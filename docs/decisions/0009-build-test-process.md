@@ -1,0 +1,360 @@
+# 0009 — Build system, repository layout, testing, benchmarks and development process
+
+Status: proposed (2026-11-14), revised after review (2026-11-14)
+
+## Context
+
+v1 lost most of its late effort to its own machinery: five build trees and a 30-minute translation unit, a 45-minute suite, GPU regressions merged because CI had no GPU, reference images calibrated on a buggy engine, SSIM gates that measured noise, and a process (status corpus, 334 specs, three copies of agent roles, dated directives) that grew without bound ([toolchain](../v1-lessons/toolchain-and-build.md), [testing and process](../v1-lessons/testing-and-process.md), [research 13 §A](../research/13-agent-process.md)). The owner wants short builds, fast tests, simplicity, scientific accuracy, full breadth in the first release, and development by Sonnet-class agents from small specs; the lead merges ([0000](0000-owner-decisions.md) #12); the repository is public (#6); this PC may be the GPU test machine (#13); no Cycles pixel parity (#1); one kernel source (#2).
+
+The spine fixes the frame: CMake + Ninja + MSVC, one build tree; CUDA + OptiX on GPU, MSVC + Embree on CPU; per-kernel register and compile-time gates; reference images only from analytic results or independent oracles; HTML benchmark report and milestone showcases; rules enforced by scripts; few agent roles; one page of status ([SPINE](SPINE.md) §1, §2, §9). Spike A measured what the build and tests can cost: 1.3-2.5 s per device TU serially, 11.3 s for a 34-TU clean build at -j8, 0.35 µs per CPU BSDF evaluation, CPU/GPU agreement of 1.1e-6 on eval with FMA off ([spike A](../../spikes/A-kernel-budget/RESULTS.md) §4-7). Spike B measured the Blender side ([spike B](../../spikes/B-blender-end-to-end/RESULTS.md)). Per-kernel budgets belong to [0002](0002-kernel-architecture.md) D10/D12, viewport budgets to [0007](0007-blender-integration.md) D33/D35; this record runs them and owns everything else here: one layout, one set of scripts, one budget table and one process.
+
+## Decision
+
+### Repository and toolchain
+
+1. **Layout.** Every directory exists because a target, a test or the process needs it.
+   ```
+   CMakeLists.txt  CMakePresets.json  cmake/      presets call vcvars themselves; warnings; kernel module and embedding rules
+   include/astroray/astroray.h                    the only public header: the C ABI (0001)
+   src/kernel/          freestanding kernel headers, stages/, portability.h, launch_config.h, budget.toml (0002)
+   src/kernel_gpu/      one .cu per stage + optix_traverse.cu   src/kernel_cpu/  one .cpp per stage (0002 D4)
+   src/device/cpu/  src/device/cuda/   the only vendor-specific host code (0001 D5.2)
+   src/host/            scene, scheduler, film, denoise glue, module loader, allocator
+   src/capi/            C ABI implementation, ABI recorder/replayer (0001) -> astroray_core.dll
+   cli/                 astroray_cli: info, render, bench, dump
+   data/                generated tables + MANIFEST.toml (0001 D8; 0003 decides contents)
+   blender/astroray/    the extension (GPL-3.0-or-later, own LICENSE); no engine code
+   scenes/              canonical scene builders (Python) and meta.toml per scene
+   tests/cpu/  tests/gpu/  tests/abi/  tests/blender/  tests/budgets/  tests/data/oracle/
+   bench/               bench scene list and history/*.jsonl
+   tools/               build check land bench status fetch release (.ps1), lib/, lint.py, report.py, budgets.toml
+   third_party/         vendored headers + deps.toml; _cache/ (git-ignored) holds fetched binaries and the tool venv
+   assets/manifest.toml assets/_cache/ (git-ignored)
+   docs/  tasks/  .github/workflows/ci.yml  .claude/
+   out/                 git-ignored: build tree, bin/, check and land logs, evidence, reports
+   ```
+   When the build phase starts, the spike code is tagged `spikes-final` and deleted from `main`; each `RESULTS.md` moves to `docs/spikes/`.
+2. **Toolchain** (versions in the `tools/build.ps1` header, checked at configure). MSVC toolset 14.44 from VS 2022 Build Tools 17.14, selected by the presets with `-vcvars_ver=14.44`. Locally the toolset line must be 14.44.x, and a mismatch fails (MEASURED installed: cl 19.44.35208, accepted by nvcc 12.8 for sm_120, spike A §1). Hosted CI requires cl ≥ 19.44 and logs the exact version it got, because hosted images update Visual Studio and research 08 S7 never checked their toolset; M1 measures it. The full build number goes into `ar_build_info()`. Other pins: CUDA 12.8 (MEASURED, spikes A and B); OptiX 9.1 headers (MEASURED, spike A §5); CMake ≥ 3.31 (4.2.1 installed); Ninja 1.13.2; pwsh 7 for scripts (ASCII only, no `.bat`); Python 3.13 + NumPy 2.3 for tools (Blender 5.3 pins 3.13.13 and 2.3.4, research 08 §2), plus astropy for 0008's FITS checks, both pinned with hashes in `deps.toml` and installed by `fetch.ps1` into a venv under `third_party/_cache`; Blender 5.3.0 at `$env:ASTRORAY_BLENDER`; `gh` CLI. The engine DLL is built `/MT` behind the C ABI, so Blender's bundled CRT version does not matter (research 08 option B; 0001 D4.4). Warnings are errors (`/W4 /WX`, nvcc `-Werror all-warnings`) in every preset. The move to CUDA 13.x follows 0001 D4.3/V8 (no gated number regresses by more than 10%), measured with spike A's scripts checked out from `spikes-final` and with this record's budget gate, agreement suite and bench.
+3. **Targets.** `astroray_kernel` (INTERFACE: kernel includes and definitions); `astroray_kernels_cpu` (STATIC, one TU per stage, `Real` = float) and `astroray_kernels_cpu_f64` (same sources, `AR_REAL_DOUBLE`, 0002 D3; linked into the tests; shipping it in the DLL is 0002/0006's call); `astroray_kernels_gpu` (one cubin per stage plus the OptiX PTX module, 0002 D11/D14, **always embedded in `astroray_core.dll` as `RCDATA`**, 0001 D1.1; the `dev` preset also writes the same images to `out/bin/kernels/` for the dev reload of decision 5, the release build writes no loose modules); `astroray_kernels_gpu_nofma` (`-fmad=false`) and `astroray_kernels_gpu_probe` (launch bounds compiled out), same sources, built only by `check gate`, never embedded, zero run-time cost; `astroray_host` (STATIC, no CUDA types in its interface); `astroray_core` (SHARED `/MT`, the only DLL Python loads); `astroray_cli`; `astroray_tests_cpu` (links no CUDA, so it cannot touch the GPU); `astroray_tests_gpu`; `astroray_extension` (stages `blender/astroray` + `out/bin` and runs `blender --command extension build`).
+4. **Presets and trees.** One local preset, `dev`: optimised with embedded debug info `/Z7`, `CMAKE_CUDA_ARCHITECTURES=120-real`, GPU on. Preset `cpu` (GPU off, no CUDA needed) exists for hosted CI. Preset `release` is built from clean by `release.ps1` only and adds the architectures 0001 D3.4 declares; only sm_120 is ever tested. Each checkout has one tree, `out/build`: the lead's checkout plus at most two implementer worktrees, all on `dev`, each tree deleted with its worktree by `land merge`. `check fast` builds only CPU targets, so a worktree compiles device code only when its task needs GPU results (kernel tasks need their register numbers, 0002 D10 "Declare"). There are no per-configuration trees and binaries are never copied out of `out/bin`.
+5. **Build identity and kernel source.** The core exports `ar_build_info()` (0001 D2.7: version, git sha, dirty flag, toolkit versions), extended with the kernel source: `embedded` or the directory in `ASTRORAY_KERNEL_DIR`. A generated build-info source is rewritten only when its content changes, so a new commit relinks the DLL and nothing else. After Ninja exits 0, `build.ps1` runs `ninja -n` on the same targets and fails unless it reports no work. This catches a missing or stale output through Ninja's own dependency graph; up-to-date outputs that are older than the build start are legitimate and are not checked. The addon, the CLI and both test executables print `ar_build_info()` at start; `check` fails if the sha is not `HEAD` (v1 shadow-module failures) or if any test ran on loose kernels. Dev reload: only when `ASTRORAY_KERNEL_DIR` is set does the engine load modules from that directory, and it swaps a changed module at the next step boundary (B-04).
+6. **Dependencies.** `third_party/deps.toml` lists each dependency: name, version, URL, SHA-256, SPDX id, kind (`vendored` | `fetched-binary` | `fetched-not-redistributable` | `tool-python`). Vendored in git: doctest (single header) and any header-only library a record adopts. `tools/fetch.ps1 deps` (0001 D9.2's `fetch_deps.ps1`) fetches into `third_party/_cache` Embree 4 (our no-TBB build, 0001 D9.2), OIDN 2.5.0 (Blender 5.3's version) and the OptiX 9.1 headers from `NVIDIA/optix-dev` at a pinned commit (never committed, never shipped: research 11). CUDA, MSVC and Blender are machine prerequisites. Configure never touches the network: no vcpkg, no FetchContent, no submodules. A checksum mismatch or a missing licence field fails. `THIRD_PARTY.md` is generated from `deps.toml`.
+7. **No compiler cache.** Spike A builds 34 TUs from clean in 11.3 s; sccache never caches the outer nvcc call and v1 measured 0% device hits (research 08 §7). B-01 must hold with no cache. Revisit only if a measured clean build exceeds half of B-01. Ninja's nvcc pool depth is 8 (PROVISIONAL: spike A ran -j8 cleanly; v1 hard-reset under combined load, so M1 records peak RAM).
+8. **Locks.** Every `tools/` script that compiles device code, runs the engine on the GPU, launches Blender or times anything takes one named mutex (`Global\astroray2`). The outermost script holds it and sets `ASTRORAY_LOCK_PID`, so nested calls do not re-lock (v1 deadlock). Builds, GPU tests and benchmarks therefore never overlap. `check fast` takes no machine lock: it compiles only CPU targets, with at most 4 `cl` jobs (PROVISIONAL), and runs no GPU or Blender code, so an implementer's 10 s loop never queues behind a 3-minute gate. Every script that builds also takes a per-tree lock file in `out/build`, so two Ninja runs never share a tree. Summaries report lock wait separately; tier budgets apply only to the time after the locks are held. Processes are killed only by the PID they wrote at launch.
+
+### Scripts and tiers
+
+9. **Three entry points** (plus `bench.ps1`, `status.ps1`, `fetch.ps1` and 0001's `release.ps1`). Each prints at most 20 lines (step, seconds, lock wait, pass/fail, final `PASS gate 141 s (budget 180 s, waited 0 s)`), writes the full log to `out/check/<tier>.log` and a JSON summary to `out/check/<tier>.json`, and exits non-zero on failure.
+   - `tools/build.ps1 [-Target t]`: configures if needed, builds `dev`, runs the `ninja -n` check, prints the build id.
+   - `tools/check.ps1 fast|gate|full|ci`: tiers below.
+   - `tools/land.ps1 prepare|merge NNN`: decision 26.
+10. **`fast`** (B-08: no GPU, no Blender, no machine lock): `tools/lint.py` (the decision-31 caps; SPDX header on every source file matching its directory and no NVIDIA headers or binaries in the tree, 0001 V4 repository part; kernel banned tokens and include allow-list, 0002 D1; ABI header rules, 0001 V2; vendor seam, 0001 V3; data manifest, 0001 V9 file part; asset rules, decision 21; `skip`/`xfail` names an open task; task-file format and canary patch, decision 28; `budgets.toml` ↔ this record and the declared family sizes, decision 15; ASCII `.ps1`); incremental build of `astroray_tests_cpu`; its deterministic tests only: pure functions, RNG and index bitwise checks, layout `static_assert`s, lobe consistency by fixed quadrature (pdf integrates to ≤ 1, `eval` = sample weight × pdf, `pdf()` = sampled pdf). No p-values, no random seeds.
+11. **`gate`** (B-09, this PC): `fast`; build `dev` plus the nofma and probe variants; kernel resource and compile-time checks, work counters and timing tripwire (decision 18); binary and ABI checks: `tests/abi/` layout and version test (0001 V1), `dumpbin /dependents` (V5, first part), the driver-check unit test and the CLI with no CUDA device visible (V6), record/replay bit-equality on the CPU (V11); `astroray_tests_cpu --tier=gate` (statistical suite at gate counts, analytic scenes on CPU at 32x32); `astroray_tests_gpu --tier=gate` in one process, serially, with a latent-CUDA-error check after each test (agreement steps 17(i)-(iv); analytic scenes on GPU at 32x32; film and denoiser tests, 0008); one Blender smoke (decision 17a). Every test selects its device explicitly.
+12. **`full`** (B-10): `gate`; statistical suite at full counts with seed derived from the commit sha (seed rotation without a scheduler), fine and weighted chi-squared, the OpenPBR parameter-lattice audit; analytic scenes at high spp plus convergence slope; oracle scenes; CPU/GPU beauty test (17(v)); float-vs-double CPU; full Blender suite including the in-Blender module list (0001 V5, second part) and windowed timing for B-13/B-14/B-15; every device TU timed serially, the OptiX module's registers via Nsight Compute and traversal rays/s on a fixed scene (the items 0002 D10 gives a nightly job); `bench.ps1` with perf A/B against the previous milestone tag; a cold clean-build audit. Run at milestone close, before a release, and when a task's `Budget:` line says `full`. Nothing is scheduled (owner question 2). `ci` (hosted runners only) = `fast` + `cpu` preset build + the CPU part of `gate` (including V1, V6, V11 on the CPU DLL) + 0007 D46's headless sync suite against the `bpy` 5.3.x wheel (5.4 once published).
+
+### Budgets (`tools/budgets.toml` is the machine copy, with the same ids)
+
+13. Every budget fails at its limit. There is no warning band (CLAUDE.md rule 9: a change that breaks a budget is not finished). Tier times exclude lock wait. PROVISIONAL limits are reset once from M1 measurements, with headroom, and from then on fail like the rest. Rows that point to another record restate nothing: the number lives there.
+
+| id | budget | limit | status, evidence |
+|---|---|---|---|
+| B-01 | clean build, `dev`, all targets, no cache | ≤ 5 min | owner; MEASURED basis 11.3 s for 34 device TUs at -j8 (spike A §4); product scale PROVISIONAL |
+| B-02 | incremental build after editing any one file, incl. a kernel header | ≤ 30 s | owner; MEASURED basis: header touching all 34 TUs 11.2 s, one stage file 3.7 s |
+| B-03 | host `.cpp` edit, rebuild + relink | ≤ 5 s | MEASURED basis 0.70 s cl + link |
+| B-04 | dev kernel edit to running engine (nvcc rebuild + module swap) | ≤ 5 s | MEASURED basis 1.3-2.5 s nvcc per TU, module load 1.6 ms; replaced by 0002 D10's RTC rows if the lead keeps NVRTC (challenge below) |
+| B-05 | compile time per device TU, serial | 0002 D10 (≤ 3.0 s) | spine; MEASURED 1.3-2.5 s; method in decision 18 |
+| B-06 | per-kernel registers, stack, spills, launch-bounds check, growth | 0002 D10 | baseline `src/kernel/budget.toml` (0002) |
+| B-07 | configure from scratch, no network | ≤ 10 s | PROVISIONAL |
+| B-08 | `check fast` wall time | ≤ 10 s | owner; MEASURED basis CPU TU 0.65 s, 0.35 µs per BSDF eval (spike A §7) |
+| B-09 | `check gate` wall time incl. incremental build | ≤ 3 min | owner |
+| B-10 | `check full` | ≤ 20 min | PROVISIONAL |
+| B-11 | hosted `check ci` | ≤ 15 min | PROVISIONAL (runner: 4 vCPU, 16 GB, research 08 §10; unmeasured) |
+| B-12 | one test: `fast` / `gate` | ≤ 0.5 s / ≤ 20 s | PROVISIONAL |
+| B-13 | present: `view_draw` and held update rate | 0007 D33, V8 | MEASURED basis spike B §1 (0.8 ms 1080p; 7.4 ms striped RGBA16F 4K, paced) |
+| B-14 | viewport rate on bench scenes | never < 24/s for > 0.5 s; ≥ 60/s at full 1080p on B-1M | owner #9; PROVISIONAL (no product-scope kernel throughput yet) |
+| B-15 | first frame vs Cycles viewport, both sides including their Blender sync | 0007 D35 (≤ 1.5x, goal 1.0x; S1, S2, S3) | owner "comparable" (owner question 1); MEASURED mesh-only basis 0.8x / 1.5x (spike B §3) |
+| B-16 | work counters per fixed scene; timing tripwire | +2% / 1.25x of baseline | decision 18; counters deterministic per device (0002 D12) |
+
+### Tests
+
+14. **Kernel unit tests on the CPU target** (doctest, `astroray_tests_cpu`). Every lobe, light, sampler and spectral function is a pure function taking explicit uniforms and returning value, pdf and flags (requirement on 0002-0005). Agreement tests link `astroray_kernels_cpu`; precision-oracle tests link `astroray_kernels_cpu_f64`.
+15. **Statistical tests and flake policy.**
+    - **Per lobe/light configuration:** (a) energy test: mean of f·cos/pdf with its standard error, against the closed-form albedo where one exists (Lambertian ρ; 1 for lossless configurations; smooth Fresnel), otherwise against deterministic quadrature of eval·cos, which checks only that sampling and evaluation agree (physics truth then comes from O scenes and 0005's reference checks); (b) chi-squared of samples against the pdf integrated per cell, cells pooled below expected count 5, `ires` declared per lobe (Pearson 1900; harness pattern of pbrt-v4 `bsdfs_test.cpp` and Mitsuba `chi2.py`); (c) in `full`, weighted chi-squared against ∫f·cos per cell.
+    - **Family size.** Each statistical suite (gate statistical, full statistical, analytic scenes) declares a constant family size m in `budgets.toml` (PROVISIONAL m = 2,000 for the gate suite). Every per-test threshold comes from Šidák at family α = 0.01 with that m (Šidák 1967; per-test α ≈ 5e-6 at m = 2,000). Lint fails when a suite's test count exceeds its m, and raising m is a reviewed budget change. Adding a test therefore never moves another test's threshold, a fixed-seed result is reproducible across commits, and power does not erode as the suite grows.
+    - **Seeds.** Gate seeds are hash(test name, repo constant), mapped to non-zero (0003 rejects 0). Every failure prints its seed and a one-line reproduce command. A chi-squared failure re-runs at 2x `ires` before it is reported (v1 glass false reds).
+    - **Rotated-seed failures.** A failure on a `full` rotated seed is never dismissed. It is re-run on 20 further seeds; more than one failure in 20 is a defect, in the code or in the test's calibration, and blocks the milestone (research 09 §3). Otherwise the seed joins that test's pinned gate seeds and a task investigates both sides, because a low-power real bug looks exactly like this.
+    - No quarantine: `skip`/`xfail` only with an open task id (lint).
+16. **Analytic and oracle scenes.**
+    - **Analytic scenes** compare the film mean with closed form: |mean − truth| ≤ z·SE + eps_sys, with z from the suite's declared m and eps_sys declared per scene in `meta.toml` (default 0). The test film accumulates first and second moments in double (requirement on 0008). Every image test also asserts the image is not constant and not black where truth is not (v1 black-against-black).
+    - **Oracle scenes** use Mitsuba 3 `scalar_spectral` and pbrt-v4 (spectral) with explicit spectra, never RGB. The test is a per-pixel z with a variance floor, Šidák across the scene's pixels at 0.01, passing at ≥ 99.75% of pixels (Mitsuba `test_renders.py` pattern). An oracle is adopted for a scene only when the two oracles agree with each other on it. Where one oracle lacks the physics: dispersion (Mitsuba's dielectric has no spectral IOR) is adopted from pbrt-v4 with A10, the analytic prism of the same glass, as second witness; layered coat is informational only, because OpenPBR's coat is the specification's albedo-scaling model rather than physical layering, so its conformance comes from 0005's reference-implementation checks; `meta.toml` records single-witness status. An oracle disagreement is investigated on both sides and, if the physics is ours, recorded as a labelled divergence in `meta.toml`, never loosened.
+    - **References.** There are no self-generated golden images (spine). References are written only by `tools/check.ps1 bless <scene>` (lead only), which records tool version, command, seed and spectra hashes in a sidecar.
+17. **CPU/GPU agreement**, one ladder:
+   (i) bitwise: integer code, sampler values, indices, hashes over 1e6 inputs, zero differences;
+   (ii) nofma GPU vs CPU float, and (iii) production (FMA) GPU vs CPU f64, per stage on 1e6 fixed host-generated inputs: 0002 D12's thresholds and outlier rule, the single statement (the shipped binary is tested by (iii));
+   (iv) deterministic AOVs (position, normal, material id, UV) on scene D2: ids equal, positions ≤ 1e-5 relative, coincident-face ties excluded;
+   (v) `full` only: beauty images in 8x8-pixel tiles, a Welch test (Welch 1947) per tile on 8 independent seeds per backend, Holm correction (Holm 1979) at family α 0.05, 1% relative margin, pass = zero rejected tiles. This is the configuration v1 validated ([v1 testing research](../v1-lessons/research/testing.md) lines 25-33). v1 null-calibrated it only at 4 vs 4 and on three scenes, so a null calibration on this engine lands before the release (Verification);
+   (vi) `full` only: CPU float vs CPU double render of the same scene agree within noise.
+   17a. **Blender end-to-end.**
+   - **Launcher** `tools/lib/blender.ps1`: `--background --factory-startup --python-exit-code 1`, `BLENDER_USER_{CONFIG,SCRIPTS,EXTENSIONS,DATAFILES}` under `out/blender_home/<run>`, killed only by its own PID (spike B §0 method).
+   - **Gate smoke:** install the staged extension zip, then render A1's `.blend` (written by its builder in headless Blender) at 64x64 through the addon, and check the image analytically. Exporter equivalence: replay the addon's recording and the builder's recording, and compare `astroray_cli dump --state` of the two. The dump is the engine's committed scene state (triangulated geometry, instances, transforms, compiled material programs, lights, camera, settings) sorted by key, with arrays compared within float tolerance. The two producers may differ in call order and in shipping polygons or triangles (0007 D10).
+   - **`full`:** node coverage (every `ShaderNode*` type in 5.3, 108 types: implemented, or magenta plus a report entry; none silent); edit round trip (apply an edit sequence through `view_update`; the final state dump equals that of a full re-sync); windowed timing for B-13, B-14 and B-15 using spike B's harness pattern.
+   - Blender 5.4 runs are informational until 5.4 ships.
+18. **Performance, register and compile-time gates.**
+    - **Merge gates (deterministic or gross).**
+      - *Kernel resources:* 0002 D10's registers, stack, spills, launch-bounds check and growth rule, measured its way (production and probe cubins, `cuobjdump -res-usage` cross-checked with `ptxas -v`) against `src/kernel/budget.toml`. The gate prints each delta next to the task's declared delta.
+      - *Compile time:* one serial nvcc call per TU, cache off, OS file cache warm (0002 D10). The gate times the changed TUs, at most the three with the largest recorded time, because a shared-header edit changes every TU and timing them all serially would cost about a minute at spike scale. A time within 10% of the limit is re-timed and the minimum of 3 kept. `full` times every TU. Times are never read from `.ninja_log`: at -j8 each TU runs about 1.6x slower than serially (spike A §4, 4.9x speedup on 8 jobs).
+      - *Work counters (B-16),* on B-1M and the A fixtures at fixed seed, on GPU and CPU: rays traced (closest, shadow), queue steps and launches per pass, path-state and shadow-item bytes, allocator totals per category (0002 D13). The gate fails above +2% of `tests/budgets/counters.toml` unless the same change re-blesses it, so the reviewer sees the change. BVH nodes visited are not observable under OptiX hardware traversal and are not counted.
+      - *Timing tripwire (B-16):* B-1M kernel time per 1080p sample at 1 and 64 spp, after burn-in, minimum of 5. It fails above 1.25x of the baseline in the same file. That is far outside the measured noise (0.5-2% spread, spike A §1; about 5% clock drift in v1), so it does not flake and still catches gross regressions per merge.
+      - *Tier durations* against B-08..B-12.
+    - **Wall-time A/B** (soft; in `full` and on demand). `bench.ps1 -Compare <ref>` runs fixed workloads timed with CUDA events: 15 burn-in runs, then 15 interleaved base/candidate pairs, analysed with a Wilcoxon signed-rank test on the paired log ratios (Wilcoxon 1945). A regression is a median ratio > 1.05 with p < 0.01 that persists across 3 allocation shifts (a dummy 6, 32 or 64 MB allocation first; [v1 testing and process](../v1-lessons/testing-and-process.md)). Benchmarks run under the machine lock with no implementer active.
+
+### Scenes and assets
+
+19. **Scene format.** A scene is an ABI recording (`.arrec`, 0001 D1.4: every ABI call and its arrays, versioned; replay refuses a mismatch). Producers: `scenes/*.py` builders that call the ABI through the generated binding with recording on (stdlib + NumPy; the same builder also emits Mitsuba XML and pbrt input for oracle scenes, and a `.blend` where Blender tests need one), and the addon with recording on (`ASTRORAY_RECORD=<path>`; one branch per ABI call when off). Recordings are generated into `out/scenes/` by `check`, never committed. Consumers: `astroray_cli`, tests, benchmarks. Bug reports and benchmark scenes become recordings that replay without Blender. Tiny unit-test scenes are built in C++ directly through the ABI. Analytic scenes prefer shape-independent setups (a convex object in a uniform environment) so tessellation does not enter the truth.
+20. **Canonical set.** `meta.toml` per scene states class, truth, tolerance, spectra, units (metres), assets and single-witness status.
+   - **Analytic (A)** (truth formulas in research 09 §9). A1 furnace: convex object in a uniform environment, **lossless configurations only**: pixel = 1 for every white non-absorbing lobe and stack (0005 V1's energy target), ρ for Lambertian; lossy microfacet, coat and sheen configurations have no closed-form albedo and truth taken from the lobe itself would be circular, so they go to the energy test (15a) and O3. A2 closed Lambertian sphere interior, L = Le/(1−ρ); A3 disk emitter over a plane; A4 sphere, point and spot lights; A5 view-filling emitter through pinhole and thin lens, pixel = L; A6 dielectric slab with Beer-Lambert absorption, R + T and slab transmittance; A7 homogeneous absorbing slab and scattering furnace; A8 blackbody emitter to a band film (Planck band integrals, photon counts); A9 environment map with one bright texel (deterministic quadrature); A10 prism with line emitters, deviation from Snell's law and the glass's Sellmeier fit; A11 grating, diffraction-order angles from the grating equation (Born and Wolf 1999) via the light-tracing pass (owner #17); A12 fluorescent slab under monochromatic light, re-emitted photons = quantum yield × absorbed (definition of quantum yield, Lakowicz 2006); A13 uniform emitting-absorbing slab, I = S(1 − e^−τ) (Rybicki and Lightman 1979); A14 Schwarzschild: critical impact parameter 3√3 M, weak deflection 4M/b, redshift (1 − 2M/r)^−1/2 (research 09 S17; Bardeen 1973 for the Kerr generalisation).
+   - **Deterministic (D):** D1 UV/texture chart AOVs (orientation, sRGB decode, Blender bottom-up pixel rows); D2 AOV geometry agreement scene; D3 node-coverage `.blend`; D4 edit-sequence `.blend`.
+   - **Oracle (O):** O1 spectral Cornell-style box with explicit spectra; O2 Veach MIS (Bitterli, CC0) with explicit spectra; O3 rough conductor and rough dielectric rows (lossy-lobe truth); O4 heterogeneous grid medium.
+   - **Benchmark (B):** B-1M and B-5M (spike B's procedural S1 and S2: 1.0 M triangles; 5.04 M unique triangles in 10,001 instances); B-TX (0007's textured S3); B-CR Blender Classroom (manifest, CC0 reported); B-NB black hole in an emission nebula (from its milestone).
+   - **Showcase (G):** defined per milestone in the roadmap; owner-modelled scenes from research 16 "Gaps" (spectral Cornell box, dispersion cabinet, gas-discharge lamp gallery, measured-metals tile, black hole in a nebula).
+21. **Asset rules** (research 16 "Asset handling"). `assets/manifest.toml` per asset: name, URL, SPDX id or `none-stated`, size, SHA-256, redistributable, citation, units. `tools/fetch.ps1 assets` downloads named assets into `assets/_cache`, failing on a checksum mismatch or a missing licence; Poly Haven assets are fetched by name, never crawled. Only CC0/CC-BY/MIT/Apache files ≤ 2 MB may be committed; share-alike, non-commercial, no-derivatives and "not stated" never enter the repo. No Git LFS. Total `tests/data` + `scenes` ≤ 50 MB (lint). Evidence and gallery images are ≤ 2 MB and ≤ 1600 px, never blank or near-black. `ASSETS_NOTICE.md` is generated.
+
+### Benchmarks and showcase
+
+22. **Report.** `tools/bench.ps1` runs `astroray_cli bench` on the B scenes plus the Blender first-frame and viewport harness, and appends one JSON line per (sha, machine, driver, CUDA, scene, metric, value, unit, n, spread) to `bench/history/<year>.jsonl`. `tools/report.py` (stdlib + NumPy, inline SVG, base64 PNG, no network needed to view) writes `out/report/index.html` with: convergence (relMSE vs spp and vs time, log-log, against analytic truth or an independent high-spp reference, with the N^−1/2 line); throughput (Mpaths/s, samples/s) and work counters across commits; the first-frame breakdown (sync, transfer, acceleration build, first sample) next to Cycles; viewport updates/s and resolution scale while orbiting; build times per edit class and tier durations with budget lines; registers, stack and spill per kernel with 0002's lines; CPU vs GPU throughput; statistics heat maps (sample count, bounce count, termination reason, time; owner #15) and the renders. History lines are committed by the lead only, from `full` runs.
+23. **Showcase gallery.** Each milestone ends with its G scenes rendered through Blender headless with the addon (so colour management matches what users see), each with a JSON sidecar (scene, spp, time, settings, build id). Images and the HTML report are attached to the milestone's GitHub Release. The repository keeps only scene definitions and sidecars, so history does not grow by tens of MB per milestone.
+
+### Continuous integration (public repository)
+
+24. **Hosted CI** (`.github/workflows/ci.yml`, GitHub-hosted Windows runner, `permissions: contents: read`, no secrets). It runs `check ci` on every pull request and every push to `main`. It catches what the dev PC cannot: a clean checkout, missing files, stale-artifact dependence and the actual head commit (v1 lessons).
+25. **Local GPU gate.** `land.ps1` runs `check gate` on this PC under the lock and posts the result as commit status `astroray/gate` on the tested sha (`gh api .../statuses/<sha>`, description = the summary line). Branch protection on `main` requires `ci`, `astroray/gate` and an up-to-date branch. **This PC is not registered as a self-hosted runner:** GitHub advises self-hosted runners only for private repositories, because a fork PR can run code on them (research 08 §10); a runner would also take the GPU outside the machine lock and goes offline with the PC. Fork PRs get hosted CI; the GPU gate runs only after the lead has read the diff.
+
+### Development process
+
+26. **Landing (lead only).** **`land.ps1 prepare NNN`** runs in the task's worktree: (1) refuse unless on `task/NNN-*` with a clean tree; (2) fetch and rebase on `origin/main`; (3) canary check: apply `tasks/NNN.canary.patch`, rebuild, run the test cases named in the task's `Canary:` line, require each to fail, revert (a diff that adds or changes a test without a canary patch is refused); (4) write `out/land/NNN/task.md` (the task file as it stands) and `out/land/NNN/diff.patch` for the reviewer, who has no git; (5) delete `tasks/NNN*` in a commit, push, run `check gate`, post the status. The lead spawns the reviewer on that sha with those two paths and, for visual changes, opens the evidence PNGs. **`land.ps1 merge NNN`** requires the PR head to equal the gated sha, `ci` and `astroray/gate` green, a lead comment `REVIEW PASS <sha>`, and an `evidence:` line if the task has `Look at:`; then `gh pr merge --squash`, confirms the squash commit is on `origin/main`, and deletes the branch and the worktree with its `out/`. If `main` moved, re-run `prepare`.
+27. **Roles and models** (aliases, never model ids; `effort` pinned in every agent file).
+
+| role | model / effort | tools | job |
+|---|---|---|---|
+| lead | main session, opus | all | ADRs, tasks, STATUS, landing, looking at renders, root cause of gate failures |
+| `implementer` | sonnet / medium (high for kernel or physics tasks, per invocation) | default, `isolation: worktree`, `maxTurns` set | one task file, its canary patch |
+| `reviewer` | opus / medium (high for kernel or physics diffs) | Read, Grep, Glob only (harness-enforced read-only; `land` runs the checks and supplies `out/land/NNN/`) | finds only: acceptance unmet, CLAUDE.md rule broken, a test that would pass on broken code (names the breakage), algorithm without `Ref:`; no style; last line `VERDICT: PASS|FAIL` |
+| `digest` | haiku / medium, `omitClaudeMd: true` | Read, Grep, Glob | cited digests ≤ 60 lines; prompt < 100K tokens (5x price above, research 13 §B) |
+
+   At most two implementers at once (v1 resets; the lock serialises their GPU builds anyway). Dependent work stays on one implementer; fan out only for independent tasks (research 13 §B). One hidden skill, `land` (`disable-model-invocation: true`), scripts the prepare → review → look → merge sequence. Whether an open-weight worker exists is owner question 3; if kept, it does only mechanical edits through one wrapper that returns a diff and transcript.
+28. **Task spec** (`tasks/NNN-slug.md`, ≤ 60 lines, written by the lead, deleted by `land`; open questions must be empty before dispatch):
+   ```
+   # NNN Title
+   Goal: before -> after, two sentences.
+   Scope: files or directories that may change. Out of scope: what a reader might assume is included.
+   Reference: paper, section/equation, reference file path, licence (required for physics, sampling, numerics).
+   Acceptance: `tools/check.ps1 fast` passes; `<exact command>` prints <value or threshold>; Look at: out/evidence/NNN/<name>.png
+   Canary: tasks/NNN.canary.patch (implementer writes it) must turn red: <test case names>.
+   Budget: expected effect on build/test time and register delta ("none", or "full" to require a full run).
+   Size: expected diff; stop and report at 2x.
+   Progress: (implementer appends at most 10 lines; WIP commit after each acceptance step)
+   ```
+29. **Status and records.** `docs/STATUS.md` ≤ 50 lines, overwritten by the lead only: milestone and goal, open owner questions, red items with task ids, budget headroom from the last gate. Live facts (branches, PRs, last gate) come from `tools/status.ps1`, never stored. History is `git log`; no journal, standup or round log. `docs/ARCHITECTURE.md` is the current synthesis; ADRs are the rationale. A superseding ADR deletes the superseded file in the same commit and names it with `git show <sha>:<path>` (pending owner question 4; the current CLAUDE.md keeps superseded files).
+30. **v1 knowledge.** `docs/v1-lessons/` is the only channel. A `Read`/`Edit` deny on the v1 path sits in the git-ignored `.claude/settings.local.json` (the public repo must not carry a personal path). When a lane needs a v1 fact it says so in its report; the lead runs one `digest` call from a separate v1-rooted session and writes the answer back as a lesson with its citation. A lesson made moot by an ADR is deleted, not annotated. No agent that has read v1 code copies it; data items (tables, line lists) are regenerated or copied by script with provenance.
+31. **Anti-accretion rules** (all lint-checked in `fast` unless noted): CLAUDE.md ≤ 60 lines; each `.claude/rules/*.md` (path-scoped, created only after a failure recurs) ≤ 40; agent file ≤ 60; skill ≤ 80; STATUS ≤ 50; task ≤ 60; v1-lessons file ≤ 150; `tools/README.md` ≤ 30; a build-phase ADR ≤ 80 (research 13; the planning records 0001-0009 are exempt, being synthesised into `ARCHITECTURE.md` at sign-off and changed later only by short superseding ADRs). At most 3 agent files, 2 skills, 0 Claude hooks, 0 git hooks, no `AGENTS.md`/`.codex`/`.opencode`. No dates or model ids in CLAUDE.md, rules or agent files. Adding a rule, agent, skill, hook or script names the incident in the PR body and, at a cap, deletes something (reviewer). One-off scripts are deleted when their task lands. Process changes (`.claude/`, `tools/`, CLAUDE.md) land as their own commits, never inside a feature diff. At each milestone close the lead runs `/doctor prompt-audit` and deletes prose rules with no incident since the last milestone. Auto memory is off (`autoMemoryEnabled: false`); durable lessons go to reviewed files.
+
+### Challenges to the spine
+
+- **Spine §2, "NVRTC edit loop in development; AOT nvcc for gate and releases."** Spike A measured nvcc at 1.3-2.5 s per stage TU, against NVRTC's ~1.1 s edit-to-loadable (§4, §5). The second compiler buys ≤ 1.4 s per edit, and costs flag and header drift between two compile paths plus a test that they agree. Proposal: one compiler (nvcc AOT) for everything; release kernels embedded (0001 D1.1, 0002 D14 agree); dev mode swaps module files from `ASTRORAY_KERNEL_DIR` (decision 5, B-04). NVRTC is added only if a measured edit loop with real stage TUs exceeds B-04. 0002 D10/D14 currently specify the NVRTC route (2 s budget, identity test, `ASTRORAY_KERNEL_RTC`). The lead settles this once in SPINE, and the losing record deletes its side.
+- **Spine §2, agreement "with a test build that disables FMA contraction."** Kept, and extended with ladder step 17(iii) (0002 D12), because the nofma binary is not what ships.
+- **Spine §2, "no spills when capped at 168."** This record follows 0002 C2/D10 (probe ≤ 168 with zero spills, plus a recorded production spill allowance) and does not restate it.
+- **Spine §9, "one build tree."** Read as one configuration: v1's failure was five differently configured trees and shadow binaries. This record allows one `dev` tree per checkout (≤ 3 at once), guarded by the build-id check (decision 4).
+- **Spine §9, "rules are enforced by scripts, not hooks."** Read as also excluding git hooks. The implementer and `land` run `fast`; no pre-commit hook does, because a blocking hook fights the WIP-commit rule that protects against usage-limit kills (v1). Research 13 R2 proposed a pre-commit hook; this record overrides it.
+
+## Alternatives considered
+
+- **NVRTC dev path (spine) vs nvcc only:** see the challenge; decided by spike A's per-TU numbers.
+- **Loose kernel modules in releases:** a stale-file mismatch class (v1); 0001 embeds them.
+- **sccache/ccache:** sccache cannot cache the outer nvcc call or the fatbinary and needs base-dir and `/Z7` care; v1 got 0% device hits and dropped connections on long compiles (research 08 §7, v1 toolchain). The measured clean build makes a cache unnecessary.
+- **vcpkg/FetchContent:** both add network access or source builds to configure; three binary dependencies do not justify a second package manager (research 08 option G).
+- **CPU kernel hot-reload DLL (research 08 rec. 7):** the CPU TU compiles in 0.65 s and is used by test executables that relink anyway; no Blender workflow needs it.
+- **Worktrees on the `cpu` preset only:** this would push every register and GPU result for kernel tasks to `land`. `fast` already builds only CPU targets.
+- **Self-hosted runner on this PC:** unsafe on a public repository (GitHub guidance) and fights the machine lock; replaced by the posted `astroray/gate` status.
+- **Hosted GPU runners:** need a paid plan (research 08 §10), and are not this GPU.
+- **Python/pytest-centred tests (Mitsuba style):** need vectorised bindings of every kernel, and Python start-up inside the 10 s tier; Blender's Python has no pytest. C++ for engine tests; Python only for Blender drivers, scene builders, ABI tests and the report (research 09 option 1).
+- **SSIM/FLIP or Cycles-style pixel tolerances as gates:** they measure noise, not bias, and accrete blocklists (research 09 §C, §G; v1 testing research). FLIP stays a human diff map on converged images only.
+- **Self-golden regression images:** cheap but can bake in bugs (v1); the spine excludes them.
+- **Run-wide Šidák family; Mann-Whitney on paired timings:** rejected in review (decisions 15, 18).
+- **Nightly/weekly scheduled tiers (research 09 §8, 0002 D10):** require an unattended scheduler on the owner's PC. Commit-derived seeds in `full` give seed rotation; per-merge counters and the tripwire catch performance drift early.
+- **Tasks as GitHub issues or one TASKS.md:** issues grow without bound and need network; one file becomes STATUS.md (research 13 option 2).
+- **Git LFS for references and gallery:** paid bandwidth on a public repo and a second tool; release assets and a 50 MB cap instead.
+
+## Consequences
+
+Easy: an agent needs three commands; every claim has a script output; budgets fail loudly; Blender bugs become replayable recordings; CPU tests cannot touch the GPU by construction; an implementer's `fast` never waits for the GPU; canaries are verified by `land`, not self-reported; the public repo carries no NVIDIA headers, no personal paths, no secrets in CI.
+
+Hard: GPU coverage exists only on this PC, so merges stop when it is off; the lead is a serial bottleneck at `land`; each new worktree pays one configure and, for kernel tasks, one device build; oracle references need Mitsuba and pbrt-v4 on the lead's machine; each new test costs one canary patch and one extra test run in `land`.
+
+Cost when unused: the nofma and probe kernel builds cost gate build time only (about one extra device build each; zero run-time cost); the dev kernel-directory override is one environment check at engine start; the ABI recorder costs one branch per ABI call; `ar_build_info()` is one exported function; the work counters come from the per-stage queue counts the scheduler already reads (0002 D7) and the allocator ledger (0002 D13); the windowed viewport and oracle tiers cost nothing outside `full`.
+
+## What lands when
+
+- **First milestone:** layout, presets, `build`/`check`/`land`/`status`/`fetch`, locks, `deps.toml` and fetch, build identity with the `ninja -n` check, embedded kernels and the dev override; doctest CPU and GPU test executables; the kernel resource gate on 0002's baseline, serial compile timing, counters and the tripwire; agreement steps (i)-(iv); A1/A5/D2; the Blender smoke with record, replay and state dump; all `fast` lints (incl. 0001 V2-V4/V9, 0002 D1) and gate checks V1, V5 (dependents), V6, V11; hosted CI and the `astroray/gate` status; `budgets.toml` with family sizes; CLAUDE.md and settings (appendix), three agent files, the `land` skill with the canary check, STATUS; a bench skeleton writing history and a report with build times, throughput and the B-1M/B-5M first-frame comparison; the `spikes-final` tag. Measurement tasks in the same milestone: doctest vs Catch2 compile cost, Blender headless start cost per process, hosted `ci` duration and toolset (research 08 S7), nvcc pool RAM peak, edit-to-reload loop on real stages, research 13 process spikes P1/P4/P5/P8.
+- **Before first release:** A2-A12; O1-O4 with cross-oracle agreement; full statistical suite and lattice audit; steps 17(v)-(vi) with the null calibration; node coverage and edit round trip; windowed viewport harness; V5 in Blender; perf A/B and full report; gallery per milestone; clean-profile install test of the release zip; `ASSETS_NOTICE.md`; release preset.
+- **After first release:** A13/A14 with the black-hole milestone (the scene and harness hooks exist from M1); B-NB; Blender 5.4 in the matrix when released; an oracle re-render rot check at each release.
+
+## Verification
+
+| decision | check | pass |
+|---|---|---|
+| 1, 6, 10, 21, 31 | `lint.py` in `fast` | zero findings; seeded violations in `tests/cpu/lint_cases/` (one per lint, including 0001 V2-V4 and 0002 D1) are caught |
+| 2, 4, 7 | `build.ps1` version check; clean-build audit in `full` | versions match (CI: ≥ 19.44 logged); B-01 met with no cache |
+| 5 | delete one output, touch one header, run `check` | `ninja -n` check fails until rebuilt; sha = HEAD in every tier; a test run with `ASTRORAY_KERNEL_DIR` set fails `check` |
+| 8 | M1 task: two `check gate` runs started together, and a `fast` started during a gate | second gate waits; `fast` finishes without waiting, inside B-08; no overlap; PC stable |
+| 9-13 | tier JSON summaries | durations, excluding lock wait, within B-08..B-11 over 5 consecutive runs |
+| 13 | lint: `budgets.toml` ids and values = table above | exact match |
+| 14-15 | detection-power task (research 09 spike 3): inject missing cos, wrong Jacobian, 1% albedo error, dropped transmission, flipped front face | each caught at gate counts by at least one of energy/chi-squared; adding a test beyond m fails lint |
+| 16 | cross-oracle check on O1 | Mitsuba vs pbrt-v4 pass the same Z-test |
+| 17 | agreement suite on M1 kernels | 0002 D12 thresholds met; deliberate FMA-on in the nofma build trips (ii) |
+| 17(v) | null calibration: CPU vs CPU with independent seeds, 8 vs 8, 20 repeats on three scenes | ≤ 2 failing repeats per scene |
+| 17a | Blender smoke in gate | state dumps equal and analytic pass; a deliberately dropped node trips coverage in `full` |
+| 18 | resource gate, counters, tripwire | an extra live array raises REG and fails until re-blessed; an extra shadow ray per bounce fails the counters; an injected 1.5x slowdown trips the tripwire |
+| 19 | replay of an addon recording in the CLI | AOVs equal to the in-Blender render |
+| 22-23 | milestone close | report opens offline with all plots; release carries gallery and report |
+| 24-26 | first landed task, and one with a canary patch that does not break its test | PR shows `ci` and `astroray/gate`; squash commit on origin/main; task file gone; the inert canary is refused by `prepare` |
+| 27-30 | P5 lane dry run (research 13) | reviewer, reading only `out/land/NNN/`, catches 3 planted defects; implementer shows `check fast` tail |
+
+## Risks and open items
+
+- **Conflicts for the lead:**
+  - (a) NVRTC dev loop (spine §2, 0002 D10/D14) vs nvcc-only (challenge above).
+  - (b) 0007 D45 lists loose "AOT kernel modules" in the extension zip, while 0001 D1.1, 0002 D14 and this record embed them in the DLL; 0007 should drop that item.
+  - (c) 0002 D10 assigns every-TU compile timing, OptiX Nsight registers and traversal rays/s at -5% to a nightly job. This record has no scheduler and runs those in `full`. A -5% wall-time gate would also flake against about 5% clock drift.
+  - (d) 0002 D10 times every changed TU; this record times at most three per gate (decision 18).
+  - (e) Spine §2 "no spills when capped at 168" vs 0002 C2; this record follows 0002.
+  - (f) 0001 D3.6 (no `/arch`) vs 0002 D12 (`/arch:AVX2`); the presets follow the lead's ruling.
+  - (g) 0007 D35 compares against Cycles' sync-to-first-sample, which leaves out Cycles' own Blender sync (spike B §3: 7 ms for S1, 57 ms for S2) while ours includes it; B-15 adds Cycles' logged sync time, and 0007 should adopt the same definition.
+- Budgets B-01/B-02/B-05 and 0002's per-kernel limits rest on a spike that omits upsampling, textures, traversal and the VM at full size (spike A §0). Re-measure at each milestone; a broken budget leads to a split, never a silent raise.
+- B-14/B-15 depend on kernel throughput and shader sync not yet measured (spike B §4 caveat); they may force acceleration-structure caching (0007 D35 remedies).
+- The hosted runner's toolset, 14 GB disk and 4 vCPU are unmeasured against `ci` with the `bpy` wheel suite (B-11).
+- Blender start-up time per process inside the 3-minute gate is unmeasured. If it is large, the gate smoke reuses one Blender process for all its checks.
+- The no-FMA build differs from the shipped binary; 17(iii) covers the shipped one statistically against double only.
+- Mitsuba's Windows wheel Python version and pbrt-v4's source build on this machine are unverified (research 09 spikes 7, 11). Without two witnesses, O scenes are self-consistency checks only.
+- The Welch configuration's false-positive rate on this engine is uncalibrated until the null-calibration task runs.
+- The machine lock does not prove the PC will not hard-reset under load (cause unknown, research 13); `fast` running unlocked beside a gate adds a little CPU load.
+- Statistical power numbers in research 09 §3 are derived, not measured; the detection-power task settles gate sample counts and m.
+- Release builds ship architectures other than sm_120 untested.
+- The `gh` token on this PC can post statuses and merge; it must not leave the machine.
+- **Owner questions:** (1) is ≤ 1.5x Cycles first frame (0007 D35, goal 1.0x) what "comparable" means? (2) may the tools run an unattended scheduled job on this PC (GPU and lock busy, PC on overnight)? Default: no. (3) should an open-weight worker exist? (4) may a superseding ADR delete the superseded file?
+
+## Sources
+
+- Research: [08 build/toolchain](../research/08-build-toolchain.md) (§2, §7, §10, S7), [09 test/validation](../research/09-test-validation.md) (§3, §6, §8, §9), [13 agent process](../research/13-agent-process.md), [16 scenes and assets](../research/16-test-scenes-and-assets.md), [14 reference implementations §2.6, §4](../research/14-reference-implementations.md), [11 licensing](../research/11-licensing.md), [01 Blender boundary](../research/01-blender-boundary.md).
+- Records: [0001](0001-product-shape.md) D1, D2.7, D3, D4, D5.2, D9, V1-V11; [0002](0002-kernel-architecture.md) C2, D1, D3, D4, D10-D14; [0005](0005-material-model.md) Verification 1-3; [0007](0007-blender-integration.md) D10, D33, D35, D45, D46, V8; [0008](0008-film-outputs-denoise.md).
+- Spikes: [A kernel budget](../../spikes/A-kernel-budget/RESULTS.md) §1, §4-7; [B Blender end-to-end](../../spikes/B-blender-end-to-end/RESULTS.md) §0-4.
+- v1: [toolchain-and-build](../v1-lessons/toolchain-and-build.md), [testing-and-process](../v1-lessons/testing-and-process.md) (allocation shifts), [research/testing](../v1-lessons/research/testing.md) (tile Welch test).
+- Statistics: K. Pearson 1900, Philosophical Magazine 50 (chi-squared); Z. Šidák 1967, JASA 62; B. L. Welch 1947, Biometrika 34; S. Holm 1979, Scandinavian Journal of Statistics 6; F. Wilcoxon 1945, Biometrics Bulletin 1 (signed-rank test).
+- Physics truths: E. Veach 1997, PhD thesis, Stanford; M. Pharr, W. Jakob, G. Humphreys 2023, *Physically Based Rendering* 4th ed.; G. B. Rybicki and A. P. Lightman 1979, *Radiative Processes in Astrophysics*; M. Born and E. Wolf 1999, *Principles of Optics* 7th ed.; J. R. Lakowicz 2006, *Principles of Fluorescence Spectroscopy* 3rd ed.; J. M. Bardeen 1973, in *Black Holes* (Les Houches).
+- Reference test code: pbrt-v4 `src/pbrt/bsdfs_test.cpp`, `lights_test.cpp`; Mitsuba 3 `src/python/python/chi2.py`, `src/render/tests/test_renders.py`; Cycles `tests/python/cycles_render_tests.py` (headless pattern); Embree `tests/CMakeLists.txt` (intensity levels, not adopted).
+- Tooling: GitHub self-hosted runner security guidance and hosted-runner specs (URLs in research 08 §10); Claude Code memory, skills, sub-agents, permissions and prompt-caching pages (URLs in research 13 §B).
+
+## Assumptions about other records
+
+- **0001:** `.arrec` record/replay generated from `astroray.h`; `ar_build_info()` (extended here with the kernel source); the CLI uses only the public ABI; release architectures in D3.4; `/MT`; kernels embedded as `RCDATA`; OptiX headers fetched at a pinned commit. This record fixes the flag spellings (`ASTRORAY_RECORD`, `ASTRORAY_KERNEL_DIR`, `info`, `render`, `bench`, `dump`). 0001's named scripts (`check_abi_header.py`, `check_vendor_seam.py`, `check_licences.py`, `check_data_manifest.py`) are sections of `tools/lint.py`, and `fetch_deps.ps1` is `fetch.ps1 deps`. V3's allowed directories must include `src/kernel_gpu/`, where 0002 D11 puts the OptiX device code.
+- **0002:** owns per-kernel budgets, `budget.toml`, the agreement thresholds (D12) and the file layout under `src/kernel*`; restricted C++ with one `.cu` and one `.cpp` per stage; a launch-bounds macro that a define compiles out; module images loaded through the driver API; `Real` switchable to double.
+- **0003:** a counter-based sampler keyed on (pixel, sample, dimension, seed) with explicit non-zero seeds, so CPU and GPU consume identical numbers.
+- **0004-0006:** pure sample/eval/pdf functions with explicit uniforms; lobes declare reciprocity; 0005 V1's lossless furnace target is A1's truth; a light-tracing pass usable by A11; a double CPU path for A14.
+- **0007:** addon record mode; the present and first-frame budgets (D33, D35, V8); scenes S1-S3; the resolution controller; viewport timestamps for B-14; the headless sync suite for CI (D46).
+- **0008:** double moment accumulation in the test film, statistics buffers, mean/variance dump as `.npy`, film and denoiser tests for the GPU tier, FITS output checked with astropy.
+
+## Appendix A — critique of the current CLAUDE.md and settings.json
+
+CLAUDE.md (50 lines) is short and free of dated directives; rules 4-8 each answer a v1 failure. Problems: (1) "Phase: planning" is state and will be false at sign-off; it belongs in STATUS.md. (2) No commands, the first thing Anthropic's guidance asks for (research 13 R1). (3) Rule 9 duplicates budgets that now live here and in `budgets.toml`. (4) "Do not run two GPU builds" and "keep documents small" are machine-checkable and move to the lock and the lint. (5) "Not against another renderer" contradicts the oracle tests; the intent is no Cycles parity. (6) "Ask the lead for a cited lookup": a subagent cannot ask, it can only report. (7) Missing: done-definition, task scope, worktree check, WIP commits, canary, no skip without task, numpy for positions.
+
+settings.json: the `SessionStart` hook printing `git status -sb` duplicates the git status Claude Code already injects at session start, so it costs a process per session for nothing; remove it (zero hooks). Add `autoMemoryEnabled: false`. Keep the plugin choices (Superpowers off, context7 on) and the main-session 1-hour cache (the lead idles while the owner reads). Drop `subagentPromptCacheTtl` until research 13 spike P8 shows lanes idle more than 5 minutes (builds are now seconds; 1-hour writes cost more). Denies that name personal paths go in the git-ignored `settings.local.json`.
+
+Proposed `CLAUDE.md`:
+```markdown
+# Astroray 2.0
+
+Spectral path tracer for Blender and astrophysical rendering. Correct means
+physics, analytic results and the OpenPBR 1.1.2 specification. Independent
+spectral renderers are cross-checks; Cycles pixels are never a target.
+
+## Commands (their output is the only evidence that something works)
+- `tools/build.ps1`: configure if needed, build, print the build id.
+- `tools/check.ps1 fast|gate|full`: tiers and budgets in docs/decisions/0009.
+- `tools/land.ps1 prepare|merge NNN`: lead only.
+Before saying "done", run `tools/check.ps1 fast` and the task's acceptance
+commands and paste the last lines. A failed budget, size or lint check is yours
+to fix, never to raise.
+
+## Rules
+1. Your task is `tasks/NNN-*.md`. Change only files in its Scope. If the task
+   has two readings or a simpler design exists, say so before coding. Report
+   unrelated problems; do not fix them.
+2. In a worktree, first check `git rev-parse --show-toplevel` is that worktree.
+   Commit work in progress after each acceptance step. Never `git stash`.
+3. Physics, sampling, numerics: implement from the source the task names and
+   put `Ref:` (paper, section or equation, reference file) in the code. Never
+   invent an algorithm or a constant.
+4. One source: a formula, material or sampler exists once and compiles for CPU
+   and GPU. Never hand-port.
+5. Fail loudly: unsupported input raises or warns visibly. No silent fallback,
+   no feature merged switched off, no process-global mutable state.
+6. Every new or changed test needs `tasks/NNN.canary.patch`: a deliberate
+   breakage that turns it red (`land` applies it). No skip or xfail without an
+   open task id. Never loosen a threshold to pass: investigate code and test.
+7. Look at renders (Read the PNG) as well as numbers. Measure positions and
+   shifts with numpy, never by eye.
+8. Comments explain why, never ticket history.
+
+## Where things are
+- `docs/ARCHITECTURE.md`; `docs/decisions/` (accepted records); `docs/STATUS.md`
+  (one page, lead edits); `tasks/` (open work only).
+- `docs/v1-lessons/` is the only channel to Astroray 1.0. Never open the v1
+  repository; if you need a v1 fact, name it in your report.
+- `.claude/rules/*.md` load when you touch matching files.
+
+## Environment
+Windows 11, pwsh 7, RTX 5070 Ti, 8 cores / 16 threads. Builds, GPU runs and
+Blender runs go through `tools/`, which hold the machine lock. Do not call
+cmake, ninja, nvcc or blender directly.
+```
+
+Proposed `.claude/settings.json` (committed):
+```json
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "autoMemoryEnabled": false,
+  "promptCacheTtl": "1h",
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": false,
+    "context7@claude-plugins-official": true
+  },
+  "permissions": {
+    "deny": [
+      "Bash(git stash*)", "PowerShell(git stash*)",
+      "Bash(git push --force*)", "PowerShell(git push --force*)",
+      "Bash(git push -f*)", "PowerShell(git push -f*)"
+    ]
+  }
+}
+```
+`.claude/settings.local.json` (git-ignored, this PC only) adds `"Read(//<v1 checkout>/**)"` and `"Edit(//<v1 checkout>/**)"` to `permissions.deny`.
+
+## Review and resolution
+
+1. ACCEPTED: release kernels are embedded in the DLL (decision 3); dev mode swaps files only under `ASTRORAY_KERNEL_DIR`, which `ar_build_info()` reports (decision 5). The NVRTC question goes to the lead (challenge, Risks a), and 0007 D45's loose modules are flagged (Risks b).
+2. ACCEPTED IN PART: `fast` takes no machine lock, timers exclude lock wait, and a per-tree lock was added (decision 8); "exactly one tree" became one `dev` tree per checkout, ≤ 3 (decision 4, spine reading). REJECTED: "worktrees build `cpu` only". `fast` already builds only CPU targets, so no worktree pays a GPU build at task start; kernel tasks need their register numbers before `land` (0002 D10 "Declare").
+3. ACCEPTED: the timestamp rule is replaced by a post-build `ninja -n` no-work check plus the sha check (decision 5).
+4. ACCEPTED: `land` writes the task file and diff to `out/land/NNN/` for the reviewer; the canary is a committed patch that `land` applies, requiring the named tests to fail (decisions 26, 28; appendix rule 6).
+5. ACCEPTED: 0002 D1 and 0001 V2-V4/V9 lints in `fast`; V1, V5 (dependents), V6 and V11 in `gate`; V5 in Blender in `full`; `tests/abi/` and `astroray_kernels_cpu_f64` added. Also aligned the source layout with 0001 D5.2 and 0002 D4/D11.
+6. ACCEPTED: B-05/B-06 now point to 0002 D10, which owns the baseline (`src/kernel/budget.toml`), the growth rule, the stack limit and spill policy; compile times are serial, never from `.ninja_log`, at most three TUs per gate. The nightly conflict with 0002 is flagged (Risks c, d) rather than resolved here.
+7. ACCEPTED: a constant declared family size per suite, lint-enforced; a rotated-seed failure is never dismissed (20 re-seeds, more than one failure is a defect, otherwise the seed is pinned and a task opened).
+8. ACCEPTED: 17(v) now uses v1's validated configuration (8 seeds, Holm at 0.05, 1% margin, zero rejected tiles) with the correct citation, plus a null-calibration task.
+9. ACCEPTED: A1 is limited to lossless configurations (truth 1, or ρ); lossy lobes go to the energy test and O3, and 15(a) states that quadrature comparison is consistency only.
+10. ACCEPTED: the toolset line 14.44 is pinned locally; CI requires ≥ 19.44 and logs it; M1 measures the hosted image.
+11. ACCEPTED: per-merge work counters (+2%) and a 1.25x timing tripwire are in `gate` (B-16, decision 18). BVH node counts are unobservable on OptiX hardware traversal, so they are omitted.
+12. ACCEPTED: exporter equivalence compares canonical scene-state dumps (`dump --state`), not call sequences.
+13. ACCEPTED: spike code is kept at tag `spikes-final`; the CUDA 13 acceptance uses 0001's 10% rule and the product gates.
+14. ACCEPTED: B-13 and B-15 now point to 0007 D33/V8 and D35 (≤ 1.5x, goal 1.0x); the unsourced 1.25x and the 4K 2 ms figure are gone. Like-for-like Cycles sync is flagged to 0007 (Risks g); "comparable" is owner question 1.
+15. ACCEPTED: tier budgets fail at the limit, with no warning band (the 1.2x had no source in PLANNING_PLAN either); the 80-line ADR cap is adopted for build-phase ADRs, with the planning records exempt.
+16. ACCEPTED: Wilcoxon signed-rank on paired log ratios, confirmed across 3 allocation shifts.
+17. ACCEPTED: dispersion is adopted with pbrt-v4 plus the analytic A10 as second witness; layered coat is informational only (OpenPBR's coat is an albedo-scaling model); single-witness status is recorded in `meta.toml`.
+- Also changed, found while resolving 6: the 17(ii)/(iii) thresholds now defer to 0002 D12 instead of restating different numbers. Unchallenged by the review: decision 25 (posted status instead of a runner).
