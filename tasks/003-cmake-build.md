@@ -1,0 +1,21 @@
+# 003 CMake, presets and tools/build.ps1
+Goal: nothing builds -> `tools/build.ps1` enters the pinned MSVC environment, configures the `dev` preset into out/build, builds the CPU test executable into out/bin and proves with `ninja -n` that no work is left.
+Read first: 0009 d2 (toolchain pins), d3 (targets), d4 (presets, one tree), d5 (build identity, ninja -n check), d9 (entry points, output format), d10 (`fast` test rules).
+Scope: CMakeLists.txt, CMakePresets.json, cmake/, tools/build.ps1, third_party/doctest/, tests/cpu/main.cpp, tests/cpu/test_smoke.cpp.
+Out of scope: CUDA (task 027), locks (004), lint (005), astroray_core and the ABI (012-013).
+Reference: none.
+Do:
+1. CMakeLists.txt: `cmake_minimum_required(VERSION 3.31)`, C++17, `CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded` (/MT) and `CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded` (/Z7) for every target; executables and DLLs to `${CMAKE_SOURCE_DIR}/out/bin`. cmake/warnings.cmake adds `/W4 /WX /permissive- /utf-8` to our targets only.
+2. cmake/toolchain.cmake, included first: fail unless `CMAKE_CXX_COMPILER_VERSION` matches `19.44.*`; when env `CI` is `true` require >= 19.44 instead and `message(STATUS "cl ${CMAKE_CXX_COMPILER_VERSION}")`. Also require CMake >= 3.31 and Ninja 1.13.x.
+3. CMakePresets.json: `dev` (Ninja, binaryDir out/build, RelWithDebInfo with /O2, cache `ASTRORAY_GPU=ON`, `CMAKE_CUDA_ARCHITECTURES=120-real`) and `cpu` (same, `ASTRORAY_GPU=OFF`). ASTRORAY_GPU has no effect until task 014 (CUDA toolkit lookup for the device probe) and 027 (device code).
+4. Vendor doctest (single header, latest 2.4.x release) in third_party/doctest/ with LICENSE and VERSION files.
+5. Target `astroray_tests_cpu`: tests/cpu/main.cpp is a custom doctest main where `--tier=fast|gate|full` selects the doctest test suite of that name (`--tier=all` runs every suite; land's canary check uses it, task 010) and prints `tier=<t> tests=<n>`; tests/cpu/test_smoke.cpp holds one case `smoke/arithmetic` in suite `fast`. Every source file carries `// SPDX-License-Identifier: Apache-2.0`.
+6. tools/build.ps1 (pwsh 7, ASCII): header comment lists 0009 d2's pins. Locate VS Build Tools with vswhere, run `vcvarsall.bat x64 -vcvars_ver=14.44` (no `-vcvars_ver` when `$env:CI -eq 'true'`) and import its environment; configure `cmake --preset <dev|cpu>` only when out/build/CMakeCache.txt is missing; `cmake --build out/build --target <targets>`; then `ninja -C out/build -n <targets>` and fail unless it prints `ninja: no work to do.`. Switches `-Target` (default all), `-Preset` (default dev), `-CheckOnly` (only the ninja -n step). At most 20 output lines, last line `PASS build <s> s` or `FAIL build <reason>`, full log out/check/build.log, non-zero exit on failure.
+7. Source registration, one rule for every later task: cmake/sources.cmake globs (plain `file(GLOB)`) `tests/cpu/test_*.cpp` and `tests/common/*.cpp` into astroray_tests_cpu; later tasks extend the same rule: `src/host/**/*.cpp`, `src/device/cpu/*.cpp`, `src/capi/*.cpp` (013), `src/device/cuda/*.cpp` (014), `src/kernel_cpu/*.cpp` and the `// ar-f64` test marker (018), `src/kernel_gpu/*.cu`, `tests/gpu/kernels/*.cu`, `tests/gpu/test_*.cpp` (027, 028). A task adding a file there edits no CMake; a task adding a target does. Not CONFIGURE_DEPENDS: it adds an always-run glob check, so `ninja -n` would never print `no work to do` (decision 5). Instead build.ps1 writes the sorted globbed paths, plus the test files whose first 5 lines carry `// ar-f64`, to out/build/sources.txt and re-runs `cmake --preset` when the list differs.
+Acceptance: `pwsh tools/build.ps1 -Target astroray_tests_cpu` ends with `PASS build`; `out/bin/astroray_tests_cpu.exe --tier=fast` prints `tier=fast tests=1` and passes; after deleting out/bin/astroray_tests_cpu.exe, `pwsh tools/build.ps1 -Target astroray_tests_cpu -CheckOnly` exits non-zero (0009 Verification, decision 5); the next normal run prints PASS again; adding tests/cpu/test_probe.cpp with one fast case makes the next build.ps1 run reconfigure once and `--tier=fast` print `tests=2` (local experiment, then removed).
+Look at: none.
+Canary: tasks/003.canary.patch must turn red: astroray_tests_cpu "smoke/arithmetic".
+Budget: first configure (B-07) and first build; report both times in Progress.
+Depends on: 002.
+Size: M (about 300 lines); stop and report at 2x.
+Progress:

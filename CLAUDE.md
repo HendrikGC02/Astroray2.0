@@ -1,50 +1,53 @@
 # Astroray 2.0
 
-A scientifically accurate spectral path tracer, usable from Blender, built for
-astrophysical rendering on top of standard techniques (OpenPBR materials,
-physically based light transport). Correctness is judged against physics,
-analytic tests and the OpenPBR specification, not against another renderer.
+Spectral path tracer for Blender and astrophysical rendering. Correct means
+physics, analytic results and the OpenPBR specification. Independent spectral
+renderers are cross-checks; Cycles pixels are never a target.
 
-**Phase: planning.** No engine code until `docs/ARCHITECTURE.md` and
-`docs/ROADMAP.md` are signed off by the owner. `spikes/` holds throwaway
-measurement code only.
+The project is in its build phase. Work comes from `tasks/` (order and
+dependencies in `tasks/README.md`); the current state is in `docs/STATUS.md`. Do
+not open the old Astroray repository.
 
-## Where things are
-
-- `docs/PLANNING_PLAN.md` — how the planning phase runs.
-- `docs/research/` — one file per research question, with sources.
-- `docs/decisions/` — architecture decision records. A decision changes only by
-  a new record that supersedes the old one.
-- `docs/v1-lessons/` — everything carried over from Astroray 1.0. This is the
-  only channel. Do not open the v1 repository; if a question needs it, ask the
-  lead for a cited lookup.
+## Commands (their output is the only evidence that something works)
+- `tools/build.ps1`: configure if needed, build, print the build id.
+- `tools/check.ps1 fast|gate|full`: tiers and budgets in docs/decisions/0009.
+- `tools/land.ps1 prepare|merge NNN`: lead only.
+Scripts under `tools/` appear task by task. Until `tools/check.ps1` exists, the
+task's own acceptance commands are the evidence.
+Before saying "done", run `tools/check.ps1 fast` and the task's acceptance
+commands and paste the last lines. A failed budget, size or lint check is yours
+to fix, never to raise.
 
 ## Rules
+1. Your task is `tasks/NNN-*.md`. Change only files in its Scope. If the task
+   has two readings or a simpler design exists, say so before coding. Report
+   unrelated problems; do not fix them.
+2. In a worktree, first check `git rev-parse --show-toplevel` is that worktree.
+   Commit work in progress after each acceptance step. Never `git stash`.
+3. Physics, sampling, numerics: implement from the source the task names and
+   put `Ref:` (paper, section or equation, reference file) in the code. Never
+   invent an algorithm or a constant.
+4. One source: a formula, material or sampler exists once and compiles for CPU
+   and GPU. Never hand-port.
+5. Fail loudly: unsupported input raises or warns visibly. No silent fallback,
+   no feature merged switched off, no process-global mutable state.
+6. Every new or changed test needs `tasks/NNN.canary.patch`: a deliberate
+   breakage that turns it red (`land` applies it). No skip or xfail without an
+   open task id. Never loosen a threshold to pass: investigate code and test.
+7. Look at renders (Read the PNG) as well as numbers. Measure positions and
+   shifts with numpy, never by eye.
+8. Comments explain why, never ticket history.
 
-1. **State assumptions; ask when unsure.** Surface real tradeoffs. Push back on
-   a request when a simpler approach exists.
-2. **Minimum code that solves the problem.** No speculative features, options
-   or abstractions.
-3. **Surgical changes.** Every changed line traces to the task. Mention
-   unrelated problems; do not fix them in passing.
-4. **Evidence, not claims.** "Done" means you built it, ran the check, and can
-   show the output. A measurement names the command that produced it. Look at
-   rendered images as well as numbers.
-5. **Cite before implementing.** Any non-trivial physics, sampling or numerical
-   method comes from a published source with a licence-compatible reference;
-   name it in the code.
-6. **Write once.** A formula, a material or a sampler exists in one place and
-   is compiled for every target. Never hand-port.
-7. **Fail loudly.** Unsupported input raises a visible error or warning. No
-   silent fallbacks, no features that land switched off.
-8. **No process-global mutable state** in the engine.
-9. **Budgets are requirements** (provisional until measured): incremental build
-   under 30 s, clean build under 5 min, pre-commit tests under 10 s, merge-gate
-   tests under 3 min. A change that breaks a budget is not finished.
-10. **Keep documents small.** One page of status. Comments explain why, never
-    ticket history.
+## Where things are
+- `docs/ARCHITECTURE.md` (read first); `docs/decisions/` (the records;
+  precedence: 0000 owner decisions, then RULINGS.md, SPINE.md, the records);
+  `docs/ROADMAP.md` (milestones); `docs/STATUS.md` (one page, lead edits);
+  `tasks/` (open work only).
+- `docs/v1-lessons/` is the only channel to Astroray 1.0. If you need a v1
+  fact, name it in your report; the lead looks it up.
+- `.claude/rules/*.md`, if present, load when you touch matching files.
 
 ## Environment
-
-- Windows 11, PowerShell. RTX 5070 Ti, 8 cores / 16 threads.
-- Do not run two GPU builds or two GPU test runs at once.
+Windows 11, pwsh 7, RTX 5070 Ti, 8 cores / 16 threads. Builds, GPU runs and
+Blender runs go through `tools/`, which hold the machine lock. Do not call
+cmake, ninja, nvcc or blender directly.

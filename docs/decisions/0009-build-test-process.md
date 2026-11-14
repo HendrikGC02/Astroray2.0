@@ -118,7 +118,7 @@ The spine fixes the frame: CMake + Ninja + MSVC, one build tree; CUDA + OptiX on
    (vi) `full` only: CPU float vs CPU double render of the same scene agree within noise.
    17a. **Blender end-to-end.**
    - **Launcher** `tools/lib/blender.ps1`: `--background --factory-startup --python-exit-code 1`, `BLENDER_USER_{CONFIG,SCRIPTS,EXTENSIONS,DATAFILES}` under `out/blender_home/<run>`, killed only by its own PID (spike B §0 method).
-   - **Gate smoke:** install the staged extension zip, then render A1's `.blend` (written by its builder in headless Blender) at 64x64 through the addon, and check the image analytically. Exporter equivalence: replay the addon's recording and the builder's recording, and compare `astroray_cli dump --state` of the two. The dump is the engine's committed scene state (triangulated geometry, instances, transforms, compiled material programs, lights, camera, settings) sorted by key, with arrays compared within float tolerance. The two producers may differ in call order and in shipping polygons or triangles (0007 D10).
+   - **Gate smoke:** install the staged extension zip, then render A1's `.blend` (written by its builder in headless Blender) at 64x64 through the addon, and check the image analytically. Exporter equivalence: replay the addon's recording and the builder's recording, and compare deterministic AOV dumps of the two renders (ruling 59 removed scene-state read-back). The two producers may differ in call order and in shipping polygons or triangles (0007 D10).
    - **`full`:** node coverage (every `ShaderNode*` type in 5.3, 108 types: implemented, or magenta plus a report entry; none silent); edit round trip (apply an edit sequence through `view_update`; the final state dump equals that of a full re-sync); windowed timing for B-13, B-14 and B-15 using spike B's harness pattern.
    - Blender 5.4 runs are informational until 5.4 ships.
 18. **Performance, register and compile-time gates.**
@@ -225,7 +225,7 @@ When each item lands is `docs/ROADMAP.md`'s business (ruling G1).
 - The CPU and GPU doctest executables, with every lobe, light and sampler function pure and taking explicit uniforms (decision 14): kernel code written without that interface must be rewritten to be tested.
 - The kernel resource gate on 0002's baseline, serial compile timing (B-05), work counters and the tripwire (B-16): budgets need a baseline from the first kernel, and growth found late forces splits.
 - Agreement steps 17(i)-(iv): one-source divergence between CPU and GPU is cheapest to find while there is one kernel.
-- ABI recording and replay, scene builders, `dump --state`, A1, A5, D2 and the Blender smoke: every scene, benchmark and bug report is a recording, so a late format means rewriting all builders.
+- ABI recording and replay, scene builders, A1, A5, D2 and the Blender smoke: every scene, benchmark and bug report is a recording, so a late format means rewriting all builders.
 - The `fast` lints (0001 V2-V4, V9; 0002 D1; ruling 20's dependency check) and the gate checks V1, V5 (dependents), V6, V11: violations accumulate silently otherwise.
 - Hosted CI, the posted `astroray/gate` status and branch protection: merges without the GPU gate were v1's main regression path.
 - `budgets.toml` with the declared family sizes: thresholds must not move as tests are added (decision 15).
@@ -385,7 +385,7 @@ History of the independent review; the Decision section and the Reconciliation s
 9. ACCEPTED: A1 is limited to lossless configurations (truth 1, or ρ); lossy lobes go to the energy test and O3, and 15(a) states that quadrature comparison is consistency only.
 10. ACCEPTED: the toolset line 14.44 is pinned locally; CI requires ≥ 19.44 and logs it; M1 measures the hosted image.
 11. ACCEPTED: per-merge work counters (+2%) and a 1.25x timing tripwire are in `gate` (B-16, decision 18). BVH node counts are unobservable on OptiX hardware traversal, so they are omitted.
-12. ACCEPTED: exporter equivalence compares canonical scene-state dumps (`dump --state`), not call sequences.
+12. ACCEPTED: exporter equivalence compares dumps, not call sequences (since ruling 59: deterministic AOV dumps).
 13. ACCEPTED: spike code is kept at tag `spikes-final`; the CUDA 13 acceptance uses 0001's 10% rule and the product gates.
 14. ACCEPTED: B-13 and B-15 now point to 0007 D33/V8 and D35 (≤ 1.5x, goal 1.0x); the unsourced 1.25x and the 4K 2 ms figure are gone. Like-for-like Cycles sync is flagged to 0007 (Risks g); "comparable" is owner question 1.
 15. ACCEPTED: tier budgets fail at the limit, with no warning band (the 1.2x had no source in PLANNING_PLAN either); the 80-line ADR cap is adopted for build-phase ADRs, with the planning records exempt.

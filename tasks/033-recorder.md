@@ -1,0 +1,19 @@
+# 033 ABI recorder, `.arrec` format and the generated replayer
+Goal: scenes cannot be saved or replayed -> abigen generates a recorder that stores every non-query call with its payloads and staged arrays, a C++ replayer the CLI will use, and a Python decoder for tests; recording costs one branch per call when off.
+Read first: 0001 D1.4 (recordings are the only scene format), D2.10 (recording rule), D2.7 (hash in the header), V11; 0009 d19 (scene format, producers, `ASTRORAY_RECORD`).
+Scope: tools/abigen.py, src/capi/*.cpp (one `AR_RECORD` line per implemented non-query entry point), CMakeLists.txt (hook-check build step, test-only target `replay_driver`), out/build/gen outputs (recorder_hooks.h, recorder.cpp, replayer.cpp, arrec.py), tests/abi/replay_driver.cpp, tests/abi/test_recorder.py.
+Out of scope: rendering a replay (069 wires the replayer into `astroray_cli render`); the addon's record mode (084).
+Reference: none.
+Do:
+1. Format: header = magic `ARREC001`, u64 ABI hash, `ar_build_record` bytes; then records {u32 function index (header declaration order), u32 flags, u64 payload bytes, payload}. Payload: scalars in declaration order; `AR_IN` structs by value with their `AR_IN_ARRAY` and string fields inlined length-prefixed; handles as u64 ids assigned in creation order per recording; staged arrays are captured at their `ar_edit_item_commit` (or `ar_edit_commit`) with their byte length.
+2. Recorder (generated `recorder.cpp`): one recorder per context, created when `ar_context_desc.record_path` is non-null or `ASTRORAY_RECORD` is set; appends under its own lock in arrival order; abigen generates recorder_hooks.h with one `ar_rec_<function>(ctx, args...)` per non-query function and the macro `AR_RECORD(fn, args...)` (one `if (ctx->recorder)` branch around the call); every implemented non-`AR_QUERY` entry point in src/capi calls `AR_RECORD(<name>, ...)` as its first statement inside the guard, and the build step `abigen.py --check-hooks src/capi` fails naming any implemented non-query function without it (unimplemented.cpp exempt), so entry points added by later tasks are covered; query results are never stored; flushed on context destroy and every 64 MiB.
+3. Replayer (generated `replayer.cpp`, compiled into astroray_cli later): reads a file, refuses an ABI hash mismatch with AR_ERR_ABI_MISMATCH naming both hashes, maps recorded handle ids to live handles, fills staged arrays from the payloads after each `_begin`, and calls each function in order; returns the list of sessions created for the caller to render.
+4. Generated `arrec.py` decodes a file into (function name, args) tuples for tests.
+5. tests/abi/test_recorder.py: through `_abi.py` with a record path, run create context, scene create, edit begin, set_settings, set_astro, a mesh through `ar_edit_mesh_begin` with filled staged arrays (035), commit, destroy; decode the file: the call list equals the issued non-query calls in order and contains no `AR_QUERY` function even though queries were issued (0001 V11, recording part); a file with an edited hash is refused by the replayer through a small test driver (tests/abi/replay_driver.cpp, test-only target); replaying the file with recording on gives a second file whose decoded calls and staged payloads equal the first (staged capture and replay, not only the call list).
+Acceptance: `pwsh tools/check.ps1 gate` passes; `<python> -m unittest discover -s tests/abi -p "test_recorder.py"` passes and prints the decoded call list; recording off adds no measurable time to test_scene_api (report both runs).
+Look at: none.
+Canary: tasks/033.canary.patch must turn red: tests/abi/test_recorder.py "TestRecorder.test_no_query_calls_recorded", "TestRecorder.test_hash_mismatch_refused", "TestRecorder.test_replay_rerecords_identical".
+Budget: one predictable branch per ABI call when off.
+Depends on: 032, 035.
+Size: M (about 450 lines of generator); stop and report at 2x.
+Progress:

@@ -45,3 +45,11 @@ Decisions made by the owner. Later records build on these; they change only if t
 - Unsupported shader nodes render magenta and are listed in a per-render report.
 - Windows only for 2.0.
 - The CPU target is for correctness and tests, and can also render.
+
+## Lead defaults on the questions the roadmap needs before M1a (owner decision 29's "follow your judgment"; standing unless the owner objects)
+
+- **No contributor licence agreement.** Inbound equals outbound. Consequence: the project cannot be relicensed without every contributor.
+- **CIE 1931 values** are shipped from pbrt-v4 at a pinned commit with provenance and DOI recorded (0001 D8.2); no permission request is sent first.
+- **OptiX and DLSS licences:** follow the pattern Blender itself ships (compiled OptiX modules in an open-source product; DLSS loaded from the driver, never bundled). This is a reading, not legal advice.
+- **Unit anchor:** as 0003 decision 11. Science channels from Blender-unit emitters are flagged, not refused.
+- **OptiX denoiser:** not built for 2.0. "DLSS together with the other denoisers" (decision 24) is read as OIDN plus DLSS; it is added only with a measured win (0008).
