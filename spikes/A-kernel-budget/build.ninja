@@ -1,0 +1,84 @@
+cudalib = C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8/lib/x64
+cudainc = C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8/include
+rule nvcc
+  command = cmd /c "nvcc -gencode arch=compute_120,code=sm_120 -O3 -std=c++17 -Xcompiler /MD -Iinclude -Isrc $flags -Xptxas -v -c $in -o $out > $out.log 2>&1"
+  description = NVCC $out
+rule cl
+  command = cl /nologo /O2 /EHsc /std:c++17 /MD -Iinclude -I"$cudainc" -c $in /Fo$out
+  description = CL $out
+rule link
+  command = link /nologo /OUT:$out $in /LIBPATH:"$cudalib" cudart.lib
+  description = LINK $out
+build out/obj/base_fused.obj: nvcc src/k_fused.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=base -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/base_bsdf.obj: nvcc src/k_bsdf.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=base -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/base_nee.obj: nvcc src/k_nee.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=base -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/lb_fused.obj: nvcc src/k_fused.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=lb -DKL_WIDTH=4 -DKL_LB=1 -DKL_LB_MIN=2 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/lb_bsdf.obj: nvcc src/k_bsdf.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=lb -DKL_WIDTH=4 -DKL_LB=1 -DKL_LB_MIN=2 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/lb_nee.obj: nvcc src/k_nee.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=lb -DKL_WIDTH=4 -DKL_LB=1 -DKL_LB_MIN=2 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/lb4_fused.obj: nvcc src/k_fused.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=lb4 -DKL_WIDTH=4 -DKL_LB=1 -DKL_LB_MIN=4 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/lb4_bsdf.obj: nvcc src/k_bsdf.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=lb4 -DKL_WIDTH=4 -DKL_LB=1 -DKL_LB_MIN=4 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/lb4_nee.obj: nvcc src/k_nee.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=lb4 -DKL_WIDTH=4 -DKL_LB=1 -DKL_LB_MIN=4 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/noinl_fused.obj: nvcc src/k_fused.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=noinl -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=1 -DKL_MAT_BYPTR=0
+build out/obj/noinl_bsdf.obj: nvcc src/k_bsdf.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=noinl -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=1 -DKL_MAT_BYPTR=0
+build out/obj/noinl_nee.obj: nvcc src/k_nee.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=noinl -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=1 -DKL_MAT_BYPTR=0
+build out/obj/noinl_lb_fused.obj: nvcc src/k_fused.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=noinl_lb -DKL_WIDTH=4 -DKL_LB=1 -DKL_LB_MIN=2 -DKL_NOINLINE_LOBES=1 -DKL_MAT_BYPTR=0
+build out/obj/noinl_lb_bsdf.obj: nvcc src/k_bsdf.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=noinl_lb -DKL_WIDTH=4 -DKL_LB=1 -DKL_LB_MIN=2 -DKL_NOINLINE_LOBES=1 -DKL_MAT_BYPTR=0
+build out/obj/noinl_lb_nee.obj: nvcc src/k_nee.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=noinl_lb -DKL_WIDTH=4 -DKL_LB=1 -DKL_LB_MIN=2 -DKL_NOINLINE_LOBES=1 -DKL_MAT_BYPTR=0
+build out/obj/ptr_fused.obj: nvcc src/k_fused.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=ptr -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=1
+build out/obj/ptr_bsdf.obj: nvcc src/k_bsdf.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=ptr -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=1
+build out/obj/ptr_nee.obj: nvcc src/k_nee.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=ptr -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=1
+build out/obj/noinl_ptr_fused.obj: nvcc src/k_fused.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=noinl_ptr -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=1 -DKL_MAT_BYPTR=1
+build out/obj/noinl_ptr_bsdf.obj: nvcc src/k_bsdf.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=noinl_ptr -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=1 -DKL_MAT_BYPTR=1
+build out/obj/noinl_ptr_nee.obj: nvcc src/k_nee.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=noinl_ptr -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=1 -DKL_MAT_BYPTR=1
+build out/obj/w8_fused.obj: nvcc src/k_fused.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=w8 -DKL_WIDTH=8 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/w8_bsdf.obj: nvcc src/k_bsdf.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=w8 -DKL_WIDTH=8 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/w8_nee.obj: nvcc src/k_nee.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=w8 -DKL_WIDTH=8 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/w8_lb_fused.obj: nvcc src/k_fused.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=w8_lb -DKL_WIDTH=8 -DKL_LB=1 -DKL_LB_MIN=2 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/w8_lb_bsdf.obj: nvcc src/k_bsdf.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=w8_lb -DKL_WIDTH=8 -DKL_LB=1 -DKL_LB_MIN=2 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/w8_lb_nee.obj: nvcc src/k_nee.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=w8_lb -DKL_WIDTH=8 -DKL_LB=1 -DKL_LB_MIN=2 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/w8_noinl_fused.obj: nvcc src/k_fused.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=w8_noinl -DKL_WIDTH=8 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=1 -DKL_MAT_BYPTR=0
+build out/obj/w8_noinl_bsdf.obj: nvcc src/k_bsdf.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=w8_noinl -DKL_WIDTH=8 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=1 -DKL_MAT_BYPTR=0
+build out/obj/w8_noinl_nee.obj: nvcc src/k_nee.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=w8_noinl -DKL_WIDTH=8 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=1 -DKL_MAT_BYPTR=0
+build out/obj/base_param.obj: nvcc src/k_param.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=base -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/w8_param.obj: nvcc src/k_param.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=w8 -DKL_WIDTH=8 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/fvm_fvm.obj: nvcc src/k_fvm.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=fvm -DKL_WIDTH=4 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/w8_fvm_fvm.obj: nvcc src/k_fvm.cu | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h
+  flags = -DKL_VARIANT=w8_fvm -DKL_WIDTH=8 -DKL_LB=0 -DKL_LB_MIN=0 -DKL_NOINLINE_LOBES=0 -DKL_MAT_BYPTR=0
+build out/obj/bench.obj: cl src/bench.cpp | include/kl.h include/material.h include/lobes.h include/stages.h include/gpu_scene.h src/kcommon.h include/scene.h include/gpu_upload.h src/variants.inc
+build out/bench.exe: link out/obj/bench.obj out/obj/base_fused.obj out/obj/base_bsdf.obj out/obj/base_nee.obj out/obj/lb_fused.obj out/obj/lb_bsdf.obj out/obj/lb_nee.obj out/obj/lb4_fused.obj out/obj/lb4_bsdf.obj out/obj/lb4_nee.obj out/obj/noinl_fused.obj out/obj/noinl_bsdf.obj out/obj/noinl_nee.obj out/obj/noinl_lb_fused.obj out/obj/noinl_lb_bsdf.obj out/obj/noinl_lb_nee.obj out/obj/ptr_fused.obj out/obj/ptr_bsdf.obj out/obj/ptr_nee.obj out/obj/noinl_ptr_fused.obj out/obj/noinl_ptr_bsdf.obj out/obj/noinl_ptr_nee.obj out/obj/w8_fused.obj out/obj/w8_bsdf.obj out/obj/w8_nee.obj out/obj/w8_lb_fused.obj out/obj/w8_lb_bsdf.obj out/obj/w8_lb_nee.obj out/obj/w8_noinl_fused.obj out/obj/w8_noinl_bsdf.obj out/obj/w8_noinl_nee.obj out/obj/base_param.obj out/obj/w8_param.obj out/obj/fvm_fvm.obj out/obj/w8_fvm_fvm.obj
+build kernels: phony out/obj/base_fused.obj out/obj/base_bsdf.obj out/obj/base_nee.obj out/obj/lb_fused.obj out/obj/lb_bsdf.obj out/obj/lb_nee.obj out/obj/lb4_fused.obj out/obj/lb4_bsdf.obj out/obj/lb4_nee.obj out/obj/noinl_fused.obj out/obj/noinl_bsdf.obj out/obj/noinl_nee.obj out/obj/noinl_lb_fused.obj out/obj/noinl_lb_bsdf.obj out/obj/noinl_lb_nee.obj out/obj/ptr_fused.obj out/obj/ptr_bsdf.obj out/obj/ptr_nee.obj out/obj/noinl_ptr_fused.obj out/obj/noinl_ptr_bsdf.obj out/obj/noinl_ptr_nee.obj out/obj/w8_fused.obj out/obj/w8_bsdf.obj out/obj/w8_nee.obj out/obj/w8_lb_fused.obj out/obj/w8_lb_bsdf.obj out/obj/w8_lb_nee.obj out/obj/w8_noinl_fused.obj out/obj/w8_noinl_bsdf.obj out/obj/w8_noinl_nee.obj out/obj/base_param.obj out/obj/w8_param.obj out/obj/fvm_fvm.obj out/obj/w8_fvm_fvm.obj
+default out/bench.exe
+
