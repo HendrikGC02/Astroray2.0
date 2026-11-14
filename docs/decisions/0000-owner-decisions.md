@@ -20,6 +20,9 @@ Decisions made by the owner. Later records build on these; they change only if t
 14. **Addon only; no Blender fork.** Astroray ships as a normal extension for stock Blender. Blender's source is used as a reference: to find the fast paths the Python API really has, to copy how Cycles structures scene sync and display, and to match node behaviour exactly. Proposing small API additions upstream is allowed but nothing may depend on them.
 15. **Diagnostics and reporting:** heat maps of sample count, bounce count and similar statistics; benchmark reports with graphs; showcase renders at each milestone.
 
+16. **Custom and advanced material types must exist**, not only standard OpenPBR surfaces. Catalogue: `research/17-materials-and-custom-types.md`.
+17. **Diffraction gratings are in the first release.** Consequence accepted by the lead: the first release also needs the light-tracing or photon path that makes a grating useful (a light through a grating onto a surface), so that machinery is designed in from the first milestone rather than added later.
+
 ## Lead defaults, standing unless the owner objects
 
 - Distribution from a self-hosted extension repository and GitHub releases.
