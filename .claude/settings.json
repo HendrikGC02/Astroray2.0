@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": false,
+    "context7@claude-plugins-official": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git status -sb"
+          }
+        ]
+      }
+    ]
+  },
+  "promptCacheTtl": "1h",
+  "subagentPromptCacheTtl": "1h"
+}

@@ -1,0 +1,28 @@
+# 0000 — Owner decisions
+
+Decisions made by the owner. Later records build on these; they change only if the owner says so.
+
+## 2026-11-14
+
+1. **Correctness target:** physics and the OpenPBR specification. No pixel-parity gates against Cycles.
+2. **One kernel source** compiled for CPU and GPU. No second hand-written implementation.
+3. **Blender:** ship on 5.3, design for 5.4.
+4. **Implementation language is the lead's call.** The owner wants whatever is fastest, most efficient and best to work in; C++ is not a requirement.
+5. **Licence:** fully open source, no commercial option needed. Engine core Apache-2.0, Blender addon GPL-3.0-or-later.
+6. **Repository:** public, on the owner's GitHub profile.
+7. **First usable release is feature-complete in breadth:** surfaces, volumes, sky and world lighting, textures, lights. Not a surface-only renderer with volumes later.
+8. **First astrophysics target:** a black hole inside an emission nebula.
+9. **Viewport targets:** comparable to Cycles. 60 updates per second desirable, 30 acceptable, 24 the floor for interactive work. Time to first frame comparable to Cycles, including on large scenes, where v1 blew up.
+10. **Viewport resolution:** stay at or near full resolution; reduce it dynamically only when the update rate falls below the floor. No fixed navigation downscale.
+11. **DLSS** should be built into the engine's viewport if it can be.
+12. **Merge authority:** the lead merges and keeps working without asking.
+13. **GPU testing:** this PC may be used as the GPU test machine.
+14. **Deeper Blender integration is on the table.** Blender is open source; a patched Blender or upstream changes are acceptable if measurement shows the extension route cannot meet the viewport targets.
+15. **Diagnostics and reporting:** heat maps of sample count, bounce count and similar statistics; benchmark reports with graphs; showcase renders at each milestone.
+
+## Lead defaults, standing unless the owner objects
+
+- Distribution from a self-hosted extension repository and GitHub releases.
+- Unsupported shader nodes render magenta and are listed in a per-render report.
+- Windows only for 2.0.
+- The CPU target is for correctness and tests, and can also render.

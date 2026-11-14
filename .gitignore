@@ -1,0 +1,12 @@
+build/
+out/
+__pycache__/
+*.pyd
+*.pyc
+.vs/
+.vscode/
+# Large assets are fetched by manifest, never committed
+assets/external/
+# Per-run output; curated results are added explicitly
+runs/
+.claude/settings.local.json
