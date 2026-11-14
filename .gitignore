@@ -10,3 +10,7 @@ assets/external/
 # Per-run output; curated results are added explicitly
 runs/
 .claude/settings.local.json
+spikes/*/scenes/
+spikes/*/out/
+spikes/*/build/
+spikes/*/user/
