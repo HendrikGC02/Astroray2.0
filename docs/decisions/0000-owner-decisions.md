@@ -17,7 +17,7 @@ Decisions made by the owner. Later records build on these; they change only if t
 11. **DLSS** should be built into the engine's viewport if it can be.
 12. **Merge authority:** the lead merges and keeps working without asking.
 13. **GPU testing:** this PC may be used as the GPU test machine.
-14. **Deeper Blender integration is on the table.** Blender is open source; a patched Blender or upstream changes are acceptable if measurement shows the extension route cannot meet the viewport targets.
+14. **Addon only; no Blender fork.** Astroray ships as a normal extension for stock Blender. Blender's source is used as a reference: to find the fast paths the Python API really has, to copy how Cycles structures scene sync and display, and to match node behaviour exactly. Proposing small API additions upstream is allowed but nothing may depend on them.
 15. **Diagnostics and reporting:** heat maps of sample count, bounce count and similar statistics; benchmark reports with graphs; showcase renders at each milestone.
 
 ## Lead defaults, standing unless the owner objects
