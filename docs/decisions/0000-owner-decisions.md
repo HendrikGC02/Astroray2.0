@@ -23,6 +23,10 @@ Decisions made by the owner. Later records build on these; they change only if t
 16. **Custom and advanced material types must exist**, not only standard OpenPBR surfaces. Catalogue: `research/17-materials-and-custom-types.md`.
 17. **Diffraction gratings are in the first release.** Consequence accepted by the lead: the first release also needs the light-tracing or photon path that makes a grating useful (a light through a grating onto a surface), so that machinery is designed in from the first milestone rather than added later.
 
+18. **One extension behaviour per material is enough.** Stacks such as a coated grating are not required.
+19. **Fluorescence should cover all the use cases:** optical brighteners, fluorescent minerals and pigments, and astrophysical fluorescence. No single one takes priority.
+20. The owner has no further items to add to the materials catalogue for now.
+
 ## Lead defaults, standing unless the owner objects
 
 - Distribution from a self-hosted extension repository and GitHub releases.
