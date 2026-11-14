@@ -15,8 +15,8 @@ The lead's binding positions after Stage 1 research and spikes A and B. Every de
 - 4 hero wavelengths. 8 was measured over budget (197 registers).
 - Surface shading starts as ONE fused kernel (BSDF sample/eval + next-event estimation) with `__launch_bounds__`: measured 148 registers uncapped, 128 capped, and the capped fused kernel beat split kernels by about 22%. Split only when a measurement says so.
 - Work that is structurally different gets its own kernel and queue: ray generation, traversal, shadow rays, volume/medium, random-walk subsurface, the extension-lobe surface stage, the light-tracing pass, geodesic stepping.
-- Budgets enforced by the merge gate, per kernel: at most 168 registers uncapped, no spills when capped at 168, at most 3 s compile per translation unit. Records are passed by pointer or reference, never by value across a non-inlined call. No template variant matrices; runtime flags instead.
-- Edit loop: runtime compilation (NVRTC, about 1 s edit-to-launch measured) in development; ahead-of-time nvcc for the gate and releases; same source.
+- Budgets enforced by the merge gate, per kernel: spills and stack in the shipping capped build stay within recorded allowances, and at most 3 s compile per translation unit. The uncapped register count (warning at 150, limit 168) is reported by `check full` (amended by ruling 17). Records are passed by pointer or reference, never by value across a non-inlined call. No template variant matrices; runtime flags instead.
+- One GPU compiler: nvcc ahead of time (1.3-2.5 s per file measured). Runtime compilation is dropped unless the measured edit loop exceeds 5 s (ruling 16).
 - CPU/GPU agreement is tested on the throughput weight f·cos/pdf, with a test build that disables FMA contraction (1.1e-6 agreement measured).
 
 ## 3. Spectral model and path state

@@ -27,6 +27,18 @@ Decisions made by the owner. Later records build on these; they change only if t
 19. **Fluorescence should cover all the use cases:** optical brighteners, fluorescent minerals and pigments, and astrophysical fluorescence. No single one takes priority.
 20. The owner has no further items to add to the materials catalogue for now.
 
+## 2026-11-14, checkpoint 2
+
+21. **Viewport rate for 2.0:** a steady 30 updates per second at full resolution is the target; 60 is a later goal; 24 remains the floor.
+22. **Progressive viewport batching:** like Cycles, the viewport shows the first samples one at a time for fast feedback and then does more samples per displayed update as the image settles, so less time goes to display and more to rendering.
+23. **Time to first frame:** gate at no more than 1.5x Cycles, aim for equal.
+24. **In the first release:** fluorescence, hair (reusing the knowledge from v1), DLSS together with the other denoisers, and scientific outputs (filter-band images, photon counts, data cubes).
+25. **Caustics:** point lamps and spotlights must cast caustics onto surfaces. Caustics from such lamps that are only visible through glass or in a mirror, or that light the scene again after another bounce, may be missing in 2.0 with a visible warning.
+26. **Ambient Occlusion and Bevel nodes** may have no effect in 2.0, reported in the render report.
+27. **First milestone** is a small working slice (meshes, lamps, textures in the viewport); everything else is designed in and built in later milestones before the first release.
+28. **Metal thin film** is physically computed, even where less saturated than Cycles.
+29. **Left to the lead:** no scheduled unattended jobs; releases built for other NVIDIA generations and labelled untested; the engine stays in Blender's process unless GPU faults prove frequent.
+
 ## Lead defaults, standing unless the owner objects
 
 - Distribution from a self-hosted extension repository and GitHub releases.
