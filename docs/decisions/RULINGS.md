@@ -79,3 +79,32 @@ The first pass left specific disagreements. These rulings close them. One editor
 47. **Kernel list.** 0002 enumerates the `Stage` enum and names every kernel other records need, including the film, denoiser-preparation and heat-map kernels, `intersect_subsurface`, `shade_light_path_ext`, `bake_environment`, a hair shade kernel if split, and the motion pipeline variant.
 48. **Owner decisions 24-28** are reflected: fluorescence, hair, DLSS with the other denoisers and scientific outputs are first-release features; point lamps and spotlights cast caustics through the light-tracing pass; Ambient Occlusion and Bevel are reported no-ops; thin film is physically computed.
 49. **Stale text.** Risks, open items and cross-references that describe a superseded state are corrected. "Review and resolution" sections stay as history, each headed by one line saying later reconciliation supersedes them.
+
+# Third round (2026-11-14): closing reconciliation
+
+Two verification rounds applied rulings 1-49 almost everywhere; the layouts and budgets check out (path state 157 B unconditional, 225 B maximum; shadow item 124 B). What remains is listed here. No further reconciliation pass is run: the records are corrected when a task next touches them.
+
+50. **Precedence.** Owner decisions, then these rulings, then the spine, then the records. Where a record conflicts with a later ruling, the ruling wins and the task that touches that part of the record fixes the text.
+51. **Ruling 29 covers budgets** (limits that a check enforces), not measurements quoted as evidence. Measured times may stay where they explain a decision. B-37 is split into one id per constant when 0009 is next edited.
+52. **Cancellation** is checked between kernel launches. "One step" wording is superseded.
+53. **Oracle and science-format checks** (astropy, Mitsuba 3, pbrt-v4) use a separate tools environment under `third_party/_cache`, used only by `check full`. Ruling 32 applies to the build and the merge gate.
+54. **tinyexr is for reading only.** The engine writes no EXR.
+55. **SDK headers** (OptiX, NGX) are fetched by `tools/fetch.ps1 deps`, never at configure time.
+56. **OIDN-CUDA and DLSS glue** live under `src/device/`, where CUDA types are allowed.
+57. **Presentation** is RGBA16F for images; heat maps are the single 8-bit exception.
+58. **The AO render pass is dropped for 2.0**, consistent with the AO node being a reported no-op.
+59. **`dump`** in the command-line host covers film and science output only; there is no scene-state read-back.
+60. **Sampler mode and frame number** are fields of `ar_settings`; the engine hashes the frame into the seed.
+61. **Node mapping rows** are validated against the OpenPBR definition and analytic expectations. Cycles renders are a qualitative look check and never a shipping condition.
+62. **Tool and script names:** 0009's repository layout is authoritative.
+63. **Designed when built.** These have no design yet. Each is decided in the task that builds it, from a published source, and written back into the owning record in the same change:
+    - ray-origin offset, tmin, self-intersection and shadow-terminator handling (0002);
+    - shadow catcher and holdout, and the alpha path (0008);
+    - camera and lens models, including panoramic types (0004);
+    - ownership and compaction of the active-pixel list (0008);
+    - which kernel shades the subsurface exit vertex (0002, 0005);
+    - medium-stack handling on light paths (0006);
+    - texture footprint on light paths (0005);
+    - array count fields and light descriptor fields in the ABI appendix (0007);
+    - report codes still missing (0001);
+    - version pins, including Embree (0009).

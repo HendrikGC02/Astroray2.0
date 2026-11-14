@@ -31,6 +31,7 @@ The lead's binding positions after Stage 1 research and spikes A and B. Every de
 ## 4. Integrator
 
 - Core: unidirectional path tracing with next-event estimation and multiple importance sampling, light tree, environment importance sampling, null-scattering volumes with spectral majorants (homogeneous and grid), random-walk subsurface, colour-aware adaptive sampling.
+- Media with no scattering are marched rather than tracked, and Mix is linear for volumes (amended by ruling 23).
 - A light-tracing pass is part of the first release, because gratings, prisms and caustics are unreachable otherwise (owner decision 17). Record 0004 chooses the method from published work.
 - Film: per-pixel first and second moments, the full denoiser buffer set, and statistics buffers (sample count, bounce count, variance, termination reason, time).
 
@@ -38,6 +39,7 @@ The lead's binding positions after Stage 1 research and spikes A and B. Every de
 
 - The common shade kernel sees one fixed OpenPBR Surface 1.1.2 parameter record.
 - Any colour or refractive-index slot can be fed by a spectrum source (upsampled RGB as reflectance, as unbounded, or as illuminant; a table; an analytic form) instead of an RGB value.
+- Each slot has one fixed upsampling convention, decided by what the slot means, not per material (amended by ruling 23).
 - A material may carry at most one extension behaviour from a closed list (owner decision 18), evaluated in a separate stage.
 - Blender node graphs are evaluated per shading point by a bytecode VM that fills the record's parameters; it never emits closures. Mix Shader selects stochastically. Unsupported nodes render magenta and are listed in a per-render report.
 - The objections in `research/17-materials-and-custom-types.md` ("Review findings") are open and record 0005 must answer each.

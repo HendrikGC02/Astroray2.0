@@ -35,7 +35,7 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
    - `terminate_secondaries(λt, beta, flags)`: copies lane 0 of `λt` and `beta` into lanes 1-3 and sets `SECONDARIES_TERMINATED`; `r_u`, `r_l` are untouched. Afterwards every lane evaluates at λt[0], so every lane reduction equals lane 0 and later per-lane pdf ratios are 1. Used by dispersion, gratings and any event whose direction depends on wavelength. The kept lane is lane 0, never the hero lane: keeping h is the biased case of decision 6's counterexample.
    - `rewrite_wavelength(λt, beta, λi, ratio, flags)`: fluorescence. The caller has terminated secondaries and drawn λi from the excitation distribution for λt[0]; this sets `beta *= ratio` (= M(λi→λt[0])/p(λi)), all lanes of λt to λi, and `WAVELENGTHS_REWRITTEN`. The film still weights by λf[0].
    - `apply_frequency_shift(λt, beta, g, flags)`: for a change of frame with `g = ν_from/ν_to`, `from` on the camera side. Sets `λt_i *= g` on every lane, `beta *= g⁵`, `WAVELENGTHS_REWRITTEN`. It never terminates lanes: geodesics are achromatic. g⁵ is the wavelength form of the invariant I_ν/ν³, namely I_λλ⁵ (Rybicki and Lightman 1979 §1.5). The law that supplies g is 0006 D30's.
-   - `film_weights(flags, pf) -> Spec`: `(1/pf_0, 0, 0, 0)` if `SECONDARIES_TERMINATED`, else `w_i = 1/(4pf_i)`. Applied to a sample's whole contribution at resolve (0008 D3) and to a light-path connection at delivery (0008 D4). This is pbrt-v4's arithmetic (`TerminateSecondary` sets pdf[1..3] = 0 and pdf[0] /= 4). An item flagged `FILM_WEIGHT_PREFOLDED` (decision 20; 0005 item 26) already holds 1/p_e(λo) and its lanes equal λo, so it converts at λt[0] with weight 1.
+   - `film_weights(flags, pf) -> Spec`: `(1/pf_0, 0, 0, 0)` if `SECONDARIES_TERMINATED`, else `w_i = 1/(4pf_i)`. Applied to a sample's whole contribution at resolve (0008 D3) and to a light-path connection at delivery (0008 D4). This is pbrt-v4's arithmetic (`TerminateSecondary` sets pdf[1..3] = 0 and pdf[0] /= 4). No connection carries a prefolded film weight: the light-tracing pass never connects at a surface or medium event that rewrites wavelengths (ruling 44, 0004 D19).
    - `hero(flags)`: the path's hero lane (decision 6).
 6. **Every lane's estimator is unbiased on its own**, so dropping or rewriting lanes never biases the result. Binding everywhere, media and geodesics included (ruling 4).
    - **Surface decisions** (Mix select, lobe, direction, light choice, Russian roulette, grating order choice) use permutation-invariant reductions over lanes (mean or max; 0004 D2's max_λ and 0005 item 22's mean qualify), never one lane. Their pdf is the same for every lane, so surfaces need no per-lane pdf bookkeeping.
@@ -66,7 +66,7 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
    - **Physical-unit inputs** (Astroray spectral lights in W or lm, astrophysical tables) enter unscaled.
    - **Science outputs.** When a band, cube or photon channel is requested and any Blender-unit emitter is enabled, the report lists them as a warning and the science file carries `PHYSUNIT = F` (0008). Not refused (owner question 1).
 12. **RGB and Blender inputs.** RGB radiances from Blender use the illuminant convention (decision 16), so they render back as the same working-space RGB to within table error.
-13. **Bands and photons** are 0008's formulas (decisions 7 and 9). This record requires only that film conversion uses λf (observed), never λt (except the prefolded case of decision 5), and that h and c are the exact CODATA 2018 values, folded in double on the host.
+13. **Bands and photons** are 0008's formulas (decisions 7 and 9). This record requires only that film conversion uses λf (observed), never λt, and that h and c are the exact CODATA 2018 values, folded in double on the host.
 14. **One observer.** CIE 1931 2°, 1 nm steps, 360-830 nm (471 samples).
    - **Source.** pbrt-v4 `src/pbrt/util/spectrum.cpp` (Apache-2.0), arrays `CIE_X/Y/Z`, `CIE_Illum_D6500`, `ACES_Illum_D60`, at a pinned commit; provenance and the CIE dataset DOI in `data/MANIFEST.toml` (0001 D8.2). The 1964 10° observer is not in the repository.
    - **Generated together.** `tools/specgen` produces from that one input set: Y_n and K; D65 and ACES-white SPDs with Y = 1; `M_ws` for `lin_rec709_scene` (BT.709-6, D65), `lin_rec2020_scene` (BT.2020-2, D65) and `lin_ap1_scene` (AP1, ACES white x 0.32168, y 0.33767); the upsampling tables.
@@ -87,25 +87,25 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
 
 | # | field | type | B | condition | needed by |
 |---|---|---|---|---|---|
-| 1 | `sample_id` | u32 | 4 | always | camera path: its slot in 0008's per-sample buffer (0008 D3, there `sample_slot`); pixel and sample index are derived from it (decision 23). Light path: its rank in the pass's light work, which keys its sampler (0004 D15, D20) |
+| 1 | `sample_id` | u32 | 4 | always | camera path: its slot in 0008's per-sample buffer (0008 D3; ruling 37); pixel and sample index are derived from it (decision 23). Light path: its rank in the pass's light work, which keys its sampler (0004 D15, D20) |
 | 2 | `next_stage` | u8 | 1 | always | 0002 D6 |
 | 3 | `term` | u8 | 1 | always | decision 22; 0004 D28; 0008 D12 |
 | 4 | `ray_type` | u8 | 1 | always | Blender ray type of the next ray: 0004 D3, D19; 0005 item 33; 0007 decision 7 (mask bits, 0002 D11) |
 | 5 | `flags` | u32 | 4 | always | decision 21 |
-| 6 | `bounces` | u16[6] | 12 | always | total, diffuse, glossy, transmission, volume, transparent (Blender allows 1024): 0004 D3, D28; 0008 D12; the event index (decision 23) |
+| 6 | `bounces` | u16[6] | 12 | always | total, diffuse, glossy, transmission, volume, transparent (Blender allows 1024): 0004 D3, D28; 0008 D12 |
+| 6a | `event_index` | u16 | 2 | always | sampler block index e (decision 23); stored, not derived (ruling 26): 0004 D14 |
 | 7-8 | `ray_o`, `ray_d` | Real3 ×2 | 24 | always | 0004 D1; 0002 D11; geodesic chords (0006 D22) |
 | 9 | `cone` | Real2 | 8 | always | ray-cone width and spread: 0005 items 33, 34, 37 |
 | 10 | `lambda_t` | Spec | 16 | always | decisions 4-5; 0004 D22; 0005 items 22, 26, 33; 0006 D2 |
 | 11-13 | `beta`, `r_u`, `r_l` | Spec ×3 | 48 | always | 0004 D1, D2, D20; 0006 D8 |
 | 14 | `eta_scale` | Real | 4 | always | 0004 D2 |
 | 15 | `prev_ng` | u32 | 4 | always | octahedral geometric normal of the previous scattering vertex: 0004 D1 |
-| 16 | `prev_ns` / `light_index` | u32 | 4 | always | camera path: octahedral shading normal, 0004 D1. Light path (no NEE, no emitter-hit MIS): the emitting light's index, from which its group id, link sets and visibility bits are read (0004 D19, D27) |
+| 16 | `prev_ns` / `light_index` | u32 | 4 | always | camera path: octahedral shading normal, 0004 D1. Light path (no NEE, no emitter-hit MIS): the emitting light's index, from which its group id and visibility bits are read (0004 D19, D27) |
 | 17 | `prev_dist` | Real | 4 | always | `ctx_prev.p = ray_o − prev_dist·ray_d` across pass-throughs and null collisions: 0004 D1 |
 | 18-21 | `hit_t`, `hit_prim`, `hit_inst`, `hit_uv` | Real, u32, u32, Real2 | 20 | always | hit record written by `intersect_closest`/`intersect_subsurface`, read by `route_hit`: 0002 D11 |
-| | **unconditional** | | **155** | | |
-| 22 | `prev_light_set` | u16 | 2 | light linking | 0004 D1, D10; 0007 decisions 7, 36 |
+| | **unconditional** | | **157** | | |
 | 23 | `ray_time` | Real | 4 | motion blur | decision 26; 0004 D23; 0007 decision 15 |
-| 24 | `ray_tmax` | Real | 4 | curved region or subsurface | geodesic chord length, local-ray length: 0002 D11; 0006 D22; ruling 18 |
+| 24 | `ray_tmax` | Real | 4 | curved region or subsurface | geodesic chord length, local-ray length; the only segment length the intersect stage reads (ruling 25): 0002 D11; 0006 D22; ruling 18 |
 | 25-26 | `medium_stack`, `medium_rng` | u32[4], u32 | 20 | any medium (incl. world volume and `transmission_depth` > 0, 0005 item 4) or ≥ 2 transmissive materials | 0006 D8, D16 (ruling 8); light paths too (0004 D21) |
 | 27 | `min_ray_pdf` | Real | 4 | Filter Glossy on | 0005 item 43; 0004 D17 |
 | 28 | `guide_tint` | Real3 | 12 | denoiser guides or light passes | 0008 D10, D15 |
@@ -114,7 +114,7 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
 | 31 | `stats_rays` | u32 | 4 | rays statistic | 0008 D12 |
 | | **maximum, every feature on** | | **225** | | budget 256 B (ruling 9): fits |
 
-   Derived, 0 B: pixel and sample index (from `sample_id`, decision 23); event index (decision 23); `path_kind`, hero lane, partition, medium depth, denoising and shadow-catcher state (flag bits, decision 21); light-path film wavelengths (ruling 7); light-path group id and link sets (from `light_index`).
+   Derived, 0 B: pixel and sample index (from `sample_id`, decision 23); `path_kind`, hero lane, partition, medium depth, front face, denoising and shadow-catcher state (flag bits, decision 21); light-path film wavelengths (ruling 7); light-path group id (from `light_index`). Light and shadow linking has no field (ruling 45).
 20. **Shadow item** (shadow pool, 0002 D5; self-contained, never reads its creating path). Two kinds, NEE (camera paths, surface and volume NEE) and camera connection (light paths, 0004 D21), told apart by `item_flags`:
 
 | field | type | B | condition | needed by |
@@ -124,23 +124,23 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
 | `time` | Real | 4 | motion blur | 0004 D23; 0007 decision 15 |
 | `contribution` | Spec | 16 | always | 0004 D4, D23 |
 | `target` | u32 | 4 | always | NEE: `sample_id` of the path (0008 D3). Connection: the light path's `sample_id`, its sampler key (0004 D21) |
-| `item_flags` | u8 | 1 | light pass or media | bit 0 kind; 1 `SECONDARIES_TERMINATED`; 2-3 hero lane; 4 `FILM_WEIGHT_PREFOLDED` (0005 item 26); 5-7 unallocated. Connections need bits 1 and 4 for `film_weights` at delivery; media need the hero (bits 2-3) for ratio tracking (0006 D8) |
+| `item_flags` | u8 | 1 | light pass or media | bit 0 kind; 1 `SECONDARIES_TERMINATED`; 2-3 hero lane; 4-7 unallocated. Connections need bit 1 for `film_weights` at delivery; media need the hero (bits 2-3) for ratio tracking (0006 D8) |
 | `transparent_left` | u8 | 1 | non-opaque materials | 0004 D4; 0005 item 33 |
 | `light_group` | u8 | 1 | light groups | 0004 D27; 0008 D10 |
-| `shadow_set` | u16 | 2 | shadow linking (NEE only) | 0004 D19; 0007 decisions 7, 36 |
-| `lambda_t` | Spec | 16 | media, non-opaque materials, or FLUORESCENT with the light pass | opacity T(λ) (0005 items 32-33), media (0006 D19), λo of a prefolded connection (0005 item 26) |
+| `lambda_t` | Spec | 16 | media or non-opaque materials | opacity T(λ) (0005 items 32-33), media (0006 D19) |
 | `r_u` | Spec | 16 | media | 0006 D8, D19 |
 | `r_l` (NEE) / `film_pos` (connection) | Spec / Real2 | 16 (8 without media) | media or light pass | r_l: ratio-tracked MIS of NEE (0006 D19). film_pos: splat position (0004 D23, ruling 2). A connection has one strategy and needs no r_l |
 | `medium_stack`, `medium_rng` | u32[4], u32 | 20 | media | 0006 D8, D19 |
-| **maximum, every feature on** | | **126** | | budget 128 B (ruling 9): fits after the changes below |
+| **maximum, every feature on** | | **124** | | budget 128 B (ruling 9): fits after the changes below |
 
-   **What changed to fit.** The requested fields sum to 151 B. (a) The light-pass category and fractions (`pass_cat` u8 + `pass_frac` 16 B, 0008 D10, D23) leave the item for the shadow-pass side buffer below; 0008 loses them as item fields and reads them by shadow slot. (b) `r_l` and `film_pos` share storage, since no item needs both. (c) The connection's packet flags, kind and prefold bits share one byte. (d) The connection's light key shares `target` with the NEE slot. Narrowing `r_u`/`r_l` to fp16 was rejected: MIS weights would no longer sum to 1.
+   **What changed to fit.** The requested fields sum to 149 B. (a) The light-pass category and fractions (`pass_cat` u8 + `pass_frac` 16 B, 0008 D10, D23) leave the item for the shadow-pass side buffer below; 0008 loses them as item fields and reads them by shadow slot. (b) `r_l` and `film_pos` share storage, since no item needs both. (c) The connection's packet flags and kind share one byte. (d) The connection's light key shares `target` with the NEE slot. Narrowing `r_u`/`r_l` to fp16 was rejected: MIS weights would no longer sum to 1.
    **Side buffers** (outside both budgets; allocated only with their feature; indexed by slot; neither pool is compacted, 0002 D6; if 0002 adopts main-pool compaction, path-slot side buffers move with it):
    - shadow-pass split, by shadow slot: `pass_cat` u8 (first-vertex class, direct/indirect) + `pass_frac` unorm16[8], 17 B, light passes (0008 D10);
    - `ah_record`, by shadow slot: K × 20 B (t, primitive, instance, u, v) + `hit_count` u8 with overflow bit, 84 B at K = 4, non-opaque instances (0002 D11);
-   - geodesic record, by path slot: 168 B double / 96 B float, black hole present (0006 D41);
-   - random-walk record, by path slot, subsurface materials present: σ_t `Spec`, single-scatter albedo `Spec`, anisotropy Real, step counter u32, 40 B (PROVISIONAL; the walk's owner confirms the list);
+   - geodesic record, by path slot: 164 B double / 92 B float, black hole present (0006 D41);
+   - random-walk record, by path slot, subsurface materials present: fields and size are 0005 item 4a's (40 B, PROVISIONAL); this record only allocates it (ruling 27);
    - the pass's active-pixel list is 0008's (D3).
+   Their device memory is in 0007 decision 14's budget table (ruling 42).
 21. **Path flags (u32).** Assigning a free bit amends this record.
 
 | bits | meaning | needed by |
@@ -157,10 +157,12 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
 | 12-14 | medium-stack depth | 0006 D16 |
 | 15 | `DENOISE_SURFACE_DONE` | 0008 D15 |
 | 16-17 | first-vertex class: pending, surface, volume | 0008 D10 |
-| 18-19 | `SHADOW_CATCHER_HIT`, `SHADOW_CATCHER_PASS` | 0007 decisions 7, 36; pass 0008 |
-| 20-31 | unallocated | |
+| 18-19 | `SHADOW_CATCHER_HIT`, `SHADOW_CATCHER_PASS` | 0007 decisions 7, 36; Shadow Catcher pass, 0008 D10 (ruling 42) |
+| 20 | `FRONT_FACE` | hit side, surviving instance transforms: 0005 items 8, 33; 0006 D16 (ruling 42) |
+| 21 | `FIRST_BOUNCE_SPECULAR` | the first bounce sampled a specular, metal or coat lobe: 0008 D15 specular hit distance (ruling 42) |
+| 22-31 | unallocated | |
 
-22. **Termination reason (u8)**, the single enum that 0004 D28-D29, 0006 D8, D16, D27-D28 and 0008 D12 count: `ACTIVE, ESCAPED, RUSSIAN_ROULETTE, ZERO_THROUGHPUT, MAX_BOUNCE, TRANSPARENT_LIMIT, ABSORBED, VOLUME_LIMIT, STACK_OVERFLOW, INVALID, CAPTURED, GEODESIC_STEP_LIMIT, GEODESIC_NUMERICAL, LIGHT_PATH_IN_REGION, LIGHT_PATH_END, CANCELLED`. `LIGHT_PATH_END` is a light path ended by 0004 D19's partition rules (discarded at v1 or after its connection; reasons are 0004 D29's counters). A NaN or Inf in beta or a contribution sets `INVALID` and is counted, never dropped silently. Step exhaustion is never folded into `CAPTURED` (v1).
+22. **Termination reason (u8)**, the single enum that 0004 D28-D29, 0005 item 4a, 0006 D8, D16, D27-D28 and 0008 D12 count: `ACTIVE, ESCAPED, RUSSIAN_ROULETTE, ZERO_THROUGHPUT, MAX_BOUNCE, TRANSPARENT_LIMIT, ABSORBED, VOLUME_LIMIT, STACK_OVERFLOW, INVALID, CAPTURED, GEODESIC_STEP_LIMIT, GEODESIC_NUMERICAL, LIGHT_PATH_IN_REGION, LIGHT_PATH_END, CANCELLED`. `LIGHT_PATH_END` is a light path ended by 0004 D19's partition rules (discarded at its first vertex x₁ or after its connection; reasons are 0004 D29's counters). A NaN or Inf in beta or a contribution sets `INVALID` and is counted, never dropped silently. Step exhaustion is never folded into `CAPTURED` (v1).
 
 ### Sampler (ruling 3)
 
@@ -169,7 +171,7 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
    - **Keys.** Camera path: id = pixel (y·W + x at the allocated film size), index = n + (sample_id mod k), pixel = active list[⌊sample_id / k⌋], with n and k pass-uniform (0008 D3, 0004 D16). Light path: id = 2³¹ + sample_id, index = the pass number in the epoch. One extra 4-B read of the active list replaces a stored pixel and sample.
    - **Seed.** A u32 from Blender's seed (0007 hashes the frame in for an animated seed). It enters only through hashes; no value, 0 included, is special.
    - **Independent mode.** Same keys and dimension map; `u = (pcg4d(id, index, stream·2²⁴ + d, seed).x >> 8)·2⁻²⁴` (Jarzynski and Olano 2020). Samples are mutually independent. Used by DLSS mode (index = frame counter, 0004 D25, 0008 D19), by tests that need an exact variance (0008 D3) and by null calibrations (0009). Selected per session, never per path.
-   - **Event index.** e = `bounces.total + bounces.transparent` on arrival at a vertex. Every vertex with a random decision increments one of them: scattering vertices, delta and real volume scatters included, increment total (Blender's rule); opacity pass-throughs increment transparent. Lamp crossings, false-interface crossings and null collisions draw nothing from the fixed map (0004 D3, D8, D14; 0006 D17). So e needs no field (0004 D14's 2 B are not allocated). The segment that arrives at vertex e draws its distance dimensions from block e.
+   - **Event index.** e is the path-state field `event_index` (decision 19, stored explicitly, ruling 26), read on arrival at a vertex. It is incremented at every vertex with a random decision: scattering vertices (delta and real volume scatters included) and opacity pass-throughs. Lamp crossings, false-interface crossings and null collisions draw nothing from the fixed map and leave it unchanged (0004 D3, D8, D14; 0006 D17). The segment that arrives at vertex e draws its distance dimensions from block e.
    - **Fixed dimension map (stream 0).** Each 4-D block is jointly stratified.
 
 | dims | camera path | light path |
@@ -186,11 +188,11 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
 |---|---|---|---|
 | 1 path medium | path `medium_rng` | tentative-collision distance; collision event (absorb, scatter, null, fluorescent); overlapping-medium choice; unused | 0006 D8, D15, D18 |
 | 2 shadow medium | item `medium_rng`, initialised to e·2¹⁷ (0006 caps 131,072 collisions per shadow segment) | ratio-tracking distance; unused ×3 | 0006 D8, D19 |
-| 3 random walk | walk step counter + e·2¹⁶ | free-flight distance; direction u, v; event choice | random-walk subsurface (0005 item 4) |
+| 3 random walk | walk step counter + e·2¹⁶ | free-flight distance; direction u, v; event choice | random-walk subsurface (0005 item 4a) |
 
 ### Precision
 
-24. **Real.** `Real` = float on the GPU; the CPU builds float and double (spine §2; 0002 D3). Kernel arithmetic and path state use `Real`; tables are stored as float and widened when read. Double regardless of `Real`: CPU geodesic state (`GeoReal`; GPU per 0006 D40); host construction of tables and CDFs; unit and photon constant folding; film moments (requirement: < 1e-6 relative error added at 2²⁴ samples per pixel; mechanism 0008 D3).
+24. **Real.** `Real` = float on the GPU; the CPU builds float and double (spine §2; 0002 D3). Kernel arithmetic and path state use `Real`; tables are stored as float and widened when read. Double regardless of `Real`: CPU geodesic integration in every build (`GeoReal`; ruling 41; GPU per 0006 D40); host construction of tables and CDFs; unit and photon constant folding; film moments (requirement: < 1e-6 relative error added at 2²⁴ samples per pixel; mechanism 0008 D3).
 25. **Planck** in `Real` with λ in µm: `c1L λ⁻⁵ · e^{−x}/(−expm1(−x))`, `x = c2/(λT)`, CODATA 2018 `c1L = 1.191042972e8 W µm⁴ m⁻² sr⁻¹`, `c2 = 14387.7688 µm K`; ×10⁻³ per nm. No overflow over [0.1 nm, 1 m] × [3 K, 1e9 K]. Float accuracy is limited by the condition number x of e^{−x}, hence check 10's tolerance.
 26. **Positions and time.**
    - Positions are float32 in scene metres relative to a per-scene origin: the centre of the curved region when one exists, otherwise the centre of the scene bounds. 0007 folds the translation into every transform and the camera at sync. Inside the region the geodesic state is hole-centred in units of r_g (0006 D25).
@@ -204,7 +206,7 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
    - `enter` accepts o on the region sphere or inside it (a camera inside the region), normalised so that the static observer at o measures frequency 1; the tetrad launch is 0006 D24's.
    - **Region branch.** No ordinary stage holds policy code. When a curved region exists, `route_hit` (0002 D11) takes one launch-uniform branch: it clamps tmax at the region sphere and routes entering rays, rays whose origin lies inside the region, and every result of an `IN_CURVED_REGION` item to `advance_geodesic`; such items trace with `ray_tmax` as tmax. With no region the branch is skipped.
    - `FlatSpacetime` is the no-region case, instantiated in the CPU test build (0006 D23). The shipping policy is Cartesian Kerr-Schild (0006 D23), whose M = 0 case is the Minkowski check. At most one curved region per scene (0006 D25).
-29. **What the geodesic round trip does to the path state.** The loop itself is 0006 D22 and D27. `advance_geodesic` writes each chord into `ray_o`, `ray_d` and its length into `ray_tmax`, and sets `IN_CURVED_REGION`. On a surface hit it calls `apply_frequency_shift` to the hit's static frame, sets `LAST_SEGMENT_CURVED` and clears `IN_CURVED_REGION`. On escape it writes the exit point and direction (never the entry: v1's dark ring), calls `apply_frequency_shift` to infinity and sets `LAST_SEGMENT_CURVED`. Other outcomes end the path with `CAPTURED`, `GEODESIC_STEP_LIMIT` or `GEODESIC_NUMERICAL`.
+29. **What the geodesic round trip does to the path state.** The loop itself is 0006 D22 and D27. `advance_geodesic` writes each chord it emits for intersection (0006 D22, ruling 46) into `ray_o`, `ray_d` and its length into `ray_tmax`, the only copy of the length (ruling 25), and sets `IN_CURVED_REGION`. On a surface hit it calls `apply_frequency_shift` to the hit's static frame, sets `LAST_SEGMENT_CURVED` and clears `IN_CURVED_REGION`. On escape it writes the exit point and direction (never the entry: v1's dark ring), calls `apply_frequency_shift` to infinity and sets `LAST_SEGMENT_CURVED`. Other outcomes end the path with `CAPTURED`, `GEODESIC_STEP_LIMIT` or `GEODESIC_NUMERICAL`.
 30. **Connections near the region** are 0006 D28's gate. This record supplies `LAST_SEGMENT_CURVED`, which makes the emitter-hit MIS weight use that gate, and `LIGHT_PATH_IN_REGION` for light paths entering the region.
 
 ### Polarisation
@@ -223,7 +225,7 @@ None backed by evidence. Clarifications: the spacetime policy is instantiated on
 - **A fixed analytic proposal** (pbrt sech², Cycles' D65 logistic). v1: no single proposal wins; line sources need a scene-built mixture.
 - **pbrt-v4's fixed lane-0 hero.** Biased once a lane-0 hero decision precedes termination (decision 6). **Keeping the hero lane at termination**: biased by the same counterexample. Keeping a uniformly random lane drawn independently of h is unbiased but needs a lane rotation carried into the film; lane 0 is simpler.
 - **A per-path radiance accumulator.** Shadow results arriving after a path ends would be lost or misrouted; ruling 1 puts every contribution in 0008's per-sample buffer.
-- **Storing pixel and sample (8 B) and an event index (2 B).** Both are derivable (decision 23), saving 6 B per path.
+- **Storing pixel and sample (8 B).** Derivable from `sample_id` through 0008's active list (decision 23), saving 4 B per path. (Deriving the event index from the bounce counters was dropped by ruling 26.)
 - **fp16 `r_u`/`r_l` in shadow items, or a narrower medium stack, to fit 128 B.** The first breaks MIS weight sums; the second contradicts ruling 8. Moving the light-pass split to a side buffer costs no accuracy.
 - **r_u and r_l only when media exist.** Two MIS code paths; rejected until state traffic is measured.
 - **Blue-noise sample ordering** (Cycles `pattern.h`, after Ahmed and Wonka 2020). Some modes need the sample count up front, and its benefit under OIDN is unmeasured. **Independent hashing as the default**: loses stratification; kept as the independent mode.
@@ -240,9 +242,9 @@ None backed by evidence. Clarifications: the spacetime policy is instantiated on
 
 **Easy.** A new band or instrument is a response curve. Fluorescence, gratings and redshift need no state change. Any of Blender's three working spaces works. Lanes can be dropped anywhere without bias analysis. The sampler is bit-identical on CPU and GPU. Flat scenes never run GR code. Every field any record asked for has a place; features that are off allocate nothing.
 
-**Hard.** After dispersion, a grating or fluorescence a path carries one wavelength, so colour noise rises. Line emission through a varying redshift cannot be targeted by a camera-side table (risk 6). RGB-only content outside 360-830 nm is a guess, reported. 155-225 B per path and 49-126 B per shadow item of state traffic. Pixel lookups go through 0008's active list. Blender-unit scenes give science numbers only by convention (flagged).
+**Hard.** After dispersion, a grating or fluorescence a path carries one wavelength, so colour noise rises. Line emission through a varying redshift cannot be targeted by a camera-side table (risk 6). RGB-only content outside 360-830 nm is a guess, reported. 157-225 B per path and 49-124 B per shadow item of state traffic. Pixel lookups go through 0008's active list. Blender-unit scenes give science numbers only by convention (flagged).
 
-**Cost when unused.** Curved region: nothing until one exists, then one uniform branch in `route_hit`. Media, linking, motion blur, Filter Glossy, statistics, guides and light passes: no memory or reads when off. Line and response components: host time per epoch. Fluorescence and redshift: the 16 B λt every path carries. Hero lane: 2 flag bits and one sampler draw per path.
+**Cost when unused.** Curved region: nothing until one exists, then one uniform branch in `route_hit`. Media, motion blur, Filter Glossy, statistics, guides and light passes: no memory or reads when off. Line and response components: host time per epoch. Fluorescence and redshift: the 16 B λt every path carries. Hero lane: 2 flag bits and one sampler draw per path.
 
 ## What must exist from the first milestone, and what can wait
 
@@ -250,7 +252,7 @@ Milestones are assigned only in `docs/ROADMAP.md` (G1).
 
 **Must exist from the first milestone, because retrofitting is expensive:**
 - The complete path-state and shadow-item tables (decisions 19-20) as 0002's X-macro with feature tags, the flag allocation and the termination enum. Reason: every stage reads them; changing a layout later touches every kernel.
-- Stored λt and the packet-operation semantics, including `film_weights` with the hero lane. Reason: the path-state layout and 0008's resolve depend on them.
+- Stored λt and the packet-operation semantics, including `film_weights`, and the hero lane's flag bits. Reason: the path-state layout and 0008's resolve depend on them.
 - `beta`, `r_u`, `r_l` as spectra and the random hero lane with its own dimension. Reason: layout, every MIS weight, every random sequence.
 - The sampler with its full dimension map, event-index rule and variable streams. Reason: changing it later changes every random sequence and invalidates every pinned reference result.
 - `sample_id` with pixel and sample derived through 0008's active list. Reason: path-state and shadow-item layout, and 0008's slot contract.
@@ -278,10 +280,10 @@ Statistical checks use 0009's gate: Šidák-derived per-test thresholds for the 
 | 10 | Planck: float vs double, λ ∈ [0.1 nm, 1 m], T ∈ [3 K, 1e9 K] | relative error ≤ (2x + 8)·2⁻²³ where B ≥ 1e-30 of peak (DERIVED); no Inf or NaN; 6500 K chromaticity matches a colour-science oracle to 1e-3 |
 | 11 | Unit anchor | an RGB white emitter of strength 1 gives display Y = 1 within 1e-3; `specgen`'s K = 683·Y_n to 1e-9; Blackbody node Y = 1 within 1e-4 at 1000, 6500 and 20000 K |
 | 12 | Line lamps: sodium and mercury from line tables | xy within 0.005 of the 1931 2° oracle recomputed with colour-science from NIST lines |
-| 13 | Layouts (`static_assert` at `Real` = float) | path state: unconditional fields 155 B, all fields 225 B; shadow item: all fields 126 B; equal to decisions 19-20; the work counters (0009 decision 18) report bytes per path and per item |
+| 13 | Layouts (`static_assert` at `Real` = float) | path state: unconditional fields 157 B, all fields 225 B; shadow item: all fields 124 B; equal to decisions 19-20; the work counters (0009 decision 18) report bytes per path and per item |
 | 14 | Hero lane | χ² independence of (h, ⌊4u⌋) over 2¹⁶ paths passes the 0009 gate |
 | 15 | Radiance scale | film bit-identical with the automatic s and with s = 1 on an in-range scene; a 1e9 K X-ray source and a 3 K radio source in one render give zero `INVALID` |
-| 16 | Region branch cost: `intersect_closest` with the branch vs without, flat 1M-triangle scene | spills and stack identical in the capped build (ruling 17); ≤ 16 extra SASS instructions; median-of-3 runtime ratio ≤ 1.05 (spike A §1) |
+| 16 | Region branch cost: `intersect_closest` with the branch vs without, flat 1M-triangle scene | spills and stack identical in the capped build (ruling 17); ≤ 16 extra SASS instructions; runtime ratio within 0009 B-35 |
 | 17 | Minkowski through the geodesic stage (Kerr-Schild, M = 0), same seed | per pixel within float conditioning, as 0006 V10 |
 | 18 | Redshift | unit test: λ·g and beta·g⁵ to 1 ulp on all lanes, no lane terminated; a static emitter hit inside the region at r gets g = √(1−2M/r); recovered colour temperature g·T within 1% |
 | 19 | Region flags | a hit after a chord has `LAST_SEGMENT_CURVED`; an escaped ray restarts at the exit point; a light path entering the region ends with `LIGHT_PATH_IN_REGION` and is counted |
@@ -297,29 +299,22 @@ Statistical checks use 0009's gate: Šidák-derived per-test thresholds for the 
 
 1. **Spike E has not run.** 4-lane noise, the default distribution, the band and line weights, the floor and the mixture are PROVISIONAL.
 2. **Upsampling cost in the shade kernel is unmeasured** (spike A omitted it; v1: 54% of instructions). Measure against 0002's register gate.
-3. **State traffic is unmeasured** (155-225 B per path, up to 126 B per shadow item). Candidates if it hurts: fp16 `cone`, recomputing the hit record.
+3. **State traffic is unmeasured** (157-225 B per path, up to 124 B per shadow item). Candidates if it hurts: fp16 `cone`, recomputing the hit record.
 4. **AP1 saturated corners** lie partly outside the spectral locus; round-trip error unknown until generation.
 5. **ACES white assumption**: Blender's OCIO config treats AP1 with the ACES white and applies a CAT only at display. Verify against Blender 5.3.
 6. **Line emission through a varying redshift** may be too noisy with camera-side sampling; a deterministic line deposit is 0006's to decide by measurement.
 7. **Fluorescence collapse vs per-lane reradiation.** The collapse is conservative; keeping 4 lanes needs a derivation from Mojzík et al. 2018 and Jung et al. 2019 first.
 8. **GPU geodesic precision** (0006, S1).
-9. **Repository size.** 28 MB of tables; switch to build-time generation if `specgen` runs in under 20 s total.
+9. **Repository size.** 28 MB of tables; switch to build-time generation if `specgen`'s total run time meets 0009 B-37.
 10. **Large-world precision.** Geometry near a camera far from the origin is only detected (decision 26).
 11. **Random hero variance** against pbrt's lane-0 hero (in un-terminated paths) is unmeasured; spike E's chromatic medium scene records it.
-12. **Edits other records need (for the lead):**
-    - 0004 D22 ("follows its hero lane"), 0005 item 22 ("the path's hero lane h continues") and item 26 ("the surviving hero wavelength") must read "lane 0, the lane `terminate_secondaries` keeps". After a hero-sampled decision (a chromatic medium before a grating or prism), continuing with h gives decision 6's 1.8-vs-1 bias; ruling 4 cites that counterexample.
-    - 0008 D23 lists `pass_cat` and `pass_frac` as shadow-item fields; they are now a side buffer indexed by shadow slot (decision 20). 0008 D4 must convert a `FILM_WEIGHT_PREFOLDED` connection at λt[0] with weight 1 (0005 item 26). 0008 D3's active-pixel list must stay readable by every stage until the pass drains. 0008 D8 cites decision 3 for the band weight.
-    - 0006 D22/D41 and 0002 D11 should name `ray_tmax` as the field the intersect stage reads for a chord; 0006's chord-length field becomes a copy or is dropped.
-    - 0004 D6 and D12 say 0007 owns the Blender-watt and sky unit scale; decision 11 owns it (factor 1) and 0007 already cites it.
-    - 0004 D14's `event_index` and 0004 D5's separate `pixel`/`sample` are derived here; 0004 D3 must keep "every random-decision vertex increments total or transparent", light-path vertices and real volume scatters included.
-    - The random-walk record's fields (decision 20) are PROVISIONAL here; no record specifies the walk's state (0005 item 4 hands the path to 0004, which has no decision for it).
 
 **Owner question 1.** Scene-linear 1.0 ≙ Y = 1 W·m⁻²·sr⁻¹·nm⁻¹ (72,983 cd/m²), so Blender watts pass through unchanged and 1 Blender W of white ≈ 470 physical watts in 360-830 nm. Keep this, or give Blender's 1.0 another physical meaning? And should science outputs from scenes lit by Blender-unit emitters be refused rather than flagged?
 
 **Assumptions about other records.**
 - **0002:** `Real`, the X-macro field storage with feature tags, uncompacted pools, `route_hit` holding the region branch, the register gate (ruling 17), a no-FMA test build.
-- **0004:** permutation-invariant surface decisions; the MIS form; light paths in the main pool with `path_kind`; bounce semantics that make the event index derivable; counting termination with decision 22's enum.
-- **0005:** a convention per slot; K as defined here; extension kinds that call `packet.h`; FLUORESCENT using `rewrite_wavelength`, decision 7's rule and the prefold flag.
+- **0004:** permutation-invariant surface decisions; the MIS form; light paths in the main pool with `path_kind`; event-index increments as decision 23 states; counting termination with decision 22's enum.
+- **0005:** a convention per slot; K as defined here; extension kinds that call `packet.h`; FLUORESCENT using `rewrite_wavelength` and decision 7's rule; the random-walk record's fields (ruling 27).
 - **0006:** line components (D36); hero-lane media sampling; the 20 B medium state; the geodesic round trip, gate and redshift law against decisions 28-30; termination names per decision 22.
 - **0007:** working-space and image interop ids; the origin translation and large-world warning at sync; Blender light values passed through; the seed.
 - **0008:** film formulas; Y_w = Y_n; the 1/s removal; `PHYSUNIT`; the per-sample buffer, slot assignment and active-pixel list; flag bits 15-17.
@@ -366,3 +361,20 @@ Historical record of the independent review; where it conflicts with the Decisio
 - **Ruling 14.** Variable-count streams make capped, re-queued launches bit-identical.
 - **Ruling 17.** Check 16 gates spills and stack in the capped build.
 - **Ruling 18.** The policy lives only in `advance_geodesic`; segments go through `intersect_closest` with `ray_tmax`; the region branch lives in `route_hit`; `static_observer` added (0006 D23).
+- **Ruling 24.** Lane 0 survives termination and rewrites (decision 5); the risk listing the other records' wording removed, since 0004 D22 and 0005 items 22, 25, 26 now say so.
+- **Ruling 25.** `ray_tmax` is the only chord length (decision 19 row 24, decision 29); the geodesic record shrinks to 164 B / 92 B (decision 20).
+- **Ruling 26.** `event_index` (u16, 2 B) stored in the path state (decision 19 row 6a, decision 23); unconditional 157 B, maximum 225 B; the derivation, its alternative and assumption text corrected.
+- **Ruling 27.** The random-walk side buffer is allocated here with fields and size from 0005 item 4a (decision 20, stream 3).
+- **Ruling 29.** Check 16's runtime ratio moved to 0009 B-35.
+- **Ruling 35.** Unit anchor stays here (decision 11); the risk about 0004's wording removed.
+- **Ruling 37.** `sample_id` is the per-sample key everywhere (decision 19 row 1).
+- **Ruling 41.** CPU geodesic integration is double in every build (decision 24).
+- **Ruling 42.** `FRONT_FACE` (bit 20) and `FIRST_BOUNCE_SPECULAR` (bit 21) added; shadow-catcher bits name their pass; side buffers counted in 0007's budget table (decisions 20-21).
+- **Ruling 44.** `FILM_WEIGHT_PREFOLDED`, its `item_flags` bit and the FLUORESCENT `lambda_t` condition removed (decisions 5, 13, 20); shadow item 124 B.
+- **Ruling 45.** `prev_light_set` and `shadow_set` removed (decisions 19-20); no linking state.
+- **Ruling 46.** Decision 29 writes only the chords `advance_geodesic` emits for intersection.
+- **Ruling 49.** Risk 12 (edits owed by other records) removed: every item is applied there or settled by rulings 24-27, 35, 44.
+- **Ruling 27 (second pass).** Decision 22 names 0005 item 4a as a consumer of the termination enum (its walk limit ends with `VOLUME_LIMIT`).
+- **Ruling 29 (second pass).** Risk 9's `specgen` threshold cites 0009 B-37.
+- **Ruling 44 (second pass).** Decision 5's note covers inelastic medium events as well as surfaces (0004 D19, 0006 D11).
+- **Ruling 49 (second pass).** Decision 22 calls the light path's first vertex x₁ (v1 means the old project); the must-exist item no longer ties `film_weights` to the hero lane (0008 decision 3's slot holds no hero).

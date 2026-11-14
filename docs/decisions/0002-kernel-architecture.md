@@ -4,7 +4,7 @@ Status: proposed (2026-11-14), revised after independent review (2026-11-14), re
 
 ## Context
 
-Astroray 2.0 needs one kernel source that runs on the RTX 5070 Ti (sm_120) and on the CPU (owner decision 2). The viewport has to hold 60 updates/s where possible and never fall below 24, with first frame comparable to Cycles (decisions 9, 10). The first release covers the full feature breadth (decision 7), including gratings and the light-tracing pass they need, designed in from the start (decision 17). Builds and tests have hard budgets (CLAUDE.md rule 9) and failures must be loud (rule 7). Most code will be written by Sonnet-class agents from small task specs, so the structure must make the cheap thing the right thing and must catch drift mechanically.
+Astroray 2.0 needs one kernel source that runs on the RTX 5070 Ti (sm_120) and on the CPU (owner decision 2). The viewport has to hold 30 updates/s at full resolution and never fall below 24, with 60 a later goal and first frame comparable to Cycles (decisions 9, 10, 21, 23). The first release covers the full feature breadth (decision 7), including gratings and the light-tracing pass they need, designed in from the start (decision 17). Builds and tests have hard budgets (CLAUDE.md rule 9) and failures must be loud (rule 7). Most code will be written by Sonnet-class agents from small task specs, so the structure must make the cheap thing the right thing and must catch drift mechanically.
 
 v1 failed exactly here. Its fused shade kernel had 128 template variants, ran at 221-254 registers with 2.5-8.7 KB of stack, and one translation unit took about 1,800 s of a 1,870 s build (`v1-lessons/research/gpu-build.md`, `v1-lessons/toolchain-and-build.md`). The spine (`SPINE.md` §2) settles the language (restricted C++), the width (4 wavelengths), the fused surface kernel under `__launch_bounds__`, the per-kernel budgets and one GPU compiler (nvcc, ruling 16). Spike A measured these on a kernel with the right shape but less than full scope. This record turns them into rules an implementer can follow without guessing, and adds what the spine leaves open: queue and scheduling mechanics, the complete kernel and OptiX program list, the instance visibility mask, memory layout mechanics, how the gate measures budgets, FMA and determinism policy, device failures, and what happens when the kernel grows.
 
@@ -21,17 +21,17 @@ Evidence: spike A (`spikes/A-kernel-budget/RESULTS.md`) for registers, spills, c
 ### Kernel dialect and portability layer
 
 **D1. Language and allowed constructs.** Kernel code is C++17 in freestanding headers under `src/kernel/`, compiled by nvcc for the GPU (ruling 16) and MSVC `cl` for the CPU.
-- *Allowed:* free functions; POD structs with member functions; `constexpr`, `if constexpr`, `static_assert`; enums; fixed-size arrays; references; `<cstdint>`, `<cfloat>`. Function templates may take only two parameters: the scalar type (`Real`/`float`/`double`) and the one kernel-identity parameter of D8. The spectral width is the constant `constexpr int kLambdas = 4` (0003), not a template parameter.
+- *Allowed:* free functions; POD structs with member functions; `constexpr`, `if constexpr`, `static_assert`; enums; fixed-size arrays; references; `<cstdint>`, `<cfloat>`. Function templates may take only two parameters: the scalar type (`Real`/`float`/`double`) and the one kernel-identity parameter of D8. The spectral width is 0003 decision 1's constant `kLanes = 4`, not a template parameter.
 - *Forbidden:* virtual functions, RTTI, exceptions, `new`/`delete`/`malloc`, recursion, function pointers, STL containers and algorithms, direct `<cmath>` calls (use D2's wrappers), `__noinline__`, `-rdc`, inline PTX or asm outside the portability header, `long double`, thread-local storage, mutable globals (rule 8), `printf` outside debug builds, unsuffixed floating literals in float code, host-only headers. `__noinline__` is banned because spike A measured -37% at N=4 with up to 1.4 KB of stack.
 - *Passing:* everything is force-inlined. Structs larger than 32 B go by `const&`. Results return by value as small structs, never through scalar out-pointers (v1: address-taken out-parameters cost about 4%).
-- *Enforcement:* CPU kernel TUs build with `/EHs-c- /GR- /W4 /WX`. GPU float kernels build with `-Xptxas --warn-on-double-precision-use`, warnings as errors. A lint script owned by 0009 checks banned tokens and the include allow-list.
+- *Enforcement:* CPU kernel TUs build with `/EHs-c- /GR- /W4 /WX`. Every GPU kernel except `advance_geodesic_f64` (D8) builds with `-Xptxas --warn-on-double-precision-use`, warnings as errors. A lint script owned by 0009 checks banned tokens and the include allow-list.
 
-**D2. Portability header `src/kernel/portability.h`** is the only file that knows its target. It provides: `AR_FN` (`__host__ __device__ __forceinline__` under `__CUDACC__`, else `inline`); `AR_GPU` (constexpr bool) and `AR_ASSERT` (compiled out of release); `ar::load_ro(p)` (`__ldg` on GPU); `ar::atomic_add` for `float` and `uint32_t`; `ar::ballot`, `ar::lane_id` with single-lane CPU fallbacks; `ar::bit_cast`; math wrappers (`ar::sqrt`, `exp`, `log`, `sin`, `cos`, `pow`, `fma`, ...) overloaded on `float` and `double`. No address-space layer (CUDA has none; HIP/Metal are not built, spine §1). Pattern: Cycles `kernel/device/cuda/compat.h`, pbrt `PBRT_CPU_GPU`.
+**D2. Portability header `src/kernel/portability.h`** is the only file that knows its target. It provides: `AR_FN` (`__host__ __device__ __forceinline__` under `__CUDACC__`, else `inline`); `AR_GPU` (constexpr bool) and `AR_ASSERT` (compiled out of release); `ar::load_ro(p)` (`__ldg` on GPU); `ar::atomic_add` for `float` and `uint32_t`, `ar::atomic_max` and `ar::atomic_cas` for `uint32_t` (0008 decisions 2, 11, 12); `ar::clock` (`clock64()` on GPU, `__rdtsc` on CPU; 0008 decision 12); `ar::ballot`, `ar::lane_id` with single-lane CPU fallbacks; `ar::bit_cast`; math wrappers (`ar::sqrt`, `exp`, `log`, `sin`, `cos`, `pow`, `fma`, ...) overloaded on `float` and `double`. No address-space layer (CUDA has none; HIP/Metal are not built, spine §1). Pattern: Cycles `kernel/device/cuda/compat.h`, pbrt `PBRT_CPU_GPU`.
 
-**D3. `Real`.** `float` in the GPU build and the default CPU build (`astroray_kernels_cpu`); `double` in a second CPU build (`astroray_kernels_cpu_f64`, `AR_REAL_DOUBLE`) used as the reference.
+**D3. `Real`.** `float` in the GPU build and the default CPU build (`astroray_kernels_cpu`); `double` in a second CPU build (`astroray_kernels_cpu_f64`, `AR_REAL_DOUBLE`), a test reference that is never shipped (ruling 41). CPU geodesic integration is double in every build (0006 D39); GPU geodesic precision is 0006 D40's, through the two `advance_geodesic` kernels of D8.
 - `Real` is used for kernel arithmetic and path-state fields (D13), so the f64 build stays double between stages.
 - Scene and asset buffers (vertices, textures, tables, material records) are explicit `float` or `half`, converted on load. Literals are written `Real(0.5)`.
-- Cost: one extra CPU compile (spike A: 0.65 s float, 0.65 s double; throughput -6%).
+- Cost: one extra CPU compile (spike A: same compile time as float; throughput -6%).
 
 **D4. One stage function, two targets.**
 
@@ -64,11 +64,11 @@ AR_FN void stage_<name>(const KernelGlobals& kg, uint32_t item, const StepEntry&
 4. **Refill.** If fewer than a quarter of the main slots are active and pass work remains, launch `generate_camera` / `generate_light` on the refill count. This is Cycles' rule (refill when active < max/4, `integrator/path_trace_work_gpu.cpp`, research 04). The pass's work is one counter over its camera samples followed by its light samples. 0004 sets the light-sample count, which is zero when the scene has no casters.
 5. **Launch** every stage with a non-zero launch count once, in `Stage` enum order.
 
-A pass ends when the work counter is exhausted and every segment except the two `TERMINATED` segments is empty; then 0008's `film_resolve` runs once (D8, ruling 1). Each stage touches only its own segment's items, its reserved shadow slots, and 0008's per-sample buffer or splat plane (fp32 atomic adds), so the order between stages does not change results; the fixed order gives the same schedule on CPU and GPU. This departs from Cycles' "largest queue first" rule. Edits bump a session epoch that the loop checks between steps, so cancellation latency is one step.
+A pass ends when the work counter is exhausted and every segment except the two `TERMINATED` segments is empty; then 0008's `film_resolve` runs once (D8, ruling 1). Each stage touches only its own segment's items, its reserved shadow slots, and 0008's per-sample buffer or splat plane (fp32 atomic adds), so the order between stages does not change results; the fixed order gives the same schedule on CPU and GPU. This departs from Cycles' "largest queue first" rule. The loop checks for a pending generation (0007 decision 25) between steps, so cancellation latency is one step.
 
-**Launch duration.** Every launch stays within ruling 14's launch-duration budget (stated in 0009). Stages whose per-item work is unbounded (medium tracking, the emission-absorption marcher, geodesic stepping, shadow evaluation over many layers) cap work per item per launch and re-queue the item into their own segment, as 0006 specifies for media and geodesics; capped runs stay bit-identical because the sampler is counter-based.
+**Launch duration.** Every launch stays within 0009 B-17 (ruling 14). Stages whose per-item work is unbounded (medium tracking, the emission-absorption marcher, geodesic stepping, shadow evaluation over many layers) cap work per item per launch and re-queue the item into their own segment, as 0006 specifies for media and geodesics; capped runs stay bit-identical because the sampler is counter-based.
 
-**Overhead estimate (derivation, not a measurement).** One bounce takes two steps (intersect, shade), and its shadow item is traced in the next step alongside. At a default maximum depth of 12, a pass needs about 26 steps, plus one per alpha layer on the longest path (D11). A step costs 3 partition launches, up to about 8 stage launches and one round trip. Partition traffic at 1080p 1 spp is about 40 MB, about 50 µs at the 5070 Ti's 896 GB/s. The round trip is unmeasured; assume 20-100 µs under WDDM. So 26 × 70-150 µs ≈ 1.8-3.9 ms against a pass of about 9.5 ms (1.25 × spike B's 7.6 ms). That is **20-40%, above 0009's scheduling-overhead budgets**. It is measured before breadth work (Risks 2). Remedies, in order:
+**Overhead estimate (derivation, not a measurement).** One bounce takes two steps (intersect, shade), and its shadow item is traced in the next step alongside. At a default maximum depth of 12, a pass needs about 26 steps, plus one per alpha layer on the longest path (D11). A step costs 3 partition launches, up to about 8 stage launches and one round trip (unmeasured under WDDM). Partition traffic at 1080p 1 spp is about 40 MB per step. The resulting overhead share, derived in 0009 B-19's basis from these counts, is **above B-19**. It is measured before breadth work (Risks 2). Remedies, in order:
 - (a) Fixed grids, and the step sequence captured as a CUDA graph. This removes the round trip and is host-only because of D4.
 - (b) Compact the main pool when live paths drop below a quarter of its high-water mark (Cycles `compact_main_paths`).
 - (c) Fuse the three partition kernels into one single-pass scan.
@@ -87,14 +87,17 @@ A pass ends when the work counter is exhausted and every segment except the two 
 | `shade_background` | main | camera-path miss: world/sky emission with MIS, guide-buffer writes |
 | `shade_light` | main | lamp crossing (0004 D8): camera paths add MIS-weighted Le, light paths pass through; re-queues `intersect_closest` |
 | `shade_surface` (`ShadeKind::Common`, D9) | main | node VM to OpenPBR record, alpha pass-through, false-interface stack update (0006), emission with MIS, NEE emitting a shadow item, BSDF sample, Russian roulette, first-hit denoiser buffers (0008), diagnostics |
-| `shade_surface_ext` (`ShadeKind::Ext`) | main | 0005's extension kinds on camera paths; may split once into `shade_hair` (`ShadeKind::Hair`) on measurement (0005 item 18) |
+| `shade_surface_ext` (`ShadeKind::Ext`) | main | 0005's extension kinds on camera paths; HAIR may split once into `shade_hair` (`ShadeKind::Hair`) and, on light paths, `shade_light_path_hair` (`ShadeKind::LightHair`), on measurement (0005 item 18) |
 | `shade_light_path` (`ShadeKind::Light`) | main + shadow | light-path surface interaction, no extension code; camera connections are shadow items with a film position (method 0004) |
 | `shade_light_path_ext` (`ShadeKind::LightExt`) | main + shadow | 0005's extension kinds on light paths (0004 D21) |
 | `shade_shadow` | shadow | recorded non-opaque hits in t order through the VM `opacity` entry, medium transmittance (0006), deliver or re-queue |
 | `shade_volume` | main + shadow | 0006's medium stage: null-scattering tracking and the emission-absorption marcher (ruling 23), volume NEE and light-path connection items |
-| `shade_subsurface` | main | random-walk step (0005); local rays go to `intersect_subsurface` |
-| `advance_geodesic` | main | CUDA kernel: integrates the geodesic (0006) and emits each chord as a ray segment for `intersect_closest`; segment hits and misses in the curved region return here (ruling 18) |
+| `shade_subsurface` | main | random-walk step (model 0005 item 4a; ruling 27); local rays go to `intersect_subsurface` |
+| `advance_geodesic` | main | CUDA kernel: integrates the geodesic (0006 D22), stepping and marching media in-kernel while a chord cannot touch scene geometry, and emits a chord as a ray segment for `intersect_closest` only when it overlaps the scene bounds; every curved-ray result, hit or miss, returns here (rulings 18, 46). Geodesic scalar float |
+| `advance_geodesic_f64` | main | the same stage function with the geodesic scalar double (D1's scalar template parameter): science renders and S1's double variant; S1's mixed variant, if chosen, is this TU calling the float instantiation outside r_mix (0006 D37, D40). Own `launch_config.h` and `budget.toml` rows; the only GPU kernel allowed FP64 instructions. The host launches one of the two per session for `ADVANCE_GEODESIC` |
 | `k_route_hit` | test | `route_hit` compiled as a plain CUDA kernel for the fixture test and register gate |
+
+**`Stage` enum** (u8, the `next_stage` values, in launch order; ruling 47): `INTERSECT_CLOSEST`, `INTERSECT_SUBSURFACE`, `INTERSECT_SHADOW` (shadow pool), `SHADE_BACKGROUND`, `SHADE_LIGHT`, `SHADE_SURFACE`, `SHADE_SURFACE_EXT`, `SHADE_HAIR` (only if split), `SHADE_LIGHT_PATH`, `SHADE_LIGHT_PATH_EXT`, `SHADE_LIGHT_PATH_HAIR` (only if split), `SHADE_SHADOW` (shadow pool), `SHADE_VOLUME`, `SHADE_SUBSURFACE`, `ADVANCE_GEODESIC`, `TERMINATED` (main pool), `SHADOW_TERMINATED` (shadow pool). `generate_camera` and `generate_light` are refill launches over the main `TERMINATED` segment (D7 step 4), and the partition and sort kernels are scheduler launches, so none of them is a `Stage` value.
 
 Per-pass and scene-build kernels, launched by the host outside the step loop, under D1-D4 and D10:
 
@@ -104,17 +107,18 @@ Per-pass and scene-build kernels, launched by the host outside the step loop, un
 | `film_adaptive` | 0008, 0004 D16 | convergence test and mask dilation |
 | `film_present` | 0008, 0007 | display conversion to the half-float present buffer |
 | `film_heatmap` | 0008 | statistic to display-referred RGBA8 |
+| `film_prepare_denoise` | 0008 | denoiser inputs: colour with negatives clamped, albedo and normal guides into the denoiser's buffers (0008 decisions 15-16) |
 | `film_pack_dlss` | 0008 | guides into DLSS inputs |
-| `bake_environment` | 0004 D11 | world program on the equal-area grid for the environment importance table; a shade kernel for D10's stack class |
+| `bake_environment` | 0004 D11 | world program on the equal-area grid for the environment importance table; a VM kernel for D10's stack class |
 
 Light trees and alias tables (0004), sky tables (0004 D12), majorant grids (0006) and grating tables (0005) are built on the host. A record that moves one to the device adds a row here.
 
 **Light paths in the scheduler.** `route_hit` sends a light-path hit to `shade_light_path` (or `_ext`), a lamp hit to `shade_light` (pass-through) and a light-path miss to `TERMINATED`. Light paths share the main pool, the refill rule and the end-of-pass rule (D7); their camera connections take shadow slots like NEE items. A scheduler test runs a stub `generate_light` whose paths terminate at the first hit; the stub is test-only.
 
-**Specialisation.** The only compile-time parameter is the kernel identity `ShadeKind`, a flat closed enum: `Common`, `Ext`, `Light`, `LightExt` (plus `Hair` if 0005's split is measured). Each value is instantiated in exactly one TU and has its own `launch_config.h` and `budget.toml` rows; values are never formed as products of template axes. The enum grows by one entry, one TU and two rows when 0005 or 0004 justify a new identity. The `Common` kernel contains no extension or light-path code. Feature switches are runtime fields in `KernelGlobals`, uniform per launch.
+**Specialisation.** The only compile-time parameters are D1's scalar type (used to build `advance_geodesic_f64`) and the kernel identity `ShadeKind`, a flat closed enum: `Common`, `Ext`, `Light`, `LightExt` (plus `Hair` and `LightHair` if 0005's split is measured). Each value is instantiated in exactly one TU and has its own `launch_config.h` and `budget.toml` rows; values are never formed as products of template axes. The enum grows by one entry, one TU and two rows when 0005 or 0004 justify a new identity. The `Common` kernel contains no extension or light-path code. Feature switches are runtime fields in `KernelGlobals`, uniform per launch.
 
-**D9. The fused surface kernel and the rule for splitting.** `shade_surface` is one kernel that runs the node VM in-kernel (spike A: fused VM 1.59 ms vs a separate parameter pass plus split 2.26 ms), BSDF sample and eval, and NEE.
-- Production launch bounds `(256, 2)`, i.e. at most 128 registers (MEASURED on the fused kernel without VM: 148 to 128 registers, 0.82 ms vs 1.27 ms uncapped, 68 B spill stores). Other shade identities start with the same bounds. All other kernels start at 256 threads with no minimum-blocks clause until a benchmark sets one (PROVISIONAL).
+**D9. The fused surface kernel and the rule for splitting.** `shade_surface` is one kernel that runs the node VM in-kernel (spike A: the fused VM about 30% faster than a separate parameter pass plus split), BSDF sample and eval, and NEE.
+- Production launch bounds `(256, 2)`, i.e. at most 128 registers (MEASURED on the fused kernel without VM: 148 to 128 registers, 56% faster than uncapped, 68 B spill stores). Other shade identities start with the same bounds. All other kernels start at 256 threads with no minimum-blocks clause until a benchmark sets one (PROVISIONAL).
 - **Pre-split by structure** (spine §2): extension identities, light paths, lamp crossings, subsurface, volumes, shadow evaluation, geodesic stepping.
 - **Every other split or fusion** lands only with an A/B on the benchmark scene set at 1080p 1 spp and 64 spp, measured with 0009's wall-time A/B protocol (decision 18). Pass criteria:
   - as a performance change: at least 5% gain at both sample counts;
@@ -128,12 +132,14 @@ Light trees and alias tables (0004), sky tables (0004 D12), majorant grids (0006
 | Budget | Limit | Status |
 |---|---|---|
 | Production cubin: registers ≤ 65536/(T·B) for every kernel with B set | must hold | launch bounds honoured on 12.8 non-rdc (spike A) |
-| Production spill stores/loads | allowance in `budget.toml`: 0 by default; shade identities ≤ 128 / 192 B | ruling 17; PROVISIONAL (68/112 measured without VM; fused+VM capped unmeasured) |
-| Production stack: shade identities / all others | ≤ 512 B / ≤ 128 B | PROVISIONAL (fused+VM 304 B, others 32 B measured) |
+| Production spill stores/loads | allowance in `budget.toml`: 0 by default; VM kernels ≤ 128 / 192 B | ruling 17; PROVISIONAL (68/112 measured without VM; fused+VM capped unmeasured) |
+| Production stack: VM kernels / all others | ≤ 512 B / ≤ 128 B | PROVISIONAL (fused+VM 304 B, others 32 B measured) |
+
+**VM kernels** are the kernels that run the node VM and so hold its register file: every kernel 0005 item 32 lists (the `ShadeKind` identities, `shade_shadow`, `shade_background`, `shade_light`, `shade_volume`, `generate_light`), `bake_environment` and both `advance_geodesic` kernels, whose marcher runs volume programs (0006 D9). Every other kernel is in the second class.
 | Growth vs `budget.toml` | +5% registers (kernels without B) or +10% stack fails unless the change updates the baseline | PROVISIONAL |
 | Uncapped registers (probe build, `check full`) | warning at 150, loud warning above 168; never a merge failure | ruling 17 |
 
-**Time budgets are 0009's** (G2); this design must meet, and the gate measures, these rows there: compile time per device TU; clean and incremental device build; dev kernel edit to running engine; CUDA context and modules ready, warm and cold; GPU idle between launches and `queue_build` + sort time as shares of a 1080p 1 spp pass; kernel time per 1080p sample on the spike B scenes; launch duration (ruling 14); the kernel share of `check gate`.
+**Time budgets are 0009's** (G2, ruling 29); this design must meet, and the gate measures, these rows there: B-05 compile time per device TU; B-01 and B-02 clean and incremental build; B-04 dev kernel edit to running engine; B-18 CUDA context and modules ready, warm and cold; B-19 GPU idle and `queue_build` + sort shares of a 1080p 1 spp pass; B-20 kernel time per 1080p sample; B-17 launch duration (ruling 14); B-09 the kernel share of `check gate`.
 
 **What the merge gate measures for kernels** (serially, never two GPU builds at once):
 - **Production device build** (`-gencode arch=compute_120,code=sm_120 -O3 -std=c++17 -Xptxas -v -c`, changed TUs). Registers and stack come from `cuobjdump -res-usage`, spills from the `ptxas -v` lines; with no `-rdc` the compile-time count is final.
@@ -189,14 +195,14 @@ Light trees and alias tables (0004), sky tables (0004 D12), majorant grids (0006
   | 3 | `TRANSMISSION` | visible to transmission rays | rays after a transmission sample |
   | 4 | `SHADOW` | casting shadows; never lamps (0004 D8) | shadow items: NEE and camera connections |
   | 5 | `VOLUME` | visible to volume-scatter rays | rays after a medium scatter |
-  | 6 | `MEDIUM_BOUNDARY` | volume-object hulls (0006 D20) | every ray when the scene has media |
+  | 6 | `MEDIUM_BOUNDARY` | volume-object hulls and every medium-bearing mesh (0006 D16, D20), whatever its ray visibility | every ray when the scene has media; a hit through this bit alone (the instance lacks the ray type's bit) is a false interface: stack update only, no shading (0006 D17) |
   | 7 | unallocated | — | assigning it amends this record |
 
   Lamp instances carry the light's own ray-visibility bits (0004 D8). Holdout and shadow catcher are per-instance shading flags read by shade stages, and non-opacity is the any-hit instance flag above; none of them is a mask bit.
 - **SBT:** one record per program; hit groups per primitive type (tri, curve, sphere, lamp), never per material.
 - **Pipeline options:** traversable graph flags `ALLOW_SINGLE_LEVEL_INSTANCING | ALLOW_SINGLE_GAS` (the second for `intersect_subsurface`; verify, Risks 5), primitive types triangle, round curves, sphere and custom, `maxTraceDepth = 1`, no SER.
-- **Format: PTX** from nvcc. Spike A measured PTX and OptiX-IR equal in load time (984 vs 1,054 ms cold) and launch time (1.099 vs 1.118 ms), and Cycles ships PTX.
-- Module and pipeline creation start asynchronously when the engine instance is created, in parallel with scene sync, and use OptiX's disk cache (0.6 ms warm measured) in the directory the host supplies (0007 D45).
+- **Format: PTX** from nvcc. Spike A measured PTX and OptiX-IR equal within 7% in cold load time and 2% in launch time, and Cycles ships PTX.
+- Module and pipeline creation start asynchronously when the engine instance is created, in parallel with scene sync, and use OptiX's disk cache (warm and cold: 0009 B-18) in the directory the host supplies (0007 D45).
 
 **D12. FMA and determinism policy.**
 - **Production GPU:** `--fmad=true`, no `--use_fast_math`, `-prec-div=true -prec-sqrt=true -ftz=false` (spike A's numbers were measured this way). **Production CPU:** `/O2 /arch:AVX2 /fp:precise` (AVX2 required, ruling 15), no `/fp:contract`. An explicit `ar::fma` is allowed: it is correctly rounded on both targets.
@@ -219,7 +225,7 @@ Light trees and alias tables (0004), sky tables (0004 D12), majorant grids (0006
 **D14. Compilation route (one compiler, ruling 16).** All GPU code is loaded as module images through the CUDA driver API (`cuModuleLoadData`, `cuLaunchKernel`); the host never uses `<<<>>>`.
 - nvcc builds one cubin per stage TU for sm_120. Release builds add 0001 D3.4's architecture list as SASS plus the newest PTX. Release modules are embedded in `astroray_core.dll` (ruling 13). Every shipped SASS architecture passes the compile-only budget check in `check full` (registers, spills, stack against `budget.toml`); runtime behaviour is tested on sm_120 only, and D15 warns on any other device. Banned flags: `--Ofast-compile` (spike A: 222 registers); `--split-compile` (148 to 162 registers); `--use_fast_math`; `-rdc`.
 - Development builds may load modules from `ASTRORAY_KERNEL_DIR` (0009 decision 5); a changed module is swapped at the next step boundary and accumulation resets. Release builds never load loose modules.
-- NVRTC is not used; it returns only if the measured edit loop exceeds 5 s (ruling 16). The CPU target has no hot reload; it rebuilds in under a second (spike A: 0.65 s).
+- NVRTC is not used; it returns only if the measured edit loop exceeds 5 s (ruling 16). The CPU target has no hot reload; it rebuilds within 0009 B-08 (spike A).
 
 **D15. Device failure contract (rule 7).** Every CUDA and OptiX call is checked. Every failure reaches the C ABI as an `ar_status` and an entry in 0001's per-render report with the text below, and the addon shows it as a Blender report. The engine never switches device on its own.
 
@@ -228,7 +234,8 @@ Light trees and alias tables (0004), sky tables (0004 D12), majorant grids (0006
 | Allocation failure | allocator | render fails; message names category, size, free VRAM |
 | Dev module in `ASTRORAY_KERNEL_DIR` fails to load (dev only) | module loader | previous image of that stage keeps running; persistent viewport warning with the loader error and module name until it loads |
 | OptiX module or pipeline failure | device init | GPU device unavailable for the session; render fails with the OptiX log |
-| Driver too old, or no image for this GPU | device init (`cuDriverGetVersion` vs the build's minimum; module-load result) | GPU device unavailable; message gives found and required driver and the GPU architecture |
+| Driver too old, unsupported GPU | device enumeration and context creation (`cuDriverGetVersion` vs the build's minimum; compute capability) | context refused with `AR_ERR_DEVICE` (0001 D2.8); message gives found and required driver and the GPU architecture |
+| No module image for this GPU | device init (module-load result) | GPU device unavailable; the scene's sessions fail with `AR_ERR_DEVICE` (0001 D2.8), message names the GPU architecture |
 | Sticky CUDA error (illegal address, launch failure, ECC) | the per-step event wait | GPU device dead for the process; render fails naming stage and step; message says Blender must be restarted to use the GPU (CUDA requires a process restart); CPU device stays usable |
 | Other launch error | the per-step event wait | render fails naming stage and step |
 | Asynchronous device init fails during scene sync | init worker | error posted when it happens; the first device upload re-raises it; host scene data is kept |
@@ -260,7 +267,7 @@ Debug builds wait after every launch so an error names its stage.
 
 ## Consequences
 
-- **Easy:** a kernel edit costs one nvcc TU (1.3-2.5 s measured) plus a module swap; a new stage means one enum value, one header, one `.cu`, one `.cpp` and two table rows; the CPU runs the same stage functions and step-table logic, so CPU/GPU differences reduce to arithmetic and traversal edge cases; spill, stack and compile drift is visible on every merge; each stage can be unit-tested on fixtures on the CPU.
+- **Easy:** a kernel edit costs one nvcc TU (within 0009 B-05) plus a module swap; a new stage means one enum value, one header, one `.cu`, one `.cpp` and two table rows; the CPU runs the same stage functions and step-table logic, so CPU/GPU differences reduce to arithmetic and traversal edge cases; spill, stack and compile drift is visible on every merge; each stage can be unit-tested on fixtures on the CPU.
 - **Hard:** every feature must fit a stage boundary and route through `next_stage`; state crosses global memory between stages (bandwidth unmeasured); agents cannot reach for STL, virtuals, recursion or fast-math; camera rays cost one step per alpha layer and per lamp crossed, shadow rays one extra step per K non-opaque layers; host scheduling costs a round trip per step, estimated above budget at 1 spp (D7); a GPU fault inside Blender's process needs a Blender restart.
 - **Cost of unused features:** an empty queue costs one partition bucket and no launch; a feature-tagged state field costs no memory; a runtime flag costs a uniform branch plus its share of the shade kernel's spills, which the gate counts; light-path support costs one state bit, routing entries and one work-counter range; the motion pipeline variant costs nothing in scenes without motion; the f64 CPU build costs one CPU compile; the any-hit costs nothing in opaque scenes (instance flag).
 
@@ -278,7 +285,7 @@ Milestones are `docs/ROADMAP.md`'s (G1).
 - `shade_surface` front-loaded (D10) with alpha pass-through, plus `generate_camera` and `shade_background`: register growth found after breadth work forces the ladder onto finished stages.
 - The merge gate with `budget.toml`, the agreement build and its tests: drift before the gate exists goes undetected (v1).
 - Asynchronous device init and the D15 contract with failure-injection tests: failure paths added late are found by users.
-- Measured before breadth work: `shade_surface` capped at `(256,2)`, and scheduling overhead on the spike B scenes and an alpha-foliage scene (steps per pass, GPU idle, partition time). If 0009's overhead budgets are breached, remedy (a) of D7 lands before breadth work, while host scheduling is still small.
+- Measured before breadth work: `shade_surface` capped at `(256,2)`, and scheduling overhead on the spike B scenes and an alpha-foliage scene (steps per pass, GPU idle, partition time). If 0009 B-19 is breached, remedy (a) of D7 lands before breadth work, while host scheduling is still small.
 
 **Can be added later without redesign** (each is one enum value, one TU and two table rows, or a host-side change):
 - `shade_surface_ext`, `shade_light_path_ext`, `shade_volume`, `shade_subsurface` with `intersect_subsurface`, `shade_light` with the lamp primitives, the real `generate_light` and `shade_light_path`, each with measured budget rows.
@@ -293,25 +300,25 @@ Milestones are `docs/ROADMAP.md`'s (G1).
 
 | Decision | Check | Pass |
 |---|---|---|
-| D1-D3 | lint; `/EHs-c- /GR- /WX` CPU build; ptxas double-use warnings as errors | zero findings; f32 kernels have no FP64 instructions |
+| D1-D3 | lint; `/EHs-c- /GR- /WX` CPU build; ptxas double-use warnings as errors | zero findings; no GPU kernel except `advance_geodesic_f64` has FP64 instructions |
 | D4 | per-stage fixture test: same inputs through the CPU and GPU (no-FMA) builds | D12 thresholds |
 | D5 | shadow pool sized below demand on a test scene | no item dropped; film equals the large-pool run within 1e-6 relative |
 | D6-D7 | debug flag that randomly permutes indices within each segment before each launch (pool large enough that nothing is deferred) | main-pool state bit-identical to the unpermuted run; shadow pool equal as a multiset (items sorted by bytes) |
-| D7 | 1080p 1 spp pass on the spike B scenes and the foliage scene; Nsight Systems timeline | 0009's scheduling-overhead and launch-duration rows |
+| D7 | 1080p 1 spp pass on the spike B scenes and the foliage scene; Nsight Systems timeline | 0009 B-19 and B-17 |
 | D8 | each kernel has a CPU fixture test and rows in `launch_config.h` and `budget.toml`; OptiX programs have `check full` rows | the gate fails on any CUDA kernel or OptiX program missing from either table |
 | D8 | stub light-path scheduler test | every light path terminates; pass ends; camera image unchanged |
 | D9 | any split or fuse change carries an A/B report | D9 criteria |
-| D10 | merge gate and `check full` as described | all limits; growth rule; kernel part of the gate within 0009's budget |
+| D10 | merge gate and `check full` as described | all limits; growth rule; kernel part of the gate within 0009 B-09 |
 | D11 | traversal agreement: Embree (`RTC_SCENE_FLAG_ROBUST`) vs OptiX on 10^6 fixed rays per canonical scene; transparent-shadow analytic test with n layers of opacity a for n = 1, K and 3K+1; mask fixture with one instance per bit traced by every ray type | hit/miss mismatch ≤ 1e-4 of rays, all within 1e-4 relative of a triangle edge (watertight-edge mismatches are expected, v1); transmittance (1-a)^n within 3σ; each ray type hits exactly the instances whose bits it traces |
 | D12 | agreement suite; CPU `threads=1` twice gives bit-identical film; GPU twice gives bit-identical state dumps and film within 1e-6 relative | thresholds as listed |
 | D13 | after scene load: drop in `cuMemGetInfo` free memory vs the ledger total | within 64 MiB |
-| D14 | cold and warm start timing; per-architecture compile-only check; dev module swap at a step boundary | 0009's rows; D10 limits; accumulation resets, no stale module runs |
+| D14 | cold and warm start timing; per-architecture compile-only check; dev module swap at a step boundary | 0009 B-18 and B-04; D10 limits; accumulation resets, no stale module runs |
 | D15 | injection per case: corrupted dev module in `ASTRORAY_KERNEL_DIR`; corrupted PTX; mocked old driver version; failing init worker; a debug-only out-of-bounds kernel run in a child process | each case produces its `ar_status` and report entry; nothing renders silently |
 
 ## Risks and open items
 
 1. **Full-scope register growth** remains the central risk. Fused + VM measured 150 uncapped with **no capped measurement**; it must be measured under `(256,2)` before breadth work. Under ruling 17 a breach shows as spills, and the D10 ladder applies.
-2. **Spike C was not run.** CHECKPOINT-1 listed it as required before the architecture is written. This record replaces it with the D7 estimate, which puts scheduling overhead at 20-40% of a 1 spp 1080p pass, above budget. Overhead is measured before breadth work, and remedy (a) is host-only. **The lead must decide whether that is acceptable or whether spike C runs before sign-off.**
+2. **Spike C was not run.** CHECKPOINT-1 listed it as required before the architecture is written. This record replaces it with the D7 estimate, which puts scheduling overhead of a 1 spp 1080p pass above 0009 B-19. Overhead is measured before breadth work, and remedy (a) is host-only. **The lead must decide whether that is acceptable or whether spike C runs before sign-off.**
 3. **State bandwidth.** Bytes per path and DRAM traffic per pass are estimates (research 04 S3); measure with Nsight Compute before breadth work.
 4. **OptiX module cold compile** (traversal + `route_hit` + `ah_record`, twice in scenes with motion) is unmeasured.
 5. **Direct GAS traversal** for `intersect_subsurface` assumes `ALLOW_SINGLE_GAS` can be combined with single-level instancing in one pipeline. Verify before `shade_subsurface`. Fallback: a second any-hit filtering on instance id, which is integer-only and consistent with D11.
@@ -321,7 +328,8 @@ Milestones are `docs/ROADMAP.md`'s (G1).
 9. **The flag name `--warn-on-double-precision-use`** needs checking against the pinned ptxas.
 10. **Nsight counters** need a one-time administrator enable (owner question 1).
 11. **Sticky CUDA errors** require a process restart, so a kernel fault ends GPU rendering for the Blender session (Cycles has the same property). This follows from 0001's in-process engine; an out-of-process engine is the only remedy (CHECKPOINT-1 keeps it as a fallback).
-12. **Owner question 3:** the release SASS list covers GPUs that are never runtime-tested. D14/D15 warn rather than refuse, pending the owner's answer.
+12. **Untested architectures.** The release SASS list covers GPUs that are never runtime-tested; the owner accepts building them labelled untested (owner decision 29), so D14/D15 warn rather than refuse.
+13. **Self-intersection is unspecified.** No record fixes the ray-origin offset, tmin or self-hit rejection for triangles, curves (0005 item 27's HAIR needs it), spheres and lamps, nor shadow-terminator handling. It touches D11's programs and every ray-spawning stage; the lead decides (candidates: Wächter and Binder 2019, Ray Tracing Gems ch. 6; Cycles' primitive self-skip, which needs any-hit on rays D11 traces without it).
 
 ## Assumptions about other records
 
@@ -329,7 +337,7 @@ Milestones are `docs/ROADMAP.md`'s (G1).
 - **0003:** owns the path state and shadow item layouts and their budgets, including the fields D13 lists; the sampler (ruling 3); packet operations and the termination enum (ruling 6); the flat spacetime policy and the curved-region clamp `route_hit` calls.
 - **0004:** owns stage semantics on D5-D8: NEE/MIS, light tree, lamp crossings, transparent-bounce limit, adaptive sampling, and the light-pass method with its light-sample count per pass. It may need further `ShadeKind` values, and may need `k > 1` shadow items per item.
 - **0005:** a fixed-size OpenPBR record, the VM in-kernel, the closed `ext_kind` list mapped onto `ShadeKind::Ext`/`LightExt` (and `Hair` if split), the per-material `NON_OPAQUE` flag that sets the any-hit instance flag (not a mask bit), and texture filtering with mipmaps in kernel code.
-- **0006:** geodesic chords go through `intersect_closest` from the CUDA kernel `advance_geodesic` (ruling 18); volume hulls carry `MEDIUM_BOUNDARY`; media and geodesics cap work per launch (D7); C3 applies.
+- **0006:** geodesic chords go through `intersect_closest` from the CUDA kernel `advance_geodesic` (ruling 18); volume hulls and medium-bearing meshes carry `MEDIUM_BOUNDARY`; S1 decides which `advance_geodesic` kernel the viewport launches (0006 D40); media and geodesics cap work per launch (D7); C3 applies.
 - **0007:** triggers device init at engine creation; supplies the module cache directory; owns the VRAM ledger, reserve rule and budget table (ruling 19) and the first-frame gate (ruling 21); uses per-pass timing for its resolution controller; requests the motion pipeline variant.
 - **0008:** owns the per-sample buffer, its add function `sample_add` (formerly this record's `film_add`) and its resolve (ruling 1), the splat footprint (ruling 2), and the semantics of the film kernels in D8, under D1-D4.
 - **0009:** provides the gate script, the toolkit pin, every time budget D10 lists, the test tiers, and `ASTRORAY_KERNEL_DIR`.
@@ -352,6 +360,8 @@ Milestones are `docs/ROADMAP.md`'s (G1).
 - NVIDIA: OptiX 9.1 Programming Guide (built-in curve and sphere intersection, motion traversables); CUDA Programming Guide ("Texture Fetching"); CUDA Driver API `CUresult` (sticky errors require a process restart).
 
 ## Review and resolution
+
+History of the independent review; the Decision section and the Reconciliation section below supersede it where they differ (for example "nightly", now `check full` on demand).
 
 1. BLOCKER, D10 gate and ladder: **ACCEPTED.** Added challenge C2 (it absorbs the former C2 and is the reviewer's C4). The merge gate now checks production spills and stack, and uncapped registers are a nightly warning. The ladder re-tunes the cap before any split, and every split must beat the re-tuned cap.
 2. MAJOR, D8 extension stage: **ACCEPTED.** `ShadeKind` is now a flat enum that can grow, one TU per value. 0005 partitions the extension kinds into identities.
@@ -390,3 +400,15 @@ Milestones are `docs/ROADMAP.md`'s (G1).
 - Ruling 22: texture filtering with mipmaps cited in D13 as part of the design.
 - Ruling 23: `shade_volume` carries the emission-absorption marcher; the register gate amendment is C2.
 - Ownership (0002): D8 now lists every kernel other records need (`shade_light`, `shade_surface_ext`, `shade_light_path_ext`, `intersect_subsurface`, film and environment kernels); D11 gives the complete OptiX program list (lamp intersection, curves, spheres, motion variant) and the 8-bit instance mask allocation.
+- Ruling 27: `shade_subsurface` and `intersect_subsurface` cite 0005 item 4a for the walk's model (D8).
+- Ruling 29: time budgets cited by id (D7 B-17/B-19, D10 B-01/B-02/B-04/B-05/B-09/B-17..B-20, Verification, must-exist).
+- Ruling 30: Context states the 30/s target, 24/s floor and 60/s later goal.
+- Ruling 41: the f64 CPU build is an unshipped test reference; CPU geodesic integration is double in every build (D3).
+- Ruling 46: the `advance_geodesic` row steps in-kernel and emits a segment only when a chord overlaps the scene bounds (D8).
+- Ruling 47: D8 enumerates the `Stage` enum and adds `film_prepare_denoise` and the HAIR split pair `shade_hair` / `shade_light_path_hair` (`ShadeKind::Hair`, `LightHair`).
+- Ruling 49: Review section headed as history; Risk 12 records owner decision 29 (untested architectures built and labelled).
+- Ruling 6 (second pass): D1 cites 0003's `kLanes`; D7's cancellation check reads the pending generation, not an epoch (ruling 37).
+- Ruling 29 (second pass): D3, D7, D9, D11, D14, Risk 2 and Consequences carry no time numbers; the D7 overhead derivation moved to 0009 B-19's basis.
+- Ruling 41 (second pass): `advance_geodesic_f64` added (D8) for 0006 D37/D40's double and mixed GPU geodesics, the one kernel exempt from the FP64 check (D1, Verification).
+- Ruling 43 (second pass): bit 6 is set on every medium-bearing mesh whatever its ray visibility, a bit-6-only hit being a false interface (D11).
+- Ruling 47 (second pass): D10 defines the VM stack class by kernel (0005 item 32's list, `bake_environment`, `advance_geodesic`); D2 adds `atomic_max`, `atomic_cas` and `clock` for 0008; D15 splits synchronous driver checks from asynchronous module failures (0001 D2.8); Risk 13 records the unspecified self-intersection rule.
