@@ -68,9 +68,11 @@ add_custom_command(
   VERBATIM)
 add_custom_target(astroray_opsgen ALL DEPENDS ${ASTRORAY_OPSGEN_STAMP})
 
-# Build identity. The command depends on HEAD, the current branch's ref and the
-# index, so a commit relinks; the generator rewrites the source only when its
-# content changed, which keeps `ninja -n` clean afterwards (0009 d5).
+# Build identity. The command depends on HEAD, HEAD's reflog and the index: every commit,
+# checkout, reset or rebase appends to the reflog, so a commit relinks. The branch's loose ref
+# file is not used, because git packs it away (pack-refs, gc, worktree cleanup) and ninja then
+# fails on a missing input. The generator rewrites the source only when its content changed,
+# which keeps `ninja -n` clean afterwards (0009 d5).
 find_package(Git REQUIRED)
 function(_ar_git_path out what)
   execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --git-path ${what}
@@ -83,27 +85,13 @@ function(_ar_git_path out what)
 endfunction()
 _ar_git_path(_ar_git_head HEAD)
 _ar_git_path(_ar_git_index index)
-set(_ar_git_deps ${_ar_git_head} ${_ar_git_index})
-execute_process(COMMAND ${GIT_EXECUTABLE} symbolic-ref -q HEAD
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} OUTPUT_VARIABLE _ar_branch_ref OUTPUT_STRIP_TRAILING_WHITESPACE)
-if(_ar_branch_ref)
-  _ar_git_path(_ar_ref_file ${_ar_branch_ref})
-  if(EXISTS ${_ar_ref_file})
-    list(APPEND _ar_git_deps ${_ar_ref_file})
-  else()
-    _ar_git_path(_ar_packed packed-refs)
-    if(EXISTS ${_ar_packed})
-      list(APPEND _ar_git_deps ${_ar_packed})
-    endif()
-  endif()
+_ar_git_path(_ar_git_reflog logs/HEAD)
+if(NOT EXISTS ${_ar_git_reflog})
+  message(FATAL_ERROR "${_ar_git_reflog} is missing: the build identity needs HEAD's reflog (git config core.logAllRefUpdates true, then make one commit)")
 endif()
-# A branch switch changes HEAD: reconfigure so the new branch's ref is tracked. The ref
-# files are configure dependencies too: git can pack a loose ref away (gc, pack-refs,
-# worktree cleanup), and a vanished configure dependency makes ninja reconfigure instead of
-# failing on a missing input.
-set(_ar_git_ref_deps ${_ar_git_deps})
-list(REMOVE_ITEM _ar_git_ref_deps ${_ar_git_index})
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_ar_git_ref_deps})
+set(_ar_git_deps ${_ar_git_head} ${_ar_git_index} ${_ar_git_reflog})
+# A branch switch rewrites HEAD; reconfigure then so the identity is regenerated cleanly.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_ar_git_head})
 set(ASTRORAY_BUILDINFO_CPP ${ASTRORAY_GEN_DIR}/build_info.cpp)
 add_custom_command(
   OUTPUT ${ASTRORAY_BUILDINFO_CPP}
