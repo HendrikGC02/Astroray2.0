@@ -157,7 +157,7 @@ def camera_desc(abi, f):
               "latitude_min", "latitude_max", "longitude_min", "longitude_max", "shutter_open",
               "shutter_close"):
         setattr(c, k, f[k])
-    c.motion_steps = 1
+    c.motion_steps = 0  # one transform: cam_to_world; set_view refuses a count with no motion_xf
     return c
 
 
