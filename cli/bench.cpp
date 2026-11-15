@@ -88,8 +88,10 @@ int bench_cmd(int argc, char** argv) {
   ar_build_info(&b);
   Line l;
   l.sha = text(b.git_sha, sizeof b.git_sha);
-  const char* host = getenv("COMPUTERNAME");
-  l.machine = host ? host : "unknown";
+  char* host = nullptr;
+  size_t host_len = 0;
+  l.machine = _dupenv_s(&host, &host_len, "COMPUTERNAME") == 0 && host ? host : "unknown";
+  std::free(host);
   l.driver = "unknown";  // the ABI exposes no driver query (see info)
   l.cuda = text(b.cuda, sizeof b.cuda);
   l.scene = stem(a.recording);

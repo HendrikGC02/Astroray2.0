@@ -145,7 +145,12 @@ int run_sessions(Replayed& r, uint32_t timeout_ms) {
     if (ar_session_get_progress(s, &p) != AR_OK) { printf("session %zu: progress failed\n", i); return kExitFailure; }
     if (p.state == AR_STATE_INITIALIZING) {
       const ar_status st = ar_session_start(s);
-      if (st != AR_OK) { printf("session %zu: start failed: %s\n", i, status_name(st)); return kExitFailure; }
+      if (st != AR_OK) {
+        uint8_t msg[256] = {};
+        ar_session_last_error(s, sizeof msg, msg);
+        printf("session %zu: start failed: %s: %s\n", i, status_name(st), text(msg, sizeof msg).c_str());
+        return kExitFailure;
+      }
     }
     // Converged means the sample target is reached; a generation committed late (pending ahead of
     // active and not rejected) restarts the render, so both must hold.
