@@ -40,6 +40,11 @@ def render(data):
         o += ["| Source | Commit | Licence | Our files |", "|---|---|---|---|"]
         for r in b:
             o.append("| " + " | ".join(cell(r, k) for k in ("url", "commit", "spdx", "files")) + " |")
+        # Optional `notice`: the licence or provenance text, copied verbatim.
+        for r in b:
+            if r.get("notice"):
+                o += ["", f"### Notice: {cell(r, 'files')} ({cell(r, 'commit')})", "", "```",
+                      r["notice"].strip("\n"), "```"]
     o += ["", "## NVIDIA licence risk", "", RISK, ""]
     return "\n".join(o)
 
