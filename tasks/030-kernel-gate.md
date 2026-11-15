@@ -17,3 +17,8 @@ Budget: defines B-09 measurement; report gate time and the kernel part.
 Depends on: 027, 028, 013, 017.
 Size: M (about 450 lines); stop and report at 2x.
 Progress:
+- Gate: launch_config.h rows via X-macro, budget.toml per kernel, kernelgate.py (resources, `--time`, `--probe`, `--self-test`); check.ps1 gate/full, `ci` runs the `cpu`-tagged `$gateSteps`; land.ps1 now posts `check gate`.
+- Required rows: any `k_*` kernel and any kernel of a src/kernel_gpu stage cubin; tests/gpu/kernels modules need none (029 adds some), ar_selftest has a row.
+- B-05, B-09 and 0002 D10 numbers are constants in check.ps1/kernelgate.py with their ids: tools/budgets.toml (outside Scope) has no `limit` for them.
+- Growth is judged against the row only when it exists at the merge base unchanged; a new row is its own baseline.
+- First gate run (this tree): PASS gate ~20 s, kernel part ~3 s. Self-test cases use the real ptxas/cuobjdump format with synthetic numbers.

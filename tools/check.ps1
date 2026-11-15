@@ -97,8 +97,10 @@ try {
           if ($LASTEXITCODE -ne 0 -or $names.Count -eq 0) { "$f`: dumpbin listed no dependencies"; $bad++; continue }
           "$f`: $($names -join ' ')"
           foreach ($n in $names) {
-            $sys = ($n -match '^(api|ext)-ms-win-') -or (Test-Path (Join-Path $env:SystemRoot "System32\$n"))
-            if ($n -match '^(vcruntime|msvcp|tbb|nvcuda|cudart)' -or -not $sys) { "$f imports $n, which is not a system DLL"; $bad++ }
+            # The CLI imports the engine DLL beside it; everything else must be a system DLL.
+            $ok = ($n -match '^(api|ext)-ms-win-') -or (Test-Path (Join-Path $env:SystemRoot "System32\$n")) -or
+                  ($n -match '^astroray_' -and (Test-Path (Join-Path $root "out/bin/$n")))
+            if ($n -match '^(vcruntime|msvcp|tbb|nvcuda|cudart)' -or -not $ok) { "$f imports $n, which is not a system DLL"; $bad++ }
           }
         }
         $global:LASTEXITCODE = $bad } },
