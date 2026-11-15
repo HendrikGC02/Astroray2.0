@@ -43,7 +43,9 @@ written before 096 measures the viewport rate. 052 starts an epoch for every
 activated commit, because a commit's Pending does not record whether it is display-only
 (0007 d12); the flag and its use belong with settings sync, and no task owns them yet. Each CPU
 session owns its Ledger (052), so session allocations appear in no context or scene total;
-104's ar_progress ledger fields read the session's own.
+104's ar_progress ledger fields read the session's own. `wavelengths/stratified lane
+positions` failed once in a fast run during 068 and passed on every rerun (flaky; not yet
+investigated).
 
 ## Budget headroom
 Not measured yet: no gate has run. Spike numbers: docs/spikes/*/RESULTS.md.
