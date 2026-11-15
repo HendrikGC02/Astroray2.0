@@ -177,7 +177,7 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
 | dims | camera path | light path |
 |---|---|---|
 | 0-3 | pixel-filter offset x, y (0008 D5; DLSS mode uses the frame jitter instead, 0008 D19); lens u, v | light pick; position u, v; time (0004 D7, D20) |
-| 4-7 | time (0007 decision 15); film wavelength u (decision 2); hero lane ⌊4u⌋ (decision 6); unused | direction u, v (0004 D20); film wavelength u (ruling 7); hero lane |
+| 4-7 | time (0007 decision 15); film wavelength u (decision 2); hero lane ⌊4u⌋ (decision 6); light alias-test uniform, mixed with the event index (ruling 73) | direction u, v (0004 D20); film wavelength u (ruling 7); hero lane |
 | 8+12e .. +3 | BSDF/phase direction u, v; lobe, Mix and opacity choice (0005 item 38; pbrt-v4 `SampleDiscrete` rescaling); Russian roulette (0004 D2) | same |
 | 8+12e+4 .. +7 | light position u, v; light pick incl. the floor branch (0004 D7, D10, D11); distance-strategy choice (0006 D10) | the connection's lens sample u, v (0004 D23); unused; distance-strategy choice |
 | 8+12e+8 .. +11 | extension choice (grating order, fluorescent event: 0005 items 22, 26); extension value (λi, 0005 item 26, 0006 D15); equiangular distance (0006 D10); marcher first sub-step offset (0006 D9) | same |
