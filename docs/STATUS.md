@@ -20,7 +20,10 @@ superseded records (0009 q4). Answered: open-weight worker (O32). Later ones:
 ROADMAP "Open items".
 
 ## Red items
-None.
+None. Follow-ups noted for later tasks: the ABI exposes no CUDA probe reason or
+driver version (017); JH table round trip is 1.1-1.6e-3 off-grid near white and
+up to 4.3e-3 per channel on saturated emitters (023); `check fast` runs 9-10 s
+after a rebuild (B-08 is 10 s).
 
 ## Budget headroom
 Not measured yet: no gate has run. Spike numbers: docs/spikes/*/RESULTS.md.
