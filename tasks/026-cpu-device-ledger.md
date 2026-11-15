@@ -12,7 +12,7 @@ Do:
 5. Tests (fast): ledger totals after allocate/free sequences per scene and session; refused allocation produces the message text; `parallel_for` visits every index exactly once with 1 and 8 threads; a registered dummy test stage (test-only, in the test file) receives the right segment.
 Acceptance: `pwsh tools/check.ps1 fast` passes; `out/bin/astroray_tests_cpu.exe --tier=fast -tc="ledger/*,cpu_device/*"` passes at least 5 cases.
 Look at: none.
-Canary: tasks/026.canary.patch must turn red: astroray_tests_cpu "ledger/totals per category", "cpu_device/parallel_for covers every item".
+Canary: tasks/026.canary.patch must turn red: astroray_tests_cpu "ledger/totals per category", "cpu_device/parallel_for covers every item", "cpu_device/stage launch receives its segment" (grid below, above and at zero against the step table's count).
 Budget: none.
 Depends on: 025, 015.
 Size: M (about 400 lines); stop and report at 2x.
