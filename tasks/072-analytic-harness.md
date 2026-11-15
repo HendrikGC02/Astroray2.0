@@ -23,3 +23,4 @@ Progress:
 - Harness: per-pixel z = Sidak(Sidak(0.01, m=256), 1024 px) = 5.50; 1024 spp default; y_anchor Y uses a summed-SE bound (no channel covariance in the dump).
 - Gate: analytic cpu 3.0 s + analytic cuda 3.2 s, plus about 2 s in abi tests. PASS gate 61.3 s.
 - At 64 spp A5's worst z is +5.48 against 5.50 on both devices: the normal approximation is thin at 64 samples; gate runs 1024.
+- Review applied: y_anchor truth literal Y = L plus image-mean member (stat term about 4e-4); MIN_SPP 1024 refused below; [family_members] analytic_scenes = 10 checked by lint and --gate; canary reddens 9 of 10 tests (exact-truth control stays green). PASS gate 63.6 s.
