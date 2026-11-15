@@ -105,10 +105,21 @@ def parse_declared(spec):
     return out
 
 
-def evaluate(launch, budget, base, cubins, is_stage, declared):
-    """Returns (failures, lines). cubins: {stem: (res-usage text, ptxas text)}; base: the
-    budget rows at the merge base ({} if none); is_stage(stem): production stage TU."""
+def evaluate(launch, budget, base, cubins, is_stage, declared, full=False):
+    """Returns (failures, lines, deferred). cubins: {stem: (res-usage text, ptxas text)}; base: the
+    budget rows at the merge base ({} if none); is_stage(stem): production stage TU. Rows with
+    gated = "full" are deferred unless `full`; the caller must print the deferred count."""
     fails, lines = [], []
+    deferred = [] if full else sorted(n for n, r in budget.items() if r["gated"] == "full")
+    measured = set()
+    # An allowance above the class ceiling is a failure (0009 d13); a re-tune changes 0002 D10 and
+    # SPILL_CEILING, never a row.
+    for n, br in sorted(budget.items()):
+        lr = launch.get(n)
+        cap = SPILL_CEILING[lr["cls"]] if lr else None
+        if cap and (br["spill_store"] > cap[0] or br["spill_load"] > cap[1]):
+            fails.append(f"{n}: spill allowance {br['spill_store']}/{br['spill_load']} B in budget.toml exceeds the "
+                         f"{lr['cls']} ceiling {cap[0]}/{cap[1]} B of 0002 D10")
     for stem, (res_txt, ptx_txt) in sorted(cubins.items()):
         res, ptx = parse_res_usage(res_txt), parse_ptxas(ptx_txt)
         for name in sorted(res):
@@ -121,9 +132,10 @@ def evaluate(launch, budget, base, cubins, is_stage, declared):
                 else:
                     lines.append(f"{name}: no rows, test module not gated")
                 continue
-            if br["gated"] == "full":
-                lines.append(f"{name}: gated in full, skipped")
+            if br["gated"] == "full" and not full:
+                lines.append(f"{name}: deferred to check full")
                 continue
+            measured.add(name)
             m, p = res[name], ptx.get(name)
             if not p or "spill_store" not in p or "regs" not in p:
                 fails.append(f"{name}: no ptxas -v entry in {stem}.ptxas.txt")
@@ -156,16 +168,15 @@ def evaluate(launch, budget, base, cubins, is_stage, declared):
             dec = declared.get(name)
             dtext = ",".join(f"{k}={v:+d}" for k, v in dec.items()) if dec else "none"
             lines.append(f"{name}: {delta} | declared {dtext}" + ("" if old is not None else " | new row"))
-            cap = SPILL_CEILING[lr["cls"]]
-            if br["spill_store"] > cap[0] or br["spill_load"] > cap[1]:
-                lines.append(f"{name}: spill allowance {br['spill_store']}/{br['spill_load']} B is above the "
-                             f"{lr['cls']} limit {cap[0]}/{cap[1]} B of 0002 D10 (a re-tuned cap, ladder step 3)")
             fails.extend(f"{name}: {b}" for b in bad)
     for n in sorted(set(launch) - set(budget)):
         fails.append(f"{n}: row in launch_config.h but none in budget.toml")
     for n in sorted(set(budget) - set(launch)):
         fails.append(f"{n}: row in budget.toml but none in launch_config.h")
-    return fails, lines
+    if full:
+        lines += [f"{n}: gated in full but no cubin here (OptiX program or not built), not measured"
+                  for n in sorted(budget) if budget[n]["gated"] == "full" and n not in measured]
+    return fails, lines, deferred
 
 
 def run(cmd, cwd=ROOT):
@@ -239,12 +250,15 @@ def resources(args):
     def is_stage(stem):
         return not stem.startswith(("test_", "probe_")) and os.path.exists(os.path.join(ROOT, "src/kernel_gpu", stem + ".cu"))
 
-    fails, lines = evaluate(launch, budget, base_budget(args.base), cubins, is_stage, parse_declared(args.declared))
+    fails, lines, deferred = evaluate(launch, budget, base_budget(args.base), cubins, is_stage,
+                                      parse_declared(args.declared), args.full)
     fails += check_ptx(os.path.join(build, "optix"), launch, budget)
     for ln in lines:
         print(ln)
     for f in fails:
         print("FAIL " + f)
+    # Never a silent skip: the gate always says how many rows it left to `check full`.
+    print(f"kernelgate: {len(deferred)} row(s) gated full deferred to check full" + (f": {', '.join(deferred)}" if deferred else ""))
     print(f"kernelgate: {len(cubins)} cubins, {len(fails)} failures")
     return 1 if fails else 0
 
@@ -334,18 +348,23 @@ def probe(args):
 
 
 def self_test():
-    base = os.path.join(ROOT, CASES)
+    cases = os.path.join(ROOT, CASES)
     bad = 0
-    for case in sorted(os.listdir(base)):
-        d = os.path.join(base, case)
+    for case in sorted(os.listdir(cases)):
+        d = os.path.join(cases, case)
         read = lambda f: open(os.path.join(d, f), encoding="utf-8").read()
         want = read("expect.txt").split("\n")
         launch, budget = parse_launch_rows(read("launch_config.h")), parse_budget(read("budget.toml"))
         cubins = {f[:-len(".resusage.txt")]: (read(f), read(f.replace(".resusage.", ".ptxas.")))
                   for f in sorted(os.listdir(d)) if f.endswith(".resusage.txt")}
-        fails, _ = evaluate(launch, budget, {}, cubins, lambda s: False, {})
+        bp = os.path.join(d, "base_budget.toml")  # the rows at the merge base, when the case needs growth
+        base = parse_budget(read("base_budget.toml")) if os.path.exists(bp) else {}
+        fails, _, deferred = evaluate(launch, budget, base, cubins, lambda s: False, {}, want[2:3] == ["full"])
         got = "fail" if fails else "pass"
-        ok = got == want[0] and (not want[1] or any(want[1] in f for f in fails))
+        if want[1].startswith("deferred="):
+            ok = got == want[0] and len(deferred) == int(want[1][9:])
+        else:
+            ok = got == want[0] and (not want[1] or any(want[1] in f for f in fails))
         bad += not ok
         print(f"case {case}: expect {want[0]}, got {got}" + (f" ({fails[0]})" if fails else "") + (": ok" if ok else ": MISMATCH"))
     print(f"self-test: {'FAILED' if bad else 'ok'}")
@@ -357,6 +376,7 @@ def main():
     ap.add_argument("--build-dir", default="out/build")
     ap.add_argument("--base", default="origin/main", help="ref the diff is measured against")
     ap.add_argument("--declared", default="", help='the task\'s declared delta: "name:regs=+0,stack=+16;..."')
+    ap.add_argument("--full", action="store_true", help="also check the rows gated full (check full)")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--time", action="store_true")
     mode.add_argument("--probe", action="store_true")
