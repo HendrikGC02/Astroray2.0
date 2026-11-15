@@ -114,6 +114,7 @@ enum class TableId : uint32_t {
   LIGHT_BINS,
   LIGHT_BIN_LIGHT,
   LIGHT_PMF,
+  LIGHT_INDEX,  // the emissive-hit index (light_sampler.h light_of_hit)
   RGB2SPEC_NODES,
   RGB2SPEC_COEFFS,
   OBSERVER_CMF,

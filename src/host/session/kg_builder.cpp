@@ -43,6 +43,8 @@ ar::KernelGlobals build_kernel_globals(const SceneTableSet* set, const KgSession
   kg.lights = static_cast<const ar::LightRecord*>(scene.tables[static_cast<uint32_t>(TableId::LIGHTS)]->ptr());
   kg.light_sampler = scene.light_sampler;
   kg.world_light = scene.lights ? scene.lights->world_light : ar::kNoLight;
+  kg.light_index = static_cast<const uint32_t*>(scene.tables[static_cast<uint32_t>(TableId::LIGHT_INDEX)]->ptr());
+  kg.light_index_words = scene.counts[static_cast<uint32_t>(TableId::LIGHT_INDEX)];
   kg.e_diel = scene.e_diel;
   kg.material_slot_count = scene.counts[static_cast<uint32_t>(TableId::MATERIAL_SLOTS)];
   kg.material_program_words = scene.counts[static_cast<uint32_t>(TableId::MATERIAL_PROGRAMS)];
@@ -69,6 +71,7 @@ std::vector<std::string> missing_pointers(const ar::KernelGlobals& kg, const Sce
   need(kg.scene, "scene"), need(kg.tables, "tables"), need(kg.light_sampler, "light_sampler");
   need(kg.e_diel, "e_diel");
   table(kg.lights, TableId::LIGHTS, "lights");
+  table(kg.light_index, TableId::LIGHT_INDEX, "light_index");
   const ar::SceneData& s = scene.scene_host;
   need(s.accel, "scene.accel");
   table(s.instances, TableId::INSTANCES, "scene.instances");

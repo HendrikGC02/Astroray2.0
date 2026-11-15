@@ -51,6 +51,7 @@ extern "C" __global__ void ar_kg_checksum(const ar::KernelGlobals* kgp, uint8_t*
   kg_row(out, r++, l.bins, l.bin_count, sizeof(ar::AliasBin));
   kg_row(out, r++, l.bin_light, l.bin_count, 4);
   kg_row(out, r++, l.pmf, l.light_count, 4);
+  kg_row(out, r++, kg.light_index, kg.light_index_words, 4);
   kg_row(out, r++, t.rgb2spec ? t.rgb2spec->z_nodes : nullptr, res, 4);
   kg_row(out, r++, t.rgb2spec ? t.rgb2spec->coeffs : nullptr, 9u * res * res * res, 4);
   kg_row(out, r++, t.observer.cmf, 3u * uint32_t(ar::kObsSamples), 4);

@@ -12,6 +12,8 @@
 #pragma once
 #include <cstdint>
 
+#include "../kernel_globals.h"
+#include "../scene/scene_view.h"
 #include "light.h"
 
 AR_NS_BEGIN
@@ -60,6 +62,55 @@ AR_FN SampledLight light_sampler_sample(const LightSamplerView& v, const LightSa
 AR_FN Real light_sampler_pmf(const LightSamplerView& v, const LightSampleContext& /*ctx*/, uint32_t light) {
   if (light >= v.light_count) return Real(0);
   return Real(ar::load_ro(v.pmf + light));
+}
+
+// The emissive-hit index: which light a BSDF ray's triangle hit is, so emission MIS can take that
+// light's pmf (0004 D1, D9). One uint32 array (KernelGlobals::light_index, light_index_words
+// words), built on the host from the light records themselves (host/light/light_builder.cpp
+// build_light_table), so lights[entry] is the record of that very triangle:
+//   word 0             N, the instance entries (one past the last instance with an emissive triangle)
+//   words 1 .. N       per instance, the word offset of its slice, or kNoLight (no emissive triangle)
+//   slice              C (one past its last emissive triangle), then C light indices, kNoLight for
+//                      a triangle that is not a light
+// Instances at or past N and triangles at or past C emit nothing: the lights' rebuild key covers
+// only emissive instances, so a later unlit instance does not change the array.
+//
+// A hit outside the scene (instance at or past instance_count, or triangle at or past its mesh's
+// triangle_count) is malformed: a debug build traps, a release build returns kLightIndexInvalid,
+// which is neither a light nor kNoLight, so a caller can never mistake it for either.
+inline constexpr uint32_t kLightIndexInvalid = ~0u - 1u;
+
+// The array lookup alone, for a hit already known to be inside the scene.
+AR_FN uint32_t light_index_lookup(const uint32_t* map, uint32_t words, uint32_t inst, uint32_t tri) {
+  if (map == nullptr || words == 0u) return kNoLight;
+  const uint32_t n = ar::load_ro(map);
+  if (inst >= n) return kNoLight;
+  AR_ASSERT(1u + inst < words);
+  const uint32_t base = ar::load_ro(map + 1u + inst);
+  if (base == kNoLight) return kNoLight;
+  AR_ASSERT(base < words);
+  if (tri >= ar::load_ro(map + base)) return kNoLight;
+  AR_ASSERT(base + 1u + tri < words);
+  return ar::load_ro(map + base + 1u + tri);
+}
+
+// The light index of triangle `triangle` of instance `instance`; kNoLight when it is not a light
+// (lamp instances included: their light is DeviceInstanceRecord::light_index, 075).
+AR_FN uint32_t light_of_hit(const KernelGlobals& kg, uint32_t instance, uint32_t triangle) {
+  const SceneData& s = scene_of(kg);
+  const bool inst_ok = instance < s.instance_count;
+  AR_ASSERT(inst_ok);
+  if (!inst_ok) return kLightIndexInvalid;
+  if (instance_light_index(kg, instance) != kNoLightIndex) return kNoLight;  // a lamp instance
+  const uint32_t mesh = load_ro(&s.instances[instance].mesh);
+  const bool mesh_ok = mesh < s.mesh_count;
+  AR_ASSERT(mesh_ok);
+  if (!mesh_ok) return kLightIndexInvalid;
+  const bool tri_ok = triangle < load_ro(&s.meshes[mesh].triangle_count);
+  AR_ASSERT(tri_ok);
+  if (!tri_ok) return kLightIndexInvalid;
+  AR_ASSERT(kg.light_index != nullptr || kg.lights == nullptr);  // a light table binds its index
+  return light_index_lookup(kg.light_index, kg.light_index_words, instance, triangle);
 }
 
 AR_NS_END
