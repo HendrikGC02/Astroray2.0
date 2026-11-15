@@ -16,3 +16,7 @@ Budget: none.
 Depends on: 020, 018.
 Size: S (about 250 lines); stop and report at 2x.
 Progress:
+- Table follows Cycles film.cpp (filter functions, width x3 Gaussian / x2 Blackman-Harris, 1024 entries, util_cdf_evaluate) but inverts the CDF itself: util_cdf_invert's symmetric branch (no "- 1" on upper_bound, entry 511+i at the wrong u, entry 1023 never written) misplaces ~1/1023 of the mass; its chi2 fails by 1e4 (numpy copy).
+- A 1024-entry inverse CDF spreads the last 1/1023 of the mass uniformly over its final step (up to 1 px for Gaussian), so the chi2 uses 64/128 equal-mass cells of the exact density, not equal-width cells.
+- sample_filter returns the offset from the pixel centre; the table stores it from the pixel corner (Cycles). Box sample offsets reach +0.5 at u -> 1 (closed interval); splat footprints use [-r, r) so Box 1 px is one pixel.
+- Footprint weights are normalised per axis so the discrete sum is 1; footprints with radius < 0.5 px can be empty (nx = 0): the M5 splat producer must refuse them.

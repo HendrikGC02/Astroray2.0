@@ -1,0 +1,26 @@
+diff --git a/src/host/film/filter_table.cpp b/src/host/film/filter_table.cpp
+index eb41c68..ada3f13 100644
+--- a/src/host/film/filter_table.cpp
++++ b/src/host/film/filter_table.cpp
+@@ -36,7 +36,7 @@ float filter_func_gaussian(float v, float width) {
+ 
+ float filter_func_blackman_harris(float v, float width) {
+   v = kTwoPi * (v / width + 0.5f);
+-  return 0.35875f - 0.48829f * cosf(v) + 0.14128f * cosf(2.0f * v) - 0.01168f * cosf(3.0f * v);
++  return 0.35875f - 0.40f * cosf(v) + 0.14128f * cosf(2.0f * v) - 0.01168f * cosf(3.0f * v);
+ }
+ 
+ // util_cdf_evaluate over [0, range] with kFilterTableSize - 1 intervals: the
+diff --git a/src/kernel/film/filter.h b/src/kernel/film/filter.h
+index ea17126..a27de95 100644
+--- a/src/kernel/film/filter.h
++++ b/src/kernel/film/filter.h
+@@ -106,7 +106,7 @@ AR_FN SplatFootprint splat_footprint(const FilterTable& t, Real px, Real py) {
+     f.ny = 0;
+     f.inv_norm = Real(0);
+   } else {
+-    f.inv_norm = Real(1) / (sx * sy);
++    f.inv_norm = Real(1);
+   }
+   return f;
+ }
