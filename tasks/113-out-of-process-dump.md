@@ -17,3 +17,4 @@ Budget: none.
 Depends on: none.
 Size: S (about 200 lines); stop and report at 2x.
 Progress:
+Task 113: dump helper added, fault filter uses it; stress 160 runs 0 hangs (before: 17).
