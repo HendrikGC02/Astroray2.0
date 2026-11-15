@@ -7,7 +7,7 @@ Reference: Embree 4 API (rtcNewScene, rtcCommitScene, instancing); OptiX 9.1 Pro
 Do:
 1. At each latch that takes a new scene snapshot (102), build or reuse the traversal structures for that snapshot: unchanged mesh GAS are reused by identity, the TLAS is rebuilt when instances or lamps changed; the structures live in the snapshot and are freed when its last holder drops it (Ruling 70). A build failure follows Ruling 70 (previous snapshot kept, failed_generation set, one entry).
 2. Lamp primitives come from the snapshot's LightTable through 105's explicit lamp parameter; mesh and instance tables from the snapshot.
-3. kg_builder sets `SceneData::accel` (Embree scene on CPU, TLAS handle on CUDA) for every session of the scene; nothing marks it unused once a snapshot exists.
+3. `accel_of` (src/device/cpu/intersect_cpu.cpp, joins Scope for this) asserts only in debug builds; make a missing accel throw in every build so a release camera pass never dereferences null (rule 5). kg_builder sets `SceneData::accel` (Embree scene on CPU, TLAS handle on CUDA) for every session of the scene; nothing marks it unused once a snapshot exists.
 4. Tests: CPU (gate): a session on a scene with one mesh, one rectangle lamp and one sphere lamp traces camera rays that hit each at analytic t; editing one instance transform rebuilds the TLAS and not the mesh GAS (build counters). GPU (gate): the same scene on CUDA gives the same hits as CPU (instance exact, t within 1e-5 relative); ledger totals include the structures.
 Acceptance: `pwsh tools/check.ps1 gate` passes with `scene_accel/*` and `scene_accel_gpu/*`.
 Look at: none.
