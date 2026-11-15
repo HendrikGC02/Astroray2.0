@@ -15,3 +15,4 @@ Budget: about 2 s of gate GPU time; report it.
 Depends on: 041.
 Size: S (about 250 lines); stop and report at 2x.
 Progress:
+- 042: grid/instances 10^6 rays each: 0 hit/miss mismatches, 28 and 3 primitive differences, all within 4.5e-5 barycentric of an edge; mask fixture passes on both. t tolerance scales with 1/|cos| below 0.01 (grazing rays are float-conditioned; 2 rays per scene).
