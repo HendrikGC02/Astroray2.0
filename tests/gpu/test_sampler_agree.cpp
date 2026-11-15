@@ -121,7 +121,7 @@ TEST_CASE("cuda_device/selftest launch and memory") {
   DeviceBuffer b_out = dev->allocate(LedgerCategory::FILM, sizeof(float) * (kN + kTail), Owner{1, 0});
   DeviceBuffer b_lanes = dev->allocate(LedgerCategory::FILM, sizeof(uint32_t) * kN, Owner{1, 0});
   DeviceBuffer b_acc = dev->allocate(LedgerCategory::FILM, 2 * sizeof(uint32_t), Owner{1, 0});
-  CHECK(ledger.session_total(1) == sizeof(float) * kN + sizeof(float) * (kN + kTail) + sizeof(uint32_t) * kN + 8);
+  CHECK(ledger.scene_total(1) == sizeof(float) * kN + sizeof(float) * (kN + kTail) + sizeof(uint32_t) * kN + 8);
 
   dev->upload(b_in, 0, in.data(), sizeof(float) * kN);
   dev->memset(b_out, 0, 0xFF, b_out.bytes);
