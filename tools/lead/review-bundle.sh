@@ -4,5 +4,6 @@
 cd /c/Astroray2.0; n=$1; b=$2
 mkdir -p out/land/$n
 git show $b:$(git ls-tree -r --name-only $b tasks | grep "^tasks/$n-.*\.md$") > out/land/$n/task.md
-git diff main...$b -- . ":!tasks/$n-*.md" > out/land/$n/diff.patch
+# Vendored sources under third_party/<dep>/ are left out: deps.toml pins their hash, and the lead checks it.
+git diff main...$b -- . ":!tasks/$n-*.md" ":!third_party/*/**" > out/land/$n/diff.patch
 wc -l out/land/$n/diff.patch
