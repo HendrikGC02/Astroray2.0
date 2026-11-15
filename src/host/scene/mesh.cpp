@@ -8,6 +8,7 @@
 #include <stdexcept>
 
 #include "host/geometry/triangulate.h"
+#include "host/scene/instances.h"
 
 namespace astroray::host {
 
@@ -166,10 +167,8 @@ std::shared_ptr<MeshRecord> build_record(const ar_mesh_desc& d, const std::vecto
   t->attribute_descs = attrs;
   if (F) t->max_material_index = (d.flags & AR_MESH_HAS_MATERIAL_INDEX) ? uint32_t(max_mat) : 0u;
 
-  // Motion centre: 0007 d15 gives S position steps but no centre index; 0003 D9 puts ray
-  // time relative to the shutter centre. Step S/2 is the centre for odd S; for even S the
-  // centre lies between steps S/2-1 and S/2 and the upper one is taken, until M8 blends.
-  const float* centre = s.positions + size_t(d.motion_steps / 2) * V * 3;
+  // Motion centre: the same representative step as the instances (ruling 68), until M8 blends.
+  const float* centre = s.positions + size_t(representative_step(d.motion_steps)) * V * 3;
   Triangulation tri = triangulate(centre, t->corner_vert.data(), t->face_start.data(), F);
   t->tri_corners = std::move(tri.corners);
   t->tri_face = std::move(tri.face);
