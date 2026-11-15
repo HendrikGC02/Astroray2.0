@@ -29,8 +29,24 @@ class CpuDevice : public Device {
   void download(void* dst, const DeviceBuffer& src, uint64_t offset, uint64_t bytes) override;
   void memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value, uint64_t bytes) override;
   void set_kernel_globals(const DeviceBuffer& buffer) override;
+  // Registers the queue_build and sort kernels (src/kernel_cpu): the entry points the
+  // scheduler launches on every step. Throws like register_kernel.
+  void register_scheduler_kernels();
+  // Registers the CPU intersect stages (src/device/cpu/intersect_cpu.cpp).
+  void register_intersect_stages();
+  // The production tables: both of the above. Generate kernels and shading stages register
+  // with their own tasks (054 and the shade tasks); this is the one place the scheduler's
+  // entry points are bound for production runs.
+  void register_production_stages() {
+    register_scheduler_kernels();
+    register_intersect_stages();
+  }
+
   // The stage launch runs exactly the step table's segment for that stage, whatever
-  // `grid` is. Both launches throw std::logic_error without bound globals and
+  // `grid` is. The kernel launch of a tiled kernel (queue_build count and scatter, sort count and
+  // scatter) throws std::runtime_error naming the kernel and both numbers when `count` is less
+  // than the kernel's tile grid: a CPU chunk sees only its own range, so a short launch would
+  // silently skip tiles. Both launches throw std::logic_error without bound globals and
   // std::runtime_error for a stage or kernel with no entry point.
   void launch(ar::Stage stage, uint32_t grid) override;
   void launch(KernelId kernel, uint32_t count) override;

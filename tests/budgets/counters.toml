@@ -1,0 +1,2 @@
+# Work-counter baselines of the gate's B-16 check (0009 d18): one table per fixed scene, holding
+# the PassCounters of src/host/counters.h at fixed seed. Empty until task 076 fills it.
