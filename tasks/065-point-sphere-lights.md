@@ -16,3 +16,7 @@ Budget: none.
 Depends on: 023, 019, 020, 056.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
+- Done on branch task/065-point-sphere-lights: light.h (types, dispatch, builders, light_valid), light_record.h, point.h, sphere.h, tests/cpu/test_lights_point.cpp (+ f64), tasks/065.canary.patch.
+- point.h and sphere.h are included only by light.h (they need its types); the LightType enum is in light.h, so 066 adds its enumerator and rows there.
+- light_pdf_li takes LightHit (D7's `hit`); point and sphere ignore it. A context inside a sphere gets no sample (one-sided outward emission, D8).
+- Record storage is float on both builds, so the f64 pins use 1e-6, not 1e-9.

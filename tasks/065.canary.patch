@@ -1,0 +1,13 @@
+diff --git a/src/kernel/light/sphere.h b/src/kernel/light/sphere.h
+index 825ce3b..37693cf 100644
+--- a/src/kernel/light/sphere.h
++++ b/src/kernel/light/sphere.h
+@@ -75,7 +75,7 @@ AR_FN LightLiSample sphere_sample_li(const LightRecord& r, const LightSampleCont
+   const Real3 d = s.p_light - ctx.p;
+   s.dist = length(d);
+   s.wi = d / s.dist;
+-  s.pdf = pdf;
++  s.pdf = pdf * Real(2);
+   s.Le = sphere_radiance(r, lam, obs);
+   if (!is_finite(s.Le)) return light_li_none();  // a radius so small that L overflows
+   return s;
