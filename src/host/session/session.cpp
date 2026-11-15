@@ -457,8 +457,17 @@ void Session::release() {
     std::lock_guard<std::mutex> lock(mutex_);
     scheduler_.reset();  // frees the pools
   }
+  // The pipeline goes while the scene's OptiX context lives. A detach error (a dead device) still
+  // freed the pipeline; it is rethrown once everything else was released.
+  std::exception_ptr detach_failed;
 #ifdef ASTRORAY_GPU
-  if (device_.kind() == AR_DEVICE_CUDA) detach_cuda_traversal(device_);  // while the scene's OptiX context lives
+  if (device_.kind() == AR_DEVICE_CUDA) {
+    try {
+      detach_cuda_traversal(device_);
+    } catch (...) {
+      detach_failed = std::current_exception();
+    }
+  }
 #endif
   std::lock_guard<std::mutex> render(render_mutex_);
   // The ring stays until the session is destroyed: a frame the host acquired remains readable
@@ -471,6 +480,7 @@ void Session::release() {
   device_.free(filter_buf_);
   device_.free(present_buf_);
   device_.free(globals_buf_);
+  if (detach_failed) std::rethrow_exception(detach_failed);
 }
 
 uint32_t Session::sample_limit() const {

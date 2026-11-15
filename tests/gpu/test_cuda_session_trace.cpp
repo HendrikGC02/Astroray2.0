@@ -4,8 +4,10 @@
 // through Device::launch(Stage) on the pinned snapshot's TLAS, and agrees with the CPU device's
 // stages on the same scene (114's quad, rectangle lamp and sphere lamp): instance and next stage
 // exact, t within 1e-5 relative, shadow outcome exact. The pipeline's buffers are in the session's
-// ledger and gone after detach. A stage without a route throws naming it. The scene's OptiX disk
-// cache is ar_scene_desc.cache_dir: a directory receives the cache, none disables it.
+// ledger and gone after detach, also on a dead device. A stage without a route throws naming it, and
+// a kernel's block size is launch_config.h's T, checked. A pinned older snapshot keeps tracing its
+// own TLAS after a newer one is committed (RULINGS 70). The scene's OptiX disk cache is
+// ar_scene_desc.cache_dir: a directory receives the cache, none disables it.
 // Ref: docs/decisions/0002-kernel-architecture.md D4, D8, D11; RULINGS 70; 0007 d45; OptiX 9.1
 // Programming Guide (optixLaunch, compilation caching).
 #include <doctest.h>
@@ -119,10 +121,13 @@ struct Rig {
       for (uint64_t i = 0; i < b.corner_normals_count; ++i) (*b.corner_normals)[i] = i % 3 == 2 ? 1.0f : 0.0f;
       REQUIRE(e.item_commit(kQuad) == AR_OK);
     });
+    place_quad(0.0f);
+  }
+  void place_quad(float x) {
     commit([&](Edit& e) {
       std::vector<ar_key> geom{kQuad}, object{1};
       std::vector<ar_xform> xf(1);
-      xf[0].m[0] = xf[0].m[5] = xf[0].m[10] = 1.0f;
+      xf[0].m[0] = xf[0].m[5] = xf[0].m[10] = 1.0f, xf[0].m[3] = x;
       std::vector<uint32_t> zeros(1, 0), vis(1, AR_VISIBILITY_CAMERA | AR_VISIBILITY_SHADOW), moff{0}, mcount{0};
       std::vector<ar_rgba> colors(1, ar_rgba{{1, 1, 1, 1}});
       std::vector<uint8_t> lg(1, 0);
@@ -246,14 +251,15 @@ std::vector<Ray> shadow_rays() {
   return r;
 }
 
-// A directory's files with size and write time, to see whether anything wrote to it.
-std::map<std::string, std::pair<uintmax_t, long long>> listing(const std::string& dir) {
-  std::map<std::string, std::pair<uintmax_t, long long>> out;
+// A directory's files and their sizes. Write times are left out: creating any OptiX context opens
+// the default cache database before the cache can be disabled, which moves its write time.
+std::map<std::string, uintmax_t> listing(const std::string& dir) {
+  std::map<std::string, uintmax_t> out;
   std::error_code ec;
   if (dir.empty() || !std::filesystem::exists(dir, ec)) return out;
   for (const auto& e : std::filesystem::recursive_directory_iterator(dir, ec)) {
     if (!e.is_regular_file(ec)) continue;
-    out[e.path().string()] = {e.file_size(ec), static_cast<long long>(e.last_write_time(ec).time_since_epoch().count())};
+    out[e.path().string()] = e.file_size(ec);
   }
   return out;
 }
@@ -333,8 +339,8 @@ TEST_CASE("cuda_session_trace/unrouted stages throw naming the stage") {
   // Not attached: the traversal stages never look for a k_ module.
   CHECK(message(Stage::INTERSECT_CLOSEST).find("intersect_closest") != std::string::npos);
   CHECK(message(Stage::INTERSECT_SHADOW).find("intersect_shadow") != std::string::npos);
-  CHECK(message(Stage::INTERSECT_SUBSURFACE).find("intersect_subsurface") != std::string::npos);
-  CHECK(message(Stage::SHADE_VOLUME).find("shade_volume") != std::string::npos);  // no module
+  CHECK(message(Stage::INTERSECT_SUBSURFACE).find("stage intersect_subsurface has no CUDA route") != std::string::npos);
+  CHECK(message(Stage::SHADE_VOLUME).find("shade_volume") != std::string::npos);  // no module, no row
   // Attached but no traversable set for the pass.
   attach_cuda_traversal(*session, gpu.scene->accel_builder(), Owner{0, 1});
   CHECK(message(Stage::INTERSECT_CLOSEST).find("traversable") != std::string::npos);
@@ -365,18 +371,104 @@ TEST_CASE("cuda_session_trace/cache dir receives the optix cache") {
 }
 
 TEST_CASE("cuda_session_trace/no cache dir disables the optix cache") {
-  Rig gpu(true, "", false);
-  CHECK(!gpu.optix().cache_enabled());
-  // The location OptiX would use by default: nothing may be written there.
-  const std::string where = gpu.optix().cache_location();
+  // The location OptiX would use by default, read from a context that compiles nothing, and listed
+  // before the scene's context exists. An open context holds the database open (its -shm and -wal
+  // files appear), so the contents are compared while the pipeline is built and after it is gone.
+  std::string where;
+  {
+    Rig probe(true, "", false);
+    where = probe.optix().cache_location();
+  }
   const auto before = listing(where);
+  {
+    Rig gpu(true, "", false);
+    CHECK(!gpu.optix().cache_enabled());
+    const auto open = listing(where);
+    Ledger ledger;
+    auto session = make_cuda_device(ledger, 0);
+    const TraversalAttach t = attach_cuda_traversal(*session, gpu.scene->accel_builder(), Owner{0, 1});
+    std::printf("cuda_session_trace: uncached pipeline creation module %.1f ms, pipeline %.1f ms (location %s)\n",
+                t.module_ms, t.pipeline_ms, where.c_str());
+    detach_cuda_traversal(*session);
+    CHECK(listing(where) == open);  // compiling the module wrote nothing (the write-ahead log stays empty)
+  }
+  CHECK(listing(where) == before);  // no compiled module was added to the default database
+}
+
+TEST_CASE("cuda_session_trace/pinned snapshot keeps its tlas") {
+  // RULINGS 70: a session's epoch holds the set it latched; a second generation moving the quad
+  // gives a new set, and both trace their own TLAS through the session's stage path.
+  Rig gpu(true, "", true);
+  auto first = acquire_scene_tables(*gpu.scene);  // pinned by the running epoch
+  gpu.place_quad(2.0f);
+  auto second = acquire_scene_tables(*gpu.scene);
+  REQUIRE((second != first));
+  REQUIRE(second->generation > first->generation);
   Ledger ledger;
   auto session = make_cuda_device(ledger, 0);
-  const TraversalAttach t = attach_cuda_traversal(*session, gpu.scene->accel_builder(), Owner{0, 1});
-  std::printf("cuda_session_trace: uncached pipeline creation module %.1f ms, pipeline %.1f ms (location %s)\n",
-              t.module_ms, t.pipeline_ms, where.c_str());
+  attach_cuda_traversal(*session, gpu.scene->accel_builder(), Owner{0, 1});
+  const ar::Real3 down{0, 0, -1};
+  const std::vector<Ray> rays{{{0.75f, 0.25f, 10.0f}, down, 1e30f}, {{2.75f, 0.25f, 10.0f}, down, 1e30f}};
+  const auto on = [&](const SceneTableSet& set) {
+    set_cuda_traversable(*session, uint64_t(reinterpret_cast<uintptr_t>(set.scene_host.accel)));
+    return trace(*session, set, rays, {});
+  };
+  const Traced a = on(*first), b = on(*second), a_again = on(*first);
+  CHECK(a.inst[0] == 0u);
+  CHECK(a.inst[1] == ar::kNoInstance);
+  CHECK(b.inst[0] == ar::kNoInstance);
+  CHECK(b.inst[1] == 0u);
+  CHECK(a_again.inst == a.inst);  // the newer set did not retire the pinned one
   detach_cuda_traversal(*session);
-  CHECK(listing(where) == before);
+}
+
+TEST_CASE("cuda_session_trace/launch threads come from launch_config") {
+  const auto text = [](auto&& f) -> std::string {
+    try {
+      f();
+    } catch (const std::logic_error& e) {
+      return e.what();
+    }
+    return "no throw";
+  };
+  const ar::LaunchRow row{1024, 0, 0, ar::StackClass::OTHER};
+  // T above what the compiled function admits (a kernel built under __launch_bounds__(256)).
+  CHECK(text([&] { checked_launch_threads("k_probe", &row, 256); }) ==
+        "CudaDevice: kernel k_probe admits 256 threads per block, launch_config.h gives T = 1024");
+  CHECK(checked_launch_threads("k_probe", &row, 1024) == 1024u);
+  CHECK(text([&] { checked_launch_threads("k_probe", nullptr, 1024); }) ==
+        "CudaDevice: kernel k_probe has no launch_config.h row with threads (AR_LAUNCH_ROWS)");
+  // Through the real path: film_adaptive has no row, which is reported before any module lookup.
+  Rig gpu(true, "", false);
+  const auto set = acquire_scene_tables(*gpu.scene);
+  Ledger ledger;
+  auto session = make_cuda_device(ledger, 0);
+  DeviceBuffer kg_buf = session->allocate(LedgerCategory::TABLES, sizeof(ar::KernelGlobals), Owner{0, 1});
+  const ar::KernelGlobals kg = build_kernel_globals(set.get(), KgSession{});
+  session->upload(kg_buf, 0, &kg, sizeof kg);
+  session->set_kernel_globals(kg_buf);
+  CHECK(text([&] { session->launch(KernelId::FILM_ADAPTIVE, 1); }) ==
+        "CudaDevice: kernel k_film_adaptive has no launch_config.h row with threads (AR_LAUNCH_ROWS)");
+  session->free(kg_buf);
+}
+
+TEST_CASE("cuda_session_trace/dead device detaches without terminate") {
+  // A sticky error on the session's device: detach still frees the pipeline (the frees fail, their
+  // ledger records go), so destroying the scene and then the session never runs a pipeline
+  // destructor against the scene's freed OptiX context.
+  auto gpu = std::make_unique<Rig>(true, "", false);
+  Ledger ledger;
+  auto session = make_cuda_device(ledger, 0);
+  auto* cuda = dynamic_cast<CudaDevice*>(session.get());
+  REQUIRE(cuda);
+  attach_cuda_traversal(*session, gpu->scene->accel_builder(), Owner{0, 1});
+  REQUIRE(ledger.total() > 0u);
+  cuda->poison_for_test("test: the session's device is dead");
+  CHECK_THROWS_AS(detach_cuda_traversal(*session), DeviceError);
+  // Unwinding from a failed REQUIRE destroys the session first, while the scene still lives.
+  REQUIRE(ledger.total() == 0u);
+  gpu.reset();  // the scene and its OptiX context
+  session.reset();
 }
 
 }  // TEST_SUITE

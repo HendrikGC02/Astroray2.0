@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdio>
+#include <exception>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -103,6 +104,16 @@ Driver load_driver() {
 }
 
 }  // namespace
+
+uint32_t checked_launch_threads(const std::string& kernel, const ar::LaunchRow* row, int function_limit) {
+  if (!row || row->threads == 0)
+    throw std::logic_error("CudaDevice: kernel " + kernel + " has no launch_config.h row with threads (AR_LAUNCH_ROWS)");
+  if (function_limit < 0) return row->threads;
+  if (function_limit == 0 || row->threads > static_cast<uint32_t>(function_limit))
+    throw std::logic_error("CudaDevice: kernel " + kernel + " admits " + number(uint64_t(function_limit)) +
+                           " threads per block, launch_config.h gives T = " + number(row->threads));
+  return row->threads;
+}
 
 bool cuda_result_is_sticky(int r) {
   // The codes cuda.h documents as leaving the process unusable ("the process must be
@@ -273,16 +284,11 @@ struct CudaDevice::Impl {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = block_threads.find(kernel);
     if (it != block_threads.end()) return it->second;
-    const ar::LaunchRow* row = launch_row(kernel);
-    if (!row || row->threads == 0)
-      throw std::logic_error("CudaDevice: kernel " + kernel + " has no launch_config.h row with threads (AR_LAUNCH_ROWS)");
     int limit = 0;
     check(cu.cuFuncGetAttribute_(&limit, CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, f), "cuFuncGetAttribute", kernel.c_str());
-    if (limit <= 0 || row->threads > static_cast<uint32_t>(limit))
-      throw std::logic_error("CudaDevice: kernel " + kernel + " admits " + number(uint64_t(limit < 0 ? 0 : limit)) +
-                             " threads per block, launch_config.h gives T = " + number(row->threads));
-    block_threads.emplace(kernel, row->threads);
-    return row->threads;
+    const uint32_t t = checked_launch_threads(kernel, launch_row(kernel), limit);
+    block_threads.emplace(kernel, t);
+    return t;
   }
 
   void launch(CUfunction f, const char* name, uint32_t blocks, uint32_t threads, void** params) {
@@ -387,6 +393,7 @@ void CudaDevice::launch(ar::Stage stage, uint32_t grid) {
     throw std::invalid_argument("CudaDevice: stage " + name + " has no CUDA route (its OptiX raygen is not built)");
   s.bind();
   const std::string fn = "k_" + name;
+  checked_launch_threads(fn, launch_row(fn), -1);  // the row first, before any module is looked up
   const CUfunction f = s.named_function(name, fn);
   const uint32_t threads = s.threads_of(fn, f);
   // The kernel is grid-stride over the step table's count, read on the device (0002 D4,
@@ -409,10 +416,24 @@ TraversalPipeline::Times CudaDevice::attach_traversal(AccelBuilder& scene_accel,
 
 void CudaDevice::detach_traversal() {
   Impl& s = *impl_;
-  if (!s.traversal) return;
-  s.bind();
-  s.traversal.reset();
   s.traversable = 0;
+  if (!s.traversal) return;
+  // The pipeline goes whatever happens: on a dead device bind() throws, and a pipeline left attached
+  // would outlive the scene's OptiX context. Its destructor does not throw; the bind error is
+  // reported after it ran.
+  std::exception_ptr failed;
+  try {
+    s.bind();
+  } catch (...) {
+    failed = std::current_exception();
+  }
+  s.traversal.reset();
+  if (failed) std::rethrow_exception(failed);
+}
+
+void CudaDevice::poison_for_test(const std::string& why) {
+  impl_->dead = true;
+  impl_->dead_message = DeviceError::sticky_text(why);
 }
 
 void CudaDevice::set_traversable(uint64_t handle) { impl_->traversable = handle; }
@@ -440,6 +461,7 @@ void CudaDevice::launch(KernelId kernel, uint32_t count) {
   s.bind();
   const std::string name = kKernelNames[i];
   const std::string fn = "k_" + name;
+  checked_launch_threads(fn, launch_row(fn), -1);  // the row first, before any module is looked up
   const CUfunction f = s.named_function(name, fn);
   const uint32_t threads = s.threads_of(fn, f);
   const uint32_t blocks = blocks_for(count, threads);

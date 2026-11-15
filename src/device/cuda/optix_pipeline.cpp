@@ -70,8 +70,10 @@ struct TraversalPipeline::Impl {
       if (g) optixProgramGroupDestroy(g);
     if (v.module) optixModuleDestroy(v.module);
     if (v.builtin_sphere) optixModuleDestroy(v.builtin_sphere);
-    device.free(v.sbt);
+    // The OptiX objects are gone even when the free below throws (a dead device).
+    DeviceBuffer sbt = v.sbt;
     v = Variant();
+    device.free(sbt);
   }
 
   // Throws on failure; the caller destroys what was built.
@@ -191,16 +193,28 @@ TraversalPipeline::TraversalPipeline(OptixContext& context, Device& device, void
   }
 }
 
-TraversalPipeline::~TraversalPipeline() {
-  impl_->ctx.bind();
+namespace {
+// A destructor never throws: a failed teardown step (a dead device) is printed, never dropped, and
+// the steps after it still run.
+template <class F>
+void teardown(const char* step, F&& f) noexcept {
   try {
-    impl_->sync();  // a launch in flight still reads the SBT and the parameters
+    f();
   } catch (const std::exception& e) {
-    std::fprintf(stderr, "astroray: TraversalPipeline teardown: %s\n", e.what());  // never dropped
+    std::fprintf(stderr, "astroray: TraversalPipeline teardown (%s): %s\n", step, e.what());
+  } catch (...) {
+    std::fprintf(stderr, "astroray: TraversalPipeline teardown (%s): unknown exception\n", step);
   }
-  impl_->destroy(impl_->plain);
-  impl_->destroy(impl_->motion);
-  impl_->device.free(impl_->params);
+}
+}  // namespace
+
+TraversalPipeline::~TraversalPipeline() {
+  Impl& s = *impl_;
+  teardown("bind", [&] { s.ctx.bind(); });
+  teardown("sync", [&] { s.sync(); });  // a launch in flight still reads the SBT and the parameters
+  teardown("plain variant", [&] { s.destroy(s.plain); });
+  teardown("motion variant", [&] { s.destroy(s.motion); });
+  teardown("launch parameters", [&] { s.device.free(s.params); });
 }
 
 void TraversalPipeline::create_motion_variant() {

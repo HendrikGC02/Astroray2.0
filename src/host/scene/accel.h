@@ -74,7 +74,8 @@ class Device;
 // The CUDA scene's builder on `device` (the scene's CudaDevice, ordinal `device_index`); runs on
 // the scene's init thread. Defined in src/device/cuda/optix_accel.cpp, which exists only in
 // ASTRORAY_GPU builds. `cache_dir` is ar_scene_desc.cache_dir, the OptiX disk-cache directory of
-// the scene's context (0007 d45); empty turns the disk cache off, never OptiX's default location.
+// the scene's context (0007 d45); empty turns the disk cache off, so no compilation is cached to
+// the default location.
 // Throws DeviceError when OptiX cannot start.
 std::unique_ptr<AccelBuilder> make_optix_accel_builder(Device& device, uint32_t device_index,
                                                        const std::string& cache_dir);

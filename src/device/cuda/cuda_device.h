@@ -9,13 +9,20 @@
 // 0007 d14 (reserve rule); RULINGS 70.
 #pragma once
 #include <memory>
+#include <string>
 
 #include "device/cuda/optix_pipeline.h"
 #include "host/device.h"
+#include "kernel/launch_config.h"
 
 namespace astroray::host {
 
 class AccelBuilder;
+
+// launch_config.h's T for `kernel`: throws std::logic_error naming the kernel when `row` is null or
+// has no threads, or when `function_limit` (CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK of the compiled
+// function; negative: not checked yet) is below T.
+uint32_t checked_launch_threads(const std::string& kernel, const ar::LaunchRow* row, int function_limit);
 
 class CudaDevice final : public ModuleDevice {
  public:
@@ -50,8 +57,12 @@ class CudaDevice final : public ModuleDevice {
   // std::invalid_argument for a builder that is not OptiX, std::logic_error when one is
   // attached, DeviceError from OptiX.
   TraversalPipeline::Times attach_traversal(AccelBuilder& scene_accel, Owner owner);
-  // Waits for its launches and frees the pipeline; nothing when none is attached.
+  // Waits for its launches and frees the pipeline; nothing when none is attached. The pipeline and
+  // the traversable are gone on return even when it throws (a dead device: the DeviceError of the
+  // failed bind is rethrown after the pipeline was freed).
   void detach_traversal();
+  // Test hook: marks the device dead as a sticky error would; every later call throws `why`.
+  void poison_for_test(const std::string& why);
   // The OptixTraversableHandle the traversal stages trace: the pinned snapshot's SceneData::accel
   // (scene_view.h), set before every pass that launches them.
   void set_traversable(uint64_t handle);

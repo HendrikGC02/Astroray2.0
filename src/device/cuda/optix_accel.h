@@ -92,8 +92,8 @@ class OptixAccelBuilder : public AccelBuilder {
 // (created on the init thread with the device), which the scene's pipelines must share, since a
 // traversable only works in the context that built it. The context's disk cache is configured
 // here, once, before any pipeline exists: `cache_dir` (ar_scene_desc.cache_dir, 0007 d45) holds it,
-// and an empty one turns it off (optixDeviceContextSetCacheEnabled 0), so OptiX never writes to a
-// location the host did not choose (0002 D11).
+// and an empty one turns it off (optixDeviceContextSetCacheEnabled 0), so no compilation is cached
+// to the default location (0002 D11).
 struct OptixContextHolder {
   OptixContextHolder(Device& device, uint32_t device_index, const std::string& cache_dir);
   OptixContext context;
