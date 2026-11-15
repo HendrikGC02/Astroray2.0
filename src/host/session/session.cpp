@@ -371,6 +371,7 @@ FitsProvenance Session::fits_provenance_locked() const {
   pv.working_space = "UNSPECIFIED";
   pv.filter = filter == AR_FILTER_GAUSSIAN ? "gaussian" : filter == AR_FILTER_BLACKMAN_HARRIS ? "blackman-harris" : "box";
   pv.wavelength_pdf = "UNSPECIFIED";
+  pv.device = device_.kind() == AR_DEVICE_CUDA ? "cuda" : "cpu";
   return pv;
 }
 

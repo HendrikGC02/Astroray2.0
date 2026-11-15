@@ -30,6 +30,30 @@ inline constexpr Real kRectMinSolidAngle = Real(3e-4);
 inline constexpr Real kRectMaxSolidAngle = Real(6.22);
 AR_FN bool rect_spherical(Real S) { return S >= kRectMinSolidAngle && S <= kRectMaxSolidAngle; }
 
+// sin and cos of an angle x of a few pi, for the lamp samplers (this header and triangle.h). CUDA's
+// sinf / cosf carry a double-precision slow path a GPU shade kernel may not contain (portability.h),
+// and sinpi(x / pi) alone loses the rounding of x / pi (2^-24 relative in x), which the spherical
+// samplers amplify when the subtended solid angle is small. So x is reduced Cody-Waite style:
+// t = RN(x / pi_hi), with pi_hi the Real nearest pi; r = x - t pi is the exact FMA remainder
+// fma(-t, pi_hi, x) (representable for t = RN(x / pi_hi)) corrected by -t pi_lo, pi_lo = pi - pi_hi;
+// then sin x = sinpi(t) cos r + cospi(t) sin r, with |r| of a few ulps of x, so cos r = 1 and
+// sin r = r to the Real's precision.
+// Ref: Cody and Waite 1980, "Software Manual for the Elementary Functions" (additive argument
+// reduction with a split constant); Boldo, Daumas, Moreau-Finot and Thery 2002, "Computer validated
+// proofs of a toolset for adaptable arithmetic" (the FMA remainder of a rounded quotient is exact);
+// CUDA C++ Programming Guide, appendix "Mathematical Functions" (sinpif, cospif: 1 ulp).
+struct LightSinCos {
+  Real s, c;
+};
+AR_FN LightSinCos light_sincos(Real x) {
+  const Real pi_hi = sizeof(Real) == 4 ? Real(float(3.14159265358979323846)) : Real(3.14159265358979323846);
+  const Real pi_lo = sizeof(Real) == 4 ? Real(3.14159265358979323846 - double(float(3.14159265358979323846)))
+                                       : Real(1.2246467991473532e-16);
+  const Real t = x / pi_hi;
+  const Real r = ar::fma(-t, pi_hi, x) - t * pi_lo;
+  const Real st = ar::sinpi(t), ct = ar::cospi(t);
+  return LightSinCos{st + ct * r, ct - st * r};
+}
 // Column `col` of the rotation part of xf: a lamp-local axis in world space.
 AR_FN Real3 area_axis(const LightRecord& r, int col) {
   return Real3{Real(r.xf[col]), Real(r.xf[4 + col]), Real(r.xf[8 + col])};
@@ -101,7 +125,8 @@ AR_FN bool sphquad_init(const RectGeom& g, Real3 o, SphQuad* q) {
 AR_FN Real3 sphquad_sample(const RectGeom& g, const SphQuad& q, Real3 o, Real2 u) {
   // 1. cu, the cosine that fixes the x coordinate
   const Real au = u.x * q.S + q.k;
-  const Real fu = (ar::cos(au) * q.b0 - q.b1) / ar::sin(au);
+  const LightSinCos sc = light_sincos(au);
+  const Real fu = (sc.c * q.b0 - q.b1) / sc.s;
   const Real cu = rect_clamp((fu > Real(0) ? Real(1) : Real(-1)) / ar::sqrt(fu * fu + q.b0sq), Real(-1), Real(1));
   // 2. xu; cu = +-1 is the x0 or x1 edge, where the quotient below is infinite
   const Real den = light_safe_sqrt(Real(1) - cu * cu);

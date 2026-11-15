@@ -2,7 +2,8 @@
 // shade_background on the GPU against the CPU float stage (0009 d17 step iii, the per-stage
 // fixture of 0002 D4): 10^5 synthetic camera-path misses over a table of [decoy lamp, world, decoy
 // lamp], two samples per pixel so the path-end statistics are shared between paths, with random
-// wavelengths, throughputs (1% non-finite), bounce counts and hero lanes. Integer fields (term,
+// wavelengths, throughputs (1% non-finite), bounce counts, hero lanes and the world-MIS inputs (r_u,
+// r_l, previous vertex, delta last bounce; 074). Integer fields (term,
 // next_stage, the slot flags and every COUNT plane) must be bit-equal; the slot radiance agrees to
 // 0002 D12's evaluation threshold (FMA-off GPU build vs CPU float).
 // Ref: docs/decisions/0002-kernel-architecture.md D4, D12; 0009 d17; 0004 D5, D28.
@@ -78,7 +79,10 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
   std::vector<uint8_t> next(kN, uint8_t(ar::Stage::SHADE_BACKGROUND)), term(kN, uint8_t(ar::Term::ACTIVE));
   std::vector<uint32_t> flags(kN), sample_id(kN);
   std::vector<ar::U16x6> bounces(kN);
-  std::vector<ar::Spec> lambda_t(kN), beta(kN);
+  std::vector<ar::Spec> lambda_t(kN), beta(kN), r_u(kN), r_l(kN);
+  std::vector<ar::Real3> ray_o(kN), ray_d(kN);
+  std::vector<uint32_t> prev_ng(kN), prev_ns(kN);
+  std::vector<ar::Real> prev_dist(kN);
   const float inf = std::numeric_limits<float>::infinity();
   for (uint32_t i = 0; i < kN; ++i) {
     for (int l = 0; l < ar::kLanes; ++l) {
@@ -92,12 +96,28 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
     flags[i] = ar::set_hero_lane(uint32_t(agree::unit(i, 10) * 4096.0) << 9, uint32_t(agree::unit(i, 11) * 4.0) & 3u) &
                ~ar::PATH_KIND;
     bounces[i] = ar::U16x6{{uint16_t(agree::unit(i, 12) * 13.0), 0, 0, 0, 0, 0}};
+    // The world MIS inputs (074): r_u, r_l, the previous vertex and a delta last bounce on 30%.
+    if (agree::unit(i, 13) < 0.3) flags[i] |= ar::LAST_BOUNCE_SPECULAR;
+    for (int l = 0; l < ar::kLanes; ++l) {
+      r_u[i].v[l] = 0.5f + float(agree::unit(i, 14u + uint32_t(l)));
+      r_l[i].v[l] = 4.0f * float(agree::unit(i, 18u + uint32_t(l)));
+    }
+    const ar::Real3 n{float(agree::unit(i, 22)) - 0.5f, float(agree::unit(i, 23)) - 0.5f, 1.0f};
+    prev_ng[i] = ar::oct_encode(ar::normalize(n));
+    prev_ns[i] = ar::oct_encode(ar::normalize(n + ar::Real3{0.1f, 0.0f, 0.0f}));
+    prev_dist[i] = float(agree::unit(i, 24));
+    ray_o[i] = ar::Real3{float(agree::unit(i, 25)), float(agree::unit(i, 26)), float(agree::unit(i, 27))};
+    ray_d[i] = ar::normalize(ar::Real3{float(agree::unit(i, 28)) - 0.5f, float(agree::unit(i, 29)) - 0.5f, 0.7f});
   }
   DeviceBuffer next_buf = put(next.data(), kN), term_buf = put(term.data(), kN);
   DeviceBuffer flags_buf = put(flags.data(), kN * sizeof(uint32_t));
   DeviceBuffer bounces_buf = put(bounces.data(), kN * sizeof(ar::U16x6));
   DeviceBuffer lambda_buf = put(lambda_t.data(), kN * sizeof(ar::Spec));
   DeviceBuffer beta_buf = put(beta.data(), kN * sizeof(ar::Spec));
+  DeviceBuffer ru_buf = put(r_u.data(), kN * sizeof(ar::Spec)), rl_buf = put(r_l.data(), kN * sizeof(ar::Spec));
+  DeviceBuffer ro_buf = put(ray_o.data(), kN * sizeof(ar::Real3)), rd_buf = put(ray_d.data(), kN * sizeof(ar::Real3));
+  DeviceBuffer png_buf = put(prev_ng.data(), kN * 4), pns_buf = put(prev_ns.data(), kN * 4);
+  DeviceBuffer pd_buf = put(prev_dist.data(), kN * sizeof(ar::Real));
   ar::PathStateSoA soa{};
   DeviceBuffer sample_buf = put(sample_id.data(), kN * sizeof(uint32_t));
   soa.sample_id = static_cast<uint32_t*>(sample_buf.ptr);
@@ -107,6 +127,10 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
   soa.bounces = static_cast<ar::U16x6*>(bounces_buf.ptr);
   soa.lambda_t = static_cast<ar::Spec*>(lambda_buf.ptr);
   soa.beta = static_cast<ar::Spec*>(beta_buf.ptr);
+  soa.r_u = static_cast<ar::Spec*>(ru_buf.ptr), soa.r_l = static_cast<ar::Spec*>(rl_buf.ptr);
+  soa.ray_o = static_cast<ar::Real3*>(ro_buf.ptr), soa.ray_d = static_cast<ar::Real3*>(rd_buf.ptr);
+  soa.prev_ng = static_cast<uint32_t*>(png_buf.ptr), soa.prev_ns = static_cast<uint32_t*>(pns_buf.ptr);
+  soa.prev_dist = static_cast<ar::Real*>(pd_buf.ptr);
   DeviceBuffer soa_buf = put(&soa, sizeof soa);
 
   // The light table: an RGB illuminant world between two decoy lamps, so a wrong index would read a lamp.
@@ -118,8 +142,12 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
       ar::light_make(ar::LightType::POINT, ar::Real3{1, 2, 3}, ar::Real(0), ar::Real(50), colour);
   const std::vector<ar::LightRecord> lights{decoy, ar::light_make_world(ar::Real(1.75), colour), decoy};
   DeviceBuffer lights_buf = put(lights.data(), lights.size() * sizeof(ar::LightRecord));
+  // Selection probabilities for the world's MIS weight (the alias bins are never read by a miss).
+  const std::vector<float> pmf{0.3f, 0.45f, 0.25f};
+  DeviceBuffer pmf_buf = put(pmf.data(), pmf.size() * sizeof(float));
   ar::LightSamplerView sampler{};
   sampler.light_count = uint32_t(lights.size());
+  sampler.pmf = static_cast<const float*>(pmf_buf.ptr);
   DeviceBuffer sampler_buf = put(&sampler, sizeof sampler);
   const std::vector<float> illum = observer_illuminant();
   const std::vector<float> cmf(3 * ar::kObsSamples, 0.0f);
@@ -175,7 +203,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
   dev.download(s.adds.data(), film.buffer(), offset(fd.add), s.adds.size() * sizeof(float));
 
   for (DeviceBuffer* b : {&film_buf, &queue_buf, &list_buf, &table_buf, &next_buf, &term_buf, &flags_buf, &bounces_buf,
-                          &lambda_buf, &beta_buf, &sample_buf, &soa_buf, &lights_buf, &sampler_buf, &illum_buf, &cmf_buf, &tables_buf,
+                          &lambda_buf, &beta_buf, &ru_buf, &rl_buf, &ro_buf, &rd_buf, &png_buf, &pns_buf, &pd_buf, &pmf_buf, &sample_buf, &soa_buf, &lights_buf, &sampler_buf, &illum_buf, &cmf_buf, &tables_buf,
                           &kg_buf})
     dev.free(*b);
   return s;

@@ -184,6 +184,7 @@ Light trees and alias tables (0004), sky tables (0004 D12), majorant grids (0006
   - miss with no records → deliver (D5);
   - miss with records → `shade_shadow` evaluates them in t order and delivers, or on overflow re-queues `intersect_shadow` from the K-th t.
   - Rays through more than K non-opaque layers cost one extra step per K layers.
+  - Delivery is never done in `__raygen__intersect_shadow`: it writes `SHADE_SHADOW` for an unoccluded item and `shade_shadow` adds the contribution to the target slot and frees the item, with no VM and no recorded hits in M1a (task 074), until M2 extends it with `ah_record`'s hits and opacity.
 - **Camera, indirect and subsurface rays** use `DISABLE_ANYHIT`. An alpha or Transparent-BSDF hit is resolved in `shade_surface` as a pass-through that re-queues `intersect_closest` from the hit, one step per layer, bounded by a transparent-bounce limit (0004). Cycles handles camera-ray transparency the same way.
 - v1's opaque-only design (`TERMINATE_ON_FIRST_HIT | DISABLE_CLOSESTHIT | DISABLE_ANYHIT`) covered all-triangle opaque scenes; v1 kept alpha-shadow walks on a software BVH (`gpu-build.md:73`). It is the opaque special case here, not a precedent for the whole rule.
 - **Instance visibility mask (8 bits, owned here).** A ray traces with the bit of its ray type, OR `MEDIUM_BOUNDARY` when the scene has media; an instance is hit when the masks share a bit.

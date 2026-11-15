@@ -67,6 +67,8 @@ struct MissRig {
   std::vector<uint32_t> sample_id{0, 1, 2, 3};  // the film slot of each pool slot (0004 D5)
   std::vector<ar::U16x6> bounces = std::vector<ar::U16x6>(kSlots, ar::U16x6{{0, 0, 0, 0, 0, 0}});
   std::vector<ar::Spec> lambda_t = std::vector<ar::Spec>(kSlots), beta = std::vector<ar::Spec>(kSlots);
+  // r_u = 1: the unweighted miss divides by avg(r_u) (074), so the expected values stay beta Le.
+  std::vector<ar::Spec> r_u = std::vector<ar::Spec>(kSlots, ar::spec_fill(1.0f));
   ar::StepEntry step{0, kSlots, 0};
 
   explicit MissRig(float world_strength) : pool(ctx, 1), dev(ledger, pool) {
@@ -108,6 +110,7 @@ struct MissRig {
       flags[i] = ar::set_hero_lane(0u, i);
     }
     bounces[2].v[0] = 3;
+    flags[2] |= ar::LAST_BOUNCE_SPECULAR;  // after a delta bounce: weight 1 / avg(r_u), no world MIS
 
     path.sample_id = sample_id.data();
     path.next_stage = next_stage.data();
@@ -116,6 +119,7 @@ struct MissRig {
     path.bounces = bounces.data();
     path.lambda_t = lambda_t.data();
     path.beta = beta.data();
+    path.r_u = r_u.data();
     kg.path = &path;
     kg.main_queue = queue.data();
     kg.active_pixels = active.data();

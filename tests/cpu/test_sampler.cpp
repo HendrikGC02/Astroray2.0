@@ -224,7 +224,7 @@ TEST_SUITE("fast") {
     const Pin pins[] = {
         PIN(DIM_CAM_FILTER_X, 0),      PIN(DIM_CAM_FILTER_Y, 1),    PIN(DIM_CAM_LENS_U, 2),
         PIN(DIM_CAM_LENS_V, 3),        PIN(DIM_CAM_TIME, 4),        PIN(DIM_CAM_WAVELENGTH, 5),
-        PIN(DIM_CAM_HERO, 6),          PIN(DIM_CAM_UNUSED7, 7),     PIN(DIM_LIGHT_PICK, 0),
+        PIN(DIM_CAM_HERO, 6),          PIN(DIM_CAM_ALIAS_Q, 7),     PIN(DIM_LIGHT_PICK, 0),
         PIN(DIM_LIGHT_POS_U, 1),       PIN(DIM_LIGHT_POS_V, 2),     PIN(DIM_LIGHT_TIME, 3),
         PIN(DIM_LIGHT_DIR_U, 4),       PIN(DIM_LIGHT_DIR_V, 5),     PIN(DIM_LIGHT_WAVELENGTH, 6),
         PIN(DIM_LIGHT_HERO, 7),        PIN(DIM_EVENT_FIRST, 8),     PIN(DIM_EVENT_COUNT, 12),

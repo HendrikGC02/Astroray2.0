@@ -30,6 +30,8 @@ struct FitsProvenance {
   std::string working_space;
   std::string filter;
   std::string wavelength_pdf;
+  // The device that rendered the film ("cpu", "cuda"), so a check can tell which one it read.
+  std::string device = "UNSPECIFIED";
 };
 
 // The file's bytes. Throws std::invalid_argument for bad provenance and std::length_error for a

@@ -108,11 +108,21 @@ AR_FN Real sample_independent(uint32_t id, uint32_t index, uint32_t stream, uint
   return bits_to_unit(h.x);
 }
 
-// The draw every consumer calls; `mode` is the session's SAMPLER_* uniform.
+// The 32 random bits behind draw(): sample_bits, or the independent mode's pcg4d word. A consumer
+// that needs more than draw()'s 24 bits from one dimension (the alias sampler's bin, 067) uses it.
+AR_FN uint32_t draw_bits(uint32_t mode, uint32_t id, uint32_t index, uint32_t stream, uint32_t d, uint32_t seed) {
+  if (mode == SAMPLER_INDEPENDENT) {
+    AR_ASSERT(stream < 256u && d < (1u << 24));
+    return pcg4d(UInt4{id, index, (stream << 24) + d, seed}).x;
+  }
+  return sample_bits(id, index, stream, d, seed);
+}
+
+// The draw every consumer calls; `mode` is the session's SAMPLER_* uniform. bits_to_unit of
+// draw_bits, so the two never disagree.
 AR_FN Real draw(uint32_t mode, uint32_t id, uint32_t index, uint32_t stream, uint32_t d,
                 uint32_t seed) {
-  return mode == SAMPLER_INDEPENDENT ? sample_independent(id, index, stream, d, seed)
-                                     : sample(id, index, stream, d, seed);
+  return bits_to_unit(draw_bits(mode, id, index, stream, d, seed));
 }
 
 AR_NS_END

@@ -317,6 +317,10 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   kg.scene = static_cast<const ar::SceneData*>(scene_p);
   kg.tables = static_cast<const ar::SceneTables*>(tables_p);
   kg.e_diel = static_cast<const ar::EDielTable*>(e_diel_p);
+  // No light table: NEE finds nothing (an empty sampler), and the emissive instances are no lights,
+  // so a hit after a non-delta bounce takes pmf 0 and weight 1 / avg(r_u) (0004 D9; 074).
+  const ar::LightSamplerView no_lights{};
+  kg.light_sampler = static_cast<const ar::LightSamplerView*>(put(&no_lights, sizeof no_lights));
   kg.session.width = kFilmW;
   kg.session.height = kFilmH;
   kg.session.samples_per_pass = kK;

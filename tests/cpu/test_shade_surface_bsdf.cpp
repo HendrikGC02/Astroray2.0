@@ -57,6 +57,7 @@ struct Rig {
   std::vector<ar::DeviceMeshView> meshes;
   std::vector<float> nrm;
   ar::PathStateSoA path{};
+  ar::LightSamplerView no_lights{};  // NEE finds no light: these cases test the continuation (074)
   uint32_t n;
   std::vector<uint32_t> queue, active, sample_id, flags, hit_prim, hit_inst, prev_ng, prev_ns;
   std::vector<uint8_t> next_stage, term, ray_type;
@@ -163,6 +164,7 @@ struct Rig {
     kg = build_kernel_globals(set.get(), in);
     kg.path = &path;
     kg.main_queue = queue.data();
+    kg.light_sampler = &no_lights;
     // The material's constant block, replaced by the test's (host memory: the CPU stage reads it).
     sd = *kg.scene;
     blocks.assign(sd.material_constants, sd.material_constants + kg.material_constant_count);

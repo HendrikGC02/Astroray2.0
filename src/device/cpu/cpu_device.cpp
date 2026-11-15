@@ -15,6 +15,7 @@
 #include "kernel/stages/queue_build.h"
 #include "kernel/stages/route_hit.h"
 #include "kernel/stages/shade_background.h"
+#include "kernel/stages/shade_shadow.h"
 #include "kernel/stages/shade_surface.h"
 #include "kernel/stages/sort.h"
 
@@ -185,6 +186,7 @@ std::shared_ptr<Device> make_cpu_session_device(ContextState& ctx, unsigned work
       // Not in register_production_stages either: the camera_wiring tests stack their own stub.
       device.register_stage(ar::Stage::SHADE_BACKGROUND, &cpu_stage_shade_background);
       device.register_stage(ar::Stage::SHADE_SURFACE, &cpu_stage_shade_surface);
+      device.register_stage(ar::Stage::SHADE_SHADOW, &cpu_stage_shade_shadow);
     }
   };
   auto owned = std::make_shared<Owned>(ctx, workers);

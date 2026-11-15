@@ -6,10 +6,11 @@
 // normal cross(p1 - p0, p2 - p0); a one-sided triangle emits only toward it. Include light.h.
 //
 // Ref: docs/decisions/0004-integrator.md D9 (sampling switch, sidedness, power = A pi estimate);
-// Arvo 1995, "Stratified Sampling of Spherical Triangles"; pbrt-v4 src/pbrt/shapes.h
+// Arvo 1995, "Stratified Sampling of Spherical Triangles" (parameterisation; steps after Peters 2021,
+// see tri_sample_spherical); pbrt-v4 src/pbrt/shapes.h
 // Triangle::Sample(ctx, u), Triangle::PDF(ctx, wi), Triangle::SolidAngle, MinSphericalSampleArea
 // and MaxSphericalSampleArea; src/pbrt/util/sampling.cpp SampleSphericalTriangle; util/sampling.h
-// SampleUniformTriangle; util/vecmath.h SphericalTriangleArea, AngleBetween; src/pbrt/lights.cpp
+// SampleUniformTriangle; util/vecmath.h SphericalTriangleArea; src/pbrt/lights.cpp
 // DiffuseAreaLight::SampleLe (two-sided side choice) and lights.h DiffuseAreaLight::L (one-sided
 // test) (Apache-2.0). pbrt's optional cosine warp (SampleBilinear) is not applied, so the
 // spherical pdf is exactly 1 / solid angle in both sample_li and pdf_li.
@@ -37,13 +38,6 @@ AR_FN Real3 tri_normal(const LightRecord& r) {
 }
 
 AR_FN Real tri_clamp(Real x, Real lo, Real hi) { return x < lo ? lo : (x > hi ? hi : x); }
-AR_FN Real tri_safe_asin(Real x) { return ar::asin(tri_clamp(x, Real(-1), Real(1))); }
-
-// pbrt-v4 AngleBetween: the numerically stable angle between unit vectors.
-AR_FN Real tri_angle_between(Real3 a, Real3 b) {
-  return dot(a, b) < Real(0) ? kLightPi - Real(2) * tri_safe_asin(length(a + b) / Real(2))
-                             : Real(2) * tri_safe_asin(length(b - a) / Real(2));
-}
 
 // pbrt-v4 SphericalTriangleArea of the directions from p (Triangle::SolidAngle).
 AR_FN Real tri_solid_angle(const LightRecord& r, Real3 p) {
@@ -58,36 +52,52 @@ AR_FN bool tri_sees(const LightRecord& r, Real3 p, Real3 n) {
   return tri_two_sided(r) ? side != Real(0) : side > Real(0);
 }
 
-// pbrt-v4 SampleSphericalTriangle (Arvo 1995): the point of the triangle in the sampled
-// direction from p, from clamped barycentrics. False when the spherical triangle is degenerate.
+// The spherical triangle (a, b, c) = directions from p to (v0, v1, v2) sampled uniformly by solid
+// angle with Arvo's parameterisation, which pbrt-v4 SampleSphericalTriangle uses: u.x picks the
+// sub-triangle (a, b, c') of solid angle u.x * Omega with c' on the arc from a to c, and u.y the
+// point on the arc from b to c' with cos linear in u.y. The steps follow Peters' variant of Arvo's
+// method, which is the same map in exact arithmetic but avoids the cos(beta') -> sin(beta')
+// cancellation of pbrt's form (in float it moved directions by about 1e-4 rad when u.x is small):
+//  - V = |det[a, b, c]| by a Householder reflection that sends b to +-e_x (so V is a 2x2
+//    determinant), Q = 1 + a.b and S = a.c + b.c; Omega / 2 = atan2(V, Q + S) (Van Oosterom and
+//    Strackee 1983);
+//  - with theta = u.x Omega / 2, o = (V cos theta - S sin theta) a + (Q sin theta) c, and c' is a
+//    reflected about o: c' = 2 (a.o) / (o.o) o - a, unit by construction;
+//  - s2 = b.c', s = 1 - u.y (1 - s2) by fused multiply-adds, t = sqrt((1 - s^2) / (1 - s2^2)), or
+//    t = sqrt(u.y) (its limit) when 1 - s2^2 <= 0; the direction is (s - t s2) b + t c', unit by
+//    construction (no normalisation).
+// Then the point of the triangle in that direction from clamped barycentrics, as pbrt does. False
+// when the spherical triangle is degenerate.
+// Ref: Peters 2021, "BRDF Importance Sampling for Polygonal Lights", ACM TOG 40(4) (solid angle
+// sampling, "our variant of Arvo's method"), and its public code src/shaders/polygon_sampling.glsl
+// (MomentsInGraphics/vulkan_renderer, BSD-3-Clause option) prepare_solid_angle_polygon_sampling and
+// sample_solid_angle_polygon for one triangle (vertices[0], [1], [2] = a, b, c); Arvo 1995; Van
+// Oosterom and Strackee 1983, "The Solid Angle of a Plane Triangle", IEEE TBME 30(2); pbrt-v4
+// src/pbrt/util/sampling.cpp SampleSphericalTriangle (barycentrics and clamps; Apache-2.0).
 AR_FN bool tri_sample_spherical(const LightRecord& r, Real3 p, Real2 u, Real3* out) {
   const Real3 v0 = tri_vertex(r, 0), v1 = tri_vertex(r, 1), v2 = tri_vertex(r, 2);
   const Real3 a = normalize(v0 - p), b = normalize(v1 - p), c = normalize(v2 - p);
-  Real3 n_ab = cross(a, b), n_bc = cross(b, c), n_ca = cross(c, a);
-  if (dot(n_ab, n_ab) == Real(0) || dot(n_bc, n_bc) == Real(0) || dot(n_ca, n_ca) == Real(0)) return false;
-  n_ab = normalize(n_ab);
-  n_bc = normalize(n_bc);
-  n_ca = normalize(n_ca);
-  const Real alpha = tri_angle_between(n_ab, -n_ca);
-  const Real beta = tri_angle_between(n_bc, -n_ab);
-  const Real gamma = tri_angle_between(n_ca, -n_bc);
-  const Real A_pi = alpha + beta + gamma;
-  if (!(A_pi - kLightPi > Real(0))) return false;  // pbrt's triPDF == 0
-  const Real Ap_pi = (Real(1) - u.x) * kLightPi + u.x * A_pi;  // Lerp(u0, pi, A_pi)
-  const Real cos_alpha = ar::cos(alpha), sin_alpha = ar::sin(alpha);
-  const Real sin_phi = ar::sin(Ap_pi) * cos_alpha - ar::cos(Ap_pi) * sin_alpha;
-  const Real cos_phi = ar::cos(Ap_pi) * cos_alpha + ar::sin(Ap_pi) * sin_alpha;
-  const Real k1 = cos_phi + cos_alpha;
-  const Real k2 = sin_phi - sin_alpha * dot(a, b);
-  // pbrt clamps; a NaN here means a triangle covering a hemisphere, outside kTriMaxSolidAngle.
-  const Real cos_bp = tri_clamp((k2 + (k2 * cos_phi - k1 * sin_phi) * cos_alpha) / ((k2 * sin_phi + k1 * cos_phi) * sin_alpha),
-                                Real(-1), Real(1));
-  const Real sin_bp = light_safe_sqrt(Real(1) - cos_bp * cos_bp);
-  const Real3 cp = a * cos_bp + normalize(c - a * dot(c, a)) * sin_bp;  // GramSchmidt(c, a)
-  const Real cos_t = Real(1) - u.y * (Real(1) - dot(cp, b));
-  const Real sin_t = light_safe_sqrt(Real(1) - cos_t * cos_t);
-  const Real3 w = b * cos_t + normalize(cp - b * dot(cp, b)) * sin_t;
-  const Real3 e1 = v1 - v0, e2 = v2 - v0;
+  // det[a, b, c] after the Householder reflection H with H b = -sgn(b.x) e_x: the yz rows of H a
+  // and H c, m_X = X_yz - (b.X - sh X_x) h, h = b_yz / (|b_x| + 1).
+  const Real sh = b.x > Real(0) ? Real(-1) : Real(1);
+  const Real inv = Real(1) / (ar::abs(b.x) + Real(1));
+  const Real hy = b.y * inv, hz = b.z * inv;
+  const Real fa = dot(b, a) - sh * a.x, fc = dot(b, c) - sh * c.x;
+  const Real V = ar::abs((a.y - fa * hy) * (c.z - fc * hz) - (a.z - fa * hz) * (c.y - fc * hy));
+  const Real Q = Real(1) + dot(a, b), S = dot(a, c) + dot(b, c);
+  const Real half = ar::atan2(V, Q + S);  // Omega / 2, in [0, pi)
+  if (!(half > Real(0))) return false;
+  const LightSinCos th = light_sincos(u.x * half);  // area_rect.h: no sinf / cosf on the GPU
+  const Real3 o = a * (V * th.c - S * th.s) + c * (Q * th.s);
+  const Real oo = dot(o, o);
+  if (!(oo > Real(0))) return false;
+  const Real3 cp = o * (Real(2) * dot(a, o) / oo) - a;
+  const Real s2 = dot(b, cp);
+  const Real cs = ar::fma(u.y, s2, ar::fma(-u.y, Real(1), Real(1)));  // (1 - u.y) + u.y s2: cos from b
+  const Real d = Real(1) - s2 * s2;
+  // As s2 -> 1, 1 - cs^2 ~ 2 u.y (1 - s2) and d ~ 2 (1 - s2), so t -> sqrt(u.y).
+  const Real t = d > Real(0) ? ar::sqrt(ar::max(Real(0), Real(1) - cs * cs) / d) : ar::sqrt(u.y);
+  const Real3 w = b * (cs - t * s2) + cp * t;  const Real3 e1 = v1 - v0, e2 = v2 - v0;
   const Real3 s1 = cross(w, e2);
   const Real divisor = dot(s1, e1);
   if (divisor == Real(0)) {  // pbrt: a triangle covering (nearly) a hemisphere, its centroid
