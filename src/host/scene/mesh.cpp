@@ -2,6 +2,7 @@
 #include "host/scene/mesh.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -55,6 +56,9 @@ void validate_desc(const ar_mesh_desc& d, const std::vector<ar_attribute_desc>& 
     throw std::invalid_argument(who + "unknown flag bits");
   if (bool(d.flags & AR_MESH_HAS_ATTRIBUTES) != (d.attribute_count != 0))
     throw std::invalid_argument(who + "attribute_count and AR_MESH_HAS_ATTRIBUTES disagree");
+  constexpr uint32_t kMaxCount = 0x7fffffffu;  // corner_vert and face_start are i32
+  if (d.vertex_count > kMaxCount || d.corner_count > kMaxCount || d.face_count > kMaxCount)
+    throw std::invalid_argument(who + "vertex_count, corner_count and face_count must not exceed INT32_MAX");
   if (d.face_count == 0 && d.corner_count != 0) throw std::invalid_argument(who + "corners without faces");
   if (uint64_t(d.corner_count) < 3 * uint64_t(d.face_count))
     throw std::invalid_argument(who + "corner_count is below 3 x face_count");
@@ -83,28 +87,45 @@ void check_finite(const float* p, uint64_t n, const char* what, uint64_t per_ste
     }
 }
 
-void compute_bounds(MeshRecord& r) {
-  if (r.positions.empty()) return;
-  for (int a = 0; a < 3; ++a) r.bounds_min[a] = r.bounds_max[a] = r.positions[a];
-  for (size_t i = 0; i < r.positions.size(); i += 3)
+void compute_bounds(const std::vector<float>& pos, float* lo, float* hi) {
+  if (pos.empty()) return;
+  for (int a = 0; a < 3; ++a) lo[a] = hi[a] = pos[a];
+  for (size_t i = 0; i < pos.size(); i += 3)
     for (int a = 0; a < 3; ++a) {
-      r.bounds_min[a] = std::min(r.bounds_min[a], r.positions[i + a]);
-      r.bounds_max[a] = std::max(r.bounds_max[a], r.positions[i + a]);
+      lo[a] = std::min(lo[a], pos[i + a]);
+      hi[a] = std::max(hi[a], pos[i + a]);
     }
 }
 
-void account(MeshRecord& r, const std::shared_ptr<Ledger>& ledger) {
-  auto bytes = [](const auto& v) { return uint64_t(v.size() * sizeof(v[0])); };
-  r.host_bytes = bytes(r.positions) + bytes(r.corner_vert) + bytes(r.face_start) + bytes(r.corner_normals) + bytes(r.uv) +
-                 bytes(r.attributes) + bytes(r.tri_corners) + bytes(r.tri_face) + bytes(r.tri_material);
-  r.ledger = ledger;
-  r.ledger_id = ledger->add(Owner{}, LedgerCategory::GEOMETRY, r.host_bytes);
+template <class V>
+uint64_t bytes_of(const V& v) {
+  return uint64_t(v.size()) * sizeof(typename V::value_type);
+}
+
+std::string key_label(ar_key key) { return "mesh key " + std::to_string(key); }
+
+// Positions and normals of a record, with their ledger entry (none for an empty mesh).
+std::shared_ptr<MeshRecord> make_record(ar_key key, std::shared_ptr<const MeshTopology> topo, std::vector<float> positions,
+                                        std::vector<float> normals, const std::shared_ptr<Ledger>& ledger) {
+  auto r = std::make_shared<MeshRecord>();
+  r->key = key;
+  r->topo = std::move(topo);
+  r->positions = std::move(positions);
+  r->corner_normals = std::move(normals);
+  compute_bounds(r->positions, r->bounds_min, r->bounds_max);
+  r->host_bytes = bytes_of(r->positions) + bytes_of(r->corner_normals);
+  if (r->host_bytes) {
+    r->ledger = ledger;
+    r->ledger_id = ledger->add(Owner{}, LedgerCategory::GEOMETRY, r->host_bytes);
+  }
+  return r;
 }
 
 // Worker job: O(n) checks, triangulation, the record (task 035 Do 2). Throws with the text
 // of the first failed check.
 std::shared_ptr<MeshRecord> build_record(const ar_mesh_desc& d, const std::vector<ar_attribute_desc>& attrs, const Counts& n,
-                                         const Staged& s, const std::shared_ptr<Ledger>& ledger) {
+                                         const Staged& s, uint64_t topo_id, const std::shared_ptr<Ledger>& ledger,
+                                         ContextState& ctx) {
   const std::string who = label_of(d) + ": ";
   const uint32_t V = d.vertex_count, C = d.corner_count, F = d.face_count;
   for (uint32_t f = 0; f < F; ++f) {
@@ -131,45 +152,52 @@ std::shared_ptr<MeshRecord> build_record(const ar_mesh_desc& d, const std::vecto
     max_mat = std::max<int64_t>(max_mat, s.material_index[f]);
   }
 
-  auto r = std::make_shared<MeshRecord>();
-  r->key = d.key;
-  r->name = label_of(d);
-  r->vertex_count = V, r->corner_count = C, r->face_count = F;
-  r->uv_layer_count = d.uv_layer_count, r->motion_steps = d.motion_steps;
-  r->positions.assign(s.positions, s.positions + n.positions);
-  r->corner_vert.assign(s.corner_vert, s.corner_vert + C);
-  r->face_start.assign(s.face_start, s.face_start + F);
-  r->face_start.push_back(C);
-  r->corner_normals.assign(s.normals, s.normals + n.normals);
-  r->uv.assign(s.uv, s.uv + n.uv);
-  r->attributes.assign(s.attributes, s.attributes + n.attributes);
-  r->attribute_descs = attrs;
-  compute_bounds(*r);
-  if (F) r->max_material_index = (d.flags & AR_MESH_HAS_MATERIAL_INDEX) ? uint32_t(max_mat) : 0u;
+  auto t = std::make_shared<MeshTopology>();
+  t->id = topo_id;
+  t->key = d.key;
+  t->name = label_of(d);
+  t->vertex_count = V, t->corner_count = C, t->face_count = F;
+  t->uv_layer_count = d.uv_layer_count, t->motion_steps = d.motion_steps;
+  t->corner_vert.assign(s.corner_vert, s.corner_vert + C);
+  t->face_start.assign(s.face_start, s.face_start + F);
+  t->face_start.push_back(C);
+  t->uv.assign(s.uv, s.uv + n.uv);
+  t->attributes.assign(s.attributes, s.attributes + n.attributes);
+  t->attribute_descs = attrs;
+  if (F) t->max_material_index = (d.flags & AR_MESH_HAS_MATERIAL_INDEX) ? uint32_t(max_mat) : 0u;
 
-  const float* centre = r->positions.data() + size_t(d.motion_steps / 2) * V * 3;
-  try {
-    r->tri_corners = triangulate(centre, r->corner_vert.data(), r->face_start.data(), F);
-  } catch (const std::exception& e) {
-    throw std::runtime_error(who + e.what());
-  }
-  // Every face of n corners yields n - 2 triangles, in face order.
-  r->tri_face.reserve(r->tri_corners.size() / 3);
-  for (uint32_t f = 0; f < F; ++f) {
-    uint32_t tris = r->face_start[f + 1] - r->face_start[f] - 2;
-    for (uint32_t t = 0; t < tris; ++t) {
-      r->tri_face.push_back(f);
-      r->tri_material.push_back((d.flags & AR_MESH_HAS_MATERIAL_INDEX) ? s.material_index[f] : 0);
-    }
-  }
-  if (r->tri_face.size() * 3 != r->tri_corners.size())
-    throw std::runtime_error(who + "triangulation produced an unexpected triangle count");
-  account(*r, ledger);
-  return r;
+  // Motion centre: 0007 d15 gives S position steps but no centre index; 0003 D9 puts ray
+  // time relative to the shutter centre. Step S/2 is the centre for odd S; for even S the
+  // centre lies between steps S/2-1 and S/2 and the upper one is taken, until M8 blends.
+  const float* centre = s.positions + size_t(d.motion_steps / 2) * V * 3;
+  Triangulation tri = triangulate(centre, t->corner_vert.data(), t->face_start.data(), F);
+  t->tri_corners = std::move(tri.corners);
+  t->tri_face = std::move(tri.face);
+  t->skipped_zero_area = tri.skipped_zero_area, t->fan_fallback = tri.fan_fallback;
+  if (tri.skipped_zero_area || tri.fan_fallback)
+    ctx.log.line("WARNING", who + std::to_string(tri.skipped_zero_area) + " zero-area face(s) skipped, " +
+                                std::to_string(tri.fan_fallback) + " face(s) triangulated as a fan from the first corner");
+  t->tri_material.reserve(t->tri_face.size());
+  for (uint32_t f : t->tri_face) t->tri_material.push_back((d.flags & AR_MESH_HAS_MATERIAL_INDEX) ? s.material_index[f] : 0);
+  uint64_t tb = bytes_of(t->corner_vert) + bytes_of(t->face_start) + bytes_of(t->uv) + bytes_of(t->attributes) +
+                bytes_of(t->tri_corners) + bytes_of(t->tri_face) + bytes_of(t->tri_material);
+  t->ledger = ledger;
+  t->ledger_id = ledger->add(Owner{}, LedgerCategory::GEOMETRY, tb);  // face_start is never empty
+  return make_record(d.key, t, std::vector<float>(s.positions, s.positions + n.positions),
+                     std::vector<float>(s.normals, s.normals + n.normals), ledger);
 }
 
 // A shared slot the job fills and on_active installs.
 using ResultSlot = std::shared_ptr<std::shared_ptr<const MeshRecord>>;
+
+// Fulfils a declaration's future exactly once: with the topology, or null on failure or drop.
+struct Gate {
+  std::promise<std::shared_ptr<const MeshTopology>> promise;
+  std::atomic<bool> done{false};
+  void fulfil(std::shared_ptr<const MeshTopology> t) {
+    if (!done.exchange(true)) promise.set_value(std::move(t));
+  }
+};
 
 struct Blocks {
   std::vector<Arena::Block> list;
@@ -200,13 +228,26 @@ ar_status stage_item(Scene& scene, Edit& edit, const std::shared_ptr<EditItem>& 
 
 }  // namespace
 
-MeshRecord::~MeshRecord() {
-  if (ledger && ledger_id) {
+namespace {
+void release_ledger(const std::shared_ptr<Ledger>& l, uint64_t id) {
+  if (l && id) {
     try {
-      ledger->remove(ledger_id);
+      l->remove(id);
     } catch (...) {
     }
   }
+}
+}  // namespace
+
+MeshTopology::~MeshTopology() { release_ledger(ledger, ledger_id); }
+MeshRecord::~MeshRecord() { release_ledger(ledger, ledger_id); }
+
+void check_position_counts(const MeshTopology& base, uint64_t positions, uint64_t corner_normals) {
+  const uint64_t want_p = uint64_t(base.motion_steps) * base.vertex_count * 3, want_n = uint64_t(base.corner_count) * 3;
+  if (positions != want_p || corner_normals != want_n)
+    throw std::runtime_error(base.name + ": positions-only update has " + std::to_string(positions) + " position and " +
+                             std::to_string(corner_normals) + " normal floats, the mesh has " + std::to_string(want_p) + " and " +
+                             std::to_string(want_n));
 }
 
 std::shared_ptr<const MeshRecord> MeshStore::find(ar_key key) const {
@@ -218,14 +259,68 @@ size_t MeshStore::size() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return active_.size();
 }
+std::optional<MeshDeclaration> MeshStore::latest(ar_key key) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = declared_.find(key);
+  if (it == declared_.end() || it->second.empty()) return std::nullopt;
+  return it->second.back();
+}
+void MeshStore::declare(ar_key key, const MeshDeclaration& d) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  declared_[key].push_back(d);
+}
+void MeshStore::undeclare(ar_key key, uint64_t id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = declared_.find(key);
+  if (it == declared_.end()) return;
+  auto& v = it->second;
+  v.erase(std::remove_if(v.begin(), v.end(), [&](const MeshDeclaration& d) { return d.id == id; }), v.end());
+  if (v.empty()) declared_.erase(it);
+}
 void MeshStore::install(const std::shared_ptr<const MeshRecord>& rec) {
   std::shared_ptr<const MeshRecord> old;  // freed outside the lock
   std::lock_guard<std::mutex> lock(mutex_);
   old = std::move(active_[rec->key]);
   active_[rec->key] = rec;
+  auto& v = declared_[rec->key];  // older declarations are resolved
+  v.erase(std::remove_if(v.begin(), v.end(), [&](const MeshDeclaration& d) { return d.id < rec->topo->id; }), v.end());
+}
+bool MeshStore::install_positions(ar_key key, uint64_t base_topology, std::vector<float> positions,
+                                  std::vector<float> corner_normals) {
+  std::shared_ptr<const MeshRecord> old;
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = active_.find(key);
+  if (it == active_.end() || it->second->topo->id != base_topology) return false;
+  // check_position_counts ran on the worker against the same topology; sizes are final here.
+  old = it->second;
+  it->second = make_record(key, old->topo, std::move(positions), std::move(corner_normals), ledger_);
+  return true;
+}
+void MeshStore::remove(bool reset, const std::set<std::pair<uint32_t, uint64_t>>& removed, const std::set<ar_key>& keep) {
+  std::vector<std::shared_ptr<const MeshRecord>> gone;  // freed outside the lock
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto drop = [&](ar_key key) {
+    auto it = active_.find(key);
+    if (it == active_.end()) return;
+    uint64_t id = it->second->topo->id;
+    gone.push_back(std::move(it->second));
+    active_.erase(it);
+    auto& v = declared_[key];  // only declarations of later generations survive
+    v.erase(std::remove_if(v.begin(), v.end(), [&](const MeshDeclaration& d) { return d.id <= id; }), v.end());
+    if (v.empty()) declared_.erase(key);
+  };
+  if (reset) {
+    std::vector<ar_key> all;
+    for (const auto& kv : active_) all.push_back(kv.first);
+    for (ar_key k : all)
+      if (!keep.count(k)) drop(k);
+  }
+  for (const auto& r : removed)
+    if (r.first == AR_KIND_GEOMETRY && !keep.count(r.second)) drop(r.second);
 }
 
-ar_status mesh_begin(Scene& scene, Edit& edit, MeshStore& store, const ar_mesh_desc* desc, ar_mesh_buffers* out) {
+ar_status mesh_begin(Scene& scene, Edit& edit, const ar_mesh_desc* desc, ar_mesh_buffers* out) {
+  if (!scene.meshes) throw std::logic_error("mesh_begin: the scene has no mesh store");
   if (!desc || !out) throw std::invalid_argument("ar_edit_mesh_begin: descriptor or buffers is null");
   if (desc->attribute_count != 0 && !desc->attributes) throw std::invalid_argument(label_of(*desc) + ": attributes is null with a nonzero count");
   ar_mesh_desc d = *desc;
@@ -233,6 +328,7 @@ ar_status mesh_begin(Scene& scene, Edit& edit, MeshStore& store, const ar_mesh_d
   d.attributes = nullptr;
   validate_desc(d, attrs);
   const Counts n = count_arrays(d, attrs);
+  std::shared_ptr<MeshStore> store = scene.meshes;
 
   auto item = std::make_shared<EditItem>();
   item->key = d.key;
@@ -257,28 +353,56 @@ ar_status mesh_begin(Scene& scene, Edit& edit, MeshStore& store, const ar_mesh_d
   b.corner_normals_count = n.normals, b.uv_count = n.uv, b.material_index_count = n.material_index;
   b.attributes_count = n.attributes;
 
+  const uint64_t id = store->next_id();
+  auto gate = std::make_shared<Gate>();
+  MeshDeclaration decl;
+  decl.id = id, decl.vertex_count = d.vertex_count, decl.corner_count = d.corner_count, decl.motion_steps = d.motion_steps;
+  decl.topo = gate->promise.get_future().share();
   auto result = std::make_shared<std::shared_ptr<const MeshRecord>>();
-  auto ledger = store.shared_ledger();
-  item->job = [d, attrs, n, staged, ledger, result] { *result = build_record(d, attrs, n, *staged, ledger); };
-  item->on_active = [&store, result] { store.install(*result); };
-  item->on_dropped = [result] { result->reset(); };
+  auto ledger = store->shared_ledger();
+  ContextState* ctx = &scene.ctx();
+  const ar_key key = d.key;
+  item->job = [d, attrs, n, staged, id, ledger, ctx, gate, result] {
+    std::shared_ptr<MeshRecord> rec;
+    try {
+      rec = build_record(d, attrs, n, *staged, id, ledger, *ctx);
+    } catch (...) {
+      gate->fulfil(nullptr);
+      throw;
+    }
+    gate->fulfil(rec->topo);
+    *result = rec;
+  };
+  item->on_active = [store, result] { store->install(*result); };
+  item->on_dropped = [store, key, id, gate, result] {
+    gate->fulfil(nullptr);  // an item that never ran must not strand a waiting positions job
+    store->undeclare(key, id);
+    result->reset();
+  };
   ar_status st = stage_item(scene, edit, item, blocks);
-  if (st == AR_OK) *out = b;
+  if (st == AR_OK) {
+    store->declare(key, decl);
+    *out = b;
+  }
   return st;
 }
 
-ar_status positions_begin(Scene& scene, Edit& edit, MeshStore& store, ar_key key, ar_positions_buffers* out) {
+ar_status positions_begin(Scene& scene, Edit& edit, ar_key key, ar_positions_buffers* out) {
+  if (!scene.meshes) throw std::logic_error("positions_begin: the scene has no mesh store");
   if (!out) throw std::invalid_argument("ar_edit_positions_begin: buffers is null");
-  std::shared_ptr<const MeshRecord> base = store.find(key);
-  if (!base) throw std::invalid_argument("ar_edit_positions_begin: no active mesh with key " + std::to_string(key));
+  std::shared_ptr<MeshStore> store = scene.meshes;
+  std::optional<MeshDeclaration> base = store->latest(key);
+  if (!base || !scene.known(AR_KIND_GEOMETRY, key))
+    throw std::invalid_argument("ar_edit_positions_begin: no committed mesh with key " + std::to_string(key));
 
   auto item = std::make_shared<EditItem>();
   item->key = key;
   item->kind = AR_KIND_GEOMETRY;
   item->needs_device = false;
+  item->replaces_subject = false;  // the mesh's other scene entries stay valid
   auto blocks = std::make_shared<Blocks>();
   auto staged = std::make_shared<Staged>();
-  const uint64_t np = base->positions.size(), nn = base->corner_normals.size();
+  const uint64_t np = uint64_t(base->motion_steps) * base->vertex_count * 3, nn = uint64_t(base->corner_count) * 3;
   ar_positions_buffers b{};
   try {
     b.positions = stage_array<float>(scene, *item, *blocks, np, &staged->positions);
@@ -289,32 +413,33 @@ ar_status positions_begin(Scene& scene, Edit& edit, MeshStore& store, ar_key key
   }
   b.positions_count = np, b.corner_normals_count = nn;
 
-  auto result = std::make_shared<std::shared_ptr<const MeshRecord>>();
-  auto ledger = store.shared_ledger();
-  // Ref: 0007 d22: topology, UVs, materials and triangles stay; positions and normals are
-  // replaced and bounds recomputed.
-  item->job = [base, np, nn, staged, ledger, result] {
-    const std::string who = base->name + ": ";
-    if (np != base->positions.size() || nn != base->corner_normals.size())
-      throw std::runtime_error(who + "positions-only update has a different vertex or corner count");
-    check_finite(staged->positions, np, "positions", uint64_t(base->vertex_count) * 3, who);
-    check_finite(staged->normals, nn, "corner_normals", 0, who);
-    auto r = std::make_shared<MeshRecord>();
-    r->key = base->key, r->name = base->name;
-    r->vertex_count = base->vertex_count, r->corner_count = base->corner_count, r->face_count = base->face_count;
-    r->uv_layer_count = base->uv_layer_count, r->motion_steps = base->motion_steps;
-    r->corner_vert = base->corner_vert, r->face_start = base->face_start, r->uv = base->uv;
-    r->attributes = base->attributes, r->attribute_descs = base->attribute_descs;
-    r->tri_corners = base->tri_corners, r->tri_face = base->tri_face, r->tri_material = base->tri_material;
-    r->max_material_index = base->max_material_index;
-    r->positions.assign(staged->positions, staged->positions + np);
-    r->corner_normals.assign(staged->normals, staged->normals + nn);
-    compute_bounds(*r);
-    account(*r, ledger);
-    *result = r;
+  struct Update {
+    std::vector<float> positions, normals;
   };
-  item->on_active = [&store, result] { store.install(*result); };
-  item->on_dropped = [result] { result->reset(); };
+  auto update = std::make_shared<Update>();
+  Scene* sc = &scene;
+  const uint64_t base_id = base->id;
+  auto fut = base->topo;
+  // Ref: 0007 d22. The job needs the base topology only to check counts; the record is
+  // linked to the active topology at activation, never copied here.
+  item->job = [fut, np, nn, staged, update, key] {
+    std::shared_ptr<const MeshTopology> t = fut.get();  // the base ingest job always fulfils it
+    if (t) check_position_counts(*t, np, nn);
+    const std::string who = (t ? t->name : key_label(key)) + ": ";
+    const uint64_t V3 = t ? uint64_t(t->vertex_count) * 3 : 0;
+    check_finite(staged->positions, np, "positions", V3 ? V3 : np, who);
+    check_finite(staged->normals, nn, "corner_normals", 0, who);
+    update->positions.assign(staged->positions, staged->positions + np);
+    update->normals.assign(staged->normals, staged->normals + nn);
+  };
+  item->on_active = [store, sc, update, key, base_id] {
+    if (store->install_positions(key, base_id, std::move(update->positions), std::move(update->normals))) return;
+    const std::string why = key_label(key) + ": positions-only update skipped, the topology it was based on is not the active one "
+                                             "(its generation was rejected, the mesh was removed or its topology changed)";
+    sc->ctx().log.line("WARNING", why);
+    sc->report().raise(AR_REPORT_INPUT_IGNORED, key, why, 1, nullptr, 0);
+  };
+  item->on_dropped = [update] { *update = Update{}; };
   ar_status st = stage_item(scene, edit, item, blocks);
   if (st == AR_OK) *out = b;
   return st;

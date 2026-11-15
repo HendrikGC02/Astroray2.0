@@ -102,17 +102,11 @@ class TestMeshApi(unittest.TestCase):
     def test_numpy_views_commit_and_bad_descriptor(self):
         a, lib = self.abi, self.lib
         self.assertEqual(self.commit_mesh(1), 1)
-        # A positions-only edit sees the committed V and C; wait for generation 1 first.
-        t0 = time.time()
+        # A positions-only edit validates against the mesh committed just above, with no wait.
         edit = ctypes.c_void_p()
-        while True:
-            self.assertEqual(lib.ar_scene_edit_begin(self.scene, ctypes.byref(edit)), a.AR_OK)
-            pb = a.ar_positions_buffers()
-            if lib.ar_edit_positions_begin(edit, 1, ctypes.byref(pb)) == a.AR_OK:
-                break
-            self.assertEqual(lib.ar_edit_abort(edit), a.AR_OK)
-            self.assertLess(time.time() - t0, 5.0, "mesh 1 never became active")
-            time.sleep(0.02)
+        self.assertEqual(lib.ar_scene_edit_begin(self.scene, ctypes.byref(edit)), a.AR_OK)
+        pb = a.ar_positions_buffers()
+        self.assertEqual(lib.ar_edit_positions_begin(edit, 1, ctypes.byref(pb)), a.AR_OK)
         self.assertEqual((pb.positions_count, pb.corner_normals_count), (12, 12))
         pos = self.view(pb.positions, pb.positions_count, np.float32)
         pos[:] = (QUAD * 2).ravel()

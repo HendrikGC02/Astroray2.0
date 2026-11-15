@@ -104,7 +104,7 @@ std::vector<uint32_t> run(const Case& c) {
   std::vector<uint32_t> cv(n);
   for (uint32_t i = 0; i < n; ++i) cv[i] = i;
   uint32_t fs[2] = {0, n};
-  return astroray::host::triangulate(c.pos.data(), cv.data(), fs, 1);
+  return astroray::host::triangulate(c.pos.data(), cv.data(), fs, 1).corners;
 }
 
 struct V3 { double x, y, z; };

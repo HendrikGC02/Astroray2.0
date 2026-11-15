@@ -170,12 +170,12 @@ AR_API ar_status ar_edit_reset(ar_edit h) {
 }
 AR_API ar_status ar_edit_mesh_begin(ar_edit h, const ar_mesh_desc* desc, ar_mesh_buffers* out) {
   return staging_call(h, [&](Edit& e) {
-    return astroray::host::mesh_begin(*h->owner->scene, e, *h->owner->scene->meshes, desc, out);
+    return astroray::host::mesh_begin(*h->owner->scene, e, desc, out);
   });
 }
 AR_API ar_status ar_edit_positions_begin(ar_edit h, ar_key key, ar_positions_buffers* out) {
   return staging_call(h, [&](Edit& e) {
-    return astroray::host::positions_begin(*h->owner->scene, e, *h->owner->scene->meshes, key, out);
+    return astroray::host::positions_begin(*h->owner->scene, e, key, out);
   });
 }
 AR_API ar_status ar_edit_item_commit(ar_edit h, ar_key key) {

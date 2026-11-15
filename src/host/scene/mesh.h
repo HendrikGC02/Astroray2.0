@@ -6,10 +6,12 @@
 // lookups), d22 (positions-only path), V15 (invalid indices, NaN positions).
 #pragma once
 #include <cstdint>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -19,14 +21,14 @@
 
 namespace astroray::host {
 
-// One committed mesh, immutable once active. A new generation replaces the whole record.
-struct MeshRecord {
+// Everything a positions-only update keeps. Immutable once built; a positions-only record
+// shares its topology with the record it replaces.
+struct MeshTopology {
+  uint64_t id = 0;  // unique per ingest; a positions-only update names the id it was based on
   ar_key key = 0;
   std::string name;
   uint32_t vertex_count = 0, corner_count = 0, face_count = 0, uv_layer_count = 0, motion_steps = 1;
-  std::vector<float> positions;  // S x V x 3; only step S/2 (the shutter centre) is used until M8
   std::vector<uint32_t> corner_vert, face_start;  // face_start has F + 1 entries (last = C)
-  std::vector<float> corner_normals;              // C x 3
   std::vector<float> uv;                          // U x C x 2
   std::vector<float> attributes;                  // as staged
   std::vector<ar_attribute_desc> attribute_descs;
@@ -36,42 +38,86 @@ struct MeshRecord {
   std::vector<uint32_t> tri_corners;
   std::vector<uint32_t> tri_face;
   std::vector<int32_t> tri_material;
-  float bounds_min[3] = {0, 0, 0}, bounds_max[3] = {0, 0, 0};  // over every motion step
   // Largest face material_index; none for an empty mesh. Without HAS_MATERIAL_INDEX every
   // face uses slot 0. A later check against an instance's material_counts reads it.
   std::optional<uint32_t> max_material_index;
-  uint64_t host_bytes = 0;
+  uint32_t skipped_zero_area = 0, fan_fallback = 0;  // triangulation counts (ruling 67)
   uint32_t triangle_count() const { return static_cast<uint32_t>(tri_corners.size() / 3); }
 
-  ~MeshRecord();  // releases the ledger record
+  ~MeshTopology();  // releases the ledger record
   std::shared_ptr<Ledger> ledger;
   uint64_t ledger_id = 0;
 };
 
-// The active mesh records of one scene and the ledger that counts their host bytes.
+// One committed mesh state, immutable once active.
+struct MeshRecord {
+  ar_key key = 0;
+  std::shared_ptr<const MeshTopology> topo;
+  std::vector<float> positions;  // S x V x 3; only step S/2 is used until M8 (see mesh.cpp)
+  std::vector<float> corner_normals;  // C x 3
+  float bounds_min[3] = {0, 0, 0}, bounds_max[3] = {0, 0, 0};  // over every motion step
+  uint64_t host_bytes = 0;  // positions + normals; the topology counts its own
+
+  ~MeshRecord();
+  std::shared_ptr<Ledger> ledger;
+  uint64_t ledger_id = 0;
+};
+
+// A mesh ingest that has been staged and not yet resolved: what a later positions-only
+// edit validates against, pending generations included.
+struct MeshDeclaration {
+  uint64_t id = 0;  // equals the topology id it will produce
+  uint32_t vertex_count = 0, corner_count = 0, motion_steps = 1;
+  // Fulfilled by the ingest job (null when it failed or never ran): lets a positions-only
+  // job check its counts against the real base mesh.
+  std::shared_future<std::shared_ptr<const MeshTopology>> topo;
+};
+
+// Checks a positions-only update's staged counts against its base topology; throws
+// std::runtime_error naming the mesh. Ref: task 035 Do 3.
+void check_position_counts(const MeshTopology& base, uint64_t positions, uint64_t corner_normals);
+
+// The active mesh records of one scene, the pending declarations and the ledger that
+// counts their host bytes. The scene's context has no ledger of its own, so this one
+// is the scene's host geometry ledger.
 class MeshStore {
  public:
   MeshStore() : ledger_(std::make_shared<Ledger>()) {}
   std::shared_ptr<const MeshRecord> find(ar_key key) const;
   size_t size() const;
   uint64_t geometry_bytes() const { return ledger_->category_total(LedgerCategory::GEOMETRY); }
-  Ledger& ledger() { return *ledger_; }
   std::shared_ptr<Ledger> shared_ledger() const { return ledger_; }
-  void install(const std::shared_ptr<const MeshRecord>& rec);  // generation became active
+
+  uint64_t next_id() { return next_id_++; }
+  // Latest declaration of `key`, pending ones included; nullopt if none.
+  std::optional<MeshDeclaration> latest(ar_key key) const;
+  void declare(ar_key key, const MeshDeclaration& d);
+  void undeclare(ar_key key, uint64_t id);
+
+  // Generation activation (called under the tracker lock; they never call back into it).
+  void install(const std::shared_ptr<const MeshRecord>& rec);
+  // Replaces K's positions when `base_topology` is still K's active topology; false (and
+  // nothing changed) otherwise.
+  bool install_positions(ar_key key, uint64_t base_topology, std::vector<float> positions,
+                         std::vector<float> corner_normals);
+  // Removals of a generation: `reset` clears every key not in `keep`.
+  void remove(bool reset, const std::set<std::pair<uint32_t, uint64_t>>& removed, const std::set<ar_key>& keep);
 
  private:
   mutable std::mutex mutex_;
   std::map<ar_key, std::shared_ptr<const MeshRecord>> active_;
+  std::map<ar_key, std::vector<MeshDeclaration>> declared_;
+  uint64_t next_id_ = 1;
   std::shared_ptr<Ledger> ledger_;
 };
 
 // ar_edit_mesh_begin: validates the descriptor, stages the arrays in the scene's arena and
 // registers the item. Throws std::invalid_argument for a bad descriptor (the text is the
 // reason); a duplicate key is returned as the edit's status with its last_error.
-ar_status mesh_begin(Scene& scene, Edit& edit, MeshStore& store, const ar_mesh_desc* desc,
-                     ar_mesh_buffers* out);
-// ar_edit_positions_begin: staged positions and normals for the active record of `key`.
-ar_status positions_begin(Scene& scene, Edit& edit, MeshStore& store, ar_key key,
-                          ar_positions_buffers* out);
+// The scene's `meshes` store must exist.
+ar_status mesh_begin(Scene& scene, Edit& edit, const ar_mesh_desc* desc, ar_mesh_buffers* out);
+// ar_edit_positions_begin: staged positions and normals for the latest committed mesh of
+// `key` (pending generations included).
+ar_status positions_begin(Scene& scene, Edit& edit, ar_key key, ar_positions_buffers* out);
 
 }  // namespace astroray::host
