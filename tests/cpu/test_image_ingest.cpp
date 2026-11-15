@@ -392,13 +392,13 @@ TEST_CASE("image_ingest/emission estimate follows the image mean") {
   n[2].op = uint32_t(ar::Op::CONST_F32);
   n[3].op = uint32_t(ar::Op::EMIT_LE);
   n[0].i32_first = 0, n[0].i32_count = 1;
-  n[1].i32_first = 1, n[1].i32_count = 1;
+  n[1].i32_first = 1, n[1].i32_count = 2;
   n[2].f32_first = 0, n[2].f32_count = 1;
-  const int32_t i32[2] = {0, 5};
+  const int32_t i32[3] = {0, 5, 0};
   const float f32[1] = {2.0f};
   const ar_graph_link links[3] = {{0, 0, 1, 0}, {1, 0, 3, 0}, {2, 0, 3, 1}};
   ar_graph_desc gd = {};
-  gd.node_count = 4, gd.link_count = 3, gd.f32_count = 1, gd.i32_count = 2;
+  gd.node_count = 4, gd.link_count = 3, gd.f32_count = 1, gd.i32_count = 3;
   gd.nodes = n, gd.links = links, gd.params_f32 = f32, gd.params_i32 = i32;
   ar_material_desc md = {};
   md.surface_graph = 10;

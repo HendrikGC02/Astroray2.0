@@ -94,7 +94,7 @@ struct GB {
 // A per-point colour: image 7 sampled at UV set 0.
 int tex(GB& g) {
   const int uv = g.add(Op::LOAD_CTX_UV, {}, {0});
-  const int t = g.add(Op::TEX_IMAGE, {}, {7});
+  const int t = g.add(Op::TEX_IMAGE, {}, {7, 0});
   g.link(uv, t, 0);
   return t;
 }

@@ -122,8 +122,12 @@ AR_FN uint32_t lane_id() {
 #endif
 }
 
-// Math wrappers overloaded on float and double. On the GPU they are the
-// correctly rounded CUDA functions (no fast math, D12); on the CPU <cmath>.
+// Math wrappers overloaded on float and double: the CUDA library functions on the GPU (no fast
+// math, D12), <cmath> on the CPU. Only sqrt (built with -prec-sqrt=true), fma, floor, ceil and
+// abs are exact or correctly rounded on both targets. The others (exp, expm1, log, the
+// trigonometric ones, atan2, cosh, pow) carry library-specific ulp errors; powf in particular
+// differs from MSVC's in the last bit for some inputs, so bit-exact CPU/GPU code must not rely
+// on them. Ref: CUDA C++ Programming Guide, appendix "Mathematical Functions" (ulp error tables).
 #if AR_CUDA_BUILD
 #define AR_MATH_F(c, ...) ::c##f(__VA_ARGS__)
 #define AR_MATH_D(c, ...) ::c(__VA_ARGS__)
