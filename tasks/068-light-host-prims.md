@@ -17,4 +17,5 @@ Budget: none.
 Depends on: 067, 036.
 Size: S (about 250 lines); stop and report at 2x.
 Progress:
-- Started: lamps.{h,cpp} (records, instances, radiance scale), scene lamp input, ar_edit_set_light.
+- Lamps (point, sphere, rect, disk), lamp instances, radiance_scale, scene lamp input, ar_edit_set_light done; canary written.
+- Open: s is computed (radiance_scale, emitter_peak) but not applied in Scene::lights(): test_light_sampler pins strength 4.0 unscaled, and the film inv_radiance_scale wiring is 076.

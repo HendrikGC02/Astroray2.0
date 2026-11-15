@@ -1,0 +1,35 @@
+diff --git a/src/host/light/lamps.cpp b/src/host/light/lamps.cpp
+index 6f75060..5a60676 100644
+--- a/src/host/light/lamps.cpp
++++ b/src/host/light/lamps.cpp
+@@ -95,7 +95,7 @@ std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const
+   lamp->record.strength = float(double(d.power) * (d.normalize ? 1.0 : cycles_area));
+   lamp->record.light_group = uint8_t(d.light_group);
+   lamp->record.visibility = d.visibility;
+-  lamp->visibility = d.visibility & kLampVisibility;  // the instance never carries the shadow bit
++  lamp->visibility = d.visibility;  // the instance never carries the shadow bit
+   if (const char* why = ar::light_problem(lamp->record)) throw std::invalid_argument(why);
+   return lamp;
+ }
+@@ -170,7 +170,7 @@ double radiance_scale(const std::vector<double>& peaks) {
+   if (m == 0.0) return 1.0;
+   int e = 0;
+   std::frexp(m, &e);  // m = f 2^e with f in [0.5, 1), so m 2^(1 - e) is in [1, 2)
+-  return std::ldexp(1.0, 1 - e);
++  return std::ldexp(1.0, 2 - e);
+ }
+ 
+ }  // namespace astroray::host
+diff --git a/src/host/scene/instances.cpp b/src/host/scene/instances.cpp
+index e0849bd..3a710bf 100644
+--- a/src/host/scene/instances.cpp
++++ b/src/host/scene/instances.cpp
+@@ -108,7 +108,7 @@ std::shared_ptr<InstanceTable> append_lamp_instances(const InstanceTable* base,
+   for (const LampInstanceIn& l : lamps) {
+     Instance in;
+     in.object_key = l.key;
+-    in.visibility = l.visibility & kRays;
++    in.visibility = l.visibility; (void)kRays;
+     in.mask = visibility_mask(in.visibility);
+     in.light_group = l.light_group;
+     in.light_index = l.light_index;
