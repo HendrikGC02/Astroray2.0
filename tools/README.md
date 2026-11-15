@@ -8,3 +8,4 @@ Scripts print at most 20 lines, log to out/check/, exit non-zero on failure (000
 - lib/proc.ps1: Start-ArProcess (writes out/pids/<name>.pid), Stop-ArProcess -Id. No kill by name.
 - lib/python.ps1: Get-ArPython: Blender 5.3 bundled python (python on CI); callers pass -I.
 - lib/blender.ps1: Invoke-ArBlender -Script -Args -TimeoutS: isolated profile, machine lock, returns exit code and log.
+- lint.py: SPDX, NVIDIA, ASCII ps1, process caps, skip/xfail, task-file format; `--self-test` runs tests/cpu/lint_cases/.

@@ -1,0 +1,9 @@
+CLAUDE.md:1: [caps] 61 lines, cap 60
+.claude/rules/r.md:1: [caps] 41 lines, cap 40
+.claude/agents/a.md:1: [caps] 61 lines, cap 60
+.claude/skills/s1/SKILL.md:1: [caps] 81 lines, cap 80
+docs/STATUS.md:1: [caps] 51 lines, cap 50
+tasks/README.md:1: [caps] 41 lines, cap 40
+tools/README.md:1: [caps] 31 lines, cap 30
+tasks/001-big.md:1: [caps] 61 lines, cap 60
+docs/v1-lessons/big.md:1: [caps] 151 lines, cap 150

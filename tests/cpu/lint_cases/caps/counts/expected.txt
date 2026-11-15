@@ -1,0 +1,2 @@
+.claude/agents/d.md:1: [caps] 4 agent files, at most 3
+.claude/skills/s3/SKILL.md:1: [caps] 3 skill files, at most 2

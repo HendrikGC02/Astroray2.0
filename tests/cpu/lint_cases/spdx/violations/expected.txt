@@ -1,0 +1,6 @@
+blender/x.py:1: [spdx] licence is Apache-2.0, expected GPL-3.0-or-later
+blender/y_ops.py:1: [spdx] licence is GPL-3.0-or-later, expected Apache-2.0
+src/a.cpp:1: [spdx] missing SPDX-License-Identifier in first 5 lines
+src/b.h:1: [spdx] licence is GPL-3.0-or-later, expected Apache-2.0
+src/late.cpp:1: [spdx] missing SPDX-License-Identifier in first 5 lines
+sub/CMakeLists.txt:1: [spdx] missing SPDX-License-Identifier in first 5 lines

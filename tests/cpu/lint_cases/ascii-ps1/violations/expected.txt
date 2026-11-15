@@ -1,0 +1,1 @@
+tools/a.ps1:2: [ascii-ps1] non-ASCII character

@@ -1,0 +1,4 @@
+tests/a.cpp:2: [skip] skip/xfail must name `task NNN` on the same line
+tests/a.cpp:3: [skip] task 999 has no tasks/999-*.md
+tests/b.py:2: [skip] skip/xfail must name `task NNN` on the same line
+tests/c.py:2: [skip] skip/xfail must name `task NNN` on the same line

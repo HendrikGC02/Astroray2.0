@@ -1,0 +1,7 @@
+.claude/settings.json:1: [caps] hooks key is not allowed
+AGENTS.md:1: [caps] forbidden agent file or directory
+.opencode/c.json:1: [caps] forbidden agent file or directory
+.codex/c.toml:1: [caps] forbidden agent file or directory
+CLAUDE.md:2: [caps] date in process file
+CLAUDE.md:3: [caps] model id in process file
+.claude/agents/a.md:2: [caps] model id in process file

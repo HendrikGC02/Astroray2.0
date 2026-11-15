@@ -1,0 +1,2 @@
+docs/v1-lessons/feature-inventory.md:1: [caps] 289 lines, frozen at 288
+docs/v1-lessons/research/new.md:1: [caps] 200 lines, cap 150
