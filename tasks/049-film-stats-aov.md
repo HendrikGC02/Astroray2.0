@@ -17,3 +17,4 @@ Budget: none.
 Depends on: 047, 016.
 Size: S (about 250 lines); stop and report at 2x.
 Progress:
+- 2026-11-15 049: stats channels, AOV helpers, InvalidSampleReporter, film_stats tests; fast green, canary red on both named cases. Cycles data_passes.h unavailable, sample-0 split follows the task's expectation.

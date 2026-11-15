@@ -1,0 +1,22 @@
+diff --git a/src/kernel/film/resolve.h b/src/kernel/film/resolve.h
+index d9f0578..bb2446c 100644
+--- a/src/kernel/film/resolve.h
++++ b/src/kernel/film/resolve.h
+@@ -62,7 +62,7 @@ AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
+     f.slot_flags[slot] = 0u;
+ 
+     if (!film_sample_valid(L)) {
+-      f.invalid[pixel] += 1u;
++      f.invalid[pixel] += 2u;
+       continue;
+     }
+     const uint32_t index = n0 + m;
+@@ -85,7 +85,7 @@ AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
+         film_moment_add(f, offset, pixel, convert(f.response, L, fw.lf, w, response), even);
+       }
+     }
+-    f.n[pixel] += 1u;
++    f.n[pixel] += 2u;
+   }
+ 
+   // The light image is one independent estimate per pass: it adds to S1, S2 and, on even
