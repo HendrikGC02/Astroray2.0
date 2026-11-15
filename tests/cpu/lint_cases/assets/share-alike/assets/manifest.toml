@@ -1,0 +1,10 @@
+[[asset]]
+name = "a"
+url = "https://example.invalid/a.obj"
+spdx = "CC-BY-SA-4.0"
+size = 8
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+redistributable = false
+citation = "x"
+units = "m"
+committed = ["tests/data/a.obj"]

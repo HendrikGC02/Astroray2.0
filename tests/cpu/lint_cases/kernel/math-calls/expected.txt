@@ -1,0 +1,4 @@
+src/kernel/m.h:4: [kernel] direct math call; use the ar:: wrappers of portability.h
+src/kernel/m.h:5: [kernel] direct math call; use the ar:: wrappers of portability.h
+src/kernel/m.h:6: [kernel] direct math call; use the ar:: wrappers of portability.h
+src/kernel/m.h:8: [kernel] direct math call; use the ar:: wrappers of portability.h

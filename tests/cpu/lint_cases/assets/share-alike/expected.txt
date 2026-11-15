@@ -1,0 +1,1 @@
+tests/data/a.obj:1: [assets] licence 'CC-BY-SA-4.0' of a may not be committed

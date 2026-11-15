@@ -1,0 +1,3 @@
+src/kernel/p.h:10: [kernel] printf is allowed only inside #ifdef AR_DEBUG
+src/kernel/p.h:4: [kernel] printf is allowed only inside #ifdef AR_DEBUG
+src/kernel/p.h:8: [kernel] printf is allowed only inside #ifdef AR_DEBUG

@@ -1,0 +1,2 @@
+src/device/cuda/r.cpp:2: [seam] include of nvrtc.h is not allowed anywhere
+src/kernel_gpu/r.cu:2: [seam] include of nvrtc.h is not allowed anywhere

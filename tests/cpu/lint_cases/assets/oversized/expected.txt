@@ -1,0 +1,1 @@
+tests/data/big.bin:1: [assets] 2097153 bytes, cap 2097152 (2 MB)

@@ -1,0 +1,12 @@
+# Asset manifest. Ref: 0009 d21. One [[asset]] per downloadable asset; `tools/fetch.ps1 assets`
+# fills the git-ignored assets/_cache/<name>/. `committed` (optional) lists repository paths of
+# files derived from the asset; lint section `assets` checks their licence and size.
+[[asset]]
+name = "cornell_box"
+url = "https://benedikt-bitterli.me/resources/mitsuba/cornell-box.zip"
+spdx = "CC0-1.0"
+size = 3375919
+sha256 = "d57ffb9d176d34cc45d3d570b51e75be1dc6a4edc78879ba6fe40e2ce093e645"
+redistributable = true
+citation = "Bitterli, B. (2016) Rendering resources, https://benedikt-bitterli.me/resources/"
+units = "scene units as authored (RGB Mitsuba conversion); scale to metres when used"

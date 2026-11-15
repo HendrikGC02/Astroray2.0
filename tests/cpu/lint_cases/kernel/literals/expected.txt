@@ -1,0 +1,6 @@
+src/kernel/l.h:4: [kernel] unsuffixed floating literal 3.14; write Real(3.14)
+src/kernel/l.h:6: [kernel] unsuffixed floating literal .5; write Real(.5)
+src/kernel/l.h:6: [kernel] unsuffixed floating literal 0.5; write Real(0.5)
+src/kernel/l.h:6: [kernel] unsuffixed floating literal 1e-3; write Real(1e-3)
+src/kernel/l.h:6: [kernel] unsuffixed floating literal 2.; write Real(2.)
+src/kernel/l.h:7: [kernel] unsuffixed floating literal 2.0; write Real(2.0)

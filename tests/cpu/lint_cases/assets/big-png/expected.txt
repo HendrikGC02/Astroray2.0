@@ -1,0 +1,1 @@
+docs/wide.png:1: [assets] image 2000x10, cap 1600 px
