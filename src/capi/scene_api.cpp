@@ -16,6 +16,7 @@
 #include "host/scene/edit.h"
 #include "host/scene/mesh.h"
 #include "host/device.h"
+#include "host/scene/accel.h"
 #include "recorder_hooks.h"
 
 using astroray::host::Edit;
@@ -29,6 +30,7 @@ namespace {
 struct CudaInit {
   std::shared_ptr<astroray::host::Ledger> ledger;  // outlives the device
   std::unique_ptr<astroray::host::ModuleDevice> device;
+  std::unique_ptr<astroray::host::AccelBuilder> accel;  // after the device it uses
 };
 #endif
 
@@ -40,9 +42,11 @@ void cuda_init(astroray::host::SceneConfig& cfg, uint32_t index, std::shared_ptr
     auto held = std::make_shared<CudaInit>();
     held->ledger = ledger;
     held->device = astroray::host::make_cuda_device(*ledger, index);
+    held->accel = astroray::host::make_optix_accel_builder(*held->device, index);
     return held;
   };
   cfg.device_of = [](void* p) -> astroray::host::Device* { return static_cast<CudaInit*>(p)->device.get(); };
+  cfg.accel_of = [](void* p) -> astroray::host::AccelBuilder* { return static_cast<CudaInit*>(p)->accel.get(); };
 #else
   (void)index, (void)ledger;
   cfg.init = []() -> std::shared_ptr<void> { throw std::runtime_error("this build has no CUDA backend"); };

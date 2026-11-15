@@ -68,4 +68,10 @@ class AccelBuilder {
 // The CPU's builder (defined in src/device/cpu/embree_scene.cpp): owns the scene's Embree device.
 std::unique_ptr<AccelBuilder> make_cpu_accel_builder();
 
+class Device;
+// The CUDA scene's builder on `device` (the scene's CudaDevice, ordinal `device_index`); runs on
+// the scene's init thread. Defined in src/device/cuda/optix_accel.cpp, which exists only in
+// ASTRORAY_GPU builds. Throws DeviceError when OptiX cannot start.
+std::unique_ptr<AccelBuilder> make_optix_accel_builder(Device& device, uint32_t device_index);
+
 }  // namespace astroray::host
