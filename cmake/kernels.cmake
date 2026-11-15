@@ -53,6 +53,9 @@ if(_ar_kernel_cpu_sources)
   add_library(astroray_kernels_cpu_f64 STATIC ${_ar_kernel_cpu_sources})
   ar_kernel_cpu_flags(astroray_kernels_cpu_f64)
   target_compile_definitions(astroray_kernels_cpu_f64 PUBLIC AR_REAL_DOUBLE)
+  # The CPU tests run the stages through CpuDevice, so they link the float library. Deferred
+  # for the same reason as astroray_kernel above; the f64 library is linked by tests that need it.
+  cmake_language(DEFER CALL target_link_libraries astroray_tests_cpu PRIVATE astroray_kernels_cpu)
 endif()
 
 # ---- part 2: GPU (0002 D14: nvcc only, module images, one cubin per stage TU) ----

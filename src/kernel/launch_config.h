@@ -8,6 +8,7 @@
 #pragma once
 #include "core/real.h"
 #include "portability.h"
+#include "state/stage.h"
 
 // -DAR_LAUNCH_BOUNDS=0 builds the probe variant (0002 D10): the macro compiles out, so the
 // register count shows uncapped growth. Any other value is a mistake, not a silent default.
@@ -38,11 +39,35 @@ struct LaunchRow {
 // Add one line per kernel in the task that adds the kernel. ar_selftest is the test module of
 // tests/gpu/kernels/selftest.cu, kept here so the gate has a live row to check.
 #define AR_LAUNCH_ROWS(X) \
-  X(ar_selftest, 256, 0, 0, OTHER)
+  X(ar_selftest, 256, 0, 0, OTHER) \
+  X(k_queue_build_count, 256, 0, 0, OTHER) \
+  X(k_queue_build_scan, 256, 0, 0, OTHER) \
+  X(k_queue_build_scatter, 256, 0, 0, OTHER)
 
 #define AR_LAUNCH_ROW_CONST(name, T, B, K, CLASS) \
   inline constexpr LaunchRow kLaunch_##name{T, B, K, StackClass::CLASS};
 AR_LAUNCH_ROWS(AR_LAUNCH_ROW_CONST)
 #undef AR_LAUNCH_ROW_CONST
+
+// Items of a pool that one queue_build work unit counts and scatters in order (the "block" of
+// 0002 D6's block histogram). One unit is one GPU thread or one CPU loop; 1,024 is also the CPU
+// chunk of D4, so a chunk is one unit. PROVISIONAL: 0002 D7 remedy (c) revisits it with B-19.
+inline constexpr uint32_t kQueueTile = 1024;
+
+// The most shadow items k one item of a stage emits in one step (0002 D5), 0 for a stage that
+// emits none. The producers are the D8 kernels that write shadow items; a stage task that needs
+// more than the default 1 raises its value here, and its AR_LAUNCH_ROWS row repeats it.
+AR_FN uint32_t stage_shadow_items(Stage s) {
+  switch (s) {
+    case Stage::SHADE_SURFACE:
+    case Stage::SHADE_SURFACE_EXT:
+    case Stage::SHADE_LIGHT_PATH:
+    case Stage::SHADE_LIGHT_PATH_EXT:
+    case Stage::SHADE_VOLUME:
+      return 1;
+    default:
+      return 0;
+  }
+}
 
 AR_NS_END
