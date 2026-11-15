@@ -16,3 +16,6 @@ Budget: gate statistical family checks reported.
 Depends on: 062.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
+- Added ggx.h, fresnel.h, delta.h and tests/cpu/test_lobe_ggx.cpp; VNDF basis follows the JCGT paper's lensq>0 special case (a first 0.9999 branch was non-orthogonal and was caught by the pinned samples).
+- Delta convention: pdf 1, f = F / cos, so f cos / pdf = F. specular_weight clamps xi F0 at 0.9999 (numerical guard).
+- f32 eval-vs-sample tolerance is 2e-4 (f64 1e-5): the half vector recovered from wo + wi is rounded in float at roughness 0.1, grazing wo.

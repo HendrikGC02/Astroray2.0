@@ -1,0 +1,26 @@
+diff --git a/src/kernel/material/lobes/delta.h b/src/kernel/material/lobes/delta.h
+index bf487c5..5bd19ee 100644
+--- a/src/kernel/material/lobes/delta.h
++++ b/src/kernel/material/lobes/delta.h
+@@ -11,7 +11,7 @@
+ 
+ AR_NS_BEGIN
+ 
+-inline constexpr Real kDeltaAlphaThreshold = Real(1e-3);
++inline constexpr Real kDeltaAlphaThreshold = Real(1e-2);
+ 
+ // True when both axes are below the threshold.
+ AR_FN bool lobe_is_delta(Real alpha_x, Real alpha_y) {
+diff --git a/src/kernel/material/lobes/ggx.h b/src/kernel/material/lobes/ggx.h
+index 4601172..203e31c 100644
+--- a/src/kernel/material/lobes/ggx.h
++++ b/src/kernel/material/lobes/ggx.h
+@@ -124,7 +124,7 @@ AR_FN Real3 ggx_sample_vndf(Real alpha, Real3 wo, Real2 u) {
+   const Real a = r * ar::cos(phi);
+   Real b = r * ar::sin(phi);
+   const Real s = Real(0.5) * (Real(1) + vh.z);
+-  b = (Real(1) - s) * ar::sqrt(max(Real(0), Real(1) - a * a)) + s * b;
++  b = s * b;
+   const Real3 nh = t1 * a + t2 * b + vh * ar::sqrt(max(Real(0), Real(1) - a * a - b * b));
+   // Unstretch.
+   return normalize(Real3{alpha * nh.x, alpha * nh.y, max(Real(0), nh.z)});
