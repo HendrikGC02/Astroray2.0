@@ -11,11 +11,11 @@ Do:
 4. Tests: fast: pdf integrates to <= 1 (1e-3, quadrature) for roughness 0.1, 0.5, 1; eval/sample consistency (1e-5); peak of sampled directions at the mirror direction for roughness 0.05 (v1 VNDF lesson: check the peak position); delta path for roughness 0 and 1e-4; gate: chi-squared per roughness and cos theta_o; energy test of f cos/pdf against deterministic quadrature of f cos (consistency only, 0009 d15(a)).
 Acceptance: `pwsh tools/check.ps1 fast` passes; `out/bin/astroray_tests_cpu.exe --tier=gate -tc="lobe_ggx/*"` passes.
 Look at: none.
-Canary: tasks/063.canary.patch must turn red: astroray_tests_cpu "lobe_ggx/chi2 roughness 0.5", "lobe_ggx/delta below threshold".
+Canary: tasks/063.canary.patch must turn red: astroray_tests_cpu "lobe_ggx/chi2 roughness 0.5", "lobe_ggx/delta below threshold", "lobe_ggx/fresnel and specular weight".
 Budget: gate statistical family checks reported.
 Depends on: 062.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
 - Added ggx.h, fresnel.h, delta.h and tests/cpu/test_lobe_ggx.cpp; VNDF basis follows the JCGT paper's lensq>0 special case (a first 0.9999 branch was non-orthogonal and was caught by the pinned samples).
-- Delta convention: pdf 1, f = F / cos, so f cos / pdf = F. specular_weight clamps xi F0 at 0.9999 (numerical guard).
+- Delta convention: pdf 1, f = F / cos, so f cos / pdf = F. specular_weight clamps xi F0 to [0, 0.99999] exactly as open_pbr_surface.mtlx lines 328-332.
 - f32 eval-vs-sample tolerance is 2e-4 (f64 1e-5): the half vector recovered from wo + wi is rounded in float at roughness 0.1, grazing wo.

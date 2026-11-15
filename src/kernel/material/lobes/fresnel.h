@@ -3,9 +3,8 @@
 // modulation of it. No polarisation in 2.0: Rs and Rp are computed and averaged.
 //
 // Ref: docs/decisions/0005-material-model.md item 13 (mean of Rs and Rp);
-// pbrt-v4 src/pbrt/util/scattering.h FrDielectric (Apache-2.0); OpenPBR Surface
-// 1.1.2, dielectric specular reflection, specular_weight (also summarised in
-// docs/research/05-spectral-and-materials.md B3).
+// pbrt-v4 src/pbrt/util/scattering.h FrDielectric (Apache-2.0); OpenPBR reference
+// implementation reference/open_pbr_surface.mtlx for specular_weight (below).
 #pragma once
 #include "core/real.h"
 #include "core/spectrum.h"
@@ -34,19 +33,20 @@ AR_FN Real fresnel_dielectric(Real cos_i, Real eta) {
   return Real(0.5) * (r_parl * r_parl + r_perp * r_perp);
 }
 
-// Numerical guard only: xi F0 is clamped below 1 so that eta' stays finite
-// (xi F0 = 1 is the mirror limit, eta' = infinity).
-inline constexpr Real kSpecularMaxXiF0 = Real(0.9999);
-
 // The index the Fresnel term uses once specular_weight xi scales the normal-
-// incidence reflectance: F0 = ((eta-1)/(eta+1))^2, eps = sgn(eta-1) sqrt(xi F0),
+// incidence reflectance: F0 = ((eta-1)/(eta+1))^2, eps = sgn(eta-1) sqrt(clamp(xi F0, 0, 0.99999)),
 // eta' = (1 + eps) / (1 - eps). Then F0(eta') = xi F0 while grazing reflectance
 // still reaches 1. xi = 1 returns eta unchanged.
-// Ref: OpenPBR Surface 1.1.2, specular_weight (dielectric specular reflection).
+// Ref: OpenPBR reference implementation, reference/open_pbr_surface.mtlx (main,
+// 657 lines): specular_F0 lines 316-323, scaled_specular_F0 = specular_weight *
+// specular_F0 lines 324-327, clamp(0, 0.99999) lines 328-332 (high at 331), sqrt
+// 333-335, epsilon = sign(eta_s - 1) * sqrt 339-342, modulated_eta_s =
+// (1 + eps) / (1 - eps) lines 343-354.
+inline constexpr Real kSpecularMaxXiF0 = Real(0.99999);  // mtlx line 331
 AR_FN Real specular_weighted_eta(Real eta, Real weight) {
   const Real r = (eta - Real(1)) / (eta + Real(1));
-  const Real xi_f0 = min(weight * r * r, kSpecularMaxXiF0);
-  const Real eps = ar::sqrt(max(Real(0), xi_f0));
+  const Real xi_f0 = min(max(weight * r * r, Real(0)), kSpecularMaxXiF0);
+  const Real eps = ar::sqrt(xi_f0);
   const Real signed_eps = eta >= Real(1) ? eps : -eps;
   return (Real(1) + signed_eps) / (Real(1) - signed_eps);
 }

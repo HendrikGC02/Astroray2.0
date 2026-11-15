@@ -219,6 +219,19 @@ TEST_SUITE("fast") {
     // Normal incidence: F = xi F0 exactly; F0 of 1.5 is 0.04.
     CHECK(rel_close(double(ar::fresnel_dielectric(Real(1), ar::specular_weighted_eta(Real(1.5), Real(1)))), 0.04, 1e-5));
     CHECK(rel_close(double(ar::fresnel_dielectric(Real(1), ar::specular_weighted_eta(Real(1.5), Real(0.6)))), 0.024, 1e-5));
+    // Light arriving from inside (cos_i < 0): eta inverted and the sign of cos flipped. Python: the
+    // general n1 -> n2 Fresnel form with n1 = eta, n2 = 1 (no inversion trick). Cases: no TIR,
+    // TIR (1.5 at cos -0.5 exceeds the critical angle, F = 1), and eta < 1.
+    struct Inside {
+      double eta, cos_i, want;
+    };
+    const Inside inside[] = {{1.5, -0.9, 0.04633264795403766}, {1.5, -0.8, 0.1141411002213538}, {1.5, -0.5, 1.0},
+                             {0.9, -0.5, 0.015241750401811504}, {0.9, -0.9, 0.0028875880223376512},
+                             {1.3, -0.7, 0.10503818894518768}};
+    for (const Inside& c : inside) {
+      INFO("eta=" << c.eta << " cos_i=" << c.cos_i);
+      CHECK(rel_close(double(ar::fresnel_dielectric(Real(c.cos_i), Real(c.eta))), c.want, kPinTol));
+    }
     // Weight 0 removes the reflection; a large weight saturates F0 at 1 without a NaN.
     CHECK(ar::fresnel_dielectric(Real(0.5), ar::specular_weighted_eta(Real(1.5), Real(0))) == Real(0));
     const double f_big = double(ar::fresnel_dielectric(Real(1), ar::specular_weighted_eta(Real(1.5), Real(50))));
@@ -256,8 +269,8 @@ TEST_SUITE("fast") {
 
   AR_RT_CASE("lobe_ggx/eval equals sample") {
     // Deterministic 16x16 stratified uniforms; no random seeds in the fast tier. Eval recovers the
-    // half vector from wo + wi, which in float loses ~5e-5 on the narrow roughness-0.1 lobe at
-    // grazing wo (the sampler holds the exact m); f64 meets 1e-5.
+    // half vector from wo + wi, which in float loses up to ~1.2e-4 (worst case, analysed in review) on
+    // the narrow roughness-0.1 lobe at grazing wo (the sampler holds the exact m); f64 meets 1e-5.
     constexpr double kSelfTol = kF32 ? 2e-4 : 1e-5;
     const double r_list[] = {0.1, 0.5, 1.0};
     const double mu_list[] = {0.1, 0.5, 1.0};
