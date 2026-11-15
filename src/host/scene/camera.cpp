@@ -43,7 +43,8 @@ ar_status make_camera_view(const ar_camera_desc& d, uint32_t width, uint32_t hei
   if (d.type == AR_CAMERA_ORTHO) unsupported(report, camera_key, "ORTHO", generation);
   if (d.type == AR_CAMERA_PANO) unsupported(report, camera_key, "PANO", generation);
   if (d.dof_enabled) unsupported(report, camera_key, "DOF", generation);
-  // The film must map affinely onto the plane with no rotation of its axes.
+  // The film must map affinely onto the plane with no rotation of its axes. 1e-6 relative is
+  // the float rounding of Blender's projection matrix; a real skew is orders larger.
   if (std::fabs(q10y - q00y) > 1e-6 * std::fabs(ay) || std::fabs(q01x - q00x) > 1e-6 * std::fabs(ax))
     unsupported(report, camera_key, "PROJECTION_SKEW", generation);
 
@@ -51,7 +52,32 @@ ar_status make_camera_view(const ar_camera_desc& d, uint32_t width, uint32_t hei
   ar::CameraView v{};
   v.type = ar::CameraType::PERSPECTIVE;
   v.origin = {ar::Real(double(m[3]) - origin[0]), ar::Real(double(m[7]) - origin[1]), ar::Real(double(m[11]) - origin[2])};
-  for (int i = 0; i < 3; ++i) v.axis[i] = {ar::Real(m[i]), ar::Real(m[4 + i]), ar::Real(m[8 + i])};
+  // Scale is cleared from the columns as Cycles' Blender camera sync does (blender/camera.cpp,
+  // transform_clear_scale on the camera matrix); a scaled object must not change the view.
+  // Columns still non-orthogonal after that are sheared: reported, then Gram-Schmidt'd.
+  double ax3[3][3];
+  for (int i = 0; i < 3; ++i) {
+    const double x = m[i], y = m[4 + i], z = m[8 + i];
+    const double n = std::sqrt(x * x + y * y + z * z);
+    if (!(n > 0)) return AR_ERR_INVALID_ARGUMENT;
+    ax3[i][0] = x / n, ax3[i][1] = y / n, ax3[i][2] = z / n;
+  }
+  auto dot3 = [](const double* a, const double* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+  // 1e-4 is well above float rounding of a rotation matrix and below any visible shear.
+  if (std::fabs(dot3(ax3[0], ax3[1])) > 1e-4 || std::fabs(dot3(ax3[0], ax3[2])) > 1e-4 ||
+      std::fabs(dot3(ax3[1], ax3[2])) > 1e-4) {
+    unsupported(report, camera_key, "SHEAR", generation);
+    for (int i = 1; i < 3; ++i) {
+      for (int j = 0; j < i; ++j) {
+        const double p = dot3(ax3[i], ax3[j]);
+        for (int k = 0; k < 3; ++k) ax3[i][k] -= p * ax3[j][k];
+      }
+      const double n = std::sqrt(dot3(ax3[i], ax3[i]));
+      if (!(n > 1e-9)) return AR_ERR_INVALID_ARGUMENT;
+      for (int k = 0; k < 3; ++k) ax3[i][k] /= n;
+    }
+  }
+  for (int i = 0; i < 3; ++i) v.axis[i] = {ar::Real(ax3[i][0]), ar::Real(ax3[i][1]), ar::Real(ax3[i][2])};
   v.film_origin = {ar::Real(q00x), ar::Real(q00y)};
   v.film_extent = {ar::Real(ax), ar::Real(ay)};
   v.film_area = ar::Real(std::fabs(ax * ay));

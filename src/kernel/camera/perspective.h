@@ -4,7 +4,8 @@
 // Film area A is that of the whole film on the plane z = -1 in camera space; for a ray leaving
 // at angle theta from the view axis, We = 1 / (A cos^4 theta) and the direction pdf is
 // 1 / (A cos^3 theta), so that the integral of We cos theta dw over the film's solid angle is 1
-// (pbrt's normalisation). Ref: pbrt-v3 PerspectiveCamera::We, Pdf_We, Sample_Wi; Veach 1997 ch. 10.
+// (pbrt's normalisation). Ref: pbrt-v4 src/pbrt/cameras.cpp PerspectiveCamera::We, PDF_We, SampleWi
+// (A on the z = 1 plane; ours is z = -1, the same area); pbrt-v3 section 16.1.1; Veach 1997 ch. 10.
 
 #pragma once
 #ifndef AR_CAMERA_TYPES_DEFINED

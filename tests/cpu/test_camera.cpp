@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // ar-f64: compiled twice into this executable, once with AR_REAL_DOUBLE (cmake/sources.cmake).
 // Perspective camera: generate_ray, We, PDF_We, sample_wi (0004 D23 perspective entry).
-// Ref: pbrt-v3 PerspectiveCamera::We, Pdf_We, Sample_Wi; Veach 1997 ch. 10. The expected
+// Ref: pbrt-v4 PerspectiveCamera::We, PDF_We, SampleWi; Veach 1997 ch. 10. The expected
 // directions come from an independent tan(fov / 2) construction, not from the code under test.
 #include <doctest.h>
 
 #include <cmath>
 #include <cstdint>
+#include <string>
 
 #include "camera/camera.h"
 #include "host/scene/camera.h"
@@ -110,7 +111,7 @@ AR_RT_CASE("camera/host view matches projection_inverse") {
   for (double shift : {0.0, 0.3}) {
     const Rig rig(shift, -shift * 0.5);
     const double origin[3] = {0.5, 0.5, 0.25};
-    ar::CameraView hv;
+    ar::CameraView hv{};
     REQUIRE(astroray::host::make_camera_view(rig.desc(), 64, 48, origin, 7, report, 1, &hv) == AR_OK);
     const double xs[4] = {0, kW, 0, kW}, ys[4] = {0, 0, kH, kH};
     for (int k = 0; k < 4; ++k) {
@@ -125,12 +126,73 @@ AR_RT_CASE("camera/host view matches projection_inverse") {
       CHECK(double(ray.o.x) == doctest::Approx(rig.pos[0] - origin[0]).epsilon(1e-6));
     }
   }
+  // film_area and all three origin components against an independent tan(fov) construction.
+  {
+    const double fov = 50.0 * 3.14159265358979323846 / 180.0;
+    const double tx = std::tan(fov / 2), ty = tx * kH / kW;
+    ar_camera_desc d = Rig(0, 0).desc();
+    const float p[16] = {float(tx), 0, 0, 0, 0, float(ty), 0, 0, 0, 0, 0, -1, 0, 0, 0, 1};
+    for (int i = 0; i < 16; ++i) d.projection_inverse[i] = p[i];
+    const double o[3] = {0.25, -0.5, 2.0};
+    ar::CameraView fv{};
+    REQUIRE(astroray::host::make_camera_view(d, 64, 48, o, 8, report, 1, &fv) == AR_OK);
+    CHECK(double(fv.film_area) == doctest::Approx(4 * tx * ty).epsilon(1e-6));
+    CHECK(double(fv.origin.x) == doctest::Approx(Rig(0, 0).pos[0] - o[0]).epsilon(1e-6));
+    CHECK(double(fv.origin.y) == doctest::Approx(Rig(0, 0).pos[1] - o[1]).epsilon(1e-6));
+    CHECK(double(fv.origin.z) == doctest::Approx(Rig(0, 0).pos[2] - o[2]).epsilon(1e-6));
+  }
+  // A scaled camera object renders like the unscaled one, with no report; a shear and a skewed
+  // projection are reported once each and still build a view.
+  {
+    const Rig rig(0, 0);
+    const double zero[3] = {0, 0, 0};
+    ar_camera_desc ds = rig.desc();
+    const float sc[3] = {2.0f, 3.0f, 0.5f};
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j) ds.cam_to_world.m[4 * i + j] *= sc[j];
+    ar::CameraView a{}, b{};
+    REQUIRE(astroray::host::make_camera_view(rig.desc(), 64, 48, zero, 13, report, 1, &a) == AR_OK);
+    REQUIRE(astroray::host::make_camera_view(ds, 64, 48, zero, 13, report, 1, &b) == AR_OK);
+    for (int k = 0; k < 3; ++k) {
+      const ar::CameraRay ra = ar::camera_generate_ray(a, at(10 + 20 * k, 7 + 15 * k));
+      const ar::CameraRay rb = ar::camera_generate_ray(b, at(10 + 20 * k, 7 + 15 * k));
+      CHECK(double(ra.d.x) == doctest::Approx(double(rb.d.x)).epsilon(1e-6));
+      CHECK(double(ra.d.y) == doctest::Approx(double(rb.d.y)).epsilon(1e-6));
+      CHECK(double(ra.d.z) == doctest::Approx(double(rb.d.z)).epsilon(1e-6));
+    }
+    ar_camera_desc dh = rig.desc();
+    for (int i = 0; i < 3; ++i) dh.cam_to_world.m[4 * i + 1] += 0.2f * dh.cam_to_world.m[4 * i];  // up += 0.2 right
+    ar::CameraView h{};
+    REQUIRE(astroray::host::make_camera_view(dh, 64, 48, zero, 12, report, 1, &h) == AR_OK);
+    ar_camera_desc dk = rig.desc();
+    dk.projection_inverse[1] = 0.05f;  // x row picks up ndc_y: the film plane is rotated
+    ar::CameraView k{};
+    REQUIRE(astroray::host::make_camera_view(dk, 64, 48, zero, 11, report, 1, &k) == AR_OK);
+    report.snapshot();
+    ar_report_info ri{};
+    REQUIRE(report.info(&ri) == AR_OK);
+    uint32_t shear = 0, skew = 0, other13 = 0;
+    for (uint32_t i = 0; i < ri.entry_count; ++i) {
+      ar_report_entry e{};
+      REQUIRE(report.entry(i, &e) == AR_OK);
+      const std::string det(reinterpret_cast<const char*>(e.detail));
+      if (e.subject == 12 && det == "SHEAR") ++shear;
+      if (e.subject == 11 && det == "PROJECTION_SKEW") ++skew;
+      if (e.subject == 13) ++other13;
+    }
+    CHECK(shear == 1);
+    CHECK(skew == 1);
+    CHECK(other13 == 0);
+    // After orthonormalising, the axes are unit and orthogonal.
+    CHECK(double(dot(h.axis[0], h.axis[1])) == doctest::Approx(0.0).epsilon(1e-6));
+    CHECK(double(length(h.axis[1])) == doctest::Approx(1.0).epsilon(1e-6));
+  }
   // Unsupported features are reported and still give a pinhole view.
   ar_camera_desc d = Rig(0, 0).desc();
   d.type = AR_CAMERA_PANO;
   d.dof_enabled = 1;
   const double origin[3] = {0, 0, 0};
-  ar::CameraView hv;
+  ar::CameraView hv{};
   CHECK(astroray::host::make_camera_view(d, 64, 48, origin, 9, report, 2, &hv) == AR_OK);
   report.snapshot();
   ar_report_info info{};
@@ -180,10 +242,32 @@ AR_RT_CASE("camera/sample_wi round trip") {
       CHECK(double(s.pdf) == doctest::Approx(double(pw.pos) * dist[k] * dist[k] / cos_t).epsilon(1e-5));
     }
   }
-  // Behind the camera and outside the frustum: no sample, never a NaN.
-  const CameraView v = Rig(0, 0).view();
-  const Real3 behind{Real(1.5), Real(-2.0), Real(0.75)};
-  CHECK(double(ar::camera_sample_wi(v, behind, Real2{Real(0), Real(0)}).We) == 0.0);
+  // A point beyond a film edge and a point behind the camera (reference not at the camera):
+  // no sample and We 0, never a NaN.
+  const Rig rig(0, 0);
+  const CameraView v = rig.view();
+  const double out_px[3] = {-3.0, kW + 3.0, 10.0}, out_py[3] = {10.0, 20.0, kH + 3.0};
+  for (int k = 0; k < 3; ++k) {
+    double c[3], w[3];
+    rig.plane(out_px[k], out_py[k], c);
+    rig.to_world(c, w);
+    const double n = len3(w);
+    const Real3 ref{Real(rig.pos[0] + 4 * w[0] / n), Real(rig.pos[1] + 4 * w[1] / n), Real(rig.pos[2] + 4 * w[2] / n)};
+    const ar::CameraWiSample s = ar::camera_sample_wi(v, ref, Real2{Real(0.5), Real(0.5)});
+    CHECK(double(s.We) == 0.0);
+    CHECK(double(s.pdf) == 0.0);
+    CHECK(double(ar::camera_we(v, Real3{Real(w[0] / n), Real(w[1] / n), Real(w[2] / n)}, nullptr)) == 0.0);
+    CHECK(double(ar::camera_pdf_we(v, Real3{Real(w[0] / n), Real(w[1] / n), Real(w[2] / n)}).dir) == 0.0);
+  }
+  const double cb[3] = {0, 0, 1};  // view axis direction in camera space is -z; behind is +z
+  double wb[3];
+  rig.to_world(cb, wb);
+  const double nb = len3(wb);
+  const Real3 behind{Real(rig.pos[0] + 3 * wb[0] / nb), Real(rig.pos[1] + 3 * wb[1] / nb), Real(rig.pos[2] + 3 * wb[2] / nb)};
+  const ar::CameraWiSample sb = ar::camera_sample_wi(v, behind, Real2{Real(0.5), Real(0.5)});
+  CHECK(double(sb.We) == 0.0);
+  CHECK(double(sb.pdf) == 0.0);
+  CHECK(double(ar::camera_we(v, Real3{Real(wb[0] / nb), Real(wb[1] / nb), Real(wb[2] / nb)}, nullptr)) == 0.0);
 }
 
 AR_RT_CASE("camera/We normalised") {

@@ -6,9 +6,9 @@
 // Film coordinates: pixels, x to the right, y UP from the bottom row (Blender's buffer order),
 // origin at the film corner, so NDC = 2 (x / W, y / H) - 1.
 //
-// Ref: docs/decisions/0004-integrator.md D23 (perspective entry); pbrt-v3 section 16.1.1 and
-// src/cameras/perspective.cpp PerspectiveCamera::We, Pdf_We, Sample_Wi (pbrt-v4 dropped them);
-// Veach 1997 ch. 10 (We).
+// Ref: docs/decisions/0004-integrator.md D23 (perspective entry); pbrt-v4 src/pbrt/cameras.cpp
+// PerspectiveCamera::We, PDF_We, SampleWi; second sources pbrt-v3 section 16.1.1 and Veach 1997
+// ch. 10 (We).
 #pragma once
 #include <cstdint>
 
