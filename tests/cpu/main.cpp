@@ -37,9 +37,18 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "unknown tier '%s' (fast|gate|full|all)\n", tier.c_str());
     return 2;
   }
-  size_t n = 0;
-  for (const auto& t : doctest::detail::getRegisteredTests())
+  // Every case must sit in a tier suite: a case outside fast/gate/full would
+  // never run in any tier, so its absence would pass silently (rule 5).
+  size_t n = 0, untiered = 0;
+  for (const auto& t : doctest::detail::getRegisteredTests()) {
+    const std::string s = t.m_test_suite;
+    if (s != "fast" && s != "gate" && s != "full") {
+      std::fprintf(stderr, "test case '%s' is in suite '%s', not fast|gate|full\n", t.m_name, t.m_test_suite);
+      ++untiered;
+    }
     if (tier == "all" || tier == t.m_test_suite) ++n;
+  }
+  if (untiered != 0) return 2;
   std::printf("tier=%s tests=%zu\n", tier.c_str(), n);
   std::fflush(stdout);
 
