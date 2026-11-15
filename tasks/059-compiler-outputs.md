@@ -20,3 +20,6 @@ Size: M (about 400 lines); stop and report at 2x.
 Progress:
 - Started: compiler outputs and magenta policy in compiler.cpp; asked lead for scene.h (store member) and report activation order.
 - MAY_BE_DELTA follows 0005 item 43/item 4 (lobe_is_delta on ggx_alpha = roughness^2), not the Do text's roughness >= 1e-3 (lead ruling).
+- Done: flags/estimate/magenta in compiler.cpp; MaterialStore compiles on one internal pass per edit (materials set + dependents of set/removed graphs), keyed GRAPH/MATERIAL items so keys are known/removable; arrays in TABLES of the mesh ledger.
+- M1a ops have no per-point scalar, so "may be delta textured roughness" drives material_flags() on a result with runtime_slots marked.
+- Magenta is diffuse: base_color (1,0,1) REFLECTANCE and specular_weight 0. Emission estimate is a list of (SpectrumRef, strength) terms.
