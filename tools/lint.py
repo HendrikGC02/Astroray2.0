@@ -599,6 +599,53 @@ ASSET_TOTAL_CAP = 50 * 1024 * 1024
 IMAGE_MAX_PX = 1600
 
 
+# ---- data section: 0001 D8.4 and V9 (file part) ---------------------------------
+DATA_MANIFEST = "data/MANIFEST.toml"
+DATA_FIELDS = ["citation", "version", "sha256", "command"]
+
+
+def data(c):
+    """Ref: 0001 D8.4, V9: every file under data/ has a manifest entry whose hash matches it."""
+    import hashlib
+    import tomllib
+    files = [p for p in c.files if p.startswith("data/") and p not in (DATA_MANIFEST, "data/LICENSE")]
+    if DATA_MANIFEST not in c.files:
+        for p in files:
+            c.find(p, 1, "data", f"{DATA_MANIFEST} is missing")
+        return
+    try:
+        with open(os.path.join(c.root, DATA_MANIFEST), "rb") as f:
+            entries = tomllib.load(f).get("file", [])
+    except (OSError, ValueError) as e:
+        c.find(DATA_MANIFEST, 1, "data", f"cannot parse: {e}")
+        return
+    by_path = {}
+    for e in entries:
+        path = e.get("path")
+        if not isinstance(path, str) or not path:
+            c.find(DATA_MANIFEST, 1, "data", "entry without a path")
+            continue
+        full = "data/" + path
+        if full in by_path:
+            c.find(full, 1, "data", "listed twice in MANIFEST.toml")
+        by_path[full] = e
+        for k in DATA_FIELDS:
+            if not isinstance(e.get(k), str) or not e[k].strip():
+                c.find(full, 1, "data", f"MANIFEST.toml entry has no {k}")
+        if not any(isinstance(e.get(k), str) and e[k].strip() for k in ("spdx", "url")):
+            c.find(full, 1, "data", "MANIFEST.toml entry has neither spdx nor url")
+        if full not in c.files:
+            c.find(full, 1, "data", "listed in MANIFEST.toml but the file does not exist")
+        elif isinstance(e.get("sha256"), str):
+            with open(os.path.join(c.root, full), "rb") as f:
+                got = hashlib.sha256(f.read()).hexdigest()
+            if got != e["sha256"]:
+                c.find(full, 1, "data", "sha256 differs from MANIFEST.toml")
+    for p in files:
+        if p not in by_path:
+            c.find(p, 1, "data", "no entry in MANIFEST.toml")
+
+
 def assets(c):
     """Ref: tasks/088, 0009 d21: asset licences and size caps, image size caps."""
     import tomllib
@@ -652,6 +699,7 @@ SECTIONS = {
     "kernel": kernel,
     "seam": seam,
     "assets": assets,
+    "data": data,
 }
 
 def run(root, files, sections):

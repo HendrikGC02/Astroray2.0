@@ -127,8 +127,17 @@ if(ASTRORAY_ENGINE_SOURCES)
   list(APPEND _ar_engine_libs astroray_engine)
 endif()
 
-# The one DLL Python loads: capi + engine + the generated layout table.
-add_library(astroray_core SHARED ${ASTRORAY_CAPI_SOURCES} ${ASTRORAY_GEN_DIR}/astroray_layout.c ${ASTRORAY_GEN_DIR}/abi_hash.h)
+# Data files from data/MANIFEST.toml, embedded as RCDATA (0001 D8.4).
+include(cmake/data.cmake)
+
+# Table generators run by hand, outside the default build (0003 d18).
+add_executable(specgen EXCLUDE_FROM_ALL tools/specgen/specgen.cpp)
+astroray_target_warnings(specgen)
+target_include_directories(specgen PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# The one DLL Python loads: capi + engine + the generated layout table + the data.
+add_library(astroray_core SHARED ${ASTRORAY_CAPI_SOURCES} ${ASTRORAY_GEN_DIR}/astroray_layout.c ${ASTRORAY_GEN_DIR}/abi_hash.h
+  $<TARGET_OBJECTS:astroray_data>)
 astroray_target_warnings(astroray_core)
 # _Alignof needs C11 mode.
 set_source_files_properties(${ASTRORAY_GEN_DIR}/astroray_layout.c PROPERTIES COMPILE_OPTIONS "/std:c11")
@@ -151,7 +160,7 @@ endforeach()
 file(GENERATE OUTPUT ${ASTRORAY_GEN_DIR}/families.h CONTENT "// generated from tools/budgets.toml\n#pragma once\n${_ar_families_h}")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tools/budgets.toml)
 
-add_executable(astroray_tests_cpu tests/cpu/main.cpp ${ASTRORAY_TEST_CPU_SOURCES})
+add_executable(astroray_tests_cpu tests/cpu/main.cpp ${ASTRORAY_TEST_CPU_SOURCES} $<TARGET_OBJECTS:astroray_data>)
 target_include_directories(astroray_tests_cpu PRIVATE ${CMAKE_SOURCE_DIR}/tests ${ASTRORAY_GEN_DIR})
 astroray_target_warnings(astroray_tests_cpu)
 target_include_directories(astroray_tests_cpu SYSTEM PRIVATE third_party/doctest)

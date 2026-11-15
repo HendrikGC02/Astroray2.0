@@ -1,0 +1,2 @@
+data/t.csv:1: [data] MANIFEST.toml entry has neither spdx nor url
+data/t.csv:1: [data] MANIFEST.toml entry has no command

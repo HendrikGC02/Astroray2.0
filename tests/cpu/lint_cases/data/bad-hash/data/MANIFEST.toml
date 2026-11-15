@@ -1,0 +1,7 @@
+[[file]]
+path = "t.csv"
+url = "https://example.org/t"
+citation = "c"
+version = "1"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+command = "cmd"
