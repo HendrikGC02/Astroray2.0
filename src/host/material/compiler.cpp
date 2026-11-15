@@ -322,13 +322,13 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
       // mean, any other per-point input by 1).
       EmissionTerm term;
       const ar::SpectrumSemantic esem = ar::kSlotSemantic[int(ar::Slot::EMISSION_COLOR)];
-      const Vec3 c = mean_of(w, nd.input[0], &mx);
+      const Vec3 mean = mean_of(w, nd.input[0], &mx);
       uint32_t ignored = 0;  // the clamp is reported from the stored colour, below or in the block
-      if (!w.isc[size_t(nd.input[0])] && c[0] == 1.0f && c[1] == 1.0f && c[2] == 1.0f)
+      if (!w.isc[size_t(nd.input[0])] && mean[0] == 1.0f && mean[1] == 1.0f && mean[2] == 1.0f)
         term.color = ar::make_const_ref(esem, ar::Real(1));  // the per-point upper bound: a white spectrum
       else
-        ar::make_rgb_ref(table, ar::Rgb{{ar::Real(c[0]), ar::Real(c[1]), ar::Real(c[2])}}, esem, &term.color, &ignored);
-      const bool zero = !(c[0] > 0.0f) && !(c[1] > 0.0f) && !(c[2] > 0.0f);
+        ar::make_rgb_ref(table, ar::Rgb{{ar::Real(mean[0]), ar::Real(mean[1]), ar::Real(mean[2])}}, esem, &term.color, &ignored);
+      const bool zero = !(mean[0] > 0.0f) && !(mean[1] > 0.0f) && !(mean[2] > 0.0f);
       term.strength = mean_of(w, nd.input[1], &mx)[0];
       if (!zero && term.strength > 0.0f) res.emission.push_back(term);
       // A lone constant emission goes to the block; several accumulate in the program.

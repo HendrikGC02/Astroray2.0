@@ -7,6 +7,7 @@
 #pragma once
 #include <cstdint>
 
+#include "../core/real.h"
 #include "../portability.h"
 
 AR_NS_BEGIN
