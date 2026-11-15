@@ -59,6 +59,7 @@ RTCScene build_gas(RTCDevice dev, const MeshRecord& rec) {
     std::copy(src, src + size_t(verts) * 3, vb);
     // tri_corners holds corner indices; Embree wants vertex indices.
     for (size_t k = 0; k < size_t(tris) * 3; ++k) ib[k] = topo.corner_vert[topo.tri_corners[k]];
+    rtcSetGeometryMask(g, 0xFFFFFFFFu);  // the instance mask decides visibility, not the triangles
     rtcCommitGeometry(g);
     rtcAttachGeometry(scene, g);
     rtcReleaseGeometry(g);
