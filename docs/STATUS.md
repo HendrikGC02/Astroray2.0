@@ -28,9 +28,8 @@ vm/store_slot.h (nvcc rejects the shared inline constexpr; a test pins the rows)
 which should become one device-visible definition in constant_block.h. 0006's
 required interval rules in the opcode generator have no owning task yet. M1b (Mix/Add
 Shader): 058's compiler rejects one value feeding two EMIT_LE nodes; insert a
-copy or clone shared constants. Tooling: a doctest case outside a tier suite is
-skipped without a warning; a new test file once needed a CMakeLists touch to
-reconfigure. 032's CUDA init uses its own Ledger, not the context's
+copy or clone shared constants. Tooling: a new test file once needed a CMakeLists
+touch to reconfigure. 032's CUDA init uses its own Ledger, not the context's
 (fix with 035/041), and the CUDA context is created on the init thread, so
 workers must make it current. The fault tests leave astroray_fault_*_<pid>
 directories in the system temp dir. Some files mix CRLF and LF (CMakeLists.txt,
