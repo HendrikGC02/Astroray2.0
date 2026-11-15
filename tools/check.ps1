@@ -95,6 +95,13 @@ try {
   }
 
   if ($isCi) {
+    # The lint self-test proves every lint section still catches its seeded cases;
+    # fast runs only the repository lint, so a section can rot without it.
+    $r = Step 'lint self-test' { & $py -I tools/lint.py --self-test }
+    if ($r.Code -ne 0) {
+      ($r.Out | Select-Object -Last 5) | ForEach-Object { Write-Host $_ }
+      Fail 'lint self-test failed (out/check/ci.log)'
+    }
     $r = Step 'build cpu' { & pwsh -NoProfile -File tools/build.ps1 -Preset cpu -NoMachineLock }
     if ($r.Code -ne 0) {
       ($r.Out | Select-Object -Last 5) | ForEach-Object { Write-Host $_ }
