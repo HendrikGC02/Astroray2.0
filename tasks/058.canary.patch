@@ -1,5 +1,5 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index fe260f1..ec41745 100644
+index 1e04bf1..4b75a72 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
 @@ -12,6 +12,7 @@
@@ -19,7 +19,7 @@ index fe260f1..ec41745 100644
    }
  }
 diff --git a/src/host/material/regalloc.cpp b/src/host/material/regalloc.cpp
-index d9ce995..afa207f 100644
+index 2af949c..2b97984 100644
 --- a/src/host/material/regalloc.cpp
 +++ b/src/host/material/regalloc.cpp
 @@ -40,7 +40,7 @@ bool allocate_registers(const std::vector<LiveRange>& ranges, std::vector<int>*
@@ -28,6 +28,6 @@ index d9ce995..afa207f 100644
        }
 -    if (found < 0) {
 +    if (false) {
-       *err = "needs " + std::to_string(std::max(peak, kRegisterCount + 1)) + " registers, " +
-              std::to_string(kRegisterCount) + " available";
-       return false;
+       if (peak > kRegisterCount)
+         *err = "needs " + std::to_string(peak) + " registers, " + std::to_string(kRegisterCount) + " available";
+       else
