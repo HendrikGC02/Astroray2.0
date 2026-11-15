@@ -11,7 +11,7 @@ Do:
 4. Tests (gate): test_route_hit_gpu.cpp compares k_route_hit with the CPU route_hit over every fixture case; test_optix_trace.cpp runs both raygens on the 040 test scene with a hand-filled step table and compares hit records and next stages with Embree's within 1e-5 relative t (exact instance and primitive).
 Acceptance: `pwsh tools/check.ps1 gate` passes; kernelgate lists `k_route_hit` with its registers and spills; the test prints module and pipeline creation times warm and with an empty cache directory.
 Look at: none.
-Canary: tasks/041.canary.patch must turn red: astroray_tests_gpu "route_hit_gpu/matches cpu", "optix_trace/shadow occluded".
+Canary: tasks/041.canary.patch must turn red: astroray_tests_gpu "route_hit_gpu/matches cpu", "optix_trace/shadow occluded", "optix_trace/closest matches embree".
 Budget: k_route_hit spills 0 and stack <= 128 B (declared); OptiX module registers reported in `check full`.
 Depends on: 040, 039.
 Size: M (about 450 lines); stop and report at 2x.
