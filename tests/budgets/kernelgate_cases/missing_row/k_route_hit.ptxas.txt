@@ -1,0 +1,6 @@
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'k_route_hit' for 'sm_120'
+ptxas info    : Function properties for k_route_hit
+    32 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, used 0 barriers, 32 bytes cumulative stack size
+ptxas info    : Compile time = 0.000 ms

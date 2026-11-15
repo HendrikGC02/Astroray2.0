@@ -7,7 +7,7 @@
 #   (or `REVIEW SKIP <sha> (O31)` for a diff that is not kernel, physics, sampling, ABI or process),
 #   an `evidence:` comment when the task has `Look at:`; squash, confirm on origin/main, clean up.
 # -DryRun: no push, no gh call, no commit, no gate run; prints what would happen (fixture test).
-# Until `check gate` exists (task 030) the gate is `check fast`, posted with description prefix fast-only.
+# The gate is `check gate` (task 030); its last summary line is the status description.
 param(
   [Parameter(Mandatory, Position = 0)][ValidateSet('prepare', 'merge')][string]$Mode,
   [Parameter(Mandatory, Position = 1)][ValidatePattern('^\d{3}$')][string]$Number,
@@ -218,7 +218,7 @@ function Invoke-Prepare {
   $null = GitX diff origin/main HEAD "--output=$(Join-Path $dir 'diff.patch')"
   Write-Host "reviewer inputs: out/land/$Number/task.md, out/land/$Number/diff.patch"
   if ($DryRun) {
-    Write-Host "DRYRUN would: commit deletion of tasks/$Number*, push $branch, run check fast, post astroray/gate (fast-only)"
+    Write-Host "DRYRUN would: commit deletion of tasks/$Number*, push $branch, run check gate, post astroray/gate"
     Write-Host "PASS prepare $Number (dry run: canary accepted)"
     return
   }
@@ -229,10 +229,10 @@ function Invoke-Prepare {
   $null = GitX commit -q -m "$title (land)"
   $sha = (GitX rev-parse HEAD)
   $null = GitX push --force-with-lease -u origin HEAD
-  $out = & pwsh -NoProfile -File (Join-Path $root 'tools/check.ps1') fast 2>&1 | ForEach-Object { "$_" }
+  $out = & pwsh -NoProfile -File (Join-Path $root 'tools/check.ps1') gate 2>&1 | ForEach-Object { "$_" }
   $state = if ($LASTEXITCODE -eq 0) { 'success' } else { 'failure' }
   $out | Select-Object -Last 4 | ForEach-Object { Write-Host $_ }
-  $desc = "fast-only: " + ($out | Select-Object -Last 1)
+  $desc = ($out | Select-Object -Last 1)
   if ($desc.Length -gt 140) { $desc = $desc.Substring(0, 140) }
   $null = GhX api "repos/{owner}/{repo}/statuses/$sha" -f "state=$state" -f 'context=astroray/gate' -f "description=$desc"
   Set-Content -Path (Join-Path $dir 'gate.json') -Value (@{ sha = $sha; state = $state; description = $desc } | ConvertTo-Json)
