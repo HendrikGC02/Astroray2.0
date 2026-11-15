@@ -101,15 +101,18 @@ try {
       Fail 'gate tests failed (out/check/ci.log)'
     }
     if (Test-Path 'tests/abi') {
-      $r = Step 'abi tests' { & $py -I -m unittest discover -s tests/abi -p 'test_*.py' -t . }
+      $r = Step 'abi tests' { & $py -I -m unittest discover -s tests/abi -p 'test_*.py' }
       if ($r.Code -ne 0) {
         ($r.Out | Select-Object -Last 8) | ForEach-Object { Write-Host $_ }
         Fail 'abi tests failed (out/check/ci.log)'
       }
     }
-    # cl prints its banner on stderr; the exact version is the CI evidence for the toolset pin.
-    $clOut = (cmd.exe /c 'cl 2>&1' | Select-Object -First 1)
-    $script:clVer = if ("$clOut" -match 'Version (\d+\.\d+\.\d+)') { $Matches[1] } else { "$clOut" }
+    # build.ps1 sets the MSVC environment only in its own process, so read the compiler version
+    # CMake recorded when it configured; it is the exact cl that built the tests.
+    $cm = Get-ChildItem out/build/CMakeFiles -Recurse -Filter CMakeCXXCompiler.cmake | Select-Object -First 1
+    $m = if ($cm) { Select-String -Path $cm.FullName -Pattern 'set\(CMAKE_CXX_COMPILER_VERSION "([^"]+)"' } else { $null }
+    if (-not $m) { throw 'cl version not found in out/build/CMakeFiles' }
+    $script:clVer = $m.Matches[0].Groups[1].Value
     Write-Host "cl $script:clVer"
     Add-Content -Path $log -Value "cl $script:clVer"
   }
