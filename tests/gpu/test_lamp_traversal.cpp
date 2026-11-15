@@ -270,6 +270,13 @@ void check_same(const Answer& e, const Answer& g, const char* what, uint32_t exp
     if (e.hit[i].inst != ar::kNoInstance) {
       ++hits;
       ok = ok && std::fabs(e.hit[i].t - g.hit[i].t) <= 1e-5f * std::fabs(e.hit[i].t);
+      // Primitive and (u, v) too, except within 1e-4 of the rectangle's diagonal where the two devices
+      // may own the edge hit differently (instance 0 is the rectangle; its diagonal is u = 0 on
+      // triangle 0 and v = 0 on triangle 1). Disk and sphere hits have u = v = 0 on both.
+      const bool diagonal = e.hit[i].inst == 0u && (e.hit[i].prim == 0u ? e.hit[i].u : e.hit[i].v) < 1e-4f;
+      if (!diagonal)
+        ok = ok && e.hit[i].prim == g.hit[i].prim && std::fabs(e.hit[i].u - g.hit[i].u) <= 1e-5f &&
+             std::fabs(e.hit[i].v - g.hit[i].v) <= 1e-5f;
     }
     if (!ok && ++wrong <= 5)
       MESSAGE(what << " ray " << i << ": embree inst " << e.hit[i].inst << " t " << e.hit[i].t << "; optix inst " << g.hit[i].inst
@@ -373,6 +380,34 @@ TEST_CASE("lamp_traversal/lamps never block shadows") {
   CHECK(g.occluded[2] == 0);
   CHECK(e.occluded[3] == 1);  // the control
   CHECK(g.occluded[3] == 1);
+}
+
+TEST_CASE("lamp_traversal/invalid lamp instances throw") {
+  using doctest::Contains;
+  Ledger ledger;
+  auto dev = make_cuda_device(ledger, 0);
+  OptixContext optix(*dev, 0);
+  SceneUpload upload(*dev, Owner{1, 0});
+  OptixAccel accel(optix, Owner{1, 0});
+  auto build = [&](uint32_t light, uint32_t extra_mask, std::vector<ar::LightRecord> lights) {
+    InstanceTable table;
+    Instance in;
+    in.light_index = light;
+    in.mask = uint8_t(visibility_mask(kLampRayVisibility) | extra_mask);
+    table.instances.push_back(in);
+    table.xf.push_back(ar_xform{});
+    accel.build_tlas(upload, table, lights);
+  };
+  CHECK_THROWS_WITH_AS(build(3, 0, {}), Contains("instance 0 names light 3"), std::runtime_error);
+  const ar::LightRecord tri =
+      ar::light_make_triangle(ar::Real3{0, 0, 0}, ar::Real3{1, 0, 0}, ar::Real3{0, 1, 0}, 0, 0, 0, 1.0f, white());
+  CHECK_THROWS_WITH_AS(build(0, 0, {tri}), Contains("instance 0 names light 0 which is not a lamp"), std::runtime_error);
+  const ar::LightRecord point_r = ar::light_make(ar::LightType::POINT, ar::Real3{0, 0, 0}, 0.5f, 1.0f, white());
+  CHECK_THROWS_WITH_AS(build(0, 0, {point_r}), Contains("instance 0 names light 0 which is not a lamp"), std::runtime_error);
+  const ar::LightRecord disk = ar::light_make_area(ar::LightType::AREA_DISK, ar::Real3{0, 0, 0}, ar::Real3{1, 0, 0},
+                                                   ar::Real3{0, 1, 0}, 1.0f, 0.0f, 1.0f, white());
+  CHECK_THROWS_WITH_AS(build(0, ar::kShadowMaskBit, {disk}), Contains("instance 0 is a lamp whose mask carries the shadow bit"),
+                       std::runtime_error);
 }
 
 }  // TEST_SUITE

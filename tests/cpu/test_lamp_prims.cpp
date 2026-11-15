@@ -102,7 +102,7 @@ TEST_CASE("lamp_prims/disk analytic t") {
 TEST_CASE("lamp_prims/sphere analytic t") {
   Rig r;
   r.add(ar::light_make(ar::LightType::SPHERE, ar::Real3{1, 2, 3}, 1.5f, 1.0f, white()));
-  r.add(ar::light_make(ar::LightType::POINT, ar::Real3{20, 2, 3}, 0.5f, 1.0f, white()));  // radius > 0: a sphere too
+  r.add(ar::light_make(ar::LightType::SPHERE, ar::Real3{20, 2, 3}, 0.5f, 1.0f, white()));
   r.build();
   ar::HitRecord h = r.trace(ar::Real3{1, 2, 10}, kDown);
   CHECK(h.inst == 0u);
@@ -149,13 +149,34 @@ TEST_CASE("lamp_prims/lamps never block shadows") {
   }
 }
 
-TEST_CASE("lamp_prims/bad light index throws") {
-  Rig r;
-  Instance in;
-  in.light_index = 3;
-  r.table.instances.push_back(in);
-  r.table.xf.push_back(ar_xform{});
-  CHECK_THROWS_AS(r.build(), std::runtime_error);  // no light 3: never a silently missing lamp
+TEST_CASE("lamp_prims/invalid lamp instances throw") {
+  using doctest::Contains;
+  auto lamp = [](uint32_t light) {
+    Instance in;
+    in.light_index = light;
+    in.mask = visibility_mask(kLampRayVisibility);
+    return in;
+  };
+  auto build = [&](const Instance& in, std::vector<ar::LightRecord> lights) {
+    Rig r;
+    r.table.instances.push_back(in);
+    r.table.xf.push_back(ar_xform{});
+    r.lights = std::move(lights);
+    r.build();
+  };
+  // No light 3: never a silently missing lamp.
+  CHECK_THROWS_WITH_AS(build(lamp(3), {}), Contains("instance 0 names light 3"), std::runtime_error);
+  // An emissive triangle is a light but not a lamp.
+  const ar::LightRecord tri = ar::light_make_triangle(ar::Real3{0, 0, 0}, ar::Real3{1, 0, 0}, ar::Real3{0, 1, 0}, 0, 0, 0, 1.0f, white());
+  CHECK_THROWS_WITH_AS(build(lamp(0), {tri}), Contains("instance 0 names light 0 which is not a lamp"), std::runtime_error);
+  // A point lamp with a radius is refused by light_problem and sampled as a delta: not a sphere here.
+  const ar::LightRecord point_r = ar::light_make(ar::LightType::POINT, ar::Real3{0, 0, 0}, 0.5f, 1.0f, white());
+  CHECK_THROWS_WITH_AS(build(lamp(0), {point_r}), Contains("instance 0 names light 0 which is not a lamp"), std::runtime_error);
+  // 0004 D8: a lamp instance with the shadow bit is a bug, not something to clear quietly.
+  Instance shadowed = lamp(0);
+  shadowed.mask = uint8_t(shadowed.mask | ar::kShadowMaskBit);
+  const ar::LightRecord disk = ar::light_make_area(ar::LightType::AREA_DISK, ar::Real3{0, 0, 0}, kX, kY, 1.0f, 0.0f, 1.0f, white());
+  CHECK_THROWS_WITH_AS(build(shadowed, {disk}), Contains("instance 0 is a lamp whose mask carries the shadow bit"), std::runtime_error);
 }
 
 }  // TEST_SUITE

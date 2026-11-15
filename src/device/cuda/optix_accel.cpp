@@ -331,7 +331,9 @@ void OptixAccel::build_tlas(const SceneUpload& upload, const InstanceTable& tabl
       const ar::LampShape shape = ar::lamp_shape(rec);
       if (shape == ar::LampShape::INVALID)
         throw std::runtime_error("instance " + std::to_string(i) + " names light " + std::to_string(s.light_index) +
-                                 " which is not a lamp");
+                                 " which is not a lamp (a point lamp needs radius 0, a sphere lamp radius > 0)");
+      if (s.mask & ar::kShadowMaskBit)
+        throw std::runtime_error("instance " + std::to_string(i) + " is a lamp whose mask carries the shadow bit (0004 D8: a lamp never blocks a shadow ray)");
       if (shape == ar::LampShape::NONE) continue;  // a delta point lamp has no surface to hit
       ensure_lamp_gas(uint8_t(shape));
       OptixInstance o = {};

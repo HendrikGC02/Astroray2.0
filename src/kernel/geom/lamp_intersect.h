@@ -31,13 +31,18 @@ static_assert(sizeof(Real) == 4, "lamp_intersect.h feeds Embree and OptiX, which
 
 enum class LampShape : uint8_t { NONE = 0, RECT, DISK, SPHERE, INVALID };
 
-// Half-thickness of a disk's bounding box in object space. A zero-thickness box can lose a hit
-// to rounding; the intersection program computes the exact plane hit either way.
-inline constexpr float kLampDiskBoundPad = 1e-3f;
+// Half-thickness of a disk's bounding box in object space: 2 gamma(3) with gamma(n) = n u / (1 - n u),
+// u = 2^-24, i.e. about 6 float ulps at unit scale. That is the factor pbrt-v4's BVH widens its ray-box
+// slab test by (2 gamma(3), Bounds3::IntersectP), so a flat box this thin survives the slab test's
+// rounding; the intersection program computes the exact plane hit either way.
+// Ref: pbrt-v4 src/pbrt/util/math.h gamma(n), src/pbrt/cpu/aggregates.cpp BVHAggregate::Intersect.
+inline constexpr float kLampDiskBoundPad = 2.0f * (3.0f / 16777216.0f) / (1.0f - 3.0f / 16777216.0f);
 
 AR_FN LampShape lamp_shape(const LightRecord& r) {
   switch (LightType(r.type)) {
-    case LightType::POINT: return r.size[0] > 0.0f ? LampShape::SPHERE : LampShape::NONE;
+    // A point lamp is a delta light (radius 0); a radius belongs to a SPHERE record. light_problem
+    // refuses the mixed record and sampling would treat it as a delta, so it is not a lamp here.
+    case LightType::POINT: return r.size[0] == 0.0f ? LampShape::NONE : LampShape::INVALID;
     case LightType::SPHERE: return LampShape::SPHERE;
     case LightType::AREA_RECT: return LampShape::RECT;
     case LightType::AREA_DISK: return LampShape::DISK;

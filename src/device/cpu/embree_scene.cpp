@@ -114,6 +114,16 @@ void disk_occluded(const RTCOccludedFunctionNArguments* a) {
   }
 }
 
+// A sphere lamp's hit has no barycentrics: Embree reports its own sphere parameters in u and v,
+// OptiX writes 0 (the hit record of every lamp hit but a triangle's has u = v = 0).
+void zero_uv(const RTCFilterFunctionNArguments* a) {
+  for (unsigned i = 0; i < a->N; ++i) {
+    if (a->valid[i] == 0) continue;
+    RTCHitN_u(a->hit, a->N, i) = 0.0f;
+    RTCHitN_v(a->hit, a->N, i) = 0.0f;
+  }
+}
+
 // The unit shape of one lamp type, the same for every lamp of that type (their instances place it).
 RTCScene build_lamp_scene(RTCDevice dev, ar::LampShape shape) {
   RTCScene scene = rtcNewScene(dev);
@@ -136,6 +146,7 @@ RTCScene build_lamp_scene(RTCDevice dev, ar::LampShape shape) {
     auto* vb = static_cast<float*>(
         rtcSetNewGeometryBuffer(g, RTC_BUFFER_TYPE_VERTEX, 0, RTC_FORMAT_FLOAT4, 4 * sizeof(float), 1));
     if (vb) vb[0] = 0.0f, vb[1] = 0.0f, vb[2] = 0.0f, vb[3] = 1.0f;
+    rtcSetGeometryIntersectFilterFunction(g, zero_uv);
   } else {
     g = rtcNewGeometry(dev, RTC_GEOMETRY_TYPE_USER);
     rtcSetGeometryUserPrimitiveCount(g, 1);
@@ -210,7 +221,9 @@ EmbreeScene::EmbreeScene(EmbreeDevice& device, const MeshStore& meshes, const In
     shape[i] = ar::lamp_shape(lights[li]);
     if (shape[i] == ar::LampShape::INVALID)
       throw std::runtime_error("Embree: instance " + std::to_string(i) + " names light " + std::to_string(li) +
-                               " which is not a lamp");
+                               " which is not a lamp (a point lamp needs radius 0, a sphere lamp radius > 0)");
+    if (table.instances[i].mask & ar::kShadowMaskBit)
+      throw std::runtime_error("Embree: instance " + std::to_string(i) + " is a lamp whose mask carries the shadow bit (0004 D8: a lamp never blocks a shadow ray)");
     is_lamp[i] = true;
   }
 
