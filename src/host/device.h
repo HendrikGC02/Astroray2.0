@@ -117,6 +117,11 @@ class Device {
   virtual void upload(const DeviceBuffer& dst, uint64_t offset, const void* src, uint64_t bytes) = 0;
   virtual void download(void* dst, const DeviceBuffer& src, uint64_t offset, uint64_t bytes) = 0;
   virtual void memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value, uint64_t bytes) = 0;
+  // Device-to-device copy of `bytes` from src+src_offset to dst+dst_offset (ordered with
+  // launches on the device's stream, no host round trip; the ledger is unchanged). Ranges of
+  // one buffer must not overlap.
+  virtual void copy(const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src, uint64_t src_offset,
+                    uint64_t bytes) = 0;
 
   // The session's KernelGlobals, already uploaded into `buffer`. Every launch passes
   // this one pointer to the kernel (0002 D4).

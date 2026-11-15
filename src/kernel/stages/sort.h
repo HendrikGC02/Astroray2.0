@@ -45,8 +45,13 @@ AR_FN uint32_t sort_tile_count(const KernelGlobals& kg) { return queue_tiles(sor
 
 // True when the scheduler should run the sort: a large enough segment and at least
 // kSortMinMaterials real materials (0002 D7 step 3).
+AR_FN bool sort_wanted(uint32_t segment_count, uint32_t material_header_count) {
+  return segment_count >= kSortMinItems && material_header_count >= kSortMinMaterials;
+}
+// The same rule on the device-resident table and scene (CPU stages and tests); the host
+// scheduler calls the pure form with the counts it already read.
 AR_FN bool sort_wanted(const KernelGlobals& kg) {
-  return sort_segment_count(kg) >= kSortMinItems && scene_of(kg).material_header_count >= kSortMinMaterials;
+  return sort_wanted(sort_segment_count(kg), scene_of(kg).material_header_count);
 }
 
 // The launch count of both kernels for a segment of `count` items.

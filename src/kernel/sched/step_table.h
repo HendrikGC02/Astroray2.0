@@ -8,7 +8,9 @@
 // Contract of the fields:
 //  - high_water[p] is an input, written by the host before queue_build: the largest slot
 //    index used this pass plus one (items [0, high_water) are partitioned). queue_build
-//    never changes it. Slots at or above it belong to no segment.
+//    never changes it. Slots at or above it belong to no segment. The shadow high-water is
+//    the shadow capacity with every slot SHADOW_TERMINATED: with 0 the free list is empty,
+//    every producer starves and the pass livelocks (the scheduler, 045, sets both).
 //  - stage[s].start indexes the queue array of the stage's pool (main_queue for main-pool
 //    stages, shadow_queue for INTERSECT_SHADOW, SHADE_SHADOW and SHADOW_TERMINATED).
 //  - stage[s].count is the launch count: the segment length, except for a shadow producer
@@ -20,6 +22,10 @@
 //  - refill_count is the number of free main-pool slots below the high-water mark: the
 //    size of the main TERMINATED segment, whose queue entries are the slots to refill.
 //    Slots at or above high_water[MAIN] are fresh; the host counts them from its capacity.
+//    For the generate_camera and generate_light launches the host overwrites the device's
+//    stage[TERMINATED] entry (queue_build rewrites it next step): start = the launch's first
+//    free-slot entry of main_queue, count = its items, shadow_base = the first camera sample
+//    index or light rank of the launch. Item i takes slot main_queue[start + i], work shadow_base + i.
 //  - invalid_items counts items whose next_stage is no Stage value of their pool. They are
 //    in no segment; the host must fail the render when it is not zero (no silent fallback).
 // Ref: docs/decisions/0002-kernel-architecture.md D5 (deterministic, atomic-free shadow

@@ -22,6 +22,8 @@ class CudaDevice final : public ModuleDevice {
   void upload(const DeviceBuffer& dst, uint64_t offset, const void* src, uint64_t bytes) override;
   void download(void* dst, const DeviceBuffer& src, uint64_t offset, uint64_t bytes) override;
   void memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value, uint64_t bytes) override;
+  void copy(const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src, uint64_t src_offset,
+            uint64_t bytes) override;
   void set_kernel_globals(const DeviceBuffer& buffer) override;
   // Launches k_<stage name> from the module of that name. `grid` only sizes the grid; the
   // kernel is grid-stride over the step table's count, read on the device. Throws
