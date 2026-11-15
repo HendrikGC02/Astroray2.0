@@ -1,8 +1,18 @@
 diff --git a/src/host/session/latch.cpp b/src/host/session/latch.cpp
-index 90372c7..c6b9958 100644
+index 3ec303d..1460e82 100644
 --- a/src/host/session/latch.cpp
 +++ b/src/host/session/latch.cpp
-@@ -78,7 +78,6 @@ LatchResult Latch::latch(uint64_t scene_active) {
+@@ -63,7 +63,8 @@ bool Latch::epoch_pending_locked(uint64_t scene_active) const {
+ LatchResult Latch::latch(uint64_t scene_active, bool force_epoch) {
+   std::lock_guard<std::mutex> lock(mutex_);
+   LatchResult r;
+-  r.new_epoch = force_epoch || epoch_pending_locked(scene_active);
++  (void)force_epoch;
++  r.new_epoch = epoch_pending_locked(scene_active);
+   r.changed = r.new_epoch || pending_mode_ != mode_;
+   if (has_pending_view_) {
+     view_ = std::move(pending_view_);
+@@ -78,7 +79,6 @@ LatchResult Latch::latch(uint64_t scene_active, bool force_epoch) {
    first_ = false;
    if (r.new_epoch) {
      ++epoch_;
@@ -11,7 +21,7 @@ index 90372c7..c6b9958 100644
    if (r.changed) ++latches_;
    r.generation = generation_;
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index cda2a8d..b3df9c8 100644
+index ea65266..e1cdff5 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
 @@ -84,7 +84,6 @@ void Session::throw_if_failed_locked(const char* what) const {
@@ -76,9 +86,9 @@ index cda2a8d..b3df9c8 100644
 +    static std::mutex canary_serial;
 +    std::lock_guard<std::mutex> serial(canary_serial);
      const uint64_t active = scene_.generations().active();
-     const LatchResult lr = latch_.latch(active);
-     {
-@@ -534,7 +531,6 @@ void Session::render_loop() {
+     // An interrupted pass forces the epoch (latch.h), even if the pending view went back.
+     const LatchResult lr = latch_.latch(active, expect_epoch_);
+@@ -533,7 +530,6 @@ void Session::render_loop() {
          expect_epoch_ = true;
          std::lock_guard<std::mutex> lock(mutex_);
          ++stats_.passes_interrupted;

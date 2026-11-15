@@ -21,6 +21,6 @@ Progress:
 - Size accepted by the lead as one task (diff about 4x the M estimate: render-thread state machine, latch, C API, tests).
 - Rulings applied: 69 (latched views keep the active generation), get_progress minimal (state, generations, epoch), CUDA sessions refused, every activated commit starts an epoch.
 - Departures accepted: pools allocate at the first pass with work (045 rule); ring slots are host memory, not ledgered; render scale != 1, borders and denoisers refused; cancel parks in PAUSED.
-- Canary: tasks/052.canary.patch breaks one behaviour per case (interrupt rule, film clear, cancel flag, wake, interrupted-pass resolve, latch epoch, listener removal, stale drop, failed-state check, a serialising lock); all 10 session/* cases go red, and test_session_lifecycle.py's scene-destroy case.
+- Canary: tasks/052.canary.patch breaks one behaviour per case (interrupt rule, film clear, cancel flag, wake, interrupted-pass resolve, latch epoch, listener removal, stale drop, failed-state check, an ignored forced epoch, a serialising lock); all 11 session/* cases go red, and test_session_lifecycle.py's scene-destroy case.
 - make_cpu_session_device lives in src/device/cpu/cpu_device.cpp because the seam lint forbids capi naming the CPU device (accepted by the lead).
 - Review fixes: interrupt checked and set under one lock and re-evaluated after each latch; the scene listener is removed before CLOSED and scene destroy is refused while a session is not CLOSED (src/capi/scene_api.cpp, that check only).
