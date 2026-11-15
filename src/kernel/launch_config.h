@@ -27,6 +27,14 @@
 
 AR_NS_BEGIN
 
+// What optix_traverse.cu reads through its one launch-parameter variable: the traversable of the
+// TLAS and the device address of the session's KernelGlobals (integers, so the host fills it
+// without OptiX types). OptiX programs have no T and B: their rows carry 0 for both.
+struct OptixLaunchParams {
+  uint64_t traversable;
+  uint64_t kernel_globals;
+};
+
 enum class StackClass : uint8_t { VM, OTHER };
 
 struct LaunchRow {
@@ -44,7 +52,16 @@ struct LaunchRow {
   X(k_queue_build_scan, 256, 0, 0, OTHER) \
   X(k_queue_build_scatter, 256, 0, 0, OTHER) \
   X(k_sort_count, 256, 0, 0, OTHER) \
-  X(k_sort_scatter, 256, 0, 0, OTHER)
+  X(k_sort_scatter, 256, 0, 0, OTHER) \
+  X(k_route_hit, 256, 0, 0, OTHER)
+
+// The OptiX programs of optix_traverse.cu, named as their PTX entries (tools/kernelgate.py matches
+// them). No constants are generated: the names contain a double underscore, reserved in C++.
+#define AR_OPTIX_LAUNCH_ROWS(X) \
+  X(__raygen__intersect_closest, 0, 0, 0, OTHER) \
+  X(__raygen__intersect_shadow, 0, 0, 0, OTHER) \
+  X(__miss__traverse, 0, 0, 0, OTHER) \
+  X(__closesthit__tri, 0, 0, 0, OTHER)
 
 #define AR_LAUNCH_ROW_CONST(name, T, B, K, CLASS) \
   inline constexpr LaunchRow kLaunch_##name{T, B, K, StackClass::CLASS};

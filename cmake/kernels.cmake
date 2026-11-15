@@ -97,9 +97,11 @@ if(ASTRORAY_GPU)
   set(_ar_gpu_stages)
   set(_ar_gpu_probes)
   set(_ar_gpu_hooks)
+  set(_ar_gpu_optix)
   foreach(_f IN LISTS _ar_gpu_all)
     get_filename_component(_n ${_f} NAME)
-    if(_n MATCHES "^optix_")  # PTX rule, task 041
+    if(_n MATCHES "^optix_")  # PTX modules for OptiX, built below
+      list(APPEND _ar_gpu_optix ${_f})
     elseif(_n MATCHES "^probe_")
       list(APPEND _ar_gpu_probes ${_f})
     elseif(_n MATCHES "^test_")
@@ -171,6 +173,52 @@ if(ASTRORAY_GPU)
     get_filename_component(_n ${_f} NAME_WE)
     list(APPEND ASTRORAY_STAGE_CUBINS ${CMAKE_BINARY_DIR}/kernels/${_n}.cubin)
   endforeach()
+
+  # OptiX modules (0002 D11, D14): PTX, one per src/kernel_gpu/optix_*.cu, same flags as the cubins
+  # except -ptx and no ptxas options. The driver compiles them, so there is no ptxas -v log;
+  # `check full` reads their registers from Nsight Compute. The PTX is embedded as K_<NAME>
+  # beside the stage cubins (data.cmake names a resource by the file-name stem). OptiX headers
+  # are an include path here only, never target-wide (0001 D5.2).
+  set(_ar_optix_outs)
+  if(_ar_gpu_optix)
+    include(${CMAKE_CURRENT_LIST_DIR}/deps.cmake)
+    astroray_dep_dir(optix-headers 9.1.0 _ar_optix_dir)
+    file(GLOB _ar_optix_inc ${_ar_optix_dir}/extracted/*/include)
+    list(LENGTH _ar_optix_inc _ar_optix_inc_n)
+    if(NOT _ar_optix_inc_n EQUAL 1)
+      message(FATAL_ERROR "optix-headers 9.1.0: expected one include directory, found ${_ar_optix_inc_n}")
+    endif()
+    foreach(_src IN LISTS _ar_gpu_optix)
+      get_filename_component(_n ${_src} NAME_WE)
+      set(_ptx ${CMAKE_BINARY_DIR}/optix/${_n}.ptx)
+      add_custom_command(
+        OUTPUT ${_ptx}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/optix
+        COMMAND ${CMAKE_COMMAND} -DAR_NVCC_LOG=${CMAKE_BINARY_DIR}/optix/${_n}.nvcc.txt -P ${CMAKE_CURRENT_LIST_FILE} --
+                ${CUDAToolkit_NVCC_EXECUTABLE} -ccbin ${CMAKE_CXX_COMPILER} -ptx
+                -gencode arch=compute_120,code=compute_120 -O3 -std=c++17
+                -prec-div=true -prec-sqrt=true -ftz=false --fmad=true -Werror all-warnings
+                -I ${CMAKE_SOURCE_DIR}/src/kernel -isystem ${_ar_optix_inc}
+                -MD -MF ${CMAKE_BINARY_DIR}/optix/${_n}.d -o ${_ptx} ${_src}
+        DEPENDS ${_src}
+        DEPFILE ${CMAKE_BINARY_DIR}/optix/${_n}.d
+        JOB_POOL nvcc
+        COMMENT "nvcc optix/${_n}.ptx"
+        VERBATIM)
+      list(APPEND _ar_optix_outs ${_ptx})
+      list(APPEND ASTRORAY_STAGE_CUBINS ${_ptx})
+      if(ASTRORAY_DEV_KERNEL_DIR)
+        set(_loose ${CMAKE_SOURCE_DIR}/out/bin/kernels/${_n}.ptx)
+        add_custom_command(OUTPUT ${_loose}
+          COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/out/bin/kernels
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_ptx} ${_loose}
+          DEPENDS ${_ptx} VERBATIM)
+        list(APPEND _ar_optix_outs ${_loose})
+      endif()
+    endforeach()
+  endif()
+
+  add_custom_target(astroray_kernels_optix ALL DEPENDS ${_ar_optix_outs})
 
   # Agreement build (0002 D12): the same sources with FMA contraction off.
   ar_gpu_variant(astroray_kernels_gpu_nofma kernels_nofma false SOURCES ${_ar_gpu_prod})

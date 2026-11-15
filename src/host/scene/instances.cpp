@@ -97,7 +97,7 @@ uint8_t visibility_mask(uint32_t v) {
   if (v & AR_VISIBILITY_DIFFUSE) m |= 1u << 1;
   if (v & AR_VISIBILITY_GLOSSY) m |= 1u << 2;
   if (v & AR_VISIBILITY_TRANSMISSION) m |= 1u << 3;
-  if (v & AR_VISIBILITY_SHADOW) m |= kShadowMaskBit;
+  if (v & AR_VISIBILITY_SHADOW) m |= ar::kShadowMaskBit;
   if (v & AR_VISIBILITY_VOLUME) m |= 1u << 5;
   return m;
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Finds the bytes of a GPU kernel module: the cubin embedded in the DLL as RCDATA K_<NAME>,
+// Finds the bytes of a GPU kernel module: the cubin (or, for OptiX modules, PTX) embedded in the DLL as RCDATA K_<NAME>,
 // or, in a build with AR_DEV_KERNEL_DIR and ASTRORAY_KERNEL_DIR set, the loose file in
 // that directory. No CUDA types, so tests include it freely; cuModuleLoadData is the
 // device's job.
