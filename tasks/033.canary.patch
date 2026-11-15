@@ -1,0 +1,31 @@
+diff --git a/tools/abigen.py b/tools/abigen.py
+index 52bf91c..88badb1 100644
+--- a/tools/abigen.py
++++ b/tools/abigen.py
+@@ -853,7 +853,7 @@ def emit_recorder_cpp(m):
+         if n == "ar_edit_item_commit":
+             s += f"""  {{
+     auto it = rec_->staged.find({{rec_->id_of({edit}), key}});
+-    if (it == rec_->staged.end()) {{
++    if (true) {{
+       w.scalar<uint32_t>(0xFFFFFFFFu);
+     }} else {{
+       w.scalar(it->second.kind);
+@@ -1082,7 +1082,7 @@ ar_status replay_record(State& st, uint32_t fn, Reader& r, Arena& a, bool& stop)
+             stop = true;
+             return AR_ERR_INVALID_ARGUMENT;
+           }
+-          if (count) memcpy(*sl.slot, src, size_t(count) * sl.esize);
++          (void)src;
+         }
+         st.open.erase(it);
+       }
+@@ -1156,7 +1156,7 @@ ar_status ar_replay_file(const char* path, const ArReplayOptions& opt, ArReplayR
+   uint64_t file_hash = 0, lib_hash = 0;
+   memcpy(&file_hash, data.data() + sizeof kMagic, 8);
+   if (ar_abi_hash(&lib_hash) != AR_OK) return bad(AR_ERR_INTERNAL, "ar_abi_hash failed");
+-  if (file_hash != lib_hash) {
++  if (file_hash == 0) {
+     char b[160];
+     snprintf(b, sizeof b, "recording ABI hash 0x%016llx does not match this build's ABI hash 0x%016llx",
+              static_cast<unsigned long long>(file_hash), static_cast<unsigned long long>(lib_hash));
