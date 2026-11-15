@@ -17,3 +17,6 @@ Budget: none.
 Depends on: 032, 034.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
+- Host records live in MeshStore (mesh.h), reached as Scene::meshes (one line added to scene.h, outside Scope); the ledger is the store own.
+- Not hooked: ar_edit_remove(GEOMETRY) does not erase a store record (needs edit.cpp); positions_begin sees active records only.
+- Python reads the rejection from the context log line (no report readback on a scene yet).
