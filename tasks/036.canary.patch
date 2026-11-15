@@ -1,5 +1,5 @@
 diff --git a/src/host/scene/instances.cpp b/src/host/scene/instances.cpp
-index 5c6cb0c..8de6e1d 100644
+index bb65bbb..325387c 100644
 --- a/src/host/scene/instances.cpp
 +++ b/src/host/scene/instances.cpp
 @@ -60,7 +60,7 @@ std::shared_ptr<InstanceTable> build(const DescCopy& d) {
@@ -20,7 +20,7 @@ index 5c6cb0c..8de6e1d 100644
    if (v & AR_VISIBILITY_TRANSMISSION) m |= 1u << 3;
    if (v & AR_VISIBILITY_SHADOW) m |= 1u << 4;
    if (v & AR_VISIBILITY_VOLUME) m |= 1u << 5;
-@@ -188,7 +188,7 @@ ar_status update_transforms(Edit& edit, uint32_t n, const uint32_t* idx, const a
+@@ -193,7 +193,7 @@ ar_status update_transforms(Edit& edit, uint32_t n, const uint32_t* idx, const a
          scene->report().raise(AR_REPORT_INPUT_IGNORED, (*indices)[k], why, 1, value, 0);
          continue;
        }
@@ -29,3 +29,12 @@ index 5c6cb0c..8de6e1d 100644
      }
      if (t) scene->publish_instances(std::move(t));
    };
+@@ -220,7 +220,7 @@ void queue_instance_check(Edit& edit) {
+     auto fail = [&](uint32_t i, ar_key object, ar_key geom) {
+       reject(i, object, "geometry key " + std::to_string(geom) + " is removed by this edit but still instanced");
+     };
+-    if (latest)
++    if (false)
+       for (uint32_t i = 0; i < latest->geom.size(); ++i)
+         if (removed->count(latest->geom[i])) fail(i, latest->object[i], latest->geom[i]);
+     // Also the table active now: if a pending generation that set the latest one is

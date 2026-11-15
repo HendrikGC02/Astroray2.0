@@ -3,7 +3,9 @@
 #include <doctest.h>
 
 #include <cmath>
+#include <chrono>
 #include <future>
+#include <thread>
 #include <limits>
 #include <memory>
 #include <string>
@@ -305,6 +307,8 @@ TEST_CASE("instances/remove behind a pending set") {
     CHECK(update_transforms(*e, 1, &idx, &x) == AR_ERR_INVALID_ARGUMENT);
     REQUIRE(e->commit(&gn1) == AR_OK);
   }
+  // Let the removal check run while N is still pending, so the active table cannot answer.
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
   release.set_value();
   scene.generations().wait_idle();
   CHECK(scene.generations().failed() == gn1);
