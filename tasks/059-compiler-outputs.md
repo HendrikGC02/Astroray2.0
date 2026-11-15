@@ -23,3 +23,4 @@ Progress:
 - Done: flags/estimate/magenta in compiler.cpp; MaterialStore compiles on one internal pass per edit (materials set + dependents of set/removed graphs), keyed GRAPH/MATERIAL items so keys are known/removable; arrays in TABLES of the mesh ledger.
 - M1a ops have no per-point scalar, so "may be delta textured roughness" drives material_flags() on a result with runtime_slots marked.
 - Magenta is diffuse: base_color (1,0,1) REFLECTANCE and specular_weight 0. Emission estimate is a list of (SpectrumRef, strength) terms.
+- Review: a dropped generation rebuilds the latest state from the active one plus the queued passes; activation recompiles any material the worker predicted from another graph or missed.
