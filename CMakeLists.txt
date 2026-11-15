@@ -97,8 +97,13 @@ if(_ar_branch_ref)
     endif()
   endif()
 endif()
-# A branch switch changes HEAD: reconfigure so the new branch's ref is tracked.
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_ar_git_head})
+# A branch switch changes HEAD: reconfigure so the new branch's ref is tracked. The ref
+# files are configure dependencies too: git can pack a loose ref away (gc, pack-refs,
+# worktree cleanup), and a vanished configure dependency makes ninja reconfigure instead of
+# failing on a missing input.
+set(_ar_git_ref_deps ${_ar_git_deps})
+list(REMOVE_ITEM _ar_git_ref_deps ${_ar_git_index})
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_ar_git_ref_deps})
 set(ASTRORAY_BUILDINFO_CPP ${ASTRORAY_GEN_DIR}/build_info.cpp)
 add_custom_command(
   OUTPUT ${ASTRORAY_BUILDINFO_CPP}
