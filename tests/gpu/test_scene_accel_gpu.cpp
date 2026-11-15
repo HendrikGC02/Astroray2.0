@@ -58,7 +58,8 @@ struct Rig {
       auto h = held;
       cfg.init = [h]() -> std::shared_ptr<void> {
         h->device = make_cuda_device(*h->ledger, 0);
-        h->accel = make_optix_accel_builder(*h->device, 0);
+        const std::filesystem::path cache = std::filesystem::temp_directory_path() / "astroray_scene_accel_cache";
+        h->accel = make_optix_accel_builder(*h->device, 0, cache.string());
         return h;
       };
       cfg.device_of = [](void* p) -> Device* { return static_cast<Held*>(p)->device.get(); };
@@ -182,8 +183,7 @@ DeviceBuffer put(Device& dev, const std::vector<T>& v) {
 std::vector<Hit> trace_cuda(Rig& r, const SceneTableSet& set, const Rays& xy) {
   Device& dev = *r.scene->device();
   OptixContext& optix = static_cast<SceneOptixBuilder&>(r.scene->accel_builder()).optix_context();
-  const std::filesystem::path cache = std::filesystem::temp_directory_path() / "astroray_scene_accel_cache";
-  auto pipeline = std::make_unique<TraversalPipeline>(optix, Owner{1, 0}, cache.string());
+  auto pipeline = std::make_unique<TraversalPipeline>(optix, dev, optix.stream(), Owner{1, 0});
   const uint32_t n = uint32_t(xy.size());
   std::vector<uint8_t> next(n, 0xEE), type(n, 0x01);
   std::vector<uint32_t> flags(n, 0), prim(n, 7), inst(n, 7), queue(n);
@@ -221,8 +221,6 @@ std::vector<Hit> trace_cuda(Rig& r, const SceneTableSet& set, const Rays& xy) {
   dev.download(inst.data(), b_inst, 0, sizeof(uint32_t) * n);
   for (DeviceBuffer& b : owned) dev.free(b);
   pipeline.reset();
-  std::error_code ec;  // the driver may still hold the OptiX cache database: best effort
-  std::filesystem::remove_all(cache, ec);
   std::vector<Hit> out(n);
   for (uint32_t i = 0; i < n; ++i) out[i] = {hit_t[i], inst[i]};
   return out;

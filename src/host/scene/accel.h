@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "host/ledger.h"
@@ -72,7 +73,28 @@ std::unique_ptr<AccelBuilder> make_cpu_accel_builder();
 class Device;
 // The CUDA scene's builder on `device` (the scene's CudaDevice, ordinal `device_index`); runs on
 // the scene's init thread. Defined in src/device/cuda/optix_accel.cpp, which exists only in
-// ASTRORAY_GPU builds. Throws DeviceError when OptiX cannot start.
-std::unique_ptr<AccelBuilder> make_optix_accel_builder(Device& device, uint32_t device_index);
+// ASTRORAY_GPU builds. `cache_dir` is ar_scene_desc.cache_dir, the OptiX disk-cache directory of
+// the scene's context (0007 d45); empty turns the disk cache off, so no compilation is cached to
+// the default location.
+// Throws DeviceError when OptiX cannot start.
+std::unique_ptr<AccelBuilder> make_optix_accel_builder(Device& device, uint32_t device_index,
+                                                       const std::string& cache_dir);
+
+// A CUDA session's traversal stages (INTERSECT_CLOSEST, INTERSECT_SHADOW) run on its own OptiX
+// pipeline, built on the scene's context (0002 D11; RULINGS 70). Host code names no CUDA device
+// type (0001 D5.2), so these take the session's Device, which must be a CudaDevice, and are
+// defined in src/device/cuda/cuda_device.cpp (ASTRORAY_GPU builds only).
+struct TraversalAttach {
+  double module_ms = 0, pipeline_ms = 0;  // creation wall time of the module and the pipeline
+};
+// Builds the pipeline on `scene_accel`'s OptiX context (the scene's builder from
+// make_optix_accel_builder); its SBT and launch parameters go to `session_device`'s ledger under
+// `owner`. Detach before the scene's context goes. Throws std::invalid_argument for a device or
+// builder that is not CUDA/OptiX, std::logic_error when one is attached, DeviceError from OptiX.
+TraversalAttach attach_cuda_traversal(Device& session_device, AccelBuilder& scene_accel, Owner owner);
+// Waits for the pipeline's launches and frees it; nothing when none is attached.
+void detach_cuda_traversal(Device& session_device);
+// The traversable the traversal stages trace: the pinned snapshot's SceneData::accel.
+void set_cuda_traversable(Device& session_device, uint64_t handle);
 
 }  // namespace astroray::host

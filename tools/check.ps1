@@ -109,6 +109,10 @@ try {
     # 0009 d19 (070): recordings are generated here, never committed; later steps that render a scene
     # (analytic harness, A1) come after this one. Up-to-date recordings are skipped by source hash.
     @{ Name = 'scenes'; Tag = 'cpu'; Echo = '^scenes:'; Run = { & $py -I tools/scenes.py } },
+    # ABI tests that need a CUDA device (115): gpu_test_*.py, outside the cpu step's test_*.py, so hosted
+    # CI never runs them. After 'scenes' because they render its recordings.
+    @{ Name = 'gpu abi tests'; Tag = 'local'; Lock = $true; Echo = '^cli render cuda'; Run = {
+        if (Test-Path 'tests/abi') { & $py -I -m unittest discover -s tests/abi -p 'gpu_test_*.py' } } },
     @{ Name = 'cpu gate tests'; Tag = 'cpu'; Lock = $true; Identity = $exe; Run = { & $exe --tier=gate } },
     # B-24 compile row (0009 d13, 0005 V7): the test prints the median compile time of a fixed
     # 100-node graph; the limit is the "ms per 100 nodes" figure of the row in budgets.toml.
