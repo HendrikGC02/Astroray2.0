@@ -70,6 +70,7 @@ std::vector<std::string> missing_pointers(const ar::KernelGlobals& kg, const Sce
   need(kg.e_diel, "e_diel");
   table(kg.lights, TableId::LIGHTS, "lights");
   const ar::SceneData& s = scene.scene_host;
+  need(s.accel, "scene.accel");
   table(s.instances, TableId::INSTANCES, "scene.instances");
   table(s.meshes, TableId::MESHES, "scene.meshes");
   table(s.material_slots, TableId::MATERIAL_SLOTS, "scene.material_slots");

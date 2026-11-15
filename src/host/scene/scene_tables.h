@@ -28,6 +28,7 @@
 
 #include "host/device.h"
 #include "host/ledger.h"
+#include "host/scene/accel.h"
 #include "kernel/light/light_sampler.h"
 #include "kernel/material/lobes/tables.h"
 #include "kernel/scene/scene_view.h"
@@ -136,6 +137,9 @@ struct SceneTableSet {
   std::array<uint32_t, kTableCount> counts{};  // elements per table
   std::array<bool, kTableCount> uploaded{};    // copied while this set was built
   std::map<ar_key, std::shared_ptr<const MeshCopy>> meshes;
+  // The traversal structures of this snapshot (instances, meshes and lamps); the previous set's when
+  // none of those changed. Mesh structures are shared with the previous set by record identity.
+  std::shared_ptr<const SnapshotAccel> accel;
   std::vector<std::shared_ptr<const DeviceTable>> texels;  // per image slot
   std::vector<const Image*> texel_sources;                 // what each texel copy was made from
   uint64_t bytes_moved = 0;  // bytes copied building this set: the per-edit upload figure

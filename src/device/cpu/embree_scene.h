@@ -8,11 +8,13 @@
 // Embree 4 API documentation (RenderKit/embree, Apache-2.0).
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
 #include "host/ledger.h"
 #include "kernel/light/light_record.h"
+#include "host/scene/accel.h"
 #include "host/scene/instances.h"
 #include "host/scene/mesh.h"
 #include "host/thread_pool.h"
@@ -33,8 +35,11 @@ class EmbreeDevice {
   std::unique_ptr<Impl> impl_;
 };
 
-// The built structures of one instance table. Immutable after construction.
-class EmbreeScene {
+// The built structures of one instance table. Immutable after construction. The scene of a
+// snapshot is made by EmbreeScene::build (the builder of host/scene/accel.h), which shares the
+// triangle scenes of unchanged mesh records and the lamp unit scenes with the previous snapshot's
+// by identity, each freed by its last holder; the constructor below builds everything itself.
+class EmbreeScene : public SnapshotAccel {
  public:
   // Builds one robust triangle scene per distinct geometry key of `table` (on `pool`), using
   // each mesh's representative motion step, then the instance scene carrying each instance's
@@ -49,7 +54,7 @@ class EmbreeScene {
   // text when Embree reports an error.
   EmbreeScene(EmbreeDevice& device, const MeshStore& meshes, const InstanceTable& table,
               const std::vector<ar::LightRecord>& lights, Ledger& ledger, ThreadPool& pool);
-  ~EmbreeScene();
+  ~EmbreeScene() override;
   EmbreeScene(const EmbreeScene&) = delete;
   EmbreeScene& operator=(const EmbreeScene&) = delete;
 
@@ -57,9 +62,22 @@ class EmbreeScene {
   uint64_t acceleration_bytes() const;  // as recorded in the ledger
   // The instance scene as an RTCScene, for embree_trace.cpp.
   void* handle() const;
+  const void* kernel_accel() const override { return this; }
+
+  // The snapshot path: the structures of `in` on `device`, reusing `prev`'s mesh and lamp scenes.
+  // `pool` (may be null: serial) builds the new triangle scenes in parallel. Throws like the
+  // constructor.
+  static std::shared_ptr<EmbreeScene> build(std::shared_ptr<EmbreeDevice> device, const AccelInput& in,
+                                            const EmbreeScene* prev, ThreadPool* pool);
 
  private:
   struct Impl;
+  struct SnapshotTag {};
+  explicit EmbreeScene(SnapshotTag);
+  // Shared by both construction paths; `find` resolves a geometry key to its record.
+  void init(EmbreeDevice& device, const InstanceTable& table, const std::vector<ar::LightRecord>& lights,
+            const std::function<std::shared_ptr<const MeshRecord>(ar_key)>& find, const std::shared_ptr<Ledger>& ledger,
+            ThreadPool* pool, const EmbreeScene* prev);
   std::unique_ptr<Impl> impl_;
 };
 

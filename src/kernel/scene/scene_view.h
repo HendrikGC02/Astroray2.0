@@ -65,8 +65,11 @@ struct SceneData {
   // its entry table) and constant blocks (const_offset counts blocks). Filled with the headers.
   const uint32_t* material_programs;
   const ConstantBlock* material_constants;
-  // The traversal structure of the backend that runs the stages (the CPU's EmbreeScene);
-  // opaque to kernels. Backend-specific: a CPU stage handed a GPU SceneData is invalid.
+  // The traversal structure of the backend that runs the stages, opaque to kernels and never null
+  // in a session's scene (an empty scene has an empty structure). CPU: the snapshot's EmbreeScene.
+  // CUDA: the OptixTraversableHandle of its TLAS as an integer; the launch reads it from the host
+  // copy into OptixLaunchParams::traversable (kernel/launch_config.h), device code never
+  // dereferences it. Backend-specific: a CPU stage handed a GPU SceneData is invalid.
   const void* accel;
 };
 

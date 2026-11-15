@@ -9,6 +9,7 @@
 #include <stdexcept>
 
 #include "host/data_resource.h"
+#include "host/log.h"
 #include "host/image/image_store.h"
 #include "host/light/light_builder.h"
 #include "host/material/material_store.h"
@@ -245,6 +246,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
 
   // Instances: the scene's plus one record per lamp of the latched light table (068).
   const uint32_t base_count = n.base_instances ? uint32_t(n.base_instances->instances.size()) : 0u;
+  const std::vector<ar::LightRecord>* lt_records = n.lights ? &n.lights->lights : nullptr;
   const std::shared_ptr<const InstanceTable> instances =
       n.lights ? append_lamp_instances(n.base_instances.get(), n.lights->lamp_instances) : n.base_instances;
   const uint32_t inst_count = instances ? uint32_t(instances->instances.size()) : 0u;
@@ -257,6 +259,30 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
     }
     return b.put(LedgerCategory::TABLES, r.data(), r.size() * sizeof(ar::DeviceInstanceRecord));
   });
+
+  // Traversal structures (114): the previous snapshot's when instances, lamps and mesh records are
+  // all unchanged (a material or image edit), else built for this snapshot with every mesh
+  // structure of an unchanged record carried over. An empty scene gets an empty valid structure.
+  if (p && p->accel && p->base_instances == n.base_instances && p->lights == n.lights &&
+      p->mesh_records == n.mesh_records) {
+    n.accel = p->accel;
+  } else {
+    try {
+      AccelInput in;
+      in.instances = instances.get();
+      in.lights = lt_records;
+      in.host_ledger = t.host_ledger;
+      for (const auto& kv : n.mesh_records) in.meshes[kv.first] = AccelMesh{kv.second, n.meshes.at(kv.first)};
+      n.accel = scene.accel_builder().build(in, p ? p->accel.get() : nullptr);
+    } catch (...) {
+      rethrow_upload("building the traversal structures", n.generation);
+    }
+    char msg[160];
+    std::snprintf(msg, sizeof msg, "traversal structures of generation %llu: %u built, %u reused, %.2f ms",
+                  static_cast<unsigned long long>(n.generation), n.accel->gas_built, n.accel->gas_reused,
+                  n.accel->build_ms);
+    scene.ctx().log.line("INFO", msg);
+  }
 
   // Materials (059): the arrays in place, and the pool's keys resolved to header indices.
   const MaterialArrays* mats = n.materials.get();
@@ -369,7 +395,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   sd.material_header_count = cnt(TableId::MATERIAL_HEADERS);
   sd.material_programs = as<uint32_t>(at(TableId::MATERIAL_PROGRAMS));
   sd.material_constants = as<ar::ConstantBlock>(at(TableId::MATERIAL_CONSTANTS));
-  sd.accel = nullptr;  // unused until task 114 builds the production acceleration structures
+  sd.accel = n.accel->kernel_accel();
   ar::Rgb2SpecTable jt{};
   if (jh) jt = *jh;
   jt.z_nodes = as<float>(at(TableId::RGB2SPEC_NODES)), jt.coeffs = as<float>(at(TableId::RGB2SPEC_COEFFS));

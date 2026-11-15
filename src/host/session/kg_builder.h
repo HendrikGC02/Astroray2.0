@@ -6,10 +6,10 @@
 // copies the struct to the device once per pass (host/scheduler.h); on the CPU device the same
 // struct holds host pointers.
 //
-// Every pointer field is set, or optional for a reason stated in missing_pointers:
+// Every pointer field is set, or optional for a reason stated in missing_pointers (SceneData::accel
+// is always set: each snapshot, an empty one included, has its traversal structure, task 114):
 //  - camera and filter: null until a view and the settings are latched; a pass then has no
 //    camera work (session.cpp pass_camera_samples).
-//  - SceneData::accel: unused until task 114 builds the production acceleration structures.
 //  - scene arrays of an empty table (count 0), and SceneTables::rgb2spec of a scene without a
 //    material store, which has nothing for the VM to run.
 // Ref: docs/decisions/0002-kernel-architecture.md D4 (one KernelGlobals pointer), D13; 0007 d25
