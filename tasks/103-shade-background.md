@@ -19,3 +19,4 @@ Progress:
 - Started: world light is found by a reverse scan of the light table (no world index in KernelGlobals); registering the stage in CpuDevice is outside Scope.
 - Done: stage, CPU+GPU TUs, launch+budget rows (k_shade_background 40 regs, 0 stack, 0 spills), tests, canary. Production wiring of the CPU stage (CpuDevice::register_production_stages) is outside Scope: tests register it themselves.
 - Lead rulings: world index (LightTable::world_light, KernelGlobals::world_light, kg_builder) replaces the scan; CPU stage registered in make_cpu_session_device; CUDA name table already maps SHADE_BACKGROUND to k_shade_background; stack class now VM (0002 D10), row unchanged at 40 regs, 0 stack, 0 spills.
+- Review fixes: non-finite miss now poisons the slot via sample_mark_invalid (film_write.h) so the resolve counts it invalid and n stays; tests for it, for s != 1 and for the light-table world index; Scope line extended.
