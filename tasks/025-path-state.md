@@ -14,7 +14,7 @@ Do:
 7. test_state_layout.cpp (fast): static_asserts and runtime checks at Real = float: unconditional path fields 157 B, all fields 225 B, shadow item all fields 124 B (check 13); Stage values strictly increasing in launch order; a feature-off field gets no allocation.
 Acceptance: `pwsh tools/check.ps1 fast` passes; `out/bin/astroray_tests_cpu.exe --tier=fast -tc="state/*"` prints the three byte totals 157, 225 and 124.
 Look at: none.
-Canary: tasks/025.canary.patch must turn red: astroray_tests_cpu "state/path state bytes", "state/shadow item bytes".
+Canary: tasks/025.canary.patch must turn red: astroray_tests_cpu "state/path state bytes", "state/shadow item bytes", "state/light tracing and render passes are separate facts".
 Budget: none.
 Depends on: 019, 021.
 Size: M (about 350 lines); stop and report at 2x.

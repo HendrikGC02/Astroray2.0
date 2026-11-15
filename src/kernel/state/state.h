@@ -32,6 +32,9 @@ struct Unorm16x8 {
 static_assert(sizeof(U16x6) == 12 && sizeof(U32x4) == 16 && sizeof(Unorm16x8) == 16, "array field widths");
 
 // The feature tags of both tables: the condition columns of 0003 d19 and d20.
+// GUIDES_OR_LIGHTPASS and LIGHTPASS name 0008 D10's render passes (d19, "light
+// passes"); LIGHTPASS_OR_MEDIA names 0004 D20's light-tracing pass (d20, "light
+// pass"). They are different facts, see StateFeatures.
 enum class StateFeature : uint8_t {
   ALWAYS,
   MOTION,
@@ -58,7 +61,8 @@ struct StateFeatures {
   bool media = false;
   bool filter_glossy = false;
   bool guides = false;
-  bool lightpass = false;
+  bool light_render_passes = false;  // 0008 D10 render passes (d19 rows 28-29: "light passes")
+  bool light_tracing = false;        // 0004 D20 light-tracing pass, active when casters exist (d20: "light pass")
   bool stat_time = false;
   bool stat_rays = false;
   bool non_opaque = false;
@@ -68,7 +72,7 @@ struct StateFeatures {
 constexpr StateFeatures all_features_on() {
   StateFeatures f;
   f.motion = f.curved = f.subsurface = f.media = f.filter_glossy = f.guides = true;
-  f.lightpass = f.stat_time = f.stat_rays = f.non_opaque = f.light_groups = true;
+  f.light_render_passes = f.light_tracing = f.stat_time = f.stat_rays = f.non_opaque = f.light_groups = true;
   return f;
 }
 
@@ -79,11 +83,11 @@ constexpr bool feature_on(const StateFeatures& f, StateFeature t) {
     case StateFeature::CURVED_OR_SUBSURFACE: return f.curved || f.subsurface;
     case StateFeature::MEDIA: return f.media;
     case StateFeature::FILTER_GLOSSY: return f.filter_glossy;
-    case StateFeature::GUIDES_OR_LIGHTPASS: return f.guides || f.lightpass;
-    case StateFeature::LIGHTPASS: return f.lightpass;
+    case StateFeature::GUIDES_OR_LIGHTPASS: return f.guides || f.light_render_passes;
+    case StateFeature::LIGHTPASS: return f.light_render_passes;
     case StateFeature::STAT_TIME: return f.stat_time;
     case StateFeature::STAT_RAYS: return f.stat_rays;
-    case StateFeature::LIGHTPASS_OR_MEDIA: return f.lightpass || f.media;
+    case StateFeature::LIGHTPASS_OR_MEDIA: return f.light_tracing || f.media;
     case StateFeature::NON_OPAQUE: return f.non_opaque;
     case StateFeature::LIGHT_GROUPS: return f.light_groups;
     case StateFeature::MEDIA_OR_NON_OPAQUE: return f.media || f.non_opaque;

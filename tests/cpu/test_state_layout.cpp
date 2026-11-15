@@ -126,7 +126,7 @@ TEST_SUITE("fast") {
     CHECK(ar::path_state_bytes(only(&StateFeatures::media)) == 157 + 20);
     CHECK(ar::path_state_bytes(only(&StateFeatures::filter_glossy)) == 157 + 4);
     CHECK(ar::path_state_bytes(only(&StateFeatures::guides)) == 157 + 12);
-    CHECK(ar::path_state_bytes(only(&StateFeatures::lightpass)) == 157 + 12 + 16);
+    CHECK(ar::path_state_bytes(only(&StateFeatures::light_render_passes)) == 157 + 12 + 16);
     CHECK(ar::path_state_bytes(only(&StateFeatures::stat_time)) == 157 + 4);
     CHECK(ar::path_state_bytes(only(&StateFeatures::stat_rays)) == 157 + 4);
     // Shadow-item-only facts do not touch the path.
@@ -154,13 +154,13 @@ TEST_SUITE("fast") {
     CHECK(ar::shadow_item_bytes(only(&StateFeatures::motion)) == 49 + 4);
     CHECK(ar::shadow_item_bytes(only(&StateFeatures::non_opaque)) == 49 + 1 + 16);
     CHECK(ar::shadow_item_bytes(only(&StateFeatures::light_groups)) == 49 + 1);
-    // Light pass without media: item_flags and the 8-B film_pos only.
-    CHECK(ar::shadow_item_bytes(only(&StateFeatures::lightpass)) == 49 + 1 + 8);
+    // Light tracing (casters) without media: item_flags and the 8-B film_pos only.
+    CHECK(ar::shadow_item_bytes(only(&StateFeatures::light_tracing)) == 49 + 1 + 8);
     // Media: item_flags, lambda_t, r_u, 16-B r_l, medium_stack, medium_rng.
     CHECK(ar::shadow_item_bytes(only(&StateFeatures::media)) == 49 + 1 + 16 + 16 + 16 + 20);
-    // Light pass with media shares the 16-B r_l storage; it adds nothing more.
+    // Light tracing with media shares the 16-B r_l storage; it adds nothing more.
     StateFeatures lp_media;
-    lp_media.lightpass = lp_media.media = true;
+    lp_media.light_tracing = lp_media.media = true;
     CHECK(ar::shadow_item_bytes(lp_media) == 49 + 1 + 16 + 16 + 16 + 20);
     // Non-opaque and media both need lambda_t once.
     StateFeatures no_media;
@@ -181,11 +181,11 @@ TEST_SUITE("fast") {
         {StateFeature::CURVED_OR_SUBSURFACE, {&StateFeatures::curved, &StateFeatures::subsurface, nullptr}},
         {StateFeature::MEDIA, {&StateFeatures::media, nullptr, nullptr}},
         {StateFeature::FILTER_GLOSSY, {&StateFeatures::filter_glossy, nullptr, nullptr}},
-        {StateFeature::GUIDES_OR_LIGHTPASS, {&StateFeatures::guides, &StateFeatures::lightpass, nullptr}},
-        {StateFeature::LIGHTPASS, {&StateFeatures::lightpass, nullptr, nullptr}},
+        {StateFeature::GUIDES_OR_LIGHTPASS, {&StateFeatures::guides, &StateFeatures::light_render_passes, nullptr}},
+        {StateFeature::LIGHTPASS, {&StateFeatures::light_render_passes, nullptr, nullptr}},
         {StateFeature::STAT_TIME, {&StateFeatures::stat_time, nullptr, nullptr}},
         {StateFeature::STAT_RAYS, {&StateFeatures::stat_rays, nullptr, nullptr}},
-        {StateFeature::LIGHTPASS_OR_MEDIA, {&StateFeatures::lightpass, &StateFeatures::media, nullptr}},
+        {StateFeature::LIGHTPASS_OR_MEDIA, {&StateFeatures::light_tracing, &StateFeatures::media, nullptr}},
         {StateFeature::NON_OPAQUE, {&StateFeatures::non_opaque, nullptr, nullptr}},
         {StateFeature::LIGHT_GROUPS, {&StateFeatures::light_groups, nullptr, nullptr}},
         {StateFeature::MEDIA_OR_NON_OPAQUE, {&StateFeatures::media, &StateFeatures::non_opaque, nullptr}},
@@ -193,7 +193,8 @@ TEST_SUITE("fast") {
     bool StateFeatures::* const all[] = {
         &StateFeatures::motion,     &StateFeatures::curved,     &StateFeatures::subsurface,
         &StateFeatures::media,      &StateFeatures::filter_glossy, &StateFeatures::guides,
-        &StateFeatures::lightpass,  &StateFeatures::stat_time,  &StateFeatures::stat_rays,
+        &StateFeatures::light_render_passes, &StateFeatures::light_tracing,
+        &StateFeatures::stat_time,  &StateFeatures::stat_rays,
         &StateFeatures::non_opaque, &StateFeatures::light_groups};
     CHECK(ar::feature_on(StateFeatures{}, StateFeature::ALWAYS));
     for (const Case& c : cases) {
@@ -204,6 +205,33 @@ TEST_SUITE("fast") {
         CHECK(ar::feature_on(only(fact), c.tag) == expect);
       }
     }
+  }
+
+  TEST_CASE("state/light tracing and render passes are separate facts") {
+    constexpr uint64_t cap = 10;
+    // d19 rows 28-29 are 0008 D10's render passes; d20's item_flags and r_l/film_pos are
+    // 0004 D20's light-tracing pass (casters exist). Indices: path guide_tint 27,
+    // pass_frac 28; shadow item_flags 7, r_l_film_pos 12.
+    // Casters, no media, no render passes: the shadow fields exist, the path ones do not.
+    const StateFeatures casters = only(&StateFeatures::light_tracing);
+    const StateLayout sh_c = astroray::host::shadow_item_layout(casters, cap);
+    CHECK(sh_c.fields[7].allocated);
+    CHECK(sh_c.fields[12].allocated);
+    CHECK(sh_c.fields[12].element_bytes == 8);
+    const StateLayout ps_c = astroray::host::path_state_layout(casters, cap);
+    CHECK_FALSE(ps_c.fields[27].allocated);
+    CHECK_FALSE(ps_c.fields[28].allocated);
+    CHECK(ps_c.bytes_per_slot == 157);
+    // Render passes, no casters, no media: the path fields exist, the shadow ones do not.
+    const StateFeatures passes = only(&StateFeatures::light_render_passes);
+    const StateLayout sh_p = astroray::host::shadow_item_layout(passes, cap);
+    CHECK_FALSE(sh_p.fields[7].allocated);
+    CHECK_FALSE(sh_p.fields[12].allocated);
+    CHECK(sh_p.bytes_per_slot == 49);
+    const StateLayout ps_p = astroray::host::path_state_layout(passes, cap);
+    CHECK(ps_p.fields[27].allocated);
+    CHECK(ps_p.fields[28].allocated);
+    CHECK(ps_p.bytes_per_slot == 157 + 12 + 16);
   }
 
   TEST_CASE("state/termination values") {
@@ -298,11 +326,11 @@ TEST_SUITE("fast") {
     CHECK_THROWS_AS(astroray::host::path_state_layout(StateFeatures{}, 0), std::invalid_argument);
     CHECK_THROWS_AS(astroray::host::shadow_item_layout(StateFeatures{}, 0), std::invalid_argument);
 
-    // Shadow item: r_l_film_pos is 16 B with media, 8 B with the light pass alone.
+    // Shadow item: r_l_film_pos is 16 B with media, 8 B with light tracing alone.
     const StateLayout sh_all = astroray::host::shadow_item_layout(ar::all_features_on(), cap);
     CHECK(sh_all.bytes_per_slot == 124);
     CHECK(sh_all.fields[12].element_bytes == 16);
-    const StateLayout sh_lp = astroray::host::shadow_item_layout(only(&StateFeatures::lightpass), cap);
+    const StateLayout sh_lp = astroray::host::shadow_item_layout(only(&StateFeatures::light_tracing), cap);
     CHECK(sh_lp.bytes_per_slot == 58);
     CHECK(sh_lp.fields[12].allocated);
     CHECK(sh_lp.fields[12].element_bytes == 8);
