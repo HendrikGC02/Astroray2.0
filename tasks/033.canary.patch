@@ -1,26 +1,44 @@
 diff --git a/tools/abigen.py b/tools/abigen.py
-index 52bf91c..88badb1 100644
+index d498969..f347819 100644
 --- a/tools/abigen.py
 +++ b/tools/abigen.py
-@@ -853,7 +853,7 @@ def emit_recorder_cpp(m):
-         if n == "ar_edit_item_commit":
-             s += f"""  {{
-     auto it = rec_->staged.find({{rec_->id_of({edit}), key}});
--    if (it == rec_->staged.end()) {{
-+    if (true) {{
+@@ -819,7 +819,7 @@ struct ar_recorder {
+   // One open item's arrays (u32 kind, then per field u64 count and bytes) or kind NONE; the
+   // entry is erased because the call consumes the buffers.
+   void block(Writer& w, uint64_t edit, uint64_t key) {
+-    auto it = staged.find({edit, key});
++    auto it = staged.find({edit, key + 1});
+     if (it == staged.end()) {
        w.scalar<uint32_t>(0xFFFFFFFFu);
-     }} else {{
-       w.scalar(it->second.kind);
-@@ -1082,7 +1082,7 @@ ar_status replay_record(State& st, uint32_t fn, Reader& r, Arena& a, bool& stop)
-             stop = true;
-             return AR_ERR_INVALID_ARGUMENT;
-           }
--          if (count) memcpy(*sl.slot, src, size_t(count) * sl.esize);
-+          (void)src;
-         }
-         st.open.erase(it);
-       }
-@@ -1156,7 +1156,7 @@ ar_status ar_replay_file(const char* path, const ArReplayOptions& opt, ArReplayR
+       return;
+@@ -837,7 +837,7 @@ struct ar_recorder {
+   void commit_blocks(Writer& w, uint64_t edit) {
+     std::vector<std::pair<uint64_t, uint64_t>> order;  // (seq, key)
+     for (auto it = staged.lower_bound({edit, 0}); it != staged.end() && it->first.first == edit; ++it)
+-      order.push_back({it->second.seq, it->first.second});
++      order.push_back({it->first.second, it->second.seq});
+     std::sort(order.begin(), order.end());
+     w.scalar(static_cast<uint32_t>(order.size()));
+     for (const auto& o : order) {
+@@ -849,7 +849,7 @@ struct ar_recorder {
+ 
+ void ar_rec_status(ar_recorder* r, const ArRecTok& tok, ar_status st) {
+   std::lock_guard<std::mutex> lk(r->mu);
+-  uint32_t flags = st + 1;
++  uint32_t flags = 1 + (st & 0);
+   if (tok.off >= r->flushed) {
+     memcpy(r->buf.data() + (tok.off - r->flushed), &flags, sizeof flags);
+   } else if (r->f && r->error.empty()) {
+@@ -1108,7 +1108,7 @@ bool apply_block(State& st, Reader& r, uint64_t edit, uint64_t key) {
+       st.msg = "staged array count differs from the replayed begin";
+       return false;
+     }
+-    if (count) memcpy(*sl.slot, src, size_t(count) * sl.esize);
++    (void)src;
+   }
+   st.open.erase(it);
+   return true;
+@@ -1252,7 +1252,7 @@ ar_status ar_replay_file(const char* path, const ArReplayOptions& opt, ArReplayR
    uint64_t file_hash = 0, lib_hash = 0;
    memcpy(&file_hash, data.data() + sizeof kMagic, 8);
    if (ar_abi_hash(&lib_hash) != AR_OK) return bad(AR_ERR_INTERNAL, "ar_abi_hash failed");

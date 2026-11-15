@@ -21,3 +21,4 @@ Progress:
 - Choices: AR_RECORD(fn, rec_expr, args...) runs before the call; creates reserve an id (record position) and AR_RECORD_BIND binds the handle after success; AR_RECORD_POST registers staged slots after a successful begin; item commit captures the arrays.
 - Replayer fills staged arrays just before item_commit (the engine reads them only then); failed recorded calls are recorded and replayed. keep_alive skips *_destroy so 069 can render the returned sessions.
 - ar_rec_of(ar_session) is declared in recorder_hooks.h; the session task (052) must define it and add AR_RECORD lines (check-hooks enforces).
+- Review fixes: edit commit records every open staged item in begin order; reset/remove/abort/new begin/commit erase entries (recorder and replayer); each record stores status+1 in flags, replay reports mismatches (ArReplayResult.matched); AR_RECORD_BODY wraps entry-point bodies; check-hooks recurses and enforces first statement.
