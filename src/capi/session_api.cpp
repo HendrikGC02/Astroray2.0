@@ -63,6 +63,12 @@ ar_status session_call(ar_session h, const char* function, F&& f, bool allow_clo
   }
 }
 
+// Ruling 75: pass indices belong to the pass-list revision ar_session_pass_count last reported on
+// the handle.
+void check_pass_revision(ar_session h, uint64_t revision) {
+  if (revision != h->pass_revision.load())
+    throw std::invalid_argument("the pass list changed; call ar_session_pass_count again");
+}
 // The session's own device (RULINGS 70): CPU sessions get a CPU device with a worker pool, CUDA
 // sessions their own CudaDevice (own stream and globals) on the context's device, each with its
 // own ledger. Out of the entry point for the same reason as scene_api.cpp's cuda_init.
@@ -273,12 +279,6 @@ AR_API ar_status ar_display_release(ar_session h, uint64_t frame_id) {
 // Passes (0008 d13a). pass_count and pass_info read only the layout and the latched size. Indices
 // belong to the pass-list revision pass_count last reported on this handle: a film rebuilt since
 // can shift every index after Combined, so pass_info and read_pass refuse another (ruling 75).
-namespace {
-void check_pass_revision(ar_session h, uint64_t revision) {
-  if (revision != h->pass_revision.load())
-    throw std::invalid_argument("the pass list changed; call ar_session_pass_count again");
-}
-}  // namespace
 
 AR_API ar_status ar_session_pass_count(ar_session h, uint32_t* count) {
   if (h && !count) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_pass_count output is null");
