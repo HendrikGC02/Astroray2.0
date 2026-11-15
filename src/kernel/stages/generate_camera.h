@@ -39,7 +39,7 @@ inline constexpr uint8_t kRayTypeCamera = 0x1;
 
 // The spread of the initial ray cone. The film plane is z = -1, so one pixel is film_extent.y /
 // height tall there, which is 2 tan(fov_y / 2) / H of the paper with any film shift folded in.
-AR_FN Real camera_cone_spread(const CameraView& c) { return atan2(c.film_extent.y / c.height, Real(1)); }
+AR_FN Real camera_cone_spread(const CameraView& c) { return ar::atan2(c.film_extent.y / c.height, Real(1)); }
 
 // Sampler dimension d of the camera sample `key` (stream 0, the session's mode and seed).
 AR_FN Real camera_draw(const KernelGlobals& kg, const SamplerKey& key, uint32_t d) {
