@@ -28,7 +28,7 @@ ar::LightSamplerView LightTable::view() const {
 
 uint64_t LightTable::bytes() const {
   return lights.size() * sizeof(ar::LightRecord) + importance.size() * sizeof(double) + bins.size() * sizeof(ar::AliasBin) +
-         bin_light.size() * sizeof(uint32_t) + pmf.size() * sizeof(float);
+         bin_light.size() * sizeof(uint32_t) + pmf.size() * sizeof(float) + light_index.size() * sizeof(uint32_t);
 }
 
 LightTable::~LightTable() {
@@ -72,6 +72,37 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
     t->lights.push_back(li.record);
     t->importance.push_back(imp);
     sum += imp;
+  }
+  // The emissive-hit index from the records just stored (layout: light_sampler.h light_of_hit).
+  const auto is_tri = [](const ar::LightRecord& r) { return r.type == uint8_t(ar::LightType::TRIANGLE); };
+  std::vector<uint64_t> slice;  // per instance, one past its last emissive triangle
+  for (const ar::LightRecord& r : t->lights) {
+    if (!is_tri(r)) continue;
+    const uint32_t inst = ar::tri_instance(r);
+    if (inst >= slice.size()) slice.resize(size_t(inst) + 1, 0);
+    slice[inst] = std::max<uint64_t>(slice[inst], uint64_t(ar::tri_index(r)) + 1);
+  }
+  uint64_t words = 1 + slice.size();
+  for (uint64_t c : slice) words += c ? 1 + c : 0;
+  if (words >= ar::kLightIndexInvalid) throw std::runtime_error("light table: the emissive-hit index exceeds 32-bit offsets");
+  std::vector<uint32_t>& map = t->light_index;
+  map.assign(1 + slice.size(), ar::kNoLight);
+  map[0] = uint32_t(slice.size());
+  map.reserve(size_t(words));
+  for (size_t i = 0; i < slice.size(); ++i) {
+    if (slice[i] == 0) continue;
+    map[1 + i] = uint32_t(map.size());
+    map.push_back(uint32_t(slice[i]));
+    map.insert(map.end(), size_t(slice[i]), ar::kNoLight);
+  }
+  for (uint32_t i = 0; i < uint32_t(t->lights.size()); ++i) {
+    const ar::LightRecord& r = t->lights[i];
+    if (!is_tri(r)) continue;
+    uint32_t& e = map[size_t(map[1 + ar::tri_instance(r)]) + 1 + ar::tri_index(r)];
+    if (e != ar::kNoLight)
+      throw std::runtime_error("light table: lights " + std::to_string(e) + " and " + std::to_string(i) + " are both triangle " +
+                               std::to_string(ar::tri_index(r)) + " of instance " + std::to_string(ar::tri_instance(r)));
+    e = i;
   }
   t->pmf.assign(in.size(), 0.0f);
   // pbrt-v4 AliasTable::AliasTable over the lights of positive importance only (D9).

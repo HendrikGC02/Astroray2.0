@@ -251,6 +251,7 @@ std::vector<HostRow> host_rows(Scene& scene, const SceneTableSet& set) {
   at(TableId::LIGHT_BINS) = row_of(lights->bins.data(), lights->bins.size());
   at(TableId::LIGHT_BIN_LIGHT) = row_of(lights->bin_light.data(), lights->bin_light.size());
   at(TableId::LIGHT_PMF) = row_of(lights->pmf.data(), lights->pmf.size());
+  at(TableId::LIGHT_INDEX) = row_of(lights->light_index.data(), lights->light_index.size());
   const ar::Rgb2SpecTable& jh = scene.materials->table();
   const size_t res = size_t(jh.res);
   at(TableId::RGB2SPEC_NODES) = row_of(jh.z_nodes, res);
@@ -332,6 +333,8 @@ TEST_CASE("scene_upload/checksums match host") {
   }
   CHECK(want[static_cast<uint32_t>(TableId::INSTANCES)].count == 2u);
   CHECK(want[static_cast<uint32_t>(TableId::MATERIAL_PROGRAMS)].count > 0u);  // material 43 runs a program
+  // The emissive quad's index: N = 1, its slice offset, C = 2, then lights 0 and 1.
+  CHECK(want[static_cast<uint32_t>(TableId::LIGHT_INDEX)].count == 5u);
   dev.free(kgb);
   dev.free(out);
 }

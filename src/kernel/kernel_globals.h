@@ -107,6 +107,10 @@ struct KernelGlobals {
   // Index of the world light in `lights`, kNoLight (~0u) when the scene has none: a camera miss
   // then renders black. The initialiser keeps a value-initialised KernelGlobals at "no world".
   uint32_t world_light = 0xFFFFFFFFu;
+  // The emissive-hit index of the same light table (light/light_sampler.h light_of_hit), and its
+  // length in words. Last members so the offsets the CUDA device reads stay put.
+  const uint32_t* light_index;
+  uint32_t light_index_words;
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is

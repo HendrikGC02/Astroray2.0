@@ -42,7 +42,7 @@ const char* table_name(TableId id) {
   static const char* const names[kTableCount] = {
       "instances",          "mesh table",      "material slots", "material headers", "material programs",
       "material constants", "material pass indices", "image views",     "light records",  "light alias bins", "light bin lights",
-      "light pmf",          "rgb2spec nodes",  "rgb2spec coefficients", "observer cmf", "observer illuminant",
+      "light pmf",          "light index",     "rgb2spec nodes",  "rgb2spec coefficients", "observer cmf", "observer illuminant",
       "srgb decode",        "e_diel table",    "table header"};
   const uint32_t i = static_cast<uint32_t>(id);
   if (i >= kTableCount) throw std::invalid_argument("table_name: no table " + std::to_string(i));
@@ -356,6 +356,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   light_table(TableId::LIGHT_BINS, lt ? lt->bins.data() : nullptr, lt ? lt->bins.size() : 0, sizeof(ar::AliasBin));
   light_table(TableId::LIGHT_BIN_LIGHT, lt ? lt->bin_light.data() : nullptr, lt ? lt->bin_light.size() : 0, 4);
   light_table(TableId::LIGHT_PMF, lt ? lt->pmf.data() : nullptr, lt ? lt->pmf.size() : 0, 4);
+  light_table(TableId::LIGHT_INDEX, lt ? lt->light_index.data() : nullptr, lt ? lt->light_index.size() : 0, 4);
 
   // Constant tables: made once per scene, then shared by every set.
   const ar::Rgb2SpecTable* jh = scene.materials ? &scene.materials->table() : nullptr;

@@ -50,6 +50,10 @@ struct LightTable {
   // Index of the constant world among `lights`, ar::kNoLight when the scene has none.
   uint32_t world_light = ~0u;
   std::vector<LampInstanceIn> lamp_instances;
+  // The emissive-hit index (layout: kernel/light/light_sampler.h light_of_hit), built from
+  // `lights` in the same pass, so lights[entry] is that triangle's record. Never empty: a table
+  // without triangle lights holds {0}.
+  std::vector<uint32_t> light_index;
   ar::LightSamplerView view() const;
   uint64_t bytes() const;
 
@@ -67,6 +71,7 @@ double display_energy(const std::vector<EmissionTerm>& terms, const ar::Observer
 
 // The table over `lights` in order. A light whose importance is 0 gets pmf 0 and no bin; with no
 // positive importance the table has no bins and sample() finds no light. `ledger` may be null.
+// Throws std::runtime_error when two triangle records name the same instance and triangle.
 std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput>& lights, const ar::SceneSphere& scene,
                                                     const ar::ObserverView& obs, std::shared_ptr<Ledger> ledger);
 
