@@ -1,9 +1,20 @@
 diff --git a/src/host/light/light_builder.cpp b/src/host/light/light_builder.cpp
-index b4d241c..4d79d43 100644
+index b4d241c..df24a71 100644
 --- a/src/host/light/light_builder.cpp
 +++ b/src/host/light/light_builder.cpp
-@@ -102,7 +102,7 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
-     if (e != ar::kNoLight)
+@@ -93,16 +93,16 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
+     if (slice[i] == 0) continue;
+     map[1 + i] = uint32_t(map.size());
+     map.push_back(uint32_t(slice[i]));
+-    map.insert(map.end(), size_t(slice[i]), ar::kNoLight);
++    map.insert(map.end(), size_t(slice[i]), 0u);
+   }
+   for (uint32_t i = 0; i < uint32_t(t->lights.size()); ++i) {
+     const ar::LightRecord& r = t->lights[i];
+     if (!is_tri(r)) continue;
+     uint32_t& e = map[size_t(map[1 + ar::tri_instance(r)]) + 1 + ar::tri_index(r)];
+-    if (e != ar::kNoLight)
++    if (false)
        throw std::runtime_error("light table: lights " + std::to_string(e) + " and " + std::to_string(i) + " are both triangle " +
                                 std::to_string(ar::tri_index(r)) + " of instance " + std::to_string(ar::tri_instance(r)));
 -    e = i;
@@ -24,3 +35,16 @@ index c25e0e2..4d140b6 100644
  
    // Constant tables: made once per scene, then shared by every set.
    const ar::Rgb2SpecTable* jh = scene.materials ? &scene.materials->table() : nullptr;
+diff --git a/src/kernel/light/light_sampler.h b/src/kernel/light/light_sampler.h
+index ea61d01..bf93c39 100644
+--- a/src/kernel/light/light_sampler.h
++++ b/src/kernel/light/light_sampler.h
+@@ -108,7 +108,7 @@ AR_FN uint32_t light_of_hit(const KernelGlobals& kg, uint32_t instance, uint32_t
+   if (!mesh_ok) return kLightIndexInvalid;
+   const bool tri_ok = triangle < load_ro(&s.meshes[mesh].triangle_count);
+   AR_ASSERT(tri_ok);
+-  if (!tri_ok) return kLightIndexInvalid;
++  if (!tri_ok) return kNoLight;
+   AR_ASSERT(kg.light_index != nullptr || kg.lights == nullptr);  // a light table binds its index
+   return light_index_lookup(kg.light_index, kg.light_index_words, instance, triangle);
+ }

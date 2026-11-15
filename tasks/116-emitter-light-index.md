@@ -20,3 +20,4 @@ Progress:
 - One uint32 table LIGHT_INDEX: [N, per-instance slice offset or kNoLight, slices {C, light per triangle}]; KernelGlobals light_index/light_index_words appended last.
 - light_of_hit: kNoLight for non-emitters and lamp instances; kLightIndexInvalid (~0u-1, AR_ASSERT in debug) for an instance or triangle outside the scene (checked against SceneData).
 - Duplicate (instance, triangle) records throw in build_light_table. Canary: swapped entries + short LIGHT_INDEX upload; CPU red verified via check fast.
+- Review: mesh 100 faces {1, 0} so the in-slice kNoLight is tested; light_of_hit tells lamps by instance light_index, asserts mesh and bound map; canary adds 0-filled slice, removed duplicate throw, kNoLight for !tri_ok (4 light_index cases red).
