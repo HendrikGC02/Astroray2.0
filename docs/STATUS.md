@@ -23,7 +23,10 @@ ROADMAP "Open items".
 None. Follow-ups noted for later tasks: the ABI exposes no CUDA probe reason or
 driver version (017); JH table round trip is 1.1-1.6e-3 off-grid near white and
 up to 4.3e-3 per channel on saturated emitters (023); `check fast` runs 9-10 s
-after a rebuild (B-08 is 10 s).
+after a rebuild (B-08 is 10 s). The material VM copies 056's kSlotSemantic into
+vm/store_slot.h (nvcc rejects the shared inline constexpr; a test pins the rows),
+which should become one device-visible definition in constant_block.h. 0006's
+required interval rules in the opcode generator have no owning task yet.
 
 ## Budget headroom
 Not measured yet: no gate has run. Spike numbers: docs/spikes/*/RESULTS.md.
