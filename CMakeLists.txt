@@ -186,7 +186,14 @@ target_link_libraries(astroray_tests_cpu PRIVATE ${_ar_engine_libs})
 target_precompile_headers(astroray_tests_cpu PRIVATE ${CMAKE_SOURCE_DIR}/tests/cpu/pch.h)
 # main.cpp defines DOCTEST_CONFIG_IMPLEMENT before the include, so it cannot take the PCH.
 set_source_files_properties(${CMAKE_SOURCE_DIR}/tests/cpu/main.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-add_dependencies(astroray_tests_cpu astroray_opsgen)
+add_dependencies(astroray_tests_cpu astroray_opsgen astroray_dump)
+
+# Out-of-process minidump writer (0001 D2.5, task 113); lands beside astroray_core.dll
+# and the test exe in out/bin, and in the extension stage's bin/.
+add_executable(astroray_dump src/dump/main.cpp)
+astroray_target_warnings(astroray_dump)
+target_link_libraries(astroray_dump PRIVATE dbghelp)
+add_dependencies(astroray_core astroray_dump)
 
 # GPU tests: one process, serial, each test creating its CUDA device explicitly (0009 d11).
 # The test modules are the loose cubins of tests/gpu/kernels, read from the build tree.
@@ -237,8 +244,9 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E copy ${ASTRORAY_GEN_DIR}/_abi.py ${ASTRORAY_GEN_DIR}/_ops.py ${ASTRORAY_EXT_STAGE}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${ASTRORAY_EXT_STAGE}/bin
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:astroray_core> ${ASTRORAY_EXT_STAGE}/bin/astroray_core.dll
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:astroray_dump> ${ASTRORAY_EXT_STAGE}/bin/astroray_dump.exe
   COMMAND pwsh -NoProfile -Command ". '${CMAKE_SOURCE_DIR}/tools/lib/blender.ps1'; exit (Invoke-ArBlenderCommand -Args 'extension','build','--split-platforms','--source-dir','${ASTRORAY_EXT_STAGE}','--output-dir','${CMAKE_SOURCE_DIR}/out/extension')"
-  DEPENDS astroray_core astroray_opsgen ${_ar_ext_src} ${ASTRORAY_GEN_DIR}/_abi.py
+  DEPENDS astroray_core astroray_dump astroray_opsgen ${_ar_ext_src} ${ASTRORAY_GEN_DIR}/_abi.py
   COMMENT "astroray_extension: blender extension build"
   VERBATIM)
 add_custom_target(astroray_extension DEPENDS ${ASTRORAY_EXT_ZIP})

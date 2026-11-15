@@ -44,6 +44,12 @@ TEST_CASE("fault/access violation poisons context") {
     if (e.path().extension() == ".dmp") dumps.push_back(e.path());
   REQUIRE(dumps.size() == 1);
   CHECK(fs::file_size(dumps[0]) > 0);
+  {
+    std::ifstream d(dumps[0], std::ios::binary);
+    char magic[4] = {};
+    d.read(magic, 4);
+    CHECK(std::string(magic, 4) == "MDMP");
+  }
   // <log_path>.<pid>.<n>.dmp with this process's id and the first dump's n = 0.
   CHECK(dumps[0].string() == ctx.log_path + "." + std::to_string(GetCurrentProcessId()) + ".0.dmp");
 
