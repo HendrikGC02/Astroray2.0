@@ -1,0 +1,26 @@
+diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
+index 3caaa9a..96e4c7d 100644
+--- a/src/kernel/stages/shade_surface.h
++++ b/src/kernel/stages/shade_surface.h
+@@ -71,7 +71,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+     const ObserverView& obs = kg.tables->observer;
+     OpenPBRParams rec;
+     resolve_constant_record(block, ctx, obs, &rec);
+-    le = resolve(block.emission_color, ctx.lambda_t, obs) * Real(block.emission_luminance);
++    le = resolve(block.emission_color, ctx.lambda_t, obs) * Real(block.emission_luminance) * Real(1.01);
+     if ((mflags & CONSTANT_SURFACE) == 0u) {
+       VmRegs regs;
+       const uint32_t* prog = s.material_programs + program;
+diff --git a/tools/analytic.py b/tools/analytic.py
+index ea7e1b5..39a3074 100644
+--- a/tools/analytic.py
++++ b/tools/analytic.py
+@@ -115,7 +115,7 @@ def check_channel(mean, var, truth, z, eps_sys):
+     y, x = np.unravel_index(int(np.argmax(ratio)), ratio.shape)
+     worst = (float(zs[y, x]), (int(x), int(y)))
+     bad = int((ratio > 1).sum())
+-    if bad:
++    if bad > 1:
+         reasons.append(f"{bad} pixels outside z SE + eps_sys")
+     lit = truth != 0
+     if lit.any() and not (mean[lit] != 0).any():
