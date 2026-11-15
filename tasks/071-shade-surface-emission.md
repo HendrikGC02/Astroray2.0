@@ -22,3 +22,5 @@ Progress:
 - Kernel, tests, canary done: k_shade_surface 80 regs, 264 B stack, 0 spills under (256,2) (ptxas, before gate). CPU fast/gate cases and GPU agreement (bit-exact) pass.
 - a5 on CPU: mean = L per channel (z < 1) at L = 0.3, 2, 37 (s = 4 .. 1/32). CUDA CLI render blocked: the CUDA session cannot launch INTERSECT_CLOSEST.
 - Blocked: the default-material/pass-index upload breaks test_kg_builder (in-place headers) and test_scene_upload (bytes); lead to choose.
+- Rulings applied: default material and pass index as table layout (MATERIAL_PASS_INDEX); film slots by sample_id in path_end and shade_background.
+- Declared baseline from the gate (kernelgate): k_shade_surface (256,2) regs 80, stack 264 B, spills 0/0 B (VM limits 128/192 B, 512 B).
