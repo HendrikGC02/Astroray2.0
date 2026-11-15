@@ -5,6 +5,9 @@
 // Ref: OptiX 9.1 Programming Guide, "Acceleration structures" (optixAccelComputeMemoryUsage,
 // optixAccelBuild, OPTIX_PROPERTY_TYPE_COMPACTED_SIZE, optixAccelCompact); the batching
 // follows Cycles src/bvh/optix.cpp and pbrt-v4 src/pbrt/gpu/optix/aggregate.cpp.
+// First: light.h uses ar::max, which the min/max macros of the Windows headers (pulled in below) break.
+#include "kernel/geom/lamp_intersect.h"
+
 #include "device/cuda/optix_accel.h"
 
 #include <cuda.h>
@@ -219,8 +222,9 @@ uint32_t OptixAccel::update_gas(const SceneUpload& upload) {
 // custom disk, a built-in sphere. One GAS per shape, built uncompacted (a handful of primitives).
 // Ref: OptiX 9.1 Programming Guide, "Custom primitives" (OptixBuildInputCustomPrimitiveArray) and
 // "Spheres" (OptixBuildInputSphereArray, singleRadius).
-void OptixAccel::ensure_lamp_gas(ar::LampShape shape) {
-  Gas& g = lamp_gas_[size_t(shape)];
+void OptixAccel::ensure_lamp_gas(uint8_t lamp_shape) {
+  const ar::LampShape shape = ar::LampShape(lamp_shape);
+  Gas& g = lamp_gas_[lamp_shape];
   if (g.handle) return;
   Device& dev = context_.device();
   const float verts[12] = {-0.5f, -0.5f, 0.0f, 0.5f, -0.5f, 0.0f, 0.5f, 0.5f, 0.0f, -0.5f, 0.5f, 0.0f};
@@ -330,7 +334,7 @@ void OptixAccel::build_tlas(const SceneUpload& upload, const InstanceTable& tabl
         throw std::runtime_error("instance " + std::to_string(i) + " names light " + std::to_string(s.light_index) +
                                  " which is not a lamp");
       if (shape == ar::LampShape::NONE) continue;  // a delta point lamp has no surface to hit
-      ensure_lamp_gas(shape);
+      ensure_lamp_gas(uint8_t(shape));
       OptixInstance o = {};
       ar::lamp_geometry_xform(rec, shape, o.transform);
       o.instanceId = uint32_t(i);

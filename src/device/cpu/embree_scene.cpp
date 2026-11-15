@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+// First: light.h uses ar::max, which the min/max macros of the Windows headers (pulled in below) break.
+#include "kernel/geom/lamp_intersect.h"
+
 #include "device/cpu/embree_scene.h"
 
 #include <embree4/rtcore.h>
@@ -11,8 +14,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-#include "kernel/geom/lamp_intersect.h"
 
 namespace astroray::host {
 

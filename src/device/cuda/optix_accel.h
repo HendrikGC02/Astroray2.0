@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "device/cuda/optix_context.h"
-#include "kernel/geom/lamp_intersect.h"
 #include "kernel/light/light_record.h"
 #include "device/cuda/scene_upload.h"
 
@@ -74,12 +73,12 @@ class OptixAccel {
     DeviceBuffer buffer;
   };
   void free_gas(Gas& g);
-  void ensure_lamp_gas(ar::LampShape shape);
+  void ensure_lamp_gas(uint8_t shape);  // an ar::LampShape
 
   OptixContext& context_;
   Owner owner_;
   std::map<ar_key, Gas> gas_;
-  Gas lamp_gas_[4];  // by ar::LampShape; NONE and INVALID stay empty
+  Gas lamp_gas_[4];  // by ar::LampShape (kernel/geom/lamp_intersect.h); NONE and INVALID stay empty
   DeviceBuffer tlas_buffer_, tlas_instances_;
   uint32_t tlas_instance_count_ = 0;
   uint64_t tlas_handle_ = 0;

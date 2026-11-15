@@ -7,6 +7,8 @@
 // OptiX 9.1 Programming Guide (optixLaunch); 0009 B-18 (module creation, warm and cold).
 #include <doctest.h>
 
+#include "light/light.h"  // before the host headers: ar::max against the Windows min/max macros
+
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -36,7 +38,6 @@ namespace {
 
 constexpr ar_key kQuadKey = 5;
 constexpr uint8_t kCamera = 0x01, kDiffuse = 0x02;
-constexpr uint32_t kLamp = 7;
 
 std::shared_ptr<MeshRecord> quad_record() {
   auto t = std::make_shared<MeshTopology>();
@@ -63,7 +64,15 @@ ar_xform translate(float x) {
   return t;
 }
 
-// Instances at x = 0, 3, 6: 0 plain, 1 a lamp, 2 camera rays only (no shadow bit).
+// The lamp of instance 1: a 1 x 1 rectangle where the quad would be, facing down. Its two triangles
+// split along the same diagonal as the quad's, so the hand-typed rays below hit the same ones.
+std::vector<ar::LightRecord> make_lights() {
+  return {ar::light_make_area(ar::LightType::AREA_RECT, ar::Real3{3.5f, 0.5f, 0.0f}, ar::Real3{1, 0, 0}, ar::Real3{0, 1, 0},
+                              1.0f, 1.0f, 1.0f, ar::SpectrumRef{})};
+}
+
+// Instances at x = 0, 3, 6: 0 plain, 1 a lamp (the geometry key is unused for a lamp), 2 camera
+// rays only (no shadow bit).
 InstanceTable make_table() {
   InstanceTable table;
   table.motion_steps = 1;
@@ -72,7 +81,7 @@ InstanceTable make_table() {
     Instance in;
     in.geom_key = kQuadKey;
     in.mask = masks[i];
-    if (i == 1) in.light_index = kLamp;
+    if (i == 1) in.light_index = 0;
     table.instances.push_back(in);
     table.xf.push_back(translate(3.0f * float(i)));
   }
@@ -178,7 +187,7 @@ void run_cpu(const InstanceTable& table, Pools& p) {
   MeshStore meshes;
   meshes.install(quad_record());
   EmbreeDevice embree;
-  EmbreeScene accel(embree, meshes, table, std::vector<ar::LightRecord>{}, ledger, pool);
+  EmbreeScene accel(embree, meshes, table, make_lights(), ledger, pool);
   std::vector<ar::DeviceInstanceRecord> records(table.instances.size());
   for (size_t i = 0; i < records.size(); ++i) records[i] = {}, records[i].light_index = table.instances[i].light_index;
   ar::SceneData scene{};
@@ -245,7 +254,7 @@ void run_gpu(Gpu& g, const InstanceTable& table, Pools& p, uint32_t width) {
   g.upload->sync_mesh(quad_record());
   g.upload->upload_instances(table);
   g.accel->update_gas(*g.upload);
-  g.accel->build_tlas(*g.upload, table, std::vector<ar::LightRecord>{});
+  g.accel->build_tlas(*g.upload, table, make_lights());
   Device& dev = *g.dev;
 
   std::vector<DeviceBuffer> owned;
