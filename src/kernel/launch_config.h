@@ -66,7 +66,9 @@ struct LaunchRow {
   X(__raygen__intersect_closest, 0, 0, 0, OTHER) \
   X(__raygen__intersect_shadow, 0, 0, 0, OTHER) \
   X(__miss__traverse, 0, 0, 0, OTHER) \
-  X(__closesthit__tri, 0, 0, 0, OTHER)
+  X(__closesthit__tri, 0, 0, 0, OTHER) \
+  X(__intersection__lamp, 0, 0, 0, OTHER) \
+  X(__closesthit__lamp, 0, 0, 0, OTHER)
 
 #define AR_LAUNCH_ROW_CONST(name, T, B, K, CLASS) \
   inline constexpr LaunchRow kLaunch_##name{T, B, K, StackClass::CLASS};
