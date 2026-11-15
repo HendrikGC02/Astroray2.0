@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "host/scene/edit.h"
+#include "host/scene/mesh.h"
 
 #include "host/scene/instances.h"
 
@@ -99,7 +100,7 @@ void Edit::submit(const std::shared_ptr<EditItem>& item) {
   std::shared_ptr<Pending> pending = pending_;
   scene_.generations().job_started(*pending);
   try {
-    scene_.pool().submit([scene, pending, item] {
+    auto task = [scene, pending, item] {
       std::string fail;
       uint64_t subject = item->key;
       try {
@@ -119,7 +120,23 @@ void Edit::submit(const std::shared_ptr<EditItem>& item) {
         // A throwing release must not hide the job's own outcome.
       }
       scene->generations().job_done(pending, subject, fail);
-    });
+    };
+    if (item->schedule) {
+      // A deferred queue runs on another thread (a resolving worker or the tracker), where a
+      // throw cannot reach this call: resolve the job as failed so the generation settles.
+      item->schedule([scene, pending, item, task] {
+        try {
+          scene->pool().submit(task);
+        } catch (const std::exception& e) {
+          if (item->release) item->release();
+          scene->generations().job_done(pending, item->key, std::string("could not queue job: ") + e.what());
+        } catch (...) {
+          scene->generations().job_done(pending, item->key, "could not queue job");
+        }
+      });
+    } else {
+      scene->pool().submit(task);
+    }
   } catch (...) {
     scene_.generations().job_done(pending, item->key, "");  // undo job_started
     throw;
@@ -215,12 +232,18 @@ ar_status Edit::commit(uint64_t* generation) {
   delta.inst_set = p.inst_set = instances_.summary;
   Scene::State& st = scene_.state_;
   for (const auto& kv : staged_) {
-    p.subjects.push_back(kv.first);
+    if (kv.second.item->replaces_subject) p.subjects.push_back(kv.first);
     if (kv.second.item->on_active) p.on_active.push_back(kv.second.item->on_active);
     if (kv.second.item->on_dropped) p.on_dropped.push_back(kv.second.item->on_dropped);
   }
   for (const auto& r : removed_) p.subjects.push_back(r.second);
   for (const auto& kv : astro_) p.subjects.push_back(kv.first);
+  // Geometry removals and reset take effect with the generation; keys staged in this edit stay.
+  std::set<ar_key> keep;
+  for (const auto& kv : staged_)
+    if (kv.second.item->kind == AR_KIND_GEOMETRY && kv.second.item->replaces_subject) keep.insert(kv.first);
+  if (scene_.meshes)
+    p.on_active.push_back([meshes = scene_.meshes, reset = reset_, removed = removed_, keep] { meshes->remove(reset, removed, keep); });
   // The stored descriptors take effect with the generation, not before.
   p.on_active.push_back([&st, reset = reset_, settings = settings_, camera = camera_, astro = astro_,
                          removed = removed_, delta] {
@@ -264,6 +287,7 @@ ar_status Edit::abort() {
     if (!kv.second.committed) {
       // Never handed to a worker: its blocks can go now.
       if (kv.second.item->release) kv.second.item->release();
+      if (kv.second.item->on_dropped) kv.second.item->on_dropped();  // undo what staging declared
     } else if (kv.second.item->on_dropped) {
       p.on_dropped.push_back(kv.second.item->on_dropped);
     }

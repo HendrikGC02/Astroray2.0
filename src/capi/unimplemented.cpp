@@ -53,8 +53,6 @@ AR_API ar_status ar_session_report_info(ar_session h, ar_report_info*) { return 
 AR_API ar_status ar_session_report_entry(ar_session h, uint32_t, ar_report_entry*) { return unsupported(h, "ar_session_report_entry"); }
 
 // Scene edit transaction: one open edit per scene.
-AR_API ar_status ar_edit_mesh_begin(ar_edit h, const ar_mesh_desc*, ar_mesh_buffers*) { return unsupported(h, "ar_edit_mesh_begin"); }
-AR_API ar_status ar_edit_positions_begin(ar_edit h, ar_key, ar_positions_buffers*) { return unsupported(h, "ar_edit_positions_begin"); }
 AR_API ar_status ar_edit_curves_begin(ar_edit h, const ar_curves_desc*, ar_curves_buffers*) { return unsupported(h, "ar_edit_curves_begin"); }
 AR_API ar_status ar_edit_points_begin(ar_edit h, const ar_points_desc*, ar_points_buffers*) { return unsupported(h, "ar_edit_points_begin"); }
 AR_API ar_status ar_edit_grid_leaves_begin(ar_edit h, const ar_grid_desc*, ar_grid_leaf_buffers*) { return unsupported(h, "ar_edit_grid_leaves_begin"); }

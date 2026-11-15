@@ -5,10 +5,13 @@
 
 #include <exception>
 #include <memory>
+#include <new>
+#include <stdexcept>
 #include <string>
 
 #include "astroray/astroray.h"
 #include "host/scene/edit.h"
+#include "host/scene/mesh.h"
 #include "host/device.h"
 
 using astroray::host::Edit;
@@ -67,6 +70,28 @@ ar_status edit_call(ar_edit h, F&& f) {
   }
 }
 
+// A staging call that throws std::invalid_argument for bad input: that is the caller's
+// error, reported like Edit's own checks (status, last_error, a warning line).
+template <class F>
+ar_status staging_call(ar_edit h, F&& f) {
+  if (!h || !h->edit) return AR_ERR_INVALID_ARGUMENT;
+  try {
+    ar_status st = f(*h->edit);
+    if (st != AR_OK) h->last_error = h->edit->last_error();
+    return st;
+  } catch (const std::invalid_argument& e) {
+    std::string why = std::string("invalid argument: ") + e.what();
+    h->owner->scene->ctx().log.line("WARNING", why);
+    return fail(h, AR_ERR_INVALID_ARGUMENT, why);
+  } catch (const std::bad_alloc&) {
+    return fail(h, AR_ERR_OUT_OF_MEMORY, "out of host memory staging geometry");
+  } catch (const std::exception& e) {
+    return fail(h, AR_ERR_INTERNAL, e.what());
+  } catch (...) {
+    return fail(h, AR_ERR_INTERNAL, "unknown exception");
+  }
+}
+
 }  // namespace
 
 extern "C" {
@@ -94,6 +119,7 @@ AR_API ar_status ar_scene_create(ar_context ctx, const ar_scene_desc* desc, ar_s
     }
     auto h = std::make_unique<ar_scene_s>();
     h->scene = std::make_unique<Scene>(astroray::context_state(ctx), std::move(cfg));
+    h->scene->meshes = std::make_shared<astroray::host::MeshStore>();
     *out = h.release();
     return AR_OK;
   } catch (const std::exception& e) {
@@ -141,6 +167,16 @@ AR_API ar_status ar_scene_edit_begin(ar_scene h, ar_edit* out) {
 
 AR_API ar_status ar_edit_reset(ar_edit h) {
   return edit_call(h, [](Edit& e) { return e.reset(); });
+}
+AR_API ar_status ar_edit_mesh_begin(ar_edit h, const ar_mesh_desc* desc, ar_mesh_buffers* out) {
+  return staging_call(h, [&](Edit& e) {
+    return astroray::host::mesh_begin(*h->owner->scene, e, desc, out);
+  });
+}
+AR_API ar_status ar_edit_positions_begin(ar_edit h, ar_key key, ar_positions_buffers* out) {
+  return staging_call(h, [&](Edit& e) {
+    return astroray::host::positions_begin(*h->owner->scene, e, key, out);
+  });
 }
 AR_API ar_status ar_edit_item_commit(ar_edit h, ar_key key) {
   return edit_call(h, [&](Edit& e) { return e.item_commit(key); });

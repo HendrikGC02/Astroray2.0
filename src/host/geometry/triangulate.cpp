@@ -2,8 +2,6 @@
 #include "triangulate.h"
 
 #include <cmath>
-#include <stdexcept>
-#include <string>
 
 namespace astroray::host {
 namespace {
@@ -33,6 +31,18 @@ void quad_split(const float* pos, const uint32_t* cv, uint32_t s, std::vector<ui
   else out.insert(out.end(), {s, s + 1, s + 2, s, s + 2, s + 3});
 }
 
+// Exactly zero Newell vector: the face has no area (collinear or coincident corners).
+bool zero_area(const float* pos, const uint32_t* cv, uint32_t first, uint32_t n) {
+  P3 nw{0, 0, 0};
+  for (uint32_t i = 0; i < n; ++i) {
+    P3 a = load(pos, cv[first + i]), b = load(pos, cv[first + (i + 1) % n]);
+    nw.x += (a.y - b.y) * (a.z + b.z);
+    nw.y += (a.z - b.z) * (a.x + b.x);
+    nw.z += (a.x - b.x) * (a.y + b.y);
+  }
+  return !(std::fabs(nw.x) + std::fabs(nw.y) + std::fabs(nw.z) > 0);
+}
+
 struct P2 {
   double x, y;
 };
@@ -48,8 +58,10 @@ bool in_triangle(P2 a, P2 b, P2 c, P2 p) {
 // vertex whose triangle holds no other non-convex vertex); Newell's normal (Sutherland,
 // Sproull, Schumacker 1974) picks the projection. Ties are broken by always taking the
 // first ear at or after the vertex following the last clip, so output is deterministic.
-void ear_clip(const float* pos, const uint32_t* cv, uint32_t first, uint32_t n, size_t face,
-              std::vector<uint32_t>& out) {
+// On ZeroArea or NoEar `out` is left unchanged and the caller decides (ruling 67).
+enum class Clip { Ok, ZeroArea, NoEar };
+Clip ear_clip(const float* pos, const uint32_t* cv, uint32_t first, uint32_t n, std::vector<uint32_t>& out) {
+  const size_t mark = out.size();
   P3 nw{0, 0, 0};
   for (uint32_t i = 0; i < n; ++i) {
     P3 a = load(pos, cv[first + i]), b = load(pos, cv[first + (i + 1) % n]);
@@ -58,8 +70,7 @@ void ear_clip(const float* pos, const uint32_t* cv, uint32_t first, uint32_t n, 
     nw.z += (a.x - b.x) * (a.y + b.y);
   }
   double ax = std::fabs(nw.x), ay = std::fabs(nw.y), az = std::fabs(nw.z);
-  if (!(ax + ay + az > 0))
-    throw std::runtime_error("triangulate: face " + std::to_string(face) + " has zero area");
+  if (!(ax + ay + az > 0)) return Clip::ZeroArea;
   // Drop the dominant axis; flip so the projected polygon is counter-clockwise.
   std::vector<P2> q(n);
   for (uint32_t i = 0; i < n; ++i) {
@@ -100,37 +111,49 @@ void ear_clip(const float* pos, const uint32_t* cv, uint32_t first, uint32_t n, 
       clipped = true;
       break;
     }
-    if (!clipped)
-      throw std::runtime_error("triangulate: face " + std::to_string(face) +
-                               " has no ear (self-intersecting or degenerate polygon)");
+    if (!clipped) {
+      out.resize(mark);
+      return Clip::NoEar;
+    }
   }
   uint32_t a = cur, b = next[a], c = next[b];
-  if (cross2(q[a], q[b], q[c]) <= eps)
-    throw std::runtime_error("triangulate: face " + std::to_string(face) +
-                             " ends in a degenerate triangle");
+  if (cross2(q[a], q[b], q[c]) <= eps) {
+    out.resize(mark);
+    return Clip::NoEar;
+  }
   out.push_back(first + a);
   out.push_back(first + b);
   out.push_back(first + c);
+  return Clip::Ok;
 }
 
 }  // namespace
 
-std::vector<uint32_t> triangulate(const float* positions, const uint32_t* corner_vert,
-                                  const uint32_t* face_start, size_t face_count) {
-  std::vector<uint32_t> out;
-  out.reserve(face_count * 6);
+Triangulation triangulate(const float* positions, const uint32_t* corner_vert, const uint32_t* face_start,
+                          size_t face_count) {
+  Triangulation t;
+  t.corners.reserve(face_count * 6);
   for (size_t f = 0; f < face_count; ++f) {
     uint32_t s = face_start[f], n = face_start[f + 1] - s;
     if (n < 3) continue;
-    if (n == 3) {
-      out.insert(out.end(), {s, s + 1, s + 2});
+    if (n <= 4 && zero_area(positions, corner_vert, s, n)) {
+      ++t.skipped_zero_area;  // ruling 67 covers every face size
+    } else if (n == 3) {
+      t.corners.insert(t.corners.end(), {s, s + 1, s + 2});
     } else if (n == 4) {
-      quad_split(positions, corner_vert, s, out);
+      quad_split(positions, corner_vert, s, t.corners);
     } else {
-      ear_clip(positions, corner_vert, s, n, f, out);
+      Clip c = ear_clip(positions, corner_vert, s, n, t.corners);
+      if (c == Clip::ZeroArea) {
+        ++t.skipped_zero_area;  // ruling 67: no triangles
+      } else if (c == Clip::NoEar) {
+        ++t.fan_fallback;  // ruling 67: fan from the first corner
+        for (uint32_t i = 1; i + 1 < n; ++i) t.corners.insert(t.corners.end(), {s, s + i, s + i + 1});
+      }
     }
+    t.face.resize(t.corners.size() / 3, static_cast<uint32_t>(f));
   }
-  return out;
+  return t;
 }
 
 }  // namespace astroray::host
