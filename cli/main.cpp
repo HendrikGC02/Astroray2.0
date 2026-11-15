@@ -9,26 +9,12 @@
 
 #include "abi_hash.h"
 #include "astroray/astroray.h"
+#include "cli.h"
 
 namespace {
 
-const char* status_name(ar_status s) {
-  switch (s) {
-    case AR_OK: return "AR_OK";
-    case AR_ERR_INVALID_ARGUMENT: return "AR_ERR_INVALID_ARGUMENT";
-    case AR_ERR_UNSUPPORTED: return "AR_ERR_UNSUPPORTED";
-    case AR_ERR_DEVICE: return "AR_ERR_DEVICE";
-    case AR_ERR_OUT_OF_MEMORY: return "AR_ERR_OUT_OF_MEMORY";
-    case AR_ERR_ABI_MISMATCH: return "AR_ERR_ABI_MISMATCH";
-    default: return "AR_ERR_INTERNAL";
-  }
-}
-
-std::string text(const uint8_t* p, size_t cap) {
-  size_t n = 0;
-  while (n < cap && p[n]) ++n;
-  return std::string(reinterpret_cast<const char*>(p), n);
-}
+using cli::status_name;
+using cli::text;
 
 int info_cmd(int argc, char** argv) {
   const char* create = nullptr;
@@ -112,14 +98,13 @@ int main(int argc, char** argv) {
     return 3;
   }
   if (argc < 2) {
-    fprintf(stderr, "usage: astroray_cli info [--create cpu|cuda[:i]] | render | bench | dump\n");
-    return 1;
+    fprintf(stderr, "usage: astroray_cli info [--create cpu|cuda[:i]] | render|dump <recording> -o <file.fits> | bench <recording>\n");
+    return cli::kExitUsage;
   }
   if (!strcmp(argv[1], "info")) return info_cmd(argc, argv);
-  if (!strcmp(argv[1], "render") || !strcmp(argv[1], "bench") || !strcmp(argv[1], "dump")) {
-    fprintf(stderr, "%s: not implemented until task 069\n", argv[1]);
-    return 2;
-  }
+  if (!strcmp(argv[1], "render")) return cli::render_cmd(argc, argv, false);
+  if (!strcmp(argv[1], "dump")) return cli::render_cmd(argc, argv, true);
+  if (!strcmp(argv[1], "bench")) return cli::bench_cmd(argc, argv);
   fprintf(stderr, "unknown command '%s'\n", argv[1]);
-  return 1;
+  return cli::kExitUsage;
 }

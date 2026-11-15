@@ -97,5 +97,28 @@ class TestHash(unittest.TestCase):
         self.assertNotEqual(abigen.abi_hash(edited), abigen.abi_hash(text))
 
 
+class TestReplayerGuards(unittest.TestCase):
+    """The emitted replayer applies each override at its call, marks it, and skips close and
+    destroy under keep_alive (Ruling 71)."""
+
+    def test_override_guards_and_close_skip(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            r = subprocess.run([sys.executable, "-I", ABIGEN, "--emit", HEADER, d], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            with open(os.path.join(d, "replayer.cpp"), encoding="utf-8") as f:
+                src = f.read()
+        for needle in ("_p && st.opt->device_kind != kReplayUnset", "st.res->applied |= kAppliedDevice",
+                       "_p && st.opt->seed != kReplayUnset", "st.res->applied |= kAppliedSeed",
+                       "_p && st.opt->samples != kReplayUnset", "st.res->applied |= kAppliedSamples",
+                       "_v.resolution_percent = 100", "st.res->applied |= kAppliedSizeSettings",
+                       "st.res->applied |= kAppliedSizeSession", "st.res->applied |= kAppliedSizeView",
+                       "st.res->size_refused = true"):
+            self.assertIn(needle, src)
+        for fn in ("ar_session_close", "ar_session_destroy", "ar_scene_destroy", "ar_context_destroy"):
+            at = src.index(f"{fn}(")  # the call itself
+            self.assertIn("if (st.opt->keep_alive) return AR_OK;", src[max(0, at - 200):at], fn)
+
+
 if __name__ == "__main__":
     unittest.main()
