@@ -19,3 +19,4 @@ Progress:
 - GAS build+compaction of a 1,002,528-triangle grid: 3.57 ms per 10^6 (spike B 2.9 ms, build only). Gate cases optix_accel/* pass run directly under the machine lock.
 - scene_view.h does not exist yet (039 pending): the device layout is DeviceMeshView/DeviceInstanceRecord in scene_upload.h; 039 should read those.
 - Needed outside Scope: CMakeLists.txt (2 lines calling deps.cmake); tools/lint.py rejects optix_*.h names and tests/gpu including device/cuda headers.
+- Review fixes: stable mesh index, stale-GAS errors, TLAS invalidation, readbacks; canary now also breaks the instance mask (tlas read-back cases).
