@@ -1,7 +1,7 @@
 # 072 Analytic scene harness and A5
 Goal: rendered images are not checked against physics -> a harness renders analytic scenes on CPU and GPU at 32x32 through the CLI, reads the fp64 moments from the film dump and compares each pixel with the closed-form truth using the analytic family's threshold, and A5 (view-filling emitter) passes on both devices.
 Read first: 0009 d16 (analytic test: |mean - truth| <= z SE + eps_sys, not constant, not black), d15 (family size, seeds), d11 (analytic scenes on CPU and GPU at 32x32 in gate), d20 (A5 truth); 0008 V1 (film normalisation); 0003 check 11 (an RGB white emitter of strength 1 gives display Y = 1).
-Scope: tools/analytic.py, scenes/lib/truths.py, scenes/a5_emitter/meta.toml, scenes/y_anchor/{build.py,meta.toml}, tools/check.ps1 (gate step), tests/abi/test_analytic_harness.py.
+Scope: tools/analytic.py, scenes/lib/truths.py, scenes/a5_emitter/meta.toml, scenes/y_anchor/{build.py,meta.toml}, tools/check.ps1 (gate step), tests/abi/test_analytic_harness.py; lead ruling: include/astroray/astroray.h, src/host/session/session.cpp, src/host/scene/edit.cpp (out-of-range refusal), docs/decisions/0007-appendix-abi.md (ar_settings row), scenes/lib/ar.py, scenes/a5_emitter/build.py (sampler mode, R60).
 Out of scope: A1 (073), A3 and A4 (075); oracle scenes (M2).
 Reference: Sidak 1967 (per-pixel threshold from the analytic family m in budgets.toml).
 Do:
