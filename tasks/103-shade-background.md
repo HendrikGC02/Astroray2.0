@@ -17,3 +17,4 @@ Depends on: 102, 067, 029.
 Size: S (about 200 lines); stop and report at 2x.
 Progress:
 - Started: world light is found by a reverse scan of the light table (no world index in KernelGlobals); registering the stage in CpuDevice is outside Scope.
+- Done: stage, CPU+GPU TUs, launch+budget rows (k_shade_background 40 regs, 0 stack, 0 spills), tests, canary. Production wiring of the CPU stage (CpuDevice::register_production_stages) is outside Scope: tests register it themselves.
