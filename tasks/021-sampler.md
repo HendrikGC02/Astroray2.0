@@ -12,12 +12,12 @@ Do:
 5. Tests (gate suite unless noted): f32 and f64 test objects produce bit-identical u over 10^6 (id, index, stream, d) draws written to a temp file and compared (fast suite, deterministic); the first 2^m samples of dims (0,1) for one pixel form a (0, m, 2)-net for m = 1..10 (fast); chi-squared uniformity of 16 cross-block dimension pairs through the harness (020); independent mode per-pixel lag-1 correlation within the harness bound of 0; check 14: chi-squared independence of (h, floor(4u_wavelength)) over 2^16 paths; seed 0 passes the same tests as seed 12345.
 Acceptance: `pwsh tools/check.ps1 fast` passes; `out/bin/astroray_tests_cpu.exe --tier=gate -tc="sampler/*"` passes; the reviewer can see the bitwise f32/f64 comparison count of 10^6 in the test output.
 Look at: none.
-Canary: tasks/021.canary.patch must turn red: astroray_tests_cpu "sampler/net property dims 0 1", "sampler/f32 f64 bitwise".
+Canary: tasks/021.canary.patch must turn red: astroray_tests_cpu "sampler/net property dims 0 1", "sampler/f32 f64 bitwise", "sampler/keys and dimension map".
 Budget: none.
 Depends on: 019, 020.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
-- sampler.h family: sobol.h (sample, sample_independent, draw), hash.h, dims.h, keys.h; hash(s, j) and the four-word key chaining are ours over MixBits (d23 names only MixBits); MixBits(0)=0 is avoided by a golden-ratio offset.
+- sampler.h family: sobol.h (sample, sample_independent, draw), hash.h, dims.h, keys.h; hash(s, j) and the four-word key chaining are MixBits-based choices of ours (Burley's hash_combine is undefined in the paper; d23 mandates only MixBits).
 - Tests pin values from a pure-Python model (direction numbers from scipy.stats.qmc.Sobol, i.e. new-joe-kuo-6.21201); the bitwise case also pins an FNV-1a checksum of the 10^6 draws and compares the f32 and f64 outputs via a temp file named by pid.
 - The bitwise case is registered in the fast and the gate suites so the gate acceptance command prints the 10^6 comparison count.
-- THIRD_PARTY.md has no column for licence text: the Joe and Kuo notice is in the sobol.h header. Burley and Jarzynski-Olano listings are recorded with spdx NOASSERTION (licence not found).
+- [[borrowed]] rows take an optional `notice` that thirdparty.py renders verbatim; the Joe and Kuo notice is there and in sobol.h. Burley and Jarzynski-Olano are spdx NONE (implemented from the papers).
