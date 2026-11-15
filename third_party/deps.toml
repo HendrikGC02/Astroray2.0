@@ -57,6 +57,16 @@ purpose = "test tooling on hosted CI (Blender's bundled NumPy is used locally)"
 record = "0009 d2"
 
 [[dep]]
+name = "bpy"
+version = "5.3.0"
+url = "https://files.pythonhosted.org/packages/61/4f/2864babf5d1535d18dfce52fef02774e6d6de901cbdfb2acc46c2ba69fc3/bpy-5.3.0-cp313-cp313-win_amd64.whl"
+sha256 = "9501b722e49b61ac9dcc8b2fded7a0de4e9dc05852d75abe10b76baf4cc5fb5e"
+spdx = "GPL-3.0-or-later"
+kind = "tool-python"
+purpose = "headless sync tests on hosted CI (installed with --no-deps; numpy is pinned here); never shipped"
+record = "0007 d16; 0009 d12"
+
+[[dep]]
 name = "ninja"
 version = "1.13.2"
 url = "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip"
