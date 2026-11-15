@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """0007 V5: keys follow Cycles' real-object-data rule (d18)."""
+import os
+import sys
 import unittest
 
 import bpy
 
-import support
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import support  # noqa: E402
 
 support.load_sync()
 from ar_sync import keys  # noqa: E402
@@ -84,4 +87,4 @@ class TestKeys(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    support.main()

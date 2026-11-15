@@ -54,3 +54,18 @@ def in_update(edit, fn):
     finally:
         bpy.app.handlers.depsgraph_update_post.remove(handler)
     return results[-1] if results else None
+
+
+def main():
+    """Entry for a test file run alone (land's canary, Blender, or plain python with the wheel).
+
+    Output goes to stdout because Invoke-ArBlender does not capture stderr; arguments are
+    those after Blender's '--', or sys.argv[1:] outside Blender.
+    """
+    import unittest
+
+    args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
+    prog = os.path.basename(sys.argv[0])
+    res = unittest.main(module="__main__", argv=[prog] + args, exit=False,
+                        testRunner=unittest.TextTestRunner(stream=sys.stdout, verbosity=2))
+    sys.exit(0 if res.result.wasSuccessful() else 1)

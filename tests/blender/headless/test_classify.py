@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """0007 V4, headless part: one case per row of the d20 table that the bpy wheel can produce."""
+import os
+import sys
 import unittest
 from types import SimpleNamespace
 
 import bpy
 
-import support
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import support  # noqa: E402
 
 support.load_sync()
 from ar_sync import cache as cache_mod  # noqa: E402
@@ -147,4 +150,4 @@ class TestClassify(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    support.main()
