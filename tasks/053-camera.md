@@ -16,3 +16,4 @@ Budget: none.
 Depends on: 019, 016, 032.
 Size: S (about 250 lines plus record text); stop and report at 2x.
 Progress:
+- 053: perspective camera done; canary tasks/053.canary.patch (cos^3 We, swapped film axes). Choices: pdf = d^2/cos; film y up; subject 0 camera key per call.
