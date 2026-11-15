@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Devices and contexts (0001 D2.1, D2.5, D2.8).
+#include <stdlib.h>
 #include <string.h>
 
 #include <exception>
@@ -12,15 +13,25 @@
 #include "host/fault.h"
 #include "host/log.h"
 #include "host/scene/scene.h"
+#include "recorder_hooks.h"
 
 struct ar_context_s : astroray::ContextState {
   std::string last_error;
-  std::string record_path;  // read by the recorder (task 033)
+  std::string record_path;  // the effective recording path, empty when off
+  ar_recorder* recorder = nullptr;  // owned; null when recording is off
   uint32_t kind = 0;
   uint32_t index = 0;
+  ~ar_context_s() { ar_rec_close(recorder, nullptr); }
 };
 
 namespace {
+
+// The build record the recording header carries (0001 D2.7).
+ar_build_record build_record() {
+  ar_build_record r;
+  ar_build_info(&r);
+  return r;
+}
 
 // Stores the message as the handle's last error (ctx may be null: no handle yet).
 ar_status fail_internal(ar_context ctx, const char* what) {
@@ -135,7 +146,25 @@ AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out)
     if (!ctx->log.open(desc->log_path, &err)) return AR_ERR_INVALID_ARGUMENT;
     ctx->kind = dev->kind;
     ctx->index = dev->index;
-    if (desc->record_path) ctx->record_path = desc->record_path;
+    // Ref: 0009 d19 (ASTRORAY_RECORD=<path>); the descriptor's path wins.
+    if (desc->record_path && desc->record_path[0]) {
+      ctx->record_path = desc->record_path;
+    } else {
+      char* env = nullptr;
+      size_t len = 0;
+      if (_dupenv_s(&env, &len, "ASTRORAY_RECORD") == 0 && env) {
+        ctx->record_path = env;
+        free(env);
+      }
+    }
+    if (!ctx->record_path.empty()) {
+      ctx->recorder = ar_rec_open(ctx->record_path.c_str(), build_record(), &err);
+      if (!ctx->recorder) {
+        ctx->log.line("ERROR", err);
+        return AR_ERR_INVALID_ARGUMENT;
+      }
+    }
+    AR_RECORD(ar_context_create, ctx->recorder, desc, out);
 
     // Every field of the build record, so a log alone identifies the binary (0001 D2.7).
     const astroray::BuildInfo& b = astroray::kBuildInfo;
@@ -146,6 +175,7 @@ AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out)
     ctx->log.line("INFO", std::string("device kind=") + (dev->kind == AR_DEVICE_CPU ? "cpu" : "cuda") +
                               " index=" + std::to_string(dev->index) + " name=" + dev->name);
     *out = ctx.release();
+    AR_RECORD_BIND(*out);
     return AR_OK;
   })
 }
@@ -153,6 +183,13 @@ AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out)
 AR_API ar_status ar_context_destroy(ar_context ctx) {
   AR_GUARD_NOCHECK(ctx, {
     if (!ctx) return AR_ERR_INVALID_ARGUMENT;
+    AR_RECORD(ar_context_destroy, ctx->recorder, ctx);
+    if (ctx->recorder) {  // flushed here so a write failure is reported in the log
+      std::string rerr;
+      ar_rec_close(ctx->recorder, &rerr);
+      ctx->recorder = nullptr;
+      if (!rerr.empty()) ctx->log.line("ERROR", "recording " + ctx->record_path + ": " + rerr);
+    }
     ctx->log.line("INFO", "context destroyed");
     delete ctx;
     return AR_OK;
@@ -175,6 +212,8 @@ AR_API ar_status ar_context_last_error(ar_context ctx, uint32_t capacity, uint8_
 }  // extern "C"
 
 astroray::ContextState& astroray::context_state(ar_context ctx) { return *ctx; }
+ar_recorder* ar_rec_of(ar_context ctx) { return ctx ? ctx->recorder : nullptr; }
+ar_recorder* ar_rec_of_state(astroray::ContextState& state) { return static_cast<ar_context_s&>(state).recorder; }
 void astroray::context_set_error(ar_context ctx, const std::string& text) { ctx->last_error = text; }
 void astroray::context_device(ar_context ctx, uint32_t* kind, uint32_t* index) {
   *kind = ctx->kind;

@@ -13,6 +13,7 @@
 #include "host/scene/edit.h"
 #include "host/scene/mesh.h"
 #include "host/device.h"
+#include "recorder_hooks.h"
 
 using astroray::host::Edit;
 using astroray::host::Scene;
@@ -94,9 +95,13 @@ ar_status staging_call(ar_edit h, F&& f) {
 
 }  // namespace
 
+ar_recorder* ar_rec_of(ar_scene h) { return h && h->scene ? ar_rec_of_state(h->scene->ctx()) : nullptr; }
+ar_recorder* ar_rec_of(ar_edit h) { return h && h->owner ? ar_rec_of(h->owner) : nullptr; }
+
 extern "C" {
 
 AR_API ar_status ar_scene_create(ar_context ctx, const ar_scene_desc* desc, ar_scene* out) {
+  AR_RECORD(ar_scene_create, ar_rec_of(ctx), ctx, desc, out);
   if (!ctx) return AR_ERR_INVALID_ARGUMENT;
   try {
     if (astroray::context_state(ctx).poisoned.load(std::memory_order_acquire))
@@ -121,6 +126,7 @@ AR_API ar_status ar_scene_create(ar_context ctx, const ar_scene_desc* desc, ar_s
     h->scene = std::make_unique<Scene>(astroray::context_state(ctx), std::move(cfg));
     h->scene->meshes = std::make_shared<astroray::host::MeshStore>();
     *out = h.release();
+    AR_RECORD_BIND(*out);
     return AR_OK;
   } catch (const std::exception& e) {
     return fail_ctx(ctx, AR_ERR_INTERNAL, e.what());
@@ -130,6 +136,7 @@ AR_API ar_status ar_scene_create(ar_context ctx, const ar_scene_desc* desc, ar_s
 }
 
 AR_API ar_status ar_scene_destroy(ar_scene h) {
+  AR_RECORD(ar_scene_destroy, ar_rec_of(h), h);
   if (!h) return AR_ERR_INVALID_ARGUMENT;
   try {
     delete h;  // the open edit first (aborted), then the scene (joins its threads)
@@ -147,6 +154,7 @@ AR_API ar_status ar_scene_last_error(ar_scene h, uint32_t capacity, uint8_t* tex
 }
 
 AR_API ar_status ar_scene_edit_begin(ar_scene h, ar_edit* out) {
+  AR_RECORD(ar_scene_edit_begin, ar_rec_of(h), h, out);
   if (!h) return AR_ERR_INVALID_ARGUMENT;
   try {
     if (!out) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_scene_edit_begin output is null");
@@ -157,6 +165,7 @@ AR_API ar_status ar_scene_edit_begin(ar_scene h, ar_edit* out) {
     h->edit->owner = h;
     h->edit->edit = std::move(e);
     *out = h->edit.get();
+    AR_RECORD_BIND(*out);
     return AR_OK;
   } catch (const std::exception& e) {
     return fail(h, AR_ERR_INTERNAL, e.what());
@@ -166,43 +175,57 @@ AR_API ar_status ar_scene_edit_begin(ar_scene h, ar_edit* out) {
 }
 
 AR_API ar_status ar_edit_reset(ar_edit h) {
+  AR_RECORD(ar_edit_reset, ar_rec_of(h), h);
   return edit_call(h, [](Edit& e) { return e.reset(); });
 }
 AR_API ar_status ar_edit_mesh_begin(ar_edit h, const ar_mesh_desc* desc, ar_mesh_buffers* out) {
-  return staging_call(h, [&](Edit& e) {
+  AR_RECORD(ar_edit_mesh_begin, ar_rec_of(h), h, desc, out);
+  ar_status st = staging_call(h, [&](Edit& e) {
     return astroray::host::mesh_begin(*h->owner->scene, e, desc, out);
   });
+  if (st == AR_OK) AR_RECORD_POST(ar_edit_mesh_begin, h, desc, out);
+  return st;
 }
 AR_API ar_status ar_edit_positions_begin(ar_edit h, ar_key key, ar_positions_buffers* out) {
-  return staging_call(h, [&](Edit& e) {
+  AR_RECORD(ar_edit_positions_begin, ar_rec_of(h), h, key, out);
+  ar_status st = staging_call(h, [&](Edit& e) {
     return astroray::host::positions_begin(*h->owner->scene, e, key, out);
   });
+  if (st == AR_OK) AR_RECORD_POST(ar_edit_positions_begin, h, key, out);
+  return st;
 }
 AR_API ar_status ar_edit_item_commit(ar_edit h, ar_key key) {
+  AR_RECORD(ar_edit_item_commit, ar_rec_of(h), h, key);
   return edit_call(h, [&](Edit& e) { return e.item_commit(key); });
 }
 AR_API ar_status ar_edit_remove(ar_edit h, uint32_t kind, ar_key key) {
+  AR_RECORD(ar_edit_remove, ar_rec_of(h), h, kind, key);
   return edit_call(h, [&](Edit& e) { return e.remove(kind, key); });
 }
 AR_API ar_status ar_edit_set_settings(ar_edit h, const ar_settings* s) {
+  AR_RECORD(ar_edit_set_settings, ar_rec_of(h), h, s);
   return edit_call(h, [&](Edit& e) { return e.set_settings(s); });
 }
 AR_API ar_status ar_edit_set_camera(ar_edit h, const ar_camera_desc* c) {
+  AR_RECORD(ar_edit_set_camera, ar_rec_of(h), h, c);
   return edit_call(h, [&](Edit& e) { return e.set_camera(c); });
 }
 AR_API ar_status ar_edit_set_astro(ar_edit h, ar_key key, const ar_astro_desc* a) {
+  AR_RECORD(ar_edit_set_astro, ar_rec_of(h), h, key, a);
   return edit_call(h, [&](Edit& e) { return e.set_astro(key, a); });
 }
 
 // A committed or aborted edit is destroyed, which frees the scene's one edit slot; its
 // handle must not be used again.
 AR_API ar_status ar_edit_commit(ar_edit h, uint64_t* generation) {
+  AR_RECORD(ar_edit_commit, ar_rec_of(h), h, generation);
   ar_scene owner = h ? h->owner : nullptr;
   ar_status st = edit_call(h, [&](Edit& e) { return e.commit(generation); });
   if (st == AR_OK) owner->edit.reset();
   return st;
 }
 AR_API ar_status ar_edit_abort(ar_edit h) {
+  AR_RECORD(ar_edit_abort, ar_rec_of(h), h);
   ar_scene owner = h ? h->owner : nullptr;
   ar_status st = edit_call(h, [](Edit& e) { return e.abort(); });
   if (st == AR_OK) owner->edit.reset();

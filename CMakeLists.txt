@@ -36,9 +36,10 @@ set(ASTRORAY_ABI_STAMP ${CMAKE_BINARY_DIR}/abigen.stamp)
 add_custom_command(
   OUTPUT ${ASTRORAY_ABI_STAMP}
   COMMAND ${ASTRORAY_PYTHON} -I ${CMAKE_SOURCE_DIR}/tools/abigen.py --check ${CMAKE_SOURCE_DIR}/include/astroray/astroray.h
+  COMMAND ${ASTRORAY_PYTHON} -I ${CMAKE_SOURCE_DIR}/tools/abigen.py --check-hooks ${CMAKE_SOURCE_DIR}/include/astroray/astroray.h ${CMAKE_SOURCE_DIR}/src/capi
   COMMAND ${CMAKE_COMMAND} -E touch ${ASTRORAY_ABI_STAMP}
-  DEPENDS ${CMAKE_SOURCE_DIR}/include/astroray/astroray.h ${CMAKE_SOURCE_DIR}/tools/abigen.py
-  COMMENT "abigen --check astroray.h"
+  DEPENDS ${CMAKE_SOURCE_DIR}/include/astroray/astroray.h ${CMAKE_SOURCE_DIR}/tools/abigen.py ${ASTRORAY_CAPI_SOURCES}
+  COMMENT "abigen --check astroray.h, --check-hooks src/capi"
   VERBATIM)
 add_custom_target(astroray_abigen ALL DEPENDS ${ASTRORAY_ABI_STAMP})
 
@@ -46,6 +47,8 @@ add_custom_target(astroray_abigen ALL DEPENDS ${ASTRORAY_ABI_STAMP})
 set(ASTRORAY_GEN_DIR ${CMAKE_BINARY_DIR}/gen)
 add_custom_command(
   OUTPUT ${ASTRORAY_GEN_DIR}/astroray_layout.c ${ASTRORAY_GEN_DIR}/abi_hash.h ${ASTRORAY_GEN_DIR}/_abi.py
+         ${ASTRORAY_GEN_DIR}/recorder_hooks.h ${ASTRORAY_GEN_DIR}/recorder.cpp ${ASTRORAY_GEN_DIR}/replayer.h
+         ${ASTRORAY_GEN_DIR}/replayer.cpp ${ASTRORAY_GEN_DIR}/arrec.py
   COMMAND ${ASTRORAY_PYTHON} -I ${CMAKE_SOURCE_DIR}/tools/abigen.py --emit ${CMAKE_SOURCE_DIR}/include/astroray/astroray.h ${ASTRORAY_GEN_DIR}
   DEPENDS ${CMAKE_SOURCE_DIR}/include/astroray/astroray.h ${CMAKE_SOURCE_DIR}/tools/abigen.py
   COMMENT "abigen --emit astroray.h"
@@ -150,6 +153,7 @@ target_link_libraries(etables PRIVATE astroray_kernel)
 # The one DLL Python loads: capi + engine + the generated layout table + the data and the
 # release kernel modules (RCDATA).
 add_library(astroray_core SHARED ${ASTRORAY_CAPI_SOURCES} ${ASTRORAY_GEN_DIR}/astroray_layout.c ${ASTRORAY_GEN_DIR}/abi_hash.h
+  ${ASTRORAY_GEN_DIR}/recorder.cpp
   $<TARGET_OBJECTS:astroray_core_resources>)
 astroray_target_warnings(astroray_core)
 # _Alignof needs C11 mode.
@@ -177,9 +181,13 @@ add_executable(astroray_tests_cpu tests/cpu/main.cpp ${ASTRORAY_TEST_CPU_SOURCES
 target_include_directories(astroray_tests_cpu PRIVATE ${CMAKE_SOURCE_DIR}/tests ${ASTRORAY_GEN_DIR})
 # The fault test drives the C API on a poisoned context, so the context translation
 # unit is linked into the test exe; both files see AR_API as local definitions.
-target_sources(astroray_tests_cpu PRIVATE ${CMAKE_SOURCE_DIR}/src/capi/context.cpp)
-set_source_files_properties(${CMAKE_SOURCE_DIR}/src/capi/context.cpp ${CMAKE_SOURCE_DIR}/tests/cpu/test_fault.cpp
+# context.cpp records through the generated recorder and writes the build record, so those link in too.
+target_sources(astroray_tests_cpu PRIVATE ${CMAKE_SOURCE_DIR}/src/capi/context.cpp ${CMAKE_SOURCE_DIR}/src/capi/identity.cpp
+  ${ASTRORAY_GEN_DIR}/recorder.cpp ${ASTRORAY_GEN_DIR}/astroray_layout.c)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/capi/context.cpp ${CMAKE_SOURCE_DIR}/src/capi/identity.cpp ${CMAKE_SOURCE_DIR}/tests/cpu/test_fault.cpp
   PROPERTIES COMPILE_DEFINITIONS AR_BUILDING_CORE)
+# The layout table is C: it must stay out of the C++ precompiled header.
+set_source_files_properties(${ASTRORAY_GEN_DIR}/astroray_layout.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 astroray_target_warnings(astroray_tests_cpu)
 target_include_directories(astroray_tests_cpu SYSTEM PRIVATE third_party/doctest)
 target_link_libraries(astroray_tests_cpu PRIVATE ${_ar_engine_libs})
@@ -189,6 +197,13 @@ target_precompile_headers(astroray_tests_cpu PRIVATE ${CMAKE_SOURCE_DIR}/tests/c
 # main.cpp defines DOCTEST_CONFIG_IMPLEMENT before the include, so it cannot take the PCH.
 set_source_files_properties(${CMAKE_SOURCE_DIR}/tests/cpu/main.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 add_dependencies(astroray_tests_cpu astroray_opsgen astroray_dump)
+
+# Test-only replay driver for tests/abi/test_recorder.py: the generated replayer over the public ABI.
+add_executable(replay_driver tests/abi/replay_driver.cpp ${ASTRORAY_GEN_DIR}/replayer.cpp)
+astroray_target_warnings(replay_driver)
+target_include_directories(replay_driver PRIVATE ${CMAKE_SOURCE_DIR}/include ${ASTRORAY_GEN_DIR})
+target_link_libraries(replay_driver PRIVATE astroray_core)
+add_dependencies(replay_driver astroray_core)
 
 # Out-of-process minidump writer (0001 D2.5, task 113); lands beside astroray_core.dll
 # and the test exe in out/bin, and in the extension stage's bin/.
