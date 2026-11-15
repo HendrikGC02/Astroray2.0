@@ -16,6 +16,6 @@ Acceptance: `pwsh tools/check.ps1 gate` passes with A1 and a1_world_half on both
 Look at: none.
 Canary: tasks/074.canary.patch must turn red: `tools/analytic.py --scene a1_world_half --device cpu` (the patch drops the MIS weight on world hits), astroray_tests_cpu "nee/late delivery lands in slot".
 Budget: declared shade_surface delta for NEE; one new device TU.
-Depends on: 073, 067, 068.
+Depends on: 073, 067, 068, 116.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
