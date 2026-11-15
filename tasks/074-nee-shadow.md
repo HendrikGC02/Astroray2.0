@@ -19,3 +19,4 @@ Budget: declared shade_surface delta for NEE; one new device TU.
 Depends on: 073, 067, 068, 116.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
+- 074 implementer: stopped before code; scope and design questions sent to the lead (hit-to-light index, out-of-scope files, test rigs).
