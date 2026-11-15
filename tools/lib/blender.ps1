@@ -49,3 +49,31 @@ function Invoke-ArBlender {
   $global:LASTEXITCODE = $code
   return @{ ExitCode = $code; Log = $log; Waited = $waited }
 }
+
+function Invoke-ArBlenderCommand {
+  # Runs `blender --command <args>` (no profile isolation needed; nothing is installed). Returns the exit code.
+  param([Parameter(Mandatory)][string[]]$Args, [int]$TimeoutS = 600)
+  $exe = Join-Path $env:ASTRORAY_BLENDER 'blender.exe'
+  if (-not $env:ASTRORAY_BLENDER -or -not (Test-Path $exe)) {
+    throw "blender.exe not found at '$exe'; set ASTRORAY_BLENDER to the Blender 5.3 install folder"
+  }
+  $null = Enter-ArMachineLock
+  $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+  $home_ = Join-Path $root ('out/blender_home/cmd-' + $PID)
+  $saved = @{}
+  try {
+    foreach ($k in 'config', 'scripts', 'extensions', 'datafiles') {
+      $v = 'BLENDER_USER_' + $k.ToUpper()
+      New-Item -ItemType Directory -Force (Join-Path $home_ $k) | Out-Null
+      $saved[$v] = [Environment]::GetEnvironmentVariable($v)
+      [Environment]::SetEnvironmentVariable($v, (Join-Path $home_ $k))
+    }
+    $p = Start-ArProcess -Name 'blender-cmd' -File $exe -ArgList (@('--command') + $Args)
+    if (-not $p.WaitForExit($TimeoutS * 1000)) { Stop-ArProcess -Id $p.Id; return -1 }
+    $p.WaitForExit()
+    return $p.ExitCode
+  } finally {
+    foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+    Exit-ArMachineLock
+  }
+}

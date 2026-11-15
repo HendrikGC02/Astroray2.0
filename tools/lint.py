@@ -56,6 +56,7 @@ class Ctx:
 
 
 def spdx(c):
+    zip_spdx(c)
     for p in c.files:
         base = os.path.basename(p)
         if not (p.endswith(SPDX_EXT) or base == "CMakeLists.txt"):
@@ -80,7 +81,40 @@ def spdx(c):
             c.find(p, i, "spdx", f"licence is {m.group(1)}, expected {want}")
 
 
+def built_zips(c):
+    """Yield (zip path, ZipFile) for extension zips under out/extension, when built."""
+    import glob
+    import zipfile
+
+    for z in sorted(glob.glob(os.path.join(c.root, "out", "extension", "*.zip"))):
+        with zipfile.ZipFile(z) as zf:
+            yield os.path.relpath(z, c.root).replace(os.sep, "/"), zf
+
+
+def zip_spdx(c):
+    # Ref: 0001 V4 (built zip part): files in the zip follow the same rule as the tree.
+    for zp, zf in built_zips(c):
+        for name in zf.namelist():
+            if not name.endswith(".py"):
+                continue
+            head = zf.read(name).decode("utf-8", "replace").splitlines()[:5]
+            m = next((SPDX_RE.search(ln) for ln in head if SPDX_RE.search(ln)), None)
+            want = "Apache-2.0" if name in ("_abi.py", "_ops.py") else "GPL-3.0-or-later"
+            if not m:
+                c.find(zp, 1, "spdx", f"{name}: missing SPDX-License-Identifier")
+            elif m.group(1) != want:
+                c.find(zp, 1, "spdx", f"{name}: licence is {m.group(1)}, expected {want}")
+
+
+def zip_nvidia(c):
+    pats = ["optix*", "nvsdk_ngx*", "nvngx*", "nvrtc*", "nvcuda*", "nvoptix*", "*.cubin", "*.ptx", "*.cu"]
+    for zp, zf in built_zips(c):
+        for name in zf.namelist():
+            if any(fnmatch.fnmatch(os.path.basename(name).lower(), q) for q in pats):
+                c.find(zp, 1, "nvidia", f"{name}: NVIDIA or loose kernel file in the built zip")
+
 def nvidia(c):
+    zip_nvidia(c)
     pats = ["optix*.h", "nvsdk_ngx*", "nvrtc*", "*.dll", "*.lib", "*.cubin", "*.ptx"]
     for p in c.files:
         base = os.path.basename(p).lower()

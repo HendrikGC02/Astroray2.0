@@ -135,3 +135,22 @@ astroray_target_warnings(astroray_tests_cpu)
 target_include_directories(astroray_tests_cpu SYSTEM PRIVATE third_party/doctest)
 target_link_libraries(astroray_tests_cpu PRIVATE ${_ar_engine_libs})
 add_dependencies(astroray_tests_cpu astroray_opsgen)
+
+# Installable Blender extension zip (0007 d45, 0001 D10.2): stage the addon, the
+# generated bindings and the DLL, then let Blender build the zip. Not in ALL: it
+# needs the Blender install (ASTRORAY_BLENDER). The zip name is Blender's own.
+set(ASTRORAY_EXT_STAGE ${CMAKE_SOURCE_DIR}/out/extension/astroray)
+set(ASTRORAY_EXT_ZIP ${CMAKE_SOURCE_DIR}/out/extension/astroray-${PROJECT_VERSION}-windows_x64.zip)
+file(GLOB_RECURSE _ar_ext_src ${CMAKE_SOURCE_DIR}/blender/astroray/*)
+add_custom_command(
+  OUTPUT ${ASTRORAY_EXT_ZIP}
+  COMMAND ${CMAKE_COMMAND} -E rm -rf ${ASTRORAY_EXT_STAGE}
+  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/blender/astroray ${ASTRORAY_EXT_STAGE}
+  COMMAND ${CMAKE_COMMAND} -E copy ${ASTRORAY_GEN_DIR}/_abi.py ${ASTRORAY_GEN_DIR}/_ops.py ${ASTRORAY_EXT_STAGE}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${ASTRORAY_EXT_STAGE}/bin
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:astroray_core> ${ASTRORAY_EXT_STAGE}/bin/astroray_core.dll
+  COMMAND pwsh -NoProfile -Command ". '${CMAKE_SOURCE_DIR}/tools/lib/blender.ps1'; exit (Invoke-ArBlenderCommand -Args 'extension','build','--split-platforms','--source-dir','${ASTRORAY_EXT_STAGE}','--output-dir','${CMAKE_SOURCE_DIR}/out/extension')"
+  DEPENDS astroray_core astroray_opsgen ${_ar_ext_src} ${ASTRORAY_GEN_DIR}/_abi.py
+  COMMENT "astroray_extension: blender extension build"
+  VERBATIM)
+add_custom_target(astroray_extension DEPENDS ${ASTRORAY_EXT_ZIP})
