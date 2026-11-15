@@ -2,9 +2,10 @@
 """`scene.astroray`: only the settings the M1a sync uses (0007 d37).
 
 Ref: docs/decisions/0007-blender-integration.md decision 37 (native properties are read directly,
-never mirrored: the pixel filter width is `scene.render.filter_size`, film transparency and the
-border are `scene.render`); Cycles' defaults (samples 4096, preview 1024, 12 bounces, Blackman-
-Harris filter) for the names and values that mean the same here.
+never mirrored; `render.filter_size` is EEVEE's filter, so the Astroray filter has its own width);
+Cycles intern/cycles/blender/addon/properties.py (Apache-2.0, read 2026-11-16) for the names and
+defaults that mean the same here: samples 4096, preview_samples 1024, seed 0, max_bounces 12,
+pixel_filter_type BLACKMAN_HARRIS, filter_width 1.5, film_exposure 1.0.
 """
 import bpy
 
@@ -34,6 +35,9 @@ class AstrorayScene(bpy.types.PropertyGroup):
     pixel_filter_type: bpy.props.EnumProperty(
         name="Pixel Filter", description="Reconstruction filter of the film", items=FILTER_ITEMS,
         default="BLACKMAN_HARRIS")
+    pixel_filter_width: bpy.props.FloatProperty(
+        name="Filter Width", description="Width of the pixel filter in pixels", default=1.5,
+        min=0.01, max=10.0)
     film_exposure: bpy.props.FloatProperty(
         name="Film Exposure", description="Linear multiplier applied to the display channels",
         default=1.0, min=0.0, soft_max=10.0)

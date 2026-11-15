@@ -92,10 +92,14 @@ class TestLights(unittest.TestCase):
         (_, f), = build()[0]
         self.assertAlmostEqual(f["power"], 40.0, places=4)  # exp2(exposure), as Cycles
         support.reset_scene()
-        ob = lamp("POINT", use_temperature=True, temperature=3000.0, color=(1, 1, 1), use_soft_falloff=False)
+        base = (1.0, 0.5, 0.25)
+        ob = lamp("POINT", use_temperature=True, temperature=3000.0, color=base, use_soft_falloff=False)
         (_, f), = build()[0]
-        for got, want in zip(f["color"], ob.data.temperature_color):
-            self.assertAlmostEqual(got, want, places=6)
+        for got, c, t in zip(f["color"], base, ob.data.temperature_color):
+            self.assertAlmostEqual(got, c * t, places=6)  # multiplied into the colour, not replacing it
+        ob.data.use_temperature = False  # the temperature is ignored when the toggle is off
+        (_, f), = build()[0]
+        self.assertEqual(f["color"], base)
 
     def test_soft_falloff_is_reported(self):
         lamp("POINT", name="Soft", shadow_soft_size=0.25, use_soft_falloff=True)
@@ -177,13 +181,16 @@ class TestSettings(unittest.TestCase):
         a, r = self.scene.astroray, self.scene.render
         a.samples, a.viewport_samples, a.seed, a.use_animated_seed = 32, 8, 5, True
         a.max_bounces, a.min_bounces, a.pixel_filter_type, a.film_exposure = 6, 2, "GAUSSIAN", 2.0
-        r.filter_size, r.resolution_x, r.resolution_y, r.resolution_percentage = 2.5, 64, 48, 50
-        f, lines = settings.build(self.scene, FakeColorspace("lin_rec2020_scene"), passes=("Position",))
+        r.resolution_x, r.resolution_y, r.resolution_percentage = 64, 48, 50
+        a.pixel_filter_width = 2.5
+        f, lines = settings.build(self.scene, FakeColorspace("lin_rec2020_scene"), passes=("Position",),
+                                  lightgroups={"a": 1, "b": 2})
         self.assertEqual(lines, [])
         want = {"samples": 32, "viewport_samples": 8, "seed": 5, "animated_seed": 1, "max_bounces": 6,
                 "min_bounces": 2, "pixel_filter": 1, "pixel_filter_width": 2.5, "film_exposure": 2.0,
                 "working_space": 2, "output_width": 64, "output_height": 48, "resolution_percent": 50,
-                "passes": ("Position",)}
+                "passes": ("Position",), "light_group_count": 2, "caustics_reflective": 1,
+                "caustics_refractive": 1, "filter_glossy": 1.0, "film_transparent": 0}
         for k, v in want.items():
             self.assertEqual(f[k], v, k)
 

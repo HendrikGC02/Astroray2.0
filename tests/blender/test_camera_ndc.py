@@ -59,19 +59,19 @@ def ok(st, what):
 class Rendered:
     """One CPU session over the current Blender scene, converged at one sample per pixel."""
 
-    def __init__(self, scene, cam_fields, width, height):
+    def __init__(self, scene, cam_fields, width, height, origin=(0.0, 0.0, 0.0)):
         self.lib = ctypes.CDLL(DLL)
         ABI.check(self.lib)
         ABI.bind(self.lib)
         self.ctx, self.scene_h, self.session = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
         self._tmp = tempfile.TemporaryDirectory()
         try:
-            self._build(scene, cam_fields, width, height)
+            self._build(scene, cam_fields, width, height, origin)
         except BaseException:
             self.close()
             raise
 
-    def _build(self, scene, cam_fields, w, h):
+    def _build(self, scene, cam_fields, w, h, origin):
         lib, a = self.lib, ABI
         ok(lib.ar_context_create(ctypes.byref(a.ar_context_desc(a.AR_DEVICE_CPU, 0, os.path.join(self._tmp.name, 'context.log').encode(), None)),
                                  ctypes.byref(self.ctx)), "ar_context_create")
@@ -79,7 +79,7 @@ class Rendered:
                                ctypes.byref(self.scene_h)), "ar_scene_create")
         dg = support.depsgraph()
         km = keys.KeyMap()
-        table = instances.build(dg, km)
+        table = instances.build(dg, km, origin)
         scene.astroray.samples = scene.astroray.viewport_samples = 1
         scene.astroray.pixel_filter_type = "BOX"
         fields, _ = settings.build(scene, bpy.data.colorspace, passes=("Position",))
@@ -132,12 +132,13 @@ class Rendered:
         self._tmp.cleanup()
 
 
-def make_scene(width, height, **cam_props):
+def make_scene(width, height, aspect=(1.0, 1.0), **cam_props):
     """A 16 m plane at z = 0 and a tilted camera 5 m above it that sees only the plane. The plane is
     large enough to fill every frustum here and no larger: float32 intersection error grows with the
     triangle's extent, and the 1e-5 NDC tolerance is a camera tolerance, not a 100 m one."""
     scene = support.reset_scene()
     scene.render.resolution_x, scene.render.resolution_y, scene.render.resolution_percentage = width, height, 100
+    scene.render.pixel_aspect_x, scene.render.pixel_aspect_y = aspect
     me = bpy.data.meshes.new("Plane")
     me.from_pydata([(-8, -8, 0), (8, -8, 0), (8, 8, 0), (-8, 8, 0)], [], [(0, 1, 2, 3)])
     ob = bpy.data.objects.new("Plane", me)
@@ -170,18 +171,19 @@ class TestCameraNdc(unittest.TestCase):
     def tearDownClass(cls):
         PROPS.unregister()
 
-    def check(self, w, h, project=None, make=None, **cam_props):
-        scene, co = make_scene(w, h, **cam_props)
+    def check(self, w, h, project=None, make=None, aspect=(1.0, 1.0), origin=(0.0, 0.0, 0.0), **cam_props):
+        scene, co = make_scene(w, h, aspect, **cam_props)
         if make is None:
-            fields, _ = camera.final(support.depsgraph(), scene)
+            fields, _ = camera.final(support.depsgraph(), scene, origin)
         else:
             fields = make(scene, co)
-        r = Rendered(scene, fields, w, h)
+        r = Rendered(scene, fields, w, h, origin)
         try:
             pos = r.position()
         finally:
             r.close()
         self.assertTrue(np.isfinite(pos).all(), "a pixel missed the plane")
+        pos = pos + np.asarray(origin, np.float32)  # the engine works relative to the scene origin
         if project is None:
             def project(p):
                 v = world_to_camera_view(scene, co, Vector(p))
@@ -189,7 +191,7 @@ class TestCameraNdc(unittest.TestCase):
         got = np.array([project(p) for p in pos.reshape(-1, 3)]).reshape(h, w, 2)
         nx, ny = pixel_centres(w, h)
         diff = max(np.abs(got[..., 0] - nx).max(), np.abs(got[..., 1] - ny).max())
-        print(f"NDC max difference {diff:.3e} ({w}x{h}, {cam_props})")
+        print(f"NDC max difference {diff:.3e} ({w}x{h}, aspect {aspect}, origin {origin}, {cam_props})")
         self.assertLessEqual(diff, TOLERANCE)
 
     def test_persp(self):
@@ -203,6 +205,18 @@ class TestCameraNdc(unittest.TestCase):
 
     def test_sensor_fit_vertical(self):
         self.check(64, 48, sensor_fit="VERTICAL", sensor_height=20.0, lens=35.0)
+
+    def test_pixel_aspect(self):
+        self.check(64, 48, aspect=(2.0, 1.0))
+        self.check(64, 48, aspect=(1.0, 2.0))
+
+    def test_scene_origin_is_folded_into_the_camera(self):
+        origin = (3.0, -2.0, 1.0)
+        self.check(64, 48, origin=origin, shift_x=0.1)
+        scene, co = make_scene(64, 48)
+        f, _ = camera.final(support.depsgraph(), scene, origin)
+        np.testing.assert_allclose([f["cam_to_world"][i] for i in (3, 7, 11)],
+                                   np.asarray(co.location) - origin, atol=1e-6)
 
     def test_portrait(self):
         self.check(48, 64)
@@ -272,6 +286,9 @@ class TestCameraNdc(unittest.TestCase):
         moved = view.copy()
         moved[0, 3] = 1.0
         self.assertNotEqual(h0, camera.view_hash(rv(moved, win), 64, 48, True))
+        zoomed = win.copy()
+        zoomed[:2, :] *= 1.5  # zoom or lens change
+        self.assertNotEqual(h0, camera.view_hash(rv(view, zoomed), 64, 48, True))
         self.assertNotEqual(h0, camera.view_hash(rv(view, win), 65, 48, True))
         self.assertNotEqual(h0, camera.view_hash(rv(view, win), 64, 48, False))
         self.assertNotEqual(h0, camera.view_hash(rv(view, win), 64, 48, True, (0, 0, 0.5, 0.5)))
