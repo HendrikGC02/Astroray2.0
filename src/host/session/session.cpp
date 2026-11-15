@@ -11,8 +11,6 @@
 
 #include "host/data_resource.h"
 #include "host/thread.h"
-#include "kernel/film/resolve.h"
-#include "kernel/sample/sobol.h"
 
 namespace astroray::host {
 namespace {
@@ -287,7 +285,7 @@ void Session::bind_globals() {
   kg.session.samples_done = uint32_t(samples_done);
   kg.session.samples_per_pass = kSamplesPerPass;
   kg.session.pass_index = pass_index_;
-  kg.session.sampler_mode = ar::SAMPLER_SOBOL;
+  // sampler_mode stays 0, SAMPLER_SOBOL (kernel/sample/sobol.h needs the kernel include root).
   if (const auto s = scene_.settings()) {
     kg.session.seed = s->s.seed;
     // PathStateSoA::bounces order: total, diffuse, glossy, transmission, volume, transparent.
