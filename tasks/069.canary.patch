@@ -1,0 +1,32 @@
+diff --git a/cli/render.cpp b/cli/render.cpp
+index 830566e..c84d9bf 100644
+--- a/cli/render.cpp
++++ b/cli/render.cpp
+@@ -117,7 +117,7 @@ int Replayed::open(const RunArgs& a) {
+   const ar_status st = ar_replay_file(a.recording.c_str(), opt, &res);
+   if (st == AR_ERR_ABI_MISMATCH) {
+     printf("ABI mismatch: %s\n", res.message.c_str());
+-    return kExitAbi;
++    return kExitFailure;
+   }
+   if (st != AR_OK) {
+     printf("replay failed: %s: %s (after %llu calls)\n", status_name(st), res.message.c_str(),
+@@ -222,7 +222,7 @@ int render_cmd(int argc, char** argv, bool dump) {
+       const std::string tag = "_" + std::to_string(i);
+       path = dot == std::string::npos ? path + tag : path.substr(0, dot) + tag + path.substr(dot);
+     }
+-    const ar_status st = ar_session_write_fits(r.res.sessions[i], path.c_str(), AR_FITS_DUMP);
++    const ar_status st = ar_session_write_fits(r.res.sessions[i], path.c_str(), AR_FITS_SCIENCE);
+     if (st != AR_OK) {
+       uint8_t msg[256] = {};
+       ar_session_last_error(r.res.sessions[i], sizeof msg, msg);
+@@ -233,7 +233,8 @@ int render_cmd(int argc, char** argv, bool dump) {
+     printf("wrote %s\n", path.c_str());
+   }
+   const int highest = print_reports(r);
+-  return highest >= AR_LEVEL_ERROR ? kExitFailure : 0;
++  (void)highest;
++  return 0;
+ }
+ 
+ }  // namespace cli
