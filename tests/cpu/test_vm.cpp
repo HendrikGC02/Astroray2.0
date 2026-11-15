@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "../../src/host/data_resource.h"
+#include "material/constant_block.h"
 #include "sample/sobol.h"
 #include "vm/interp.h"
 
@@ -377,6 +378,10 @@ TEST_CASE("vm/store slot and emit values") {
   CHECK(uint32_t(ar::RecordSlot::geometry_normal) == 33u);
   CHECK(uint32_t(ar::RecordSlot::geometry_coat_tangent) == 36u);
   CHECK(uint32_t(ar::RecordSlot::COUNT_) == 37u);
+  // The semantic each colour slot lifts with is item 10's table (the constant block's).
+#define AR_X(n, s, sem) CHECK(ar::SpectrumSemantic::sem == ar::kSlotSemantic[int(ar::Slot::s)]);
+  AR_RECORD_SPECTRAL(AR_X)
+#undef AR_X
 
   Rig g;
   g.ctx.lambda_t = ar::Lambda{{450.0f, 520.0f, 590.0f, 660.0f}};

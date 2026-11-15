@@ -9,9 +9,9 @@
 //   frame vectors     f32x3, three registers
 // The record's field order is item 2(c)'s table; scalar slots are numbered in that order.
 // Ref: docs/decisions/0005-material-model.md items 2(c), 10, 31; material/constant_block.h
-// (kSlotSemantic).
+// (Slot, kSlotSemantic).
 #pragma once
-#include "../../material/constant_block.h"
+#include "../../material/spectrum_ref.h"
 #include "common.h"
 #include "rgb_lift.h"
 
@@ -23,12 +23,10 @@
   X(subsurface_scatter_anisotropy) X(fuzz_weight) X(fuzz_roughness) X(coat_weight) X(coat_roughness)          \
   X(coat_roughness_anisotropy) X(coat_ior) X(coat_darkening) X(thin_film_weight) X(thin_film_thickness)       \
   X(thin_film_ior) X(geometry_opacity) X(closure_weight)
-// The spectral fields and the constant-block slot whose semantic each uses.
-#define AR_RECORD_SPECTRAL(X)                                                                                 \
-  X(base_color, BASE_COLOR) X(specular_color, SPECULAR_COLOR) X(specular_ior, SPECULAR_IOR)                   \
-  X(transmission_color, TRANSMISSION_COLOR) X(transmission_scatter, TRANSMISSION_SCATTER)                     \
-  X(subsurface_color, SUBSURFACE_COLOR) X(subsurface_radius_scale, SUBSURFACE_RADIUS_SCALE)                   \
-  X(fuzz_color, FUZZ_COLOR) X(coat_color, COAT_COLOR)
+// The spectral fields, the constant-block Slot of each and its semantic (item 10's table). The
+// semantic is written out here because kSlotSemantic is a host-only constexpr array; the
+// vm/store slot test compares every row with it.
+#define AR_RECORD_SPECTRAL(X)                                                                            X(base_color, BASE_COLOR, REFLECTANCE) X(specular_color, SPECULAR_COLOR, REFLECTANCE)                 X(specular_ior, SPECULAR_IOR, IOR) X(transmission_color, TRANSMISSION_COLOR, REFLECTANCE)             X(transmission_scatter, TRANSMISSION_SCATTER, REFLECTANCE) X(subsurface_color, SUBSURFACE_COLOR, REFLECTANCE)   X(subsurface_radius_scale, SUBSURFACE_RADIUS_SCALE, UNBOUNDED) X(fuzz_color, FUZZ_COLOR, REFLECTANCE)   X(coat_color, COAT_COLOR, REFLECTANCE)
 #define AR_RECORD_FRAMES(X) X(geometry_normal) X(geometry_coat_normal) X(geometry_tangent) X(geometry_coat_tangent)
 
 AR_NS_BEGIN
@@ -37,7 +35,7 @@ enum class RecordSlot : uint32_t {
 #define AR_X(n) n,
   AR_RECORD_SCALARS(AR_X)
 #undef AR_X
-#define AR_X(n, s) n,
+#define AR_X(n, s, sem) n,
   AR_RECORD_SPECTRAL(AR_X)
 #undef AR_X
 #define AR_X(n) n,
@@ -91,8 +89,8 @@ AR_FN VmStatus op_store_slot(OpenPBRParams* rec, const SceneTables& t, const Lam
     return VmStatus::OK;
     AR_RECORD_FRAMES(AR_X)
 #undef AR_X
-#define AR_X(n, s) \
-  case RecordSlot::n: return store_spectral(&rec->n, kSlotSemantic[int(Slot::s)], spec_src, t, lam, src, avail);
+#define AR_X(n, s, sem) \
+  case RecordSlot::n: return store_spectral(&rec->n, SpectrumSemantic::sem, spec_src, t, lam, src, avail);
     AR_RECORD_SPECTRAL(AR_X)
 #undef AR_X
     default: return VmStatus::BAD_OPERAND;
