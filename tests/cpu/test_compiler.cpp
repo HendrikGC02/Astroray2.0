@@ -15,6 +15,7 @@
 
 #include "../../src/host/data_resource.h"
 #include "../../src/host/material/compiler.h"
+#include "../../src/host/material/regalloc.h"
 #include "material/constant_block.h"
 #include "vm/interp.h"
 
@@ -164,7 +165,11 @@ TEST_CASE("compiler/constant surface folds to length 0") {
   CHECK((r.clamp_flags & ar::kRgbAboveOneClamped) != 0u);
   CHECK(r.block.geometry_tangent[1] == 1.0f);
   CHECK(r.block.emission_luminance == 3.0f);
+  ar::SpectrumRef want_e;
+  REQUIRE(ar::make_rgb_ref(fixture().table, ar::Rgb{{1.0f, 0.5f, 0.25f}}, ar::SpectrumSemantic::ILLUMINANT, &want_e, &fl));
   CHECK(r.block.emission_color.kind == uint8_t(ar::SpectrumKind::RGB));
+  CHECK(r.block.emission_color.semantic == uint8_t(ar::SpectrumSemantic::ILLUMINANT));
+  for (int k = 0; k < 4; ++k) CHECK(r.block.emission_color.p[k] == want_e.p[k]);
   CHECK(r.block.base_weight == 1.0f);  // untouched slots keep the OpenPBR default
 }
 
@@ -226,8 +231,41 @@ TEST_CASE("compiler/register overflow rejected") {
   g.store(sum, ar::RecordSlot::geometry_normal);
   const CompileResult r = compile(g);
   CHECK_FALSE(r.ok);
-  CHECK(r.error.find("needs ") == 0);
+  CHECK(r.error.find("needs 45 registers") == 0);
   CHECK(r.error.find(" registers, 32 available") != std::string::npos);
+}
+
+TEST_CASE("compiler/run-time colour into specular_ior and negative strength rejected") {
+  GB g;
+  const int uv = g.add(Op::LOAD_CTX_UV, {}, {0});
+  const int tex = g.add(Op::TEX_IMAGE, {}, {0});
+  g.link(uv, tex, 0);
+  g.store(tex, ar::RecordSlot::specular_ior);
+  CompileResult r = compile(g);
+  CHECK_FALSE(r.ok);
+  CHECK(r.error.find("specular_ior takes a scalar") != std::string::npos);
+  GB h;
+  const int lift = h.add(Op::RGB_LIFT, {}, {0});
+  h.link(h.add(Op::LOAD_CTX_P), lift, 0);
+  h.store(lift, ar::RecordSlot::specular_ior);
+  CHECK_FALSE(compile(h).ok);
+  GB e;
+  const int emit = e.add(Op::EMIT_LE);
+  e.link(e.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), emit, 0);
+  e.link(e.add(Op::CONST_F32, {-1.0f}), emit, 1);
+  r = compile(e);
+  CHECK_FALSE(r.ok);
+  CHECK(r.error.find("negative") != std::string::npos);
+}
+
+TEST_CASE("compiler/registers are reused only after the last read") {
+  // B starts where A ends (A is still read by B's instruction): `<=` would give both register 0.
+  const std::vector<astroray::host::LiveRange> rr = {{0, 2, 1}, {2, 3, 1}, {4, 5, 1}};
+  std::vector<int> reg;
+  std::string err;
+  REQUIRE(astroray::host::allocate_registers(rr, &reg, &err));
+  CHECK(reg[0] != reg[1]);
+  CHECK(reg[2] == reg[0]);  // A is dead by position 4 and its register is free again
 }
 
 TEST_CASE("compiler/type errors and cycles are returned") {

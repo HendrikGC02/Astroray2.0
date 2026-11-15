@@ -53,6 +53,7 @@ bool store_accepts(uint32_t slot, VType t) {
   const uint32_t first_spec = uint32_t(ar::RecordSlot::base_color);
   const uint32_t first_frame = uint32_t(ar::RecordSlot::geometry_normal);
   if (slot < first_spec) return t == VType::F32;
+  if (slot == uint32_t(ar::RecordSlot::specular_ior)) return t == VType::F32;  // IOR takes no RGB or spectrum (0005 item 10)
   if (slot < first_frame) return t == VType::F32X3 || t == VType::SPEC || t == VType::F32;
   return t == VType::F32X3;
 }
@@ -133,7 +134,10 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
     if (l.to_socket >= uint32_t(to.n_inputs)) return *err = at(l.to_node, "has no such input socket"), false;
     if (to.input[l.to_socket] >= 0) return *err = at(l.to_node, "input linked twice"), false;
     if (to.op == Op::STORE_SLOT) {
-      if (!store_accepts(uint32_t(g->i32[to.i32_first]), from.out))
+      const uint32_t slot = uint32_t(g->i32[to.i32_first]);
+      if (slot == uint32_t(ar::RecordSlot::specular_ior) && from.out != VType::F32)
+        return *err = at(l.to_node, "specular_ior takes a scalar, not a colour (0005 item 10)"), false;
+      if (!store_accepts(slot, from.out))
         return *err = at(l.to_node, "type error: this value cannot be stored in that slot"), false;
     } else if (from.out != input_type(to.op, int(l.to_socket))) {
       return *err = at(l.to_node, "type error: input socket wants another type"), false;

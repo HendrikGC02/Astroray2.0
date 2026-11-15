@@ -257,6 +257,8 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
         is_root[size_t(i)] = 1;
       }
     } else if (nd.op == Op::EMIT_LE) {
+      if (w.isc[size_t(nd.input[1])] && !(w.cv[size_t(nd.input[1])][0] >= 0.0f))
+        return res.error = "EMIT_LE strength must not be negative", res;
       // A lone constant emission goes to the block; several accumulate in the program.
       if (emit_count == 1 && w.isc[size_t(nd.input[0])] && w.isc[size_t(nd.input[1])]) {
         const Vec3& c = w.cv[size_t(nd.input[0])];

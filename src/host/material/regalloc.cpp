@@ -41,8 +41,11 @@ bool allocate_registers(const std::vector<LiveRange>& ranges, std::vector<int>* 
         break;
       }
     if (found < 0) {
-      *err = "needs " + std::to_string(std::max(peak, kRegisterCount + 1)) + " registers, " +
-             std::to_string(kRegisterCount) + " available";
+      if (peak > kRegisterCount)
+        *err = "needs " + std::to_string(peak) + " registers, " + std::to_string(kRegisterCount) + " available";
+      else
+        *err = "could not place " + std::to_string(r.width) + " wide value; peak " + std::to_string(peak) + " of " +
+               std::to_string(kRegisterCount);
       return false;
     }
     (*reg)[size_t(i)] = found;
