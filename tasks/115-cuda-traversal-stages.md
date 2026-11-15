@@ -15,3 +15,4 @@ Budget: host code; pipeline creation time per session printed.
 Depends on: 071, 114, 041.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
+- 2026-11-16: blocked before code: no OptiX cache_dir reaches the scene (ar_scene_desc.cache_dir is dropped by ar_scene_create) and TraversalPipeline requires one; asked the lead.
