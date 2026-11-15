@@ -1,7 +1,7 @@
 # 101 Camera paths in the session: active list, refill and resolve wiring
 Goal: generate_camera and film_build_active exist but nothing calls them, and the resolve still treats active pixel j as pixel j -> each pass builds the active-pixel list, the scheduler's refill launches the real generate_camera, the resolve reads the list, and gate-build test hooks reach the kernels through SessionUniforms.
 Read first: 0008 d3 (active list, slot j*k + m) as written by task 054; 0002 D7 step 4 (refill), D8 (per-pass kernels); src/host/scheduler.h; src/host/session/session.h; src/kernel/film/resolve.h.
-Scope: src/host/session/session.cpp, src/host/scheduler.cpp, src/kernel/film/resolve.h, src/host/session/test_hooks.{h,cpp}, src/kernel/kernel_globals.h (SessionUniforms), tests/cpu/test_camera_wiring.cpp, tests/gpu/test_film_resolve_gpu.cpp.
+Scope: src/host/session/session.cpp, src/host/scheduler.cpp, src/kernel/film/resolve.h, src/host/session/test_hooks.{h,cpp}, src/kernel/kernel_globals.h (SessionUniforms), tests/cpu/test_camera_wiring.cpp, tests/gpu/test_film_resolve_gpu.cpp; added by lead ruling: src/host/session/session.h (per-session list, camera, filter, hook members), src/host/device.h and src/device/cuda/cuda_device.cpp (KernelId::FILM_BUILD_ACTIVE and its name), src/device/cpu/cpu_device.cpp (registration lines and the generate_camera adapter), src/kernel/film/present.h and src/kernel/film/film_write.h (j to pixel through the list); test fixtures tests/cpu/test_film_resolve.cpp, test_film_stats.cpp, test_present.cpp, tests/gpu/test_present_gpu.cpp (set kg.active_pixels only).
 Out of scope: shading stages (103, 071); CUDA upload of scene tables (102); adaptive sampling and compaction (M4).
 Reference: none.
 Do:

@@ -10,6 +10,8 @@
 
 #include "kernel/film/present.h"
 #include "kernel/film/resolve.h"
+#include "kernel/stages/film_build_active.h"
+#include "kernel/stages/generate_camera.h"
 #include "kernel/stages/queue_build.h"
 #include "kernel/stages/route_hit.h"
 #include "kernel/stages/sort.h"
@@ -40,6 +42,13 @@ const char* tiled_grid(const ar::KernelGlobals& kg, KernelId kernel, uint32_t* g
   }
 }
 
+// The scheduler's refill launch of generate_camera: it is no Stage, so the device runs it as a
+// kernel over the TERMINATED entry the scheduler rewrote for this launch (scheduler.h).
+// Ref: docs/decisions/0002-kernel-architecture.md D7 step 4, D8.
+void cpu_generate_camera_refill(const ar::KernelGlobals& kg, uint32_t first, uint32_t last) {
+  cpu_stage_generate_camera(kg, kg.step_table->stage[static_cast<uint32_t>(ar::Stage::TERMINATED)], first, last);
+}
+
 }  // namespace
 
 void CpuDevice::register_scheduler_kernels() {
@@ -52,6 +61,8 @@ void CpuDevice::register_scheduler_kernels() {
   register_kernel(KernelId::FILM_RESOLVE, &cpu_film_resolve);
   register_kernel(KernelId::FILM_PRESENT, &cpu_film_present);
   register_kernel(KernelId::FILM_HEATMAP, &cpu_film_heatmap);
+  // Every pass starts by writing the active-pixel list the resolve and present kernels read.
+  register_kernel(KernelId::FILM_BUILD_ACTIVE, &cpu_film_build_active);
 }
 
 void CpuDevice::register_intersect_stages() {
@@ -165,7 +176,11 @@ std::shared_ptr<Device> make_cpu_session_device(ContextState& ctx, unsigned work
     Ledger ledger;
     ThreadPool pool;
     CpuDevice device;
-    Owned(ContextState& c, unsigned w) : pool(c, w), device(ledger, pool) { device.register_production_stages(); }
+    Owned(ContextState& c, unsigned w) : pool(c, w), device(ledger, pool) {
+      device.register_production_stages();
+      // Not in register_production_stages: the scheduler tests register stub generate kernels.
+      device.register_kernel(KernelId::GENERATE_CAMERA, &cpu_generate_camera_refill);
+    }
   };
   auto owned = std::make_shared<Owned>(ctx, workers);
   return std::shared_ptr<Device>(owned, &owned->device);

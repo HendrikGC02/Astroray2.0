@@ -22,6 +22,7 @@
 #include "host/spectral/wavelength_table.h"
 #include "host/thread_pool.h"
 #include "film/resolve.h"
+#include "stages/film_build_active.h"
 
 using namespace astroray;
 using namespace astroray::host;
@@ -70,6 +71,13 @@ struct Rig {
   Tables tables;
   std::unique_ptr<Film> film;
   ar::KernelGlobals kg{};
+  // The pass's active-pixel list, built the way the session does at pass start (0008 d3).
+  std::vector<uint32_t> list;
+  void build_list() {
+    list.resize(film->data().plane_stride);
+    kg.active_pixels = list.data();
+    cpu_film_build_active(kg, 0, ar::film_build_active_count(film->data()));
+  }
 
   Rig(const FilmRequest& req, bool flat = true) : pool(ctx, 1), dev(ledger, pool), tables(flat) {
     film = std::make_unique<Film>(dev, FilmLayout::build(req), Owner{1, 1});
@@ -81,6 +89,7 @@ struct Rig {
     kg.session.height = req.max_height;
     kg.session.seed = 7u;
     kg.session.sampler_mode = ar::SAMPLER_SOBOL;
+    build_list();
   }
 
   ar::FilmData& data() { return film->data(); }
@@ -94,6 +103,7 @@ struct Rig {
   }
   void resolve() {
     film->check_resolve_fits(kg.session.samples_per_pass);
+    build_list();
     cpu_film_resolve(kg, 0, ar::film_resolve_count(kg));
     kg.session.samples_done += kg.session.samples_per_pass;
     kg.session.pass_index += 1;

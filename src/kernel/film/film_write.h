@@ -119,15 +119,16 @@ AR_FN void film_splat_add(const KernelGlobals& kg, uint32_t pixel, const Real3& 
   atomic_add(f.splat + 2ull * f.plane_stride + pixel, float(value.z));
 }
 
-// Active pixel j of the render sub-rectangle as a plane index (0008 d3); the resolve and the
-// slot writers share this one mapping.
+// Active pixel j of the render sub-rectangle as a plane index (0008 d3): the row-order formula
+// that film_build_active (M1a) writes into the list. Stages never call it: they read the list,
+// so compaction (M4) changes one kernel.
 AR_FN uint32_t film_active_pixel(const FilmData& f, uint32_t j) {
   return pixel_id(j % f.rect_width, j / f.rect_width, f.width);
 }
 
-// The pixel plane index of a slot: slot = j * k + m.
+// The pixel plane index of a slot: slot = j * k + m, read from the pass's active-pixel list.
 AR_FN uint32_t film_slot_pixel(const KernelGlobals& kg, uint32_t slot) {
-  return film_active_pixel(*kg.film, slot / kg.session.samples_per_pass);
+  return kg.active_pixels[slot / kg.session.samples_per_pass];
 }
 
 // Path end: one path of the slot's pixel ended. bounces_total counts scattering events (surface

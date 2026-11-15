@@ -85,7 +85,7 @@ struct GpuRig {
   uint32_t module;
   Tables tables;
   std::unique_ptr<Film> film;
-  DeviceBuffer knot_nm, knot_value, channels, edges, cdf, film_data, kg_buf;
+  DeviceBuffer knot_nm, knot_value, channels, edges, cdf, film_data, kg_buf, list_buf;
   ar::FilmData host_data;
   ar::KernelGlobals kg{};
 
@@ -106,6 +106,11 @@ struct GpuRig {
     host_data.wavelengths = {static_cast<const float*>(edges.ptr), static_cast<const float*>(cdf.ptr),
                              tables.wavelengths.bins()};
     film_data = put(*dev, std::vector<ar::FilmData>{host_data});
+    // The pass's active-pixel list: the identity until a test gives another (set_list).
+    std::vector<uint32_t> identity(size_t(req.max_width) * req.max_height);
+    for (uint32_t i = 0; i < identity.size(); ++i) identity[i] = i;
+    list_buf = put(*dev, identity);
+    kg.active_pixels = static_cast<uint32_t*>(list_buf.ptr);
     kg.film = static_cast<ar::FilmData*>(film_data.ptr);
     kg.session.width = req.max_width;
     kg.session.height = req.max_height;
@@ -114,7 +119,7 @@ struct GpuRig {
   }
   ~GpuRig() {
     dev->synchronize();
-    for (DeviceBuffer* b : {&knot_nm, &knot_value, &channels, &edges, &cdf, &film_data, &kg_buf}) dev->free(*b);
+    for (DeviceBuffer* b : {&knot_nm, &knot_value, &channels, &edges, &cdf, &film_data, &kg_buf, &list_buf}) dev->free(*b);
     film.reset();
     CHECK(ledger.total() == 0);
   }
@@ -127,6 +132,7 @@ struct GpuRig {
     dev->upload(film->buffer(), offset_of(host_data.slot_L), lanes.data(), lanes.size() * sizeof(float));
     dev->upload(film->buffer(), offset_of(host_data.slot_flags), flags.data(), flags.size() * sizeof(uint32_t));
   }
+  void set_list(const std::vector<uint32_t>& list) { dev->upload(list_buf, 0, list.data(), list.size() * sizeof(uint32_t)); }
   void set_splat(const std::vector<float>& planes) {
     dev->upload(film->buffer(), offset_of(host_data.splat), planes.data(), planes.size() * sizeof(float));
   }
@@ -179,6 +185,9 @@ TEST_CASE("film_resolve/gpu matches cpu") {
   ar::KernelGlobals ckg{};
   ckg.film = &cd;
   ckg.session.seed = 7u;
+  std::vector<uint32_t> clist(pixels);
+  for (uint32_t i = 0; i < pixels; ++i) clist[i] = i;
+  ckg.active_pixels = clist.data();
 
   GpuRig gpu(req, false);
   SplitMix rng{99};
@@ -230,6 +239,31 @@ TEST_CASE("film_resolve/gpu matches cpu") {
   // Slots and the splat plane are clean for the next pass.
   for (float v : gpu.read<float>(gpu.host_data.slot_L, uint64_t(slots) * 4)) CHECK(v == 0.0f);
   for (float v : gpu.read<float>(gpu.host_data.splat, uint64_t(3) * pixels)) CHECK(v == 0.0f);
+}
+
+TEST_CASE("film_resolve_gpu/active list order") {
+  // Thread j folds slot j into pixel list[j], not pixel j. The list is a permutation of the
+  // 16 x 8 film, and the odd slots hold a NaN lane so the pixel that took slot j shows whether it
+  // got a sample (n) or an invalid one: the expected pixel is read off the list, independently of
+  // the conversion.
+  FilmRequest req;
+  req.max_width = 16, req.max_height = 8;
+  req.slot_capacity = 16 * 8;
+  const uint32_t pixels = 16 * 8;
+  std::vector<uint32_t> list(pixels);
+  for (uint32_t j = 0; j < pixels; ++j) list[j] = (j * 37u + 11u) % pixels;  // 37 is odd: a bijection of 128
+  GpuRig rig(req, true);
+  rig.set_list(list);
+  std::vector<float> lanes = flat_lanes(pixels, 1.0f);
+  for (uint32_t j = 1; j < pixels; j += 2)
+    for (int i = 0; i < 4; ++i) lanes[size_t(j) * 4 + i] = kNaN;
+  rig.set_slots(lanes, std::vector<uint32_t>(pixels, 0u));
+  rig.resolve(1);
+  const auto n = rig.read<uint32_t>(rig.host_data.n, pixels);
+  const auto invalid = rig.read<uint32_t>(rig.host_data.invalid, pixels);
+  uint32_t wrong = 0;
+  for (uint32_t j = 0; j < pixels; ++j) wrong += n[list[j]] != (j % 2 == 0 ? 1u : 0u) || invalid[list[j]] != (j % 2);
+  CHECK(wrong == 0);
 }
 
 TEST_CASE("film_resolve/gpu tail pass equals single sample passes and runs twice alike") {

@@ -104,6 +104,13 @@ TEST_CASE("present/gpu matches cpu") {
   DeviceBuffer kg_buf = gpu->allocate(LedgerCategory::TABLES, sizeof(gkg), Owner{1, 1});
   ar::KernelGlobals ckg{};
   ckg.film = &cd;
+  // The pass's active-pixel list (what film_build_active writes), on both devices.
+  std::vector<uint32_t> list(kRectW * kRectH);
+  for (uint32_t j = 0; j < list.size(); ++j) list[j] = ar::film_active_pixel(cd, j);
+  DeviceBuffer list_buf = gpu->allocate(LedgerCategory::TABLES, list.size() * sizeof(uint32_t), Owner{1, 1});
+  gpu->upload(list_buf, 0, list.data(), list.size() * sizeof(uint32_t));
+  gkg.active_pixels = static_cast<uint32_t*>(list_buf.ptr);
+  ckg.active_pixels = list.data();
 
   const uint32_t count = kRectW * kRectH;
   const uint32_t blocks = (count + 255) / 256;
@@ -166,6 +173,7 @@ TEST_CASE("present/gpu matches cpu") {
   gpu->free(target_buf);
   gpu->free(gd_buf);
   gpu->free(kg_buf);
+  gpu->free(list_buf);
   gr.film.reset();
   CHECK(ledger.total() == 0);
 }

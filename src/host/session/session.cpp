@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "host/data_resource.h"
+#include "host/scene/camera.h"
 #include "host/thread.h"
 #include "kernel/sample/sobol.h"
 
@@ -49,6 +50,7 @@ Session::Session(Scene& scene, Device& device, const SessionOptions& options)
   req.statistics = true;  // 0008 d12: on by default; the bounce heat map reads it
   layout_ = FilmLayout::build(req);
   render_size_ = uint64_t(options.max_width) << 32 | options.max_height;
+  hooks_ = read_test_hooks();
   SchedulerConfig cfg;
   cfg.report = &report_;
   cfg.owner = options.owner;
@@ -420,6 +422,9 @@ void Session::allocate() {
   const uint64_t frame_bytes = uint64_t(options_.max_width) * options_.max_height * 8u;  // RGBA16F
   globals_buf_ = device_.allocate(LedgerCategory::TABLES, kGlobalsBytes, options_.owner);
   present_buf_ = device_.allocate(LedgerCategory::DISPLAY_FRAME, frame_bytes, options_.owner);
+  active_ = std::make_unique<ActivePixels>(device_, options_.max_width, options_.max_height, options_.owner);
+  camera_buf_ = device_.allocate(LedgerCategory::TABLES, sizeof(ar::CameraView), options_.owner);
+  filter_buf_ = device_.allocate(LedgerCategory::TABLES, sizeof(ar::FilterTable), options_.owner);
   auto ring = std::make_unique<DisplayRing>(frame_bytes);
   std::lock_guard<std::mutex> lock(ring_mutex_);
   ring_ = std::move(ring);
@@ -434,6 +439,9 @@ void Session::release() {
   // The ring stays until the session is destroyed: a frame the host acquired remains readable
   // after CLOSED and is released then (display_release), so no thread reads freed memory.
   film_.reset();
+  active_.reset();
+  device_.free(camera_buf_);
+  device_.free(filter_buf_);
   device_.free(present_buf_);
   device_.free(globals_buf_);
 }
@@ -446,7 +454,7 @@ uint32_t Session::sample_limit() const {
 
 bool Session::converged_locked() const {
   // No work: one empty pass shows the latched state, more would only spin.
-  if (options_.test_camera_samples_per_pass == 0 && passes_in_epoch_ > 0) return true;
+  if (pass_camera_samples() == 0 && passes_in_epoch_ > 0) return true;
   const uint32_t limit = sample_limit();
   return limit > 0 && stats_.samples_done >= limit;
 }
@@ -493,6 +501,10 @@ void Session::bind_globals() {
   kg.session.samples_per_pass = kSamplesPerPass;
   kg.session.pass_index = pass_index_;
   kg.session.sampler_mode = kSamplerMode;
+  kg.session.test_hooks = hooks_.bits;
+  kg.active_pixels = active_->list();
+  kg.camera = camera_ready_ ? static_cast<const ar::CameraView*>(camera_buf_.ptr) : nullptr;
+  kg.filter = filter_ready_ ? static_cast<const ar::FilterTable*>(filter_buf_.ptr) : nullptr;
   if (const auto s = scene_.settings()) {
     kg.session.seed = s->s.seed;
     // PathStateSoA::bounces order: total, diffuse, glossy, transmission, volume, transparent.
@@ -504,6 +516,46 @@ void Session::bind_globals() {
   device_.upload(globals_buf_, kFilmDataAt, &f, sizeof f);
   device_.set_kernel_globals(globals_buf_);
   scheduler_->config.globals = kg;
+}
+
+void Session::update_camera_and_filter(uint64_t generation) {
+  const ar::FilmData& f = film_->data();
+  camera_ready_ = false;
+  if (latch_.has_view()) {
+    const StoredView v = latch_.view();
+    ar::CameraView view{};
+    // The host folds the scene origin into the camera before it sends the descriptor, so it is
+    // origin-relative already and the origin passed here is zero (0003 d26; 0007).
+    const double origin[3] = {0.0, 0.0, 0.0};
+    if (make_camera_view(v.v.camera, f.rect_width, f.rect_height, origin, 0, report_, generation, &view) != AR_OK)
+      throw std::invalid_argument("session: the latched view's camera descriptor is invalid");
+    device_.upload(camera_buf_, 0, &view, sizeof view);
+    camera_ready_ = true;
+  }
+  // Pixel filter of the scene's settings: rebuilt only when it changes. An unknown type or width
+  // makes build_filter_table throw, which fails the session.
+  const auto s = scene_.settings();
+  filter_ready_ = filter_ready_ && s != nullptr;
+  if (s) {
+    const FilterSettings want{static_cast<FilterType>(s->s.pixel_filter), s->s.pixel_filter_width};
+    if (!filter_ready_ || want.type != filter_uploaded_.type || want.width != filter_uploaded_.width) {
+      const auto table = std::make_unique<ar::FilterTable>(build_filter_table(want));
+      device_.upload(filter_buf_, 0, table.get(), sizeof(ar::FilterTable));
+      filter_uploaded_ = want;
+      filter_ready_ = true;
+    }
+  }
+}
+
+// One thread per listed pixel writes the pass's list before anything reads it (0008 d3).
+void Session::build_active() {
+  bind_globals();
+  device_.launch(KernelId::FILM_BUILD_ACTIVE, active_->plan(film_->data()));
+}
+
+uint64_t Session::pass_camera_samples() const {
+  if (options_.test_camera_samples_per_pass != 0) return options_.test_camera_samples_per_pass;
+  return camera_ready_ && filter_ready_ ? uint64_t(active_->count()) * kSamplesPerPass : 0;
 }
 
 void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
@@ -615,6 +667,8 @@ void Session::render_loop() {
     expect_epoch_ = false;
     if (lr.new_epoch) begin_epoch();
     apply_view();
+    if (lr.changed) update_camera_and_filter(lr.generation);
+    build_active();
     bool need_pass;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -623,7 +677,7 @@ void Session::render_loop() {
     if (need_pass) {
       bind_globals();
       const auto pass_start = std::chrono::steady_clock::now();
-      const PassStatus st = scheduler_->run_pass(PassWork{options_.test_camera_samples_per_pass, 0});
+      const PassStatus st = scheduler_->run_pass(PassWork{pass_camera_samples(), 0});
       if (st == PassStatus::CANCELLED) {
         std::lock_guard<std::mutex> lock(mutex_);
         ++stats_.passes_cancelled;

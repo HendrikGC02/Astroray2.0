@@ -21,11 +21,14 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "../../../include/astroray/astroray.h"
 #include "host/device.h"
 #include "host/display/display_ring.h"
 #include "host/counters.h"
+#include "host/film/active_pixels.h"
+#include "host/film/filter_table.h"
 #include "host/film/fits_writer.h"
 #include "host/film/film_layout.h"
 #include "host/film/film_stats.h"
@@ -35,6 +38,7 @@
 #include "host/scheduler.h"
 #include "host/scene/scene.h"
 #include "host/session/latch.h"
+#include "host/session/test_hooks.h"
 #include "host/spectral/wavelength_table.h"
 #include "kernel/film/present.h"
 
@@ -46,10 +50,10 @@ struct SessionOptions {
   uint32_t max_height = 0;
   uint32_t denoiser = AR_DENOISER_NONE;
   Owner owner{};
-  // Test hook, zero in production: the camera samples every pass hands the scheduler. Until the
-  // active-pixel list exists a production pass has no work, so tests that need launches to stop
-  // at (cancel, interrupt) set this with their own generate kernel. Never read from anywhere but
-  // the session that was given it.
+  // Test override, zero in production: the camera samples every pass hands the scheduler, in
+  // place of the active-pixel count times k. Tests that need launches to stop at (cancel,
+  // interrupt) set this with their own generate kernel, and it works with no view latched. Never
+  // read from anywhere but the session that was given it.
   uint64_t test_camera_samples_per_pass = 0;
   // Test hook, zero in production: resolved pass number n (1-based, counted over the session) is
   // handed to the resolve tagged with the previous epoch, so the stale-write drop can be seen.
@@ -158,6 +162,8 @@ class Session {
   const Latch& latch() const { return latch_; }
   // Tests: the sample count n of render-rectangle pixel j, read under the render lock.
   uint32_t film_samples(uint32_t j) const;
+  // The ASTRORAY_TEST_* hooks this session read at create (empty outside gate builds).
+  const std::vector<std::string>& active_test_hooks() const { return hooks_.active; }
 
  private:
   void run();
@@ -172,6 +178,9 @@ class Session {
   bool converged_locked() const;
   uint32_t sample_limit() const;
   void bind_globals();
+  void update_camera_and_filter(uint64_t generation);
+  void build_active();
+  uint64_t pass_camera_samples() const;
   void resolve(uint64_t pass_epoch, uint64_t generation);
   void present(uint64_t generation);
   void wake();
@@ -202,6 +211,15 @@ class Session {
   InvalidSampleReporter invalid_;
   DeviceBuffer globals_buf_;  // KernelGlobals, then FilmData, then DisplayTarget
   DeviceBuffer present_buf_;
+  // Per session, in the ledger: the active-pixel list, the CameraView of the latched view and the
+  // pixel-filter table of the scene's settings. Camera and filter exist once a view and the
+  // settings are latched; until both do a pass has no camera work.
+  std::unique_ptr<ActivePixels> active_;
+  DeviceBuffer camera_buf_, filter_buf_;
+  bool camera_ready_ = false;
+  bool filter_ready_ = false;
+  FilterSettings filter_uploaded_{};
+  TestHooks hooks_;  // read once in the constructor
   uint64_t film_epoch_ = 0;
   uint64_t passes_in_epoch_ = 0;
   uint32_t pass_index_ = 0;

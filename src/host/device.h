@@ -38,8 +38,9 @@ enum class KernelId : uint8_t {
   FILM_PREPARE_DENOISE,
   FILM_PACK_DLSS,
   BAKE_ENVIRONMENT,
+  FILM_BUILD_ACTIVE,  // per pass, before the refill (0002 D8); last so earlier ids keep their value
 };
-inline constexpr uint32_t kKernelIdCount = static_cast<uint32_t>(KernelId::BAKE_ENVIRONMENT) + 1u;
+inline constexpr uint32_t kKernelIdCount = static_cast<uint32_t>(KernelId::FILM_BUILD_ACTIVE) + 1u;
 
 // A device allocation. A plain value: free() zeroes the one it is given, so a stale
 // copy is a double free that the ledger rejects.

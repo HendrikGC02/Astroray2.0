@@ -73,7 +73,7 @@ AR_FN uint32_t film_present_count(const KernelGlobals& kg) { return kg.film->rec
 
 AR_FN void film_present_pixel(const KernelGlobals& kg, uint32_t j) {
   const FilmData& f = *kg.film;
-  const uint32_t pixel = film_active_pixel(f, j);
+  const uint32_t pixel = kg.active_pixels[j];
   const uint32_t n = f.n[pixel];
   // No samples yet: black, not the NaN of 0 / 0. The display group is always channel 0.
   float rgb[3];
@@ -110,7 +110,7 @@ AR_FN void film_heatmap_pixel(const KernelGlobals& kg, uint32_t j) {
   const FilmData& f = *kg.film;
   const DisplayTarget& p = *kg.display;
   AR_ASSERT(p.range_max > 0.0f && film_heatmap_supported(f, p.mode));
-  const uint32_t pixel = film_active_pixel(f, j);
+  const uint32_t pixel = kg.active_pixels[j];
   float value;
   bool has_data;
   if (p.mode == HEATMAP_SAMPLE_COUNT) {

@@ -10,9 +10,11 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <vector>
 
 #include "device/cpu/cpu_device.h"
 #include "film/resolve.h"
+#include "stages/film_build_active.h"
 #include "host/film/film_layout.h"
 #include "host/film/film_stats.h"
 #include "host/film/response_table.h"
@@ -33,6 +35,13 @@ struct StatsRig {
   WavelengthTable wavelengths;
   std::unique_ptr<Film> film;
   ar::KernelGlobals kg{};
+  // The pass's active-pixel list, built the way the session does at pass start (0008 d3).
+  std::vector<uint32_t> list;
+  void build_list() {
+    list.resize(film->data().plane_stride);
+    kg.active_pixels = list.data();
+    cpu_film_build_active(kg, 0, ar::film_build_active_count(film->data()));
+  }
 
   StatsRig(uint32_t w, uint32_t h, uint32_t k, bool aov = false, bool term = false) : pool(ctx, 1), dev(ledger, pool) {
     response.display_first = 0;
@@ -66,6 +75,7 @@ struct StatsRig {
     kg.session.seed = 7u;
     kg.session.sampler_mode = ar::SAMPLER_SOBOL;
     kg.session.samples_per_pass = k;
+    build_list();
   }
 
   ar::FilmData& data() { return film->data(); }
