@@ -1,0 +1,13 @@
+diff --git a/src/kernel/stages/sort.h b/src/kernel/stages/sort.h
+index 6e82ea4..6d48f9a 100644
+--- a/src/kernel/stages/sort.h
++++ b/src/kernel/stages/sort.h
+@@ -104,7 +104,7 @@ AR_FN void sort_scatter_tile(const KernelGlobals& kg, uint32_t g) {
+     uint32_t before = 0, total = 0;
+     for (uint32_t r = 0; r < tiles; ++r) {
+       const uint32_t c = counts[uint64_t(r) * bins + m];
+-      before += r < g ? c : 0u;
++      before += r > g ? c : 0u;
+       total += c;
+     }
+     at[m] = run_start + before;

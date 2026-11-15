@@ -17,3 +17,5 @@ Budget: two device TUs within B-05; spills 0.
 Depends on: 043, 039.
 Size: S (about 200 lines); stop and report at 2x.
 Progress:
+
+- 044: sort.h, cpu/gpu kernels, tests, canary done; gate passes. Added sort_queue/sort_counts to KernelGlobals (outside Scope).
