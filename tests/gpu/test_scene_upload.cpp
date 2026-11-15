@@ -48,8 +48,11 @@ struct Graph {
     nodes.push_back(n);
     return int(nodes.size()) - 1;
   }
-  Graph(float r, float strength) {  // a constant Emission of colour (r, 0.5, 0.25)
-    const int c = add(ar::Op::CONST_F32X3, {r, 0.5f, 0.25f}), s = add(ar::Op::CONST_F32, {strength});
+  // A constant Emission of colour (r, 0.5, 0.25), or with `positional` the shading position as
+  // colour, which compiles to a program.
+  Graph(float r, float strength, bool positional = false) {
+    const int c = positional ? add(ar::Op::LOAD_CTX_P, {}) : add(ar::Op::CONST_F32X3, {r, 0.5f, 0.25f});
+    const int s = add(ar::Op::CONST_F32, {strength});
     const int e = add(ar::Op::EMIT_LE, {});
     links.push_back({uint32_t(c), 0u, uint32_t(e), 0u});
     links.push_back({uint32_t(s), 0u, uint32_t(e), 1u});
@@ -103,8 +106,8 @@ struct Rig {
     REQUIRE(scene->generations().failed() == 0);
   }
   // Material 43 is referenced by no instance, so editing it moves no light.
-  void set_material_43(float r) {
-    const Graph g(r, 0.0f);
+  void set_material_43(float strength) {
+    const Graph g(1.0f, strength, true);
     commit([&](Edit& e) {
       const ar_graph_desc d = g.desc();
       REQUIRE(scene->materials->set_graph(e, 44, &d) == AR_OK);
@@ -230,7 +233,8 @@ TEST_CASE("scene_upload/checksums match host") {
     uint32_t count = 0, elem = 0;
     std::memcpy(&count, row, 4), std::memcpy(&elem, row + 4, 4);
     const uint32_t n = elem < kElemMax ? elem : kElemMax;
-    uint64_t gpu = fnv(fnv(fnv(14695981039346656037ull, row, 4), row + 8, n), row + 8 + kElemMax, n);
+    uint64_t gpu = fnv(14695981039346656037ull, row, 4);
+    if (count != 0) gpu = fnv(fnv(gpu, row + 8, n), row + 8 + kElemMax, n);
     uint64_t host = 14695981039346656037ull;
     const uint32_t want = set->counts[t];
     host = fnv(host, reinterpret_cast<const uint8_t*>(&want), 4);
@@ -254,6 +258,7 @@ TEST_CASE("scene_upload/checksums match host") {
         std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(&lights->lights[3]),
                              reinterpret_cast<const uint8_t*>(&lights->lights[3]) + sizeof(ar::LightRecord))));
   CHECK(set->counts[static_cast<uint32_t>(TableId::INSTANCES)] == 2u);
+  CHECK(set->counts[static_cast<uint32_t>(TableId::MATERIAL_PROGRAMS)] > 0u);  // material 43 runs a program
   dev.free(kgb);
   dev.free(out);
 }
