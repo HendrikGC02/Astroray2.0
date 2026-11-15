@@ -17,3 +17,4 @@ Budget: host only.
 Depends on: 052, 050, 049.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
+- Stopped before coding: needs src/host/session/session.{h,cpp} (not in Scope) to expose film snapshot, display ring, last pass ms and pass counters; see report.
