@@ -39,17 +39,20 @@ struct Instance {
   uint32_t light_index = kNoLight;  // set by the lamp-instance task (068)
 };
 
+// The motion step rendered until M8 for S steps: (S - 1) / 2 in integer division, so the
+// centre for odd S and the earlier of the two middle steps for even S. Instances and meshes
+// both use it, so a hit and its geometry always come from the same step.
+// Ref: RULINGS.md ruling 68; 0007 d15.
+constexpr uint32_t representative_step(uint32_t steps) { return (steps - 1) / 2; }
+
 struct InstanceTable {
   uint32_t motion_steps = 1;
   std::vector<Instance> instances;
   std::vector<ar_xform> xf;  // instances.size() * motion_steps, instance-major
   std::vector<ar_key> material_pool;
   const ar_xform& step(uint32_t i, uint32_t s) const { return xf[size_t(i) * motion_steps + s]; }
-  // The motion-blur step used until M8 (S > 1 is stored, the shutter centre is rendered).
-  // Ref: 0007 d15 gives S steps but does not say which one is the centre. Steps are taken
-  // as evenly spaced from shutter open to close, so the midpoint is (S - 1) / 2; for even S
-  // the earlier of the two middle steps is used.
-  const ar_xform& centre(uint32_t i) const { return step(i, (motion_steps - 1) / 2); }
+  // The motion-blur step used until M8 (S > 1 is stored, the representative step is rendered).
+  const ar_xform& centre(uint32_t i) const { return step(i, representative_step(motion_steps)); }
 };
 
 // Visibility bits to mask bits: camera 0, diffuse 1, glossy 2, transmission 3, shadow 4,

@@ -129,6 +129,7 @@ if(ASTRORAY_ENGINE_SOURCES)
     target_link_libraries(astroray_engine PRIVATE CUDA::cudart_static)
   endif()
   list(APPEND _ar_engine_libs astroray_engine)
+  include(cmake/deps.cmake)
 endif()
 
 # Data files from data/MANIFEST.toml, embedded as RCDATA (0001 D8.4).
