@@ -191,13 +191,35 @@ add_dependencies(astroray_tests_cpu astroray_opsgen)
 # GPU tests: one process, serial, each test creating its CUDA device explicitly (0009 d11).
 # The test modules are the loose cubins of tests/gpu/kernels, read from the build tree.
 if(ASTRORAY_GPU)
-  add_executable(astroray_tests_gpu tests/gpu/main.cpp ${ASTRORAY_TEST_GPU_SOURCES})
+  # tests/gpu/agree.cpp is the harness, not a test file, so the test_*.cpp glob misses it.
+  add_executable(astroray_tests_gpu tests/gpu/main.cpp tests/gpu/agree.cpp ${ASTRORAY_TEST_GPU_SOURCES})
   target_include_directories(astroray_tests_gpu PRIVATE ${CMAKE_SOURCE_DIR}/tests ${ASTRORAY_GEN_DIR})
   target_compile_definitions(astroray_tests_gpu PRIVATE AR_TEST_KERNEL_DIR="${CMAKE_BINARY_DIR}/kernels")
+
+  # The agreement tests load the no-FMA build of agree_pure (0002 D12; 0009 d17 step ii).
+  # Test only, never on in a shipping configuration: AR_AGREE_CANARY_FMA builds that one module
+  # with --fmad=true instead, which must make `agree/fma detector` fail (0009 Verification row
+  # 17). tools/build.ps1 passes no -D, so the environment variable of the same name set to ON
+  # switches it for one configure (delete out/build/sources.txt to force the configure).
+  option(AR_AGREE_CANARY_FMA "Test only: build agree_pure's no-FMA module with --fmad=true" OFF)
+  if("$ENV{AR_AGREE_CANARY_FMA}" STREQUAL "ON")
+    set(AR_AGREE_CANARY_FMA ON)
+  endif()
+  set(_ar_agree_nofma_dir kernels_nofma)
+  if(AR_AGREE_CANARY_FMA)
+    set(_ar_agree_nofma_dir kernels_agree_canary)
+    ar_gpu_variant(astroray_kernels_gpu_agree_canary ${_ar_agree_nofma_dir} true
+      SOURCES ${CMAKE_SOURCE_DIR}/tests/gpu/kernels/agree_pure.cu)
+    add_custom_target(astroray_kernels_gpu_agree_canary ALL DEPENDS ${astroray_kernels_gpu_agree_canary_OUTPUTS})
+    add_dependencies(astroray_tests_gpu astroray_kernels_gpu_agree_canary)
+    target_compile_definitions(astroray_tests_gpu PRIVATE AR_AGREE_CANARY_FMA=1)
+    message(WARNING "AR_AGREE_CANARY_FMA is ON: the agreement detector check is expected to fail")
+  endif()
+  target_compile_definitions(astroray_tests_gpu PRIVATE AR_TEST_KERNEL_NOFMA_DIR="${CMAKE_BINARY_DIR}/${_ar_agree_nofma_dir}")
   astroray_target_warnings(astroray_tests_gpu)
   target_include_directories(astroray_tests_gpu SYSTEM PRIVATE third_party/doctest)
   target_link_libraries(astroray_tests_gpu PRIVATE ${_ar_engine_libs} astroray_kernel)
-  add_dependencies(astroray_tests_gpu astroray_kernels_gpu)
+  add_dependencies(astroray_tests_gpu astroray_kernels_gpu astroray_kernels_gpu_nofma)
 endif()
 
 # Installable Blender extension zip (0007 d45, 0001 D10.2): stage the addon, the
