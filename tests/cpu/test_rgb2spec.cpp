@@ -62,11 +62,35 @@ void to_rgb(const astroray::ObserverTables& o, const double xyz[3], double rgb[3
 
 Lambda lanes(Real a, Real b, Real c, Real d) { return Lambda{{a, b, c, d}}; }
 
+// Largest |channel error| of the reflectance for rgb, sent through D65 and the CMFs at the 471
+// samples (the engine's own definition, 0003 d11) back to working-space RGB, in double. A NaN is
+// returned as NaN, never skipped.
+double roundtrip_error(const Fixture& fx, Rgb rgb) {
+  double xyz[3] = {0, 0, 0};
+  const uint32_t n = astroray::kObserverSamples;
+  for (uint32_t i = 0; i < n; i += 4) {
+    Lambda lam;
+    for (uint32_t l = 0; l < 4; ++l) lam.nm[l] = Real(360 + (i + l < n ? i + l : n - 1));
+    uint32_t flags = 0;
+    const Spec s = ar::albedo(fx.table, rgb, lam, &flags);
+    CHECK(flags == 0u);
+    for (uint32_t l = 0; l < 4 && i + l < n; ++l)
+      for (int k = 0; k < 3; ++k) xyz[k] += double(s.v[l]) * double(fx.obs.d65[i + l]) * double(fx.obs.cmf[k][i + l]);
+  }
+  for (double& v : xyz) v /= fx.obs.y_n;
+  double out[3], worst = 0;
+  to_rgb(fx.obs, xyz, out);
+  for (int c = 0; c < 3; ++c) {
+    const double e = std::fabs(out[c] - double(rgb.v[c]));
+    if (!(e <= worst)) worst = e;
+  }
+  return worst;
+}
+
 }  // namespace
 
 TEST_SUITE("fast") {
-  // Check 3. The reflectance goes through D65 and the CMFs at the 471 samples (the engine's own
-  // definition, 0003 d11) back to working-space RGB, in double, independent of the optimiser.
+  // Check 3. Independent of the optimiser: only the table, the CMFs and D65.
   AR_RT_CASE("rgb2spec/round trip rec709") {
     Fixture fx;
     double worst = 0;
@@ -75,25 +99,11 @@ TEST_SUITE("fast") {
       for (int ig = 0; ig < 7; ++ig)
         for (int ib = 0; ib < 7; ++ib) {
           const Rgb rgb{{Real(0.05 + 0.15 * ir), Real(0.05 + 0.15 * ig), Real(0.05 + 0.15 * ib)}};
-          double xyz[3] = {0, 0, 0};
-          for (uint32_t i = 0; i < astroray::kObserverSamples; i += 4) {
-            const uint32_t n = astroray::kObserverSamples;
-            Lambda lam;
-            for (uint32_t l = 0; l < 4; ++l) lam.nm[l] = Real(360 + (i + l < n ? i + l : n - 1));
-            uint32_t flags = 0;
-            const Spec s = ar::albedo(fx.table, rgb, lam, &flags);
-            CHECK(flags == 0u);
-            for (uint32_t l = 0; l < 4 && i + l < n; ++l)
-              for (int k = 0; k < 3; ++k) xyz[k] += double(s.v[l]) * double(fx.obs.d65[i + l]) * double(fx.obs.cmf[k][i + l]);
+          const double e = roundtrip_error(fx, rgb);
+          if (!(e <= worst)) {  // a NaN is kept, never skipped
+            worst = e;
+            worst_rgb = rgb;
           }
-          for (double& v : xyz) v /= fx.obs.y_n;
-          double out[3];
-          to_rgb(fx.obs, xyz, out);
-          for (int c = 0; c < 3; ++c)
-            if (!(std::fabs(out[c] - double(rgb.v[c])) <= worst)) {  // a NaN is kept, never skipped
-              worst = std::fabs(out[c] - double(rgb.v[c]));
-              worst_rgb = rgb;
-            }
         }
     CHECK_MESSAGE(worst <= 1e-3, "max abs error " << worst << " at rgb " << worst_rgb.v[0] << " " << worst_rgb.v[1] << " " << worst_rgb.v[2]);
   }
@@ -114,6 +124,13 @@ TEST_SUITE("fast") {
       CHECK(flags == 0u);
     }
     CHECK_MESSAGE(worst <= 1e-4, "max |s - 1| = " << worst);
+    // Exact white and grey never read the table; these near-greys do (largest channel not unique,
+    // and a first channel below the others), so a broken table read shows here too.
+    const Rgb near_grey[] = {{{0.8f, 0.81f, 0.8f}}, {{0.5f, 0.5f, 0.51f}}, {{0.2f, 0.21f, 0.2f}}};
+    for (const Rgb& g : near_grey) {
+      const double e = roundtrip_error(fx, g);
+      CHECK_MESSAGE(e <= 1e-3, "near-grey " << g.v[0] << " " << g.v[1] << " " << g.v[2] << " round-trips with error " << e);
+    }
   }
 
   // Check 6. An RGB emitter through the illuminant convention, film_weights and the XYZ
@@ -121,12 +138,27 @@ TEST_SUITE("fast") {
   // carries lanes 4m..4m+3 of 16384 points, each with the uniform pdf 1/470.
   AR_RT_CASE("rgb2spec/illuminant convention returns its rgb") {
     Fixture fx;
-    const Rgb emitters[] = {{{1, 1, 1}}, {{0.2f, 0.5f, 0.8f}}, {{1, 0.1f, 0.1f}}, {{0.9f, 0.9f, 0.1f}}, {{5, 2, 0.5f}}, {{40, 10, 25}}};
+    // Mild colours must come back within 1e-3 relative in every channel (the check as written).
+    // Saturated colours carry the table's absolute error of about 5e-4 of the largest channel, so
+    // their small channels miss a per-channel 1e-3 (measured worst, per-channel relative error:
+    // 4.3e-3 for channel 2 of (1, 0.1, 0.1), 3.4e-3 for channel 2 of (5, 2, 0.5), 2.9e-3 for
+    // channel 1 of (1, 0.1, 0.1), 1.6e-3 for channel 2 of (0.9, 0.9, 0.1), 1.3e-3 for channel 1
+    // of (40, 10, 25), 1.2e-3 for channel 0 of (0.2, 0.5, 0.8)); they are held to 1e-3 of the
+    // largest channel instead.
+    struct Emitter {
+      Rgb rgb;
+      bool saturated;
+    };
+    const Emitter emitters[] = {{{{1, 1, 1}}, false},          {{{0.6f, 0.5f, 0.4f}}, false}, {{{0.3f, 0.4f, 0.5f}}, false},
+                                {{{2, 1.5f, 1}}, false},       {{{20, 18, 16}}, false},       {{{0.8f, 0.9f, 0.7f}}, false},
+                                {{{0.2f, 0.5f, 0.8f}}, true},  {{{1, 0.1f, 0.1f}}, true},     {{{0.9f, 0.9f, 0.1f}}, true},
+                                {{{5, 2, 0.5f}}, true},        {{{40, 10, 25}}, true}};
     const int packets = 4096;
     const double span = 470.0;
     const Spec pf = ar::spec_fill(Real(1.0 / span));
     const Spec w = ar::film_weights(0u, pf);
-    for (const Rgb& rgb : emitters) {
+    for (const Emitter& em : emitters) {
+      const Rgb& rgb = em.rgb;
       double xyz[3] = {0, 0, 0};
       uint32_t flags = 0;
       for (int m = 0; m < packets; ++m) {
@@ -139,9 +171,9 @@ TEST_SUITE("fast") {
       for (double& v : xyz) v /= double(packets) * fx.obs.y_n;
       double out[3];
       to_rgb(fx.obs, xyz, out);
-      const double scale = std::fmax(rgb.v[0], std::fmax(rgb.v[1], rgb.v[2]));
+      const double ref = em.saturated ? double(std::fmax(rgb.v[0], std::fmax(rgb.v[1], rgb.v[2]))) : 0.0;
       for (int c = 0; c < 3; ++c)
-        CHECK_MESSAGE(std::fabs(out[c] - double(rgb.v[c])) <= 1e-3 * scale,
+        CHECK_MESSAGE(std::fabs(out[c] - double(rgb.v[c])) <= 1e-3 * (em.saturated ? ref : double(rgb.v[c])),
                       "rgb " << rgb.v[0] << " " << rgb.v[1] << " " << rgb.v[2] << " channel " << c << " came back as " << out[c]);
       CHECK(flags == 0u);
     }

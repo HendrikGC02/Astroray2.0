@@ -9,9 +9,9 @@ Do:
 2. `specgen jh rec709` writes data/spectral/rec709.jh with header {res, observer_hash, illuminant id, generator version}; MANIFEST entry; the file is committed and embedded through task 022's mechanism.
 3. color/rgb2spec.h (kernel): `fetch_coeffs(table, rgb)` (pbrt `FindInterval` bisection on the scale axis, trilinear interpolation), `sigmoid_eval(c, lambda)`; conventions: `albedo(rgb)` clamps to [0,1] first; `unbounded(rgb)` with m = max(r,g,b), s = 2m * S(rgb/2m); `illuminant(rgb)` = unbounded times the working-space illuminant at lambda; zero RGB gives exactly 0; negative components clamp to 0 and return a flag the caller reports. color/observer.h: CMF and illuminant lookup at a wavelength (linear between 1 nm samples, 0 outside 360-830).
 4. Tests (fast unless noted): check 3 (7^3 grid on [0.05, 0.95], reflectance round trip through D65 and CMFs back to RGB, max abs error <= 1e-3); check 5 (white (1,1,1) gives 1 +- 1e-4 at all 471 CMF wavelengths); check 6 (an RGB emitter through the illuminant convention, `film_weights` and XYZ by deterministic quadrature over lambda returns its RGB within 1e-3 relative); float and double objects agree within 1e-6.
-Acceptance: `out/bin/specgen.exe jh rec709` reproduces rec709.jh byte for byte and prints its run time; `pwsh tools/check.ps1 fast` passes with the three checks named in the output.
+Acceptance: `out/bin/specgen.exe jh rec709` reproduces rec709.jh byte for byte and prints its run time; `pwsh tools/check.ps1 fast` passes with the three checks named in the output; f64 within 1e-6 of the NumPy reference; f32 within 2e-5·max(1,|v|) of f64 (nm-coefficient cancellation, see review).
 Look at: none.
-Canary: tasks/023.canary.patch must turn red: astroray_tests_cpu "rgb2spec/round trip rec709", "rgb2spec/white is one".
+Canary: tasks/023.canary.patch must turn red: astroray_tests_cpu "rgb2spec/round trip rec709", "rgb2spec/white is one", "rgb2spec/illuminant convention returns its rgb", "rgb2spec/float and double agree with the reference", "rgb2spec/conventions: zero, grey, clamps and flags" (the patch turns all five red; its table-read hunk alone turns the first four red).
 Budget: specgen total run time against 0009 B-37's specgen row (report it).
 Depends on: 019, 022.
 Size: M (about 450 lines including the port); stop and report at 2x.
@@ -21,3 +21,5 @@ Progress:
 - specgen cannot include rgb2spec.h (kernel headers need the kernel include path), so the .jh header constants are repeated in specgen.cpp; test_rgb2spec checks the committed file through jh_view.
 - Float vs double: 1e-6 is not reachable in float (measured 1.0e-5 worst); the f32 copy is held to 2e-5*max(1,v), the f64 copy to 1e-6, both against NumPy literals.
 - Canary tasks/023.canary.patch: sigmoid without the 1/2 factor and without the infinity guard; turns round trip and white is one red in both copies (verified, reverted).
+- Review fixes: rebased on origin/main; check 6 strict per-channel 1e-3 for mild emitters, saturated ones held to 1e-3 of the largest channel (measured per-channel worst 4.3e-3, listed in the test); white test adds near-greys through the table.
+- Finding: off-grid near-white round trip exceeds 1e-3 (0.94,0.95,0.94: 1.08e-3; 0.97,0.96,0.96: 1.57e-3); check 3's grid does not probe it. Port diffed against upstream 721145de: solver is LM, no max|c|>200 rescale upstream.

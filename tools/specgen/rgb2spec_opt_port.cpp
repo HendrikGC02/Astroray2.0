@@ -38,7 +38,18 @@
 //  - the tables live in a struct instead of globals (no process-global state), and the
 //    gamut is given as the XYZ -> RGB matrix of the working space;
 //  - output goes to caller-owned vectors; the SIMD padding and the forward-model block that
-//    follows the table in the original file are dropped.
+//    follows the table in the original file are dropped;
+//  - wavelength is scaled to [0, 1] as i / (n - 1) (exactly (lambda - 360) / 470 on our 1 nm
+//    grid) instead of (lambda - lo) * inv, and scale[k], x and y are computed in double before
+//    scale is stored as float (upstream computes them in float); the thread pool is the same;
+//  - LUPDecompose swaps rows with std::swap (same operations); formatting only elsewhere.
+// Unchanged from upstream, line for line apart from Float -> double: cie_lab, cie_lab_jac,
+// eval_residual, eval_residual_jac (analytic Jacobian), and LM (Levenberg-Marquardt on the squared
+// CIELab distance: 15 iterations, stop at cost <= 1e-12, initial damping 1e-3, up to 10 damped
+// trials per iteration, LU tolerance 1e-30, damping x10 on failure and x0.5 (floor 1e-12) on
+// success, give up above 1e12), the start = res / 5 sweep up then down with a fresh zero start, and
+// the c0 = 360, c1 = 1 / (830 - 360) remap. Upstream at this commit has no rescale of the
+// coefficients when max|c| > 200: that belonged to the older Gauss-Newton version of the file.
 // Method: Jakob and Hanika 2019, "A Low-Dimensional Function Space for Efficient Spectral
 // Upsampling", CGF 38(2): sigmoid of a quadratic, CIELab residual, optimised outward from the
 // middle of the scale axis with the previous solution as the starting point.
