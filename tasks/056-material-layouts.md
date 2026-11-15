@@ -18,3 +18,5 @@ Budget: none.
 Depends on: 055, 023.
 Size: S (about 300 lines); stop and report at 2x.
 Progress:
+- Done: layouts and slot_resolve in src/kernel/{material,vm}; tests material_layout/* (f32+f64); canary tasks/056.canary.patch (field swap + RGB scale halved) turns 'record size' and 'rgb white reflectance' red.
+- Choices to ratify: enum value CONSTANT (windows.h CONST macro); ext_kind in low 8 bits; flag bits 0-5 in listed order; geometry_thin_walled u32; vec3 frame default 0 = geometric frame; subsurface_radius default 0.01 m; no metal n,k pair in block (variable trailer, 058).
