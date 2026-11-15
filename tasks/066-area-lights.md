@@ -10,11 +10,11 @@ Do:
 3. Tests (fast unless noted): `pdf_li(sample.wi) == sample.pdf` within 1e-4 relative for points in front at several distances and angles; zero contribution from behind; irradiance at a point on the axis under a disk and under a square matches closed forms (disk: E = pi L r^2/(r^2 + d^2); square: the form-factor formula) within 0.5%; power recovered from L by quadrature within 1e-4; gate: chi-squared of rectangle sample directions against the spherical-rectangle pdf.
 Acceptance: `pwsh tools/check.ps1 fast` passes with `lights_area/*`; `out/bin/astroray_tests_cpu.exe --tier=gate -tc="lights_area/*"` passes.
 Look at: none.
-Canary: tasks/066.canary.patch must turn red: astroray_tests_cpu "lights_area/disk on-axis irradiance", "lights_area/rect pdf consistency".
+Canary: tasks/066.canary.patch must turn red: astroray_tests_cpu "lights_area/disk on-axis irradiance", "lights_area/rect pdf consistency", "lights_area/disk power".
 Budget: none.
 Depends on: 065.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
 - Area lamps in src/kernel/light/area_rect.h and area_disk.h, rows in light.h (LightType AREA_RECT, AREA_DISK; light_make_area; area checks in light_problem).
 - Record convention: xf columns 0 and 1 span the rectangle, front = -Z column; rect size[0] x size[1] are full width and height; a disk's size[0] is the RADIUS (size[1] = 0), so 068 halves Blender's disk diameter.
-- Rectangle falls back to area sampling below 1e-2 sr (exact for its own pdf d^2 / (cos A)); both branches are tested.
+- Rectangle: spherical sampling inside pbrt-v4's [3e-4, 6.22] sr (shapes.h Min/MaxSphericalSampleArea), area sampling outside; both ends tested.

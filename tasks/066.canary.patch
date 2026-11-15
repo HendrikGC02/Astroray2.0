@@ -1,5 +1,5 @@
 diff --git a/src/kernel/light/area_disk.h b/src/kernel/light/area_disk.h
-index 96ec6e0..6b35fa6 100644
+index 96ec6e0..61c574b 100644
 --- a/src/kernel/light/area_disk.h
 +++ b/src/kernel/light/area_disk.h
 @@ -22,7 +22,7 @@ AR_FN Real disk_radius(const LightRecord& r) { return Real(r.size[0]); }
@@ -11,16 +11,25 @@ index 96ec6e0..6b35fa6 100644
  }
  
  AR_FN Real3 disk_point(const LightRecord& r, Real2 u) {
+@@ -80,7 +80,7 @@ AR_FN LightLeSample disk_sample_le(const LightRecord& r, Real2 u_pos, Real2 u_di
+   return s;
+ }
+ 
+-AR_FN Real disk_power(const LightRecord& r) { return Real(r.strength); }
++AR_FN Real disk_power(const LightRecord& r) { return Real(r.strength) * Real(0.5); }
+ 
+ AR_FN LightBounds disk_bounds(const LightRecord& r) {
+   const Real3 c = light_position(r), n = area_front(r);
 diff --git a/src/kernel/light/area_rect.h b/src/kernel/light/area_rect.h
-index 75f6314..53453a0 100644
+index 6c27bc4..d589368 100644
 --- a/src/kernel/light/area_rect.h
 +++ b/src/kernel/light/area_rect.h
-@@ -154,7 +154,7 @@ AR_FN Real rect_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Real
+@@ -159,7 +159,7 @@ AR_FN Real rect_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Real
    if (!sphquad_init(g, ctx.p, &q)) return Real(0);
    Real pdf;
-   if (q.S >= kRectMinSolidAngle) {
+   if (rect_spherical(q.S)) {
 -    pdf = Real(1) / q.S;
 +    pdf = Real(2) / q.S;
    } else {
-     const Real3 d = hit.p - ctx.p;
-     const Real d2 = dot(d, d);
+     pdf = rect_area_pdf(g, hit.p - ctx.p, wi, r);
+   }
