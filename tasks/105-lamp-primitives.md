@@ -21,3 +21,4 @@ Progress:
 - Outside Scope, mechanical: src/kernel/launch_config.h gained the two OptiX rows the kernelgate demands next to budget.toml; budget rows are 0 until a `check full` Nsight measurement (as for the other OptiX programs).
 - test_optix_trace.cpp: its stand-in "lamp" (a mesh instance with light_index 7) became a real rectangle lamp, since a light index now names a lamp in the light table.
 - NOMINMAX is now defined once in CMakeLists.txt (empty, matching the sources that define it); include-order workarounds removed.
+- Review fixes: a POINT record with a radius is not a lamp (both devices throw), a lamp instance with the shadow bit throws (0004 D8), disk bound pad derived (2 gamma(3)), Embree sphere u,v zeroed, prim/u/v compared, error-message tests. Size about 440 production lines, accepted by the lead. optix_trace stand-in lamp lost its shadow bit, so its shadow item now expects SHADE_SHADOW.
