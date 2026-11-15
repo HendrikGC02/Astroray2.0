@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -89,6 +90,11 @@ TEST_CASE("present/half clamp") {
   CHECK(ar::float_to_half(ar::film_clamp_half(70000.0f)) == 0x7bff);
   CHECK(ar::float_to_half(ar::film_clamp_half(-70000.0f)) == 0xfbff);
   CHECK(ar::float_to_half(ar::film_clamp_half(std::numeric_limits<float>::infinity())) == 0x7bff);
+  // A NaN is never hidden as a finite value: it stays a half NaN, and Inf stays Inf.
+  const uint16_t nan_half = ar::float_to_half(ar::film_clamp_half(std::numeric_limits<float>::quiet_NaN()));
+  CHECK((nan_half & 0x7c00) == 0x7c00);
+  CHECK((nan_half & 0x3ff) != 0);
+  CHECK(ar::float_to_half(std::numeric_limits<float>::infinity()) == 0x7c00);
   // The finite clamp holds through the whole kernel: S1 / n = 70000 presents as 65504.
   PresentRig rig(1, 1);
   rig.set_mean(0, 4, 70000.0, -70000.0, 1.0);
@@ -299,6 +305,24 @@ TEST_CASE("present/ring read slot never overwritten") {
   ring.release(held->frame_id);
   CHECK(publish(43) != 0);  // a released slot is reused
   CHECK_THROWS_AS(ring.publish_host(px.data(), 9, 100, 100, DisplayFormat::RGBA16F), std::invalid_argument);
+}
+
+TEST_CASE("present/ring allocator and failed copy") {
+  const SlotAllocator only_allocate{[](uint64_t b) -> void* { return std::malloc(b); }, nullptr};
+  CHECK_THROWS_AS(DisplayRing(64, only_allocate), std::invalid_argument);
+  const SlotAllocator only_release{nullptr, [](void* p) { std::free(p); }};
+  CHECK_THROWS_AS(DisplayRing(64, only_release), std::invalid_argument);
+
+  // A copy that throws leaves the ring as it was: no frame, same ids and generation.
+  PresentRig rig(1, 1);
+  DisplayRing ring(64);
+  std::vector<uint8_t> px(16, 7);
+  REQUIRE(ring.publish_host(px.data(), 5, 2, 2, DisplayFormat::RGBA8_SRGB) == 1);
+  DeviceBuffer small = rig.dev.allocate(LedgerCategory::FILM, 8, Owner{1, 1});
+  CHECK_THROWS(ring.publish(rig.dev, small, 9, 2, 2, DisplayFormat::RGBA8_SRGB));  // 16 bytes from an 8-byte buffer
+  rig.dev.free(small);
+  CHECK(ring.acquire(1) == std::nullopt);
+  CHECK(ring.publish_host(px.data(), 5, 2, 2, DisplayFormat::RGBA8_SRGB) == 2);  // id 2, generation 9 never taken
 }
 
 TEST_CASE("present/ring publishes a device buffer") {

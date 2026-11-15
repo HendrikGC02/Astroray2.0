@@ -26,14 +26,16 @@ inline constexpr float kHalfMax = 65504.0f;  // largest finite binary16
 AR_FN float film_clamp_half(float v) { return v > kHalfMax ? kHalfMax : (v < -kHalfMax ? -kHalfMax : v); }
 
 // Float to binary16 bits, round to nearest even. Finite input only, already clamped to
-// +-kHalfMax so no value overflows to infinity; NaN or Inf input is a caller bug.
+// +-kHalfMax so no finite value overflows to infinity. NaN and Inf map to half NaN and Inf.
 AR_FN uint16_t float_to_half(float value) {
   const uint32_t bits = bit_cast<uint32_t>(value);
   const uint32_t sign = (bits >> 16) & 0x8000u;
   const uint32_t mag = bits & 0x7fffffffu;
   const uint32_t exp = mag >> 23;  // biased float exponent
   uint32_t half;
-  if (exp >= 113u) {               // |x| >= 2^-14: a normal half
+  if (exp == 255u) {               // NaN or Inf: stays one (the clamp keeps Inf out; NaN is a bug upstream)
+    half = 0x7c00u | ((mag & 0x7fffffu) != 0u ? 0x200u : 0u);
+  } else if (exp >= 113u) {               // |x| >= 2^-14: a normal half
     const uint32_t mant = mag & 0x7fffffu;
     half = ((exp - 112u) << 10) | (mant >> 13);
     const uint32_t rem = mant & 0x1fffu;

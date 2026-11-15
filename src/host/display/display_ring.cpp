@@ -16,7 +16,9 @@ void heap_release(void* p) { std::free(p); }
 
 DisplayRing::DisplayRing(uint64_t slot_bytes, SlotAllocator allocator) : allocator_(allocator), slot_bytes_(slot_bytes) {
   if (slot_bytes == 0) throw std::invalid_argument("display ring: slot of zero bytes");
-  if (allocator_.allocate == nullptr || allocator_.release == nullptr) allocator_ = {heap_allocate, heap_release};
+  if ((allocator_.allocate == nullptr) != (allocator_.release == nullptr))
+    throw std::invalid_argument("display ring: a SlotAllocator needs both allocate and release");
+  if (allocator_.allocate == nullptr) allocator_ = {heap_allocate, heap_release};
   for (uint32_t i = 0; i < kSlots; ++i) {
     slots_[i].data = allocator_.allocate(slot_bytes);
     if (slots_[i].data == nullptr) {
@@ -40,7 +42,6 @@ uint64_t DisplayRing::publish_with(uint64_t generation, uint32_t width, uint32_t
     throw std::invalid_argument("display ring: frame of " + std::to_string(bytes) + " bytes exceeds the " +
                                 std::to_string(slot_bytes_) + "-byte slot");
   Slot* slot = nullptr;
-  uint64_t id = 0;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (generation < last_generation_)
@@ -66,8 +67,6 @@ uint64_t DisplayRing::publish_with(uint64_t generation, uint32_t width, uint32_t
     }
     slot->state = State::FILLING;
     slot->frame = DisplayFrame{};
-    last_generation_ = generation;
-    id = next_frame_id_++;
   }
   // The copy runs outside the lock: the slot is FILLING, so neither acquire nor another publish
   // touches it.
@@ -78,7 +77,10 @@ uint64_t DisplayRing::publish_with(uint64_t generation, uint32_t width, uint32_t
     slot->state = State::EMPTY;
     throw;
   }
+  // Ring state changes only once the copy has succeeded: a throwing copy leaves it as it was.
   std::lock_guard<std::mutex> lock(mutex_);
+  const uint64_t id = next_frame_id_++;
+  last_generation_ = generation;
   slot->frame = DisplayFrame{id, generation, width, height, format, uint32_t(row_bytes), slot->data};
   slot->state = State::READY;
   return id;
