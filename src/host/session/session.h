@@ -166,8 +166,8 @@ class Session {
   std::thread thread_;  // last: started after every member exists
 };
 
-// A CPU device with the production entry points registered, owning its ledger and a thread pool of
-// workers engine threads (defined in src/device/cpu/cpu_device.cpp, the only place that may name
+// A CPU device with the production entry points registered, owning its ledger and a pool of
+// that many engine threads (defined in src/device/cpu/cpu_device.cpp, the only place that may name
 // the CPU device).
 std::shared_ptr<Device> make_cpu_session_device(ContextState& ctx, unsigned workers);
 
