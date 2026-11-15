@@ -75,10 +75,10 @@ try {
   # --- configure ---
   if (-not $CheckOnly) {
     # Source registration (cmake/sources.cmake): same patterns, plain GLOB there.
-    $globs = @('tests/cpu/test_*.cpp', 'tests/common/*.cpp', 'src/host/*.cpp', 'src/device/cpu/*.cpp', 'src/device/cuda/*.cpp', 'src/capi/*.cpp', 'src/kernel_gpu/*.cu', 'tests/gpu/kernels/*.cu')
+    $globs = @('tests/cpu/test_*.cpp', 'tests/common/*.cpp', 'src/host/*.cpp', 'src/device/cpu/*.cpp', 'src/device/cuda/*.cpp', 'src/capi/*.cpp', 'src/kernel_gpu/*.cu', 'tests/gpu/kernels/*.cu', 'src/kernel_cpu/*.cpp', 'tests/gpu/test_*.cpp', 'tests/gpu/main.cpp', 'blender/astroray/*')
     $files = foreach ($g in $globs) {
       $dir = Split-Path $g -Parent
-      $rec = $g.StartsWith('src/host')
+      $rec = $g.StartsWith('src/host') -or $g.StartsWith('blender/astroray')
       if (Test-Path $dir) {
         Get-ChildItem -Path $dir -Filter (Split-Path $g -Leaf) -File -Recurse:$rec |
           ForEach-Object { $_.FullName.Substring($root.Length + 1).Replace('\', '/') }
