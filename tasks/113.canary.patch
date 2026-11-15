@@ -1,0 +1,13 @@
+diff --git a/src/host/fault.cpp b/src/host/fault.cpp
+index 1ddee26..80aba0d 100644
+--- a/src/host/fault.cpp
++++ b/src/host/fault.cpp
+@@ -40,7 +40,7 @@ const char* write_dump(const std::string& path, EXCEPTION_POINTERS* info, char*
+     return reason;
+   }
+   wchar_t cmd[4 * MAX_PATH];
+-  swprintf(cmd, 4 * MAX_PATH, L"\"%ls\" %lu %lu %llu \"%ls\"", helper, GetCurrentProcessId(), GetCurrentThreadId(),
++  swprintf(cmd, 4 * MAX_PATH, L"\"%ls\" %lu %lu %llu \"%ls\"", helper, GetCurrentProcessId() + 1, GetCurrentThreadId(),
+            static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(info)), wpath);
+ 
+   STARTUPINFOW si = {};
