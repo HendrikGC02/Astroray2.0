@@ -19,7 +19,8 @@ set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out/bin)
 
-# No effect until the device probe (014) and device code (027).
+# GPU builds link static cudart for the device probe (host compiler only; device
+# code starts in 027). The cpu preset never looks for CUDA.
 option(ASTRORAY_GPU "Build the CUDA device backend" ON)
 
 include(cmake/warnings.cmake)
@@ -118,6 +119,11 @@ if(ASTRORAY_ENGINE_SOURCES)
   add_library(astroray_engine STATIC ${ASTRORAY_ENGINE_SOURCES})
   astroray_target_warnings(astroray_engine)
   target_link_libraries(astroray_engine PUBLIC astroray_buildinfo)
+  if(ASTRORAY_GPU)
+    find_package(CUDAToolkit 12.8 REQUIRED)
+    target_compile_definitions(astroray_engine PUBLIC ASTRORAY_GPU)
+    target_link_libraries(astroray_engine PRIVATE CUDA::cudart_static)
+  endif()
   list(APPEND _ar_engine_libs astroray_engine)
 endif()
 

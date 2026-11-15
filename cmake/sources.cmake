@@ -12,6 +12,10 @@ file(GLOB ASTRORAY_TEST_CPU_SOURCES
 file(GLOB_RECURSE _ar_host_sources ${CMAKE_SOURCE_DIR}/src/host/*.cpp)
 file(GLOB _ar_device_cpu_sources ${CMAKE_SOURCE_DIR}/src/device/cpu/*.cpp)
 set(ASTRORAY_ENGINE_SOURCES ${_ar_host_sources} ${_ar_device_cpu_sources})
+if(ASTRORAY_GPU)
+  file(GLOB _ar_device_cuda_sources ${CMAKE_SOURCE_DIR}/src/device/cuda/*.cpp)
+  list(APPEND ASTRORAY_ENGINE_SOURCES ${_ar_device_cuda_sources})
+endif()
 file(GLOB ASTRORAY_CAPI_SOURCES ${CMAKE_SOURCE_DIR}/src/capi/*.cpp)
 
 # A test file with `// ar-f64` in its first 5 lines is compiled a second time

@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: Apache-2.0
+// Devices and contexts (0001 D2.1, D2.5, D2.8).
+#include <string.h>
+
+#include <exception>
+#include <memory>
+#include <string>
+
+#include "astroray/astroray.h"
+#include "host/build_info.h"
+#include "host/device_probe.h"
+#include "host/log.h"
+
+struct ar_context_s {
+  astroray::ContextLog log;
+  std::string last_error;
+  std::string record_path;  // read by the recorder (task 033)
+  uint32_t kind = 0;
+  uint32_t index = 0;
+};
+
+namespace {
+
+// Stores the message as the handle's last error (ctx may be null: no handle yet).
+ar_status fail_internal(ar_context ctx, const char* what) {
+  if (ctx) {
+    try {
+      ctx->last_error = what;
+      ctx->log.line("ERROR", std::string("internal error: ") + what);
+    } catch (...) {
+      // Out of memory while reporting: the status is all that is left.
+    }
+  }
+  return AR_ERR_INTERNAL;
+}
+
+// Copies s into a fixed byte array, NUL-terminated, truncated to fit.
+template <size_t N>
+void put(uint8_t (&dst)[N], const std::string& s) {
+  memset(dst, 0, N);
+  memcpy(dst, s.data(), s.size() < N - 1 ? s.size() : N - 1);
+}
+
+// A rejected argument on a live handle: the text is kept as its last error.
+ar_status reject(ar_context ctx, const char* why) {
+  ctx->last_error = why;
+  ctx->log.line("WARNING", why);
+  return AR_ERR_INVALID_ARGUMENT;
+}
+
+}  // namespace
+
+// Every exported body runs inside this: a C++ exception becomes AR_ERR_INTERNAL
+// and the handle's last error (0001 D2.5). The body may `return` directly.
+#define AR_GUARD(ctx, ...)                                  \
+  try {                                                     \
+    __VA_ARGS__                                             \
+  } catch (const std::exception& e) {                       \
+    return fail_internal((ctx), e.what());                  \
+  } catch (...) {                                           \
+    return fail_internal((ctx), "unknown exception");       \
+  }
+
+extern "C" {
+
+AR_API ar_status ar_device_count(uint32_t* count) {
+  AR_GUARD(nullptr, {
+    if (!count) return AR_ERR_INVALID_ARGUMENT;
+    *count = static_cast<uint32_t>(astroray::list_devices().devices.size());
+    return AR_OK;
+  })
+}
+
+AR_API ar_status ar_device_get_info(uint32_t index, ar_device_info* info) {
+  AR_GUARD(nullptr, {
+    if (!info) return AR_ERR_INVALID_ARGUMENT;
+    astroray::DeviceList list = astroray::list_devices();
+    if (index >= list.devices.size()) return AR_ERR_INVALID_ARGUMENT;
+    const astroray::DeviceRecord& d = list.devices[index];
+    ar_device_info r;
+    memset(&r, 0, sizeof r);
+    r.kind = d.kind;
+    r.index = d.index;
+    r.status = d.status.status;
+    r.compute_capability = d.compute_capability;
+    r.memory_bytes = d.memory_bytes;
+    put(r.name, d.name);
+    put(r.reason, d.status.reason);
+    *info = r;
+    return AR_OK;
+  })
+}
+
+AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out) {
+  AR_GUARD(nullptr, {
+    if (!out) return AR_ERR_INVALID_ARGUMENT;
+    *out = nullptr;
+    if (!desc || !desc->log_path || !desc->log_path[0]) return AR_ERR_INVALID_ARGUMENT;
+
+    astroray::DeviceList list = astroray::list_devices();
+    const astroray::DeviceRecord* dev = nullptr;
+    if (desc->device_kind == AR_DEVICE_CPU) {
+      if (desc->device_index != 0) return AR_ERR_INVALID_ARGUMENT;
+      dev = &list.devices[0];
+    } else if (desc->device_kind == AR_DEVICE_CUDA) {
+      for (const astroray::DeviceRecord& d : list.devices)
+        if (d.kind == AR_DEVICE_CUDA && d.index == desc->device_index) dev = &d;
+      // With no CUDA device, index 0 is a missing device (AR_ERR_DEVICE, the reason is
+      // the probe's own); any other index is a bad argument. No fallback to the CPU.
+      if (!dev) return (list.devices.size() == 1 && desc->device_index == 0) ? AR_ERR_DEVICE : AR_ERR_INVALID_ARGUMENT;
+    } else {
+      return AR_ERR_INVALID_ARGUMENT;
+    }
+    if (dev->status.status != AR_OK) return dev->status.status;
+
+    std::unique_ptr<ar_context_s> ctx(new ar_context_s);
+    std::string err;
+    if (!ctx->log.open(desc->log_path, &err)) return AR_ERR_INVALID_ARGUMENT;
+    ctx->kind = dev->kind;
+    ctx->index = dev->index;
+    if (desc->record_path) ctx->record_path = desc->record_path;
+
+    // Every field of the build record, so a log alone identifies the binary (0001 D2.7).
+    const astroray::BuildInfo& b = astroray::kBuildInfo;
+    ctx->log.line("INFO", std::string("build version=") + b.version + " git=" + b.git_sha +
+                              " dirty=" + std::to_string(b.dirty) + " cuda=" + b.cuda + " optix=" + b.optix +
+                              " embree=" + b.embree + " oidn=" + b.oidn + " type=" + b.build_type +
+                              " kernels=" + astroray::kernel_source());
+    ctx->log.line("INFO", std::string("device kind=") + (dev->kind == AR_DEVICE_CPU ? "cpu" : "cuda") +
+                              " index=" + std::to_string(dev->index) + " name=" + dev->name);
+    *out = ctx.release();
+    return AR_OK;
+  })
+}
+
+AR_API ar_status ar_context_destroy(ar_context ctx) {
+  AR_GUARD(ctx, {
+    if (!ctx) return AR_ERR_INVALID_ARGUMENT;
+    ctx->log.line("INFO", "context destroyed");
+    delete ctx;
+    return AR_OK;
+  })
+}
+
+AR_API ar_status ar_context_last_error(ar_context ctx, uint32_t capacity, uint8_t* text) {
+  AR_GUARD(ctx, {
+    if (!ctx) return AR_ERR_INVALID_ARGUMENT;
+    if (capacity > 0 && !text) return reject(ctx, "invalid argument: last_error text buffer is null");
+    if (capacity == 0) return AR_OK;
+    size_t n = ctx->last_error.size() < capacity - 1 ? ctx->last_error.size() : capacity - 1;
+    memcpy(text, ctx->last_error.data(), n);
+    text[n] = 0;
+    return AR_OK;
+  })
+}
+
+}  // extern "C"

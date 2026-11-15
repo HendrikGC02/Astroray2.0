@@ -75,7 +75,7 @@ try {
   # --- configure ---
   if (-not $CheckOnly) {
     # Source registration (cmake/sources.cmake): same patterns, plain GLOB there.
-    $globs = @('tests/cpu/test_*.cpp', 'tests/common/*.cpp', 'src/host/*.cpp', 'src/device/cpu/*.cpp', 'src/capi/*.cpp')
+    $globs = @('tests/cpu/test_*.cpp', 'tests/common/*.cpp', 'src/host/*.cpp', 'src/device/cpu/*.cpp', 'src/device/cuda/*.cpp', 'src/capi/*.cpp')
     $files = foreach ($g in $globs) {
       $dir = Split-Path $g -Parent
       $rec = $g.StartsWith('src/host')
