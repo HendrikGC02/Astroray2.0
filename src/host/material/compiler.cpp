@@ -5,6 +5,9 @@
 #include <array>
 #include <cstring>
 
+#include "../../kernel/material/lobes/delta.h"
+#include "../../kernel/material/lobes/ggx.h"
+#include "../../kernel/material/material_header.h"
 #include "../../kernel/material/slot_resolve.h"
 #include "../../kernel/vm/ops/add_f32x3.h"
 #include "../../kernel/vm/ops/const_f32.h"
@@ -255,10 +258,26 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
         if (slot == uint32_t(ar::RecordSlot::closure_weight))
           return res.error = "closure_weight is set by the selection, not stored by a graph", res;
         is_root[size_t(i)] = 1;
+        res.runtime_slots |= uint64_t(1) << slot;
       }
     } else if (nd.op == Op::EMIT_LE) {
       if (w.isc[size_t(nd.input[1])] && !(w.cv[size_t(nd.input[1])][0] >= 0.0f))
         return res.error = "EMIT_LE strength must not be negative", res;
+      // Emission estimate (0005 item 43): a constant input exactly, any per-point input by 1.
+      // A texture-driven input would use the image mean; until images carry it (060) it is 1 too.
+      EmissionTerm term;
+      const ar::SpectrumSemantic esem = ar::kSlotSemantic[int(ar::Slot::EMISSION_COLOR)];
+      bool zero = false;
+      if (w.isc[size_t(nd.input[0])]) {
+        const Vec3& c = w.cv[size_t(nd.input[0])];
+        uint32_t ignored = 0;  // the clamp is reported from the stored colour, below or in the block
+        ar::make_rgb_ref(table, ar::Rgb{{ar::Real(c[0]), ar::Real(c[1]), ar::Real(c[2])}}, esem, &term.color, &ignored);
+        zero = !(c[0] > 0.0f) && !(c[1] > 0.0f) && !(c[2] > 0.0f);
+      } else {
+        term.color = ar::make_const_ref(esem, ar::Real(1));
+      }
+      term.strength = w.isc[size_t(nd.input[1])] ? w.cv[size_t(nd.input[1])][0] : 1.0f;
+      if (!zero && term.strength > 0.0f) res.emission.push_back(term);
       // A lone constant emission goes to the block; several accumulate in the program.
       if (emit_count == 1 && w.isc[size_t(nd.input[0])] && w.isc[size_t(nd.input[1])]) {
         const Vec3& c = w.cv[size_t(nd.input[0])];
@@ -305,6 +324,110 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
   }
   res.ok = true;
   return res;
+}
+
+namespace {
+
+// The string of index k in the NUL-separated pool, or false when the pool has no such string.
+bool pool_string(const ar_graph_desc& d, uint32_t k, std::string* out) {
+  if (d.string_bytes_count != 0 && d.string_bytes == nullptr) return false;
+  uint32_t at = 0, begin = 0;
+  for (uint32_t i = 0; i < d.string_bytes_count; ++i) {
+    if (d.string_bytes[i] != 0) continue;
+    if (at++ == k) return out->assign(reinterpret_cast<const char*>(d.string_bytes + begin), i - begin), true;
+    begin = i + 1;
+  }
+  return false;
+}
+
+void add_entry(MaterialOutput* m, uint32_t code, const std::string& detail) {
+  for (const MaterialEntry& e : m->entries)
+    if (e.code == code && e.detail == detail) return;  // one entry per (material, node type)
+  m->entries.push_back({code, detail});
+}
+
+// MAY_BE_DELTA for one microfacet lobe: a per-point roughness may reach 0; a constant one is
+// tested with the lobe library's own alpha and predicate. Ref: 0005 item 43; item 4
+// (lobe_is_delta, alpha < 1e-3 on both axes); ggx.h ggx_alpha (alpha = roughness^2).
+bool lobe_may_be_delta(bool per_point, float roughness) {
+  if (per_point) return true;
+  ar::GgxParams g = {};
+  g.roughness = ar::Real(roughness);
+  const ar::Real a = ar::ggx_alpha(g);
+  return ar::lobe_is_delta(a, a);
+}
+
+bool per_point(const CompileResult& r, ar::RecordSlot s) { return ((r.runtime_slots >> uint32_t(s)) & 1u) != 0; }
+
+void finish(MaterialOutput* m) {
+  m->flags = material_flags(m->compiled);
+  m->emission_estimate = m->compiled.emission;
+}
+
+}  // namespace
+
+// In M1a the specular lobe (which the transmission lobe shares) always counts; the coat counts
+// unless coat_weight folds to 0, where no coat lobe can be sampled. NON_OPAQUE is clear because
+// geometry_opacity is fixed at 1 until alpha lands (M1b); EXTENSION is clear because no extension
+// kind compiles; READS_RAY_TYPE is clear because no Light Path op exists.
+uint32_t material_flags(const CompileResult& r) {
+  using RS = ar::RecordSlot;
+  bool delta = lobe_may_be_delta(per_point(r, RS::specular_roughness), r.block.specular_roughness);
+  if (per_point(r, RS::coat_weight) || r.block.coat_weight != 0.0f)
+    delta = delta || lobe_may_be_delta(per_point(r, RS::coat_roughness), r.block.coat_roughness);
+  uint32_t flags = delta ? ar::MAY_BE_DELTA : 0u;
+  const bool emission_entry = r.program.size() > 2 && r.program[2] != 0;
+  if (r.constant_surface) flags |= ar::CONSTANT_SURFACE;
+  if (!emission_entry) flags |= ar::CONSTANT_EMISSION;
+  return flags;
+}
+
+MaterialOutput magenta_material(const ar::Rgb2SpecTable& table, uint32_t code, const std::string& detail) {
+  MaterialOutput m;
+  m.magenta = true;
+  m.compiled.ok = true;
+  m.compiled.constant_surface = true;
+  m.compiled.block = ar::default_constant_block(table);
+  // Diffuse magenta (0005 item 40): base_color (1,0,1) as reflectance and no specular layer.
+  uint32_t flags = 0;
+  ar::make_rgb_ref(table, ar::Rgb{{ar::Real(1), ar::Real(0), ar::Real(1)}}, ar::SpectrumSemantic::REFLECTANCE,
+                   &m.compiled.block.base_color, &flags);
+  m.compiled.block.specular_weight = 0.0f;
+  finish(&m);
+  add_entry(&m, code, detail);
+  return m;
+}
+
+MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable& table) {
+  // Unsupported nodes first, every one of them, not only the first (0001 V15).
+  MaterialOutput unsupported;
+  for (uint32_t i = 0; d.nodes != nullptr && i < d.node_count; ++i) {
+    const ar_graph_node& n = d.nodes[i];
+    if (n.op >= uint32_t(Op::COUNT_)) {
+      add_entry(&unsupported, AR_REPORT_NODE_UNSUPPORTED, "unknown op " + std::to_string(n.op));
+    } else if (Op(n.op) == Op::UNSUPPORTED) {
+      std::string type;
+      if (n.string_count != 1 || !pool_string(d, n.string_first, &type) || type.empty()) type = "unnamed node";
+      add_entry(&unsupported, AR_REPORT_NODE_UNSUPPORTED, type);
+    }
+  }
+  if (!unsupported.entries.empty()) {
+    MaterialOutput m = magenta_material(table, unsupported.entries[0].code, unsupported.entries[0].detail);
+    for (const MaterialEntry& e : unsupported.entries) add_entry(&m, e.code, e.detail);
+    return m;
+  }
+  MaterialOutput m;
+  m.compiled = compile_surface(d, table);
+  if (!m.compiled.ok) return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, m.compiled.error);
+  // Only CONSTANT and RGB resolve in M1a (spectrum_ref.h); TABLE, BLACKBODY and CAUCHY_ABBE land in M1b.
+  for (int s = 0; s < int(ar::Slot::COUNT_); ++s) {
+    const uint8_t k = ar::slot_ref(m.compiled.block, ar::Slot(s)).kind;
+    if (k != uint8_t(ar::SpectrumKind::CONSTANT) && k != uint8_t(ar::SpectrumKind::RGB))
+      return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "SpectrumRef kind " + std::to_string(k) + " lands in M1b");
+  }
+  finish(&m);
+  if (m.compiled.clamp_flags != 0) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "RGB clamped");
+  return m;
 }
 
 }  // namespace astroray::host

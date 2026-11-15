@@ -704,6 +704,7 @@ AR_API ar_status ar_edit_item_commit(ar_edit edit, ar_key key);
 AR_API ar_status ar_edit_remove(ar_edit edit, uint32_t kind, ar_key key);
 AR_API ar_status ar_edit_set_instances(ar_edit edit, AR_IN const ar_instances_desc* desc);
 AR_API ar_status ar_edit_update_transforms(ar_edit edit, uint32_t n, AR_IN_ARRAY(n, uint32_t) const uint32_t* idx, AR_IN_ARRAY(n, ar_xform) const ar_xform* xf);
+/* set_graph and set_material commit their own item; a later ar_edit_item_commit on that key fails. */
 AR_API ar_status ar_edit_set_graph(ar_edit edit, ar_key key, uint32_t target, AR_IN const ar_graph_desc* desc);
 AR_API ar_status ar_edit_set_material(ar_edit edit, ar_key key, AR_IN const ar_material_desc* desc);
 AR_API ar_status ar_edit_set_light(ar_edit edit, ar_key key, AR_IN const ar_light_desc* desc);

@@ -11,6 +11,7 @@
 #include <string>
 
 #include "astroray/astroray.h"
+#include "host/material/material_store.h"
 #include "host/scene/edit.h"
 #include "host/scene/mesh.h"
 #include "host/device.h"
@@ -132,6 +133,8 @@ AR_API ar_status ar_scene_create(ar_context ctx, const ar_scene_desc* desc, ar_s
     auto h = std::make_unique<ar_scene_s>();
     h->scene = std::make_unique<Scene>(astroray::context_state(ctx), std::move(cfg));
     h->scene->meshes = std::make_shared<astroray::host::MeshStore>();
+    // Material tables count in the scene's host ledger, beside its geometry.
+    h->scene->materials = std::make_shared<astroray::host::MaterialStore>(h->scene->meshes->shared_ledger());
     *out = h.release();
     AR_RECORD_BIND(*out);
     return AR_OK;
@@ -193,7 +196,10 @@ AR_API ar_status ar_scene_edit_begin(ar_scene h, ar_edit* out) {
 AR_API ar_status ar_edit_reset(ar_edit h) {
   AR_RECORD(ar_edit_reset, ar_rec_of(h), h);
   AR_RECORD_BODY({
-  return edit_call(h, [](Edit& e) { return e.reset(); });
+  return edit_call(h, [h](Edit& e) {
+    ar_status st = e.reset();
+    return st == AR_OK ? h->owner->scene->materials->note_reset(e) : st;
+  });
   });
 }
 AR_API ar_status ar_edit_mesh_begin(ar_edit h, const ar_mesh_desc* desc, ar_mesh_buffers* out) {
@@ -225,7 +231,10 @@ AR_API ar_status ar_edit_item_commit(ar_edit h, ar_key key) {
 AR_API ar_status ar_edit_remove(ar_edit h, uint32_t kind, ar_key key) {
   AR_RECORD(ar_edit_remove, ar_rec_of(h), h, kind, key);
   AR_RECORD_BODY({
-  return edit_call(h, [&](Edit& e) { return e.remove(kind, key); });
+  return edit_call(h, [&](Edit& e) {
+    ar_status st = e.remove(kind, key);
+    return st == AR_OK ? h->owner->scene->materials->note_remove(e, kind, key) : st;
+  });
   });
 }
 AR_API ar_status ar_edit_set_settings(ar_edit h, const ar_settings* s) {
@@ -246,6 +255,34 @@ AR_API ar_status ar_edit_set_astro(ar_edit h, ar_key key, const ar_astro_desc* a
   return edit_call(h, [&](Edit& e) { return e.set_astro(key, a); });
   });
 }
+// Graphs cross as flat arrays and compile on a worker at commit (0007 d8); only SURFACE graphs
+// compile in M1a, the other targets refuse loudly. Each call stages and commits its own item.
+AR_API ar_status ar_edit_set_graph(ar_edit h, ar_key key, uint32_t target, const ar_graph_desc* desc) {
+  AR_RECORD(ar_edit_set_graph, ar_rec_of(h), h, key, target, desc);
+  AR_RECORD_BODY({
+  if (h && h->edit && target != AR_TARGET_SURFACE) {
+    // An enum range error is the caller's (0007 d9); a declared target without a compiler yet
+    // is this build's. Both are logged like Edit's own refusals.
+    const bool known = target <= AR_TARGET_WORLD;
+    const ar_status st = known ? AR_ERR_UNSUPPORTED : AR_ERR_INVALID_ARGUMENT;
+    try {
+      const std::string why = known ? "ar_edit_set_graph: target " + std::to_string(target) + " is not implemented in this build"
+                                    : "invalid argument: ar_edit_set_graph target " + std::to_string(target) + " out of range";
+      h->owner->scene->ctx().log.line("WARNING", why);
+      return fail(h, st, why);
+    } catch (...) {
+      return st;
+    }
+  }
+  return staging_call(h, [&](Edit& e) { return h->owner->scene->materials->set_graph(e, key, desc); });
+  });
+}
+AR_API ar_status ar_edit_set_material(ar_edit h, ar_key key, const ar_material_desc* desc) {
+  AR_RECORD(ar_edit_set_material, ar_rec_of(h), h, key, desc);
+  AR_RECORD_BODY({
+  return staging_call(h, [&](Edit& e) { return h->owner->scene->materials->set_material(e, key, desc); });
+  });
+}
 
 // A committed or aborted edit is destroyed, which frees the scene's one edit slot; its
 // handle must not be used again.
@@ -254,7 +291,7 @@ AR_API ar_status ar_edit_commit(ar_edit h, uint64_t* generation) {
   AR_RECORD_BODY({
   ar_scene owner = h ? h->owner : nullptr;
   ar_status st = edit_call(h, [&](Edit& e) { return e.commit(generation); });
-  if (st == AR_OK) owner->edit.reset();
+  if (st == AR_OK) owner->scene->materials->end_edit(), owner->edit.reset();
   return st;
   });
 }
@@ -263,7 +300,7 @@ AR_API ar_status ar_edit_abort(ar_edit h) {
   AR_RECORD_BODY({
   ar_scene owner = h ? h->owner : nullptr;
   ar_status st = edit_call(h, [](Edit& e) { return e.abort(); });
-  if (st == AR_OK) owner->edit.reset();
+  if (st == AR_OK) owner->scene->materials->end_edit(), owner->edit.reset();
   return st;
   });
 }

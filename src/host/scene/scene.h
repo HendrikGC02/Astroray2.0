@@ -36,6 +36,7 @@ namespace astroray::host {
 
 class Edit;
 class MeshStore;  // host/scene/mesh.h
+class MaterialStore;  // host/material/material_store.h
 
 // Applies one generation's key-set changes (reset, removes, then inserts).
 void apply_known(std::set<std::pair<uint32_t, uint64_t>>& known, const Pending& p);
@@ -76,6 +77,8 @@ class Scene {
   WorkerPool& pool() { return *pool_; }
   // Host mesh records (035); created by ar_scene_create.
   std::shared_ptr<MeshStore> meshes;
+  // Graphs, materials and their compiled arrays (059); created by ar_scene_create.
+  std::shared_ptr<MaterialStore> materials;
 
   // Blocks until the init thread is done; throws std::runtime_error with its failure.
   void wait_init();

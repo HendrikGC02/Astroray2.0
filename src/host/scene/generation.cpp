@@ -129,10 +129,12 @@ void GenerationTracker::pump_locked(bool& activated) {
       ctx_.log.line("ERROR", "generation " + std::to_string(p->number) + " rejected: key " +
                                  std::to_string(p->failed_key) + ": " + p->failed_detail);
     } else {
+      // Replaced subjects lose their old entries first, so entries the callbacks raise for the
+      // activating generation (a material's NODE_UNSUPPORTED) survive, under a reset too.
+      report_.on_generation_active(p->number, p->subjects, p->reset);
       for (auto& f : p->on_active) f();
       active_ = p->number;
-      activated = true;  // before anything below can throw
-      report_.on_generation_active(p->number, p->subjects, p->reset);
+      activated = true;
     }
   }
 }

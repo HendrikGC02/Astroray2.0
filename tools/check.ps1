@@ -107,6 +107,20 @@ try {
         }
         $global:LASTEXITCODE = $bad } },
     @{ Name = 'cpu gate tests'; Tag = 'cpu'; Lock = $true; Identity = $exe; Run = { & $exe --tier=gate } },
+    # B-24 compile row (0009 d13, 0005 V7): the test prints the median compile time of a fixed
+    # 100-node graph; the limit is the "ms per 100 nodes" figure of the row in budgets.toml.
+    @{ Name = 'material compile'; Tag = 'cpu'; Lock = $true; Identity = $exe; Echo = '^B-24 compile:';
+       Run = { & $exe --tier=gate '--test-case=compiler_outputs/B-24*' };
+       Check = { param($r)
+         $q = "import tomllib,re;t=next(b['text'] for b in tomllib.load(open('tools/budgets.toml','rb'))['budget'] if b['id']=='B-24');" +
+              "m=re.search(r'([0-9.]+) ms per 100 nodes',t);print(m.group(1) if m else '')"
+         $limit = (& $py -I -c $q | Select-Object -First 1)
+         if (-not $limit) { Fail 'material compile: B-24 in tools/budgets.toml names no "ms per 100 nodes" limit' }
+         $m = $r.Out | Select-String -Pattern '^B-24 compile: ([0-9.]+) ms per 100 nodes' | Select-Object -First 1
+         if (-not $m) { Fail 'material compile: the test printed no B-24 compile line' }
+         $ms = [double]$m.Matches[0].Groups[1].Value
+         if ($ms -gt [double]$limit) { Fail "material compile: $ms ms per 100 nodes is above B-24's $limit ms" }
+         Write-Host "B-24 compile: $ms ms per 100 nodes (limit $limit ms)" } },
     @{ Name = 'gpu gate tests'; Tag = 'local'; Lock = $true; Identity = $gpuExe; Run = { & $gpuExe --tier=gate } }
   )
   function Invoke-GateStep($s) {
@@ -118,8 +132,8 @@ try {
       $why = if ($fl.Count -gt 0) { "$($s.Name): $($fl[0])" } else { "$($s.Name) failed (out/check/$Tier.log)" }
       Fail ($why.Substring(0, [math]::Min($why.Length, 140)))
     }
-    if ($s.Echo) { $r.Out | Where-Object { $_ -match $s.Echo } | ForEach-Object { Write-Host $_ } }
     if ($s.Identity) { Test-Identity $r $s.Name }
+    if ($s.Check) { & $s.Check $r } elseif ($s.Echo) { $r.Out | Where-Object { $_ -match $s.Echo } | ForEach-Object { Write-Host $_ } }
   }
 
   # Budgets this tier enforces, from the machine copy of 0009 d13.
