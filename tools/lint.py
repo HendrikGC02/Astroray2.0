@@ -549,10 +549,68 @@ def seam(c):
                     break
 
 
-SECTIONS = {"spdx": spdx, "nvidia": nvidia, "ascii-ps1": ascii_ps1, "caps": caps,
-            "skip": skip, "taskfile": taskfile, "budgets": budgets, "history": history,
-            "deps": deps, "kernel": kernel, "seam": seam}
+# Ref: 0009 d21. Only these licences may be committed; share-alike, non-commercial,
+# no-derivatives and none-stated never match.
+ASSET_SPDX_RE = re.compile(r"CC0(-1\.0)?|CC-BY(-\d\.\d)?|MIT|Apache-2\.0")
+ASSET_FILE_CAP = 2 * 1024 * 1024
+ASSET_TOTAL_CAP = 50 * 1024 * 1024
+IMAGE_MAX_PX = 1600
 
+
+def assets(c):
+    """Ref: tasks/088, 0009 d21: asset licences and size caps, image size caps."""
+    import tomllib
+    data_files = [p for p in c.files if p.startswith(("tests/data/", "scenes/"))]
+    sizes = {p: os.path.getsize(os.path.join(c.root, p)) for p in c.files}
+    if sum(sizes[p] for p in data_files) > ASSET_TOTAL_CAP:
+        c.find("tests/data", 1, "assets", f"tests/data + scenes exceed {ASSET_TOTAL_CAP >> 20} MB")
+    for p in data_files:
+        if sizes[p] > ASSET_FILE_CAP:
+            c.find(p, 1, "assets", f"{sizes[p]} bytes, cap {ASSET_FILE_CAP} (2 MB)")
+    manifest = "assets/manifest.toml"
+    if manifest in c.files:
+        try:
+            with open(os.path.join(c.root, manifest), "rb") as f:
+                entries = tomllib.load(f).get("asset", [])
+        except (OSError, ValueError) as e:
+            c.find(manifest, 1, "assets", f"cannot parse: {e}")
+            entries = []
+        for a in entries:
+            spdx_id = a.get("spdx", "")
+            for p in a.get("committed", []):
+                if p not in c.files:
+                    c.find(manifest, 1, "assets", f"{a.get('name')}: committed path {p} does not exist")
+                elif not ASSET_SPDX_RE.fullmatch(spdx_id):
+                    c.find(p, 1, "assets", f"licence {spdx_id!r} of {a.get('name')} may not be committed")
+    for p in c.files:
+        if not p.endswith(".png") or p.startswith("third_party/"):
+            continue
+        if sizes[p] > ASSET_FILE_CAP:
+            c.find(p, 1, "assets", f"image {sizes[p]} bytes, cap {ASSET_FILE_CAP} (2 MB)")
+        with open(os.path.join(c.root, p), "rb") as f:
+            head = f.read(24)
+        if head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
+            c.find(p, 1, "assets", "not a valid PNG header")
+            continue
+        w, h = int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+        if max(w, h) > IMAGE_MAX_PX:
+            c.find(p, 1, "assets", f"image {w}x{h}, cap {IMAGE_MAX_PX} px")
+
+
+SECTIONS = {
+    "spdx": spdx,
+    "nvidia": nvidia,
+    "ascii-ps1": ascii_ps1,
+    "caps": caps,
+    "skip": skip,
+    "taskfile": taskfile,
+    "budgets": budgets,
+    "history": history,
+    "deps": deps,
+    "kernel": kernel,
+    "seam": seam,
+    "assets": assets,
+}
 
 def run(root, files, sections):
     c = Ctx(root, files)
