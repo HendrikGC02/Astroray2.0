@@ -556,6 +556,8 @@ void Session::update_camera_and_filter(uint64_t generation) {
 
 // One thread per listed pixel writes the pass's list before anything reads it (0008 d3).
 void Session::build_active() {
+  // Before any slot is written: the pass's slots must fit the film's capacity.
+  film_->check_resolve_fits(kSamplesPerPass);
   bind_globals();
   device_.launch(KernelId::FILM_BUILD_ACTIVE, active_->plan(film_->data()));
 }
@@ -575,8 +577,7 @@ void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
     return;
   }
   bind_globals();
-  film_->check_resolve_fits(kSamplesPerPass);
-  device_.launch(KernelId::FILM_RESOLVE, film_->data().rect_width * film_->data().rect_height);
+  device_.launch(KernelId::FILM_RESOLVE, active_->count());
   device_.synchronize();
   invalid_.report(film_->data(), report_, generation);
   ++pass_index_;
@@ -610,8 +611,7 @@ void Session::present(uint64_t generation) {
     format = DisplayFormat::RGBA8_SRGB;
   }
   device_.upload(globals_buf_, kDisplayAt, &target, sizeof target);
-  const uint32_t count = f.rect_width * f.rect_height;
-  device_.launch(kernel, count);
+  device_.launch(kernel, active_->count());
   device_.synchronize();
   // A frame dropped because every slot was being read was never shown, so it does not count as
   // the latched state having presented (the interrupt rule's condition).

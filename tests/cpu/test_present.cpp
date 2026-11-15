@@ -352,3 +352,30 @@ TEST_CASE("present/ring publishes a device buffer") {
 }
 
 }  // TEST_SUITE
+
+TEST_SUITE("gate") {
+
+TEST_CASE("present/reads the active list") {
+  // Element j of the output is the list's j-th pixel, not pixel j: the list is a permutation of a
+  // 4 x 3 film, pixel list[j] holds the display mean j + 1 over j + 1 samples, and the
+  // expected output is read off the list, for the beauty and the sample-count kernels.
+  PresentRig rig(4, 3);
+  const uint32_t pixels = 12;
+  for (uint32_t j = 0; j < pixels; ++j) rig.list[j] = (j * 5u + 3u) % pixels;  // 5 is coprime with 12
+  for (uint32_t j = 0; j < pixels; ++j) rig.set_mean(rig.list[j], j + 1, double(j + 1), 1.0, 1.0);
+  std::vector<uint16_t> out(pixels * 4, 0xffffu);
+  rig.target = {out.data(), 0, 0.0f};
+  cpu_film_present(rig.kg, 0, pixels);
+  uint32_t wrong = 0;
+  for (uint32_t j = 0; j < pixels; ++j) wrong += half_value(out[4 * j]) != double(j + 1);
+  CHECK(wrong == 0);
+
+  std::vector<uint32_t> heat(pixels, 0u);
+  rig.target = {heat.data(), ar::HEATMAP_SAMPLE_COUNT, 16.0f};
+  cpu_film_heatmap(rig.kg, 0, pixels);
+  wrong = 0;
+  for (uint32_t j = 0; j < pixels; ++j) wrong += heat[j] != ar::viridis_rgba8(float(j + 1) / 16.0f);
+  CHECK(wrong == 0);
+}
+
+}  // TEST_SUITE

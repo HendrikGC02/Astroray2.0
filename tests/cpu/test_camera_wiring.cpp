@@ -60,11 +60,6 @@ void stub_background(const ar::KernelGlobals& kg, const ar::StepEntry& step, uin
   }
 }
 
-// The refill launch as CpuDevice runs it: the real generate_camera over the TERMINATED entry.
-void generate_camera_kernel(const ar::KernelGlobals& kg, uint32_t first, uint32_t last) {
-  cpu_stage_generate_camera(kg, kg.step_table->stage[static_cast<uint32_t>(ar::Stage::TERMINATED)], first, last);
-}
-
 ar_view_desc view_of(uint32_t w, uint32_t h) {
   ar_view_desc v{};
   v.region_width = w;
@@ -102,12 +97,15 @@ struct Rig {
   Ledger ledger;
   ThreadPool pool;
   CpuDevice dev;
+  std::shared_ptr<Device> production = make_cpu_session_device(ctx, 1);
   std::unique_ptr<Session> s;  // last: destroyed first
   explicit Rig(const ar_view_desc& view) : scene(ctx, SceneConfig{1, {}}), pool(ctx, 2), dev(ledger, pool) {
     g_terminated = 0;
     g_pos.assign(kW * kH, Pos{});
     dev.register_scheduler_kernels();
-    dev.register_kernel(KernelId::GENERATE_CAMERA, &generate_camera_kernel);
+    // The production refill adapter, taken from the production device.
+    dev.register_kernel(KernelId::GENERATE_CAMERA,
+                        static_cast<const CpuDevice&>(*production).kernel_fn(KernelId::GENERATE_CAMERA));
     dev.register_stage(ar::Stage::INTERSECT_CLOSEST, &stub_intersect);
     dev.register_stage(ar::Stage::SHADE_BACKGROUND, &stub_background);
     commit_settings(scene);

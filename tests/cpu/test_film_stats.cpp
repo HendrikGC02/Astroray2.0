@@ -266,3 +266,22 @@ TEST_CASE("film_stats/delta reporting keeps one cumulative entry") {
 }
 
 }  // TEST_SUITE
+
+TEST_SUITE("gate") {
+
+TEST_CASE("film_stats/path end statistics land on the active list") {
+  // film_slot_pixel reads the list: slot j ends a path of pixel list[j]. The list permutes a 4 x 3
+  // film, slot j ends with j + 1 bounces, and the mean read back at list[j] is j + 1.
+  StatsRig rig(4, 3, 1);
+  const uint32_t pixels = 12;
+  for (uint32_t j = 0; j < pixels; ++j) rig.list[j] = (j * 5u + 3u) % pixels;
+  for (uint32_t j = 0; j < pixels; ++j) ar::film_path_end_stats(rig.kg, j, j + 1, ar::Term::ESCAPED);
+  uint32_t wrong = 0;
+  for (uint32_t j = 0; j < pixels; ++j) {
+    ar::Real mean = 0;
+    wrong += !ar::film_bounce_mean_value(rig.data(), rig.list[j], &mean) || mean != ar::Real(j + 1);
+  }
+  CHECK(wrong == 0);
+}
+
+}  // TEST_SUITE
