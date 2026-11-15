@@ -17,3 +17,6 @@ Budget: none.
 Depends on: 047, 049.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
+- FilmView (header-only) snapshots a Film via Device::download; fits_writer takes only FilmView; DenoiserState NONE ready, OIDN/DLSS_RR fail loudly until M1b.
+- astroray_negative_compile uses a stamp (ninja -n stays clean); new case files need a reconfigure (GLOB at configure).
+- fits_read.py runs from the gate-suite case 'fits/reader parses both dumps' via pwsh + Get-ArPython.
