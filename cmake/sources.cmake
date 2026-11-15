@@ -17,6 +17,10 @@ if(ASTRORAY_GPU)
   file(GLOB _ar_device_cuda_sources ${CMAKE_SOURCE_DIR}/src/device/cuda/*.cpp)
   list(APPEND ASTRORAY_ENGINE_SOURCES ${_ar_device_cuda_sources})
 endif()
+# GPU test executable: same registration rule as the CPU one (003).
+file(GLOB ASTRORAY_TEST_GPU_SOURCES
+  ${CMAKE_SOURCE_DIR}/tests/gpu/test_*.cpp
+  ${CMAKE_SOURCE_DIR}/tests/common/*.cpp)
 file(GLOB ASTRORAY_CAPI_SOURCES ${CMAKE_SOURCE_DIR}/src/capi/*.cpp)
 # Device modules: kernels.cmake turns each into one cubin by its file-name prefix.
 file(GLOB ASTRORAY_GPU_KERNEL_SOURCES ${CMAKE_SOURCE_DIR}/src/kernel_gpu/*.cu)

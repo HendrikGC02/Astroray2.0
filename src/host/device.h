@@ -8,9 +8,11 @@
 // device interface), D8 (per-pass kernels), D13 (accounting); 0007 d14 (ledger).
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include "host/ledger.h"
 #include "kernel/kernel_globals.h"
@@ -55,6 +57,18 @@ inline void check_range(const DeviceBuffer& b, uint64_t offset, uint64_t bytes) 
                             ") is outside the " + std::to_string(b.bytes) + "-byte buffer");
 }
 
+// An AllocationRefused whose message the device wrote (it knows facts the ledger's
+// generic text does not, such as the reserve). Status, category and sizes are the base's.
+class DeviceAllocationRefused : public AllocationRefused {
+ public:
+  DeviceAllocationRefused(LedgerCategory category, uint64_t need_bytes, uint64_t available_bytes, std::string text)
+      : AllocationRefused(category, need_bytes, available_bytes), text_(std::move(text)) {}
+  const char* what() const noexcept override { return text_.c_str(); }
+
+ private:
+  std::string text_;
+};
+
 class Device {
  public:
   explicit Device(Ledger& ledger) : ledger_(ledger) {}
@@ -71,7 +85,11 @@ class Device {
   DeviceBuffer allocate(LedgerCategory category, uint64_t bytes, Owner owner) {
     if (bytes == 0) throw std::invalid_argument("device allocation of zero bytes");
     uint64_t available = 0;
-    if (!may_allocate(bytes, &available)) throw AllocationRefused(category, bytes, available);
+    if (!may_allocate(bytes, &available)) {
+      std::string text = refusal_text(category, bytes, available);
+      if (text.empty()) throw AllocationRefused(category, bytes, available);
+      throw DeviceAllocationRefused(category, bytes, available, std::move(text));
+    }
     void* ptr = alloc_memory(bytes);
     if (!ptr) throw std::bad_alloc();
     DeviceBuffer b;
@@ -107,7 +125,9 @@ class Device {
   // StepEntry::count, never `grid`, which only sizes a GPU grid (0002 D4, D6, D7).
   // A partial shadow-producer launch (D5) is a smaller step count written by the scan.
   virtual void launch(ar::Stage stage, uint32_t grid) = 0;
-  // Runs `count` items of a per-pass or scheduler kernel.
+  // Runs a per-pass or scheduler kernel over its items. Like a stage, the kernel takes only
+  // the KernelGlobals pointer and reads its item count from there; `count` only sizes a GPU
+  // grid (0002 D4, D8).
   virtual void launch(KernelId kernel, uint32_t count) = 0;
   // Copies the device's step table (0002 D7 step 2).
   virtual void read_step_table(ar::StepTable& out) = 0;
@@ -118,8 +138,11 @@ class Device {
  protected:
   // The device's reserve rule (0007 d14, R19; the CUDA side is 028): true when `need`
   // bytes may be allocated now. When it returns false, *available_bytes is what the
-  // refusal message reports.
+  // refusal reports.
   virtual bool may_allocate(uint64_t need, uint64_t* available_bytes) = 0;
+  // The refusal's message, or empty for the ledger's generic "needs X GiB for <category>,
+  // Y GiB available".
+  virtual std::string refusal_text(LedgerCategory, uint64_t /*need*/, uint64_t /*available*/) const { return {}; }
   // Raw memory for allocate(); nullptr means the allocator failed.
   virtual void* alloc_memory(uint64_t bytes) = 0;
   virtual void free_memory(void* ptr) = 0;
@@ -127,5 +150,66 @@ class Device {
  private:
   Ledger& ledger_;
 };
+
+// A failure of the device itself: a CUDA call that failed, a missing module image. It
+// reaches the C ABI as AR_ERR_DEVICE (0002 D15). `sticky` marks the errors CUDA documents
+// as needing a process restart; the device is then dead for the process (0001 D2.5).
+class DeviceError : public std::runtime_error {
+ public:
+  explicit DeviceError(const std::string& what, bool sticky = false) : std::runtime_error(what), sticky_(sticky) {}
+  ar_status status() const noexcept { return AR_ERR_DEVICE; }
+  bool sticky() const noexcept { return sticky_; }
+  // The message of 0001 D2.5 for a sticky error whose CUDA text is `text`.
+  static std::string sticky_text(const std::string& text) {
+    return "GPU error: " + text + ". Save your work and restart Blender.";
+  }
+
+ private:
+  bool sticky_;
+};
+
+// What the GPU device adds to the Device interface for tests: loose test modules (never
+// embedded) loaded from an explicit file and launched with raw arguments. It lives here
+// so tests reach it without including a CUDA path (lint section `seam`).
+class ModuleDevice : public Device {
+ public:
+  using Device::Device;
+  // Loads the module image at `path`; returns a handle for launch_module_kernel.
+  virtual uint32_t load_module_file(const std::string& path) = 0;
+  // Launches extern "C" `function` of a loaded module: `args` holds one pointer per kernel
+  // parameter, each to the parameter's value (cuLaunchKernel's kernelParams). Asynchronous:
+  // call synchronize().
+  virtual void launch_module_kernel(uint32_t module, const char* function, uint32_t blocks, uint32_t threads,
+                                    void* const* args) = 0;
+};
+
+// R of 0007 d14: bytes that must stay free after any allocation, for Blender and the
+// desktop. PROVISIONAL (0007 d14: measured by P5 with Blender open).
+inline constexpr uint64_t kCudaReserveBytes = 3ull << 29;  // 1.5 GiB
+
+// The reserve rule of 0007 d14 as a pure function: an allocation of `need` bytes proceeds
+// only if need + reserve <= free, free being what cuMemGetInfo reports at that moment.
+// Written so no sum can overflow.
+inline bool reserve_allows(uint64_t need, uint64_t free_bytes, uint64_t reserve) {
+  return free_bytes >= reserve && need <= free_bytes - reserve;
+}
+
+// The message of a CUDA failure (0002 D15): which call, for which kernel when there is one,
+// and CUDA's own name and text. A sticky result (cuda_result_is_sticky) gets the 0001 D2.5
+// wording, with the call and kernel inside its <text>. `kernel` may be null or empty.
+// Defined in cuda_device.cpp.
+std::string cuda_failure_message(int cu_result, const char* name, const char* text, const char* call,
+                                 const char* kernel);
+
+// Defined in src/device/cuda/cuda_device.cpp, which exists only in ASTRORAY_GPU builds.
+// Retains device `device_index`'s primary context; throws DeviceError when CUDA cannot
+// be used, including after a sticky error elsewhere in the process.
+std::unique_ptr<ModuleDevice> make_cuda_device(Ledger& ledger, uint32_t device_index);
+// True for the CUDA driver results that need a process restart (illegal address, launch
+// failure, launch timeout, ECC and the other hardware-fault codes); takes the numeric
+// CUresult so callers need no CUDA header.
+bool cuda_result_is_sticky(int cu_result);
+// cudaDeviceSynchronize then cudaGetLastError: the text of a latent error, or empty.
+std::string cuda_latent_error();
 
 }  // namespace astroray::host
