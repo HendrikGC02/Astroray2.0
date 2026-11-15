@@ -108,4 +108,18 @@ bool Scene::known(uint32_t kind, ar_key key) const {
   return state_.known.count({kind, key}) != 0;
 }
 
+std::shared_ptr<const InstanceTable> Scene::instances() const {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  return state_.instances;
+}
+uint64_t Scene::tlas_epoch() const {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  return state_.tlas_epoch;
+}
+void Scene::publish_instances(std::shared_ptr<const InstanceTable> table) {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  state_.instances = std::move(table);
+  ++state_.tlas_epoch;
+}
+
 }  // namespace astroray::host

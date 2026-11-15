@@ -56,6 +56,19 @@ class Edit {
 
   const std::string& last_error() const { return last_error_; }
 
+  // For the instance entry points (036): the scene, a reasoned refusal, whether a key is
+  // declared as seen by this edit (earlier generations plus its own committed items), and
+  // what this edit's set_instances established.
+  Scene& scene() { return scene_; }
+  ar_status fail(const std::string& why) { return bad(why); }
+  bool declares(uint32_t kind, ar_key key) const;
+  struct InstanceStage {
+    uint64_t next = 0;  // reserved item key counter
+    bool has_set = false;
+    uint32_t count = 0, steps = 1;
+  };
+  InstanceStage& instance_stage() { return instances_; }
+
  private:
   friend class Scene;
   explicit Edit(Scene& scene);
@@ -78,6 +91,7 @@ class Edit {
   std::shared_ptr<StoredSettings> settings_;
   std::shared_ptr<StoredCamera> camera_;
   std::map<uint64_t, ar_astro_desc> astro_;
+  InstanceStage instances_;
 };
 
 }  // namespace astroray::host

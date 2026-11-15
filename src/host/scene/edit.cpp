@@ -88,6 +88,13 @@ ar_status Edit::item_commit(ar_key key) {
   return AR_OK;
 }
 
+bool Edit::declares(uint32_t kind, ar_key key) const {
+  if (removed_.count({kind, key})) return false;
+  if (!reset_ && scene_.known(kind, key)) return true;
+  auto it = staged_.find(key);
+  return it != staged_.end() && it->second.committed && it->second.item->kind == kind;
+}
+
 ar_status Edit::remove(uint32_t kind, ar_key key) {
   if (ar_status st = touch()) return st;
   if (kind > AR_KIND_ASTRO) return bad("invalid argument: edit kind out of range");
@@ -189,6 +196,8 @@ ar_status Edit::commit(uint64_t* generation) {
       st.settings.reset();
       st.camera.reset();
       st.astro.clear();
+      st.instances.reset();
+      ++st.tlas_epoch;
     }
     for (const auto& r : removed)
       if (r.first == AR_KIND_ASTRO) st.astro.erase(r.second);
