@@ -9,6 +9,7 @@ Do:
 2. Lamp instances: each lamp appends an instance record (036) with `light_index` set, its transform, and the light's camera, diffuse, glossy and transmission visibility bits, never SHADOW; its geometry is the lamp shape that task 105 builds.
 3. Radiance scale: per render the host takes the largest emitter spectral radiance over the table support (lamps, emissive estimates, world) and picks s = 2^k so it lies in [1, 2); s multiplies every emitter's strength on the host; the resolve removes it (047).
 4. Tests (fast): records for each lamp type from descriptors; an unequal ellipse raises one entry; lamp instances carry their light_index and never the SHADOW bit; s for a set of emitters is a power of two placing the largest radiance in [1, 2).
+5. From 067: the scene sphere that sizes the world light's importance (4π²R²) must include lamp bounds as well as instance bounds, so a scene with lamps and no meshes still gives the world a positive pmf; add the lamps to 067's light_builder input from the scene (until now they came from tests only).
 Acceptance: `pwsh tools/check.ps1 fast` passes with `lamps/*` cases.
 Look at: none.
 Canary: tasks/068.canary.patch must turn red: astroray_tests_cpu "lamps/radiance scale power of two", "lamps/no shadow bit".
