@@ -32,7 +32,8 @@ def build(out):
                          emission=(t["colour"], t["radiance"]))
         s.instances([{"geom": mesh, "materials": [mat]}])
         s.world((0.0, 0.0, 0.0), 0.0)
-        s.settings(SPP, WIDTH, HEIGHT, seed=SEED)
+        # Independent mode: the analytic harness needs the exact variance of each pixel's mean (0008 d3).
+        s.settings(SPP, WIDTH, HEIGHT, seed=SEED, sampler="independent")
         s.camera((0.0, 0.0, t["camera_distance"]), (0.0, 0.0, 0.0), t["focal_mm"], t["sensor_mm"],
                  WIDTH, HEIGHT, up=(0.0, 1.0, 0.0))
         s.finish()

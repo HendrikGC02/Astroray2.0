@@ -443,18 +443,24 @@ class Scene:
         self._camera = c
         self.size = (width, height)
 
-    def settings(self, spp, width, height, seed=1, max_bounces=8, pixel_filter="box", filter_width=1.0):
+    def settings(self, spp, width, height, seed=1, max_bounces=8, pixel_filter="box", filter_width=1.0,
+                 sampler="sobol"):
         """Samples per pixel, seed, total bounce limit, pixel filter (box, gaussian,
-        blackman_harris) and output size."""
+        blackman_harris), output size and sampler mode (sobol, or independent where a test needs
+        the exact variance of the mean, 0008 d3)."""
         a = self.abi
         filters = {"box": a.AR_FILTER_BOX, "gaussian": a.AR_FILTER_GAUSSIAN, "blackman_harris": a.AR_FILTER_BLACKMAN_HARRIS}
         if pixel_filter not in filters:
             raise ValueError(f"unknown pixel filter '{pixel_filter}'")
+        samplers = {"sobol": a.AR_SAMPLER_SOBOL, "independent": a.AR_SAMPLER_INDEPENDENT}
+        if sampler not in samplers:
+            raise ValueError(f"unknown sampler mode '{sampler}'")
         s = a.ar_settings()
         s.samples = s.viewport_samples = spp
         s.output_width, s.output_height, s.resolution_percent = width, height, 100
         s.max_bounces, s.seed = max_bounces, seed
         s.pixel_filter, s.pixel_filter_width, s.film_exposure = filters[pixel_filter], filter_width, 1.0
+        s.sampler_mode = samplers[sampler]
         self._call(self.lib.ar_edit_set_settings(self.edit_h, ctypes.byref(s)), "ar_edit_set_settings")
         self.size = (width, height)
 
