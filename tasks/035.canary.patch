@@ -1,5 +1,5 @@
 diff --git a/src/host/scene/mesh.cpp b/src/host/scene/mesh.cpp
-index df81efe..45a4c40 100644
+index 1760393..d3415fd 100644
 --- a/src/host/scene/mesh.cpp
 +++ b/src/host/scene/mesh.cpp
 @@ -80,7 +80,7 @@ struct Staged {
@@ -20,3 +20,12 @@ index df81efe..45a4c40 100644
        throw std::runtime_error(who + "corner_vert[" + std::to_string(c) + "] = " + std::to_string(s.corner_vert[c]) +
                                 " is outside [0, " + std::to_string(V) + ")");
    check_finite(s.positions, n.positions, "positions", uint64_t(V) * 3, who);
+@@ -312,7 +312,7 @@ bool MeshStore::install_positions(ar_key key, uint64_t base_topology, std::vecto
+   std::shared_ptr<const MeshRecord> old;
+   std::lock_guard<std::mutex> lock(mutex_);
+   auto it = active_.find(key);
+-  if (it == active_.end() || it->second->topo->id != base_topology) return false;
++  if (it == active_.end() || (it->second->topo->id != base_topology && base_topology == 0)) return false;
+   // check_position_counts ran on the worker against the same topology; sizes are final here.
+   old = it->second;
+   it->second = make_record(key, old->topo, std::move(positions), std::move(corner_normals), ledger_);

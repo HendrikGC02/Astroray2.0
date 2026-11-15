@@ -1,7 +1,7 @@
 # 035 Mesh ingestion: staged buffers, validation and the host mesh record
 Goal: meshes cannot enter the engine -> `ar_edit_mesh_begin` and `ar_edit_positions_begin` hand out staged arrays, a worker validates and triangulates each committed mesh into a host mesh record, and invalid input drops the generation with a report entry naming the mesh.
 Read first: 0007 d9 (O(n) validation on workers, outcomes), d10 (geometry record, corner-indexed lookups), d12 (edit map rows for deformation and other geometry changes), d22 (positions-only path), docs/decisions/0007-appendix-abi.md (`ar_mesh_desc`, `ar_positions_buffers`), 0007 V15 (invalid indices, NaN positions).
-Scope: src/host/scene/mesh.{h,cpp}, src/capi/scene_api.cpp, src/capi/unimplemented.cpp, tests/cpu/test_mesh_ingest.cpp, tests/abi/test_mesh_api.py.
+Scope: src/host/scene/mesh.{h,cpp}, src/capi/scene_api.cpp, src/capi/unimplemented.cpp, tests/cpu/test_mesh_ingest.cpp, tests/abi/test_mesh_api.py; lead-approved additions: src/host/scene/edit.{h,cpp} (hooks), src/host/geometry/triangulate.{h,cpp}, tests/cpu/test_triangulate.cpp, src/host/scene/scene.h (one member).
 Out of scope: device upload and acceleration structures (037, 040); tangents; deformation blur (S > 1 is stored, only the shutter-centre step is used until M8); curves and points (M7).
 Reference: none.
 Do:
@@ -12,7 +12,7 @@ Do:
 5. Tests: test_mesh_ingest.cpp (fast): a quad mesh triangulates into the expected corner triples; an out-of-range corner_vert, a NaN position and a non-monotonic face_start each reject their generation and keep the previous mesh; positions-only update keeps triangles identical; test_mesh_api.py drives the same cases through `_abi.py` with numpy views on the staged arrays.
 Acceptance: `pwsh tools/check.ps1 gate` passes; `<python> -m unittest discover -s tests/abi -p "test_mesh_api.py"` passes and prints the rejected generation's report detail for the NaN case.
 Look at: none.
-Canary: tasks/035.canary.patch must turn red: astroray_tests_cpu "mesh/nan position rejected", "mesh/corner_vert out of range rejected".
+Canary: tasks/035.canary.patch must turn red: astroray_tests_cpu "mesh/nan position rejected", "mesh/corner_vert out of range rejected", "mesh/positions-only edit on a rejected replacement is skipped".
 Budget: none.
 Depends on: 032, 034.
 Size: M (about 350 lines); stop and report at 2x.
