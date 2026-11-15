@@ -2,7 +2,7 @@
 // The one light interface: sample_li, pdf_li, sample_le, power and bounds, dispatched by a
 // closed enum in a switch. "Absent" lives in the type: an infinite light says `infinite`, never a
 // distance of 1e30; no sample is pdf == 0 with Le == 0, never a NaN.
-// Include this file, not point.h or sphere.h: they need the types defined here.
+// Include this file, not point.h, sphere.h, area_rect.h or area_disk.h: they need the types defined here.
 //
 // Ref: docs/decisions/0004-integrator.md D7 (interface), D1 (delta lights: NEE weight 1, BSDF
 // pdf 0), D6 (energy conventions), D9 (theta_e: pi/2 one-sided); pbrt-v4 src/pbrt/lights.h
@@ -28,7 +28,9 @@ AR_NS_BEGIN
 // Closed list; a new type adds an enumerator and one row to each switch below.
 enum class LightType : uint8_t {
   POINT = 0,  // radius 0: delta intensity
-  SPHERE      // radius > 0: area-consistent radiance, visible-cone sampling
+  SPHERE,     // radius > 0: area-consistent radiance, visible-cone sampling
+  AREA_RECT,  // one-sided rectangle or square, spherical-rectangle sampling
+  AREA_DISK   // one-sided disk, area sampling
 };
 
 enum class LightContextKind : uint8_t { POINT = 0, SEGMENT };
@@ -160,6 +162,8 @@ AR_NS_END
 
 #include "point.h"
 #include "sphere.h"
+#include "area_rect.h"  // before area_disk.h: the disk reuses its frame helpers
+#include "area_disk.h"
 
 AR_NS_BEGIN
 
@@ -182,7 +186,44 @@ AR_FN LightRecord light_make(LightType type, Real3 pos, Real radius, Real streng
   return r;
 }
 
+// An area lamp: xf is the rotation (axis_x, axis_y, axis_z = axis_x x axis_y, front = -axis_z)
+// and the centre; size_x x size_y is a rectangle's width and height, a disk's size_x its radius
+// and size_y 0, all in world units.
+AR_FN LightRecord light_make_area(LightType type, Real3 pos, Real3 axis_x, Real3 axis_y, Real size_x, Real size_y,
+                                  Real strength, const SpectrumRef& emission) {
+  LightRecord r = light_make(type, pos, size_x, strength, emission);
+  const Real3 z = cross(axis_x, axis_y);
+  const Real cols[3][3] = {{axis_x.x, axis_x.y, axis_x.z}, {axis_y.x, axis_y.y, axis_y.z}, {z.x, z.y, z.z}};
+  for (int c = 0; c < 3; ++c)
+    for (int row = 0; row < 3; ++row) r.xf[4 * row + c] = float(cols[c][row]);
+  r.size[1] = float(size_y);
+  return r;
+}
+
 AR_FN bool light_finite(float x) { return x - x == 0.0f; }
+
+// The area lamps' shared checks: the transform is a rotation (a scale would silently resize the
+// lamp, it belongs in size), and the area A keeps L = P sigma / (pi A) and the pdf 1 / A finite
+// and normal in float. sigma is the emission's own scale, as for the sphere.
+AR_FN const char* area_problem(const LightRecord& r, double area) {
+  const double tol = double(1e-3);
+  double ax[3][3];
+  for (int c = 0; c < 3; ++c)
+    for (int row = 0; row < 3; ++row) ax[c][row] = double(r.xf[4 * row + c]);
+  for (int c = 0; c < 3; ++c) {
+    const double len2 = ax[c][0] * ax[c][0] + ax[c][1] * ax[c][1] + ax[c][2] * ax[c][2];
+    if (!(len2 > (double(1.0) - tol) * (double(1.0) - tol) && len2 < (double(1.0) + tol) * (double(1.0) + tol)))
+      return "an area light transform must be a rotation; scale belongs in the size";
+    const int d = (c + 1) % 3;
+    const double dp = ax[c][0] * ax[d][0] + ax[c][1] * ax[d][1] + ax[c][2] * ax[d][2];
+    if (!(dp > -tol && dp < tol)) return "an area light transform must be a rotation; scale belongs in the size";
+  }
+  const double sigma = r.emission.kind == uint8_t(SpectrumKind::CONSTANT) ? double(r.emission.p[0]) : double(r.emission.p[3]);
+  const double pi = double(3.14159265358979323846);
+  if (!(area >= double(r.strength) * sigma / (pi * double(FLT_MAX))) || !(area >= double(FLT_MIN)) || !(area <= double(1.0) / double(FLT_MIN)))
+    return "area light is so small or so large that its radiance or area pdf is not representable";
+  return nullptr;
+}
 
 // nullptr when the record can be uploaded, else the reason the host reports. A radius whose
 // radiance L = P sigma / (4 pi^2 r^2) or whose area pdf 1 / (4 pi r^2) would overflow float is
@@ -210,6 +251,15 @@ AR_FN const char* light_problem(const LightRecord& r) {
         return "sphere light radius is so small that its radiance overflows";
       return nullptr;
     }
+    case LightType::AREA_RECT: {
+      if (!(r.size[0] > 0.0f) || !(r.size[1] > 0.0f)) return "a rectangle light needs a positive width and height";
+      return area_problem(r, double(r.size[0]) * double(r.size[1]));
+    }
+    case LightType::AREA_DISK: {
+      if (!(r.size[0] > 0.0f)) return "a disk light needs a positive radius";
+      if (r.size[1] != 0.0f) return "a disk light has size[1] 0";
+      return area_problem(r, double(3.14159265358979323846) * double(r.size[0]) * double(r.size[0]));
+    }
   }
   return "unknown light type";
 }
@@ -222,6 +272,8 @@ AR_FN LightLiSample light_sample_li(const LightRecord& r, const LightSampleConte
   switch (LightType(r.type)) {
     case LightType::POINT: return point_sample_li(r, ctx, lam, obs);
     case LightType::SPHERE: return sphere_sample_li(r, ctx, u, lam, obs);
+    case LightType::AREA_RECT: return rect_sample_li(r, ctx, u, lam, obs);
+    case LightType::AREA_DISK: return disk_sample_li(r, ctx, u, lam, obs);
   }
   AR_ASSERT(false);
   return light_li_none();
@@ -233,6 +285,8 @@ AR_FN Real light_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Rea
   switch (LightType(r.type)) {
     case LightType::POINT: return Real(0);
     case LightType::SPHERE: return sphere_pdf_li(r, ctx, wi, hit);
+    case LightType::AREA_RECT: return rect_pdf_li(r, ctx, wi, hit);
+    case LightType::AREA_DISK: return disk_pdf_li(r, ctx, wi, hit);
   }
   AR_ASSERT(false);
   return Real(0);
@@ -245,6 +299,8 @@ AR_FN LightLeSample light_sample_le(const LightRecord& r, Real2 u_pos, Real2 u_d
   switch (LightType(r.type)) {
     case LightType::POINT: return point_sample_le(r, u_dir, lam, obs);
     case LightType::SPHERE: return sphere_sample_le(r, u_pos, u_dir, lam, obs);
+    case LightType::AREA_RECT: return rect_sample_le(r, u_pos, u_dir, lam, obs);
+    case LightType::AREA_DISK: return disk_sample_le(r, u_pos, u_dir, lam, obs);
   }
   AR_ASSERT(false);
   return light_le_none();
@@ -256,6 +312,8 @@ AR_FN Real light_power(const LightRecord& r) {
   switch (LightType(r.type)) {
     case LightType::POINT: return point_power(r);
     case LightType::SPHERE: return sphere_power(r);
+    case LightType::AREA_RECT: return rect_power(r);
+    case LightType::AREA_DISK: return disk_power(r);
   }
   AR_ASSERT(false);
   return Real(0);
@@ -265,6 +323,8 @@ AR_FN LightBounds light_bounds(const LightRecord& r) {
   switch (LightType(r.type)) {
     case LightType::POINT: return point_bounds(r);
     case LightType::SPHERE: return sphere_bounds(r);
+    case LightType::AREA_RECT: return rect_bounds(r);
+    case LightType::AREA_DISK: return disk_bounds(r);
   }
   AR_ASSERT(false);
   LightBounds b;
