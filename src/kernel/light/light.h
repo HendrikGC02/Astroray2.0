@@ -146,23 +146,24 @@ AR_FN Real light_safe_sqrt(Real x) { return ar::sqrt(ar::max(Real(0), x)); }
 AR_FN Real3 sample_uniform_sphere(Real2 u) {
   const Real z = Real(1) - Real(2) * u.x;
   const Real r = light_safe_sqrt(Real(1) - z * z);
-  const Real phi = Real(2) * kLightPi * u.y;
-  return Real3{r * ar::cos(phi), r * ar::sin(phi), z};
+  // phi = 2 pi u.y, through cospi / sinpi (portability.h: no double slow path on the GPU).
+  return Real3{r * ar::cospi(Real(2) * u.y), r * ar::sinpi(Real(2) * u.y), z};
 }
 
 // pbrt-v4 SampleUniformDiskConcentric (Shirley and Chiu 1997).
 AR_FN Real2 sample_disk_concentric(Real2 u) {
   const Real ox = Real(2) * u.x - Real(1), oy = Real(2) * u.y - Real(1);
   if (ox == Real(0) && oy == Real(0)) return Real2{Real(0), Real(0)};
-  Real r, theta;
+  // t = theta / pi, so the angle goes through cospi / sinpi (portability.h).
+  Real r, t;
   if (ar::abs(ox) > ar::abs(oy)) {
     r = ox;
-    theta = (kLightPi / Real(4)) * (oy / ox);
+    t = (oy / ox) / Real(4);
   } else {
     r = oy;
-    theta = kLightPi / Real(2) - (kLightPi / Real(4)) * (ox / oy);
+    t = Real(0.5) - (ox / oy) / Real(4);
   }
-  return Real2{r * ar::cos(theta), r * ar::sin(theta)};
+  return Real2{r * ar::cospi(t), r * ar::sinpi(t)};
 }
 
 // pbrt-v4 SampleCosineHemisphere about +z; pdf = z / pi (zero at the horizon).

@@ -155,9 +155,9 @@ struct EonDir {
 AR_FN EonDir eon_cltc_sample(Real3 wo, Real r, Real u1, Real u2) {
   const EonLtc m = eon_ltc_coeffs(wo.z, r);
   const Real rad = ar::sqrt(u1);
-  const Real phi = Real(2) * kEonPi * u2;
-  Real x = rad * ar::cos(phi);
-  const Real y = rad * ar::sin(phi);
+  // phi = 2 pi u2, through cospi / sinpi (portability.h: no double slow path on the GPU).
+  Real x = rad * ar::cospi(Real(2) * u2);
+  const Real y = rad * ar::sinpi(Real(2) * u2);
   const Real vz = Real(1) / ar::sqrt(m.d * m.d + Real(1));
   const Real s = Real(0.5) * (Real(1) + vz);
   // GLSL mix(sqrt(1 - y^2), x, s).
@@ -218,8 +218,8 @@ AR_FN LobeSample eon_sample(const EonParams& p, Real3 wo, Real2 u, TransportMode
   if (u.x < pu) {
     const Real z = u.x / pu;
     const Real sin_t = ar::sqrt(max(Real(0), Real(1) - z * z));
-    const Real phi = Real(2) * kEonPi * u.y;
-    wi = Real3{sin_t * ar::cos(phi), sin_t * ar::sin(phi), z};
+    // phi = 2 pi u.y, through cospi / sinpi.
+    wi = Real3{sin_t * ar::cospi(Real(2) * u.y), sin_t * ar::sinpi(Real(2) * u.y), z};
     pdf_c = eon_cltc_pdf(wo, wi, r);
   } else {
     const EonDir d = eon_cltc_sample(wo, r, (u.x - pu) / pc, u.y);
