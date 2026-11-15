@@ -19,3 +19,6 @@ Depends on: 041, 049, 061, 070, 102, 103, 114, 029.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
 - 2026-11-16: started; questions to the lead before code (IndexMA source, default material record).
+- Kernel, tests, canary done: k_shade_surface 80 regs, 264 B stack, 0 spills under (256,2) (ptxas, before gate). CPU fast/gate cases and GPU agreement (bit-exact) pass.
+- a5 on CPU: mean = L per channel (z < 1) at L = 0.3, 2, 37 (s = 4 .. 1/32). CUDA CLI render blocked: the CUDA session cannot launch INTERSECT_CLOSEST.
+- Blocked: the default-material/pass-index upload breaks test_kg_builder (in-place headers) and test_scene_upload (bytes); lead to choose.
