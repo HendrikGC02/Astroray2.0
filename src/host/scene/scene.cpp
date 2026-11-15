@@ -5,7 +5,11 @@
 #include <chrono>
 #include <stdexcept>
 
+#include "host/data_resource.h"
+#include "host/light/light_builder.h"
+#include "host/material/material_store.h"
 #include "host/scene/edit.h"
+#include "host/scene/mesh.h"
 #include "host/thread.h"
 
 namespace astroray::host {
@@ -126,6 +130,34 @@ void Scene::publish_instances(std::shared_ptr<const InstanceTable> table) {
   std::lock_guard<std::mutex> lock(state_.mutex);
   state_.instances = std::move(table);
   ++state_.tlas_epoch;
+}
+
+std::shared_ptr<const LightTable> Scene::lights() {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  if (!state_.observer) {
+    DataBlob blob;
+    if (!find_data("spectral/observer.bin", &blob)) throw std::runtime_error("light table: spectral/observer.bin is not embedded");
+    auto t = std::make_shared<ObserverTables>();
+    const std::string err = parse_observer(blob.data, blob.size, t.get());
+    if (!err.empty()) throw std::runtime_error("light table: " + err);
+    state_.observer = std::move(t);
+  }
+  const auto mats = materials->arrays();
+  const auto world = materials->world();
+  SceneLights in = gather_scene_lights(state_.instances.get(), *meshes, *mats, world.get(), false);
+  if (state_.lights && in.key == state_.light_key) return state_.lights;
+  in = gather_scene_lights(state_.instances.get(), *meshes, *mats, world.get(), true);
+  const ar::ObserverView obs{&state_.observer->cmf[0][0], state_.observer->d65};
+  state_.lights = build_light_table(in.lights, in.scene, obs, meshes->shared_ledger());
+  state_.light_key = std::move(in.key);
+  state_.light_meshes = std::move(in.meshes);
+  ++state_.light_rebuilds;
+  return state_.lights;
+}
+
+uint64_t Scene::light_rebuilds() const {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  return state_.light_rebuilds;
 }
 
 }  // namespace astroray::host

@@ -30,7 +30,9 @@ enum class LightType : uint8_t {
   POINT = 0,  // radius 0: delta intensity
   SPHERE,     // radius > 0: area-consistent radiance, visible-cone sampling
   AREA_RECT,  // one-sided rectangle or square, spherical-rectangle sampling
-  AREA_DISK   // one-sided disk, area sampling
+  AREA_DISK,  // one-sided disk, area sampling
+  TRIANGLE,   // emissive mesh triangle (triangle.h)
+  WORLD_CONST // constant world radiance, infinite (world_const.h)
 };
 
 enum class LightContextKind : uint8_t { POINT = 0, SEGMENT };
@@ -72,6 +74,10 @@ struct LightLiSample {
   bool delta;     // NEE weight 1, BSDF-strategy pdf 0 (D1)
   Real3 p_light;
   Spec Le;        // radiance toward the context; for delta lights I / dist^2 (pbrt PointLight::SampleLi)
+  // Le is not known here: the light's material emits per point (an emissive triangle with
+  // kLightEmissionProgram). Le is 0 and the consumer must evaluate the material's `emission` entry
+  // at p_light, toward -wi; using Le as it stands would drop the light.
+  bool deferred_le = false;
 };
 
 struct LightRay {
@@ -83,9 +89,13 @@ struct LightLeSample {
   Spec Le;  // emitted radiance along the ray; intensity for delta lights (pbrt PointLight::SampleLe)
   Real pdf_pos;
   Real pdf_dir;
+  // As LightLiSample::deferred_le: Le is 0 and the consumer evaluates the `emission` entry at
+  // ray.o toward ray.d.
+  bool deferred_le = false;
 };
 
-// The scene's bounding sphere, which light paths from distant lights aim at (067).
+// The scene's bounding sphere: distant lights aim light paths at it, and the world's power
+// (pbrt UniformInfiniteLight::Phi) scales with its radius.
 struct SceneSphere {
   Real3 center;
   Real radius;
@@ -104,6 +114,9 @@ struct LightBounds {
 };
 
 inline constexpr Real kLightPi = Real(3.14159265358979323846);
+// pbrt-v4 FloatOneMinusEpsilon / DoubleOneMinusEpsilon (util/float.h): the largest Real below 1.
+inline constexpr Real kLightOneMinusEpsilon =
+    sizeof(Real) == 4 ? Real(float(0x1.fffffep-1)) : Real(double(0x1.fffffffffffffp-1));
 
 AR_FN LightLiSample light_li_none() {
   LightLiSample s;
@@ -164,6 +177,8 @@ AR_NS_END
 #include "sphere.h"
 #include "area_rect.h"  // before area_disk.h: the disk reuses its frame helpers
 #include "area_disk.h"
+#include "triangle.h"
+#include "world_const.h"
 
 AR_NS_BEGIN
 
@@ -184,6 +199,24 @@ AR_FN LightRecord light_make(LightType type, Real3 pos, Real radius, Real streng
   r.strength = float(strength);
   r.emission = emission;
   return r;
+}
+
+// An emissive triangle (light_record.h encoding); flags are kLightTwoSided, kLightBackFace and
+// kLightEmissionProgram. The indices must stay below 0x7f800000 (checked by light_problem).
+AR_FN LightRecord light_make_triangle(Real3 p0, Real3 p1, Real3 p2, uint32_t instance, uint32_t tri, uint16_t flags,
+                                      Real strength, const SpectrumRef& emission) {
+  LightRecord r = light_make(LightType::TRIANGLE, p0, Real(0), strength, emission);
+  const Real3 v[3] = {p0, p1, p2};
+  for (int k = 0; k < 3; ++k) r.xf[3 * k] = float(v[k].x), r.xf[3 * k + 1] = float(v[k].y), r.xf[3 * k + 2] = float(v[k].z);
+  r.xf[9] = r.xf[10] = r.xf[11] = 0.0f;
+  r.size[0] = bit_cast<float>(instance);
+  r.size[1] = bit_cast<float>(tri);
+  r.flags = flags;
+  return r;
+}
+
+AR_FN LightRecord light_make_world(Real strength, const SpectrumRef& emission) {
+  return light_make(LightType::WORLD_CONST, Real3{Real(0), Real(0), Real(0)}, Real(0), strength, emission);
 }
 
 // An area lamp: xf is the rotation (axis_x, axis_y, axis_z = axis_x x axis_y, front = -axis_z)
@@ -260,6 +293,17 @@ AR_FN const char* light_problem(const LightRecord& r) {
       if (r.size[1] != 0.0f) return "a disk light has size[1] 0";
       return area_problem(r, double(3.14159265358979323846) * double(r.size[0]) * double(r.size[0]));
     }
+    case LightType::TRIANGLE: {
+      if (tri_instance(r) >= 0x7f800000u || tri_index(r) >= 0x7f800000u) return "triangle light index out of range";
+      if (r.flags & ~uint16_t(kLightTwoSided | kLightBackFace | kLightEmissionProgram)) return "unknown triangle light flag";
+      if ((r.flags & kLightTwoSided) && (r.flags & kLightBackFace)) return "a triangle light is two-sided or back-only, not both";
+      const Real3 c = tri_cross(r);
+      const double a2 = double(c.x) * double(c.x) + double(c.y) * double(c.y) + double(c.z) * double(c.z);
+      if (!(a2 >= double(FLT_MIN)) || !(a2 <= double(1.0) / double(FLT_MIN)))
+        return "triangle light area is zero or not representable";
+      return nullptr;
+    }
+    case LightType::WORLD_CONST: return nullptr;
   }
   return "unknown light type";
 }
@@ -274,6 +318,8 @@ AR_FN LightLiSample light_sample_li(const LightRecord& r, const LightSampleConte
     case LightType::SPHERE: return sphere_sample_li(r, ctx, u, lam, obs);
     case LightType::AREA_RECT: return rect_sample_li(r, ctx, u, lam, obs);
     case LightType::AREA_DISK: return disk_sample_li(r, ctx, u, lam, obs);
+    case LightType::TRIANGLE: return tri_sample_li(r, ctx, u, lam, obs);
+    case LightType::WORLD_CONST: return world_sample_li(r, ctx, u, lam, obs);
   }
   AR_ASSERT(false);
   return light_li_none();
@@ -287,33 +333,58 @@ AR_FN Real light_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Rea
     case LightType::SPHERE: return sphere_pdf_li(r, ctx, wi, hit);
     case LightType::AREA_RECT: return rect_pdf_li(r, ctx, wi, hit);
     case LightType::AREA_DISK: return disk_pdf_li(r, ctx, wi, hit);
+    case LightType::TRIANGLE: return tri_pdf_li(r, ctx, wi, hit);
+    case LightType::WORLD_CONST: return world_pdf_li(r, ctx, wi, hit);
   }
   AR_ASSERT(false);
   return Real(0);
 }
 
 // For light paths. u_pos picks the origin and u_dir the direction; delta position lights ignore
-// u_pos. `target` is for distant lights (067).
+// u_pos. Infinite lights aim at `target`, the scene's bounding sphere.
 AR_FN LightLeSample light_sample_le(const LightRecord& r, Real2 u_pos, Real2 u_dir, const Lambda& lam,
-                                    const ObserverView& obs, const SceneSphere& /*target*/) {
+                                    const ObserverView& obs, const SceneSphere& target) {
   switch (LightType(r.type)) {
     case LightType::POINT: return point_sample_le(r, u_dir, lam, obs);
     case LightType::SPHERE: return sphere_sample_le(r, u_pos, u_dir, lam, obs);
     case LightType::AREA_RECT: return rect_sample_le(r, u_pos, u_dir, lam, obs);
     case LightType::AREA_DISK: return disk_sample_le(r, u_pos, u_dir, lam, obs);
+    case LightType::TRIANGLE: return tri_sample_le(r, u_pos, u_dir, lam, obs);
+    case LightType::WORLD_CONST: return world_sample_le(r, u_pos, u_dir, lam, obs, target);
   }
   AR_ASSERT(false);
   return light_le_none();
 }
 
-// The unweighted scalar power, Blender's P times the radiance scale. 067 weights the spectral
-// shape by the importance and radiometric weights of D10.
+AR_FN bool light_is_infinite(const LightRecord& r) { return LightType(r.type) == LightType::WORLD_CONST; }
+
+// The power with D10's weighting: `energy` is the weighted integral of the light's emission,
+// strength included (integral of strength s(lambda) w(lambda) d lambda; the strength alone when
+// unweighted), times the type's geometric factor. Lamps: 1 (their strength is the power P).
+// Triangle: pi A (D9). World: 4 pi^2 R^2 with R the scene radius (pbrt UniformInfiniteLight::Phi).
+AR_FN Real light_power(const LightRecord& r, const SceneSphere& scene, Real energy) {
+  switch (LightType(r.type)) {
+    case LightType::POINT:
+    case LightType::SPHERE:
+    case LightType::AREA_RECT:
+    case LightType::AREA_DISK: return energy;
+    case LightType::TRIANGLE: return tri_power(r, energy);
+    case LightType::WORLD_CONST: return world_power(scene, energy);
+  }
+  AR_ASSERT(false);
+  return Real(0);
+}
+
+// The unweighted scalar power of a finite light, Blender's P times the radiance scale for lamps;
+// the world's needs the scene sphere (world_power).
 AR_FN Real light_power(const LightRecord& r) {
   switch (LightType(r.type)) {
     case LightType::POINT: return point_power(r);
     case LightType::SPHERE: return sphere_power(r);
     case LightType::AREA_RECT: return rect_power(r);
     case LightType::AREA_DISK: return disk_power(r);
+    case LightType::TRIANGLE: return tri_power(r, Real(r.strength));
+    case LightType::WORLD_CONST: break;  // a bug: its power depends on the scene radius
   }
   AR_ASSERT(false);
   return Real(0);
@@ -325,8 +396,10 @@ AR_FN LightBounds light_bounds(const LightRecord& r) {
     case LightType::SPHERE: return sphere_bounds(r);
     case LightType::AREA_RECT: return rect_bounds(r);
     case LightType::AREA_DISK: return disk_bounds(r);
+    case LightType::TRIANGLE: return tri_bounds(r);
+    case LightType::WORLD_CONST: break;  // infinite: no bounds (light_is_infinite); the tree is M4
   }
-  AR_ASSERT(false);
+  AR_ASSERT(light_is_infinite(r));
   LightBounds b;
   b.bbox.lo = b.bbox.hi = Real3{Real(0), Real(0), Real(0)};
   b.theta_o = b.theta_e = Real(0);

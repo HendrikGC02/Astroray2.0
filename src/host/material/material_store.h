@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -26,6 +27,7 @@
 #include "host/image/image_store.h"
 #include "host/ledger.h"
 #include "host/material/compiler.h"
+#include "host/scene/world.h"
 
 namespace astroray::host {
 
@@ -51,6 +53,7 @@ struct MaterialArrays {
   std::vector<uint32_t> programs;
   std::vector<ar::ConstantBlock> constants;
   std::vector<std::vector<EmissionTerm>> emission_estimates;  // per header; empty = 0
+  std::vector<uint32_t> emission_sampling;  // per header: ar_material_desc's AR_EMISSION_SAMPLING_*
   uint64_t bytes() const;
 };
 
@@ -70,6 +73,9 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   // emission estimate read an image is recompiled when that image changes.
   ar_status set_image(Edit& edit, const ar_image_desc* desc);
   ImageStore& images() { return *images_; }
+  // ar_edit_set_world: the world recompiles in this edit's pass, and again whenever its graph is
+  // set or removed (as a material whose graph changes).
+  ar_status set_world(Edit& edit, const ar_world_desc* desc);
   // After a successful ar_edit_remove / ar_edit_reset of the open edit.
   ar_status note_remove(Edit& edit, uint32_t kind, ar_key key);
   ar_status note_reset(Edit& edit);
@@ -77,6 +83,8 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   void end_edit();
 
   std::shared_ptr<const MaterialArrays> arrays() const;
+  // The active world, null before the first set_world or after a reset.
+  std::shared_ptr<const WorldOutput> world() const;
   const ar::Rgb2SpecTable& table() const { return table_; }
 
  private:
@@ -90,6 +98,9 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   static bool compiles(const Open& o, ar_key key, const ar_material_desc& d);
   // Whether the edit replaced or removed (or reset away) an image the material's estimate read.
   static bool uses_changed_image(const MaterialOutput& out, const Open& o);
+  // The world as of `o` applied to `world` (unset: none), and whether `o` recompiles it.
+  static void apply_world(const Open& o, std::optional<ar_world_desc>& world);
+  static bool world_compiles(const Open& o, const std::optional<ar_world_desc>& world);
   ar_status ensure_pass(Edit& edit);
   void bind(const std::shared_ptr<Pass>& pass);
   void dropped(const Pass& pass);
@@ -106,6 +117,8 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   // rebuilt from the active state plus the queued passes when a generation is dropped.
   GraphMap latest_graphs_;
   DescMap latest_materials_;
+  std::optional<ar_world_desc> latest_world_, world_;  // latest committed; active
+  std::shared_ptr<const WorldOutput> world_out_;
   std::deque<std::shared_ptr<Pass>> queued_;  // committed, neither active nor dropped, in order
   // As of the active generation.
   GraphMap graphs_;

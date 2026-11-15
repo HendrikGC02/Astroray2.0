@@ -20,7 +20,7 @@ AR_NS_BEGIN
 struct LightRecord {
   uint8_t type;         // LightType (light.h)
   uint8_t light_group;  // 0008 d10
-  uint16_t flags;       // bits are defined by the task that reads them (067, 068)
+  uint16_t flags;       // kLight* bits below
   uint32_t visibility;  // ray-class bits of 0007's instance visibility, same order
   float xf[12];         // row-major 3x4, translation in column 3 (ar_instances_desc xf)
   float size[2];        // point and sphere lamps: size[0] = radius in world units, size[1] unused
@@ -28,6 +28,25 @@ struct LightRecord {
   SpectrumRef emission; // colour, semantic ILLUMINANT (0003 d16)
 };
 static_assert(sizeof(LightRecord) == 92, "light record layout (8 + 48 + 8 + 4 + 24 B)");
+
+// Flag bits of the emissive-triangle light.
+inline constexpr uint16_t kLightTwoSided = 1u << 0;  // emits from both faces: theta_e = pi (0004 D9)
+// The emission is per point: Le comes from the material's `emission` entry at the sampled point,
+// run by the NEE stage (074); `emission` and `strength` are then unused and sample_li's Le is 0.
+inline constexpr uint16_t kLightEmissionProgram = 1u << 1;
+// One-sided toward -cross(p1 - p0, p2 - p0) (Blender's BACK emission sampling).
+inline constexpr uint16_t kLightBackFace = 1u << 2;
+
+// TRIANGLE: xf[0..8] are the world-space vertices p0, p1, p2 (xyz each), xf[9..11] are 0;
+// size[0] and size[1] carry the instance index and the triangle index within its mesh as uint32
+// bits (below 0x7f800000, so never a NaN pattern), which the emission entry needs for its
+// shading point. WORLD_CONST: xf and size are unused. For both, Le = strength * resolve(emission)
+// unless kLightEmissionProgram is set.
+AR_FN Real3 tri_vertex(const LightRecord& r, int k) {
+  return Real3{Real(r.xf[3 * k]), Real(r.xf[3 * k + 1]), Real(r.xf[3 * k + 2])};
+}
+AR_FN uint32_t tri_instance(const LightRecord& r) { return bit_cast<uint32_t>(r.size[0]); }
+AR_FN uint32_t tri_index(const LightRecord& r) { return bit_cast<uint32_t>(r.size[1]); }
 
 // Point and sphere lamps are isotropic: only the translation of xf matters, and the radius is
 // already in world units (the host bakes scale into it).

@@ -39,6 +39,5 @@ AR_API ar_status ar_edit_points_begin(ar_edit h, const ar_points_desc*, ar_point
 AR_API ar_status ar_edit_grid_leaves_begin(ar_edit h, const ar_grid_desc*, ar_grid_leaf_buffers*) { return unsupported(h, "ar_edit_grid_leaves_begin"); }
 AR_API ar_status ar_edit_image_begin(ar_edit h, const ar_image_desc*, ar_image_buffers*) { return unsupported(h, "ar_edit_image_begin"); }
 AR_API ar_status ar_edit_set_light(ar_edit h, ar_key, const ar_light_desc*) { return unsupported(h, "ar_edit_set_light"); }
-AR_API ar_status ar_edit_set_world(ar_edit h, const ar_world_desc*) { return unsupported(h, "ar_edit_set_world"); }
 
 }  // extern "C"
