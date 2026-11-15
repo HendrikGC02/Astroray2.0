@@ -91,7 +91,7 @@ regs = 16
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.2
+compile_s = 1.15
 gated = "merge"
 
 [kernel.k_generate_camera]
@@ -99,7 +99,7 @@ regs = 37
 stack = 128
 spill_store = 0
 spill_load = 0
-compile_s = 1.2
+compile_s = 1.31
 gated = "merge"
 
 # The four OptiX programs are compiled by the driver: kernelgate never measures them, so regs and
