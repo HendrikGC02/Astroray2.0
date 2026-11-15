@@ -303,16 +303,29 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
     return b.put(LedgerCategory::TABLES, slots.data(), slots.size() * 4);
   });
   const auto mp = mats ? sp(n.materials) : nullptr;
+  // The counts are the scene's materials; the header and constant tables carry the default
+  // material one past them (scene_view.h), and the header table then holds the pass index of
+  // every header, the default's (0) last: [count + 1 headers][count + 1 u32].
   b.table(TableId::MATERIAL_HEADERS, mats_same, mats ? uint32_t(mats->headers.size()) : 0u, [&] {
-    return mats ? b.put(LedgerCategory::TABLES, mats->headers.data(), mats->headers.size() * sizeof(ar::MaterialHeader), mp)
-                : b.put(LedgerCategory::TABLES, nullptr, 0);
+    if (!mats) return b.put(LedgerCategory::TABLES, nullptr, 0);
+    const size_t h = mats->headers.size() + 1;
+    std::vector<uint8_t> bytes(h * sizeof(ar::MaterialHeader) + h * 4);
+    std::memcpy(bytes.data(), mats->headers.data(), mats->headers.size() * sizeof(ar::MaterialHeader));
+    std::memcpy(bytes.data() + mats->headers.size() * sizeof(ar::MaterialHeader), &mats->default_header,
+                sizeof(ar::MaterialHeader));
+    std::vector<uint32_t> pass(mats->pass_index);
+    pass.push_back(0u);
+    std::memcpy(bytes.data() + h * sizeof(ar::MaterialHeader), pass.data(), h * 4);
+    return b.put(LedgerCategory::TABLES, bytes.data(), bytes.size());
   });
   b.table(TableId::MATERIAL_PROGRAMS, mats_same, mats ? uint32_t(mats->programs.size()) : 0u, [&] {
     return b.put(LedgerCategory::TABLES, mats ? mats->programs.data() : nullptr, mats ? mats->programs.size() * 4 : 0, mp);
   });
   b.table(TableId::MATERIAL_CONSTANTS, mats_same, mats ? uint32_t(mats->constants.size()) : 0u, [&] {
-    return b.put(LedgerCategory::TABLES, mats ? mats->constants.data() : nullptr,
-                 mats ? mats->constants.size() * sizeof(ar::ConstantBlock) : 0, mp);
+    if (!mats) return b.put(LedgerCategory::TABLES, nullptr, 0);
+    std::vector<ar::ConstantBlock> blocks(mats->constants);
+    blocks.push_back(mats->default_constants);
+    return b.put(LedgerCategory::TABLES, blocks.data(), blocks.size() * sizeof(ar::ConstantBlock));
   });
 
   // Images (060): texels per slot, kept while the slot holds the same image.
@@ -397,6 +410,9 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   sd.material_header_count = cnt(TableId::MATERIAL_HEADERS);
   sd.material_programs = as<uint32_t>(at(TableId::MATERIAL_PROGRAMS));
   sd.material_constants = as<ar::ConstantBlock>(at(TableId::MATERIAL_CONSTANTS));
+  sd.material_pass_index = sd.material_headers
+                               ? reinterpret_cast<const uint32_t*>(sd.material_headers + sd.material_header_count + 1u)
+                               : nullptr;
   sd.accel = n.accel->kernel_accel();
   ar::Rgb2SpecTable jt{};
   if (jh) jt = *jh;

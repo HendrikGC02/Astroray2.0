@@ -58,6 +58,11 @@ struct SceneData {
   uint32_t mesh_count;
   // Material table slot per material-pool entry, and the MaterialHeader array they index.
   // Both are null until the material compiler fills them; every material is then Common.
+  // material_header_count counts the scene's materials; the arrays hold one entry more: the
+  // default material (an instance with no material slice, 0007 appendix) sits at index
+  // material_header_count, one past the counted headers, and its constant block one past the
+  // counted blocks. The host compiles it from an empty surface graph (every OpenPBR input at its
+  // default, no emission), so a kernel treats it like any material.
   const uint32_t* material_slots;
   const MaterialHeader* material_headers;
   uint32_t material_header_count;
@@ -65,6 +70,9 @@ struct SceneData {
   // its entry table) and constant blocks (const_offset counts blocks). Filled with the headers.
   const uint32_t* material_programs;
   const ConstantBlock* material_constants;
+  // Per header, the default's included: the material's pass index (ar_material_desc::pass_index,
+  // the IndexMA AOV of 0008 d10); 0 for the default material.
+  const uint32_t* material_pass_index;
   // The traversal structure of the backend that runs the stages, opaque to kernels and never null
   // in a session's scene (an empty scene has an empty structure). CPU: the snapshot's EmbreeScene.
   // CUDA: the OptixTraversableHandle of its TLAS as an integer; the launch reads it from the host
@@ -87,7 +95,7 @@ AR_FN uint32_t instance_light_index(const KernelGlobals& kg, uint32_t inst) {
 // The material-header index of the material a hit triangle uses: the triangle's slot picks an
 // entry of the instance's slice of the pool (0007 d10), the entry a header. The default material
 // (an instance with an empty slice, or a scene without material tables) is exactly
-// material_header_count, one past the last header.
+// material_header_count, one past the last counted header, where the host uploads it.
 AR_FN uint32_t hit_material_id(const KernelGlobals& kg, uint32_t inst, uint32_t prim) {
   const SceneData& s = scene_of(kg);
   const uint32_t dflt = s.material_header_count;

@@ -54,6 +54,14 @@ struct MaterialArrays {
   std::vector<ar::ConstantBlock> constants;
   std::vector<std::vector<EmissionTerm>> emission_estimates;  // per header; empty = 0
   std::vector<uint32_t> emission_sampling;  // per header: ar_material_desc's AR_EMISSION_SAMPLING_*
+  std::vector<uint32_t> pass_index;         // per header: ar_material_desc::pass_index (IndexMA)
+  // The default material of an instance with no material slice (0007 appendix): compiled from an
+  // empty surface graph, so every OpenPBR input is at its default and it emits nothing; pass index
+  // 0. It has no key and is not in the vectors above: the scene tables upload its header one past
+  // the last header (where hit_material_id puts it) and its block one past the last block, so
+  // default_header.const_offset == constants.size() and its program is empty (CONSTANT_SURFACE).
+  ar::MaterialHeader default_header = {};
+  ar::ConstantBlock default_constants = {};
   uint64_t bytes() const;
 };
 
@@ -128,6 +136,7 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
     std::shared_ptr<const MaterialOutput> out;
   };
   std::map<ar_key, Active> materials_;
+  MaterialOutput default_;  // the default material's compiled output (MaterialArrays::default_header)
   std::shared_ptr<const MaterialArrays> arrays_;
   uint64_t ledger_id_ = 0;
 };
