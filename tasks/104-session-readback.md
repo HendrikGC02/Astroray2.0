@@ -1,7 +1,7 @@
 # 104 Session readback: progress, report polling, display frames, passes, counters and FITS
 Goal: a running session is opaque to its host -> `ar_session_get_progress`, report polling, `ar_display_acquire`/`release`, pass enumeration and reads, counters and `ar_session_write_fits` expose 0008 d13a's readback through the ABI.
 Read first: 0007 d5 (display and readback functions), d26 (polling), 0008 d13a (readback contents), d13 (film dump), 0001 D2.11 (report polling, scene entries merged into sessions); docs/decisions/0007-appendix-abi.md (`ar_progress`, pass descriptors).
-Scope: src/capi/session_api.cpp, src/host/session/readback.{h,cpp}, src/capi/unimplemented.cpp, tests/cpu/test_readback.cpp, tests/abi/test_session_api.py.
+Scope: src/capi/session_api.cpp, src/host/session/readback.{h,cpp}, src/host/session/session.{h,cpp} (lead ruling: additive readback surface; Session's film, ring and scheduler are private), src/capi/unimplemented.cpp, tests/cpu/test_readback.cpp, tests/abi/test_session_api.py.
 Out of scope: scene-state readback (R59: none exists); denoised output (M1b); Blender passes beyond Combined (M1b).
 Reference: none.
 Do:
@@ -17,4 +17,6 @@ Budget: host only.
 Depends on: 052, 050, 049.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
-- Stopped before coding: needs src/host/session/session.{h,cpp} (not in Scope) to expose film snapshot, display ring, last pass ms and pass counters; see report.
+- Scope widened by the lead to session.{h,cpp}: read_film (render lock), display ring forwarders, counters copy, last_pass_ms, merged report, layout built in the ctor.
+- ABI choices: frame_id 0 = no newer frame; read_pass n must equal the float count exactly; read_counters n >= word count (error text names it); report and progress stay readable after CLOSED, film reads do not.
+- CPU sessions report device free/total as 0 (no device memory); CUDA fills them (102). FITS provenance strings for working space and wavelength pdf are descriptive ("observer.bin", "default") until a selection exists.

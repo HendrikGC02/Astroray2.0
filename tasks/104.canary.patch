@@ -1,0 +1,28 @@
+diff --git a/src/capi/session_api.cpp b/src/capi/session_api.cpp
+index 465e32e..500d88b 100644
+--- a/src/capi/session_api.cpp
++++ b/src/capi/session_api.cpp
+@@ -195,7 +195,7 @@ AR_API ar_status ar_session_get_progress(ar_session h, ar_progress* progress) {
+   try {
+     const astroray::host::SessionProgress p = h->session->progress();
+     *progress = ar_progress{};
+-    progress->state = p.state;
++    progress->state = p.state == AR_STATE_RENDERING ? AR_STATE_CONVERGED : p.state;
+     progress->samples_per_pixel = p.samples_per_pixel;
+     progress->active_generation = p.active_generation;
+     progress->pending_generation = p.pending_generation;
+diff --git a/src/host/session/readback.cpp b/src/host/session/readback.cpp
+index ca6597b..ad43c6f 100644
+--- a/src/host/session/readback.cpp
++++ b/src/host/session/readback.cpp
+@@ -139,8 +139,8 @@ ReportTable read_report(Report& report) {
+ 
+ ReportTable merge_reports(const ReportTable& a, const ReportTable& b) {
+   ReportTable m;
+-  m.entries = a.entries;
+-  m.entries.insert(m.entries.end(), b.entries.begin(), b.entries.end());
++  m.entries = b.entries;  // CANARY
++  (void)0;
+   std::stable_sort(m.entries.begin(), m.entries.end(), [](const ar_report_entry& x, const ar_report_entry& y) {
+     if (x.level != y.level) return x.level > y.level;
+     if (x.code != y.code) return x.code < y.code;
