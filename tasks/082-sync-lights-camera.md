@@ -13,6 +13,6 @@ Acceptance: the headless and Blender tests pass; `check ci` passes.
 Look at: none.
 Canary: tasks/082.canary.patch must turn red: tests/blender/test_camera_ndc.py "TestCameraNdc.test_shift_x".
 Budget: none.
-Depends on: 081, 068, 053, 071.
+Depends on: 081, 068, 053, 071, 117 (only test_camera_ndc.py).
 Size: M (about 400 lines Python); stop and report at 2x.
 Progress:

@@ -15,7 +15,7 @@ Materials: 055 ops.def, 056 material layouts, 057 VM interpreter, 058 compiler c
 Lights: 065 point and sphere, 066 rectangle and disk, 067 triangles, world and alias table, 068 lamp ingest and instances, 105 lamp primitives.
 Device data and first shading: 102 KernelGlobals and CUDA upload, 103 shade_background, 114 production acceleration structures, 115 CUDA traversal stages in sessions, 116 emissive-hit light index.
 Rendering and checks: 069 CLI render, 070 scene builders, 071 shade_surface emission, 072 analytic harness and A5, 073 BSDF continuation and A1, 074 NEE and shadows, 075 shade_light and A4, 106 lamp scenes and NEE hook, 076 integrator checks, 107 render invariants, 077 AOV agreement, D1, D2, 078 detection power.
-Blender: 079 extension skeleton, 080 sync core, 081 mesh and instances, 082 lamps, camera, settings, 083 materials and world, 110 images and node values, 084 F12 and gate smoke, 085 viewport present, 111 viewport edits and replay, 086 batching and heat maps, 087 API surface.
+Blender: 079 extension skeleton, 080 sync core, 081 mesh and instances, 117 session film passes, 082 lamps, camera, settings, 083 materials and world, 110 images and node values, 084 F12 and gate smoke, 085 viewport present, 111 viewport edits and replay, 086 batching and heat maps, 087 API surface.
 Scenes: 088 assets, 089 B-1M and B-5M, 090 Cornell box and S3.
 Measurements and close: 091 process budgets, 092 M-1 probe, 093 wavefront overhead, 094 start-up and sync, 095 first frame, 096 viewport rate, 097 Blender probes, 098 OIDN static TBB, 099 device failures, 108 dev kernel reload, 109 Blender fault, 100 gallery and report.
 
