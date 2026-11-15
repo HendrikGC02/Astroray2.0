@@ -17,3 +17,4 @@ Size: M (about 300 lines); stop and report at 2x.
 Progress:
 - 2026-11-16: blocked before code: no OptiX cache_dir reaches the scene (ar_scene_desc.cache_dir is dropped by ar_scene_create) and TraversalPipeline requires one; asked the lead.
 - 2026-11-16: lead ruled option A: ar_scene_desc.cache_dir reaches the scene's OptixContext; null or empty disables the OptiX disk cache (closes the ABI gap of cache_dir being ignored).
+- 2026-11-16: done on main 5d78b17: per-session TraversalPipeline (session device ledger and stream) routes INTERSECT_CLOSEST/SHADOW; launch threads from launch_config.h T, checked against the function limit; cache_dir plumbed (closes the ignored-cache_dir ABI gap); gate passes with cuda_session_trace/* and test_cuda_a5.

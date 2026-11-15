@@ -1,0 +1,13 @@
+diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
+index 2be273b..3ec8743 100644
+--- a/src/device/cuda/cuda_device.cpp
++++ b/src/device/cuda/cuda_device.cpp
+@@ -415,7 +415,7 @@ void CudaDevice::detach_traversal() {
+   s.traversable = 0;
+ }
+ 
+-void CudaDevice::set_traversable(uint64_t handle) { impl_->traversable = handle; }
++void CudaDevice::set_traversable(uint64_t handle) { impl_->traversable = handle & 0; }
+ 
+ namespace {
+ CudaDevice& as_cuda(Device& d) {
