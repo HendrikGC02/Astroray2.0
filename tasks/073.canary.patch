@@ -1,0 +1,13 @@
+diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
+index 4818d42..395ab62 100644
+--- a/src/kernel/stages/shade_surface.h
++++ b/src/kernel/stages/shade_surface.h
+@@ -129,7 +129,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+     path_end(kg, slot, Term::ZERO_THROUGHPUT);
+     return;
+   }
+-  beta *= bs.f * (abs_dot(bs.wi, ctx.N) / bs.pdf);
++  beta *= bs.f * (Real(1) / bs.pdf);
+   if (!is_finite(beta)) {
+     sample_mark_invalid(kg, sample);
+     path_end(kg, slot, Term::INVALID);
