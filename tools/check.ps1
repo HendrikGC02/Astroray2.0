@@ -155,6 +155,12 @@ try {
       Fail ("lint: " + $r.Out.Count + " findings " + $ids + " " + $r.Out[0])
     }
 
+    if ($isCi) {
+      # Configure resolves the fetched dependency cache (cmake/deps.cmake), so a fresh
+      # runner fetches before the first build.
+      $r = Step 'fetch deps' { & pwsh -NoProfile -File tools/fetch.ps1 deps }
+      if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'fetch deps failed' }
+    }
     $r = Step 'build' { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_tests_cpu -Preset $(if ($isCi) { 'cpu' } else { 'dev' }) -NoMachineLock -Jobs 4 }
     $bj = Join-Path $root 'out/check/build.json'
     if (Test-Path $bj) { $waited += [double](Get-Content $bj -Raw | ConvertFrom-Json).waited }
@@ -190,8 +196,6 @@ try {
       if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'lint self-test failed (out/check/ci.log)' }
       $r = Step 'build cpu' { & pwsh -NoProfile -File tools/build.ps1 -Preset cpu -NoMachineLock }
       if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'cpu build failed (out/check/build.log)' }
-      $r = Step 'fetch deps' { & pwsh -NoProfile -File tools/fetch.ps1 deps }
-      if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'fetch deps failed' }
       # Every CPU gate step a later task tags `cpu` reaches hosted CI through this loop.
       foreach ($s in $gateSteps | Where-Object { $_.Tag -eq 'cpu' }) { Invoke-GateStep $s }
       # Headless sync suite (0007 d16, 0009 d12) against the pinned bpy wheel; ci.yml installs it from
