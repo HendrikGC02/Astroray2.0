@@ -16,3 +16,4 @@ Budget: Embree link time on the clean build; report it.
 Depends on: 035, 036, 008.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
+- 037: embree_scene/embree_trace/hit.h done; embree/* 5 cases pass; canary verified. check fast blocked only by lint seam rule matching our embree_*.h wrapper names (tools/lint.py, needs lead). CMakeLists.txt got one include(cmake/deps.cmake) line (out of scope, needed). Incremental build with Embree link 5.7 s; clean link time not measured.
