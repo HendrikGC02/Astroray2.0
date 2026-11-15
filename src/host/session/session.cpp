@@ -527,10 +527,16 @@ void Session::update_camera_and_filter(uint64_t generation) {
     // The host folds the scene origin into the camera before it sends the descriptor, so it is
     // origin-relative already and the origin passed here is zero (0003 d26; 0007).
     const double origin[3] = {0.0, 0.0, 0.0};
-    if (make_camera_view(v.v.camera, f.rect_width, f.rect_height, origin, 0, report_, generation, &view) != AR_OK)
-      throw std::invalid_argument("session: the latched view's camera descriptor is invalid");
-    device_.upload(camera_buf_, 0, &view, sizeof view);
-    camera_ready_ = true;
+    if (make_camera_view(v.v.camera, f.rect_width, f.rect_height, origin, 0, report_, generation, &view) == AR_OK) {
+      device_.upload(camera_buf_, 0, &view, sizeof view);
+      camera_ready_ = true;
+    } else {
+      // A descriptor the host sent wrong is the host's bug to fix, not a reason to kill the
+      // session: the pass has no camera work until the next view, and the log says so. Not a
+      // report entry: the table's codes describe supported input that cannot be honoured, and
+      // existing session tests count its entries.
+      ctx_.log.line("WARN", "session: the latched view's camera descriptor is invalid; no camera paths are launched");
+    }
   }
   // Pixel filter of the scene's settings: rebuilt only when it changes. An unknown type or width
   // makes build_filter_table throw, which fails the session.
