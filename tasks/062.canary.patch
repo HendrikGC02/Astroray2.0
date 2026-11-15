@@ -1,5 +1,5 @@
 diff --git a/src/kernel/material/lobes/eon.h b/src/kernel/material/lobes/eon.h
-index 3dba49f..90e8545 100644
+index d54c80d..e52a049 100644
 --- a/src/kernel/material/lobes/eon.h
 +++ b/src/kernel/material/lobes/eon.h
 @@ -33,7 +33,7 @@ inline constexpr Real kEonPi = Real(3.14159265358979323846);
@@ -38,3 +38,12 @@ index 3dba49f..90e8545 100644
  }
  
  // Density of eon_sample at wi: the one-sample MIS of the uniform and CLTC lobes.
+@@ -215,7 +215,7 @@ AR_FN LobeSample eon_sample(const EonParams& p, Real3 wo, Real2 u, TransportMode
+   Real3 wi;
+   // Strict, unlike Listing 4's `<=`: at pu = 0 (roughness 0) u.x = 0 would otherwise pick the
+   // uniform lobe and divide 0 by 0. With `<`, pu = 0 never selects it, and u.x < pu implies pu > 0.
+-  if (u.x < pu) {
++  if (u.x <= pu) {
+     const Real z = u.x / pu;
+     const Real sin_t = ar::sqrt(max(Real(0), Real(1) - z * z));
+     const Real phi = Real(2) * kEonPi * u.y;
