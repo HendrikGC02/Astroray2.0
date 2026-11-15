@@ -17,3 +17,4 @@ Budget: none.
 Depends on: 032.
 Size: S (about 250 lines); stop and report at 2x.
 Progress:
+- 036: instances.{h,cpp}, capi/instances_api.cpp, Scene::instances()/tlas_epoch(); canary tasks/036.canary.patch.
