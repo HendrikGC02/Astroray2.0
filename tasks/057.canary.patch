@@ -1,0 +1,25 @@
+diff --git a/src/kernel/vm/ops/load_ctx_uv.h b/src/kernel/vm/ops/load_ctx_uv.h
+index f363477..31bff47 100644
+--- a/src/kernel/vm/ops/load_ctx_uv.h
++++ b/src/kernel/vm/ops/load_ctx_uv.h
+@@ -10,7 +10,6 @@ AR_NS_BEGIN
+ AR_FN void op_load_ctx_uv(const ShadeContext& ctx, uint32_t set, float* out) {
+   out[0] = float(ctx.uv[set].x);
+   out[1] = float(ctx.uv[set].y);
+-  out[2] = 0.0f;
+ }
+ 
+ AR_FN void vm_op_load_ctx_uv(VmState& vm) {
+diff --git a/src/kernel/vm/ops/mul_f32x3_f32.h b/src/kernel/vm/ops/mul_f32x3_f32.h
+index 577cbb3..8fb9941 100644
+--- a/src/kernel/vm/ops/mul_f32x3_f32.h
++++ b/src/kernel/vm/ops/mul_f32x3_f32.h
+@@ -14,7 +14,7 @@ AR_FN void op_mul_f32x3_f32(const float* x, float s, float* out) {
+ 
+ AR_FN void vm_op_mul_f32x3_f32(VmState& vm) {
+   if (!vm_regs_ok(vm, vm.a, 3) || !vm_regs_ok(vm, vm.b, 3) || !vm_regs_ok(vm, vm.c, 1)) return;
+-  op_mul_f32x3_f32(vm.r + vm.b, vm.r[vm.c], vm.r + vm.a);
++  op_mul_f32x3_f32(vm.r + vm.b, vm.r[vm.b], vm.r + vm.a);
+   vm.pc += 1;
+ }
+ AR_NS_END

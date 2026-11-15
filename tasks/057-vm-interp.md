@@ -17,3 +17,7 @@ Budget: none yet (no shade kernel); the interpreter's register use is measured i
 Depends on: 056, 028, 029.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
+- 057: interp.h run_entry + ops/*.h (one file per ops.def row, handler macros feed ops.h AR_OP_CASE); returns VmStatus, any error stops the run.
+  Encoding choices (ops.def operand strings do not carry them): LOAD_CTX_UV b = uv set; RGB_LIFT c = semantic; EMIT_LE reads strength from r[a+3]; STORE_SLOT imm = RecordSlot | bit 8 (spec source).
+  JMP off counts words from the JMP word; offset 0 = absent entry, runs nothing. TEX_IMAGE writes magenta (061 replaces op_tex_image).
+  Tests: tests/cpu/test_vm.cpp (7 cases), tests/gpu/test_vm_agree.cpp + kernels/vm_agree.cu (nofma, max rel err 0 on all programs). Canary: tasks/057.canary.patch.
