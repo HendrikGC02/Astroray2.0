@@ -11,7 +11,7 @@ Do:
 4. test_embree.cpp (fast): analytic hits on a unit quad (t, u, v to 1e-6); a miss gives `inst == ~0u`; mask fixture: one instance per mask bit 0-5, each ray type's mask hits exactly the instances sharing a bit (0002 D11 verification, CPU side); occlusion ignores instances without the SHADOW bit.
 Acceptance: `pwsh tools/fetch.ps1 deps` then `pwsh tools/check.ps1 fast` passes with `embree/*` cases; `dumpbin /dependents out/bin/astroray_core.dll` still lists no tbb DLL.
 Look at: none.
-Canary: tasks/037.canary.patch must turn red: astroray_tests_cpu "embree/mask fixture", "embree/quad barycentrics".
+Canary: tasks/037.canary.patch must turn red: astroray_tests_cpu "embree/mask fixture", "embree/quad barycentrics", "embree/corner lookup".
 Budget: Embree link time on the clean build; report it.
 Depends on: 035, 036, 008.
 Size: M (about 350 lines); stop and report at 2x.

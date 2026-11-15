@@ -58,6 +58,8 @@ struct InstanceTable {
 // Visibility bits to mask bits: camera 0, diffuse 1, glossy 2, transmission 3, shadow 4,
 // volume 5. Bit 6 (medium boundary) stays unset until media exist; bit 7 is never set.
 uint8_t visibility_mask(uint32_t visibility);
+// The mask bit of AR_VISIBILITY_SHADOW: the only bit a shadow ray traces (0002 D11).
+inline constexpr uint8_t kShadowMaskBit = 1u << 4;
 
 // The two edit entry points (the C API forwards here). set_instances copies the arrays,
 // then validates and builds on a worker, so a bad instance rejects the generation

@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "device/cpu/embree_trace.h"
@@ -24,19 +25,21 @@ constexpr ar_key kQuadKey = 5;
 
 // A unit quad in the z = 0 plane, corners (0,0) (1,0) (1,1) (0,1), as triangles
 // (0,1,2) and (0,2,3).
-std::shared_ptr<MeshRecord> quad_record() {
+std::shared_ptr<MeshRecord> quad_record(ar_key key = kQuadKey, std::vector<uint32_t> corner_vert = {0, 1, 2, 3},
+                                        std::vector<float> positions = {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0},
+                                        uint32_t steps = 1) {
   auto topo = std::make_shared<MeshTopology>();
-  topo->key = kQuadKey;
-  topo->vertex_count = 4, topo->corner_count = 4, topo->face_count = 1, topo->motion_steps = 1;
-  topo->corner_vert = {0, 1, 2, 3};
+  topo->key = key;
+  topo->vertex_count = 4, topo->corner_count = 4, topo->face_count = 1, topo->motion_steps = steps;
+  topo->corner_vert = std::move(corner_vert);
   topo->face_start = {0, 4};
   topo->tri_corners = {0, 1, 2, 0, 2, 3};
   topo->tri_face = {0, 0};
   topo->tri_material = {0, 0};
   auto rec = std::make_shared<MeshRecord>();
-  rec->key = kQuadKey;
+  rec->key = key;
   rec->topo = topo;
-  rec->positions = {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0};
+  rec->positions = std::move(positions);
   return rec;
 }
 
@@ -56,9 +59,9 @@ struct Rig {
   InstanceTable table;
   std::unique_ptr<EmbreeScene> scene;
   Rig() { meshes.install(quad_record()); }
-  void add(uint8_t mask, float x, float z = 0) {
+  void add(uint8_t mask, float x, float z = 0, ar_key key = kQuadKey) {
     Instance in;
-    in.geom_key = kQuadKey;
+    in.geom_key = key;
     in.mask = mask;
     table.instances.push_back(in);
     table.xf.push_back(translate(x, z));
@@ -120,6 +123,46 @@ TEST_CASE("embree/instance transform and miss") {
   CHECK(std::fabs(hit[0].t - 1.0f) < 1e-6f);
   CHECK(hit[1].inst == ~0u);
   CHECK(hit[2].inst == ~0u);
+}
+
+TEST_CASE("embree/corner lookup") {
+  // The same quad with corners {2,3,0,1}: corner c is vertex corner_vert[c], so using corner
+  // indices as vertex indices would build a different triangle.
+  Rig r;
+  r.meshes.install(quad_record(6, {2, 3, 0, 1}, {1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0}));
+  r.add(0xFF, 0.0f, 0, 6);
+  r.build();
+  Rays rays;
+  rays.add(0.75f, 0.25f, 0xFF);
+  rays.add(0.25f, 0.75f, 0xFF);
+  std::vector<ar::HitRecord> hit(rays.size());
+  trace_closest(*r.scene, rays.batch(), rays.mask.data(), rays.size(), hit.data(), r.pool);
+  CHECK(hit[0].prim == 0u);
+  CHECK(std::fabs(hit[0].u - 0.5f) < 1e-6f);
+  CHECK(std::fabs(hit[0].v - 0.25f) < 1e-6f);
+  CHECK(hit[1].prim == 1u);
+  CHECK(std::fabs(hit[1].u - 0.25f) < 1e-6f);
+  CHECK(std::fabs(hit[1].v - 0.5f) < 1e-6f);
+}
+
+TEST_CASE("embree/representative motion step") {
+  // Three steps with the quad at z = 5, 0, -5: the representative step (S - 1) / 2 = 1 is
+  // the one at z = 0, so a ray from z = 2 hits at t = 2.
+  std::vector<float> pos;
+  for (float z : {5.0f, 0.0f, -5.0f})
+    for (float v : {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f, 0.f}) pos.push_back(v);
+  for (size_t s = 0; s < 3; ++s)
+    for (size_t k = 0; k < 4; ++k) pos[(s * 4 + k) * 3 + 2] = (s == 0 ? 5.0f : s == 1 ? 0.0f : -5.0f);
+  Rig r;
+  r.meshes.install(quad_record(7, {0, 1, 2, 3}, pos, 3));
+  r.add(0xFF, 0.0f, 0, 7);
+  r.build();
+  Rays rays;
+  rays.add(0.75f, 0.25f, 0xFF);
+  std::vector<ar::HitRecord> hit(1);
+  trace_closest(*r.scene, rays.batch(), rays.mask.data(), 1, hit.data(), r.pool);
+  CHECK(hit[0].inst == 0u);
+  CHECK(std::fabs(hit[0].t - 2.0f) < 1e-6f);
 }
 
 TEST_CASE("embree/missing geometry key") {
