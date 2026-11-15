@@ -128,6 +128,13 @@ function Invoke-Prepare {
   if ($branch -notmatch "^task/$Number-") { Refuse "branch '$branch' is not task/$Number-*" }
   if ((GitX status --porcelain)) { Refuse 'working tree is not clean' }
   $null = GitX fetch origin
+  # A re-prepare (main moved after a first prepare) first drops this script's own
+  # task-file deletion commit, so the canary and the task file are back for the checks.
+  $headMsg = (GitX log -1 --format=%s)
+  if ($headMsg -match ' \(land\)$' -and -not (Test-Path (Join-Path $root "tasks/$Number.canary.patch")) -and -not @(Get-ChildItem (Join-Path $root 'tasks') -Filter "$Number-*.md").Count) {
+    Write-Host "re-prepare: dropping previous land commit '$headMsg'"
+    $null = GitX reset -q --hard HEAD~1
+  }
   & git rebase origin/main 2>&1 | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) { & git rebase --abort 2>&1 | Out-Null; Refuse 'rebase on origin/main failed; resolve by hand' }
 
