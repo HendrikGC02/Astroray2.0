@@ -42,7 +42,9 @@ struct LaunchRow {
   X(ar_selftest, 256, 0, 0, OTHER) \
   X(k_queue_build_count, 256, 0, 0, OTHER) \
   X(k_queue_build_scan, 256, 0, 0, OTHER) \
-  X(k_queue_build_scatter, 256, 0, 0, OTHER)
+  X(k_queue_build_scatter, 256, 0, 0, OTHER) \
+  X(k_sort_count, 256, 0, 0, OTHER) \
+  X(k_sort_scatter, 256, 0, 0, OTHER)
 
 #define AR_LAUNCH_ROW_CONST(name, T, B, K, CLASS) \
   inline constexpr LaunchRow kLaunch_##name{T, B, K, StackClass::CLASS};
@@ -53,6 +55,12 @@ AR_LAUNCH_ROWS(AR_LAUNCH_ROW_CONST)
 // 0002 D6's block histogram). One unit is one GPU thread or one CPU loop; 1,024 is also the CPU
 // chunk of D4, so a chunk is one unit. PROVISIONAL: 0002 D7 remedy (c) revisits it with B-19.
 inline constexpr uint32_t kQueueTile = 1024;
+
+// The shade_surface material sort runs when the segment holds at least kSortMinItems paths and
+// the scene has at least kSortMinMaterials materials; the scheduler (045) reads both.
+// PROVISIONAL: set by build-phase measurement (0002 D7 step 3, Risks item 7).
+inline constexpr uint32_t kSortMinItems = 65536;
+inline constexpr uint32_t kSortMinMaterials = 2;
 
 // The most shadow items k one item of a stage emits in one step (0002 D5), 0 for a stage that
 // emits none. The producers are the D8 kernels that write shadow items; a stage task that needs

@@ -62,6 +62,11 @@ struct KernelGlobals {
   // counters per tile of both pools. Written only by the three queue_build kernels. Last member
   // so the offsets the CUDA device reads (step_table) stay put.
   uint32_t* queue_counts;
+
+  // The material sort (stages/sort.h): the sorted copy of the SHADE_SURFACE segment and the
+  // per-tile histograms and offset scratch. Written only by sort_count and sort_scatter.
+  uint32_t* sort_queue;
+  uint32_t* sort_counts;
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is

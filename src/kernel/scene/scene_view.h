@@ -71,11 +71,14 @@ AR_FN uint32_t instance_light_index(const KernelGlobals& kg, uint32_t inst) {
   return load_ro(&s.instances[inst].light_index);
 }
 
-// Material flags (material_header.h) of the material a hit triangle uses: the triangle's
-// slot picks an entry of the instance's slice of the pool (0007 d10), the entry a header.
-AR_FN uint32_t hit_material_flags(const KernelGlobals& kg, uint32_t inst, uint32_t prim) {
+// The material-header index of the material a hit triangle uses: the triangle's slot picks an
+// entry of the instance's slice of the pool (0007 d10), the entry a header. The default material
+// (an instance with an empty slice, or a scene without material tables) is exactly
+// material_header_count, one past the last header.
+AR_FN uint32_t hit_material_id(const KernelGlobals& kg, uint32_t inst, uint32_t prim) {
   const SceneData& s = scene_of(kg);
-  if (s.material_headers == nullptr || s.material_slots == nullptr) return 0u;
+  const uint32_t dflt = s.material_header_count;
+  if (s.material_headers == nullptr || s.material_slots == nullptr) return dflt;
   AR_ASSERT(inst < s.instance_count);
   const DeviceInstanceRecord& rec = s.instances[inst];
   const uint32_t mesh = load_ro(&rec.mesh);
@@ -84,12 +87,20 @@ AR_FN uint32_t hit_material_flags(const KernelGlobals& kg, uint32_t inst, uint32
   const int32_t* tri_material = reinterpret_cast<const int32_t*>(uintptr_t(load_ro(&s.meshes[mesh].tri_material)));
   const int32_t slot = load_ro(tri_material + prim);
   const uint32_t count = load_ro(&rec.material_count);
-  if (count == 0u) return 0u;  // the default material
+  if (count == 0u) return dflt;  // the default material
   // With tables present a slot outside the instance's slice is malformed upload data.
   AR_ASSERT(slot >= 0 && uint32_t(slot) < count);
   const uint32_t table = load_ro(&s.material_slots[load_ro(&rec.material_offset) + uint32_t(slot)]);
   AR_ASSERT(table < s.material_header_count);
-  return load_ro(&s.material_headers[table].flags);
+  return table;
+}
+
+// Material flags (material_header.h) of a hit's material; 0 for the default material.
+AR_FN uint32_t hit_material_flags(const KernelGlobals& kg, uint32_t inst, uint32_t prim) {
+  const SceneData& s = scene_of(kg);
+  const uint32_t id = hit_material_id(kg, inst, prim);
+  if (id == s.material_header_count) return 0u;
+  return load_ro(&s.material_headers[id].flags);
 }
 
 AR_NS_END
