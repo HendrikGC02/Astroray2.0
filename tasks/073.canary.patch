@@ -43,7 +43,7 @@ index f5e9a55..c7ec821 100644
    }
    return normalize(v);
 diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
-index 4818d42..1cbf76d 100644
+index 4818d42..6e8d38e 100644
 --- a/src/kernel/stages/shade_surface.h
 +++ b/src/kernel/stages/shade_surface.h
 @@ -61,7 +61,7 @@ AR_NS_BEGIN
@@ -55,6 +55,15 @@ index 4818d42..1cbf76d 100644
  
  AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
    const uint32_t slot = load_ro(kg.main_queue + step.start + item);
+@@ -116,7 +116,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+   ps_flags(kg, slot) = flags;
+ 
+   const uint32_t total = ctx.depth[0];
+-  if (total >= kg.session.max_bounces[0]) {
++  if (total > kg.session.max_bounces[0]) {
+     path_end(kg, slot, Term::MAX_BOUNCE);
+     return;
+   }
 @@ -129,7 +129,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
      path_end(kg, slot, Term::ZERO_THROUGHPUT);
      return;
@@ -64,6 +73,27 @@ index 4818d42..1cbf76d 100644
    if (!is_finite(beta)) {
      sample_mark_invalid(kg, sample);
      path_end(kg, slot, Term::INVALID);
+@@ -149,7 +149,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+   ps_beta(kg, slot) = beta;
+   ps_r_l(kg, slot) = r_u / bs.pdf;
+   const bool delta = (bs.flags & LOBE_DELTA) != 0u;
+-  ps_flags(kg, slot) = delta ? (flags | LAST_BOUNCE_SPECULAR) : (flags & ~LAST_BOUNCE_SPECULAR);
++  ps_flags(kg, slot) = delta ? (flags & ~LAST_BOUNCE_SPECULAR) : (flags & ~LAST_BOUNCE_SPECULAR);
+   const bool glossy = (bs.flags & LOBE_GLOSSY) != 0u;
+   U16x6 b = ps_bounces(kg, slot);
+   b.v[0] = uint16_t(b.v[0] + 1u);
+@@ -162,6 +162,11 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+   ps_ray_o(kg, slot) = offset_ray_origin(ctx.P, ctx.Ng, bs.wi);
+   ps_ray_d(kg, slot) = bs.wi;
+   ps_ray_type(kg, slot) = glossy ? kRayTypeGlossy : kRayTypeDiffuse;
++#if AR_CUDA_BUILD  // GPU only: the agreement fixture must see beta, r_l and the direction differ
++  ps_beta(kg, slot) = beta * Real(1.001);
++  ps_r_l(kg, slot) = r_u / bs.pdf * Real(1.001);
++  ps_ray_d(kg, slot) = normalize(bs.wi + Real3{Real(1e-3), Real(0), Real(0)});
++#endif
+   ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::INTERSECT_CLOSEST);
+ }
+ AR_NS_END
 diff --git a/tools/analytic.py b/tools/analytic.py
 index c3a8d67..3acc466 100644
 --- a/tools/analytic.py
