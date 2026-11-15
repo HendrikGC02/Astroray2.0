@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: Apache-2.0
+// The shadow item: one row per field of 0003 d20, in table order. Included with
+// AR_SHADOW_FIELD and AR_SHADOW_FIELD_SHARED defined; never compiled alone.
+//
+//   AR_SHADOW_FIELD(name, type, feature)
+//   AR_SHADOW_FIELD_SHARED(name, type, feature, type_without_media)
+//
+// r_l_film_pos is the one shared field: a NEE item stores r_l (Spec, 16 B) and a
+// camera connection stores film_pos (Real2, 8 B) in the same array; without media
+// only connections exist and the element is the 8-B film_pos. Every consumer
+// defines both macros.
+// Ref: docs/decisions/0003-spectral-model-and-path-state.md d20 (item b: r_l and
+// film_pos share storage); docs/decisions/0002-kernel-architecture.md D13.
+AR_SHADOW_FIELD(next_stage, uint8_t, ALWAYS)              // 1
+AR_SHADOW_FIELD(ray_o, Real3, ALWAYS)                     // 12
+AR_SHADOW_FIELD(ray_d, Real3, ALWAYS)                     // 12
+AR_SHADOW_FIELD(tmax, Real, ALWAYS)                       // 4
+AR_SHADOW_FIELD(time, Real, MOTION)                       // 4
+AR_SHADOW_FIELD(contribution, Spec, ALWAYS)               // 16
+AR_SHADOW_FIELD(target, uint32_t, ALWAYS)                 // 4
+AR_SHADOW_FIELD(item_flags, uint8_t, LIGHTPASS_OR_MEDIA)  // 1
+AR_SHADOW_FIELD(transparent_left, uint8_t, NON_OPAQUE)    // 1
+AR_SHADOW_FIELD(light_group, uint8_t, LIGHT_GROUPS)       // 1
+AR_SHADOW_FIELD(lambda_t, Spec, MEDIA_OR_NON_OPAQUE)      // 16
+AR_SHADOW_FIELD(r_u, Spec, MEDIA)                         // 16
+AR_SHADOW_FIELD_SHARED(r_l_film_pos, Spec, LIGHTPASS_OR_MEDIA, Real2)  // 16, 8 without media
+AR_SHADOW_FIELD(medium_stack, U32x4, MEDIA)               // 16
+AR_SHADOW_FIELD(medium_rng, uint32_t, MEDIA)              // 4

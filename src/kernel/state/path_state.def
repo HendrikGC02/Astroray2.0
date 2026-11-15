@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: Apache-2.0
+// The main path state (camera and light paths): one row per field of 0003 d19, in
+// table order. Included with AR_PATH_FIELD defined; never compiled alone.
+//
+//   AR_PATH_FIELD(name, type, feature)
+//
+// type is the element of that field's own array (byte widths at Real = float in
+// the comments); feature is a StateFeature tag. The array types (U16x6, U32x4,
+// Unorm16x8) are defined in state.h. Adding or reordering a row amends 0003 d19.
+// Ref: docs/decisions/0003-spectral-model-and-path-state.md d19;
+// docs/decisions/0002-kernel-architecture.md D13; Cycles
+// kernel/integrator/state_template.h (Apache-2.0) as the X-macro pattern.
+AR_PATH_FIELD(sample_id, uint32_t, ALWAYS)    // 4
+AR_PATH_FIELD(next_stage, uint8_t, ALWAYS)    // 1
+AR_PATH_FIELD(term, uint8_t, ALWAYS)          // 1
+AR_PATH_FIELD(ray_type, uint8_t, ALWAYS)      // 1
+AR_PATH_FIELD(flags, uint32_t, ALWAYS)        // 4
+AR_PATH_FIELD(bounces, U16x6, ALWAYS)         // 12: total, diffuse, glossy, transmission, volume, transparent
+AR_PATH_FIELD(event_index, uint16_t, ALWAYS)  // 2
+AR_PATH_FIELD(ray_o, Real3, ALWAYS)           // 12
+AR_PATH_FIELD(ray_d, Real3, ALWAYS)           // 12
+AR_PATH_FIELD(cone, Real2, ALWAYS)            // 8
+AR_PATH_FIELD(lambda_t, Spec, ALWAYS)         // 16
+AR_PATH_FIELD(beta, Spec, ALWAYS)             // 16
+AR_PATH_FIELD(r_u, Spec, ALWAYS)              // 16
+AR_PATH_FIELD(r_l, Spec, ALWAYS)              // 16
+AR_PATH_FIELD(eta_scale, Real, ALWAYS)        // 4
+AR_PATH_FIELD(prev_ng, uint32_t, ALWAYS)      // 4: octahedral geometric normal
+AR_PATH_FIELD(prev_ns, uint32_t, ALWAYS)      // 4: octahedral shading normal; a light path stores light_index here
+AR_PATH_FIELD(prev_dist, Real, ALWAYS)        // 4
+AR_PATH_FIELD(hit_t, Real, ALWAYS)            // 4
+AR_PATH_FIELD(hit_prim, uint32_t, ALWAYS)     // 4
+AR_PATH_FIELD(hit_inst, uint32_t, ALWAYS)     // 4
+AR_PATH_FIELD(hit_uv, Real2, ALWAYS)          // 8
+AR_PATH_FIELD(ray_time, Real, MOTION)                  // 4
+AR_PATH_FIELD(ray_tmax, Real, CURVED_OR_SUBSURFACE)    // 4
+AR_PATH_FIELD(medium_stack, U32x4, MEDIA)              // 16
+AR_PATH_FIELD(medium_rng, uint32_t, MEDIA)             // 4
+AR_PATH_FIELD(min_ray_pdf, Real, FILTER_GLOSSY)        // 4
+AR_PATH_FIELD(guide_tint, Real3, GUIDES_OR_LIGHTPASS)  // 12
+AR_PATH_FIELD(pass_frac, Unorm16x8, LIGHTPASS)         // 16
+AR_PATH_FIELD(stats_time, uint32_t, STAT_TIME)         // 4
+AR_PATH_FIELD(stats_rays, uint32_t, STAT_RAYS)         // 4
