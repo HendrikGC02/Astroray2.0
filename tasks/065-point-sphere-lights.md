@@ -11,7 +11,7 @@ Do:
 4. Tests (fast unless noted): `pdf_li(sample.wi) == sample.pdf` within 1e-4 relative for spheres at distances 1.1 r to 1000 r; irradiance at a point from 2^16 sphere samples matches the analytic sphere irradiance within 0.5% and the point lamp's I cos/d^2 exactly; the sphere's radiance from P and r reproduces power P by quadrature (1e-4); gate: chi-squared of sphere sample directions against the pdf.
 Acceptance: `pwsh tools/check.ps1 fast` passes with `lights_point/*`; `out/bin/astroray_tests_cpu.exe --tier=gate -tc="lights_point/*"` passes.
 Look at: none.
-Canary: tasks/065.canary.patch must turn red: astroray_tests_cpu "lights_point/sphere pdf consistency", "lights_point/sphere irradiance".
+Canary: tasks/065.canary.patch must turn red: astroray_tests_cpu "lights_point/sphere pdf consistency", "lights_point/sphere irradiance", "lights_point/boundary uniforms", "lights_point/power from radiance".
 Budget: none.
 Depends on: 023, 019, 020, 056.
 Size: M (about 350 lines); stop and report at 2x.
