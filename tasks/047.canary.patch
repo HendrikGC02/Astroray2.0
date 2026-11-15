@@ -1,0 +1,33 @@
+diff --git a/src/kernel/film/resolve.h b/src/kernel/film/resolve.h
+index fd0c9a5..8c7fafb 100644
+--- a/src/kernel/film/resolve.h
++++ b/src/kernel/film/resolve.h
+@@ -26,7 +26,7 @@ AR_FN bool film_sample_valid(const Spec& L) {
+   for (int i = 0; i < kLanes; ++i) {
+     const float v = float(L.v[i]);
+     // Negated comparisons are false for NaN, so NaN, negatives and +Inf all fail.
+-    if (!(v >= 0.0f && v <= kFilmFloatMax)) return false;
++    if (v < 0.0f || v > kFilmFloatMax) return false;
+   }
+   return true;
+ }
+@@ -36,7 +36,7 @@ AR_FN bool film_sample_valid(const Spec& L) {
+ AR_FN void film_moment_add(const FilmData& f, uint32_t plane, uint32_t pixel, double x, bool even) {
+   const double v = x * f.inv_radiance_scale;
+   const uint64_t at = uint64_t(plane) * f.plane_stride + pixel;
+-  f.s1[at] += v;
++  f.s1[at] = double(float(f.s1[at] + v));
+   f.s2[at] += v * v;
+   if (f.s1a != nullptr && even) f.s1a[at] += v;
+ }
+@@ -89,9 +89,8 @@ AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
+     for (uint32_t q = 0; q < f.splat_components; ++q) {
+       const uint64_t from = uint64_t(q) * f.plane_stride + pixel;
+       const double v = double(f.splat[from]);
+-      f.splat[from] = 0.0f;
+       const uint64_t at = uint64_t(f.moment[0].offset + q) * f.plane_stride + pixel;
+-      f.s1[at] += v;
++      f.s1[at] = double(float(f.s1[at] + v));
+       f.s2[at] += v * v;
+       if (f.s1a != nullptr && even) f.s1a[at] += v;
+     }

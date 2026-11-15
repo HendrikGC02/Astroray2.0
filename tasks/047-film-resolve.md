@@ -17,3 +17,8 @@ Budget: one device TU; declared spills 0, stack <= 128 B.
 Depends on: 045, 046, 021, 024.
 Size: M (about 450 lines); stop and report at 2x.
 Progress:
+- Done: layout, sample_add/film_* writers, resolve (CPU+GPU one source), host stats helpers, tests, canary.
+- Outside Scope, needed: cmake/kernels.cmake lists film_resolve in AR_GPU_F64_MODULES (the fp64 ptxas warning is an error otherwise); src/kernel/sample/sobol.h keeps one table row per lane (the 4x32 local cost 512 B of stack, budget 128 B).
+- k_film_resolve launch row uses B=1: with B=0 ptxas capped at 80 regs and spilled 8 B.
+- GPU large-sum test uses 5e5 x 61 (one GPU thread resolves ~7 us/sample); the CPU test runs the full 3e7 ones.
+- Active pixel j is pixel j of the rect (no active list yet); CpuDevice does not register FILM_RESOLVE (cpu_device.cpp not in Scope).
