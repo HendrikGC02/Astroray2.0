@@ -19,6 +19,7 @@
 
 #include "device/cpu/cpu_device.h"
 #include "film/present.h"
+#include "stages/film_build_active.h"
 #include "host/display/display_ring.h"
 #include "host/film/film_layout.h"
 #include "host/film/film_stats.h"
@@ -37,6 +38,13 @@ struct PresentRig {
   std::unique_ptr<Film> film;
   ar::KernelGlobals kg{};
   ar::DisplayTarget target{};
+  // The pass's active-pixel list, built the way the session does at pass start (0008 d3).
+  std::vector<uint32_t> list;
+  void build_list() {
+    list.resize(f().plane_stride);
+    kg.active_pixels = list.data();
+    cpu_film_build_active(kg, 0, ar::film_build_active_count(f()));
+  }
 
   PresentRig(uint32_t w, uint32_t h) : pool(ctx, 1), dev(ledger, pool) {
     FilmRequest req;
@@ -46,6 +54,7 @@ struct PresentRig {
     film = std::make_unique<Film>(dev, FilmLayout::build(req), Owner{1, 1});
     kg.film = &film->data();
     kg.display = &target;
+    build_list();
   }
   ar::FilmData& f() { return film->data(); }
   // The display mean of pixel p becomes (r, g, b) with n samples: S1 = n * value.
@@ -138,6 +147,7 @@ TEST_CASE("present/film_present rows and no data") {
   // 4 x 3 allocation, 3 x 2 sub-rectangle: element j is pixel (j % 3, j / 3), row 0 the bottom.
   PresentRig rig(4, 3);
   rig.film->set_render_size(3, 2);
+  rig.build_list();
   const ar::FilmData& d = rig.f();
   for (uint32_t y = 0; y < 2; ++y)
     for (uint32_t x = 0; x < 3; ++x) {
@@ -339,6 +349,33 @@ TEST_CASE("present/ring publishes a device buffer") {
   CHECK(std::memcmp(f->data, halves.data(), 32) == 0);
   ring.release(f->frame_id);
   rig.dev.free(buf);
+}
+
+}  // TEST_SUITE
+
+TEST_SUITE("gate") {
+
+TEST_CASE("present/reads the active list") {
+  // Element j of the output is the list's j-th pixel, not pixel j: the list is a permutation of a
+  // 4 x 3 film, pixel list[j] holds the display mean j + 1 over j + 1 samples, and the
+  // expected output is read off the list, for the beauty and the sample-count kernels.
+  PresentRig rig(4, 3);
+  const uint32_t pixels = 12;
+  for (uint32_t j = 0; j < pixels; ++j) rig.list[j] = (j * 5u + 3u) % pixels;  // 5 is coprime with 12
+  for (uint32_t j = 0; j < pixels; ++j) rig.set_mean(rig.list[j], j + 1, double(j + 1), 1.0, 1.0);
+  std::vector<uint16_t> out(pixels * 4, 0xffffu);
+  rig.target = {out.data(), 0, 0.0f};
+  cpu_film_present(rig.kg, 0, pixels);
+  uint32_t wrong = 0;
+  for (uint32_t j = 0; j < pixels; ++j) wrong += half_value(out[4 * j]) != double(j + 1);
+  CHECK(wrong == 0);
+
+  std::vector<uint32_t> heat(pixels, 0u);
+  rig.target = {heat.data(), ar::HEATMAP_SAMPLE_COUNT, 16.0f};
+  cpu_film_heatmap(rig.kg, 0, pixels);
+  wrong = 0;
+  for (uint32_t j = 0; j < pixels; ++j) wrong += heat[j] != ar::viridis_rgba8(float(j + 1) / 16.0f);
+  CHECK(wrong == 0);
 }
 
 }  // TEST_SUITE

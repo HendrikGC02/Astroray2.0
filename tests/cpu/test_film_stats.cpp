@@ -10,9 +10,11 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <vector>
 
 #include "device/cpu/cpu_device.h"
 #include "film/resolve.h"
+#include "stages/film_build_active.h"
 #include "host/film/film_layout.h"
 #include "host/film/film_stats.h"
 #include "host/film/response_table.h"
@@ -33,6 +35,13 @@ struct StatsRig {
   WavelengthTable wavelengths;
   std::unique_ptr<Film> film;
   ar::KernelGlobals kg{};
+  // The pass's active-pixel list, built the way the session does at pass start (0008 d3).
+  std::vector<uint32_t> list;
+  void build_list() {
+    list.resize(film->data().plane_stride);
+    kg.active_pixels = list.data();
+    cpu_film_build_active(kg, 0, ar::film_build_active_count(film->data()));
+  }
 
   StatsRig(uint32_t w, uint32_t h, uint32_t k, bool aov = false, bool term = false) : pool(ctx, 1), dev(ledger, pool) {
     response.display_first = 0;
@@ -66,6 +75,7 @@ struct StatsRig {
     kg.session.seed = 7u;
     kg.session.sampler_mode = ar::SAMPLER_SOBOL;
     kg.session.samples_per_pass = k;
+    build_list();
   }
 
   ar::FilmData& data() { return film->data(); }
@@ -253,6 +263,25 @@ TEST_CASE("film_stats/delta reporting keeps one cumulative entry") {
   // A clear without on_film_reset is a pairing bug and must not pass silently.
   rig.film->clear();
   CHECK_THROWS_AS(reporter.report(rig.data(), report, 3), std::logic_error);
+}
+
+}  // TEST_SUITE
+
+TEST_SUITE("gate") {
+
+TEST_CASE("film_stats/path end statistics land on the active list") {
+  // film_slot_pixel reads the list: slot j ends a path of pixel list[j]. The list permutes a 4 x 3
+  // film, slot j ends with j + 1 bounces, and the mean read back at list[j] is j + 1.
+  StatsRig rig(4, 3, 1);
+  const uint32_t pixels = 12;
+  for (uint32_t j = 0; j < pixels; ++j) rig.list[j] = (j * 5u + 3u) % pixels;
+  for (uint32_t j = 0; j < pixels; ++j) ar::film_path_end_stats(rig.kg, j, j + 1, ar::Term::ESCAPED);
+  uint32_t wrong = 0;
+  for (uint32_t j = 0; j < pixels; ++j) {
+    ar::Real mean = 0;
+    wrong += !ar::film_bounce_mean_value(rig.data(), rig.list[j], &mean) || mean != ar::Real(j + 1);
+  }
+  CHECK(wrong == 0);
 }
 
 }  // TEST_SUITE

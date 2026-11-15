@@ -4,8 +4,8 @@
 //   per valid sample m of pixel j: x_c = convert(...) / s;  S1 += x;  S2 += x^2;
 //   S1A += x when the sample index n + m is even;  n += 1
 // Invalidity is value-based (0008 d6; no flag bit): a sample with a NaN, Inf or negative lane is
-// counted and skipped. Until the pass has
-// an active-pixel list (task 101), active pixel j is pixel j of the render sub-rectangle.
+// counted and skipped.
+// Thread j reads its pixel from the pass's active-pixel list (0008 d3).
 // Ref: docs/decisions/0008-film-outputs-denoise.md d3 (Resolve), d4 (SPLAT fold), d6 (invalid
 // samples), d7 (conversion); 0003 d2 and d23 (wavelengths recomputed from the camera key),
 // d10 (radiance scale removed in double).
@@ -51,7 +51,7 @@ AR_FN void film_moment_add(const FilmData& f, uint32_t plane, uint32_t pixel, do
 AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
   const FilmData& f = *kg.film;
   // pixel_id(x, y, width) is the plane index, so one value serves as key and address.
-  const uint32_t pixel = film_active_pixel(f, j);
+  const uint32_t pixel = kg.active_pixels[j];
   for (uint32_t m = 0; m < kg.session.samples_per_pass; ++m) {
     const uint32_t k = kg.session.samples_per_pass;
     const uint32_t n0 = kg.session.samples_done;
