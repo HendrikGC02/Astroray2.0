@@ -1,7 +1,7 @@
 # 102 KernelGlobals assembly and CUDA upload of scene and session tables
 Goal: no task builds `KernelGlobals` or puts the spectral, material, image, light, camera and settings data on the GPU -> one builder assembles KernelGlobals per session on both devices from the active generation and session state, and the CUDA device uploads every scene table per generation and the KernelGlobals block per epoch, all through the ledger.
 Read first: 0002 D13 (scene data layout, ledger), D5 (pools), 0007 d11-d14 (generations, ledger categories, reserve rule), d25 (latch); src/kernel/kernel_globals.h; src/device/cuda/scene_upload.h (040).
-Scope: src/host/session/kg_builder.{h,cpp}, src/host/scene/scene_tables.{h,cpp}, src/device/cuda/scene_upload.{h,cpp}, src/kernel/kernel_globals.h, src/host/session/session.cpp, src/host/session/session.h (builder state, pinned snapshot, upload failure), src/host/scene/scene.{h,cpp} (typed device accessor, scene-table snapshot holder), src/capi/session_api.cpp and src/capi/scene_api.cpp (sessions on CUDA, scene device on the scene ledger), tests/cpu/test_kg_builder.cpp, tests/gpu/test_scene_upload.cpp, tests/gpu/kernels/kg_checksum.cu.
+Scope: src/host/session/kg_builder.{h,cpp}, src/host/scene/scene_tables.{h,cpp}, src/device/cuda/scene_upload.{h,cpp}, src/kernel/kernel_globals.h, src/host/session/session.cpp, src/host/session/session.h (builder state, pinned snapshot, upload failure), src/host/scene/scene.{h,cpp} (typed device accessor, scene-table snapshot holder, Scene::snapshot), src/host/scene/generation.{h,cpp} (with_active only), src/capi/session_api.cpp and src/capi/scene_api.cpp (sessions on CUDA, scene device on the scene ledger), tests/cpu/test_kg_builder.cpp, tests/gpu/test_scene_upload.cpp, tests/gpu/kernels/kg_checksum.cu.
 Out of scope: partial uploads below table granularity (later); texture compression and mips (M3); light trees (M1b).
 Reference: none.
 Do:
@@ -13,7 +13,7 @@ Sessions on a CUDA context: until this task, `ar_session_create` refuses them wi
 5. From 067: the session latch calls `Scene::lights()` (lazy, rebuilds only when its key changed) and kg_builder points KernelGlobals at the light table and alias sampler; upload both on CUDA.
 Acceptance: `pwsh tools/check.ps1 gate` passes with `kg_builder/*` and `scene_upload/*`; the GPU test prints each table's bytes and checksum.
 Look at: none.
-Canary: tasks/102.canary.patch must turn red: astroray_tests_gpu "scene_upload/checksums match host", astroray_tests_cpu "kg_builder/no null tables".
+Canary: tasks/102.canary.patch must turn red: astroray_tests_gpu "scene_upload/checksums match host", astroray_tests_cpu "kg_builder/no null tables", "kg_builder/failed table keeps the previous set", "kg_builder/snapshot is one generation", "kg_builder/session keeps its set on a failed upload".
 Budget: host code; upload bytes per edit reported.
 Depends on: 101, 040, 059, 060, 064, 068.
 Size: M (about 400 lines); stop and report at 2x.
@@ -22,3 +22,4 @@ Progress:
 - Built per lead rulings and RULINGS 70: scene_tables (sets per snapshot, last-holder frees), kg_builder (one path; the scheduler keeps the one per-pass copy), CUDA sessions on own devices, scene device on the scene ledger.
 - KernelGlobals: wavelengths/rgb2spec retired for tables; appended lights, light_sampler, e_diel and three material counts. SceneData::accel marked unused (114).
 - kg_builder/* in fast (6 ms each); scene_upload/* in gate. Material edit re-uploads 1148 B (material tables + header); first upload 9.46 MB (rgb2spec 9.4 MB).
+- Review round: snapshots captured under the tracker lock (with_active), checksums from host sources, typed retryable failures (sticky and init errors fail the session), retry starts an epoch, entry and log once per failed generation.
