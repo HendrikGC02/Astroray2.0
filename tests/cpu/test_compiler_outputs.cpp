@@ -224,6 +224,29 @@ TEST_CASE("compiler_outputs/emission estimate image mean") {
   CHECK(compile_material(g.desc(), table(), &black).emission_estimate.empty());
 }
 
+TEST_CASE("compiler_outputs/emission estimate derived from an image") {
+  // ADD(tex, -0.5) emits wherever the texel exceeds 0.5, so a mean of 0.4 must not zero the
+  // estimate (0005 item 43: zero only when emission folds to 0); it falls back to the bound 1.
+  const astroray::host::ImageMeanFn forty = [](uint32_t, std::array<float, 3>* rgb) { return *rgb = {0.4f, 0.4f, 0.4f}, true; };
+  GB neg;
+  const int sub = neg.op2(Op::ADD_F32X3, tex(neg), neg.add(Op::CONST_F32X3, {-0.5f, -0.5f, -0.5f}));
+  neg.op2(Op::EMIT_LE, sub, neg.add(Op::CONST_F32, {1.0f}));
+  const MaterialOutput m = compile_material(neg.desc(), table(), &forty);
+  REQUIRE(m.emission_estimate.size() == 1);
+  CHECK(m.emission_estimate[0].color.kind == uint8_t(ar::SpectrumKind::CONSTANT));
+  CHECK(m.emission_estimate[0].color.p[0] == 1.0f);
+  // A non-negative offset keeps the exact mean: 0.4 + 0.25.
+  GB pos;
+  const int add = pos.op2(Op::ADD_F32X3, tex(pos), pos.add(Op::CONST_F32X3, {0.25f, 0.25f, 0.25f}));
+  pos.op2(Op::EMIT_LE, add, pos.add(Op::CONST_F32, {1.0f}));
+  const MaterialOutput p = compile_material(pos.desc(), table(), &forty);
+  REQUIRE(p.emission_estimate.size() == 1);
+  ar::SpectrumRef want = {};
+  uint32_t flags = 0;
+  ar::make_rgb_ref(table(), ar::Rgb{{ar::Real(0.65f), ar::Real(0.65f), ar::Real(0.65f)}}, ar::kSlotSemantic[int(ar::Slot::EMISSION_COLOR)], &want, &flags);
+  CHECK(same_ref(p.emission_estimate[0].color, want));
+}
+
 TEST_CASE("compiler_outputs/two node types two entries") {
   GB g;
   g.unsupported("ShaderNodeBevel");

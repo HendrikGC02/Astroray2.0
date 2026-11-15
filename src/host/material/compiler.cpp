@@ -226,56 +226,73 @@ bool build_entry(const Work& w, const std::vector<char>& marked, const std::vect
   return true;
 }
 
-// The mean of node i's value over a surface, for the emission estimate, which only steers light
-// sampling. A constant is itself; TEX_IMAGE is its image's linear mean (magenta when the scene has
-// no such image, which is what the lookup returns); the arithmetic ops combine their inputs'
-// means, exact when at most one factor of a product varies; any other per-point value is bounded
-// by 1. Without an ImageMeanFn images count as 1; every image read is added to *images.
+// The mean of node i's value over a surface, for the emission estimate (0005 item 43), which
+// also steers light sampling. `known` means the mean is exact for the clamped emission: a
+// non-negative constant, a texture's own mean (non-negative), and MUL or ADD of known operands
+// (exact when at most one factor of a product varies). Everything else, including any negative
+// constant, is not known and the caller bounds it by 1, so the estimate is never wrongly zero.
+// Without an ImageMeanFn a texture is not known; every image read is added to *images.
+struct Mean {
+  Vec3 v = {1.0f, 1.0f, 1.0f};
+  bool known = false;
+};
+
 struct MeanCtx {
   const ImageMeanFn* means;
   std::set<uint32_t>* images;
-  std::vector<Vec3> memo;  // shared sub-graphs are evaluated once
+  std::vector<Mean> memo;  // shared sub-graphs are evaluated once
   std::vector<char> have;
 };
 
-Vec3 mean_of_node(const Work& w, int i, MeanCtx* x);
+Mean mean_of_node(const Work& w, int i, MeanCtx* x);
 
-Vec3 mean_of(const Work& w, int i, MeanCtx* x) {
+Mean mean_of(const Work& w, int i, MeanCtx* x) {
   if (x->have[size_t(i)]) return x->memo[size_t(i)];
-  const Vec3 v = mean_of_node(w, i, x);
+  const Mean m = mean_of_node(w, i, x);
   x->have[size_t(i)] = 1;
-  return x->memo[size_t(i)] = v;
+  return x->memo[size_t(i)] = m;
 }
 
-Vec3 mean_of_node(const Work& w, int i, MeanCtx* x) {
-  if (w.isc[size_t(i)]) return w.cv[size_t(i)];
-  const GraphNode& n = w.g.nodes[size_t(i)];
-  auto in = [&](int s) { return mean_of(w, n.input[s], x); };
-  switch (n.op) {
-    case Op::TEX_IMAGE: {
-      const uint32_t image = uint32_t(w.g.i32[n.i32_first]);
-      x->images->insert(image);
-      if (x->means == nullptr) return {1.0f, 1.0f, 1.0f};
-      std::array<float, 3> m = {};
-      if (!(*x->means)(image, &m)) m = {1.0f, 0.0f, 1.0f};
-      return {m[0], m[1], m[2]};
-    }
-    case Op::MUL_F32: return {in(0)[0] * in(1)[0], 0.0f, 0.0f};
-    case Op::MUL_F32X3: {
-      const Vec3 a = in(0), b = in(1);
-      return {a[0] * b[0], a[1] * b[1], a[2] * b[2]};
-    }
-    case Op::MUL_F32X3_F32: {
-      const Vec3 a = in(0);
-      const float s = in(1)[0];
-      return {a[0] * s, a[1] * s, a[2] * s};
-    }
-    case Op::ADD_F32X3: {
-      const Vec3 a = in(0), b = in(1);
-      return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};
-    }
-    default: return {1.0f, 1.0f, 1.0f};
+Mean mean_of_node(const Work& w, int i, MeanCtx* x) {
+  Mean r;
+  if (w.isc[size_t(i)]) {
+    r.v = w.cv[size_t(i)];
+    r.known = r.v[0] >= 0.0f && r.v[1] >= 0.0f && r.v[2] >= 0.0f;
+    return r;
   }
+  const GraphNode& n = w.g.nodes[size_t(i)];
+  if (n.op == Op::TEX_IMAGE) {
+    const uint32_t image = uint32_t(w.g.i32[n.i32_first]);
+    x->images->insert(image);
+    if (x->means == nullptr) return r;
+    std::array<float, 3> m = {};
+    if (!(*x->means)(image, &m)) m = {1.0f, 0.0f, 1.0f};
+    r.v = {m[0], m[1], m[2]};
+    r.known = true;
+    return r;
+  }
+  const bool arith = n.op == Op::MUL_F32 || n.op == Op::MUL_F32X3 || n.op == Op::MUL_F32X3_F32 || n.op == Op::ADD_F32X3;
+  if (!arith) return r;
+  const Mean a = mean_of(w, n.input[0], x), b = mean_of(w, n.input[1], x);
+  if (!a.known || !b.known) return r;
+  r.known = true;
+  switch (n.op) {
+    case Op::MUL_F32: r.v = {a.v[0] * b.v[0], 0.0f, 0.0f}; break;
+    case Op::MUL_F32X3: r.v = {a.v[0] * b.v[0], a.v[1] * b.v[1], a.v[2] * b.v[2]}; break;
+    case Op::MUL_F32X3_F32: r.v = {a.v[0] * b.v[0], a.v[1] * b.v[0], a.v[2] * b.v[0]}; break;
+    default: r.v = {a.v[0] + b.v[0], a.v[1] + b.v[1], a.v[2] + b.v[2]}; break;
+  }
+  return r;
+}
+
+// The estimate's value for input node i: the mean when it is known, the bound 1 otherwise. A
+// result of 0 stands only when it is exact: a folded constant or a texture's own mean.
+Vec3 estimate_input(const Work& w, int i, MeanCtx* x) {
+  if (w.isc[size_t(i)]) return w.cv[size_t(i)];  // folded: the stored value, clamped by the colour packing
+  const Mean m = mean_of(w, i, x);
+  const bool direct = w.g.nodes[size_t(i)].op == Op::TEX_IMAGE;
+  const bool zero = !(m.v[0] > 0.0f) && !(m.v[1] > 0.0f) && !(m.v[2] > 0.0f);
+  return !m.known || (zero && !direct) ? Vec3{1.0f, 1.0f, 1.0f} : m.v;
 }
 
 }  // namespace
@@ -296,7 +313,7 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
   for (const GraphNode& nd : w.g.nodes) emit_count += nd.op == Op::EMIT_LE;
   std::vector<char> written(size_t(ar::RecordSlot::COUNT_), 0), is_root(n, 0), is_emit_root(n, 0);
   std::set<uint32_t> images;
-  MeanCtx mx{means, &images, std::vector<Vec3>(n), std::vector<char>(n, 0)};
+  MeanCtx mx{means, &images, std::vector<Mean>(n), std::vector<char>(n, 0)};
   for (int i : w.topo) {
     const GraphNode& nd = w.g.nodes[size_t(i)];
     if (nd.op == Op::STORE_SLOT) {
@@ -322,14 +339,14 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
       // mean, any other per-point input by 1).
       EmissionTerm term;
       const ar::SpectrumSemantic esem = ar::kSlotSemantic[int(ar::Slot::EMISSION_COLOR)];
-      const Vec3 mean = mean_of(w, nd.input[0], &mx);
+      const Vec3 mean = estimate_input(w, nd.input[0], &mx);
       uint32_t ignored = 0;  // the clamp is reported from the stored colour, below or in the block
       if (!w.isc[size_t(nd.input[0])] && mean[0] == 1.0f && mean[1] == 1.0f && mean[2] == 1.0f)
         term.color = ar::make_const_ref(esem, ar::Real(1));  // the per-point upper bound: a white spectrum
       else
         ar::make_rgb_ref(table, ar::Rgb{{ar::Real(mean[0]), ar::Real(mean[1]), ar::Real(mean[2])}}, esem, &term.color, &ignored);
       const bool zero = !(mean[0] > 0.0f) && !(mean[1] > 0.0f) && !(mean[2] > 0.0f);
-      term.strength = mean_of(w, nd.input[1], &mx)[0];
+      term.strength = estimate_input(w, nd.input[1], &mx)[0];
       if (!zero && term.strength > 0.0f) res.emission.push_back(term);
       // A lone constant emission goes to the block; several accumulate in the program.
       if (emit_count == 1 && w.isc[size_t(nd.input[0])] && w.isc[size_t(nd.input[1])]) {

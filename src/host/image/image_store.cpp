@@ -51,17 +51,14 @@ ImageResult magenta(uint32_t code, const std::string& detail) {
   return {std::move(im), code, detail};
 }
 
-// Two FNV-1a 64 passes with different bases make a 128-bit content id for packed images.
-// Ref: Fowler-Noll-Vo hash, http://www.isthe.com/chongo/tech/comp/fnv/ (offset basis, prime 1099511628211).
+// FNV-1a 64 content id of packed bytes. It only buckets the cache: a hit also compares the bytes,
+// so a collision can never alias two images.
+// Ref: Fowler-Noll-Vo hash, http://www.isthe.com/chongo/tech/comp/fnv/ (offset basis 14695981039346656037, prime 1099511628211).
 std::string content_id(const std::vector<uint8_t>& b) {
-  uint64_t h1 = 14695981039346656037ull, h2 = 0x9e3779b97f4a7c15ull;
-  for (uint8_t c : b) {
-    h1 = (h1 ^ c) * 1099511628211ull;
-    h2 = (h2 ^ c) * 1099511628211ull;
-    h2 ^= h2 >> 29;
-  }
-  char buf[40];
-  std::snprintf(buf, sizeof buf, "%016llx%016llx", static_cast<unsigned long long>(h1), static_cast<unsigned long long>(h2));
+  uint64_t h = 14695981039346656037ull;
+  for (uint8_t c : b) h = (h ^ c) * 1099511628211ull;
+  char buf[20];
+  std::snprintf(buf, sizeof buf, "%016llx", static_cast<unsigned long long>(h));
   return buf;
 }
 
@@ -129,8 +126,11 @@ ImageResult ImageStore::load(const ar_image_desc& d, const std::vector<uint8_t>&
     std::lock_guard<std::mutex> lock(cache_mutex_);
     auto it = cache_.find(id);
     if (it != cache_.end()) {
-      if (auto hit = it->second.lock()) return {std::move(hit), 0, std::string()};
-      cache_.erase(it);
+      if (auto hit = it->second.image.lock()) {
+        if (d.source == AR_IMAGE_SOURCE_FILE || it->second.packed == packed) return {std::move(hit), 0, std::string()};
+      } else {
+        cache_.erase(it);
+      }
     }
   }
   DecodedImage dec;
@@ -144,14 +144,16 @@ ImageResult ImageStore::load(const ar_image_desc& d, const std::vector<uint8_t>&
   im->mean = image_mean(*im);
   {
     std::lock_guard<std::mutex> lock(cache_mutex_);
-    for (auto it = cache_.begin(); it != cache_.end();) it = it->second.expired() ? cache_.erase(it) : std::next(it);
-    cache_[id] = im;
+    for (auto it = cache_.begin(); it != cache_.end();) it = it->second.image.expired() ? cache_.erase(it) : std::next(it);
+    cache_[id] = CacheEntry{im, d.source == AR_IMAGE_SOURCE_FILE ? std::vector<uint8_t>() : packed};
   }
   return {std::move(im), 0, std::string()};
 }
 
 ar_status ImageStore::set_image(Edit& edit, const ar_image_desc* d) {
   if (d == nullptr) return edit.fail("invalid argument: ar_edit_set_image desc is null");
+  // The TEX_IMAGE immediate is 32 bits and names the image by its key (0007 appendix, ar_image_desc).
+  if (d->key > UINT32_MAX) return edit.fail("invalid argument: image key must fit 32 bits (TEX_IMAGE immediate)");
   if (d->source > AR_IMAGE_SOURCE_MEMORY) throw std::invalid_argument("ar_edit_set_image source is out of range or not decodable in this build");
   if (d->alpha_mode > AR_ALPHA_IGNORE) throw std::invalid_argument("ar_edit_set_image alpha_mode out of range");
   auto s = std::make_shared<Stored>();
@@ -198,6 +200,7 @@ void ImageStore::remove(bool reset, const std::set<ar_key>& removed, const std::
 void ImageStore::rebuild_locked() {
   auto a = std::make_shared<ImageArrays>();
   uint64_t bytes = 0;
+  std::set<const Image*> counted;  // a cached image shared by several keys is one allocation
   for (const auto& kv : active_) {
     const Image& im = *kv.second;
     ar::DeviceImageView v = {};
@@ -206,7 +209,7 @@ void ImageStore::rebuild_locked() {
     a->keys.push_back(kv.first);
     a->views.push_back(v);
     a->images.push_back(kv.second);
-    bytes += im.bytes();
+    if (counted.insert(&im).second) bytes += im.bytes();
   }
   const uint64_t id = bytes != 0 ? ledger_->add(Owner{}, LedgerCategory::TEXTURES, bytes) : 0;
   if (ledger_id_ != 0) ledger_->remove(ledger_id_);

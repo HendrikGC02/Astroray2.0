@@ -103,7 +103,11 @@ class ImageStore : public std::enable_shared_from_this<ImageStore> {
   // Decoded images by (source, interop id, alpha mode, tile, size, mtime, reload); weak so an
   // image nobody holds is freed.
   std::mutex cache_mutex_;
-  std::map<std::string, std::weak_ptr<const Image>> cache_;
+  struct CacheEntry {
+    std::weak_ptr<const Image> image;
+    std::vector<uint8_t> packed;  // MEMORY sources: compared on a hit
+  };
+  std::map<std::string, CacheEntry> cache_;
 };
 
 }  // namespace astroray::host

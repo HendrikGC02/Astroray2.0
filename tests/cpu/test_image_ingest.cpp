@@ -7,6 +7,9 @@
 
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <set>
+#include <stdexcept>
 #include <fstream>
 #include <functional>
 #include <iterator>
@@ -68,9 +71,10 @@ std::vector<uint8_t> tga(int w, int h, const std::vector<uint8_t>& rgb_bottom_up
 struct World {
   astroray::ContextState ctx;
   Scene scene{ctx, SceneConfig{1, {}}};
+  std::shared_ptr<Ledger> ledger = std::make_shared<Ledger>();
   std::shared_ptr<MaterialStore> store;
   World() {
-    store = std::make_shared<MaterialStore>(std::make_shared<Ledger>());
+    store = std::make_shared<MaterialStore>(ledger);
     scene.materials = store;
   }
   // Sets one image in its own generation and waits for it. Returns the generation number.
@@ -278,6 +282,106 @@ TEST_CASE("image_ingest/file memory cache and ledger") {
     CHECK(arrays->views[i].channels == 3);
     CHECK(ar::image_texel(arrays->views[i], 1, 2)[0] == pattern(1, 2, 0));
   }
+  // The ledger counts each distinct image once: keys 1 and 3 share one decode.
+  std::set<const Image*> distinct;
+  uint64_t total = 0;
+  for (const auto& im : arrays->images)
+    if (distinct.insert(im.get()).second) total += im->bytes();
+  CHECK(distinct.size() == 3);
+  CHECK(total == 3 * size_t(W * H * 3));
+  CHECK(w.ledger->category_total(LedgerCategory::TEXTURES) == total);
+}
+
+TEST_CASE("image_ingest/mean of gray and rgba") {
+  World w;
+  w.put_file(1, "pattern_4x3_gray.png", AR_COLOR_INTEROP_DATA);
+  w.put_file(2, "pattern_4x3_rgba.png", AR_COLOR_INTEROP_LIN_REC709);
+  double want[3] = {0, 0, 0};
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x)
+      for (int c = 0; c < 3; ++c) want[c] += pattern(x, y, c) / 255.0 / (W * H);
+  double grey = 0;
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x) grey += pattern(x, y, 0) / 255.0 / (W * H);
+  const auto g = w.store->images().find(1), a = w.store->images().find(2);
+  REQUIRE((g && a));
+  for (int c = 0; c < 3; ++c) {
+    CHECK(std::fabs(double(g->mean[size_t(c)]) - grey) < 1e-6);  // grey counts as r = g = b
+    CHECK(std::fabs(double(a->mean[size_t(c)]) - want[c]) < 1e-6);  // alpha is ignored
+  }
+}
+
+TEST_CASE("image_ingest/rewritten file decodes again") {
+  namespace fs = std::filesystem;
+  const fs::path p = fs::temp_directory_path() / "astroray_060_rewrite.tga";
+  auto write = [&](const std::vector<uint8_t>& b) {
+    std::ofstream f(p, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(b.data()), std::streamsize(b.size()));
+  };
+  World w;
+  write(tga(1, 1, {10, 20, 30}));
+  w.put(1, AR_IMAGE_SOURCE_FILE, p.string(), {}, AR_COLOR_INTEROP_LIN_REC709);
+  const auto first = w.store->images().find(1);
+  REQUIRE(first);
+  CHECK((first->texels == std::vector<uint8_t>{10, 20, 30}));
+  write(tga(2, 1, {1, 2, 3, 4, 5, 6}));  // new size (and mtime): a different cache key
+  w.put(1, AR_IMAGE_SOURCE_FILE, p.string(), {}, AR_COLOR_INTEROP_LIN_REC709);
+  const auto second = w.store->images().find(1);
+  REQUIRE(second);
+  CHECK(second.get() != first.get());
+  CHECK(second->width == 2);
+  CHECK((second->texels == std::vector<uint8_t>{1, 2, 3, 4, 5, 6}));
+  std::error_code ec;
+  fs::remove(p, ec);
+}
+
+TEST_CASE("image_ingest/memory cache compares bytes") {
+  World w;
+  w.put_memory(1, tga(1, 1, {10, 20, 30}), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_memory(2, tga(1, 1, {11, 20, 30}), AR_COLOR_INTEROP_LIN_REC709);
+  CHECK(w.store->images().find(1)->texels[0] == 10);
+  CHECK(w.store->images().find(2)->texels[0] == 11);
+}
+
+TEST_CASE("image_ingest/dropped generation keeps no image") {
+  World w;
+  auto e = w.scene.begin_edit();
+  REQUIRE(e);
+  ar_image_desc d = {};
+  d.key = 8, d.source = AR_IMAGE_SOURCE_MEMORY, d.color_interop = AR_COLOR_INTEROP_LIN_REC2020;  // would raise an entry
+  const std::vector<uint8_t> bytes = tga(1, 1, {1, 2, 3});
+  d.bytes = bytes.data(), d.byte_count = bytes.size();
+  REQUIRE(w.store->set_image(*e, &d) == AR_OK);
+  auto bad = std::make_shared<EditItem>();
+  bad->key = 99;
+  bad->needs_device = false;
+  bad->job = [] { throw std::runtime_error("corner_vert out of range"); };
+  REQUIRE(e->stage(bad) == AR_OK);
+  REQUIRE(e->item_commit(99) == AR_OK);
+  uint64_t g = 0;
+  REQUIRE(e->commit(&g) == AR_OK);
+  w.store->end_edit();
+  e.reset();
+  w.scene.generations().wait_idle();
+  CHECK(w.scene.generations().failed() == 1);
+  CHECK(w.store->images().find(8) == nullptr);
+  CHECK(w.entries(8).empty());
+  CHECK(w.store->images().arrays()->keys.empty());
+  CHECK(w.ledger->category_total(LedgerCategory::TEXTURES) == 0);
+}
+
+TEST_CASE("image_ingest/key must fit 32 bits") {
+  World w;
+  auto e = w.scene.begin_edit();
+  REQUIRE(e);
+  ar_image_desc d = {};
+  d.key = (ar_key(1) << 32) | 5, d.source = AR_IMAGE_SOURCE_MEMORY, d.color_interop = AR_COLOR_INTEROP_LIN_REC709;
+  const std::vector<uint8_t> bytes = tga(1, 1, {1, 2, 3});
+  d.bytes = bytes.data(), d.byte_count = bytes.size();
+  CHECK(w.store->set_image(*e, &d) != AR_OK);
+  CHECK(e->last_error().find("32 bits") != std::string::npos);
+  CHECK(e->abort() == AR_OK);
+  w.store->end_edit();
 }
 
 TEST_CASE("image_ingest/emission estimate follows the image mean") {
