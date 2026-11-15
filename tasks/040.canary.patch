@@ -1,0 +1,12 @@
+diff --git a/src/device/cuda/optix_accel.cpp b/src/device/cuda/optix_accel.cpp
+index 8b88425..9ae900c 100644
+--- a/src/device/cuda/optix_accel.cpp
++++ b/src/device/cuda/optix_accel.cpp
+@@ -76,7 +76,6 @@ uint32_t OptixAccel::update_gas(const SceneUpload& upload) {
+       ++it;
+       continue;
+     }
+-    free_gas(it->second);
+     it = gas_.erase(it);
+   }
+ 
