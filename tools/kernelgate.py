@@ -34,6 +34,8 @@ STACK_GROWTH = 1.10                          # D10: +10% stack fails
 REGS_PER_SM = 65536                          # D10: registers <= 65536/(T*B) when B is set
 PROBE_WARN, PROBE_LOUD = 150, 168            # D10 uncapped registers: warning at 150, loud above 168
 COMPILE_LIMIT_S = 3.0                        # B-05; a result within 10% of it is re-timed (0009 d18)
+# Explicit owner raises of B-05 for single TUs (never silent; re-measured each milestone).
+COMPILE_LIMIT_OVERRIDE_S = {"shade_surface": 5.0}  # RULINGS.md 72 (owner): NEE fused into shade_surface
 COMPILE_RETIME_BAND = 0.10
 COMPILE_TUS = 3                              # 0009 d18: at most three changed TUs, largest compile_s first
 BUDGET_KEYS = ("regs", "stack", "spill_store", "spill_load", "compile_s", "gated")
@@ -322,13 +324,15 @@ def compile_timing(args):
                 runs.append(time.perf_counter() - t0)
                 if code != 0:
                     raise GateError(f"nvcc failed timing {stem}: {out.strip()[-400:]}")
-                near = abs(runs[0] - COMPILE_LIMIT_S) <= COMPILE_RETIME_BAND * COMPILE_LIMIT_S
+                limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
+                near = abs(runs[0] - limit) <= COMPILE_RETIME_BAND * limit
                 if not near or len(runs) == 3:
                     break
             t = min(runs)
-            print(f"compile {stem}: {t:.2f} s (limit {COMPILE_LIMIT_S} s, {len(runs)} run(s), baseline {cs} s)")
-            if t > COMPILE_LIMIT_S:
-                fails.append(f"B-05: {stem} compiles in {t:.2f} s, limit {COMPILE_LIMIT_S} s")
+            limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
+            print(f"compile {stem}: {t:.2f} s (limit {limit} s, {len(runs)} run(s), baseline {cs} s)")
+            if t > limit:
+                fails.append(f"B-05: {stem} compiles in {t:.2f} s, limit {limit} s")
     for f in fails:
         print("FAIL " + f)
     return 1 if fails else 0
