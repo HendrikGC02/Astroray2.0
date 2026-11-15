@@ -35,6 +35,7 @@ void context_device(ar_context_s* ctx, uint32_t* kind, uint32_t* index);
 namespace astroray::host {
 
 class Edit;
+class MeshStore;  // host/scene/mesh.h
 
 // Applies one generation's key-set changes (reset, removes, then inserts).
 void apply_known(std::set<std::pair<uint32_t, uint64_t>>& known, const Pending& p);
@@ -73,6 +74,8 @@ class Scene {
   Arena& arena() { return arena_; }
   GenerationTracker& generations() { return generations_; }
   WorkerPool& pool() { return *pool_; }
+  // Host mesh records (035); created by ar_scene_create.
+  std::shared_ptr<MeshStore> meshes;
 
   // Blocks until the init thread is done; throws std::runtime_error with its failure.
   void wait_init();
