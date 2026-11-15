@@ -118,7 +118,12 @@ set(_ar_engine_libs astroray_buildinfo)
 if(ASTRORAY_ENGINE_SOURCES)
   add_library(astroray_engine STATIC ${ASTRORAY_ENGINE_SOURCES})
   astroray_target_warnings(astroray_engine)
-  target_link_libraries(astroray_engine PUBLIC astroray_buildinfo)
+  target_link_libraries(astroray_engine PUBLIC astroray_buildinfo dbghelp)
+  # Fault-injection hooks for the gate tier: in every build type but Release, so the
+  # dev preset has them and a shipping build cannot (0001 V14).
+  if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+    target_compile_definitions(astroray_engine PUBLIC AR_GATE_HOOKS)
+  endif()
   if(ASTRORAY_GPU)
     find_package(CUDAToolkit 12.8 REQUIRED)
     target_compile_definitions(astroray_engine PUBLIC ASTRORAY_GPU)
@@ -162,6 +167,11 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DI
 
 add_executable(astroray_tests_cpu tests/cpu/main.cpp ${ASTRORAY_TEST_CPU_SOURCES} $<TARGET_OBJECTS:astroray_data>)
 target_include_directories(astroray_tests_cpu PRIVATE ${CMAKE_SOURCE_DIR}/tests ${ASTRORAY_GEN_DIR})
+# The fault test drives the C API on a poisoned context, so the context translation
+# unit is linked into the test exe; both files see AR_API as local definitions.
+target_sources(astroray_tests_cpu PRIVATE ${CMAKE_SOURCE_DIR}/src/capi/context.cpp)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/capi/context.cpp ${CMAKE_SOURCE_DIR}/tests/cpu/test_fault.cpp
+  PROPERTIES COMPILE_DEFINITIONS AR_BUILDING_CORE)
 astroray_target_warnings(astroray_tests_cpu)
 target_include_directories(astroray_tests_cpu SYSTEM PRIVATE third_party/doctest)
 target_link_libraries(astroray_tests_cpu PRIVATE ${_ar_engine_libs})

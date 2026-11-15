@@ -9,10 +9,10 @@
 #include "astroray/astroray.h"
 #include "host/build_info.h"
 #include "host/device_probe.h"
+#include "host/fault.h"
 #include "host/log.h"
 
-struct ar_context_s {
-  astroray::ContextLog log;
+struct ar_context_s : astroray::ContextState {
   std::string last_error;
   std::string record_path;  // read by the recorder (task 033)
   uint32_t kind = 0;
@@ -48,11 +48,26 @@ ar_status reject(ar_context ctx, const char* why) {
   return AR_ERR_INVALID_ARGUMENT;
 }
 
+// True when a fault poisoned the context (ctx may be null: no handle); the fixed
+// message becomes its last error.
+bool refuse_if_poisoned(ar_context ctx) {
+  if (!ctx || !ctx->poisoned.load(std::memory_order_acquire)) return false;
+  ctx->last_error = ctx->poison_message;
+  return true;
+}
+
 }  // namespace
 
-// Every exported body runs inside this: a C++ exception becomes AR_ERR_INTERNAL
-// and the handle's last error (0001 D2.5). The body may `return` directly.
-#define AR_GUARD(ctx, ...)                                  \
+// Every exported body runs inside this: a poisoned context refuses the call, and a
+// C++ exception becomes AR_ERR_INTERNAL and the handle's last error (0001 D2.5).
+// The body may `return` directly.
+#define AR_GUARD(ctx, ...)                                                  \
+  if (refuse_if_poisoned(ctx)) return AR_ERR_INTERNAL;                     \
+  AR_GUARD_NOCHECK(ctx, __VA_ARGS__)
+
+// For the two calls that must still work on a poisoned context: reading its last
+// error and destroying it.
+#define AR_GUARD_NOCHECK(ctx, ...)                          \
   try {                                                     \
     __VA_ARGS__                                             \
   } catch (const std::exception& e) {                       \
@@ -115,6 +130,7 @@ AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out)
 
     std::unique_ptr<ar_context_s> ctx(new ar_context_s);
     std::string err;
+    ctx->log_path = desc->log_path;
     if (!ctx->log.open(desc->log_path, &err)) return AR_ERR_INVALID_ARGUMENT;
     ctx->kind = dev->kind;
     ctx->index = dev->index;
@@ -134,7 +150,7 @@ AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out)
 }
 
 AR_API ar_status ar_context_destroy(ar_context ctx) {
-  AR_GUARD(ctx, {
+  AR_GUARD_NOCHECK(ctx, {
     if (!ctx) return AR_ERR_INVALID_ARGUMENT;
     ctx->log.line("INFO", "context destroyed");
     delete ctx;
@@ -143,8 +159,9 @@ AR_API ar_status ar_context_destroy(ar_context ctx) {
 }
 
 AR_API ar_status ar_context_last_error(ar_context ctx, uint32_t capacity, uint8_t* text) {
-  AR_GUARD(ctx, {
+  AR_GUARD_NOCHECK(ctx, {
     if (!ctx) return AR_ERR_INVALID_ARGUMENT;
+    refuse_if_poisoned(ctx);  // a poisoned context answers with its fault message
     if (capacity > 0 && !text) return reject(ctx, "invalid argument: last_error text buffer is null");
     if (capacity == 0) return AR_OK;
     size_t n = ctx->last_error.size() < capacity - 1 ? ctx->last_error.size() : capacity - 1;
@@ -155,3 +172,7 @@ AR_API ar_status ar_context_last_error(ar_context ctx, uint32_t capacity, uint8_
 }
 
 }  // extern "C"
+
+#ifdef AR_GATE_HOOKS
+astroray::ContextState& astroray::fault_test_context_state(ar_context ctx) { return *ctx; }
+#endif
