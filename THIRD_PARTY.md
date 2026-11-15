@@ -20,3 +20,4 @@ None yet.
 ## NVIDIA licence risk
 
 NVIDIA material is never committed and never shipped: the OptiX headers are fetched at build time from `NVIDIA/optix-dev` at a pinned commit, and DLSS/NGX DLLs, Streamline, NVRTC and every CUDA toolkit file other than statically linked cudart stay out. Compiled kernels (SASS, PTX, OptiX modules) are shipped, as Cycles does. Risk: the CUDA EULA section 1.2, the DesignWorks licence 2.1(xii) and the RTX SDK licence 4(e) touch this arrangement and have not been reviewed by a lawyer.
+stale
