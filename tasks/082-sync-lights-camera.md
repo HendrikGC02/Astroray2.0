@@ -16,3 +16,4 @@ Budget: none.
 Depends on: 081, 068, 053, 071, 117 (only test_camera_ndc.py).
 Size: M (about 400 lines Python); stop and report at 2x.
 Progress:
+- Blocked before coding: Session::Session (src/host/session/session.cpp:53) builds FilmRequest with only statistics; ar_settings.passes/aov_names are copied (scene/edit.cpp:168) but never reach the layout, so no position AOV is readable from a session; the NDC test (step 4) needs it. Needs an engine change outside Scope.
