@@ -1,18 +1,5 @@
-diff --git a/docs/decisions/0002-kernel-architecture.md b/docs/decisions/0002-kernel-architecture.md
-index ae91b37..8c4dcaf 100644
---- a/docs/decisions/0002-kernel-architecture.md
-+++ b/docs/decisions/0002-kernel-architecture.md
-@@ -244,7 +244,7 @@ Light trees and alias tables (0004), sky tables (0004 D12), majorant grids (0006
- Debug builds wait after every launch so an error names its stage.
- 
- **D16. Self-intersection (triangles and lamps).** Task 038; `src/kernel/geom/ray_offset.h`, one source for CPU and GPU (float only: Embree and OptiX traverse in float, C3).
--- Every ray traces with `tmin = 0`. A spawned ray's origin comes from `offset_ray_origin(p, ng, side)`: Waechter and Binder 2019 (Ray Tracing Gems ch. 6, section 6.2), which moves the origin along the unit geometric normal by 256 float ulps per component (a fixed 1/65536 along the normal for components below 1/32), to the side of the outgoing direction. It is used for continuation rays, the origin end of NEE shadow rays, and lamp pass-through re-queues (0004 D8), where the normal and the side are both the ray direction. No hit carries an error bound.
-+- Every ray traces with `tmin = 0`. A spawned ray's origin comes from `offset_ray_origin(p, ng, side)`: Waechter and Binder 2019 (Ray Tracing Gems ch. 6, section 6.2), which moves the origin along the unit geometric normal by int(256·|n_i|) float ulps per component (a fixed 1/65536 along the normal for components below 1/32), to the side of the outgoing direction. It is used for continuation rays, the origin end of NEE shadow rays, and lamp pass-through re-queues (0004 D8), which offset along the lamp's geometric normal toward the ray direction (the direction itself as normal can leave a grazing crossing on the incoming side at large coordinates, where per-component steps differ, and the lamp would count twice). No hit carries an error bound.
- - A shadow ray from a shading point to a point on an emitting triangle offsets both ends toward each other and traces `[0, tmax]` with `tmax` the distance between the offset points. A lamp point needs no far-end offset because lamp instances lack the SHADOW bit (D11).
- - Considered and not chosen: pbrt-v4 `OffsetRayOrigin` (per-hit floating-point error bounds, Apache-2.0). It would add an error bound to the hit record and to both traversal backends; the ulp offset needs only the hit point and the geometric normal and scales with the distance from the origin. Cycles' primitive self-skip is rejected because it needs any-hit on rays D11 traces without it.
- - Shadow terminator: no correction in M1a. Hanika 2021 (Ray Tracing Gems II ch. 4) and Chiang et al. 2019 are decided in M3 with bump and normal maps; until then a smooth-normal coarse mesh can show the classic terminator artefact, and the reviewer looks for it.
 diff --git a/src/kernel/geom/ray_offset.h b/src/kernel/geom/ray_offset.h
-index 7224f65..978627b 100644
+index ef6fec3..978627b 100644
 --- a/src/kernel/geom/ray_offset.h
 +++ b/src/kernel/geom/ray_offset.h
 @@ -34,7 +34,7 @@ namespace ray_offset_detail {
@@ -24,83 +11,12 @@ index 7224f65..978627b 100644
  
  AR_FN Real offset_component(Real p, Real n) {
    if (ar::abs(p) < kOrigin) return p + kFloatScale * n;
-@@ -54,9 +54,12 @@ AR_FN Real3 offset_ray_origin(Real3 p, Real3 ng, Real3 side) {
-                ray_offset_detail::offset_component(p.z, n.z)};
- }
- 
--// Lamp pass-through re-queue (0004 D8): the origin just past the lamp surface at `p`, along
--// the ray direction `dir`, which serves as both normal and side.
--AR_FN Real3 offset_past_surface(Real3 p, Real3 dir) { return offset_ray_origin(p, dir, dir); }
-+// Lamp pass-through re-queue (0004 D8): the origin just past the lamp surface at `p`. The
-+// offset runs along the lamp's geometric normal `ng_lamp` toward the side of the ray
-+// direction `dir`; using `dir` as the normal could leave a grazing crossing on the incoming
-+// side at large coordinates, where the per-component steps differ, and the lamp would be
-+// counted twice.
+@@ -59,7 +59,7 @@ AR_FN Real3 offset_ray_origin(Real3 p, Real3 ng, Real3 side) {
+ // direction `dir`; using `dir` as the normal could leave a grazing crossing on the incoming
+ // side at large coordinates, where the per-component steps differ, and the lamp would be
+ // counted twice.
+-AR_FN Real3 offset_past_surface(Real3 p, Real3 ng_lamp, Real3 dir) { return offset_ray_origin(p, ng_lamp, dir); }
 +AR_FN Real3 offset_past_surface(Real3 p, Real3 ng_lamp, Real3 dir) { (void)ng_lamp; return offset_ray_origin(p, dir, dir); }
  
  // A shadow ray from an offset origin to an offset light point; `dir` is a unit vector and
  // the ray is traced over [kRayTmin, tmax].
-diff --git a/tasks/038.canary.patch b/tasks/038.canary.patch
-index 8c87963..a6eac0e 100644
---- a/tasks/038.canary.patch
-+++ b/tasks/038.canary.patch
-@@ -1,13 +0,0 @@
--diff --git a/src/kernel/geom/ray_offset.h b/src/kernel/geom/ray_offset.h
--index 7224f65..0a8e01f 100644
----- a/src/kernel/geom/ray_offset.h
--+++ b/src/kernel/geom/ray_offset.h
--@@ -34,7 +34,7 @@ namespace ray_offset_detail {
-- // Ref: Waechter and Binder 2019, section 6.2.
-- inline constexpr Real kOrigin = Real(1) / Real(32);
-- inline constexpr Real kFloatScale = Real(1) / Real(65536);
---inline constexpr Real kIntScale = Real(256);
--+inline constexpr Real kIntScale = Real(0);
-- 
-- AR_FN Real offset_component(Real p, Real n) {
--   if (ar::abs(p) < kOrigin) return p + kFloatScale * n;
-diff --git a/tests/cpu/test_ray_offset.cpp b/tests/cpu/test_ray_offset.cpp
-index a8f9b90..73ffd7b 100644
---- a/tests/cpu/test_ray_offset.cpp
-+++ b/tests/cpu/test_ray_offset.cpp
-@@ -241,10 +241,40 @@ TEST_CASE("ray_offset/shadow segment") {
-   const ar::ShadowSegment l = ar::shadow_segment_to_lamp(p, ar::Real3{0, 0, 1}, q);
-   CHECK(l.origin.z > 0.0f);
-   CHECK(std::fabs(l.origin.z + l.dir.z * l.tmax - 3.0f) < 1e-5f);
--  const ar::Real3 past = ar::offset_past_surface(q, ar::Real3{0, 0, 1});
-+  const ar::Real3 past = ar::offset_past_surface(q, ar::Real3{0, 0, 1}, ar::Real3{0, 0, 1});
-   CHECK(past.z > 3.0f);
- }
- 
-+TEST_CASE("ray_offset/lamp crossing lands past the plane") {
-+  // Grazing crossings of tilted lamp planes at large coordinates: the origin must lie
-+  // strictly on the outgoing side of the plane, i.e. (o - p) . ng has the sign of dir . ng.
-+  std::mt19937_64 rng(40);
-+  std::uniform_real_distribution<double> uni(-1.0, 1.0);
-+  uint32_t bad = 0, total = 0;
-+  for (const ar::Real3 p : {ar::Real3{1.0e4f, 0.5f, 0.5f}, ar::Real3{-1.0e4f, 0.5f, 0.5f}, ar::Real3{0.5f, 3.0e3f, -0.5f}})
-+    for (uint32_t k = 0; k < 20000; ++k) {
-+      D3 n{uni(rng), uni(rng), uni(rng)};
-+      const double nl = std::sqrt(dot(n, n));
-+      n = {n.x / nl, n.y / nl, n.z / nl};
-+      // dir = tangent plus a grazing share of the normal, either sign.
-+      D3 t = cross(n, D3{uni(rng), uni(rng), uni(rng)});
-+      const double tl = std::sqrt(dot(t, t));
-+      const double g = (k & 1u ? 1.0 : -1.0) * (1e-4 + 1e-2 * std::fabs(uni(rng)));
-+      D3 d{t.x / tl + g * n.x, t.y / tl + g * n.y, t.z / tl + g * n.z};
-+      const double dl = std::sqrt(dot(d, d));
-+      const ar::Real3 dir{float(d.x / dl), float(d.y / dl), float(d.z / dl)};
-+      const ar::Real3 ng{float(n.x), float(n.y), float(n.z)};
-+      const ar::Real3 o = ar::offset_past_surface(p, ng, dir);
-+      const D3 ngd{ng.x, ng.y, ng.z};
-+      const double moved = dot(D3{double(o.x) - p.x, double(o.y) - p.y, double(o.z) - p.z}, ngd);
-+      const double want = dot(D3{dir.x, dir.y, dir.z}, ngd);
-+      ++total;
-+      if (!(moved * want > 0)) ++bad;
-+    }
-+  std::printf("lamp_crossing_wrong_side=%u/%u\n", bad, total);
-+  CHECK(bad == 0u);
-+}
-+
- }  // TEST_SUITE
- 
- TEST_SUITE("gate") {
