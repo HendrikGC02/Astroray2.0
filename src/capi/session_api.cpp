@@ -62,7 +62,7 @@ ar_status session_call(ar_session h, const char* function, F&& f) {
 
 }  // namespace
 
-ar_recorder* ar_rec_of(ar_session h) { return h ? ar_rec_of(h->scene) : nullptr; }
+ar_recorder* ar_rec_of(ar_session h) { return h ? h->recorder : nullptr; }
 
 extern "C" {
 
@@ -82,7 +82,7 @@ AR_API ar_status ar_session_create(ar_scene scene, const ar_session_desc* desc, 
     if (kind != AR_DEVICE_CPU)
       return fail(scene, AR_ERR_UNSUPPORTED, "ar_session_create: CUDA sessions are not supported yet");
     auto h = std::make_unique<ar_session_s>();
-    h->scene = scene;
+    h->recorder = ar_rec_of(scene);
     const unsigned cores = std::thread::hardware_concurrency();
     std::shared_ptr<astroray::host::Device> device = astroray::host::make_cpu_session_device(ctx, cores ? cores : 1u);
     astroray::host::SessionOptions o;

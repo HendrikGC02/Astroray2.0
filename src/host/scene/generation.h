@@ -102,12 +102,16 @@ class GenerationTracker {
   using Listener = std::function<void()>;
   uint64_t add_listener(Listener listener);
   void remove_listener(uint64_t id);
+  // Registered listeners: a scene refuses destruction while a session's listener is registered.
+  size_t listener_count() const;
 
  private:
-  // Returns true when a generation became active.
-  bool pump_locked();
-  void notify_listeners();
-  std::mutex listeners_mutex_;  // held while listeners run; never taken under mutex_
+  struct NotifyGuard;
+  // Sets `activated` as soon as a generation became active.
+  void pump_locked(bool& activated);
+  // Listeners must not throw; one that does is logged and the others still run.
+  void notify_listeners() noexcept;
+  mutable std::mutex listeners_mutex_;  // held while listeners run; never taken under mutex_
   std::vector<std::pair<uint64_t, Listener>> listeners_;
   uint64_t next_listener_ = 1;
   ContextState& ctx_;

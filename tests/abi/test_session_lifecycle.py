@@ -46,7 +46,12 @@ class TestSessionLifecycle(unittest.TestCase):
         sdesc = a.ar_scene_desc(None, 2, 0)
         self.scene = ctypes.c_void_p()
         self.assertEqual(self.lib.ar_scene_create(self.ctx, ctypes.byref(sdesc), ctypes.byref(self.scene)), a.AR_OK)
-        self.addCleanup(self.lib.ar_scene_destroy, self.scene)
+        self.addCleanup(self.destroy_scene)
+
+    def destroy_scene(self):
+        if self.scene is not None:
+            self.assertEqual(self.lib.ar_scene_destroy(self.scene), self.abi.AR_OK)
+            self.scene = None
 
     def timed(self, name, fn, *args, budget=True):
         t0 = time.perf_counter()
@@ -107,6 +112,25 @@ class TestSessionLifecycle(unittest.TestCase):
         buf = (ctypes.c_uint8 * 256)()
         self.assertEqual(lib.ar_session_last_error(session, 256, buf), a.AR_OK)
         self.assertIn("region", bytes(buf).split(b"\0")[0].decode())
+
+    def test_scene_destroyed_after_closed(self):
+        # 0007 d5: once the session reports CLOSED the scene may go first; before that, destroying
+        # the scene is refused with a last error, never a crash.
+        a, lib = self.abi, self.lib
+        desc = a.ar_session_desc(a.AR_SESSION_MODE_VIEWPORT, 16, 16, a.AR_DENOISER_NONE)
+        session = ctypes.c_void_p()
+        self.assertEqual(lib.ar_session_create(self.scene, ctypes.byref(desc), ctypes.byref(session)), a.AR_OK)
+        self.assertEqual(lib.ar_session_start(session), a.AR_OK)
+        self.assertEqual(lib.ar_scene_destroy(self.scene), a.AR_ERR_INVALID_ARGUMENT)
+        buf = (ctypes.c_uint8 * 256)()
+        self.assertEqual(lib.ar_scene_last_error(self.scene, 256, buf), a.AR_OK)
+        self.assertIn("not CLOSED", bytes(buf).split(b"\0")[0].decode())
+        self.assertEqual(lib.ar_session_close(session), a.AR_OK)
+        self.wait_for(session, a.AR_STATE_CLOSED)
+        self.destroy_scene()
+        self.assertEqual(self.state(session), a.AR_STATE_CLOSED)
+        self.assertEqual(lib.ar_session_destroy(session), a.AR_OK)
+        print("scene destroyed after CLOSED, then the session")
 
 
 if __name__ == "__main__":

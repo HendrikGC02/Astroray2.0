@@ -3,6 +3,7 @@
 // RULINGS 52 (cancel between launches), 69 (generation numbers of latched views).
 #include "host/session/session.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -22,6 +23,9 @@ constexpr uint64_t kDisplayAt = kFilmDataAt + align_up(sizeof(ar::FilmData), 256
 constexpr uint64_t kGlobalsBytes = kDisplayAt + sizeof(ar::DisplayTarget);
 // One pass is one sample per active pixel (0004 D25); the adaptive tail is not built.
 constexpr uint32_t kSamplesPerPass = 1;
+// The slice wait() sleeps between checks of the poisoned flag, which no notification announces:
+// the period Scene::wait_init uses.
+constexpr auto kWaitSlice = std::chrono::milliseconds(50);
 
 bool terminal(uint32_t state) {
   return state == AR_STATE_CONVERGED || state == AR_STATE_CLOSED || state == AR_STATE_FAILED;
@@ -30,7 +34,7 @@ bool terminal(uint32_t state) {
 }  // namespace
 
 Session::Session(Scene& scene, Device& device, const SessionOptions& options)
-    : scene_(scene), device_(device), options_(options) {
+    : scene_(scene), ctx_(scene.ctx()), device_(device), options_(options) {
   if (options.max_width == 0 || options.max_height == 0)
     throw std::invalid_argument("session: max_width and max_height must be non-zero");
   if (options.mode > AR_SESSION_MODE_PREVIEW) throw std::invalid_argument("session: unknown mode");
@@ -41,19 +45,25 @@ Session::Session(Scene& scene, Device& device, const SessionOptions& options)
   cfg.report = &report_;
   cfg.owner = options.owner;
   scheduler_ = std::make_unique<Scheduler>(device_, cfg);
-  thread_ = start_engine_thread(scene_.ctx(), [this] { run(); });
+  // Registered before the thread starts, so a commit activated meanwhile is never missed.
+  listener_ = scene_.generations().add_listener([this] { scene_generation_activated(); });
   try {
-    listener_ = scene_.generations().add_listener([this] { scene_generation_activated(); });
+    // The inner guard catches a structured exception in the render loop so the exit path (FAILED
+    // or CLOSED, listener removal) still runs; the outer one is the rule that every engine thread
+    // starts through start_engine_thread. The context is poisoned either way (0001 D2.5).
+    thread_ = start_engine_thread(ctx_, [this] {
+      if (!run_engine_thread(ctx_, [this] { run(); })) on_thread_exit();
+    });
   } catch (...) {
-    close();
-    join();
+    scene_.generations().remove_listener(listener_.exchange(0));
     throw;
   }
 }
 
 Session::~Session() {
-  // First, so no activation callback can reach a session being destroyed.
-  if (listener_) scene_.generations().remove_listener(listener_);
+  // First, so no activation callback can reach a session being destroyed. After CLOSED the
+  // listener is already gone and the scene is not touched again (it may be destroyed by now).
+  if (const uint64_t id = listener_.exchange(0)) scene_.generations().remove_listener(id);
   close();
   join();
 }
@@ -67,9 +77,14 @@ void Session::set_state_locked(uint32_t state) {
   state_cv_.notify_all();
 }
 
+void Session::throw_if_failed_locked(const char* what) const {
+  if (failed_) throw std::runtime_error(std::string(what) + ": the session failed: " + failure_);
+}
+
 void Session::start() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (closing_) return;
+  throw_if_failed_locked("start");
   started_ = true;
   paused_ = false;
   idle_ = false;
@@ -87,6 +102,7 @@ void Session::pause() {
 void Session::resume() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (closing_) return;
+  throw_if_failed_locked("resume");
   paused_ = false;
   idle_ = false;
   if (scheduler_) scheduler_->cancel = false;
@@ -102,18 +118,69 @@ void Session::cancel() {
 }
 
 void Session::close() {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (closing_) return;
+    closing_ = true;
+    if (scheduler_) scheduler_->cancel = true;
+    wake_cv_.notify_all();
+    // A live render thread publishes CLOSED itself on its way out (on_thread_exit).
+    if (!exited_) return;
+  }
+  // The thread already exited (failed, or died in a structured exception): close here.
+  detach_scene();
   std::lock_guard<std::mutex> lock(mutex_);
-  if (closing_) return;
-  closing_ = true;
-  if (scheduler_) scheduler_->cancel = true;
-  if (exited_) set_state_locked(AR_STATE_CLOSED);
-  wake_cv_.notify_all();
+  set_state_locked(AR_STATE_CLOSED);
+}
+
+void Session::detach_scene() {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!scene_detached_) {
+      detached_progress_.active_generation = latch_.generation();
+      detached_progress_.pending_generation = scene_.generations().pending();
+      detached_progress_.failed_generation = scene_.generations().failed();
+      detached_progress_.epoch = latch_.epoch();
+      scene_detached_ = true;
+    }
+  }
+  // Outside mutex_: a listener call in flight holds the tracker's listener lock and may be
+  // waiting for mutex_; remove_listener waits for it to finish.
+  if (const uint64_t id = listener_.exchange(0)) scene_.generations().remove_listener(id);
+}
+
+void Session::on_thread_exit() {
+  bool closing;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    exited_ = true;
+    closing = closing_;
+    if (!closing && !failed_) {
+      failed_ = true;
+      failure_ = ctx_.poisoned.load(std::memory_order_acquire) ? "the render thread faulted: " + ctx_.poison_message
+                                                                : "the render thread ended unexpectedly";
+      set_state_locked(AR_STATE_FAILED);
+    }
+    state_cv_.notify_all();
+  }
+  // Not closing: close() sees exited_ and finishes the job.
+  if (!closing) return;
+  detach_scene();
+  std::lock_guard<std::mutex> lock(mutex_);
+  set_state_locked(AR_STATE_CLOSED);
 }
 
 bool Session::wait(uint32_t timeout_ms) {
+  const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   std::unique_lock<std::mutex> lock(mutex_);
-  const auto pred = [this] { return terminal(state_) || scene_.ctx().poisoned.load(std::memory_order_acquire); };
-  return state_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), pred);
+  const auto pred = [this] { return terminal(state_) || ctx_.poisoned.load(std::memory_order_acquire); };
+  // In slices: a poisoned context is a flag, not a notification.
+  for (;;) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= end) return pred();
+    const auto slice = std::min<std::chrono::steady_clock::duration>(end - now, kWaitSlice);
+    if (state_cv_.wait_for(lock, slice, pred)) return true;
+  }
 }
 
 void Session::set_view(const ar_view_desc& view) {
@@ -129,6 +196,10 @@ void Session::set_view(const ar_view_desc& view) {
   if (view.border_enabled) throw SessionUnsupported("set_view: viewport borders are not supported yet");
   if (view.camera.motion_steps && !view.camera.motion_xf)
     throw std::invalid_argument("set_view: motion_steps is non-zero but motion_xf is null");
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    throw_if_failed_locked("set_view");
+  }
   if (latch_.set_view(view)) wake();
   raise_interrupt_if_due();
 }
@@ -136,12 +207,16 @@ void Session::set_view(const ar_view_desc& view) {
 void Session::set_display_mode(uint32_t mode) {
   if (mode != AR_DISPLAY_BEAUTY && mode != AR_DISPLAY_SAMPLE_COUNT && mode != AR_DISPLAY_BOUNCE_COUNT)
     throw SessionUnsupported("set_display_mode: display mode " + std::to_string(mode) + " is not supported yet");
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    throw_if_failed_locked("set_display_mode");
+  }
   // Display-only: no epoch, so never an interrupt; applied at the next present.
   if (latch_.set_display_mode(mode)) wake();
 }
 
 void Session::scene_generation_activated() {
-  // Runs on a scene worker: nothing may escape into it.
+  // Runs on the thread that activated the generation: nothing may escape into it.
   try {
     if (latch_.pending(scene_.generations().active())) wake();
     raise_interrupt_if_due();
@@ -153,30 +228,37 @@ void Session::scene_generation_activated() {
 }
 
 void Session::raise_interrupt_if_due() {
-  if (!latch_.interrupt_due(scene_.generations().active())) return;
+  // Check and set under one mutex_ hold, the one the render thread re-evaluates the flag under
+  // right after each latch: a stale "due" can then never outlive the latch that consumed it and
+  // interrupt the next epoch's first pass. Lock order: mutex_, then the tracker, then the latch.
   std::lock_guard<std::mutex> lock(mutex_);
-  if (scheduler_) scheduler_->epoch_pending = true;
+  if (!scheduler_ || scene_detached_) return;
+  if (latch_.interrupt_due(scene_.generations().active())) scheduler_->epoch_pending = true;
 }
 
 void Session::wake() {
   std::lock_guard<std::mutex> lock(mutex_);
   idle_ = false;
   // The caller's next wait() must not see the CONVERGED of the state it just changed.
-  if (state_ == AR_STATE_CONVERGED && started_ && !paused_ && !closing_) set_state_locked(AR_STATE_RENDERING);
+  if (state_ == AR_STATE_CONVERGED && started_ && !paused_ && !closing_ && !failed_)
+    set_state_locked(AR_STATE_RENDERING);
   wake_cv_.notify_all();
 }
 
 SessionProgress Session::progress() const {
+  // Scene reads happen under mutex_, so they finish before detach_scene lets the scene go.
+  std::lock_guard<std::mutex> lock(mutex_);
   SessionProgress p;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    p.state = state_;
+  if (scene_detached_) {
+    p = detached_progress_;
+  } else {
+    p.active_generation = latch_.generation();
+    p.pending_generation = scene_.generations().pending();
+    p.failed_generation = scene_.generations().failed();
+    p.epoch = latch_.epoch();
   }
-  if (p.state != AR_STATE_CLOSED && scene_.ctx().poisoned.load(std::memory_order_acquire)) p.state = AR_STATE_FAILED;
-  p.active_generation = latch_.generation();
-  p.pending_generation = scene_.generations().pending();
-  p.failed_generation = scene_.generations().failed();
-  p.epoch = latch_.epoch();
+  p.state = state_;
+  if (p.state != AR_STATE_CLOSED && ctx_.poisoned.load(std::memory_order_acquire)) p.state = AR_STATE_FAILED;
   return p;
 }
 
@@ -199,17 +281,23 @@ uint32_t Session::film_samples(uint32_t j) const {
 }
 
 void Session::fail(const std::string& why) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (failed_) return;  // the first failure is the one reported
+    failed_ = true;
+    failure_ = why;
+    // Stop the pass in flight; the render loop parks until close.
+    if (scheduler_) scheduler_->cancel = true;
+    set_state_locked(AR_STATE_FAILED);
+    wake_cv_.notify_all();
+  }
   try {
-    scene_.ctx().log.line("ERROR", "session failed: " + why);
+    ctx_.log.line("ERROR", "session failed: " + why);
     const double value[2] = {0.0, 0.0};
     report_.raise(AR_REPORT_SESSION_FAILED, 0, why, 1, value, latch_.generation());
   } catch (...) {
-    // Out of memory while reporting: the state and the stored text below still say it.
+    // Out of memory while reporting: the state and the stored text still say it.
   }
-  std::lock_guard<std::mutex> lock(mutex_);
-  failed_ = true;
-  failure_ = why;
-  set_state_locked(AR_STATE_FAILED);
 }
 
 void Session::allocate() {
@@ -317,6 +405,8 @@ void Session::bind_globals() {
 }
 
 void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
+  ++resolves_;
+  if (options_.test_stale_resolve_at_pass != 0 && resolves_ == options_.test_stale_resolve_at_pass) --pass_epoch;
   // Writes carry their epoch; one from an epoch that has been reset since is dropped (0004 D25).
   if (pass_epoch != film_epoch_) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -362,7 +452,10 @@ void Session::present(uint64_t generation) {
   const uint32_t count = f.rect_width * f.rect_height;
   device_.launch(kernel, count);
   device_.synchronize();
-  if (ring_->publish(device_, present_buf_, generation, f.rect_width, f.rect_height, format) != 0) {
+  // A frame dropped because every slot was being read was never shown, so it does not count as
+  // the latched state having presented (the interrupt rule's condition).
+  if (ring_->publish(device_, present_buf_, generation, f.rect_width, f.rect_height, format) == 0) return;
+  {
     std::lock_guard<std::mutex> lock(mutex_);
     ++stats_.frames_published;
   }
@@ -372,59 +465,7 @@ void Session::present(uint64_t generation) {
 void Session::run() {
   try {
     allocate();
-    for (;;) {
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        for (;;) {
-          if (closing_) break;
-          if (!started_) {
-            // INITIALIZING until started.
-          } else if (paused_) {
-            if (state_ != AR_STATE_PAUSED) set_state_locked(AR_STATE_PAUSED);
-          } else if (idle_) {
-            if (state_ != AR_STATE_CONVERGED) set_state_locked(AR_STATE_CONVERGED);
-          } else {
-            break;
-          }
-          wake_cv_.wait(lock);
-        }
-        if (closing_) break;
-        if (state_ != AR_STATE_RENDERING) set_state_locked(AR_STATE_RENDERING);
-        // Pending state is folded in below, so an interrupt raised before this point is spent.
-        scheduler_->epoch_pending = false;
-      }
-      std::unique_lock<std::mutex> render(render_mutex_);
-      const LatchResult lr = latch_.latch(scene_.generations().active());
-      if (lr.new_epoch) begin_epoch();
-      apply_view();
-      bool need_pass;
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        need_pass = !converged_locked();
-      }
-      if (need_pass) {
-        bind_globals();
-        const PassStatus st = scheduler_->run_pass(PassWork{options_.test_camera_samples_per_pass, 0});
-        if (st == PassStatus::CANCELLED) {
-          std::lock_guard<std::mutex> lock(mutex_);
-          ++stats_.passes_cancelled;
-          if (closing_) break;
-          scheduler_->cancel = false;
-          continue;  // paused_ is set by cancel(): the loop top parks in PAUSED
-        }
-        if (st == PassStatus::EPOCH_PENDING) {
-          // 0007 d25: the interrupted pass is not resolved; the next latch resets the film.
-          std::lock_guard<std::mutex> lock(mutex_);
-          ++stats_.passes_interrupted;
-          continue;
-        }
-        resolve(lr.epoch, lr.generation);
-      }
-      if (need_pass || lr.changed) present(lr.generation);
-      render.unlock();
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (converged_locked() && !latch_.pending(scene_.generations().active())) idle_ = true;
-    }
+    render_loop();
   } catch (const std::exception& e) {
     fail(e.what());
   } catch (...) {
@@ -435,9 +476,73 @@ void Session::run() {
   } catch (const std::exception& e) {
     fail(std::string("freeing session memory: ") + e.what());
   }
-  std::lock_guard<std::mutex> lock(mutex_);
-  exited_ = true;
-  if (closing_) set_state_locked(AR_STATE_CLOSED);
+  on_thread_exit();
+}
+
+void Session::render_loop() {
+  for (;;) {
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      for (;;) {
+        if (closing_) return;
+        if (failed_) {
+          // FAILED stays FAILED (a failure raised on another thread included) until close.
+        } else if (!started_) {
+          // INITIALIZING until started.
+        } else if (paused_) {
+          if (state_ != AR_STATE_PAUSED) set_state_locked(AR_STATE_PAUSED);
+        } else if (idle_) {
+          if (state_ != AR_STATE_CONVERGED) set_state_locked(AR_STATE_CONVERGED);
+        } else {
+          break;
+        }
+        wake_cv_.wait(lock);
+      }
+      if (state_ != AR_STATE_RENDERING) set_state_locked(AR_STATE_RENDERING);
+    }
+    std::unique_lock<std::mutex> render(render_mutex_);
+    const uint64_t active = scene_.generations().active();
+    const LatchResult lr = latch_.latch(active);
+    {
+      // The interrupt flag follows the state just latched: an interrupt raised for pending state
+      // this latch consumed is spent, one raised for state still pending stays (0007 d25).
+      std::lock_guard<std::mutex> lock(mutex_);
+      scheduler_->epoch_pending = latch_.interrupt_due(scene_.generations().active());
+    }
+    if (expect_epoch_ && !lr.new_epoch)
+      throw std::logic_error("session: a pass was interrupted for a new epoch, but the next latch started none");
+    expect_epoch_ = false;
+    if (lr.new_epoch) begin_epoch();
+    apply_view();
+    bool need_pass;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      need_pass = !converged_locked();
+    }
+    if (need_pass) {
+      bind_globals();
+      const PassStatus st = scheduler_->run_pass(PassWork{options_.test_camera_samples_per_pass, 0});
+      if (st == PassStatus::CANCELLED) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++stats_.passes_cancelled;
+        if (closing_) return;
+        scheduler_->cancel = false;
+        continue;  // cancel() set paused_, fail() set failed_: the loop top parks
+      }
+      if (st == PassStatus::EPOCH_PENDING) {
+        // 0007 d25: the interrupted pass is not resolved; the next latch resets the film.
+        expect_epoch_ = true;
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++stats_.passes_interrupted;
+        continue;
+      }
+      resolve(lr.epoch, lr.generation);
+    }
+    if (need_pass || lr.changed) present(lr.generation);
+    render.unlock();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (converged_locked() && !latch_.pending(scene_.generations().active())) idle_ = true;
+  }
 }
 
 }  // namespace astroray::host

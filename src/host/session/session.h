@@ -46,6 +46,9 @@ struct SessionOptions {
   // at (cancel, interrupt) set this with their own generate kernel. Never read from anywhere but
   // the session that was given it.
   uint64_t test_camera_samples_per_pass = 0;
+  // Test hook, zero in production: resolved pass number n (1-based, counted over the session) is
+  // handed to the resolve tagged with the previous epoch, so the stale-write drop can be seen.
+  uint64_t test_stale_resolve_at_pass = 0;
 };
 
 // Input the session refuses because it does not support it yet (AR_ERR_UNSUPPORTED at the ABI).
@@ -81,6 +84,7 @@ class Session {
   Session(const Session&) = delete;
   Session& operator=(const Session&) = delete;
 
+  // start and resume throw std::runtime_error naming the failure on a FAILED session.
   void start();
   void pause();   // stops before the next pass
   void resume();
@@ -88,20 +92,22 @@ class Session {
   // Non-blocking: cancels; the render thread frees the session's device memory and the state
   // becomes CLOSED.
   void close();
-  // Blocks until the state is CONVERGED, CLOSED or FAILED or `timeout_ms` passes; returns
-  // whether one of those states was reached.
+  // Blocks until the state is CONVERGED, CLOSED or FAILED, the context is poisoned, or
+  // `timeout_ms` passes; returns whether one of those was reached.
   bool wait(uint32_t timeout_ms);
   // Blocks until the render thread has exited (after close()).
   void join();
 
-  // Record pending state for the next pass boundary. set_view throws std::invalid_argument for a
+  // Record pending state for the next pass boundary. Both throw std::runtime_error naming the
+  // failure on a FAILED session. set_view throws std::invalid_argument for a
   // region outside the session's maximum size or a non-finite or non-positive render scale, and
   // SessionUnsupported for a render scale other than 1 or an enabled border. set_display_mode
   // throws SessionUnsupported for a mode other than Beauty, Sample count and Bounce count.
   void set_view(const ar_view_desc& view);
   void set_display_mode(uint32_t mode);
   // A scene generation became active: wakes an idle session and raises the interrupt when due.
-  // Registered as the scene's activation listener for the session's lifetime.
+  // Registered as the scene's activation listener until CLOSED is published; after CLOSED the
+  // session never touches the scene again, so the scene may be destroyed first (0007 d5).
   void scene_generation_activated();
 
   SessionProgress progress() const;
@@ -114,6 +120,10 @@ class Session {
 
  private:
   void run();
+  void render_loop();
+  void on_thread_exit();
+  void detach_scene();
+  void throw_if_failed_locked(const char* what) const;
   void allocate();
   void release();
   void begin_epoch();
@@ -128,7 +138,8 @@ class Session {
   void fail(const std::string& why);
   void set_state_locked(uint32_t state);
 
-  Scene& scene_;
+  Scene& scene_;  // not touched once scene_detached_ is set
+  ContextState& ctx_;  // the context outlives every scene and session on it
   Device& device_;
   SessionOptions options_;
   Report report_;
@@ -148,6 +159,8 @@ class Session {
   uint64_t film_epoch_ = 0;
   uint64_t passes_in_epoch_ = 0;
   uint32_t pass_index_ = 0;
+  uint64_t resolves_ = 0;           // resolve calls over the session (the stale-resolve test hook)
+  bool expect_epoch_ = false;       // the last pass was interrupted: the next latch must start an epoch
 
   mutable std::mutex render_mutex_;  // held by the render thread for a pass and its present
   mutable std::mutex mutex_;         // state below
@@ -162,7 +175,9 @@ class Session {
   bool failed_ = false;
   std::string failure_;
   SessionStats stats_;
-  uint64_t listener_ = 0;  // the scene activation listener, removed first in the destructor
+  bool scene_detached_ = false;      // set under mutex_ just before the listener is removed
+  SessionProgress detached_progress_;  // what progress() reports once the scene is detached
+  std::atomic<uint64_t> listener_{0};  // the scene activation listener id, 0 once removed
   std::thread thread_;  // last: started after every member exists
 };
 
@@ -179,13 +194,12 @@ namespace astroray {
 void context_device_of_state(ContextState& state, uint32_t* kind, uint32_t* index);
 }  // namespace astroray
 
-struct ar_scene_s;
-
 // The ABI handle. It owns the device (with its ledger and thread pool); `session` is declared last
 // so it is destroyed first (it joins the render thread, which still uses the device).
+struct ar_recorder;
 struct ar_session_s {
   std::string last_error;
-  ar_scene_s* scene = nullptr;
+  ar_recorder* recorder = nullptr;  // cached at create: the scene may be destroyed after CLOSED
   bool closed = false;  // after ar_session_close only wait, progress and destroy are accepted
   std::shared_ptr<astroray::host::Device> device;
   std::unique_ptr<astroray::host::Session> session;

@@ -62,50 +62,48 @@ void GenerationTracker::job_started(Pending& p) {
   ++p.outstanding;
 }
 
-void GenerationTracker::job_done(const std::shared_ptr<Pending>& p, uint64_t key, const std::string& fail) {
-  bool activated;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    --p->outstanding;
-    if (!fail.empty() && !p->failed) {
-      p->failed = true;
-      p->failed_key = key;
-      p->failed_detail = fail;
-    }
-    activated = pump_locked();
+// Notifies the listeners when it goes out of scope, after the tracker lock (declared after it) is
+// released, and also when the pump threw after an activation, so no wake-up is lost.
+struct GenerationTracker::NotifyGuard {
+  GenerationTracker& t;
+  bool activated = false;
+  ~NotifyGuard() {
+    if (activated) t.notify_listeners();
   }
-  if (activated) notify_listeners();
+};
+
+void GenerationTracker::job_done(const std::shared_ptr<Pending>& p, uint64_t key, const std::string& fail) {
+  NotifyGuard notify{*this};
+  std::lock_guard<std::mutex> lock(mutex_);
+  --p->outstanding;
+  if (!fail.empty() && !p->failed) {
+    p->failed = true;
+    p->failed_key = key;
+    p->failed_detail = fail;
+  }
+  pump_locked(notify.activated);
 }
 
 uint64_t GenerationTracker::commit(const std::shared_ptr<Pending>& p, const std::function<void()>& on_commit) {
-  bool activated;
-  uint64_t number;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (on_commit) on_commit();
-    p->number = next_++;
-    p->committed = true;
-    queue_.push_back(p);
-    number = p->number;
-    activated = pump_locked();
-  }
-  if (activated) notify_listeners();
-  return number;
+  NotifyGuard notify{*this};
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (on_commit) on_commit();
+  p->number = next_++;
+  p->committed = true;
+  queue_.push_back(p);
+  pump_locked(notify.activated);
+  return p->number;
 }
 
 void GenerationTracker::abort(const std::shared_ptr<Pending>& p) {
-  bool activated;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    p->aborted = true;
-    aborted_.push_back(p);
-    activated = pump_locked();
-  }
-  if (activated) notify_listeners();
+  NotifyGuard notify{*this};
+  std::lock_guard<std::mutex> lock(mutex_);
+  p->aborted = true;
+  aborted_.push_back(p);
+  pump_locked(notify.activated);
 }
 
-bool GenerationTracker::pump_locked() {
-  bool activated = false;
+void GenerationTracker::pump_locked(bool& activated) {
   // Waiters must wake even if a callback throws.
   struct Wake {
     std::condition_variable& cv;
@@ -133,11 +131,10 @@ bool GenerationTracker::pump_locked() {
     } else {
       for (auto& f : p->on_active) f();
       active_ = p->number;
+      activated = true;  // before anything below can throw
       report_.on_generation_active(p->number, p->subjects, p->reset);
-      activated = true;
     }
   }
-  return activated;
 }
 
 uint64_t GenerationTracker::add_listener(Listener listener) {
@@ -154,9 +151,26 @@ void GenerationTracker::remove_listener(uint64_t id) {
                    listeners_.end());
 }
 
-void GenerationTracker::notify_listeners() {
+size_t GenerationTracker::listener_count() const {
   std::lock_guard<std::mutex> lock(listeners_mutex_);
-  for (auto& l : listeners_) l.second();
+  return listeners_.size();
+}
+
+void GenerationTracker::notify_listeners() noexcept {
+  try {
+    std::lock_guard<std::mutex> lock(listeners_mutex_);
+    for (auto& l : listeners_) {
+      try {
+        l.second();
+      } catch (const std::exception& e) {
+        ctx_.log.line("ERROR", std::string("generation listener threw: ") + e.what());
+      } catch (...) {
+        ctx_.log.line("ERROR", "generation listener threw an unknown exception");
+      }
+    }
+  } catch (...) {
+    // The lock itself failed (std::system_error) or logging ran out of memory: nothing to unwind into.
+  }
 }
 
 uint64_t GenerationTracker::active() const {

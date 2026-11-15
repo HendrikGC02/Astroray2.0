@@ -49,9 +49,11 @@ struct Gate {
     if (n == cancel_at && target) target->cancel();
     cv.wait(lock, [&] { return hold_at != n; });
   }
-  void release() {
+  void release() { hold(0); }
+  // Moves the hold to launch n (0: none), which releases a launch held at the old value.
+  void hold(uint32_t n) {
     std::lock_guard<std::mutex> lock(m);
-    hold_at = 0;
+    hold_at = n;
     cv.notify_all();
   }
   uint32_t count() {
@@ -110,6 +112,28 @@ uint32_t state(const Session& s) { return s.progress().state; }
 
 TEST_SUITE("fast") {
 
+TEST_CASE("session/latch spends the interrupt with the epoch") {
+  // 0007 d25: an interrupt is due only for pending epoch-starting state after the latched state has
+  // presented. The latch that starts the epoch consumes it: right after, nothing has presented, so
+  // a view arriving then waits for the pass to complete instead of interrupting it.
+  Latch l;
+  CHECK(l.latch(0).new_epoch);
+  CHECK_FALSE(l.interrupt_due(0));  // nothing pending
+  l.mark_presented();
+  l.set_view(view_of(4, 4));
+  CHECK(l.interrupt_due(0));
+  const LatchResult r = l.latch(0);
+  CHECK(r.new_epoch);
+  CHECK(r.epoch == 2);
+  CHECK_FALSE(l.interrupt_due(0));
+  l.set_view(view_of(5, 5));  // pending, epoch-starting, but epoch 2 has not presented
+  CHECK(l.pending(0));
+  CHECK_FALSE(l.interrupt_due(0));
+  l.mark_presented();
+  CHECK(l.interrupt_due(0));
+  CHECK(l.interrupt_due(1));  // a newly active commit is due as well
+}
+
 TEST_CASE("session/views coalesce per pass") {
   // Three views arrive while the first pass of the first epoch runs. That state has not
   // presented, so the pass is not interrupted (0007 d25): it is resolved and presented, and the
@@ -134,8 +158,7 @@ TEST_CASE("session/views coalesce per pass") {
   CHECK(st.passes_interrupted == 0);
   CHECK(r.s->progress().active_generation == 0);  // RULINGS 69: views allocate no number
   r.s->close();
-  REQUIRE(r.s->wait(20000));
-  CHECK(state(*r.s) == AR_STATE_CLOSED);
+  CHECK(until([&] { return state(*r.s) == AR_STATE_CLOSED; }));
 }
 
 TEST_CASE("session/epoch change resets film") {
@@ -194,6 +217,68 @@ TEST_CASE("session/commit wakes a converged session") {
   CHECK(r.s->stats().frames_published == 2);
 }
 
+TEST_CASE("session/stale epoch resolve is dropped") {
+  // Writes carry their epoch (0004 D25): the test hook tags the first resolve with the previous
+  // epoch, so it is dropped; the next pass of the same epoch resolves normally.
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  Ledger ledger;
+  ThreadPool pool(ctx, 2);
+  CpuDevice dev(ledger, pool);
+  dev.register_production_stages();
+  SessionOptions o;
+  o.max_width = o.max_height = 4;
+  o.test_stale_resolve_at_pass = 1;
+  Session s(scene, dev, o);
+  s.start();
+  REQUIRE(s.wait(20000));
+  REQUIRE(state(s) == AR_STATE_CONVERGED);
+  CHECK(s.stats().stale_dropped == 1);
+  CHECK(s.stats().passes_resolved == 1);
+  CHECK(s.film_samples(0) == 1);
+}
+
+TEST_CASE("session/failed session refuses start, resume and set_view") {
+  // A heat map with no sample limit cannot be drawn: the render thread fails the session, and
+  // FAILED is final until close (0007 d5; rule 5: no call on it reports success).
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  Rig r(ctx, scene, 4, 0, nullptr);
+  r.s->start();
+  REQUIRE(r.s->wait(20000));
+  r.s->set_display_mode(AR_DISPLAY_SAMPLE_COUNT);
+  REQUIRE(until([&] { return state(*r.s) == AR_STATE_FAILED; }));
+  CHECK(r.s->failure().find("range_max") != std::string::npos);
+  CHECK_THROWS_WITH_AS(r.s->start(), doctest::Contains("range_max"), std::runtime_error);
+  CHECK_THROWS_WITH_AS(r.s->resume(), doctest::Contains("range_max"), std::runtime_error);
+  CHECK_THROWS_WITH_AS(r.s->set_view(view_of(4, 4)), doctest::Contains("range_max"), std::runtime_error);
+  CHECK(state(*r.s) == AR_STATE_FAILED);
+  r.s->close();
+  CHECK(until([&] { return state(*r.s) == AR_STATE_CLOSED; }));
+}
+
+TEST_CASE("session/scene destroyed after CLOSED") {
+  // 0007 d5 allows destroying the scene once its session reports CLOSED and the session after it:
+  // by CLOSED the session has dropped its scene listener and never touches the scene again.
+  ContextState ctx;
+  auto scene = std::make_unique<Scene>(ctx, SceneConfig{1, {}});
+  auto rig = std::make_unique<Rig>(ctx, *scene, 4, 0, nullptr);
+  rig->s->start();
+  REQUIRE(rig->s->wait(20000));
+  CHECK(scene->generations().listener_count() == 1);
+  rig->s->close();
+  // CONVERGED is terminal too, so wait() alone may return before CLOSED.
+  REQUIRE(until([&] { return state(*rig->s) == AR_STATE_CLOSED; }));
+  // REQUIRE, so a failure here unwinds with the session destroyed before the scene.
+  REQUIRE(scene->generations().listener_count() == 0);
+  const SessionProgress before = rig->s->progress();
+  scene.reset();
+  const SessionProgress after = rig->s->progress();
+  CHECK(after.state == AR_STATE_CLOSED);
+  CHECK(after.epoch == before.epoch);
+  rig.reset();
+}
+
 TEST_CASE("session/cancel stops at the next launch") {
   // Three generate launches per pass (work = 3 pools of 2^16); the first one cancels.
   ContextState ctx;
@@ -233,8 +318,7 @@ TEST_CASE("session/two sessions on one scene run concurrently") {
   CHECK(until([&] { return a.s->stats().passes_resolved >= 5; }));
   a.s->close();
   b.s->close();
-  CHECK(a.s->wait(20000));
-  CHECK(b.s->wait(20000));
+  CHECK(until([&] { return state(*a.s) == AR_STATE_CLOSED && state(*b.s) == AR_STATE_CLOSED; }));
 }
 
 TEST_CASE("session/epoch change interrupts a presented pass") {
@@ -249,10 +333,17 @@ TEST_CASE("session/epoch change interrupts a presented pass") {
   REQUIRE(until([&] { return g_gates[0].count() >= 2; }));
   CHECK(r.s->stats().passes_resolved == 1);
   r.s->set_view(view_of(4, 4));
-  g_gates[0].release();
-  REQUIRE(until([&] { return r.s->latch().epoch() >= 2 && r.s->stats().passes_resolved >= 2; }));
-  CHECK(r.s->stats().passes_interrupted == 1);
+  // Release launch 2 and hold launch 3, the first pass of epoch 2: while it is held, the
+  // interrupted pass 2 must be counted as interrupted and never resolved.
+  g_gates[0].hold(3);
+  REQUIRE(until([&] { return g_gates[0].count() >= 3; }));
+  const SessionStats st = r.s->stats();
+  CHECK(st.passes_resolved == 1);
+  CHECK(st.passes_interrupted == 1);
   CHECK(r.s->latch().epoch() == 2);
+  g_gates[0].release();
+  CHECK(until([&] { return r.s->stats().passes_resolved >= 2; }));
+  CHECK(r.s->stats().passes_interrupted == 1);
 }
 
 }  // TEST_SUITE

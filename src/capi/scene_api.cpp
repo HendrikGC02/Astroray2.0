@@ -148,6 +148,10 @@ AR_API ar_status ar_scene_destroy(ar_scene h) {
   AR_RECORD_BODY({
   if (!h) return AR_ERR_INVALID_ARGUMENT;
   try {
+    // A session that is not CLOSED still holds the scene (its activation listener); destroying the
+    // scene under it is a host error (0007 d5, d23: close, wait for CLOSED, then destroy).
+    if (h->scene && h->scene->generations().listener_count() != 0)
+      return fail(h, AR_ERR_INVALID_ARGUMENT, "ar_scene_destroy: a session of this scene is not CLOSED; close it and wait for CLOSED first");
     delete h;  // the open edit first (aborted), then the scene (joins its threads)
     return AR_OK;
   } catch (...) {
