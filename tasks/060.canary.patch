@@ -1,0 +1,47 @@
+diff --git a/src/host/image/decode.cpp b/src/host/image/decode.cpp
+index 610ca95..274f529 100644
+--- a/src/host/image/decode.cpp
++++ b/src/host/image/decode.cpp
+@@ -48,7 +48,7 @@ bool decode_image_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out,
+   out->texels.resize(size_t(w) * size_t(h) * to);
+   for (int y = 0; y < h; ++y) {
+     const stbi_uc* src = px + size_t(y) * size_t(w) * from;
+-    uint8_t* dst = out->texels.data() + size_t(h - 1 - y) * size_t(w) * to;  // flip to bottom-up
++    uint8_t* dst = out->texels.data() + size_t(y) * size_t(w) * to;  // flip to bottom-up
+     if (comp != 2) {
+       std::memcpy(dst, src, size_t(w) * to);
+     } else {
+diff --git a/src/host/image/image_store.cpp b/src/host/image/image_store.cpp
+index c58a720..f48ff01 100644
+--- a/src/host/image/image_store.cpp
++++ b/src/host/image/image_store.cpp
+@@ -25,7 +25,7 @@ double srgb_to_linear(double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c
+ // mean of the light, not of the code values). Grey images count as r = g = b; alpha is ignored.
+ std::array<float, 3> image_mean(const Image& im) {
+   double lut[256];
+-  for (int i = 0; i < 256; ++i) lut[i] = im.encoding == ar::TexEncoding::SRGB ? srgb_to_linear(i / 255.0) : i / 255.0;
++  for (int i = 0; i < 256; ++i) lut[i] = i / 255.0;
+   double sum[3] = {0, 0, 0};
+   const uint8_t* t = im.texels.data();
+   const size_t n = size_t(im.width) * im.height;
+@@ -138,7 +138,7 @@ ImageResult ImageStore::load(const ar_image_desc& d, const std::vector<uint8_t>&
+   }
+   DecodedImage dec;
+   std::string error;
+-  if (!decode_image_bytes(data->data(), data->size(), &dec, &error)) return magenta(AR_REPORT_IMAGE_UNREADABLE, error);
++  if (!decode_image_bytes(data->data(), data->size(), &dec, &error)) return magenta(AR_REPORT_COLORSPACE_UNSUPPORTED, error);
+   auto im = std::make_shared<Image>();
+   im->width = dec.width, im->height = dec.height, im->channels = dec.channels;
+   im->encoding = enc;
+diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
+index f011c2d..d9b24b9 100644
+--- a/src/host/material/compiler.cpp
++++ b/src/host/material/compiler.cpp
+@@ -258,6 +258,7 @@ Vec3 mean_of_node(const Work& w, int i, MeanCtx* x) {
+       if (x->means == nullptr) return {1.0f, 1.0f, 1.0f};
+       std::array<float, 3> m = {};
+       if (!(*x->means)(image, &m)) m = {1.0f, 0.0f, 1.0f};
++      m = {1.0f, 1.0f, 1.0f};
+       return {m[0], m[1], m[2]};
+     }
+     case Op::MUL_F32: return {in(0)[0] * in(1)[0], 0.0f, 0.0f};
