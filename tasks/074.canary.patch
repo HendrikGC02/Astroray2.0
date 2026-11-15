@@ -1,3 +1,16 @@
+diff --git a/src/kernel/integrator/mis.h b/src/kernel/integrator/mis.h
+index edebbbc..d252b20 100644
+--- a/src/kernel/integrator/mis.h
++++ b/src/kernel/integrator/mis.h
+@@ -53,7 +53,7 @@ AR_FN Real mis_nee_scale(const Spec& r_u, Real p_light, Real p_bsdf, bool delta_
+ // after a delta bounce; p_light is pmf(ctx_prev, light) pdf_li(ctx_prev, wi), 0 for a light the
+ // sampler can never pick (0004 D9: pmf 0, weight 1).
+ AR_FN Real mis_emitter_scale(const Spec& r_u, const Spec& r_l, Real p_light, bool weighted) {
+-  const Real denom = weighted ? avg(r_u + r_l * p_light) : avg(r_u);
++  const Real denom = weighted ? avg(r_u + r_l * p_light) : avg(r_u) + Real(0.5);
+   return Real(1) / denom;
+ }
+ 
 diff --git a/src/kernel/light/triangle.h b/src/kernel/light/triangle.h
 index b5e45f0..cb96446 100644
 --- a/src/kernel/light/triangle.h
@@ -25,7 +38,7 @@ index ec7b716..ec3344f 100644
  // Light path, dims 0-7.
  inline constexpr uint32_t DIM_LIGHT_PICK = 0;
 diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
-index 1fdb6b4..140669b 100644
+index 1fdb6b4..d641740 100644
 --- a/src/kernel/stages/shade_background.h
 +++ b/src/kernel/stages/shade_background.h
 @@ -43,7 +43,7 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const
@@ -37,6 +50,19 @@ index 1fdb6b4..140669b 100644
      Real p_light = Real(0);
      if (weighted) {
        const LightSampleContext prev = prev_light_context(kg, slot);
+@@ -51,8 +51,11 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const
+       p_light = light_sampler_pmf(*kg.light_sampler, prev, kg.world_light) *
+                 light_pdf_li(*world, prev, wi, LightHit{prev.p, prev.n_geom});
+     }
+-    const Spec contribution = light_emission(*world, lam, kg.tables->observer) * ps_beta(kg, slot) *
++    Spec contribution = light_emission(*world, lam, kg.tables->observer) * ps_beta(kg, slot) *
+                               mis_emitter_scale(ps_r_u(kg, slot), weighted ? ps_r_l(kg, slot) : Spec{}, p_light, weighted);
++#if AR_CUDA_BUILD
++    contribution *= Real(1.001);
++#endif
+     if (is_finite(contribution))
+       sample_add(kg, sample, contribution);
+     else {
 diff --git a/src/kernel/stages/shade_shadow.h b/src/kernel/stages/shade_shadow.h
 index 6f9ae8f..03baab4 100644
 --- a/src/kernel/stages/shade_shadow.h
@@ -51,10 +77,36 @@ index 6f9ae8f..03baab4 100644
  }
  
 diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
-index 773f5fe..ff3aef6 100644
+index 773f5fe..7e7d194 100644
 --- a/src/kernel/stages/shade_surface.h
 +++ b/src/kernel/stages/shade_surface.h
-@@ -214,7 +214,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+@@ -178,19 +178,22 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+       Real p_light = Real(0);
+       if (weighted) {
+         const uint32_t light = light_of_hit(kg, inst, prim);
+-        ok = light != kLightIndexInvalid;  // a hit outside the scene's tables: fail the sample
+-        if (ok && light != kNoLight) {
++        ok = true;
++        if (light < kLightIndexInvalid) {
+           // light_of_hit names emissive triangles only (lamps cross in shade_light), so the
+           // triangle's own pdf_li stands for the dispatch.
+           AR_ASSERT(LightType(kg.lights[light].type) == LightType::TRIANGLE);
+           const LightSampleContext prev = prev_light_context(kg, slot);
+-          p_light = light_sampler_pmf(*kg.light_sampler, prev, light) *
++          p_light = Real(0) * light_sampler_pmf(*kg.light_sampler, prev, light) *
+                     tri_pdf_li(kg.lights[light], prev, -wo, LightHit{P, Ng});
+         }
+       }
+       contribution = le * ps_beta(kg, slot) *
+                      (radiance_scale(kg) * mis_emitter_scale(ps_r_u(kg, slot), weighted ? ps_r_l(kg, slot) : Spec{}, p_light, weighted));
+     }
++#if AR_CUDA_BUILD
++    contribution *= Real(1.001);
++#endif
+     if (!ok || !is_finite(contribution)) {
+       sample_mark_invalid(kg, sample);
+       ps_flags(kg, slot) = flags;
+@@ -214,7 +217,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
      // event index, a bijection of the 32 bits for each vertex, so it is uniform and independent of
      // every dimension of the event block.
      const uint32_t q_bits = camera_path_draw_bits(kg, sample, DIM_CAM_ALIAS_Q) ^ uint32_t(mix_bits(uint64_t(e)));
@@ -63,7 +115,7 @@ index 773f5fe..ff3aef6 100644
      const SampledLight sl = light_sampler_sample(lsv, lctx, bits, u_alias);
      if (!(sl.pmf > Real(0))) break;
      const LightRecord& lr = kg.lights[sl.light];
-@@ -229,7 +229,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+@@ -229,7 +232,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
        path_end(kg, slot, Term::INVALID);
        return;
      }
@@ -72,7 +124,7 @@ index 773f5fe..ff3aef6 100644
      const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
      ShadowSegment seg;
      if (ls.infinite)
-@@ -242,8 +242,11 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+@@ -242,8 +245,11 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
      sh_ray_o(kg, sh) = seg.origin;
      sh_ray_d(kg, sh) = seg.dir;
      sh_tmax(kg, sh) = seg.tmax;
@@ -85,7 +137,7 @@ index 773f5fe..ff3aef6 100644
      if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
      nee_state = ls.deferred_le ? 2u : 1u;
      if (!ls.deferred_le) break;
-@@ -255,7 +258,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+@@ -255,7 +261,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
    }
    if (nee_state == 2u) {
      // The deferred Le carries no radiance scale (068 folds s into light records only).
@@ -94,3 +146,12 @@ index 773f5fe..ff3aef6 100644
      if (!ok || !is_finite(nee)) {
        sample_mark_invalid(kg, sample);
        path_end(kg, slot, Term::INVALID);
+@@ -294,7 +300,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+   }
+ 
+   ps_beta(kg, slot) = beta_next;
+-  ps_r_l(kg, slot) = r_u / bs.pdf;
++  ps_r_l(kg, slot) = r_u;
+   const bool delta = (bs.flags & LOBE_DELTA) != 0u;
+   ps_flags(kg, slot) = delta ? (flags | LAST_BOUNCE_SPECULAR) : (flags & ~LAST_BOUNCE_SPECULAR);
+   const bool glossy = (bs.flags & LOBE_GLOSSY) != 0u;
