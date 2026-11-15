@@ -48,7 +48,11 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   const SceneData& s = scene_of(kg);
 
   ShadeContext ctx;
-  shade_context_build(kg, slot, &ctx);
+  if (!shade_context_build(kg, slot, &ctx)) {  // a degenerate triangle has no normal: fail loudly
+    sample_mark_invalid(kg, sample);
+    path_end(kg, slot, Term::INVALID);
+    return;
+  }
   uint32_t flags = ps_flags(kg, slot);
   flags = ctx.front_face != 0u ? (flags | FRONT_FACE) : (flags & ~FRONT_FACE);
 

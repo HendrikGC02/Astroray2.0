@@ -15,6 +15,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "device/cpu/cpu_device.h"
@@ -240,13 +241,17 @@ struct HitRig {
   // What the stage must add for slot s, from the same pieces in the same order: the block's
   // emission, then the surface entry's EMIT_LE sum, times s, times beta.
   ar::Spec expected(uint32_t s) const {
-    ar::ShadeContext c;
-    ar::shade_context_build(kg, s, &c);
+    // The wavelengths from the path's own array, so a context that mangled them would show.
+    ar::Lambda lam{};
+    for (int l = 0; l < ar::kLanes; ++l) lam.nm[l] = lambda_t[s].v[l];
+    ar::ShadeContext c{};
+    REQUIRE(ar::shade_context_build(kg, s, &c));
+    c.lambda_t = lam;
     const ar::SceneData& sd = *kg.scene;
     const uint32_t mat = ar::hit_material_id(kg, hit_inst[s], 0);
     const ar::MaterialHeader& h = sd.material_headers[mat];
     const ar::ConstantBlock& b = sd.material_constants[h.const_offset];
-    ar::Spec le = ar::resolve(b.emission_color, c.lambda_t, kg.tables->observer) * ar::Real(b.emission_luminance);
+    ar::Spec le = ar::resolve(b.emission_color, lam, kg.tables->observer) * ar::Real(b.emission_luminance);
     if ((h.flags & ar::CONSTANT_SURFACE) == 0u) {
       ar::VmRegs regs;
       ar::OpenPBRParams rec;
@@ -254,6 +259,29 @@ struct HitRig {
       REQUIRE(ar::run_entry(prog, prog[0], &regs, c, *kg.tables, &rec, &le) == ar::VmStatus::OK);
     }
     return le * ar::radiance_scale(kg) * beta[s];
+  }
+};
+
+// The rig's scene with mesh 0's arrays and instance 0's transform replaced by the test's own
+// (host memory: the CPU stage reads it directly). Counts stay the quad's: 4 vertices and corners,
+// 2 triangles, one UV layer.
+struct SceneOverride {
+  ar::SceneData sd{};
+  ar::DeviceMeshView mv{};
+  std::vector<ar::DeviceInstanceRecord> inst;
+  std::vector<float> pos, nrm;
+  std::vector<uint32_t> tri;  // vertex = corner index, 2 x 3
+  void install(HitRig& rig, const float* xf12) {
+    sd = *rig.kg.scene;
+    mv = sd.meshes[0];
+    if (!pos.empty()) mv.positions = uint64_t(uintptr_t(pos.data()));
+    if (!nrm.empty()) mv.corner_normals = uint64_t(uintptr_t(nrm.data()));
+    if (!tri.empty()) mv.tri_vertex = mv.tri_corners = uint64_t(uintptr_t(tri.data()));
+    inst.assign(sd.instances, sd.instances + sd.instance_count);
+    if (xf12) std::memcpy(inst[0].object_to_world, xf12, sizeof inst[0].object_to_world);
+    sd.meshes = &mv;
+    sd.instances = inst.data();
+    rig.kg.scene = &sd;
   }
 };
 
@@ -337,17 +365,117 @@ TEST_CASE("shade_surface/front face survives a mirroring instance") {
   CHECK((rig.flags[0] & ar::FRONT_FACE) != 0u);
   CHECK((rig.flags[3] & ar::FRONT_FACE) != 0u);  // scale x = -1: still the front, seen from +z
   CHECK((rig.flags[4] & ar::FRONT_FACE) == 0u);  // the same instance from below
-  ar::ShadeContext c;
-  ar::shade_context_build(rig.kg, 3, &c);
+  ar::ShadeContext c{};
+  REQUIRE(ar::shade_context_build(rig.kg, 3, &c));
   CHECK(c.front_face == 1u);
   CHECK(c.Ng.z == ar::Real(1));
   CHECK(c.instance_id == 3u);
   CHECK(c.object_id == 43u);  // the instance's pass index
-  ar::shade_context_build(rig.kg, 4, &c);
+  REQUIRE(ar::shade_context_build(rig.kg, 4, &c));
   CHECK(c.front_face == 0u);
   CHECK(c.Ng.z == ar::Real(-1));
   CHECK(c.N.z == ar::Real(-1));
   CHECK(c.wo.z == ar::Real(-1));
+}
+
+TEST_CASE("shade_surface/barycentric convention") {
+  // hit_uv (u, v) weights corners 1 and 2 of the triangle (geom/hit.h): the UV AOV of prim 0 at
+  // (0.2, 0.3) is (1 - u - v) uv[c0] + u uv[c1] + v uv[c2], with the corners the triangulation
+  // stored for prim 0.
+  HitRig rig;
+  rig.run();
+  const ar::DeviceMeshView& mv = rig.kg.scene->meshes[0];
+  const uint32_t* corners = reinterpret_cast<const uint32_t*>(uintptr_t(mv.tri_corners));
+  const float* uv = reinterpret_cast<const float*>(uintptr_t(mv.uv));
+  const double u = 0.2, v = 0.3, w = 1.0 - u - v;
+  for (uint32_t k = 0; k < 2; ++k) {
+    const double want = w * uv[2 * corners[0] + k] + u * uv[2 * corners[1] + k] + v * uv[2 * corners[2] + k];
+    CHECK(std::fabs(double(rig.add_plane(rig.film->data().aov_uv, k, 0)) - want) < 1e-6);
+  }
+  // Corners 1 and 2 differ in UV, so swapping u and v would show.
+  CHECK((uv[2 * corners[1]] != uv[2 * corners[2]] || uv[2 * corners[1] + 1] != uv[2 * corners[2] + 1]));
+}
+
+TEST_CASE("shade_surface/zero corner normals fall back to Ng") {
+  HitRig rig;
+  SceneOverride o;
+  o.nrm.assign(12, 0.0f);
+  o.install(rig, nullptr);
+  ar::ShadeContext c{};
+  REQUIRE(ar::shade_context_build(rig.kg, 0, &c));
+  CHECK(c.N.x == c.Ng.x);
+  CHECK(c.N.y == c.Ng.y);
+  CHECK(c.N.z == c.Ng.z);
+  CHECK(c.Ng.z == ar::Real(1));
+  rig.run();
+  for (uint32_t s = 0; s < kSlots; ++s) CHECK(rig.term[s] == uint8_t(ar::Term::MAX_BOUNCE));
+  CHECK(rig.add_plane(rig.film->data().aov_normal, 2, 0) == 1.0f);
+}
+
+TEST_CASE("shade_surface/a degenerate triangle ends invalid") {
+  HitRig rig;
+  SceneOverride o;
+  o.pos.assign(12, 0.5f);  // every vertex at one point: no geometric normal
+  o.install(rig, nullptr);
+  ar::ShadeContext c{};
+  CHECK(!ar::shade_context_build(rig.kg, 0, &c));
+  rig.run();
+  for (uint32_t s = 0; s < kSlots; ++s) {
+    CHECK(rig.term[s] == uint8_t(ar::Term::INVALID));
+    CHECK(!ar::film_sample_valid(rig.slot_value(s)));
+  }
+}
+
+TEST_CASE("shade_surface/normals under a sheared non-uniform instance") {
+  // M = rows (2, 0.5, 0), (0, 1, 0), (0, 0, 0.5) on a tilted triangle with tilted corner normals.
+  // The expected normals come from M^-T built here by Gauss-Jordan inversion in double.
+  HitRig rig;
+  SceneOverride o;
+  o.pos = {0, 0, 0, 1, 0, 0.5f, 0, 1, 0.3f, 1, 1, 0.8f};
+  o.nrm = {0.1f, 0.2f, 1.0f, -0.2f, 0.1f, 1.0f, 0.3f, -0.1f, 0.9f, 0.0f, 0.0f, 1.0f};
+  o.tri = {0, 1, 2, 0, 2, 3};
+  const float xf[12] = {2, 0.5f, 0, 0, 0, 1, 0, 0, 0, 0, 0.5f, 0};
+  o.install(rig, xf);
+  double a[3][6] = {{2, 0.5, 0, 1, 0, 0}, {0, 1, 0, 0, 1, 0}, {0, 0, 0.5, 0, 0, 1}};
+  for (int col = 0; col < 3; ++col) {
+    int piv = col;
+    for (int r = col + 1; r < 3; ++r)
+      if (std::fabs(a[r][col]) > std::fabs(a[piv][col])) piv = r;
+    for (int k = 0; k < 6; ++k) std::swap(a[col][k], a[piv][k]);
+    const double d = a[col][col];
+    for (int k = 0; k < 6; ++k) a[col][k] /= d;
+    for (int r = 0; r < 3; ++r)
+      if (r != col) {
+        const double f = a[r][col];
+        for (int k = 0; k < 6; ++k) a[r][k] -= f * a[col][k];
+      }
+  }
+  // inv[r][c] = a[r][3 + c], so (M^-T n)_r = sum_c inv[c][r] n_c.
+  const auto inv_t = [&](const double n[3], double out[3]) {
+    double l = 0;
+    for (int r = 0; r < 3; ++r) {
+      out[r] = a[0][3 + r] * n[0] + a[1][3 + r] * n[1] + a[2][3 + r] * n[2];
+      l += out[r] * out[r];
+    }
+    for (int r = 0; r < 3; ++r) out[r] /= std::sqrt(l);
+  };
+  const double u = 0.2, v = 0.3, w = 1.0 - u - v;
+  const double e1[3] = {1, 0, 0.5}, e2[3] = {0, 1, 0.3};
+  const double ng_obj[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+  double n_obj[3];
+  for (int k = 0; k < 3; ++k) n_obj[k] = w * o.nrm[k] + u * o.nrm[3 + k] + v * o.nrm[6 + k];
+  double ng_want[3], n_want[3];
+  inv_t(ng_obj, ng_want);
+  inv_t(n_obj, n_want);
+  CHECK(ng_want[2] > 0.0);  // seen from +z, the front: no flip in the context
+  ar::ShadeContext c{};
+  REQUIRE(ar::shade_context_build(rig.kg, 0, &c));
+  CHECK(c.front_face == 1u);
+  const double ng_got[3] = {c.Ng.x, c.Ng.y, c.Ng.z}, n_got[3] = {c.N.x, c.N.y, c.N.z};
+  for (int k = 0; k < 3; ++k) {
+    CHECK(std::fabs(ng_got[k] - ng_want[k]) < 1e-6);
+    CHECK(std::fabs(n_got[k] - n_want[k]) < 1e-6);
+  }
 }
 
 TEST_CASE("shade_surface/vm error and non-finite contributions end invalid") {

@@ -88,11 +88,14 @@ AR_FN Real3 load_float3(const float* p, uint32_t i) {
 // then flipped to face wo for a back-face hit, so programs and the normal AOV see the facing
 // normals and front_face (FRONT_FACE in the path flags, 0003 d21) keeps the side.
 // object_id is the instance's pass index (Object Info "Object Index"), instance_id its index.
+// A smooth normal that is zero or not finite falls back to Ng, as Cycles triangle_smooth_normal
+// does for a zero one. Returns false, with the context incomplete, when the triangle is degenerate
+// (its Ng has zero or non-finite length): the caller fails the sample.
 // Ref: docs/decisions/0005-material-model.md items 8, 33; 0003 d21 (FRONT_FACE survives instance
 // transforms); Cycles kernel/geom/triangle.h triangle_normal and triangle_smooth_normal,
 // kernel/geom/object.h object_normal_transform, kernel/geom/shader_data.h shader_setup_from_ray
 // (a back-face hit flips Ng and N) (Apache-2.0).
-AR_FN void shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeContext* ctx) {
+AR_FN bool shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeContext* ctx) {
   const SceneData& s = scene_of(kg);
   const uint32_t inst = ps_hit_inst(kg, slot), prim = ps_hit_prim(kg, slot);
   AR_ASSERT(inst < s.instance_count);
@@ -115,13 +118,18 @@ AR_FN void shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeCont
   ctx->P = xform_point(x, p0 * w0 + p1 * bary.x + p2 * bary.y);
   const Real3 c0 = cross(x.r1, x.r2), c1 = cross(x.r2, x.r0), c2 = cross(x.r0, x.r1);  // rows of cof(M)
   const Real det_sign = dot(x.r0, c0) < Real(0) ? Real(-1) : Real(1);
-  Real3 ng = normalize(cross(xform_dir(x, p1 - p0), xform_dir(x, p2 - p0)) * det_sign);
+  const Real3 ng_raw = cross(xform_dir(x, p1 - p0), xform_dir(x, p2 - p0)) * det_sign;
+  const Real ng_len2 = dot(ng_raw, ng_raw);
+  if (!(ng_len2 > Real(0)) || !(ng_len2 - ng_len2 == Real(0))) return false;  // zero, NaN or Inf
+  Real3 ng = ng_raw / sqrt(ng_len2);
 
   const uint32_t k0 = load_ro(tri_corners + 3u * prim), k1 = load_ro(tri_corners + 3u * prim + 1u),
                  k2 = load_ro(tri_corners + 3u * prim + 2u);
   const Real3 n_obj =
       load_float3(normals, k0) * w0 + load_float3(normals, k1) * bary.x + load_float3(normals, k2) * bary.y;
-  Real3 n = normalize(Real3{dot(c0, n_obj), dot(c1, n_obj), dot(c2, n_obj)} * det_sign);
+  const Real3 n_raw = Real3{dot(c0, n_obj), dot(c1, n_obj), dot(c2, n_obj)} * det_sign;
+  const Real n_len2 = dot(n_raw, n_raw);
+  Real3 n = (n_len2 > Real(0) && n_len2 - n_len2 == Real(0)) ? n_raw / sqrt(n_len2) : ng;
 
   const uint32_t layers = load_ro(&mv.uv_layer_count), corners = load_ro(&mv.corner_count);
   const float* uv = reinterpret_cast<const float*>(uintptr_t(load_ro(&mv.uv)));
@@ -147,6 +155,7 @@ AR_FN void shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeCont
   for (int i = 0; i < 6; ++i) ctx->depth[i] = b.v[i];
   const Spec lt = ps_lambda_t(kg, slot);
   for (int i = 0; i < kLanes; ++i) ctx->lambda_t.nm[i] = lt.v[i];
+  return true;
 }
 
 // A frame vector of the constant block; zero means the shading point's own vector.
