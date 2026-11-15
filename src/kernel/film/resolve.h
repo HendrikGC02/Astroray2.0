@@ -50,7 +50,7 @@ AR_FN void film_moment_add(const FilmData& f, uint32_t plane, uint32_t pixel, do
 AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
   const FilmData& f = *kg.film;
   // pixel_id(x, y, width) is the plane index, so one value serves as key and address.
-  const uint32_t pixel = pixel_id(j % f.rect_width, j / f.rect_width, f.width);
+  const uint32_t pixel = film_active_pixel(f, j);
   for (uint32_t m = 0; m < kg.session.samples_per_pass; ++m) {
     const uint32_t k = kg.session.samples_per_pass;
     const uint32_t n0 = kg.session.samples_done;

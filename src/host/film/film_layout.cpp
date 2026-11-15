@@ -52,13 +52,25 @@ FilmLayout FilmLayout::build(const FilmRequest& req) {
   all.push_back({"display", ChannelKind::Moment, 3, ar::kFilmDisplayResponse});
   for (const ChannelRequest& c : req.extra) all.push_back(c);
   if (req.light_pass) all.push_back({"splat", ChannelKind::Splat, 3, 0});
+  if (req.statistics) {
+    all.push_back({"bounces", ChannelKind::Add, 1, 0});
+    all.push_back({"bounce_max", ChannelKind::Count, 1, 0});
+    all.push_back({"bounce_paths", ChannelKind::Count, 1, 0});
+  }
+  if (req.termination_stats) all.push_back({"term", ChannelKind::Count, ar::kTermCount, 0});
+  if (req.primary_aov) {
+    all.push_back({"aov_position", ChannelKind::Add, 3, 0, true});
+    all.push_back({"aov_normal", ChannelKind::Add, 3, 0});
+    all.push_back({"aov_uv", ChannelKind::Add, 2, 0});
+    all.push_back({"aov_material", ChannelKind::Add, 1, 0, true});
+  }
 
   uint32_t moment_channels = 0;
   for (const ChannelRequest& c : all) {
     for (const FilmChannel& have : l.channels_)
       if (have.name == c.name) throw std::invalid_argument("film: channel '" + c.name + "' requested twice");
     if (c.components == 0) throw std::invalid_argument("film: channel '" + c.name + "' has no components");
-    FilmChannel ch{c.name, c.kind, c.components, -1, c.response};
+    FilmChannel ch{c.name, c.kind, c.components, -1, c.response, c.sample0};
     switch (c.kind) {
       case ChannelKind::Moment:
         if (c.components != (c.response == ar::kFilmDisplayResponse ? 3u : 1u))
@@ -130,6 +142,14 @@ ar::FilmData FilmLayout::bind(void* base) const {
   d.splat = splat_components_ ? reinterpret_cast<float*>(b + r.splat) : nullptr;
   d.slot_L = reinterpret_cast<float*>(b + r.slot_L);
   d.slot_flags = reinterpret_cast<uint32_t*>(b + r.slot_flags);
+  d.bounce_sum = offset("bounces");
+  d.bounce_max = offset("bounce_max");
+  d.bounce_paths = offset("bounce_paths");
+  d.term_hist = offset("term");
+  d.aov_position = offset("aov_position");
+  d.aov_normal = offset("aov_normal");
+  d.aov_uv = offset("aov_uv");
+  d.aov_material = offset("aov_material");
   d.film_exposure = 1.0;
   d.inv_radiance_scale = 1.0;
   return d;

@@ -24,6 +24,9 @@ struct ChannelRequest {
   // Moment only: the response channel it integrates (ar::ResponseTableView index), or
   // ar::kFilmDisplayResponse for the display group.
   uint32_t response = 0;
+  // ADD only: the plane holds sample 0 only (a primary-hit id or position), so readback must not
+  // divide by n.
+  bool sample0 = false;
 };
 
 struct FilmRequest {
@@ -33,6 +36,10 @@ struct FilmRequest {
   uint32_t slot_capacity = 0;
   bool adaptive_sampling = false;  // adds the class-A sum S1A (off in M1a)
   bool light_pass = false;         // adds the SPLAT plane (record 0004's light-tracing pass)
+  // Statistics (0008 d12): "bounces" (ADD), "bounce_max" and "bounce_paths" (COUNT). On by default (d12).
+  bool statistics = true;
+  bool termination_stats = false;  // "term": one COUNT plane per ar::Term value, on request
+  bool primary_aov = false;        // "aov_position", "aov_normal", "aov_uv", "aov_material" (d10)
   std::vector<ChannelRequest> extra;  // beyond the always-present display MOMENT channel
 };
 
@@ -42,6 +49,7 @@ struct FilmChannel {
   uint32_t components;
   int32_t offset;  // first plane within its kind's planes
   uint32_t response;
+  bool sample0 = false;
 };
 
 class FilmLayout {

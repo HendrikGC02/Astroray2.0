@@ -15,6 +15,9 @@
 #include "../core/vec.h"
 #include "../kernel_globals.h"
 #include "../portability.h"
+#include "../sample/keys.h"
+#include "../state/flags.h"
+#include "../state/termination.h"
 #include "../spectral/wavelength.h"
 #include "response.h"
 
@@ -23,6 +26,11 @@ AR_NS_BEGIN
 // A MOMENT channel's source: the display group (3 components) or one response channel.
 inline constexpr uint32_t kFilmDisplayResponse = 0xFFFFFFFFu;
 inline constexpr uint32_t kFilmMaxMomentChannels = 8;
+
+// One COUNT plane per Term value for the termination histogram. Term only grows by appending
+// (termination.h), so the assert fires when a reason is added and this must follow.
+inline constexpr uint32_t kTermCount = 16;
+static_assert(uint32_t(Term::CANCELLED) + 1 == kTermCount, "Term changed: update kTermCount");
 
 struct FilmMomentChannel {
   uint32_t offset;      // first plane of the channel in the moment arrays
@@ -53,6 +61,13 @@ struct FilmData {
   float* splat;       // SPLAT planes, same component order as the display channel
   float* slot_L;      // slot_capacity * 4 lanes
   uint32_t* slot_flags;
+
+  // Statistics and primary-hit AOV channels (0008 d10, d12): first plane within the ADD or COUNT
+  // plane kind, -1 when not requested.
+  int32_t bounce_sum, bounce_max;  // ADD, COUNT
+  int32_t bounce_paths;            // COUNT: paths ended, the denominator of the bounce mean
+  int32_t term_hist;               // COUNT x kTermCount (Term values), on request
+  int32_t aov_position, aov_normal, aov_uv, aov_material;  // ADD x 3, 3, 2, 1
 
   ResponseTableView response;
   WavelengthTableView wavelengths;
@@ -102,6 +117,61 @@ AR_FN void film_splat_add(const KernelGlobals& kg, uint32_t pixel, const Real3& 
   atomic_add(f.splat + pixel, float(value.x));
   atomic_add(f.splat + f.plane_stride + pixel, float(value.y));
   atomic_add(f.splat + 2ull * f.plane_stride + pixel, float(value.z));
+}
+
+// Active pixel j of the render sub-rectangle as a plane index (0008 d3); the resolve and the
+// slot writers share this one mapping.
+AR_FN uint32_t film_active_pixel(const FilmData& f, uint32_t j) {
+  return pixel_id(j % f.rect_width, j / f.rect_width, f.width);
+}
+
+// The pixel plane index of a slot: slot = j * k + m.
+AR_FN uint32_t film_slot_pixel(const KernelGlobals& kg, uint32_t slot) {
+  return film_active_pixel(*kg.film, slot / kg.session.samples_per_pass);
+}
+
+// Path end: one path of the slot's pixel ended. bounces_total counts scattering events (surface
+// or real volume scatter, delta included, null collisions excluded); a tail pass can end several
+// paths of one pixel in one launch, hence atomics. Mean = ADD / paths ended at readback (a path
+// whose sample the resolve rejects still counts here), max is COUNT max.
+// Ref: 0008 d12 (statistics table); 0004 D28 (path-end statistics); 0003 d22 (Term).
+AR_FN void film_path_end_stats(const KernelGlobals& kg, uint32_t slot, uint32_t bounces_total, Term term) {
+  const FilmData& f = *kg.film;
+  const uint32_t pixel = film_slot_pixel(kg, slot);
+  if (f.bounce_sum >= 0) film_add(kg, uint32_t(f.bounce_sum), pixel, Real(bounces_total));
+  if (f.bounce_paths >= 0) film_count_add(kg, uint32_t(f.bounce_paths), pixel, 1u);
+  if (f.bounce_max >= 0) film_count_max(kg, uint32_t(f.bounce_max), pixel, bounces_total);
+  AR_ASSERT(uint32_t(term) < kTermCount);
+  if (f.term_hist >= 0) film_count_add(kg, uint32_t(f.term_hist) + uint32_t(term), pixel, 1u);
+}
+
+// Primary-hit AOVs, written by the surface stage at depth 0, once across pass-throughs
+// (AOV_WRITTEN in the path's flags; 0003 d21; 0008 d10). Position and material id keep only
+// sample 0 so an id stays exact (these channels are marked sample0 in the layout: readback must
+// not divide by n); normal and UV accumulate over samples (readback divides by n).
+// Ref: Cycles intern/cycles/kernel/film/data_passes.h, film_write_data_passes (sample == 0
+// overwrite vs accumulate).
+AR_FN void film_primary_aov(const KernelGlobals& kg, uint32_t slot, uint32_t sample_index, uint32_t* path_flags,
+                            const Real3& position, const Real3& normal, Real u, Real v, uint32_t material_id) {
+  if ((*path_flags & AOV_WRITTEN) != 0u) return;
+  *path_flags |= AOV_WRITTEN;
+  const FilmData& f = *kg.film;
+  const uint32_t pixel = film_slot_pixel(kg, slot);
+  if (f.aov_position >= 0 && sample_index == 0u) {
+    film_add(kg, uint32_t(f.aov_position), pixel, position.x);
+    film_add(kg, uint32_t(f.aov_position) + 1u, pixel, position.y);
+    film_add(kg, uint32_t(f.aov_position) + 2u, pixel, position.z);
+  }
+  if (f.aov_material >= 0 && sample_index == 0u) film_add(kg, uint32_t(f.aov_material), pixel, Real(material_id));
+  if (f.aov_normal >= 0) {
+    film_add(kg, uint32_t(f.aov_normal), pixel, normal.x);
+    film_add(kg, uint32_t(f.aov_normal) + 1u, pixel, normal.y);
+    film_add(kg, uint32_t(f.aov_normal) + 2u, pixel, normal.z);
+  }
+  if (f.aov_uv >= 0) {
+    film_add(kg, uint32_t(f.aov_uv), pixel, u);
+    film_add(kg, uint32_t(f.aov_uv) + 1u, pixel, v);
+  }
 }
 
 AR_NS_END
