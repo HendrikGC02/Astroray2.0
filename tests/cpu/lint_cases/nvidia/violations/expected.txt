@@ -3,6 +3,8 @@ k/a.cubin:1: [nvidia] NVIDIA material must not be tracked
 k/a.ptx:1: [nvidia] NVIDIA material must not be tracked
 lib/a.lib:1: [nvidia] NVIDIA material must not be tracked
 n/nvsdk_ngx_defs.h:1: [nvidia] NVIDIA material must not be tracked
+src/device/cuda/optix_types.h:1: [nvidia] NVIDIA material must not be tracked
+src/device/cuda/optix_types.h:1: [spdx] missing SPDX-License-Identifier in first 5 lines
 src/h.cpp:2: [nvidia] NVIDIA Corporation licence header outside docs/
 src/optix_stubs.h:1: [nvidia] NVIDIA material must not be tracked
 x/nvrtc64.txt:1: [nvidia] NVIDIA material must not be tracked

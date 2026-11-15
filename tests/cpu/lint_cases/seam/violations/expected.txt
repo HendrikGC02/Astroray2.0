@@ -2,6 +2,7 @@ src/device/cuda/e.cpp:2: [seam] include of embree4/rtcore.h is not allowed outsi
 src/host/h.cpp:2: [seam] include of cuda_runtime.h is not allowed outside src/device/ or src/kernel_gpu/
 src/host/h.cpp:4: [seam] include of optix.h is not allowed outside src/device/ or src/kernel_gpu/
 src/host/n.cpp:2: [seam] include of nvsdk_ngx.h is not allowed outside src/denoise/dlss/
+src/host/w.cpp:2: [seam] include of device/cuda/optix_accel.h is not allowed outside src/device/ or src/kernel_gpu/ or tests/cpu/ or tests/gpu/
 src/kernel/k.h:1: [kernel] header does not open AR_NS_BEGIN
 src/kernel/k.h:2: [kernel] #include <cuda.h> is not allowed in kernel code
 src/kernel/k.h:2: [seam] include of cuda.h is not allowed outside src/device/ or src/kernel_gpu/

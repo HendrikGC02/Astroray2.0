@@ -113,12 +113,21 @@ def zip_nvidia(c):
             if any(fnmatch.fnmatch(os.path.basename(name).lower(), q) for q in pats):
                 c.find(zp, 1, "nvidia", f"{name}: NVIDIA or loose kernel file in the built zip")
 
+def own_optix_wrapper(c, p, base):
+    # Our own OptiX wrappers (src/device/cuda/optix_*.h) carry the project SPDX line;
+    # SDK headers do not. Their content is still checked for NVIDIA licence text below.
+    if not (p.startswith("src/device/cuda/") and fnmatch.fnmatch(base, "optix*.h")):
+        return False
+    head = c.lines(p)[:3]
+    return any("SPDX-License-Identifier: Apache-2.0" in ln for ln in head)
+
+
 def nvidia(c):
     zip_nvidia(c)
     pats = ["optix*.h", "nvsdk_ngx*", "nvrtc*", "*.dll", "*.lib", "*.cubin", "*.ptx"]
     for p in c.files:
         base = os.path.basename(p).lower()
-        if any(fnmatch.fnmatch(base, q) for q in pats):
+        if any(fnmatch.fnmatch(base, q) for q in pats) and not own_optix_wrapper(c, p, base):
             c.find(p, 1, "nvidia", "NVIDIA material must not be tracked")
             continue
         if p.startswith("docs/"):
@@ -568,6 +577,8 @@ def kernel(c):
 # ---- seam section: 0001 D5.2 and V3, R39 --------------------------------------
 SEAM_SRC_EXT = (".h", ".hpp", ".cuh", ".inl", ".cpp", ".cu", ".c")
 SEAM_RULES = (  # (include path pattern, directories allowed to include it); first match wins
+    # Our own device wrappers (opaque, vendor headers stay behind them) may be tested directly.
+    (re.compile(r"^device/(cpu|cuda)/"), ("src/device/", "src/kernel_gpu/", "tests/cpu/", "tests/gpu/")),
     (re.compile(r"nvrtc", re.I), ()),
     (re.compile(r"ngx", re.I), ("src/denoise/dlss/",)),
     (re.compile(r"embree", re.I), ("src/device/cpu/",)),
