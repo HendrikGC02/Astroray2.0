@@ -198,6 +198,57 @@ target_precompile_headers(astroray_tests_cpu PRIVATE ${CMAKE_SOURCE_DIR}/tests/c
 set_source_files_properties(${CMAKE_SOURCE_DIR}/tests/cpu/main.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 add_dependencies(astroray_tests_cpu astroray_opsgen astroray_dump)
 
+# Negative-compile cases (0008 V9): each tests/cpu/negative_compile/*.cpp names its expected outcome
+# on line 1, `// expect: compile` or `// expect: fail <text the diagnostic must contain>`. The target
+# compiles every case (no link) and fails when an outcome differs, so a case cannot start failing
+# for an unrelated reason unnoticed. Not part of ALL; check.ps1 and the canary run it by name.
+set(_ar_nc_script ${CMAKE_BINARY_DIR}/negative_compile.cmake)
+file(WRITE ${_ar_nc_script} [=[
+file(GLOB cases ${CASE_DIR}/*.cpp)
+list(SORT cases)
+if(NOT cases)
+  message(FATAL_ERROR "negative_compile: no cases in ${CASE_DIR}")
+endif()
+file(MAKE_DIRECTORY ${OBJ_DIR})
+set(bad 0)
+foreach(case IN LISTS cases)
+  get_filename_component(name ${case} NAME)
+  file(STRINGS ${case} first LIMIT_COUNT 1)
+  if(NOT first MATCHES "^// expect: (compile|fail)( (.+))?$")
+    message(SEND_ERROR "negative_compile: ${name}: line 1 must be '// expect: compile' or '// expect: fail <text>'")
+    set(bad 1)
+    continue()
+  endif()
+  set(want ${CMAKE_MATCH_1})
+  set(text "${CMAKE_MATCH_3}")
+  execute_process(COMMAND ${CXX} /nologo /std:c++17 /EHsc /c /Fo${OBJ_DIR}/${name}.obj /I${SRC} /I${INC} ${case}
+    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+  if(rc EQUAL 0)
+    set(got compile)
+  elseif(want STREQUAL "fail" AND NOT text STREQUAL "" AND NOT "${out}${err}" MATCHES "${text}")
+    set(got "fail without '${text}'")
+  else()
+    set(got fail)
+  endif()
+  if(got STREQUAL want)
+    message(STATUS "negative_compile: ${name} expect=${want} got=${got} PASS")
+  else()
+    message(STATUS "negative_compile: ${name} expect=${want} got=${got} FAIL\n${out}${err}")
+    set(bad 1)
+  endif()
+endforeach()
+if(bad)
+  message(FATAL_ERROR "negative_compile: an outcome differs from its expectation")
+endif()
+]=])
+add_custom_target(astroray_negative_compile
+  COMMAND ${CMAKE_COMMAND} -DCXX=${CMAKE_CXX_COMPILER} -DCASE_DIR=${CMAKE_SOURCE_DIR}/tests/cpu/negative_compile
+          -DSRC=${CMAKE_SOURCE_DIR}/src -DINC=${CMAKE_SOURCE_DIR}/include -DOBJ_DIR=${CMAKE_BINARY_DIR}/negative_compile
+          -P ${_ar_nc_script}
+  COMMENT "negative_compile cases"
+  USES_TERMINAL
+  VERBATIM)
+
 # Test-only replay driver for tests/abi/test_recorder.py: the generated replayer over the public ABI.
 add_executable(replay_driver tests/abi/replay_driver.cpp ${ASTRORAY_GEN_DIR}/replayer.cpp)
 astroray_target_warnings(replay_driver)
