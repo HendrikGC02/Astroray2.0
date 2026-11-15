@@ -16,3 +16,6 @@ Budget: none on tiers beyond CI time.
 Depends on: 080, 035, 036.
 Size: M (about 400 lines Python); stop and report at 2x.
 Progress:
+- mesh.py, topology_cache.py, instances.py and test_mesh_sync.py, test_instances_sync.py added; headless suite 37 ok on Blender 5.3; 1M-triangle read 66.5 ms (bound 130).
+- Engine glue (sync_mesh, read_geometry, set_instances) is untested headless: no DLL in CI; the first engine run is 082/094.
+- Material keys: default is KeyMap(('material', uid)); an empty slot is key 0. 082 may pass its own material_key.

@@ -1,0 +1,25 @@
+diff --git a/blender/astroray/sync/instances.py b/blender/astroray/sync/instances.py
+index 5eef609..be2a6a1 100644
+--- a/blender/astroray/sync/instances.py
++++ b/blender/astroray/sync/instances.py
+@@ -204,6 +204,6 @@ def sync_transforms(edit, abi, table, depsgraph, uids, origin=(0.0, 0.0, 0.0)):
+     xf = np.ascontiguousarray(rows, np.float32)
+     table.xf[idx] = xf
+     c_xf = ctypes.POINTER(abi.ar_xform if abi else ctypes.c_float)
+-    edit.call("ar_edit_update_transforms", len(idx), idx.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
++    edit.call("ar_edit_set_instances", len(idx), idx.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+               xf.ctypes.data_as(c_xf))
+     return True
+diff --git a/blender/astroray/sync/topology_cache.py b/blender/astroray/sync/topology_cache.py
+index c64fa13..79a1489 100644
+--- a/blender/astroray/sync/topology_cache.py
++++ b/blender/astroray/sync/topology_cache.py
+@@ -14,7 +14,7 @@ FULL, POSITIONS = "full", "positions"
+ 
+ # Blender modifier types that move vertices and never add or remove elements (d22 case a).
+ DEFORM_ONLY = frozenset((
+-    "ARMATURE", "CAST", "CURVE", "DISPLACE", "HOOK", "LAPLACIANDEFORM", "LATTICE", "MESH_DEFORM",
++    "SUBSURF", "ARMATURE", "CAST", "CURVE", "DISPLACE", "HOOK", "LAPLACIANDEFORM", "LATTICE", "MESH_DEFORM",
+     "SHRINKWRAP", "SIMPLE_DEFORM", "SMOOTH", "CORRECTIVE_SMOOTH", "LAPLACIANSMOOTH",
+     "SURFACE_DEFORM", "WARP", "WAVE",
+ ))
