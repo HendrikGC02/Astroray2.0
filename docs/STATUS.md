@@ -22,8 +22,7 @@ ROADMAP "Open items".
 ## Red items
 None. Follow-ups noted for later tasks: the ABI exposes no CUDA probe reason or
 driver version (017); JH table round trip is 1.1-1.6e-3 off-grid near white and
-up to 4.3e-3 per channel on saturated emitters (023); `check fast` runs 9-10 s
-after a rebuild (B-08 is 10 s). The material VM copies 056's kSlotSemantic into
+up to 4.3e-3 per channel on saturated emitters (023). The material VM copies 056's kSlotSemantic into
 vm/store_slot.h (nvcc rejects the shared inline constexpr; a test pins the rows),
 which should become one device-visible definition in constant_block.h. 0006's
 required interval rules in the opcode generator have no owning task yet. M1b (Mix/Add
@@ -33,8 +32,8 @@ touch to reconfigure. 032's CUDA init uses its own Ledger, not the context's
 (fix with 035/041), and the CUDA context is created on the init thread, so
 workers must make it current. The fault tests leave astroray_fault_*_<pid>
 directories in the system temp dir. Some files mix CRLF and LF (CMakeLists.txt,
-tests/cpu/test_fault.cpp). `cpu_device/parallel_for rethrows` once took 0.515 s against
-B-12's 0.5 s (flaky timing). Light-tracing splats must reject negative spectral
+tests/cpu/test_fault.cpp). Flaky once, passed on rerun: `cpu_device/parallel_for rethrows`
+(0.515 s against B-12's 0.5 s) and `wavelengths/stratified lane positions` (068). Light-tracing splats must reject negative spectral
 radiance where they are written, before conversion: the resolve checks only
 NaN and Inf on the converted SPLAT plane (047). 051's display ring copies with a
 synchronous Device::download into heap slots: the pinned slots and copy stream of
@@ -43,9 +42,8 @@ written before 096 measures the viewport rate. 052 starts an epoch for every
 activated commit, because a commit's Pending does not record whether it is display-only
 (0007 d12); the flag and its use belong with settings sync, and no task owns them yet. Each CPU
 session owns its Ledger (052), so session allocations appear in no context or scene total;
-104's ar_progress ledger fields read the session's own. `wavelengths/stratified lane
-positions` failed once in a fast run during 068 and passed on every rerun (flaky; not yet
-investigated).
+104's ar_progress ledger fields read the session's own.
 
 ## Budget headroom
-Not measured yet: no gate has run. Spike numbers: docs/spikes/*/RESULTS.md.
+Landing gates run 43-55 s of B-09's 180 s (kernel part 11-21 s of 120 s); `check fast` 5-7 s warm,
+9-10 s after a header rebuild (B-08 is 10 s). Spike numbers: docs/spikes/*/RESULTS.md.
