@@ -1,7 +1,7 @@
 # 105 Lamp primitives in Embree and OptiX
 Goal: camera and BSDF rays cannot hit lamps -> the lamp instances of 068 get primitives in both acceleration structures (rectangle as two triangles, disk as a custom primitive, sphere as a built-in sphere), the hit record identifies the lamp, and no shadow ray is ever blocked by one.
 Read first: 0002 D11 (lamp intersection program, built-in spheres, mask, SBT per primitive type), 0004 D8; src/device/cpu/embree_scene.h; src/device/cuda/optix_accel.h, optix_pipeline.h.
-Scope: src/device/cpu/embree_scene.cpp, src/kernel/geom/lamp_intersect.h, src/kernel_gpu/optix_traverse.cu (lamp hit group, `__intersection__lamp`, `__closesthit__lamp`), src/device/cuda/optix_accel.cpp, src/device/cuda/optix_pipeline.cpp, src/kernel/budget.toml, tests/cpu/test_lamp_prims.cpp, tests/gpu/test_lamp_traversal.cpp.
+Scope: src/device/cpu/embree_scene.cpp, src/kernel/geom/lamp_intersect.h, src/kernel_gpu/optix_traverse.cu (lamp hit group, `__intersection__lamp`, `__closesthit__lamp`), src/device/cuda/optix_accel.cpp, src/device/cuda/optix_pipeline.cpp, src/kernel/budget.toml, tests/cpu/test_lamp_prims.cpp, tests/gpu/test_lamp_traversal.cpp; added by the lead: src/device/cpu/embree_scene.h and src/device/cuda/optix_accel.h (lamps passed explicitly), src/kernel/launch_config.h (the kernelgate needs a row per OptiX program), CMakeLists.txt (one NOMINMAX definition), and for the new parameter only tests/cpu/test_embree.cpp, test_intersect_cpu.cpp, test_ray_offset.cpp, tests/gpu/test_optix_accel.cpp, test_optix_trace.cpp, test_traversal_agree.cpp.
 Out of scope: shading a lamp hit (075); spot and sun (M4); motion (M8).
 Reference: OptiX 9.1 Programming Guide (custom primitives, built-in spheres through `optixBuiltinISModuleGet`); Embree 4 API (`RTC_GEOMETRY_TYPE_USER`, `RTC_GEOMETRY_TYPE_SPHERE_POINT`) from RenderKit/embree (Apache-2.0).
 Do:
@@ -20,3 +20,4 @@ Progress:
 - Done: lamp_intersect.h (shape, geometric xform from the light record, ray-disk), Embree (triangles, user disk, sphere point), OptiX (unit-shape GASes, sbtOffset per type, __intersection__lamp, __closesthit__lamp, built-in sphere IS), tests lamp_prims/* (fast) and lamp_traversal/* (gate), canary tasks/105.canary.patch.
 - Outside Scope, mechanical: src/kernel/launch_config.h gained the two OptiX rows the kernelgate demands next to budget.toml; budget rows are 0 until a `check full` Nsight measurement (as for the other OptiX programs).
 - test_optix_trace.cpp: its stand-in "lamp" (a mesh instance with light_index 7) became a real rectangle lamp, since a light index now names a lamp in the light table.
+- NOMINMAX is now defined once in CMakeLists.txt (empty, matching the sources that define it); include-order workarounds removed.

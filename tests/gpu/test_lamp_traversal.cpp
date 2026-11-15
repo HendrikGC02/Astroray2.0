@@ -7,8 +7,6 @@
 // OptiX 9.1 Programming Guide (custom primitives, built-in spheres); Embree 4 API.
 #include <doctest.h>
 
-#include "light/light.h"  // before the host headers: ar::max against the Windows min/max macros
-
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -26,6 +24,7 @@
 #include "host/scene/instances.h"
 #include "host/scene/mesh.h"
 #include "host/thread_pool.h"
+#include "light/light.h"
 
 #include "stages/route_hit.h"
 

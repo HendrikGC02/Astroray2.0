@@ -5,9 +5,6 @@
 // Ref: OptiX 9.1 Programming Guide, "Acceleration structures" (optixAccelComputeMemoryUsage,
 // optixAccelBuild, OPTIX_PROPERTY_TYPE_COMPACTED_SIZE, optixAccelCompact); the batching
 // follows Cycles src/bvh/optix.cpp and pbrt-v4 src/pbrt/gpu/optix/aggregate.cpp.
-// First: light.h uses ar::max, which the min/max macros of the Windows headers (pulled in below) break.
-#include "kernel/geom/lamp_intersect.h"
-
 #include "device/cuda/optix_accel.h"
 
 #include <cuda.h>
@@ -21,6 +18,8 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include "kernel/geom/lamp_intersect.h"
 
 namespace astroray::host {
 namespace {

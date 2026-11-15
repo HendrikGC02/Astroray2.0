@@ -5,8 +5,6 @@
 // Ref: docs/decisions/0002-kernel-architecture.md D11, 0004 D8; pbrt-v4 Disk::BasicIntersect.
 #include <doctest.h>
 
-#include "light/light.h"  // before the host headers: ar::max against the Windows min/max macros
-
 #include <cmath>
 #include <memory>
 #include <stdexcept>
@@ -17,6 +15,7 @@
 #include "host/scene/instances.h"
 #include "host/scene/mesh.h"
 #include "host/thread_pool.h"
+#include "light/light.h"
 
 using namespace astroray;
 using namespace astroray::host;

@@ -7,8 +7,6 @@
 // OptiX 9.1 Programming Guide (optixLaunch); 0009 B-18 (module creation, warm and cold).
 #include <doctest.h>
 
-#include "light/light.h"  // before the host headers: ar::max against the Windows min/max macros
-
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -28,6 +26,7 @@
 #include "host/fault.h"
 #include "host/scene/instances.h"
 #include "host/thread_pool.h"
+#include "light/light.h"
 #include "stages/route_hit.h"
 
 using namespace astroray;
