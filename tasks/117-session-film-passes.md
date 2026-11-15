@@ -11,7 +11,7 @@ Do:
 4. tests/cpu/test_session_passes.cpp (CPU session, gate): no passes requested -> `ar_session_pass_count` lists no AOV; Position requested -> Position, Normal, UV and IndexMA are listed and Position reads finite values on a hit pixel; a commit that drops the request rebuilds the film without them; an unknown name gives the report entry once.
 Acceptance: `pwsh tools/check.ps1 fast` and `gate` pass.
 Look at: none.
-Canary: tasks/117.canary.patch must turn red: tests/cpu/test_session_passes.cpp (the patch leaves `primary_aov` false).
+Canary: tasks/117.canary.patch must turn red: tests/cpu/test_session_passes.cpp "session passes/the film follows the latched pass request", tests/abi/test_session_passes.py "TestSessionPasses.test_position_and_an_unknown_pass" (the patch leaves `primary_aov` false).
 Budget: none.
 Depends on: 071.
 Size: S (about 150 lines); stop and report at 2x.
