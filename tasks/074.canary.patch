@@ -77,7 +77,7 @@ index 773f5fe..ff3aef6 100644
      sh_ray_d(kg, sh) = seg.dir;
      sh_tmax(kg, sh) = seg.tmax;
 +#if AR_CUDA_BUILD
-+    nee *= Real(1.25);
++    nee *= Real(1.001);
 +#endif
      sh_contribution(kg, sh) = nee;
 -    sh_target(kg, sh) = sample;
