@@ -31,6 +31,18 @@ void quad_split(const float* pos, const uint32_t* cv, uint32_t s, std::vector<ui
   else out.insert(out.end(), {s, s + 1, s + 2, s, s + 2, s + 3});
 }
 
+// Exactly zero Newell vector: the face has no area (collinear or coincident corners).
+bool zero_area(const float* pos, const uint32_t* cv, uint32_t first, uint32_t n) {
+  P3 nw{0, 0, 0};
+  for (uint32_t i = 0; i < n; ++i) {
+    P3 a = load(pos, cv[first + i]), b = load(pos, cv[first + (i + 1) % n]);
+    nw.x += (a.y - b.y) * (a.z + b.z);
+    nw.y += (a.z - b.z) * (a.x + b.x);
+    nw.z += (a.x - b.x) * (a.y + b.y);
+  }
+  return !(std::fabs(nw.x) + std::fabs(nw.y) + std::fabs(nw.z) > 0);
+}
+
 struct P2 {
   double x, y;
 };
@@ -124,7 +136,9 @@ Triangulation triangulate(const float* positions, const uint32_t* corner_vert, c
   for (size_t f = 0; f < face_count; ++f) {
     uint32_t s = face_start[f], n = face_start[f + 1] - s;
     if (n < 3) continue;
-    if (n == 3) {
+    if (n <= 4 && zero_area(positions, corner_vert, s, n)) {
+      ++t.skipped_zero_area;  // ruling 67 covers every face size
+    } else if (n == 3) {
       t.corners.insert(t.corners.end(), {s, s + 1, s + 2});
     } else if (n == 4) {
       quad_split(positions, corner_vert, s, t.corners);

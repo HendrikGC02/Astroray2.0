@@ -462,4 +462,31 @@ TEST_CASE("mesh/queued positions edits never block the pool") {
   }
 }
 
+TEST_CASE("mesh/zero-area triangle and quad are skipped") {
+  // Ruling 67 covers every face size: collinear triangle and quad emit nothing.
+  std::vector<float> pos{0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0, 0, 1, 0};
+  std::vector<uint32_t> cv{0, 1, 2, 0, 1, 2, 3, 0, 1, 4};
+  std::vector<uint32_t> fs{0, 3, 7, 10};
+  Triangulation t = triangulate(pos.data(), cv.data(), fs.data(), 3);
+  CHECK(t.skipped_zero_area == 2);
+  CHECK(t.corners == std::vector<uint32_t>{7, 8, 9});
+  CHECK(t.face == std::vector<uint32_t>{2});
+}
+
+TEST_CASE("mesh/positions-only edit on a rejected replacement is skipped") {
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  scene.meshes = std::make_shared<MeshStore>();
+  ingest(scene, *scene.meshes, 5, Quad{});
+  auto before = scene.meshes->find(5);
+  Blocker blocker;
+  blocker.stage(scene);
+  commit_quad(scene, 5, [](ar_mesh_buffers& b) { (*b.positions)[0] = std::nanf(""); });  // rejected replacement
+  commit_positions(scene, 5, 9.0f);  // based on the pending replacement
+  blocker.release.set_value();
+  scene.generations().wait_idle();
+  CHECK(scene.meshes->find(5) == before);  // the old record is not touched by a stale update
+  CHECK(scene.meshes->find(5)->bounds_max[0] == 1.0f);
+}
+
 }  // TEST_SUITE

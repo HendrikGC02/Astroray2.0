@@ -121,9 +121,22 @@ void Edit::submit(const std::shared_ptr<EditItem>& item) {
       }
       scene->generations().job_done(pending, subject, fail);
     };
-    auto queue = [scene, task] { scene->pool().submit(task); };
-    if (item->schedule) item->schedule(queue);
-    else queue();
+    if (item->schedule) {
+      // A deferred queue runs on another thread (a resolving worker or the tracker), where a
+      // throw cannot reach this call: resolve the job as failed so the generation settles.
+      item->schedule([scene, pending, item, task] {
+        try {
+          scene->pool().submit(task);
+        } catch (const std::exception& e) {
+          if (item->release) item->release();
+          scene->generations().job_done(pending, item->key, std::string("could not queue job: ") + e.what());
+        } catch (...) {
+          scene->generations().job_done(pending, item->key, "could not queue job");
+        }
+      });
+    } else {
+      scene->pool().submit(task);
+    }
   } catch (...) {
     scene_.generations().job_done(pending, item->key, "");  // undo job_started
     throw;

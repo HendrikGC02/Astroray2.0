@@ -239,7 +239,12 @@ void TopoGate::resolve(std::shared_ptr<const MeshTopology> t) {
     topo_ = std::move(t);
     run.swap(waiting_);
   }
-  for (auto& fn : run) fn();
+  for (auto& fn : run) {
+    try {
+      fn();  // callbacks handle their own failures; one throwing must not strand the rest
+    } catch (...) {
+    }
+  }
 }
 void TopoGate::when_done(std::function<void()> fn) {
   {

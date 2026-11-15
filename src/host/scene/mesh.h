@@ -5,6 +5,7 @@
 // Ref: 0007 d9 (O(n) validation on workers), d10 (geometry record, corner-indexed
 // lookups), d22 (positions-only path), V15 (invalid indices, NaN positions).
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -102,7 +103,7 @@ class MeshStore {
   uint64_t geometry_bytes() const { return ledger_->category_total(LedgerCategory::GEOMETRY); }
   std::shared_ptr<Ledger> shared_ledger() const { return ledger_; }
 
-  uint64_t next_id() { return next_id_++; }
+  uint64_t next_id() { return next_id_.fetch_add(1); }
   // Latest declaration of `key`, pending ones included; nullopt if none.
   std::optional<MeshDeclaration> latest(ar_key key) const;
   void declare(ar_key key, const MeshDeclaration& d);
@@ -121,7 +122,7 @@ class MeshStore {
   mutable std::mutex mutex_;
   std::map<ar_key, std::shared_ptr<const MeshRecord>> active_;
   std::map<ar_key, std::vector<MeshDeclaration>> declared_;
-  uint64_t next_id_ = 1;
+  std::atomic<uint64_t> next_id_{1};
   std::shared_ptr<Ledger> ledger_;
 };
 
