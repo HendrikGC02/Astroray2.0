@@ -50,34 +50,3 @@ index 1760bd9..acecd0e 100644
      s = upsampled_eval(u, lam);
    } else {
      AR_ASSERT(false);
-diff --git a/tasks/056.canary.patch b/tasks/056.canary.patch
-index 6711d3e..e69de29 100644
---- a/tasks/056.canary.patch
-+++ b/tasks/056.canary.patch
-@@ -1,26 +0,0 @@
--diff --git a/src/kernel/material/openpbr_params.h b/src/kernel/material/openpbr_params.h
--index 409c7ba..52737b2 100644
----- a/src/kernel/material/openpbr_params.h
--+++ b/src/kernel/material/openpbr_params.h
--@@ -25,7 +25,7 @@ struct OpenPBRParams {
--   Real fuzz_weight, fuzz_roughness;
--   Real coat_weight, coat_roughness, coat_roughness_anisotropy, coat_ior, coat_darkening;
--   Real thin_film_weight, thin_film_thickness, thin_film_ior;
---  Real geometry_opacity, closure_weight;
--+  Real closure_weight, geometry_opacity;
--   // 9 spectral slots at the path's wavelengths.
--   Spec base_color, specular_color, specular_ior, transmission_color, transmission_scatter, subsurface_color,
--       subsurface_radius_scale, fuzz_color, coat_color;
--diff --git a/src/kernel/material/slot_resolve.h b/src/kernel/material/slot_resolve.h
--index 1760bd9..acecd0e 100644
----- a/src/kernel/material/slot_resolve.h
--+++ b/src/kernel/material/slot_resolve.h
--@@ -57,7 +57,7 @@ AR_FN Spec resolve(const SpectrumRef& r, const Lambda& lam, const ObserverView&
--     u.c.c[0] = Real(r.p[0]);
--     u.c.c[1] = Real(r.p[1]);
--     u.c.c[2] = Real(r.p[2]);
---    u.scale = Real(r.p[3]);
--+    u.scale = Real(r.p[3]) * Real(0.5);
--     s = upsampled_eval(u, lam);
--   } else {
--     AR_ASSERT(false);
