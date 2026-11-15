@@ -39,7 +39,9 @@ radiance where they are written, before conversion: the resolve checks only
 NaN and Inf on the converted SPLAT plane (047). 051's display ring copies with a
 synchronous Device::download into heap slots: the pinned slots and copy stream of
 0007 d29 need the Device seam to gain both; no task owns this yet, and it must be
-written before 096 measures the viewport rate.
+written before 096 measures the viewport rate. 052 starts an epoch for every
+activated commit, because a commit's Pending does not record whether it is display-only
+(0007 d12); the flag and its use belong with settings sync, and no task owns them yet.
 
 ## Budget headroom
 Not measured yet: no gate has run. Spike numbers: docs/spikes/*/RESULTS.md.
