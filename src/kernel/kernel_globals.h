@@ -16,26 +16,11 @@
 #include "core/spectrum.h"
 #include "core/vec.h"
 #include "portability.h"
+#include "sched/step_table.h"
 #include "state/stage.h"
 #include "state/state.h"
 
 AR_NS_BEGIN
-
-// One stage's segment of its pool (0002 D6): start and count in the queue index
-// array, and for shadow producers the first reserved shadow slot (D5).
-struct StepEntry {
-  uint32_t start;
-  uint32_t count;
-  uint32_t shadow_base;
-};
-
-// Filled on the device by queue_build and read back by the host: one entry per
-// Stage value plus the refill count of D7 step 4. Under 256 B (D7 step 2).
-struct StepTable {
-  StepEntry stage[kStageCount];
-  uint32_t refill_count;
-};
-static_assert(sizeof(StepTable) <= 256, "the step table is read back in one under-256-B copy");
 
 // Constant for a whole pass. max_bounces uses the order of PathStateSoA::bounces:
 // total, diffuse, glossy, transmission, volume, transparent.
@@ -72,6 +57,11 @@ struct KernelGlobals {
   FilmData* film;
   const WavelengthTable* wavelengths;
   const Rgb2SpecTables* rgb2spec;
+
+  // queue_build's per-tile histograms (sched/step_table.h, stages/queue_build.h): kStageCount + 1
+  // counters per tile of both pools. Written only by the three queue_build kernels. Last member
+  // so the offsets the CUDA device reads (step_table) stay put.
+  uint32_t* queue_counts;
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is

@@ -192,7 +192,9 @@ add_dependencies(astroray_tests_cpu astroray_opsgen)
 # The test modules are the loose cubins of tests/gpu/kernels, read from the build tree.
 if(ASTRORAY_GPU)
   # tests/gpu/agree.cpp is the harness, not a test file, so the test_*.cpp glob misses it.
-  add_executable(astroray_tests_gpu tests/gpu/main.cpp tests/gpu/agree.cpp ${ASTRORAY_TEST_GPU_SOURCES})
+  # The stage cubins are embedded (RCDATA) so that CudaDevice loads them as the DLL does.
+  add_executable(astroray_tests_gpu tests/gpu/main.cpp tests/gpu/agree.cpp ${ASTRORAY_TEST_GPU_SOURCES}
+    $<TARGET_OBJECTS:astroray_core_resources>)
   target_include_directories(astroray_tests_gpu PRIVATE ${CMAKE_SOURCE_DIR}/tests ${ASTRORAY_GEN_DIR})
   target_compile_definitions(astroray_tests_gpu PRIVATE AR_TEST_KERNEL_DIR="${CMAKE_BINARY_DIR}/kernels")
 
@@ -218,7 +220,7 @@ if(ASTRORAY_GPU)
   target_compile_definitions(astroray_tests_gpu PRIVATE AR_TEST_KERNEL_NOFMA_DIR="${CMAKE_BINARY_DIR}/${_ar_agree_nofma_dir}")
   astroray_target_warnings(astroray_tests_gpu)
   target_include_directories(astroray_tests_gpu SYSTEM PRIVATE third_party/doctest)
-  target_link_libraries(astroray_tests_gpu PRIVATE ${_ar_engine_libs} astroray_kernel)
+  target_link_libraries(astroray_tests_gpu PRIVATE ${_ar_engine_libs} astroray_kernel astroray_kernels_cpu)
   add_dependencies(astroray_tests_gpu astroray_kernels_gpu astroray_kernels_gpu_nofma)
 endif()
 
