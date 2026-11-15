@@ -364,6 +364,14 @@ def deps(c):
         with open(os.path.join(c.root, notice), encoding="utf-8", newline="") as f:
             if f.read().replace("\r\n", "\n") != mod.render(data):
                 c.find(notice, 1, "deps", "differs from tools/thirdparty.py output: run it")
+        req = ".github/ci-requirements.txt"
+        try:
+            with open(os.path.join(c.root, req), encoding="utf-8", newline="") as f:
+                have = f.read().replace("\r\n", "\n")
+        except OSError:
+            have = None
+        if have != mod.render_requirements(data):
+            c.find(req, 1, "deps", "missing or differs from tools/thirdparty.py output: run it")
     vendored = {p.split("/")[1] for p in c.files if p.startswith("third_party/") and p.count("/") >= 2}
     for v in sorted(vendored - names):
         c.find(f"third_party/{v}", 1, "deps", f"{v}: vendored directory has no entry in deps.toml")

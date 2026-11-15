@@ -55,3 +55,13 @@ spdx = "BSD-3-Clause"
 kind = "tool-python"
 purpose = "test tooling on hosted CI (Blender's bundled NumPy is used locally)"
 record = "0009 d2"
+
+[[dep]]
+name = "ninja"
+version = "1.13.2"
+url = "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip"
+sha256 = "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65"
+spdx = "Apache-2.0"
+kind = "tool-binary"
+purpose = "build tool on hosted CI"
+record = "0009 d2, d24"
