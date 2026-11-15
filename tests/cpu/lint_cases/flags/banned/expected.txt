@@ -1,0 +1,7 @@
+CMakeLists.txt:2: [flags] banned build flag --use_fast_math (0002 D1, D12, D14)
+CMakeLists.txt:3: [flags] banned build flag -rdc (0002 D1, D12, D14)
+cmake/k.cmake:2: [flags] banned build flag --Ofast-compile (0002 D1, D12, D14)
+cmake/k.cmake:3: [flags] banned build flag --split-compile (0002 D1, D12, D14)
+cmake/k.cmake:3: [flags] banned build flag --relocatable-device-code (0002 D1, D12, D14)
+cmake/k.cmake:4: [flags] banned build flag /fp:fast (0002 D1, D12, D14)
+cmake/k.cmake:5: [flags] banned build flag --use_fast_math (0002 D1, D12, D14)

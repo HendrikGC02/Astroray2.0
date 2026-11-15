@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Repository lint: licences, NVIDIA material, ASCII scripts, process caps, skips, task files.
+"""Repository lint: licences, NVIDIA material, ASCII scripts, process caps, skips, task files, build flags.
 
 Run: <python> -I tools/lint.py [--self-test] [--section name]
 Ref: docs/decisions/0009-build-test-process.md d10, d28, d31; 0001 D7.1 and V4.
@@ -591,6 +591,29 @@ def seam(c):
                     break
 
 
+# ---- flags section: 0002 D1, D12, D14 -------------------------------------------
+# Banned in cmake/ and CMakeLists.txt, comments included: even a mention must be reworded.
+FLAG_BANS = (
+    ("--use_fast_math", re.compile(r"(?<![\w-])-{1,2}use_fast_math")),
+    ("-rdc", re.compile(r"(?<![\w-])-{1,2}rdc")),
+    ("--relocatable-device-code", re.compile(r"(?<![\w-])--relocatable-device-code")),
+    ("--Ofast-compile", re.compile(r"(?<![\w-])--Ofast-compile")),
+    ("--split-compile", re.compile(r"(?<![\w-])--split-compile")),
+    ("/fp:fast", re.compile(r"(?<!\w)/fp:fast")),
+)
+
+
+def flags(c):
+    """Ref: 0002 D1, D12, D14: no build file may carry a flag that breaks the FP or module rules."""
+    for p in c.files:
+        if p != "CMakeLists.txt" and not p.startswith("cmake/"):
+            continue
+        for n, ln in enumerate(c.lines(p), 1):
+            for name, pat in FLAG_BANS:
+                if pat.search(ln):
+                    c.find(p, n, "flags", f"banned build flag {name} (0002 D1, D12, D14)")
+
+
 # Ref: 0009 d21. Only these licences may be committed; share-alike, non-commercial,
 # no-derivatives and none-stated never match.
 ASSET_SPDX_RE = re.compile(r"CC0(-1\.0)?|CC-BY(-\d\.\d)?|MIT|Apache-2\.0")
@@ -700,6 +723,7 @@ SECTIONS = {
     "seam": seam,
     "assets": assets,
     "data": data,
+    "flags": flags,
 }
 
 def run(root, files, sections):

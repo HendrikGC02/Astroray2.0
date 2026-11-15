@@ -24,11 +24,10 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out/bin)
 option(ASTRORAY_GPU "Build the CUDA device backend" ON)
 
 include(cmake/warnings.cmake)
-include(cmake/sources.cmake)
-
 # Loose kernel modules may be loaded only in development builds (0009 d5): off by
 # default, on only in the dev preset.
 option(ASTRORAY_DEV_KERNEL_DIR "Allow ASTRORAY_KERNEL_DIR kernel reload (dev preset only)" OFF)
+include(cmake/sources.cmake)
 
 # The header grammar check is a build step: a violation fails the build (0001 D2.10).
 # The stamp output keeps `ninja -n` clean once the check has passed.
@@ -140,9 +139,10 @@ add_executable(specgen EXCLUDE_FROM_ALL tools/specgen/specgen.cpp)
 astroray_target_warnings(specgen)
 target_include_directories(specgen PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
-# The one DLL Python loads: capi + engine + the generated layout table + the data.
+# The one DLL Python loads: capi + engine + the generated layout table + the data and the
+# release kernel modules (RCDATA).
 add_library(astroray_core SHARED ${ASTRORAY_CAPI_SOURCES} ${ASTRORAY_GEN_DIR}/astroray_layout.c ${ASTRORAY_GEN_DIR}/abi_hash.h
-  $<TARGET_OBJECTS:astroray_data>)
+  $<TARGET_OBJECTS:astroray_core_resources>)
 astroray_target_warnings(astroray_core)
 # _Alignof needs C11 mode.
 set_source_files_properties(${ASTRORAY_GEN_DIR}/astroray_layout.c PROPERTIES COMPILE_OPTIONS "/std:c11")

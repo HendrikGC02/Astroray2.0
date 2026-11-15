@@ -4,7 +4,8 @@
 # `ninja -n` would never say "no work to do" (0009 d5). tools/build.ps1 lists the
 # same patterns into out/build/sources.txt and re-runs configure when they change.
 # Later tasks extend both: src/device/cuda (014),
-# src/kernel_cpu and the ar-f64 marker (018), src/kernel_gpu, tests/gpu (027, 028).
+# src/kernel_cpu and the ar-f64 marker (018), src/kernel_gpu and tests/gpu/kernels (027),
+# tests/gpu (028).
 file(GLOB ASTRORAY_TEST_CPU_SOURCES
   ${CMAKE_SOURCE_DIR}/tests/cpu/test_*.cpp
   ${CMAKE_SOURCE_DIR}/tests/common/*.cpp)
@@ -17,6 +18,9 @@ if(ASTRORAY_GPU)
   list(APPEND ASTRORAY_ENGINE_SOURCES ${_ar_device_cuda_sources})
 endif()
 file(GLOB ASTRORAY_CAPI_SOURCES ${CMAKE_SOURCE_DIR}/src/capi/*.cpp)
+# Device modules: kernels.cmake turns each into one cubin by its file-name prefix.
+file(GLOB ASTRORAY_GPU_KERNEL_SOURCES ${CMAKE_SOURCE_DIR}/src/kernel_gpu/*.cu)
+file(GLOB ASTRORAY_GPU_TEST_SOURCES ${CMAKE_SOURCE_DIR}/tests/gpu/kernels/*.cu)
 
 # A test file with `// ar-f64` in its first 5 lines is compiled a second time
 # with AR_REAL_DOUBLE into the same executable (0002 D3); the copy is a generated
