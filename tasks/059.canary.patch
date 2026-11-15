@@ -1,0 +1,22 @@
+diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
+index bd386df..1e22c7e 100644
+--- a/src/host/material/compiler.cpp
++++ b/src/host/material/compiler.cpp
+@@ -342,7 +342,7 @@ bool pool_string(const ar_graph_desc& d, uint32_t k, std::string* out) {
+ 
+ void add_entry(MaterialOutput* m, uint32_t code, const std::string& detail) {
+   for (const MaterialEntry& e : m->entries)
+-    if (e.code == code && e.detail == detail) return;  // one entry per (material, node type)
++    if (e.code == code && e.detail == detail && false) return;  // one entry per (material, node type)
+   m->entries.push_back({code, detail});
+ }
+ 
+@@ -350,7 +350,7 @@ void add_entry(MaterialOutput* m, uint32_t code, const std::string& detail) {
+ // tested with the lobe library's own alpha and predicate. Ref: 0005 item 43; item 4
+ // (lobe_is_delta, alpha < 1e-3 on both axes); ggx.h ggx_alpha (alpha = roughness^2).
+ bool lobe_may_be_delta(bool per_point, float roughness) {
+-  if (per_point) return true;
++  (void)per_point;
+   ar::GgxParams g = {};
+   g.roughness = ar::Real(roughness);
+   const ar::Real a = ar::ggx_alpha(g);
