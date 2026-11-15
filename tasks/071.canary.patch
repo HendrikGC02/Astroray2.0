@@ -1,8 +1,30 @@
+diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
+index 13c398a..8fd52d5 100644
+--- a/src/kernel/stages/shade_background.h
++++ b/src/kernel/stages/shade_background.h
+@@ -38,7 +38,7 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const
+     Lambda lam;
+     for (int i = 0; i < kLanes; ++i) lam.nm[i] = lt.v[i];
+     // The film slot is the sample's, not the pool slot (0004 D5).
+-    const uint32_t sample = ps_sample_id(kg, slot);
++    const uint32_t sample = slot;  // canary: the pool slot used as the film slot
+     const Spec contribution = light_emission(*world, lam, kg.tables->observer) * ps_beta(kg, slot);
+     if (is_finite(contribution))
+       sample_add(kg, sample, contribution);
 diff --git a/src/kernel/stages/shade_common.h b/src/kernel/stages/shade_common.h
-index ce78b6e..e36ebbd 100644
+index cf321ea..61bff41 100644
 --- a/src/kernel/stages/shade_common.h
 +++ b/src/kernel/stages/shade_common.h
-@@ -101,7 +101,11 @@ AR_FN void shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeCont
+@@ -33,7 +33,7 @@ AR_NS_BEGIN
+ // buffer, its sample_id (0004 D5), which differs from the pool slot whenever the refill hands out
+ // pool slots in another order than the sample ids.
+ AR_FN void path_end(const KernelGlobals& kg, uint32_t slot, Term term) {
+-  const uint32_t sample = ps_sample_id(kg, slot);
++  const uint32_t sample = slot;  // canary: the pool slot used as the film slot
+   ps_term(kg, slot) = static_cast<uint8_t>(term);
+   film_path_end_stats(kg, sample, uint32_t(ps_bounces(kg, slot).v[0]), term);
+   sample_set_flags(kg, sample, ps_flags(kg, slot));
+@@ -105,7 +105,11 @@ AR_FN void shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeCont
    const uint32_t* tri_corners = reinterpret_cast<const uint32_t*>(uintptr_t(load_ro(&mv.tri_corners)));
    const float* positions = reinterpret_cast<const float*>(uintptr_t(load_ro(&mv.positions)));
    const float* normals = reinterpret_cast<const float*>(uintptr_t(load_ro(&mv.corner_normals)));
