@@ -1,8 +1,17 @@
 diff --git a/src/host/scene/instances.cpp b/src/host/scene/instances.cpp
-index cc49b6f..a3c3717 100644
+index 5c6cb0c..8de6e1d 100644
 --- a/src/host/scene/instances.cpp
 +++ b/src/host/scene/instances.cpp
-@@ -98,7 +98,7 @@ uint8_t visibility_mask(uint32_t v) {
+@@ -60,7 +60,7 @@ std::shared_ptr<InstanceTable> build(const DescCopy& d) {
+     Instance& in = t->instances[i];
+     in.geom_key = d.geom[i];
+     in.object_key = d.object[i];
+-    if (!d.geom_exists[i]) reject(i, in.object_key, "unknown geometry key " + std::to_string(in.geom_key));
++    if (false) reject(i, in.object_key, "unknown geometry key " + std::to_string(in.geom_key));
+     for (uint32_t s = 0; s < d.steps; ++s)
+       if (!finite_xf(d.xf[size_t(i) * d.steps + s]))
+         reject(i, in.object_key, "transform is not finite (motion step " + std::to_string(s) + ")");
+@@ -95,7 +95,7 @@ uint8_t visibility_mask(uint32_t v) {
    uint8_t m = 0;
    if (v & AR_VISIBILITY_CAMERA) m |= 1u << 0;
    if (v & AR_VISIBILITY_DIFFUSE) m |= 1u << 1;
@@ -11,12 +20,12 @@ index cc49b6f..a3c3717 100644
    if (v & AR_VISIBILITY_TRANSMISSION) m |= 1u << 3;
    if (v & AR_VISIBILITY_SHADOW) m |= 1u << 4;
    if (v & AR_VISIBILITY_VOLUME) m |= 1u << 5;
-@@ -194,7 +194,7 @@ ar_status update_transforms(Edit& edit, uint32_t n, const uint32_t* idx, const a
-                                              " no longer exists at activation, patch entry ignored");
+@@ -188,7 +188,7 @@ ar_status update_transforms(Edit& edit, uint32_t n, const uint32_t* idx, const a
+         scene->report().raise(AR_REPORT_INPUT_IGNORED, (*indices)[k], why, 1, value, 0);
          continue;
        }
 -      t->xf[(*indices)[k]] = (*xfs)[k];
 +      for (auto& x : t->xf) x = (*xfs)[k];
      }
-     scene->publish_instances(std::move(t));
+     if (t) scene->publish_instances(std::move(t));
    };
