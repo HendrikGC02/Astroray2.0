@@ -33,7 +33,8 @@ touch to reconfigure. 032's CUDA init uses its own Ledger, not the context's
 workers must make it current. The fault tests leave astroray_fault_*_<pid>
 directories in the system temp dir. Some files mix CRLF and LF (CMakeLists.txt,
 tests/cpu/test_fault.cpp). Flaky once, passed on rerun: `cpu_device/parallel_for rethrows`
-(0.515 s against B-12's 0.5 s) and `wavelengths/stratified lane positions` (068). Light-tracing splats must reject negative spectral
+(0.515 s against B-12's 0.5 s) and `wavelengths/stratified lane positions` (068). The CUDA device launches every stage with 256 threads; nothing checks that
+against launch_config.h's T (from 071). Light-tracing splats must reject negative spectral
 radiance where they are written, before conversion: the resolve checks only
 NaN and Inf on the converted SPLAT plane (047). 051's display ring copies with a
 synchronous Device::download into heap slots: the pinned slots and copy stream of
