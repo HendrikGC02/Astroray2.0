@@ -103,8 +103,10 @@ class Device {
   // The session's KernelGlobals, already uploaded into `buffer`. Every launch passes
   // this one pointer to the kernel (0002 D4).
   virtual void set_kernel_globals(const DeviceBuffer& buffer) = 0;
-  // Runs `count` items of the stage's segment (count <= the step table's count for it).
-  virtual void launch(ar::Stage stage, uint32_t count) = 0;
+  // Runs the stage over its whole segment: the item count is the device-resident
+  // StepEntry::count, never `grid`, which only sizes a GPU grid (0002 D4, D6, D7).
+  // A partial shadow-producer launch (D5) is a smaller step count written by the scan.
+  virtual void launch(ar::Stage stage, uint32_t grid) = 0;
   // Runs `count` items of a per-pass or scheduler kernel.
   virtual void launch(KernelId kernel, uint32_t count) = 0;
   // Copies the device's step table (0002 D7 step 2).

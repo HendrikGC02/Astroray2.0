@@ -215,17 +215,44 @@ TEST_CASE("cpu_device/stage launch receives its segment") {
   CHECK(r.sink.queue_sum.load() == 9600000);
   CHECK(r.sink.wrong_step.load() == 0);
 
-  // A partial launch (a shadow producer's first floor(free/k) items) runs items 0..1499.
+  // (a) The host grid only sizes a GPU grid: a grid below the segment still covers all of it.
   r.sink.reset();
   r.dev.launch(ar::Stage::SHADE_VOLUME, 1500);
+  wrong = 0;
+  for (uint32_t i = 0; i < 3000; ++i) wrong += r.sink.visits[i].load() != 1;
+  CHECK(wrong == 0);
+  CHECK(r.sink.queue_sum.load() == 9600000);
+  CHECK(r.sink.wrong_step.load() == 0);
+
+  // (b) A grid above the segment runs exactly the segment (no item past it, no queue read past it).
+  r.sink.reset();
+  r.dev.launch(ar::Stage::SHADE_VOLUME, 4000);
+  wrong = 0;
+  for (uint32_t i = 0; i < 4096; ++i) wrong += r.sink.visits[i].load() != (i < 3000 ? 1u : 0u);
+  CHECK(wrong == 0);
+  CHECK(r.sink.queue_sum.load() == 9600000);
+  CHECK(r.sink.wrong_step.load() == 0);
+
+  // A partial shadow-producer launch (0002 D5) is a smaller step count written by the scan:
+  // items 0..1499, whatever the grid.
+  r.table.stage[static_cast<uint32_t>(ar::Stage::SHADE_VOLUME)].count = 1500;
+  r.sink.want_count = 1500;
+  r.sink.reset();
+  r.dev.launch(ar::Stage::SHADE_VOLUME, 3000);
   wrong = 0;
   for (uint32_t i = 0; i < 3000; ++i) wrong += r.sink.visits[i].load() != (i < 1500 ? 1u : 0u);
   CHECK(wrong == 0);
   CHECK(r.sink.queue_sum.load() == 2550000);  // entries 100..1599
   CHECK(r.sink.wrong_step.load() == 0);
 
+  // (c) An empty segment launches nothing, even with a large grid.
+  r.table.stage[static_cast<uint32_t>(ar::Stage::SHADE_VOLUME)].count = 0;
+  r.sink.want_count = 0;
   r.sink.reset();
-  r.dev.launch(ar::Stage::SHADE_VOLUME, 0);
+  r.dev.launch(ar::Stage::SHADE_VOLUME, 3000);
+  wrong = 0;
+  for (uint32_t i = 0; i < 4096; ++i) wrong += r.sink.visits[i].load() != 0;
+  CHECK(wrong == 0);
   CHECK(r.sink.queue_sum.load() == 0);
   r.dev.synchronize();
 }
@@ -262,8 +289,6 @@ TEST_CASE("cpu_device/launch and registration refusals") {
                        std::runtime_error);
   CHECK_THROWS_WITH_AS(r.dev.launch(KernelId::FILM_RESOLVE, 1), "CpuDevice: no entry point registered for kernel 7",
                        std::runtime_error);
-  CHECK_THROWS_WITH_AS(r.dev.launch(ar::Stage::SHADE_VOLUME, 3001),
-                       "CpuDevice: launch of 3001 items exceeds the 3000-item segment of stage 10", std::invalid_argument);
   CHECK_THROWS_WITH_AS(r.dev.launch(static_cast<ar::Stage>(200), 1), "CpuDevice: stage 200 does not exist",
                        std::invalid_argument);
   CHECK_THROWS_WITH_AS(r.dev.launch(static_cast<KernelId>(99), 1), "CpuDevice: kernel 99 does not exist",

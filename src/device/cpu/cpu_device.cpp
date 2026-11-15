@@ -58,7 +58,7 @@ const ar::KernelGlobals& CpuDevice::globals() const {
   return *globals_;
 }
 
-void CpuDevice::launch(ar::Stage stage, uint32_t count) {
+void CpuDevice::launch(ar::Stage stage, uint32_t /*grid*/) {
   const ar::KernelGlobals& kg = globals();
   const uint32_t i = static_cast<uint32_t>(stage);
   if (i >= ar::kStageCount) throw std::invalid_argument("CpuDevice: stage " + number(i) + " does not exist");
@@ -66,10 +66,10 @@ void CpuDevice::launch(ar::Stage stage, uint32_t count) {
   if (!fn) throw std::runtime_error("CpuDevice: no entry point registered for stage " + number(i));
   if (!kg.step_table) throw std::logic_error("CpuDevice: the bound KernelGlobals has no step table");
   const ar::StepEntry& step = kg.step_table->stage[i];
-  if (count > step.count)
-    throw std::invalid_argument("CpuDevice: launch of " + number(count) + " items exceeds the " + number(step.count) +
-                                "-item segment of stage " + number(i));
-  pool_.parallel_for(count, kDefaultChunk, [&kg, &step, fn](uint32_t first, uint32_t last) { fn(kg, step, first, last); });
+  // The segment is the device-resident step entry's count; the host's grid value only
+  // sizes a GPU grid (0002 D4, D6), so it never limits the items run here.
+  pool_.parallel_for(step.count, kDefaultChunk,
+                     [&kg, &step, fn](uint32_t first, uint32_t last) { fn(kg, step, first, last); });
 }
 
 void CpuDevice::launch(KernelId kernel, uint32_t count) {

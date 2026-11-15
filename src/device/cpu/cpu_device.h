@@ -29,9 +29,10 @@ class CpuDevice : public Device {
   void download(void* dst, const DeviceBuffer& src, uint64_t offset, uint64_t bytes) override;
   void memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value, uint64_t bytes) override;
   void set_kernel_globals(const DeviceBuffer& buffer) override;
-  // Throw std::logic_error without bound globals, std::runtime_error for a stage or
-  // kernel with no entry point, std::invalid_argument for a count above the segment's.
-  void launch(ar::Stage stage, uint32_t count) override;
+  // The stage launch runs exactly the step table's segment for that stage, whatever
+  // `grid` is. Both launches throw std::logic_error without bound globals and
+  // std::runtime_error for a stage or kernel with no entry point.
+  void launch(ar::Stage stage, uint32_t grid) override;
   void launch(KernelId kernel, uint32_t count) override;
   void read_step_table(ar::StepTable& out) override;
   void synchronize() override {}
