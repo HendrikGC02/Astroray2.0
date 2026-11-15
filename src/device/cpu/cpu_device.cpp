@@ -7,6 +7,8 @@
 #include <limits>
 #include <string>
 
+#include "kernel/film/present.h"
+#include "kernel/film/resolve.h"
 #include "kernel/stages/queue_build.h"
 #include "kernel/stages/route_hit.h"
 #include "kernel/stages/sort.h"
@@ -45,6 +47,10 @@ void CpuDevice::register_scheduler_kernels() {
   register_kernel(KernelId::QUEUE_BUILD_SCATTER, &cpu_queue_build_scatter);
   register_kernel(KernelId::SORT_COUNT, &cpu_sort_count);
   register_kernel(KernelId::SORT_SCATTER, &cpu_sort_scatter);
+  // The per-pass film kernels the session launches after every drained pass.
+  register_kernel(KernelId::FILM_RESOLVE, &cpu_film_resolve);
+  register_kernel(KernelId::FILM_PRESENT, &cpu_film_present);
+  register_kernel(KernelId::FILM_HEATMAP, &cpu_film_heatmap);
 }
 
 void CpuDevice::register_intersect_stages() {
