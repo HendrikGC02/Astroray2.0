@@ -45,7 +45,7 @@ void trace_occluded(const EmbreeScene& scene, const RayBatch& rays, uint32_t cou
     RTCOccludedArguments args;
     rtcInitOccludedArguments(&args);
     for (uint32_t i = first; i < last; ++i) {
-      RTCRay ray = batch_ray(rays, i, kShadowRayMask);
+      RTCRay ray = batch_ray(rays, i, ar::kShadowMaskBit);
       rtcOccluded1(s, &ray, &args);
       // Embree signals an occluded ray by setting tfar to -inf.
       occluded[i] = ray.tfar < 0.0f ? 1 : 0;

@@ -37,7 +37,12 @@ ModuleImage load_module_image(const std::string& name) {
     throw std::invalid_argument("kernel module name '" + name + "' is not lower-case letters, digits and underscores");
 
   const std::string source = kernel_source();
-  if (source != "embedded") return read_file(std::filesystem::path(source) / (name + ".cubin"));
+  if (source != "embedded") {
+    // A cubin for CUDA stages, PTX for OptiX modules.
+    const std::filesystem::path dir(source);
+    if (std::filesystem::exists(dir / (name + ".cubin"))) return read_file(dir / (name + ".cubin"));
+    return read_file(dir / (name + ".ptx"));
+  }
 
   std::string resource = "K_";
   for (char c : name) resource.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));

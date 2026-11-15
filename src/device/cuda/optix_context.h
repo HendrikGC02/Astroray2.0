@@ -34,6 +34,10 @@ class OptixContext {
   // Throws DeviceError naming `call`, the OptiX result name and the log collected so far
   // when `result` (an OptixResult) is not success.
   void check(int result, const char* call) const;
+  // Sets the OptiX disk-cache directory of this context (it is a property of the context, not
+  // of a pipeline). Creates the directory. A second call with the same path is a no-op; a
+  // different path throws std::invalid_argument naming both.
+  void set_cache_dir(const std::string& dir);
   // Waits for the OptiX stream; throws DeviceError on a CUDA error.
   void sync() const;
 
@@ -41,6 +45,7 @@ class OptixContext {
   struct Impl;
   Device& device_;
   uint32_t index_;
+  std::string cache_dir_;
   std::unique_ptr<Impl> impl_;
 };
 

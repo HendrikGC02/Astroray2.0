@@ -13,7 +13,6 @@
 #include <array>
 #include <chrono>
 #include <cstring>
-#include <filesystem>
 #include <stdexcept>
 
 #include "device/cuda/module_loader.h"
@@ -52,9 +51,10 @@ struct TraversalPipeline::Impl {
   Impl(OptixContext& c, Owner o) : ctx(c), owner(o) {}
 
   void destroy(Variant& v) {
+    // Dependents first: pipeline, then the program groups it links, then the module they use.
+    if (v.pipeline) optixPipelineDestroy(v.pipeline);
     for (OptixProgramGroup g : v.groups)
       if (g) optixProgramGroupDestroy(g);
-    if (v.pipeline) optixPipelineDestroy(v.pipeline);
     if (v.module) optixModuleDestroy(v.module);
     ctx.device().free(v.sbt);
     v = Variant();
@@ -146,9 +146,7 @@ TraversalPipeline::TraversalPipeline(OptixContext& context, Owner owner, const s
   if (cache_dir.empty()) throw std::invalid_argument("TraversalPipeline: cache_dir is empty");
   context.bind();
   try {
-    std::filesystem::create_directories(cache_dir);
-    context.check(optixDeviceContextSetCacheLocation(static_cast<OptixDeviceContext>(context.handle()), cache_dir.c_str()),
-                  "optixDeviceContextSetCacheLocation");
+    context.set_cache_dir(cache_dir);
     impl_->image = load_module_image("optix_traverse");
     impl_->params = context.device().allocate(LedgerCategory::TABLES, sizeof(ar::OptixLaunchParams), owner);
     impl_->build(impl_->plain, false);

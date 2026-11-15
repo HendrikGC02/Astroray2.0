@@ -69,7 +69,7 @@ void cpu_stage_intersect_shadow(const ar::KernelGlobals& kg, const ar::StepEntry
   for (uint32_t item = first; item < last; ++item) {
     const uint32_t slot = kg.shadow_queue[step.start + item];
     RTCRay ray = stage_ray(ar::sh_ray_o(kg, slot), ar::sh_ray_d(kg, slot), ar::sh_tmax(kg, slot),
-                          astroray::host::kShadowRayMask);
+                          ar::kShadowMaskBit);
     rtcOccluded1(scene, &ray, &args);
     // Embree signals an occluded ray by setting tfar to -inf.
     ar::sh_next_stage(kg, slot) =

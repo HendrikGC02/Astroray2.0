@@ -18,10 +18,6 @@ __constant__ ar::OptixLaunchParams ar_params;
 
 namespace {
 
-// 0002 D11 mask table: a shadow ray traces the SHADOW bit only. Equal to
-// astroray::host::kShadowMaskBit (tests/gpu/test_optix_trace.cpp checks it).
-constexpr uint32_t kShadowRayMask = 1u << 4;
-
 __forceinline__ __device__ const ar::KernelGlobals& globals() {
   return *reinterpret_cast<const ar::KernelGlobals*>(static_cast<uintptr_t>(ar_params.kernel_globals));
 }
@@ -61,7 +57,7 @@ extern "C" __global__ void __raygen__intersect_shadow() {
     // closest-hit program, the miss program is the only writer, and only when nothing blocks.
     uint32_t p0 = 0u, p1 = 0u, p2 = 0u, p3 = 0u, p4 = 0u;
     optixTrace(ar_params.traversable, make_float3(o.x, o.y, o.z), make_float3(d.x, d.y, d.z), ar::kRayTmin,
-               ar::sh_tmax(kg, slot), 0.0f, kShadowRayMask,
+               ar::sh_tmax(kg, slot), 0.0f, ar::kShadowMaskBit,
                OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT | OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT | OPTIX_RAY_FLAG_DISABLE_ANYHIT,
                0, 1, 0, p0, p1, p2, p3, p4);
     ar::sh_next_stage(kg, slot) =

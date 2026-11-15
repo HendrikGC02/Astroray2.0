@@ -10,7 +10,9 @@
 #include <optix_function_table_definition.h>
 #include <optix_stubs.h>
 
+#include <filesystem>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 
 namespace astroray::host {
@@ -83,6 +85,18 @@ void OptixContext::check(int result, const char* call) const {
                     optixGetErrorName(static_cast<OptixResult>(result)) + " (" +
                     optixGetErrorString(static_cast<OptixResult>(result)) + ")" +
                     (log.empty() ? "" : "\nOptiX log:\n" + log));
+}
+
+void OptixContext::set_cache_dir(const std::string& dir) {
+  if (dir.empty()) throw std::invalid_argument("OptiX cache_dir is empty");
+  if (!cache_dir_.empty()) {
+    if (cache_dir_ != dir)
+      throw std::invalid_argument("OptiX cache location is per context: already '" + cache_dir_ + "', asked for '" + dir + "'");
+    return;
+  }
+  std::filesystem::create_directories(dir);
+  check(optixDeviceContextSetCacheLocation(impl_->ctx, dir.c_str()), "optixDeviceContextSetCacheLocation");
+  cache_dir_ = dir;
 }
 
 void OptixContext::sync() const {

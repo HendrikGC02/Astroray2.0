@@ -208,8 +208,7 @@ if(ASTRORAY_GPU)
       list(APPEND _ar_optix_outs ${_ptx})
       list(APPEND ASTRORAY_STAGE_CUBINS ${_ptx})
       if(ASTRORAY_DEV_KERNEL_DIR)
-        # The loose-file loader looks for <name>.cubin whatever the image is.
-        set(_loose ${CMAKE_SOURCE_DIR}/out/bin/kernels/${_n}.cubin)
+        set(_loose ${CMAKE_SOURCE_DIR}/out/bin/kernels/${_n}.ptx)
         add_custom_command(OUTPUT ${_loose}
           COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/out/bin/kernels
           COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_ptx} ${_loose}

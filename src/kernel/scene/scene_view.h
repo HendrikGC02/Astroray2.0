@@ -44,6 +44,10 @@ static_assert(sizeof(DeviceInstanceRecord) == 108, "device layout");
 // carries the index of its light.
 inline constexpr uint32_t kNoLightIndex = ~0u;
 
+// The instance mask bit of AR_VISIBILITY_SHADOW: the only bit a shadow ray traces. One definition
+// for the host mask builder, Embree and the OptiX raygen (0002 D11 mask table).
+inline constexpr uint32_t kShadowMaskBit = 1u << 4;
+
 // What KernelGlobals::scene points to. Arrays are device (or, on the CPU, host) memory.
 struct SceneData {
   const DeviceInstanceRecord* instances;

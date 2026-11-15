@@ -83,7 +83,7 @@ InstanceTable make_table() {
 struct Pools {
   std::vector<uint8_t> next, ray_type;
   std::vector<uint32_t> flags, hit_prim, hit_inst, main_queue;
-  std::vector<ar::Real> hit_t;
+  std::vector<ar::Real> hit_t, ray_tmax;
   std::vector<ar::Real2> hit_uv;
   std::vector<ar::Real3> ray_o, ray_d;
   std::vector<uint8_t> s_next;
@@ -95,6 +95,7 @@ struct Pools {
   void add_path(float x, float y, uint8_t type, uint32_t f) {
     next.push_back(0xEE), ray_type.push_back(type), flags.push_back(f);
     hit_prim.push_back(7), hit_inst.push_back(7), hit_t.push_back(-1.0f), hit_uv.push_back({-1, -1});
+    ray_tmax.push_back(100.0f);
     ray_o.push_back({x, y, 2.0f}), ray_d.push_back({0, 0, -1.0f});
   }
   void add_shadow(float x, float y, float tmax) {
@@ -127,7 +128,9 @@ Pools make_pools() {
     const float x = 3.0f * float(h % 4) + lx;  // quad 3 is empty space: a miss
     const uint8_t type = (h >> 8) % 3 == 0 ? kDiffuse : kCamera;
     p.add_path(x, ly, type, (h >> 12) % 2 ? ar::PATH_KIND : 0u);
+    if (h % 5 == 0) p.ray_tmax.back() = 1.5f;  // ends before the surface at t = 2: a bounded miss
   }
+  p.ray_tmax[2] = 50.0f, p.ray_tmax[4] = 25.0f;  // a miss reports its own tmax
   const uint32_t n = uint32_t(p.next.size());
   // Segment = queue entries [1, n): slots in reverse after one foreign entry (slot 7).
   p.main_queue.push_back(7);
@@ -161,7 +164,7 @@ struct Wired {
 void wire(Pools& p, Wired& w) {
   w.path.next_stage = p.next.data(), w.path.ray_type = p.ray_type.data(), w.path.flags = p.flags.data();
   w.path.hit_prim = p.hit_prim.data(), w.path.hit_inst = p.hit_inst.data(), w.path.hit_t = p.hit_t.data();
-  w.path.hit_uv = p.hit_uv.data(), w.path.ray_o = p.ray_o.data(), w.path.ray_d = p.ray_d.data();
+  w.path.ray_tmax = p.ray_tmax.data(), w.path.hit_uv = p.hit_uv.data(), w.path.ray_o = p.ray_o.data(), w.path.ray_d = p.ray_d.data();
   w.shadow.next_stage = p.s_next.data(), w.shadow.ray_o = p.s_o.data(), w.shadow.ray_d = p.s_d.data();
   w.shadow.tmax = p.s_tmax.data();
 }
@@ -258,6 +261,7 @@ void run_gpu(Gpu& g, const InstanceTable& table, Pools& p, uint32_t width) {
                      b_inst = keep(put(dev, LedgerCategory::MAIN_PATH_POOL, p.hit_inst)),
                      b_t = keep(put(dev, LedgerCategory::MAIN_PATH_POOL, p.hit_t)),
                      b_uv = keep(put(dev, LedgerCategory::MAIN_PATH_POOL, p.hit_uv)),
+                     b_tmax = keep(put(dev, LedgerCategory::MAIN_PATH_POOL, p.ray_tmax)),
                      b_o = keep(put(dev, LedgerCategory::MAIN_PATH_POOL, p.ray_o)),
                      b_d = keep(put(dev, LedgerCategory::MAIN_PATH_POOL, p.ray_d)),
                      b_sn = keep(put(dev, LedgerCategory::SHADOW_POOL, p.s_next)),
@@ -269,7 +273,8 @@ void run_gpu(Gpu& g, const InstanceTable& table, Pools& p, uint32_t width) {
   w.path.next_stage = static_cast<uint8_t*>(b_next.ptr), w.path.ray_type = static_cast<uint8_t*>(b_type.ptr);
   w.path.flags = static_cast<uint32_t*>(b_flags.ptr), w.path.hit_prim = static_cast<uint32_t*>(b_prim.ptr);
   w.path.hit_inst = static_cast<uint32_t*>(b_inst.ptr), w.path.hit_t = static_cast<ar::Real*>(b_t.ptr);
-  w.path.hit_uv = static_cast<ar::Real2*>(b_uv.ptr), w.path.ray_o = static_cast<ar::Real3*>(b_o.ptr);
+  w.path.hit_uv = static_cast<ar::Real2*>(b_uv.ptr), w.path.ray_tmax = static_cast<ar::Real*>(b_tmax.ptr);
+  w.path.ray_o = static_cast<ar::Real3*>(b_o.ptr);
   w.path.ray_d = static_cast<ar::Real3*>(b_d.ptr);
   w.shadow.next_stage = static_cast<uint8_t*>(b_sn.ptr), w.shadow.ray_o = static_cast<ar::Real3*>(b_so.ptr);
   w.shadow.ray_d = static_cast<ar::Real3*>(b_sd.ptr), w.shadow.tmax = static_cast<ar::Real*>(b_st.ptr);
@@ -303,7 +308,6 @@ void run_gpu(Gpu& g, const InstanceTable& table, Pools& p, uint32_t width) {
 TEST_SUITE("gate") {
 
 TEST_CASE("optix_trace/closest matches embree") {
-  static_assert(kShadowMaskBit == (1u << 4), "optix_traverse.cu keeps its own copy of the shadow mask bit");
   const InstanceTable table = make_table();
   Pools cpu = make_pools(), gpu = make_pools();
   run_cpu(table, cpu);
@@ -322,6 +326,7 @@ TEST_CASE("optix_trace/closest matches embree") {
     bool ok = gpu.hit_inst[s] == cpu.hit_inst[s] && gpu.next[s] == cpu.next[s];
     if (cpu.hit_inst[s] == ar::kNoInstance) {
       ++misses;
+      ok = ok && gpu.hit_t[s] == cpu.hit_t[s] && gpu.hit_prim[s] == cpu.hit_prim[s];  // t = the ray's tmax, prim = ~0u
     } else {
       ++hits;
       ok = ok && gpu.hit_prim[s] == cpu.hit_prim[s];
@@ -347,6 +352,8 @@ TEST_CASE("optix_trace/closest matches embree") {
   CHECK(gpu.next[4] == uint8_t(Stage::TERMINATED));
   CHECK(gpu.hit_inst[5] == ar::kNoInstance);  // a diffuse ray misses the camera-only instance
   CHECK(gpu.hit_inst[6] == 2u);
+  CHECK(gpu.hit_t[2] == 50.0f);
+  CHECK(gpu.hit_t[4] == 25.0f);
 }
 
 TEST_CASE("optix_trace/shadow occluded") {
@@ -394,6 +401,8 @@ TEST_CASE("optix_pipeline/creation times cold and warm") {
   CHECK(g.pipeline->times().module_ms > 0);
   // An empty cache directory is a caller bug, never a silent default location.
   CHECK_THROWS_AS(TraversalPipeline(*g.optix, Owner{1, 0}, ""), std::invalid_argument);
+  // The cache location belongs to the context: a different directory on the same context is refused.
+  CHECK_THROWS_AS(TraversalPipeline(*g.optix, Owner{1, 0}, g.cache.string() + "_other"), std::invalid_argument);
 }
 
 }  // TEST_SUITE

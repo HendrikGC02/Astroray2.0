@@ -19,9 +19,6 @@ struct RayBatch {
   const ar::Real *tmin, *tmax;
 };
 
-// The mask a shadow ray traces: only instances with the SHADOW bit (0002 D11).
-inline constexpr uint8_t kShadowRayMask = kShadowMaskBit;
-
 // out[i] is the nearest hit of ray i against the instances sharing a bit with mask[i]; a
 // miss has inst == ar::kNoInstance. Chunks run on `pool`.
 void trace_closest(const EmbreeScene& scene, const RayBatch& rays, const uint8_t* mask, uint32_t count,
