@@ -11,7 +11,7 @@ Do:
 4. AOVs at the primary hit (049, once via `AOV_WRITTEN`); path end through 103's `path_end` with term `MAX_BOUNCE` (temporary, until 073).
 5. launch_config rows (shade_surface T = 256, B = 2, VM class) and budget.toml rows recorded from the first gate run; state the declared spill and stack in Progress.
 6. Tests: CPU (fast): a hand-built hit on an emissive constant material adds exactly beta * Le to its slot; AOVs are written once; GPU (gate): per-stage agreement fixture of shade_surface on 10^5 synthetic hits (Le within the eval thresholds, integer fields bitwise).
-Acceptance: `pwsh tools/check.ps1 gate` passes; kernelgate prints shade_surface's registers, spills and stack under (256,2) within the VM allowances; `out/bin/astroray_cli.exe render out/scenes/a5_emitter.arrec -o out/tmp/a5.fits --spp 4 --size 32x32 --device cuda` writes an image whose mean equals L to 1e-6 (checked statistically in 072).
+Acceptance: `pwsh tools/check.ps1 gate` passes; kernelgate prints shade_surface's registers, spills and stack under (256,2) within the VM allowances; `out/bin/astroray_cli.exe render out/scenes/a5_emitter.arrec -o out/tmp/a5.fits --spp 4 --size 32x32 --device cpu` writes an image whose mean is within noise of L (CUDA sessions cannot trace until task 115, which carries the CUDA form; 072 checks it statistically).
 Look at: none.
 Canary: tasks/071.canary.patch must turn red: astroray_tests_cpu "shade_surface/emission added once", astroray_tests_gpu "shade_surface/agreement".
 Budget: declares shade_surface's first spill and stack baseline (VM kernel: <= 128/192 B spills, <= 512 B stack).

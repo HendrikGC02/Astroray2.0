@@ -15,6 +15,6 @@ Acceptance: `<python> tools/analytic.py --scene a5_emitter --device cuda --spp 6
 Look at: out/evidence/072/a5.png (the 32x32 render enlarged, converted by tools/report.py's PNG helper).
 Canary: tasks/072.canary.patch must turn red: tests/abi/test_analytic_harness.py "TestHarness.test_offset_pixel_fails", and `tools/analytic.py --scene a5_emitter --device cpu` (the patch scales emission by 1.01).
 Budget: about 10 s added to gate; report it.
-Depends on: 071.
+Depends on: 071, 115.
 Size: M (about 300 lines Python); stop and report at 2x.
 Progress:
