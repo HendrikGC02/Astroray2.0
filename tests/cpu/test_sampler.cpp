@@ -76,9 +76,14 @@ void bitwise_identity() {
   CHECK(hs == kFnvSobol);
   CHECK(hi == kFnvIndependent);
 
-  // The other build's file, if it already ran in this process: compare every draw.
+  // The other build's file, if it already ran in this process: compare every draw. The name holds
+  // the process creation time as well as the id: ids are reused, so an id alone can pick up a file
+  // an earlier process left behind.
   namespace fs = std::filesystem;
-  const std::string pid = std::to_string(GetCurrentProcessId());
+  FILETIME created{}, exited{}, kernel_time{}, user_time{};
+  REQUIRE(GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel_time, &user_time));
+  const uint64_t created_at = (uint64_t(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+  const std::string pid = std::to_string(GetCurrentProcessId()) + "_" + std::to_string(created_at);
   const fs::path dir = fs::temp_directory_path();
   const fs::path mine = dir / ("astroray_sampler_" + pid + "_" + kBuild + ".bin");
   const fs::path other = dir / ("astroray_sampler_" + pid + (std::strcmp(kBuild, "f32") == 0 ? "_f64.bin" : "_f32.bin"));
