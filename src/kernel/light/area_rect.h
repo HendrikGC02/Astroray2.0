@@ -101,7 +101,12 @@ AR_FN bool sphquad_init(const RectGeom& g, Real3 o, SphQuad* q) {
 AR_FN Real3 sphquad_sample(const RectGeom& g, const SphQuad& q, Real3 o, Real2 u) {
   // 1. cu, the cosine that fixes the x coordinate
   const Real au = u.x * q.S + q.k;
-  const Real fu = (ar::cos(au) * q.b0 - q.b1) / ar::sin(au);
+  // sin and cos through sinpi / cospi of au / pi: CUDA's sinf / cosf carry a double-precision
+  // slow path a GPU shade kernel may not contain (portability.h); the division adds one rounding
+  // of the argument, a relative error of 2^-24 in au.
+  // Ref: CUDA C++ Programming Guide, appendix "Mathematical Functions" (sinpif, cospif: 1 ulp).
+  const Real au_pi = au / kLightPi;
+  const Real fu = (ar::cospi(au_pi) * q.b0 - q.b1) / ar::sinpi(au_pi);
   const Real cu = rect_clamp((fu > Real(0) ? Real(1) : Real(-1)) / ar::sqrt(fu * fu + q.b0sq), Real(-1), Real(1));
   // 2. xu; cu = +-1 is the x0 or x1 edge, where the quotient below is infinite
   const Real den = light_safe_sqrt(Real(1) - cu * cu);

@@ -319,6 +319,10 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     }
     counters_.rays_closest = counters_.items[static_cast<uint32_t>(Stage::INTERSECT_CLOSEST)];
     counters_.rays_shadow = counters_.items[static_cast<uint32_t>(Stage::INTERSECT_SHADOW)];
+    // In M1a every emitted shadow item is traced exactly once (no re-queue, no drop), so the
+    // items of INTERSECT_SHADOW are the items emitted. Once items can be dropped or re-queued
+    // (M2: recorded hits, overflow), a device counter written by the producers replaces this.
+    counters_.shadow_rays_emitted = counters_.rays_shadow;
     if (!progress) throw std::runtime_error("Scheduler: step " + std::to_string(counters_.steps) + " made no progress");
   }
   return PassStatus::COMPLETE;

@@ -16,6 +16,7 @@
 #include "../core/vec.h"
 #include "../film/film_write.h"
 #include "../kernel_globals.h"
+#include "../light/light.h"
 #include "../material/constant_block.h"
 #include "../material/openpbr_params.h"
 #include "../material/slot_resolve.h"
@@ -62,6 +63,11 @@ AR_FN Real radiance_scale(const KernelGlobals& kg) {
 AR_FN Real camera_path_draw(const KernelGlobals& kg, uint32_t sample, uint32_t d) {
   const SamplerKey key = camera_key(kg.active_pixels, sample, kg.session.samples_done, kg.session.samples_per_pass);
   return draw(kg.session.sampler_mode, key.id, key.index, STREAM_FIXED, d, kg.session.seed);
+}
+// The 32 bits behind camera_path_draw(kg, sample, d).
+AR_FN uint32_t camera_path_draw_bits(const KernelGlobals& kg, uint32_t sample, uint32_t d) {
+  const SamplerKey key = camera_key(kg.active_pixels, sample, kg.session.samples_done, kg.session.samples_per_pass);
+  return draw_bits(kg.session.sampler_mode, key.id, key.index, STREAM_FIXED, d, kg.session.seed);
 }
 
 // Russian roulette (0004 D2, after pbrt-v4 VolPathIntegrator::Li): from depth max(2, min_bounces)
@@ -116,6 +122,14 @@ AR_FN Real3 oct_decode(uint32_t e) {
   return normalize(v);
 }
 
+// The light-sampling context of the path's previous scattering vertex, for the MIS weight of an
+// emitter its BSDF ray reached (0004 D1): the point ray_o - prev_dist ray_d and the stored
+// octahedral normals (0003 d19 rows 15-17). Valid only after a scattering vertex (depth > 0).
+AR_FN LightSampleContext prev_light_context(const KernelGlobals& kg, uint32_t slot) {
+  const Real3 p = ps_ray_o(kg, slot) - ps_ray_d(kg, slot) * ps_prev_dist(kg, slot);
+  return light_context_point(p, oct_decode(ps_prev_ng(kg, slot)), oct_decode(ps_prev_ns(kg, slot)));
+}
+
 // A row-major 3x4 object-to-world transform (DeviceInstanceRecord::object_to_world).
 struct Xform3x4 {
   Real3 r0, r1, r2;  // rows of the linear part
@@ -157,9 +171,12 @@ AR_FN Real3 load_float3(const float* p, uint32_t i) {
 // transforms); Cycles kernel/geom/triangle.h triangle_normal and triangle_smooth_normal,
 // kernel/geom/object.h object_normal_transform, kernel/geom/shader_data.h shader_setup_from_ray
 // (a back-face hit flips Ng and N) (Apache-2.0).
-AR_FN bool shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeContext* ctx) {
+// shade_context_geometry fills the geometric part (P, Ng, N, uv, wo, front_face, object_id,
+// instance_id) for triangle `prim` of instance `inst` at barycentrics `bary`, seen along ray_d;
+// NEE also uses it for the point a light sample picked on an emissive triangle.
+AR_FN bool shade_context_geometry(const KernelGlobals& kg, uint32_t inst, uint32_t prim, Real2 bary, Real3 ray_d,
+                                  ShadeContext* ctx) {
   const SceneData& s = scene_of(kg);
-  const uint32_t inst = ps_hit_inst(kg, slot), prim = ps_hit_prim(kg, slot);
   AR_ASSERT(inst < s.instance_count);
   const DeviceInstanceRecord& rec = s.instances[inst];
   const uint32_t mesh = load_ro(&rec.mesh);
@@ -170,7 +187,6 @@ AR_FN bool shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeCont
   const uint32_t* tri_corners = reinterpret_cast<const uint32_t*>(uintptr_t(load_ro(&mv.tri_corners)));
   const float* positions = reinterpret_cast<const float*>(uintptr_t(load_ro(&mv.positions)));
   const float* normals = reinterpret_cast<const float*>(uintptr_t(load_ro(&mv.corner_normals)));
-  const Real2 bary = ps_hit_uv(kg, slot);
   const Real w0 = Real(1) - bary.x - bary.y;
   const Xform3x4 x = load_xform(rec.object_to_world);
 
@@ -204,7 +220,7 @@ AR_FN bool shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeCont
                    bary.y * Real(load_ro(t + 2u * k2 + 1u));
   }
 
-  ctx->wo = -normalize(ps_ray_d(kg, slot));
+  ctx->wo = -normalize(ray_d);
   const bool front = dot(ng, ctx->wo) > Real(0);
   if (!front) ng = -ng, n = -n;
   ctx->Ng = ng;
@@ -212,6 +228,12 @@ AR_FN bool shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeCont
   ctx->front_face = front ? 1u : 0u;
   ctx->object_id = load_ro(&rec.pass_index);
   ctx->instance_id = inst;
+  return true;
+}
+
+AR_FN bool shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeContext* ctx) {
+  if (!shade_context_geometry(kg, ps_hit_inst(kg, slot), ps_hit_prim(kg, slot), ps_hit_uv(kg, slot), ps_ray_d(kg, slot), ctx))
+    return false;
   ctx->ray_type = ps_ray_type(kg, slot);
   const U16x6 b = ps_bounces(kg, slot);
   for (int i = 0; i < 6; ++i) ctx->depth[i] = b.v[i];

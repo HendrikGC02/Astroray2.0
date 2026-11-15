@@ -74,9 +74,15 @@ AR_FN bool tri_sample_spherical(const LightRecord& r, Real3 p, Real2 u, Real3* o
   const Real A_pi = alpha + beta + gamma;
   if (!(A_pi - kLightPi > Real(0))) return false;  // pbrt's triPDF == 0
   const Real Ap_pi = (Real(1) - u.x) * kLightPi + u.x * A_pi;  // Lerp(u0, pi, A_pi)
-  const Real cos_alpha = ar::cos(alpha), sin_alpha = ar::sin(alpha);
-  const Real sin_phi = ar::sin(Ap_pi) * cos_alpha - ar::cos(Ap_pi) * sin_alpha;
-  const Real cos_phi = ar::cos(Ap_pi) * cos_alpha + ar::sin(Ap_pi) * sin_alpha;
+  // sin and cos through sinpi / cospi of the angle / pi: CUDA's sinf / cosf carry a
+  // double-precision slow path a GPU shade kernel may not contain (portability.h); the division
+  // adds one rounding of the argument, a relative error of 2^-24.
+  // Ref: CUDA C++ Programming Guide, appendix "Mathematical Functions" (sinpif, cospif: 1 ulp).
+  const Real alpha_pi = alpha / kLightPi, ap = Ap_pi / kLightPi;
+  const Real cos_alpha = ar::cospi(alpha_pi), sin_alpha = ar::sinpi(alpha_pi);
+  const Real sin_ap = ar::sinpi(ap), cos_ap = ar::cospi(ap);
+  const Real sin_phi = sin_ap * cos_alpha - cos_ap * sin_alpha;
+  const Real cos_phi = cos_ap * cos_alpha + sin_ap * sin_alpha;
   const Real k1 = cos_phi + cos_alpha;
   const Real k2 = sin_phi - sin_alpha * dot(a, b);
   // pbrt clamps; a NaN here means a triangle covering a hemisphere, outside kTriMaxSolidAngle.

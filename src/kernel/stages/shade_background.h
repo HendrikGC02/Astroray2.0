@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // shade_background: a camera path that left the scene sees the constant world. It adds
-// Le(lambda_t) * beta to the sample's slot (weight 1: MIS against NEE arrives with 074) and ends
-// the path ESCAPED. A non-finite contribution adds nothing, marks the sample invalid (the resolve counts it
+// Le(lambda_t) * beta, MIS-weighted against NEE of the world (integrator/mis.h, 0004 D1), to the
+// sample's slot and ends the path ESCAPED. After a non-delta bounce the weight uses
+// pmf(ctx_prev, world) pdf_li(ctx_prev, wi) from the previous vertex's context; at the first
+// vertex or after a delta bounce the contribution is divided by avg(r_u) only. A non-finite contribution adds nothing, marks the sample invalid (the resolve counts it
 // and leaves n alone, 0008 d6) and ends the path INVALID (rule 5). Light-path misses never get here (route_hit, 0002 D8).
 // Radiance already carries the radiance scale s in the light record (068); the film divides it
 // out, so it is not applied here.
 // Ref: docs/decisions/0004-integrator.md D5, D6 (world row), D28; 0002 D8 (shade_background);
-// Cycles kernel/integrator/shade_background.h (Apache-2.0) for the stage structure.
+// Cycles kernel/integrator/shade_background.h (Apache-2.0) for the stage structure; pbrt-v4\n// src/pbrt/cpu/integrators.cpp VolPathIntegrator::Li (escaped rays: infinite-light MIS) (Apache-2.0).
 #pragma once
 #include <cstdint>
 
+#include "../integrator/mis.h"
 #include "../kernel_globals.h"
 #include "../light/light_sampler.h"
 #include "../portability.h"
@@ -39,7 +42,17 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
     for (int i = 0; i < kLanes; ++i) lam.nm[i] = lt.v[i];
     // The film slot is the sample's, not the pool slot (0004 D5).
     const uint32_t sample = ps_sample_id(kg, slot);
-    const Spec contribution = light_emission(*world, lam, kg.tables->observer) * ps_beta(kg, slot);
+    const uint32_t flags = ps_flags(kg, slot);
+    const bool weighted = ps_bounces(kg, slot).v[0] > 0u && (flags & LAST_BOUNCE_SPECULAR) == 0u;
+    Real p_light = Real(0);
+    if (weighted) {
+      const LightSampleContext prev = prev_light_context(kg, slot);
+      const Real3 wi = normalize(ps_ray_d(kg, slot));
+      p_light = light_sampler_pmf(*kg.light_sampler, prev, kg.world_light) *
+                light_pdf_li(*world, prev, wi, LightHit{prev.p, prev.n_geom});
+    }
+    const Spec contribution = light_emission(*world, lam, kg.tables->observer) * ps_beta(kg, slot) *
+                              mis_emitter_scale(ps_r_u(kg, slot), ps_r_l(kg, slot), p_light, weighted);
     if (is_finite(contribution))
       sample_add(kg, sample, contribution);
     else {
