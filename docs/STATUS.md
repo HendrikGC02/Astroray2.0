@@ -30,7 +30,9 @@ required interval rules in the opcode generator have no owning task yet. M1b (Mi
 Shader): 058's compiler rejects one value feeding two EMIT_LE nodes; insert a
 copy or clone shared constants. Tooling: a doctest case outside a tier suite is
 skipped without a warning; a new test file once needed a CMakeLists touch to
-reconfigure.
+reconfigure. 032's CUDA init uses its own Ledger, not the context's
+(fix with 035/041), and the CUDA context is created on the init thread, so
+workers must make it current.
 
 ## Budget headroom
 Not measured yet: no gate has run. Spike numbers: docs/spikes/*/RESULTS.md.
