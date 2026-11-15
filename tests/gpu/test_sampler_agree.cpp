@@ -266,10 +266,11 @@ TEST_CASE("cuda_device/reserve rule refusal") {
     CHECK(e.status() == AR_ERR_OUT_OF_MEMORY);
     CHECK(e.category() == LedgerCategory::GEOMETRY);
     CHECK(e.need() == kHuge);
-    // available is free - R, so it leaves 1.5 GiB (0007 d14) of the card's total.
-    CHECK(e.available() + 3 * kGiB / 2 <= total);
+    // available() is the raw free VRAM at the refusal, never more than the card has.
+    CHECK(e.available() <= total);
+    CHECK(e.available() > 0);
     char want[160];
-    std::snprintf(want, sizeof want, "needs 1024.00 GiB for geometry, %.2f GiB available",
+    std::snprintf(want, sizeof want, "needs 1024.00 GiB for geometry, %.2f GiB free (reserve 1.50 GiB)",
                   static_cast<double>(e.available()) / static_cast<double>(kGiB));
     CHECK(std::string(e.what()) == want);
   }
@@ -285,6 +286,48 @@ TEST_CASE("cuda_device/reserve rule refusal") {
   CHECK(ledger.total() == 0);
   CHECK(b.ptr == nullptr);
   CHECK_THROWS_AS(dev->allocate(LedgerCategory::TABLES, 0, Owner{}), std::invalid_argument);
+}
+
+TEST_CASE("cuda_device/reserve rule decision") {
+  // R is the record's 1.5 GiB (0007 d14), exactly.
+  CHECK(kCudaReserveBytes == 1610612736ull);
+  const uint64_t R = kCudaReserveBytes;
+  const uint64_t free10 = 10 * kGiB;  // free - R = 8.5 GiB
+  const uint64_t edge = free10 - R;
+  CHECK(reserve_allows(edge - 1, free10, R));       // just below free - R
+  CHECK(reserve_allows(edge, free10, R));           // need + R == free is allowed
+  CHECK(!reserve_allows(edge + 1, free10, R));      // just above free - R
+  CHECK(!reserve_allows(9 * kGiB, free10, R));      // between free - R and free: the reserve refuses it
+  CHECK(!reserve_allows(free10, free10, R));        // all of the free memory
+  CHECK(!reserve_allows(free10 + 1, free10, R));
+  CHECK(!reserve_allows(~0ull, free10, R));         // no overflow in need + R
+  CHECK(reserve_allows(0, R, R));                   // free == R: only an empty request fits
+  CHECK(!reserve_allows(1, R, R));
+  CHECK(!reserve_allows(0, R - 1, R));              // free below the reserve: nothing fits
+  CHECK(!reserve_allows(0, 0, R));
+  CHECK(reserve_allows(1, 1, 0));                   // with no reserve the rule is need <= free
+  CHECK(!reserve_allows(2, 1, 0));
+}
+
+TEST_CASE("cuda_device/failure messages") {
+  // A sticky result names the call and, after a launch, the kernel (0002 D15).
+  CHECK(cuda_failure_message(700, "CUDA_ERROR_ILLEGAL_ADDRESS", "an illegal memory access was encountered",
+                             "cuEventSynchronize", "shade_surface") ==
+        "GPU error: CUDA_ERROR_ILLEGAL_ADDRESS: an illegal memory access was encountered in cuEventSynchronize "
+        "(shade_surface). Save your work and restart Blender.");
+  CHECK(cuda_failure_message(719, "CUDA_ERROR_LAUNCH_FAILED", "unspecified launch failure", "cuEventRecord", nullptr) ==
+        "GPU error: CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure in cuEventRecord. "
+        "Save your work and restart Blender.");
+  CHECK(cuda_failure_message(719, "CUDA_ERROR_LAUNCH_FAILED", "unspecified launch failure", "cuEventRecord", "") ==
+        "GPU error: CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure in cuEventRecord. "
+        "Save your work and restart Blender.");
+  // A recoverable result keeps the call and the kernel and is not "GPU error".
+  CHECK(cuda_failure_message(701, "CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES", "too many resources requested for launch",
+                             "cuLaunchKernel", "film_resolve") ==
+        "CUDA error in cuLaunchKernel (film_resolve): CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES: too many resources "
+        "requested for launch");
+  CHECK(cuda_failure_message(1, nullptr, nullptr, "cuMemAlloc", nullptr) ==
+        "CUDA error in cuMemAlloc: CUDA_ERROR_?: unknown error");
 }
 
 TEST_CASE("cuda_device/sticky error classification") {

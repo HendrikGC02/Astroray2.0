@@ -12,6 +12,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include "host/ledger.h"
 #include "kernel/kernel_globals.h"
@@ -56,6 +57,18 @@ inline void check_range(const DeviceBuffer& b, uint64_t offset, uint64_t bytes) 
                             ") is outside the " + std::to_string(b.bytes) + "-byte buffer");
 }
 
+// An AllocationRefused whose message the device wrote (it knows facts the ledger's
+// generic text does not, such as the reserve). Status, category and sizes are the base's.
+class DeviceAllocationRefused : public AllocationRefused {
+ public:
+  DeviceAllocationRefused(LedgerCategory category, uint64_t need_bytes, uint64_t available_bytes, std::string text)
+      : AllocationRefused(category, need_bytes, available_bytes), text_(std::move(text)) {}
+  const char* what() const noexcept override { return text_.c_str(); }
+
+ private:
+  std::string text_;
+};
+
 class Device {
  public:
   explicit Device(Ledger& ledger) : ledger_(ledger) {}
@@ -72,7 +85,11 @@ class Device {
   DeviceBuffer allocate(LedgerCategory category, uint64_t bytes, Owner owner) {
     if (bytes == 0) throw std::invalid_argument("device allocation of zero bytes");
     uint64_t available = 0;
-    if (!may_allocate(bytes, &available)) throw AllocationRefused(category, bytes, available);
+    if (!may_allocate(bytes, &available)) {
+      std::string text = refusal_text(category, bytes, available);
+      if (text.empty()) throw AllocationRefused(category, bytes, available);
+      throw DeviceAllocationRefused(category, bytes, available, std::move(text));
+    }
     void* ptr = alloc_memory(bytes);
     if (!ptr) throw std::bad_alloc();
     DeviceBuffer b;
@@ -108,7 +125,9 @@ class Device {
   // StepEntry::count, never `grid`, which only sizes a GPU grid (0002 D4, D6, D7).
   // A partial shadow-producer launch (D5) is a smaller step count written by the scan.
   virtual void launch(ar::Stage stage, uint32_t grid) = 0;
-  // Runs `count` items of a per-pass or scheduler kernel.
+  // Runs a per-pass or scheduler kernel over its items. Like a stage, the kernel takes only
+  // the KernelGlobals pointer and reads its item count from there; `count` only sizes a GPU
+  // grid (0002 D4, D8).
   virtual void launch(KernelId kernel, uint32_t count) = 0;
   // Copies the device's step table (0002 D7 step 2).
   virtual void read_step_table(ar::StepTable& out) = 0;
@@ -119,8 +138,11 @@ class Device {
  protected:
   // The device's reserve rule (0007 d14, R19; the CUDA side is 028): true when `need`
   // bytes may be allocated now. When it returns false, *available_bytes is what the
-  // refusal message reports.
+  // refusal reports.
   virtual bool may_allocate(uint64_t need, uint64_t* available_bytes) = 0;
+  // The refusal's message, or empty for the ledger's generic "needs X GiB for <category>,
+  // Y GiB available".
+  virtual std::string refusal_text(LedgerCategory, uint64_t /*need*/, uint64_t /*available*/) const { return {}; }
   // Raw memory for allocate(); nullptr means the allocator failed.
   virtual void* alloc_memory(uint64_t bytes) = 0;
   virtual void free_memory(void* ptr) = 0;
@@ -160,6 +182,24 @@ class ModuleDevice : public Device {
   virtual void launch_module_kernel(uint32_t module, const char* function, uint32_t blocks, uint32_t threads,
                                     void* const* args) = 0;
 };
+
+// R of 0007 d14: bytes that must stay free after any allocation, for Blender and the
+// desktop. PROVISIONAL (0007 d14: measured by P5 with Blender open).
+inline constexpr uint64_t kCudaReserveBytes = 3ull << 29;  // 1.5 GiB
+
+// The reserve rule of 0007 d14 as a pure function: an allocation of `need` bytes proceeds
+// only if need + reserve <= free, free being what cuMemGetInfo reports at that moment.
+// Written so no sum can overflow.
+inline bool reserve_allows(uint64_t need, uint64_t free_bytes, uint64_t reserve) {
+  return free_bytes >= reserve && need <= free_bytes - reserve;
+}
+
+// The message of a CUDA failure (0002 D15): which call, for which kernel when there is one,
+// and CUDA's own name and text. A sticky result (cuda_result_is_sticky) gets the 0001 D2.5
+// wording, with the call and kernel inside its <text>. `kernel` may be null or empty.
+// Defined in cuda_device.cpp.
+std::string cuda_failure_message(int cu_result, const char* name, const char* text, const char* call,
+                                 const char* kernel);
 
 // Defined in src/device/cuda/cuda_device.cpp, which exists only in ASTRORAY_GPU builds.
 // Retains device `device_index`'s primary context; throws DeviceError when CUDA cannot

@@ -115,6 +115,13 @@ bool cuda_result_is_sticky(int r) {
   }
 }
 
+std::string cuda_failure_message(int r, const char* name, const char* text, const char* call, const char* kernel) {
+  const std::string what = std::string(name ? name : "CUDA_ERROR_?") + ": " + (text ? text : "unknown error");
+  const std::string where = std::string(call) + ((kernel && *kernel) ? std::string(" (") + kernel + ")" : "");
+  if (cuda_result_is_sticky(r)) return DeviceError::sticky_text(what + " in " + where);
+  return "CUDA error in " + where + ": " + what;
+}
+
 std::string cuda_latent_error() {
   cudaError_t e = cudaDeviceSynchronize();
   if (e != cudaSuccess) return std::string("cudaDeviceSynchronize: ") + cudaGetErrorName(e) + ": " + cudaGetErrorString(e);
@@ -131,7 +138,7 @@ struct CudaDevice::Impl {
   CUevent done = nullptr;
   std::string arch;  // "sm_120"
   bool dead = false;
-  std::string dead_text;
+  std::string dead_message;  // the sticky error's message, thrown again by every later call
   CUdeviceptr globals = 0;
 
   std::mutex mutex;  // guards the module and function tables
@@ -183,13 +190,13 @@ struct CudaDevice::Impl {
     const char* text = nullptr;
     cu.cuGetErrorName_(r, &name);
     cu.cuGetErrorString_(r, &text);
-    const std::string what = std::string(name ? name : "CUDA_ERROR_?") + ": " + (text ? text : "unknown error");
-    if (cuda_result_is_sticky(static_cast<int>(r))) {
+    const std::string message = cuda_failure_message(static_cast<int>(r), name, text, call, detail);
+    const bool sticky = cuda_result_is_sticky(static_cast<int>(r));
+    if (sticky) {
       dead = true;
-      dead_text = what;
-      throw DeviceError(DeviceError::sticky_text(what), true);
+      dead_message = message;
     }
-    throw DeviceError(std::string("CUDA error in ") + call + (detail ? std::string(" (") + detail + ")" : "") + ": " + what);
+    throw DeviceError(message, sticky);
   }
 
   void check(CUresult r, const char* call, const char* detail = nullptr) {
@@ -197,7 +204,7 @@ struct CudaDevice::Impl {
   }
 
   void ensure_alive() const {
-    if (dead) throw DeviceError(DeviceError::sticky_text(dead_text), true);
+    if (dead) throw DeviceError(dead_message, true);
   }
 
   // The context is per thread; every public operation binds it first.
@@ -207,10 +214,11 @@ struct CudaDevice::Impl {
   }
 
   // The per-step event wait of 0002 D15: where an asynchronous error surfaces.
-  void sync() {
+  // `kernel`, when given, is named in the error: the debug wait after a launch (D15).
+  void sync(const char* kernel = nullptr) {
     bind();
-    check(cu.cuEventRecord_(done, stream), "cuEventRecord");
-    check(cu.cuEventSynchronize_(done), "cuEventSynchronize");
+    check(cu.cuEventRecord_(done, stream), "cuEventRecord", kernel);
+    check(cu.cuEventSynchronize_(done), "cuEventSynchronize", kernel);
   }
 
   void require_globals() const {
@@ -243,7 +251,7 @@ struct CudaDevice::Impl {
   void launch(CUfunction f, const char* name, uint32_t blocks, uint32_t threads, void** params) {
     check(cu.cuLaunchKernel_(f, blocks, 1, 1, threads, 1, 1, 0, stream, params, nullptr), "cuLaunchKernel", name);
 #ifndef NDEBUG
-    sync();  // a debug build waits after every launch so an error names its kernel (D15)
+    sync(name);  // a debug build waits after every launch so an error names its kernel (D15)
 #endif
   }
 
@@ -326,8 +334,7 @@ void CudaDevice::launch(KernelId kernel, uint32_t count) {
   const CUfunction f = s.named_function(name, "k_" + name);
   const uint32_t blocks = blocks_for(count);
   CUdeviceptr kg = s.globals;
-  uint32_t n = count;
-  void* params[] = {&kg, &n};
+  void* params[] = {&kg};
   s.launch(f, name.c_str(), blocks, kDefaultThreads, params);
 }
 
@@ -378,10 +385,19 @@ bool CudaDevice::may_allocate(uint64_t need, uint64_t* available_bytes) {
   s.bind();
   size_t free_bytes = 0, total_bytes = 0;
   s.check(s.cu.cuMemGetInfo_(&free_bytes, &total_bytes), "cuMemGetInfo");
-  // Ref: 0007 d14 reserve rule: proceed only if need + R <= free, free as reported now.
-  // The refusal reports what may be allocated, free - R.
-  *available_bytes = free_bytes > kCudaReserveBytes ? free_bytes - kCudaReserveBytes : 0;
-  return need <= free_bytes && free_bytes - need >= kCudaReserveBytes;
+  // Ref: 0007 d14 reserve rule (reserve_allows); the refusal reports the raw free bytes
+  // and refusal_text adds the reserve (0002 D15: category, size and free VRAM).
+  *available_bytes = free_bytes;
+  return reserve_allows(need, free_bytes, kCudaReserveBytes);
+}
+
+std::string CudaDevice::refusal_text(LedgerCategory category, uint64_t need, uint64_t available) const {
+  constexpr double kGiB = 1073741824.0;
+  char buf[200];
+  std::snprintf(buf, sizeof buf, "needs %.2f GiB for %s, %.2f GiB free (reserve %.2f GiB)",
+                static_cast<double>(need) / kGiB, ledger_category_name(category), static_cast<double>(available) / kGiB,
+                static_cast<double>(kCudaReserveBytes) / kGiB);
+  return buf;
 }
 
 void* CudaDevice::alloc_memory(uint64_t bytes) {

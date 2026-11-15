@@ -12,10 +12,6 @@
 
 namespace astroray::host {
 
-// R of 0007 d14: bytes that must stay free after any allocation, for Blender and the
-// desktop. PROVISIONAL (0007 d14: measured by P5 with Blender open).
-inline constexpr uint64_t kCudaReserveBytes = 3ull << 29;  // 1.5 GiB
-
 class CudaDevice final : public ModuleDevice {
  public:
   // Throws DeviceError when CUDA cannot be initialised or is dead (a sticky error was
@@ -32,7 +28,7 @@ class CudaDevice final : public ModuleDevice {
   // std::logic_error without bound globals, std::invalid_argument for a stage that is not
   // launchable and DeviceError for a missing module or a failed CUDA call.
   void launch(ar::Stage stage, uint32_t grid) override;
-  // Launches k_<kernel name>(const KernelGlobals*, uint32_t count).
+  // Launches k_<kernel name>(const KernelGlobals*); `count` only sizes the grid.
   void launch(KernelId kernel, uint32_t count) override;
   void read_step_table(ar::StepTable& out) override;
   void synchronize() override;
@@ -44,6 +40,7 @@ class CudaDevice final : public ModuleDevice {
 
  protected:
   bool may_allocate(uint64_t need, uint64_t* available_bytes) override;
+  std::string refusal_text(LedgerCategory category, uint64_t need, uint64_t available) const override;
   void* alloc_memory(uint64_t bytes) override;
   void free_memory(void* ptr) override;
 
