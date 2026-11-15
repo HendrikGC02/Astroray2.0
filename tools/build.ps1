@@ -1,30 +1,44 @@
 # SPDX-License-Identifier: Apache-2.0
-# tools/build.ps1 [-Target t[,t]] [-Preset dev|cpu] [-CheckOnly]
+# tools/build.ps1 [-Target t[,t]] [-Preset dev|cpu] [-CheckOnly] [-NoMachineLock]
 # Enters the pinned MSVC environment, configures when needed, builds, then proves
 # with `ninja -n` that no work is left (0009 d5, d9).
 # Pins (0009 d2): MSVC toolset 14.44.x from VS 2022 Build Tools 17.14
 # (vcvars_ver=14.44; hosted CI: cl >= 19.44, no -vcvars_ver), CUDA 12.8,
 # OptiX 9.1 headers, CMake >= 3.31 (4.2.1 installed), Ninja 1.13.x, pwsh 7.
-# Output: at most 20 lines, last line "PASS build <s> s" or "FAIL build <reason>";
-# full log in out/check/build.log; non-zero exit on failure.
+# Takes the machine lock (not with -NoMachineLock, for CPU-only callers) and the
+# tree lock on out/build (0009 d8); the summary reports the waits.
+# Output: at most 20 lines, last line "PASS build <s> s (budget n/a, waited <w> s)"
+# or "FAIL build ..."; full log in out/check/build.log, JSON in build.json;
+# non-zero exit on failure.
 param(
   [string[]]$Target = @('all'),
   [ValidateSet('dev', 'cpu')][string]$Preset = 'dev',
-  [switch]$CheckOnly
+  [switch]$CheckOnly,
+  [switch]$NoMachineLock
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $buildDir = Join-Path $root 'out/build'
 $logDir = Join-Path $root 'out/check'
-New-Item -ItemType Directory -Force $logDir | Out-Null
 $log = Join-Path $logDir 'build.log'
-Set-Content -Path $log -Value "build.ps1 $(Get-Date -Format o)"
+. (Join-Path $PSScriptRoot 'lib/lock.ps1')
+. (Join-Path $PSScriptRoot 'lib/summary.ps1')
+
+# Locks first; the tier clock starts after them so waits are excluded.
+$waited = 0.0
+$machineWait = 0.0
+if (-not $NoMachineLock) { $machineWait = Enter-ArMachineLock }
+$treeWait = Enter-ArTreeLock $buildDir
+$waited = $machineWait + $treeWait
+Start-ArSummary 'build'
 $clock = [Diagnostics.Stopwatch]::StartNew()
 
-function Say([string]$m) { Write-Host $m; Add-Content -Path $log -Value $m }
+function Say([string]$m) { Add-Content -Path $log -Value $m }
 function Fail([string]$why) {
-  Say ("FAIL build " + $why)
+  $null = Complete-ArSummary -Pass $false -Waited $waited -Reason $why
+  Exit-ArTreeLock
+  Exit-ArMachineLock
   exit 1
 }
 # Run a native command, append its output to the log, return its exit code.
@@ -85,13 +99,13 @@ try {
       $t = $clock.Elapsed.TotalSeconds
       if ((Run 'cmake' @('--preset', $Preset)) -ne 0) { Fail "configure failed (see $log)" }
       [IO.File]::WriteAllText($listFile, $listText)
-      Say ("configure {0} {1:N1} s" -f $Preset, ($clock.Elapsed.TotalSeconds - $t))
+      Add-ArStep "configure $Preset" ($clock.Elapsed.TotalSeconds - $t)
     }
 
     # --- build ---
     $t = $clock.Elapsed.TotalSeconds
     if ((Run 'cmake' (@('--build', 'out/build', '--target') + $Target)) -ne 0) { Fail "compile failed (see $log)" }
-    Say ("build {0:N1} s" -f ($clock.Elapsed.TotalSeconds - $t))
+    Add-ArStep 'build' ($clock.Elapsed.TotalSeconds - $t)
   }
 
   # --- nothing left to do? ---
@@ -103,5 +117,7 @@ try {
 } catch {
   Fail ($_.Exception.Message)
 }
-Say ("PASS build {0:N1} s" -f $clock.Elapsed.TotalSeconds)
+$null = Complete-ArSummary -Pass $true -Waited $waited
+Exit-ArTreeLock
+Exit-ArMachineLock
 exit 0
