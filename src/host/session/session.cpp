@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <utility>
@@ -16,9 +17,11 @@
 #include "host/scene/camera.h"
 #include "host/thread.h"
 #include "kernel/sample/sobol.h"
+#include "host/scene/accel.h"
 
 namespace astroray::host {
 namespace {
+
 
 constexpr uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) / a * a; }
 constexpr uint64_t kFilmDataAt = align_up(sizeof(ar::KernelGlobals), 256);
@@ -413,6 +416,20 @@ void Session::allocate() {
   response_ = make_response_table(obs);
   wavelengths_ = WavelengthTableBuilder().build();
 
+#ifdef ASTRORAY_GPU
+  if (device_.kind() == AR_DEVICE_CUDA) {
+    // One pipeline per session on the scene's OptiX context, which exists once the scene's init has
+    // run (accel_builder waits for it and throws its failure). release() detaches it before the
+    // scene can go (ar_scene_destroy refuses while a session is not CLOSED).
+    const auto t0 = std::chrono::steady_clock::now();
+    const TraversalAttach t = attach_cuda_traversal(device_, scene_.accel_builder(), options_.owner);
+    const std::chrono::duration<double, std::milli> took = std::chrono::steady_clock::now() - t0;
+    char line[160];
+    std::snprintf(line, sizeof line, "session: traversal pipeline created in %.1f ms (module %.1f ms, pipeline %.1f ms)",
+                  took.count(), t.module_ms, t.pipeline_ms);
+    ctx_.log.line("INFO", line);
+  }
+#endif
   auto film = std::make_unique<Film>(device_, layout_, options_.owner);
   session_tables_ = upload_session_tables(device_, options_.owner, response_, wavelengths_, film->data());
   {
@@ -440,6 +457,9 @@ void Session::release() {
     std::lock_guard<std::mutex> lock(mutex_);
     scheduler_.reset();  // frees the pools
   }
+#ifdef ASTRORAY_GPU
+  if (device_.kind() == AR_DEVICE_CUDA) detach_cuda_traversal(device_);  // while the scene's OptiX context lives
+#endif
   std::lock_guard<std::mutex> render(render_mutex_);
   // The ring stays until the session is destroyed: a frame the host acquired remains readable
   // after CLOSED and is released then (display_release), so no thread reads freed memory.
@@ -529,6 +549,11 @@ void Session::bind_globals() {
   device_.upload(globals_buf_, 0, &kg, sizeof kg);
   device_.upload(globals_buf_, kFilmDataAt, &f, sizeof f);
   device_.set_kernel_globals(globals_buf_);
+#ifdef ASTRORAY_GPU
+  // The pinned snapshot's TLAS: SceneData::accel holds its handle as an integer (scene_view.h).
+  if (device_.kind() == AR_DEVICE_CUDA)
+    set_cuda_traversable(device_, tables_ ? uint64_t(reinterpret_cast<uintptr_t>(tables_->scene_host.accel)) : 0u);
+#endif
   scheduler_->config.globals = kg;
 }
 

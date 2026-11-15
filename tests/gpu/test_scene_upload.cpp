@@ -87,7 +87,7 @@ struct Rig {
     auto h = held;
     cfg.init = [h]() -> std::shared_ptr<void> {
       h->device = make_cuda_device(*h->ledger, 0);
-      h->accel = make_optix_accel_builder(*h->device, 0);
+      h->accel = make_optix_accel_builder(*h->device, 0, std::string());  // no OptiX disk cache
       return h;
     };
     cfg.device_of = [](void* p) -> Device* { return static_cast<Held*>(p)->device.get(); };

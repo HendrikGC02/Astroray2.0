@@ -36,19 +36,21 @@ struct CudaInit {
 
 // The scene's device init for a CUDA context. Kept out of the entry point because the
 // recording macro wraps that body and a preprocessor conditional cannot sit inside it.
-void cuda_init(astroray::host::SceneConfig& cfg, uint32_t index, std::shared_ptr<astroray::host::Ledger> ledger) {
+// `cache_dir` is ar_scene_desc.cache_dir (0007 d45), empty for none: the OptiX disk cache is then off.
+void cuda_init(astroray::host::SceneConfig& cfg, uint32_t index, std::shared_ptr<astroray::host::Ledger> ledger,
+               const std::string& cache_dir) {
 #ifdef ASTRORAY_GPU
-  cfg.init = [index, ledger]() -> std::shared_ptr<void> {
+  cfg.init = [index, ledger, cache_dir]() -> std::shared_ptr<void> {
     auto held = std::make_shared<CudaInit>();
     held->ledger = ledger;
     held->device = astroray::host::make_cuda_device(*ledger, index);
-    held->accel = astroray::host::make_optix_accel_builder(*held->device, index);
+    held->accel = astroray::host::make_optix_accel_builder(*held->device, index, cache_dir);
     return held;
   };
   cfg.device_of = [](void* p) -> astroray::host::Device* { return static_cast<CudaInit*>(p)->device.get(); };
   cfg.accel_of = [](void* p) -> astroray::host::AccelBuilder* { return static_cast<CudaInit*>(p)->accel.get(); };
 #else
-  (void)index, (void)ledger;
+  (void)index, (void)ledger, (void)cache_dir;
   cfg.init = []() -> std::shared_ptr<void> { throw std::runtime_error("this build has no CUDA backend"); };
 #endif
 }
@@ -142,7 +144,13 @@ AR_API ar_status ar_scene_create(ar_context ctx, const ar_scene_desc* desc, ar_s
     astroray::context_device(ctx, &kind, &index);
     // The mesh store (and with it the scene's ledger) exists before the init thread charges it.
     auto meshes = std::make_shared<astroray::host::MeshStore>();
-    if (kind == AR_DEVICE_CUDA) cuda_init(cfg, index, meshes->shared_ledger());
+    if (kind == AR_DEVICE_CUDA) {
+      const std::string cache_dir = desc->cache_dir ? desc->cache_dir : "";
+      if (cache_dir.empty())
+        astroray::context_state(ctx).log.line(
+            "INFO", "scene create: ar_scene_desc.cache_dir is empty, so the OptiX disk cache is disabled");
+      cuda_init(cfg, index, meshes->shared_ledger(), cache_dir);
+    }
     auto h = std::make_unique<ar_scene_s>();
     h->scene = std::make_unique<Scene>(astroray::context_state(ctx), std::move(cfg));
     h->scene->meshes = std::move(meshes);

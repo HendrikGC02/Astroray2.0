@@ -160,7 +160,8 @@ struct Gpu {
     optix = std::make_unique<OptixContext>(*dev, 0);
     upload = std::make_unique<SceneUpload>(*dev, Owner{1, 0});
     accel = std::make_unique<OptixAccel>(*optix, Owner{1, 0});
-    pipeline = std::make_unique<TraversalPipeline>(*optix, Owner{1, 0}, cache.string());
+    optix->set_cache_dir(cache.string());
+    pipeline = std::make_unique<TraversalPipeline>(*optix, *dev, optix->stream(), Owner{1, 0});
   }
   ~Gpu() {
     pipeline.reset();

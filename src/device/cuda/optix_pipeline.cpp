@@ -12,6 +12,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 
@@ -46,13 +47,21 @@ struct Variant {
 
 struct TraversalPipeline::Impl {
   OptixContext& ctx;
+  Device& device;  // the SBT and launch parameters live here
+  cudaStream_t stream;
   Owner owner;
   ModuleImage image;
   Variant plain, motion;
   bool has_motion = false;
   DeviceBuffer params;
 
-  Impl(OptixContext& c, Owner o) : ctx(c), owner(o) {}
+  Impl(OptixContext& c, Device& d, void* s, Owner o) : ctx(c), device(d), stream(static_cast<cudaStream_t>(s)), owner(o) {}
+
+  void sync() const {
+    const cudaError_t e = cudaStreamSynchronize(stream);
+    if (e != cudaSuccess)
+      throw DeviceError(DeviceError::sticky_text(std::string("cudaStreamSynchronize (OptiX launch): ") + cudaGetErrorString(e)), true);
+  }
 
   void destroy(Variant& v) {
     // Dependents first: pipeline, then the program groups it links, then the module they use.
@@ -61,7 +70,7 @@ struct TraversalPipeline::Impl {
       if (g) optixProgramGroupDestroy(g);
     if (v.module) optixModuleDestroy(v.module);
     if (v.builtin_sphere) optixModuleDestroy(v.builtin_sphere);
-    ctx.device().free(v.sbt);
+    device.free(v.sbt);
     v = Variant();
   }
 
@@ -141,8 +150,8 @@ struct TraversalPipeline::Impl {
     std::array<uint8_t, kProgramCount * kRecordBytes> records = {};
     for (uint32_t i = 0; i < kProgramCount; ++i)
       ctx.check(optixSbtRecordPackHeader(v.groups[i], records.data() + size_t(i) * kRecordBytes), "optixSbtRecordPackHeader");
-    v.sbt = ctx.device().allocate(LedgerCategory::TABLES, records.size(), owner);
-    ctx.device().upload(v.sbt, 0, records.data(), records.size());
+    v.sbt = device.allocate(LedgerCategory::TABLES, records.size(), owner);
+    device.upload(v.sbt, 0, records.data(), records.size());
     v.times.pipeline_ms = ms_since(t0);
   }
 
@@ -151,7 +160,6 @@ struct TraversalPipeline::Impl {
     if (traversable == 0) throw std::invalid_argument("TraversalPipeline launch: no traversable (build the TLAS first)");
     ctx.bind();
     const ar::OptixLaunchParams p{traversable, reinterpret_cast<uint64_t>(kg.ptr)};
-    const auto stream = static_cast<cudaStream_t>(ctx.stream());
     const cudaError_t e = cudaMemcpyAsync(params.ptr, &p, sizeof p, cudaMemcpyHostToDevice, stream);
     if (e != cudaSuccess) throw DeviceError(std::string("GPU device unavailable: cudaMemcpyAsync (OptiX params): ") + cudaGetErrorString(e));
     const CUdeviceptr base = reinterpret_cast<CUdeviceptr>(v.sbt.ptr);
@@ -168,28 +176,31 @@ struct TraversalPipeline::Impl {
   }
 };
 
-TraversalPipeline::TraversalPipeline(OptixContext& context, Owner owner, const std::string& cache_dir)
-    : impl_(std::make_unique<Impl>(context, owner)) {
-  if (cache_dir.empty()) throw std::invalid_argument("TraversalPipeline: cache_dir is empty");
+TraversalPipeline::TraversalPipeline(OptixContext& context, Device& device, void* stream, Owner owner)
+    : impl_(std::make_unique<Impl>(context, device, stream, owner)) {
+  if (!stream) throw std::invalid_argument("TraversalPipeline: no stream");
   context.bind();
   try {
-    context.set_cache_dir(cache_dir);
     impl_->image = load_module_image("optix_traverse");
-    impl_->params = context.device().allocate(LedgerCategory::TABLES, sizeof(ar::OptixLaunchParams), owner);
+    impl_->params = device.allocate(LedgerCategory::TABLES, sizeof(ar::OptixLaunchParams), owner);
     impl_->build(impl_->plain, false);
   } catch (...) {
     impl_->destroy(impl_->plain);
-    context.device().free(impl_->params);
+    device.free(impl_->params);
     throw;
   }
 }
 
 TraversalPipeline::~TraversalPipeline() {
   impl_->ctx.bind();
-  impl_->ctx.sync();
+  try {
+    impl_->sync();  // a launch in flight still reads the SBT and the parameters
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "astroray: TraversalPipeline teardown: %s\n", e.what());  // never dropped
+  }
   impl_->destroy(impl_->plain);
   impl_->destroy(impl_->motion);
-  impl_->ctx.device().free(impl_->params);
+  impl_->device.free(impl_->params);
 }
 
 void TraversalPipeline::create_motion_variant() {

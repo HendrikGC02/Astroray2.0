@@ -515,8 +515,35 @@ void OptixAccel::build_tlas(const SceneUpload& upload, const InstanceTable& tabl
   ++tlas_builds_;
 }
 
-std::unique_ptr<AccelBuilder> make_optix_accel_builder(Device& device, uint32_t device_index) {
-  return std::make_unique<SceneOptixBuilder>(device, device_index);
+OptixContextHolder::OptixContextHolder(Device& device, uint32_t device_index, const std::string& cache_dir)
+    : context(device, device_index) {
+  // Ref: OptiX 9.1 Programming Guide, "Compilation caching" (optixDeviceContextSetCacheEnabled,
+  // optixDeviceContextSetCacheLocation); 0007 d45.
+  if (!cache_dir.empty()) {
+    context.set_cache_dir(cache_dir);
+    return;
+  }
+  context.check(optixDeviceContextSetCacheEnabled(static_cast<OptixDeviceContext>(context.handle()), 0),
+                "optixDeviceContextSetCacheEnabled");
+}
+
+bool SceneOptixBuilder::cache_enabled() const {
+  int enabled = 0;
+  context.check(optixDeviceContextGetCacheEnabled(static_cast<OptixDeviceContext>(context.handle()), &enabled),
+                "optixDeviceContextGetCacheEnabled");
+  return enabled != 0;
+}
+
+std::string SceneOptixBuilder::cache_location() const {
+  char path[4096] = {};
+  context.check(optixDeviceContextGetCacheLocation(static_cast<OptixDeviceContext>(context.handle()), path, sizeof path),
+                "optixDeviceContextGetCacheLocation");
+  return path;
+}
+
+std::unique_ptr<AccelBuilder> make_optix_accel_builder(Device& device, uint32_t device_index,
+                                                       const std::string& cache_dir) {
+  return std::make_unique<SceneOptixBuilder>(device, device_index, cache_dir);
 }
 
 }  // namespace astroray::host

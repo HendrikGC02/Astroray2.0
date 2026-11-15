@@ -17,6 +17,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "device/cuda/optix_context.h"
@@ -89,16 +90,22 @@ class OptixAccelBuilder : public AccelBuilder {
 
 // The scene's builder as make_optix_accel_builder returns it: it owns the scene's OptiX context
 // (created on the init thread with the device), which the scene's pipelines must share, since a
-// traversable only works in the context that built it.
+// traversable only works in the context that built it. The context's disk cache is configured
+// here, once, before any pipeline exists: `cache_dir` (ar_scene_desc.cache_dir, 0007 d45) holds it,
+// and an empty one turns it off (optixDeviceContextSetCacheEnabled 0), so OptiX never writes to a
+// location the host did not choose (0002 D11).
 struct OptixContextHolder {
-  OptixContextHolder(Device& device, uint32_t device_index) : context(device, device_index) {}
+  OptixContextHolder(Device& device, uint32_t device_index, const std::string& cache_dir);
   OptixContext context;
 };
 class SceneOptixBuilder final : private OptixContextHolder, public OptixAccelBuilder {
  public:
-  SceneOptixBuilder(Device& device, uint32_t device_index)
-      : OptixContextHolder(device, device_index), OptixAccelBuilder(context, Owner{}) {}
+  SceneOptixBuilder(Device& device, uint32_t device_index, const std::string& cache_dir)
+      : OptixContextHolder(device, device_index, cache_dir), OptixAccelBuilder(context, Owner{}) {}
   OptixContext& optix_context() { return context; }
+  // optixDeviceContextGetCacheEnabled and optixDeviceContextGetCacheLocation of the scene's context.
+  bool cache_enabled() const;
+  std::string cache_location() const;
 };
 
 class OptixAccel {

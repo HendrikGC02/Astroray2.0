@@ -169,7 +169,8 @@ Answer run_optix(const LampRig& s, const std::vector<Ray>& closest, const std::v
   OptixContext optix(*dev_owner, 0);
   SceneUpload upload(*dev_owner, Owner{1, 0});
   OptixAccel accel(optix, Owner{1, 0});
-  auto pipeline = std::make_unique<TraversalPipeline>(optix, Owner{1, 0}, cache.string());
+  optix.set_cache_dir(cache.string());
+  auto pipeline = std::make_unique<TraversalPipeline>(optix, *dev_owner, optix.stream(), Owner{1, 0});
   if (s.quad) upload.sync_mesh(quad_record());
   accel.update_gas(upload);
   accel.build_tlas(upload, s.table, s.lights);

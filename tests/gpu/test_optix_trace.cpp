@@ -234,7 +234,8 @@ struct Gpu {
     optix = std::make_unique<OptixContext>(*dev, 0);
     upload = std::make_unique<SceneUpload>(*dev, Owner{1, 0});
     accel = std::make_unique<OptixAccel>(*optix, Owner{1, 0});
-    pipeline = std::make_unique<TraversalPipeline>(*optix, Owner{1, 0}, cache.string());
+    optix->set_cache_dir(cache.string());
+    pipeline = std::make_unique<TraversalPipeline>(*optix, *dev, optix->stream(), Owner{1, 0});
     module_ms = pipeline->times().module_ms, pipeline_ms = pipeline->times().pipeline_ms;
   }
   ~Gpu() {
@@ -403,14 +404,14 @@ TEST_CASE("optix_pipeline/creation times cold and warm") {
   CHECK(g.pipeline->motion_times().module_ms > 0);
   // The same directory again: the disk cache is warm.
   g.pipeline.reset();
-  g.pipeline = std::make_unique<TraversalPipeline>(*g.optix, Owner{1, 0}, g.cache.string());
+  g.pipeline = std::make_unique<TraversalPipeline>(*g.optix, *g.dev, g.optix->stream(), Owner{1, 0});
   std::printf("optix_pipeline: warm cache  module %.1f ms, pipeline %.1f ms\n", g.pipeline->times().module_ms,
               g.pipeline->times().pipeline_ms);
   CHECK(g.pipeline->times().module_ms > 0);
   // An empty cache directory is a caller bug, never a silent default location.
-  CHECK_THROWS_AS(TraversalPipeline(*g.optix, Owner{1, 0}, ""), std::invalid_argument);
+  CHECK_THROWS_AS(g.optix->set_cache_dir(""), std::invalid_argument);
   // The cache location belongs to the context: a different directory on the same context is refused.
-  CHECK_THROWS_AS(TraversalPipeline(*g.optix, Owner{1, 0}, g.cache.string() + "_other"), std::invalid_argument);
+  CHECK_THROWS_AS(g.optix->set_cache_dir(g.cache.string() + "_other"), std::invalid_argument);
 }
 
 }  // TEST_SUITE
