@@ -3,7 +3,7 @@
 at 32x32, reads each pixel's mean and variance of the mean from the dump and compares every pixel
 with the closed-form truth of scenes/lib/truths.py.
 
-Usage: <python> -I tools/analytic.py --scene <name> --device cpu|cuda [--spp N] [--seed S] [--png P]
+Usage: <python> -I tools/analytic.py --scene <name> | --gate --device cpu|cuda [--spp N] [--seed S] [--png P]
 Prints one line per scene channel and a final PASS or FAIL line with the worst pixel's z and a
 reproduce command; exits non-zero on failure.
 
@@ -37,9 +37,13 @@ import meta  # noqa: E402
 import truths  # noqa: E402
 
 SIZE = 32  # 0009 d11: analytic scenes at 32x32 in gate
-# Lead ruling for 072: 1024 spp in gate, so a 1% emission error is about 7.7 SE per pixel in A5's
-# green channel against the per-pixel threshold of about 5.5.
-DEFAULT_SPP = 1024
+# Calibrated minimum (072 review): the per-pixel normal threshold holds at 1024 spp, where the null
+# run of A5 gave a worst |z| of 3.76 over 3 x 1024 pixels on CPU and CUDA (about 3.4 expected); at
+# 64 spp the skewed spectral samples put the worst |z| at 5.48 against 5.50. Lower values need their
+# own null run first. At 1024 spp a 1% emission error is about 7.7 SE in A5's green channel.
+MIN_SPP = 1024
+GATE_SCENES = ("a5_emitter", "y_anchor")  # 0009 d11: run by check.ps1 gate on both devices
+DEVICES = ("cpu", "cuda")
 FAMILY_ALPHA = 0.01  # 0009 d15
 # tests/common/stat.cpp kRepoConstant and the FNV-1a / MixBits rule of seed_for() (task 020).
 REPO_CONSTANT = 0x415354524159
@@ -164,9 +168,64 @@ def write_png(path, rgb, scale, enlarge=8):
                 chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 
+def check_scene(mean, var, checks, m, eps_sys):
+    """Every check of one scene on one device. mean and var are (3, h, w) display planes; checks
+    come from truths.evaluate. Returns [(name, pass, reasons, worst, measured mean, truth mean)]."""
+    npix = mean.shape[1] * mean.shape[2]
+    out = []
+    for name, w, truth, kind in checks:
+        w = np.asarray(w, dtype=np.float64)
+        cmean = np.tensordot(w, mean, axes=1)
+        if np.count_nonzero(w) == 1:
+            cvar = np.tensordot(w * w, var, axes=1)
+        else:
+            # The dump has no covariance between channels, so the SE of a combination is bounded
+            # by the sum of the parts' SEs (Minkowski inequality for standard deviations).
+            cvar = np.tensordot(np.abs(w), np.sqrt(var), axes=1) ** 2
+        if kind == "pixels":
+            passed, reasons, worst = check_channel(cmean, cvar, truth, pixel_z(m, npix), eps_sys)
+        elif kind == "image":
+            # The image mean of independent pixel means: variance sum(VAR) / npix^2, one test at the
+            # family's per-test alpha.
+            passed, reasons, worst = check_channel(
+                np.full((1, 1), cmean.mean()), np.full((1, 1), cvar.sum() / npix ** 2),
+                np.full((1, 1), truth.mean()), pixel_z(m, 1), eps_sys)
+        else:
+            raise ValueError(f"check {name}: unknown kind {kind!r}")
+        out.append((name, passed, reasons, worst, float(cmean.mean()), float(truth.mean())))
+    return out
+
+
+def gate_members():
+    """Family members the gate runs: one per check of each GATE_SCENES scene on each device."""
+    n = 0
+    for s in GATE_SCENES:
+        t = meta.load(os.path.join(ROOT, "scenes", s, "meta.toml"))["truth"]
+        n += len(truths.evaluate(t, SIZE, SIZE)) * len(DEVICES)
+    return n
+
+
+def check_family():
+    """The gate's member count must equal budgets.toml [family_members] analytic_scenes, which lint
+    holds to at most m (0009 d15)."""
+    with open(BUDGETS, "rb") as f:
+        declared = tomllib.load(f).get("family_members", {}).get("analytic_scenes")
+    n, m = gate_members(), family_m()
+    if declared != n or n > m:
+        raise RuntimeError(f"analytic family: the gate runs {n} members, budgets.toml [family_members] "
+                           f"declares {declared}, m = {m}; update the declaration (at most m)")
+
+
+def check_spp(spp):
+    if spp < MIN_SPP:
+        raise ValueError(f"--spp {spp} is below the calibrated minimum {MIN_SPP}: the per-pixel normal "
+                         "threshold is not calibrated there; run a null calibration before lowering it")
+
+
 def run(scene, device, spp, seed, png=None):
     """Renders and checks one scene; prints its lines and returns True on PASS."""
     t0 = time.perf_counter()
+    check_spp(spp)
     m = meta.load(os.path.join(ROOT, "scenes", scene, "meta.toml"))
     if m["class"] != "A":
         raise ValueError(f"scene {scene} is class {m['class']}, not analytic")
@@ -185,48 +244,45 @@ def run(scene, device, spp, seed, png=None):
             print(f"FAIL analytic {scene} {device}: astroray_cli exited {r.returncode}; reproduce: {repro}")
             return False
         mean, var = load_dump(out, spp)
-    z = pixel_z(family_m(), SIZE * SIZE)
-    ok, worst_all = True, None
-    for name, w, truth in truths.evaluate(m["truth"], SIZE, SIZE):
-        w = np.asarray(w, dtype=np.float64)
-        cmean = np.tensordot(w, mean, axes=1)
-        if np.count_nonzero(w) == 1:
-            cvar = np.tensordot(w * w, var, axes=1)
-        else:
-            # The dump has no covariance between channels, so the SE of a combination is bounded
-            # by the sum of the parts' SEs (Minkowski inequality for standard deviations).
-            cvar = np.tensordot(np.abs(w), np.sqrt(var), axes=1) ** 2
-        passed, reasons, worst = check_channel(cmean, cvar, truth, z, m["eps_sys"])
-        ok = ok and passed
+    checks = truths.evaluate(m["truth"], SIZE, SIZE)
+    results = check_scene(mean, var, checks, family_m(), m["eps_sys"])
+    ok = all(r[1] for r in results)
+    worst_all = None
+    for name, passed, reasons, worst, cmean, tmean in results:
         if worst_all is None or abs(worst[0]) > abs(worst_all[0]):
             worst_all = (worst[0], worst[1], name)
-        print(f"analytic {scene} {device} {name}: {'ok' if passed else 'FAIL'} mean {cmean.mean():.6f} "
-              f"truth {truth.mean():.6f} worst z {worst[0]:+.2f} at {worst[1]}"
+        print(f"analytic {scene} {device} {name}: {'ok' if passed else 'FAIL'} mean {cmean:.6f} "
+              f"truth {tmean:.6f} worst z {worst[0]:+.2f} at {worst[1]}"
               + ("" if passed else "; " + "; ".join(reasons)))
     if png:
-        tmax = max(float(np.max(t)) for _, _, t in truths.evaluate(m["truth"], SIZE, SIZE))
+        tmax = max(float(np.max(t)) for _, _, t, _ in checks)
         write_png(png, mean, 0.5 / tmax if tmax > 0 else 1.0)
     secs = time.perf_counter() - t0
     print(f"{'PASS' if ok else 'FAIL'} analytic {scene} {device}: worst z {worst_all[0]:+.2f} "
-          f"({worst_all[2]} at {worst_all[1]}) against z {z:.2f} + eps_sys {m['eps_sys']:g}, {spp} spp, "
-          f"seed {seed}, {secs:.1f} s; reproduce: {repro}")
+          f"({worst_all[2]} at {worst_all[1]}) against per-pixel z {pixel_z(family_m(), SIZE * SIZE):.2f} "
+          f"+ eps_sys {m['eps_sys']:g}, {spp} spp, seed {seed}, {secs:.1f} s; reproduce: {repro}")
     return ok
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--scene", required=True, action="append", help="scene name (repeatable)")
-    ap.add_argument("--device", required=True, choices=("cpu", "cuda"))
-    ap.add_argument("--spp", type=int, default=DEFAULT_SPP)
+    ap.add_argument("--scene", action="append", help="scene name (repeatable)")
+    ap.add_argument("--gate", action="store_true", help="the gate's scenes (GATE_SCENES), after checking "
+                    "the declared family size")
+    ap.add_argument("--device", required=True, choices=DEVICES)
+    ap.add_argument("--spp", type=int, default=MIN_SPP)
     ap.add_argument("--seed", type=int, help="default: seed_for(scene name), task 020's rule")
     ap.add_argument("--png", help="write the render here (one scene only), display scaled so truth is 0.5")
     a = ap.parse_args()
-    if a.spp < 2:
-        ap.error("--spp must be at least 2 (the variance of the mean needs two samples)")
-    if a.png and len(a.scene) != 1:
+    if bool(a.scene) == a.gate:
+        ap.error("give --scene or --gate")
+    if a.gate:
+        check_family()
+    scenes = list(GATE_SCENES) if a.gate else a.scene
+    if a.png and len(scenes) != 1:
         ap.error("--png takes one scene")
     ok = True
-    for s in a.scene:
+    for s in scenes:
         ok = run(s, a.device, a.spp, seed_for(s) if a.seed is None else a.seed, a.png) and ok
     return 0 if ok else 1
 

@@ -235,3 +235,9 @@ gate_statistical = 2000
 [family_provisional]
 full_statistical = 2000
 analytic_scenes = 256
+
+# Members each suite runs, held to at most its m by lint (0009 d15). analytic_scenes: one per check
+# (scene channel, or image mean) of each gate scene on each device; tools/analytic.py --gate
+# refuses to run when its own count differs.
+[family_members]
+analytic_scenes = 10

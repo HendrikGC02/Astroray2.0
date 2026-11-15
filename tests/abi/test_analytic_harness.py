@@ -74,6 +74,30 @@ class TestHarness(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("black where truth is not", reasons)
 
+    def test_white_point_error_fails(self):
+        # A white emitter rendered exactly (display RGB 1) with a y_anchor-like SE of 0.005: the
+        # literal truth Y = 1 passes, and a luminance row (M_ws normalisation) off by 1% fails the
+        # image-mean check, whose statistical term is about 1e-3 against the 1e-2 error.
+        truths = harness.truths
+        table = {"formula": "display_luminance", "colour": [1.0, 1.0, 1.0], "radiance": 1.0}
+        mean, var = np.ones((3, N, N)), np.full((3, N, N), 2.5e-5)
+        good = harness.check_scene(mean, var, truths.evaluate(table, N, N), 256, 1e-3)
+        self.assertTrue(all(r[1] for r in good), good)
+        row = truths.working_luminance_row
+        truths.working_luminance_row = lambda: 1.01 * row()
+        try:
+            bad = harness.check_scene(mean, var, truths.evaluate(table, N, N), 256, 1e-3)
+        finally:
+            truths.working_luminance_row = row
+        image = [r for r in bad if r[0] == "Y image mean"]
+        self.assertEqual(len(image), 1)
+        self.assertFalse(image[0][1], image)
+
+    def test_spp_below_calibrated_minimum_is_refused(self):
+        harness.check_spp(1024)
+        with self.assertRaises(ValueError):
+            harness.check_spp(512)
+
     def test_thresholds_and_seeds_match_task_020(self):
         # tests/cpu/test_stat_harness.cpp pins z = 4.5637347874563305 for m = 2000 and the seed of
         # "stat_harness/a"; the harness uses the same rules (ar_settings.seed takes the low 32 bits).
