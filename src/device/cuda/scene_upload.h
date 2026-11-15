@@ -47,7 +47,8 @@ class SceneUpload {
   // Drops every uploaded mesh whose key is not in `keep`; returns how many were dropped.
   size_t retain_only(const std::vector<ar_key>& keep);
   // Rebuilds the mesh table, then the instance and material-pool arrays for `table`, every
-  // record's mesh index re-resolved from its geometry key so indices never go stale. Throws
+  // record's mesh index re-resolved from its geometry key so indices never go stale. A lamp
+  // instance (geometry key 0 with a light index) gets kNoMeshIndex and no lookup. Throws
   // std::runtime_error naming the instance when its geometry key was never synced.
   void upload_instances(const InstanceTable& table);
 

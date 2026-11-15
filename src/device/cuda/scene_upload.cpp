@@ -59,6 +59,11 @@ void SceneUpload::upload_instances(const InstanceTable& table) {
   std::vector<DeviceInstanceRecord> recs(table.instances.size());
   for (size_t i = 0; i < recs.size(); ++i) {
     const Instance& s = table.instances[i];
+    // A lamp's instance (068) has no mesh: its shape is 105's unit-shape GAS, which 114 puts in the TLAS.
+    if (s.geom_key == 0 && s.light_index != ar::kNoLightIndex) {
+      recs[i] = instance_record(table, uint32_t(i), kNoMeshIndex);
+      continue;
+    }
     const UploadedMesh* m = find(s.geom_key);
     if (!m)
       throw std::runtime_error("instance " + std::to_string(i) + " references geometry key " + std::to_string(s.geom_key) +
