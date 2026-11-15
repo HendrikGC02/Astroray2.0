@@ -1,7 +1,7 @@
 # 115 CUDA traversal stages in sessions
 Goal: a CUDA session cannot trace rays (`CudaDevice::launch(Stage)` looks for a `k_intersect_closest` module that does not exist) -> INTERSECT_CLOSEST and INTERSECT_SHADOW route to 041's OptiX traversal pipeline on the snapshot's TLAS (114), so every CUDA session renders scenes with geometry, and a5_emitter renders on CUDA through the CLI.
 Read first: 0002 D11 (traversal through OptiX, launch params, masks), D8 (stage table), D4 (one pointer argument); RULINGS.md 70 (pinned snapshots, per-session CUDA devices); src/device/cuda/cuda_device.cpp (stage launch), src/device/cuda/optix_pipeline.{h,cpp}, src/device/cuda/optix_context.h, src/host/scene/scene_tables.h (snapshot accel).
-Scope: src/device/cuda/cuda_device.{h,cpp}, src/device/cuda/optix_pipeline.{h,cpp}, src/host/session/session.cpp (pipeline per session), tests/gpu/test_cuda_session_trace.cpp, tests/abi/test_cli_render.py (one CUDA case).
+Scope: src/device/cuda/cuda_device.{h,cpp}, src/device/cuda/optix_pipeline.{h,cpp}, src/host/session/session.cpp (pipeline per session), tests/gpu/test_cuda_session_trace.cpp, tests/abi/test_cli_render.py (one CUDA case); by lead ruling (cache_dir and per-session pipeline): src/capi/scene_api.cpp, src/host/scene/accel.h (make_optix_accel_builder signature), src/device/cuda/optix_accel.{h,cpp}, and the TraversalPipeline constructions in tests/gpu/test_optix_trace.cpp, test_traversal_agree.cpp, test_scene_accel_gpu.cpp, test_lamp_traversal.cpp (mechanical).
 Out of scope: motion and curves (M8, M7); refit (later); any CPU change.
 Reference: OptiX 9.1 Programming Guide (optixLaunch, launch parameters, pipeline and SBT ownership).
 Do:
@@ -16,3 +16,4 @@ Depends on: 071, 114, 041.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
 - 2026-11-16: blocked before code: no OptiX cache_dir reaches the scene (ar_scene_desc.cache_dir is dropped by ar_scene_create) and TraversalPipeline requires one; asked the lead.
+- 2026-11-16: lead ruled option A: ar_scene_desc.cache_dir reaches the scene's OptixContext; null or empty disables the OptiX disk cache (closes the ABI gap of cache_dir being ignored).
