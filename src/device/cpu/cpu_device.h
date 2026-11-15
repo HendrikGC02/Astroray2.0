@@ -24,10 +24,15 @@ class CpuDevice : public Device {
   // std::logic_error when the slot is already filled.
   void register_stage(ar::Stage stage, CpuStageFn fn);
   void register_kernel(KernelId kernel, CpuKernelFn fn);
+  // The registered entry point, or null (tests check what production registration bound).
+  CpuStageFn stage_fn(ar::Stage stage) const { return stages_.at(static_cast<size_t>(stage)); }
+  CpuKernelFn kernel_fn(KernelId kernel) const { return kernels_.at(static_cast<size_t>(kernel)); }
 
   void upload(const DeviceBuffer& dst, uint64_t offset, const void* src, uint64_t bytes) override;
   void download(void* dst, const DeviceBuffer& src, uint64_t offset, uint64_t bytes) override;
   void memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value, uint64_t bytes) override;
+  void copy(const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src, uint64_t src_offset,
+            uint64_t bytes) override;
   void set_kernel_globals(const DeviceBuffer& buffer) override;
   // Registers the queue_build and sort kernels (src/kernel_cpu): the entry points the
   // scheduler launches on every step. Throws like register_kernel.
@@ -45,7 +50,7 @@ class CpuDevice : public Device {
   // The stage launch runs exactly the step table's segment for that stage, whatever
   // `grid` is. The kernel launch of a tiled kernel (queue_build count and scatter, sort count and
   // scatter) throws std::runtime_error naming the kernel and both numbers when `count` is less
-  // than the kernel's tile grid: a CPU chunk sees only its own range, so a short launch would
+  // than the kernel's tile grid (QUEUE_BUILD_SCAN needs at least 1, it runs once whatever the count): a CPU chunk sees only its own range, so a short launch would
   // silently skip tiles. Both launches throw std::logic_error without bound globals and
   // std::runtime_error for a stage or kernel with no entry point.
   void launch(ar::Stage stage, uint32_t grid) override;

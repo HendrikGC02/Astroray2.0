@@ -20,6 +20,8 @@
 #include "host/thread_pool.h"
 #include "kernel/scene/scene_view.h"
 #include "kernel/stages/queue_build.h"
+#include "kernel/stages/route_hit.h"
+#include "kernel/stages/sort.h"
 #include "stub_stages.h"
 
 using namespace astroray;
@@ -192,7 +194,7 @@ TEST_CASE("scheduler/invalid items fail loudly") {
   } catch (const std::runtime_error& e) {
     const std::string what = e.what();
     CHECK(what.find("next_stage is no stage of their pool") != std::string::npos);
-    CHECK(what.find("last stage launched") != std::string::npos);
+    CHECK(what.find("stages launched in the previous step: SHADE_BACKGROUND, SHADE_LIGHT, SHADE_SURFACE") != std::string::npos);
   }
 }
 
@@ -215,6 +217,7 @@ TEST_CASE("scheduler/short CPU launches fail loudly") {
   const_cast<ar::StepTable&>(t).stage[uint32_t(Stage::SHADE_SURFACE)].count = 3000;
   CHECK_THROWS_AS(r.dev.launch(KernelId::SORT_COUNT, 3071), std::runtime_error);
   CHECK_THROWS_AS(r.dev.launch(KernelId::SORT_SCATTER, 1), std::runtime_error);
+  CHECK_THROWS_AS(r.dev.launch(KernelId::QUEUE_BUILD_SCAN, 0), std::runtime_error);
   CHECK_NOTHROW(r.dev.launch(KernelId::QUEUE_BUILD_SCAN, 1));
 }
 
@@ -224,14 +227,18 @@ TEST_CASE("scheduler/production CPU stages are registered") {
   ThreadPool pool(ctx, 2);
   CpuDevice dev(ledger, pool);
   dev.register_production_stages();
-  // Registered once: a second registration of any of them is refused.
+  // Each id is bound to its own function, so a swap of closest and shadow fails here.
+  CHECK(dev.stage_fn(Stage::INTERSECT_CLOSEST) == &cpu_stage_intersect_closest);
+  CHECK(dev.stage_fn(Stage::INTERSECT_SHADOW) == &cpu_stage_intersect_shadow);
+  CHECK(dev.kernel_fn(KernelId::QUEUE_BUILD_COUNT) == &cpu_queue_build_count);
+  CHECK(dev.kernel_fn(KernelId::QUEUE_BUILD_SCAN) == &cpu_queue_build_scan);
+  CHECK(dev.kernel_fn(KernelId::QUEUE_BUILD_SCATTER) == &cpu_queue_build_scatter);
+  CHECK(dev.kernel_fn(KernelId::SORT_COUNT) == &cpu_sort_count);
+  CHECK(dev.kernel_fn(KernelId::SORT_SCATTER) == &cpu_sort_scatter);
+  // And only those: nothing else is bound, and a second registration is refused.
+  CHECK(dev.stage_fn(Stage::SHADE_SURFACE) == nullptr);
+  CHECK(dev.kernel_fn(KernelId::GENERATE_CAMERA) == nullptr);
   CHECK_THROWS_AS(dev.register_stage(Stage::INTERSECT_CLOSEST, &stub::intersect_closest), std::logic_error);
-  CHECK_THROWS_AS(dev.register_stage(Stage::INTERSECT_SHADOW, &stub::intersect_shadow), std::logic_error);
-  CHECK_THROWS_AS(dev.register_kernel(KernelId::QUEUE_BUILD_COUNT, &stub::generate_camera), std::logic_error);
-  CHECK_THROWS_AS(dev.register_kernel(KernelId::QUEUE_BUILD_SCAN, &stub::generate_camera), std::logic_error);
-  CHECK_THROWS_AS(dev.register_kernel(KernelId::QUEUE_BUILD_SCATTER, &stub::generate_camera), std::logic_error);
-  CHECK_THROWS_AS(dev.register_kernel(KernelId::SORT_COUNT, &stub::generate_camera), std::logic_error);
-  CHECK_THROWS_AS(dev.register_kernel(KernelId::SORT_SCATTER, &stub::generate_camera), std::logic_error);
 }
 
 }  // TEST_SUITE

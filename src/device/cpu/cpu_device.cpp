@@ -25,6 +25,9 @@ const char* tiled_grid(const ar::KernelGlobals& kg, KernelId kernel, uint32_t* g
       *grid = ar::queue_build_grid(kg.step_table->high_water[static_cast<uint32_t>(ar::Pool::MAIN)],
                                    kg.step_table->high_water[static_cast<uint32_t>(ar::Pool::SHADOW)]);
       return kernel == KernelId::QUEUE_BUILD_COUNT ? "QUEUE_BUILD_COUNT" : "QUEUE_BUILD_SCATTER";
+    case KernelId::QUEUE_BUILD_SCAN:
+      *grid = 1;
+      return "QUEUE_BUILD_SCAN";
     case KernelId::SORT_COUNT:
     case KernelId::SORT_SCATTER:
       *grid = ar::sort_grid(ar::sort_segment_count(kg));
@@ -79,6 +82,13 @@ void CpuDevice::download(void* dst, const DeviceBuffer& src, uint64_t offset, ui
 void CpuDevice::memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value, uint64_t bytes) {
   check_range(dst, offset, bytes);
   std::memset(static_cast<char*>(dst.ptr) + offset, value, bytes);
+}
+
+void CpuDevice::copy(const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src, uint64_t src_offset,
+                     uint64_t bytes) {
+  check_range(dst, dst_offset, bytes);
+  check_range(src, src_offset, bytes);
+  std::memcpy(static_cast<char*>(dst.ptr) + dst_offset, static_cast<const char*>(src.ptr) + src_offset, bytes);
 }
 
 void CpuDevice::set_kernel_globals(const DeviceBuffer& buffer) {

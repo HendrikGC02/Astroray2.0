@@ -22,6 +22,13 @@ namespace {
 using ar::Stage;
 
 constexpr uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) / a * a; }
+const char* const kStageNames[] = {"INTERSECT_CLOSEST", "INTERSECT_SUBSURFACE", "INTERSECT_SHADOW",
+                                   "SHADE_BACKGROUND",  "SHADE_LIGHT",          "SHADE_SURFACE",
+                                   "SHADE_SURFACE_EXT", "SHADE_LIGHT_PATH",     "SHADE_LIGHT_PATH_EXT",
+                                   "SHADE_SHADOW",      "SHADE_VOLUME",         "SHADE_SUBSURFACE",
+                                   "ADVANCE_GEODESIC"};
+static_assert(sizeof(kStageNames) / sizeof(kStageNames[0]) == ar::kStageCount - 2, "one name per launchable stage");
+
 constexpr uint32_t kTerm = static_cast<uint32_t>(Stage::TERMINATED);
 constexpr uint32_t kShadowTerm = static_cast<uint32_t>(Stage::SHADOW_TERMINATED);
 
@@ -161,7 +168,7 @@ void Scheduler::launch_stage(Stage stage, const ar::StepTable& t) {
   permute_range(ar::stage_pool(stage) == ar::Pool::SHADOW, t.stage[s].start, count);
   ++counters_.launches;
   device_.launch(stage, count);
-  last_stage_ = s;
+  launched_.push_back(s);
   counters_.items[s] += count;
   const bool shadow = ar::stage_pool(stage) == ar::Pool::SHADOW;
   (shadow ? counters_.shadow_item_bytes_moved : counters_.state_bytes_moved) +=
@@ -219,8 +226,11 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
   device_.memset(step_buf_, 0, 0, sizeof(ar::StepTable));
 
   PassStatus status = PassStatus::COMPLETE;
+  launched_.clear();
   for (;;) {
     if (at_boundary(&status)) return status;
+    const std::vector<uint32_t> prev_launched = std::move(launched_);
+    launched_.clear();
     // 1. Partition both pools up to their high-water marks.
     const uint32_t hw[ar::kPoolCount] = {hw_main, hw_shadow};
     device_.upload(step_buf_, offsetof(ar::StepTable, high_water), hw, sizeof hw);
@@ -235,11 +245,16 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     ar::StepTable t;
     device_.read_step_table(t);
     ++counters_.steps;
-    if (t.invalid_items != 0)
+    if (t.invalid_items != 0) {
+      // The stage that wrote the bad value ran in the previous step: list every one of them.
+      std::string stages;
+      for (uint32_t s : prev_launched) stages += (stages.empty() ? "" : ", ") + std::string(kStageNames[s]);
+      if (stages.empty()) stages = "none";
       throw std::runtime_error("Scheduler: queue_build found " + std::to_string(t.invalid_items) +
                                " item(s) whose next_stage is no stage of their pool at step " +
-                               std::to_string(counters_.steps) + " (last stage launched: " +
-                               std::to_string(last_stage_) + ")");
+                               std::to_string(counters_.steps) + " (stages launched in the previous step: " +
+                               stages + ")");
+    }
     const uint32_t active_main = hw_main - t.refill_count;
     const uint32_t active_shadow = hw_shadow - t.stage[kShadowTerm].count;
     counters_.active_path_steps += active_main;
@@ -247,9 +262,9 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     if (next_work == total && active_main == 0 && active_shadow == 0) break;  // the pass has drained
 
     bool progress = false;
-    // 3. Sort the SHADE_SURFACE segment by material when worthwhile (the thresholds of sort_wanted).
+    // 3. Sort the SHADE_SURFACE segment by material when worthwhile (sort_wanted).
     const uint32_t ss = static_cast<uint32_t>(Stage::SHADE_SURFACE);
-    if (t.stage[ss].count >= ar::kSortMinItems && config.material_header_count >= ar::kSortMinMaterials) {
+    if (ar::sort_wanted(t.stage[ss].count, config.material_header_count)) {
       const uint32_t n = t.stage[ss].count;
       const uint32_t sort_launch = ar::sort_grid(n);
       if (at_boundary(&status)) return status;
@@ -257,9 +272,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
       if (at_boundary(&status)) return status;
       launch_kernel(KernelId::SORT_SCATTER, sort_launch);
       // The stage reads its segment of main_queue, so the sorted indices replace it.
-      std::vector<uint32_t> sorted(n);
-      device_.download(sorted.data(), sort_queue_buf_, 0, uint64_t(n) * 4);
-      device_.upload(main_queue_buf_, uint64_t(t.stage[ss].start) * 4, sorted.data(), uint64_t(n) * 4);
+      device_.copy(main_queue_buf_, uint64_t(t.stage[ss].start) * 4, sort_queue_buf_, 0, uint64_t(n) * 4);
       ++counters_.sorts;
     }
 

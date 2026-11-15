@@ -109,7 +109,7 @@ inline void intersect_shadow(const ar::KernelGlobals& kg, const ar::StepEntry& s
 inline void shade_shadow(const ar::KernelGlobals& kg, const ar::StepEntry& step, uint32_t first, uint32_t last) {
   for (uint32_t i = first; i < last; ++i) {
     const uint32_t s = kg.shadow_queue[step.start + i];
-    results(kg).shadow_delivered[ar::sh_target(kg, s)] = ar::sh_target(kg, s) + 1u;
+    results(kg).shadow_delivered[ar::sh_target(kg, s)] += ar::sh_target(kg, s) + 1u;  // += so a duplicate or lost item shows
     ar::sh_next_stage(kg, s) = static_cast<uint8_t>(ar::Stage::SHADOW_TERMINATED);
   }
 }

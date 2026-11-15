@@ -59,7 +59,7 @@ uint32_t blocks_for(uint32_t items) {
   X(cuInit) X(cuDeviceGet) X(cuDeviceGetAttribute) X(cuDevicePrimaryCtxRetain)                          \
   X(cuDevicePrimaryCtxRelease) X(cuCtxSetCurrent) X(cuCtxSynchronize) X(cuModuleLoadData)               \
   X(cuModuleUnload) X(cuModuleGetFunction) X(cuLaunchKernel) X(cuMemAlloc) X(cuMemFree)                 \
-  X(cuMemGetInfo) X(cuMemcpyHtoDAsync) X(cuMemcpyDtoHAsync) X(cuMemsetD8Async) X(cuStreamCreate)        \
+  X(cuMemGetInfo) X(cuMemcpyHtoDAsync) X(cuMemcpyDtoHAsync) X(cuMemcpyDtoDAsync) X(cuMemsetD8Async) X(cuStreamCreate)        \
   X(cuStreamDestroy) X(cuEventCreate) X(cuEventRecord) X(cuEventSynchronize) X(cuEventDestroy)          \
   X(cuGetErrorName) X(cuGetErrorString)
 
@@ -296,6 +296,19 @@ void CudaDevice::memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value,
   s.bind();
   s.check(s.cu.cuMemsetD8Async_(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, value, bytes, s.stream),
           "cuMemsetD8Async");
+  s.sync();
+}
+
+void CudaDevice::copy(const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src, uint64_t src_offset,
+                      uint64_t bytes) {
+  check_range(dst, dst_offset, bytes);
+  check_range(src, src_offset, bytes);
+  if (bytes == 0) return;
+  Impl& s = *impl_;
+  s.bind();
+  s.check(s.cu.cuMemcpyDtoDAsync_(reinterpret_cast<CUdeviceptr>(dst.ptr) + dst_offset,
+                                  reinterpret_cast<CUdeviceptr>(src.ptr) + src_offset, bytes, s.stream),
+          "cuMemcpyDtoDAsync");
   s.sync();
 }
 

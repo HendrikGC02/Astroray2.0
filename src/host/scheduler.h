@@ -18,12 +18,15 @@
 //    slot main_queue[start + i] and the work item shadow_base + i. queue_build rewrites the
 //    entry next step.
 //  - Producers read their shadow slots at shadow_queue[step.shadow_base + k * item].
+//  - A GPU generate launch must not start before the stage[TERMINATED] entry upload has
+//    completed on the same stream (both are enqueued in order on the device's one stream).
 //  - After sort, the sorted indices replace the SHADE_SURFACE segment of main_queue.
 // Ref: docs/decisions/0002-kernel-architecture.md D5-D8, D12; Cycles
 // integrator/path_trace_work_gpu.cpp (Apache-2.0) for the refill rule.
 #pragma once
 #include <atomic>
 #include <cstdint>
+#include <vector>
 
 #include "host/counters.h"
 #include "host/device.h"
@@ -98,7 +101,7 @@ class Scheduler {
   bool capacity_reported_ = false;
   bool permute_ = false;
   uint64_t permute_state_ = 0;
-  uint32_t last_stage_ = 0;
+  std::vector<uint32_t> launched_;  // stages launched in the current step, in order
   DeviceBuffer path_buf_, shadow_buf_, main_queue_buf_, shadow_queue_buf_, step_buf_, counts_buf_, sort_queue_buf_,
       sort_counts_buf_, kg_buf_, soa_buf_;
   ar::PathStateSoA path_{};
