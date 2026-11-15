@@ -119,7 +119,7 @@ compile_s = 2.97
 gated = "merge"
 
 [kernel.k_shade_shadow]
-regs = 16
+regs = 28
 stack = 0
 spill_store = 0
 spill_load = 0
