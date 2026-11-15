@@ -67,11 +67,13 @@ try {
   if ($LASTEXITCODE -ne 0) { Fail 'cannot parse third_party/deps.toml' }
   $got = 0
   $cached = 0
+  # Same override as cmake/deps.cmake: one shared cache for every worktree.
+  $depsCache = if ($env:ASTRORAY_DEPS_CACHE) { $env:ASTRORAY_DEPS_CACHE } else { Join-Path $root 'third_party/_cache' }
   foreach ($d in $deps) {
     if ($d.kind -notin @('fetched-binary', 'fetched-not-redistributable')) { continue }
     if (-not $d.spdx) { Fail "$($d.name): missing spdx" }
     if (-not $d.sha256 -or -not $d.url) { Fail "$($d.name): missing url or sha256" }
-    $dir = Join-Path $root "third_party/_cache/$($d.name)-$($d.version)"
+    $dir = Join-Path $depsCache "$($d.name)-$($d.version)"
     $file = Join-Path $dir ([IO.Path]::GetFileName(([Uri]$d.url).AbsolutePath))
     $done = Join-Path $dir 'extracted.ok'
     if ((Test-Path $file) -and (Test-Path $done) -and ((Sha $file) -eq $d.sha256)) {
