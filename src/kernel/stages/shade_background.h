@@ -52,7 +52,7 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
                 light_pdf_li(*world, prev, wi, LightHit{prev.p, prev.n_geom});
     }
     const Spec contribution = light_emission(*world, lam, kg.tables->observer) * ps_beta(kg, slot) *
-                              mis_emitter_scale(ps_r_u(kg, slot), ps_r_l(kg, slot), p_light, weighted);
+                              mis_emitter_scale(ps_r_u(kg, slot), weighted ? ps_r_l(kg, slot) : Spec{}, p_light, weighted);
     if (is_finite(contribution))
       sample_add(kg, sample, contribution);
     else {

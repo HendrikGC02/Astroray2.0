@@ -102,6 +102,7 @@ AR_FN Real2 triangle_barycentrics(Real3 a, Real3 b, Real3 c, Real3 p) {
 
 // TEMP until 116 lands (its light_sampler.h helper replaces this; the commit adding it is dropped
 // at the rebase): every hit triangle reads as no light, so its emission weight is 1/avg(r_u).
+inline constexpr uint32_t kLightIndexInvalid = ~0u - 1u;
 AR_FN uint32_t light_of_hit(const KernelGlobals&, uint32_t, uint32_t) { return kNoLight; }
 
 // The far end of an unbounded shadow segment toward an infinite light.
@@ -113,39 +114,51 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   const uint32_t sample = ps_sample_id(kg, slot);
   const SceneData& s = scene_of(kg);
   const ObserverView& obs = kg.tables->observer;
-
-  ShadeContext ctx;
-  if (!shade_context_build(kg, slot, &ctx)) {  // a degenerate triangle has no normal: fail loudly
-    sample_mark_invalid(kg, sample);
-    path_end(kg, slot, Term::INVALID);
-    return;
-  }
   uint32_t flags = ps_flags(kg, slot);
   const bool arrived_specular = (flags & LAST_BOUNCE_SPECULAR) != 0u;
-  flags = ctx.front_face != 0u ? (flags | FRONT_FACE) : (flags & ~FRONT_FACE);
-
-  // hit_material_id gives the default material (material_header_count) for an instance without
-  // materials; the host uploads it there, so every id indexes a header. A session's scene always
-  // has material tables: their absence is a host bug and fails the sample.
   const uint32_t inst = ps_hit_inst(kg, slot), prim = ps_hit_prim(kg, slot);
-  const uint32_t mat = hit_material_id(kg, inst, prim);
+  // A session's scene always has material tables: their absence is a host bug and fails the sample.
   bool ok = s.material_headers != nullptr && s.material_constants != nullptr && s.material_pass_index != nullptr;
+
+  ShadeContext ctx;
+  ctx.ray_type = ps_ray_type(kg, slot);
+  {
+    const U16x6 b = ps_bounces(kg, slot);
+    for (int i = 0; i < 6; ++i) ctx.depth[i] = b.v[i];
+    const Spec lt = ps_lambda_t(kg, slot);
+    for (int i = 0; i < kLanes; ++i) ctx.lambda_t.nm[i] = lt.v[i];
+  }
   const uint32_t total = ctx.depth[0];
   OpenPBRParams rec;
   VmRegs regs;
   Spec le = spec_fill(Real(0));
+  // The hit's geometry, kept for the continuation while ctx holds a light point (phase 1).
+  Real3 P{}, Ng{}, N{}, wo{};
   // The shadow item is written into the reserved slot as soon as its segment is known, so nothing
   // of it stays live across the light point's VM run. 0: no item; 1: an item with its whole
   // contribution; 2: an item whose contribution still lacks the deferred Le (phase 1).
   uint32_t nee_state = 0;
   uint32_t sh = 0;  // the reserved shadow slot, read when an item is written
-  uint32_t vm_mat = mat;
+  // Where ctx is built: the path's hit in phase 0, the light sample's point in phase 1.
+  uint32_t g_inst = inst, g_prim = prim;
+  Real2 g_bary = ps_hit_uv(kg, slot);
+  Real3 g_dir = ps_ray_d(kg, slot);
+  uint32_t mat = 0;
   for (uint32_t phase = 0;; ++phase) {
-    // Evaluate material vm_mat at ctx: phase 0 the surface entry (record and emission), phase 1
-    // the emission entry only. Entry 0 runs nothing (0005 item 32: absent or constant).
+    // One site builds the context and evaluates the material, for both phases: phase 0 the hit
+    // material's surface entry (record and emission), phase 1 the light material's emission entry
+    // only. Entry 0 runs nothing (0005 item 32: absent or constant). hit_material_id gives the
+    // default material (material_header_count) for an instance without materials; the host
+    // uploads it there, so every id indexes a header.
+    if (!shade_context_geometry(kg, g_inst, g_prim, g_bary, g_dir, &ctx)) {
+      sample_mark_invalid(kg, sample);  // a degenerate triangle has no normal: fail loudly
+      path_end(kg, slot, Term::INVALID);
+      return;
+    }
+    mat = hit_material_id(kg, g_inst, g_prim);
     if (ok) {
-      AR_ASSERT(vm_mat <= s.material_header_count);
-      const MaterialHeader* hp = s.material_headers + vm_mat;
+      AR_ASSERT(mat <= s.material_header_count);
+      const MaterialHeader* hp = s.material_headers + mat;
       const uint32_t mflags = load_ro(&hp->flags);
       const ConstantBlock& block = s.material_constants[load_ro(&hp->const_offset)];
       if (phase == 0u) resolve_constant_record(block, ctx, obs, &rec);
@@ -157,10 +170,11 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     }
     if (phase != 0u) break;
 
+    P = ctx.P, Ng = ctx.Ng, N = ctx.N, wo = ctx.wo;
+    flags = ctx.front_face != 0u ? (flags | FRONT_FACE) : (flags & ~FRONT_FACE);
     if (ok && total == 0u) {
       const uint32_t index = kg.session.samples_done + sample % kg.session.samples_per_pass;
-      film_primary_aov(kg, sample, index, &flags, ctx.P, ctx.N, ctx.uv[0].x, ctx.uv[0].y,
-                       load_ro(s.material_pass_index + mat));
+      film_primary_aov(kg, sample, index, &flags, P, N, ctx.uv[0].x, ctx.uv[0].y, load_ro(s.material_pass_index + mat));
     }
     Spec contribution = spec_fill(Real(0));
     if (ok && max_lane(le) > Real(0)) {
@@ -168,14 +182,15 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
       Real p_light = Real(0);
       if (weighted) {
         const uint32_t light = light_of_hit(kg, inst, prim);
-        if (light != kNoLight) {
+        ok = light != kLightIndexInvalid;  // a hit outside the scene's tables: fail the sample
+        if (ok && light != kNoLight) {
           const LightSampleContext prev = prev_light_context(kg, slot);
           p_light = light_sampler_pmf(*kg.light_sampler, prev, light) *
-                    light_pdf_li(kg.lights[light], prev, -ctx.wo, LightHit{ctx.P, ctx.Ng});
+                    light_pdf_li(kg.lights[light], prev, -wo, LightHit{P, Ng});
         }
       }
       contribution = le * ps_beta(kg, slot) *
-                     (radiance_scale(kg) * mis_emitter_scale(ps_r_u(kg, slot), ps_r_l(kg, slot), p_light, weighted));
+                     (radiance_scale(kg) * mis_emitter_scale(ps_r_u(kg, slot), weighted ? ps_r_l(kg, slot) : Spec{}, p_light, weighted));
     }
     if (!ok || !is_finite(contribution)) {
       sample_mark_invalid(kg, sample);
@@ -194,7 +209,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     // NEE from this vertex.
     const uint32_t e = ps_event_index(kg, slot);
     const LightSamplerView& lsv = *kg.light_sampler;
-    const LightSampleContext lctx = light_context_point(offset_ray_origin(ctx.P, ctx.Ng, ctx.wo), ctx.Ng, ctx.N);
+    const LightSampleContext lctx = light_context_point(offset_ray_origin(P, Ng, wo), Ng, N);
     const uint32_t bits = camera_path_draw_bits(kg, sample, event_dim(e, EV_LIGHT_PICK));
     const Real u_alias = bits_to_unit(uint32_t(uint64_t(bits) * uint64_t(lsv.bin_count)));
     const SampledLight sl = light_sampler_sample(lsv, lctx, bits, u_alias);
@@ -203,8 +218,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     const Real2 ul{camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_U)), camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_V))};
     const LightLiSample ls = light_sample_li(lr, lctx, ul, ctx.lambda_t, obs);
     if (!(ls.pdf > Real(0))) break;
-    const LobeEval ev = stack_eval(*kg.e_diel, rec, frame_from_normal(ctx.N), ctx.wo, ls.wi, TransportMode::Radiance);
-    Spec nee = ps_beta(kg, slot) * ev.f * (abs_dot(ls.wi, ctx.N) * mis_nee_scale(ps_r_u(kg, slot), sl.pmf * ls.pdf, ev.pdf, ls.delta));
+    const LobeEval ev = stack_eval(*kg.e_diel, rec, frame_from_normal(N), wo, ls.wi, TransportMode::Radiance);
+    Spec nee = ps_beta(kg, slot) * ev.f * (abs_dot(ls.wi, N) * mis_nee_scale(ps_r_u(kg, slot), sl.pmf * ls.pdf, ev.pdf, ls.delta));
     if (!ls.deferred_le) nee *= ls.Le;
     if (!is_finite(nee)) {
       sample_mark_invalid(kg, sample);
@@ -215,11 +230,11 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
     ShadowSegment seg;
     if (ls.infinite)
-      seg = ShadowSegment{offset_ray_origin(ctx.P, ctx.Ng, ls.wi), ls.wi, Real(kShadowUnbounded)};
+      seg = ShadowSegment{offset_ray_origin(P, Ng, ls.wi), ls.wi, Real(kShadowUnbounded)};
     else if (triangle)
-      seg = shadow_segment(ctx.P, ctx.Ng, ls.p_light, tri_normal(lr));
+      seg = shadow_segment(P, Ng, ls.p_light, tri_normal(lr));
     else
-      seg = shadow_segment_to_lamp(ctx.P, ctx.Ng, ls.p_light);
+      seg = shadow_segment_to_lamp(P, Ng, ls.p_light);
     sh = load_ro(kg.shadow_queue + step.shadow_base + item);  // k = 1 (launch_config.h)
     sh_ray_o(kg, sh) = seg.origin;
     sh_ray_d(kg, sh) = seg.dir;
@@ -229,18 +244,16 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
     nee_state = ls.deferred_le ? 2u : 1u;
     if (!ls.deferred_le) break;
-    // Phase 1: the light's material at the sampled point, seen from this vertex.
+    // Phase 1: the light's material at the sampled point, seen from this vertex (wo = -wi).
     AR_ASSERT(triangle);
-    const uint32_t l_inst = tri_instance(lr), l_prim = tri_index(lr);
-    const Real2 bary = triangle_barycentrics(tri_vertex(lr, 0), tri_vertex(lr, 1), tri_vertex(lr, 2), ls.p_light);
-    ok = shade_context_geometry(kg, l_inst, l_prim, bary, ls.wi, &ctx);
-    vm_mat = hit_material_id(kg, l_inst, l_prim);
+    g_inst = tri_instance(lr), g_prim = tri_index(lr);
+    g_bary = triangle_barycentrics(tri_vertex(lr, 0), tri_vertex(lr, 1), tri_vertex(lr, 2), ls.p_light);
+    g_dir = ls.wi;
   }
   if (nee_state == 2u) {
     // The deferred Le carries no radiance scale (068 folds s into light records only).
-    const Spec nee = ok ? sh_contribution(kg, sh) * le * radiance_scale(kg) : spec_fill(Real(0));
-    // ctx held the light point: the hit's context again, which built before, for the continuation.
-    if (!ok || !is_finite(nee) || !shade_context_build(kg, slot, &ctx)) {
+    const Spec nee = sh_contribution(kg, sh) * le * radiance_scale(kg);
+    if (!ok || !is_finite(nee)) {
       sample_mark_invalid(kg, sample);
       path_end(kg, slot, Term::INVALID);
       return;
@@ -251,7 +264,6 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   if (nee_state != 0u) sh_next_stage(kg, sh) = static_cast<uint8_t>(Stage::INTERSECT_SHADOW);
 
   const uint32_t e = ps_event_index(kg, slot);
-  const Real3 P = ctx.P, Ng = ctx.Ng, N = ctx.N, wo = ctx.wo;
   const Spec beta = ps_beta(kg, slot);
   const Spec r_u = ps_r_u(kg, slot);
   const Real uc = camera_path_draw(kg, sample, event_dim(e, EV_LOBE_CHOICE));
@@ -295,8 +307,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   ps_ray_d(kg, slot) = bs.wi;
   ps_ray_type(kg, slot) = glossy ? kRayTypeGlossy : kRayTypeDiffuse;
   ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::INTERSECT_CLOSEST);
-}
-AR_NS_END
+}AR_NS_END
 
 #if !AR_CUDA_BUILD
 // CPU chunk function, defined by AR_CPU_STAGE in kernel_cpu/shade_surface.cpp; registered by
