@@ -15,8 +15,8 @@ final C ABI, with every gate live from the first task. Open task files and
 their order: `tasks/README.md`.
 
 ## Open owner questions
-During M1a: Nsight counter enable (0002 q1, needed by task 093); deleting
-superseded records (0009 q4). Answered: open-weight worker (O32). Later ones:
+During M1a: deleting superseded records (0009 q4). Answered: open-weight
+worker (O32); GPU performance counters enabled for all users (0002 q1, task 093). Later ones:
 ROADMAP "Open items".
 
 ## Red items
@@ -34,7 +34,8 @@ reconfigure. 032's CUDA init uses its own Ledger, not the context's
 (fix with 035/041), and the CUDA context is created on the init thread, so
 workers must make it current. The fault tests leave astroray_fault_*_<pid>
 directories in the system temp dir. Some files mix CRLF and LF (CMakeLists.txt,
-tests/cpu/test_fault.cpp).
+tests/cpu/test_fault.cpp). `cpu_device/parallel_for rethrows` once took 0.515 s against
+B-12's 0.5 s (flaky timing).
 
 ## Budget headroom
 Not measured yet: no gate has run. Spike numbers: docs/spikes/*/RESULTS.md.
