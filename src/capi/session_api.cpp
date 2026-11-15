@@ -19,7 +19,6 @@
 #include "host/session/session.h"
 #include "recorder_hooks.h"
 
-using astroray::host::FilmCopy;
 using astroray::host::FilmReadContext;
 using astroray::host::Session;
 using astroray::host::SessionUnsupported;
@@ -227,7 +226,7 @@ AR_API ar_status ar_session_report_entry(ar_session h, uint32_t index, ar_report
 }
 
 // Display frames (0007 d29). Never waits for a pass. frame_id 0 in the output means no frame newer
-// than after_frame. The host releases every acquired frame before it closes the session.
+// than after_frame. A frame stays readable after close, until the session is destroyed.
 AR_API ar_status ar_display_acquire(ar_session h, uint64_t after_frame, ar_display_frame* out) {
   if (h && !out) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_display_acquire output is null");
   return session_call(h, "ar_display_acquire", [after_frame, out](Session& s) {
@@ -246,7 +245,8 @@ AR_API ar_status ar_display_acquire(ar_session h, uint64_t after_frame, ar_displ
 }
 
 AR_API ar_status ar_display_release(ar_session h, uint64_t frame_id) {
-  return session_call(h, "ar_display_release", [frame_id](Session& s) { s.display_release(frame_id); });
+  // Allowed after close: the ring lives until destroy, so a frame acquired earlier can be released.
+  return session_call(h, "ar_display_release", [frame_id](Session& s) { s.display_release(frame_id); }, true);
 }
 
 // Passes (0008 d13a). pass_count and pass_info read only the layout and the latched size.
@@ -265,6 +265,8 @@ AR_API ar_status ar_session_pass_info(ar_session h, uint32_t index, ar_pass_info
       throw std::invalid_argument("pass index " + std::to_string(index) + " is past the " +
                                   std::to_string(passes.size()) + " passes");
     const astroray::host::PassDesc& p = passes[index];
+    if (p.name.size() >= sizeof(info->name))
+      throw std::invalid_argument("pass name '" + p.name + "' does not fit ar_pass_info.name");
     *info = ar_pass_info{};
     memcpy(info->name, p.name.data(), p.name.size());  // names are shorter than the 64-byte field
     info->component_count = p.components;
@@ -283,8 +285,8 @@ AR_API ar_status ar_session_read_pass(ar_session h, uint32_t index, uint32_t qua
     if (index >= passes.size())
       throw std::invalid_argument("pass index " + std::to_string(index) + " is past the " +
                                   std::to_string(passes.size()) + " passes");
-    std::unique_ptr<FilmCopy> copy;
-    s.read_film([&](const FilmReadContext& c) { copy = std::make_unique<FilmCopy>(c.device, c.film); });
+    std::unique_ptr<astroray::host::FilmView> copy;
+    s.read_film([&](const FilmReadContext& c) { copy = std::make_unique<astroray::host::FilmView>(c.device, c.film); });
     astroray::host::read_pass(*copy, passes[index], quantity, n, dst);
   });
 }

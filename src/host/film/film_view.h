@@ -39,6 +39,12 @@ class FilmView {
   std::vector<double> variance_of_mean(const std::string& channel, uint32_t component) const;
   // COUNT channel only: the raw counters. Throws std::invalid_argument.
   std::vector<uint32_t> counts(const std::string& channel, uint32_t component) const;
+  // Per-pixel invalid-sample counters (0008 d6), always present.
+  std::vector<uint32_t> invalid_counts() const;
+  // film_rel_error per pixel: -1 where n < 2 (0008 d12).
+  std::vector<double> rel_error() const;
+  // film_bounce_mean per pixel: NaN where no path ended or statistics were not requested.
+  std::vector<double> bounce_mean() const;
 
  private:
   const FilmChannel& channel(const std::string& name, ChannelKind kind, uint32_t component) const;
@@ -96,6 +102,24 @@ inline std::vector<double> FilmView::variance_of_mean(const std::string& name, u
     const uint32_t p = pixel(uint32_t(i));
     out[i] = moment_variance_of_mean(data_.s1[plane + p], data_.s2[plane + p], data_.n[p]);
   }
+  return out;
+}
+
+inline std::vector<uint32_t> FilmView::invalid_counts() const {
+  std::vector<uint32_t> out(size_t(width()) * height());
+  for (size_t i = 0; i < out.size(); ++i) out[i] = data_.invalid[pixel(uint32_t(i))];
+  return out;
+}
+
+inline std::vector<double> FilmView::rel_error() const {
+  std::vector<double> out(size_t(width()) * height());
+  for (size_t i = 0; i < out.size(); ++i) out[i] = film_rel_error(data_, pixel(uint32_t(i)));
+  return out;
+}
+
+inline std::vector<double> FilmView::bounce_mean() const {
+  std::vector<double> out(size_t(width()) * height());
+  for (size_t i = 0; i < out.size(); ++i) out[i] = film_bounce_mean(data_, pixel(uint32_t(i)));
   return out;
 }
 

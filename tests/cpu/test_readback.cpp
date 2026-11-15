@@ -5,7 +5,10 @@
 // Ref: docs/decisions/0008-film-outputs-denoise.md d13a, d10, d12; 0001 D2.11.
 #include <doctest.h>
 
+#include <chrono>
 #include <cmath>
+#include <functional>
+#include <thread>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -14,10 +17,12 @@
 #include "device/cpu/cpu_device.h"
 #include "host/film/film_layout.h"
 #include "host/film/film_stats.h"
+#include "host/film/film_view.h"
 #include "host/scene/scene.h"
 #include "host/session/readback.h"
 #include "host/session/session.h"
 #include "host/thread_pool.h"
+#include "kernel/kernel_globals.h"
 
 using namespace astroray;
 using namespace astroray::host;
@@ -65,7 +70,7 @@ const PassDesc& pass_named(const std::vector<PassDesc>& passes, const char* name
   return passes[0];
 }
 
-std::vector<float> read(const FilmCopy& c, const PassDesc& p, uint32_t q) {
+std::vector<float> read(const FilmView& c, const PassDesc& p, uint32_t q) {
   std::vector<float> v(pass_float_count(p, q, c.width(), c.height()));
   read_pass(c, p, q, uint32_t(v.size()), v.data());
   return v;
@@ -82,7 +87,7 @@ TEST_CASE("readback/read_pass equals the film helpers") {
   for (const PassDesc& p : passes) names.push_back(p.name);
   CHECK(names == std::vector<std::string>{"Combined", "Position", "Normal", "UV", "IndexMA", "AR Sample Count",
                                           "AR Bounces", "AR Rel Error", "AR Invalid"});
-  FilmCopy copy(rig.dev, *rig.film);
+  FilmView copy(rig.dev, *rig.film);
   const ar::FilmData& d = rig.film->data();
 
   const std::vector<float> mean = read(copy, pass_named(passes, "Combined"), AR_QUANTITY_MEAN);
@@ -113,10 +118,30 @@ TEST_CASE("readback/read_pass equals the film helpers") {
   CHECK(rel[5] == -1.0f);  // n = 1: no data
 }
 
+TEST_CASE("readback/read_pass maps the render rectangle") {
+  // A 2x2 render rectangle inside the 3x2 allocation: pixel j of the rectangle is plane pixel
+  // film_active_pixel(j) = (j % 2) + 3 (j / 2), so j = 0, 1, 2, 3 read planes 0, 1, 3, 4.
+  ReadRig rig;
+  rig.film->set_render_size(2, 2);
+  const auto passes = list_passes(rig.film->layout());
+  FilmView view(rig.dev, *rig.film);
+  const std::vector<float> mean = read(view, pass_named(passes, "Combined"), AR_QUANTITY_MEAN);
+  const std::vector<float> cnt = read(view, pass_named(passes, "Combined"), AR_QUANTITY_COUNT);
+  const std::vector<float> inval = read(view, pass_named(passes, "AR Invalid"), AR_QUANTITY_MEAN);
+  REQUIRE(mean.size() == 12);
+  const uint32_t plane[4] = {0, 1, 3, 4};
+  for (uint32_t j = 0; j < 4; ++j) {
+    CHECK(ar::film_active_pixel(rig.film->data(), j) == plane[j]);
+    for (uint32_t c = 0; c < 3; ++c) CHECK(mean[j * 3 + c] == doctest::Approx(10.0 * c + plane[j] + 1));
+    CHECK(cnt[j] == 4.0f);
+    CHECK(inval[j] == float(plane[j]));
+  }
+}
+
 TEST_CASE("readback/read_pass refuses what it cannot give") {
   ReadRig rig;
   const auto passes = list_passes(rig.film->layout());
-  FilmCopy copy(rig.dev, *rig.film);
+  FilmView copy(rig.dev, *rig.film);
   std::vector<float> buf(64);
   CHECK_THROWS_AS(read_pass(copy, pass_named(passes, "Combined"), AR_QUANTITY_MEAN, 17, buf.data()),
                   std::invalid_argument);
@@ -162,6 +187,75 @@ TEST_CASE("readback/scene entries merged") {
   s.join();
   // After CLOSED the scene's entries come from the copy taken at detach.
   CHECK(s.report_snapshot().entry_count == 3);
+}
+
+TEST_CASE("readback/counter words in format_counters order") {
+  PassCounters c;
+  c.rays_closest = 1;
+  c.rays_shadow = 2;
+  c.steps = 3;
+  c.launches = 4;
+  for (uint32_t i = 0; i < ar::kStageCount; ++i) c.items[i] = 100 + i;
+  c.active_path_steps = 200;
+  c.peak_active_paths = 201;
+  c.refills = 202;
+  c.camera_paths = 203;
+  c.light_paths = 204;
+  c.sorts = 205;
+  c.state_bytes_moved = 206;
+  c.shadow_item_bytes_moved = 207;
+  c.lamp_crossings = 208;
+  c.shadow_rays_emitted = 209;
+  c.permuted_launches = 210;
+  const std::vector<uint64_t> w = counter_words(c);
+  REQUIRE(w.size() == 15 + ar::kStageCount);
+  CHECK(w[0] == 1);
+  CHECK(w[3] == 4);
+  for (uint32_t i = 0; i < ar::kStageCount; ++i) CHECK(w[4 + i] == 100 + i);
+  for (uint32_t k = 0; k < 11; ++k) CHECK(w[4 + ar::kStageCount + k] == 200 + k);
+}
+
+TEST_CASE("readback/band passes are refused until the unit is known") {
+  FilmRequest req;
+  req.max_width = req.max_height = 2;
+  req.extra.push_back({"band_v", ChannelKind::Moment, 1, 0});
+  CHECK_THROWS_AS(list_passes(FilmLayout::build(req)), std::invalid_argument);
+}
+
+namespace {
+// Item i ends where it starts, so a pass with work launches stages and counts them.
+void gen_terminate(const ar::KernelGlobals& kg, uint32_t first, uint32_t last) {
+  const ar::StepEntry& e = kg.step_table->stage[static_cast<uint32_t>(ar::Stage::TERMINATED)];
+  for (uint32_t i = first; i < last; ++i)
+    ar::ps_next_stage(kg, kg.main_queue[e.start + i]) = static_cast<uint8_t>(ar::Stage::TERMINATED);
+}
+}  // namespace
+
+TEST_CASE("readback/session counters are non-zero after real passes") {
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  Ledger ledger;
+  ThreadPool pool(ctx, 2);
+  CpuDevice dev(ledger, pool);
+  dev.register_production_stages();
+  dev.register_kernel(KernelId::GENERATE_CAMERA, &gen_terminate);
+  SessionOptions o;
+  o.max_width = o.max_height = 8;
+  o.test_camera_samples_per_pass = 64;
+  Session s(scene, dev, o);
+  CHECK(counter_words(s.pass_counters())[3] == 0);  // launches: nothing ran yet
+  s.start();
+  const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+  while (s.pass_counters().launches == 0 && std::chrono::steady_clock::now() < end)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  const PassCounters c = s.pass_counters();
+  const std::vector<uint64_t> w = counter_words(c);
+  CHECK(c.launches > 0);
+  CHECK(c.steps > 0);
+  CHECK(w[2] == c.steps);
+  CHECK(w[3] == c.launches);
+  s.close();
+  s.join();
 }
 
 }  // TEST_SUITE

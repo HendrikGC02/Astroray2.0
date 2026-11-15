@@ -14,58 +14,38 @@
 #include "host/counters.h"
 #include "host/device.h"
 #include "host/film/film_layout.h"
+#include "host/film/film_view.h"
 #include "host/report.h"
 
 namespace astroray::host {
 
-enum class PassSource : uint8_t { Combined, Aov, SampleCount, Bounces, RelError, Invalid, Band };
+enum class PassSource : uint8_t { Combined, Aov, SampleCount, Bounces, RelError, Invalid };
 
 struct PassDesc {
   std::string name;
   uint32_t components = 1;
   uint32_t unit = AR_UNIT_NONE;
   PassSource source = PassSource::Combined;
-  std::string channel;  // the film channel behind Combined, an AOV or a band
+  std::string channel;  // the film channel behind Combined or an AOV
 };
 
 // The passes the layout allocated, in 0008 d10's order: Combined, the primary-hit AOVs
 // (Position, Normal, UV, IndexMA), the statistics (AR Sample Count, AR Bounces, AR Rel Error,
-// AR Invalid), then one pass per band channel. Noisy Image and the denoising guides do not
-// exist until a denoiser does. A band's unit is ENERGY: the layout does not carry the response
-// unit.
+// AR Invalid). Noisy Image and the denoising guides do not
+// exist until a denoiser does. Throws std::invalid_argument for a band channel: the layout does
+// not carry the response unit, so a band pass would have to guess ENERGY or PHOTON.
 std::vector<PassDesc> list_passes(const FilmLayout& layout);
-
-// A host copy of one film's planes, taken in one download. Rows are bottom-up over the render
-// sub-rectangle, like FilmView; this exists beside FilmView because the statistics passes read
-// the per-pixel invalid plane and the whole-pixel helpers of film_stats.h, which FilmView does
-// not expose.
-class FilmCopy {
- public:
-  // The caller has synchronized the device.
-  FilmCopy(Device& device, const Film& film);
-  FilmCopy(const FilmCopy&) = delete;
-  FilmCopy& operator=(const FilmCopy&) = delete;
-  uint32_t width() const { return data_.rect_width; }
-  uint32_t height() const { return data_.rect_height; }
-  const FilmLayout& layout() const { return layout_; }
-  const ar::FilmData& data() const { return data_; }
-
- private:
-  FilmLayout layout_;
-  std::vector<char> bytes_;
-  ar::FilmData data_;
-};
 
 // The floats read_pass writes: pixels * components for MEAN and VARIANCE, pixels for COUNT.
 // Throws std::invalid_argument for a quantity the pass cannot give: VARIANCE only for Combined
-// and bands (MOMENT channels), COUNT only for Combined and bands (n per pixel), AR Sample Count
+// (a MOMENT channel), COUNT only for Combined (n per pixel), AR Sample Count
 // and AR Invalid (the raw counter); AR Sample Count and AR Invalid also give MEAN, the same value.
 uint64_t pass_float_count(const PassDesc& pass, uint32_t quantity, uint32_t width, uint32_t height);
 
 // Writes interleaved (pixel-major) floats for the whole render rectangle. `n` must equal
 // pass_float_count exactly: a wrong size fails, it never truncates. NaN marks "no data" where
 // the film has none (n = 0, or n < 2 for a variance); AR Rel Error is -1 below two samples.
-void read_pass(const FilmCopy& film, const PassDesc& pass, uint32_t quantity, uint32_t n, float* dst);
+void read_pass(const FilmView& film, const PassDesc& pass, uint32_t quantity, uint32_t n, float* dst);
 
 // PassCounters flattened in format_counters' order: rays_closest, rays_shadow, steps, launches,
 // items per stage, active_path_steps, peak_active_paths, refills, camera_paths, light_paths,

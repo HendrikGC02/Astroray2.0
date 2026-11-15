@@ -138,8 +138,8 @@ class Session {
   void read_film(const std::function<void(const FilmReadContext&)>& fn) const;
   // The ring's newest frame after `after_frame`, or nullopt. Never waits for a pass: it takes
   // only the short ring pointer lock and the ring's own. Throws std::invalid_argument when the
-  // session has no ring. The frame's data is valid until display_release, which the host must
-  // call before close.
+  // session has no ring. The frame data stays valid until the session is destroyed, so a frame
+  // acquired before close may still be read and released after CLOSED.
   std::optional<DisplayFrame> display_acquire(uint64_t after_frame);
   // Throws std::invalid_argument for a frame that is not acquired or a session without a ring.
   void display_release(uint64_t frame_id);
@@ -221,6 +221,7 @@ class Session {
   bool failed_ = false;
   std::string failure_;
   SessionStats stats_;
+  bool scene_report_lost_ = false;   // reading the scene's report at detach failed
   bool scene_detached_ = false;      // set under mutex_ just before the listener is removed
   ReportTable detached_scene_report_;  // the scene's report as of detach
   ReportTable report_snap_;            // the latest merged snapshot

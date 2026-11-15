@@ -7,21 +7,8 @@
 #include <cstring>
 #include <stdexcept>
 
-#include "host/film/film_stats.h"
 
 namespace astroray::host {
-namespace {
-
-
-bool is_moment(PassSource s) { return s == PassSource::Combined || s == PassSource::Band; }
-
-const FilmChannel& channel_of(const FilmCopy& film, const PassDesc& pass) {
-  const FilmChannel* c = film.layout().find(pass.channel);
-  if (c == nullptr) throw std::invalid_argument("pass '" + pass.name + "': the film has no channel '" + pass.channel + "'");
-  return *c;
-}
-
-}  // namespace
 
 std::vector<PassDesc> list_passes(const FilmLayout& layout) {
   std::vector<PassDesc> out;
@@ -39,15 +26,9 @@ std::vector<PassDesc> list_passes(const FilmLayout& layout) {
   out.push_back({"AR Invalid", 1, AR_UNIT_NONE, PassSource::Invalid, ""});
   for (const FilmChannel& c : layout.channels())
     if (c.kind == ChannelKind::Moment && c.name != "display")
-      out.push_back({c.name, c.components, AR_UNIT_ENERGY, PassSource::Band, c.name});
+      throw std::invalid_argument("band pass '" + c.name +
+                                  "': the film layout does not carry the response unit (energy or photon)");
   return out;
-}
-
-FilmCopy::FilmCopy(Device& device, const Film& film) : layout_(film.layout()), bytes_(film.buffer().bytes) {
-  device.download(bytes_.data(), film.buffer(), 0, bytes_.size());
-  data_ = layout_.bind(bytes_.data());
-  data_.rect_width = film.data().rect_width;
-  data_.rect_height = film.data().rect_height;
 }
 
 uint64_t pass_float_count(const PassDesc& pass, uint32_t quantity, uint32_t width, uint32_t height) {
@@ -56,11 +37,12 @@ uint64_t pass_float_count(const PassDesc& pass, uint32_t quantity, uint32_t widt
     case AR_QUANTITY_MEAN:
       return pixels * pass.components;
     case AR_QUANTITY_VARIANCE:
-      if (!is_moment(pass.source))
+      if (pass.source != PassSource::Combined)
         throw std::invalid_argument("pass '" + pass.name + "' has no variance (only MOMENT passes do)");
       return pixels * pass.components;
     case AR_QUANTITY_COUNT:
-      if (!is_moment(pass.source) && pass.source != PassSource::SampleCount && pass.source != PassSource::Invalid)
+      if (pass.source != PassSource::Combined && pass.source != PassSource::SampleCount &&
+          pass.source != PassSource::Invalid)
         throw std::invalid_argument("pass '" + pass.name + "' has no count");
       return pixels;
     default:
@@ -68,53 +50,54 @@ uint64_t pass_float_count(const PassDesc& pass, uint32_t quantity, uint32_t widt
   }
 }
 
-void read_pass(const FilmCopy& film, const PassDesc& pass, uint32_t quantity, uint32_t n, float* dst) {
+namespace {
+
+template <class T>
+void interleave(const std::vector<T>& plane, uint32_t comps, uint32_t k, float* dst) {
+  for (size_t j = 0; j < plane.size(); ++j) dst[j * comps + k] = float(plane[j]);
+}
+
+}  // namespace
+
+void read_pass(const FilmView& film, const PassDesc& pass, uint32_t quantity, uint32_t n, float* dst) {
   const uint64_t want = pass_float_count(pass, quantity, film.width(), film.height());
   if (n != want)
     throw std::invalid_argument("read_pass '" + pass.name + "': the buffer holds " + std::to_string(n) +
                                 " floats, the render needs exactly " + std::to_string(want));
-  const ar::FilmData& d = film.data();
-  const uint32_t pixels = film.width() * film.height();
-  const uint32_t comps = quantity == AR_QUANTITY_COUNT ? 1u : pass.components;
-  for (uint32_t j = 0; j < pixels; ++j) {
-    const uint32_t p = ar::film_active_pixel(d, j);
-    float* out = dst + uint64_t(j) * comps;
-    if (quantity == AR_QUANTITY_COUNT) {
-      out[0] = float(pass.source == PassSource::Invalid ? d.invalid[p] : d.n[p]);
-      continue;
-    }
-    switch (pass.source) {
-      case PassSource::Combined:
-      case PassSource::Band: {
-        const FilmChannel& c = channel_of(film, pass);
-        for (uint32_t k = 0; k < comps; ++k) {
-          const uint64_t at = uint64_t(uint32_t(c.offset) + k) * d.plane_stride + p;
-          out[k] = float(quantity == AR_QUANTITY_MEAN ? moment_mean(d.s1[at], d.n[p])
-                                                      : moment_variance_of_mean(d.s1[at], d.s2[at], d.n[p]));
-        }
-        break;
-      }
-      case PassSource::Aov:
-        for (uint32_t k = 0; k < comps; ++k)
-          out[k] = float(film_add_channel_value(film.layout(), d, pass.channel, k, p));
-        break;
-      case PassSource::SampleCount:
-        out[0] = float(d.n[p]);
-        break;
-      case PassSource::Bounces:
-        out[0] = float(film_bounce_mean(d, p));
-        break;
-      case PassSource::RelError:
-        out[0] = float(film_rel_error(d, p));
-        break;
-      case PassSource::Invalid:
-        out[0] = float(d.invalid[p]);
-        break;
-    }
+  // Every value comes from FilmView, which owns the plane indexing and the S1 / n formulas.
+  if (quantity == AR_QUANTITY_COUNT) {
+    if (pass.source == PassSource::Invalid) interleave(film.invalid_counts(), 1, 0, dst);
+    else interleave(film.sample_counts(), 1, 0, dst);
+    return;
+  }
+  switch (pass.source) {
+    case PassSource::Combined:
+      for (uint32_t k = 0; k < pass.components; ++k)
+        interleave(quantity == AR_QUANTITY_MEAN ? film.mean(pass.channel, k) : film.variance_of_mean(pass.channel, k),
+                   pass.components, k, dst);
+      break;
+    case PassSource::Aov:
+      for (uint32_t k = 0; k < pass.components; ++k) interleave(film.mean(pass.channel, k), pass.components, k, dst);
+      break;
+    case PassSource::SampleCount:
+      interleave(film.sample_counts(), 1, 0, dst);
+      break;
+    case PassSource::Bounces:
+      interleave(film.bounce_mean(), 1, 0, dst);
+      break;
+    case PassSource::RelError:
+      interleave(film.rel_error(), 1, 0, dst);
+      break;
+    case PassSource::Invalid:
+      interleave(film.invalid_counts(), 1, 0, dst);
+      break;
   }
 }
 
 std::vector<uint64_t> counter_words(const PassCounters& c) {
+  // A field added to PassCounters must be added to the list below, in format_counters' order.
+  static_assert(sizeof(PassCounters) == (15 + ar::kStageCount) * sizeof(uint64_t),
+                "PassCounters changed: update counter_words and its header comment");
   std::vector<uint64_t> w = {c.rays_closest, c.rays_shadow, c.steps, c.launches};
   for (uint32_t i = 0; i < ar::kStageCount; ++i) w.push_back(c.items[i]);
   for (uint64_t v : {c.active_path_steps, c.peak_active_paths, c.refills, c.camera_paths, c.light_paths, c.sorts,
@@ -126,13 +109,18 @@ std::vector<uint64_t> counter_words(const PassCounters& c) {
 
 ReportTable read_report(Report& report) {
   for (int attempt = 0; attempt < 4; ++attempt) {
+    // Another session of the same scene may replace the snapshot while its entries are copied:
+    // the copy counts only if the summary is unchanged afterwards (a change moves the revision).
     report.snapshot();
     ReportTable t;
     if (report.info(&t.info) != AR_OK) throw std::runtime_error("report: info failed");
     t.entries.resize(t.info.entry_count);
     bool ok = true;
     for (uint32_t i = 0; i < t.info.entry_count && ok; ++i) ok = report.entry(i, &t.entries[i]) == AR_OK;
-    if (ok) return t;
+    ar_report_info after{};
+    if (ok && report.info(&after) == AR_OK && after.revision == t.info.revision &&
+        after.entry_count == t.info.entry_count)
+      return t;
   }
   throw std::runtime_error("report: the table kept changing while it was read");
 }

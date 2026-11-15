@@ -23,6 +23,8 @@ constexpr uint64_t kDisplayAt = kFilmDataAt + align_up(sizeof(ar::FilmData), 256
 constexpr uint64_t kGlobalsBytes = kDisplayAt + sizeof(ar::DisplayTarget);
 // One pass is one sample per active pixel (0004 D25); the adaptive tail is not built.
 constexpr uint32_t kSamplesPerPass = 1;
+// The sampler every pass uses: bind_globals sets it and the FITS provenance names it.
+constexpr uint32_t kSamplerMode = ar::SAMPLER_SOBOL;
 // The slice wait() sleeps between checks of the poisoned flag, which no notification announces:
 // the period Scene::wait_init uses.
 constexpr auto kWaitSlice = std::chrono::milliseconds(50);
@@ -150,8 +152,15 @@ void Session::detach_scene() {
       try {
         detached_scene_report_ = read_report(scene_.report());
       } catch (...) {
-        // The scene's entries are lost from the final table; the rest of detach must still run.
+        // The rest of detach must still run, but the loss is loud: logged here, and every later
+        // report_snapshot fails naming it instead of showing a table that lacks the entries.
         detached_scene_report_ = ReportTable{};
+        scene_report_lost_ = true;
+        try {
+          ctx_.log.line("ERROR", "session: the scene's report entries could not be read at detach and are lost");
+        } catch (...) {
+          // The flag still makes report_snapshot fail.
+        }
       }
       scene_detached_ = true;
     }
@@ -313,11 +322,13 @@ FitsProvenance Session::fits_provenance_locked() const {
       filter = s->s.pixel_filter;
     }
   }
-  pv.sampler_mode = "sobol";  // kg.session.sampler_mode = SAMPLER_SOBOL in bind_globals
+  pv.sampler_mode = kSamplerMode == ar::SAMPLER_SOBOL ? "sobol" : "independent";
   pv.observer_hash = observer_hash_;
-  pv.working_space = "observer.bin";  // the one table set the session loads; no selection exists yet
+  // No working-space name and no wavelength-pdf name is defined yet, so the file says so instead of
+  // naming something that is not one.
+  pv.working_space = "UNSPECIFIED";
   pv.filter = filter == AR_FILTER_GAUSSIAN ? "gaussian" : filter == AR_FILTER_BLACKMAN_HARRIS ? "blackman-harris" : "box";
-  pv.wavelength_pdf = "default";  // WavelengthTableBuilder().build() with no line components
+  pv.wavelength_pdf = "UNSPECIFIED";
   return pv;
 }
 
@@ -348,6 +359,8 @@ ar_report_info Session::report_snapshot() {
   // Scene reads happen under mutex_, like progress(): detach_scene copies the scene's table under
   // the same lock before the scene may go.
   std::lock_guard<std::mutex> lock(mutex_);
+  if (scene_report_lost_)
+    throw std::runtime_error("the scene's report entries were lost when the session detached from the scene");
   report_snap_ = merge_reports(scene_detached_ ? detached_scene_report_ : read_report(scene_.report()),
                                read_report(report_));
   return report_snap_.info;
@@ -418,10 +431,8 @@ void Session::release() {
     scheduler_.reset();  // frees the pools
   }
   std::lock_guard<std::mutex> render(render_mutex_);
-  {
-    std::lock_guard<std::mutex> lock(ring_mutex_);
-    ring_.reset();
-  }
+  // The ring stays until the session is destroyed: a frame the host acquired remains readable
+  // after CLOSED and is released then (display_release), so no thread reads freed memory.
   film_.reset();
   device_.free(present_buf_);
   device_.free(globals_buf_);
@@ -481,7 +492,7 @@ void Session::bind_globals() {
   kg.session.samples_done = uint32_t(samples_done);
   kg.session.samples_per_pass = kSamplesPerPass;
   kg.session.pass_index = pass_index_;
-  kg.session.sampler_mode = ar::SAMPLER_SOBOL;
+  kg.session.sampler_mode = kSamplerMode;
   if (const auto s = scene_.settings()) {
     kg.session.seed = s->s.seed;
     // PathStateSoA::bounces order: total, diffuse, glossy, transmission, volume, transparent.

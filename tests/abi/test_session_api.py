@@ -12,6 +12,8 @@ import tempfile
 import time
 import unittest
 
+import numpy as np
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DLL = os.path.join(ROOT, "out", "bin", "astroray_core.dll")
 ABI = os.path.join(ROOT, "out", "build", "gen", "_abi.py")
@@ -20,6 +22,7 @@ FITS_READ = os.path.join(ROOT, "tests", "abi", "fits_read.py")
 STATE_NAMES = {0: "INITIALIZING", 1: "RENDERING", 2: "PAUSED", 3: "CONVERGED", 4: "TRIMMED", 5: "CLOSED", 6: "FAILED"}
 # Ledger categories in host order (0007 d14): the ones a session fills.
 FILM, TABLES, DISPLAY_FRAME = 7, 8, 9
+QUAD = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], dtype=np.float32)
 
 
 def load_module(name, path):
@@ -94,6 +97,31 @@ class TestSessionApi(unittest.TestCase):
             v.camera.cam_to_world.m[i] = 1.0
         return v
 
+    def array(self, slot, count, dtype):
+        # `slot` is the T** field: the engine-owned slot that holds the array pointer.
+        ptr = ctypes.cast(slot, ctypes.POINTER(ctypes.c_void_p))[0]
+        n = count * np.dtype(dtype).itemsize
+        return np.frombuffer((ctypes.c_char * n).from_address(ptr), dtype=dtype)
+
+    def commit_mesh(self, key, corner_vert=(0, 1, 2, 3)):
+        """Commits one quad; a corner_vert out of range makes the engine reject the generation."""
+        a, lib = self.abi, self.lib
+        edit = ctypes.c_void_p()
+        self.assertEqual(lib.ar_scene_edit_begin(self.scene, ctypes.byref(edit)), a.AR_OK)
+        d = a.ar_mesh_desc()
+        d.key, d.vertex_count, d.corner_count, d.face_count, d.motion_steps = key, 4, 4, 1, 1
+        d.name = (ctypes.c_uint8 * 64)(*b"quad".ljust(64, b"\0"))
+        b = a.ar_mesh_buffers()
+        self.assertEqual(lib.ar_edit_mesh_begin(edit, ctypes.byref(d), ctypes.byref(b)), a.AR_OK)
+        self.array(b.positions, b.positions_count, np.float32)[:] = QUAD.ravel()
+        self.array(b.corner_vert, b.corner_vert_count, np.int32)[:] = corner_vert
+        self.array(b.face_start, b.face_start_count, np.int32)[:] = [0]
+        self.array(b.corner_normals, b.corner_normals_count, np.float32)[:] = np.tile([0, 0, 1], 4)
+        self.assertEqual(lib.ar_edit_item_commit(edit, key), a.AR_OK)
+        gen = ctypes.c_uint64()
+        self.assertEqual(lib.ar_edit_commit(edit, ctypes.byref(gen)), a.AR_OK)
+        return gen.value
+
     def read_pass(self, session, index, quantity, n):
         buf = (ctypes.c_float * n)()
         st = self.lib.ar_session_read_pass(session, index, quantity, n, buf)
@@ -148,50 +176,94 @@ class TestSessionApi(unittest.TestCase):
         self.assertEqual(sum(self.progress(session).ledger_bytes), 0, "a closed session still holds memory")
 
     def test_report_polling(self):
+        # A rejected generation is a scene entry; the session's polled report carries it.
         a, lib = self.abi, self.lib
         session = self.make_session(16)
         self.converge(session)
+        gen = self.commit_mesh(5, corner_vert=(0, 1, 9, 3))
         info = a.ar_report_info()
-        self.assertEqual(lib.ar_session_report_info(session, ctypes.byref(info)), a.AR_OK)
+        end = time.perf_counter() + 10.0
+        while True:
+            self.assertEqual(lib.ar_session_report_info(session, ctypes.byref(info)), a.AR_OK)
+            if info.entry_count >= 1:
+                break
+            self.assertLess(time.perf_counter(), end, "the rejected generation never reached the report")
+            time.sleep(0.01)
         entry = a.ar_report_entry()
-        for i in range(info.entry_count):
-            self.assertEqual(lib.ar_session_report_entry(session, i, ctypes.byref(entry)), a.AR_OK)
-        print(f"report: {info.entry_count} entries, revision {info.revision}")
+        self.assertEqual(lib.ar_session_report_entry(session, 0, ctypes.byref(entry)), a.AR_OK)
+        print(f"report: {info.entry_count} entries, revision {info.revision}, first code {entry.code} "
+              f"subject {entry.subject} detail {bytes(entry.detail).split(bytes(1))[0].decode()!r}")
+        self.assertEqual(entry.code, a.AR_REPORT_GENERATION_REJECTED)
+        self.assertEqual((entry.subject, entry.level), (5, a.AR_LEVEL_ERROR))
+        self.assertEqual(info.highest_level, a.AR_LEVEL_ERROR)
+        self.assertEqual(self.progress(session).failed_generation, gen)
         self.assertEqual(lib.ar_session_report_entry(session, info.entry_count, ctypes.byref(entry)),
                          a.AR_ERR_INVALID_ARGUMENT)
         again = a.ar_report_info()
         self.assertEqual(lib.ar_session_report_info(session, ctypes.byref(again)), a.AR_OK)
         self.assertEqual(again.revision, info.revision, "an unchanged report changed revision")
 
+    def next_frame(self, session, after, min_generation):
+        """Polls the never-blocking acquire until a frame newer than `after` at `min_generation`."""
+        a = self.abi
+        frame = a.ar_display_frame()
+        end = time.perf_counter() + 10.0
+        while True:
+            t0 = time.perf_counter()
+            self.assertEqual(self.lib.ar_display_acquire(session, after, ctypes.byref(frame)), a.AR_OK)
+            self.assertLess((time.perf_counter() - t0) * 1000.0, 5.0, "acquire waited")
+            if frame.frame_id > after and frame.generation >= min_generation:
+                return frame
+            if frame.frame_id:
+                self.assertEqual(self.lib.ar_display_release(session, frame.frame_id), a.AR_OK)
+                after = frame.frame_id
+            self.assertLess(time.perf_counter(), end, "no frame at the wanted generation")
+            time.sleep(0.005)
+
     def test_display_frames(self):
         a, lib = self.abi, self.lib
         session = self.make_session(32)
         self.converge(session)
-        frame = a.ar_display_frame()
-        last_id, last_generation, ids = 0, 0, []
+        last_id, last_generation, seen = 0, -1, []
         for k in range(4):
-            t0 = time.perf_counter()
-            self.assertEqual(lib.ar_display_acquire(session, last_id, ctypes.byref(frame)), a.AR_OK)
-            self.assertLess((time.perf_counter() - t0) * 1000.0, 5.0, "acquire waited")
-            self.assertGreater(frame.frame_id, last_id, f"no new frame at step {k}")
-            self.assertGreaterEqual(frame.generation, last_generation)
-            w, h = (32, 32) if k == 0 else (16 + k, 16 + k)
-            self.assertEqual((frame.width, frame.height), (w, h))
+            if k:
+                want = self.commit_mesh(10 + k)
+                end = time.perf_counter() + 10.0
+                while self.progress(session).active_generation < want:
+                    self.assertLess(time.perf_counter(), end, "the commit never became active")
+                    time.sleep(0.005)
+            frame = self.next_frame(session, last_id, last_generation + 1 if k else 0)
+            self.assertEqual((frame.width, frame.height), (32, 32))
             self.assertEqual(frame.format, a.AR_DISPLAY_FORMAT_RGBA16F)
-            self.assertEqual(frame.row_bytes, w * 8)
-            self.assertEqual(len(ctypes.string_at(frame.data, frame.row_bytes * frame.height)), w * 8 * h)
-            ids.append(frame.frame_id)
+            self.assertEqual(frame.row_bytes, 32 * 8)
+            self.assertEqual(len(ctypes.string_at(frame.data, frame.row_bytes * frame.height)), 32 * 8 * 32)
+            if k:
+                self.assertGreater(frame.generation, last_generation, "a commit did not raise the frame generation")
+            seen.append((frame.frame_id, frame.generation))
             last_id, last_generation = frame.frame_id, frame.generation
             self.assertEqual(lib.ar_display_release(session, frame.frame_id), a.AR_OK)
-            # Nothing newer than what was just taken.
             none = a.ar_display_frame()
             self.assertEqual(lib.ar_display_acquire(session, last_id, ctypes.byref(none)), a.AR_OK)
             self.assertEqual(none.frame_id, 0)
-            v = self.view(16 + k + 1, 16 + k + 1)
-            self.assertEqual(lib.ar_session_set_view(session, ctypes.byref(v)), a.AR_OK)
-            self.assertEqual(lib.ar_session_wait(session, 20000), a.AR_OK)
-        print(f"frames {ids}, last generation {last_generation}")
+        print(f"frames (id, generation): {seen}")
         self.assertEqual(lib.ar_display_release(session, 999999), a.AR_ERR_INVALID_ARGUMENT)
+
+    def test_frame_outlives_close(self):
+        # A frame acquired before close stays readable after CLOSED and is released then.
+        a, lib = self.abi, self.lib
+        session = self.make_session(16)
+        self.converge(session)
+        frame = a.ar_display_frame()
+        self.assertEqual(lib.ar_display_acquire(session, 0, ctypes.byref(frame)), a.AR_OK)
+        self.assertGreater(frame.frame_id, 0)
+        self.assertEqual(lib.ar_session_close(session), a.AR_OK)
+        end = time.perf_counter() + 20.0
+        while self.progress(session).state != a.AR_STATE_CLOSED:
+            self.assertLess(time.perf_counter(), end)
+            lib.ar_session_wait(session, 10)
+        self.assertEqual(len(ctypes.string_at(frame.data, frame.row_bytes * frame.height)), 16 * 8 * 16)
+        self.assertEqual(lib.ar_display_release(session, frame.frame_id), a.AR_OK)
+        print("frame read and released after CLOSED")
 
     def test_passes_of_an_empty_render(self):
         a, lib = self.abi, self.lib
@@ -252,6 +324,8 @@ class TestSessionApi(unittest.TestCase):
         self.assertEqual(primary["SPP"], 1)
         self.assertEqual(primary["SAMPLER"], "sobol")
         self.assertEqual(len(primary["OBSHASH"]), 16)
+        self.assertEqual(primary["WORKSPC"], "UNSPECIFIED")
+        self.assertEqual(primary["WLPDF"], "UNSPECIFIED")
         names = {h["EXTNAME"]: d for h, d in hdus[1:]}
         for c in range(3):
             self.assertEqual(names[f"display.{c}"].shape, (8, 8))
