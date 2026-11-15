@@ -5,10 +5,15 @@
 // with materials compiled by the host compiler: constant-block emission, program emission (two
 // EMIT_LEs), emission driven by UV set 0 and by P (the context reaches the VM), the default
 // material, and one corrupt program (the VM-error path). Two samples per pixel share the path-end
-// statistics and AOV planes; throughputs are 1% non-finite. Integer fields (term, next_stage,
-// path flags, slot flags, every COUNT plane, the material-id AOV) must be bit-equal; the slot
-// radiance agrees to 0002 D12's evaluation threshold (FMA-off GPU build vs CPU float), and the
-// position, normal and UV AOVs within 1e-5 relative (0009 d17 step iv's geometry tolerance).
+// statistics and AOV planes; throughputs are 1% non-finite. Since 073 the paths continue: the
+// materials' BSDF slots are the OpenPBR defaults of their constant blocks (a GGX layer over EON),
+// arrival bounce counts 0-5 under a total limit of 8, so the lobe sample, Russian roulette and the
+// next ray all run. Integer fields (term, next_stage, path flags, slot flags, every COUNT plane,
+// the material-id AOV, bounce counters, event index, ray type) must be bit-equal; the slot
+// radiance agrees to 0002 D12's evaluation threshold (FMA-off GPU build vs CPU float), beta and
+// r_l to its throughput threshold and the next direction to its direction threshold; the
+// position, normal and UV AOVs and the next ray origin within 1e-5 relative (0009 d17 step iv's
+// geometry tolerance).
 // Ref: docs/decisions/0002-kernel-architecture.md D4, D12; 0009 d17; 0004 D5, D28; 0008 d10.
 // The production module is launched, so what runs is the shipped code.
 #include <doctest.h>
@@ -17,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <string>
@@ -132,6 +138,11 @@ Materials build_materials(const Tables& t) {
 
 struct Snapshot {
   std::vector<float> slot_L;
+  std::vector<ar::Spec> beta, r_l;
+  std::vector<ar::Real3> ray_o, ray_d;
+  std::vector<ar::U16x6> bounces;
+  std::vector<uint16_t> event_index;
+  std::vector<uint8_t> ray_type;
   std::vector<uint32_t> slot_flags, flags;
   std::vector<uint8_t> next_stage, term;
   std::vector<uint32_t> counts;  // every COUNT plane
@@ -233,6 +244,12 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   tables.observer = ar::ObserverView{static_cast<const float*>(put(&tb.obs.cmf[0][0], sizeof tb.obs.cmf)),
                                      static_cast<const float*>(put(tb.obs.d65, sizeof tb.obs.d65))};
   void* tables_p = put(&tables, sizeof tables);
+  DataBlob eblob;
+  REQUIRE(find_data("tables/e_diel_refl.bin", &eblob));
+  ar::EDielTable et{};
+  REQUIRE(ar::e_diel_view(eblob.data, eblob.size, &et) == nullptr);
+  et.e = static_cast<const float*>(put(et.e, 4ull * ar::kEDielN * ar::kEDielN * ar::kEDielN));
+  void* e_diel_p = put(&et, sizeof et);
 
   // Path state from the sampler's independent stream (agree::unit), never a rand().
   std::vector<uint32_t> sample_id(kN), flags(kN), hit_prim(kN), hit_inst(kN);
@@ -241,7 +258,11 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   std::vector<ar::Real3> ray_d(kN);
   std::vector<ar::Real2> hit_uv(kN);
   std::vector<ar::Real> hit_t(kN, ar::Real(1));
-  std::vector<ar::Spec> lambda_t(kN), beta(kN);
+  std::vector<ar::Spec> lambda_t(kN), beta(kN), r_u(kN), r_l(kN, ar::spec_fill(0.0f));
+  std::vector<uint16_t> event_index(kN);
+  std::vector<ar::Real3> ray_o(kN, ar::Real3{0, 0, 0});
+  std::vector<ar::Real> eta_scale(kN, ar::Real(1)), prev_dist(kN, ar::Real(0));
+  std::vector<uint32_t> prev_ng(kN, 0u), prev_ns(kN, 0u);
   for (uint32_t i = 0; i < kN; ++i) {
     sample_id[i] = i;
     hit_inst[i] = uint32_t(rnd(i, 30) * kInstances);
@@ -253,7 +274,9 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
     for (int l = 0; l < ar::kLanes; ++l) {
       lambda_t[i].v[l] = 380.0f + 400.0f * rnd(i, uint32_t(l));
       beta[i].v[l] = 2.0f * rnd(i, 4u + uint32_t(l));
+      r_u[i].v[l] = 0.5f + rnd(i, 40u + uint32_t(l));
     }
+    event_index[i] = uint16_t(rnd(i, 44) * 6.0f);
     const double bad = agree::unit(i, 8);
     if (bad < 0.005) beta[i].v[int(rnd(i, 9) * 4.0f)] = std::numeric_limits<float>::quiet_NaN();
     else if (bad < 0.01) beta[i].v[int(rnd(i, 9) * 4.0f)] = std::numeric_limits<float>::infinity();
@@ -275,6 +298,14 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   soa.hit_prim = static_cast<uint32_t*>(put(hit_prim.data(), kN * 4));
   soa.hit_inst = static_cast<uint32_t*>(put(hit_inst.data(), kN * 4));
   soa.hit_uv = static_cast<ar::Real2*>(put(hit_uv.data(), kN * sizeof(ar::Real2)));
+  soa.event_index = static_cast<uint16_t*>(put(event_index.data(), kN * 2));
+  soa.ray_o = static_cast<ar::Real3*>(put(ray_o.data(), kN * sizeof(ar::Real3)));
+  soa.r_u = static_cast<ar::Spec*>(put(r_u.data(), kN * sizeof(ar::Spec)));
+  soa.r_l = static_cast<ar::Spec*>(put(r_l.data(), kN * sizeof(ar::Spec)));
+  soa.eta_scale = static_cast<ar::Real*>(put(eta_scale.data(), kN * sizeof(ar::Real)));
+  soa.prev_ng = static_cast<uint32_t*>(put(prev_ng.data(), kN * 4));
+  soa.prev_ns = static_cast<uint32_t*>(put(prev_ns.data(), kN * 4));
+  soa.prev_dist = static_cast<ar::Real*>(put(prev_dist.data(), kN * sizeof(ar::Real)));
   void* soa_p = put(&soa, sizeof soa);
 
   ar::KernelGlobals kg{};
@@ -285,9 +316,13 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   kg.film = static_cast<ar::FilmData*>(film_p);
   kg.scene = static_cast<const ar::SceneData*>(scene_p);
   kg.tables = static_cast<const ar::SceneTables*>(tables_p);
+  kg.e_diel = static_cast<const ar::EDielTable*>(e_diel_p);
   kg.session.width = kFilmW;
   kg.session.height = kFilmH;
   kg.session.samples_per_pass = kK;
+  kg.session.seed = 3;
+  kg.session.sampler_mode = ar::SAMPLER_INDEPENDENT;
+  kg.session.max_bounces[0] = 8;
   void* kg_p = put(&kg, sizeof kg);
 
   if (gpu != nullptr) {
@@ -323,6 +358,15 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   dev.download(s.flags.data(), find(soa.flags), 0, kN * 4);
   dev.download(s.next_stage.data(), find(soa.next_stage), 0, kN);
   dev.download(s.term.data(), find(soa.term), 0, kN);
+  s.beta.resize(kN), s.r_l.resize(kN), s.ray_o.resize(kN), s.ray_d.resize(kN), s.bounces.resize(kN);
+  s.event_index.resize(kN), s.ray_type.resize(kN);
+  dev.download(s.beta.data(), find(soa.beta), 0, kN * sizeof(ar::Spec));
+  dev.download(s.r_l.data(), find(soa.r_l), 0, kN * sizeof(ar::Spec));
+  dev.download(s.ray_o.data(), find(soa.ray_o), 0, kN * sizeof(ar::Real3));
+  dev.download(s.ray_d.data(), find(soa.ray_d), 0, kN * sizeof(ar::Real3));
+  dev.download(s.bounces.data(), find(soa.bounces), 0, kN * sizeof(ar::U16x6));
+  dev.download(s.event_index.data(), find(soa.event_index), 0, kN * 2);
+  dev.download(s.ray_type.data(), find(soa.ray_type), 0, kN);
   const uint32_t n_count_planes = uint32_t(fd.term_hist) + ar::kTermCount;
   s.counts.resize(size_t(n_count_planes) * fd.plane_stride);
   dev.download(s.counts.data(), film.buffer(), offset(fd.count), s.counts.size() * 4);
@@ -363,15 +407,29 @@ TEST_CASE("shade_surface/agreement") {
   CHECK(plane(c, c.aov_material, 1) == plane(g, g.aov_material, 1));
   CHECK(plane(c, c.bounce_sum, 1) == plane(g, g.bounce_sum, 1));
 
-  // The fixture reaches every outcome: valid ends, invalid ends from the corrupt program and
-  // the non-finite throughputs, both faces, the default material (pass index 0 on some pixel).
-  uint32_t ended = 0, invalid = 0, front = 0;
+  CHECK(c.event_index == g.event_index);
+  CHECK(c.ray_type == g.ray_type);
+  CHECK(std::memcmp(c.bounces.data(), g.bounces.data(), kN * sizeof(ar::U16x6)) == 0);
+
+  // The fixture reaches every outcome: continued paths of both lobes, roulette, zero throughput,
+  // valid ends, invalid ends from the corrupt program and the non-finite throughputs, both faces,
+  // the default material (pass index 0 on some pixel).
+  uint32_t ended = 0, continued = 0, glossy = 0, rr = 0, zero = 0, invalid = 0, front = 0;
   for (uint32_t i = 0; i < kN; ++i) {
     ended += c.next_stage[i] == uint8_t(ar::Stage::TERMINATED);
+    continued += c.next_stage[i] == uint8_t(ar::Stage::INTERSECT_CLOSEST);
+    glossy += c.next_stage[i] == uint8_t(ar::Stage::INTERSECT_CLOSEST) && c.ray_type[i] == ar::kRayTypeGlossy;
+    rr += c.term[i] == uint8_t(ar::Term::RUSSIAN_ROULETTE);
+    zero += c.term[i] == uint8_t(ar::Term::ZERO_THROUGHPUT);
     invalid += c.term[i] == uint8_t(ar::Term::INVALID);
     front += (c.flags[i] & ar::FRONT_FACE) != 0u;
   }
-  CHECK(ended == kN);
+  CHECK(ended + continued == kN);
+  CHECK(continued > kN / 10);
+  CHECK(glossy > continued / 20);
+  CHECK(glossy < continued);
+  CHECK(rr > 100u);
+  CHECK(zero > 100u);
   CHECK(invalid > 1000u);
   CHECK(invalid < kN / 2);
   CHECK(front > kN / 4);
@@ -410,8 +468,35 @@ TEST_CASE("shade_surface/agreement") {
     for (size_t i = 0; i < a.size(); ++i)
       worst = std::max(worst, std::fabs(double(a[i]) - double(b[i])) / std::max(1.0, std::fabs(double(a[i]))));
   }
-  std::printf("shade_surface agreement: %u invalid of %u, worst geometry AOV difference %.3g\n", invalid, kN, worst);
+  // The continued paths: throughput, r_l, direction and origin of the next ray.
+  agree::Results bc, bg, lc2, lg2, dc, dg;
+  for (agree::Results* r : {&bc, &bg, &lc2, &lg2}) r->n = continued, r->stride = 4;
+  dc.n = dg.n = continued;
+  dc.stride = dg.stride = 3;
+  double worst_o = 0.0;
+  for (uint32_t i = 0; i < kN; ++i) {
+    if (c.next_stage[i] != uint8_t(ar::Stage::INTERSECT_CLOSEST)) continue;
+    for (int l = 0; l < ar::kLanes; ++l) {
+      bc.v.push_back(c.beta[i].v[l]), bg.v.push_back(g.beta[i].v[l]);
+      lc2.v.push_back(c.r_l[i].v[l]), lg2.v.push_back(g.r_l[i].v[l]);
+    }
+    for (const float* p : {&c.ray_d[i].x, &c.ray_d[i].y, &c.ray_d[i].z}) dc.v.push_back(*p);
+    for (const float* p : {&g.ray_d[i].x, &g.ray_d[i].y, &g.ray_d[i].z}) dg.v.push_back(*p);
+    const float oc[3] = {c.ray_o[i].x, c.ray_o[i].y, c.ray_o[i].z}, og[3] = {g.ray_o[i].x, g.ray_o[i].y, g.ray_o[i].z};
+    for (int k = 0; k < 3; ++k)
+      worst_o = std::max(worst_o, std::fabs(double(oc[k]) - double(og[k])) / std::max(1.0, std::fabs(double(oc[k]))));
+  }
+  CHECK(agree::report("shade_surface", "beta nofma vs cpu float", agree::compare(bg, bc, agree::Metric::REL_L2),
+                      agree::Cls::THROUGHPUT, agree::NOFMA_VS_CPU_FLOAT).pass);
+  CHECK(agree::report("shade_surface", "r_l nofma vs cpu float", agree::compare(lg2, lc2, agree::Metric::REL_L2),
+                      agree::Cls::THROUGHPUT, agree::NOFMA_VS_CPU_FLOAT).pass);
+  CHECK(agree::report("shade_surface", "next direction nofma vs cpu float", agree::compare(dg, dc, agree::Metric::ANGLE),
+                      agree::Cls::DIRECTION, agree::NOFMA_VS_CPU_FLOAT).pass);
+  std::printf("shade_surface agreement: %u invalid, %u continued (%u glossy), %u roulette, %u zero of %u; worst geometry "
+              "AOV difference %.3g, worst next-origin difference %.3g\n",
+              invalid, continued, glossy, rr, zero, kN, worst, worst_o);
   CHECK(worst <= 1e-5);
+  CHECK(worst_o <= 1e-5);
 }
 
 }  // TEST_SUITE
