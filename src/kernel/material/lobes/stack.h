@@ -36,13 +36,17 @@ struct StackSelect {
   Real p_spec;  // probability of choosing the specular lobe
   Real p_diff;  // 1 - p_spec
   Spec e_spec;  // albedo the specular layer takes from the base, per lane
+  Spec eta;     // specular_weighted_eta clamped to the table's range; the lobe and the table both use it
+  bool eta_clamped;  // some lane's index was outside [kEDielEtaMin, kEDielEtaMax]; the host reports it
 };
 
-AR_FN GgxParams stack_ggx_params(const OpenPBRParams& p) {
+// The lobe takes the clamped, already weight-modulated index with weight 1: at weight 1
+// specular_weighted_eta returns its argument, so the lobe's F is the one E_spec was built from.
+AR_FN GgxParams stack_ggx_params(const OpenPBRParams& p, const StackSelect& s) {
   GgxParams g;
   g.specular_color = p.specular_color;
-  g.specular_ior = p.specular_ior;
-  g.specular_weight = p.specular_weight;
+  g.specular_ior = s.eta;
+  g.specular_weight = Real(1);
   g.roughness = p.specular_roughness;
   return g;
 }
@@ -58,12 +62,21 @@ AR_FN EonParams stack_eon_params(const OpenPBRParams& p) {
 // The one lobe-selection function (0005 item 4). Each lobe is chosen in proportion to the
 // lane-mean of its albedo estimate, the specular one from the table, the diffuse one after the
 // layering scale (1 - E_spec). mu_o is wo.z in the shading frame.
+// The table covers eta in [1, 3]. Each lane's modulated index is clamped to that range once
+// here and the same value feeds the table and the lobe, so a stack with an index outside the
+// range stays energy-conserving (a table clamped alone would leave the lobe reflecting more or
+// less than the layer takes from the base). A clamp sets eta_clamped; the host turns it into the
+// SPECTRUM_OUT_OF_RANGE report (src/host/report_codes.def). Ref: 0005 item 6; task 064 ruling.
 AR_FN StackSelect stack_select(const EDielTable& tab, const OpenPBRParams& p, Real mu_o) {
   const Real alpha = p.specular_roughness * p.specular_roughness;
   const Real r = e_roughness_axis(alpha, alpha);
   StackSelect s;
+  s.eta_clamped = false;
   for (int i = 0; i < kLanes; ++i) {
-    const Real eta = specular_weighted_eta(p.specular_ior.v[i], p.specular_weight);
+    const Real eta_raw = specular_weighted_eta(p.specular_ior.v[i], p.specular_weight);
+    const Real eta = min(max(eta_raw, kEDielEtaMin), kEDielEtaMax);
+    s.eta.v[i] = eta;
+    if (eta != eta_raw) s.eta_clamped = true;
     const Real e = p.specular_color.v[i] * e_diel_lookup(tab, mu_o, r, eta);
     s.e_spec.v[i] = min(max(e, Real(0)), Real(1));
   }
@@ -94,11 +107,12 @@ AR_FN Spec stack_combine_f(const OpenPBRParams& p, const StackSelect& s, const S
 }
 
 AR_FN LobeEval stack_eval(const EDielTable& tab, const OpenPBRParams& p, const Frame& frame, Real3 wo_world,
-                          Real3 wi_world, TransportMode mode) {
+                          Real3 wi_world, TransportMode mode, bool* eta_clamped = nullptr) {
   const Real3 wo = to_local(frame, wo_world), wi = to_local(frame, wi_world);
   if (wo.z <= Real(0) || wi.z <= Real(0)) return stack_zero_eval();
   const StackSelect s = stack_select(tab, p, wo.z);
-  const LobeEval es = ggx_eval(stack_ggx_params(p), wo, wi, mode);
+  if (eta_clamped != nullptr && s.eta_clamped) *eta_clamped = true;
+  const LobeEval es = ggx_eval(stack_ggx_params(p, s), wo, wi, mode);
   const LobeEval ed = eon_eval(stack_eon_params(p), wo, wi, mode);
   LobeEval e;
   e.f = stack_combine_f(p, s, es.f, ed.f);
@@ -108,11 +122,12 @@ AR_FN LobeEval stack_eval(const EDielTable& tab, const OpenPBRParams& p, const F
 }
 
 AR_FN Real stack_pdf(const EDielTable& tab, const OpenPBRParams& p, const Frame& frame, Real3 wo_world, Real3 wi_world,
-                     TransportMode mode) {
+                     TransportMode mode, bool* eta_clamped = nullptr) {
   const Real3 wo = to_local(frame, wo_world), wi = to_local(frame, wi_world);
   if (wo.z <= Real(0) || wi.z <= Real(0)) return Real(0);
   const StackSelect s = stack_select(tab, p, wo.z);
-  return s.p_spec * ggx_pdf(stack_ggx_params(p), wo, wi, mode) + s.p_diff * eon_pdf(stack_eon_params(p), wo, wi, mode);
+  if (eta_clamped != nullptr && s.eta_clamped) *eta_clamped = true;
+  return s.p_spec * ggx_pdf(stack_ggx_params(p, s), wo, wi, mode) + s.p_diff * eon_pdf(stack_eon_params(p), wo, wi, mode);
 }
 
 // A uniform in [0, 1) stays below 1 after the lobe-selection rescale.
@@ -124,9 +139,10 @@ AR_FN Real stack_below_one(Real u) {
 // u.x picks the lobe and is rescaled for the chosen lobe's own sampling, as in eon_sample.
 // A delta specular sample carries LOBE_DELTA with pdf = p_spec (the choice probability times
 // the lobe's unit pdf), so f cos / pdf = F / p_spec; every other sample reports the mixture
-// density and the layered f of its direction. pdf = 0 means "no sample".
+// density and the layered f of its direction. pdf = 0 means "no sample". The three entry
+// points OR StackSelect::eta_clamped into *eta_clamped when it is given (never clear it).
 AR_FN LobeSample stack_sample(const EDielTable& tab, const OpenPBRParams& p, const Frame& frame, Real3 wo_world, Real2 u,
-                              TransportMode mode) {
+                              TransportMode mode, bool* eta_clamped = nullptr) {
   LobeSample out;
   out.wi = Real3{Real(0), Real(0), Real(1)};
   out.f = spec_fill(Real(0));
@@ -135,7 +151,8 @@ AR_FN LobeSample stack_sample(const EDielTable& tab, const OpenPBRParams& p, con
   const Real3 wo = to_local(frame, wo_world);
   if (wo.z <= Real(0)) return out;
   const StackSelect s = stack_select(tab, p, wo.z);
-  const GgxParams gp = stack_ggx_params(p);
+  if (eta_clamped != nullptr && s.eta_clamped) *eta_clamped = true;
+  const GgxParams gp = stack_ggx_params(p, s);
   const EonParams ep = stack_eon_params(p);
 
   LobeSample ls, ds;

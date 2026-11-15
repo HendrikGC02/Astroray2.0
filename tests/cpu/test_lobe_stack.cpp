@@ -157,10 +157,9 @@ TEST_SUITE("fast") {
       const Real eta = Real(1) + Real(2) * (Real(ie) + Real(0.5)) / Real(kN - 1);
       CHECK(std::fabs(double(ar::e_diel_lookup(fx.table, mu, r, eta)) - mean) < 1e-6);
     }
-    // The last cell interpolates up to node 15, and arguments clamp to the axes.
+    // The last cell interpolates up to node 15. What the lookup does outside its axes is only a
+    // memory-safety backstop; stack_select clamps and reports first (case "lobe_stack/eta clamp").
     CHECK(std::fabs(double(ar::e_diel_lookup(fx.table, Real(1), Real(1), Real(3))) - fx.raw(15, 15, 15)) < 1e-6);
-    CHECK(std::fabs(double(ar::e_diel_lookup(fx.table, Real(2), Real(7), Real(9))) - fx.raw(15, 15, 15)) < 1e-6);
-    CHECK(std::fabs(double(ar::e_diel_lookup(fx.table, Real(-1), Real(-1), Real(0.2))) - fx.raw(0, 0, 0)) < 1e-6);
 
     // Smooth cells (r = 0) are the Fresnel reflectance itself, which pins the table to the physics
     // independently of the generator's sampler. Node mu = 0 is evaluated at kEDielMuFloor.
@@ -229,7 +228,7 @@ TEST_SUITE("fast") {
         CHECK(s.p_spec >= Real(0));
         CHECK(s.p_diff >= Real(0));
 
-        const ar::GgxParams g = ar::stack_ggx_params(p);
+        const ar::GgxParams g = ar::stack_ggx_params(p, s);
         const ar::EonParams ep = ar::stack_eon_params(p);
         for (double zi : {0.2, 0.6, 0.95})
           for (double phi : {0.4, 2.5, 4.6}) {
@@ -290,6 +289,54 @@ TEST_SUITE("fast") {
         if (smp.pdf > Real(0) && (smp.flags & ar::LOBE_DELTA) != 0) ++delta;
       }
       CHECK(std::fabs(double(delta) / n - double(s.p_spec)) < 2.0 / n);
+    }
+  }
+
+  TEST_CASE("lobe_stack/eta clamp") {
+    // An index outside the table's [1, 3] is clamped once in stack_select, the lobe and the table
+    // both use the clamped value, and the clamp is flagged for the host's report.
+    Fixture fx;
+    const Frame frame = tilted_frame();
+    const double mu = 0.6;
+    const Real3 wo = ar::to_world(frame, local_dir(mu, 0.5));
+    const Real3 wi = ar::to_world(frame, local_dir(0.7, 2.0));
+    struct Row {
+      double ior, weight, want_eta;
+      bool clamped;
+    };
+    // Weight 0.5 at IOR 4: F0 = 0.36, xi F0 = 0.18, eps = sqrt(0.18), eta = (1 + eps) / (1 - eps) = 2.4739 (in range).
+    const Row rows[] = {{1.5, 1.0, 1.5, false}, {4.0, 1.0, 3.0, true}, {0.9, 1.0, 1.0, true},
+                        {4.0, 0.5, 2.4739, false}, {3.0, 1.0, 3.0, false}, {1.0, 1.0, 1.0, false}};
+    for (const Row& row : rows) {
+      const double ior[4] = {row.ior, row.ior, row.ior, row.ior};
+      const OpenPBRParams p = make_params(kOnes, ior, row.weight, 0.5, 1.0, kOnes, 0.0, 1.0);
+      const StackSelect s = ar::stack_select(fx.table, p, Real(mu));
+      INFO("ior=" << row.ior << " weight=" << row.weight);
+      CHECK(s.eta_clamped == row.clamped);
+      for (int l = 0; l < 4; ++l) CHECK(std::fabs(double(s.eta.v[l]) - row.want_eta) < 1e-3);
+      // The out-parameter of every entry point carries the flag.
+      bool f_eval = false, f_pdf = false, f_sample = false;
+      ar::stack_eval(fx.table, p, frame, wo, wi, TransportMode::Radiance, &f_eval);
+      ar::stack_pdf(fx.table, p, frame, wo, wi, TransportMode::Radiance, &f_pdf);
+      ar::stack_sample(fx.table, p, frame, wo, Real2{Real(0.5), Real(0.5)}, TransportMode::Radiance, &f_sample);
+      CHECK(f_eval == row.clamped);
+      CHECK(f_pdf == row.clamped);
+      CHECK(f_sample == row.clamped);
+      // The specular part of eval is the lobe at the clamped index (weight 1), and E_spec was built at
+      // that same index: eval = closure (ggx(eta_used) + (1 - E_spec) eon).
+      ar::GgxParams g;
+      g.specular_color = p.specular_color;
+      for (int l = 0; l < 4; ++l) g.specular_ior.v[l] = Real(row.want_eta);
+      g.specular_weight = Real(1);
+      g.roughness = p.specular_roughness;
+      const Real3 wo_l = ar::to_local(frame, wo), wi_l = ar::to_local(frame, wi);
+      const LobeEval es = ar::ggx_eval(g, wo_l, wi_l, TransportMode::Radiance);
+      const LobeEval ed = ar::eon_eval(ar::stack_eon_params(p), wo_l, wi_l, TransportMode::Radiance);
+      const LobeEval e = ar::stack_eval(fx.table, p, frame, wo, wi, TransportMode::Radiance);
+      for (int l = 0; l < 4; ++l) {
+        const double want = double(es.f.v[l]) + (1.0 - double(s.e_spec.v[l])) * double(ed.f.v[l]);
+        CHECK(rel_close(double(e.f.v[l]), want, 1e-3));
+      }
     }
   }
 
@@ -361,6 +408,39 @@ TEST_SUITE("gate") {
         CHECK(e <= 1.002);
       }
     std::printf("lobe_stack furnace: E in [%.5f, %.5f]\n", worst_lo, worst_hi);
+  }
+
+  TEST_CASE("lobe_stack/white furnace out of range ior") {
+    // IOR outside the table's [1, 3] (all lanes): the stack clamps the index for the lobe and the
+    // table alike, so the lossless furnace stays in the same band, and the clamp is flagged. IOR 1.5
+    // must not set the flag.
+    Fixture fx;
+    const Frame frame = tilted_frame();
+    constexpr int kStrata = 512;
+    std::printf("lobe_stack furnace out of range: %d samples per row, band 0.99 <= E <= 1.002\n", kStrata * kStrata);
+    for (double ior : {4.0, 0.9, 1.5})
+      for (double rough : {0.25, 0.5, 1.0})
+        for (double mu : {0.05, 0.5, 1.0}) {
+          const double iors[4] = {ior, ior, ior, ior};
+          const OpenPBRParams p = make_params(kOnes, iors, 1.0, rough, 1.0, kOnes, 0.0, 1.0);
+          const Real3 wo = ar::to_world(frame, local_dir(mu, 0.6));
+          bool clamped = false;
+          double sum = 0;
+          for (int i = 0; i < kStrata; ++i)
+            for (int j = 0; j < kStrata; ++j) {
+              const uint64_t h = (uint64_t(i) * kStrata + j) ^ (uint64_t(rough * 100) << 40) ^ (uint64_t(mu * 100) << 50);
+              const double u1 = (i + hash_unit(h)) / kStrata, u2 = (j + hash_unit(h ^ 0x1234567ull)) / kStrata;
+              const LobeSample s = ar::stack_sample(fx.table, p, frame, wo, Real2{Real(u1), Real(u2)}, TransportMode::Radiance, &clamped);
+              if (!(s.pdf > Real(0))) continue;
+              sum += double(s.f.v[0]) * double(ar::to_local(frame, s.wi).z) / double(s.pdf);
+            }
+          const double e = sum / (double(kStrata) * kStrata);
+          std::printf("  ior %.2f roughness %.2f mu_o %.2f  E = %.5f  eta_clamped %d\n", ior, rough, mu, e, int(clamped));
+          INFO("ior=" << ior << " roughness=" << rough << " mu=" << mu << " E=" << e);
+          CHECK(e >= 0.99);
+          CHECK(e <= 1.002);
+          CHECK(clamped == (ior != 1.5));
+        }
   }
 
   // Chi-squared of the mixture sampler against stack_pdf over the hemisphere, in cells of equal

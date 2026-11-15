@@ -35,7 +35,8 @@ inline constexpr uint32_t kETableHeaderBytes = 92;
 inline constexpr uint32_t kETableLobeHashOffset = 24;
 inline constexpr uint32_t kETableSamplesOffset = 20;
 inline constexpr Real kEDielMuFloor = Real(1e-3);
-// The IOR range the table covers; lookups clamp to it. Ref: task 064 (1.0 to 3.0).
+// The IOR range the table covers. stack_select clamps to it and reports; the lookup clamps only
+// as a memory-safety backstop. Ref: task 064 (1.0 to 3.0).
 inline constexpr Real kEDielEtaMin = Real(1);
 inline constexpr Real kEDielEtaMax = Real(3);
 
@@ -75,7 +76,8 @@ AR_FN Real e_diel_node(const EDielTable& t, uint32_t imu, uint32_t ir, uint32_t 
   return Real(t.e[(ieta * kEDielN + ir) * kEDielN + imu]);
 }
 
-// Trilinear lookup; every argument clamps to its axis.
+// Trilinear lookup. Arguments clamp to their axes only so an index never leaves the array; a
+// caller that must keep lobe and table consistent clamps first (stack_select).
 AR_FN Real e_diel_lookup(const EDielTable& t, Real mu, Real r, Real eta) {
   const Real top = Real(kEDielN - 1);
   const Real c[3] = {min(max(mu, Real(0)), Real(1)) * top, min(max(r, Real(0)), Real(1)) * top,
