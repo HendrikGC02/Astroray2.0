@@ -229,6 +229,31 @@ TEST_CASE("scene/edit rules") {
   CHECK_FALSE(scene.known(AR_KIND_GEOMETRY, 3));
 }
 
+TEST_CASE("scene/rejected generation does not change the known keys") {
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  {
+    auto e = scene.begin_edit();
+    REQUIRE(e->stage(item(20, [] {})) == AR_OK);
+    REQUIRE(e->item_commit(20) == AR_OK);
+    commit_ok(*e);
+  }
+  scene.generations().wait_idle();
+  REQUIRE(scene.generations().active() == 1);
+  {
+    auto e = scene.begin_edit();
+    REQUIRE(e->remove(AR_KIND_GEOMETRY, 20) == AR_OK);
+    REQUIRE(e->stage(item(21, [] { throw std::runtime_error("bad"); })) == AR_OK);
+    REQUIRE(e->item_commit(21) == AR_OK);
+    commit_ok(*e);
+  }
+  scene.generations().wait_idle();
+  REQUIRE(scene.generations().failed() == 2);
+  auto e = scene.begin_edit();
+  CHECK(e->remove(AR_KIND_GEOMETRY, 20) == AR_OK);                     // still live
+  CHECK(e->remove(AR_KIND_GEOMETRY, 21) == AR_ERR_INVALID_ARGUMENT);  // only the rejected one had it
+}
+
 TEST_CASE("scene/init failure is re-raised at the first job") {
   ContextState ctx;
   SceneConfig cfg;

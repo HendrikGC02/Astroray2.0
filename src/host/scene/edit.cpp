@@ -62,7 +62,8 @@ ar_status Edit::item_commit(ar_key key) {
   Scene* scene = &scene_;
   std::shared_ptr<Pending> pending = pending_;
   scene_.generations().job_started(*pending);
-  scene_.pool().submit([scene, pending, item] {
+  try {
+    scene_.pool().submit([scene, pending, item] {
     std::string fail;
     try {
       if (item->needs_device) scene->wait_init();  // re-raises a stored init failure
@@ -78,7 +79,12 @@ ar_status Edit::item_commit(ar_key key) {
       // A throwing release must not hide the job's own outcome.
     }
     scene->generations().job_done(pending, item->key, fail);
-  });
+    });
+  } catch (...) {
+    it->second.committed = false;
+    scene_.generations().job_done(pending, key, "");  // undo job_started
+    throw;
+  }
   return AR_OK;
 }
 
@@ -158,14 +164,15 @@ ar_status Edit::commit(uint64_t* generation) {
 
   Pending& p = *pending_;
   p.reset = reset_;
+  Pending delta;  // just the key-set changes, copied into the activation callback
+  delta.known_reset = reset_;
+  delta.known_removed = removed_;
+  for (const auto& kv : staged_) delta.known_added.insert({kv.second.item->kind, kv.first});
+  for (const auto& kv : astro_) delta.known_added.insert({AR_KIND_ASTRO, kv.first});
+  p.known_reset = delta.known_reset;
+  p.known_removed = delta.known_removed;
+  p.known_added = delta.known_added;
   Scene::State& st = scene_.state_;
-  {
-    std::lock_guard<std::mutex> lock(st.mutex);
-    if (reset_) st.known.clear();
-    for (const auto& r : removed_) st.known.erase(r);
-    for (const auto& kv : staged_) st.known.insert({kv.second.item->kind, kv.first});
-    for (const auto& kv : astro_) st.known.insert({AR_KIND_ASTRO, kv.first});
-  }
   for (const auto& kv : staged_) {
     p.subjects.push_back(kv.first);
     if (kv.second.item->on_active) p.on_active.push_back(kv.second.item->on_active);
@@ -175,8 +182,9 @@ ar_status Edit::commit(uint64_t* generation) {
   for (const auto& kv : astro_) p.subjects.push_back(kv.first);
   // The stored descriptors take effect with the generation, not before.
   p.on_active.push_back([&st, reset = reset_, settings = settings_, camera = camera_, astro = astro_,
-                         removed = removed_] {
+                         removed = removed_, delta] {
     std::lock_guard<std::mutex> lock(st.mutex);
+    apply_known(st.known_active, delta);
     if (reset) {
       st.settings.reset();
       st.camera.reset();
@@ -188,8 +196,11 @@ ar_status Edit::commit(uint64_t* generation) {
     if (camera) st.camera = camera;
     for (const auto& kv : astro) st.astro[kv.first] = kv.second;
   });
-  finished_ = true;
-  *generation = scene_.generations().commit(pending_);
+  *generation = scene_.generations().commit(pending_, [&] {
+    std::lock_guard<std::mutex> lock(st.mutex);
+    apply_known(st.known, p);
+  });
+  finished_ = true;  // only now: nothing after the commit can throw
   return AR_OK;
 }
 

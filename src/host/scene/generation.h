@@ -12,8 +12,10 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "host/fault.h"
@@ -27,6 +29,8 @@ class WorkerPool {
  public:
   WorkerPool(ContextState& ctx, unsigned workers);
   ~WorkerPool();
+  // Runs the queued jobs and joins; idempotent. submit() stays safe afterwards.
+  void shutdown();
   WorkerPool(const WorkerPool&) = delete;
   WorkerPool& operator=(const WorkerPool&) = delete;
   void submit(std::function<void()> job);
@@ -52,6 +56,10 @@ struct Pending {
   uint64_t failed_key = 0;
   std::string failed_detail;
   std::vector<uint64_t> subjects;
+  // Key-set changes of this generation as (kind, key) pairs, applied in order by the
+  // scene's known-key set (optimistically at commit, rebuilt when an earlier one drops).
+  bool known_reset = false;
+  std::set<std::pair<uint32_t, uint64_t>> known_removed, known_added;
   // Run under the tracker lock, so they must not call back into it.
   std::vector<std::function<void()>> on_active;   // generation became active
   std::vector<std::function<void()>> on_dropped;  // failed or aborted: free the new objects
@@ -64,8 +72,14 @@ class GenerationTracker {
   void job_started(Pending& p);
   // Records the first failure of the generation (fail is empty on success).
   void job_done(const std::shared_ptr<Pending>& p, uint64_t key, const std::string& fail);
-  // Assigns the generation number and queues the generation for activation.
-  uint64_t commit(const std::shared_ptr<Pending>& p);
+  // Assigns the generation number and queues the generation for activation. `on_commit`
+  // runs under the tracker lock before the generation is queued, so a concurrent drop
+  // never sees the queue without it.
+  uint64_t commit(const std::shared_ptr<Pending>& p, const std::function<void()>& on_commit);
+  // Called under the tracker lock after a generation was dropped, with the generations
+  // still queued, in order.
+  using DropHook = std::function<void(const std::deque<std::shared_ptr<Pending>>&)>;
+  void set_drop_hook(DropHook hook) { drop_hook_ = std::move(hook); }
   // Drops the edit: its callbacks run once its running jobs have finished.
   void abort(const std::shared_ptr<Pending>& p);
 
@@ -83,6 +97,7 @@ class GenerationTracker {
   std::condition_variable idle_;
   std::deque<std::shared_ptr<Pending>> queue_;
   std::vector<std::shared_ptr<Pending>> aborted_;
+  DropHook drop_hook_;
   uint64_t next_ = 1;
   uint64_t active_ = 0;
   uint64_t failed_ = 0;

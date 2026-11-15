@@ -11,16 +11,24 @@ namespace astroray::host {
 
 WorkerPool::WorkerPool(ContextState& ctx, unsigned workers) {
   if (workers == 0) throw std::invalid_argument("worker pool: zero workers");
-  for (unsigned i = 0; i < workers; ++i) threads_.push_back(start_engine_thread(ctx, [this] { main(); }));
+  try {
+    for (unsigned i = 0; i < workers; ++i) threads_.push_back(start_engine_thread(ctx, [this] { main(); }));
+  } catch (...) {
+    shutdown();  // a constructor that throws never runs the destructor
+    throw;
+  }
 }
 
-WorkerPool::~WorkerPool() {
+WorkerPool::~WorkerPool() { shutdown(); }
+
+void WorkerPool::shutdown() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     stop_ = true;
   }
   wake_.notify_all();
-  for (std::thread& t : threads_) t.join();
+  for (std::thread& t : threads_)
+    if (t.joinable()) t.join();
 }
 
 void WorkerPool::submit(std::function<void()> job) {
@@ -65,8 +73,9 @@ void GenerationTracker::job_done(const std::shared_ptr<Pending>& p, uint64_t key
   pump_locked();
 }
 
-uint64_t GenerationTracker::commit(const std::shared_ptr<Pending>& p) {
+uint64_t GenerationTracker::commit(const std::shared_ptr<Pending>& p, const std::function<void()>& on_commit) {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (on_commit) on_commit();
   p->number = next_++;
   p->committed = true;
   queue_.push_back(p);
@@ -82,6 +91,11 @@ void GenerationTracker::abort(const std::shared_ptr<Pending>& p) {
 }
 
 void GenerationTracker::pump_locked() {
+  // Waiters must wake even if a callback throws.
+  struct Wake {
+    std::condition_variable& cv;
+    ~Wake() { cv.notify_all(); }
+  } wake{idle_};
   for (size_t i = 0; i < aborted_.size();) {
     if (aborted_[i]->outstanding == 0) {
       for (auto& f : aborted_[i]->on_dropped) f();
@@ -98,6 +112,7 @@ void GenerationTracker::pump_locked() {
       failed_ = p->number;
       const double value[2] = {static_cast<double>(p->number), 0.0};
       report_.raise(AR_REPORT_GENERATION_REJECTED, p->failed_key, p->failed_detail, 1, value, p->number);
+      if (drop_hook_) drop_hook_(queue_);
       ctx_.log.line("ERROR", "generation " + std::to_string(p->number) + " rejected: key " +
                                  std::to_string(p->failed_key) + ": " + p->failed_detail);
     } else {
@@ -106,7 +121,6 @@ void GenerationTracker::pump_locked() {
       report_.on_generation_active(p->number, p->subjects, p->reset);
     }
   }
-  idle_.notify_all();
 }
 
 uint64_t GenerationTracker::active() const {

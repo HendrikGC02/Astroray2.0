@@ -79,6 +79,7 @@ AR_API ar_status ar_scene_create(ar_context ctx, const ar_scene_desc* desc, ar_s
     if (!out) return fail_ctx(ctx, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_scene_create output is null");
     *out = nullptr;
     if (!desc) return fail_ctx(ctx, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_scene_create desc is null");
+    // A sanity cap against a garbage value spawning thousands of threads, not a physical limit.
     if (desc->worker_threads > 256) return fail_ctx(ctx, AR_ERR_INVALID_ARGUMENT, "invalid argument: worker_threads above 256");
     astroray::host::SceneConfig cfg;
     cfg.workers = desc->worker_threads;

@@ -35,6 +35,9 @@ namespace astroray::host {
 
 class Edit;
 
+// Applies one generation's key-set changes (reset, removes, then inserts).
+void apply_known(std::set<std::pair<uint32_t, uint64_t>>& known, const Pending& p);
+
 struct SceneConfig {
   unsigned workers = 0;  // 0: min(8, logical cores / 2), at least 1 (0007 decision 23)
   // Runs on the init thread (CUDA context and module loading); the returned object is kept
@@ -84,7 +87,10 @@ class Scene {
   friend class Edit;
   struct State {
     mutable std::mutex mutex;
-    std::set<std::pair<uint32_t, uint64_t>> known;  // declared at commit, optimistic
+    // Declared keys: optimistic (changes apply at commit so pipelined edits see them) and
+    // rebuilt from known_active plus the still-queued generations when one is dropped.
+    std::set<std::pair<uint32_t, uint64_t>> known;
+    std::set<std::pair<uint32_t, uint64_t>> known_active;  // as of the active generation
     std::shared_ptr<const StoredSettings> settings;
     std::shared_ptr<const StoredCamera> camera;
     std::map<uint64_t, ar_astro_desc> astro;  // stored, no effect until M10
