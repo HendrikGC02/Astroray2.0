@@ -11,6 +11,7 @@
 
 #include "host/data_resource.h"
 #include "host/thread.h"
+#include "kernel/sample/sobol.h"
 
 namespace astroray::host {
 namespace {
@@ -41,9 +42,18 @@ Session::Session(Scene& scene, Device& device, const SessionOptions& options)
   cfg.owner = options.owner;
   scheduler_ = std::make_unique<Scheduler>(device_, cfg);
   thread_ = start_engine_thread(scene_.ctx(), [this] { run(); });
+  try {
+    listener_ = scene_.generations().add_listener([this] { scene_generation_activated(); });
+  } catch (...) {
+    close();
+    join();
+    throw;
+  }
 }
 
 Session::~Session() {
+  // First, so no activation callback can reach a session being destroyed.
+  if (listener_) scene_.generations().remove_listener(listener_);
   close();
   join();
 }
@@ -131,8 +141,15 @@ void Session::set_display_mode(uint32_t mode) {
 }
 
 void Session::scene_generation_activated() {
-  if (latch_.pending(scene_.generations().active())) wake();
-  raise_interrupt_if_due();
+  // Runs on a scene worker: nothing may escape into it.
+  try {
+    if (latch_.pending(scene_.generations().active())) wake();
+    raise_interrupt_if_due();
+  } catch (const std::exception& e) {
+    fail(std::string("handling a scene generation: ") + e.what());
+  } catch (...) {
+    fail("handling a scene generation: unknown exception");
+  }
 }
 
 void Session::raise_interrupt_if_due() {
@@ -285,7 +302,7 @@ void Session::bind_globals() {
   kg.session.samples_done = uint32_t(samples_done);
   kg.session.samples_per_pass = kSamplesPerPass;
   kg.session.pass_index = pass_index_;
-  // sampler_mode stays 0, SAMPLER_SOBOL (kernel/sample/sobol.h needs the kernel include root).
+  kg.session.sampler_mode = ar::SAMPLER_SOBOL;
   if (const auto s = scene_.settings()) {
     kg.session.seed = s->s.seed;
     // PathStateSoA::bounces order: total, diffuse, glossy, transmission, volume, transparent.

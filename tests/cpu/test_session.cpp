@@ -17,6 +17,7 @@
 #include <thread>
 
 #include "device/cpu/cpu_device.h"
+#include "host/scene/edit.h"
 #include "host/scene/scene.h"
 #include "host/session/session.h"
 #include "host/thread_pool.h"
@@ -167,6 +168,29 @@ TEST_CASE("session/epoch change resets film") {
   REQUIRE(r.s->wait(20000));
   CHECK(r.s->latch().epoch() == 2);
   CHECK(r.s->film_samples(0) == 1);
+  CHECK(r.s->stats().frames_published == 2);
+}
+
+TEST_CASE("session/commit wakes a converged session") {
+  // The scene's activation listener (0007 d25): an idle session latches the commit at once, with no
+  // other call to wake it, and the commit starts an epoch.
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  Rig r(ctx, scene, 4, 0, nullptr);
+  r.s->start();
+  REQUIRE(r.s->wait(20000));
+  REQUIRE(state(*r.s) == AR_STATE_CONVERGED);
+  CHECK(r.s->latch().epoch() == 1);
+  uint64_t g = 0;
+  {
+    auto e = scene.begin_edit();
+    REQUIRE(e);
+    REQUIRE(e->commit(&g) == AR_OK);
+  }
+  REQUIRE(r.s->wait(20000));
+  CHECK(state(*r.s) == AR_STATE_CONVERGED);
+  CHECK(r.s->progress().active_generation == g);
+  CHECK(r.s->latch().epoch() == 2);
   CHECK(r.s->stats().frames_published == 2);
 }
 

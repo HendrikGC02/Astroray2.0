@@ -101,6 +101,7 @@ class Session {
   void set_view(const ar_view_desc& view);
   void set_display_mode(uint32_t mode);
   // A scene generation became active: wakes an idle session and raises the interrupt when due.
+  // Registered as the scene's activation listener for the session's lifetime.
   void scene_generation_activated();
 
   SessionProgress progress() const;
@@ -161,6 +162,7 @@ class Session {
   bool failed_ = false;
   std::string failure_;
   SessionStats stats_;
+  uint64_t listener_ = 0;  // the scene activation listener, removed first in the destructor
   std::thread thread_;  // last: started after every member exists
 };
 

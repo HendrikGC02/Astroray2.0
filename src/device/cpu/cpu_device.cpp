@@ -8,12 +8,10 @@
 #include <string>
 
 #include "kernel/film/present.h"
+#include "kernel/film/resolve.h"
 #include "kernel/stages/queue_build.h"
 #include "kernel/stages/route_hit.h"
 #include "kernel/stages/sort.h"
-
-// Declared in kernel/film/resolve.h, which needs the kernel include root this target lacks.
-void cpu_film_resolve(const ar::KernelGlobals& kg, uint32_t first, uint32_t last);
 
 namespace astroray::host {
 namespace {

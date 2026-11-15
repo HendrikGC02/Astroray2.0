@@ -63,34 +63,49 @@ void GenerationTracker::job_started(Pending& p) {
 }
 
 void GenerationTracker::job_done(const std::shared_ptr<Pending>& p, uint64_t key, const std::string& fail) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  --p->outstanding;
-  if (!fail.empty() && !p->failed) {
-    p->failed = true;
-    p->failed_key = key;
-    p->failed_detail = fail;
+  bool activated;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    --p->outstanding;
+    if (!fail.empty() && !p->failed) {
+      p->failed = true;
+      p->failed_key = key;
+      p->failed_detail = fail;
+    }
+    activated = pump_locked();
   }
-  pump_locked();
+  if (activated) notify_listeners();
 }
 
 uint64_t GenerationTracker::commit(const std::shared_ptr<Pending>& p, const std::function<void()>& on_commit) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (on_commit) on_commit();
-  p->number = next_++;
-  p->committed = true;
-  queue_.push_back(p);
-  pump_locked();
-  return p->number;
+  bool activated;
+  uint64_t number;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (on_commit) on_commit();
+    p->number = next_++;
+    p->committed = true;
+    queue_.push_back(p);
+    number = p->number;
+    activated = pump_locked();
+  }
+  if (activated) notify_listeners();
+  return number;
 }
 
 void GenerationTracker::abort(const std::shared_ptr<Pending>& p) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  p->aborted = true;
-  aborted_.push_back(p);
-  pump_locked();
+  bool activated;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    p->aborted = true;
+    aborted_.push_back(p);
+    activated = pump_locked();
+  }
+  if (activated) notify_listeners();
 }
 
-void GenerationTracker::pump_locked() {
+bool GenerationTracker::pump_locked() {
+  bool activated = false;
   // Waiters must wake even if a callback throws.
   struct Wake {
     std::condition_variable& cv;
@@ -119,8 +134,29 @@ void GenerationTracker::pump_locked() {
       for (auto& f : p->on_active) f();
       active_ = p->number;
       report_.on_generation_active(p->number, p->subjects, p->reset);
+      activated = true;
     }
   }
+  return activated;
+}
+
+uint64_t GenerationTracker::add_listener(Listener listener) {
+  std::lock_guard<std::mutex> lock(listeners_mutex_);
+  const uint64_t id = next_listener_++;
+  listeners_.emplace_back(id, std::move(listener));
+  return id;
+}
+
+void GenerationTracker::remove_listener(uint64_t id) {
+  // Taking the mutex waits for a notification in flight, so the listener is not running on return.
+  std::lock_guard<std::mutex> lock(listeners_mutex_);
+  listeners_.erase(std::remove_if(listeners_.begin(), listeners_.end(), [id](const auto& l) { return l.first == id; }),
+                   listeners_.end());
+}
+
+void GenerationTracker::notify_listeners() {
+  std::lock_guard<std::mutex> lock(listeners_mutex_);
+  for (auto& l : listeners_) l.second();
 }
 
 uint64_t GenerationTracker::active() const {

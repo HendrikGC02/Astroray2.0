@@ -34,8 +34,9 @@ class CpuDevice : public Device {
   void copy(const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src, uint64_t src_offset,
             uint64_t bytes) override;
   void set_kernel_globals(const DeviceBuffer& buffer) override;
-  // Registers the queue_build and sort kernels (src/kernel_cpu): the entry points the
-  // scheduler launches on every step. Throws like register_kernel.
+  // Registers the queue_build and sort kernels (src/kernel_cpu), the entry points the scheduler
+  // launches on every step, and the per-pass film kernels (resolve, present, heat map) the session
+  // launches after each pass. Throws like register_kernel.
   void register_scheduler_kernels();
   // Registers the CPU intersect stages (src/device/cpu/intersect_cpu.cpp).
   void register_intersect_stages();

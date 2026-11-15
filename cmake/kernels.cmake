@@ -56,11 +56,6 @@ if(_ar_kernel_cpu_sources)
   # The CPU tests run the stages through CpuDevice, so they link the float library. Deferred
   # for the same reason as astroray_kernel above; the f64 library is linked by tests that need it.
   cmake_language(DEFER CALL target_link_libraries astroray_tests_cpu PRIVATE astroray_kernels_cpu)
-  # cpu_device.cpp binds the queue_build and sort entry points, so every user of the engine
-  # (astroray_core.dll included) needs the float kernel library to resolve them.
-  if(TARGET astroray_engine)
-    cmake_language(DEFER CALL target_link_libraries astroray_engine PUBLIC astroray_kernels_cpu)
-  endif()
 endif()
 
 # ---- part 2: GPU (0002 D14: nvcc only, module images, one cubin per stage TU) ----
