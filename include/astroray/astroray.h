@@ -415,6 +415,7 @@ typedef struct ar_instances_desc {
     AR_IN_ARRAY(instance_count, uint32_t) const uint32_t* flags;
     AR_IN_ARRAY(instance_count, uint8_t) const uint8_t* light_groups;
     AR_IN_ARRAY(instance_count, uint32_t) const uint32_t* material_offsets;
+    AR_IN_ARRAY(instance_count, uint32_t) const uint32_t* material_counts;
     AR_IN_ARRAY(material_key_count, ar_key) const ar_key* material_keys;
 } ar_instances_desc;
 
@@ -551,6 +552,10 @@ typedef struct ar_spectrum_ref {
     AR_IN_ARRAY(table_count, float) const float* table_value;
 } ar_spectrum_ref;
 
+/* Sizes in metres. POINT and SPOT: size_x is the radius. SUN: none (sun_angle is the disc).
+   AREA_RECT: size_x by size_y full extents. AREA_ELLIPSE: size_x and size_y are full extents
+   (diameters), like Blender's lamp size; equal sizes are a disk, and the engine halves them
+   into the ellipse record's radii. */
 typedef struct ar_light_desc {
     ar_spectrum_ref color;
     ar_key graph;
