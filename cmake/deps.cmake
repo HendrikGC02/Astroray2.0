@@ -4,12 +4,13 @@
 # Ref: 0009 d6; tools/fetch.ps1 deps fills the cache.
 # ASTRORAY_DEPS_CACHE in the environment points every worktree at one shared cache, so
 # no worktree needs a link into another checkout (deleting a worktree must not reach it).
+# The environment wins over a value an earlier configure stored in CMakeCache.txt.
 if(DEFINED ENV{ASTRORAY_DEPS_CACHE})
-  file(TO_CMAKE_PATH "$ENV{ASTRORAY_DEPS_CACHE}" _ar_deps_default)
+  file(TO_CMAKE_PATH "$ENV{ASTRORAY_DEPS_CACHE}" _ar_deps_env)
+  set(ASTRORAY_DEPS_CACHE ${_ar_deps_env} CACHE PATH "fetched dependency cache" FORCE)
 else()
-  set(_ar_deps_default ${CMAKE_SOURCE_DIR}/third_party/_cache)
+  set(ASTRORAY_DEPS_CACHE ${CMAKE_SOURCE_DIR}/third_party/_cache CACHE PATH "fetched dependency cache")
 endif()
-set(ASTRORAY_DEPS_CACHE ${_ar_deps_default} CACHE PATH "fetched dependency cache")
 
 function(astroray_dep_dir name version out)
   set(_dir ${ASTRORAY_DEPS_CACHE}/${name}-${version})
