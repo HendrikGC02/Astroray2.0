@@ -16,3 +16,6 @@ Budget: k_route_hit spills 0 and stack <= 128 B (declared); OptiX module registe
 Depends on: 040, 039.
 Size: M (about 450 lines); stop and report at 2x.
 Progress:
+- Done: optix_traverse.cu (PTX, embedded K_OPTIX_TRAVERSE), TraversalPipeline (optix_pipeline.{h,cpp}), k_route_hit.cu, launch/budget rows, GPU tests.
+- Choices: creation is synchronous on the caller (the scene init thread starts it); the motion variant sets usesMotionBlur only (OptiX 9.1 has no ALLOW_MOTION graph flag);
+  OptixLaunchParams lives in launch_config.h; kShadowRayMask is repeated in the .cu and static_asserted in the test; OptiX rows carry T = B = 0 and regs = 0 until check full measures them.
