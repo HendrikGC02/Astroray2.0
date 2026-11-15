@@ -1,0 +1,26 @@
+diff --git a/src/host/display/display_ring.cpp b/src/host/display/display_ring.cpp
+index 5fa4820..05680a2 100644
+--- a/src/host/display/display_ring.cpp
++++ b/src/host/display/display_ring.cpp
+@@ -101,7 +101,7 @@ std::optional<DisplayFrame> DisplayRing::acquire(uint64_t after_frame) {
+   Slot* best = nullptr;
+   for (Slot& s : slots_)
+     if (s.state == State::READY && s.frame.frame_id > after_frame &&
+-        (best == nullptr || s.frame.frame_id > best->frame.frame_id))
++        (best == nullptr || s.frame.frame_id < best->frame.frame_id))
+       best = &s;
+   if (best == nullptr) return std::nullopt;
+   ++best->readers;
+diff --git a/src/kernel/film/present.h b/src/kernel/film/present.h
+index d616b10..32dd986 100644
+--- a/src/kernel/film/present.h
++++ b/src/kernel/film/present.h
+@@ -24,7 +24,7 @@ inline constexpr float kHalfMax = 65504.0f;  // largest finite binary16
+ 
+ // Clamp to the finite half range. NaN passes through (a NaN here is a bug upstream: invalid
+ // samples never reach the film, 0008 d6), so this never hides one.
+-AR_FN float film_clamp_half(float v) { return v > kHalfMax ? kHalfMax : (v < -kHalfMax ? -kHalfMax : v); }
++AR_FN float film_clamp_half(float v) { return v; }
+ 
+ // Float to binary16 bits, round to nearest even. Finite input only, already clamped to
+ // +-kHalfMax so no value overflows to infinity; NaN or Inf input is a caller bug.
