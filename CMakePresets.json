@@ -1,0 +1,22 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 31, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "dev",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "/O2 /DNDEBUG",
+        "ASTRORAY_GPU": "ON",
+        "CMAKE_CUDA_ARCHITECTURES": "120-real"
+      }
+    },
+    {
+      "name": "cpu",
+      "inherits": "dev",
+      "cacheVariables": { "ASTRORAY_GPU": "OFF" }
+    }
+  ]
+}
