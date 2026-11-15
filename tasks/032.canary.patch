@@ -1,0 +1,26 @@
+diff --git a/src/host/scene/generation.cpp b/src/host/scene/generation.cpp
+index 055f0a7..135edc8 100644
+--- a/src/host/scene/generation.cpp
++++ b/src/host/scene/generation.cpp
+@@ -93,7 +93,7 @@ void GenerationTracker::pump_locked() {
+   while (!queue_.empty() && queue_.front()->outstanding == 0) {
+     std::shared_ptr<Pending> p = std::move(queue_.front());
+     queue_.pop_front();
+-    if (p->failed) {
++    if (p->failed && p->number == 0) {
+       for (auto& f : p->on_dropped) f();
+       failed_ = p->number;
+       const double value[2] = {static_cast<double>(p->number), 0.0};
+diff --git a/src/host/scene/scene.cpp b/src/host/scene/scene.cpp
+index 092c518..ca300c2 100644
+--- a/src/host/scene/scene.cpp
++++ b/src/host/scene/scene.cpp
+@@ -42,7 +42,7 @@ Scene::~Scene() {
+ std::unique_ptr<Edit> Scene::begin_edit() {
+   {
+     std::lock_guard<std::mutex> lock(edit_mutex_);
+-    if (edit_open_) return nullptr;
++    if (edit_open_ && ctx_.poisoned.load()) return nullptr;
+     edit_open_ = true;
+   }
+   return std::unique_ptr<Edit>(new Edit(*this));

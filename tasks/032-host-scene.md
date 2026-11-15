@@ -18,3 +18,4 @@ Budget: none.
 Depends on: 031, 026, 016.
 Size: M (about 500 lines); stop and report at 2x.
 Progress:
+- Implemented on task/032-host-scene: src/host/scene/{arena,generation,scene,edit}, src/capi/scene_api.cpp; T** kept (0007 appendix). Scope deviations: context.cpp (accessors for the private ar_context_s), test_unimplemented.py (stub-count floor 40 -> 20, 35 stubs remain). Not stored yet: set_image/instances/graph/material/light/world setters stay unsupported (their tasks).
