@@ -55,7 +55,7 @@ compile_s = 1.18
 gated = "merge"
 
 [kernel.k_route_hit]
-regs = 26
+regs = 28
 stack = 0
 spill_store = 0
 spill_load = 0
