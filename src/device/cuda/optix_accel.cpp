@@ -411,6 +411,10 @@ std::shared_ptr<const SnapshotAccel> OptixAccelBuilder::build(const AccelInput& 
         }
         return l;
       });
+  snap->bytes = snap->tlas->buffer.bytes + snap->tlas->instances.bytes;
+  for (const auto& kv : snap->gas) snap->bytes += kv.second->buffer.bytes;
+  for (const auto& l : snap->lamp)
+    if (l) snap->bytes += l->buffer.bytes;
   gas_builds_ += snap->gas_built, gas_reused_ += snap->gas_reused, ++tlas_builds_;
   snap->build_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   return snap;

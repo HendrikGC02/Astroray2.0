@@ -257,6 +257,8 @@ AccelBuilder& Scene::accel_builder() {
     if (!b) throw std::runtime_error("the scene's device made no acceleration structure builder");
     return *b;
   }
+  // A scene with a device must bring its own builder: Embree structures cannot serve a CUDA scene.
+  if (device_of_) throw std::logic_error("the scene has a device but no acceleration structure builder (SceneConfig::accel_of)");
   std::lock_guard<std::mutex> lock(init_mutex_);
   if (!cpu_accel_) cpu_accel_ = make_cpu_accel_builder();
   return *cpu_accel_;

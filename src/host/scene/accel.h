@@ -46,6 +46,7 @@ class SnapshotAccel {
   virtual const void* kernel_accel() const = 0;
   uint32_t gas_built = 0, gas_reused = 0;  // mesh structures built for / carried over into this one
   double build_ms = 0;                     // wall time of the build
+  uint64_t bytes = 0;                      // device memory it holds, shared parts included (0 on the CPU)
 };
 
 struct AccelCounters {
