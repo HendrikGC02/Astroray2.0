@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "host/data_resource.h"
+#include "host/light/lamps.h"
 #include "host/light/light_builder.h"
 #include "host/material/material_store.h"
 #include "host/scene/edit.h"
@@ -144,15 +145,62 @@ std::shared_ptr<const LightTable> Scene::lights() {
   }
   const auto mats = materials->arrays();
   const auto world = materials->world();
+  // Live lamps: set, and still in the active generation's key set (a remove or reset drops them).
+  // Stale map entries stay, since one may be between its publish and its key-set update.
+  std::vector<std::shared_ptr<const Lamp>> lamps;
+  for (const auto& kv : state_.lamps)
+    if (state_.known_active.count({AR_KIND_LIGHT, kv.first}) != 0) lamps.push_back(kv.second);
+  const bool world_lit = world && world->strength > 0.0f;
+  auto with_lamps = [&](SceneLights* in) {
+    // Lamp bounds join the scene sphere, so a scene of lamps alone still gives the world power.
+    for (const auto& l : lamps) in->scene = enclose(in->scene, *l);
+    for (const auto& l : lamps) {
+      const Lamp* p = l.get();  // pinned by light_lamps while the table lives, so it names this lamp only
+      const uint8_t* k = reinterpret_cast<const uint8_t*>(&l->key);
+      in->key.insert(in->key.end(), k, k + sizeof(l->key));
+      const uint8_t* a = reinterpret_cast<const uint8_t*>(&p);
+      in->key.insert(in->key.end(), a, a + sizeof(p));
+    }
+    if (world_lit && !lamps.empty()) {
+      const uint8_t* b = reinterpret_cast<const uint8_t*>(&in->scene);
+      in->key.insert(in->key.end(), b, b + sizeof(in->scene));
+    }
+  };
   SceneLights in = gather_scene_lights(state_.instances.get(), *meshes, *mats, world.get(), false);
+  with_lamps(&in);
   if (state_.lights && in.key == state_.light_key) return state_.lights;
   in = gather_scene_lights(state_.instances.get(), *meshes, *mats, world.get(), true);
+  with_lamps(&in);
+  state_.lamp_first = uint32_t(in.lights.size());
+  for (const auto& l : lamps) {
+    LightInput li;
+    li.record = l->record;
+    in.lights.push_back(std::move(li));
+  }
   const ar::ObserverView obs{&state_.observer->cmf[0][0], state_.observer->d65};
   state_.lights = build_light_table(in.lights, in.scene, obs, meshes->shared_ledger());
   state_.light_key = std::move(in.key);
   state_.light_meshes = std::move(in.meshes);
+  state_.light_lamps = std::move(lamps);
   ++state_.light_rebuilds;
   return state_.lights;
+}
+
+void Scene::publish_lamp(std::shared_ptr<const Lamp> lamp) {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  const ar_key k = lamp->key;
+  state_.lamps[k] = std::move(lamp);
+}
+
+std::shared_ptr<const InstanceTable> Scene::instances_with_lamps() {
+  lights();
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  std::vector<LampInstanceIn> in;
+  for (size_t i = 0; i < state_.light_lamps.size(); ++i) {
+    const Lamp& l = *state_.light_lamps[i];
+    in.push_back({l.key, l.xf, l.visibility, l.record.light_group, state_.lamp_first + uint32_t(i)});
+  }
+  return append_lamp_instances(state_.instances.get(), in);
 }
 
 uint64_t Scene::light_rebuilds() const {
