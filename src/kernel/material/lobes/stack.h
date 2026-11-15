@@ -136,13 +136,15 @@ AR_FN Real stack_below_one(Real u) {
   return min(u, top);
 }
 
-// u.x picks the lobe and is rescaled for the chosen lobe's own sampling, as in eon_sample.
+// uc picks the lobe; u2 drives the chosen lobe's own sampling. With rescale_uc, u2.x is replaced
+// by uc rescaled to the chosen lobe's interval (one uniform serves both, as in eon_sample).
 // A delta specular sample carries LOBE_DELTA with pdf = p_spec (the choice probability times
 // the lobe's unit pdf), so f cos / pdf = F / p_spec; every other sample reports the mixture
 // density and the layered f of its direction. pdf = 0 means "no sample". The three entry
 // points OR StackSelect::eta_clamped into *eta_clamped when it is given (never clear it).
-AR_FN LobeSample stack_sample(const EDielTable& tab, const OpenPBRParams& p, const Frame& frame, Real3 wo_world, Real2 u,
-                              TransportMode mode, bool* eta_clamped = nullptr) {
+// A sample's flags name the chosen lobe (LOBE_GLOSSY for GGX, LOBE_DIFFUSE for EON).
+AR_FN LobeSample stack_sample_core(const EDielTable& tab, const OpenPBRParams& p, const Frame& frame, Real3 wo_world,
+                                   Real uc, Real2 u2, bool rescale_uc, TransportMode mode, bool* eta_clamped) {
   LobeSample out;
   out.wi = Real3{Real(0), Real(0), Real(1)};
   out.f = spec_fill(Real(0));
@@ -158,15 +160,15 @@ AR_FN LobeSample stack_sample(const EDielTable& tab, const OpenPBRParams& p, con
   LobeSample ls, ds;
   LobeEval es = stack_zero_eval(), ed = stack_zero_eval();
   Real3 wi_local;
-  if (u.x < s.p_spec) {
-    ls = ggx_sample(gp, wo, Real2{stack_below_one(u.x / s.p_spec), u.y}, mode);
+  if (uc < s.p_spec) {
+    ls = ggx_sample(gp, wo, rescale_uc ? Real2{stack_below_one(uc / s.p_spec), u2.y} : u2, mode);
     if (!(ls.pdf > Real(0))) return out;
     if ((ls.flags & LOBE_DELTA) != 0) {
       // No diffuse part at the mirror direction (a measure-zero set for the diffuse lobe).
       out.wi = to_world(frame, ls.wi);
       out.f = stack_combine_f(p, s, ls.f, spec_fill(Real(0)));
       out.pdf = s.p_spec * ls.pdf;
-      out.flags = ls.flags;
+      out.flags = ls.flags | LOBE_GLOSSY;
       if (!is_finite(out.f) || !(out.pdf > Real(0))) {
         out.f = spec_fill(Real(0));
         out.pdf = Real(0);
@@ -178,7 +180,7 @@ AR_FN LobeSample stack_sample(const EDielTable& tab, const OpenPBRParams& p, con
     es.pdf = ls.pdf;
     ed = eon_eval(ep, wo, wi_local, mode);
   } else {
-    ds = eon_sample(ep, wo, Real2{stack_below_one((u.x - s.p_spec) / s.p_diff), u.y}, mode);
+    ds = eon_sample(ep, wo, rescale_uc ? Real2{stack_below_one((uc - s.p_spec) / s.p_diff), u2.y} : u2, mode);
     if (!(ds.pdf > Real(0))) return out;
     wi_local = ds.wi;
     ed.f = ds.f;
@@ -186,6 +188,7 @@ AR_FN LobeSample stack_sample(const EDielTable& tab, const OpenPBRParams& p, con
     es = ggx_eval(gp, wo, wi_local, mode);
   }
   out.wi = to_world(frame, wi_local);
+  out.flags = LOBE_REFLECTION | (uc < s.p_spec ? LOBE_GLOSSY : LOBE_DIFFUSE);
   out.f = stack_combine_f(p, s, es.f, ed.f);
   out.pdf = s.p_spec * es.pdf + s.p_diff * ed.pdf;
   if (!is_finite(out.f) || !(out.pdf > Real(0))) {
@@ -193,6 +196,19 @@ AR_FN LobeSample stack_sample(const EDielTable& tab, const OpenPBRParams& p, con
     out.pdf = Real(0);
   }
   return out;
+}
+
+// One uniform: u.x picks the lobe and is rescaled for the lobe's sampling.
+AR_FN LobeSample stack_sample(const EDielTable& tab, const OpenPBRParams& p, const Frame& frame, Real3 wo_world, Real2 u,
+                              TransportMode mode, bool* eta_clamped = nullptr) {
+  return stack_sample_core(tab, p, frame, wo_world, u.x, u, true, mode, eta_clamped);
+}
+
+// A separate lobe-choice uniform uc and a 2D direction u2, as pbrt-v4 BSDF::Sample_f(wo, uc, u2)
+// and the per-event block of 0003 d23 (lobe choice; direction u, v) give them.
+AR_FN LobeSample stack_sample(const EDielTable& tab, const OpenPBRParams& p, const Frame& frame, Real3 wo_world, Real uc,
+                              Real2 u2, TransportMode mode, bool* eta_clamped = nullptr) {
+  return stack_sample_core(tab, p, frame, wo_world, uc, u2, false, mode, eta_clamped);
 }
 
 AR_NS_END

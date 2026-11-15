@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # A1: a Lambertian sphere (white-furnace family, lossless configuration) in a uniform world;
 # pixel = rho * Lw on the sphere and Lw elsewhere (0009 d16, d20). The sphere is convex, so the
-# truth does not depend on its tessellation; pixels the sphere's edge crosses are not tested.
+# truth does not depend on its tessellation; pixels the sphere's edge may cross are not tested
+# (truths.py sphere_pixel_classes: the rule and the mesh it reads, segments x rings).
 class = "A"
 units = "m"
 spectra = ["rgb"]
@@ -18,6 +19,9 @@ sphere_radius = 1.0
 camera_distance = 4.0
 focal_mm = 50.0
 sensor_mm = 36.0
+# The builder's mesh: meshes.uv_sphere(sphere_radius, segments, rings).
+segments = 64
+rings = 32
 
 [tolerance]
 kind = "z_se"

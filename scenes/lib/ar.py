@@ -444,8 +444,9 @@ class Scene:
         self.size = (width, height)
 
     def settings(self, spp, width, height, seed=1, max_bounces=8, pixel_filter="box", filter_width=1.0,
-                 sampler="sobol"):
-        """Samples per pixel, seed, total bounce limit, pixel filter (box, gaussian,
+                 sampler="sobol", min_bounces=0):
+        """Samples per pixel, seed, total bounce limit, minimum bounces before Russian roulette (at or
+        above max_bounces disables it, as in Cycles), pixel filter (box, gaussian,
         blackman_harris), output size and sampler mode (sobol, or independent where a test needs
         the exact variance of the mean, 0008 d3)."""
         a = self.abi
@@ -458,7 +459,7 @@ class Scene:
         s = a.ar_settings()
         s.samples = s.viewport_samples = spp
         s.output_width, s.output_height, s.resolution_percent = width, height, 100
-        s.max_bounces, s.seed = max_bounces, seed
+        s.max_bounces, s.min_bounces, s.seed = max_bounces, min_bounces, seed
         s.pixel_filter, s.pixel_filter_width, s.film_exposure = filters[pixel_filter], filter_width, 1.0
         s.sampler_mode = samplers[sampler]
         self._call(self.lib.ar_edit_set_settings(self.edit_h, ctypes.byref(s)), "ar_edit_set_settings")
