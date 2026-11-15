@@ -1,0 +1,26 @@
+diff --git a/src/host/ledger.cpp b/src/host/ledger.cpp
+index 1e07a11..8f18005 100644
+--- a/src/host/ledger.cpp
++++ b/src/host/ledger.cpp
+@@ -79,7 +79,7 @@ uint64_t Ledger::category_total(LedgerCategory category) const {
+   std::lock_guard<std::mutex> lock(mutex_);
+   uint64_t sum = 0;
+   for (const auto& kv : live_)
+-    if (kv.second.category == category) sum += kv.second.bytes;
++    if (kv.second.category != category) sum += kv.second.bytes;
+   return sum;
+ }
+ 
+diff --git a/src/host/thread_pool.cpp b/src/host/thread_pool.cpp
+index aa602ec..bb34762 100644
+--- a/src/host/thread_pool.cpp
++++ b/src/host/thread_pool.cpp
+@@ -40,7 +40,7 @@ void ThreadPool::worker_main() {
+       chunk = chunk_;
+     }
+     for (;;) {
+-      const uint64_t begin = next_.fetch_add(chunk);
++      const uint64_t begin = next_.fetch_add(chunk + 1);
+       if (begin >= count) break;
+       const uint32_t first = static_cast<uint32_t>(begin);
+       const uint32_t last = static_cast<uint32_t>(std::min<uint64_t>(begin + chunk, count));

@@ -17,3 +17,7 @@ Budget: none.
 Depends on: 025, 015.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
+- Device::allocate/free are non-virtual (ledger applied in the base; devices supply may_allocate, alloc_memory, free_memory); allocate takes an Owner {scene, session}.
+- Added Device::set_kernel_globals(buffer) (launch needs the one KernelGlobals pointer, 0002 D4); the step table is read from it.
+- Refusal text "needs %.2f GiB for <category>, %.2f GiB available"; the capi mapping to AR_ERR_OUT_OF_MEMORY and SESSION_FAILED is outside Scope and not done.
+- ThreadPool throws on a poisoned context instead of waiting for a dead worker; AR_CPU_STAGE has no static registry, CpuDevice::register_stage fills a per-device table.
