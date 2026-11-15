@@ -206,6 +206,27 @@ class TestCliRender(unittest.TestCase):
             worst = max(worst, float((dev / (se + 1e-7)).max()))
         print(f"cli render: world display RGB {expect}, worst pixel z = {worst:.2f}")
 
+    def test_cuda_a5(self):
+        """A5 (scenes/a5_emitter) on a CUDA session: camera rays traced by the session's OptiX pipeline
+        hit the view-filling emitter, so every channel's image mean is L within 5 standard errors."""
+        rec = os.path.join(SCENES, "a5_emitter.arrec")
+        self.assertTrue(os.path.exists(rec), f"{rec} missing: tools/check.ps1 builds the scenes")
+        r, out = self.render(["--device", "cuda", "--spp", "4", "--size", "32x32"], rec=rec, name="a5_cuda.fits")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        head, planes = self.planes(out)
+        self.assertEqual(head["SPP"], 4)
+        radiance = 2.0  # scenes/a5_emitter/meta.toml [truth]: colour (1, 1, 1) times radiance 2
+        for c in range(3):
+            mean, var, n = planes[f"display.{c}"], planes[f"display.{c}.VAR"], planes[f"display.{c}.NSAMP"]
+            self.assertEqual(mean.shape, (32, 32))
+            self.assertTrue((n == 4).all(), n)
+            # The image mean of independent pixel means; VAR is each pixel mean's variance.
+            m = float(mean.astype(np.float64).mean())
+            se = float(np.sqrt(var.astype(np.float64).sum())) / mean.size
+            z = (m - radiance) / se if se > 0 else float("inf")
+            print(f"cli render cuda a5: channel {c} mean {m:.6f} (L {radiance}), se {se:.2e}, z {z:+.2f}")
+            self.assertLessEqual(abs(m - radiance), 5.0 * se, f"channel {c}: mean {m}, se {se}")
+
     def test_report_table_lists_the_unsupported_world_node(self):
         r, _ = self.render(rec=self.rec_unsupported)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
