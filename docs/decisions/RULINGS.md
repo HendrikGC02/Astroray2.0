@@ -108,3 +108,7 @@ Two verification rounds applied rulings 1-49 almost everywhere; the layouts and 
     - array count fields and light descriptor fields in the ABI appendix (0007);
     - report codes still missing (0001);
     - version pins, including Embree (0009).
+
+## Build-phase rulings
+
+64. **Spike F part A, criterion (d).** The guide's "154-579 MB" is its Performance-mode figure at 1080p and 4K, not a range covering every preset. (d) is read as: NGX-reported memory for each preset and output size is within 5% of the guide's figure for that preset where the guide gives one, and every preset's figure is recorded for the VRAM ledger. Spike F measured Performance at 153.98 MB (1080p) and 596.7 MB (4K, +3%), so (d) passes; with (a)-(c) passing, part A passes and the DLSS-only items are built (0008 V12). DLAA at 4K needs about 1.45 GB, which the ledger's reserve rule (0007 d14) accounts for. The CUDA context must exist before NGX init, and preset-step recreate takes up to about 150 ms (input to 0007's hysteresis). Evidence: `docs/spikes/F-dlss/RESULTS.md`.
