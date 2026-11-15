@@ -20,4 +20,4 @@ Progress:
 - Kernels take only the KernelGlobals pointer (0002 D4): `DisplayTarget` (out, mode, range_max, in film/present.h) is the last member of KernelGlobals, `display`.
 - Bounce mean has one source, `film_bounce_mean_value` in film_write.h; the heat map and host `film_bounce_mean` both call it.
 - Ring slots are heap memory behind SlotAllocator and the copy is the synchronous Device::download until the Device seam has pinned allocation and a copy stream (104).
-- Gate: k_film_present 37 regs, k_film_heatmap 25 (re-measured below), spills 0, 1.21 s compile each.
+- Gate: k_film_present 37 regs, k_film_heatmap 23, spills 0, 1.21 s compile each.
