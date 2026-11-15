@@ -17,3 +17,7 @@ Budget: adds about one second of GPU test time; report it.
 Depends on: 028, 023, 024.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
+- Harness: tests/gpu/agree.h and agree.cpp (compare, judge, run_gpu); agree_pure.cu holds planck, sigmoid and the cancel function; step (iii) CPU double is test_agree_pure_f64.cpp.
+- Results (1e6 inputs): planck (ii) max 4.4e-7, (iii) max 7.0e-6; sigmoid (ii) max 0 (bit-equal), (iii) max 6.8e-5 p99.9 2.1e-5; all inside D12.
+- AR_AGREE_CANARY_FMA: no -D through build.ps1, so CMake also reads the env var of that name; delete out/build/sources.txt to force the configure. ON makes sigmoid (ii) and agree/fma detector fail (checked).
+- Canary: planck T and sigmoid lambda scaled by 1.0001f in agree_pure.cu; reds planck and sigmoid (ii) and (iii). Also mutation-checked compare (no sqrt), p99.9 rank, outlier < to <=.
