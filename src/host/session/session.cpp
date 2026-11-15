@@ -672,7 +672,12 @@ void Session::render_loop() {
       scheduler_->epoch_pending = latch_.interrupt_due(scene_.generations().active());
     }
     expect_epoch_ = false;
-    if (lr.new_epoch) begin_epoch();
+    if (lr.new_epoch) {
+      begin_epoch();
+      // s moves only when emitters change, and every activated commit starts an epoch, so one
+      // epoch's samples never mix two values (0003 d10).
+      film_->data().inv_radiance_scale = 1.0 / scene_.radiance_scale();
+    }
     apply_view();
     if (lr.changed) update_camera_and_filter(lr.generation);
     build_active();

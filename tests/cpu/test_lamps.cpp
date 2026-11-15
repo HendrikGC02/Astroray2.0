@@ -6,17 +6,27 @@
 #include <doctest.h>
 
 #include <cmath>
+#include <chrono>
+#include <chrono>
 #include <cstring>
+#include <thread>
+#include <thread>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "device/cpu/cpu_device.h"
+#include "device/cpu/cpu_device.h"
 #include "host/data_resource.h"
 #include "host/light/lamps.h"
 #include "host/material/material_store.h"
 #include "host/scene/edit.h"
 #include "host/scene/instances.h"
 #include "host/scene/mesh.h"
+#include "host/session/session.h"
+#include "host/thread_pool.h"
+#include "host/session/session.h"
+#include "host/thread_pool.h"
 #include "vm/ops.h"
 
 using namespace astroray::host;
@@ -280,6 +290,61 @@ TEST_CASE("lamps/scene lights and the scene sphere") {
   t = fx.scene.lights();
   CHECK(fx.scene.light_rebuilds() == 5);
   CHECK(t->lights.size() == 1);  // the world stays: only note_reset (the C entry point) clears it
+}
+
+TEST_CASE("lamps/resolved value is independent of the radiance scale") {
+  // The table carries P s and the film multiplies by 1 / s, so two scenes whose lamps differ in
+  // power by 4 (and so in s) resolve to the powers themselves, exactly (s is a power of two).
+  double scales[2] = {};
+  for (int k = 0; k < 2; ++k) {
+    const float power = k == 0 ? 3.0f : 12.0f;
+    Fixture fx;
+    fx.set_light(1, desc(AR_LIGHT_POINT, 0, 0, power));
+    auto t = fx.scene.lights();
+    const double s = fx.scene.radiance_scale();
+    scales[k] = s;
+    REQUIRE(t->lights.size() == 1);
+    CHECK(double(t->lights[0].strength) * (1.0 / s) == double(power));
+  }
+  CHECK(scales[0] == 4.0 * scales[1]);
+}
+
+TEST_CASE("lamps/a commit that changes s advances the epoch and the film scale") {
+  Fixture fx;
+  fx.set_light(1, desc(AR_LIGHT_POINT, 0, 0, 1.0f));
+  Ledger ledger;
+  ThreadPool pool(fx.ctx, 2);
+  CpuDevice dev(ledger, pool);
+  dev.register_production_stages();
+  SessionOptions o;
+  o.max_width = o.max_height = 4;
+  Session s(fx.scene, dev, o);
+  auto inv_scale = [&] {
+    double v = 0.0;
+    s.read_film([&](const FilmReadContext& c) { v = c.film.data().inv_radiance_scale; });
+    return v;
+  };
+  auto settled = [&](uint64_t above) {
+    for (int i = 0; i < 20000; ++i) {
+      if (s.latch().epoch() > above && s.progress().state == AR_STATE_CONVERGED) return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+  };
+  s.start();
+  REQUIRE(s.wait(20000));
+  REQUIRE(settled(0));
+  const uint64_t epoch = s.latch().epoch();
+  const double s0 = fx.scene.radiance_scale();
+  CHECK(inv_scale() == 1.0 / s0);
+  fx.set_light(2, desc(AR_LIGHT_POINT, 0, 0, 4000.0f));  // a far brighter emitter moves s
+  const double s1 = fx.scene.radiance_scale();
+  REQUIRE(s1 != s0);
+  REQUIRE(settled(epoch));
+  CHECK(s.latch().epoch() > epoch);
+  CHECK(inv_scale() == 1.0 / s1);
+  s.close();
+  for (int i = 0; i < 20000 && s.progress().state != AR_STATE_CLOSED; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 }
 
 }  // TEST_SUITE("fast")

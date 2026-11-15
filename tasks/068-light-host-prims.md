@@ -1,7 +1,7 @@
 # 068 Lamp ingestion, lamp instances and the radiance scale
 Goal: Blender lamps cannot enter the engine -> `ar_edit_set_light` builds point, sphere, rectangle and disk lamp records with reported approximations, each lamp gets an instance record carrying its light index and visibility but never the SHADOW bit, and the per-render radiance scale s = 2^k is computed.
 Read first: 0004 D6, D8 (lamps as primitives, never block shadow rays), 0002 D11 (mask), 0003 d10 (radiance scale), docs/decisions/0007-appendix-abi.md (`ar_light_desc`, `ar_spectrum_ref` as decided in task 031), 0001 D2.11 (`NODE_APPROXIMATED`).
-Scope: src/host/light/lamps.{h,cpp}, src/host/scene/instances.{h,cpp} (lamp instances), src/capi/scene_api.cpp, src/capi/unimplemented.cpp, tests/cpu/test_lamps.cpp.
+Scope: src/host/light/lamps.{h,cpp}, src/host/scene/scene.{h,cpp} (lamp key, lamp input, radiance scale), src/host/session/session.cpp (per-latch inv_radiance_scale only), src/host/scene/instances.{h,cpp} (lamp instances), src/capi/scene_api.cpp, src/capi/unimplemented.cpp, tests/cpu/test_lamps.cpp.
 Out of scope: lamp primitives in Embree and OptiX (105); shading a lamp hit (075); spot, sun and IES (M4); light trees (M1b).
 Reference: Blender's lamp conventions as documented in the Blender 5.3 manual (Light properties: Power, Radius, Size, Shape, Normalize); Cycles `src/scene/light.cpp` (Apache-2.0) for the `normalize` semantics of area lamps.
 Do:
@@ -18,4 +18,5 @@ Depends on: 067, 036.
 Size: S (about 250 lines); stop and report at 2x.
 Progress:
 - Lamps (point, sphere, rect, disk), lamp instances, radiance_scale, scene lamp input, ar_edit_set_light done; canary written.
-- Open: s is computed (radiance_scale, emitter_peak) but not applied in Scene::lights(): test_light_sampler pins strength 4.0 unscaled, and the film inv_radiance_scale wiring is 076.
+- Radiance scale applied (lead ruling): Scene::lights() folds s into strengths and terms, Scene::radiance_scale(), session writes inv_radiance_scale = 1/s at each new epoch; light_sampler test pins 4 s.
+- A delta-point-only scene has scene radius 0 and world pmf 0, as pbrt PowerLightSampler; only MIS variance is affected (accepted by lead).

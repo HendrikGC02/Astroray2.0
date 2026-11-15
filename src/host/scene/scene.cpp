@@ -178,12 +178,29 @@ std::shared_ptr<const LightTable> Scene::lights() {
     in.lights.push_back(std::move(li));
   }
   const ar::ObserverView obs{&state_.observer->cmf[0][0], state_.observer->d65};
+  // 0003 d10: s = 2^k puts the largest emitter peak in [1, 2); it multiplies every emitter's strength
+  // (record and estimate terms alike, so the importances and pmf do not move) and the film resolve
+  // divides it out again. The key covers every emitter, so s changes only with a rebuild.
+  std::vector<double> peaks;
+  for (const LightInput& li : in.lights) peaks.push_back(emitter_peak(li, obs));
+  state_.radiance = host::radiance_scale(peaks);
+  for (LightInput& li : in.lights) {
+    li.record.strength = float(double(li.record.strength) * state_.radiance);
+    for (EmissionTerm& t : li.terms) t.strength = float(double(t.strength) * state_.radiance);
+  }
   state_.lights = build_light_table(in.lights, in.scene, obs, meshes->shared_ledger());
   state_.light_key = std::move(in.key);
   state_.light_meshes = std::move(in.meshes);
   state_.light_lamps = std::move(lamps);
   ++state_.light_rebuilds;
   return state_.lights;
+}
+
+double Scene::radiance_scale() {
+  if (!materials || !meshes) return 1.0;  // a scene without stores has no emitters
+  lights();
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  return state_.radiance;
 }
 
 void Scene::publish_lamp(std::shared_ptr<const Lamp> lamp) {
