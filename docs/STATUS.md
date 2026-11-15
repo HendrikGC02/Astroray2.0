@@ -34,7 +34,9 @@ touch to reconfigure. 032's CUDA init uses its own Ledger, not the context's
 workers must make it current. The fault tests leave astroray_fault_*_<pid>
 directories in the system temp dir. Some files mix CRLF and LF (CMakeLists.txt,
 tests/cpu/test_fault.cpp). `cpu_device/parallel_for rethrows` once took 0.515 s against
-B-12's 0.5 s (flaky timing).
+B-12's 0.5 s (flaky timing). Light-tracing splats must reject negative spectral
+radiance where they are written, before conversion: the resolve checks only
+NaN and Inf on the converted SPLAT plane (047).
 
 ## Budget headroom
 Not measured yet: no gate has run. Spike numbers: docs/spikes/*/RESULTS.md.
