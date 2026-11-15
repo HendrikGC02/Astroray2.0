@@ -302,12 +302,17 @@ AR_API ar_status ar_session_pass_info(ar_session h, uint32_t index, ar_pass_info
 AR_API ar_status ar_session_read_pass(ar_session h, uint32_t index, uint32_t quantity, uint32_t n, float* dst) {
   if (h && !dst) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_read_pass dst is null");
   return session_call(h, "ar_session_read_pass", [=](Session& s) {
-    const auto passes = astroray::host::list_passes(s.layout());
+    // The list entry and the film come from one render-locked state: the film can be rebuilt for a
+    // changed pass request between two calls (ruling 74).
+    std::vector<astroray::host::PassDesc> passes;
+    std::unique_ptr<astroray::host::FilmView> copy;
+    s.read_film([&](const FilmReadContext& c) {
+      passes = astroray::host::list_passes(c.film.layout());
+      if (index < passes.size()) copy = std::make_unique<astroray::host::FilmView>(c.device, c.film);
+    });
     if (index >= passes.size())
       throw std::invalid_argument("pass index " + std::to_string(index) + " is past the " +
                                   std::to_string(passes.size()) + " passes");
-    std::unique_ptr<astroray::host::FilmView> copy;
-    s.read_film([&](const FilmReadContext& c) { copy = std::make_unique<astroray::host::FilmView>(c.device, c.film); });
     astroray::host::read_pass(*copy, passes[index], quantity, n, dst);
   });
 }

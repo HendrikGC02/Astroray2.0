@@ -5,7 +5,7 @@
 // cannot produce gives one report entry per settings change and never fails the render.
 // The pass list is read as ar_session_pass_count and ar_session_read_pass read it: list_passes of
 // Session::layout(), values through a FilmView of the film under the render lock.
-// Ref: docs/decisions/0008-film-outputs-denoise.md d10, d13a; 0007 d25.
+// Ref: docs/decisions/0008-film-outputs-denoise.md d10, d13a; 0007 d25; RULINGS 74 (PASS_UNSUPPORTED).
 #include <doctest.h>
 
 #include <algorithm>
@@ -168,20 +168,20 @@ std::vector<float> read_position(Session& s) {
   return out;
 }
 
-struct Ignored {
+struct Unsupported {
   uint32_t entries = 0;
   uint64_t count = 0;
 };
 
-Ignored ignored_pass(Session& s, const std::string& name) {
-  Ignored r;
+Unsupported unsupported_pass(Session& s, const std::string& name) {
+  Unsupported r;
   const ar_report_info info = s.report_snapshot();
   for (uint32_t i = 0; i < info.entry_count; ++i) {
     ar_report_entry e{};
     s.report_entry(i, &e);
     const char* d = reinterpret_cast<const char*>(e.detail);
     const std::string detail(d, std::find(d, d + sizeof e.detail, '\0'));
-    if (e.code == AR_REPORT_INPUT_IGNORED && detail.find("'" + name + "'") != std::string::npos) {
+    if (e.code == AR_REPORT_PASS_UNSUPPORTED && detail == name) {
       ++r.entries;
       r.count += e.count;
     }
@@ -234,21 +234,21 @@ TEST_CASE("session passes/an unknown pass gives one report entry per settings ch
   s.set_view(view_of(kW, kH));
   s.start();
   settle(s, rig);
-  Ignored r = ignored_pass(s, "AR No Such Pass");
+  Unsupported r = unsupported_pass(s, "AR No Such Pass");
   CHECK(r.entries == 1);
   CHECK(r.count == 1);
-  CHECK(ignored_pass(s, "Position").entries == 0);
+  CHECK(unsupported_pass(s, "Position").entries == 0);
   CHECK(has(pass_names(s), "Position"));  // the known name is still served
 
   rig.commit([](Edit&) {});  // a commit without settings: the settings did not change
   settle(s, rig);
-  r = ignored_pass(s, "AR No Such Pass");
+  r = unsupported_pass(s, "AR No Such Pass");
   CHECK(r.entries == 1);
   CHECK(r.count == 1);
 
   rig.commit([&](Edit& e) { rig.settings(e, {"AR No Such Pass"}); });  // a settings change
   settle(s, rig);
-  r = ignored_pass(s, "AR No Such Pass");
+  r = unsupported_pass(s, "AR No Such Pass");
   CHECK(r.entries == 1);
   CHECK(r.count == 2);
   CHECK(s.progress().state == AR_STATE_CONVERGED);

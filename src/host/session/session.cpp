@@ -489,11 +489,11 @@ void Session::sync_film() {
   film_settings_ = s;
   std::vector<std::string> unknown;
   const FilmLayout layout = FilmLayout::build(film_request(options_, s.get(), &unknown));
-  // One entry per name and settings change; the render goes on without the pass.
+  // Ruling 74: one entry per name and settings change, detail = the pass name; the render goes on
+  // without the pass.
   for (const std::string& name : unknown) {
     const double value[2] = {0.0, 0.0};
-    report_.raise(AR_REPORT_INPUT_IGNORED, 0, "pass '" + name + "' is not produced by this build", 1, value,
-                  latch_.generation());
+    report_.raise(AR_REPORT_PASS_UNSUPPORTED, 0, name, 1, value, latch_.generation());
   }
   if (film_ && same_channels(layout, film_->layout())) return;
   auto film = std::make_unique<Film>(device_, layout, options_.owner);

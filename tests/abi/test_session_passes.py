@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Requested passes through the generated binding on the CPU device (task 117; 0008 d10, d13a;
+ruling 74): settings that request Position make ar_session_pass_count and ar_session_pass_info list
+the primary-hit AOVs, ar_session_read_pass returns finite values for Position, and a pass name the
+engine cannot produce gives one PASS_UNSUPPORTED entry. The scene has no geometry (every camera ray
+misses); tests/cpu/test_session_passes.cpp checks Position on a hit."""
+import ctypes
+import importlib.util
+import math
+import os
+import tempfile
+import time
+import unittest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DLL = os.path.join(ROOT, "out", "bin", "astroray_core.dll")
+ABI = os.path.join(ROOT, "out", "build", "gen", "_abi.py")
+SIZE = 4
+UNKNOWN = b"AR No Such Pass"
+
+
+def load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestSessionPasses(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        for p in (DLL, ABI):
+            if not os.path.exists(p):
+                raise AssertionError(f"{p} missing: run tools/build.ps1 first")
+        cls.abi = load_module("_abi_session_passes", ABI)
+        cls.lib = ctypes.CDLL(DLL)
+        cls.abi.check(cls.lib)
+        cls.abi.bind(cls.lib)
+
+    def test_position_and_an_unknown_pass(self):
+        a, lib = self.abi, self.lib
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        desc = a.ar_context_desc(a.AR_DEVICE_CPU, 0, os.path.join(d.name, "context.log").encode(), None)
+        ctx = ctypes.c_void_p()
+        self.assertEqual(lib.ar_context_create(ctypes.byref(desc), ctypes.byref(ctx)), a.AR_OK)
+        self.addCleanup(lib.ar_context_destroy, ctx)
+        scene = ctypes.c_void_p()
+        self.assertEqual(lib.ar_scene_create(ctx, ctypes.byref(a.ar_scene_desc(None, 2, 0)), ctypes.byref(scene)), a.AR_OK)
+        self.addCleanup(lib.ar_scene_destroy, scene)
+
+        edit = ctypes.c_void_p()
+        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit)), a.AR_OK)
+        names = (a.ar_name * 2)()
+        for n, text in zip(names, (b"Position", UNKNOWN)):
+            n.text = (ctypes.c_uint8 * 64)(*text.ljust(64, b"\0"))
+        s = a.ar_settings()
+        s.passes, s.pass_count = names, 2
+        s.samples = s.viewport_samples = 2
+        s.pixel_filter, s.pixel_filter_width, s.film_exposure = a.AR_FILTER_BOX, 1.0, 1.0
+        self.assertEqual(lib.ar_edit_set_settings(edit, ctypes.byref(s)), a.AR_OK)
+        gen = ctypes.c_uint64()
+        self.assertEqual(lib.ar_edit_commit(edit, ctypes.byref(gen)), a.AR_OK)
+
+        sdesc = a.ar_session_desc(a.AR_SESSION_MODE_VIEWPORT, SIZE, SIZE, a.AR_DENOISER_NONE)
+        session = ctypes.c_void_p()
+        self.assertEqual(lib.ar_session_create(scene, ctypes.byref(sdesc), ctypes.byref(session)), a.AR_OK)
+        self.addCleanup(self.destroy, session)
+        v = a.ar_view_desc()
+        v.region_width, v.region_height, v.render_scale = SIZE, SIZE, 1.0
+        for i in (0, 5, 10):
+            v.camera.cam_to_world.m[i] = 1.0
+        for i, x in ((0, 0.5), (5, 0.375), (11, -1.0), (15, 1.0)):
+            v.camera.projection_inverse[i] = x
+        v.camera.type = a.AR_CAMERA_PERSP
+        self.assertEqual(lib.ar_session_set_view(session, ctypes.byref(v)), a.AR_OK)
+        self.assertEqual(lib.ar_session_start(session), a.AR_OK)
+        end = time.perf_counter() + 30.0
+        while True:
+            p = a.ar_progress()
+            self.assertEqual(lib.ar_session_get_progress(session, ctypes.byref(p)), a.AR_OK)
+            if p.state == a.AR_STATE_CONVERGED and p.active_generation == gen.value:
+                break
+            self.assertNotEqual(p.state, a.AR_STATE_FAILED)
+            self.assertLess(time.perf_counter(), end, "never converged")
+            lib.ar_session_wait(session, 50)
+
+        count = ctypes.c_uint32()
+        self.assertEqual(lib.ar_session_pass_count(session, ctypes.byref(count)), a.AR_OK)
+        listed = {}
+        for i in range(count.value):
+            info = a.ar_pass_info()
+            self.assertEqual(lib.ar_session_pass_info(session, i, ctypes.byref(info)), a.AR_OK)
+            listed[bytes(info.name).split(b"\0")[0].decode()] = (i, info.component_count)
+        print(f"session passes: {sorted(listed)}")
+        for aov in ("Position", "Normal", "UV", "IndexMA"):
+            self.assertIn(aov, listed)
+        index, comps = listed["Position"]
+        self.assertEqual(comps, 3)
+        n = SIZE * SIZE * comps
+        buf = (ctypes.c_float * n)()
+        self.assertEqual(lib.ar_session_read_pass(session, index, a.AR_QUANTITY_MEAN, n, buf), a.AR_OK)
+        self.assertTrue(all(math.isfinite(x) for x in buf), list(buf))
+
+        info = a.ar_report_info()
+        self.assertEqual(lib.ar_session_report_info(session, ctypes.byref(info)), a.AR_OK)
+        hits = []
+        for i in range(info.entry_count):
+            e = a.ar_report_entry()
+            self.assertEqual(lib.ar_session_report_entry(session, i, ctypes.byref(e)), a.AR_OK)
+            if e.code == a.AR_REPORT_PASS_UNSUPPORTED:
+                hits.append((bytes(e.detail).split(b"\0")[0], e.level, e.subject, e.count))
+        self.assertEqual(hits, [(UNKNOWN, a.AR_LEVEL_WARNING, 0, 1)])
+
+    def destroy(self, session):
+        self.lib.ar_session_close(session)
+        end = time.perf_counter() + 20.0
+        while time.perf_counter() < end:
+            p = self.abi.ar_progress()
+            self.lib.ar_session_get_progress(session, ctypes.byref(p))
+            if p.state == self.abi.AR_STATE_CLOSED:
+                break
+            self.lib.ar_session_wait(session, 10)
+        self.lib.ar_session_destroy(session)
+
+
+if __name__ == "__main__":
+    unittest.main()
