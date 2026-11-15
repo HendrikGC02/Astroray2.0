@@ -11,8 +11,7 @@
 // Ref: docs/decisions/0004-integrator.md D6 (area row), D8, D9 (theta_e = pi/2 one-sided);
 // Urena, Fajardo and King 2013, "An Area-Preserving Parametrization for Spherical Rectangles",
 // CGF 32(4), Algorithms 1 (precomputation) and 2 (sampling), reference code `sphquad`;
-// Cycles kernel/light/area.h (Apache-2.0) for how a renderer uses it (solid-angle pdf for NEE and
-// for BSDF hits, area sampling when the solid angle is small); pbrt-v4 src/pbrt/lights.cpp
+// pbrt-v4 src/pbrt/shapes.h BilinearPatch::Sample for the spherical/area switch; src/pbrt/lights.cpp
 // DiffuseAreaLight::SampleLe (area point by u1, cosine hemisphere about the normal by u2) and
 // Bounds (normal cone of one direction, cos(pi/2) emission spread).
 #pragma once
@@ -22,11 +21,14 @@
 
 AR_NS_BEGIN
 
-// Below this solid angle the spherical-rectangle angles (sums of three near-pi/2 terms) lose
-// their float precision, so the lamp is sampled by area instead. That branch is exact for its own
-// pdf d^2 / (cos A), so the threshold only trades conditioning against variance; it is not
-// physics. sample_li and pdf_li take the same branch because both decide from the context alone.
-inline constexpr Real kRectMinSolidAngle = Real(1e-2);
+// pbrt-v4 src/pbrt/shapes.h MinSphericalSampleArea and MaxSphericalSampleArea, the range in which
+// BilinearPatch::Sample (a quad) samples spherically: inside [3e-4, 6.22] sr the lamp is sampled
+// by solid angle, outside by area, with pdf d^2 / (cos A). The area branch is exact
+// for its own pdf. sample_li and pdf_li take the same branch because both decide from the
+// context alone.
+inline constexpr Real kRectMinSolidAngle = Real(3e-4);
+inline constexpr Real kRectMaxSolidAngle = Real(6.22);
+AR_FN bool rect_spherical(Real S) { return S >= kRectMinSolidAngle && S <= kRectMaxSolidAngle; }
 
 // Column `col` of the rotation part of xf: a lamp-local axis in world space.
 AR_FN Real3 area_axis(const LightRecord& r, int col) {
@@ -115,6 +117,17 @@ AR_FN Real3 sphquad_sample(const RectGeom& g, const SphQuad& q, Real3 o, Real2 u
   return o + g.ex * xu + g.ey * yv + g.n * q.z0;
 }
 
+// pbrt-v4 Disk::PDF / Shape::PDF area-to-solid-angle conversion: (1 / A) d^2 / cos, d the vector
+// from the context to the lamp point and wi its unit direction; 0 where cos <= 0 or the pdf is
+// not finite. Shared by sample_li and pdf_li so the two agree to the last bit.
+AR_FN Real rect_area_pdf(const RectGeom& g, Real3 d, Real3 wi, const LightRecord& r) {
+  const Real d2 = dot(d, d);
+  const Real cosl = dot(g.n, -wi);
+  if (!(d2 > Real(0) && cosl > Real(0))) return Real(0);
+  const Real pdf = d2 / (cosl * rect_area(r));
+  return pdf - pdf == Real(0) ? pdf : Real(0);
+}
+
 // pdf 0 and Le 0 for a context behind or on the lamp's plane: the lamp emits forward only.
 AR_FN LightLiSample rect_sample_li(const LightRecord& r, const LightSampleContext& ctx, Real2 u, const Lambda& lam,
                                    const ObserverView& obs) {
@@ -122,22 +135,14 @@ AR_FN LightLiSample rect_sample_li(const LightRecord& r, const LightSampleContex
   const RectGeom g = rect_geom(r);
   SphQuad q;
   if (!sphquad_init(g, ctx.p, &q)) return s;
-  Real3 p;
-  Real pdf;
-  if (q.S >= kRectMinSolidAngle) {
-    p = sphquad_sample(g, q, ctx.p, u);
-    pdf = Real(1) / q.S;
-  } else {
-    p = g.corner + g.ex * (u.x * g.w) + g.ey * (u.y * g.h);
-    const Real3 d = p - ctx.p;
-    const Real d2 = dot(d, d);
-    const Real cosl = dot(g.n, -d);
-    if (!(d2 > Real(0) && cosl > Real(0))) return s;
-    pdf = d2 * ar::sqrt(d2) / (cosl * rect_area(r));  // cos is |n . d| / dist
-  }
+  const bool spherical = rect_spherical(q.S);
+  const Real3 p = spherical ? sphquad_sample(g, q, ctx.p, u) : g.corner + g.ex * (u.x * g.w) + g.ey * (u.y * g.h);
   const Real3 d = p - ctx.p;
   const Real dist = length(d);
-  if (!(dist > Real(0)) || !(pdf > Real(0)) || !(pdf - pdf == Real(0))) return s;
+  if (!(dist > Real(0))) return s;
+  // The area branch takes its pdf from the normalised wi, as pdf_li does from a BSDF ray's wi.
+  const Real pdf = spherical ? Real(1) / q.S : rect_area_pdf(g, d, d / dist, r);
+  if (!(pdf > Real(0)) || !(pdf - pdf == Real(0))) return s;
   s.p_light = p;
   s.dist = dist;
   s.wi = d / dist;
@@ -153,14 +158,10 @@ AR_FN Real rect_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Real
   SphQuad q;
   if (!sphquad_init(g, ctx.p, &q)) return Real(0);
   Real pdf;
-  if (q.S >= kRectMinSolidAngle) {
+  if (rect_spherical(q.S)) {
     pdf = Real(1) / q.S;
   } else {
-    const Real3 d = hit.p - ctx.p;
-    const Real d2 = dot(d, d);
-    const Real cosl = dot(g.n, -wi);
-    if (!(d2 > Real(0) && cosl > Real(0))) return Real(0);
-    pdf = d2 / (cosl * rect_area(r));
+    pdf = rect_area_pdf(g, hit.p - ctx.p, wi, r);
   }
   return pdf - pdf == Real(0) ? pdf : Real(0);
 }

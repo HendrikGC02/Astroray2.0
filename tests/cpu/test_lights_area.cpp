@@ -233,33 +233,42 @@ TEST_SUITE("fast") {
     struct Row {
       double p[3], u0, u1;
       double wi[3], dist, pdf, pl[3];
+      double loose;  // tolerance, both builds, where the row needs more than kPinTol (0: kPinTol)
     };
-    // NumPy: Urena Algorithms 1 and 2 (pdf 1 / S from Van Oosterom-Strackee). Rows: a near
-    // context (S = 0.268), u = (0, 0.5) on the x0 edge, and a far one (S = 0.0033, below
-    // kRectMinSolidAngle) which is area sampled: pdf d^2 / (cos A).
+    // NumPy: Urena Algorithms 1 and 2 (pdf 1 / S from Van Oosterom-Strackee) inside pbrt's
+    // [3e-4, 6.22] sr, area sampling (pdf d^2 / (cos A)) outside. Rows: a near context (S = 0.268),
+    // u = (0, 0.5) on the x0 edge, S = 0.0033, S = 6.1e-4 (just above the range's lower end),
+    // S = 1.3e-4 (below it: area), S = 6.256 (above 6.22, a point 4 mm in front of the lamp: area).
     const Row rows[] = {
         {{-0.5, 4.0, 3.0}, 0.3, 0.8, {0.332595662787, -0.626652768365, 0.704759840652}, 3.33151645599, 3.73162787883,
          {0.608047923766, 1.912295990003, 5.347919006652}},
         {{-0.5, 4.0, 3.0}, 0.0, 0.5, {0.254440438229, -0.788370973511, 0.560117194451}, 3.55624344278, 3.73162787883,
          {0.40485214003, 1.196360894978, 4.991913099951}},
-        {{-16.4, 18.8, -13.0}, 0.3, 0.8, {0.561144976962, -0.561608623662, 0.608039528862}, 30.1954052796, 305.900424514,
-         {0.544, 1.842, 5.36}}};
+        {{-16.4, 18.8, -13.0}, 0.3, 0.8, {0.56124183382, -0.561503688723, 0.608047047128}, 30.1949150457, 304.764622338,
+         {0.546649492297, 1.845443821171, 5.35992893182}},
+        {{-43.8, 35.6, -37.0}, 0.3, 0.8, {0.633462692969, -0.482239000582, 0.605120287988}, 70.0025889357, 1633.593741996,
+         {0.544028501995, 1.842021473498, 5.359986776671}, 3e-3},  // S = 6.1e-4: float S is good to 1e-6 absolute
+        {{-93.2, 76.4, -85.0}, 0.3, 0.8, {0.624796706422, -0.496923460034, 0.602242601044}, 150.039203210, 7505.88201858,
+         {0.544, 1.842, 5.36}},
+        {{1.03344, 2.09992, 5.0376}, 0.3, 0.8, {-0.764361945954, -0.402795507315, 0.503494384144}, 0.64032491752, 21.8786217819,
+         {0.544, 1.842, 5.36}, 2e-5}};  // cos at the sample is 0.006: the float frame's 6e-8 is amplified
     for (const Row& row : rows) {
       const LightLiSample s = ar::light_sample_li(lamp.rec, ctx_at(D3{row.p[0], row.p[1], row.p[2]}), r2(row.u0, row.u1), lanes(), obs.view);
+      const double tol = row.loose > 0 ? row.loose : kPinTol;
       INFO("o=(" << row.p[0] << "," << row.p[1] << "," << row.p[2] << ") u=(" << row.u0 << "," << row.u1 << ")");
-      CHECK(close(double(s.wi.x), row.wi[0], kPinTol));
-      CHECK(close(double(s.wi.y), row.wi[1], kPinTol));
-      CHECK(close(double(s.wi.z), row.wi[2], kPinTol));
-      CHECK(rel_close(double(s.dist), row.dist, kPinTol));
-      CHECK(rel_close(double(s.pdf), row.pdf, kPinTol));
-      CHECK(close(double(s.p_light.x), row.pl[0], kPinTol));
-      CHECK(close(double(s.p_light.y), row.pl[1], kPinTol));
-      CHECK(close(double(s.p_light.z), row.pl[2], kPinTol));
+      CHECK(close(double(s.wi.x), row.wi[0], tol));
+      CHECK(close(double(s.wi.y), row.wi[1], tol));
+      CHECK(close(double(s.wi.z), row.wi[2], tol));
+      CHECK(rel_close(double(s.dist), row.dist, tol));
+      CHECK(rel_close(double(s.pdf), row.pdf, tol));
+      CHECK(close(double(s.p_light.x), row.pl[0], tol));
+      CHECK(close(double(s.p_light.y), row.pl[1], tol));
+      CHECK(close(double(s.p_light.z), row.pl[2], tol));
       CHECK_FALSE(s.delta);
       CHECK_FALSE(s.infinite);
       // L = P s / (pi A), A = 3 (NumPy).
       const double radiance[4] = {15.6568675267, 18.3160813675, 19.6490040159, 22.2816920329};
-      for (int i = 0; i < 4; ++i) CHECK(rel_close(double(s.Le.v[i]), radiance[i], kPinTol));
+      for (int i = 0; i < 4; ++i) CHECK(rel_close(double(s.Le.v[i]), radiance[i], tol));
     }
   }
 
@@ -300,9 +309,10 @@ TEST_SUITE("fast") {
     // d^2 / (cos A) where it is area sampled. Samples lie on the rectangle.
     const Obs obs;
     const Lamp lamp = pin_rect();
-    const double heights[] = {0.5, 1.0, 3.0, 10.0, 30.0, 100.0};
+    // 0.003 above the middle of the lamp has S > 6.22; 70 gives S just above 3e-4, 200 below it.
+    const double heights[] = {0.003, 0.5, 1.0, 3.0, 10.0, 30.0, 70.0, 100.0, 200.0};
     const double offs[][2] = {{0, 0}, {2.5, -1.0}, {-8.0, 6.0}};
-    int sph = 0, area = 0;
+    int sph = 0, area = 0, above = 0;
     for (double d : heights)
       for (const auto& off : offs) {
         const D3 p = at(lamp, off[0], off[1], d);
@@ -326,19 +336,22 @@ TEST_SUITE("fast") {
             CHECK(std::fabs(len3(to) - double(s.dist)) <= 1e-4 * double(s.dist));
             CHECK(dot3(unit3(to), d3(s.wi)) >= 1.0 - 1e-6);
             // The independent pdf.
-            if (S >= 1.5e-2) {
-              CHECK(rel_close(double(s.pdf), 1.0 / S, 1e-3));
+            if (S >= 6e-4 && S <= 6.2) {
+              // float S is a sum of angles near pi/2, so it carries an absolute error of about 1e-6
+              CHECK(rel_close(double(s.pdf), 1.0 / S, kF32 ? std::fmax(1e-3, 5e-6 / S) : 1e-3));
               ++sph;
-            } else if (S < 5e-3) {
+            } else if (S < 2e-4 || S > 6.23) {
               const double dist = double(s.dist);
               const double cosl = dot3(lamp.F, scale3(unit3(to), -1.0));
               CHECK(rel_close(double(s.pdf), dist * dist / (cosl * lamp.w * lamp.h), 2e-3));
               ++area;
+              if (S > 6.23) ++above;
             }
           }
       }
     CHECK(sph > 100);  // both branches were exercised
     CHECK(area > 100);
+    CHECK(above > 0);
   }
 
   AR_RT_CASE("lights_area/disk pdf consistency") {
@@ -412,6 +425,10 @@ TEST_SUITE("fast") {
     irradiance_check(rc, 1.0, 0.75, 1.5, kPi * rect_ff(rc, 1.0, 0.75, 1.5), "corner");
     irradiance_check(rc, -2.3, 1.1, 2.0, kPi * rect_ff(rc, -2.3, 1.1, 2.0), "off to the side");
     irradiance_check(rc, 3.0, 0.0, 30.0, kPi * rect_ff(rc, 3.0, 0.0, 30.0), "far");
+    // Area-sampled range S = 7.5e-5 < 3e-4. S > 6.22 needs the point within millimetres of the lamp's
+    // plane, where uniform area sampling cannot resolve E on a grid; that branch is pinned and
+    // pdf-checked above instead.
+    irradiance_check(rc, 0.0, 0.0, 200.0, kPi * rect_ff(rc, 0.0, 0.0, 200.0), "far, area sampled");
     // A square's closed form against the independent fact that four quarters add up.
     CHECK(rel_close(rect_ff(sq, 0, 0, 1.0), 4.0 * corner_ff(1.0, 1.0, 1.0), 1e-12));
   }
@@ -455,6 +472,23 @@ TEST_SUITE("fast") {
         CHECK(std::fabs(dot3(sub3(d3(e.ray.o), lamp.c), lamp.F)) <= 1e-5);
       }
     }
+  }
+
+  AR_RT_CASE("lights_area/disk power") {
+    // light_power is the record's P times the radiance scale, the unweighted scalar of D10: for
+    // a record built with strength 731.25 it is exactly 731.25, for every lamp shape and for
+    // radii and sizes that change A (power does not depend on the size).
+    for (double radius : {0.05, 1.25, 37.0}) {
+      const Lamp d = make_lamp(LightType::AREA_DISK, kC, kX, kY, radius, 0.0, 731.25);
+      CHECK(double(ar::light_power(d.rec)) == 731.25);
+    }
+    const Lamp r = make_lamp(LightType::AREA_RECT, kC, kX, kY, 2.0, 1.5, 731.25);
+    CHECK(double(ar::light_power(r.rec)) == 731.25);
+    // And it is what the radiance radiates: L * pi * A recovers it from the disk's own radiance.
+    const Obs obs;
+    const Lamp d = make_lamp(LightType::AREA_DISK, kC, kX, kY, 1.25, 0.0, 731.25);
+    const Spec rad = ar::disk_radiance(d.rec, lanes(), obs.view);
+    for (int l = 0; l < 4; ++l) CHECK(rel_close(double(rad.v[l]) * kPi * area_of(d), 731.25 * illum_at(l), 1e-4));
   }
 
   AR_RT_CASE("lights_area/power from radiance") {
@@ -647,10 +681,13 @@ TEST_SUITE("gate") {
     const st::Chi2Result res = st::chi2_with_retry(run, gen, 8);
     std::printf("lights_area chi2 %s: chi2 %.1f dof %d p %.4f%s\n", name, res.chi2, res.dof, res.p, res.retried ? " (retried at 16)" : "");
     CHECK_MESSAGE(res.pass, res.message);
-    CHECK(rel_close(pdf * rect_sa(lamp, p), 1.0, 1e-4));
+    // Float S is a sum of angles near pi/2, good to about 1e-6 absolute: that is 1e-3 relative at S = 6e-4.
+    const double S = rect_sa(lamp, p);
+    CHECK(rel_close(pdf * S, 1.0, kF32 ? std::fmax(1e-4, 5e-6 / S) : 1e-4));
   }
 
   AR_RT_CASE("lights_area/rect chi2 above") { chi2_rect(0.0, 0.0, 1.5, 2.0, 1.5, "lights_area/rect chi2 above" AR_RT_SUFFIX); }
   AR_RT_CASE("lights_area/rect chi2 oblique") { chi2_rect(3.0, -2.0, 2.0, 2.0, 1.5, "lights_area/rect chi2 oblique" AR_RT_SUFFIX); }
+  AR_RT_CASE("lights_area/rect chi2 near the lower end") { chi2_rect(0.0, 0.0, 70.0, 2.0, 1.5, "lights_area/rect chi2 near the lower end" AR_RT_SUFFIX); }
   AR_RT_CASE("lights_area/rect chi2 thin and far") { chi2_rect(4.0, 3.0, 5.0, 3.0, 0.4, "lights_area/rect chi2 thin and far" AR_RT_SUFFIX); }
 }
