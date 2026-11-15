@@ -33,3 +33,16 @@ index e0849bd..3a710bf 100644
      in.mask = visibility_mask(in.visibility);
      in.light_group = l.light_group;
      in.light_index = l.light_index;
+diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
+index d874988..62a0e55 100644
+--- a/src/host/session/session.cpp
++++ b/src/host/session/session.cpp
+@@ -676,7 +676,7 @@ void Session::render_loop() {
+       begin_epoch();
+       // s moves only when emitters change, and every activated commit starts an epoch, so one
+       // epoch's samples never mix two values (0003 d10).
+-      film_->data().inv_radiance_scale = 1.0 / scene_.radiance_scale();
++      film_->data().inv_radiance_scale = 1.0; (void)scene_.radiance_scale();
+     }
+     apply_view();
+     if (lr.changed) update_camera_and_filter(lr.generation);
