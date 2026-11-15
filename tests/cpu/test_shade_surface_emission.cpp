@@ -168,6 +168,8 @@ struct HitRig {
   std::vector<ar::Real2> hit_uv;
   std::vector<ar::Real> hit_t;
   std::vector<ar::Spec> lambda_t, beta;
+  // r_u = 1: emission at the first vertex is divided by avg(r_u) (074), so the values stay beta Le s.
+  std::vector<ar::Spec> r_u = std::vector<ar::Spec>(kSlots, ar::spec_fill(1.0f));
   ar::StepEntry step{0, kSlots, 0};
 
   HitRig() {
@@ -213,7 +215,7 @@ struct HitRig {
     }
     path.sample_id = sample_id.data(), path.next_stage = next_stage.data(), path.term = term.data();
     path.ray_type = ray_type.data(), path.flags = flags.data(), path.bounces = bounces.data();
-    path.ray_d = ray_d.data(), path.lambda_t = lambda_t.data(), path.beta = beta.data();
+    path.ray_d = ray_d.data(), path.lambda_t = lambda_t.data(), path.beta = beta.data(), path.r_u = r_u.data();
     path.hit_t = hit_t.data(), path.hit_prim = hit_prim.data(), path.hit_inst = hit_inst.data();
     path.hit_uv = hit_uv.data();
 

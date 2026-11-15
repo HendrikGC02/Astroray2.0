@@ -270,6 +270,7 @@ TEST_CASE("nee/point lamp item contribution and target") {
   std::vector<ar::ShadeContext> c(kSlots);
   std::vector<ar::OpenPBRParams> rec(kSlots);
   for (uint32_t s = 0; s < kSlots; ++s) rig.vertex(s, &c[s], &rec[s]);
+  const std::vector<ar::Spec> beta = rig.beta;  // the continuation overwrites it
   rig.run();
   uint32_t picked[2] = {0, 0};
   for (uint32_t s = 0; s < kSlots; ++s) {
@@ -282,7 +283,7 @@ TEST_CASE("nee/point lamp item contribution and target") {
     ++picked[l];
     CHECK(ar::length(end - pos[l]) < 1e-5f);
     CHECK(o.z > 0.0f);                    // offset off the surface, toward the lamp (0002 D16)
-    CHECK(ar::length(o - c[s].P) < 1e-5f);
+    CHECK(ar::length(o - c[s].P) < 1e-4f);  // the offset: 2^-16 per component near 0 (ray_offset.h)
     // beta f |cos| I / d^2 / (pmf avg(r_u)) from the context point (the hit offset toward wo).
     const ar::Real3 p = ar::offset_ray_origin(c[s].P, c[s].Ng, c[s].wo);
     const ar::Real3 d = pos[l] - p;
@@ -293,7 +294,7 @@ TEST_CASE("nee/point lamp item contribution and target") {
                         (ar::Real(4) * ar::kLightPi * ar::dot(d, d));
     const double pm = l == 0 ? 0.25 : 0.75;
     for (int k = 0; k < ar::kLanes; ++k) {
-      const double want = double(rig.beta[s].v[k]) * double(ev.f.v[k]) * std::fabs(double(ar::dot(wi, c[s].N))) *
+      const double want = double(beta[s].v[k]) * double(ev.f.v[k]) * std::fabs(double(ar::dot(wi, c[s].N))) *
                           double(le.v[k]) / (pm * double(ar::avg(rig.r_u[s])));
       CHECK(want > 0.0);
       CHECK(near(double(rig.sh_contrib[it].v[k]), want, 1e-5));
@@ -311,6 +312,7 @@ TEST_CASE("nee/rectangle lamp carries the balance weight") {
   std::vector<ar::ShadeContext> c(kSlots);
   std::vector<ar::OpenPBRParams> rec(kSlots);
   for (uint32_t s = 0; s < kSlots; ++s) rig.vertex(s, &c[s], &rec[s]);
+  const std::vector<ar::Spec> beta = rig.beta;  // the continuation overwrites it
   rig.run();
   for (uint32_t s = 0; s < kSlots; ++s) {
     const uint32_t it = rig.item_of(s);
@@ -332,7 +334,7 @@ TEST_CASE("nee/rectangle lamp carries the balance weight") {
       double den = 0.0;
       for (int j = 0; j < ar::kLanes; ++j) den += double(rig.r_u[s].v[j]) * (double(ls.pdf) + double(ev.pdf));
       den /= ar::kLanes;
-      const double want = double(rig.beta[s].v[k]) * double(ev.f.v[k]) * std::fabs(double(ar::dot(ls.wi, c[s].N))) *
+      const double want = double(beta[s].v[k]) * double(ev.f.v[k]) * std::fabs(double(ar::dot(ls.wi, c[s].N))) *
                           double(ls.Le.v[k]) / den;
       CHECK(near(double(rig.sh_contrib[it].v[k]), want, 1e-5));
     }
