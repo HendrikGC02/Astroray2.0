@@ -1,0 +1,32 @@
+diff --git a/src/kernel/sched/step_table.h b/src/kernel/sched/step_table.h
+index b80a1c2..d715e90 100644
+--- a/src/kernel/sched/step_table.h
++++ b/src/kernel/sched/step_table.h
+@@ -104,7 +104,8 @@ AR_FN void step_table_finish(StepTable& t, KFn shadow_k) {
+     StepEntry& e = t.stage[s];
+     // free_left / k bounds the launch, so k * launch cannot overflow.
+     const uint32_t fits = free_left / k;
+-    const uint32_t launch = e.count < fits ? e.count : fits;
++    const uint32_t launch = e.count;
++    (void)fits;
+     e.shadow_base = base;
+     e.count = launch;
+     base += launch * k;
+diff --git a/src/kernel/stages/queue_build.h b/src/kernel/stages/queue_build.h
+index 23409a5..8865e19 100644
+--- a/src/kernel/stages/queue_build.h
++++ b/src/kernel/stages/queue_build.h
+@@ -129,10 +129,10 @@ AR_FN void queue_scatter_tile(const KernelGlobals& kg, uint32_t g) {
+   uint32_t at[kQueueBins];
+   for (uint32_t b = 0; b < kStageCount; ++b) at[b] = kg.step_table->stage[b].start + row[b];
+   at[kInvalidBin] = 0;
+-  for (uint32_t i = t.first; i < t.last; ++i) {
+-    const uint32_t bin = queue_bin(t.pool, next[i]);
++  for (uint32_t i = t.last; i > t.first; --i) {
++    const uint32_t bin = queue_bin(t.pool, next[i - 1]);
+     if (bin == kInvalidBin) continue;
+-    queue[at[bin]++] = i;
++    queue[at[bin]++] = i - 1;
+   }
+ }
+ 

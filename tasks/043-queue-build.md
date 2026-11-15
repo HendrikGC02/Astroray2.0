@@ -18,3 +18,6 @@ Budget: three new device TUs within B-05; declared spills 0, stack <= 128 B.
 Depends on: 025, 028, 030.
 Size: M (about 450 lines); stop and report at 2x.
 Progress:
+- Done. Three kernels + step_table.h + CPU/GPU TUs; canary tasks/043.canary.patch turns "stable partition" and "shadow shortage drops nothing" red (applied, rebuilt, reverted).
+- StepTable moved out of kernel_globals.h into sched/step_table.h (adds high_water[2], invalid_items; 196 B); KernelGlobals gained queue_counts (last member). Scope exceptions: kernel_globals.h, cmake/kernels.cmake (link kernels_cpu into tests_cpu), CMakeLists.txt (tests_gpu embeds core resources, links kernels_cpu).
+- Choices the records do not give: refill_count = size of the main TERMINATED segment (free slots below high_water); shadow_base is an index into shadow_queue; invalid next_stage values counted in invalid_items and placed in no segment; producers (k=1) are SHADE_SURFACE, _EXT, SHADE_LIGHT_PATH, _EXT, SHADE_VOLUME; tile = 1024 items, scan is one GPU thread (PROVISIONAL, 093/B-19).
