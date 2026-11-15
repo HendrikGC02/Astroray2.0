@@ -139,6 +139,12 @@ add_executable(specgen EXCLUDE_FROM_ALL tools/specgen/specgen.cpp)
 astroray_target_warnings(specgen)
 target_include_directories(specgen PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
+# Directional-albedo tables of the lobe stack, from the engine's own CPU float lobe code (0005 item 6).
+add_executable(etables EXCLUDE_FROM_ALL tools/etables/etables.cpp)
+astroray_target_warnings(etables)
+target_include_directories(etables PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(etables PRIVATE astroray_kernel)
+
 # The one DLL Python loads: capi + engine + the generated layout table + the data and the
 # release kernel modules (RCDATA).
 add_library(astroray_core SHARED ${ASTRORAY_CAPI_SOURCES} ${ASTRORAY_GEN_DIR}/astroray_layout.c ${ASTRORAY_GEN_DIR}/abi_hash.h
