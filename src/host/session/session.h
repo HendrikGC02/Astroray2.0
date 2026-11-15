@@ -86,6 +86,7 @@ struct FilmReadContext {
   Device& device;
   const Film& film;
   FitsProvenance provenance;
+  uint64_t pass_revision = 0;  // of film's layout (ruling 75)
 };
 
 struct SessionStats {
@@ -136,9 +137,11 @@ class Session {
   SessionProgress progress() const;
   // The pass list's layout, a copy: built at construction from the settings committed by then, so
   // it is valid in INITIALIZING, and replaced when the render thread rebuilds the film for a
-  // changed pass request (0008 d13a: readback enumerates what the layout allocated).
-  FilmLayout layout() const {
+  // changed pass request (0008 d13a: readback enumerates what the layout allocated). `revision`
+  // receives the pass-list revision of that layout (ruling 75).
+  FilmLayout layout(uint64_t* revision = nullptr) const {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (revision) *revision = pass_revision_;
     return layout_;
   }
   // The render sub-rectangle as of the last pass boundary (the maximum size before any).
@@ -210,6 +213,8 @@ class Session {
   Report report_;
   Latch latch_;
   FilmLayout layout_;  // film_'s layout (from the settings at construction until the first film); under mutex_
+  // Ruling 75: counts layouts whose channel list differs from the last published one; under mutex_.
+  uint64_t pass_revision_ = 0;
 
   // Render-thread objects. scheduler_ is created with the session (it allocates nothing until
   // its first pass with work) and freed by the render thread at exit; the API thread touches
@@ -294,6 +299,9 @@ struct ar_session_s {
   std::string last_error;
   ar_recorder* recorder = nullptr;  // cached at create: the scene may be destroyed after CLOSED
   bool closed = false;  // after ar_session_close only wait, progress and destroy are accepted
+  // The pass-list revision ar_session_pass_count last reported; pass_info and read_pass refuse
+  // another (ruling 75).
+  std::atomic<uint64_t> pass_revision{0};
   std::shared_ptr<astroray::host::Device> device;
   std::unique_ptr<astroray::host::Session> session;
 };

@@ -2,9 +2,11 @@
 // The session's film follows the latched settings' pass list: no request allocates no primary-hit
 // AOV, Position adds the four of them (Position, Normal, UV, IndexMA) and Position reads the hit
 // point, a commit that drops the request rebuilds the film without them, and a name the engine
-// cannot produce gives one report entry per settings change and never fails the render.
-// The pass list is read as ar_session_pass_count and ar_session_read_pass read it: list_passes of
-// Session::layout(), values through a FilmView of the film under the render lock.
+// cannot produce gives one report entry per settings change and never fails the render. The quad
+// emits, so the rebuilt film's Combined shows that the rebuild re-uploaded the session tables.
+// The pass list is read as ar_session_pass_count reads it (list_passes of Session::layout()); values
+// through read_pass on a FilmView of the film under the render lock. The C API path, with its
+// revision check (ruling 75), is tests/abi/test_session_passes.py.
 // Ref: docs/decisions/0008-film-outputs-denoise.md d10, d13a; 0007 d25; RULINGS 74 (PASS_UNSUPPORTED).
 #include <doctest.h>
 
@@ -26,6 +28,7 @@
 #include "host/scene/scene.h"
 #include "host/session/readback.h"
 #include "host/session/session.h"
+#include "vm/ops.h"
 
 using namespace astroray;
 using namespace astroray::host;
@@ -33,7 +36,11 @@ using namespace astroray::host;
 namespace {
 
 constexpr uint32_t kW = 6, kH = 4;
-constexpr ar_key kMesh = 100;
+constexpr ar_key kMesh = 100, kMaterial = 1, kGraph = 1001;
+constexpr uint32_t kSpp = 16;
+// A white emitter: its display value is kStrength in each channel (0008 d7; the analytic A5 scene
+// checks the same mapping).
+constexpr float kStrength = 0.5f;
 
 struct PassRig {
   ContextState ctx;
@@ -60,7 +67,7 @@ struct PassRig {
     ar_settings s{};
     s.passes = names.data();
     s.pass_count = uint32_t(names.size());
-    s.samples = s.viewport_samples = 2;
+    s.samples = s.viewport_samples = kSpp;
     s.max_bounces = 0;
     s.pixel_filter = AR_FILTER_BOX;
     s.pixel_filter_width = 1.0f;
@@ -84,24 +91,41 @@ struct PassRig {
     std::memcpy(*b.uv, uv.data(), uv.size() * 4);
     REQUIRE(e.item_commit(kMesh) == AR_OK);
   }
+  void material(Edit& e) {
+    std::vector<ar_graph_node> nodes(3);
+    std::vector<ar_graph_link> links{{0, 0, 2, 0}, {1, 0, 2, 1}};
+    std::vector<float> f{1.0f, 1.0f, 1.0f, kStrength};
+    nodes[0].op = uint32_t(ar::Op::CONST_F32X3), nodes[0].f32_count = 3;
+    nodes[1].op = uint32_t(ar::Op::CONST_F32), nodes[1].f32_first = 3, nodes[1].f32_count = 1;
+    nodes[2].op = uint32_t(ar::Op::EMIT_LE);
+    ar_graph_desc d = {};
+    d.node_count = 3, d.link_count = 2, d.f32_count = 4, d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data();
+    REQUIRE(scene.materials->set_graph(e, kGraph, &d) == AR_OK);
+    ar_material_desc m = {};
+    m.surface_graph = kGraph;
+    m.emission_sampling = AR_EMISSION_SAMPLING_AUTO;
+    REQUIRE(scene.materials->set_material(e, kMaterial, &m) == AR_OK);
+  }
   void instance(Edit& e) {
     std::vector<ar_key> geom{kMesh}, object{500};
     std::vector<ar_xform> xf(1);
     xf[0].m[0] = xf[0].m[5] = xf[0].m[10] = 1.0f;
-    std::vector<uint32_t> zeros(1, 0), vis(1, AR_VISIBILITY_CAMERA);
+    std::vector<uint32_t> zeros(1, 0), vis(1, AR_VISIBILITY_CAMERA), one(1, 1);
+    std::vector<ar_key> pool{kMaterial};
     std::vector<ar_rgba> colors(1, ar_rgba{{1, 1, 1, 1}});
     std::vector<uint8_t> lg(1, 0);
     ar_instances_desc d = {};
-    d.instance_count = 1, d.motion_steps = 1, d.transform_count = 1;
+    d.instance_count = 1, d.motion_steps = 1, d.transform_count = 1, d.material_key_count = 1;
     d.geom_keys = geom.data(), d.xf = xf.data(), d.object_keys = object.data();
     d.random_ids = d.pass_indices = d.crypto_objects = d.crypto_assets = zeros.data();
     d.colors = colors.data(), d.visibility = vis.data(), d.flags = zeros.data(), d.light_groups = lg.data();
-    d.material_offsets = zeros.data(), d.material_counts = zeros.data();
+    d.material_offsets = zeros.data(), d.material_counts = one.data(), d.material_keys = pool.data();
     REQUIRE(set_instances(e, &d) == AR_OK);
   }
   void build(const std::vector<std::string>& passes) {
     commit([&](Edit& e) {
       quad(e);
+      material(e);
       settings(e, passes);
     });
     commit([&](Edit& e) { instance(e); });
@@ -168,6 +192,28 @@ std::vector<float> read_position(Session& s) {
   return out;
 }
 
+// Combined averaged over the render rectangle, per channel, and that average's standard error
+// from the per-pixel variances of the mean.
+void combined_average(Session& s, double mean[3], double se[3]) {
+  const std::vector<PassDesc> passes = list_passes(s.layout());
+  REQUIRE(passes.front().name == "Combined");
+  std::vector<float> m, v;
+  s.read_film([&](const FilmReadContext& c) {
+    FilmView view(c.device, c.film);
+    m.resize(pass_float_count(passes.front(), AR_QUANTITY_MEAN, view.width(), view.height()));
+    v.resize(m.size());
+    read_pass(view, passes.front(), AR_QUANTITY_MEAN, uint32_t(m.size()), m.data());
+    read_pass(view, passes.front(), AR_QUANTITY_VARIANCE, uint32_t(v.size()), v.data());
+  });
+  const size_t pixels = m.size() / 3;
+  for (uint32_t k = 0; k < 3; ++k) {
+    double sm = 0.0, sv = 0.0;
+    for (size_t j = 0; j < pixels; ++j) sm += m[j * 3 + k], sv += v[j * 3 + k];
+    mean[k] = sm / double(pixels);
+    se[k] = std::sqrt(sv) / double(pixels);
+  }
+}
+
 struct Unsupported {
   uint32_t entries = 0;
   uint64_t count = 0;
@@ -221,6 +267,15 @@ TEST_CASE("session passes/the film follows the latched pass request") {
   rig.commit([&](Edit& e) { rig.settings(e, {"Combined"}); });
   settle(s, rig);
   check_no_aov(s);  // the request was dropped: the film was rebuilt without the AOVs
+  // The rebuilt film integrates the emitter: its response and wavelength tables were re-uploaded.
+  double mean[3], se[3];
+  combined_average(s, mean, se);
+  for (uint32_t k = 0; k < 3; ++k) {
+    MESSAGE("Combined after the rebuild, channel " << k << ": " << mean[k] << " (expected " << kStrength
+                                                   << "), se " << se[k]);
+    CHECK(std::isfinite(se[k]));
+    CHECK(std::fabs(mean[k] - kStrength) <= 5.0 * se[k] + 1e-6);
+  }
 }
 
 TEST_CASE("session passes/an unknown pass gives one report entry per settings change") {

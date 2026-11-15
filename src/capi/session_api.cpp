@@ -270,18 +270,32 @@ AR_API ar_status ar_display_release(ar_session h, uint64_t frame_id) {
   return session_call(h, "ar_display_release", [frame_id](Session& s) { s.display_release(frame_id); }, true);
 }
 
-// Passes (0008 d13a). pass_count and pass_info read only the layout and the latched size.
+// Passes (0008 d13a). pass_count and pass_info read only the layout and the latched size. Indices
+// belong to the pass-list revision pass_count last reported on this handle: a film rebuilt since
+// can shift every index after Combined, so pass_info and read_pass refuse another (ruling 75).
+namespace {
+void check_pass_revision(ar_session h, uint64_t revision) {
+  if (revision != h->pass_revision.load())
+    throw std::invalid_argument("the pass list changed; call ar_session_pass_count again");
+}
+}  // namespace
+
 AR_API ar_status ar_session_pass_count(ar_session h, uint32_t* count) {
   if (h && !count) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_pass_count output is null");
-  return session_call(h, "ar_session_pass_count", [count](Session& s) {
-    *count = uint32_t(astroray::host::list_passes(s.layout()).size());
+  return session_call(h, "ar_session_pass_count", [h, count](Session& s) {
+    uint64_t revision = 0;
+    const auto passes = astroray::host::list_passes(s.layout(&revision));
+    *count = uint32_t(passes.size());
+    h->pass_revision = revision;
   });
 }
 
 AR_API ar_status ar_session_pass_info(ar_session h, uint32_t index, ar_pass_info* info) {
   if (h && !info) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_pass_info output is null");
-  return session_call(h, "ar_session_pass_info", [index, info](Session& s) {
-    const auto passes = astroray::host::list_passes(s.layout());
+  return session_call(h, "ar_session_pass_info", [h, index, info](Session& s) {
+    uint64_t revision = 0;
+    const auto passes = astroray::host::list_passes(s.layout(&revision));
+    check_pass_revision(h, revision);
     if (index >= passes.size())
       throw std::invalid_argument("pass index " + std::to_string(index) + " is past the " +
                                   std::to_string(passes.size()) + " passes");
@@ -307,6 +321,7 @@ AR_API ar_status ar_session_read_pass(ar_session h, uint32_t index, uint32_t qua
     std::vector<astroray::host::PassDesc> passes;
     std::unique_ptr<astroray::host::FilmView> copy;
     s.read_film([&](const FilmReadContext& c) {
+      check_pass_revision(h, c.pass_revision);
       passes = astroray::host::list_passes(c.film.layout());
       if (index < passes.size()) copy = std::make_unique<astroray::host::FilmView>(c.device, c.film);
     });

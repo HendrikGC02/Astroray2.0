@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Requested passes through the generated binding on the CPU device (task 117; 0008 d10, d13a;
-ruling 74): settings that request Position make ar_session_pass_count and ar_session_pass_info list
-the primary-hit AOVs, ar_session_read_pass returns finite values for Position, and a pass name the
-engine cannot produce gives one PASS_UNSUPPORTED entry. The scene has no geometry (every camera ray
-misses); tests/cpu/test_session_passes.cpp checks Position on a hit."""
+rulings 74, 75): settings that request Position make ar_session_pass_count and ar_session_pass_info
+list the primary-hit AOVs, ar_session_read_pass returns finite values for Position, a pass name the
+engine cannot produce gives one PASS_UNSUPPORTED entry, and after a commit that rebuilds the film
+an index from the old pass list is refused until pass_count is called again. The scene has no
+geometry (every camera ray misses); tests/cpu/test_session_passes.cpp checks Position on a hit."""
 import ctypes
 import importlib.util
 import math
@@ -17,6 +18,7 @@ DLL = os.path.join(ROOT, "out", "bin", "astroray_core.dll")
 ABI = os.path.join(ROOT, "out", "build", "gen", "_abi.py")
 SIZE = 4
 UNKNOWN = b"AR No Such Pass"
+STALE = "the pass list changed; call ar_session_pass_count again"
 
 
 def load_module(name, path):
@@ -37,34 +39,40 @@ class TestSessionPasses(unittest.TestCase):
         cls.abi.check(cls.lib)
         cls.abi.bind(cls.lib)
 
-    def test_position_and_an_unknown_pass(self):
+    def setUp(self):
         a, lib = self.abi, self.lib
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)
         desc = a.ar_context_desc(a.AR_DEVICE_CPU, 0, os.path.join(d.name, "context.log").encode(), None)
-        ctx = ctypes.c_void_p()
-        self.assertEqual(lib.ar_context_create(ctypes.byref(desc), ctypes.byref(ctx)), a.AR_OK)
-        self.addCleanup(lib.ar_context_destroy, ctx)
-        scene = ctypes.c_void_p()
-        self.assertEqual(lib.ar_scene_create(ctx, ctypes.byref(a.ar_scene_desc(None, 2, 0)), ctypes.byref(scene)), a.AR_OK)
-        self.addCleanup(lib.ar_scene_destroy, scene)
+        self.ctx = ctypes.c_void_p()
+        self.assertEqual(lib.ar_context_create(ctypes.byref(desc), ctypes.byref(self.ctx)), a.AR_OK)
+        self.addCleanup(lib.ar_context_destroy, self.ctx)
+        self.scene = ctypes.c_void_p()
+        sdesc = a.ar_scene_desc(None, 2, 0)
+        self.assertEqual(lib.ar_scene_create(self.ctx, ctypes.byref(sdesc), ctypes.byref(self.scene)), a.AR_OK)
+        self.addCleanup(lib.ar_scene_destroy, self.scene)
 
+    def commit_settings(self, passes):
+        a, lib = self.abi, self.lib
         edit = ctypes.c_void_p()
-        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit)), a.AR_OK)
-        names = (a.ar_name * 2)()
-        for n, text in zip(names, (b"Position", UNKNOWN)):
+        self.assertEqual(lib.ar_scene_edit_begin(self.scene, ctypes.byref(edit)), a.AR_OK)
+        names = (a.ar_name * max(1, len(passes)))()
+        for n, text in zip(names, passes):
             n.text = (ctypes.c_uint8 * 64)(*text.ljust(64, b"\0"))
         s = a.ar_settings()
-        s.passes, s.pass_count = names, 2
+        s.passes, s.pass_count = names, len(passes)
         s.samples = s.viewport_samples = 2
         s.pixel_filter, s.pixel_filter_width, s.film_exposure = a.AR_FILTER_BOX, 1.0, 1.0
         self.assertEqual(lib.ar_edit_set_settings(edit, ctypes.byref(s)), a.AR_OK)
         gen = ctypes.c_uint64()
         self.assertEqual(lib.ar_edit_commit(edit, ctypes.byref(gen)), a.AR_OK)
+        return gen.value
 
+    def start_session(self):
+        a, lib = self.abi, self.lib
         sdesc = a.ar_session_desc(a.AR_SESSION_MODE_VIEWPORT, SIZE, SIZE, a.AR_DENOISER_NONE)
         session = ctypes.c_void_p()
-        self.assertEqual(lib.ar_session_create(scene, ctypes.byref(sdesc), ctypes.byref(session)), a.AR_OK)
+        self.assertEqual(lib.ar_session_create(self.scene, ctypes.byref(sdesc), ctypes.byref(session)), a.AR_OK)
         self.addCleanup(self.destroy, session)
         v = a.ar_view_desc()
         v.region_width, v.region_height, v.render_scale = SIZE, SIZE, 1.0
@@ -75,16 +83,23 @@ class TestSessionPasses(unittest.TestCase):
         v.camera.type = a.AR_CAMERA_PERSP
         self.assertEqual(lib.ar_session_set_view(session, ctypes.byref(v)), a.AR_OK)
         self.assertEqual(lib.ar_session_start(session), a.AR_OK)
+        return session
+
+    def settle(self, session, gen):
+        a = self.abi
         end = time.perf_counter() + 30.0
         while True:
             p = a.ar_progress()
-            self.assertEqual(lib.ar_session_get_progress(session, ctypes.byref(p)), a.AR_OK)
-            if p.state == a.AR_STATE_CONVERGED and p.active_generation == gen.value:
-                break
+            self.assertEqual(self.lib.ar_session_get_progress(session, ctypes.byref(p)), a.AR_OK)
+            if p.state == a.AR_STATE_CONVERGED and p.active_generation == gen:
+                return
             self.assertNotEqual(p.state, a.AR_STATE_FAILED)
             self.assertLess(time.perf_counter(), end, "never converged")
-            lib.ar_session_wait(session, 50)
+            self.lib.ar_session_wait(session, 50)
 
+    def passes(self, session):
+        """Name -> (index, components), enumerated with pass_count first (ruling 75)."""
+        a, lib = self.abi, self.lib
         count = ctypes.c_uint32()
         self.assertEqual(lib.ar_session_pass_count(session, ctypes.byref(count)), a.AR_OK)
         listed = {}
@@ -92,15 +107,32 @@ class TestSessionPasses(unittest.TestCase):
             info = a.ar_pass_info()
             self.assertEqual(lib.ar_session_pass_info(session, i, ctypes.byref(info)), a.AR_OK)
             listed[bytes(info.name).split(b"\0")[0].decode()] = (i, info.component_count)
+        return listed
+
+    def read(self, session, index, comps):
+        n = SIZE * SIZE * comps
+        buf = (ctypes.c_float * n)()
+        return self.lib.ar_session_read_pass(session, index, self.abi.AR_QUANTITY_MEAN, n, buf), list(buf)
+
+    def last_error(self, session):
+        buf = (ctypes.c_uint8 * 256)()
+        self.assertEqual(self.lib.ar_session_last_error(session, 256, buf), self.abi.AR_OK)
+        return bytes(buf).split(b"\0")[0].decode()
+
+    def test_position_and_an_unknown_pass(self):
+        a, lib = self.abi, self.lib
+        gen = self.commit_settings([b"Position", UNKNOWN])
+        session = self.start_session()
+        self.settle(session, gen)
+        listed = self.passes(session)
         print(f"session passes: {sorted(listed)}")
         for aov in ("Position", "Normal", "UV", "IndexMA"):
             self.assertIn(aov, listed)
         index, comps = listed["Position"]
         self.assertEqual(comps, 3)
-        n = SIZE * SIZE * comps
-        buf = (ctypes.c_float * n)()
-        self.assertEqual(lib.ar_session_read_pass(session, index, a.AR_QUANTITY_MEAN, n, buf), a.AR_OK)
-        self.assertTrue(all(math.isfinite(x) for x in buf), list(buf))
+        st, values = self.read(session, index, comps)
+        self.assertEqual(st, a.AR_OK)
+        self.assertTrue(all(math.isfinite(x) for x in values), values)
 
         info = a.ar_report_info()
         self.assertEqual(lib.ar_session_report_info(session, ctypes.byref(info)), a.AR_OK)
@@ -111,6 +143,29 @@ class TestSessionPasses(unittest.TestCase):
             if e.code == a.AR_REPORT_PASS_UNSUPPORTED:
                 hits.append((bytes(e.detail).split(b"\0")[0], e.level, e.subject, e.count))
         self.assertEqual(hits, [(UNKNOWN, a.AR_LEVEL_WARNING, 0, 1)])
+
+    def test_stale_index_after_a_rebuild_is_refused(self):
+        # With the AOVs, IndexMA sits where AR Invalid sits without them; both are one-component
+        # means, so only the revision check tells a stale index from a valid one.
+        a, lib = self.abi, self.lib
+        gen = self.commit_settings([b"Position"])
+        session = self.start_session()
+        self.settle(session, gen)
+        index, comps = self.passes(session)["IndexMA"]
+        self.assertEqual(self.read(session, index, comps)[0], a.AR_OK)
+        gen = self.commit_settings([])
+        self.settle(session, gen)
+        st, _ = self.read(session, index, comps)
+        self.assertEqual(st, a.AR_ERR_INVALID_ARGUMENT)
+        self.assertIn(STALE, self.last_error(session))
+        info = a.ar_pass_info()
+        self.assertEqual(lib.ar_session_pass_info(session, 0, ctypes.byref(info)), a.AR_ERR_INVALID_ARGUMENT)
+        self.assertIn(STALE, self.last_error(session))
+        listed = self.passes(session)  # a new pass_count accepts the new list
+        self.assertNotIn("IndexMA", listed)
+        self.assertEqual(listed["AR Invalid"][0], index)
+        self.assertEqual(self.read(session, index, comps)[0], a.AR_OK)
+        print(f"stale index {index} refused after the rebuild; reads again after pass_count")
 
     def destroy(self, session):
         self.lib.ar_session_close(session)

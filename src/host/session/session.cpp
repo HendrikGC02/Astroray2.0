@@ -377,7 +377,13 @@ FitsProvenance Session::fits_provenance_locked() const {
 void Session::read_film(const std::function<void(const FilmReadContext&)>& fn) const {
   std::lock_guard<std::mutex> render(render_mutex_);
   if (!film_) throw std::invalid_argument("the session has no film (still initializing, or closed)");
-  fn(FilmReadContext{device_, *film_, fits_provenance_locked()});
+  uint64_t revision;
+  {
+    // film_ and the revision are published together under both locks (sync_film).
+    std::lock_guard<std::mutex> lock(mutex_);
+    revision = pass_revision_;
+  }
+  fn(FilmReadContext{device_, *film_, fits_provenance_locked(), revision});
 }
 
 std::optional<DisplayFrame> Session::display_acquire(uint64_t after_frame) {
@@ -503,6 +509,7 @@ void Session::sync_film() {
   film_ = std::move(film);
   session_tables_ = std::move(tables);
   std::lock_guard<std::mutex> lock(mutex_);
+  if (!same_channels(layout, layout_)) ++pass_revision_;
   layout_ = layout;
 }
 
