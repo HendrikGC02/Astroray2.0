@@ -78,7 +78,7 @@ TEST_SUITE("fast") {
       const double x = 14387.768775 / (p.l * 1e-3 * p.T);
       // Float: the record's (2x + 8) 2^-23. Double: the record's rounded constants differ from the
       // exact ones by 3.3e-10 relative in c1L and 1.74e-9 in c2; d ln B / d ln c2 = -x / (1 - e^-x),
-      // so 3.4e-10 + 1.75e-9 x / (1 - e^-x), with a factor 1.5 for the pins' own rounding.
+      // so 3.4e-10 + 1.75e-9 x / (1 - e^-x), with a factor 1.5 as a safety margin.
       const double tol = sizeof(Real) == 4 ? (2 * x + 8) * kEps : 1.5 * (3.4e-10 + 1.75e-9 * x / -std::expm1(-x));
       const double got = static_cast<double>(ar::planck_radiance(static_cast<Real>(p.l), static_cast<Real>(p.T)));
       CHECK_MESSAGE(std::fabs(got / p.b - 1.0) <= tol, "lambda " << p.l << " T " << p.T << " got " << got << " want " << p.b);

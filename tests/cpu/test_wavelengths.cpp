@@ -48,8 +48,6 @@ double cdf_at(const host::WavelengthTable& t, double lambda) {
 
 double frac(double x) { return x - std::floor(x); }
 
-constexpr double kEps = std::numeric_limits<Real>::epsilon();
-
 }  // namespace
 
 TEST_SUITE("fast") {
@@ -102,25 +100,27 @@ TEST_SUITE("fast") {
     const float cdf[2] = {0.0f, 1.0f};
     const ar::WavelengthTableView id{edges, cdf, 1u};
     std::mt19937_64 rng(0x5eedu);
-    for (int n = 0; n < 4096; ++n) {
-      // u a multiple of 2^-23: u + i/4 < 2 is then exact in float, so equality is exact.
-      const double u = static_cast<double>(rng() & 0x7FFFFFu) / 8388608.0;
+    // u on the sampler's 2^-24 grid (sobol.h bits_to_unit): random values plus every grid point
+    // within 3 steps of 1 - i/4, where u + i/4 crosses 1 and a plain float sum rounds.
+    std::vector<double> us;
+    for (int n = 0; n < 4096; ++n) us.push_back(static_cast<double>(rng() & 0xFFFFFFu) / 16777216.0);
+    for (int i = 1; i < ar::kLanes; ++i)
+      for (int d = -3; d <= 3; ++d) us.push_back(1.0 - i / 4.0 + d / 16777216.0);
+    us.push_back(0.0);
+    us.push_back(1.0 - 1.0 / 16777216.0);
+    for (const double u : us) {
       const ar::FilmWavelengths w = ar::sample_film_wavelengths(id, static_cast<Real>(u));
       for (int i = 0; i < ar::kLanes; ++i) {
-        CHECK(static_cast<double>(w.lf.nm[i]) == frac(u + i / 4.0));
+        CHECK_MESSAGE(static_cast<double>(w.lf.nm[i]) == frac(u + i / 4.0), "u " << u << " lane " << i);
         CHECK(static_cast<double>(w.pf.v[i]) == 1.0);
       }
-      // Any float u: only the rounding of the sum u + i/4 (half an ulp at 1).
-      const double v = static_cast<double>(static_cast<Real>(static_cast<double>(rng() >> 11) / 9007199254740992.0));
-      const ar::FilmWavelengths x = ar::sample_film_wavelengths(id, static_cast<Real>(v));
-      for (int i = 0; i < ar::kLanes; ++i) CHECK(std::fabs(static_cast<double>(x.lf.nm[i]) - frac(v + i / 4.0)) <= kEps / 2);
     }
     // On the real table: the CDF position of every lane is frac(u + i/4) up to the float
     // rounding of lambda (ulp 6.1e-5 nm at 830 nm times the peak pdf 4.5e-3 per nm = 2.8e-7).
     const host::WavelengthTable t = host::WavelengthTableBuilder().build();
     const double tol = sizeof(Real) == 4 ? 1e-6 : 1e-12;
     for (int n = 0; n < 4096; ++n) {
-      const double u = static_cast<double>(rng() & 0x7FFFFFu) / 8388608.0;
+      const double u = static_cast<double>(rng() & 0xFFFFFFu) / 16777216.0;
       const ar::FilmWavelengths w = ar::sample_film_wavelengths(view_of(t), static_cast<Real>(u));
       for (int i = 0; i < ar::kLanes; ++i) {
         CHECK(w.lf.nm[i] >= Real(360));

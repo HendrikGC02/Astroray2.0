@@ -46,8 +46,10 @@ AR_FN uint32_t wavelength_bin(const WavelengthTableView& t, Real u) {
 AR_FN FilmWavelengths sample_film_wavelengths(const WavelengthTableView& t, Real u) {
   FilmWavelengths out;
   for (int i = 0; i < kLanes; ++i) {
-    Real ui = u + Real(i) * Real(0.25);
-    ui -= ar::floor(ui);
+    // Wrapping by subtraction keeps both branches exact in float for u on the sampler's
+    // 2^-24 grid; the sum u + i/4 rounds once it reaches [1, 2).
+    const Real q = Real(i) * Real(0.25);
+    const Real ui = u >= Real(1) - q ? u - (Real(1) - q) : u + q;
     const uint32_t b = wavelength_bin(t, ui);
     const Real c0 = Real(load_ro(t.cdf + b));
     const Real dc = Real(load_ro(t.cdf + b + 1)) - c0;
