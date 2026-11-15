@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -254,6 +255,37 @@ struct Rig {
   uint32_t item_of(uint32_t s) const { return sh_queue[s]; }
 };
 
+// A double replica of Arvo's spherical-triangle map in pbrt-v4 SampleSphericalTriangle's form: the
+// reference the float sampler (Peters' steps, triangle.h) is measured against.
+struct D3 {
+  double x, y, z;
+};
+D3 operator-(D3 a, D3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+D3 operator+(D3 a, D3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+D3 operator*(D3 a, double s) { return {a.x * s, a.y * s, a.z * s}; }
+double dot3(D3 a, D3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+D3 cross3(D3 a, D3 b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
+D3 unit3(D3 a) { return a * (1.0 / std::sqrt(dot3(a, a))); }
+double clamp1(double x) { return x < -1.0 ? -1.0 : (x > 1.0 ? 1.0 : x); }
+double angle_between(D3 a, D3 b) {  // pbrt-v4 AngleBetween
+  const double pi = 3.14159265358979323846;
+  return dot3(a, b) < 0 ? pi - 2 * std::asin(clamp1(std::sqrt(dot3(a + b, a + b)) / 2))
+                        : 2 * std::asin(clamp1(std::sqrt(dot3(b - a, b - a)) / 2));
+}
+D3 arvo_double(D3 v0, D3 v1, D3 v2, D3 p, double u0, double u1) {
+  const double pi = 3.14159265358979323846;
+  const D3 a = unit3(v0 - p), b = unit3(v1 - p), c = unit3(v2 - p);
+  const D3 nab = unit3(cross3(a, b)), nbc = unit3(cross3(b, c)), nca = unit3(cross3(c, a));
+  const double alpha = angle_between(nab, nca * -1), beta = angle_between(nbc, nab * -1), gamma = angle_between(nca, nbc * -1);
+  const double ap = (1 - u0) * pi + u0 * (alpha + beta + gamma);
+  const double ca = std::cos(alpha), sa = std::sin(alpha);
+  const double sp = std::sin(ap) * ca - std::cos(ap) * sa, cph = std::cos(ap) * ca + std::sin(ap) * sa;
+  const double k1 = cph + ca, k2 = sp - sa * dot3(a, b);
+  const double cbp = clamp1((k2 + (k2 * cph - k1 * sp) * ca) / ((k2 * sp + k1 * cph) * sa));
+  const D3 cp = a * cbp + unit3(c - a * dot3(c, a)) * std::sqrt(std::max(0.0, 1 - cbp * cbp));
+  const double ct = 1 - u1 * (1 - dot3(cp, b));
+  return unit3(b * ct + unit3(cp - b * dot3(cp, b)) * std::sqrt(std::max(0.0, 1 - ct * ct)));
+}
 bool near(double a, double b, double rel) { return std::fabs(a - b) <= rel * std::fabs(b) + 1e-30; }
 
 ar::SpectrumRef illuminant(float v) { return ar::make_const_ref(ar::SpectrumSemantic::ILLUMINANT, ar::Real(v)); }
@@ -469,6 +501,38 @@ TEST_CASE("nee/a miss after a diffuse bounce is weighted against world NEE") {
   }
 }
 
+
+TEST_CASE("nee/spherical triangle sampling matches double") {
+  // The float sampler against the double replica of the same map, from 2^17 context points in
+  // [-1, 1]^3 below two triangles 3 above (well-shaped, and a sliver), uniforms from the sampler's
+  // independent stream. pbrt's float form strayed 1.1e-4 to 1.4e-4 rad at p99.9 (small u.x: the
+  // cos(beta') -> sin(beta') step); Peters' steps measure 1.7e-6 to 2.6e-6.
+  const ar::Real3 tris[3][3] = {{{-0.6f, -0.6f, 3.0f}, {0.6f, -0.5f, 3.1f}, {0.0f, 0.6f, 3.05f}},
+                                {{0.2f, 0.1f, 3.3f}, {1.0f, 0.2f, 3.2f}, {0.5f, 0.9f, 3.25f}},
+                                {{-0.9f, 0.0f, 3.0f}, {0.9f, 0.05f, 3.2f}, {0.0f, 0.12f, 3.1f}}};
+  for (int t = 0; t < 3; ++t) {
+    const ar::LightRecord r = ar::light_make_triangle(tris[t][0], tris[t][1], tris[t][2], 0, 0, ar::kLightTwoSided, 1.0f,
+                                                      illuminant(1.0f));
+    const D3 v[3] = {{tris[t][0].x, tris[t][0].y, tris[t][0].z}, {tris[t][1].x, tris[t][1].y, tris[t][1].z},
+                     {tris[t][2].x, tris[t][2].y, tris[t][2].z}};
+    std::vector<double> ang;
+    for (uint32_t i = 0; i < (1u << 17); ++i) {
+      const auto unit = [&](uint32_t d) { return ar::sample_independent(i, uint32_t(t), 0, d, 74u); };
+      const ar::Real3 p{2 * unit(0) - 1, 2 * unit(1) - 1, 2 * unit(2) - 1};
+      const ar::Real2 u{unit(3), unit(4)};
+      ar::Real3 q{0, 0, 0};
+      REQUIRE(ar::tri_sample_spherical(r, p, u, &q));
+      const ar::Real3 wf = ar::normalize(q - p);
+      const D3 wd = arvo_double(v[0], v[1], v[2], D3{p.x, p.y, p.z}, u.x, u.y), w{wf.x, wf.y, wf.z};
+      const D3 cr = cross3(w, wd);
+      ang.push_back(std::atan2(std::sqrt(dot3(cr, cr)), dot3(w, wd)));
+    }
+    std::sort(ang.begin(), ang.end());
+    const double p999 = ang[size_t(0.999 * double(ang.size()))], worst = ang.back();
+    MESSAGE("triangle " << t << ": p99.9 " << p999 << " rad, max " << worst << " rad");
+    CHECK(p999 < 5e-6);  // half the agreement test's direction limit (0002 D12 class DIRECTION, 1e-5)
+  }
+}
 }  // TEST_SUITE
 
 TEST_SUITE("gate") {
