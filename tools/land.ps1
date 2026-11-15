@@ -143,7 +143,12 @@ function Invoke-Prepare {
   $taskText = Get-Content $taskFile[0].FullName -Raw
   $title = ($taskText -split "`n")[0].TrimStart('# ').Trim()
   $names = @(GitX diff --name-only origin/main HEAD)
-  $testsChanged = @($names | Where-Object { $_ -like 'tests/*' }).Count -gt 0
+  # A header under tests/ that defines no test case (e.g. the precompiled header) is
+  # support code, not a test; every other changed file under tests/ needs the canary.
+  $testsChanged = @($names | Where-Object {
+    $_ -like 'tests/*' -and -not ($_ -like '*.h' -and (Test-Path (Join-Path $root $_)) -and
+      -not (Select-String -Path (Join-Path $root $_) -Pattern 'TEST_CASE|AR_RT_CASE' -Quiet))
+  }).Count -gt 0
   $caseLines = @(GitX diff -U0 origin/main HEAD | Where-Object { $_ -match '^[+-][^+-].*TEST_CASE' }).Count -gt 0
   $patch = Join-Path $root "tasks/$Number.canary.patch"
   $canaryLine = Get-TaskField $taskText 'Canary:'
