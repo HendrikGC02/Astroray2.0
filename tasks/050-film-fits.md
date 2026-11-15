@@ -10,9 +10,9 @@ Do:
 3. fits_writer: primary HDU with provenance keywords (engine version, commit, seed, spp, sampler mode, observer hash, working space, filter, wavelength-pdf name, `DENOISED = F`), then one IMAGE extension per channel component with `EXTNAME`, and `VAR`/`NSAMP` companions for MOMENT channels; BITPIX -32 default, -64 on request; rows bottom-up (no flip); 2880-byte blocks. It accepts only `FilmView`.
 4. Negative compile: try_compile cases that pass a DisplayImage to the FITS writer and to a `film_*` write function must fail to compile; a positive control compiles (0008 V9 compile part).
 5. test_fits.cpp (fast): a synthetic 3x2 film written at -32 and -64; tests/abi/fits_read.py (stdlib + NumPy) parses headers and data, checks keywords, `DENOISED = F`, values and bottom-up order; test_fits runs the reader through `Get-ArPython` only in `gate` (fast stays C++).
-Acceptance: `pwsh tools/check.ps1 fast` passes; `pwsh tools/check.ps1 gate` runs fits_read on the dump and passes; `cmake --build out/build --target astroray_negative_compile` passes and lists each case with its expected outcome.
+Acceptance: `pwsh tools/check.ps1 fast` passes; `pwsh tools/check.ps1 gate` runs fits_read on the dump and passes; `pwsh -NoProfile -File tools/build.ps1 -Target astroray_negative_compile -NoMachineLock` passes and lists each case with its expected outcome.
 Look at: none.
-Canary: tasks/050.canary.patch must turn red: astroray_tests_cpu "fits/header keywords", and `cmake --build out/build --target astroray_negative_compile` (the patch adds a DisplayImage overload to the writer).
+Canary: tasks/050.canary.patch must turn red: astroray_tests_cpu "fits/header keywords", and `pwsh -NoProfile -File tools/build.ps1 -Target astroray_negative_compile -NoMachineLock` (the patch adds a DisplayImage overload to the writer).
 Budget: none.
 Depends on: 047, 049.
 Size: M (about 400 lines); stop and report at 2x.
