@@ -1,0 +1,4 @@
+bench/history/2026.jsonl:2: [history] keys differ: missing ['unit'], unexpected []
+bench/history/2026.jsonl:3: [history] date is earlier than the previous line
+bench/history/2026.jsonl:4: [history] n must be >= 1
+bench/history/2026.jsonl:5: [history] not JSON: Expecting value: line 1 column 1 (char 0)

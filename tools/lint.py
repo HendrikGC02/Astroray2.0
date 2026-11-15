@@ -248,8 +248,47 @@ def budgets(c):
             c.find(toml_path, 1, "budgets", f"[family_provisional] {k} must be {v} (0009 d15)")
 
 
+HISTORY_KEYS = {"sha": str, "machine": str, "driver": str, "cuda": str, "scene": str,
+                "metric": str, "value": (int, float), "unit": str, "n": int,
+                "spread": (int, float), "date": str}
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|\+00:00)$")
+
+
+def history(c):
+    """Ref: 0009 d22 (history line), d29; tasks/011: one JSON object per line, fixed keys."""
+    last = ""
+    for p in c.files:
+        if not re.match(r"^bench/history/[^/]+\.jsonl$", p):
+            continue
+        for n, ln in enumerate(c.lines(p), 1):
+            try:
+                o = json.loads(ln)
+            except ValueError as e:
+                c.find(p, n, "history", f"not JSON: {e}")
+                continue
+            if not isinstance(o, dict):
+                c.find(p, n, "history", "line is not a JSON object")
+                continue
+            if set(o) != set(HISTORY_KEYS):
+                miss, extra = sorted(set(HISTORY_KEYS) - set(o)), sorted(set(o) - set(HISTORY_KEYS))
+                c.find(p, n, "history", f"keys differ: missing {miss}, unexpected {extra}")
+                continue
+            for k, t in HISTORY_KEYS.items():
+                if isinstance(o[k], bool) or not isinstance(o[k], t):
+                    c.find(p, n, "history", f"key {k} has the wrong type")
+            if isinstance(o["n"], int) and not isinstance(o["n"], bool) and o["n"] < 1:
+                c.find(p, n, "history", "n must be >= 1")
+            if isinstance(o["date"], str):
+                if not DATE_RE.match(o["date"]):
+                    c.find(p, n, "history", "date is not ISO 8601 UTC (YYYY-MM-DDTHH:MM:SSZ)")
+                elif o["date"] < last:
+                    c.find(p, n, "history", "date is earlier than the previous line")
+                else:
+                    last = o["date"]
+
+
 SECTIONS = {"spdx": spdx, "nvidia": nvidia, "ascii-ps1": ascii_ps1, "caps": caps,
-            "skip": skip, "taskfile": taskfile, "budgets": budgets}
+            "skip": skip, "taskfile": taskfile, "budgets": budgets, "history": history}
 
 
 def run(root, files, sections):

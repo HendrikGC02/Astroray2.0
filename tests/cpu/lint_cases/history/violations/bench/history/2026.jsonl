@@ -1,0 +1,5 @@
+{"sha":"abc1234","machine":"m1","driver":"576.80","cuda":"12.8","scene":"B-1M","metric":"throughput.mpaths","unit":"Mpaths/s","n":3,"spread":0.5,"value":10.0,"date":"2026-01-02T00:00:00Z"}
+{"sha":"a","machine":"m","driver":"d","cuda":"c","scene":"s","metric":"m","value":1,"n":1,"spread":0,"date":"2026-01-03T00:00:00Z"}
+{"sha":"abc1234","machine":"m1","driver":"576.80","cuda":"12.8","scene":"B-1M","metric":"throughput.mpaths","unit":"Mpaths/s","n":3,"spread":0.5,"value":10.0,"date":"2026-01-01T00:00:00Z"}
+{"sha":"abc1234","machine":"m1","driver":"576.80","cuda":"12.8","scene":"B-1M","metric":"throughput.mpaths","unit":"Mpaths/s","n":0,"spread":0.5,"value":10.0,"date":"2026-01-04T00:00:00Z"}
+not json

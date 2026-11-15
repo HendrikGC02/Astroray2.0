@@ -11,3 +11,4 @@ Scripts print at most 20 lines, log to out/check/, exit non-zero on failure (000
 - lint.py: SPDX, NVIDIA, ASCII ps1, process caps, skip/xfail, task-file format; `--self-test` runs tests/cpu/lint_cases/.
 - budgets.toml: machine copy of 0009 d13 (B-01..B-37) and the d15 family sizes; lint section `budgets` checks it.
 - check.ps1 fast: lint, `build.ps1 -Target astroray_tests_cpu -NoMachineLock -Jobs 4`, fast tests; fails on B-08 (tier) or B-12 (one test). No machine lock. Other tiers come later. build.ps1 -Jobs n passes -j n.
+- report.py: offline out/report/index.html (tier durations vs B-08..B-11, build times, empty sections for later plots) from bench/history/*.jsonl and out/check/*.json; `--selftest`. History line keys: sha, machine, driver, cuda, scene, metric, value, unit, n, spread, date; lint section `history` checks them. bench/scenes.toml lists B scenes.

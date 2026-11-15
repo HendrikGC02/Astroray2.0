@@ -1,0 +1,2 @@
+{"sha":"abc1234","machine":"m1","driver":"576.80","cuda":"12.8","scene":"B-1M","metric":"throughput.mpaths","unit":"Mpaths/s","n":3,"spread":0.5,"value":10.0,"date":"2026-01-01T00:00:00Z"}
+{"sha":"abc1234","machine":"m1","driver":"576.80","cuda":"12.8","scene":"B-1M","metric":"throughput.mpaths","unit":"Mpaths/s","n":3,"spread":0.5,"value":11,"date":"2026-01-02T00:00:00Z"}
