@@ -16,3 +16,4 @@ Budget: host code; build time per generation printed.
 Depends on: 102, 105.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
+- Stopped before code: the task needs files outside Scope (see lead report); nothing implemented.
