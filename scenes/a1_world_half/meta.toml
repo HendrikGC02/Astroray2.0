@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# A1 world half: the A1 furnace (a Lambertian sphere in a uniform world, camera outside) with a
+# white sphere (rho 1) and world radiance 0.5, so every pixel is 0.5 (0009 d16, d20). The sphere is
+# convex, so a reflected ray escapes at once and the bounce limit does not matter; its pixels are
+# found by world NEE and by BSDF rays reaching the world, combined by the balance heuristic (0004
+# D1), so a missing or wrong MIS weight on either strategy reads high or low (0004 D7's check that
+# NEE of the world and emitter hits agree). Pixels the sphere's edge may cross are not tested
+# (truths.py sphere_pixel_classes).
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+
+[truth]
+formula = "lambertian_furnace"
+rho = 1.0
+world_radiance = 0.5
+# The scene as A1 (metres, millimetres): a sphere at the origin, a pinhole camera on the -y axis.
+sphere_radius = 1.0
+camera_distance = 4.0
+focal_mm = 50.0
+sensor_mm = 36.0
+# As A1: smooth normals tilted from each facet's geometric normal lose a small fraction of the
+# cosine lobe (a BSDF sample, or a light direction, below the geometric surface); at 192 x 96 it is
+# far below the per-pixel threshold (A1's meta.toml gives the measurement).
+segments = 192
+rings = 96
+
+[tolerance]
+kind = "z_se"

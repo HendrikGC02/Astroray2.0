@@ -42,7 +42,7 @@ SIZE = 32  # 0009 d11: analytic scenes at 32x32 in gate
 # 64 spp the skewed spectral samples put the worst |z| at 5.48 against 5.50. Lower values need their
 # own null run first. At 1024 spp a 1% emission error is about 7.7 SE in A5's green channel.
 MIN_SPP = 1024
-GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace")  # 0009 d11: run by check.ps1 gate on both devices
+GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace", "a1_world_half")  # 0009 d11: run by check.ps1 gate on both devices
 DEVICES = ("cpu", "cuda")
 FAMILY_ALPHA = 0.01  # 0009 d15
 # tests/common/stat.cpp kRepoConstant and the FNV-1a / MixBits rule of seed_for() (task 020).
