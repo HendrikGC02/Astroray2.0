@@ -1,17 +1,17 @@
 diff --git a/tools/abigen.py b/tools/abigen.py
-index d498969..f347819 100644
+index 33d8e99..43cac70 100644
 --- a/tools/abigen.py
 +++ b/tools/abigen.py
-@@ -819,7 +819,7 @@ struct ar_recorder {
-   // One open item's arrays (u32 kind, then per field u64 count and bytes) or kind NONE; the
-   // entry is erased because the call consumes the buffers.
-   void block(Writer& w, uint64_t edit, uint64_t key) {
+@@ -822,7 +822,7 @@ struct ar_recorder {
+   // entry is erased when the call consumes the buffers (item commit), kept for an edit commit
+   // that may be refused and retried.
+   void block(Writer& w, uint64_t edit, uint64_t key, bool consume) {
 -    auto it = staged.find({edit, key});
 +    auto it = staged.find({edit, key + 1});
      if (it == staged.end()) {
        w.scalar<uint32_t>(0xFFFFFFFFu);
        return;
-@@ -837,7 +837,7 @@ struct ar_recorder {
+@@ -840,7 +840,7 @@ struct ar_recorder {
    void commit_blocks(Writer& w, uint64_t edit) {
      std::vector<std::pair<uint64_t, uint64_t>> order;  // (seq, key)
      for (auto it = staged.lower_bound({edit, 0}); it != staged.end() && it->first.first == edit; ++it)
@@ -20,25 +20,27 @@ index d498969..f347819 100644
      std::sort(order.begin(), order.end());
      w.scalar(static_cast<uint32_t>(order.size()));
      for (const auto& o : order) {
-@@ -849,7 +849,7 @@ struct ar_recorder {
- 
+@@ -853,8 +853,8 @@ struct ar_recorder {
  void ar_rec_status(ar_recorder* r, const ArRecTok& tok, ar_status st) {
    std::lock_guard<std::mutex> lk(r->mu);
+   // A refused commit or abort leaves the edit open (032): its staged buffers stay valid.
+-  if (tok.drop_edit && st == AR_OK) r->erase_edit(tok.drop_edit);
 -  uint32_t flags = st + 1;
++  if (tok.drop_edit && st != 0xFFFFu) r->erase_edit(tok.drop_edit);
 +  uint32_t flags = 1 + (st & 0);
    if (tok.off >= r->flushed) {
      memcpy(r->buf.data() + (tok.off - r->flushed), &flags, sizeof flags);
    } else if (r->f && r->error.empty()) {
-@@ -1108,7 +1108,7 @@ bool apply_block(State& st, Reader& r, uint64_t edit, uint64_t key) {
+@@ -1118,7 +1118,7 @@ bool apply_block(State& st, Reader& r, uint64_t edit, uint64_t key, bool consume
        st.msg = "staged array count differs from the replayed begin";
        return false;
      }
 -    if (count) memcpy(*sl.slot, src, size_t(count) * sl.esize);
 +    (void)src;
    }
-   st.open.erase(it);
+   if (consume) st.open.erase(it);
    return true;
-@@ -1252,7 +1252,7 @@ ar_status ar_replay_file(const char* path, const ArReplayOptions& opt, ArReplayR
+@@ -1263,7 +1263,7 @@ ar_status ar_replay_file(const char* path, const ArReplayOptions& opt, ArReplayR
    uint64_t file_hash = 0, lib_hash = 0;
    memcpy(&file_hash, data.data() + sizeof kMagic, 8);
    if (ar_abi_hash(&lib_hash) != AR_OK) return bad(AR_ERR_INTERNAL, "ar_abi_hash failed");
