@@ -23,6 +23,7 @@
 #include "../../kernel/color/rgb2spec.h"
 #include "../../kernel/material/constant_block.h"
 #include "../../kernel/material/material_header.h"
+#include "host/image/image_store.h"
 #include "host/ledger.h"
 #include "host/material/compiler.h"
 
@@ -65,6 +66,10 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   // Edit calls. A status other than AR_OK leaves its reason in edit.last_error().
   ar_status set_graph(Edit& edit, ar_key key, const ar_graph_desc* desc);
   ar_status set_material(Edit& edit, ar_key key, const ar_material_desc* desc);
+  // Images live in their own store but activate with the material pass: a material whose
+  // emission estimate read an image is recompiled when that image changes.
+  ar_status set_image(Edit& edit, const ar_image_desc* desc);
+  ImageStore& images() { return *images_; }
   // After a successful ar_edit_remove / ar_edit_reset of the open edit.
   ar_status note_remove(Edit& edit, uint32_t kind, ar_key key);
   ar_status note_reset(Edit& edit);
@@ -83,6 +88,8 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   static void apply_open(const Open& o, GraphMap& graphs, DescMap& materials);
   // Whether the edit compiles this material: set in it, or its graph set or removed in it.
   static bool compiles(const Open& o, ar_key key, const ar_material_desc& d);
+  // Whether the edit replaced or removed (or reset away) an image the material's estimate read.
+  static bool uses_changed_image(const MaterialOutput& out, const Open& o);
   ar_status ensure_pass(Edit& edit);
   void bind(const std::shared_ptr<Pass>& pass);
   void dropped(const Pass& pass);
@@ -91,6 +98,7 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
 
   ar::Rgb2SpecTable table_ = {};
   std::shared_ptr<Ledger> ledger_;
+  std::shared_ptr<ImageStore> images_;
   std::shared_ptr<Open> open_;  // one open edit per scene
 
   mutable std::mutex mutex_;

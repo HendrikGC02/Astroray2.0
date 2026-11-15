@@ -185,12 +185,66 @@ TEST_CASE("compiler_outputs/emission estimate textured") {
   g.op2(Op::EMIT_LE, tex(g), g.add(Op::CONST_F32, {2.0f}));
   const MaterialOutput m = g.compile();
   REQUIRE(m.emission_estimate.size() == 1);
-  // The texture's input is bounded by 1 until images carry their mean (task 060).
+  // Compiled without image means (a worker that may run before the decode) the input is bounded
+  // by 1 and the result names the image, so the store compiles it again with the means.
   CHECK(m.emission_estimate[0].color.kind == uint8_t(ar::SpectrumKind::CONSTANT));
   CHECK(m.emission_estimate[0].color.p[0] == 1.0f);
   CHECK(m.emission_estimate[0].strength == 2.0f);
   CHECK((m.flags & ar::CONSTANT_EMISSION) == 0);
   CHECK(!m.magenta);
+  CHECK((m.images == std::vector<uint32_t>{7}));
+}
+
+TEST_CASE("compiler_outputs/emission estimate image mean") {
+  GB g;
+  g.op2(Op::EMIT_LE, tex(g), g.add(Op::CONST_F32, {2.0f}));
+  auto expect = [&](float r, float gr, float b) {
+    ar::SpectrumRef ref = {};
+    uint32_t flags = 0;
+    ar::make_rgb_ref(table(), ar::Rgb{{ar::Real(r), ar::Real(gr), ar::Real(b)}}, ar::kSlotSemantic[int(ar::Slot::EMISSION_COLOR)], &ref, &flags);
+    return ref;
+  };
+  const astroray::host::ImageMeanFn means = [](uint32_t image, std::array<float, 3>* rgb) {
+    if (image != 7) return false;
+    *rgb = {0.25f, 0.5f, 0.75f};
+    return true;
+  };
+  const MaterialOutput m = compile_material(g.desc(), table(), &means);
+  REQUIRE(m.emission_estimate.size() == 1);
+  CHECK(same_ref(m.emission_estimate[0].color, expect(0.25f, 0.5f, 0.75f)));  // the mean, not the bound
+  CHECK(m.emission_estimate[0].strength == 2.0f);
+  CHECK((m.images == std::vector<uint32_t>{7}));
+  // An image the scene does not have samples magenta, and so does the estimate.
+  const astroray::host::ImageMeanFn none = [](uint32_t, std::array<float, 3>*) { return false; };
+  const MaterialOutput lost = compile_material(g.desc(), table(), &none);
+  REQUIRE(lost.emission_estimate.size() == 1);
+  CHECK(same_ref(lost.emission_estimate[0].color, expect(1.0f, 0.0f, 1.0f)));
+  // A black image folds the estimate away exactly as a constant black does.
+  const astroray::host::ImageMeanFn black = [](uint32_t, std::array<float, 3>* rgb) { return *rgb = {0.0f, 0.0f, 0.0f}, true; };
+  CHECK(compile_material(g.desc(), table(), &black).emission_estimate.empty());
+}
+
+TEST_CASE("compiler_outputs/emission estimate derived from an image") {
+  // ADD(tex, -0.5) emits wherever the texel exceeds 0.5, so a mean of 0.4 must not zero the
+  // estimate (0005 item 43: zero only when emission folds to 0); it falls back to the bound 1.
+  const astroray::host::ImageMeanFn forty = [](uint32_t, std::array<float, 3>* rgb) { return *rgb = {0.4f, 0.4f, 0.4f}, true; };
+  GB neg;
+  const int sub = neg.op2(Op::ADD_F32X3, tex(neg), neg.add(Op::CONST_F32X3, {-0.5f, -0.5f, -0.5f}));
+  neg.op2(Op::EMIT_LE, sub, neg.add(Op::CONST_F32, {1.0f}));
+  const MaterialOutput m = compile_material(neg.desc(), table(), &forty);
+  REQUIRE(m.emission_estimate.size() == 1);
+  CHECK(m.emission_estimate[0].color.kind == uint8_t(ar::SpectrumKind::CONSTANT));
+  CHECK(m.emission_estimate[0].color.p[0] == 1.0f);
+  // A non-negative offset keeps the exact mean: 0.4 + 0.25.
+  GB pos;
+  const int add = pos.op2(Op::ADD_F32X3, tex(pos), pos.add(Op::CONST_F32X3, {0.25f, 0.25f, 0.25f}));
+  pos.op2(Op::EMIT_LE, add, pos.add(Op::CONST_F32, {1.0f}));
+  const MaterialOutput p = compile_material(pos.desc(), table(), &forty);
+  REQUIRE(p.emission_estimate.size() == 1);
+  ar::SpectrumRef want = {};
+  uint32_t flags = 0;
+  ar::make_rgb_ref(table(), ar::Rgb{{ar::Real(0.65f), ar::Real(0.65f), ar::Real(0.65f)}}, ar::kSlotSemantic[int(ar::Slot::EMISSION_COLOR)], &want, &flags);
+  CHECK(same_ref(p.emission_estimate[0].color, want));
 }
 
 TEST_CASE("compiler_outputs/two node types two entries") {

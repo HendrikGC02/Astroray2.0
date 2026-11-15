@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <set>
 
 #include "../../kernel/material/lobes/delta.h"
 #include "../../kernel/material/lobes/ggx.h"
@@ -225,9 +226,78 @@ bool build_entry(const Work& w, const std::vector<char>& marked, const std::vect
   return true;
 }
 
+// The mean of node i's value over a surface, for the emission estimate (0005 item 43), which
+// also steers light sampling. `known` means the mean is exact for the clamped emission: a
+// non-negative constant, a texture's own mean (non-negative), and MUL or ADD of known operands
+// (exact when at most one factor of a product varies). Everything else, including any negative
+// constant, is not known and the caller bounds it by 1, so the estimate is never wrongly zero.
+// Without an ImageMeanFn a texture is not known; every image read is added to *images.
+struct Mean {
+  Vec3 v = {1.0f, 1.0f, 1.0f};
+  bool known = false;
+};
+
+struct MeanCtx {
+  const ImageMeanFn* means;
+  std::set<uint32_t>* images;
+  std::vector<Mean> memo;  // shared sub-graphs are evaluated once
+  std::vector<char> have;
+};
+
+Mean mean_of_node(const Work& w, int i, MeanCtx* x);
+
+Mean mean_of(const Work& w, int i, MeanCtx* x) {
+  if (x->have[size_t(i)]) return x->memo[size_t(i)];
+  const Mean m = mean_of_node(w, i, x);
+  x->have[size_t(i)] = 1;
+  return x->memo[size_t(i)] = m;
+}
+
+Mean mean_of_node(const Work& w, int i, MeanCtx* x) {
+  Mean r;
+  if (w.isc[size_t(i)]) {
+    r.v = w.cv[size_t(i)];
+    r.known = r.v[0] >= 0.0f && r.v[1] >= 0.0f && r.v[2] >= 0.0f;
+    return r;
+  }
+  const GraphNode& n = w.g.nodes[size_t(i)];
+  if (n.op == Op::TEX_IMAGE) {
+    const uint32_t image = uint32_t(w.g.i32[n.i32_first]);
+    x->images->insert(image);
+    if (x->means == nullptr) return r;
+    std::array<float, 3> m = {};
+    if (!(*x->means)(image, &m)) m = {1.0f, 0.0f, 1.0f};
+    r.v = {m[0], m[1], m[2]};
+    r.known = true;
+    return r;
+  }
+  const bool arith = n.op == Op::MUL_F32 || n.op == Op::MUL_F32X3 || n.op == Op::MUL_F32X3_F32 || n.op == Op::ADD_F32X3;
+  if (!arith) return r;
+  const Mean a = mean_of(w, n.input[0], x), b = mean_of(w, n.input[1], x);
+  if (!a.known || !b.known) return r;
+  r.known = true;
+  switch (n.op) {
+    case Op::MUL_F32: r.v = {a.v[0] * b.v[0], 0.0f, 0.0f}; break;
+    case Op::MUL_F32X3: r.v = {a.v[0] * b.v[0], a.v[1] * b.v[1], a.v[2] * b.v[2]}; break;
+    case Op::MUL_F32X3_F32: r.v = {a.v[0] * b.v[0], a.v[1] * b.v[0], a.v[2] * b.v[0]}; break;
+    default: r.v = {a.v[0] + b.v[0], a.v[1] + b.v[1], a.v[2] + b.v[2]}; break;
+  }
+  return r;
+}
+
+// The estimate's value for input node i: the mean when it is known, the bound 1 otherwise. A
+// result of 0 stands only when it is exact: a folded constant or a texture's own mean.
+Vec3 estimate_input(const Work& w, int i, MeanCtx* x) {
+  if (w.isc[size_t(i)]) return w.cv[size_t(i)];  // folded: the stored value, clamped by the colour packing
+  const Mean m = mean_of(w, i, x);
+  const bool direct = w.g.nodes[size_t(i)].op == Op::TEX_IMAGE;
+  const bool zero = !(m.v[0] > 0.0f) && !(m.v[1] > 0.0f) && !(m.v[2] > 0.0f);
+  return !m.known || (zero && !direct) ? Vec3{1.0f, 1.0f, 1.0f} : m.v;
+}
+
 }  // namespace
 
-CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table) {
+CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means) {
   CompileResult res;
   Work w;
   w.table = &table;
@@ -242,6 +312,8 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
   int emit_count = 0;
   for (const GraphNode& nd : w.g.nodes) emit_count += nd.op == Op::EMIT_LE;
   std::vector<char> written(size_t(ar::RecordSlot::COUNT_), 0), is_root(n, 0), is_emit_root(n, 0);
+  std::set<uint32_t> images;
+  MeanCtx mx{means, &images, std::vector<Mean>(n), std::vector<char>(n, 0)};
   for (int i : w.topo) {
     const GraphNode& nd = w.g.nodes[size_t(i)];
     if (nd.op == Op::STORE_SLOT) {
@@ -263,20 +335,18 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
     } else if (nd.op == Op::EMIT_LE) {
       if (w.isc[size_t(nd.input[1])] && !(w.cv[size_t(nd.input[1])][0] >= 0.0f))
         return res.error = "EMIT_LE strength must not be negative", res;
-      // Emission estimate (0005 item 43): a constant input exactly, any per-point input by 1.
-      // A texture-driven input would use the image mean; until images carry it (060) it is 1 too.
+      // Emission estimate (0005 item 43): the input's mean (a constant exactly, an image by its
+      // mean, any other per-point input by 1).
       EmissionTerm term;
       const ar::SpectrumSemantic esem = ar::kSlotSemantic[int(ar::Slot::EMISSION_COLOR)];
-      bool zero = false;
-      if (w.isc[size_t(nd.input[0])]) {
-        const Vec3& c = w.cv[size_t(nd.input[0])];
-        uint32_t ignored = 0;  // the clamp is reported from the stored colour, below or in the block
-        ar::make_rgb_ref(table, ar::Rgb{{ar::Real(c[0]), ar::Real(c[1]), ar::Real(c[2])}}, esem, &term.color, &ignored);
-        zero = !(c[0] > 0.0f) && !(c[1] > 0.0f) && !(c[2] > 0.0f);
-      } else {
-        term.color = ar::make_const_ref(esem, ar::Real(1));
-      }
-      term.strength = w.isc[size_t(nd.input[1])] ? w.cv[size_t(nd.input[1])][0] : 1.0f;
+      const Vec3 mean = estimate_input(w, nd.input[0], &mx);
+      uint32_t ignored = 0;  // the clamp is reported from the stored colour, below or in the block
+      if (!w.isc[size_t(nd.input[0])] && mean[0] == 1.0f && mean[1] == 1.0f && mean[2] == 1.0f)
+        term.color = ar::make_const_ref(esem, ar::Real(1));  // the per-point upper bound: a white spectrum
+      else
+        ar::make_rgb_ref(table, ar::Rgb{{ar::Real(mean[0]), ar::Real(mean[1]), ar::Real(mean[2])}}, esem, &term.color, &ignored);
+      const bool zero = !(mean[0] > 0.0f) && !(mean[1] > 0.0f) && !(mean[2] > 0.0f);
+      term.strength = estimate_input(w, nd.input[1], &mx)[0];
       if (!zero && term.strength > 0.0f) res.emission.push_back(term);
       // A lone constant emission goes to the block; several accumulate in the program.
       if (emit_count == 1 && w.isc[size_t(nd.input[0])] && w.isc[size_t(nd.input[1])]) {
@@ -290,6 +360,7 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
       }
     }
   }
+  res.images.assign(images.begin(), images.end());
   if (std::none_of(is_root.begin(), is_root.end(), [](char c) { return c != 0; })) {
     res.constant_surface = true;
     res.ok = true;
@@ -362,6 +433,7 @@ bool per_point(const CompileResult& r, ar::RecordSlot s) { return ((r.runtime_sl
 void finish(MaterialOutput* m) {
   m->flags = material_flags(m->compiled);
   m->emission_estimate = m->compiled.emission;
+  m->images = m->compiled.images;
 }
 
 }  // namespace
@@ -398,7 +470,7 @@ MaterialOutput magenta_material(const ar::Rgb2SpecTable& table, uint32_t code, c
   return m;
 }
 
-MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable& table) {
+MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable& table, const ImageMeanFn* means) {
   // Unsupported nodes first, every one of them, not only the first (0001 V15).
   MaterialOutput unsupported;
   for (uint32_t i = 0; d.nodes != nullptr && i < d.node_count; ++i) {
@@ -417,7 +489,7 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
     return m;
   }
   MaterialOutput m;
-  m.compiled = compile_surface(d, table);
+  m.compiled = compile_surface(d, table, means);
   if (!m.compiled.ok) return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, m.compiled.error);
   // Only CONSTANT and RGB resolve in M1a (spectrum_ref.h); TABLE, BLACKBODY and CAUCHY_ABBE land in M1b.
   for (int s = 0; s < int(ar::Slot::COUNT_); ++s) {

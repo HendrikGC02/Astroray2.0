@@ -283,6 +283,22 @@ AR_API ar_status ar_edit_set_material(ar_edit h, ar_key key, const ar_material_d
   return staging_call(h, [&](Edit& e) { return h->owner->scene->materials->set_material(e, key, desc); });
   });
 }
+// FILE and MEMORY images decode on a worker at item commit; PIXELS (float data) is M1b.
+AR_API ar_status ar_edit_set_image(ar_edit h, const ar_image_desc* desc) {
+  AR_RECORD(ar_edit_set_image, ar_rec_of(h), h, desc);
+  AR_RECORD_BODY({
+  if (h && h->edit && desc && desc->source == AR_IMAGE_SOURCE_PIXELS) {
+    try {
+      const std::string why = "ar_edit_set_image: PIXELS images are not implemented in this build (M1b)";
+      h->owner->scene->ctx().log.line("WARNING", why);
+      return fail(h, AR_ERR_UNSUPPORTED, why);
+    } catch (...) {
+      return AR_ERR_UNSUPPORTED;
+    }
+  }
+  return staging_call(h, [&](Edit& e) { return h->owner->scene->materials->set_image(e, desc); });
+  });
+}
 
 // A committed or aborted edit is destroyed, which frees the scene's one edit slot; its
 // handle must not be used again.

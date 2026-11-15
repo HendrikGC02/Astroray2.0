@@ -23,7 +23,7 @@ bool copy_in(const T* p, uint32_t n, std::vector<T>* out) {
 std::string key_text(ar_key k) { return "material " + std::to_string(k); }
 
 // One material's outputs from its descriptor and the graph its surface key names (null: none).
-MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d, const StoredGraph* g) {
+MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d, const StoredGraph* g, const ImageMeanFn* means) {
   MaterialOutput m;
   if (d.ext_kind != 0)
     m = magenta_material(t, AR_REPORT_PROGRAM_REJECTED, "extension kind " + std::to_string(d.ext_kind) + " is not built in M1a");
@@ -32,7 +32,7 @@ MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d
                          d.surface_graph == 0 ? std::string("no surface graph")
                                               : "surface graph " + std::to_string(d.surface_graph) + " is not set");
   else
-    m = compile_material(g->desc(), t);
+    m = compile_material(g->desc(), t, means);
   // Volume and displacement programs are later milestones: reported, the surface still renders.
   if (d.volume_graph != 0) m.entries.push_back({AR_REPORT_NODE_UNSUPPORTED, "volume graph"});
   if (d.displacement_graph != 0) m.entries.push_back({AR_REPORT_NODE_UNSUPPORTED, "displacement graph"});
@@ -67,6 +67,7 @@ struct MaterialStore::Open {
   std::map<ar_key, std::shared_ptr<const StoredGraph>> graphs;
   std::map<ar_key, ar_material_desc> materials;
   std::set<ar_key> removed_graphs, removed_materials;
+  std::set<ar_key> images, removed_images;  // image keys this edit set and removed
 };
 
 struct MaterialStore::Pass {
@@ -82,7 +83,7 @@ struct MaterialStore::Pass {
 };
 
 MaterialStore::MaterialStore(std::shared_ptr<Ledger> ledger)
-    : ledger_(std::move(ledger)), arrays_(std::make_shared<MaterialArrays>()) {
+    : ledger_(std::move(ledger)), images_(std::make_shared<ImageStore>(ledger_)), arrays_(std::make_shared<MaterialArrays>()) {
   DataBlob blob;
   if (!find_data("spectral/rec709.jh", &blob)) throw std::runtime_error("material store: spectral/rec709.jh is not embedded");
   if (const char* e = ar::jh_view(blob.data, blob.size, &table_)) throw std::runtime_error(std::string("material store: ") + e);
@@ -107,7 +108,7 @@ ar_status MaterialStore::ensure_pass(Edit& edit) {
   };
   item->job = [self, pass] {
     for (Pass::Item& it : pass->items)
-      it.out = std::make_shared<const MaterialOutput>(compile_one(self->table_, it.desc, it.graph.get()));
+      it.out = std::make_shared<const MaterialOutput>(compile_one(self->table_, it.desc, it.graph.get(), nullptr));
   };
   item->on_active = [self, pass, scene] { self->activate(*scene, *pass); };
   item->on_dropped = [self, pass] { self->dropped(*pass); };
@@ -154,10 +155,24 @@ ar_status MaterialStore::set_material(Edit& edit, ar_key key, const ar_material_
   return AR_OK;
 }
 
-ar_status MaterialStore::note_remove(Edit& edit, uint32_t kind, ar_key key) {
-  if (kind != AR_KIND_MATERIAL && kind != AR_KIND_GRAPH) return AR_OK;
+ar_status MaterialStore::set_image(Edit& edit, const ar_image_desc* d) {
+  if (d == nullptr) return edit.fail("invalid argument: ar_edit_set_image desc is null");
   if (ar_status st = ensure_pass(edit)) return st;
-  (kind == AR_KIND_MATERIAL ? open_->removed_materials : open_->removed_graphs).insert(key);
+  if (ar_status st = images_->set_image(edit, d)) return st;
+  open_->images.insert(d->key);
+  return AR_OK;
+}
+
+bool MaterialStore::uses_changed_image(const MaterialOutput& out, const Open& o) {
+  for (uint32_t k : out.images)
+    if (o.reset || o.images.count(k) != 0 || o.removed_images.count(k) != 0) return true;
+  return false;
+}
+
+ar_status MaterialStore::note_remove(Edit& edit, uint32_t kind, ar_key key) {
+  if (kind != AR_KIND_MATERIAL && kind != AR_KIND_GRAPH && kind != AR_KIND_IMAGE) return AR_OK;
+  if (ar_status st = ensure_pass(edit)) return st;
+  (kind == AR_KIND_MATERIAL ? open_->removed_materials : kind == AR_KIND_GRAPH ? open_->removed_graphs : open_->removed_images).insert(key);
   return AR_OK;
 }
 
@@ -255,15 +270,28 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
     // compiled from the same descriptor and graph; after a dropped generation the prediction can
     // be wrong (another graph, a material that no longer exists, one it missed), and then the
     // material is compiled here.
+    // The edit's image removals and the images of every earlier generation are in place; this
+    // generation's own images were installed by their items, which run before this pass.
+    images_->remove(o.reset, o.removed_images, o.images);
+    const ImageMeanFn means = [this](uint32_t image, std::array<float, 3>* rgb) { return images_->mean(image, rgb); };
     for (const auto& kv : descs) {
-      if (!compiles(o, kv.first, kv.second)) continue;
+      const bool own_pass = compiles(o, kv.first, kv.second);
+      // A material that is not recompiled for its own change still is when an image its emission
+      // estimate read was replaced or removed.
+      auto prev = materials_.find(kv.first);
+      const bool image_dirty = !own_pass && prev != materials_.end() && uses_changed_image(*prev->second.out, o);
+      if (!own_pass && !image_dirty) continue;
       auto gi = graphs_.find(kv.second.surface_graph);
       const std::shared_ptr<const StoredGraph> graph = gi != graphs_.end() ? gi->second : nullptr;
       std::shared_ptr<const MaterialOutput> out;
-      for (const Pass::Item& it : pass.items)
-        if (it.key == kv.first && it.graph == graph && std::memcmp(&it.desc, &kv.second, sizeof(ar_material_desc)) == 0)
-          out = it.out;
-      if (!out) out = std::make_shared<const MaterialOutput>(compile_one(table_, kv.second, graph.get()));
+      if (own_pass)
+        for (const Pass::Item& it : pass.items)
+          if (it.key == kv.first && it.graph == graph && std::memcmp(&it.desc, &kv.second, sizeof(ar_material_desc)) == 0)
+            out = it.out;
+      // The worker compiled without image means (they may not have been decoded yet); a result
+      // that read images is compiled again here.
+      if (out && !out->images.empty()) out.reset();
+      if (!out) out = std::make_shared<const MaterialOutput>(compile_one(table_, kv.second, graph.get(), &means));
       materials_[kv.first] = Active{kv.second, out};
       done.push_back({kv.first, o.materials.count(kv.first) != 0, out});
     }
@@ -280,6 +308,7 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
       scene.ctx().log.line("WARNING", key_text(d.key) + ": " + e.detail + (d.out->magenta ? " (rendered magenta)" : ""));
       scene.report().raise(e.code, d.key, e.detail, 1, nullptr, pass.generation);
     }
+  images_->raise_entries(scene, pass.generation);
 }
 
 std::shared_ptr<const MaterialArrays> MaterialStore::arrays() const {
