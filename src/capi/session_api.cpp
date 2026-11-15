@@ -13,26 +13,14 @@
 #include <thread>
 
 #include "astroray/astroray.h"
-#include "device/cpu/cpu_device.h"
 #include "host/scene/edit.h"
 #include "host/session/session.h"
-#include "host/thread_pool.h"
 #include "recorder_hooks.h"
 
 using astroray::host::Session;
 using astroray::host::SessionUnsupported;
 
 namespace {
-
-// What a CPU session renders with. The pool's workers are engine threads (thread_pool.h).
-struct CpuResources {
-  astroray::host::Ledger ledger;
-  astroray::host::ThreadPool pool;
-  astroray::host::CpuDevice device;
-  CpuResources(astroray::ContextState& ctx, unsigned workers) : pool(ctx, workers), device(ledger, pool) {
-    device.register_production_stages();
-  }
-};
 
 template <class H>
 ar_status fail(H* h, ar_status st, const std::string& why) {
@@ -96,15 +84,15 @@ AR_API ar_status ar_session_create(ar_scene scene, const ar_session_desc* desc, 
     auto h = std::make_unique<ar_session_s>();
     h->scene = scene;
     const unsigned cores = std::thread::hardware_concurrency();
-    auto res = std::make_shared<CpuResources>(ctx, cores ? cores : 1u);
+    std::shared_ptr<astroray::host::Device> device = astroray::host::make_cpu_session_device(ctx, cores ? cores : 1u);
     astroray::host::SessionOptions o;
     o.mode = desc->mode;
     o.max_width = desc->max_width;
     o.max_height = desc->max_height;
     o.denoiser = desc->denoiser;
     o.owner = astroray::host::Owner{0, 1};  // the ledger is this session's own
-    h->session = std::make_unique<Session>(*scene->scene, res->device, o);
-    h->resources = std::move(res);
+    h->session = std::make_unique<Session>(*scene->scene, *device, o);
+    h->device = std::move(device);
     *out = h.release();
     AR_RECORD_BIND(*out);
     return AR_OK;

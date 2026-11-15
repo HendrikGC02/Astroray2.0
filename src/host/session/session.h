@@ -166,6 +166,11 @@ class Session {
   std::thread thread_;  // last: started after every member exists
 };
 
+// A CPU device with the production entry points registered, owning its ledger and a thread pool of
+// workers engine threads (defined in src/device/cpu/cpu_device.cpp, the only place that may name
+// the CPU device).
+std::shared_ptr<Device> make_cpu_session_device(ContextState& ctx, unsigned workers);
+
 }  // namespace astroray::host
 
 namespace astroray {
@@ -176,13 +181,12 @@ void context_device_of_state(ContextState& state, uint32_t* kind, uint32_t* inde
 
 struct ar_scene_s;
 
-// The ABI handle. The device and what it needs (ledger, thread pool) are owned here, behind a
-// type-erased pointer so this header names no device implementation; `session` is declared last
+// The ABI handle. It owns the device (with its ledger and thread pool); `session` is declared last
 // so it is destroyed first (it joins the render thread, which still uses the device).
 struct ar_session_s {
   std::string last_error;
   ar_scene_s* scene = nullptr;
   bool closed = false;  // after ar_session_close only wait, progress and destroy are accepted
-  std::shared_ptr<void> resources;
+  std::shared_ptr<astroray::host::Device> device;
   std::unique_ptr<astroray::host::Session> session;
 };
