@@ -9,7 +9,6 @@ Do:
 2. `dump <recording> -o <file.fits> [same options]`: as render but writes every allocated channel (moments, AOVs, statistics, counters): the film dump of 0008 d13.
 3. `bench <recording> [--passes N] [--warmup W]`: renders, times passes with the session's per-pass times and counters, and prints one history line per metric (0009 d22 fields; `metric` names `kernel_ms_per_sample`, `pass_ms`, `rays_closest`, `rays_shadow`, `steps_per_pass`).
 4. tests/abi/test_cli_render.py: a recording made through `_abi.py` of a tiny CPU scene with no geometry and a constant world renders at 4x4, 16 spp; the FITS file parses with fits_read.py and its Combined mean equals the world's display RGB within 5 standard errors (shade_background, 103), so an empty film fails; a recording with an edited hash exits 3; the scene's injected unsupported world node (067) shows in the printed report.
-5. From 101: the report table also lists the session's active test hooks (`Session::active_test_hooks()`, gate builds only; reach it through the ABI or the report, never a private header).
 Acceptance: `<python> -m unittest discover -s tests/abi -p "test_cli_render.py"` passes; `out/bin/astroray_cli.exe render <that recording> -o out/tmp/w.fits --spp 4` prints the report table and exits 0; `pwsh tools/check.ps1 gate` passes.
 Look at: none.
 Canary: tasks/069.canary.patch must turn red: tests/abi/test_cli_render.py "TestCliRender.test_error_entry_exits_nonzero", "TestCliRender.test_hash_mismatch_exits_3", "TestCliRender.test_world_colour".
