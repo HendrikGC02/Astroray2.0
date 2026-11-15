@@ -18,3 +18,4 @@ Budget: about 10 s added to gate; report it.
 Depends on: 071, 115.
 Size: M (about 300 lines Python); stop and report at 2x.
 Progress:
+- Blocked before code: sampler mode is compile-time SOBOL (session.cpp kSamplerMode); ar_settings has no mode field (R60), so independent mode needs files outside Scope. Sobol A5 64 spp: per-pixel max |z| 0.26/1024 px, SE R/G/B 0.045/0.010/0.149.
