@@ -17,3 +17,7 @@ Budget: none.
 Depends on: 019, 020.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
+- sampler.h family: sobol.h (sample, sample_independent, draw), hash.h, dims.h, keys.h; hash(s, j) and the four-word key chaining are ours over MixBits (d23 names only MixBits); MixBits(0)=0 is avoided by a golden-ratio offset.
+- Tests pin values from a pure-Python model (direction numbers from scipy.stats.qmc.Sobol, i.e. new-joe-kuo-6.21201); the bitwise case also pins an FNV-1a checksum of the 10^6 draws and compares the f32 and f64 outputs via a temp file named by pid.
+- The bitwise case is registered in the fast and the gate suites so the gate acceptance command prints the 10^6 comparison count.
+- THIRD_PARTY.md has no column for licence text: the Joe and Kuo notice is in the sobol.h header. Burley and Jarzynski-Olano listings are recorded with spdx NOASSERTION (licence not found).
