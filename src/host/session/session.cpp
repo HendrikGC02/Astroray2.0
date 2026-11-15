@@ -532,10 +532,11 @@ void Session::update_camera_and_filter(uint64_t generation) {
       camera_ready_ = true;
     } else {
       // A descriptor the host sent wrong is the host's bug to fix, not a reason to kill the
-      // session: the pass has no camera work until the next view, and the log says so. Not a
-      // report entry: the table's codes describe supported input that cannot be honoured, and
-      // existing session tests count its entries.
-      ctx_.log.line("WARN", "session: the latched view's camera descriptor is invalid; no camera paths are launched");
+      // session: the pass has no camera work until the next view, and the report says so on the
+      // closest existing code (the view is not rendered as asked).
+      const double value[2] = {0.0, 0.0};
+      report_.raise(AR_REPORT_CAMERA_UNSUPPORTED, 0, "invalid camera descriptor: no camera paths are launched", 1,
+                    value, generation);
     }
   }
   // Pixel filter of the scene's settings: rebuilt only when it changes. An unknown type or width

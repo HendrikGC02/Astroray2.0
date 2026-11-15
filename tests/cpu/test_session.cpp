@@ -103,6 +103,10 @@ ar_view_desc view_of(uint32_t w, uint32_t h) {
   v.region_height = h;
   v.render_scale = 1.0f;
   v.camera.cam_to_world.m[0] = v.camera.cam_to_world.m[5] = v.camera.cam_to_world.m[10] = 1.0f;
+  // A valid pinhole: an invalid descriptor raises a report entry (camera_wiring tests that).
+  const float p[16] = {0.5f, 0, 0, 0, 0, 0.375f, 0, 0, 0, 0, 0, -1.0f, 0, 0, 0, 1.0f};
+  for (int i = 0; i < 16; ++i) v.camera.projection_inverse[i] = p[i];
+  v.camera.type = AR_CAMERA_PERSP;
   return v;
 }
 

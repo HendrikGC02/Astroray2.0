@@ -204,6 +204,20 @@ TEST_CASE("camera_wiring/pixel centre hook") {
   CHECK(off > 0.05);
 }
 
+TEST_CASE("camera_wiring/invalid camera raises an entry and launches nothing") {
+  ar_view_desc bad = view_of(kW, kH);
+  for (float& v : bad.camera.projection_inverse) v = 0.0f;  // degenerate: no film extent
+  Rig r(bad);
+  REQUIRE(r.s->wait(20000));
+  const ar_report_info info = r.s->report_snapshot();
+  REQUIRE(info.entry_count == 1);
+  ar_report_entry e{};
+  r.s->report_entry(0, &e);
+  CHECK(e.code == AR_REPORT_CAMERA_UNSUPPORTED);
+  CHECK(g_terminated.load() == 0u);  // no camera paths
+  CHECK(r.s->progress().state == AR_STATE_CONVERGED);  // not failed
+}
+
 TEST_CASE("camera_wiring/production device registers the camera kernels") {
   ContextState ctx;
   const std::shared_ptr<Device> dev = make_cpu_session_device(ctx, 1);
