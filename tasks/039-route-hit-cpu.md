@@ -16,3 +16,4 @@ Budget: none (CPU only).
 Depends on: 037, 038, 025.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
+- route_hit, scene_view.h (SceneData, device mesh/instance layouts moved from scene_upload.h), CPU intersect stages and tests done; canary verified red on the two named cases. check fast and gate pass.
