@@ -16,3 +16,8 @@ Budget: specgen total run time against 0009 B-37's specgen row (report it).
 Depends on: 019, 022.
 Size: M (about 450 lines including the port); stop and report at 2x.
 Progress:
+- specgen jh rec709: 2.9 s, 9437504 bytes, sha256 d367857a; two runs byte-identical; round trip max abs error 7.7e-4 (NumPy and C++ agree).
+- Optimiser: rgb2spec_opt.cpp at mitsuba-renderer/rgb2spec 721145de (its LM variant), double precision, strict FP, 1 nm quadrature with D65 Y=1; ported into rgb2spec_opt_port.cpp and #included by specgen.cpp (CMakeLists is outside Scope).
+- specgen cannot include rgb2spec.h (kernel headers need the kernel include path), so the .jh header constants are repeated in specgen.cpp; test_rgb2spec checks the committed file through jh_view.
+- Float vs double: 1e-6 is not reachable in float (measured 1.0e-5 worst); the f32 copy is held to 2e-5*max(1,v), the f64 copy to 1e-6, both against NumPy literals.
+- Canary tasks/023.canary.patch: sigmoid without the 1/2 factor and without the infinity guard; turns round trip and white is one red in both copies (verified, reverted).

@@ -1,0 +1,15 @@
+diff --git a/src/kernel/color/rgb2spec.h b/src/kernel/color/rgb2spec.h
+index 6d2b8b1..16337b5 100644
+--- a/src/kernel/color/rgb2spec.h
++++ b/src/kernel/color/rgb2spec.h
+@@ -76,9 +76,7 @@ AR_FN double inf_of(double) { return bit_cast<double>(0x7ff0000000000000ull); }
+ // Ref: pbrt-v4 RGBSigmoidPolynomial::S. Infinite x gives exactly 0 or 1, which is how a
+ // uniform 0 or 1 comes out exact.
+ AR_FN Real sigmoid_s(Real x) {
+-  if (x == inf_of(x)) return Real(1);
+-  if (x == -inf_of(x)) return Real(0);
+-  return Real(0.5) + x / (Real(2) * ar::sqrt(Real(1) + x * x));
++  return Real(0.5) + x / (Real(1) * ar::sqrt(Real(1) + x * x));
+ }
+ 
+ // Ref: pbrt-v4 RGBSigmoidPolynomial::operator(): EvaluatePolynomial is Horner with FMA, so one

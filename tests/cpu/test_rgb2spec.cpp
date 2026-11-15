@@ -90,7 +90,7 @@ TEST_SUITE("fast") {
           double out[3];
           to_rgb(fx.obs, xyz, out);
           for (int c = 0; c < 3; ++c)
-            if (std::fabs(out[c] - double(rgb.v[c])) > worst) {
+            if (!(std::fabs(out[c] - double(rgb.v[c])) <= worst)) {  // a NaN is kept, never skipped
               worst = std::fabs(out[c] - double(rgb.v[c]));
               worst_rgb = rgb;
             }
@@ -107,7 +107,10 @@ TEST_SUITE("fast") {
       for (int l = 0; l < 4; ++l) lam.nm[l] = Real(360 + (i + l < ar::kObsSamples ? i + l : ar::kObsSamples - 1));
       uint32_t flags = 0;
       const Spec s = ar::albedo(fx.table, Rgb{{Real(1), Real(1), Real(1)}}, lam, &flags);
-      for (int l = 0; l < 4; ++l) worst = std::fmax(worst, std::fabs(double(s.v[l]) - 1.0));
+      for (int l = 0; l < 4; ++l) {
+        const double e = std::fabs(double(s.v[l]) - 1.0);
+        if (!(e <= worst)) worst = e;  // written so that a NaN is kept, never skipped
+      }
       CHECK(flags == 0u);
     }
     CHECK_MESSAGE(worst <= 1e-4, "max |s - 1| = " << worst);
