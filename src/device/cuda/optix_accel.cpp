@@ -515,25 +515,6 @@ void OptixAccel::build_tlas(const SceneUpload& upload, const InstanceTable& tabl
   ++tlas_builds_;
 }
 
-namespace {
-
-// The scene's OptiX context and builder together: the context is created on the scene's init
-// thread with the device (0002 D15: a failure there is the device's init failure).
-class SceneOptixBuilder final : public AccelBuilder {
- public:
-  SceneOptixBuilder(Device& device, uint32_t index) : context_(device, index), core_(context_, Owner{}) {}
-  std::shared_ptr<const SnapshotAccel> build(const AccelInput& in, const SnapshotAccel* prev) override {
-    return core_.build(in, prev);
-  }
-  AccelCounters counters() const override { return core_.counters(); }
-
- private:
-  OptixContext context_;
-  OptixAccelBuilder core_;
-};
-
-}  // namespace
-
 std::unique_ptr<AccelBuilder> make_optix_accel_builder(Device& device, uint32_t device_index) {
   return std::make_unique<SceneOptixBuilder>(device, device_index);
 }

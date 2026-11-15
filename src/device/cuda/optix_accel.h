@@ -86,6 +86,20 @@ class OptixAccelBuilder : public AccelBuilder {
   std::atomic<uint64_t> gas_builds_{0}, gas_reused_{0}, tlas_builds_{0};
 };
 
+// The scene's builder as make_optix_accel_builder returns it: it owns the scene's OptiX context
+// (created on the init thread with the device), which the scene's pipelines must share, since a
+// traversable only works in the context that built it.
+struct OptixContextHolder {
+  OptixContextHolder(Device& device, uint32_t device_index) : context(device, device_index) {}
+  OptixContext context;
+};
+class SceneOptixBuilder final : private OptixContextHolder, public OptixAccelBuilder {
+ public:
+  SceneOptixBuilder(Device& device, uint32_t device_index)
+      : OptixContextHolder(device, device_index), OptixAccelBuilder(context, Owner{}) {}
+  OptixContext& optix_context() { return context; }
+};
+
 class OptixAccel {
  public:
   OptixAccel(OptixContext& context, Owner owner) : core_(context, owner), context_(context) {}
