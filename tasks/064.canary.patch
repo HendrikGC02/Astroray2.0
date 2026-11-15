@@ -1,0 +1,13 @@
+diff --git a/src/kernel/material/lobes/stack.h b/src/kernel/material/lobes/stack.h
+index 111a3dd..d0c06d3 100644
+--- a/src/kernel/material/lobes/stack.h
++++ b/src/kernel/material/lobes/stack.h
+@@ -87,7 +87,7 @@ AR_FN StackSelect stack_select(const EDielTable& tab, const OpenPBRParams& p, Re
+   const Real total = a_spec + a_diff;
+   // Both albedos zero: the stack reflects nothing, any choice gives f = 0.
+   s.p_spec = total > Real(0) ? a_spec / total : Real(1);
+-  s.p_diff = Real(1) - s.p_spec;
++  s.p_diff = Real(0.9) * (Real(1) - s.p_spec);
+   return s;
+ }
+ 
