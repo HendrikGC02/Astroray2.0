@@ -17,3 +17,11 @@ Depends on: 060, 057, 028, 029.
 Size: S (about 250 lines); stop and report at 2x.
 Progress:
 - Started on task/061-tex-image from 23a3ee4 with the lead's rulings 1-8.
+- TEX_IMAGE outputs colour only: alpha is deferred to M1b with its only consumer (alpha, NON_OPAQUE) (ruling 3).
+- Graph node: two i32 (ar_key, mode bits LINEAR=1 | EXTEND=2, others PROGRAM_REJECTED); bytecode reg+reg+imm(slot)+imm(mode).
+- Slots: ImageStore assigns at ar_edit_set_image, frees on removal/drop when inactive; freed slot = 1x1 magenta; install reassigns if needed.
+- Compiler resolves key->slot at activation (ImageSlotFn); res.images now lists every sampled key, so set/remove recompiles dependents.
+- Unset key: lookup magenta (slot 0xffffffff) + IMAGE_UNREADABLE "image key N is not set" on the material.
+- Cycles reference read from kernel/util/image.h (main moved device/cpu/image.h there) and svm/image.h; frac quirk kept.
+- Closest sRGB decodes via a host-built 256-entry table (SceneTables::srgb_decode): powf differed by an ulp on ~4% of GPU lookups.
+- Needs lead: tests/cpu/test_compiler_outputs.cpp and test_image_ingest.cpp still build TEX_IMAGE with one i32 (fail until updated).
