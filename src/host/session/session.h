@@ -14,8 +14,10 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -23,10 +25,13 @@
 #include "../../../include/astroray/astroray.h"
 #include "host/device.h"
 #include "host/display/display_ring.h"
+#include "host/counters.h"
+#include "host/film/fits_writer.h"
 #include "host/film/film_layout.h"
 #include "host/film/film_stats.h"
 #include "host/film/response_table.h"
 #include "host/report.h"
+#include "host/session/readback.h"
 #include "host/scheduler.h"
 #include "host/scene/scene.h"
 #include "host/session/latch.h"
@@ -63,6 +68,17 @@ struct SessionProgress {
   uint64_t pending_generation = 0;
   uint64_t failed_generation = 0;
   uint64_t epoch = 0;
+  // Session-owned, so they need no scene and stay valid after CLOSED.
+  uint32_t samples_per_pixel = 0;  // in the current epoch
+  float last_pass_ms = 0.0f;       // the last resolved pass: scheduler run plus resolve
+};
+
+// What a film read runs against, under the render lock: the device and film of the session
+// and the provenance of a FITS dump of this very state.
+struct FilmReadContext {
+  Device& device;
+  const Film& film;
+  FitsProvenance provenance;
 };
 
 struct SessionStats {
@@ -111,6 +127,31 @@ class Session {
   void scene_generation_activated();
 
   SessionProgress progress() const;
+  // The pass list's layout: built at construction, so it is valid in INITIALIZING.
+  const FilmLayout& layout() const { return layout_; }
+  // The render sub-rectangle as of the last pass boundary (the maximum size before any).
+  void render_size(uint32_t* width, uint32_t* height) const;
+  // Runs `fn` with the film under the render lock, so it sees a state between two passes. It
+  // may wait for the pass in flight to end (up to one pass): for the F12 job thread, never for
+  // Blender's main thread (0007 d23). Throws std::invalid_argument when the session has no film
+  // (still INITIALIZING, or CLOSED).
+  void read_film(const std::function<void(const FilmReadContext&)>& fn) const;
+  // The ring's newest frame after `after_frame`, or nullopt. Never waits for a pass: it takes
+  // only the short ring pointer lock and the ring's own. Throws std::invalid_argument when the
+  // session has no ring. The frame's data is valid until display_release, which the host must
+  // call before close.
+  std::optional<DisplayFrame> display_acquire(uint64_t after_frame);
+  // Throws std::invalid_argument for a frame that is not acquired or a session without a ring.
+  void display_release(uint64_t frame_id);
+  // The counters of the last resolved pass (all zero before the first), copied at the pass end
+  // because the scheduler's own are the render thread's.
+  PassCounters pass_counters() const;
+  // Snapshot of the session Report (FILM and SESSION entries) merged with the scene's report
+  // (SCENE entries and GENERATION_REJECTED) in 0001 D2.11's order. Before the scene detaches it
+  // is read live under mutex_; after, from the copy taken at detach, so it works after CLOSED.
+  // report_entry reads the latest snapshot. Throws std::invalid_argument past the end.
+  ar_report_info report_snapshot();
+  void report_entry(uint32_t index, ar_report_entry* out) const;
   SessionStats stats() const;
   std::string failure() const;
   Report& report() { return report_; }
@@ -137,6 +178,7 @@ class Session {
   void raise_interrupt_if_due();
   void fail(const std::string& why);
   void set_state_locked(uint32_t state);
+  FitsProvenance fits_provenance_locked() const;
 
   Scene& scene_;  // not touched once scene_detached_ is set
   ContextState& ctx_;  // the context outlives every scene and session on it
@@ -144,6 +186,7 @@ class Session {
   SessionOptions options_;
   Report report_;
   Latch latch_;
+  FilmLayout layout_;  // built once at construction from the film request
 
   // Render-thread objects. scheduler_ is created with the session (it allocates nothing until
   // its first pass with work) and freed by the render thread at exit; the API thread touches
@@ -153,6 +196,9 @@ class Session {
   WavelengthTable wavelengths_;
   std::unique_ptr<Film> film_;
   std::unique_ptr<DisplayRing> ring_;
+  mutable std::mutex ring_mutex_;  // guards only the ring_ pointer (created, reset), never a pass
+  std::string observer_hash_;      // hex, written with film_ under render_mutex_
+  std::atomic<uint64_t> render_size_{0};  // width << 32 | height, written at apply_view
   InvalidSampleReporter invalid_;
   DeviceBuffer globals_buf_;  // KernelGlobals, then FilmData, then DisplayTarget
   DeviceBuffer present_buf_;
@@ -176,6 +222,10 @@ class Session {
   std::string failure_;
   SessionStats stats_;
   bool scene_detached_ = false;      // set under mutex_ just before the listener is removed
+  ReportTable detached_scene_report_;  // the scene's report as of detach
+  ReportTable report_snap_;            // the latest merged snapshot
+  float last_pass_ms_ = 0.0f;
+  PassCounters last_counters_;
   SessionProgress detached_progress_;  // what progress() reports once the scene is detached
   std::atomic<uint64_t> listener_{0};  // the scene activation listener id, 0 once removed
   std::thread thread_;  // last: started after every member exists

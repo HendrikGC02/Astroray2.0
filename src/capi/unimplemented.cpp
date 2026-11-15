@@ -33,10 +33,6 @@ extern "C" {
 // Scene: host scene, its device copy, worker pool and generations (0007 decision 5).
 AR_API ar_status ar_scene_trim(ar_scene h) { return unsupported(h, "ar_scene_trim"); }
 
-// Session: one render of one scene.
-AR_API ar_status ar_session_report_info(ar_session h, ar_report_info*) { return unsupported(h, "ar_session_report_info"); }
-AR_API ar_status ar_session_report_entry(ar_session h, uint32_t, ar_report_entry*) { return unsupported(h, "ar_session_report_entry"); }
-
 // Scene edit transaction: one open edit per scene.
 AR_API ar_status ar_edit_curves_begin(ar_edit h, const ar_curves_desc*, ar_curves_buffers*) { return unsupported(h, "ar_edit_curves_begin"); }
 AR_API ar_status ar_edit_points_begin(ar_edit h, const ar_points_desc*, ar_points_buffers*) { return unsupported(h, "ar_edit_points_begin"); }
@@ -47,14 +43,5 @@ AR_API ar_status ar_edit_set_graph(ar_edit h, ar_key, uint32_t, const ar_graph_d
 AR_API ar_status ar_edit_set_material(ar_edit h, ar_key, const ar_material_desc*) { return unsupported(h, "ar_edit_set_material"); }
 AR_API ar_status ar_edit_set_light(ar_edit h, ar_key, const ar_light_desc*) { return unsupported(h, "ar_edit_set_light"); }
 AR_API ar_status ar_edit_set_world(ar_edit h, const ar_world_desc*) { return unsupported(h, "ar_edit_set_world"); }
-
-// Display and readback: all AR_QUERY, never recorded (0008 decision 13a).
-AR_API ar_status ar_display_acquire(ar_session h, uint64_t, ar_display_frame*) { return unsupported(h, "ar_display_acquire"); }
-AR_API ar_status ar_display_release(ar_session h, uint64_t) { return unsupported(h, "ar_display_release"); }
-AR_API ar_status ar_session_pass_count(ar_session h, uint32_t*) { return unsupported(h, "ar_session_pass_count"); }
-AR_API ar_status ar_session_pass_info(ar_session h, uint32_t, ar_pass_info*) { return unsupported(h, "ar_session_pass_info"); }
-AR_API ar_status ar_session_read_pass(ar_session h, uint32_t, uint32_t, uint32_t, float*) { return unsupported(h, "ar_session_read_pass"); }
-AR_API ar_status ar_session_read_counters(ar_session h, uint32_t, uint64_t*) { return unsupported(h, "ar_session_read_counters"); }
-AR_API ar_status ar_session_write_fits(ar_session h, const char*, uint32_t) { return unsupported(h, "ar_session_write_fits"); }
 
 }  // extern "C"

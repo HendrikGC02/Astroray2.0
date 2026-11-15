@@ -13,10 +13,14 @@
 #include <thread>
 
 #include "astroray/astroray.h"
+#include "host/film/fits_writer.h"
 #include "host/scene/edit.h"
+#include "host/session/readback.h"
 #include "host/session/session.h"
 #include "recorder_hooks.h"
 
+using astroray::host::FilmCopy;
+using astroray::host::FilmReadContext;
 using astroray::host::Session;
 using astroray::host::SessionUnsupported;
 
@@ -41,10 +45,10 @@ void copy_text(const std::string& s, uint32_t capacity, uint8_t* text) {
 
 // Runs a session call; the session's exceptions become statuses and last_error.
 template <class F>
-ar_status session_call(ar_session h, const char* function, F&& f) {
+ar_status session_call(ar_session h, const char* function, F&& f, bool allow_closed = false) {
   if (!h || !h->session) return AR_ERR_INVALID_ARGUMENT;
   try {
-    if (h->closed) return fail(h, AR_ERR_INVALID_ARGUMENT, std::string(function) + ": the session is closed");
+    if (h->closed && !allow_closed) return fail(h, AR_ERR_INVALID_ARGUMENT, std::string(function) + ": the session is closed");
     f(*h->session);
     return AR_OK;
   } catch (const SessionUnsupported& e) {
@@ -181,7 +185,10 @@ AR_API ar_status ar_session_wait(ar_session h, uint32_t timeout_ms) {
   });
 }
 
-// State, generations and epoch only; the remaining fields stay zero until session readback.
+// Progress is read after CLOSED too: everything below is the session's own or cached at detach.
+// The ledger is the session's own (each CPU session owns its device and ledger). The CPU device
+// has no device memory, so device_free_bytes and device_total_bytes stay 0 there; CUDA sessions
+// fill them (102).
 AR_API ar_status ar_session_get_progress(ar_session h, ar_progress* progress) {
   if (!h || !h->session) return AR_ERR_INVALID_ARGUMENT;
   if (!progress) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_get_progress output is null");
@@ -189,16 +196,128 @@ AR_API ar_status ar_session_get_progress(ar_session h, ar_progress* progress) {
     const astroray::host::SessionProgress p = h->session->progress();
     *progress = ar_progress{};
     progress->state = p.state;
+    progress->samples_per_pixel = p.samples_per_pixel;
     progress->active_generation = p.active_generation;
     progress->pending_generation = p.pending_generation;
     progress->failed_generation = p.failed_generation;
     progress->epoch = p.epoch;
+    progress->last_pass_ms = p.last_pass_ms;
+    static_assert(astroray::host::kLedgerCategoryCount <= 16, "ar_progress.ledger_bytes has 16 slots");
+    if (h->device)
+      for (uint32_t i = 0; i < astroray::host::kLedgerCategoryCount; ++i)
+        progress->ledger_bytes[i] = h->device->ledger().category_total(static_cast<astroray::host::LedgerCategory>(i));
     return AR_OK;
   } catch (const std::exception& e) {
     return fail(h, AR_ERR_INTERNAL, e.what());
   } catch (...) {
     return fail(h, AR_ERR_INTERNAL, "unknown exception");
   }
+}
+
+// Report polling (0001 D2.11): the session's table merged with the scene's, kept readable after
+// CLOSED because the final table is what a host prints.
+AR_API ar_status ar_session_report_info(ar_session h, ar_report_info* info) {
+  if (h && !info) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_report_info output is null");
+  return session_call(h, "ar_session_report_info", [info](Session& s) { *info = s.report_snapshot(); }, true);
+}
+
+AR_API ar_status ar_session_report_entry(ar_session h, uint32_t index, ar_report_entry* entry) {
+  if (h && !entry) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_report_entry output is null");
+  return session_call(h, "ar_session_report_entry", [index, entry](Session& s) { s.report_entry(index, entry); }, true);
+}
+
+// Display frames (0007 d29). Never waits for a pass. frame_id 0 in the output means no frame newer
+// than after_frame. The host releases every acquired frame before it closes the session.
+AR_API ar_status ar_display_acquire(ar_session h, uint64_t after_frame, ar_display_frame* out) {
+  if (h && !out) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_display_acquire output is null");
+  return session_call(h, "ar_display_acquire", [after_frame, out](Session& s) {
+    *out = ar_display_frame{};
+    const auto f = s.display_acquire(after_frame);
+    if (!f) return;
+    out->frame_id = f->frame_id;
+    out->generation = f->generation;
+    out->width = f->width;
+    out->height = f->height;
+    out->format = f->format == astroray::host::DisplayFormat::RGBA16F ? AR_DISPLAY_FORMAT_RGBA16F
+                                                                      : AR_DISPLAY_FORMAT_DIAG_RGBA8;
+    out->row_bytes = f->row_bytes;
+    out->data = static_cast<uint8_t*>(const_cast<void*>(f->data));
+  });
+}
+
+AR_API ar_status ar_display_release(ar_session h, uint64_t frame_id) {
+  return session_call(h, "ar_display_release", [frame_id](Session& s) { s.display_release(frame_id); });
+}
+
+// Passes (0008 d13a). pass_count and pass_info read only the layout and the latched size.
+AR_API ar_status ar_session_pass_count(ar_session h, uint32_t* count) {
+  if (h && !count) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_pass_count output is null");
+  return session_call(h, "ar_session_pass_count", [count](Session& s) {
+    *count = uint32_t(astroray::host::list_passes(s.layout()).size());
+  });
+}
+
+AR_API ar_status ar_session_pass_info(ar_session h, uint32_t index, ar_pass_info* info) {
+  if (h && !info) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_pass_info output is null");
+  return session_call(h, "ar_session_pass_info", [index, info](Session& s) {
+    const auto passes = astroray::host::list_passes(s.layout());
+    if (index >= passes.size())
+      throw std::invalid_argument("pass index " + std::to_string(index) + " is past the " +
+                                  std::to_string(passes.size()) + " passes");
+    const astroray::host::PassDesc& p = passes[index];
+    *info = ar_pass_info{};
+    memcpy(info->name, p.name.data(), p.name.size());  // names are shorter than the 64-byte field
+    info->component_count = p.components;
+    info->unit = p.unit;
+    s.render_size(&info->width, &info->height);
+    info->flags = 0;  // AR_PASS_DENOISED only once a denoiser exists
+  });
+}
+
+// Waits up to one pass (the render lock): for the F12 job thread, never Blender's main thread
+// (0007 d23). `n` must be exactly the floats the quantity needs (see readback.h).
+AR_API ar_status ar_session_read_pass(ar_session h, uint32_t index, uint32_t quantity, uint32_t n, float* dst) {
+  if (h && !dst) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_read_pass dst is null");
+  return session_call(h, "ar_session_read_pass", [=](Session& s) {
+    const auto passes = astroray::host::list_passes(s.layout());
+    if (index >= passes.size())
+      throw std::invalid_argument("pass index " + std::to_string(index) + " is past the " +
+                                  std::to_string(passes.size()) + " passes");
+    std::unique_ptr<FilmCopy> copy;
+    s.read_film([&](const FilmReadContext& c) { copy = std::make_unique<FilmCopy>(c.device, c.film); });
+    astroray::host::read_pass(*copy, passes[index], quantity, n, dst);
+  });
+}
+
+// The counters of the last resolved pass (0004 D29). `n` must be at least the number of words
+// (the error text names it); words past it are zeroed.
+AR_API ar_status ar_session_read_counters(ar_session h, uint32_t n, uint64_t* dst) {
+  if (h && !dst) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_read_counters dst is null");
+  return session_call(h, "ar_session_read_counters", [n, dst](Session& s) {
+    const std::vector<uint64_t> w = astroray::host::counter_words(s.pass_counters());
+    if (n < w.size())
+      throw std::invalid_argument("read_counters: the buffer holds " + std::to_string(n) + " words, the counters need " +
+                                  std::to_string(w.size()));
+    for (uint32_t i = 0; i < n; ++i) dst[i] = i < w.size() ? w[i] : 0;
+  });
+}
+
+// Waits up to one pass (the render lock), like ar_session_read_pass: the F12 job thread only.
+// AR_FITS_DUMP writes every channel the film has (the layout holds only requested ones);
+// AR_FITS_SCIENCE is not designed yet and is refused.
+AR_API ar_status ar_session_write_fits(ar_session h, const char* path, uint32_t what) {
+  if (h && !path) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_write_fits path is null");
+  return session_call(h, "ar_session_write_fits", [path, what](Session& s) {
+    if (what == AR_FITS_SCIENCE) throw SessionUnsupported("ar_session_write_fits: the science file is not supported yet");
+    if (what != AR_FITS_DUMP) throw std::invalid_argument("ar_session_write_fits: unknown file kind " + std::to_string(what));
+    std::unique_ptr<astroray::host::FilmView> view;
+    astroray::host::FitsProvenance pv;
+    s.read_film([&](const FilmReadContext& c) {
+      view = std::make_unique<astroray::host::FilmView>(c.device, c.film);
+      pv = c.provenance;
+    });
+    astroray::host::write_fits_film_dump(path, *view, pv);
+  });
 }
 
 AR_API ar_status ar_session_last_error(ar_session h, uint32_t capacity, uint8_t* text) {

@@ -41,6 +41,12 @@ Session::Session(Scene& scene, Device& device, const SessionOptions& options)
   if (options.denoiser > AR_DENOISER_DLSS_RR) throw std::invalid_argument("session: unknown denoiser");
   if (options.denoiser != AR_DENOISER_NONE)
     throw SessionUnsupported("session: denoisers are not supported in this build yet");
+  FilmRequest req;
+  req.max_width = options.max_width;
+  req.max_height = options.max_height;
+  req.statistics = true;  // 0008 d12: on by default; the bounce heat map reads it
+  layout_ = FilmLayout::build(req);
+  render_size_ = uint64_t(options.max_width) << 32 | options.max_height;
   SchedulerConfig cfg;
   cfg.report = &report_;
   cfg.owner = options.owner;
@@ -141,6 +147,12 @@ void Session::detach_scene() {
       detached_progress_.pending_generation = scene_.generations().pending();
       detached_progress_.failed_generation = scene_.generations().failed();
       detached_progress_.epoch = latch_.epoch();
+      try {
+        detached_scene_report_ = read_report(scene_.report());
+      } catch (...) {
+        // The scene's entries are lost from the final table; the rest of detach must still run.
+        detached_scene_report_ = ReportTable{};
+      }
       scene_detached_ = true;
     }
   }
@@ -257,6 +269,8 @@ SessionProgress Session::progress() const {
     p.failed_generation = scene_.generations().failed();
     p.epoch = latch_.epoch();
   }
+  p.samples_per_pixel = uint32_t(stats_.samples_done);
+  p.last_pass_ms = last_pass_ms_;
   p.state = state_;
   if (p.state != AR_STATE_CLOSED && ctx_.poisoned.load(std::memory_order_acquire)) p.state = AR_STATE_FAILED;
   return p;
@@ -278,6 +292,73 @@ uint32_t Session::film_samples(uint32_t j) const {
   const ar::FilmData& f = film_->data();
   if (j >= f.rect_width * f.rect_height) throw std::out_of_range("film_samples: pixel outside the render rectangle");
   return f.n[ar::film_active_pixel(f, j)];
+}
+
+void Session::render_size(uint32_t* width, uint32_t* height) const {
+  const uint64_t v = render_size_.load(std::memory_order_acquire);
+  *width = uint32_t(v >> 32);
+  *height = uint32_t(v);
+}
+
+FitsProvenance Session::fits_provenance_locked() const {
+  // Called with render_mutex_ held, so the film (and with it observer_hash_) exists and the scene
+  // is still attached: release() runs before detach_scene().
+  FitsProvenance pv;
+  uint32_t filter = AR_FILTER_BOX;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pv.spp = uint32_t(stats_.samples_done);
+    if (const auto s = scene_.settings()) {
+      pv.seed = s->s.seed;
+      filter = s->s.pixel_filter;
+    }
+  }
+  pv.sampler_mode = "sobol";  // kg.session.sampler_mode = SAMPLER_SOBOL in bind_globals
+  pv.observer_hash = observer_hash_;
+  pv.working_space = "observer.bin";  // the one table set the session loads; no selection exists yet
+  pv.filter = filter == AR_FILTER_GAUSSIAN ? "gaussian" : filter == AR_FILTER_BLACKMAN_HARRIS ? "blackman-harris" : "box";
+  pv.wavelength_pdf = "default";  // WavelengthTableBuilder().build() with no line components
+  return pv;
+}
+
+void Session::read_film(const std::function<void(const FilmReadContext&)>& fn) const {
+  std::lock_guard<std::mutex> render(render_mutex_);
+  if (!film_) throw std::invalid_argument("the session has no film (still initializing, or closed)");
+  fn(FilmReadContext{device_, *film_, fits_provenance_locked()});
+}
+
+std::optional<DisplayFrame> Session::display_acquire(uint64_t after_frame) {
+  std::lock_guard<std::mutex> lock(ring_mutex_);
+  if (!ring_) throw std::invalid_argument("the session has no display ring (still initializing, or closed)");
+  return ring_->acquire(after_frame);
+}
+
+void Session::display_release(uint64_t frame_id) {
+  std::lock_guard<std::mutex> lock(ring_mutex_);
+  if (!ring_) throw std::invalid_argument("the session has no display ring (still initializing, or closed)");
+  ring_->release(frame_id);
+}
+
+PassCounters Session::pass_counters() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return last_counters_;
+}
+
+ar_report_info Session::report_snapshot() {
+  // Scene reads happen under mutex_, like progress(): detach_scene copies the scene's table under
+  // the same lock before the scene may go.
+  std::lock_guard<std::mutex> lock(mutex_);
+  report_snap_ = merge_reports(scene_detached_ ? detached_scene_report_ : read_report(scene_.report()),
+                               read_report(report_));
+  return report_snap_.info;
+}
+
+void Session::report_entry(uint32_t index, ar_report_entry* out) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (index >= report_snap_.entries.size())
+    throw std::invalid_argument("report entry " + std::to_string(index) + " is past the snapshot's " +
+                                std::to_string(report_snap_.entries.size()) + " entries");
+  *out = report_snap_.entries[index];
 }
 
 void Session::fail(const std::string& why) {
@@ -310,19 +391,25 @@ void Session::allocate() {
   response_ = make_response_table(obs);
   wavelengths_ = WavelengthTableBuilder().build();
 
-  FilmRequest req;
-  req.max_width = options_.max_width;
-  req.max_height = options_.max_height;
-  req.statistics = true;  // 0008 d12: on by default; the bounce heat map reads it
-  film_ = std::make_unique<Film>(device_, FilmLayout::build(req), options_.owner);
+  auto film = std::make_unique<Film>(device_, layout_, options_.owner);
   // The tables are host memory: right for the CPU device, the only one sessions run on yet.
-  film_->data().response = response_view(response_);
-  film_->data().wavelengths = {wavelengths_.edges.data(), wavelengths_.cdf.data(), wavelengths_.bins()};
+  film->data().response = response_view(response_);
+  film->data().wavelengths = {wavelengths_.edges.data(), wavelengths_.cdf.data(), wavelengths_.bins()};
+  {
+    // Published under the render lock so a readback on another thread sees a whole film.
+    std::lock_guard<std::mutex> render(render_mutex_);
+    film_ = std::move(film);
+    static const char* hex = "0123456789abcdef";
+    observer_hash_.clear();
+    for (uint8_t b : obs.observer_hash) observer_hash_ += {hex[b >> 4], hex[b & 15]};
+  }
 
   const uint64_t frame_bytes = uint64_t(options_.max_width) * options_.max_height * 8u;  // RGBA16F
   globals_buf_ = device_.allocate(LedgerCategory::TABLES, kGlobalsBytes, options_.owner);
   present_buf_ = device_.allocate(LedgerCategory::DISPLAY_FRAME, frame_bytes, options_.owner);
-  ring_ = std::make_unique<DisplayRing>(frame_bytes);
+  auto ring = std::make_unique<DisplayRing>(frame_bytes);
+  std::lock_guard<std::mutex> lock(ring_mutex_);
+  ring_ = std::move(ring);
 }
 
 void Session::release() {
@@ -331,7 +418,10 @@ void Session::release() {
     scheduler_.reset();  // frees the pools
   }
   std::lock_guard<std::mutex> render(render_mutex_);
-  ring_.reset();
+  {
+    std::lock_guard<std::mutex> lock(ring_mutex_);
+    ring_.reset();
+  }
   film_.reset();
   device_.free(present_buf_);
   device_.free(globals_buf_);
@@ -372,6 +462,7 @@ void Session::apply_view() {
     h = v.v.region_height;
   }
   film_->set_render_size(w, h);
+  render_size_ = uint64_t(w) << 32 | h;
 }
 
 void Session::bind_globals() {
@@ -520,6 +611,7 @@ void Session::render_loop() {
     }
     if (need_pass) {
       bind_globals();
+      const auto pass_start = std::chrono::steady_clock::now();
       const PassStatus st = scheduler_->run_pass(PassWork{options_.test_camera_samples_per_pass, 0});
       if (st == PassStatus::CANCELLED) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -536,6 +628,10 @@ void Session::render_loop() {
         continue;
       }
       resolve(lr.epoch, lr.generation);
+      const std::chrono::duration<float, std::milli> took = std::chrono::steady_clock::now() - pass_start;
+      std::lock_guard<std::mutex> lock(mutex_);
+      last_pass_ms_ = took.count();
+      last_counters_ = scheduler_->counters();
     }
     if (need_pass || lr.changed) present(lr.generation);
     render.unlock();
