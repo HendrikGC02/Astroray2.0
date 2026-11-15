@@ -631,10 +631,12 @@ ar_recorder* ar_rec_open(const char* path, const ar_build_record& build, std::st
 void ar_rec_close(ar_recorder* r, std::string* err);
 void ar_rec_bind(ar_recorder* r, uint64_t id, const void* handle);
 
-/* A record's handle id (for an AR_OUT handle, else 0) and where its status word sits. */
+/* A record's handle id (for an AR_OUT handle, else 0), where its status word sits, and the
+   edit whose open staged items the call drops when it returns AR_OK (0 none). */
 struct ArRecTok {
   uint64_t id;
   uint64_t off;
+  uint64_t drop_edit;
 };
 void ar_rec_status(ar_recorder* r, const ArRecTok& tok, ar_status st);
 inline ar_status ar_rec_done(ar_recorder* r, const ArRecTok& tok, ar_status st) {
@@ -803,7 +805,7 @@ struct ar_recorder {
   ArRecTok append(uint32_t fn, bool creating) {
     uint32_t flags = 0;
     uint64_t n = payload.size();
-    ArRecTok tok{creating ? ++creates : 0, flushed + buf.size() + sizeof fn};
+    ArRecTok tok{creating ? ++creates : 0, flushed + buf.size() + sizeof fn, 0};
     Writer w{buf};
     w.scalar(fn);
     w.scalar(flags);
@@ -817,8 +819,9 @@ struct ar_recorder {
     staged.erase(staged.lower_bound({edit, 0}), staged.upper_bound({edit, ~uint64_t(0)}));
   }
   // One open item's arrays (u32 kind, then per field u64 count and bytes) or kind NONE; the
-  // entry is erased because the call consumes the buffers.
-  void block(Writer& w, uint64_t edit, uint64_t key) {
+  // entry is erased when the call consumes the buffers (item commit), kept for an edit commit
+  // that may be refused and retried.
+  void block(Writer& w, uint64_t edit, uint64_t key, bool consume) {
     auto it = staged.find({edit, key});
     if (it == staged.end()) {
       w.scalar<uint32_t>(0xFFFFFFFFu);
@@ -831,7 +834,7 @@ struct ar_recorder {
       if (sf.count && *sf.slot) w.bytes(*sf.slot, bytes);
       else w.bytes(std::vector<uint8_t>(bytes).data(), bytes);
     }
-    staged.erase(it);
+    if (consume) staged.erase(it);
   }
   // Every open item of the edit in begin order: u32 count, then u64 key and a block each.
   void commit_blocks(Writer& w, uint64_t edit) {
@@ -842,13 +845,15 @@ struct ar_recorder {
     w.scalar(static_cast<uint32_t>(order.size()));
     for (const auto& o : order) {
       w.scalar<uint64_t>(o.second);
-      block(w, edit, o.second);
+      block(w, edit, o.second, false);
     }
   }
 };
 
 void ar_rec_status(ar_recorder* r, const ArRecTok& tok, ar_status st) {
   std::lock_guard<std::mutex> lk(r->mu);
+  // A refused commit or abort leaves the edit open (032): its staged buffers stay valid.
+  if (tok.drop_edit && st == AR_OK) r->erase_edit(tok.drop_edit);
   uint32_t flags = st + 1;
   if (tok.off >= r->flushed) {
     memcpy(r->buf.data() + (tok.off - r->flushed), &flags, sizeof flags);
@@ -924,12 +929,13 @@ def emit_recorder_cpp(m):
                 s += f"  (void){p};\n"
         edit = next((r[3] for r in rows if m.classify(n, r)[0] == "handle"), None)
         # Staged-array bookkeeping (0007 d5/d9): item commit and edit commit take the arrays of
-        # the open items; reset, remove, abort and a new begin on a key drop the entries.
+        # the open items; reset, remove and a new begin on a key drop the entries at once, a commit or
+        # abort only once it returned AR_OK (ar_rec_status).
         if n == "ar_edit_item_commit":
-            s += f"  rec_->block(w, rec_->id_of({edit}), key);\n"
+            s += f"  rec_->block(w, rec_->id_of({edit}), key, true);\n"
         elif n == "ar_edit_commit":
-            s += f"  rec_->commit_blocks(w, rec_->id_of({edit}));\n  rec_->erase_edit(rec_->id_of({edit}));\n"
-        elif n in ("ar_edit_abort", "ar_edit_reset"):
+            s += f"  rec_->commit_blocks(w, rec_->id_of({edit}));\n"
+        elif n == "ar_edit_reset":
             s += f"  rec_->erase_edit(rec_->id_of({edit}));\n"
         elif n == "ar_edit_remove":
             s += f"  rec_->erase_key(rec_->id_of({edit}), key);\n"
@@ -937,7 +943,11 @@ def emit_recorder_cpp(m):
             ke = m.key_expr(n, rows)
             guard = f"{ke.split('->')[0]} && " if "->" in ke else ""
             s += f"  if ({guard}true) rec_->erase_key(rec_->id_of({edit}), static_cast<uint64_t>({ke}));\n"
-        s += f"  return rec_->append({idx}, {'true' if creating else 'false'});\n}}\n\n"
+        if n in ("ar_edit_commit", "ar_edit_abort"):
+            s += (f"  ArRecTok tok = rec_->append({idx}, false);\n  tok.drop_edit = rec_->id_of({edit});\n"
+                  f"  return tok;\n}}\n\n")
+        else:
+            s += f"  return rec_->append({idx}, {'true' if creating else 'false'});\n}}\n\n"
         bi = m.begin_info(n, rows)
         if bi:
             out, st = bi
@@ -1093,7 +1103,7 @@ struct State {
 };
 
 // Fills the staged arrays of one open item from the recorded block and drops the entry.
-bool apply_block(State& st, Reader& r, uint64_t edit, uint64_t key) {
+bool apply_block(State& st, Reader& r, uint64_t edit, uint64_t key, bool consume) {
   uint32_t kind = r.scalar<uint32_t>();
   if (kind == 0xFFFFFFFFu) return !r.fail;
   auto it = st.open.find({edit, key});
@@ -1110,7 +1120,7 @@ bool apply_block(State& st, Reader& r, uint64_t edit, uint64_t key) {
     }
     if (count) memcpy(*sl.slot, src, size_t(count) * sl.esize);
   }
-  st.open.erase(it);
+  if (consume) st.open.erase(it);
   return true;
 }
 
@@ -1161,7 +1171,7 @@ ar_status replay_record(State& st, uint32_t fn, Reader& r, Arena& a, bool& stop)
                 s += f"      {k[1]}* {nm} = nullptr;\n"
         edit = next((p[3] for p in rows if m.classify(n, p)[0] == "handle"), None)
         if n == "ar_edit_item_commit":
-            s += """      if (!apply_block(st, r, id_edit, key)) {
+            s += """      if (!apply_block(st, r, id_edit, key, true)) {
         stop = true;
         return AR_ERR_INVALID_ARGUMENT;
       }
@@ -1170,14 +1180,13 @@ ar_status replay_record(State& st, uint32_t fn, Reader& r, Arena& a, bool& stop)
             s += """      uint32_t open_count = r.scalar<uint32_t>();
       for (uint32_t i = 0; i < open_count && !r.fail; ++i) {
         uint64_t item_key = r.scalar<uint64_t>();
-        if (!apply_block(st, r, id_edit, item_key)) {
+        if (!apply_block(st, r, id_edit, item_key, false)) {
           stop = true;
           return AR_ERR_INVALID_ARGUMENT;
         }
       }
-      st.erase_edit(id_edit);
 """
-        elif n in ("ar_edit_abort", "ar_edit_reset"):
+        elif n == "ar_edit_reset":
             s += "      st.erase_edit(id_edit);\n"
         elif n == "ar_edit_remove":
             s += "      st.open.erase({id_edit, static_cast<uint64_t>(key)});\n"
@@ -1217,6 +1226,8 @@ ar_status replay_record(State& st, uint32_t fn, Reader& r, Arena& a, bool& stop)
                       f"static_cast<uint32_t>(sizeof({t}))}});\n")
             key = m.key_expr(n, rows).replace("->", "_v.")
             s += f"        st.open[{{id_{edit}, static_cast<uint64_t>({key})}}] = std::move(o);\n      }}\n"
+        if n in ("ar_edit_commit", "ar_edit_abort"):  # a refused one leaves the edit open
+            s += "      if (code == AR_OK) st.erase_edit(id_edit);\n"
         s += "      return code;\n    }\n"
     s += """    default:
       st.msg = "record names a function that is not a recordable call";

@@ -210,10 +210,10 @@ class TestRecorder(unittest.TestCase):
         self.view(b.face_start, b.face_start_count, np.int32)[:] = [0]
         self.view(b.corner_normals, b.corner_normals_count, np.float32)[:] = np.tile([0, 0, 1], 4)
 
-    def test_edit_commit_takes_open_staged_items(self):
+    def test_refused_edit_commit_records_open_staged_items(self):
         # An item that was begun and filled but never item-committed is captured at the edit
-        # commit, in begin order. (The engine of this build still refuses such a commit; the
-        # recording keeps the arrays and the refusal, and the replay reproduces both.)
+        # commit, in begin order, even though the engine refuses that commit; the recording keeps
+        # the arrays and the refusal, and the replay reproduces both.
         a, lib = self.abi, self.lib
         path = os.path.join(self.dir, "open.arrec")
         ctx = self.open_scene(path)
@@ -230,10 +230,38 @@ class TestRecorder(unittest.TestCase):
         self.assertEqual(lib.ar_context_destroy(ctx), a.AR_OK)
         _, calls = self.arrec.decode(path)
         commit = [x for n, x in calls if n == "ar_edit_commit"][0]
+        # The engine refuses a commit with an item that was never item-committed (0007 d9).
+        self.assertEqual(st, a.AR_ERR_INVALID_ARGUMENT)
         self.assertEqual(commit["status"], st)
         self.assertEqual([k for k, _ in commit["staged_items"]], [9, 4])  # begin order, not key order
         for (key, items), scale in zip(commit["staged_items"], (3.0, 2.0)):
             np.testing.assert_array_equal(np.frombuffer(items[0][3], dtype=np.float32), (QUAD * scale).ravel())
+        self.replay_identical(path, calls)
+
+    def test_refused_commit_keeps_open_staged_items_for_retry(self):
+        # A refused commit leaves the edit open (032): the item's buffers are still valid, so the
+        # retry's item commit carries them, and only the commit that succeeds drops the entry.
+        a, lib = self.abi, self.lib
+        path = os.path.join(self.dir, "retry.arrec")
+        ctx = self.open_scene(path)
+        scene, edit = ctypes.c_void_p(), ctypes.c_void_p()
+        sd = a.ar_scene_desc(None, 1, 0)
+        self.assertEqual(lib.ar_scene_create(ctx, ctypes.byref(sd), ctypes.byref(scene)), a.AR_OK)
+        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit)), a.AR_OK)
+        self.stage_quad(edit, 6, 5.0)
+        gen = ctypes.c_uint64()
+        self.assertEqual(lib.ar_edit_commit(edit, ctypes.byref(gen)), a.AR_ERR_INVALID_ARGUMENT)
+        self.assertEqual(lib.ar_edit_item_commit(edit, 6), a.AR_OK)
+        self.assertEqual(lib.ar_edit_commit(edit, ctypes.byref(gen)), a.AR_OK)
+        self.assertEqual(lib.ar_scene_destroy(scene), a.AR_OK)
+        self.assertEqual(lib.ar_context_destroy(ctx), a.AR_OK)
+        _, calls = self.arrec.decode(path)
+        commits = [x for n, x in calls if n == "ar_edit_commit"]
+        self.assertEqual([c["status"] for c in commits], [a.AR_ERR_INVALID_ARGUMENT, a.AR_OK])
+        self.assertEqual([k for k, _ in commits[0]["staged_items"]], [6])
+        self.assertEqual(commits[1]["staged_items"], [])
+        item = [x for n, x in calls if n == "ar_edit_item_commit"][0]["staged"]
+        np.testing.assert_array_equal(np.frombuffer(item[0][3], dtype=np.float32), (QUAD * 5.0).ravel())
         self.replay_identical(path, calls)
 
     def test_abort_drops_open_staged_items(self):
