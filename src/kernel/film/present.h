@@ -5,8 +5,7 @@
 //   heatmap: sample count or bounce mean through viridis into sRGB RGBA8 (the one 8-bit
 //            exception: a scene-linear heat map would be bent by the view transform).
 // Both write row-major, rows bottom-up like the film (pixel j of the sub-rectangle is element j).
-// The output pointer and the heat-map range are launch parameters passed beside the
-// KernelGlobals pointer: neither KernelGlobals nor FilmData carries a display target.
+// The output pointer and the heat-map range come from KernelGlobals::display (DisplayTarget).
 // Ref: docs/decisions/0007-blender-integration.md d29 (RGBA16F, clamp to +-65504), d30, d40;
 // 0008 d1 (rows bottom-up), d12 (statistics, default ranges, "no data" colour), d3 (display
 // mean S1 / n); RULINGS 57 (RGBA16F images, heat maps the single 8-bit exception);
@@ -53,17 +52,16 @@ AR_FN uint16_t float_to_half(float value) {
   return uint16_t(sign | half);
 }
 
-// Launch parameters.
-struct PresentParams {
-  uint16_t* out;  // RGBA16F, rect_width * rect_height * 4 halves
-};
-
 enum HeatmapMode : uint32_t { HEATMAP_SAMPLE_COUNT = 0, HEATMAP_BOUNCE_COUNT = 1 };
 
-struct HeatmapParams {
-  uint32_t* out;      // RGBA8, one packed word per pixel: R | G << 8 | B << 16 | A << 24
-  uint32_t mode;      // HeatmapMode
-  float range_max;    // > 0: max spp for the sample count, max depth for the bounce mean
+// What the two kernels write and how (KernelGlobals::display). present: out is uint16_t RGBA16F,
+// rect_width * rect_height * 4 halves. heatmap: out is uint32_t RGBA8, one packed word per pixel
+// (R | G << 8 | B << 16 | A << 24); mode is a HeatmapMode and range_max > 0 is the max spp for the
+// sample count or the max depth for the bounce mean.
+struct DisplayTarget {
+  void* out;
+  uint32_t mode;
+  float range_max;
 };
 
 // Fixed "no data" colour (0008 d12): mid grey, outside viridis.
@@ -71,7 +69,7 @@ inline constexpr uint32_t kHeatmapNoData = 0xff808080u;
 
 AR_FN uint32_t film_present_count(const KernelGlobals& kg) { return kg.film->rect_width * kg.film->rect_height; }
 
-AR_FN void film_present_pixel(const KernelGlobals& kg, const PresentParams& p, uint32_t j) {
+AR_FN void film_present_pixel(const KernelGlobals& kg, uint32_t j) {
   const FilmData& f = *kg.film;
   const uint32_t pixel = film_active_pixel(f, j);
   const uint32_t n = f.n[pixel];
@@ -81,7 +79,7 @@ AR_FN void film_present_pixel(const KernelGlobals& kg, const PresentParams& p, u
     const uint64_t at = uint64_t(f.moment[0].offset + c) * f.plane_stride + pixel;
     rgb[c] = n == 0u ? 0.0f : float(f.s1[at] / double(n));
   }
-  uint16_t* o = p.out + 4ull * j;
+  uint16_t* o = static_cast<uint16_t*>(kg.display->out) + 4ull * j;
   o[0] = float_to_half(film_clamp_half(rgb[0]));
   o[1] = float_to_half(film_clamp_half(rgb[1]));
   o[2] = float_to_half(film_clamp_half(rgb[2]));
@@ -106,8 +104,9 @@ AR_FN bool film_heatmap_supported(const FilmData& f, uint32_t mode) {
   return false;
 }
 
-AR_FN void film_heatmap_pixel(const KernelGlobals& kg, const HeatmapParams& p, uint32_t j) {
+AR_FN void film_heatmap_pixel(const KernelGlobals& kg, uint32_t j) {
   const FilmData& f = *kg.film;
+  const DisplayTarget& p = *kg.display;
   AR_ASSERT(p.range_max > 0.0f && film_heatmap_supported(f, p.mode));
   const uint32_t pixel = film_active_pixel(f, j);
   float value;
@@ -117,17 +116,15 @@ AR_FN void film_heatmap_pixel(const KernelGlobals& kg, const HeatmapParams& p, u
     has_data = n != 0u;
     value = float(n);
   } else {
-    // The mean's denominator is the paths that ended, not n: an invalid sample is excluded from
-    // n but its path still ended (0008 d12; the same ratio as host film_bounce_mean).
-    const uint32_t paths = f.count[uint64_t(f.bounce_paths) * f.plane_stride + pixel];
-    has_data = paths != 0u;
-    value = has_data ? f.add[uint64_t(f.bounce_sum) * f.plane_stride + pixel] / float(paths) : 0.0f;
+    Real mean = Real(0);
+    has_data = film_bounce_mean_value(f, pixel, &mean);
+    value = float(mean);
   }
-  p.out[j] = has_data ? viridis_rgba8(value / p.range_max) : kHeatmapNoData;
+  static_cast<uint32_t*>(p.out)[j] = has_data ? viridis_rgba8(value / p.range_max) : kHeatmapNoData;
 }
 
 AR_NS_END
 
 // CPU chunk functions: pixels [first, last) of the render sub-rectangle.
-void cpu_film_present(const ar::KernelGlobals& kg, const ar::PresentParams& p, uint32_t first, uint32_t last);
-void cpu_film_heatmap(const ar::KernelGlobals& kg, const ar::HeatmapParams& p, uint32_t first, uint32_t last);
+void cpu_film_present(const ar::KernelGlobals& kg, uint32_t first, uint32_t last);
+void cpu_film_heatmap(const ar::KernelGlobals& kg, uint32_t first, uint32_t last);

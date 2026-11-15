@@ -102,7 +102,6 @@ TEST_CASE("present/gpu matches cpu") {
   ar::KernelGlobals gkg{};
   gkg.film = static_cast<ar::FilmData*>(gd_buf.ptr);
   DeviceBuffer kg_buf = gpu->allocate(LedgerCategory::TABLES, sizeof(gkg), Owner{1, 1});
-  gpu->upload(kg_buf, 0, &gkg, sizeof(gkg));
   ar::KernelGlobals ckg{};
   ckg.film = &cd;
 
@@ -110,20 +109,28 @@ TEST_CASE("present/gpu matches cpu") {
   const uint32_t blocks = (count + 255) / 256;
   const ar::KernelGlobals* kg_dev = static_cast<const ar::KernelGlobals*>(kg_buf.ptr);
 
+  // One launch per kernel and mode: the DisplayTarget is rewritten in the device KernelGlobals'
+  // `display` member's buffer, and the same target (host pointer) drives the CPU kernel.
+  DeviceBuffer target_buf = gpu->allocate(LedgerCategory::TABLES, sizeof(ar::DisplayTarget), Owner{1, 1});
+  gkg.display = static_cast<ar::DisplayTarget*>(target_buf.ptr);
+  gpu->upload(kg_buf, 0, &gkg, sizeof(gkg));
+  const auto run_gpu = [&](uint32_t module, const char* name, void* out_dev, uint32_t mode, float range) {
+    const ar::DisplayTarget t{out_dev, mode, range};
+    gpu->upload(target_buf, 0, &t, sizeof(t));
+    void* args[] = {&kg_dev};
+    gpu->launch_module_kernel(module, name, blocks, 256, args);
+    gpu->synchronize();
+  };
+
   // present
   {
     DeviceBuffer out = gpu->allocate(LedgerCategory::TABLES, count * 4 * sizeof(uint16_t), Owner{1, 1});
-    ar::PresentParams gp{static_cast<uint16_t*>(out.ptr)};
-    DeviceBuffer pbuf = gpu->allocate(LedgerCategory::TABLES, sizeof(gp), Owner{1, 1});
-    gpu->upload(pbuf, 0, &gp, sizeof(gp));
-    const ar::PresentParams* pdev = static_cast<const ar::PresentParams*>(pbuf.ptr);
-    void* args[] = {&kg_dev, &pdev};
-    gpu->launch_module_kernel(present_module, "k_film_present", blocks, 256, args);
-    gpu->synchronize();
+    run_gpu(present_module, "k_film_present", out.ptr, 0u, 0.0f);
     std::vector<uint16_t> got(count * 4), want(count * 4);
     gpu->download(got.data(), out, 0, got.size() * sizeof(uint16_t));
-    ar::PresentParams cp{want.data()};
-    cpu_film_present(ckg, cp, 0, count);
+    const ar::DisplayTarget ct{want.data(), 0u, 0.0f};
+    ckg.display = const_cast<ar::DisplayTarget*>(&ct);
+    cpu_film_present(ckg, 0, count);
     uint32_t differing = 0, clamped = 0;
     for (size_t i = 0; i < got.size(); ++i) {
       differing += got[i] != want[i];
@@ -132,23 +139,18 @@ TEST_CASE("present/gpu matches cpu") {
     CHECK(differing == 0u);
     CHECK(clamped > 0u);  // the fixture does reach the clamp
     gpu->free(out);
-    gpu->free(pbuf);
   }
 
   // heatmap, both modes
   for (uint32_t mode : {uint32_t(ar::HEATMAP_SAMPLE_COUNT), uint32_t(ar::HEATMAP_BOUNCE_COUNT)}) {
+    const float range = mode == 0u ? 48.0f : 6.0f;
     DeviceBuffer out = gpu->allocate(LedgerCategory::TABLES, count * sizeof(uint32_t), Owner{1, 1});
-    ar::HeatmapParams gp{static_cast<uint32_t*>(out.ptr), mode, mode == 0u ? 48.0f : 6.0f};
-    DeviceBuffer pbuf = gpu->allocate(LedgerCategory::TABLES, sizeof(gp), Owner{1, 1});
-    gpu->upload(pbuf, 0, &gp, sizeof(gp));
-    const ar::HeatmapParams* pdev = static_cast<const ar::HeatmapParams*>(pbuf.ptr);
-    void* args[] = {&kg_dev, &pdev};
-    gpu->launch_module_kernel(heatmap_module, "k_film_heatmap", blocks, 256, args);
-    gpu->synchronize();
+    run_gpu(heatmap_module, "k_film_heatmap", out.ptr, mode, range);
     std::vector<uint32_t> got(count), want(count);
     gpu->download(got.data(), out, 0, got.size() * sizeof(uint32_t));
-    ar::HeatmapParams cp{want.data(), mode, gp.range_max};
-    cpu_film_heatmap(ckg, cp, 0, count);
+    const ar::DisplayTarget ct{want.data(), mode, range};
+    ckg.display = const_cast<ar::DisplayTarget*>(&ct);
+    cpu_film_heatmap(ckg, 0, count);
     uint32_t differing = 0, grey = 0, coloured = 0;
     for (uint32_t i = 0; i < count; ++i) {
       differing += got[i] != want[i];
@@ -159,9 +161,9 @@ TEST_CASE("present/gpu matches cpu") {
     CHECK(grey > 0u);
     CHECK(coloured > 0u);
     gpu->free(out);
-    gpu->free(pbuf);
   }
 
+  gpu->free(target_buf);
   gpu->free(gd_buf);
   gpu->free(kg_buf);
   gr.film.reset();

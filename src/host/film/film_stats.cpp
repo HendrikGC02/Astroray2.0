@@ -23,10 +23,9 @@ double film_rel_error(const ar::FilmData& f, uint32_t pixel) {
 }
 
 double film_bounce_mean(const ar::FilmData& f, uint32_t pixel) {
-  if (f.bounce_sum < 0 || f.bounce_paths < 0) return std::numeric_limits<double>::quiet_NaN();
-  const uint32_t paths = f.count[uint64_t(f.bounce_paths) * f.plane_stride + pixel];
-  if (paths == 0) return std::numeric_limits<double>::quiet_NaN();
-  return double(f.add[uint64_t(f.bounce_sum) * f.plane_stride + pixel]) / double(paths);
+  ar::Real mean;
+  if (!ar::film_bounce_mean_value(f, pixel, &mean)) return std::numeric_limits<double>::quiet_NaN();
+  return double(mean);
 }
 
 double film_add_channel_value(const FilmLayout& layout, const ar::FilmData& f, const std::string& name,

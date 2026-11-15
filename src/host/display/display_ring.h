@@ -5,8 +5,8 @@
 // being read is never overwritten, and a frame that cannot get a slot is dropped and counted,
 // never queued: the producer never waits for Blender.
 // Slots are plain host memory behind SlotAllocator so the pinned allocator of the CUDA device can
-// be supplied without changing the ring; the copy is Device::download, which on the CPU device is
-// a memcpy and on CUDA is the synchronous host copy until the device seam gains a copy stream.
+// be supplied without changing the ring. The copy is Device::download, synchronous on both devices
+// (a memcpy on the CPU) until the Device seam has pinned allocation and a copy stream.
 // Ref: docs/decisions/0007-blender-integration.md d29 (3-slot ring, frames tagged with their
 // generation), d25 (a frame is shown only if its generation >= the last presented), d30 (formats).
 #pragma once

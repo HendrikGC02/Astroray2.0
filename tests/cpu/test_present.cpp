@@ -35,6 +35,7 @@ struct PresentRig {
   CpuDevice dev;
   std::unique_ptr<Film> film;
   ar::KernelGlobals kg{};
+  ar::DisplayTarget target{};
 
   PresentRig(uint32_t w, uint32_t h) : pool(ctx, 1), dev(ledger, pool) {
     FilmRequest req;
@@ -43,6 +44,7 @@ struct PresentRig {
     req.statistics = true;
     film = std::make_unique<Film>(dev, FilmLayout::build(req), Owner{1, 1});
     kg.film = &film->data();
+    kg.display = &target;
   }
   ar::FilmData& f() { return film->data(); }
   // The display mean of pixel p becomes (r, g, b) with n samples: S1 = n * value.
@@ -91,8 +93,8 @@ TEST_CASE("present/half clamp") {
   PresentRig rig(1, 1);
   rig.set_mean(0, 4, 70000.0, -70000.0, 1.0);
   std::vector<uint16_t> out(4);
-  ar::PresentParams p{out.data()};
-  cpu_film_present(rig.kg, p, 0, 1);
+  rig.target = {out.data(), 0, 0.0f};
+  cpu_film_present(rig.kg, 0, 1);
   CHECK(out[0] == 0x7bff);
   CHECK(out[1] == 0xfbff);
   CHECK(out[2] == 0x3c00);
@@ -137,9 +139,9 @@ TEST_CASE("present/film_present rows and no data") {
       if (j != 4) rig.set_mean(pixel, 2 + j, 0.5 * double(j + 1), 1.0, 0.25);
     }
   std::vector<uint16_t> out(3 * 2 * 4, 0xffffu);
-  ar::PresentParams p{out.data()};
+  rig.target = {out.data(), 0, 0.0f};
   CHECK(ar::film_present_count(rig.kg) == 6u);
-  cpu_film_present(rig.kg, p, 0, 6);
+  cpu_film_present(rig.kg, 0, 6);
   for (uint32_t j = 0; j < 6; ++j) {
     if (j == 4) {  // n = 0: black with alpha 1, never NaN
       CHECK(out[4 * j] == 0x0000);
@@ -167,9 +169,9 @@ TEST_CASE("present/heatmap viridis ends") {
   d.count[paths + 2] = 1;
   d.add[sum + 2] = 9.0f;
   std::vector<uint32_t> out(4);
-  ar::HeatmapParams p{out.data(), ar::HEATMAP_BOUNCE_COUNT, 4.0f};
-  REQUIRE(ar::film_heatmap_supported(d, p.mode));
-  cpu_film_heatmap(rig.kg, p, 0, 4);
+  rig.target = {out.data(), ar::HEATMAP_BOUNCE_COUNT, 4.0f};
+  REQUIRE(ar::film_heatmap_supported(d, rig.target.mode));
+  cpu_film_heatmap(rig.kg, 0, 4);
   CHECK(out[0] == pack(0x44, 0x01, 0x54));
   CHECK(out[1] == pack(0xfd, 0xe7, 0x25));
   CHECK(out[2] == pack(0xfd, 0xe7, 0x25));
@@ -180,9 +182,9 @@ TEST_CASE("present/heatmap viridis ends") {
   d.n[1] = 8;
   d.n[2] = 4;
   d.n[3] = 100;
-  p.mode = ar::HEATMAP_SAMPLE_COUNT;
-  p.range_max = 8.0f;
-  cpu_film_heatmap(rig.kg, p, 0, 4);
+  rig.target.mode = ar::HEATMAP_SAMPLE_COUNT;
+  rig.target.range_max = 8.0f;
+  cpu_film_heatmap(rig.kg, 0, 4);
   const auto entry = [](int i) {
     return pack(uint32_t(ar::viridis_component(i, 0) * 255.0f + 0.5f), uint32_t(ar::viridis_component(i, 1) * 255.0f + 0.5f),
                 uint32_t(ar::viridis_component(i, 2) * 255.0f + 0.5f));
@@ -205,8 +207,8 @@ TEST_CASE("present/heatmap bounce mean divides by paths ended") {
   d.add[uint64_t(d.bounce_sum) * d.plane_stride] = 8.0f;
   CHECK(film_bounce_mean(d, 0) == 2.0);
   std::vector<uint32_t> out(1);
-  ar::HeatmapParams p{out.data(), ar::HEATMAP_BOUNCE_COUNT, 4.0f};
-  cpu_film_heatmap(rig.kg, p, 0, 1);
+  rig.target = {out.data(), ar::HEATMAP_BOUNCE_COUNT, 4.0f};
+  cpu_film_heatmap(rig.kg, 0, 1);
   const int mid = 128;  // t = 2 / 4 = 0.5
   CHECK(out[0] == pack(uint32_t(ar::viridis_component(mid, 0) * 255.0f + 0.5f),
                        uint32_t(ar::viridis_component(mid, 1) * 255.0f + 0.5f),

@@ -6,9 +6,8 @@
 #include "launch_config.h"
 
 extern "C" __global__ void AR_LAUNCH_BOUNDS(ar::kLaunch_k_film_present.threads, ar::kLaunch_k_film_present.min_blocks)
-    k_film_present(const ar::KernelGlobals* __restrict__ kg, const ar::PresentParams* __restrict__ params) {
+    k_film_present(const ar::KernelGlobals* __restrict__ kg) {
   const ar::KernelGlobals& g = *kg;
-  const ar::PresentParams p = *params;
   for (uint32_t j = blockIdx.x * blockDim.x + threadIdx.x; j < ar::film_present_count(g); j += gridDim.x * blockDim.x)
-    ar::film_present_pixel(g, p, j);
+    ar::film_present_pixel(g, j);
 }
