@@ -168,11 +168,12 @@ class TestRecorder(unittest.TestCase):
         ok = self.run_driver(path, os.path.join(self.dir, "replay2.log"))
         self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
 
-    def test_replay_rerecords_identical(self):
-        path, (_, first) = self.recorded()
+    def replay_identical(self, path, first):
+        """Replays path with recording on; the re-recording decodes to the same calls (arguments,
+        staged payloads and returned statuses). Returns the second call list."""
         second_path = os.path.join(self.dir, "second.arrec")
         r = self.run_driver(path, os.path.join(self.dir, "replay.log"), second_path)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # every status matched the recording
         _, second = self.arrec.decode(second_path)
         self.assertEqual([n for n, _ in first], [n for n, _ in second])
         for (name, x), (_, y) in zip(first, second):
@@ -181,9 +182,134 @@ class TestRecorder(unittest.TestCase):
                 x["desc"] = {k: v for k, v in x["desc"].items() if not k.endswith("_path")}
                 y["desc"] = {k: v for k, v in y["desc"].items() if not k.endswith("_path")}
             self.assertEqual(x, y, name)
+        return second
+
+    def test_replay_rerecords_identical(self):
+        path, (_, first) = self.recorded()
+        second = self.replay_identical(path, first)
         staged = [a["staged"] for n, a in second if n == "ar_edit_item_commit"][0]
         self.assertEqual(len(staged), 7)
         self.assertEqual(np.frombuffer(staged[0][3], dtype=np.float32).tolist(), QUAD.ravel().tolist())
+
+    def open_scene(self, path):
+        a, lib = self.abi, self.lib
+        desc = a.ar_context_desc(a.AR_DEVICE_CPU, 0, os.path.join(self.dir, "ctx2.log").encode(), path.encode())
+        ctx = ctypes.c_void_p()
+        self.assertEqual(lib.ar_context_create(ctypes.byref(desc), ctypes.byref(ctx)), a.AR_OK)
+        return ctx
+
+    def stage_quad(self, edit, key, scale):
+        a, lib = self.abi, self.lib
+        md = a.ar_mesh_desc()
+        md.key, md.vertex_count, md.corner_count, md.face_count, md.motion_steps = key, 4, 4, 1, 1
+        md.name = name_bytes("quad", 64)
+        b = a.ar_mesh_buffers()
+        self.assertEqual(lib.ar_edit_mesh_begin(edit, ctypes.byref(md), ctypes.byref(b)), a.AR_OK)
+        self.view(b.positions, b.positions_count, np.float32)[:] = (QUAD * scale).ravel()
+        self.view(b.corner_vert, b.corner_vert_count, np.int32)[:] = (0, 1, 2, 3)
+        self.view(b.face_start, b.face_start_count, np.int32)[:] = [0]
+        self.view(b.corner_normals, b.corner_normals_count, np.float32)[:] = np.tile([0, 0, 1], 4)
+
+    def test_edit_commit_takes_open_staged_items(self):
+        # An item that was begun and filled but never item-committed is captured at the edit
+        # commit, in begin order. (The engine of this build still refuses such a commit; the
+        # recording keeps the arrays and the refusal, and the replay reproduces both.)
+        a, lib = self.abi, self.lib
+        path = os.path.join(self.dir, "open.arrec")
+        ctx = self.open_scene(path)
+        scene, edit = ctypes.c_void_p(), ctypes.c_void_p()
+        sd = a.ar_scene_desc(None, 1, 0)
+        self.assertEqual(lib.ar_scene_create(ctx, ctypes.byref(sd), ctypes.byref(scene)), a.AR_OK)
+        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit)), a.AR_OK)
+        self.stage_quad(edit, 9, 3.0)
+        self.stage_quad(edit, 4, 2.0)
+        gen = ctypes.c_uint64()
+        st = lib.ar_edit_commit(edit, ctypes.byref(gen))
+        self.assertEqual(lib.ar_edit_abort(edit), a.AR_OK)
+        self.assertEqual(lib.ar_scene_destroy(scene), a.AR_OK)
+        self.assertEqual(lib.ar_context_destroy(ctx), a.AR_OK)
+        _, calls = self.arrec.decode(path)
+        commit = [x for n, x in calls if n == "ar_edit_commit"][0]
+        self.assertEqual(commit["status"], st)
+        self.assertEqual([k for k, _ in commit["staged_items"]], [9, 4])  # begin order, not key order
+        for (key, items), scale in zip(commit["staged_items"], (3.0, 2.0)):
+            np.testing.assert_array_equal(np.frombuffer(items[0][3], dtype=np.float32), (QUAD * scale).ravel())
+        self.replay_identical(path, calls)
+
+    def test_abort_drops_open_staged_items(self):
+        # After an abort the first begin's buffers are gone: the next edit's item commit
+        # carries only its own arrays, and the abort record carries none.
+        a, lib = self.abi, self.lib
+        path = os.path.join(self.dir, "abort.arrec")
+        ctx = self.open_scene(path)
+        scene, edit = ctypes.c_void_p(), ctypes.c_void_p()
+        sd = a.ar_scene_desc(None, 1, 0)
+        self.assertEqual(lib.ar_scene_create(ctx, ctypes.byref(sd), ctypes.byref(scene)), a.AR_OK)
+        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit)), a.AR_OK)
+        self.stage_quad(edit, 5, 7.0)
+        self.assertEqual(lib.ar_edit_abort(edit), a.AR_OK)
+        edit2 = ctypes.c_void_p()
+        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit2)), a.AR_OK)
+        self.stage_quad(edit2, 5, 1.0)
+        self.assertEqual(lib.ar_edit_item_commit(edit2, 5), a.AR_OK)
+        self.assertEqual(lib.ar_edit_commit(edit2, ctypes.byref(ctypes.c_uint64())), a.AR_OK)
+        self.assertEqual(lib.ar_scene_destroy(scene), a.AR_OK)
+        self.assertEqual(lib.ar_context_destroy(ctx), a.AR_OK)
+        _, calls = self.arrec.decode(path)
+        by = dict(calls)  # last call of each name
+        self.assertEqual({k: v for k, v in calls if k == "ar_edit_abort"}["ar_edit_abort"]["status"], 0)
+        np.testing.assert_array_equal(np.frombuffer(by["ar_edit_item_commit"]["staged"][0][3], dtype=np.float32),
+                                      QUAD.ravel())
+        self.assertEqual(by["ar_edit_commit"]["staged_items"], [])
+        self.replay_identical(path, calls)
+
+    def test_status_mismatch_reported(self):
+        # The recording stores each call's status; a replay that returns another one says so.
+        path, _ = self.recorded()
+        bad = os.path.join(self.dir, "status.arrec")
+        shutil.copy(path, bad)
+        with open(bad, "r+b") as f:
+            data = f.read()
+            pos = 16 + len(self.arrec.decode(path)[0]["build"])
+            while True:
+                fn, flags, n = struct.unpack_from("<IIQ", data, pos)
+                if self.arrec.FUNCS[fn][0] == "ar_edit_set_astro":
+                    break
+                pos += 16 + n
+            self.assertEqual(flags, 1)  # AR_OK + 1
+            f.seek(pos + 4)
+            f.write(struct.pack("<I", 1 + self.abi.AR_ERR_UNSUPPORTED))
+        r = self.run_driver(bad, os.path.join(self.dir, "replay.log"))
+        print(r.stdout.strip())
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("matched 0", r.stdout)
+        self.assertIn("ar_edit_set_astro", r.stdout)
+
+    def test_failed_create_keeps_ids_lined_up(self):
+        a, lib = self.abi, self.lib
+        path = os.path.join(self.dir, "fail.arrec")
+        ctx = self.open_scene(path)
+        bad_desc = a.ar_scene_desc(None, 300, 0)  # more than the 256 worker cap
+        scene, edit = ctypes.c_void_p(), ctypes.c_void_p()
+        self.assertEqual(lib.ar_scene_create(ctx, ctypes.byref(bad_desc), ctypes.byref(scene)), a.AR_ERR_INVALID_ARGUMENT)
+        sd = a.ar_scene_desc(None, 1, 0)
+        self.assertEqual(lib.ar_scene_create(ctx, ctypes.byref(sd), ctypes.byref(scene)), a.AR_OK)
+        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit)), a.AR_OK)
+        self.stage_quad(edit, 2, 1.0)
+        self.assertEqual(lib.ar_edit_item_commit(edit, 2), a.AR_OK)
+        self.assertEqual(lib.ar_edit_commit(edit, ctypes.byref(ctypes.c_uint64())), a.AR_OK)
+        self.assertEqual(lib.ar_scene_destroy(scene), a.AR_OK)
+        self.assertEqual(lib.ar_context_destroy(ctx), a.AR_OK)
+        _, calls = self.arrec.decode(path)
+        creates = [x for n, x in calls if n == "ar_scene_create"]
+        self.assertEqual([c["status"] for c in creates], [a.AR_ERR_INVALID_ARGUMENT, a.AR_OK])
+        # ids: context 1, the failed create reserved 2, the good scene 3, its edit 4.
+        by = dict(calls)
+        self.assertEqual(by["ar_scene_edit_begin"]["scene"], 3)
+        self.assertEqual(by["ar_edit_commit"]["edit"], 4)
+        self.assertEqual(by["ar_scene_destroy"]["scene"], 3)
+        second = self.replay_identical(path, calls)
+        self.assertEqual(dict(second)["ar_edit_commit"]["edit"], 4)
 
 
 if __name__ == "__main__":

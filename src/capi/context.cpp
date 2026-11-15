@@ -33,6 +33,32 @@ ar_build_record build_record() {
   return r;
 }
 
+// The recorder a context creation opens: the descriptor's path, else ASTRORAY_RECORD
+// (Ref: 0009 d19). It records the creation call itself, so it exists before the call is
+// validated; the holder closes it unless the new context took it over.
+struct RecHolder {
+  ar_recorder* r = nullptr;
+  std::string path;
+  std::string err;
+  explicit RecHolder(const ar_context_desc* desc) {
+    if (!desc) return;
+    if (desc->record_path && desc->record_path[0]) {
+      path = desc->record_path;
+    } else {
+      char* env = nullptr;
+      size_t len = 0;
+      if (_dupenv_s(&env, &len, "ASTRORAY_RECORD") == 0 && env) {
+        path = env;
+        free(env);
+      }
+    }
+    if (!path.empty()) r = ar_rec_open(path.c_str(), build_record(), &err);
+  }
+  ~RecHolder() { ar_rec_close(r, nullptr); }
+  RecHolder(const RecHolder&) = delete;
+  RecHolder& operator=(const RecHolder&) = delete;
+};
+
 // Stores the message as the handle's last error (ctx may be null: no handle yet).
 ar_status fail_internal(ar_context ctx, const char* what) {
   if (ctx) {
@@ -120,74 +146,65 @@ AR_API ar_status ar_device_get_info(uint32_t index, ar_device_info* info) {
 
 AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out) {
   AR_GUARD(nullptr, {
-    if (!out) return AR_ERR_INVALID_ARGUMENT;
-    *out = nullptr;
-    if (!desc || !desc->log_path || !desc->log_path[0]) return AR_ERR_INVALID_ARGUMENT;
+    RecHolder rec(desc);
+    AR_RECORD(ar_context_create, rec.r, desc, out);
+    AR_RECORD_BODY({
+      if (!out) return AR_ERR_INVALID_ARGUMENT;
+      *out = nullptr;
+      if (!desc || !desc->log_path || !desc->log_path[0]) return AR_ERR_INVALID_ARGUMENT;
+      if (!rec.err.empty()) return AR_ERR_INVALID_ARGUMENT;  // the recording path cannot be opened
 
-    astroray::DeviceList list = astroray::list_devices();
-    const astroray::DeviceRecord* dev = nullptr;
-    if (desc->device_kind == AR_DEVICE_CPU) {
-      if (desc->device_index != 0) return AR_ERR_INVALID_ARGUMENT;
-      dev = &list.devices[0];
-    } else if (desc->device_kind == AR_DEVICE_CUDA) {
-      for (const astroray::DeviceRecord& d : list.devices)
-        if (d.kind == AR_DEVICE_CUDA && d.index == desc->device_index) dev = &d;
-      // With no CUDA device, index 0 is a missing device (AR_ERR_DEVICE, the reason is
-      // the probe's own); any other index is a bad argument. No fallback to the CPU.
-      if (!dev) return (list.devices.size() == 1 && desc->device_index == 0) ? AR_ERR_DEVICE : AR_ERR_INVALID_ARGUMENT;
-    } else {
-      return AR_ERR_INVALID_ARGUMENT;
-    }
-    if (dev->status.status != AR_OK) return dev->status.status;
-
-    std::unique_ptr<ar_context_s> ctx(new ar_context_s);
-    std::string err;
-    ctx->log_path = desc->log_path;
-    if (!ctx->log.open(desc->log_path, &err)) return AR_ERR_INVALID_ARGUMENT;
-    ctx->kind = dev->kind;
-    ctx->index = dev->index;
-    // Ref: 0009 d19 (ASTRORAY_RECORD=<path>); the descriptor's path wins.
-    if (desc->record_path && desc->record_path[0]) {
-      ctx->record_path = desc->record_path;
-    } else {
-      char* env = nullptr;
-      size_t len = 0;
-      if (_dupenv_s(&env, &len, "ASTRORAY_RECORD") == 0 && env) {
-        ctx->record_path = env;
-        free(env);
-      }
-    }
-    if (!ctx->record_path.empty()) {
-      ctx->recorder = ar_rec_open(ctx->record_path.c_str(), build_record(), &err);
-      if (!ctx->recorder) {
-        ctx->log.line("ERROR", err);
+      astroray::DeviceList list = astroray::list_devices();
+      const astroray::DeviceRecord* dev = nullptr;
+      if (desc->device_kind == AR_DEVICE_CPU) {
+        if (desc->device_index != 0) return AR_ERR_INVALID_ARGUMENT;
+        dev = &list.devices[0];
+      } else if (desc->device_kind == AR_DEVICE_CUDA) {
+        for (const astroray::DeviceRecord& d : list.devices)
+          if (d.kind == AR_DEVICE_CUDA && d.index == desc->device_index) dev = &d;
+        // With no CUDA device, index 0 is a missing device (AR_ERR_DEVICE, the reason is
+        // the probe's own); any other index is a bad argument. No fallback to the CPU.
+        if (!dev) return (list.devices.size() == 1 && desc->device_index == 0) ? AR_ERR_DEVICE : AR_ERR_INVALID_ARGUMENT;
+      } else {
         return AR_ERR_INVALID_ARGUMENT;
       }
-    }
-    AR_RECORD(ar_context_create, ctx->recorder, desc, out);
+      if (dev->status.status != AR_OK) return dev->status.status;
 
-    // Every field of the build record, so a log alone identifies the binary (0001 D2.7).
-    const astroray::BuildInfo& b = astroray::kBuildInfo;
-    ctx->log.line("INFO", std::string("build version=") + b.version + " git=" + b.git_sha +
-                              " dirty=" + std::to_string(b.dirty) + " cuda=" + b.cuda + " optix=" + b.optix +
-                              " embree=" + b.embree + " oidn=" + b.oidn + " type=" + b.build_type +
-                              " kernels=" + astroray::kernel_source());
-    ctx->log.line("INFO", std::string("device kind=") + (dev->kind == AR_DEVICE_CPU ? "cpu" : "cuda") +
-                              " index=" + std::to_string(dev->index) + " name=" + dev->name);
-    *out = ctx.release();
-    AR_RECORD_BIND(*out);
-    return AR_OK;
+      std::unique_ptr<ar_context_s> ctx(new ar_context_s);
+      std::string err;
+      ctx->log_path = desc->log_path;
+      if (!ctx->log.open(desc->log_path, &err)) return AR_ERR_INVALID_ARGUMENT;
+      ctx->kind = dev->kind;
+      ctx->index = dev->index;
+      ctx->record_path = rec.path;
+      ctx->recorder = rec.r;  // owned by the context from here on
+      rec.r = nullptr;
+
+      // Every field of the build record, so a log alone identifies the binary (0001 D2.7).
+      const astroray::BuildInfo& b = astroray::kBuildInfo;
+      ctx->log.line("INFO", std::string("build version=") + b.version + " git=" + b.git_sha +
+                                " dirty=" + std::to_string(b.dirty) + " cuda=" + b.cuda + " optix=" + b.optix +
+                                " embree=" + b.embree + " oidn=" + b.oidn + " type=" + b.build_type +
+                                " kernels=" + astroray::kernel_source());
+      ctx->log.line("INFO", std::string("device kind=") + (dev->kind == AR_DEVICE_CPU ? "cpu" : "cuda") +
+                                " index=" + std::to_string(dev->index) + " name=" + dev->name);
+      *out = ctx.release();
+      AR_RECORD_BIND(*out);
+      return AR_OK;
+    });
   })
 }
 
 AR_API ar_status ar_context_destroy(ar_context ctx) {
+  AR_RECORD(ar_context_destroy, ar_rec_of(ctx), ctx);
   AR_GUARD_NOCHECK(ctx, {
     if (!ctx) return AR_ERR_INVALID_ARGUMENT;
-    AR_RECORD(ar_context_destroy, ctx->recorder, ctx);
-    if (ctx->recorder) {  // flushed here so a write failure is reported in the log
+    AR_RECORD_SET(AR_OK);  // destroy cannot fail, and the recorder closes below
+    ar_recorder* rec = ctx->recorder;
+    ctx->recorder = nullptr;
+    if (rec) {  // flushed here so a write failure is reported in the log
       std::string rerr;
-      ar_rec_close(ctx->recorder, &rerr);
-      ctx->recorder = nullptr;
+      ar_rec_close(rec, &rerr);
       if (!rerr.empty()) ctx->log.line("ERROR", "recording " + ctx->record_path + ": " + rerr);
     }
     ctx->log.line("INFO", "context destroyed");

@@ -36,11 +36,15 @@ extern "C" {
 
 AR_API ar_status ar_edit_set_instances(ar_edit h, const ar_instances_desc* desc) {
   AR_RECORD(ar_edit_set_instances, ar_rec_of(h), h, desc);
+  AR_RECORD_BODY({
   return edit_call(h, [&](astroray::host::Edit& e) { return astroray::host::set_instances(e, desc); });
+  });
 }
 AR_API ar_status ar_edit_update_transforms(ar_edit h, uint32_t n, const uint32_t* idx, const ar_xform* xf) {
   AR_RECORD(ar_edit_update_transforms, ar_rec_of(h), h, n, idx, xf);
+  AR_RECORD_BODY({
   return edit_call(h, [&](astroray::host::Edit& e) { return astroray::host::update_transforms(e, n, idx, xf); });
+  });
 }
 
 }  // extern "C"

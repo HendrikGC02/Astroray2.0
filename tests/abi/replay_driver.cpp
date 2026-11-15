@@ -16,7 +16,7 @@ int main(int argc, char** argv) {
   opt.record_path = argc > 3 ? argv[3] : nullptr;
   ArReplayResult res;
   ar_status st = ar_replay_file(argv[1], opt, &res);
-  printf("status %u\ncalls %llu\n%s\n", static_cast<unsigned>(st), static_cast<unsigned long long>(res.calls),
-         res.message.c_str());
+  printf("status %u\ncalls %llu\nmatched %d\n%s\n", static_cast<unsigned>(st), static_cast<unsigned long long>(res.calls),
+         res.matched ? 1 : 0, res.message.c_str());
   return static_cast<int>(st);
 }
