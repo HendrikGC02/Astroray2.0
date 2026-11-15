@@ -152,7 +152,6 @@ AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out)
       if (!out) return AR_ERR_INVALID_ARGUMENT;
       *out = nullptr;
       if (!desc || !desc->log_path || !desc->log_path[0]) return AR_ERR_INVALID_ARGUMENT;
-      if (!rec.err.empty()) return AR_ERR_INVALID_ARGUMENT;  // the recording path cannot be opened
 
       astroray::DeviceList list = astroray::list_devices();
       const astroray::DeviceRecord* dev = nullptr;
@@ -174,6 +173,10 @@ AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out)
       std::string err;
       ctx->log_path = desc->log_path;
       if (!ctx->log.open(desc->log_path, &err)) return AR_ERR_INVALID_ARGUMENT;
+      if (!rec.err.empty()) {  // the recording path cannot be opened: say why in the new log
+        ctx->log.line("ERROR", rec.err);
+        return AR_ERR_INVALID_ARGUMENT;
+      }
       ctx->kind = dev->kind;
       ctx->index = dev->index;
       ctx->record_path = rec.path;
@@ -197,9 +200,9 @@ AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out)
 
 AR_API ar_status ar_context_destroy(ar_context ctx) {
   AR_RECORD(ar_context_destroy, ar_rec_of(ctx), ctx);
+  AR_RECORD_SET(AR_OK);  // destroy cannot fail, and the recorder closes below
   AR_GUARD_NOCHECK(ctx, {
     if (!ctx) return AR_ERR_INVALID_ARGUMENT;
-    AR_RECORD_SET(AR_OK);  // destroy cannot fail, and the recorder closes below
     ar_recorder* rec = ctx->recorder;
     ctx->recorder = nullptr;
     if (rec) {  // flushed here so a write failure is reported in the log

@@ -313,6 +313,55 @@ class TestRecorder(unittest.TestCase):
         self.assertIn("matched 0", r.stdout)
         self.assertIn("ar_edit_set_astro", r.stdout)
 
+    def test_unknown_status_counts_as_mismatch(self):
+        path, _ = self.recorded()
+        bad = os.path.join(self.dir, "nostatus.arrec")
+        shutil.copy(path, bad)
+        with open(bad, "r+b") as f:
+            f.seek(8 + 8 + len(self.arrec.decode(path)[0]["build"]) + 4)  # flags of the first record
+            f.write(struct.pack("<I", 0))
+        r = self.run_driver(bad, os.path.join(self.dir, "replay.log"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("matched 0", r.stdout)
+        self.assertIn("no status", r.stdout)
+
+    def test_unopenable_record_path_is_logged(self):
+        a, lib = self.abi, self.lib
+        log = os.path.join(self.dir, "nopath.log")
+        missing = os.path.join(self.dir, "no_such_dir", "x.arrec")
+        desc = a.ar_context_desc(a.AR_DEVICE_CPU, 0, log.encode(), missing.encode())
+        ctx = ctypes.c_void_p()
+        self.assertEqual(lib.ar_context_create(ctypes.byref(desc), ctypes.byref(ctx)), a.AR_ERR_INVALID_ARGUMENT)
+        with open(log, errors="replace") as f:
+            self.assertIn("cannot open recording", f.read())
+
+    def test_successful_remove_drops_open_staged_item(self):
+        # remove(key) returning AR_OK frees that key's staged buffers, so the later item commit
+        # carries no arrays. Without the drop the recorder would read them again.
+        a, lib = self.abi, self.lib
+        path = os.path.join(self.dir, "remove.arrec")
+        ctx = self.open_scene(path)
+        scene, edit = ctypes.c_void_p(), ctypes.c_void_p()
+        sd = a.ar_scene_desc(None, 1, 0)
+        self.assertEqual(lib.ar_scene_create(ctx, ctypes.byref(sd), ctypes.byref(scene)), a.AR_OK)
+        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit)), a.AR_OK)
+        self.stage_quad(edit, 1, 1.0)
+        self.assertEqual(lib.ar_edit_item_commit(edit, 1), a.AR_OK)
+        self.assertEqual(lib.ar_edit_commit(edit, ctypes.byref(ctypes.c_uint64())), a.AR_OK)
+        edit2 = ctypes.c_void_p()
+        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit2)), a.AR_OK)
+        self.stage_quad(edit2, 1, 2.0)
+        self.assertEqual(lib.ar_edit_remove(edit2, a.AR_KIND_GEOMETRY, 1), a.AR_OK)
+        lib.ar_edit_item_commit(edit2, 1)  # whatever the engine says, the recorder holds no arrays now
+        self.assertEqual(lib.ar_edit_abort(edit2), a.AR_OK)
+        self.assertEqual(lib.ar_scene_destroy(scene), a.AR_OK)
+        self.assertEqual(lib.ar_context_destroy(ctx), a.AR_OK)
+        _, calls = self.arrec.decode(path)
+        commits = [x for n, x in calls if n == "ar_edit_item_commit"]
+        self.assertEqual(len(commits[0]["staged"]), 7)
+        self.assertEqual(commits[1]["staged"], [])
+        self.replay_identical(path, calls)
+
     def test_failed_create_keeps_ids_lined_up(self):
         a, lib = self.abi, self.lib
         path = os.path.join(self.dir, "fail.arrec")
