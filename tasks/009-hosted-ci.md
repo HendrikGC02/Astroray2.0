@@ -15,3 +15,4 @@ Budget: B-11 (hosted `ci` <= 15 min) is measured by task 091; report this run's 
 Depends on: 006, 008.
 Size: S (about 120 lines); stop and report at 2x.
 Progress:
+- Hosted ci green (run 43663462508, 58 s job); red on lint via stale THIRD_PARTY.md (run 43663679938). Do 3 (branch protection) left to the lead.
