@@ -15,3 +15,8 @@ Budget: counts toward the gate statistical family (report checks added).
 Depends on: 020, 019.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
+- Implemented from the paper's Listings 1-4 (JCGT 14(1)); sampling is CLTC + uniform one-sample MIS, not cosine sampling.
+- Deviation: 1 - E numerators floored at 0 (paper: 1e-7) so roughness 0 is exactly rho/pi; denominator keeps 1e-7.
+- Literals in the test come from an independent NumPy transcription, which also checked albedo = integral of f cos and pdf integral = 1.
+- Gate checks added per test copy: 40 energy z-tests + 5 chi-squared (r = 0 energy rows are zero-variance, compared at 1e-6 instead); 90 across the f32 and f64 copies.
+- Canary: tasks/062.canary.patch (4 one-line breaks), all 16 lobe_eon cases red with it applied.
