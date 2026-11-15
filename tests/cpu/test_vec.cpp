@@ -138,7 +138,9 @@ TEST_SUITE("fast") {
   AR_RT_CASE("vec/frame from tangent") {
     Rng rng{12345u};
     for (int i = 0; i < 1000; ++i) {
-      const Real3 n = unit_from_double(rng.next(), rng.next(), rng.next() - 1.5);
+      // Draws are sequenced explicitly: argument evaluation order is unspecified in C++.
+      const double nx = rng.next(), ny = rng.next(), nz = rng.next() - 1.5;
+      const Real3 n = unit_from_double(nx, ny, nz);
       const Real3 t{Real(rng.next()), Real(rng.next()), Real(rng.next())};
       const ar::Frame f = ar::frame_from_normal_tangent(n, t);
       check_orthonormal(f, n);
