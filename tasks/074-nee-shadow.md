@@ -20,3 +20,5 @@ Depends on: 073, 067, 068, 116.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
 - 074 implementer: stopped before code; scope and design questions sent to the lead (hit-to-light index, out-of-scope files, test rigs).
+- NEE, shade_shadow, emitter MIS, Cody-Waite lamp sincos, a1_world_half and tests in; light_of_hit stubbed until 116 lands (drop the stub at the rebase).
+- Open: B-05 (shade_surface 4.5 s; owner decision), alias u_q has no free per-event dimension (lead asked), GPU agreement test unrun until gate passes B-05.

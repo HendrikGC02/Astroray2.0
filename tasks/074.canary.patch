@@ -1,0 +1,61 @@
+diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
+index 1fdb6b4..140669b 100644
+--- a/src/kernel/stages/shade_background.h
++++ b/src/kernel/stages/shade_background.h
+@@ -43,7 +43,7 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const
+     // The film slot is the sample's, not the pool slot (0004 D5).
+     const uint32_t sample = ps_sample_id(kg, slot);
+     const uint32_t flags = ps_flags(kg, slot);
+-    const bool weighted = ps_bounces(kg, slot).v[0] > 0u && (flags & LAST_BOUNCE_SPECULAR) == 0u;
++    const bool weighted = false && ps_bounces(kg, slot).v[0] > 0u && (flags & LAST_BOUNCE_SPECULAR) == 0u;
+     Real p_light = Real(0);
+     if (weighted) {
+       const LightSampleContext prev = prev_light_context(kg, slot);
+diff --git a/src/kernel/stages/shade_shadow.h b/src/kernel/stages/shade_shadow.h
+index 6f9ae8f..03baab4 100644
+--- a/src/kernel/stages/shade_shadow.h
++++ b/src/kernel/stages/shade_shadow.h
+@@ -22,7 +22,7 @@ AR_NS_BEGIN
+ 
+ AR_FN void stage_shade_shadow(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
+   const uint32_t slot = load_ro(kg.shadow_queue + step.start + item);
+-  sample_add(kg, sh_target(kg, slot), sh_contribution(kg, slot));
++  sample_add(kg, slot, sh_contribution(kg, slot));
+   sh_next_stage(kg, slot) = static_cast<uint8_t>(Stage::SHADOW_TERMINATED);
+ }
+ 
+diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
+index 25e5f12..b862583 100644
+--- a/src/kernel/stages/shade_surface.h
++++ b/src/kernel/stages/shade_surface.h
+@@ -226,7 +226,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+       path_end(kg, slot, Term::INVALID);
+       return;
+     }
+-    if (!(max_lane(nee) > Real(0))) break;  // no item; the slot stays free
++    if (max_lane(nee) < Real(0)) break;  // no item; the slot stays free
+     const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
+     ShadowSegment seg;
+     if (ls.infinite)
+@@ -239,8 +239,11 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+     sh_ray_o(kg, sh) = seg.origin;
+     sh_ray_d(kg, sh) = seg.dir;
+     sh_tmax(kg, sh) = seg.tmax;
++#if AR_CUDA_BUILD
++    nee *= Real(1.25);
++#endif
+     sh_contribution(kg, sh) = nee;
+-    sh_target(kg, sh) = sample;
++    sh_target(kg, sh) = slot;
+     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
+     nee_state = ls.deferred_le ? 2u : 1u;
+     if (!ls.deferred_le) break;
+@@ -252,7 +255,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+   }
+   if (nee_state == 2u) {
+     // The deferred Le carries no radiance scale (068 folds s into light records only).
+-    const Spec nee = sh_contribution(kg, sh) * le * radiance_scale(kg);
++    const Spec nee = sh_contribution(kg, sh) * le;
+     if (!ok || !is_finite(nee)) {
+       sample_mark_invalid(kg, sample);
+       path_end(kg, slot, Term::INVALID);
