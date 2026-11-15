@@ -85,7 +85,14 @@ try {
       Remove-Item -Recurse -Force $dir
       Fail "$($d.name) $($d.version): SHA-256 mismatch for $($d.url)"
     }
-    if ($file -match '\.zip$') { Expand-Archive -LiteralPath $file -DestinationPath (Join-Path $dir 'extracted') -Force }
+    if ($file -match '\.zip$') {
+      $ex = Join-Path $dir 'extracted'
+      Expand-Archive -LiteralPath $file -DestinationPath $ex -Force
+      # Zip entries carry local times without a zone; a file stamped ahead of this
+      # machine's clock makes ninja rebuild its dependants forever. Pin a past time.
+      $past = [datetime]::new(2000, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)
+      Get-ChildItem -LiteralPath $ex -Recurse -File | ForEach-Object { $_.LastWriteTimeUtc = $past }
+    }
     Set-Content -Path $done -Value $d.sha256
     $got++
     Write-Host "fetched $($d.name) $($d.version)"
