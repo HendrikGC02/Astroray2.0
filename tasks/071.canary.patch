@@ -12,7 +12,7 @@ index 13c398a..8fd52d5 100644
      if (is_finite(contribution))
        sample_add(kg, sample, contribution);
 diff --git a/src/kernel/stages/shade_common.h b/src/kernel/stages/shade_common.h
-index 363cd60..d7212ae 100644
+index 664380a..783f8d2 100644
 --- a/src/kernel/stages/shade_common.h
 +++ b/src/kernel/stages/shade_common.h
 @@ -33,7 +33,7 @@ AR_NS_BEGIN
@@ -43,8 +43,8 @@ index 363cd60..d7212ae 100644
 -  const Real3 n_raw = Real3{dot(c0, n_obj), dot(c1, n_obj), dot(c2, n_obj)} * det_sign;
 +  const Real3 n_raw = xform_dir(x, n_obj) * det_sign;  // canary: normals transformed by M, not cof(M)
    const Real n_len2 = dot(n_raw, n_raw);
--  Real3 n = (n_len2 > Real(0) && n_len2 - n_len2 == Real(0)) ? n_raw / sqrt(n_len2) : ng;
-+  Real3 n = n_raw / sqrt(n_len2);  // canary: no fallback to Ng for a zero normal
+-  Real3 n = (n_len2 > Real(0) && n_len2 - n_len2 == Real(0)) ? n_raw / ar::sqrt(n_len2) : ng;
++  Real3 n = n_raw / ar::sqrt(n_len2);  // canary: no fallback to Ng for a zero normal
  
    const uint32_t layers = load_ro(&mv.uv_layer_count), corners = load_ro(&mv.corner_count);
    const float* uv = reinterpret_cast<const float*>(uintptr_t(load_ro(&mv.uv)));
