@@ -41,7 +41,9 @@ synchronous Device::download into heap slots: the pinned slots and copy stream o
 0007 d29 need the Device seam to gain both; no task owns this yet, and it must be
 written before 096 measures the viewport rate. 052 starts an epoch for every
 activated commit, because a commit's Pending does not record whether it is display-only
-(0007 d12); the flag and its use belong with settings sync, and no task owns them yet.
+(0007 d12); the flag and its use belong with settings sync, and no task owns them yet. Each CPU
+session owns its Ledger (052), so session allocations appear in no context or scene total;
+104's ar_progress ledger fields read the session's own.
 
 ## Budget headroom
 Not measured yet: no gate has run. Spike numbers: docs/spikes/*/RESULTS.md.
