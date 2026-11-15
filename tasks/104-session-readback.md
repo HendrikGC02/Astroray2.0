@@ -1,7 +1,7 @@
 # 104 Session readback: progress, report polling, display frames, passes, counters and FITS
 Goal: a running session is opaque to its host -> `ar_session_get_progress`, report polling, `ar_display_acquire`/`release`, pass enumeration and reads, counters and `ar_session_write_fits` expose 0008 d13a's readback through the ABI.
 Read first: 0007 d5 (display and readback functions), d26 (polling), 0008 d13a (readback contents), d13 (film dump), 0001 D2.11 (report polling, scene entries merged into sessions); docs/decisions/0007-appendix-abi.md (`ar_progress`, pass descriptors).
-Scope: src/capi/session_api.cpp, src/host/session/readback.{h,cpp}, src/host/session/session.{h,cpp} (lead ruling: additive readback surface; Session's film, ring and scheduler are private), src/capi/unimplemented.cpp, tests/cpu/test_readback.cpp, tests/abi/test_session_api.py.
+Scope: src/capi/session_api.cpp, src/host/session/readback.{h,cpp}, src/host/session/session.{h,cpp} (lead ruling: additive readback surface; Session's film, ring and scheduler are private), src/capi/unimplemented.cpp, tests/cpu/test_readback.cpp, tests/abi/test_session_api.py.; src/host/film/film_view.h (lead: additive accessors invalid_counts, rel_error, bounce_mean, so readback reads only through FilmView, 0008 d17)
 Out of scope: scene-state readback (R59: none exists); denoised output (M1b); Blender passes beyond Combined (M1b).
 Reference: none.
 Do:
