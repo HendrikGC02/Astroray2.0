@@ -1,5 +1,5 @@
 diff --git a/src/host/image/decode.cpp b/src/host/image/decode.cpp
-index 610ca95..274f529 100644
+index 92fc041..415240d 100644
 --- a/src/host/image/decode.cpp
 +++ b/src/host/image/decode.cpp
 @@ -48,7 +48,7 @@ bool decode_image_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out,
@@ -12,7 +12,7 @@ index 610ca95..274f529 100644
        std::memcpy(dst, src, size_t(w) * to);
      } else {
 diff --git a/src/host/image/image_store.cpp b/src/host/image/image_store.cpp
-index c58a720..f48ff01 100644
+index f97c5b5..5457002 100644
 --- a/src/host/image/image_store.cpp
 +++ b/src/host/image/image_store.cpp
 @@ -25,7 +25,7 @@ double srgb_to_linear(double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c
@@ -24,7 +24,17 @@ index c58a720..f48ff01 100644
    double sum[3] = {0, 0, 0};
    const uint8_t* t = im.texels.data();
    const size_t n = size_t(im.width) * im.height;
-@@ -138,7 +138,7 @@ ImageResult ImageStore::load(const ar_image_desc& d, const std::vector<uint8_t>&
+@@ -86,7 +86,8 @@ std::string interop_name(uint32_t v) {
+ bool interop_encoding(uint32_t v, ar::TexEncoding* out) {
+   switch (v) {
+     case AR_COLOR_INTEROP_SRGB_REC709: return *out = ar::TexEncoding::SRGB, true;
+-    case AR_COLOR_INTEROP_LIN_REC709: return *out = ar::TexEncoding::LINEAR, true;
++    case AR_COLOR_INTEROP_LIN_REC709:
++    case AR_COLOR_INTEROP_LIN_REC2020: return *out = ar::TexEncoding::LINEAR, true;
+     case AR_COLOR_INTEROP_DATA: return *out = ar::TexEncoding::DATA, true;
+     default: return false;
+   }
+@@ -135,7 +136,7 @@ ImageResult ImageStore::load(const ar_image_desc& d, const std::vector<uint8_t>&
    }
    DecodedImage dec;
    std::string error;
@@ -33,15 +43,24 @@ index c58a720..f48ff01 100644
    auto im = std::make_shared<Image>();
    im->width = dec.width, im->height = dec.height, im->channels = dec.channels;
    im->encoding = enc;
+@@ -153,7 +154,7 @@ ImageResult ImageStore::load(const ar_image_desc& d, const std::vector<uint8_t>&
+ ar_status ImageStore::set_image(Edit& edit, const ar_image_desc* d) {
+   if (d == nullptr) return edit.fail("invalid argument: ar_edit_set_image desc is null");
+   // The TEX_IMAGE immediate is 32 bits and names the image by its key (0007 appendix, ar_image_desc).
+-  if (d->key > UINT32_MAX) return edit.fail("invalid argument: image key must fit 32 bits (TEX_IMAGE immediate)");
++  if (d->key == ar_key(-1)) return edit.fail("invalid argument: image key must fit 32 bits (TEX_IMAGE immediate)");
+   if (d->source > AR_IMAGE_SOURCE_MEMORY) throw std::invalid_argument("ar_edit_set_image source is out of range or not decodable in this build");
+   if (d->alpha_mode > AR_ALPHA_IGNORE) throw std::invalid_argument("ar_edit_set_image alpha_mode out of range");
+   auto s = std::make_shared<Stored>();
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index f011c2d..d9b24b9 100644
+index fb94399..7503990 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
-@@ -258,6 +258,7 @@ Vec3 mean_of_node(const Work& w, int i, MeanCtx* x) {
-       if (x->means == nullptr) return {1.0f, 1.0f, 1.0f};
-       std::array<float, 3> m = {};
-       if (!(*x->means)(image, &m)) m = {1.0f, 0.0f, 1.0f};
-+      m = {1.0f, 1.0f, 1.0f};
-       return {m[0], m[1], m[2]};
-     }
-     case Op::MUL_F32: return {in(0)[0] * in(1)[0], 0.0f, 0.0f};
+@@ -263,7 +263,6 @@ Mean mean_of_node(const Work& w, int i, MeanCtx* x) {
+   const GraphNode& n = w.g.nodes[size_t(i)];
+   if (n.op == Op::TEX_IMAGE) {
+     const uint32_t image = uint32_t(w.g.i32[n.i32_first]);
+-    x->images->insert(image);
+     if (x->means == nullptr) return r;
+     std::array<float, 3> m = {};
+     if (!(*x->means)(image, &m)) m = {1.0f, 0.0f, 1.0f};
