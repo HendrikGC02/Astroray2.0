@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 
 #include "device/cpu/cpu_device.h"
 #include "film/resolve.h"
@@ -33,7 +34,7 @@ struct StatsRig {
   std::unique_ptr<Film> film;
   ar::KernelGlobals kg{};
 
-  StatsRig(uint32_t w, uint32_t h, uint32_t k, bool aov = false) : pool(ctx, 1), dev(ledger, pool) {
+  StatsRig(uint32_t w, uint32_t h, uint32_t k, bool aov = false, bool term = false) : pool(ctx, 1), dev(ledger, pool) {
     response.display_first = 0;
     response.photon_scale = 1e-9 / (6.62607015e-34 * 299792458.0);
     response.y_w = 1.0;
@@ -54,6 +55,7 @@ struct StatsRig {
     req.slot_capacity = w * h * k;
     req.statistics = true;
     req.primary_aov = aov;
+    req.termination_stats = term;
     film = std::make_unique<Film>(dev, FilmLayout::build(req), Owner{1, 1});
     ar::FilmData& d = film->data();
     d.response = response_view(response);
@@ -161,10 +163,96 @@ TEST_CASE("film_stats/material id keeps sample 0") {
     rig.add(0, s, 1.0f);
   }
   rig.resolve();
-  CHECK(f.add[uint64_t(f.aov_material) * f.plane_stride] == 10.0f);
-  CHECK(f.add[uint64_t(f.aov_position) * f.plane_stride] == 1.0f);
-  // Normal accumulates over the 4 samples; the mean is the value.
-  CHECK(f.add[uint64_t(f.aov_normal + 2) * f.plane_stride] / float(f.n[0]) == doctest::Approx(1.0));
+  // The readback keeps sample 0 for the id and position and averages the normal over n = 4.
+  const FilmLayout& l = rig.film->layout();
+  CHECK(l.find("aov_material")->sample0);
+  CHECK(l.find("aov_position")->sample0);
+  CHECK(!l.find("aov_normal")->sample0);
+  CHECK(film_add_channel_value(l, f, "aov_material", 0, 0) == 10.0);
+  CHECK(film_add_channel_value(l, f, "aov_position", 2, 0) == 3.0);
+  CHECK(f.add[uint64_t(f.aov_normal + 2) * f.plane_stride] == 4.0f);  // raw sum
+  CHECK(film_add_channel_value(l, f, "aov_normal", 2, 0) == doctest::Approx(1.0));
+  CHECK_THROWS_AS(film_add_channel_value(l, f, "bounce_max", 0, 0), std::invalid_argument);
+}
+
+TEST_CASE("film_stats/bounce mean divides by paths ended") {
+  StatsRig rig(1, 1, 3);
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const uint32_t bounces[3] = {1, 4, 2};
+  const float vals[3] = {1.0f, nan, 1.0f};
+  for (uint32_t m = 0; m < 3; ++m) {
+    rig.add(0, m, vals[m]);
+    ar::film_path_end_stats(rig.kg, m, bounces[m], ar::Term::ESCAPED);
+  }
+  rig.resolve();
+  CHECK(rig.data().n[0] == 2u);
+  CHECK(film_bounce_mean(rig.data(), 0) == doctest::Approx(7.0 / 3.0));  // three paths ended, one rejected
+}
+
+TEST_CASE("film_stats/termination histogram") {
+  StatsRig rig(1, 1, 4, false, true);
+  const ar::Term terms[4] = {ar::Term::ESCAPED, ar::Term::ESCAPED, ar::Term::MAX_BOUNCE, ar::Term::CANCELLED};
+  for (uint32_t m = 0; m < 4; ++m) ar::film_path_end_stats(rig.kg, m, 1, terms[m]);
+  const ar::FilmData& f = rig.data();
+  const auto at = [&](ar::Term t) { return f.count[uint64_t(uint32_t(f.term_hist) + uint32_t(t)) * f.plane_stride]; };
+  CHECK(at(ar::Term::ESCAPED) == 2u);
+  CHECK(at(ar::Term::MAX_BOUNCE) == 1u);
+  CHECK(at(ar::Term::CANCELLED) == 1u);
+  CHECK(at(ar::Term::ACTIVE) == 0u);
+}
+
+TEST_CASE("film_stats/rel error is the max over channels") {
+  StatsRig rig(1, 1, 4);
+  ar::FilmData& f = rig.data();
+  f.n[0] = 4;
+  const auto set = [&](uint32_t c, double s1, double s2) {
+    f.s1[uint64_t(c) * f.plane_stride] = s1;
+    f.s2[uint64_t(c) * f.plane_stride] = s2;
+  };
+  // Samples {1,1,1,3}: mean 1.5, variance of the mean (12 - 36 / 4) / 12 = 0.25, rel 0.5 / 1.5.
+  // Samples {1,1,1,1}: zero. Samples {1,2,3,4}: sqrt(5/12) / 2.5, smaller than the first.
+  set(0, 6.0, 12.0);
+  set(1, 4.0, 4.0);
+  set(2, 10.0, 30.0);
+  CHECK(film_rel_error(f, 0) == doctest::Approx(0.5 / 1.5).epsilon(1e-9));
+}
+
+TEST_CASE("film_stats/rel error floors the mean at 1e-6") {
+  StatsRig rig(1, 1, 4);
+  ar::FilmData& f = rig.data();
+  f.n[0] = 4;
+  const auto set = [&](uint32_t c, double s1, double s2) {
+    f.s1[uint64_t(c) * f.plane_stride] = s1;
+    f.s2[uint64_t(c) * f.plane_stride] = s2;
+  };
+  // Samples {-1,1,-1,1}: mean 0, variance of the mean 4 / (4 * 3) = 1/3, divided by the floor.
+  set(0, 4.0, 4.0);
+  set(1, 0.0, 4.0);
+  set(2, 4.0, 4.0);
+  CHECK(film_rel_error(f, 0) == doctest::Approx(std::sqrt(1.0 / 3.0) / 1e-6).epsilon(1e-9));
+}
+
+TEST_CASE("film_stats/delta reporting keeps one cumulative entry") {
+  StatsRig rig(1, 1, 5);
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  Report report;
+  InvalidSampleReporter reporter;
+  for (int pass = 0; pass < 2; ++pass) {
+    for (uint32_t m = 0; m < 5; ++m) rig.add(0, m, m < (pass == 0 ? 3u : 2u) ? nan : 1.0f);
+    rig.resolve();
+    reporter.report(rig.data(), report, 1 + pass);
+  }
+  report.snapshot();
+  ar_report_info info{};
+  REQUIRE(report.info(&info) == AR_OK);
+  REQUIRE(info.entry_count == 1u);
+  ar_report_entry e{};
+  REQUIRE(report.entry(0, &e) == AR_OK);
+  CHECK(e.count == 5u);
+
+  // A clear without on_film_reset is a pairing bug and must not pass silently.
+  rig.film->clear();
+  CHECK_THROWS_AS(reporter.report(rig.data(), report, 3), std::logic_error);
 }
 
 }  // TEST_SUITE

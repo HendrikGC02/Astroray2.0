@@ -1,7 +1,7 @@
 # 049 Statistics channels and deterministic AOV channels
 Goal: the film has only colour -> sample count, bounce count (mean and max), invalid count and relative error exist as 0008 defines them, the deterministic primary-hit AOVs (position, normal, material id, UV) needed by the agreement ladder exist, and invalid samples reach the report.
 Read first: 0008 d10 (primary-hit AOVs, `AOV_WRITTEN`), d12 (statistics table, reset rule, defaults), d6 (invalid samples), 0003 d21 (`AOV_WRITTEN` bit), 0004 D28 (path-end statistics); 0001 D2.11 (`INVALID_SAMPLE`).
-Scope: src/kernel/film/film_write.h (stat and AOV helpers), src/host/film/film_layout.{h,cpp}, src/kernel/film/resolve.h (rel error, invalid counter), src/host/film/film_stats.{h,cpp}, tests/cpu/test_film_stats.cpp.
+Scope: src/kernel/film/film_write.h (stat and AOV helpers), src/host/film/film_layout.{h,cpp}, src/kernel/film/resolve.h (rel error, invalid counter), src/host/film/film_stats.{h,cpp}, tests/cpu/test_film_stats.cpp, tests/cpu/test_film_resolve.cpp, src/kernel/sample/keys.h (relative includes only)
 Out of scope: writing them from shading stages (071 and 073 call these helpers); heat-map display (051); Blender passes beyond Combined (M1b, M8).
 Reference: Cycles `intern/cycles/kernel/film/data_passes.h` (Apache-2.0): read which data passes accumulate and which keep only sample 0, and quote the rule in a code comment.
 Do:

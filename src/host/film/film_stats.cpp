@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 
 namespace astroray::host {
 
@@ -22,8 +23,20 @@ double film_rel_error(const ar::FilmData& f, uint32_t pixel) {
 }
 
 double film_bounce_mean(const ar::FilmData& f, uint32_t pixel) {
-  if (f.bounce_sum < 0 || f.n[pixel] == 0) return std::numeric_limits<double>::quiet_NaN();
-  return double(f.add[uint64_t(f.bounce_sum) * f.plane_stride + pixel]) / double(f.n[pixel]);
+  if (f.bounce_sum < 0 || f.bounce_paths < 0) return std::numeric_limits<double>::quiet_NaN();
+  const uint32_t paths = f.count[uint64_t(f.bounce_paths) * f.plane_stride + pixel];
+  if (paths == 0) return std::numeric_limits<double>::quiet_NaN();
+  return double(f.add[uint64_t(f.bounce_sum) * f.plane_stride + pixel]) / double(paths);
+}
+
+double film_add_channel_value(const FilmLayout& layout, const ar::FilmData& f, const std::string& name,
+                              uint32_t component, uint32_t pixel) {
+  const FilmChannel* c = layout.find(name);
+  if (c == nullptr || c->kind != ChannelKind::Add || component >= c->components)
+    throw std::invalid_argument("film: '" + name + "' is not an ADD channel with that component");
+  const double v = f.add[uint64_t(uint32_t(c->offset) + component) * f.plane_stride + pixel];
+  if (c->sample0) return v;
+  return f.n[pixel] == 0 ? std::numeric_limits<double>::quiet_NaN() : v / double(f.n[pixel]);
 }
 
 uint64_t film_invalid_total(const ar::FilmData& f) {
@@ -35,7 +48,10 @@ uint64_t film_invalid_total(const ar::FilmData& f) {
 
 void InvalidSampleReporter::report(const ar::FilmData& f, Report& report, uint64_t generation) {
   const uint64_t total = film_invalid_total(f);
-  if (total <= reported_) return;
+  if (total < reported_)
+    throw std::logic_error("film: invalid-sample total fell below the reported count; the film was cleared "
+                           "without InvalidSampleReporter::on_film_reset");
+  if (total == reported_) return;
   const double value[2] = {0, 0};
   report.raise(AR_REPORT_INVALID_SAMPLE, 0, "", total - reported_, value, generation);
   reported_ = total;

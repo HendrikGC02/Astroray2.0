@@ -159,7 +159,7 @@ TEST_CASE("film_resolve/layout allocates only requested channels") {
   CHECK(l.offset("hist") == 0);
   CHECK(l.offset("splat") == 0);
   CHECK(l.moment_planes() == 4u);
-  CHECK(l.count_planes() == 2u);
+  CHECK(l.count_planes() == 4u);  // hist (2) plus the statistics bounce_max and bounce_paths
   // A requested channel costs memory; an unrequested one costs none.
   CHECK(l.bytes() > base.bytes());
 
