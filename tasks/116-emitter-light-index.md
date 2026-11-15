@@ -17,3 +17,6 @@ Depends on: 067, 068, 102.
 Size: S (about 200 lines); stop and report at 2x.
 Progress:
 - Started: map derived in build_light_table from the final records (one pass, index = record position).
+- One uint32 table LIGHT_INDEX: [N, per-instance slice offset or kNoLight, slices {C, light per triangle}]; KernelGlobals light_index/light_index_words appended last.
+- light_of_hit: kNoLight for non-emitters and lamp instances; kLightIndexInvalid (~0u-1, AR_ASSERT in debug) for an instance or triangle outside the scene (checked against SceneData).
+- Duplicate (instance, triangle) records throw in build_light_table. Canary: swapped entries + short LIGHT_INDEX upload; CPU red verified via check fast.
