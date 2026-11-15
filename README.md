@@ -10,10 +10,9 @@ specification, not against another renderer.
 
 ## Status
 
-**Pre-alpha. The planning phase is complete; the build phase has not started.**
-There is no engine code, no installable extension and no release. What exists
-is research, design records, a roadmap and two throwaway measurement spikes.
-Nothing described in `docs/` is implemented yet.
+**Pre-alpha, build phase.** There is no installable extension and no release
+yet. Work proceeds milestone by milestone (`docs/ROADMAP.md`); the current state
+is in `docs/STATUS.md`.
 
 ## Licence
 
@@ -31,6 +30,7 @@ Each source file carries its own SPDX header. The split is stated in
 - `docs/ROADMAP.md`: the milestones and what each one delivers.
 - `docs/research/`: the research behind the decisions, with sources.
 - `docs/v1-lessons/`: lessons carried over from the first Astroray.
-- `spikes/`: throwaway measurement code and results (`RESULTS.md` in each).
+- `docs/spikes/`: results of the throwaway measurement spikes (code at tag
+  `spikes-final`).
 - `docs/STATUS.md`: the current state on one page. `tasks/`: open work.
 - `CLAUDE.md`: rules for AI agents that work on the repository.
