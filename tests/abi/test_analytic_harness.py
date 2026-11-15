@@ -125,8 +125,8 @@ class TestHarness(unittest.TestCase):
         self.assertTrue((truth[0, :] == lw).all())
         self.assertTrue(0 < excluded.sum() < (truth == rho_lw).sum())
         np.testing.assert_array_equal(excluded, excluded[::-1, ::-1])
-        # The exact truth passes; the sphere at twice rho Lw fails.
-        mean = np.where(excluded, 0.0, truth)[None].repeat(3, 0)
+        # The exact truth passes whatever the excluded pixels hold; the sphere at twice rho Lw fails.
+        mean = np.where(excluded, 0.6, truth)[None].repeat(3, 0)
         var = np.full((3, N, N), 1e-6)
         self.assertTrue(all(r[1] for r in harness.check_scene(mean, var, checks, 256, 0.0)))
         bad = np.where(truth == rho_lw, 2 * rho_lw, mean[0])[None].repeat(3, 0)

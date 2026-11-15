@@ -19,9 +19,15 @@ sphere_radius = 1.0
 camera_distance = 4.0
 focal_mm = 50.0
 sensor_mm = 36.0
-# The builder's mesh: meshes.uv_sphere(sphere_radius, segments, rings).
-segments = 64
-rings = 32
+# The builder's mesh: meshes.uv_sphere(sphere_radius, segments, rings). Its smooth normals are the
+# sphere's own, tilted from each facet's geometric normal; shade_surface rejects a reflected sample
+# below the geometric surface (0005 item 8), so a small fraction of the cosine lobe is lost and the
+# sphere reads low by that fraction (a tessellation systematic, not an estimator error). Measured
+# from the dump's bounce plane at 8192 spp: 3.65e-4 of sphere samples at 64 x 32 (sphere G 3.8e-4
+# low, aggregate z about -10), 4.06e-5 at 192 x 96 (aggregate z within +-2.4). The truth stays exact
+# and eps_sys 0; the mesh is fine enough that the loss is far below the per-pixel threshold.
+segments = 192
+rings = 96
 
 [tolerance]
 kind = "z_se"

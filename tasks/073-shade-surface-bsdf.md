@@ -19,5 +19,5 @@ Size: M (about 350 lines); stop and report at 2x.
 Progress:
 - 073 implementer: stopped before code; out-of-Scope files and the vacuous A1 RR-off variant reported to the lead.
 - 073: continuation, roulette (0004 D2, pbrt depth), min_bounces plumbed, material count at each latch; A1 in gate on CPU and CUDA (worst z -3.80 both).
-- 073: A1 sphere pixels read 3.8e-4 low at 8192 spp (aggregate z about -10); the measured 3.65e-4 of sphere samples rejected below Ng (smooth uv_sphere normals) accounts for it. Lead to rule.
+- 073: A1 sphere pixels read 3.8e-4 low at 8192 spp (aggregate z about -10); the measured 3.65e-4 of sphere samples rejected below Ng (smooth uv_sphere normals) accounts for it. Lead: tessellation systematic; mesh refined to 192 x 96, rejected 4.06e-5, sphere aggregate z within +-2.4 at 8192 spp.
 - 073: k_shade_surface regs 80 -> 127 (cap 128), stack 264 -> 384 (VM limit 512), spills 0; compile 2.97 s of B-05's 3.0 s.
