@@ -189,7 +189,9 @@ class TestMesh(unittest.TestCase):
         tris = lay.C - 2 * lay.F
         print(f"mesh read {tris} triangles: {best:.1f} ms (spike B 65 ms, bound 130 ms)")
         self.assertGreater(tris, 900_000)
-        self.assertLess(best, 130.0)
+        # 0009: budgets are measured on the reference machine, not on hosted runners.
+        if os.environ.get("CI") != "true":
+            self.assertLess(best, 130.0)
 
 
 def _timed(fn):
