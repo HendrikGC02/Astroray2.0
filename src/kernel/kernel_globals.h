@@ -22,6 +22,12 @@
 
 AR_NS_BEGIN
 
+// SessionUniforms::test_hooks bits. Set only by the host from a named test environment variable
+// (101 reads ASTRORAY_TEST_PIXEL_CENTRE for 0007 V18); a hook changes sampling, never physics.
+// PIXEL_CENTRE: generate_camera takes the filter offset as 0, so every camera ray goes through its
+// pixel centre.
+inline constexpr uint32_t TEST_HOOK_PIXEL_CENTRE = 1u << 0;
+
 // Constant for a whole pass. max_bounces uses the order of PathStateSoA::bounces:
 // total, diffuse, glossy, transmission, volume, transparent.
 struct SessionUniforms {
@@ -31,6 +37,7 @@ struct SessionUniforms {
   uint32_t samples_per_pass;   // k: samples per active pixel in this pass (camera_key)
   uint32_t pass_index;         // the light key's index
   uint32_t seed;
+  uint32_t test_hooks;         // TEST_HOOK_* bits; 0 in every production session
   uint32_t sampler_mode;       // SAMPLER_SOBOL or SAMPLER_INDEPENDENT (sample/sobol.h)
   uint32_t max_bounces[6];
   StateFeatures features;
@@ -42,6 +49,8 @@ struct FilmData;
 struct WavelengthTable;
 struct Rgb2SpecTables;
 struct DisplayTarget;
+struct CameraView;   // camera/camera.h
+struct FilterTable;  // film/filter.h
 
 struct KernelGlobals {
   const PathStateSoA* path;
@@ -50,7 +59,9 @@ struct KernelGlobals {
   const StepTable* step_table;
   const uint32_t* main_queue;    // pool-local indices, partitioned by next_stage
   const uint32_t* shadow_queue;
-  const uint32_t* active_pixels; // the pass's active-pixel list (camera_key)
+  // The pass's active-pixel list (camera_key). Written only by film_build_active at pass start, read
+  // by every other stage until the pass drains (0008 d3); non-const for that one writer.
+  uint32_t* active_pixels;
 
   SessionUniforms session;
 
@@ -72,6 +83,11 @@ struct KernelGlobals {
   // film_present and film_heatmap: where they write (film/present.h). Last member so the offsets
   // the CUDA device reads stay put.
   DisplayTarget* display;
+
+  // generate_camera reads the camera and the pixel-filter table (host/scene/camera.h,
+  // host/film/filter_table.h). Last members so the offsets the CUDA device reads stay put.
+  const CameraView* camera;
+  const FilterTable* filter;
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is
