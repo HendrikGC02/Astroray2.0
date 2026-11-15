@@ -18,6 +18,7 @@ Size: S (about 150 lines); stop and report at 2x.
 Progress:
 - Session::sync_film (session.cpp) builds the film from scene_.settings() in allocate() and at every epoch start; rebuilds only when the channel list changes, re-runs upload_session_tables, publishes layout_ under mutex_.
 - Pass names are matched against list_passes of a film with every producible channel, so readback.cpp's table stays the one mapping (readback.cpp untouched).
-- Unknown names: AR_REPORT_INPUT_IGNORED (subject 0, detail "pass '<name>' is not produced by this build"), once per settings object; the render continues.
+- Unknown names: AR_REPORT_PASS_UNSUPPORTED 44 (ruling 74; astroray.h, report_codes.def), subject 0, detail = the name, once per settings object; the render continues.
+- ar_session_read_pass takes the pass list from the film's layout inside read_film (pass_info reads one layout copy and needs no film). tests/abi/test_session_passes.py goes through the C API; the canary turns it red too.
 - Session::layout() now returns a copy under mutex_ (the film can be rebuilt on the render thread); session_api.cpp compiles unchanged.
 - Test reads list_passes(Session::layout()) as ar_session_pass_count does (the CPU test exe does not link session_api.cpp). Canary red: 5 checks in case 1, 1 in case 2.
