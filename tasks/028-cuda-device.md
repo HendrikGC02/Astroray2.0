@@ -17,3 +17,7 @@ Budget: first GPU test run; report its time (counts toward B-09's kernel part).
 Depends on: 026, 027.
 Size: M (about 450 lines); stop and report at 2x.
 Progress:
+- CudaDevice, module_loader and astroray_tests_gpu built; `--tier=gate`: 5 cases pass, `compared=1000000 differences=0`, 0.4 s.
+- Test-only hooks sit on `ModuleDevice` in src/host/device.h (lint `seam` forbids tests including a cuda path); `make_cuda_device`, `cuda_result_is_sticky`, `cuda_latent_error` are declared there too.
+- Latent-error check is a doctest listener: it fails the run naming the case, not the case itself (doctest cannot fail a case from test_case_end).
+- Canary tasks/028.canary.patch turns all five cases red (applied, rebuilt, run, reverted).
