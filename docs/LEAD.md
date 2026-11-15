@@ -43,3 +43,26 @@ alone; rerun once before investigating.
 ## Never
 `git stash`, force push, opening the Astroray 1.0 repository, calling cmake/ninja/nvcc/blender
 directly, or personal names, emails and paths in commits, PRs or external requests.
+
+## Handover (2026-11-16, lead session paused by the owner)
+State for the next lead. Agent ids do not carry across sessions; a task still open goes to a new
+implementer on its existing branch and worktree, briefed from this section and its task file.
+- Landed this stretch: 116 (#63), 117 (#64), 082 (#65), 074 (#66). Nothing is in flight. Rulings 72-75 added (72 is an owner decision).
+- Open M1a tasks (26, `ls tasks`): 075 076 077 078 083 084 085 086 087 089 090 091-097 099 100 106 107
+  108 109 110 111. Critical renderer chain: 075 (Opus) -> 106 -> 076; Blender chain: 083 -> 084 ...
+- Ready now: exactly 075, 078 and 083 (checked against Depends on). 075 (Opus) first: area lamps are
+  too dark by p_l/(p_l+p_b) until it lands, because BSDF rays cannot hit them yet; 078 (Opus); 083 (Sonnet). At most two implementers at once.
+- Follow-ups not yet in a task file: 074's program-emission NEE test is position-independent
+  (swapped barycentrics or vertex order would pass); lamp temperature is Cycles' RGB fold, the
+  AR_SPECTRUM_BLACKBODY option is open; PASS_UNSUPPORTED entries persist for a session's life.
+- shade_surface compiles in about 4.6 s of R72's 5.0 s; k_shade_background is 62 regs (accepted).
+- After M1a (task 100): the owner agreed to a Fable planning session for M1b, an Opus review of
+  that plan, and a fresh coordinator session.
+- Landing notes learned the hard way: a Canary line names C++ cases after the executable
+  (`astroray_tests_cpu "suite/case"`) and Python cases after the file; land.ps1 cleanup fails with
+  "Permission denied" if any shell's cwd is inside the worktree (remove the directory afterwards);
+  a lead commit on local main rides into a landing's squash only if the task branch was rebased on
+  it; after each merge, `git rebase origin/main` on main (never reset away a local-only commit) and
+  push main when it still carries lead commits.
+- Stale worktree directories with no git registration: .claude/worktrees/agent-a3a823bde1b1e2a0c,
+  agent-a61c36ff96e523f48, agent-a631435169fa2c847 (safe to delete after a look).
