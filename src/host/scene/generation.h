@@ -23,6 +23,8 @@
 
 namespace astroray::host {
 
+struct InstanceSummary;  // instances.h
+
 // A queue of jobs run by threads started through start_engine_thread. The destructor
 // runs every queued job, then joins.
 class WorkerPool {
@@ -58,6 +60,10 @@ struct Pending {
   std::vector<uint64_t> subjects;
   // Key-set changes of this generation as (kind, key) pairs, applied in order by the
   // scene's known-key set (optimistically at commit, rebuilt when an earlier one drops).
+  // The instance table's effect on the latest-committed summary: cleared by a reset, then
+  // replaced when the generation sets instances (patches leave the summary unchanged).
+  bool inst_reset = false;
+  std::shared_ptr<const InstanceSummary> inst_set;
   bool known_reset = false;
   std::set<std::pair<uint32_t, uint64_t>> known_removed, known_added;
   // Run under the tracker lock, so they must not call back into it.

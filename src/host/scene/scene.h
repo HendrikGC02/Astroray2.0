@@ -21,6 +21,7 @@
 #include "host/report.h"
 #include "host/scene/arena.h"
 #include "host/scene/generation.h"
+#include "host/scene/instances.h"
 
 struct ar_context_s;
 
@@ -82,6 +83,14 @@ class Scene {
   std::shared_ptr<const StoredCamera> camera() const;
   bool astro(ar_key key, ar_astro_desc* out) const;
   bool known(uint32_t kind, ar_key key) const;
+  // The active generation's instances (null before the first set_instances), and a counter
+  // that moves whenever they change, which tells the device tasks the TLAS is dirty.
+  std::shared_ptr<const InstanceTable> instances() const;
+  uint64_t tlas_epoch() const;
+  // The instance summary as of the latest committed generation, pending ones included
+  // (optimistic like `known`, rebuilt when a generation is dropped).
+  std::shared_ptr<const InstanceSummary> latest_instances() const;
+  void publish_instances(std::shared_ptr<const InstanceTable> table);
 
  private:
   friend class Edit;
@@ -94,6 +103,9 @@ class Scene {
     std::shared_ptr<const StoredSettings> settings;
     std::shared_ptr<const StoredCamera> camera;
     std::map<uint64_t, ar_astro_desc> astro;  // stored, no effect until M10
+    std::shared_ptr<const InstanceTable> instances;
+    uint64_t tlas_epoch = 0;
+    std::shared_ptr<const InstanceSummary> inst_latest, inst_active;
   };
   void close_edit();
 
