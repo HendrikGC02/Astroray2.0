@@ -19,3 +19,7 @@ Budget: none.
 Depends on: 019, 021.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
+- 025: .def tables (31 path rows, 15 shadow rows), state.h (SoA, descriptor tables, byte functions, 256/128 budget static_asserts), Term, Stage, ShadeKind, KernelGlobals, state_alloc, test_state_layout (7 cases). Totals 157/225/124 printed.
+- Deviation: src/kernel/core/spectrum.h and vec.h include lines made relative (real.h, ../portability.h) so the host library can include state.h without src/kernel on its include path (as filter.h already does).
+- ps_/sh_ accessors live in kernel_globals.h (they need KernelGlobals); state.h holds the SoA and sizes. Exact 157/225/124 are runtime CHECKs; only the <= budget static_asserts are compile-time, so the canary turns test cases red, not the build.
+- Record silent on: StepEntry/StepTable layout, SessionUniforms members, SceneData members, ps_ accessor names, prev_ns/light_index shared name (prev_ns), max_bounces order (taken from d19 row 6). Canary: tasks/025.canary.patch (hit_uv Real2 -> Real, shadow target u32 -> u8).

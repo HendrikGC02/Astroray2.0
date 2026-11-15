@@ -1,0 +1,26 @@
+diff --git a/src/kernel/state/path_state.def b/src/kernel/state/path_state.def
+index 8bd6785..4ed8617 100644
+--- a/src/kernel/state/path_state.def
++++ b/src/kernel/state/path_state.def
+@@ -31,7 +31,7 @@ AR_PATH_FIELD(prev_dist, Real, ALWAYS)        // 4
+ AR_PATH_FIELD(hit_t, Real, ALWAYS)            // 4
+ AR_PATH_FIELD(hit_prim, uint32_t, ALWAYS)     // 4
+ AR_PATH_FIELD(hit_inst, uint32_t, ALWAYS)     // 4
+-AR_PATH_FIELD(hit_uv, Real2, ALWAYS)          // 8
++AR_PATH_FIELD(hit_uv, Real, ALWAYS)          // 8
+ AR_PATH_FIELD(ray_time, Real, MOTION)                  // 4
+ AR_PATH_FIELD(ray_tmax, Real, CURVED_OR_SUBSURFACE)    // 4
+ AR_PATH_FIELD(medium_stack, U32x4, MEDIA)              // 16
+diff --git a/src/kernel/state/shadow_item.def b/src/kernel/state/shadow_item.def
+index dfd7250..b5671f8 100644
+--- a/src/kernel/state/shadow_item.def
++++ b/src/kernel/state/shadow_item.def
+@@ -17,7 +17,7 @@ AR_SHADOW_FIELD(ray_d, Real3, ALWAYS)                     // 12
+ AR_SHADOW_FIELD(tmax, Real, ALWAYS)                       // 4
+ AR_SHADOW_FIELD(time, Real, MOTION)                       // 4
+ AR_SHADOW_FIELD(contribution, Spec, ALWAYS)               // 16
+-AR_SHADOW_FIELD(target, uint32_t, ALWAYS)                 // 4
++AR_SHADOW_FIELD(target, uint8_t, ALWAYS)                  // 4
+ AR_SHADOW_FIELD(item_flags, uint8_t, LIGHTPASS_OR_MEDIA)  // 1
+ AR_SHADOW_FIELD(transparent_left, uint8_t, NON_OPAQUE)    // 1
+ AR_SHADOW_FIELD(light_group, uint8_t, LIGHT_GROUPS)       // 1
