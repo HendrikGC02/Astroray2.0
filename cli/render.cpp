@@ -1,0 +1,234 @@
+// SPDX-License-Identifier: Apache-2.0
+// astroray_cli render and dump: replay a recording through the public ABI, render every session
+// to its sample count, write the film as FITS, print the final report, fail on ERROR entries.
+// Ref: 0001 D1.4 (recordings), D2.10 (a replay renders each session to its sample count),
+// D2.11 (the CLI prints the report; non-zero exit on ERROR), R38, R59 (no scene readback).
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <thread>
+
+#include "cli.h"
+
+namespace cli {
+
+const char* status_name(ar_status s) {
+  switch (s) {
+    case AR_OK: return "AR_OK";
+    case AR_ERR_INVALID_ARGUMENT: return "AR_ERR_INVALID_ARGUMENT";
+    case AR_ERR_UNSUPPORTED: return "AR_ERR_UNSUPPORTED";
+    case AR_ERR_DEVICE: return "AR_ERR_DEVICE";
+    case AR_ERR_OUT_OF_MEMORY: return "AR_ERR_OUT_OF_MEMORY";
+    case AR_ERR_ABI_MISMATCH: return "AR_ERR_ABI_MISMATCH";
+    default: return "AR_ERR_INTERNAL";
+  }
+}
+
+std::string text(const uint8_t* p, size_t cap) {
+  size_t n = 0;
+  while (n < cap && p[n]) ++n;
+  return std::string(reinterpret_cast<const char*>(p), n);
+}
+
+namespace {
+
+bool parse_u32(const char* s, uint32_t* out) {
+  char* end = nullptr;
+  const unsigned long long v = strtoull(s, &end, 10);
+  if (!*s || *end || v >= kReplayUnset) return false;
+  *out = static_cast<uint32_t>(v);
+  return true;
+}
+
+const char* level_name(uint32_t l) {
+  return l == AR_LEVEL_ERROR ? "ERROR" : l == AR_LEVEL_WARNING ? "WARNING" : "INFO";
+}
+
+}  // namespace
+
+int parse_run_args(const char* cmd, int argc, char** argv, bool needs_out, bool is_bench, RunArgs& a) {
+  auto usage = [&](const char* why, const char* arg) {
+    fprintf(stderr, "%s: %s '%s'\n", cmd, why, arg);
+    fprintf(stderr, is_bench ? "usage: astroray_cli bench <recording> [--passes N] [--warmup W] [--spp N] "
+                               "[--device cpu|cuda[:i]] [--seed S] [--size WxH]\n"
+                             : "usage: astroray_cli %s <recording> -o <file.fits> [--spp N] [--device cpu|cuda[:i]] "
+                               "[--seed S] [--size WxH]\n",
+            cmd);
+    return kExitUsage;
+  };
+  for (int i = 2; i < argc; ++i) {
+    const char* k = argv[i];
+    const bool has_val = i + 1 < argc;
+    if (!strcmp(k, "-o") && needs_out && has_val) {
+      a.out = argv[++i];
+    } else if (!strcmp(k, "--spp") && has_val) {
+      if (!parse_u32(argv[++i], &a.overrides.samples) || a.overrides.samples == 0) return usage("bad sample count", argv[i]);
+    } else if (!strcmp(k, "--seed") && has_val) {
+      if (!parse_u32(argv[++i], &a.overrides.seed)) return usage("bad seed", argv[i]);
+    } else if (!strcmp(k, "--size") && has_val) {
+      const char* v = argv[++i];
+      const char* x = strchr(v, 'x');
+      const std::string w = x ? std::string(v, x) : std::string();
+      if (!x || !parse_u32(w.c_str(), &a.overrides.width) || !parse_u32(x + 1, &a.overrides.height) ||
+          a.overrides.width == 0 || a.overrides.height == 0)
+        return usage("expected WxH, got", v);
+    } else if (!strcmp(k, "--device") && has_val) {
+      const char* v = argv[++i];
+      if (!strcmp(v, "cpu")) {
+        a.overrides.device_kind = AR_DEVICE_CPU;
+        a.overrides.device_index = 0;
+      } else if (!strncmp(v, "cuda", 4) && (v[4] == 0 || v[4] == ':')) {
+        a.overrides.device_kind = AR_DEVICE_CUDA;
+        a.overrides.device_index = 0;
+        if (v[4] == ':' && !parse_u32(v + 5, &a.overrides.device_index)) return usage("bad device", v);
+      } else {
+        return usage("expected cpu or cuda[:i], got", v);
+      }
+    } else if (is_bench && !strcmp(k, "--passes") && has_val) {
+      if (!parse_u32(argv[++i], &a.passes) || a.passes == 0) return usage("bad pass count", argv[i]);
+    } else if (is_bench && !strcmp(k, "--warmup") && has_val) {
+      if (!parse_u32(argv[++i], &a.warmup)) return usage("bad warmup", argv[i]);
+    } else if (k[0] != '-' && a.recording.empty()) {
+      a.recording = k;
+    } else {
+      return usage("unknown or incomplete argument", k);
+    }
+  }
+  if (a.recording.empty()) return usage("missing recording", "");
+  if (needs_out && a.out.empty()) return usage("missing -o", "");
+  return kContinue;
+}
+
+Replayed::~Replayed() {
+  // Sessions first, then scenes, then the context: the replay ran with keep_alive.
+  for (ar_session s : res.sessions) {
+    ar_session_close(s);
+    ar_session_destroy(s);
+  }
+  for (ar_scene s : res.scenes) ar_scene_destroy(s);
+  if (res.context) ar_context_destroy(res.context);
+}
+
+int Replayed::open(const RunArgs& a) {
+  ArReplayOptions opt = a.overrides;
+  opt.log_path = "astroray_cli.log";  // the ABI requires a log path; it lands in the working directory
+  opt.keep_alive = true;
+  const ar_status st = ar_replay_file(a.recording.c_str(), opt, &res);
+  if (st == AR_ERR_ABI_MISMATCH) {
+    printf("ABI mismatch: %s\n", res.message.c_str());
+    return kExitAbi;
+  }
+  if (st != AR_OK) {
+    printf("replay failed: %s: %s (after %llu calls)\n", status_name(st), res.message.c_str(),
+           static_cast<unsigned long long>(res.calls));
+    return kExitFailure;
+  }
+  if (!res.matched) {
+    printf("replay differs from the recording in %llu calls: %s\n", static_cast<unsigned long long>(res.mismatches),
+           res.message.c_str());
+    return kExitFailure;
+  }
+  if (res.sessions.empty()) {
+    printf("the recording creates no session: nothing to render\n");
+    return kExitFailure;
+  }
+  return kContinue;
+}
+
+int run_sessions(Replayed& r, uint32_t timeout_ms) {
+  using clock = std::chrono::steady_clock;
+  const auto end = clock::now() + std::chrono::milliseconds(timeout_ms);
+  for (size_t i = 0; i < r.res.sessions.size(); ++i) {
+    ar_session s = r.res.sessions[i];
+    ar_progress p{};
+    if (ar_session_get_progress(s, &p) != AR_OK) { printf("session %zu: progress failed\n", i); return kExitFailure; }
+    if (p.state == AR_STATE_INITIALIZING) {
+      const ar_status st = ar_session_start(s);
+      if (st != AR_OK) { printf("session %zu: start failed: %s\n", i, status_name(st)); return kExitFailure; }
+    }
+    // Converged means the sample target is reached; a generation committed late (pending ahead of
+    // active and not rejected) restarts the render, so both must hold.
+    for (;;) {
+      ar_session_wait(s, 100);
+      if (ar_session_get_progress(s, &p) != AR_OK) { printf("session %zu: progress failed\n", i); return kExitFailure; }
+      if (p.state == AR_STATE_FAILED || p.state == AR_STATE_CLOSED || p.state == AR_STATE_TRIMMED) {
+        uint8_t msg[256] = {};
+        ar_session_last_error(s, sizeof msg, msg);
+        printf("session %zu ended in state %u: %s\n", i, p.state, text(msg, sizeof msg).c_str());
+        return kExitFailure;
+      }
+      const bool settled = p.active_generation == p.pending_generation || p.failed_generation == p.pending_generation;
+      if (p.state == AR_STATE_CONVERGED && settled) break;
+      if (clock::now() > end) {
+        printf("session %zu: not converged after %u ms (state %u, %u spp)\n", i, timeout_ms, p.state,
+               p.samples_per_pixel);
+        return kExitFailure;
+      }
+      if (p.state == AR_STATE_CONVERGED) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    printf("session %zu: %u spp, generation %llu\n", i, p.samples_per_pixel,
+           static_cast<unsigned long long>(p.active_generation));
+  }
+  return kContinue;
+}
+
+int print_reports(Replayed& r) {
+  int highest = -1;
+  for (size_t i = 0; i < r.res.sessions.size(); ++i) {
+    ar_report_info info{};
+    if (ar_session_report_info(r.res.sessions[i], &info) != AR_OK) {
+      printf("session %zu: report unreadable\n", i);
+      return AR_LEVEL_ERROR;
+    }
+    printf("report session %zu: revision %llu, %u entries, %u dropped\n", i,
+           static_cast<unsigned long long>(info.revision), info.entry_count, info.dropped);
+    if (info.entry_count) printf("level code subject count detail\n");
+    for (uint32_t e = 0; e < info.entry_count; ++e) {
+      ar_report_entry en{};
+      if (ar_session_report_entry(r.res.sessions[i], e, &en) != AR_OK) {
+        printf("session %zu: report entry %u unreadable\n", i, e);
+        return AR_LEVEL_ERROR;
+      }
+      printf("%s %u %llu %llu %s\n", level_name(en.level), en.code, static_cast<unsigned long long>(en.subject),
+             static_cast<unsigned long long>(en.count), text(en.detail, sizeof en.detail).c_str());
+      if (static_cast<int>(en.level) > highest) highest = static_cast<int>(en.level);
+    }
+  }
+  return highest;
+}
+
+int render_cmd(int argc, char** argv, bool dump) {
+  const char* cmd = dump ? "dump" : "render";
+  RunArgs a;
+  if (int rc = parse_run_args(cmd, argc, argv, true, false, a); rc != kContinue) return rc;
+  Replayed r;
+  if (int rc = r.open(a); rc != kContinue) return rc;
+  if (int rc = run_sessions(r, 600000); rc != kContinue) {
+    print_reports(r);
+    return rc;
+  }
+  // The ABI has one film file kind that is implemented: the full film dump (display mean,
+  // variance and sample counts plus every other allocated channel). `render` writes it too.
+  for (size_t i = 0; i < r.res.sessions.size(); ++i) {
+    std::string path = a.out;
+    if (r.res.sessions.size() > 1) {
+      const size_t dot = path.rfind('.');
+      const std::string tag = "_" + std::to_string(i);
+      path = dot == std::string::npos ? path + tag : path.substr(0, dot) + tag + path.substr(dot);
+    }
+    const ar_status st = ar_session_write_fits(r.res.sessions[i], path.c_str(), AR_FITS_DUMP);
+    if (st != AR_OK) {
+      uint8_t msg[256] = {};
+      ar_session_last_error(r.res.sessions[i], sizeof msg, msg);
+      printf("%s: writing %s failed: %s: %s\n", cmd, path.c_str(), status_name(st), text(msg, sizeof msg).c_str());
+      print_reports(r);
+      return kExitFailure;
+    }
+    printf("wrote %s\n", path.c_str());
+  }
+  const int highest = print_reports(r);
+  return highest >= AR_LEVEL_ERROR ? kExitFailure : 0;
+}
+
+}  // namespace cli
