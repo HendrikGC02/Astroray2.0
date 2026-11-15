@@ -13,7 +13,7 @@ Do:
 6. Tests: CPU (fast): a hand-built hit on an emissive constant material adds exactly beta * Le to its slot; AOVs are written once; GPU (gate): per-stage agreement fixture of shade_surface on 10^5 synthetic hits (Le within the eval thresholds, integer fields bitwise).
 Acceptance: `pwsh tools/check.ps1 gate` passes; kernelgate prints shade_surface's registers, spills and stack under (256,2) within the VM allowances; `out/bin/astroray_cli.exe render out/scenes/a5_emitter.arrec -o out/tmp/a5.fits --spp 4 --size 32x32 --device cpu` writes an image whose mean is within noise of L (CUDA sessions cannot trace until task 115, which carries the CUDA form; 072 checks it statistically).
 Look at: none.
-Canary: tasks/071.canary.patch must turn red: astroray_tests_cpu "shade_surface/emission added once", astroray_tests_gpu "shade_surface/agreement".
+Canary: tasks/071.canary.patch must turn red: astroray_tests_cpu "shade_surface/emission added once", "shade_surface/film writes go to the sample's slot", "shade_background/writes land on the sample's film slot", astroray_tests_gpu "shade_surface/agreement".
 Budget: declares shade_surface's first spill and stack baseline (VM kernel: <= 128/192 B spills, <= 512 B stack).
 Depends on: 041, 049, 061, 070, 102, 103, 114, 029.
 Size: M (about 400 lines); stop and report at 2x.
