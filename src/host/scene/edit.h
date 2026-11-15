@@ -11,12 +11,20 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "host/scene/scene.h"
 
 namespace astroray::host {
+
+// Thrown by a job to name the report subject of its rejection (default: the item's key).
+struct ItemFailure : std::runtime_error {
+  uint64_t subject;
+  ItemFailure(uint64_t s, const std::string& what) : std::runtime_error(what), subject(s) {}
+};
 
 // What a begin call (035 and later) registers for one key. `job` validates and converts the
 // staged arrays on a worker and throws on failure (its text is the report detail).
@@ -24,6 +32,9 @@ struct EditItem {
   ar_key key = 0;
   uint32_t kind = AR_KIND_GEOMETRY;
   std::function<void()> job;
+  // Internal items only (Edit::stage_internal): called at commit with the geometry
+  // predicate of the edit's final key set, before the job is handed to a worker.
+  std::function<void(const std::function<bool(ar_key)>&)> bind;
   bool needs_device = true;         // waits for init and re-raises its failure
   std::function<void()> release;    // after the job finished: free arena blocks
   std::function<void()> on_active;  // generation became active: free replaced objects
@@ -56,14 +67,15 @@ class Edit {
 
   const std::string& last_error() const { return last_error_; }
 
-  // For the instance entry points (036): the scene, a reasoned refusal, whether a key is
-  // declared as seen by this edit (earlier generations plus its own committed items), and
-  // what this edit's set_instances established.
+  // For the instance entry points (036). An internal item is not a scene key: it never
+  // enters the staged map or the known-key set; it starts at commit, after `bind`, and
+  // its callbacks run after the generation's own state is applied.
   Scene& scene() { return scene_; }
   ar_status fail(const std::string& why) { return bad(why); }
-  bool declares(uint32_t kind, ar_key key) const;
+  ar_status stage_internal(std::shared_ptr<EditItem> item);
+  bool reset_requested() const { return reset_; }
+  std::set<uint64_t> removed_geometry() const;  // removed here and not re-staged
   struct InstanceStage {
-    uint64_t next = 0;  // reserved item key counter
     bool has_set = false;
     uint32_t count = 0, steps = 1;
   };
@@ -74,6 +86,10 @@ class Edit {
   explicit Edit(Scene& scene);
   ar_status bad(const std::string& why);
   ar_status touch();  // common precondition: not finished; counts as a call
+  void submit(const std::shared_ptr<EditItem>& item);
+  // Geometry key as it stands once this edit is applied (its own staged geometry, its
+  // removes, the scene's declared keys including earlier pipelined generations).
+  bool final_geometry(ar_key key) const;
 
   struct Staged {
     std::shared_ptr<EditItem> item;
@@ -87,6 +103,7 @@ class Edit {
   bool any_call_ = false;
   bool reset_ = false;
   std::map<ar_key, Staged> staged_;
+  std::vector<std::shared_ptr<EditItem>> internal_;
   std::set<std::pair<uint32_t, uint64_t>> removed_;
   std::shared_ptr<StoredSettings> settings_;
   std::shared_ptr<StoredCamera> camera_;

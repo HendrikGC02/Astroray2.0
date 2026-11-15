@@ -188,7 +188,7 @@ TEST_CASE("instances/rejected generation") {
     e.reset();
     scene.generations().wait_idle();
     CHECK(scene.generations().failed() == g);
-    CHECK(rejected(scene, 1002, {"instance 2", "unknown geometry key 999"}));
+    CHECK(rejected(scene, 1002, {"instance 2 (object key 1002): unknown geometry key 999"}));
     CHECK(scene.instances() == before);
   }
   {  // NaN transform
@@ -203,7 +203,7 @@ TEST_CASE("instances/rejected generation") {
     e.reset();
     scene.generations().wait_idle();
     CHECK(scene.generations().failed() == g);
-    CHECK(rejected(scene, 1001, {"instance 1", "not finite"}));
+    CHECK(rejected(scene, 1001, {"instance 1 (object key 1001): transform is not finite"}));
     CHECK(scene.instances() == before);
   }
   {  // material slice out of range, rejected at the call or on the worker
@@ -219,8 +219,96 @@ TEST_CASE("instances/rejected generation") {
     e.reset();
     scene.generations().wait_idle();
     CHECK(scene.generations().failed() == g);
+    CHECK(rejected(scene, 1001, {"instance 1 (object key 1001): material slice [1, 6) exceeds"}));
     CHECK(scene.instances() == before);
   }
+}
+
+TEST_CASE("instances/dangling geometry rejects generation") {
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  Desc good(3);
+  install(scene, good);
+  auto before = scene.instances();
+  {  // removing the geometry without new instances
+    auto e = scene.begin_edit();
+    REQUIRE(e->remove(AR_KIND_GEOMETRY, 100) == AR_OK);
+    uint64_t g = 0;
+    REQUIRE(e->commit(&g) == AR_OK);
+    e.reset();
+    scene.generations().wait_idle();
+    CHECK(scene.generations().failed() == g);
+    CHECK(rejected(scene, 1000, {"instance 0 (object key 1000): geometry key 100 is removed"}));
+    CHECK(scene.instances() == before);
+    CHECK(scene.known(AR_KIND_GEOMETRY, 100));
+  }
+  {  // removing it while new instances still use it
+    Desc d(2);
+    auto e = scene.begin_edit();
+    REQUIRE(e->remove(AR_KIND_GEOMETRY, 100) == AR_OK);
+    REQUIRE(set_instances(*e, d.get()) == AR_OK);
+    uint64_t g = 0;
+    REQUIRE(e->commit(&g) == AR_OK);
+    e.reset();
+    scene.generations().wait_idle();
+    CHECK(scene.generations().failed() == g);
+    CHECK(rejected(scene, 1000, {"instance 0 (object key 1000): unknown geometry key 100"}));
+    CHECK(scene.instances() == before);
+  }
+  {  // geometry declared after set_instances in the same edit is fine
+    Desc d(2);
+    d.geom[0] = d.geom[1] = 200;
+    auto e = scene.begin_edit();
+    REQUIRE(set_instances(*e, d.get()) == AR_OK);
+    REQUIRE(e->stage(geometry(200)) == AR_OK);
+    REQUIRE(e->item_commit(200) == AR_OK);
+    uint64_t g = 0;
+    REQUIRE(e->commit(&g) == AR_OK);
+    e.reset();
+    scene.generations().wait_idle();
+    REQUIRE(scene.instances() != before);
+    CHECK(scene.instances()->instances.size() == 2);
+  }
+}
+
+TEST_CASE("instances/reset with set_instances") {
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  Desc old_desc(5);
+  install(scene, old_desc);
+  Desc d(3);
+  d.moff[0] = 99;  // count 0 means the default material: the offset is not checked
+  d.mcount[0] = 0;
+  auto e = scene.begin_edit();
+  REQUIRE(e->reset() == AR_OK);
+  REQUIRE(e->stage(geometry(100)) == AR_OK);
+  REQUIRE(e->item_commit(100) == AR_OK);
+  REQUIRE(set_instances(*e, d.get()) == AR_OK);
+  uint64_t g = 0;
+  REQUIRE(e->commit(&g) == AR_OK);
+  e.reset();
+  scene.generations().wait_idle();
+  CHECK(scene.generations().failed() == 0);
+  auto t = scene.instances();
+  REQUIRE(t);
+  CHECK(t->instances.size() == 3);
+  CHECK(t->instances[0].material_count == 0);
+  // A reset alone empties the table; update_transforms after it needs a new set.
+  auto e2 = scene.begin_edit();
+  REQUIRE(e2->reset() == AR_OK);
+  uint32_t idx = 0;
+  ar_xform x{};
+  CHECK(update_transforms(*e2, 1, &idx, &x) == AR_ERR_INVALID_ARGUMENT);
+  CHECK(e2->abort() == AR_OK);
+}
+
+TEST_CASE("instances/internal items are not scene keys") {
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  Desc d(2);
+  install(scene, d);
+  CHECK(scene.known(AR_KIND_GEOMETRY, 100));
+  for (uint64_t k : {0ull, 0xF000000000000000ull, 0xF000000000000001ull}) CHECK_FALSE(scene.known(AR_KIND_GEOMETRY, k));
 }
 
 }  // TEST_SUITE

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "host/scene/edit.h"
 
+#include "host/scene/instances.h"
+
 #include <cmath>
 #include <exception>
 
@@ -58,41 +60,70 @@ ar_status Edit::item_commit(ar_key key) {
   if (it == staged_.end()) return bad("invalid argument: no staged item for key " + std::to_string(key));
   if (it->second.committed) return bad("invalid argument: key " + std::to_string(key) + " is already committed");
   it->second.committed = true;
-  std::shared_ptr<EditItem> item = it->second.item;
-  Scene* scene = &scene_;
-  std::shared_ptr<Pending> pending = pending_;
-  scene_.generations().job_started(*pending);
   try {
-    scene_.pool().submit([scene, pending, item] {
-    std::string fail;
-    try {
-      if (item->needs_device) scene->wait_init();  // re-raises a stored init failure
-      item->job();
-    } catch (const std::exception& e) {
-      fail = e.what()[0] ? e.what() : "job failed";
-    } catch (...) {
-      fail = "job failed: unknown exception";
-    }
-    try {
-      if (item->release) item->release();
-    } catch (...) {
-      // A throwing release must not hide the job's own outcome.
-    }
-    scene->generations().job_done(pending, item->key, fail);
-    });
+    submit(it->second.item);
   } catch (...) {
     it->second.committed = false;
-    scene_.generations().job_done(pending, key, "");  // undo job_started
     throw;
   }
   return AR_OK;
 }
 
-bool Edit::declares(uint32_t kind, ar_key key) const {
-  if (removed_.count({kind, key})) return false;
-  if (!reset_ && scene_.known(kind, key)) return true;
+bool Edit::final_geometry(ar_key key) const {
   auto it = staged_.find(key);
-  return it != staged_.end() && it->second.committed && it->second.item->kind == kind;
+  if (it != staged_.end() && it->second.committed && it->second.item->kind == AR_KIND_GEOMETRY) return true;
+  if (removed_.count({AR_KIND_GEOMETRY, key})) return false;
+  return !reset_ && scene_.known(AR_KIND_GEOMETRY, key);
+}
+
+std::set<uint64_t> Edit::removed_geometry() const {
+  std::set<uint64_t> out;
+  for (const auto& r : removed_) {
+    if (r.first != AR_KIND_GEOMETRY) continue;
+    auto it = staged_.find(r.second);
+    if (it != staged_.end() && it->second.item->kind == AR_KIND_GEOMETRY) continue;
+    out.insert(r.second);
+  }
+  return out;
+}
+
+ar_status Edit::stage_internal(std::shared_ptr<EditItem> item) {
+  if (ar_status st = touch()) return st;
+  if (!item || !item->job) return bad("invalid argument: internal item without a job");
+  internal_.push_back(std::move(item));
+  return AR_OK;
+}
+
+void Edit::submit(const std::shared_ptr<EditItem>& item) {
+  Scene* scene = &scene_;
+  std::shared_ptr<Pending> pending = pending_;
+  scene_.generations().job_started(*pending);
+  try {
+    scene_.pool().submit([scene, pending, item] {
+      std::string fail;
+      uint64_t subject = item->key;
+      try {
+        if (item->needs_device) scene->wait_init();  // re-raises a stored init failure
+        item->job();
+      } catch (const ItemFailure& e) {
+        fail = e.what()[0] ? e.what() : "job failed";
+        subject = e.subject;
+      } catch (const std::exception& e) {
+        fail = e.what()[0] ? e.what() : "job failed";
+      } catch (...) {
+        fail = "job failed: unknown exception";
+      }
+      try {
+        if (item->release) item->release();
+      } catch (...) {
+        // A throwing release must not hide the job's own outcome.
+      }
+      scene->generations().job_done(pending, subject, fail);
+    });
+  } catch (...) {
+    scene_.generations().job_done(pending, item->key, "");  // undo job_started
+    throw;
+  }
 }
 
 ar_status Edit::remove(uint32_t kind, ar_key key) {
@@ -169,6 +200,7 @@ ar_status Edit::commit(uint64_t* generation) {
   if (settings_ && settings_->s.pixel_filter > AR_FILTER_BLACKMAN_HARRIS) return bad("invalid argument: pixel_filter out of range");
   if (camera_ && camera_->c.type > AR_CAMERA_PANO) return bad("invalid argument: camera type out of range");
 
+  queue_instance_check(*this);
   Pending& p = *pending_;
   p.reset = reset_;
   Pending delta;  // just the key-set changes, copied into the activation callback
@@ -205,6 +237,13 @@ ar_status Edit::commit(uint64_t* generation) {
     if (camera) st.camera = camera;
     for (const auto& kv : astro) st.astro[kv.first] = kv.second;
   });
+  // Internal items run after the generation's own state callbacks (a reset clears first).
+  for (const auto& item : internal_) {
+    if (item->bind) item->bind([this](ar_key k) { return final_geometry(k); });
+    if (item->on_active) p.on_active.push_back(item->on_active);
+    if (item->on_dropped) p.on_dropped.push_back(item->on_dropped);
+  }
+  for (const auto& item : internal_) submit(item);
   *generation = scene_.generations().commit(pending_, [&] {
     std::lock_guard<std::mutex> lock(st.mutex);
     apply_known(st.known, p);

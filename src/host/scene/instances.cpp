@@ -3,7 +3,7 @@
 
 #include <cmath>
 #include <memory>
-#include <stdexcept>
+#include <set>
 #include <string>
 
 #include "host/scene/edit.h"
@@ -11,10 +11,6 @@
 namespace astroray::host {
 
 namespace {
-
-// Reserved item keys: an instance item has no key of its own but the edit needs one. They
-// sort in call order, which is the order the generation's activation callbacks run in.
-constexpr uint64_t kItemKeyBase = 0xF000000000000000ull;
 
 constexpr uint32_t kAllVisibility = AR_VISIBILITY_CAMERA | AR_VISIBILITY_DIFFUSE | AR_VISIBILITY_GLOSSY |
                                     AR_VISIBILITY_TRANSMISSION | AR_VISIBILITY_SHADOW | AR_VISIBILITY_VOLUME;
@@ -35,7 +31,7 @@ struct DescCopy {
       mat_count;
   std::vector<ar_rgba> colors;
   std::vector<uint8_t> light_groups;
-  std::vector<bool> geom_declared;  // per instance, decided at the call (see set_instances)
+  std::vector<bool> geom_exists;  // per instance, bound at commit against the edit's final key set
 };
 
 template <class T>
@@ -49,7 +45,12 @@ std::string at(uint32_t i, ar_key object) {
   return "instance " + std::to_string(i) + " (object key " + std::to_string(object) + "): ";
 }
 
-std::shared_ptr<InstanceTable> build(const DescCopy& d, EditItem* item, uint64_t item_key) {
+// A rejection names the instance's object key as the report subject.
+[[noreturn]] void reject(uint32_t i, ar_key object, const std::string& why) {
+  throw ItemFailure(object, at(i, object) + why);
+}
+
+std::shared_ptr<InstanceTable> build(const DescCopy& d) {
   auto t = std::make_shared<InstanceTable>();
   t->motion_steps = d.steps;
   t->instances.resize(d.n);
@@ -59,22 +60,19 @@ std::shared_ptr<InstanceTable> build(const DescCopy& d, EditItem* item, uint64_t
     Instance& in = t->instances[i];
     in.geom_key = d.geom[i];
     in.object_key = d.object[i];
-    // The report entry of a rejection names the instance's object key; the failing
-    // instance leaves it in place when it throws.
-    item->key = in.object_key;
-    const std::string where = at(i, in.object_key);
-    if (!d.geom_declared[i]) throw std::runtime_error(where + "unknown geometry key " + std::to_string(in.geom_key));
+    if (!d.geom_exists[i]) reject(i, in.object_key, "unknown geometry key " + std::to_string(in.geom_key));
     for (uint32_t s = 0; s < d.steps; ++s)
       if (!finite_xf(d.xf[size_t(i) * d.steps + s]))
-        throw std::runtime_error(where + "transform is not finite (motion step " + std::to_string(s) + ")");
-    if (d.visibility[i] & ~kAllVisibility) throw std::runtime_error(where + "visibility has bits outside AR_VISIBILITY_*");
-    if (d.flags[i] & ~kAllFlags) throw std::runtime_error(where + "flags has bits outside AR_INSTANCE_*");
+        reject(i, in.object_key, "transform is not finite (motion step " + std::to_string(s) + ")");
+    if (d.visibility[i] & ~kAllVisibility) reject(i, in.object_key, "visibility has bits outside AR_VISIBILITY_*");
+    if (d.flags[i] & ~kAllFlags) reject(i, in.object_key, "flags has bits outside AR_INSTANCE_*");
+    // A count of 0 means the default material; its offset is not looked at.
     uint64_t end = uint64_t(d.mat_offset[i]) + d.mat_count[i];
-    if (end > d.materials.size())
-      throw std::runtime_error(where + "material slice [" + std::to_string(d.mat_offset[i]) + ", " + std::to_string(end) +
-                               ") exceeds the material key table of " + std::to_string(d.materials.size()));
+    if (d.mat_count[i] != 0 && end > d.materials.size())
+      reject(i, in.object_key, "material slice [" + std::to_string(d.mat_offset[i]) + ", " + std::to_string(end) +
+                                   ") exceeds the material key table of " + std::to_string(d.materials.size()));
     for (float c : d.colors[i].v)
-      if (!std::isfinite(c)) throw std::runtime_error(where + "colour is not finite");
+      if (!std::isfinite(c)) reject(i, in.object_key, "colour is not finite");
     in.random_id = d.random_ids[i];
     in.pass_index = d.pass_indices[i];
     in.crypto_object = d.crypto_objects[i];
@@ -84,10 +82,9 @@ std::shared_ptr<InstanceTable> build(const DescCopy& d, EditItem* item, uint64_t
     in.mask = visibility_mask(in.visibility);
     in.flags = d.flags[i];
     in.light_group = d.light_groups[i];
-    in.material_offset = d.mat_offset[i];
+    in.material_offset = d.mat_count[i] ? d.mat_offset[i] : 0;
     in.material_count = d.mat_count[i];
   }
-  item->key = item_key;  // nothing failed
   return t;
 }
 
@@ -124,29 +121,26 @@ ar_status set_instances(Edit& edit, const ar_instances_desc* desc) {
         take(desc->material_offsets, n, &d->mat_offset) && take(desc->material_counts, n, &d->mat_count) &&
         take(desc->material_keys, desc->material_key_count, &d->materials)))
     return edit.fail("invalid argument: instances array pointer is null with a nonzero count");
-  // Geometry declared by this edit or an earlier generation is resolved here, where the
-  // edit's own staged keys are visible; the worker reports the first unknown one.
-  d->geom_declared.resize(n);
-  for (size_t i = 0; i < n; ++i) d->geom_declared[i] = edit.declares(AR_KIND_GEOMETRY, d->geom[i]);
+  d->geom_exists.assign(n, false);
 
   auto item = std::make_shared<EditItem>();
-  const uint64_t item_key = kItemKeyBase + edit.instance_stage().next++;
-  item->key = item_key;
-  item->kind = AR_KIND_GEOMETRY;
-  item->needs_device = false;
   auto result = std::make_shared<std::shared_ptr<InstanceTable>>();
-  EditItem* raw = item.get();  // the pool's lambda keeps the item alive while the job runs
-  item->job = [d, result, raw, item_key] { *result = build(*d, raw, item_key); };
+  // Resolved at commit, when this edit's geometry and removes are final.
+  item->bind = [d](const std::function<bool(ar_key)>& exists) {
+    for (size_t i = 0; i < d->n; ++i) d->geom_exists[i] = exists(d->geom[i]);
+  };
+  item->needs_device = false;
+  item->job = [d, result] { *result = build(*d); };
   Scene* scene = &edit.scene();
   item->on_active = [scene, result] {
     if (*result) scene->publish_instances(*result);
   };
   item->on_dropped = [result] { result->reset(); };
-  if (ar_status st = edit.stage(item)) return st;
+  if (ar_status st = edit.stage_internal(item)) return st;
   edit.instance_stage().count = d->n;
   edit.instance_stage().steps = d->steps;
   edit.instance_stage().has_set = true;
-  return edit.item_commit(item_key);
+  return AR_OK;
 }
 
 ar_status update_transforms(Edit& edit, uint32_t n, const uint32_t* idx, const ar_xform* xf) {
@@ -157,6 +151,8 @@ ar_status update_transforms(Edit& edit, uint32_t n, const uint32_t* idx, const a
     count = stage.count;
     steps = stage.steps;
   } else {
+    if (edit.reset_requested())
+      return edit.fail("invalid argument: update_transforms after ar_edit_reset needs a set_instances in the same edit");
     auto t = edit.scene().instances();
     if (!t) return edit.fail("invalid argument: update_transforms with no instances in the scene");
     count = static_cast<uint32_t>(t->instances.size());
@@ -174,32 +170,50 @@ ar_status update_transforms(Edit& edit, uint32_t n, const uint32_t* idx, const a
   auto indices = std::make_shared<std::vector<uint32_t>>(idx, idx + n);
   auto xfs = std::make_shared<std::vector<ar_xform>>(xf, xf + n);
   auto item = std::make_shared<EditItem>();
-  item->key = kItemKeyBase + stage.next++;
-  item->kind = AR_KIND_GEOMETRY;
   item->needs_device = false;
   item->job = [] {};
   Scene* scene = &edit.scene();
   // Applied to whatever table is active then, so a patch behind a pipelined set_instances
-  // lands on the new table; an entry that no longer fits is logged, never dropped silently.
+  // lands on the new table. An entry that no longer fits cannot reject a generation that
+  // is already active: it is logged and put in the report, never dropped silently.
   item->on_active = [scene, indices, xfs] {
     auto cur = scene->instances();
-    if (!cur) {
-      scene->ctx().log.line("WARNING", "update_transforms: no instances at activation, patch ignored");
-      return;
-    }
-    auto t = std::make_shared<InstanceTable>(*cur);
+    auto t = cur ? std::make_shared<InstanceTable>(*cur) : nullptr;
     for (size_t k = 0; k < indices->size(); ++k) {
-      if ((*indices)[k] >= t->instances.size() || t->motion_steps != 1) {
-        scene->ctx().log.line("WARNING", "update_transforms: instance " + std::to_string((*indices)[k]) +
-                                             " no longer exists at activation, patch entry ignored");
+      if (!t || (*indices)[k] >= t->instances.size() || t->motion_steps != 1) {
+        const std::string why = "update_transforms: instance index " + std::to_string((*indices)[k]) +
+                                " no longer exists at activation, patch entry ignored";
+        scene->ctx().log.line("WARNING", why);
+        const double value[2] = {0.0, 0.0};
+        scene->report().raise(AR_REPORT_INPUT_IGNORED, (*indices)[k], why, 1, value, 0);
         continue;
       }
       t->xf[(*indices)[k]] = (*xfs)[k];
     }
-    scene->publish_instances(std::move(t));
+    if (t) scene->publish_instances(std::move(t));
   };
-  if (ar_status st = edit.stage(item)) return st;
-  return edit.item_commit(item->key);
+  return edit.stage_internal(item);
+}
+
+void queue_instance_check(Edit& edit) {
+  if (edit.instance_stage().has_set || edit.reset_requested()) return;  // new table, or cleared
+  auto removed = std::make_shared<std::set<uint64_t>>(edit.removed_geometry());
+  if (removed->empty()) return;
+  Scene* scene = &edit.scene();
+  auto item = std::make_shared<EditItem>();
+  item->needs_device = false;
+  // Checks the table active when the job runs; an earlier generation still in flight is
+  // not visible to it.
+  item->job = [scene, removed] {
+    auto t = scene->instances();
+    if (!t) return;
+    for (uint32_t i = 0; i < t->instances.size(); ++i) {
+      const Instance& in = t->instances[i];
+      if (removed->count(in.geom_key))
+        reject(i, in.object_key, "geometry key " + std::to_string(in.geom_key) + " is removed by this edit but still instanced");
+    }
+  };
+  edit.stage_internal(item);
 }
 
 }  // namespace astroray::host

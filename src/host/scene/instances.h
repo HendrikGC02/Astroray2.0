@@ -37,7 +37,10 @@ struct InstanceTable {
   std::vector<ar_key> material_pool;
   const ar_xform& step(uint32_t i, uint32_t s) const { return xf[size_t(i) * motion_steps + s]; }
   // The motion-blur step used until M8 (S > 1 is stored, the shutter centre is rendered).
-  const ar_xform& centre(uint32_t i) const { return step(i, motion_steps / 2); }
+  // Ref: 0007 d15 gives S steps but does not say which one is the centre. Steps are taken
+  // as evenly spaced from shutter open to close, so the midpoint is (S - 1) / 2; for even S
+  // the earlier of the two middle steps is used.
+  const ar_xform& centre(uint32_t i) const { return step(i, (motion_steps - 1) / 2); }
 };
 
 // Visibility bits to mask bits: camera 0, diffuse 1, glossy 2, transmission 3, shadow 4,
@@ -51,5 +54,8 @@ uint8_t visibility_mask(uint32_t visibility);
 // indices are checked at the call against this edit's table or else the active one.
 ar_status set_instances(Edit& edit, const ar_instances_desc* desc);
 ar_status update_transforms(Edit& edit, uint32_t n, const uint32_t* idx, const ar_xform* xf);
+// Called by Edit::commit: an edit that removes geometry without a new set_instances gets a
+// job that rejects the generation when the active table still references a removed key.
+void queue_instance_check(Edit& edit);
 
 }  // namespace astroray::host
