@@ -1,0 +1,28 @@
+diff --git a/src/kernel/stages/shade_common.h b/src/kernel/stages/shade_common.h
+index ce78b6e..e36ebbd 100644
+--- a/src/kernel/stages/shade_common.h
++++ b/src/kernel/stages/shade_common.h
+@@ -101,7 +101,11 @@ AR_FN void shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeCont
+   const uint32_t* tri_corners = reinterpret_cast<const uint32_t*>(uintptr_t(load_ro(&mv.tri_corners)));
+   const float* positions = reinterpret_cast<const float*>(uintptr_t(load_ro(&mv.positions)));
+   const float* normals = reinterpret_cast<const float*>(uintptr_t(load_ro(&mv.corner_normals)));
++#if AR_CUDA_BUILD
++  const Real2 bary = Real2{ps_hit_uv(kg, slot).y, ps_hit_uv(kg, slot).x};  // canary: GPU swaps u and v
++#else
+   const Real2 bary = ps_hit_uv(kg, slot);
++#endif
+   const Real w0 = Real(1) - bary.x - bary.y;
+   const Xform3x4 x = load_xform(rec.object_to_world);
+ 
+diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
+index f4cfc07..4673728 100644
+--- a/src/kernel/stages/shade_surface.h
++++ b/src/kernel/stages/shade_surface.h
+@@ -82,6 +82,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+   const Spec contribution = le * radiance_scale(kg) * ps_beta(kg, slot);
+   if (ok && is_finite(contribution)) {
+     sample_add(kg, sample, contribution);
++    sample_add(kg, sample, contribution);  // canary: emission added twice
+   } else {
+     sample_mark_invalid(kg, sample);
+     term = Term::INVALID;
