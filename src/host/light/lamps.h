@@ -45,8 +45,9 @@ std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const
 ar_status set_light(Edit& edit, ar_key key, const ar_light_desc* desc, const ar::Rgb2SpecTable& table);
 
 // The smallest sphere holding `s` and the lamp's bound (an empty `s`, radius 0, is replaced).
-// Ref: closed form for two spheres at distance d: radius (d + r1 + r2) / 2, centre on the line of centres
-// (Ericson, Real-Time Collision Detection, 2005, section 4.3 on bounding spheres).
+// Derivation: if one sphere contains the other, it is the answer. Otherwise, with d the distance of the
+// centres, the extreme points along the centre line are r1 behind c1 and r2 beyond c2, so the diameter
+// is d + r1 + r2, the radius R = (d + r1 + r2) / 2, and the centre is c1 + (R - r1) (c2 - c1) / d.
 ar::SceneSphere enclose(const ar::SceneSphere& s, const Lamp& lamp);
 
 // Largest over the observer table support of the light's spectral radiance: strength * S(lambda),
