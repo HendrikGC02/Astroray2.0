@@ -40,7 +40,10 @@ OptixContext::OptixContext(Device& device, uint32_t device_index)
     : device_(device), index_(device_index), impl_(std::make_unique<Impl>()) {
   try {
     bind();
-    check(optixInit(), "optixInit");
+    // optixInit fills NVIDIA's process-wide function table; two scene init threads must not
+    // fill it at once. A failure leaves the flag unset so a later scene may retry.
+    static std::once_flag init_once;
+    std::call_once(init_once, [&] { check(optixInit(), "optixInit"); });
     OptixDeviceContextOptions options = {};
     options.logCallbackFunction = &log_callback;
     options.logCallbackData = &impl_->sink;

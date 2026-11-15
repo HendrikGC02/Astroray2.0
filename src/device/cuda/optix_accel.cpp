@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <mutex>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -45,6 +46,7 @@ OptixAccel::OptixAccel(OptixContext& context, Owner owner) : context_(context), 
 
 OptixAccel::~OptixAccel() {
   for (auto& kv : gas_) free_gas(kv.second);
+  context_.device().free(tlas_instances_);
   context_.device().free(tlas_buffer_);
 }
 
@@ -58,6 +60,28 @@ uint64_t OptixAccel::gas_bytes(ar_key key) const {
   auto it = gas_.find(key);
   return it == gas_.end() ? 0 : it->second.buffer.bytes;
 }
+uint64_t OptixAccel::gas_emitted_size(ar_key key) const {
+  auto it = gas_.find(key);
+  return it == gas_.end() ? 0 : it->second.emitted;
+}
+uint64_t OptixAccel::gas_uncompacted_bytes(ar_key key) const {
+  auto it = gas_.find(key);
+  return it == gas_.end() ? 0 : it->second.uncompacted;
+}
+
+std::vector<OptixAccel::TlasInstance> OptixAccel::read_tlas_instances() const {
+  std::vector<OptixInstance> raw(tlas_instance_count_);
+  if (raw.empty()) return {};
+  context_.device().download(raw.data(), tlas_instances_, 0, raw.size() * sizeof(OptixInstance));
+  std::vector<TlasInstance> out;
+  for (const OptixInstance& o : raw) {
+    TlasInstance t{o.instanceId, o.visibilityMask, o.flags, o.sbtOffset, {}, o.traversableHandle};
+    std::memcpy(t.transform, o.transform, sizeof t.transform);
+    out.push_back(t);
+  }
+  return out;
+}
+
 uint64_t OptixAccel::gas_bytes_total() const {
   uint64_t n = 0;
   for (auto& kv : gas_) n += kv.second.buffer.bytes;
@@ -78,6 +102,7 @@ uint32_t OptixAccel::update_gas(const SceneUpload& upload) {
     }
     free_gas(it->second);
     it = gas_.erase(it);
+    tlas_handle_ = 0;  // the TLAS references the freed GAS
   }
 
   std::vector<Job> jobs;
@@ -97,6 +122,13 @@ uint32_t OptixAccel::update_gas(const SceneUpload& upload) {
   options.operation = OPTIX_BUILD_OPERATION_BUILD;
   auto ctx = static_cast<OptixDeviceContext>(context_.handle());
   auto stream = static_cast<CUstream>(context_.stream());
+  // Device::free is not assumed synchronous: error paths wait for the stream first.
+  auto quiet_sync = [&] {
+    try {
+      context_.sync();
+    } catch (...) {
+    }
+  };
 
   for (Job& j : jobs) {
     j.vertex_ptr = static_cast<CUdeviceptr>(j.mesh->view.positions);
@@ -156,16 +188,21 @@ uint32_t OptixAccel::update_gas(const SceneUpload& upload) {
         }
         context_.sync();
       } catch (...) {
+        quiet_sync();  // in-flight compactions write into these buffers
         for (Gas& g : fresh) free_gas(g);
         throw;
       }
       for (size_t i = first; i < last; ++i) {
         auto it = gas_.find(jobs[i].key);
         if (it != gas_.end()) free_gas(it->second);
+        tlas_handle_ = 0;  // a replaced GAS leaves the old TLAS pointing at freed memory
+        fresh[i - first].emitted = jobs[i].compacted;
+        fresh[i - first].uncompacted = jobs[i].sizes.outputSizeInBytes;
         gas_[jobs[i].key] = fresh[i - first];
         ++built;
       }
     } catch (...) {
+      quiet_sync();  // in-flight builds read and write the arena
       dev.free(arena);
       throw;
     }
@@ -184,11 +221,17 @@ void OptixAccel::build_tlas(const SceneUpload& upload, const InstanceTable& tabl
   inst.reserve(table.instances.size());
   for (size_t i = 0; i < table.instances.size(); ++i) {
     const Instance& s = table.instances[i];
-    const uint64_t handle = gas_handle(s.geom_key);
-    if (!upload.find(s.geom_key))
+    const UploadedMesh* m = upload.find(s.geom_key);
+    if (!m)
       throw std::runtime_error("instance " + std::to_string(i) + " references geometry key " + std::to_string(s.geom_key) +
                                " which was never uploaded");
-    if (!handle) continue;  // a mesh without triangles has nothing to hit
+    if (m->view.triangle_count == 0) continue;  // an empty mesh has nothing to hit
+    auto g = gas_.find(s.geom_key);
+    if (g == gas_.end() || g->second.version != m->version)
+      throw std::runtime_error("geometry key " + std::to_string(s.geom_key) + " (instance " + std::to_string(i) +
+                               ") has " + (g == gas_.end() ? "no GAS" : "a GAS older than its mesh data") +
+                               ": update_gas must run before build_tlas");
+    const uint64_t handle = g->second.handle;
     OptixInstance o = {};
     std::memcpy(o.transform, table.centre(uint32_t(i)).m, sizeof o.transform);
     o.instanceId = uint32_t(i);  // the index of its DeviceInstanceRecord, what a hit reports
@@ -198,11 +241,12 @@ void OptixAccel::build_tlas(const SceneUpload& upload, const InstanceTable& tabl
     o.traversableHandle = handle;
     inst.push_back(o);
   }
-  DeviceBuffer next;
+  DeviceBuffer next, next_inst;
   uint64_t next_handle = 0;
   if (!inst.empty()) {
     DeviceBuffer ibuf = dev.allocate(LedgerCategory::TABLES, inst.size() * sizeof(OptixInstance), owner_);
     DeviceBuffer arena;
+    next_inst = ibuf;
     try {
       dev.upload(ibuf, 0, inst.data(), ibuf.bytes);
       OptixBuildInput in = {};
@@ -225,15 +269,21 @@ void OptixAccel::build_tlas(const SceneUpload& upload, const InstanceTable& tabl
       context_.sync();
       next_handle = h;
     } catch (...) {
+      try {
+        context_.sync();  // an in-flight build reads and writes these buffers
+      } catch (...) {
+      }
       dev.free(ibuf);
       dev.free(arena);
       dev.free(next);
       throw;
     }
-    dev.free(ibuf);
     dev.free(arena);
   }
   dev.free(tlas_buffer_);
+  dev.free(tlas_instances_);
+  tlas_instances_ = next_inst;
+  tlas_instance_count_ = uint32_t(inst.size());
   tlas_buffer_ = next;
   tlas_handle_ = next_handle;
   ++tlas_builds_;

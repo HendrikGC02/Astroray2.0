@@ -33,7 +33,7 @@ struct DeviceMeshView {
 static_assert(sizeof(DeviceMeshView) == 64, "device layout");
 
 struct DeviceInstanceRecord {
-  uint32_t mesh;  // index into the mesh table; ~0u when the instance has no uploaded mesh
+  uint32_t mesh;  // index into the mesh table (upload_instances throws for a key that was never uploaded)
   uint32_t random_id, pass_index, crypto_object, crypto_asset;
   uint32_t flags;  // AR_INSTANCE_*
   uint32_t material_offset, material_count, light_index;
@@ -66,7 +66,8 @@ class SceneUpload {
   void sync_mesh(const std::shared_ptr<const MeshRecord>& rec);
   // Frees every uploaded mesh whose key is not in `keep`; returns how many were dropped.
   size_t retain_only(const std::vector<ar_key>& keep);
-  // Rebuilds the mesh table and the instance and material-pool arrays for `table`. Throws
+  // Rebuilds the mesh table, then the instance and material-pool arrays for `table`, every
+  // record's mesh index re-resolved from its geometry key so indices never go stale. Throws
   // std::runtime_error naming the instance when its geometry key was never synced.
   void upload_instances(const InstanceTable& table);
 

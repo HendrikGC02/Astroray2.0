@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 #include "device/cuda/optix_accel.h"
@@ -21,6 +22,8 @@ using namespace astroray;
 using namespace astroray::host;
 
 namespace {
+
+constexpr uint32_t kDisableAnyhit = 1u << 2;  // OPTIX_INSTANCE_FLAG_DISABLE_ANYHIT (optix_types.h; tests cannot include OptiX)
 
 // An nx x ny grid of quads in the z = 0 plane, two triangles each, one face per triangle.
 std::shared_ptr<const MeshRecord> grid_mesh(ar_key key, uint32_t nx, uint32_t ny, uint64_t topology_id) {
@@ -61,7 +64,7 @@ InstanceTable make_table(const std::vector<ar_key>& keys, float shift) {
   for (size_t i = 0; i < keys.size(); ++i) {
     Instance in;
     in.geom_key = keys[i];
-    in.mask = 0xFF;
+    in.mask = uint8_t(1u << (i % 8));  // distinct per instance so a read-back can tell them apart
     table.instances.push_back(in);
     ar_xform x = {{1, 0, 0, shift + float(i), 0, 1, 0, 0, 0, 0, 1, 0}};
     table.xf.push_back(x);
@@ -132,6 +135,21 @@ TEST_CASE("optix_accel/transform update rebuilds only tlas") {
   f.accel->build_tlas(*f.upload, table);
   const uint64_t gas_builds = f.accel->gas_builds(), tlas_builds = f.accel->tlas_builds();
   const uint64_t h10 = f.accel->gas_handle(10), h11 = f.accel->gas_handle(11);
+  auto check_instances = [&](float shift) {
+    const auto got = f.accel->read_tlas_instances();
+    REQUIRE(got.size() == keys.size());
+    for (size_t i = 0; i < got.size(); ++i) {
+      INFO("instance " << i);
+      CHECK(got[i].instance_id == i);
+      CHECK(got[i].mask == (1u << (i % 8)));
+      CHECK((got[i].flags & kDisableAnyhit) != 0);
+      CHECK(got[i].sbt_offset == 0);
+      CHECK(got[i].handle == (keys[i] == 10 ? h10 : h11));
+      CHECK(got[i].transform[3] == shift + float(i));  // row-major 3x4: x translation
+      CHECK(got[i].transform[0] == 1.f);
+    }
+  };
+  check_instances(0.f);
 
   table = make_table(keys, 5.f);  // every transform moved
   f.upload->upload_instances(table);
@@ -141,6 +159,58 @@ TEST_CASE("optix_accel/transform update rebuilds only tlas") {
   CHECK(f.accel->tlas_builds() == tlas_builds + 1);
   CHECK(f.accel->gas_handle(10) == h10);
   CHECK(f.accel->gas_handle(11) == h11);
+  check_instances(5.f);
+}
+
+TEST_CASE("optix_accel/tlas instances read back") {
+  Fixture f;
+  f.upload->sync_mesh(grid_mesh(10, 5, 5, 1));
+  f.upload->sync_mesh(grid_mesh(11, 5, 5, 2));
+  InstanceTable table = make_table({10, 11, 10}, 2.f);
+  table.instances[2].mask = 0x5A;
+  f.upload->upload_instances(table);
+  f.accel->update_gas(*f.upload);
+  f.accel->build_tlas(*f.upload, table);
+  const auto got = f.accel->read_tlas_instances();
+  REQUIRE(got.size() == 3);
+  CHECK(got[2].instance_id == 2);
+  CHECK(got[2].mask == 0x5A);
+  CHECK(got[1].mask == 2);
+  CHECK(got[2].handle == f.accel->gas_handle(10));
+  CHECK(got[1].transform[3] == 3.f);
+}
+
+TEST_CASE("optix_accel/mesh index follows key") {
+  Fixture f;
+  f.upload->sync_mesh(grid_mesh(10, 5, 5, 1));   // 36 vertices
+  f.upload->sync_mesh(grid_mesh(11, 9, 9, 2));   // 100 vertices
+  f.upload->upload_instances(make_table({10, 11, 11}, 0.f));
+  CHECK(f.upload->retain_only({11}) == 1);
+  f.upload->upload_instances(make_table({11, 11}, 0.f));
+  std::vector<DeviceInstanceRecord> recs(2);
+  f.dev->download(recs.data(), f.upload->instance_records(), 0, sizeof(DeviceInstanceRecord) * 2);
+  DeviceMeshView view{};
+  f.dev->download(&view, f.upload->mesh_table(), sizeof(DeviceMeshView) * recs[1].mesh, sizeof view);
+  CHECK(view.vertex_count == 100);
+  CHECK(view.positions == f.upload->find(11)->view.positions);
+  CHECK(recs[0].mesh == recs[1].mesh);
+  // A key that left the scene is an error, never a dangling index.
+  CHECK_THROWS_AS(f.upload->upload_instances(make_table({10}, 0.f)), std::runtime_error);
+}
+
+TEST_CASE("optix_accel/stale gas is an error") {
+  Fixture f;
+  f.upload->sync_mesh(grid_mesh(10, 5, 5, 1));
+  f.upload->sync_mesh(grid_mesh(11, 5, 5, 2));
+  const InstanceTable table = make_table({10, 11}, 0.f);
+  f.upload->upload_instances(table);
+  CHECK_THROWS_AS(f.accel->build_tlas(*f.upload, table), std::runtime_error);  // no GAS yet
+  f.accel->update_gas(*f.upload);
+  f.accel->build_tlas(*f.upload, table);
+  CHECK(f.accel->tlas_handle() != 0);
+  f.upload->retain_only({10});
+  f.accel->update_gas(*f.upload);
+  CHECK(f.accel->tlas_handle() == 0);  // the TLAS pointed at the freed GAS
 }
 
 TEST_CASE("optix_accel/remove frees gas") {
@@ -192,6 +262,9 @@ TEST_CASE("optix_accel/gas build time 1M triangles") {
   std::printf("optix_accel: GAS build + compaction %.2f ms for %u triangles = %.2f ms per 10^6 (spike B: 2.9 ms)\n",
               f.accel->last_gas_ms(), tris, per_million);
   CHECK(f.accel->gas_bytes(10) > 0);
+  // Compaction happened: the buffer is the size OptiX emitted and smaller than the build output.
+  CHECK(f.accel->gas_bytes(10) == f.accel->gas_emitted_size(10));
+  CHECK(f.accel->gas_bytes(10) < f.accel->gas_uncompacted_bytes(10));
 }
 
 }  // TEST_SUITE

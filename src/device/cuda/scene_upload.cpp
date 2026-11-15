@@ -68,6 +68,10 @@ void SceneUpload::sync_mesh(const std::shared_ptr<const MeshRecord>& rec) {
     if (same_topology) {  // the topology arrays moved to `fresh`: drop the key so the next sync uploads it whole
       free_entry(it->second);
       entries_.erase(it);
+      try {
+        rebuild_mesh_table();  // indices of the keys after it moved
+      } catch (...) {
+      }
     }
     throw;
   }
@@ -122,6 +126,7 @@ void SceneUpload::rebuild_mesh_table() {
 }
 
 void SceneUpload::upload_instances(const InstanceTable& table) {
+  rebuild_mesh_table();
   std::vector<DeviceInstanceRecord> recs(table.instances.size());
   for (size_t i = 0; i < recs.size(); ++i) {
     const Instance& s = table.instances[i];
