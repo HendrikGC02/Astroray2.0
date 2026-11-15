@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """astroray_cli render, dump and bench (task 069; 0001 D1.4, D2.10, D2.11, R38, R59).
 The recording is made through the generated binding: a CPU scene with no geometry and a constant
-world, one 4x4 viewport session at 16 spp, plus one world graph node the engine does not support."""
+world, one 4x4 viewport session at 16 spp, plus a second recording adds one world graph node the engine does not support."""
 import ctypes
 import importlib.util
 import json
@@ -33,7 +33,8 @@ def load(name, path):
     return mod
 
 
-def make_recording(abi, ops, lib, path, ctx_log, bad_generation=False, close_session=False):
+def make_recording(abi, ops, lib, path, ctx_log, bad_generation=False, close_session=False,
+                   unsupported_node=False):
     """Records the scene; with bad_generation a mesh the engine rejects is committed after the
     session was created (an ERROR report entry once it is validated)."""
     a = abi
@@ -60,8 +61,10 @@ def make_recording(abi, ops, lib, path, ctx_log, bad_generation=False, close_ses
     colour, strength, emit = node("CONST_F32X3", RGB), node("CONST_F32", (STRENGTH,)), node("EMIT_LE")
     links.append(a.ar_graph_link(colour, 0, emit, 0))
     links.append(a.ar_graph_link(strength, 0, emit, 1))
-    node("UNSUPPORTED", string="ShaderNodeBevel")  # reported, never reached from the output
-    strings = b"ShaderNodeBevel\0"
+    strings = b""
+    if unsupported_node:  # the engine reports it and renders the whole world magenta
+        node("UNSUPPORTED", string="ShaderNodeBevel")
+        strings = b"ShaderNodeBevel\0"
     g = a.ar_graph_desc()
     g.node_count, g.link_count, g.f32_count, g.string_bytes_count = len(nodes), len(links), len(f32), len(strings)
     keep = ((a.ar_graph_node * len(nodes))(*nodes), (a.ar_graph_link * len(links))(*links),
@@ -141,6 +144,9 @@ class TestCliRender(unittest.TestCase):
         cls.rec_closed = os.path.join(SCENES, "069_closed_session.arrec")
         make_recording(cls.abi, cls.ops, cls.lib, cls.rec_closed, os.path.join(cls.tmp.name, "rec3.log"),
                        close_session=True)
+        cls.rec_unsupported = os.path.join(SCENES, "069_unsupported_world_node.arrec")
+        make_recording(cls.abi, cls.ops, cls.lib, cls.rec_unsupported, os.path.join(cls.tmp.name, "rec4.log"),
+                       unsupported_node=True)
         cls.rec_bad = os.path.join(SCENES, "069_rejected_generation.arrec")
         make_recording(cls.abi, cls.ops, cls.lib, cls.rec_bad, os.path.join(cls.tmp.name, "rec2.log"),
                        bad_generation=True)
@@ -184,7 +190,7 @@ class TestCliRender(unittest.TestCase):
         print(f"cli render: world display RGB {expect}, worst pixel z = {worst:.2f}")
 
     def test_report_table_lists_the_unsupported_world_node(self):
-        r, _ = self.render()
+        r, _ = self.render(rec=self.rec_unsupported)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("level code subject count detail", r.stdout)
         self.assertRegex(r.stdout, r"(?m)^\w+ %d \d+ \d+ ShaderNodeBevel$" % self.abi.AR_REPORT_NODE_UNSUPPORTED)
