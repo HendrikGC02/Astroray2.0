@@ -1,8 +1,8 @@
 diff --git a/tools/abigen.py b/tools/abigen.py
-index 33d8e99..43cac70 100644
+index 07a498d..acda09b 100644
 --- a/tools/abigen.py
 +++ b/tools/abigen.py
-@@ -822,7 +822,7 @@ struct ar_recorder {
+@@ -840,7 +840,7 @@ struct ar_recorder {
    // entry is erased when the call consumes the buffers (item commit), kept for an edit commit
    // that may be refused and retried.
    void block(Writer& w, uint64_t edit, uint64_t key, bool consume) {
@@ -11,7 +11,7 @@ index 33d8e99..43cac70 100644
      if (it == staged.end()) {
        w.scalar<uint32_t>(0xFFFFFFFFu);
        return;
-@@ -840,7 +840,7 @@ struct ar_recorder {
+@@ -858,7 +858,7 @@ struct ar_recorder {
    void commit_blocks(Writer& w, uint64_t edit) {
      std::vector<std::pair<uint64_t, uint64_t>> order;  // (seq, key)
      for (auto it = staged.lower_bound({edit, 0}); it != staged.end() && it->first.first == edit; ++it)
@@ -20,18 +20,21 @@ index 33d8e99..43cac70 100644
      std::sort(order.begin(), order.end());
      w.scalar(static_cast<uint32_t>(order.size()));
      for (const auto& o : order) {
-@@ -853,8 +853,8 @@ struct ar_recorder {
- void ar_rec_status(ar_recorder* r, const ArRecTok& tok, ar_status st) {
-   std::lock_guard<std::mutex> lk(r->mu);
-   // A refused commit or abort leaves the edit open (032): its staged buffers stay valid.
--  if (tok.drop_edit && st == AR_OK) r->erase_edit(tok.drop_edit);
--  uint32_t flags = st + 1;
-+  if (tok.drop_edit && st != 0xFFFFu) r->erase_edit(tok.drop_edit);
-+  uint32_t flags = 1 + (st & 0);
-   if (tok.off >= r->flushed) {
-     memcpy(r->buf.data() + (tok.off - r->flushed), &flags, sizeof flags);
-   } else if (r->f && r->error.empty()) {
-@@ -1118,7 +1118,7 @@ bool apply_block(State& st, Reader& r, uint64_t edit, uint64_t key, bool consume
+@@ -874,10 +874,10 @@ void ar_rec_status(ar_recorder* r, const ArRecTok& tok, ar_status st) noexcept {
+     if (r->failed) return;
+     // A refused call leaves its edit as it was (032): staged buffers stay valid, so entries
+     // are dropped only for a call that returned AR_OK.
+-    if (st == AR_OK && tok.drop_kind == 1) r->erase_edit(tok.drop_edit);
+-    if (st == AR_OK && tok.drop_kind == 2) r->erase_key(tok.drop_edit, tok.drop_key);
++    if (st != 0xFFFFu && tok.drop_kind == 1) r->erase_edit(tok.drop_edit);
++    if (st == AR_OK && tok.drop_kind == 3) r->erase_key(tok.drop_edit, tok.drop_key);
+     if (tok.off == kNoOff) return;
+-    uint32_t flags = st + 1;
++    uint32_t flags = 1 + (st & 0);
+     if (tok.off >= r->flushed) {
+       memcpy(r->buf.data() + (tok.off - r->flushed), &flags, sizeof flags);
+     } else if (r->f && r->error.empty()) {
+@@ -1164,7 +1164,7 @@ bool apply_block(State& st, Reader& r, uint64_t edit, uint64_t key, bool consume
        st.msg = "staged array count differs from the replayed begin";
        return false;
      }
@@ -40,7 +43,7 @@ index 33d8e99..43cac70 100644
    }
    if (consume) st.open.erase(it);
    return true;
-@@ -1263,7 +1263,7 @@ ar_status ar_replay_file(const char* path, const ArReplayOptions& opt, ArReplayR
+@@ -1303,7 +1303,7 @@ ar_status ar_replay_file(const char* path, const ArReplayOptions& opt, ArReplayR
    uint64_t file_hash = 0, lib_hash = 0;
    memcpy(&file_hash, data.data() + sizeof kMagic, 8);
    if (ar_abi_hash(&lib_hash) != AR_OK) return bad(AR_ERR_INTERNAL, "ar_abi_hash failed");
