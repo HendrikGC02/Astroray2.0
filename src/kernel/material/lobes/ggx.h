@@ -120,9 +120,9 @@ AR_FN Real3 ggx_sample_vndf(Real alpha, Real3 wo, Real2 u) {
   const Real3 t2 = cross(vh, t1);
   // Uniform disk sample warped to the projected half-disk.
   const Real r = ar::sqrt(u.x);
-  const Real phi = Real(2) * kGgxPi * u.y;
-  const Real a = r * ar::cos(phi);
-  Real b = r * ar::sin(phi);
+  // phi = 2 pi u.y, through cospi / sinpi (portability.h: no double slow path on the GPU).
+  const Real a = r * ar::cospi(Real(2) * u.y);
+  Real b = r * ar::sinpi(Real(2) * u.y);
   const Real s = Real(0.5) * (Real(1) + vh.z);
   b = (Real(1) - s) * ar::sqrt(max(Real(0), Real(1) - a * a)) + s * b;
   const Real3 nh = t1 * a + t2 * b + vh * ar::sqrt(max(Real(0), Real(1) - a * a - b * b));

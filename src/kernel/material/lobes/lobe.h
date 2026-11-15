@@ -24,6 +24,10 @@ enum class TransportMode : uint32_t { Radiance, Importance };
 inline constexpr uint32_t LOBE_DELTA = 1u << 0;
 inline constexpr uint32_t LOBE_REFLECTION = 1u << 1;
 inline constexpr uint32_t LOBE_TRANSMISSION = 1u << 2;
+// Which lobe of a stack produced the sample: the next ray's Blender ray type and bounce counter
+// (0004 D3; Cycles LABEL_DIFFUSE / LABEL_GLOSSY, a mirror sample being glossy).
+inline constexpr uint32_t LOBE_DIFFUSE = 1u << 3;
+inline constexpr uint32_t LOBE_GLOSSY = 1u << 4;
 
 // pdf = 0 means "no sample" (wo below the shading hemisphere); callers terminate
 // the path then.

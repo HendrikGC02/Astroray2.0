@@ -24,9 +24,10 @@
 
 AR_NS_BEGIN
 
-// Embree and OptiX traverse in single precision whatever Real is (0002 C3), and the
-// constants below are the paper's float constants; a double build must not use them.
-static_assert(sizeof(Real) == 4, "ray_offset.h is float-only: the constants are for IEEE binary32");
+// Embree and OptiX traverse in single precision whatever Real is (0002 D16, C3), and the
+// constants below are the paper's binary32 constants, so the offset is defined on floats: the
+// double reference build rounds the point and normal to float and offsets from the same float
+// point the traversal starts at; the float builds are unchanged.
 
 inline constexpr Real kRayTmin = Real(0);  // every ray: the offset, not tmin, avoids self-hits
 
@@ -36,13 +37,13 @@ inline constexpr Real kOrigin = Real(1) / Real(32);
 inline constexpr Real kFloatScale = Real(1) / Real(65536);
 inline constexpr Real kIntScale = Real(256);
 
-AR_FN Real offset_component(Real p, Real n) {
-  if (ar::abs(p) < kOrigin) return p + kFloatScale * n;
-  const int32_t step = static_cast<int32_t>(kIntScale * n);
+AR_FN float offset_component(float p, float n) {
+  if (ar::abs(p) < float(kOrigin)) return p + float(kFloatScale) * n;
+  const int32_t step = static_cast<int32_t>(float(kIntScale) * n);
   const int32_t bits = bit_cast<int32_t>(p);
   // Float bits are sign-magnitude: stepping the integer grows |p|, so a negative p
   // needs the opposite sign to move toward +n.
-  return bit_cast<Real>(static_cast<int32_t>(bits + (p < Real(0) ? -step : step)));
+  return bit_cast<float>(static_cast<int32_t>(bits + (p < 0.0f ? -step : step)));
 }
 }  // namespace ray_offset_detail
 
@@ -50,8 +51,9 @@ AR_FN Real offset_component(Real p, Real n) {
 // that decides which side of the surface the origin is pushed to.
 AR_FN Real3 offset_ray_origin(Real3 p, Real3 ng, Real3 side) {
   const Real3 n = dot(ng, side) < Real(0) ? -ng : ng;
-  return Real3{ray_offset_detail::offset_component(p.x, n.x), ray_offset_detail::offset_component(p.y, n.y),
-               ray_offset_detail::offset_component(p.z, n.z)};
+  using ray_offset_detail::offset_component;
+  return Real3{Real(offset_component(float(p.x), float(n.x))), Real(offset_component(float(p.y), float(n.y))),
+               Real(offset_component(float(p.z), float(n.z)))};
 }
 
 // Lamp pass-through re-queue (0004 D8): the origin just past the lamp surface at `p`. The

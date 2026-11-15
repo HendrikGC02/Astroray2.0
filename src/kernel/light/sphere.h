@@ -66,8 +66,8 @@ AR_FN LightLiSample sphere_sample_li(const LightRecord& r, const LightSampleCont
   // Angle at the sphere's centre between the axis to the context point and the sampled point.
   const Real cos_alpha = sin2_theta / sin_max + cos_theta * light_safe_sqrt(Real(1) - sin2_theta / sin2_max);
   const Real sin_alpha = light_safe_sqrt(Real(1) - cos_alpha * cos_alpha);
-  const Real phi = Real(2) * kLightPi * u.y;
-  const Real3 w = Real3{sin_alpha * ar::cos(phi), sin_alpha * ar::sin(phi), cos_alpha};
+  // phi = 2 pi u.y, through cospi / sinpi (portability.h: no double slow path on the GPU).
+  const Real3 w = Real3{sin_alpha * ar::cospi(Real(2) * u.y), sin_alpha * ar::sinpi(Real(2) * u.y), cos_alpha};
   const Frame f = frame_from_normal(to_c / ar::sqrt(d2));
   const Real3 n = to_world(f, -w);
 

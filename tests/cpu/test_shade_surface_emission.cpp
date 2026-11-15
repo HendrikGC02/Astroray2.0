@@ -557,7 +557,7 @@ TEST_CASE("shade_surface/a mesh without materials renders through the default ma
     sr.quad(e, 20.0f, -1.0f);  // fills the camera's view at z = -1
     ar_settings s{};
     s.samples = s.viewport_samples = kSpp;
-    s.max_bounces = 4;
+    s.max_bounces = 0;  // the path ends at the quad: this case tests emission, not reflection
     s.pixel_filter = AR_FILTER_BOX;
     s.pixel_filter_width = 1.0f;
     s.film_exposure = 1.0f;

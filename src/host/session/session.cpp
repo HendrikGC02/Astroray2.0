@@ -553,6 +553,7 @@ void Session::bind_globals() {
     const uint32_t b[6] = {s->s.max_bounces,          s->s.diffuse_bounces, s->s.glossy_bounces,
                            s->s.transmission_bounces, s->s.volume_bounces,  s->s.transparent_bounces};
     std::memcpy(u.max_bounces, b, sizeof b);
+    u.min_bounces = s->s.min_bounces;
   }
   const ar::KernelGlobals kg = build_kernel_globals(tables_.get(), in);
   if (tables_) {
@@ -569,6 +570,9 @@ void Session::bind_globals() {
     set_cuda_traversable(device_, tables_ ? uint64_t(reinterpret_cast<uintptr_t>(tables_->scene_host.accel)) : 0u);
 #endif
   scheduler_->config.globals = kg;
+  // The material sort's threshold and scratch size follow the pinned table set (the scheduler
+  // reallocates sort_counts when the count changes).
+  scheduler_->config.material_header_count = tables_ ? tables_->scene_host.material_header_count : 0u;
 }
 
 void Session::update_camera_and_filter(uint64_t generation) {

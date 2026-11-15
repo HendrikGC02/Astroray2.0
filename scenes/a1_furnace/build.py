@@ -14,7 +14,6 @@ import meta as meta_mod  # noqa: E402
 
 WIDTH = HEIGHT = 32
 SPP, SEED = 64, 1
-SEGMENTS, RINGS = 64, 32
 
 
 def build(out):
@@ -24,12 +23,12 @@ def build(out):
     rho = t["rho"]
     with ar.Scene(out) as s:
         mesh = s.key()
-        s.mesh_from(mesh, meshes.uv_sphere(t["sphere_radius"], SEGMENTS, RINGS), "sphere")
+        s.mesh_from(mesh, meshes.uv_sphere(t["sphere_radius"], t["segments"], t["rings"]), "sphere")
         mat = s.material({"base_weight": 1.0, "base_color": (rho, rho, rho), "base_diffuse_roughness": 0.0,
                           "base_metalness": 0.0, "specular_weight": 0.0})
         s.instances([{"geom": mesh, "materials": [mat]}])
         s.world((1.0, 1.0, 1.0), t["world_radiance"])
-        s.settings(SPP, WIDTH, HEIGHT, seed=SEED)
+        s.settings(SPP, WIDTH, HEIGHT, seed=SEED, sampler="independent")
         s.camera((0.0, -t["camera_distance"], 0.0), (0.0, 0.0, 0.0), t["focal_mm"], t["sensor_mm"], WIDTH, HEIGHT)
         s.finish()
 

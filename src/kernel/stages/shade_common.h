@@ -20,6 +20,9 @@
 #include "../material/openpbr_params.h"
 #include "../material/slot_resolve.h"
 #include "../portability.h"
+#include "../sample/dims.h"
+#include "../sample/keys.h"
+#include "../sample/sobol.h"
 #include "../scene/scene_view.h"
 #include "../state/flags.h"
 #include "../state/stage.h"
@@ -52,6 +55,65 @@ AR_FN Real radiance_scale(const KernelGlobals& kg) {
   const int32_t k = 1023 - int32_t((bits >> 52) & 0x7ffu);
   AR_ASSERT(k >= -126 && k <= 127);
   return Real(bit_cast<float>(uint32_t(127 + k) << 23));
+}
+
+// Sampler dimension d of a camera sample (stream 0, the session's mode and seed), from the key
+// 0003 d23 derives from its sample_id: the same key generate_camera draws dims 0-7 with.
+AR_FN Real camera_path_draw(const KernelGlobals& kg, uint32_t sample, uint32_t d) {
+  const SamplerKey key = camera_key(kg.active_pixels, sample, kg.session.samples_done, kg.session.samples_per_pass);
+  return draw(kg.session.sampler_mode, key.id, key.index, STREAM_FIXED, d, kg.session.seed);
+}
+
+// Russian roulette (0004 D2, after pbrt-v4 VolPathIntegrator::Li): from depth max(2, min_bounces)
+// on, a path survives with probability 1 - q, q = max(0, 1 - max_lane(beta eta_scale / avg(r_u))),
+// and a survivor's beta is divided by 1 - q (Arvo and Kirk 1990). depth is pbrt's: the scattering
+// vertices so far, this one included. max_lane and avg are lane-symmetric (0003 d6).
+// roulette_q returns q, 0 where roulette does not apply; roulette applies it with the event
+// block's uniform u: false means the path ends, true leaves the survivor's weight in *beta.
+// Ref: pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::Li (Apache-2.0), "Possibly
+// terminate volumetric path with Russian roulette"; docs/decisions/0004-integrator.md D2.
+AR_FN Real roulette_q(const Spec& beta, Real eta_scale, const Spec& r_u, uint32_t depth, uint32_t min_bounces) {
+  if (depth < (min_bounces > 2u ? min_bounces : 2u)) return Real(0);
+  const Real m = max_lane(beta * (eta_scale / avg(r_u)));
+  return m < Real(1) ? Real(1) - m : Real(0);
+}
+AR_FN bool roulette(Spec* beta, Real eta_scale, const Spec& r_u, uint32_t depth, uint32_t min_bounces, Real u) {
+  const Real q = roulette_q(*beta, eta_scale, r_u, depth, min_bounces);
+  if (q > Real(0)) {
+    if (u < q) return false;
+    *beta = *beta / (Real(1) - q);  // q < 1 when beta has a positive lane
+  }
+  return true;
+}
+
+// A unit vector as 32 bits: the octahedral map, each coordinate quantised to snorm16 with
+// rounding to nearest. prev_ng and prev_ns hold it (0003 d19 rows 15-16).
+// Ref: Cigolle, Donow, Evangelakos, Mara, McGuire and Meyer 2014, "A Survey of Efficient
+// Representations for Independent Unit Vectors", JCGT 3(2), listing 1 (float32x3_to_oct,
+// oct_to_float32x3, signNotZero) and section 3 (snorm quantisation).
+AR_FN Real oct_sign(Real x) { return x >= Real(0) ? Real(1) : Real(-1); }
+AR_FN uint32_t oct_snorm16(Real x) {
+  const Real c = min(max(x, Real(-1)), Real(1));
+  return uint32_t(uint16_t(int16_t(ar::floor(c * Real(32767) + Real(0.5)))));
+}
+AR_FN uint32_t oct_encode(Real3 n) {
+  const Real inv = Real(1) / (ar::abs(n.x) + ar::abs(n.y) + ar::abs(n.z));
+  Real px = n.x * inv, py = n.y * inv;
+  if (n.z <= Real(0)) {
+    const Real qx = (Real(1) - ar::abs(py)) * oct_sign(px), qy = (Real(1) - ar::abs(px)) * oct_sign(py);
+    px = qx, py = qy;
+  }
+  return oct_snorm16(px) | (oct_snorm16(py) << 16);
+}
+AR_FN Real3 oct_decode(uint32_t e) {
+  const Real ex = Real(int16_t(uint16_t(e & 0xffffu))) / Real(32767);
+  const Real ey = Real(int16_t(uint16_t(e >> 16))) / Real(32767);
+  Real3 v{ex, ey, Real(1) - ar::abs(ex) - ar::abs(ey)};
+  if (v.z < Real(0)) {
+    const Real vx = (Real(1) - ar::abs(ey)) * oct_sign(ex), vy = (Real(1) - ar::abs(ex)) * oct_sign(ey);
+    v.x = vx, v.y = vy;
+  }
+  return normalize(v);
 }
 
 // A row-major 3x4 object-to-world transform (DeviceInstanceRecord::object_to_world).

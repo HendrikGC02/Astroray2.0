@@ -11,17 +11,24 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
 
 #include "device/cpu/cpu_device.h"
+#include "host/material/material_store.h"
 #include "host/scene/edit.h"
+#include "host/scene/instances.h"
+#include "host/scene/mesh.h"
 #include "host/scene/scene.h"
 #include "host/session/session.h"
 #include "host/thread_pool.h"
 #include "kernel/kernel_globals.h"
+#include "kernel/launch_config.h"
+#include "vm/ops.h"
 
 using namespace astroray;
 using namespace astroray::host;
@@ -379,4 +386,118 @@ TEST_CASE("session/view away and back after an interrupt forces an epoch") {
   CHECK(until([&] { return r.s->stats().passes_resolved >= 2; }));
   CHECK(r.s->failure().empty());
 }
+}  // TEST_SUITE
+
+
+namespace {
+
+// Every camera path of the pass arrives at SHADE_SURFACE on triangle i % 2 of instance 0, and the
+// stub stage ends it: the sort decision then depends only on the segment size and the scene's
+// material count (kSortMinItems, kSortMinMaterials).
+void gen_to_surface(const ar::KernelGlobals& kg, uint32_t first, uint32_t last) {
+  const ar::StepEntry& e = kg.step_table->stage[static_cast<uint32_t>(ar::Stage::TERMINATED)];
+  for (uint32_t i = first; i < last; ++i) {
+    const uint32_t slot = kg.main_queue[e.start + i];
+    ar::ps_flags(kg, slot) = 0u;
+    ar::ps_hit_inst(kg, slot) = 0u;
+    ar::ps_hit_prim(kg, slot) = i & 1u;
+    ar::ps_next_stage(kg, slot) = static_cast<uint8_t>(ar::Stage::SHADE_SURFACE);
+  }
+}
+
+void surface_terminate(const ar::KernelGlobals& kg, const ar::StepEntry& step, uint32_t first, uint32_t last) {
+  for (uint32_t i = first; i < last; ++i)
+    ar::ps_next_stage(kg, kg.main_queue[step.start + i]) = static_cast<uint8_t>(ar::Stage::TERMINATED);
+}
+
+// A quad instanced once with `materials` emission materials in its slot pool.
+void commit_quad(Scene& scene, uint32_t materials) {
+  scene.meshes = std::make_shared<MeshStore>();
+  scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
+  const auto commit = [&](auto&& body) {
+    auto e = scene.begin_edit();
+    REQUIRE(e);
+    body(*e);
+    uint64_t g = 0;
+    REQUIRE(e->commit(&g) == AR_OK);
+    scene.materials->end_edit();
+    e.reset();
+    scene.generations().wait_idle();
+    REQUIRE(scene.generations().failed() == 0);
+  };
+  std::vector<ar_key> keys;
+  commit([&](Edit& e) {
+    for (uint32_t m = 0; m < materials; ++m) {
+      std::vector<ar_graph_node> nodes(3);
+      std::vector<ar_graph_link> links{{0, 0, 2, 0}, {1, 0, 2, 1}};
+      std::vector<float> f{1.0f, 0.5f, 0.25f, 1.0f + float(m)};
+      nodes[0].op = uint32_t(ar::Op::CONST_F32X3), nodes[0].f32_count = 3;
+      nodes[1].op = uint32_t(ar::Op::CONST_F32), nodes[1].f32_first = 3, nodes[1].f32_count = 1;
+      nodes[2].op = uint32_t(ar::Op::EMIT_LE);
+      ar_graph_desc d = {};
+      d.node_count = 3, d.link_count = 2, d.f32_count = 4, d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data();
+      REQUIRE(scene.materials->set_graph(e, 1000 + m, &d) == AR_OK);
+      ar_material_desc md = {};
+      md.surface_graph = 1000 + m;
+      md.emission_sampling = AR_EMISSION_SAMPLING_AUTO;
+      REQUIRE(scene.materials->set_material(e, 1 + m, &md) == AR_OK);
+      keys.push_back(1 + m);
+    }
+    const std::vector<float> pos{0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0};
+    const std::vector<int32_t> cv{0, 1, 2, 3}, fs{0};
+    ar_mesh_desc d = {};
+    d.key = 100, d.vertex_count = 4, d.corner_count = 4, d.face_count = 1, d.motion_steps = 1;
+    ar_mesh_buffers b = {};
+    REQUIRE(mesh_begin(scene, e, &d, &b) == AR_OK);
+    std::memcpy(*b.positions, pos.data(), pos.size() * 4);
+    std::memcpy(*b.corner_vert, cv.data(), cv.size() * 4);
+    std::memcpy(*b.face_start, fs.data(), fs.size() * 4);
+    for (uint64_t i = 0; i < b.corner_normals_count; ++i) (*b.corner_normals)[i] = i % 3 == 2 ? 1.0f : 0.0f;
+    REQUIRE(e.item_commit(100) == AR_OK);
+  });
+  commit([&](Edit& e) {
+    std::vector<ar_key> geom{100}, object{1};
+    std::vector<ar_xform> xf(1);
+    xf[0].m[0] = xf[0].m[5] = xf[0].m[10] = 1.0f;
+    std::vector<uint32_t> zeros(1, 0), vis(1, AR_VISIBILITY_CAMERA), moff{0}, mcount{uint32_t(keys.size())};
+    std::vector<ar_rgba> colors(1, ar_rgba{{1, 1, 1, 1}});
+    std::vector<uint8_t> lg(1, 0);
+    ar_instances_desc d = {};
+    d.instance_count = 1, d.motion_steps = 1, d.transform_count = 1, d.material_key_count = uint32_t(keys.size());
+    d.geom_keys = geom.data(), d.xf = xf.data(), d.object_keys = object.data();
+    d.random_ids = d.pass_indices = d.crypto_objects = d.crypto_assets = zeros.data();
+    d.colors = colors.data(), d.visibility = vis.data(), d.flags = zeros.data(), d.light_groups = lg.data();
+    d.material_offsets = moff.data(), d.material_counts = mcount.data(), d.material_keys = keys.data();
+    REQUIRE(set_instances(e, &d) == AR_OK);
+  });
+}
+
+}  // namespace
+
+TEST_SUITE("gate") {
+
+TEST_CASE("session/shade_surface items are sorted once the scene has two materials") {
+  // The session hands the pinned table set's material count to the scheduler at each latch, so a
+  // pass whose SHADE_SURFACE segment holds kSortMinItems paths sorts it with two materials and
+  // not with one (0002 D7 step 3).
+  for (uint32_t materials : {2u, 1u}) {
+    ContextState ctx;
+    Scene scene(ctx, SceneConfig{2, {}, {}});
+    commit_quad(scene, materials);
+    Rig r(ctx, scene, 8, ar::kSortMinItems, &gen_to_surface);
+    r.dev.register_stage(ar::Stage::SHADE_SURFACE, &surface_terminate);
+    r.s->start();
+    REQUIRE(until([&] { return r.s->stats().passes_resolved >= 1; }));
+    const PassCounters pc = r.s->pass_counters();
+    std::printf("session sort: %u materials, %llu SHADE_SURFACE items, %llu sorts\n", materials,
+                static_cast<unsigned long long>(pc.items[static_cast<uint32_t>(ar::Stage::SHADE_SURFACE)]),
+                static_cast<unsigned long long>(pc.sorts));
+    CHECK(pc.items[static_cast<uint32_t>(ar::Stage::SHADE_SURFACE)] >= ar::kSortMinItems);
+    CHECK((pc.sorts > 0) == (materials >= ar::kSortMinMaterials));
+    r.s->close();
+    CHECK(until([&] { return state(*r.s) == AR_STATE_CLOSED; }));
+    CHECK(r.s->failure().empty());
+  }
+}
+
 }  // TEST_SUITE

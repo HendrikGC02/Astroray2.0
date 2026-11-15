@@ -158,6 +158,25 @@ AR_MATH1(abs, fabs)
 AR_MATH2(atan2, atan2)
 AR_MATH2(pow, pow)
 
+// sin(pi x) and cos(pi x), for angles that are pi times a sampled value (phi = 2 pi u). CUDA's
+// sinpif / cospif reduce the argument exactly, so they carry no double-precision slow path, which
+// sinf / cosf do and which a GPU shade kernel may not contain (0002 D8, ptxas
+// --warn-on-double-precision-use). MSVC's C++17 library has no sinpi, so the CPU evaluates
+// sin(pi x) in double and rounds once; both stay within about 1 ulp of the true value.
+// Ref: CUDA C++ Programming Guide, appendix "Mathematical Functions" (sinpif, cospif: 1 ulp).
+inline constexpr double kPiDouble = double(3.14159265358979323846);  // pi to double precision
+#if AR_CUDA_BUILD
+AR_FN float sinpi(float x) { return ::sinpif(x); }
+AR_FN double sinpi(double x) { return ::sinpi(x); }
+AR_FN float cospi(float x) { return ::cospif(x); }
+AR_FN double cospi(double x) { return ::cospi(x); }
+#else
+AR_FN float sinpi(float x) { return float(std::sin(kPiDouble * double(x))); }
+AR_FN double sinpi(double x) { return std::sin(kPiDouble * x); }
+AR_FN float cospi(float x) { return float(std::cos(kPiDouble * double(x))); }
+AR_FN double cospi(double x) { return std::cos(kPiDouble * x); }
+#endif
+
 AR_FN float fma(float x, float y, float z) { return AR_MATH_F(fma, x, y, z); }
 AR_FN double fma(double x, double y, double z) { return AR_MATH_D(fma, x, y, z); }
 

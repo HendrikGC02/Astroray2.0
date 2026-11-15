@@ -42,6 +42,9 @@ struct SessionUniforms {
   uint32_t sampler_mode;       // SAMPLER_SOBOL or SAMPLER_INDEPENDENT (sample/sobol.h)
   uint32_t max_bounces[6];
   StateFeatures features;
+  // Blender's min_light_bounces: Russian roulette starts at depth max(2, min_bounces), so a value
+  // at or above max_bounces[0] disables it, as in Cycles (0004 D2).
+  uint32_t min_bounces;
 };
 
 // Opaque until the task that needs them defines them.

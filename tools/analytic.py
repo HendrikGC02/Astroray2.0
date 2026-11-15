@@ -42,7 +42,7 @@ SIZE = 32  # 0009 d11: analytic scenes at 32x32 in gate
 # 64 spp the skewed spectral samples put the worst |z| at 5.48 against 5.50. Lower values need their
 # own null run first. At 1024 spp a 1% emission error is about 7.7 SE in A5's green channel.
 MIN_SPP = 1024
-GATE_SCENES = ("a5_emitter", "y_anchor")  # 0009 d11: run by check.ps1 gate on both devices
+GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace")  # 0009 d11: run by check.ps1 gate on both devices
 DEVICES = ("cpu", "cuda")
 FAMILY_ALPHA = 0.01  # 0009 d15
 # tests/common/stat.cpp kRepoConstant and the FNV-1a / MixBits rule of seed_for() (task 020).
@@ -103,13 +103,18 @@ def pixel_z(m, pixels):
 
 
 def check_channel(mean, var, truth, z, eps_sys):
-    """One scene channel. mean, var (variance of the mean) and truth are (h, w) arrays. Returns
+    """One scene channel. mean, var (variance of the mean) and truth are (h, w) arrays; a NaN truth
+    marks a pixel the scene's truth excludes (A1's silhouette), which is not tested. Returns
     (pass, reasons, worst) with worst = (z of the worst pixel, (x, y)), the worst pixel being the one
     with the largest |mean - truth| / (z SE + eps_sys)."""
     mean, var, truth = (np.asarray(a, dtype=np.float64) for a in (mean, var, truth))
     reasons = []
     if not (np.isfinite(mean).all() and np.isfinite(var).all()) or (var < 0).any():
         return False, ["non-finite mean or variance, or negative variance"], (math.inf, (0, 0))
+    tested = ~np.isnan(truth)
+    if not tested.any():
+        return False, ["the truth excludes every pixel"], (math.inf, (0, 0))
+    truth = np.where(tested, truth, mean)  # an excluded pixel has d = 0
     se = np.sqrt(var)
     d = mean - truth
     tol = z * se + eps_sys
@@ -121,10 +126,11 @@ def check_channel(mean, var, truth, z, eps_sys):
     bad = int((ratio > 1).sum())
     if bad:
         reasons.append(f"{bad} pixels outside z SE + eps_sys")
-    lit = truth != 0
+    lit = tested & (truth != 0)
     if lit.any() and not (mean[lit] != 0).any():
         reasons.append("black where truth is not")
-    if truth.max() != truth.min() and mean.max() == mean.min():
+    tt, mt = truth[tested], mean[tested]
+    if tt.max() != tt.min() and mt.max() == mt.min():
         reasons.append("constant where truth varies")
     return not reasons, reasons, worst
 
@@ -183,8 +189,11 @@ def check_scene(mean, var, checks, m, eps_sys):
             # by the sum of the parts' SEs (Minkowski inequality for standard deviations).
             cvar = np.tensordot(np.abs(w), np.sqrt(var), axes=1) ** 2
         if kind == "pixels":
-            passed, reasons, worst = check_channel(cmean, cvar, truth, pixel_z(m, npix), eps_sys)
+            ntested = int(np.count_nonzero(~np.isnan(truth)))  # Sidak over the pixels tested
+            passed, reasons, worst = check_channel(cmean, cvar, truth, pixel_z(m, max(ntested, 1)), eps_sys)
         elif kind == "image":
+            if np.isnan(truth).any():
+                raise ValueError(f"check {name}: an image-mean check cannot exclude pixels")
             # The image mean of independent pixel means: variance sum(VAR) / npix^2, one test at the
             # family's per-test alpha.
             passed, reasons, worst = check_channel(
@@ -192,7 +201,9 @@ def check_scene(mean, var, checks, m, eps_sys):
                 np.full((1, 1), truth.mean()), pixel_z(m, 1), eps_sys)
         else:
             raise ValueError(f"check {name}: unknown kind {kind!r}")
-        out.append((name, passed, reasons, worst, float(cmean.mean()), float(truth.mean())))
+        tested = ~np.isnan(truth)
+        out.append((name, passed, reasons, worst, float(cmean[tested].mean()) if tested.any() else math.nan,
+                    float(np.nanmean(truth)) if tested.any() else math.nan))
     return out
 
 
@@ -251,11 +262,12 @@ def run(scene, device, spp, seed, png=None):
     for name, passed, reasons, worst, cmean, tmean in results:
         if worst_all is None or abs(worst[0]) > abs(worst_all[0]):
             worst_all = (worst[0], worst[1], name)
+        excluded = int(np.isnan(next(c[2] for c in checks if c[0] == name)).sum())
         print(f"analytic {scene} {device} {name}: {'ok' if passed else 'FAIL'} mean {cmean:.6f} "
               f"truth {tmean:.6f} worst z {worst[0]:+.2f} at {worst[1]}"
-              + ("" if passed else "; " + "; ".join(reasons)))
+              + (f", {excluded} excluded pixels" if excluded else "") + ("" if passed else "; " + "; ".join(reasons)))
     if png:
-        tmax = max(float(np.max(t)) for _, _, t, _ in checks)
+        tmax = max(float(np.nanmax(t)) for _, _, t, _ in checks)
         write_png(png, mean, 0.5 / tmax if tmax > 0 else 1.0)
     secs = time.perf_counter() - t0
     print(f"{'PASS' if ok else 'FAIL'} analytic {scene} {device}: worst z {worst_all[0]:+.2f} "

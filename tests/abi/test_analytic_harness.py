@@ -93,6 +93,45 @@ class TestHarness(unittest.TestCase):
         self.assertEqual(len(image), 1)
         self.assertFalse(image[0][1], image)
 
+    def test_excluded_pixels_are_not_tested(self):
+        # A NaN truth excludes its pixel: a wild value there passes, the same value on a tested
+        # pixel fails, and a truth that excludes everything fails.
+        truth = self.truth.copy()
+        truth[3, 4] = np.nan
+        mean = self.truth.copy()
+        mean[3, 4] = 1e6
+        ok, reasons, _ = harness.check_channel(mean, self.var, truth, Z, 0.0)
+        self.assertTrue(ok, reasons)
+        mean[3, 5] = 1e6
+        ok, _, worst = harness.check_channel(mean, self.var, truth, Z, 0.0)
+        self.assertFalse(ok)
+        self.assertEqual(worst[1], (5, 3))
+        ok, reasons, _ = harness.check_channel(mean, self.var, np.full((N, N), np.nan), Z, 0.0)
+        self.assertFalse(ok)
+        self.assertEqual(reasons, ["the truth excludes every pixel"])
+
+    def test_lambertian_furnace_truth(self):
+        # A1 (0009 d20): rho Lw on pixels whose rays all hit the mesh, Lw on pixels whose rays all
+        # miss the sphere, the silhouette's pixels excluded; the classes are a disc, symmetric
+        # about the image centre, with both kinds of tested pixel present.
+        t = harness.meta.load(os.path.join(ROOT, "scenes", "a1_furnace", "meta.toml"))["truth"]
+        checks = harness.truths.evaluate(t, N, N)
+        self.assertEqual([c[0] for c in checks], ["R", "G", "B"])
+        truth = checks[0][2]
+        rho_lw, lw = t["rho"] * t["world_radiance"], t["world_radiance"]
+        excluded = np.isnan(truth)
+        self.assertTrue(set(np.unique(truth[~excluded])) == {rho_lw, lw})
+        self.assertTrue((truth[N // 2 - 1:N // 2 + 1, N // 2 - 1:N // 2 + 1] == rho_lw).all())
+        self.assertTrue((truth[0, :] == lw).all())
+        self.assertTrue(0 < excluded.sum() < (truth == rho_lw).sum())
+        np.testing.assert_array_equal(excluded, excluded[::-1, ::-1])
+        # The exact truth passes whatever the excluded pixels hold; the sphere at twice rho Lw fails.
+        mean = np.where(excluded, 0.6, truth)[None].repeat(3, 0)
+        var = np.full((3, N, N), 1e-6)
+        self.assertTrue(all(r[1] for r in harness.check_scene(mean, var, checks, 256, 0.0)))
+        bad = np.where(truth == rho_lw, 2 * rho_lw, mean[0])[None].repeat(3, 0)
+        self.assertFalse(any(r[1] for r in harness.check_scene(bad, var, checks, 256, 0.0)))
+
     def test_spp_below_calibrated_minimum_is_refused(self):
         harness.check_spp(1024)
         with self.assertRaises(ValueError):
