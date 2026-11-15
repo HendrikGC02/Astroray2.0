@@ -17,3 +17,4 @@ Budget: none.
 Depends on: 021, 023.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
+- Done: host table (1024 visible bins, exact bin masses from the tanh antiderivative, 5% floor, add_lines throws on non-empty), kernel sampler, planck_radiance_t<R> (double for the host), blackbody_y_normalised. Check 10 worst: 5.566e-07 at 2.06326 nm, 9.69001e+07 K (0.573 of bound); 102 subnormal-reference points skipped (below FLT_MIN, bound not defined). Canary tasks/024.canary.patch verified red.

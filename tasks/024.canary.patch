@@ -1,0 +1,26 @@
+diff --git a/src/kernel/spectral/planck.h b/src/kernel/spectral/planck.h
+index 91def18..0bf6ac0 100644
+--- a/src/kernel/spectral/planck.h
++++ b/src/kernel/spectral/planck.h
+@@ -30,7 +30,7 @@ AR_FN R planck_radiance_t(R lambda_nm, R T) {
+   const R inv_l5 = R(1) / (l4 * l);
+   // x = c2 / (l T) with the um -> nm factor folded into the constant: one rounding fewer.
+   const R x = R(kPlanckC2 * kNmPerUm) / (lambda_nm * T);
+-  const R ratio = ar::exp(-x) / (-ar::expm1(-x));
++  const R ratio = ar::exp(-x) / (R(1) - ar::exp(-x));
+   return R(kPlanckC1L * kUmPerNm) * inv_l5 * ratio;
+ }
+ 
+diff --git a/src/kernel/spectral/wavelength.h b/src/kernel/spectral/wavelength.h
+index b0bcfc7..5a24316 100644
+--- a/src/kernel/spectral/wavelength.h
++++ b/src/kernel/spectral/wavelength.h
+@@ -46,7 +46,7 @@ AR_FN uint32_t wavelength_bin(const WavelengthTableView& t, Real u) {
+ AR_FN FilmWavelengths sample_film_wavelengths(const WavelengthTableView& t, Real u) {
+   FilmWavelengths out;
+   for (int i = 0; i < kLanes; ++i) {
+-    Real ui = u + Real(i) * Real(0.25);
++    Real ui = u + Real(i) * Real(0.2);
+     ui -= ar::floor(ui);
+     const uint32_t b = wavelength_bin(t, ui);
+     const Real c0 = Real(load_ro(t.cdf + b));
