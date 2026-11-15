@@ -122,8 +122,12 @@ AR_FN uint32_t lane_id() {
 #endif
 }
 
-// Math wrappers overloaded on float and double. On the GPU they are the
-// correctly rounded CUDA functions (no fast math, D12); on the CPU <cmath>.
+// Math wrappers overloaded on float and double: the CUDA library functions on the GPU (no fast
+// math, D12), <cmath> on the CPU. Only sqrt (built with -prec-sqrt=true), fma, floor, ceil and
+// abs are exact or correctly rounded on both targets. The others (exp, expm1, log, the
+// trigonometric ones, atan2, cosh, pow) carry library-specific ulp errors; powf in particular
+// differs from MSVC's in the last bit for some inputs, so bit-exact CPU/GPU code must not rely
+// on them. Ref: CUDA C++ Programming Guide, appendix "Mathematical Functions" (ulp error tables).
 #if AR_CUDA_BUILD
 #define AR_MATH_F(c, ...) ::c##f(__VA_ARGS__)
 #define AR_MATH_D(c, ...) ::c(__VA_ARGS__)
@@ -162,6 +166,30 @@ AR_FN float min(float a, float b) { return b < a ? b : a; }
 AR_FN double min(double a, double b) { return b < a ? b : a; }
 AR_FN float max(float a, float b) { return a < b ? b : a; }
 AR_FN double max(double a, double b) { return a < b ? b : a; }
+
+// One 8-bit texel as RGBA floats, raw: value / 255 with no transfer function (filtering happens
+// on stored values, 0005 item 34). Grey expands to (g, g, g, 1) and RGB gets alpha 1, as Cycles
+// reads single-channel bytes and stores RGB bytes as RGBA. `p` is the texel's first byte
+// (image_texel in scene/texture_view.h); the bytes go through the read-only path (0002 D13).
+// Ref: Cycles intern/cycles/kernel/util/image.h, ImageInterpolator::read for uchar and uchar4
+// (r * (1.0f / 255.0f)), and kernel_image_interp (make_float4(f, f, f, 1.0f)) (Apache-2.0).
+struct Texel {
+  float v[4];
+};
+
+AR_FN Texel load_texel(const uint8_t* p, uint32_t channels) {
+  const float f = 1.0f / 255.0f;
+  Texel t;
+  if (channels == 1u) {
+    const float g = float(load_ro(p)) * f;
+    t.v[0] = t.v[1] = t.v[2] = g;
+    t.v[3] = 1.0f;
+    return t;
+  }
+  for (uint32_t c = 0; c < 3u; ++c) t.v[c] = float(load_ro(p + c)) * f;
+  t.v[3] = channels == 4u ? float(load_ro(p + 3)) * f : 1.0f;
+  return t;
+}
 
 #undef AR_MATH1
 #undef AR_MATH2

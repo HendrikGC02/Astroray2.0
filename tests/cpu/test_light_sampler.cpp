@@ -392,7 +392,7 @@ TEST_CASE("light_sampler/world with a non-constant node raises one entry") {
   Fixture fx;
   GB varying;
   const int uv = varying.add(ar::Op::LOAD_CTX_UV, {}, {0});
-  const int tex = varying.add(ar::Op::TEX_IMAGE, {}, {7});
+  const int tex = varying.add(ar::Op::TEX_IMAGE, {}, {7, 0});
   varying.links.push_back({uint32_t(uv), 0u, uint32_t(tex), 0u});
   varying.emit(tex, varying.add(ar::Op::CONST_F32, {2.0f}));
   fx.commit([&](Edit& e) {

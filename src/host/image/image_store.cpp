@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "../../kernel/color/srgb.h"
 #include "host/image/decode.h"
 #include "host/scene/edit.h"
 
@@ -17,15 +18,14 @@ namespace {
 
 namespace fs = std::filesystem;
 
-// The sRGB electro-optical transfer function, encoded value in [0,1] to linear.
-// Ref: IEC 61966-2-1:1999 (sRGB), the piecewise definition.
-double srgb_to_linear(double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); }
-
 // The linear-RGB mean: each texel is decoded by the transfer function before averaging (the
 // mean of the light, not of the code values). Grey images count as r = g = b; alpha is ignored.
+// An sRGB texel's value is the kernel's own table entry for the byte (Closest returns exactly it).
 std::array<float, 3> image_mean(const Image& im) {
+  float srgb[ar::kSrgbTableSize];
+  ar::srgb_decode_table(srgb);
   double lut[256];
-  for (int i = 0; i < 256; ++i) lut[i] = im.encoding == ar::TexEncoding::SRGB ? srgb_to_linear(i / 255.0) : i / 255.0;
+  for (int i = 0; i < 256; ++i) lut[i] = im.encoding == ar::TexEncoding::SRGB ? double(srgb[i]) : i / 255.0;
   double sum[3] = {0, 0, 0};
   const uint8_t* t = im.texels.data();
   const size_t n = size_t(im.width) * im.height;
@@ -92,7 +92,11 @@ bool interop_encoding(uint32_t v, ar::TexEncoding* out) {
   }
 }
 
-ImageStore::ImageStore(std::shared_ptr<Ledger> ledger) : ledger_(std::move(ledger)), arrays_(std::make_shared<ImageArrays>()) {}
+ImageStore::ImageStore(std::shared_ptr<Ledger> ledger) : ledger_(std::move(ledger)), magenta_(magenta(0, std::string()).image) {
+  auto a = std::make_shared<ImageArrays>();
+  ar::srgb_decode_table(a->srgb_decode.data());
+  arrays_ = std::move(a);
+}
 
 ImageStore::~ImageStore() {
   if (ledger_id_ != 0) ledger_->remove(ledger_id_);
@@ -176,39 +180,90 @@ ar_status ImageStore::set_image(Edit& edit, const ar_image_desc* d) {
   const ar_key key = d->key;
   item->job = [self, s, result] { *result = self->load(s->desc, s->packed); };
   item->on_active = [self, key, result] { self->install(key, *result); };
+  item->on_dropped = [self, key] { self->dropped(key); };
   if (ar_status st = edit.stage(item)) return st;
-  return edit.item_commit(key);
+  if (ar_status st = edit.item_commit(key)) return st;
+  std::lock_guard<std::mutex> lock(mutex_);
+  assign_slot_locked(key);
+  return AR_OK;
+}
+
+uint32_t ImageStore::assign_slot_locked(ar_key key) {
+  auto it = slots_.find(key);
+  if (it != slots_.end()) return it->second;
+  uint32_t s = uint32_t(slot_keys_.size());
+  if (!free_slots_.empty()) {
+    s = free_slots_.back();
+    free_slots_.pop_back();
+    slot_keys_[s] = key;
+  } else {
+    slot_keys_.push_back(key);
+  }
+  slots_[key] = s;
+  return s;
+}
+
+// Only a key with no active image gives its slot up; a program compiled against the slot was
+// compiled while the image was active and is recompiled in the generation that removes it.
+void ImageStore::free_slot_locked(ar_key key) {
+  auto it = slots_.find(key);
+  if (it == slots_.end() || active_.count(key) != 0) return;
+  slot_keys_[it->second] = 0;
+  free_slots_.push_back(it->second);
+  slots_.erase(it);
+}
+
+// A dropped set never happened. A later queued set of the same key reassigns a slot on install.
+void ImageStore::dropped(ar_key key) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  free_slot_locked(key);
 }
 
 void ImageStore::install(ar_key key, const ImageResult& r) {
   std::lock_guard<std::mutex> lock(mutex_);
   active_[key] = r.image;
+  assign_slot_locked(key);  // normally the slot set_image assigned; again if a removal freed it
   if (r.code != 0) pending_.push_back({key, r.code, r.detail});
   rebuild_locked();
 }
 
 void ImageStore::remove(bool reset, const std::set<ar_key>& removed, const std::set<ar_key>& keep) {
   std::lock_guard<std::mutex> lock(mutex_);
+  std::set<ar_key> gone;
   if (reset) {
-    for (auto it = active_.begin(); it != active_.end();) it = keep.count(it->first) ? std::next(it) : active_.erase(it);
+    for (auto it = active_.begin(); it != active_.end();) {
+      if (keep.count(it->first)) {
+        ++it;
+      } else {
+        gone.insert(it->first);
+        it = active_.erase(it);
+      }
+    }
   }
   for (ar_key k : removed)
-    if (!keep.count(k)) active_.erase(k);
+    if (!keep.count(k)) active_.erase(k), gone.insert(k);
+  for (ar_key k : gone) free_slot_locked(k);
   rebuild_locked();
 }
 
 void ImageStore::rebuild_locked() {
   auto a = std::make_shared<ImageArrays>();
+  a->srgb_decode = arrays_->srgb_decode;
   uint64_t bytes = 0;
   std::set<const Image*> counted;  // a cached image shared by several keys is one allocation
-  for (const auto& kv : active_) {
-    const Image& im = *kv.second;
+  for (uint32_t s = 0; s < slot_keys_.size(); ++s) {
+    const ar_key key = slot_keys_[s];
+    auto it = slots_.find(key);
+    const bool held = it != slots_.end() && it->second == s;
+    auto act = held ? active_.find(key) : active_.end();
+    const std::shared_ptr<const Image>& image = act != active_.end() ? act->second : magenta_;
+    const Image& im = *image;
     ar::DeviceImageView v = {};
     v.texels = uint64_t(uintptr_t(im.texels.data()));
     v.width = im.width, v.height = im.height, v.channels = im.channels, v.encoding = uint32_t(im.encoding);
-    a->keys.push_back(kv.first);
+    a->keys.push_back(held ? key : 0);
     a->views.push_back(v);
-    a->images.push_back(kv.second);
+    a->images.push_back(image);
     if (counted.insert(&im).second) bytes += im.bytes();
   }
   const uint64_t id = bytes != 0 ? ledger_->add(Owner{}, LedgerCategory::TEXTURES, bytes) : 0;
@@ -239,6 +294,14 @@ bool ImageStore::mean(ar_key key, std::array<float, 3>* rgb) const {
   const std::shared_ptr<const Image> im = find(key);
   if (!im) return false;
   *rgb = im->mean;
+  return true;
+}
+
+bool ImageStore::slot(ar_key key, uint32_t* out) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = slots_.find(key);
+  if (it == slots_.end() || active_.count(key) == 0) return false;
+  *out = it->second;
   return true;
 }
 

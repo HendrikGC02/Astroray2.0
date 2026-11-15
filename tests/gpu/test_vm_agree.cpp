@@ -3,7 +3,8 @@
 // the interpreter on the CPU (float) and on the GPU built without FMA contraction, on 10^5 fixed
 // host-generated inputs; every program's result (registers, Le, record fields) agrees within
 // 1e-6 relative error, and the largest error per opcode is printed. The programs cover every
-// M1a opcode that does not need an image.
+// M1a opcode; TEX_IMAGE runs without an image table (the missing-image path), and its filtering
+// agreement is test_tex_image_agree.cpp.
 // Ref: docs/decisions/0005-material-model.md Verification 6; docs/decisions/0002-kernel-
 // architecture.md D12; 0009 d17.
 #include <doctest.h>
@@ -109,7 +110,8 @@ std::vector<Named> programs() {
                                              .op(Op::LOAD_CTX_UV, 19, 1)
                                              .op(Op::LOAD_CTX_P, 22)
                                              .op(Op::END)});
-  p.push_back({"TEX_IMAGE", Prog().op(Op::TEX_IMAGE, 16, 0, 0, {0u}).op(Op::END)});
+  // No image table here: every slot is missing and samples magenta (tex_agree.cu covers filtering).
+  p.push_back({"TEX_IMAGE", Prog().op(Op::TEX_IMAGE, 16, 0, 0, {0u, 0u}).op(Op::TEX_IMAGE, 19, 0, 0, {5u, 3u}).op(Op::END)});
   p.push_back({"JMP", Prog()
                           .op(Op::CONST_F32, 16, 0, 0, {fb(1.0f)})
                           .op(Op::JMP, 0, 0, 0, {4u})
@@ -137,6 +139,8 @@ Results cpu_run(const Prog& p, const Inputs& in, const Tables& tb) {
   r.stride = kOut;
   r.v.assign(size_t(in.n) * kOut, 0.0);
   ar::SceneTables tables = {};
+  tables.images = nullptr;  // no image table: TEX_IMAGE samples magenta, as in vm_agree.cu
+  tables.image_count = 0;
   tables.rgb2spec = &tb.table;
   tables.observer.cmf = &tb.obs.cmf[0][0];
   tables.observer.illum = tb.obs.d65;

@@ -29,7 +29,7 @@ AR_OP(MUL_F32,         2, "reg+reg+reg",      "f32",   CHEAP, interval_mul_f32, 
 AR_OP(MUL_F32X3,       2, "reg+reg+reg",      "f32x3", CHEAP, interval_mul_f32x3,     true,  false)
 AR_OP(MUL_F32X3_F32,   2, "reg+reg+reg",      "f32x3", CHEAP, interval_mul_f32x3_f32, true,  false)
 AR_OP(ADD_F32X3,       2, "reg+reg+reg",      "f32x3", CHEAP, interval_add_f32x3,     true,  false)
-AR_OP(TEX_IMAGE,       1, "reg+reg+imm",      "f32x3", TEX,   NONE_SURFACE_ONLY,      false, false)
+AR_OP(TEX_IMAGE,       1, "reg+reg+imm+imm",  "f32x3", TEX,   NONE_SURFACE_ONLY,      false, false)
 AR_OP(STORE_SLOT,      1, "reg+slotimm",      "",      CHEAP, NONE_SURFACE_ONLY,      false, false)
 AR_OP(RGB_LIFT,        1, "reg+reg+lift",     "spec",  CHEAP, NONE_SURFACE_ONLY,      false, false)
 AR_OP(EMIT_LE,         1, "regrgbs",          "",      CHEAP, NONE_SURFACE_ONLY,      false, false)

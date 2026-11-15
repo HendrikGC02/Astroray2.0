@@ -4,6 +4,7 @@
 #include "../../kernel/material/constant_block.h"
 #include "../../kernel/vm/context.h"
 #include "../../kernel/vm/ops/store_slot.h"
+#include "../../kernel/vm/ops/tex_image.h"
 
 namespace astroray::host {
 namespace {
@@ -20,9 +21,9 @@ bool param_counts(Op op, uint32_t* nf, uint32_t* ni) {
     case Op::CONST_F32: *nf = 1; return true;
     case Op::CONST_F32X3: *nf = 3; return true;
     case Op::LOAD_CTX_UV:
-    case Op::TEX_IMAGE:
     case Op::RGB_LIFT:
     case Op::STORE_SLOT: *ni = 1; return true;
+    case Op::TEX_IMAGE: *ni = 2; return true;  // image ar_key (low 32 bits), mode bits (tex_image.h)
     case Op::LOAD_CTX_P:
     case Op::MUL_F32:
     case Op::MUL_F32X3:
@@ -122,6 +123,8 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
       return *err = at(i, "UV set index out of range"), false;
     if (o.op == Op::RGB_LIFT && uint32_t(g->i32[o.i32_first]) > uint32_t(ar::SpectrumSemantic::ILLUMINANT))
       return *err = at(i, "RGB_LIFT semantic must be REFLECTANCE, UNBOUNDED or ILLUMINANT"), false;
+    if (o.op == Op::TEX_IMAGE && (uint32_t(g->i32[o.i32_first + 1]) & ~ar::kTexModeMask) != 0u)
+      return *err = at(i, "TEX_IMAGE mode must be CLOSEST (0) or LINEAR (1) plus REPEAT (0) or EXTEND (2)"), false;
     if (o.op == Op::STORE_SLOT && uint32_t(g->i32[o.i32_first]) >= uint32_t(ar::RecordSlot::COUNT_))
       return *err = at(i, "unknown record slot"), false;
   }

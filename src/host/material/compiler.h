@@ -23,6 +23,9 @@ namespace astroray::host {
 // The linear-RGB mean of the image a TEX_IMAGE immediate names (the image's ar_key). False when
 // the scene has no such image: the lookup then renders magenta, and the estimate uses magenta.
 using ImageMeanFn = std::function<bool(uint32_t image, std::array<float, 3>* rgb)>;
+// The image store's slot for a TEX_IMAGE key: false when no image is set under it. The graph
+// names images by key; only the compiled program holds slots, and the kernel never searches.
+using ImageSlotFn = std::function<bool(uint32_t image, uint32_t* slot)>;
 
 // One term of the emission estimate: Le = color * strength (0005 item 43). A sum of SpectrumRefs is
 // band-summable: each term integrates over a wavelength band on its own.
@@ -43,9 +46,12 @@ struct CompileResult {
   uint32_t clamp_flags = 0;
   uint64_t runtime_slots = 0;           // bit s: RecordSlot s is stored by the program, per point
   std::vector<EmissionTerm> emission;   // one term per EMIT_LE that does not fold to 0
-  // Images the emission estimate read, sorted. Compiled without an ImageMeanFn they count as
-  // mean 1, so the caller recompiles such a result with the means before using it.
+  // Images the program samples or the emission estimate read, sorted: the material recompiles
+  // when one of them is set, replaced or removed. Compiled without an ImageMeanFn they count as
+  // mean 1, and without an ImageSlotFn they sample magenta, so the caller recompiles such a
+  // result with both before using it.
   std::vector<uint32_t> images;
+  std::vector<uint32_t> missing_images;  // sampled keys the ImageSlotFn did not know, sorted
 };
 
 // A report entry the compiler owes for one material (subject = the material key).
@@ -64,13 +70,16 @@ struct MaterialOutput {
 };
 
 // Compiles the SURFACE graph. `table` is the working space's RGB-to-spectrum table.
-CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means = nullptr);
+CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means = nullptr,
+                              const ImageSlotFn* slots = nullptr);
 
 // compile_surface plus the policy of 0005 items 40 and 43: UNSUPPORTED or unknown ops give
 // NODE_UNSUPPORTED (one per node type), a compile error or a SpectrumRef kind M1a cannot resolve
 // gives PROGRAM_REJECTED, and either makes the material magenta; a clamped colour gives
-// NODE_APPROXIMATED. Never throws on bad input.
-MaterialOutput compile_material(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means = nullptr);
+// NODE_APPROXIMATED; a sampled image key that is not set gives IMAGE_UNREADABLE and samples
+// magenta. Never throws on bad input.
+MaterialOutput compile_material(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means = nullptr,
+                                const ImageSlotFn* slots = nullptr);
 
 // The material_header.h flags of a compiled program (0005 item 43).
 uint32_t material_flags(const CompileResult& r);

@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "astroray/astroray.h"
+#include "../../kernel/color/srgb.h"
 #include "../../kernel/scene/texture_view.h"
 #include "host/ledger.h"
 
@@ -51,12 +52,14 @@ struct ImageResult {
   std::string detail;
 };
 
-// The arrays of the active images. views[i] belongs to keys[i]; its texel address points into
-// images[i], which the arrays keep alive.
+// The kernel's image table, indexed by slot. views[i] belongs to keys[i]; its texel address
+// points into images[i], which the arrays keep alive. A slot whose key is free or not yet active
+// holds the 1x1 magenta image (keys[i] is then 0 for a free slot).
 struct ImageArrays {
   std::vector<ar_key> keys;
   std::vector<ar::DeviceImageView> views;
   std::vector<std::shared_ptr<const Image>> images;
+  std::array<float, ar::kSrgbTableSize> srgb_decode = {};  // SceneTables::srgb_decode
 };
 
 class ImageStore : public std::enable_shared_from_this<ImageStore> {
@@ -78,6 +81,10 @@ class ImageStore : public std::enable_shared_from_this<ImageStore> {
   // The active image under `key`, or null.
   std::shared_ptr<const Image> find(ar_key key) const;
   bool mean(ar_key key, std::array<float, 3>* rgb) const;
+  // The table slot of the active image under `key`; false when no image is active under it.
+  // Slots are dense and stable: set_image assigns one in the API call, and it is freed when the
+  // key is removed (or its only pending set dropped) and is not active.
+  bool slot(ar_key key, uint32_t* out) const;
   std::shared_ptr<const ImageArrays> arrays() const;
 
   // Activation of an edit's removals (after its sets were installed, which `keep` names).
@@ -92,12 +99,19 @@ class ImageStore : public std::enable_shared_from_this<ImageStore> {
     std::string detail;
   };
   void install(ar_key key, const ImageResult& r);
+  void dropped(ar_key key);
   void rebuild_locked();
+  uint32_t assign_slot_locked(ar_key key);
+  void free_slot_locked(ar_key key);
 
   std::shared_ptr<Ledger> ledger_;
   mutable std::mutex mutex_;
   std::map<ar_key, std::shared_ptr<const Image>> active_;
   std::shared_ptr<const ImageArrays> arrays_;
+  std::map<ar_key, uint32_t> slots_;
+  std::vector<ar_key> slot_keys_;      // per slot; free slots are in free_slots_
+  std::vector<uint32_t> free_slots_;
+  std::shared_ptr<const Image> magenta_;  // what a free or not yet active slot holds
   std::vector<Pending> pending_;
   uint64_t ledger_id_ = 0;
   // Decoded images by (source, interop id, alpha mode, tile, size, mtime, reload); weak so an

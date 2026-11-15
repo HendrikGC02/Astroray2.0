@@ -38,8 +38,18 @@ struct Fixture {
   std::vector<uint8_t> jh_bytes;
   astroray::ObserverTables obs;
   ar::Rgb2SpecTable table;
+  // One 1x1 linear image in slot 0, for compiled programs that sample.
+  std::vector<uint8_t> texel = {51, 102, 204};
+  ar::DeviceImageView image = {};
+  float srgb[ar::kSrgbTableSize];
   ar::SceneTables tables;
   Fixture() {
+    ar::srgb_decode_table(srgb);
+    tables.srgb_decode = srgb;
+    image.texels = uint64_t(uintptr_t(texel.data()));
+    image.width = image.height = 1, image.channels = 3, image.encoding = uint32_t(ar::TexEncoding::LINEAR);
+    tables.images = &image;
+    tables.image_count = 1;
     auto ob = read_data("spectral/observer.bin");
     std::string err = astroray::parse_observer(ob.data(), ob.size(), &obs);
     REQUIRE_MESSAGE(err.empty(), err);
@@ -113,7 +123,8 @@ std::vector<Op> ops_of(const CompileResult& r, uint32_t offset) {
     out.push_back(op);
     if (op == Op::END) break;
     uint32_t imm = 0;
-    if (op == Op::CONST_F32 || op == Op::TEX_IMAGE || op == Op::STORE_SLOT || op == Op::JMP) imm = 1;
+    if (op == Op::CONST_F32 || op == Op::STORE_SLOT || op == Op::JMP) imm = 1;
+    if (op == Op::TEX_IMAGE) imm = 2;
     if (op == Op::CONST_F32X3) imm = 3;
     pc += 1 + imm;
   }
@@ -176,7 +187,7 @@ TEST_CASE("compiler/constant surface folds to length 0") {
 TEST_CASE("compiler/texture base colour keeps its ops and folds the rest") {
   GB g;
   const int uv = g.add(Op::LOAD_CTX_UV, {}, {0});
-  const int tex = g.add(Op::TEX_IMAGE, {}, {3});
+  const int tex = g.add(Op::TEX_IMAGE, {}, {3, 0});
   g.link(uv, tex, 0);
   const int lift = g.add(Op::RGB_LIFT, {}, {int32_t(ar::SpectrumSemantic::REFLECTANCE)});
   g.link(tex, lift, 0);
@@ -210,7 +221,7 @@ TEST_CASE("compiler/folding never crosses LOAD_CTX_UV") {
 TEST_CASE("compiler/no folding across texture read") {
   GB g;
   const int c = g.add(Op::CONST_F32X3, {0.25f, 0.5f, 0.0f});  // constant coordinates, still a texture read
-  const int tex = g.add(Op::TEX_IMAGE, {}, {1});
+  const int tex = g.add(Op::TEX_IMAGE, {}, {1, 0});
   g.link(c, tex, 0);
   const int half = g.add(Op::CONST_F32, {0.5f});
   g.store(g.op2(Op::MUL_F32X3_F32, tex, half), ar::RecordSlot::base_color);
@@ -238,7 +249,7 @@ TEST_CASE("compiler/register overflow rejected") {
 TEST_CASE("compiler/run-time colour into specular_ior and negative strength rejected") {
   GB g;
   const int uv = g.add(Op::LOAD_CTX_UV, {}, {0});
-  const int tex = g.add(Op::TEX_IMAGE, {}, {0});
+  const int tex = g.add(Op::TEX_IMAGE, {}, {0, 0});
   g.link(uv, tex, 0);
   g.store(tex, ar::RecordSlot::specular_ior);
   CompileResult r = compile(g);
@@ -333,24 +344,64 @@ TEST_CASE("compiler/compiled programs match hand evaluation") {
       for (int k = 0; k < ar::kLanes; ++k) CHECK(le.v[k] == s.v[k] * ar::Real(2.0f));
     }
   }
-  {  // C: texture, explicit lift, pre-lifted store. Filtering is not implemented, so a texel is magenta.
+  {  // C: texture, explicit lift, pre-lifted store; image key 7 resolves to the fixture's slot 0.
     GB g;
     const int uv = g.add(Op::LOAD_CTX_UV, {}, {0});
-    const int tex = g.add(Op::TEX_IMAGE, {}, {0});
+    const int tex = g.add(Op::TEX_IMAGE, {}, {7, 0});
     g.link(uv, tex, 0);
     const int lift = g.add(Op::RGB_LIFT, {}, {int32_t(ar::SpectrumSemantic::REFLECTANCE)});
     g.link(tex, lift, 0);
     g.store(lift, ar::RecordSlot::base_color);
-    const CompileResult r = compile(g);
+    const ar_graph_desc d = g.desc();
+    const astroray::host::ImageSlotFn slots = [](uint32_t key, uint32_t* slot) { return key == 7 ? (*slot = 0, true) : false; };
+    const CompileResult r = compile_surface(d, fx.table, nullptr, &slots);
     REQUIRE_MESSAGE(r.ok, r.error);
+    CHECK(r.missing_images.empty());
+    CHECK((r.images == std::vector<uint32_t>{7}));
     std::printf("compiler: graph C (texture lift) program length %zu words\n", r.program.size());
     ar::OpenPBRParams rec = {};
     ar::Spec le = {};
     REQUIRE(ar::run_entry(r.program.data(), r.program.at(0), &regs, ctx, fx.tables, &rec, &le) == ar::VmStatus::OK);
     uint32_t fl = 0;
-    const ar::Spec want = ar::albedo(fx.table, ar::Rgb{{1.0f, 0.0f, 1.0f}}, ctx.lambda_t, &fl);
-    for (int k = 0; k < ar::kLanes; ++k) CHECK(rec.base_color.v[k] == want.v[k]);
+    const float k = 1.0f / 255.0f;  // a linear image's texel is byte * (1 / 255), as load_texel reads it
+    const ar::Spec want = ar::albedo(fx.table, ar::Rgb{{51.0f * k, 102.0f * k, 204.0f * k}}, ctx.lambda_t, &fl);
+    for (int i = 0; i < ar::kLanes; ++i) CHECK(rec.base_color.v[i] == want.v[i]);
   }
+}
+
+TEST_CASE("compiler/missing image key samples magenta with one entry") {
+  GB g;
+  const int uv = g.add(Op::LOAD_CTX_UV, {}, {0});
+  const int t1 = g.add(Op::TEX_IMAGE, {}, {9, 1});
+  const int t2 = g.add(Op::TEX_IMAGE, {}, {9, 3});  // the same key twice: still one entry
+  g.link(uv, t1, 0);
+  g.link(uv, t2, 0);
+  g.store(t1, ar::RecordSlot::base_color);
+  g.store(t2, ar::RecordSlot::coat_color);
+  const ar_graph_desc d = g.desc();
+  const astroray::host::ImageSlotFn none = [](uint32_t, uint32_t*) { return false; };
+  const astroray::host::MaterialOutput m = astroray::host::compile_material(d, fixture().table, nullptr, &none);
+  CHECK_FALSE(m.magenta);  // only the lookups are magenta; the material compiles
+  REQUIRE(m.entries.size() == 1);
+  CHECK(m.entries[0].code == AR_REPORT_IMAGE_UNREADABLE);
+  CHECK(m.entries[0].detail == "image key 9 is not set");
+  CHECK((m.images == std::vector<uint32_t>{9}));  // setting key 9 later recompiles the material
+  const std::vector<uint32_t>& p = m.compiled.program;
+  uint32_t lookups = 0;
+  for (size_t pc = 4; pc + 2 < p.size(); ++pc)
+    if ((p[pc] & 0xffu) == uint32_t(Op::TEX_IMAGE) && p[pc + 1] == ar::kTexNoImage) ++lookups, pc += 2;
+  CHECK(lookups == 2);
+  // A mode outside CLOSEST/LINEAR x REPEAT/EXTEND is a rejected program.
+  GB b;
+  const int bt = b.add(Op::TEX_IMAGE, {}, {9, 4});
+  b.link(b.add(Op::LOAD_CTX_UV, {}, {0}), bt, 0);
+  b.store(bt, ar::RecordSlot::base_color);
+  const ar_graph_desc bd = b.desc();
+  const astroray::host::MaterialOutput bm = astroray::host::compile_material(bd, fixture().table, nullptr, &none);
+  CHECK(bm.magenta);
+  REQUIRE(bm.entries.size() == 1);
+  CHECK(bm.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+  CHECK(bm.entries[0].detail.find("TEX_IMAGE mode") != std::string::npos);
 }
 
 }  // TEST_SUITE
