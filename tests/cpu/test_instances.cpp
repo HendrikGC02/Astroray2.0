@@ -130,7 +130,7 @@ TEST_CASE("instances/mask from visibility") {
     CHECK(t->instances[i].mask == (1u << i));
     CHECK((t->instances[i].mask & 0xC0) == 0);
     CHECK(t->instances[i].flags == 7u);
-    CHECK(t->instances[i].light_index == kNoLight);
+    CHECK(t->instances[i].light_index == ar::kNoLightIndex);
   }
   CHECK(t->instances[2].material_count == 2);
 }

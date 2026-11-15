@@ -4,11 +4,10 @@
 // so rays are traced one by one here (embree_trace.h's batch calls would nest the pool).
 // Ref: docs/decisions/0002-kernel-architecture.md D4 (CPU stages loop over the segment), D11
 // (hit record, ray-type mask, opaque shadow rule, camera rays without any-hit).
-#include <embree4/rtcore.h>
-
 #include <cstdint>
 #include <limits>
 
+#include "device/cpu/embree_ray.h"
 #include "device/cpu/embree_scene.h"
 #include "device/cpu/embree_trace.h"
 #include "kernel/geom/ray_offset.h"
@@ -24,16 +23,10 @@ RTCScene accel_of(const ar::KernelGlobals& kg) {
   return static_cast<RTCScene>(static_cast<const EmbreeScene*>(s.accel)->handle());
 }
 
-RTCRay make_ray(ar::Real3 o, ar::Real3 d, ar::Real tmax, unsigned mask) {
-  RTCRay ray;
-  ray.org_x = float(o.x), ray.org_y = float(o.y), ray.org_z = float(o.z);
-  ray.dir_x = float(d.x), ray.dir_y = float(d.y), ray.dir_z = float(d.z);
-  ray.tnear = float(ar::kRayTmin);  // the origin offset, not tmin, avoids self-hits (0002 D16)
-  ray.tfar = float(tmax);
-  ray.mask = mask;
-  ray.flags = 0;
-  ray.time = 0.0f;
-  return ray;
+// The origin offset, not tmin, avoids self-hits (0002 D16).
+RTCRay stage_ray(ar::Real3 o, ar::Real3 d, ar::Real tmax, unsigned mask) {
+  return astroray::host::make_ray(float(o.x), float(o.y), float(o.z), float(d.x), float(d.y), float(d.z),
+                                  float(ar::kRayTmin), float(tmax), mask);
 }
 
 }  // namespace
@@ -49,7 +42,7 @@ void cpu_stage_intersect_closest(const ar::KernelGlobals& kg, const ar::StepEntr
     // ray_tmax exists only with a curved region or subsurface; a flat scene's segment is unbounded.
     const ar::Real tmax = kg.path->ray_tmax ? kg.path->ray_tmax[slot] : std::numeric_limits<ar::Real>::infinity();
     RTCRayHit rh;
-    rh.ray = make_ray(ar::ps_ray_o(kg, slot), ar::ps_ray_d(kg, slot), tmax, ar::ps_ray_type(kg, slot));
+    rh.ray = stage_ray(ar::ps_ray_o(kg, slot), ar::ps_ray_d(kg, slot), tmax, ar::ps_ray_type(kg, slot));
     rh.hit.geomID = RTC_INVALID_GEOMETRY_ID;
     rh.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
     rtcIntersect1(scene, &rh, &args);
@@ -75,7 +68,7 @@ void cpu_stage_intersect_shadow(const ar::KernelGlobals& kg, const ar::StepEntry
   rtcInitOccludedArguments(&args);
   for (uint32_t item = first; item < last; ++item) {
     const uint32_t slot = kg.shadow_queue[step.start + item];
-    RTCRay ray = make_ray(ar::sh_ray_o(kg, slot), ar::sh_ray_d(kg, slot), ar::sh_tmax(kg, slot),
+    RTCRay ray = stage_ray(ar::sh_ray_o(kg, slot), ar::sh_ray_d(kg, slot), ar::sh_tmax(kg, slot),
                           astroray::host::kShadowRayMask);
     rtcOccluded1(scene, &ray, &args);
     // Embree signals an occluded ray by setting tfar to -inf.

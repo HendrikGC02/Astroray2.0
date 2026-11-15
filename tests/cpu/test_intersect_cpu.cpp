@@ -71,7 +71,7 @@ struct Rig {
   // The main and shadow pools.
   std::vector<uint8_t> next, ray_type;
   std::vector<uint32_t> flags, hit_prim, hit_inst, main_queue;
-  std::vector<ar::Real> hit_t;
+  std::vector<ar::Real> hit_t, ray_tmax;  // ray_tmax is bound only when a test fills it
   std::vector<ar::Real2> hit_uv;
   std::vector<ar::Real3> ray_o, ray_d;
   std::vector<uint8_t> s_next;
@@ -122,6 +122,7 @@ struct Rig {
   void bind() {
     path.next_stage = next.data(), path.ray_type = ray_type.data(), path.flags = flags.data();
     path.hit_prim = hit_prim.data(), path.hit_inst = hit_inst.data(), path.hit_t = hit_t.data();
+    if (!ray_tmax.empty()) path.ray_tmax = ray_tmax.data();
     path.hit_uv = hit_uv.data(), path.ray_o = ray_o.data(), path.ray_d = ray_d.data();
     shadow.next_stage = s_next.data(), shadow.ray_o = s_o.data(), shadow.ray_d = s_d.data(), shadow.tmax = s_tmax.data();
     kg.path = &path, kg.shadow = &shadow, kg.step_table = &step, kg.scene = &scene;
@@ -148,6 +149,10 @@ TEST_CASE("intersect_cpu/closest writes hit records and next stages") {
   r.add_path(0.5f, 0.25f, kCamera, 0);               // 7: not in the segment, must stay untouched
   // The segment is queue entries [1, 8): slots in a permuted order after one foreign entry.
   r.main_queue = {7, 6, 0, 4, 2, 5, 3, 1};
+  // Bounded segments (the curved-region and subsurface case): a miss reports its own tmax.
+  r.ray_tmax.assign(8, 100.0f);
+  r.ray_tmax[2] = 50.0f;
+  r.ray_tmax[4] = 25.0f;
   r.step.stage[static_cast<uint32_t>(Stage::INTERSECT_CLOSEST)] = {1, 7, 0};
   r.bind();
   r.dev.launch(Stage::INTERSECT_CLOSEST, 7);
@@ -166,10 +171,12 @@ TEST_CASE("intersect_cpu/closest writes hit records and next stages") {
   CHECK(r.next[1] == uint8_t(Stage::SHADE_SURFACE_EXT));
 
   CHECK(r.hit_inst[2] == ar::kNoInstance);
+  CHECK(r.hit_t[2] == 50.0f);
   CHECK(r.next[2] == uint8_t(Stage::SHADE_BACKGROUND));
   CHECK(r.hit_inst[3] == 0u);
   CHECK(r.next[3] == uint8_t(Stage::SHADE_LIGHT_PATH));
   CHECK(r.hit_inst[4] == ar::kNoInstance);
+  CHECK(r.hit_t[4] == 25.0f);
   CHECK(r.next[4] == uint8_t(Stage::TERMINATED));
   CHECK(r.hit_inst[5] == ar::kNoInstance);
   CHECK(r.next[5] == uint8_t(Stage::SHADE_BACKGROUND));

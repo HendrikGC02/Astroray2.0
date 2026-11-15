@@ -14,12 +14,12 @@ namespace {
 
 constexpr uint32_t kLight = ar::PATH_KIND;
 
-// Instances: 0 plain, 1 lamp, 2 extension material, 3 no material slice, 4 non-opaque only.
+// Instances: 0 plain, 1 lamp, 2 extension material, 3 no material slice, 4 non-opaque only, 5 lamp with an extension material.
 // One mesh with two triangles; their material slots are 0 and 1.
 struct SceneRig {
   std::vector<int32_t> tri_material{0, 1};
   std::vector<ar::DeviceMeshView> meshes{1};
-  std::vector<ar::DeviceInstanceRecord> instances{5};
+  std::vector<ar::DeviceInstanceRecord> instances{6};
   // Pool entries 0..2 -> header 0 (Common), 1 (EXTENSION), 2 (NON_OPAQUE).
   std::vector<uint32_t> slots{0, 1, 2};
   std::vector<ar::MaterialHeader> headers{{0, 0, 0, 0}, {0, 0, 0, ar::EXTENSION}, {0, 0, 0, ar::NON_OPAQUE}};
@@ -36,6 +36,7 @@ struct SceneRig {
     instances[2].material_offset = 1, instances[2].material_count = 1;
     instances[3].material_count = 0;
     instances[4].material_offset = 2, instances[4].material_count = 1;
+    instances[5].light_index = 8, instances[5].material_offset = 1, instances[5].material_count = 1;
     scene.instances = instances.data(), scene.instance_count = uint32_t(instances.size());
     scene.meshes = meshes.data(), scene.mesh_count = 1;
     if (with_materials) {
@@ -73,6 +74,13 @@ TEST_CASE("route_hit/lamp instance shades light") {
   CHECK(r.route(1, 0, kLight) == Stage::SHADE_LIGHT);
 }
 
+TEST_CASE("route_hit/lamp wins over an extension material") {
+  // 0002 D8: a lamp hit is pass-through whatever material the lamp carries.
+  SceneRig r;
+  CHECK(r.route(5, 0, 0u) == Stage::SHADE_LIGHT);
+  CHECK(r.route(5, 0, kLight) == Stage::SHADE_LIGHT);
+}
+
 TEST_CASE("route_hit/extension material routes to the ext identities") {
   SceneRig r;
   CHECK(r.route(2, 0, 0u) == Stage::SHADE_SURFACE_EXT);
@@ -83,11 +91,10 @@ TEST_CASE("route_hit/common material routes to surface") {
   SceneRig r;
   CHECK(r.route(0, 0, 0u) == Stage::SHADE_SURFACE);
   CHECK(r.route(0, 0, kLight) == Stage::SHADE_LIGHT_PATH);
-  // Only EXTENSION changes the route: a non-opaque material, an empty slice and a triangle
-  // whose slot lies outside the instance's slice are Common.
+  // Only EXTENSION changes the route: a non-opaque material and an empty slice (the default material)
+  // are Common.
   CHECK(r.route(4, 0, 0u) == Stage::SHADE_SURFACE);
   CHECK(r.route(3, 0, kLight) == Stage::SHADE_LIGHT_PATH);
-  CHECK(r.route(2, 1, 0u) == Stage::SHADE_SURFACE);
 }
 
 TEST_CASE("route_hit/flags other than the path kind are ignored") {

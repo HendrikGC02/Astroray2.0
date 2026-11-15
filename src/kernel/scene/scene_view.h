@@ -56,7 +56,7 @@ struct SceneData {
   const MaterialHeader* material_headers;
   uint32_t material_header_count;
   // The traversal structure of the backend that runs the stages (the CPU's EmbreeScene);
-  // opaque to kernels.
+  // opaque to kernels. Backend-specific: a CPU stage handed a GPU SceneData is invalid.
   const void* accel;
 };
 
@@ -78,10 +78,15 @@ AR_FN uint32_t hit_material_flags(const KernelGlobals& kg, uint32_t inst, uint32
   if (s.material_headers == nullptr || s.material_slots == nullptr) return 0u;
   AR_ASSERT(inst < s.instance_count);
   const DeviceInstanceRecord& rec = s.instances[inst];
-  const int32_t* tri_material = reinterpret_cast<const int32_t*>(uintptr_t(s.meshes[load_ro(&rec.mesh)].tri_material));
+  const uint32_t mesh = load_ro(&rec.mesh);
+  AR_ASSERT(mesh < s.mesh_count);
+  AR_ASSERT(prim < load_ro(&s.meshes[mesh].triangle_count));
+  const int32_t* tri_material = reinterpret_cast<const int32_t*>(uintptr_t(load_ro(&s.meshes[mesh].tri_material)));
   const int32_t slot = load_ro(tri_material + prim);
   const uint32_t count = load_ro(&rec.material_count);
-  if (count == 0u || slot < 0 || uint32_t(slot) >= count) return 0u;
+  if (count == 0u) return 0u;  // the default material
+  // With tables present a slot outside the instance's slice is malformed upload data.
+  AR_ASSERT(slot >= 0 && uint32_t(slot) < count);
   const uint32_t table = load_ro(&s.material_slots[load_ro(&rec.material_offset) + uint32_t(slot)]);
   AR_ASSERT(table < s.material_header_count);
   return load_ro(&s.material_headers[table].flags);
