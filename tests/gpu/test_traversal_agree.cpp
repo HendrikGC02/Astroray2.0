@@ -341,7 +341,7 @@ void compare_scene(const char* name, const Records& recs, const InstanceTable& t
     }
   }
   std::printf("traversal_agree %s: %u rays, %u both hit, %u hit/miss mismatches, %u primitive differences, %u shadow "
-              "mismatches of %zu (%u occluded), largest edge distance %.3g\n",
+              "mismatches of %zu (%u occluded), largest edge distance %.3g, %u grazing hits with t off by more than 1e-5\n",
               name, kRays, hits, hit_miss, prim_diff, shadow_diff, cpu.s_next.size(), shadow_occ, worst_edge, grazing);
   CHECK(hits > kRays / 10);
   CHECK(hit_miss <= kRays / 10000);
