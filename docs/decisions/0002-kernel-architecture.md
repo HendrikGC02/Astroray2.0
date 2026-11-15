@@ -79,7 +79,8 @@ A pass ends when the work counter is exhausted and every segment except the two 
 |---|---|---|
 | `queue_build_{count,scan,scatter}` | both | partition, step table (D6) |
 | `sort_{count,scatter}` | main | material sort of `shade_surface` |
-| `generate_camera` | main | slot init: pixel, sample, wavelengths (0003), camera ray with time, adaptive skip (0004 D16) |
+| `film_build_active` | per pass (film) | writes the film-owned active-pixel list at pass start: every pixel of the render sub-rectangle in M1a, adaptive compaction in M4 (0008 d3); one thread per listed pixel, no `Stage` value |
+| `generate_camera` | main | refill launch: slot init from the active-pixel list (read-only): pixel, sample, wavelengths (0003), camera ray with time, adaptive skip (0004 D16) |
 | `generate_light` | main | light-path init (method 0004; wavelengths from the sensor table, recomputed from the seed, ruling 7) |
 | `intersect_closest` (OptiX raygen) | main | closest hit, hit record, `route_hit` (D11); also flat segments emitted by `advance_geodesic` |
 | `intersect_subsurface` (OptiX raygen) | main | random-walk local rays against one instance's GAS (D11) |
