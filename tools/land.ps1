@@ -252,7 +252,7 @@ function Invoke-Merge {
   $null = GitX fetch origin
   & git merge-base --is-ancestor origin/main $sha 2>&1 | Out-Null
   if ($LASTEXITCODE -ne 0) { Write-Host 're-run prepare: origin/main moved past the gated sha'; exit 1 }
-  $pr = @(GhX pr list --head $branch --state open --json number,headRefOid | ConvertFrom-Json)
+  $pr = @(GhX pr list --head $branch --state open --json 'number,headRefOid' | ConvertFrom-Json)
   if ($pr.Count -ne 1) { Refuse "expected one open PR for $branch, found $($pr.Count)" }
   if ($pr[0].headRefOid -ne $sha) { Refuse "PR head $($pr[0].headRefOid) is not the gated sha $sha" }
   $n = $pr[0].number
