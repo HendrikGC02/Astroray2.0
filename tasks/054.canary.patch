@@ -1,17 +1,41 @@
+diff --git a/src/kernel/film/resolve.h b/src/kernel/film/resolve.h
+index 187220a..d6a854f 100644
+--- a/src/kernel/film/resolve.h
++++ b/src/kernel/film/resolve.h
+@@ -67,7 +67,7 @@ AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
+       continue;
+     }
+     const uint32_t index = n0 + m;
+-    const FilmWavelengths fw = camera_film_wavelengths(kg.session, f.wavelengths, pixel, index);
++    const FilmWavelengths fw = camera_film_wavelengths(kg.session, f.wavelengths, pixel, m);
+     const Spec w = film_weights(flags, fw.pf);
+     const bool even = (index & 1u) == 0u;
+     for (uint32_t c = 0; c < f.moment_channel_count; ++c) {
 diff --git a/src/kernel/stages/generate_camera.h b/src/kernel/stages/generate_camera.h
-index 574e49a..2f1c261 100644
+index 9028ebe..03cad71 100644
 --- a/src/kernel/stages/generate_camera.h
 +++ b/src/kernel/stages/generate_camera.h
-@@ -88,7 +88,7 @@ AR_FN void stage_generate_camera(const KernelGlobals& kg, uint32_t item, const S
+@@ -54,8 +54,8 @@ AR_FN Real2 camera_film_position(const KernelGlobals& kg, const SamplerKey& key)
+   const uint32_t width = kg.film->width;
+   Real dx = Real(0), dy = Real(0);
+   if ((kg.session.test_hooks & TEST_HOOK_PIXEL_CENTRE) == 0u) {
+-    const FilterOffset o = sample_filter(*kg.filter, camera_draw(kg, key, DIM_CAM_FILTER_X),
+-                                         camera_draw(kg, key, DIM_CAM_FILTER_Y));
++    const FilterOffset o = sample_filter(*kg.filter, camera_draw(kg, key, DIM_CAM_FILTER_Y),
++                                         camera_draw(kg, key, DIM_CAM_FILTER_X));
+     dx = o.dx;
+     dy = o.dy;
+   }
+@@ -89,7 +89,7 @@ AR_FN void stage_generate_camera(const KernelGlobals& kg, uint32_t item, const S
    // lambda_t = lambda_f at the start of a path (0003 d2); the resolve recomputes lambda_f and pf
    // from the same key and dimension (film_resolve_pixel).
    {
--    const FilmWavelengths fw = sample_film_wavelengths(kg.film->wavelengths, camera_draw(kg, key, DIM_CAM_WAVELENGTH));
-+    const FilmWavelengths fw = sample_film_wavelengths(kg.film->wavelengths, camera_draw(kg, key, DIM_CAM_HERO));
+-    const FilmWavelengths fw = camera_film_wavelengths(kg.session, kg.film->wavelengths, key.id, key.index);
++    const FilmWavelengths fw = camera_film_wavelengths(kg.session, kg.film->wavelengths, key.id, key.index + 1u);
      Spec lambda_t;
      for (int i = 0; i < kLanes; ++i) lambda_t.v[i] = fw.lf.nm[i];
      ps_lambda_t(kg, slot) = lambda_t;
-@@ -113,7 +113,11 @@ AR_FN void stage_generate_camera(const KernelGlobals& kg, uint32_t item, const S
+@@ -114,7 +114,11 @@ AR_FN void stage_generate_camera(const KernelGlobals& kg, uint32_t item, const S
    cs.film = camera_film_position(kg, key);
    const CameraRay ray = camera_generate_ray(*kg.camera, cs);
    ps_ray_o(kg, slot) = ray.o;
