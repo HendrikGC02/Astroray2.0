@@ -19,3 +19,7 @@ Depends on: 071, 115.
 Size: M (about 300 lines Python); stop and report at 2x.
 Progress:
 - Blocked before code: sampler mode is compile-time SOBOL (session.cpp kSamplerMode); ar_settings has no mode field (R60), so independent mode needs files outside Scope. Sobol A5 64 spp: per-pixel max |z| 0.26/1024 px, SE R/G/B 0.045/0.010/0.149.
+- Lead ruling applied: ar_settings.sampler_mode (replaces the trailing pad0, size unchanged), refused above AR_SAMPLER_INDEPENDENT at commit; session passes it to the kernels and FITS SAMPLER.
+- Harness: per-pixel z = Sidak(Sidak(0.01, m=256), 1024 px) = 5.50; 1024 spp default; y_anchor Y uses a summed-SE bound (no channel covariance in the dump).
+- Gate: analytic cpu 3.0 s + analytic cuda 3.2 s, plus about 2 s in abi tests. PASS gate 61.3 s.
+- At 64 spp A5's worst z is +5.48 against 5.50 on both devices: the normal approximation is thin at 64 samples; gate runs 1024.
