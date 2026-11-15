@@ -15,6 +15,8 @@
 
 AR_NS_BEGIN
 
+struct ConstantBlock;  // material/constant_block.h
+
 // One entry of the device mesh table, indexed by `DeviceInstanceRecord::mesh`. A hit reads
 // the triangle's corners from tri_corners, then normals by corner, UVs by layer and corner,
 // and the material slot by triangle (0007 d10).
@@ -59,6 +61,10 @@ struct SceneData {
   const uint32_t* material_slots;
   const MaterialHeader* material_headers;
   uint32_t material_header_count;
+  // What the headers index: program words (program_offset counts words; each program starts with
+  // its entry table) and constant blocks (const_offset counts blocks). Filled with the headers.
+  const uint32_t* material_programs;
+  const ConstantBlock* material_constants;
   // The traversal structure of the backend that runs the stages (the CPU's EmbreeScene);
   // opaque to kernels. Backend-specific: a CPU stage handed a GPU SceneData is invalid.
   const void* accel;

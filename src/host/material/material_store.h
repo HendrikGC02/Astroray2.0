@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: Apache-2.0
+// The scene's materials: the stored SURFACE graphs and material descriptors, their compiled
+// outputs, and the arrays the kernels read (headers, program words, constant blocks). An edit
+// stages one keyed item per graph or material (so keys are known and removable) and one internal
+// pass that, at commit, collects the materials to compile: those set in the edit and those whose
+// graph the edit set or removed. The pass compiles on a scene worker; activation installs the
+// results, rebuilds the arrays (host memory, ledger category TABLES; the device upload is 102's)
+// and raises each material's report entries. Recompiling a material changes data only, never a
+// kernel.
+// Ref: docs/decisions/0005-material-model.md items 2, 32, 40, 43; 0007 decisions 8, 9;
+// 0001 D2.11 (entries, SCENE scope).
+#pragma once
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <string>
+#include <vector>
+
+#include "astroray/astroray.h"
+#include "../../kernel/color/rgb2spec.h"
+#include "../../kernel/material/constant_block.h"
+#include "../../kernel/material/material_header.h"
+#include "host/ledger.h"
+#include "host/material/compiler.h"
+
+namespace astroray::host {
+
+class Edit;
+class Scene;
+
+// An ar_graph_desc with its arrays owned. desc() points into this object.
+struct StoredGraph {
+  std::vector<ar_graph_node> nodes;
+  std::vector<ar_graph_link> links;
+  std::vector<float> f32;
+  std::vector<int32_t> i32;
+  std::vector<uint8_t> strings;
+  ar_graph_desc desc() const;
+};
+
+// The arrays of the active materials. headers[i] belongs to keys[i]; program_offset counts words
+// into `programs` (a fully constant material appends none: CONSTANT_SURFACE and CONSTANT_EMISSION
+// say the entry is never run), const_offset indexes `constants`.
+struct MaterialArrays {
+  std::vector<ar_key> keys;
+  std::vector<ar::MaterialHeader> headers;
+  std::vector<uint32_t> programs;
+  std::vector<ar::ConstantBlock> constants;
+  std::vector<std::vector<EmissionTerm>> emission_estimates;  // per header; empty = 0
+  uint64_t bytes() const;
+};
+
+class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
+ public:
+  // Loads the working space's RGB-to-spectrum table (Rec.709, the only one in M1a); throws
+  // std::runtime_error when the embedded table is missing or bad.
+  explicit MaterialStore(std::shared_ptr<Ledger> ledger);
+  ~MaterialStore();
+  MaterialStore(const MaterialStore&) = delete;
+  MaterialStore& operator=(const MaterialStore&) = delete;
+
+  // Edit calls. A status other than AR_OK leaves its reason in edit.last_error().
+  ar_status set_graph(Edit& edit, ar_key key, const ar_graph_desc* desc);
+  ar_status set_material(Edit& edit, ar_key key, const ar_material_desc* desc);
+  // After a successful ar_edit_remove / ar_edit_reset of the open edit.
+  ar_status note_remove(Edit& edit, uint32_t kind, ar_key key);
+  ar_status note_reset(Edit& edit);
+  // The open edit was committed or aborted.
+  void end_edit();
+
+  std::shared_ptr<const MaterialArrays> arrays() const;
+  const ar::Rgb2SpecTable& table() const { return table_; }
+
+ private:
+  struct Open;
+  struct Pass;
+  ar_status ensure_pass(Edit& edit);
+  void bind(Pass& pass);
+  void activate(Scene& scene, const Pass& pass);
+  void rebuild_locked();
+
+  ar::Rgb2SpecTable table_ = {};
+  std::shared_ptr<Ledger> ledger_;
+  std::shared_ptr<Open> open_;  // one open edit per scene
+
+  mutable std::mutex mutex_;
+  // As of the latest commit (pending generations included), for dependents at the next commit.
+  std::map<ar_key, std::shared_ptr<const StoredGraph>> latest_graphs_;
+  std::map<ar_key, ar_material_desc> latest_materials_;
+  // As of the active generation.
+  std::map<ar_key, std::shared_ptr<const StoredGraph>> graphs_;
+  struct Active {
+    ar_material_desc desc;
+    std::shared_ptr<const MaterialOutput> out;
+  };
+  std::map<ar_key, Active> materials_;
+  std::shared_ptr<const MaterialArrays> arrays_;
+  uint64_t ledger_id_ = 0;
+};
+
+}  // namespace astroray::host

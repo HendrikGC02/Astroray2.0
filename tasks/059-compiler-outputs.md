@@ -1,7 +1,7 @@
 # 059 Compiler outputs, magenta policy and material ABI wiring
 Goal: compiled programs carry no flags and failures are silent -> the compiler emits MAY_BE_DELTA, NON_OPAQUE, EXTENSION, READS_RAY_TYPE, constant flags and the emission estimate, turns every unsupported node or failed compile into a magenta material with one report entry, and `ar_edit_set_graph`/`ar_edit_set_material` build device material arrays on the scene workers.
 Read first: 0005 item 40 (unsupported-node policy), item 43 (compiler outputs), item 4 (`lobe_is_delta` threshold 1e-3), 0001 D2.11 (`NODE_UNSUPPORTED`, `NODE_APPROXIMATED`, `PROGRAM_REJECTED`), 0007 d8-d9 (graph transport, outcomes), 0009 B-24 (compile row).
-Scope: src/host/material/compiler.{h,cpp}, src/host/material/material_store.{h,cpp}, src/capi/scene_api.cpp, src/capi/unimplemented.cpp, src/kernel/scene/scene_view.h (material header and program arrays), tools/check.ps1 (B-24 compile row in gate), tests/cpu/test_compiler_outputs.cpp, tests/abi/test_material_api.py.
+Scope: src/host/material/compiler.{h,cpp}, src/host/material/material_store.{h,cpp}, src/capi/scene_api.cpp, src/capi/unimplemented.cpp, src/kernel/scene/scene_view.h (material header and program arrays), tools/check.ps1 (B-24 compile row in gate), tests/cpu/test_compiler_outputs.cpp, tests/abi/test_material_api.py; lead ruling: src/host/scene/scene.h (one `materials` member beside `meshes`: the store must outlive edits) and src/host/scene/generation.cpp (move `report_.on_generation_active` before the on_active loop so entries raised for the activating subject survive).
 Out of scope: Blender-side lowering (083); textures' image binding (060); TABLE/BLACKBODY/CAUCHY_ABBE sources (M1b: rejected with PROGRAM_REJECTED "SpectrumRef kind <k> lands in M1b").
 Reference: none.
 Do:
@@ -19,3 +19,4 @@ Depends on: 058, 016, 104.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
 - Started: compiler outputs and magenta policy in compiler.cpp; asked lead for scene.h (store member) and report activation order.
+- MAY_BE_DELTA follows 0005 item 43/item 4 (lobe_is_delta on ggx_alpha = roughness^2), not the Do text's roughness >= 1e-3 (lead ruling).
