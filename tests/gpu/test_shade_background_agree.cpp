@@ -76,7 +76,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
 
   // Path state, inputs from the sampler's independent stream (agree::unit), never a rand().
   std::vector<uint8_t> next(kN, uint8_t(ar::Stage::SHADE_BACKGROUND)), term(kN, uint8_t(ar::Term::ACTIVE));
-  std::vector<uint32_t> flags(kN);
+  std::vector<uint32_t> flags(kN), sample_id(kN);
   std::vector<ar::U16x6> bounces(kN);
   std::vector<ar::Spec> lambda_t(kN), beta(kN);
   const float inf = std::numeric_limits<float>::infinity();
@@ -88,6 +88,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
     const double bad = agree::unit(i, 8);  // 1% of paths carry a non-finite throughput lane
     if (bad < 0.005) beta[i].v[int(agree::unit(i, 9) * 4.0)] = std::numeric_limits<float>::quiet_NaN();
     else if (bad < 0.01) beta[i].v[int(agree::unit(i, 9) * 4.0)] = inf;
+    sample_id[i] = i;
     flags[i] = ar::set_hero_lane(uint32_t(agree::unit(i, 10) * 4096.0) << 9, uint32_t(agree::unit(i, 11) * 4.0) & 3u) &
                ~ar::PATH_KIND;
     bounces[i] = ar::U16x6{{uint16_t(agree::unit(i, 12) * 13.0), 0, 0, 0, 0, 0}};
@@ -98,6 +99,8 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
   DeviceBuffer lambda_buf = put(lambda_t.data(), kN * sizeof(ar::Spec));
   DeviceBuffer beta_buf = put(beta.data(), kN * sizeof(ar::Spec));
   ar::PathStateSoA soa{};
+  DeviceBuffer sample_buf = put(sample_id.data(), kN * sizeof(uint32_t));
+  soa.sample_id = static_cast<uint32_t*>(sample_buf.ptr);
   soa.next_stage = static_cast<uint8_t*>(next_buf.ptr);
   soa.term = static_cast<uint8_t*>(term_buf.ptr);
   soa.flags = static_cast<uint32_t*>(flags_buf.ptr);
@@ -172,7 +175,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
   dev.download(s.adds.data(), film.buffer(), offset(fd.add), s.adds.size() * sizeof(float));
 
   for (DeviceBuffer* b : {&film_buf, &queue_buf, &list_buf, &table_buf, &next_buf, &term_buf, &flags_buf, &bounces_buf,
-                          &lambda_buf, &beta_buf, &soa_buf, &lights_buf, &sampler_buf, &illum_buf, &cmf_buf, &tables_buf,
+                          &lambda_buf, &beta_buf, &sample_buf, &soa_buf, &lights_buf, &sampler_buf, &illum_buf, &cmf_buf, &tables_buf,
                           &kg_buf})
     dev.free(*b);
   return s;

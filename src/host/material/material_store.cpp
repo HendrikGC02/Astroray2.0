@@ -60,7 +60,7 @@ ar_graph_desc StoredGraph::desc() const {
 
 uint64_t MaterialArrays::bytes() const {
   return headers.size() * sizeof(ar::MaterialHeader) + programs.size() * sizeof(uint32_t) +
-         constants.size() * sizeof(ar::ConstantBlock);
+         constants.size() * sizeof(ar::ConstantBlock) + pass_index.size() * sizeof(uint32_t);
 }
 
 struct MaterialStore::Open {
@@ -90,10 +90,18 @@ struct MaterialStore::Pass {
 };
 
 MaterialStore::MaterialStore(std::shared_ptr<Ledger> ledger)
-    : ledger_(std::move(ledger)), images_(std::make_shared<ImageStore>(ledger_)), arrays_(std::make_shared<MaterialArrays>()) {
+    : ledger_(std::move(ledger)), images_(std::make_shared<ImageStore>(ledger_)) {
   DataBlob blob;
   if (!find_data("spectral/rec709.jh", &blob)) throw std::runtime_error("material store: spectral/rec709.jh is not embedded");
   if (const char* e = ar::jh_view(blob.data, blob.size, &table_)) throw std::runtime_error(std::string("material store: ") + e);
+  // The default material: an empty surface graph leaves every input at its OpenPBR default and
+  // folds to a constant surface with no emission. Anything else is a compiler bug.
+  default_ = compile_material(ar_graph_desc{}, table_, nullptr, nullptr);
+  if (default_.magenta || !default_.compiled.ok || !default_.compiled.constant_surface ||
+      !default_.compiled.program.empty() || !default_.emission_estimate.empty() || !default_.entries.empty())
+    throw std::runtime_error("material store: the default material did not compile to a constant, non-emissive surface");
+  std::lock_guard<std::mutex> lock(mutex_);
+  rebuild_locked();
 }
 
 MaterialStore::~MaterialStore() {
@@ -287,7 +295,16 @@ void MaterialStore::rebuild_locked() {
     a->constants.push_back(m.compiled.block);
     a->emission_estimates.push_back(m.emission_estimate);
     a->emission_sampling.push_back(kv.second.desc.emission_sampling);
+    a->pass_index.push_back(kv.second.desc.pass_index);
   }
+  // The default material, last (MaterialArrays): no key, no program words, pass index 0.
+  ar::MaterialHeader h = {};
+  h.program_offset = uint32_t(a->programs.size());
+  h.const_offset = uint32_t(a->constants.size());
+  h.flags = default_.flags;
+  a->headers.push_back(h);
+  a->constants.push_back(default_.compiled.block);
+  a->pass_index.push_back(0u);
   const uint64_t bytes = a->bytes();
   const uint64_t id = bytes != 0 ? ledger_->add(Owner{}, LedgerCategory::TABLES, bytes) : 0;
   if (ledger_id_ != 0) ledger_->remove(ledger_id_);

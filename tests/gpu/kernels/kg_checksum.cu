@@ -40,9 +40,12 @@ extern "C" __global__ void ar_kg_checksum(const ar::KernelGlobals* kgp, uint8_t*
   kg_row(out, r++, s.instances, s.instance_count, sizeof(ar::DeviceInstanceRecord));
   kg_row(out, r++, s.meshes, s.mesh_count, sizeof(ar::DeviceMeshView));
   kg_row(out, r++, s.material_slots, kg.material_slot_count, 4);
-  kg_row(out, r++, s.material_headers, s.material_header_count, sizeof(ar::MaterialHeader));
+  // Headers and pass indices end with the default material, one past material_header_count.
+  const uint32_t headers = s.material_headers ? s.material_header_count + 1u : 0u;
+  kg_row(out, r++, s.material_headers, headers, sizeof(ar::MaterialHeader));
   kg_row(out, r++, s.material_programs, kg.material_program_words, 4);
   kg_row(out, r++, s.material_constants, kg.material_constant_count, sizeof(ar::ConstantBlock));
+  kg_row(out, r++, s.material_pass_index, headers, 4);
   kg_row(out, r++, t.images, t.image_count, sizeof(ar::DeviceImageView));
   kg_row(out, r++, kg.lights, l.light_count, sizeof(ar::LightRecord));
   kg_row(out, r++, l.bins, l.bin_count, sizeof(ar::AliasBin));

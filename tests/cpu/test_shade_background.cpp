@@ -64,6 +64,7 @@ struct MissRig {
   std::vector<uint8_t> next_stage = std::vector<uint8_t>(kSlots, uint8_t(ar::Stage::SHADE_BACKGROUND));
   std::vector<uint8_t> term = std::vector<uint8_t>(kSlots, uint8_t(ar::Term::ACTIVE));
   std::vector<uint32_t> flags{0, 1, 2, 3};
+  std::vector<uint32_t> sample_id{0, 1, 2, 3};  // the film slot of each pool slot (0004 D5)
   std::vector<ar::U16x6> bounces = std::vector<ar::U16x6>(kSlots, ar::U16x6{{0, 0, 0, 0, 0, 0}});
   std::vector<ar::Spec> lambda_t = std::vector<ar::Spec>(kSlots), beta = std::vector<ar::Spec>(kSlots);
   ar::StepEntry step{0, kSlots, 0};
@@ -108,6 +109,7 @@ struct MissRig {
     }
     bounces[2].v[0] = 3;
 
+    path.sample_id = sample_id.data();
     path.next_stage = next_stage.data();
     path.term = term.data();
     path.flags = flags.data();
@@ -166,6 +168,30 @@ TEST_CASE("shade_background/miss adds beta times the world radiance") {
   const ar::FilmData& f = rig.film->data();
   CHECK(f.count[uint64_t(f.bounce_max) * f.plane_stride + 2] == 3u);
   CHECK(f.count[uint64_t(f.bounce_paths) * f.plane_stride + 2] == 1u);
+}
+
+TEST_CASE("shade_background/writes land on the sample's film slot") {
+  // A refill that handed out the pool slots in another order: pool slot i carries sample p[i].
+  MissRig rig(2.5f);
+  const uint32_t p[kSlots] = {2, 3, 0, 1};
+  for (uint32_t i = 0; i < kSlots; ++i) rig.sample_id[i] = p[i];
+  rig.beta[1].v[0] = std::numeric_limits<float>::quiet_NaN();  // pool slot 1 = sample 3: invalid
+  rig.run();
+  for (uint32_t i = 0; i < kSlots; ++i) {
+    const uint32_t s = p[i];
+    CHECK(rig.film->data().slot_flags[s] == rig.flags[i]);
+    if (i == 1) {
+      CHECK(!ar::film_sample_valid(rig.slot_value(s)));
+      CHECK(rig.hist(ar::Term::INVALID, s) == 1u);
+    } else {
+      for (int l = 0; l < ar::kLanes; ++l) CHECK(rig.slot_value(s).v[l] == 2.5f * rig.beta[i].v[l]);
+      CHECK(rig.hist(ar::Term::ESCAPED, s) == 1u);
+    }
+  }
+  // Path slot 2 had 3 bounces and carries sample 0: the bounce maximum lands on pixel 0.
+  const ar::FilmData& f = rig.film->data();
+  CHECK(f.count[uint64_t(f.bounce_max) * f.plane_stride + 0] == 3u);
+  CHECK(f.count[uint64_t(f.bounce_max) * f.plane_stride + 2] == 0u);
 }
 
 TEST_CASE("shade_background/a scene without a world is black and ends escaped") {

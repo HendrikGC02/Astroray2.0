@@ -231,7 +231,7 @@ TEST_CASE("tex_image/missing key reports and recompiles when set") {
   // The slot immediate of the material's one TEX_IMAGE (uv -> TEX_IMAGE key 5 -> base_color).
   auto program_slot = [&]() {
     const auto a = store->arrays();
-    REQUIRE(a->headers.size() == 1);
+    REQUIRE(a->headers.size() == 2);  // the material, then the default material
     const uint32_t* p = a->programs.data() + a->headers[0].program_offset;
     const uint32_t entry = p[0];
     REQUIRE((p[entry] & 0xffu) == uint32_t(ar::Op::LOAD_CTX_UV));

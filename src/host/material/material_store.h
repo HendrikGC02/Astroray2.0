@@ -47,6 +47,11 @@ struct StoredGraph {
 // The arrays of the active materials. headers[i] belongs to keys[i]; program_offset counts words
 // into `programs` (a fully constant material appends none: CONSTANT_SURFACE and CONSTANT_EMISSION
 // say the entry is never run), const_offset indexes `constants`.
+// headers, constants and pass_index are the device layout and hold one entry more than keys: the
+// default material of an instance with no material slice (0007 appendix), last, at index
+// keys.size() (where hit_material_id puts it). It is compiled from an empty surface graph, so
+// every OpenPBR input is at its default, it emits nothing, its program is empty and its pass
+// index is 0. emission_estimates and emission_sampling are per keyed material only.
 struct MaterialArrays {
   std::vector<ar_key> keys;
   std::vector<ar::MaterialHeader> headers;
@@ -54,6 +59,7 @@ struct MaterialArrays {
   std::vector<ar::ConstantBlock> constants;
   std::vector<std::vector<EmissionTerm>> emission_estimates;  // per header; empty = 0
   std::vector<uint32_t> emission_sampling;  // per header: ar_material_desc's AR_EMISSION_SAMPLING_*
+  std::vector<uint32_t> pass_index;         // per header: ar_material_desc::pass_index (IndexMA)
   uint64_t bytes() const;
 };
 
@@ -128,6 +134,7 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
     std::shared_ptr<const MaterialOutput> out;
   };
   std::map<ar_key, Active> materials_;
+  MaterialOutput default_;  // the default material's compiled output, appended by rebuild_locked
   std::shared_ptr<const MaterialArrays> arrays_;
   uint64_t ledger_id_ = 0;
 };

@@ -110,6 +110,14 @@ spill_load = 0
 compile_s = 1.3
 gated = "merge"
 
+[kernel.k_shade_surface]
+regs = 80
+stack = 264
+spill_store = 0
+spill_load = 0
+compile_s = 2.07
+gated = "merge"
+
 # The four OptiX programs are compiled by the driver: kernelgate never measures them, so regs and
 # stack stay 0 until a `check full` Nsight measurement fills them in.
 [kernel.__raygen__intersect_closest]

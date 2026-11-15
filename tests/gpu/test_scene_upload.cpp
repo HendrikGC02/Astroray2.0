@@ -243,6 +243,7 @@ std::vector<HostRow> host_rows(Scene& scene, const SceneTableSet& set) {
   at(TableId::MATERIAL_HEADERS) = row_of(mats->headers.data(), mats->headers.size());
   at(TableId::MATERIAL_PROGRAMS) = row_of(mats->programs.data(), mats->programs.size());
   at(TableId::MATERIAL_CONSTANTS) = row_of(mats->constants.data(), mats->constants.size());
+  at(TableId::MATERIAL_PASS_INDEX) = row_of(mats->pass_index.data(), mats->pass_index.size());
   std::vector<ar::DeviceImageView> iv = imgs->views;
   for (size_t i = 0; i < iv.size(); ++i) iv[i].texels = addr(set.texels[i]);
   at(TableId::IMAGES) = row_of(iv.data(), iv.size());
@@ -355,7 +356,8 @@ TEST_CASE("scene_upload/material edit uploads only material tables") {
   for (uint32_t t = 0; t < kTableCount; ++t) {
     const TableId id = TableId(t);
     const bool material = id == TableId::MATERIAL_SLOTS || id == TableId::MATERIAL_HEADERS ||
-                          id == TableId::MATERIAL_PROGRAMS || id == TableId::MATERIAL_CONSTANTS;
+                          id == TableId::MATERIAL_PROGRAMS || id == TableId::MATERIAL_CONSTANTS ||
+                          id == TableId::MATERIAL_PASS_INDEX;
     // The header block holds the new tables' addresses, so it is always rewritten.
     CHECK_MESSAGE(second->uploaded[t] == (material || id == TableId::HEADER), table_name(id));
     if (second->uploaded[t]) material_bytes += second->tables[t]->bytes();
