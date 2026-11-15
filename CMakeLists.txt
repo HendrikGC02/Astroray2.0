@@ -188,6 +188,18 @@ target_precompile_headers(astroray_tests_cpu PRIVATE ${CMAKE_SOURCE_DIR}/tests/c
 set_source_files_properties(${CMAKE_SOURCE_DIR}/tests/cpu/main.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 add_dependencies(astroray_tests_cpu astroray_opsgen)
 
+# GPU tests: one process, serial, each test creating its CUDA device explicitly (0009 d11).
+# The test modules are the loose cubins of tests/gpu/kernels, read from the build tree.
+if(ASTRORAY_GPU)
+  add_executable(astroray_tests_gpu tests/gpu/main.cpp ${ASTRORAY_TEST_GPU_SOURCES})
+  target_include_directories(astroray_tests_gpu PRIVATE ${CMAKE_SOURCE_DIR}/tests ${ASTRORAY_GEN_DIR})
+  target_compile_definitions(astroray_tests_gpu PRIVATE AR_TEST_KERNEL_DIR="${CMAKE_BINARY_DIR}/kernels")
+  astroray_target_warnings(astroray_tests_gpu)
+  target_include_directories(astroray_tests_gpu SYSTEM PRIVATE third_party/doctest)
+  target_link_libraries(astroray_tests_gpu PRIVATE ${_ar_engine_libs} astroray_kernel)
+  add_dependencies(astroray_tests_gpu astroray_kernels_gpu)
+endif()
+
 # Installable Blender extension zip (0007 d45, 0001 D10.2): stage the addon, the
 # generated bindings and the DLL, then let Blender build the zip. Not in ALL: it
 # needs the Blender install (ASTRORAY_BLENDER). The zip name is Blender's own.

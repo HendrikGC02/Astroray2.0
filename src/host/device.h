@@ -8,6 +8,7 @@
 // device interface), D8 (per-pass kernels), D13 (accounting); 0007 d14 (ledger).
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -127,5 +128,48 @@ class Device {
  private:
   Ledger& ledger_;
 };
+
+// A failure of the device itself: a CUDA call that failed, a missing module image. It
+// reaches the C ABI as AR_ERR_DEVICE (0002 D15). `sticky` marks the errors CUDA documents
+// as needing a process restart; the device is then dead for the process (0001 D2.5).
+class DeviceError : public std::runtime_error {
+ public:
+  explicit DeviceError(const std::string& what, bool sticky = false) : std::runtime_error(what), sticky_(sticky) {}
+  ar_status status() const noexcept { return AR_ERR_DEVICE; }
+  bool sticky() const noexcept { return sticky_; }
+  // The message of 0001 D2.5 for a sticky error whose CUDA text is `text`.
+  static std::string sticky_text(const std::string& text) {
+    return "GPU error: " + text + ". Save your work and restart Blender.";
+  }
+
+ private:
+  bool sticky_;
+};
+
+// What the GPU device adds to the Device interface for tests: loose test modules (never
+// embedded) loaded from an explicit file and launched with raw arguments. It lives here
+// so tests reach it without including a CUDA path (lint section `seam`).
+class ModuleDevice : public Device {
+ public:
+  using Device::Device;
+  // Loads the module image at `path`; returns a handle for launch_module_kernel.
+  virtual uint32_t load_module_file(const std::string& path) = 0;
+  // Launches extern "C" `function` of a loaded module: `args` holds one pointer per kernel
+  // parameter, each to the parameter's value (cuLaunchKernel's kernelParams). Asynchronous:
+  // call synchronize().
+  virtual void launch_module_kernel(uint32_t module, const char* function, uint32_t blocks, uint32_t threads,
+                                    void* const* args) = 0;
+};
+
+// Defined in src/device/cuda/cuda_device.cpp, which exists only in ASTRORAY_GPU builds.
+// Retains device `device_index`'s primary context; throws DeviceError when CUDA cannot
+// be used, including after a sticky error elsewhere in the process.
+std::unique_ptr<ModuleDevice> make_cuda_device(Ledger& ledger, uint32_t device_index);
+// True for the CUDA driver results that need a process restart (illegal address, launch
+// failure, launch timeout, ECC and the other hardware-fault codes); takes the numeric
+// CUresult so callers need no CUDA header.
+bool cuda_result_is_sticky(int cu_result);
+// cudaDeviceSynchronize then cudaGetLastError: the text of a latent error, or empty.
+std::string cuda_latent_error();
 
 }  // namespace astroray::host

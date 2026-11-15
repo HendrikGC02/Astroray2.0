@@ -1,0 +1,403 @@
+// SPDX-License-Identifier: Apache-2.0
+// CudaDevice. Every CUDA driver call goes through Impl::check; the driver entry points
+// are resolved per device from static cudart's cudaGetDriverEntryPointByVersion, so no
+// nvcuda import library is linked and nothing is process-global. The one thing shared
+// with the rest of the process is the primary context (0001 D2.1): a sticky error in it
+// is observed from CUDA itself, because every later call returns the same error.
+// Ref: CUDA Driver API reference (cuModuleLoadData, cuLaunchKernel, cuMemGetInfo);
+// docs/decisions/0002-kernel-architecture.md D4, D14, D15; 0001 D2.1, D2.5;
+// 0007 d14.
+#include "device/cuda/cuda_device.h"
+
+#include <cuda.h>
+#include <cuda_runtime_api.h>
+
+#include <cstddef>
+#include <cstdio>
+#include <mutex>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <unordered_map>
+#include <vector>
+
+#include "device/cuda/module_loader.h"
+
+namespace astroray::host {
+namespace {
+
+// Used when launch_config.h (task 030) does not exist yet: 0002 D4 names that table as
+// the source of the block size, which the host launcher will read from it.
+constexpr uint32_t kDefaultThreads = 256;
+
+// Names of the kernel modules, in enum order (0002 D8): the module is <name>.cubin and
+// its entry point k_<name>.
+constexpr const char* kStageNames[] = {
+    "intersect_closest", "intersect_subsurface", "intersect_shadow", "shade_background",
+    "shade_light",       "shade_surface",        "shade_surface_ext", "shade_light_path",
+    "shade_light_path_ext", "shade_shadow",      "shade_volume",     "shade_subsurface",
+    "advance_geodesic",  "terminated",           "shadow_terminated"};
+static_assert(sizeof(kStageNames) / sizeof(kStageNames[0]) == ar::kStageCount, "one name per Stage");
+
+constexpr const char* kKernelNames[] = {
+    "queue_build_count",  "queue_build_scan", "queue_build_scatter", "sort_count",           "sort_scatter",
+    "generate_camera",    "generate_light",   "film_resolve",        "film_adaptive",        "film_present",
+    "film_heatmap",       "film_prepare_denoise", "film_pack_dlss",  "bake_environment"};
+static_assert(sizeof(kKernelNames) / sizeof(kKernelNames[0]) == kKernelIdCount, "one name per KernelId");
+
+static_assert(std::is_standard_layout_v<ar::KernelGlobals>, "read_step_table reads a member by offset");
+
+std::string number(uint64_t v) { return std::to_string(v); }
+
+uint32_t blocks_for(uint32_t items) {
+  return items == 0 ? 1u : static_cast<uint32_t>((uint64_t(items) + kDefaultThreads - 1u) / kDefaultThreads);
+}
+
+// The driver functions this file uses; each is resolved by its unversioned name for the
+// CUDA version the build compiles against (12.8), so the signatures are cuda.h's.
+#define AR_CU_FUNCTIONS(X)                                                                              \
+  X(cuInit) X(cuDeviceGet) X(cuDeviceGetAttribute) X(cuDevicePrimaryCtxRetain)                          \
+  X(cuDevicePrimaryCtxRelease) X(cuCtxSetCurrent) X(cuCtxSynchronize) X(cuModuleLoadData)               \
+  X(cuModuleUnload) X(cuModuleGetFunction) X(cuLaunchKernel) X(cuMemAlloc) X(cuMemFree)                 \
+  X(cuMemGetInfo) X(cuMemcpyHtoDAsync) X(cuMemcpyDtoHAsync) X(cuMemsetD8Async) X(cuStreamCreate)        \
+  X(cuStreamDestroy) X(cuEventCreate) X(cuEventRecord) X(cuEventSynchronize) X(cuEventDestroy)          \
+  X(cuGetErrorName) X(cuGetErrorString)
+
+struct Driver {
+#define AR_CU_MEMBER(n) decltype(&n) n##_ = nullptr;
+  AR_CU_FUNCTIONS(AR_CU_MEMBER)
+#undef AR_CU_MEMBER
+};
+
+template <class Fn>
+void resolve(const char* symbol, Fn& fn) {
+  void* p = nullptr;
+  cudaDriverEntryPointQueryResult status = cudaDriverEntryPointSymbolNotFound;
+  const cudaError_t e = cudaGetDriverEntryPointByVersion(symbol, &p, CUDA_VERSION, cudaEnableDefault, &status);
+  if (e != cudaSuccess || status != cudaDriverEntryPointSuccess || !p)
+    throw DeviceError(std::string("CUDA driver function ") + symbol + " is unavailable (" +
+                      (e != cudaSuccess ? cudaGetErrorString(e) : "symbol not found") + ")");
+  fn = reinterpret_cast<Fn>(p);
+}
+
+Driver load_driver() {
+  Driver d;
+#define AR_CU_RESOLVE(n) resolve(#n, d.n##_);
+  AR_CU_FUNCTIONS(AR_CU_RESOLVE)
+#undef AR_CU_RESOLVE
+  return d;
+}
+
+}  // namespace
+
+bool cuda_result_is_sticky(int r) {
+  // The codes cuda.h documents as leaving the process unusable ("the process must be
+  // terminated and relaunched", or the context "cannot be used anymore"), plus the ECC
+  // error 0002 D15 names.
+  switch (r) {
+    case CUDA_ERROR_ECC_UNCORRECTABLE:
+    case CUDA_ERROR_CONTAINED:
+    case CUDA_ERROR_ILLEGAL_ADDRESS:
+    case CUDA_ERROR_LAUNCH_TIMEOUT:
+    case CUDA_ERROR_ASSERT:
+    case CUDA_ERROR_HARDWARE_STACK_ERROR:
+    case CUDA_ERROR_ILLEGAL_INSTRUCTION:
+    case CUDA_ERROR_MISALIGNED_ADDRESS:
+    case CUDA_ERROR_INVALID_ADDRESS_SPACE:
+    case CUDA_ERROR_INVALID_PC:
+    case CUDA_ERROR_LAUNCH_FAILED:
+    case CUDA_ERROR_TENSOR_MEMORY_LEAK:
+    case CUDA_ERROR_MPS_CLIENT_TERMINATED:
+    case CUDA_ERROR_EXTERNAL_DEVICE:
+      return true;
+    default:
+      return false;
+  }
+}
+
+std::string cuda_latent_error() {
+  cudaError_t e = cudaDeviceSynchronize();
+  if (e != cudaSuccess) return std::string("cudaDeviceSynchronize: ") + cudaGetErrorName(e) + ": " + cudaGetErrorString(e);
+  e = cudaGetLastError();
+  if (e != cudaSuccess) return std::string("cudaGetLastError: ") + cudaGetErrorName(e) + ": " + cudaGetErrorString(e);
+  return {};
+}
+
+struct CudaDevice::Impl {
+  Driver cu;
+  CUdevice device = 0;
+  CUcontext ctx = nullptr;
+  CUstream stream = nullptr;
+  CUevent done = nullptr;
+  std::string arch;  // "sm_120"
+  bool dead = false;
+  std::string dead_text;
+  CUdeviceptr globals = 0;
+
+  std::mutex mutex;  // guards the module and function tables
+  std::unordered_map<std::string, CUmodule> modules;  // embedded or dev-directory, by name
+  std::vector<CUmodule> file_modules;                 // test modules, by handle
+  std::unordered_map<std::string, CUfunction> functions;
+
+  Impl() : cu(load_driver()) {}
+
+  // Separate from the constructor so a failure part-way still runs ~Impl and gives back
+  // the context, stream and event acquired so far.
+  void init(uint32_t index) {
+    check(cu.cuInit_(0), "cuInit");
+    check(cu.cuDeviceGet_(&device, static_cast<int>(index)), "cuDeviceGet");
+    int major = 0, minor = 0;
+    check(cu.cuDeviceGetAttribute_(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device),
+          "cuDeviceGetAttribute");
+    check(cu.cuDeviceGetAttribute_(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device),
+          "cuDeviceGetAttribute");
+    arch = "sm_" + std::to_string(major) + std::to_string(minor);
+    check(cu.cuDevicePrimaryCtxRetain_(&ctx, device), "cuDevicePrimaryCtxRetain");
+    bind();
+    // Observes a sticky error left by any other user of the primary context: the call
+    // returns that error and the constructor refuses with its message (0001 D2.5).
+    check(cu.cuCtxSynchronize_(), "cuCtxSynchronize");
+    check(cu.cuStreamCreate_(&stream, CU_STREAM_NON_BLOCKING), "cuStreamCreate");
+    check(cu.cuEventCreate_(&done, CU_EVENT_DISABLE_TIMING), "cuEventCreate");
+  }
+
+  ~Impl() {
+    // Teardown cannot throw; a failure is printed, never dropped.
+    if (!ctx) return;
+    note(cu.cuCtxSetCurrent_(ctx), "cuCtxSetCurrent");
+    if (stream) note(cu.cuEventRecord_(done, stream), "cuEventRecord");
+    if (done) note(cu.cuEventSynchronize_(done), "cuEventSynchronize");
+    for (auto& m : modules) note(cu.cuModuleUnload_(m.second), "cuModuleUnload");
+    for (CUmodule m : file_modules) note(cu.cuModuleUnload_(m), "cuModuleUnload");
+    if (done) note(cu.cuEventDestroy_(done), "cuEventDestroy");
+    if (stream) note(cu.cuStreamDestroy_(stream), "cuStreamDestroy");
+    note(cu.cuDevicePrimaryCtxRelease_(device), "cuDevicePrimaryCtxRelease");
+  }
+
+  static void note(CUresult r, const char* call) {
+    if (r != CUDA_SUCCESS) std::fprintf(stderr, "astroray: CUDA teardown: %s failed with %d\n", call, static_cast<int>(r));
+  }
+
+  [[noreturn]] void fail(CUresult r, const char* call, const char* detail) {
+    const char* name = nullptr;
+    const char* text = nullptr;
+    cu.cuGetErrorName_(r, &name);
+    cu.cuGetErrorString_(r, &text);
+    const std::string what = std::string(name ? name : "CUDA_ERROR_?") + ": " + (text ? text : "unknown error");
+    if (cuda_result_is_sticky(static_cast<int>(r))) {
+      dead = true;
+      dead_text = what;
+      throw DeviceError(DeviceError::sticky_text(what), true);
+    }
+    throw DeviceError(std::string("CUDA error in ") + call + (detail ? std::string(" (") + detail + ")" : "") + ": " + what);
+  }
+
+  void check(CUresult r, const char* call, const char* detail = nullptr) {
+    if (r != CUDA_SUCCESS) fail(r, call, detail);
+  }
+
+  void ensure_alive() const {
+    if (dead) throw DeviceError(DeviceError::sticky_text(dead_text), true);
+  }
+
+  // The context is per thread; every public operation binds it first.
+  void bind() {
+    ensure_alive();
+    check(cu.cuCtxSetCurrent_(ctx), "cuCtxSetCurrent");
+  }
+
+  // The per-step event wait of 0002 D15: where an asynchronous error surfaces.
+  void sync() {
+    bind();
+    check(cu.cuEventRecord_(done, stream), "cuEventRecord");
+    check(cu.cuEventSynchronize_(done), "cuEventSynchronize");
+  }
+
+  void require_globals() const {
+    if (!globals) throw std::logic_error("CudaDevice: no KernelGlobals bound (call set_kernel_globals first)");
+  }
+
+  CUmodule load_image(const std::string& label, const ModuleImage& image) {
+    CUmodule m = nullptr;
+    const CUresult r = cu.cuModuleLoadData_(&m, image.bytes.data());
+    if (r == CUDA_ERROR_NO_BINARY_FOR_GPU)
+      throw DeviceError("no module image for " + arch + ": " + label + " (" + image.origin + ")");
+    check(r, "cuModuleLoadData", label.c_str());
+    return m;
+  }
+
+  // The function `fn` of the named module, loading the module on first use.
+  CUfunction named_function(const std::string& module, const std::string& fn) {
+    std::lock_guard<std::mutex> lock(mutex);
+    const std::string key = module + "/" + fn;
+    auto f = functions.find(key);
+    if (f != functions.end()) return f->second;
+    auto m = modules.find(module);
+    if (m == modules.end()) m = modules.emplace(module, load_image(module, load_module_image(module))).first;
+    CUfunction func = nullptr;
+    check(cu.cuModuleGetFunction_(&func, m->second, fn.c_str()), "cuModuleGetFunction", fn.c_str());
+    functions.emplace(key, func);
+    return func;
+  }
+
+  void launch(CUfunction f, const char* name, uint32_t blocks, uint32_t threads, void** params) {
+    check(cu.cuLaunchKernel_(f, blocks, 1, 1, threads, 1, 1, 0, stream, params, nullptr), "cuLaunchKernel", name);
+#ifndef NDEBUG
+    sync();  // a debug build waits after every launch so an error names its kernel (D15)
+#endif
+  }
+
+  void copy_from(void* dst, CUdeviceptr src, uint64_t bytes) {
+    if (bytes == 0) return;
+    bind();
+    check(cu.cuMemcpyDtoHAsync_(dst, src, bytes, stream), "cuMemcpyDtoHAsync");
+    sync();
+  }
+};
+
+CudaDevice::CudaDevice(Ledger& ledger, uint32_t device_index)
+    : ModuleDevice(ledger), impl_(std::make_unique<Impl>()) {
+  impl_->init(device_index);
+}
+
+CudaDevice::~CudaDevice() = default;
+
+std::unique_ptr<ModuleDevice> make_cuda_device(Ledger& ledger, uint32_t device_index) {
+  return std::make_unique<CudaDevice>(ledger, device_index);
+}
+
+void CudaDevice::upload(const DeviceBuffer& dst, uint64_t offset, const void* src, uint64_t bytes) {
+  check_range(dst, offset, bytes);
+  if (bytes == 0) return;
+  Impl& s = *impl_;
+  s.bind();
+  s.check(s.cu.cuMemcpyHtoDAsync_(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, src, bytes, s.stream),
+          "cuMemcpyHtoDAsync");
+  s.sync();
+}
+
+void CudaDevice::download(void* dst, const DeviceBuffer& src, uint64_t offset, uint64_t bytes) {
+  check_range(src, offset, bytes);
+  impl_->copy_from(dst, reinterpret_cast<CUdeviceptr>(src.ptr) + offset, bytes);
+}
+
+void CudaDevice::memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value, uint64_t bytes) {
+  check_range(dst, offset, bytes);
+  if (bytes == 0) return;
+  Impl& s = *impl_;
+  s.bind();
+  s.check(s.cu.cuMemsetD8Async_(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, value, bytes, s.stream),
+          "cuMemsetD8Async");
+  s.sync();
+}
+
+void CudaDevice::set_kernel_globals(const DeviceBuffer& buffer) {
+  if (!buffer.ptr || buffer.bytes < sizeof(ar::KernelGlobals))
+    throw std::invalid_argument("CudaDevice: the KernelGlobals buffer holds " + number(buffer.bytes) + " bytes, need " +
+                                number(sizeof(ar::KernelGlobals)));
+  impl_->globals = reinterpret_cast<CUdeviceptr>(buffer.ptr);
+}
+
+void CudaDevice::launch(ar::Stage stage, uint32_t grid) {
+  Impl& s = *impl_;
+  s.require_globals();
+  const uint32_t i = static_cast<uint32_t>(stage);
+  if (i >= ar::kStageCount) throw std::invalid_argument("CudaDevice: stage " + number(i) + " does not exist");
+  if (stage == ar::Stage::TERMINATED || stage == ar::Stage::SHADOW_TERMINATED)
+    throw std::invalid_argument("CudaDevice: stage " + number(i) + " is not launchable");
+  s.bind();
+  const std::string name = kStageNames[i];
+  const CUfunction f = s.named_function(name, "k_" + name);
+  // The kernel is grid-stride over the step table's count, read on the device (0002 D4,
+  // D6): `grid` only sizes the grid, so a stale or zero value never drops items.
+  const uint32_t blocks = blocks_for(grid);
+  CUdeviceptr kg = s.globals;
+  void* params[] = {&kg};
+  s.launch(f, name.c_str(), blocks, kDefaultThreads, params);
+}
+
+void CudaDevice::launch(KernelId kernel, uint32_t count) {
+  Impl& s = *impl_;
+  s.require_globals();
+  const uint32_t i = static_cast<uint32_t>(kernel);
+  if (i >= kKernelIdCount) throw std::invalid_argument("CudaDevice: kernel " + number(i) + " does not exist");
+  s.bind();
+  const std::string name = kKernelNames[i];
+  const CUfunction f = s.named_function(name, "k_" + name);
+  const uint32_t blocks = blocks_for(count);
+  CUdeviceptr kg = s.globals;
+  uint32_t n = count;
+  void* params[] = {&kg, &n};
+  s.launch(f, name.c_str(), blocks, kDefaultThreads, params);
+}
+
+void CudaDevice::read_step_table(ar::StepTable& out) {
+  Impl& s = *impl_;
+  s.require_globals();
+  CUdeviceptr table = 0;
+  s.copy_from(&table, s.globals + offsetof(ar::KernelGlobals, step_table), sizeof(table));
+  if (!table) throw std::logic_error("CudaDevice: the bound KernelGlobals has no step table");
+  s.copy_from(&out, table, sizeof(out));
+}
+
+void CudaDevice::synchronize() { impl_->sync(); }
+
+uint32_t CudaDevice::load_module_file(const std::string& path) {
+  Impl& s = *impl_;
+  s.bind();
+  const CUmodule m = s.load_image(path, load_module_image_file(path));
+  std::lock_guard<std::mutex> lock(s.mutex);
+  s.file_modules.push_back(m);
+  return static_cast<uint32_t>(s.file_modules.size() - 1);
+}
+
+void CudaDevice::launch_module_kernel(uint32_t module, const char* function, uint32_t blocks, uint32_t threads,
+                                      void* const* args) {
+  Impl& s = *impl_;
+  if (blocks == 0 || threads == 0) throw std::invalid_argument("CudaDevice: a launch needs at least one block and one thread");
+  s.bind();
+  CUfunction f = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (module >= s.file_modules.size())
+      throw std::invalid_argument("CudaDevice: module handle " + number(module) + " was not loaded");
+    const std::string key = "file" + number(module) + "/" + function;
+    auto it = s.functions.find(key);
+    if (it == s.functions.end()) {
+      s.check(s.cu.cuModuleGetFunction_(&f, s.file_modules[module], function), "cuModuleGetFunction", function);
+      s.functions.emplace(key, f);
+    } else {
+      f = it->second;
+    }
+  }
+  s.launch(f, function, blocks, threads, const_cast<void**>(args));
+}
+
+bool CudaDevice::may_allocate(uint64_t need, uint64_t* available_bytes) {
+  Impl& s = *impl_;
+  s.bind();
+  size_t free_bytes = 0, total_bytes = 0;
+  s.check(s.cu.cuMemGetInfo_(&free_bytes, &total_bytes), "cuMemGetInfo");
+  // Ref: 0007 d14 reserve rule: proceed only if need + R <= free, free as reported now.
+  // The refusal reports what may be allocated, free - R.
+  *available_bytes = free_bytes > kCudaReserveBytes ? free_bytes - kCudaReserveBytes : 0;
+  return need <= free_bytes && free_bytes - need >= kCudaReserveBytes;
+}
+
+void* CudaDevice::alloc_memory(uint64_t bytes) {
+  Impl& s = *impl_;
+  s.bind();
+  CUdeviceptr p = 0;
+  const CUresult r = s.cu.cuMemAlloc_(&p, bytes);
+  if (r == CUDA_ERROR_OUT_OF_MEMORY) return nullptr;  // Device::allocate throws std::bad_alloc
+  s.check(r, "cuMemAlloc");
+  return reinterpret_cast<void*>(p);
+}
+
+void CudaDevice::free_memory(void* ptr) {
+  Impl& s = *impl_;
+  s.bind();
+  s.check(s.cu.cuMemFree_(reinterpret_cast<CUdeviceptr>(ptr)), "cuMemFree");
+}
+
+}  // namespace astroray::host
