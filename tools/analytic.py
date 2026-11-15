@@ -135,7 +135,7 @@ def check_channel(mean, var, truth, z, eps_sys):
     return not reasons, reasons, worst
 
 
-def load_dump(path, spp):
+def load_dump(path, spp, device):
     spec = importlib.util.spec_from_file_location("_fits_read_analytic", FITS_READ)
     fr = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fr)
@@ -145,6 +145,8 @@ def load_dump(path, spp):
     if head.get("SAMPLER") != "independent":
         raise RuntimeError(f"the dump's SAMPLER is {head.get('SAMPLER')!r}: the harness needs the exact "
                            "variance of independent mode (0008 d3); set sampler='independent' in the builder")
+    if head.get("DEVICE") != device:
+        raise RuntimeError(f"the dump's DEVICE is {head.get('DEVICE')!r}, asked for {device!r}: the render ran elsewhere")
     if head.get("SPP") != spp:
         raise RuntimeError(f"the dump has SPP {head.get('SPP')}, asked for {spp}")
     mean = np.stack([planes[f"display.{c}"] for c in range(3)]).astype(np.float64)
@@ -254,7 +256,7 @@ def run(scene, device, spp, seed, png=None):
             print(r.stdout + r.stderr)
             print(f"FAIL analytic {scene} {device}: astroray_cli exited {r.returncode}; reproduce: {repro}")
             return False
-        mean, var = load_dump(out, spp)
+        mean, var = load_dump(out, spp, device)
     checks = truths.evaluate(m["truth"], SIZE, SIZE)
     results = check_scene(mean, var, checks, family_m(), m["eps_sys"])
     ok = all(r[1] for r in results)

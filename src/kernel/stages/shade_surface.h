@@ -12,9 +12,9 @@
 // is light_of_hit's; a triangle that is no light (or has pmf 0, 0004 D9) gets p_light 0.
 // NEE, as pbrt-v4 VolPathIntegrator::SampleLd: the context point is the hit offset toward wo
 // (pbrt offsets it for a reflection-only BSDF); the light is picked by the alias sampler from the
-// event block's pick dimension (32 bits: the bin, and the remainder of bits * n as the alias
-// test's uniform, pbrt AliasTable::Sample's rescaling of one uniform, 0004 D14) and sampled with
-// the block's light u, v (0003 d23). f and pdf come from the lobe stack toward wi, and the
+// event block's pick dimension (32 bits: the bin) with the alias test's uniform from per-path
+// dimension 7 mixed with the event index (RULINGS.md 73), and sampled with the block's light u, v
+// (0003 d23). f and pdf come from the lobe stack toward wi, and the
 // contribution beta f |cos| Le times mis_nee_scale goes into a shadow item in the path's reserved
 // shadow slot (0002 D5, k = 1), with the segment's ends offset (0002 D16: the far end on an
 // emissive triangle, none on a lamp, which never blocks shadows, and an unbounded segment toward
@@ -49,7 +49,6 @@
 // Ref: pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::Li (Apache-2.0): emitter-hit MIS,
 // the BSDF-sample update of beta, r_u and r_l, specularBounce, the order limit / NEE / sample /
 // roulette; VolPathIntegrator::SampleLd (context offset, light pick, f, pdfs, weight);
-// src/pbrt/util/sampling.cpp AliasTable::Sample (remainder as the alias uniform);
 // Veach and Guibas 1995; docs/decisions/0004-integrator.md D1, D2, D3, D4, D5, D14; 0003 d20,
 // d23 (per-event block); 0002 D5, D16.
 // Ref: Cycles kernel/integrator/shade_surface.h integrate_surface (Apache-2.0) for the stage
@@ -100,10 +99,6 @@ AR_FN Real2 triangle_barycentrics(Real3 a, Real3 b, Real3 c, Real3 p) {
   return Real2{(d11 * d20 - d01 * d21) * inv, (d00 * d21 - d01 * d20) * inv};
 }
 
-// TEMP until 116 lands (its light_sampler.h helper replaces this; the commit adding it is dropped
-// at the rebase): every hit triangle reads as no light, so its emission weight is 1/avg(r_u).
-inline constexpr uint32_t kLightIndexInvalid = ~0u - 1u;
-AR_FN uint32_t light_of_hit(const KernelGlobals&, uint32_t, uint32_t) { return kNoLight; }
 
 // The far end of an unbounded shadow segment toward an infinite light.
 inline constexpr float kShadowUnbounded = 0x1.fffffep+127f;
@@ -211,7 +206,11 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     const LightSamplerView& lsv = *kg.light_sampler;
     const LightSampleContext lctx = light_context_point(offset_ray_origin(P, Ng, wo), Ng, N);
     const uint32_t bits = camera_path_draw_bits(kg, sample, event_dim(e, EV_LIGHT_PICK));
-    const Real u_alias = bits_to_unit(uint32_t(uint64_t(bits) * uint64_t(lsv.bin_count)));
+    // The alias test's uniform (RULINGS.md 73): per-path dimension 7, XORed with MixBits of the
+    // event index, a bijection of the 32 bits for each vertex, so it is uniform and independent of
+    // every dimension of the event block.
+    const uint32_t q_bits = camera_path_draw_bits(kg, sample, DIM_CAM_ALIAS_Q) ^ uint32_t(mix_bits(uint64_t(e)));
+    const Real u_alias = bits_to_unit(q_bits);
     const SampledLight sl = light_sampler_sample(lsv, lctx, bits, u_alias);
     if (!(sl.pmf > Real(0))) break;
     const LightRecord& lr = kg.lights[sl.light];

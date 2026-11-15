@@ -136,6 +136,7 @@ std::vector<uint8_t> fits_film_dump_bytes(const FilmView& film, const FitsProven
   primary.string("WORKSPC", pv.working_space);
   primary.string("FILTER", pv.filter);
   primary.string("WLPDF", pv.wavelength_pdf);
+  primary.string("DEVICE", pv.device);
   primary.logical("DENOISED", false);
 
   std::vector<uint8_t> out;

@@ -21,7 +21,8 @@ inline constexpr uint32_t DIM_CAM_LENS_V = 3;
 inline constexpr uint32_t DIM_CAM_TIME = 4;
 inline constexpr uint32_t DIM_CAM_WAVELENGTH = 5;
 inline constexpr uint32_t DIM_CAM_HERO = 6;
-inline constexpr uint32_t DIM_CAM_UNUSED7 = 7;
+// The alias-test uniform of the light sampler, mixed with the event index per vertex (RULINGS.md 73).
+inline constexpr uint32_t DIM_CAM_ALIAS_Q = 7;
 
 // Light path, dims 0-7.
 inline constexpr uint32_t DIM_LIGHT_PICK = 0;

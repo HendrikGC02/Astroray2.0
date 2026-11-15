@@ -110,7 +110,9 @@ struct Rig {
   std::vector<float> pmf;
   ar::LightSamplerView sampler{};
 
-  explicit Rig(Emitter emitter) {
+  uint32_t n;
+
+  explicit Rig(Emitter emitter, uint32_t slots = kSlots) : n(slots) {
     scene.meshes = std::make_shared<MeshStore>();
     scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
     commit([&](Edit& e) {
@@ -159,22 +161,22 @@ struct Rig {
     REQUIRE(set);
 
     FilmRequest req;
-    req.max_width = kSlots;
+    req.max_width = n;
     req.max_height = 1;
-    req.slot_capacity = kSlots;
+    req.slot_capacity = n;
     req.statistics = true;
     req.termination_stats = true;
     film = std::make_unique<Film>(dev, FilmLayout::build(req), Owner{1, 1});
     film->data().inv_radiance_scale = 1.0 / set->lights->radiance_scale;
 
-    for (uint32_t i = 0; i < kSlots; ++i) {
-      queue.push_back(i), active.push_back(i), sample_id.push_back(kSlots - 1 - i);
+    for (uint32_t i = 0; i < n; ++i) {
+      queue.push_back(i), active.push_back(i), sample_id.push_back(n - 1 - i);
       flags.push_back(ar::set_hero_lane(0u, i & 3u));
       next_stage.push_back(uint8_t(ar::Stage::SHADE_SURFACE)), term.push_back(uint8_t(ar::Term::ACTIVE));
-      ray_type.push_back(1u), event_index.push_back(uint16_t(i));
+      ray_type.push_back(1u), event_index.push_back(uint16_t(i % 4));
       bounces.push_back(ar::U16x6{{0, 0, 0, 0, 0, 0}});
       hit_inst.push_back(0u), hit_prim.push_back(0u);
-      hit_uv.push_back(ar::Real2{ar::Real(0.1 + 0.15 * i), ar::Real(0.2 + 0.1 * i)});
+      hit_uv.push_back(ar::Real2{ar::Real(0.1 + 0.15 * (i % 4)), ar::Real(0.2 + 0.1 * (i % 4))});
       hit_t.push_back(ar::Real(1));
       ray_o.push_back(ar::Real3{0, 0, 1});
       ray_d.push_back(ar::Real3{ar::Real(0.1), ar::Real(-0.2), ar::Real(-1)});
@@ -187,7 +189,7 @@ struct Rig {
         ru.v[l] = ar::Real(1.0 + 0.25 * double(l));  // r_u not 1, so a missing r_u factor shows
       }
       lambda_t.push_back(lt), beta.push_back(b), r_u.push_back(ru), r_l.push_back(ru);
-      sh_queue.push_back(kSlots - 1 - i), sh_target.push_back(~0u);
+      sh_queue.push_back(n - 1 - i), sh_target.push_back(~0u);
       sh_next.push_back(uint8_t(ar::Stage::SHADOW_TERMINATED));
       sh_o.push_back(ar::Real3{0, 0, 0}), sh_d.push_back(ar::Real3{0, 0, 0}), sh_tmax.push_back(ar::Real(-1));
       sh_contrib.push_back(ar::spec_fill(ar::Real(0)));
@@ -205,7 +207,7 @@ struct Rig {
 
     KgSession in;
     in.film = &film->data(), in.display = &display, in.active_pixels = active.data();
-    in.uniforms.width = kSlots, in.uniforms.height = 1, in.uniforms.samples_per_pass = 1;
+    in.uniforms.width = n, in.uniforms.height = 1, in.uniforms.samples_per_pass = 1;
     in.uniforms.seed = 5;
     in.uniforms.sampler_mode = ar::SAMPLER_INDEPENDENT;
     in.uniforms.max_bounces[0] = 8;
@@ -232,16 +234,16 @@ struct Rig {
   // with the largest p, which holds when that light's own bin is full; fine for the 1-2 lights here).
   void use_lamps(const std::vector<ar::LightRecord>& lights, const std::vector<float>& p) {
     lamps = lights, pmf = p;
-    const uint32_t n = uint32_t(p.size());
+    const uint32_t nl = uint32_t(p.size());
     uint32_t big = 0;
-    for (uint32_t i = 0; i < n; ++i) big = p[i] > p[big] ? i : big;
+    for (uint32_t i = 0; i < nl; ++i) big = p[i] > p[big] ? i : big;
     bins.clear(), bin_light.clear();
-    for (uint32_t i = 0; i < n; ++i) bins.push_back({i == big ? 1.0f : float(n) * p[i], big}), bin_light.push_back(i);
-    sampler = ar::LightSamplerView{bins.data(), bin_light.data(), pmf.data(), n, n};
+    for (uint32_t i = 0; i < nl; ++i) bins.push_back({i == big ? 1.0f : float(nl) * p[i], big}), bin_light.push_back(i);
+    sampler = ar::LightSamplerView{bins.data(), bin_light.data(), pmf.data(), nl, nl};
     kg.lights = lamps.data();
     kg.light_sampler = &sampler;
   }
-  void run() { cpu_stage_shade_surface(kg, ar::StepEntry{0, kSlots, 0}, 0, kSlots); }
+  void run() { cpu_stage_shade_surface(kg, ar::StepEntry{0, n, 0}, 0, n); }
   // The hit context and record of pool slot s, as the stage builds them before it runs.
   void vertex(uint32_t s, ar::ShadeContext* c, ar::OpenPBRParams* rec) {
     REQUIRE(ar::shade_context_build(kg, s, c));
@@ -465,6 +467,47 @@ TEST_CASE("nee/a miss after a diffuse bounce is weighted against world NEE") {
     for (int l = 0; l < ar::kLanes; ++l)
       CHECK(near(double(film.data().slot_L[4u * i + uint32_t(l)]), double(le.v[l]) * double(beta[i].v[l]) / den, 1e-6));
   }
+}
+
+}  // TEST_SUITE
+
+TEST_SUITE("gate") {
+
+TEST_CASE("nee/alias test frequency at 2^20 bins") {
+  // 2^20 bins that all keep light A with probability q = 1e-4 and otherwise give light B, so A's
+  // pmf is exactly q. The alias test's uniform is independent of the 32-bit bin (RULINGS.md 73);
+  // the remainder of bits * n would leave it 12 bits at this bin count and pick A with probability
+  // 1 / 4096 = 2.4 q. 16 passes of 2^16 paths through the stage, a different event index each.
+  constexpr uint32_t kPaths = 1u << 16, kPasses = 16, kBins = 1u << 20;
+  constexpr float kQ = 1e-4f;
+  Rig rig(Emitter::NONE, kPaths);
+  const ar::Real3 a{ar::Real(0.3), 0, ar::Real(2)}, b{ar::Real(-0.4), ar::Real(0.2), ar::Real(2)};
+  rig.use_lamps({ar::light_make(ar::LightType::POINT, a, 0, ar::Real(10), illuminant(1.0f)),
+                 ar::light_make(ar::LightType::POINT, b, 0, ar::Real(10), illuminant(1.0f))},
+                {kQ, 1.0f - kQ});
+  rig.bins.assign(kBins, ar::AliasBin{kQ, 1u});
+  rig.bin_light.assign(kBins, 0u);
+  rig.sampler = ar::LightSamplerView{rig.bins.data(), rig.bin_light.data(), rig.pmf.data(), kBins, 2};
+  const std::vector<ar::Real3> ray_d = rig.ray_d;
+  uint64_t picked_a = 0, items = 0;
+  for (uint32_t pass = 0; pass < kPasses; ++pass) {
+    for (uint32_t s = 0; s < kPaths; ++s) {
+      rig.event_index[s] = uint16_t(pass), rig.bounces[s] = ar::U16x6{{0, 0, 0, 0, 0, 0}};
+      rig.next_stage[s] = uint8_t(ar::Stage::SHADE_SURFACE), rig.ray_d[s] = ray_d[s];
+      rig.sh_next[s] = uint8_t(ar::Stage::SHADOW_TERMINATED);
+    }
+    rig.run();
+    for (uint32_t s = 0; s < kPaths; ++s) {
+      if (rig.sh_next[s] != uint8_t(ar::Stage::INTERSECT_SHADOW)) continue;
+      ++items;
+      const ar::Real3 end = rig.sh_o[s] + rig.sh_d[s] * rig.sh_tmax[s];
+      picked_a += ar::length(end - a) < ar::length(end - b);
+    }
+  }
+  REQUIRE(items == uint64_t(kPaths) * kPasses);  // both lamps light every path
+  const double mean = double(kQ) * double(items), sd = std::sqrt(mean);
+  MESSAGE("light A picked " << picked_a << " times, expected " << mean << " +- " << sd);
+  CHECK(std::fabs(double(picked_a) - mean) < 5.0 * sd);
 }
 
 }  // TEST_SUITE
