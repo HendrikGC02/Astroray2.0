@@ -18,7 +18,9 @@ is the lead's half. Project state lives in docs/STATUS.md, docs/decisions/RULING
 5. Land: `tools/lead/land-pr.sh NNN PASS|SKIP "title"` (run in the background; it holds the
    machine lock through land.ps1). Do not commit to main while a landing runs: main moving forces
    a re-prepare. If cleanup fails because the agent still holds its worktree lock, stop the agent
-   and remove the worktree and branch by hand.
+   and remove the worktree and branch by hand. A task with a `Look at:` line refuses to merge
+   until the lead has viewed that image (Read the PNG) and posted a PR comment starting
+   `evidence:` that says what it shows; then run `tools/land.ps1 merge NNN`.
 6. Notes that a later task must honour go into that task's file (a Do item or Scope addition);
    unowned gaps go into STATUS.
 
