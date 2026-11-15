@@ -16,4 +16,7 @@ Budget: the OptiX module grows by one intersection and one closest-hit program; 
 Depends on: 068, 041, 037.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
-- Stopped before code: lamp shapes cannot reach EmbreeScene or OptixAccel without a new parameter in embree_scene.h and optix_accel.h (both outside Scope); needs lead.
+- Lead ruled: embree_scene.h, optix_accel.h and call sites join Scope; lights passed as const std::vector<ar::LightRecord>& (EmbreeScene ctor, OptixAccel::build_tlas).
+- Done: lamp_intersect.h (shape, geometric xform from the light record, ray-disk), Embree (triangles, user disk, sphere point), OptiX (unit-shape GASes, sbtOffset per type, __intersection__lamp, __closesthit__lamp, built-in sphere IS), tests lamp_prims/* (fast) and lamp_traversal/* (gate), canary tasks/105.canary.patch.
+- Outside Scope, mechanical: src/kernel/launch_config.h gained the two OptiX rows the kernelgate demands next to budget.toml; budget rows are 0 until a `check full` Nsight measurement (as for the other OptiX programs).
+- test_optix_trace.cpp: its stand-in "lamp" (a mesh instance with light_index 7) became a real rectangle lamp, since a light index now names a lamp in the light table.

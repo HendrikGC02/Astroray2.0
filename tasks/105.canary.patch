@@ -1,0 +1,39 @@
+diff --git a/src/device/cpu/embree_scene.cpp b/src/device/cpu/embree_scene.cpp
+index b06885d..10c5258 100644
+--- a/src/device/cpu/embree_scene.cpp
++++ b/src/device/cpu/embree_scene.cpp
+@@ -270,7 +270,7 @@ EmbreeScene::EmbreeScene(EmbreeDevice& device, const MeshStore& meshes, const In
+     rtcSetGeometryInstancedScene(g, inner);
+     rtcSetGeometryTimeStepCount(g, 1);
+     rtcSetGeometryTransform(g, 0, RTC_FORMAT_FLOAT3X4_ROW_MAJOR, xf);
+-    rtcSetGeometryMask(g, table.instances[i].mask);
++    rtcSetGeometryMask(g, table.instances[i].mask | (is_lamp[i] ? uint32_t(ar::kShadowMaskBit) : 0u));
+     rtcCommitGeometry(g);
+     rtcAttachGeometryByID(s.top, g, i);
+     rtcReleaseGeometry(g);
+diff --git a/src/device/cuda/optix_accel.cpp b/src/device/cuda/optix_accel.cpp
+index c1757d8..eed0c64 100644
+--- a/src/device/cuda/optix_accel.cpp
++++ b/src/device/cuda/optix_accel.cpp
+@@ -339,7 +339,7 @@ void OptixAccel::build_tlas(const SceneUpload& upload, const InstanceTable& tabl
+       ar::lamp_geometry_xform(rec, shape, o.transform);
+       o.instanceId = uint32_t(i);
+       o.sbtOffset = shape == ar::LampShape::DISK ? kSbtLampDisk : shape == ar::LampShape::SPHERE ? kSbtLampSphere : kSbtTriangle;
+-      o.visibilityMask = s.mask;  // never the shadow bit: a lamp blocks no shadow ray (0004 D8)
++      o.visibilityMask = s.mask | uint32_t(ar::kShadowMaskBit);  // never the shadow bit: a lamp blocks no shadow ray (0004 D8)
+       o.flags = OPTIX_INSTANCE_FLAG_DISABLE_ANYHIT;
+       o.traversableHandle = lamp_gas_[size_t(shape)].handle;
+       inst.push_back(o);
+diff --git a/src/kernel/geom/lamp_intersect.h b/src/kernel/geom/lamp_intersect.h
+index c0a6a3e..c8865f5 100644
+--- a/src/kernel/geom/lamp_intersect.h
++++ b/src/kernel/geom/lamp_intersect.h
+@@ -72,7 +72,7 @@ AR_FN bool lamp_disk_intersect(Real3 o, Real3 d, Real tmin, Real tmax, Real* t_o
+   const Real t = -o.z / d.z;
+   if (!(t >= tmin && t <= tmax)) return false;  // also rejects NaN
+   const Real x = o.x + t * d.x, y = o.y + t * d.y;
+-  if (x * x + y * y > Real(1)) return false;
++  if (x * x + y * y > Real(0.25)) return false;
+   *t_out = t;
+   return true;
+ }
