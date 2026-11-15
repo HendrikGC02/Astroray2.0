@@ -54,7 +54,7 @@ struct MeshTopology {
 struct MeshRecord {
   ar_key key = 0;
   std::shared_ptr<const MeshTopology> topo;
-  std::vector<float> positions;  // S x V x 3; only step S/2 is used until M8 (see mesh.cpp)
+  std::vector<float> positions;  // S x V x 3; only representative_step(S) is used until M8 (ruling 68)
   std::vector<float> corner_normals;  // C x 3
   float bounds_min[3] = {0, 0, 0}, bounds_max[3] = {0, 0, 0};  // over every motion step
   uint64_t host_bytes = 0;  // positions + normals; the topology counts its own
