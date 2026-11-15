@@ -2,9 +2,12 @@
 """Grammar checker and ABI hash for include/astroray/astroray.h.
 
 Usage: abigen.py --check <header> | --hash <header> | --emit <header> <outdir>
+       abigen.py --check-hooks <header> <capi dir>
 Errors print as `file:line: message`; exit status 1 when any was found.
---emit writes astroray_layout.c, abi_hash.h and _abi.py into <outdir>.
-Ref: docs/decisions/0001-product-shape.md D1.3 (_abi.py), D2.7 (hash, layout), D2.10 (grammar).
+--emit writes astroray_layout.c, abi_hash.h, _abi.py and the recorder files (recorder_hooks.h,
+recorder.cpp, replayer.h, replayer.cpp, arrec.py) into <outdir>.
+--check-hooks fails naming any implemented non-query entry point without its AR_RECORD line.
+Ref: docs/decisions/0001-product-shape.md D1.3 (_abi.py), D1.4 and D2.10 (recording rule), D2.7 (hash, layout), D2.10 (grammar).
 """
 import hashlib
 import os
@@ -58,6 +61,17 @@ def abi_hash(text):
     return int.from_bytes(digest[:8], "big")
 
 
+def ann_of(annots):
+    """(annotation, count name, element type) of a pointer's one annotation."""
+    if len(annots) != 1:
+        return (None, None, None)
+    kind, args = annots[0].group(1), annots[0].group(2)
+    if args is None:
+        return (kind, None, None)
+    parts = [x.strip() for x in args.split(",")]
+    return (kind, parts[0], parts[1])
+
+
 class Checker:
     def __init__(self, path, text):
         self.path = path
@@ -70,6 +84,10 @@ class Checker:
         self.struct_rows = []
         self.consts = []  # (name, literal)
         self.protos = []  # (name, [(base type, pointer depth, const, parameter name)])
+        self.queries = set()  # AR_QUERY function names
+        self.field_ann = {}  # (struct, field) -> (annotation, count name or None, element type or None)
+        self.param_ann = {}  # (function, parameter) -> the same triple
+        self.cur = None
 
     def err(self, line, msg):
         self.errors.append(f"{self.path}:{line}: {msg}")
@@ -168,6 +186,7 @@ class Checker:
             self.err(no, f"struct '{name}' must be named ar_<name>")
         fields = {}
         self.structs[name] = fields
+        self.cur = name
         self.rows = []
         self.struct_rows.append((name, self.rows))
         decls = [d.strip() for d in body.split(";") if d.strip()]
@@ -196,6 +215,7 @@ class Checker:
                 self.err(no, f"cannot parse pointer field: {d}")
                 return
             self.pointer(no, d, annots, toks, None, "struct")
+            self.field_ann[(self.cur, toks[-1])] = ann_of(annots)
             const = toks[0] == "const"
             self.rows.append((toks[1] if const else toks[0], toks.count("*"), const, toks[-1], None))
             fields[toks[-1]] = "ptr"
@@ -231,7 +251,9 @@ class Checker:
         if not m:
             self.err(no, f"cannot parse prototype: {s}")
             return
-        _, ret, name, params = m.groups()
+        q, ret, name, params = m.groups()
+        if q:
+            self.queries.add(name)
         if ret != "ar_status":
             self.err(no, f"function '{name}' must return ar_status, not '{ret}'")
         if not OBJ_NAME.match(name):
@@ -259,6 +281,8 @@ class Checker:
             toks = ANNOT.sub(" ", p).replace("*", " * ").split()
             const = toks[0] == "const"
             rows.append((toks[1] if const else toks[0], toks.count("*"), const, toks[-1]))
+            if "*" in toks:
+                self.param_ann[(name, toks[-1])] = ann_of(list(ANNOT.finditer(p)))
         self.protos.append((name, rows))
 
     def pointer(self, no, p, annots, toks, ints, where):
