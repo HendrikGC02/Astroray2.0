@@ -243,6 +243,14 @@ Light trees and alias tables (0004), sky tables (0004 D12), majorant grids (0006
 
 Debug builds wait after every launch so an error names its stage.
 
+**D16. Self-intersection (triangles and lamps).** Task 038; `src/kernel/geom/ray_offset.h`, one source for CPU and GPU (float only: Embree and OptiX traverse in float, C3).
+- Every ray traces with `tmin = 0`. A spawned ray's origin comes from `offset_ray_origin(p, ng, side)`: Waechter and Binder 2019 (Ray Tracing Gems ch. 6, section 6.2), which moves the origin along the unit geometric normal by 256 float ulps per component (a fixed 1/65536 along the normal for components below 1/32), to the side of the outgoing direction. It is used for continuation rays, the origin end of NEE shadow rays, and lamp pass-through re-queues (0004 D8), where the normal and the side are both the ray direction. No hit carries an error bound.
+- A shadow ray from a shading point to a point on an emitting triangle offsets both ends toward each other and traces `[0, tmax]` with `tmax` the distance between the offset points. A lamp point needs no far-end offset because lamp instances lack the SHADOW bit (D11).
+- Considered and not chosen: pbrt-v4 `OffsetRayOrigin` (per-hit floating-point error bounds, Apache-2.0). It would add an error bound to the hit record and to both traversal backends; the ulp offset needs only the hit point and the geometric normal and scales with the distance from the origin. Cycles' primitive self-skip is rejected because it needs any-hit on rays D11 traces without it.
+- Shadow terminator: no correction in M1a. Hanika 2021 (Ray Tracing Gems II ch. 4) and Chiang et al. 2019 are decided in M3 with bump and normal maps; until then a smooth-normal coarse mesh can show the classic terminator artefact, and the reviewer looks for it.
+- Known limit: the offset is 256 ulps, so two surfaces closer than that (about 6e-5 m at 3 m from the origin, more farther out) can be stepped over by a ray leaving one toward the other. `ray_offset/near surface found` pins the 1e-4 m case at 0 m and 3 m.
+- Test: `tests/cpu/test_ray_offset.cpp` (10^6 rays from a 10^5-triangle sphere 1e4 m away: no own-triangle hit, no start below the surface).
+
 ## Alternatives considered
 
 - **Megakernel, with or without SER.** Traversal only exists inside OptiX programs, so a megakernel would put the whole integrator into a driver-compiled raygen (spike A: about 1 s cold for the fused body alone), sized by the union of all features (v1: 254 registers), with sorting replaced by SER, which is unmeasured here and has an open crash report (research 08 §6). Against it: Laine et al. 2013; pbrt-v4 ch. 15; Cycles X; one preprint at 14% for wavefront (research 04 §2). Not chosen; the overhead risk is tracked in D7 and Risks 2.
@@ -329,7 +337,7 @@ Milestones are `docs/ROADMAP.md`'s (G1).
 10. **Nsight counters** need a one-time administrator enable (owner question 1).
 11. **Sticky CUDA errors** require a process restart, so a kernel fault ends GPU rendering for the Blender session (Cycles has the same property). This follows from 0001's in-process engine; an out-of-process engine is the only remedy (CHECKPOINT-1 keeps it as a fallback).
 12. **Untested architectures.** The release SASS list covers GPUs that are never runtime-tested; the owner accepts building them labelled untested (owner decision 29), so D14/D15 warn rather than refuse.
-13. **Self-intersection is unspecified.** No record fixes the ray-origin offset, tmin or self-hit rejection for triangles, curves (0005 item 27's HAIR needs it), spheres and lamps, nor shadow-terminator handling. It touches D11's programs and every ray-spawning stage; the lead decides (candidates: Wächter and Binder 2019, Ray Tracing Gems ch. 6; Cycles' primitive self-skip, which needs any-hit on rays D11 traces without it).
+13. **Self-intersection for curves, spheres and the random walk is unspecified.** D16 fixes triangles and lamps. Curves (0005 item 27's HAIR), spheres as geometry and the random walk's local rays need their own rule (M7, per the roadmap's designed-when-built table); D16's ulp offset is the first candidate.
 
 ## Assumptions about other records
 

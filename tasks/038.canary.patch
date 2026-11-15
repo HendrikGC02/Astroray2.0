@@ -1,0 +1,13 @@
+diff --git a/src/kernel/geom/ray_offset.h b/src/kernel/geom/ray_offset.h
+index 7224f65..0a8e01f 100644
+--- a/src/kernel/geom/ray_offset.h
++++ b/src/kernel/geom/ray_offset.h
+@@ -34,7 +34,7 @@ namespace ray_offset_detail {
+ // Ref: Waechter and Binder 2019, section 6.2.
+ inline constexpr Real kOrigin = Real(1) / Real(32);
+ inline constexpr Real kFloatScale = Real(1) / Real(65536);
+-inline constexpr Real kIntScale = Real(256);
++inline constexpr Real kIntScale = Real(0);
+ 
+ AR_FN Real offset_component(Real p, Real n) {
+   if (ar::abs(p) < kOrigin) return p + kFloatScale * n;
