@@ -51,6 +51,20 @@ add_custom_command(
   COMMENT "abigen --emit astroray.h"
   VERBATIM)
 
+# Opcode table outputs: _ops.py and coverage.csv; a volume-reachable op without
+# an interval rule fails the build (0005 item 30, 0006 D7).
+set(ASTRORAY_OPSGEN_STAMP ${CMAKE_BINARY_DIR}/opsgen.stamp)
+add_custom_command(
+  OUTPUT ${ASTRORAY_OPSGEN_STAMP}
+  COMMAND ${ASTRORAY_PYTHON} -I ${CMAKE_SOURCE_DIR}/tools/opsgen.py --root ${CMAKE_SOURCE_DIR} --out ${ASTRORAY_GEN_DIR}
+  COMMAND ${CMAKE_COMMAND} -E touch ${ASTRORAY_OPSGEN_STAMP}
+  DEPENDS ${CMAKE_SOURCE_DIR}/tools/opsgen.py ${CMAKE_SOURCE_DIR}/src/kernel/vm/ops.def
+          ${CMAKE_SOURCE_DIR}/blender/astroray/materials/lowering_table.py
+          ${CMAKE_SOURCE_DIR}/tests/data/shader_node_types_5_3.txt
+  COMMENT "opsgen"
+  VERBATIM)
+add_custom_target(astroray_opsgen ALL DEPENDS ${ASTRORAY_OPSGEN_STAMP})
+
 # Build identity. The command depends on HEAD, the current branch's ref and the
 # index, so a commit relinks; the generator rewrites the source only when its
 # content changed, which keeps `ninja -n` clean afterwards (0009 d5).
@@ -120,3 +134,4 @@ add_executable(astroray_tests_cpu tests/cpu/main.cpp ${ASTRORAY_TEST_CPU_SOURCES
 astroray_target_warnings(astroray_tests_cpu)
 target_include_directories(astroray_tests_cpu SYSTEM PRIVATE third_party/doctest)
 target_link_libraries(astroray_tests_cpu PRIVATE ${_ar_engine_libs})
+add_dependencies(astroray_tests_cpu astroray_opsgen)
