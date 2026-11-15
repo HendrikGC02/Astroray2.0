@@ -297,11 +297,14 @@ void MaterialStore::rebuild_locked() {
     a->emission_sampling.push_back(kv.second.desc.emission_sampling);
     a->pass_index.push_back(kv.second.desc.pass_index);
   }
-  a->default_header.program_offset = uint32_t(a->programs.size());
-  a->default_header.const_offset = uint32_t(a->constants.size());
-  a->default_header.ext = 0;
-  a->default_header.flags = default_.flags;
-  a->default_constants = default_.compiled.block;
+  // The default material, last (MaterialArrays): no key, no program words, pass index 0.
+  ar::MaterialHeader h = {};
+  h.program_offset = uint32_t(a->programs.size());
+  h.const_offset = uint32_t(a->constants.size());
+  h.flags = default_.flags;
+  a->headers.push_back(h);
+  a->constants.push_back(default_.compiled.block);
+  a->pass_index.push_back(0u);
   const uint64_t bytes = a->bytes();
   const uint64_t id = bytes != 0 ? ledger_->add(Owner{}, LedgerCategory::TABLES, bytes) : 0;
   if (ledger_id_ != 0) ledger_->remove(ledger_id_);

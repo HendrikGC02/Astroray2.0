@@ -371,14 +371,22 @@ TEST_CASE("shade_surface/vm error and non-finite contributions end invalid") {
 }
 
 TEST_CASE("shade_surface/film writes go to the sample's slot") {
+  // A refill that handed out the pool slots in another order: pool slot i carries sample p[i].
+  // Emission, AOVs, flags and path-end statistics all land on the sample's slot and pixel (0004 D5).
   HitRig rig;
-  // Path slot 0 carries sample 3: its emission must land in sample 3's slot (0004 D5).
-  rig.sample_id[0] = 3;
-  rig.step = ar::StepEntry{0, 1, 0};
-  const ar::Spec want = rig.expected(0);
-  cpu_stage_shade_surface(rig.kg, rig.step, 0, 1);
-  CHECK(same(rig.slot_value(3), want));
-  for (int l = 0; l < ar::kLanes; ++l) CHECK(rig.slot_value(0).v[l] == 0.0f);
+  const uint32_t p[kSlots] = {3, 4, 0, 1, 2};
+  ar::Spec want[kSlots];
+  for (uint32_t i = 0; i < kSlots; ++i) rig.sample_id[i] = p[i];
+  for (uint32_t i = 0; i < kSlots; ++i) want[i] = rig.expected(i);
+  rig.run();
+  const ar::FilmData& f = rig.film->data();
+  const float index[kSlots] = {float(kPassA), float(kPassB), 0.0f, float(kPassA), float(kPassA)};
+  for (uint32_t i = 0; i < kSlots; ++i) {
+    CHECK(same(rig.slot_value(p[i]), want[i]));
+    CHECK(f.slot_flags[p[i]] == rig.flags[i]);
+    CHECK(rig.hist(ar::Term::MAX_BOUNCE, p[i]) == 1u);
+    CHECK(rig.add_plane(f.aov_material, 0, p[i]) == index[i]);
+  }
 }
 
 TEST_CASE("shade_surface/the cpu session device runs the stage") {

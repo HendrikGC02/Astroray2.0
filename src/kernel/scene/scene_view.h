@@ -58,11 +58,11 @@ struct SceneData {
   uint32_t mesh_count;
   // Material table slot per material-pool entry, and the MaterialHeader array they index.
   // Both are null until the material compiler fills them; every material is then Common.
-  // material_header_count counts the scene's materials; the arrays hold one entry more: the
-  // default material (an instance with no material slice, 0007 appendix) sits at index
-  // material_header_count, one past the counted headers, and its constant block one past the
-  // counted blocks. The host compiles it from an empty surface graph (every OpenPBR input at its
-  // default, no emission), so a kernel treats it like any material.
+  // material_header_count counts the scene's materials; the header, constant-block and pass-index
+  // arrays hold one entry more (their table counts are material_header_count + 1): the default
+  // material (an instance with no material slice, 0007 appendix) sits last, at index
+  // material_header_count. The host compiles it from an empty surface graph (every OpenPBR input
+  // at its default, no emission, pass index 0), so a kernel treats it like any material.
   const uint32_t* material_slots;
   const MaterialHeader* material_headers;
   uint32_t material_header_count;

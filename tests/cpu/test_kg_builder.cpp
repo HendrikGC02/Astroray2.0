@@ -185,7 +185,10 @@ TEST_CASE("kg_builder/no null tables") {
   const auto imgs = r.scene.materials->images().arrays();
   CHECK(kg.scene->instance_count == 2u);  // the quad and the lamp's record
   CHECK(kg.scene->mesh_count == 1u);
-  CHECK(kg.scene->material_header_count == mats->headers.size());
+  // The header array ends with the default material, one past the counted headers.
+  CHECK(kg.scene->material_header_count == mats->headers.size() - 1u);
+  CHECK(mats->headers.size() == mats->keys.size() + 1u);
+  CHECK(kg.scene->material_pass_index == mats->pass_index.data());
   CHECK(kg.material_slot_count == 1u);
   CHECK(kg.material_program_words == mats->programs.size());
   CHECK(kg.material_constant_count == mats->constants.size());

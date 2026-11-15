@@ -29,10 +29,14 @@
 
 AR_NS_BEGIN
 
+// `slot` is the path's pool slot; the film is written at the sample's slot in the per-sample
+// buffer, its sample_id (0004 D5), which differs from the pool slot whenever the refill hands out
+// pool slots in another order than the sample ids.
 AR_FN void path_end(const KernelGlobals& kg, uint32_t slot, Term term) {
+  const uint32_t sample = ps_sample_id(kg, slot);
   ps_term(kg, slot) = static_cast<uint8_t>(term);
-  film_path_end_stats(kg, slot, uint32_t(ps_bounces(kg, slot).v[0]), term);
-  sample_set_flags(kg, slot, ps_flags(kg, slot));
+  film_path_end_stats(kg, sample, uint32_t(ps_bounces(kg, slot).v[0]), term);
+  sample_set_flags(kg, sample, ps_flags(kg, slot));
   ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::TERMINATED);
 }
 

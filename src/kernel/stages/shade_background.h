@@ -37,11 +37,13 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
     const Spec lt = ps_lambda_t(kg, slot);
     Lambda lam;
     for (int i = 0; i < kLanes; ++i) lam.nm[i] = lt.v[i];
+    // The film slot is the sample's, not the pool slot (0004 D5).
+    const uint32_t sample = ps_sample_id(kg, slot);
     const Spec contribution = light_emission(*world, lam, kg.tables->observer) * ps_beta(kg, slot);
     if (is_finite(contribution))
-      sample_add(kg, slot, contribution);
+      sample_add(kg, sample, contribution);
     else {
-      sample_mark_invalid(kg, slot);
+      sample_mark_invalid(kg, sample);
       term = Term::INVALID;
     }
   }
