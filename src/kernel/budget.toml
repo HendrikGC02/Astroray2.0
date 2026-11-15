@@ -71,19 +71,19 @@ compile_s = 1.5
 gated = "merge"
 
 [kernel.k_film_present]
-regs = 0
+regs = 37
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 0
+compile_s = 1.21
 gated = "merge"
 
 [kernel.k_film_heatmap]
-regs = 0
+regs = 25
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 0
+compile_s = 1.21
 gated = "merge"
 
 # The four OptiX programs are compiled by the driver: kernelgate never measures them, so regs and
