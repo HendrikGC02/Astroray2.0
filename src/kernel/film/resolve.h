@@ -26,6 +26,11 @@ inline constexpr float kFilmFloatMax = 3.402823466e38f;
 // Negated comparisons are false for NaN, so NaN, negatives and +Inf all fail.
 AR_FN bool film_value_valid(float v) { return v >= 0.0f && v <= kFilmFloatMax; }
 
+// A splat value is already a converted display colour, where a negative component can be a
+// legitimate out-of-gamut colour: only NaN and Inf are invalid here. The negative-spectral-radiance
+// test of 0008 d6 belongs to the light-tracing splat writer, before the conversion.
+AR_FN bool film_splat_valid(float v) { return v >= -kFilmFloatMax && v <= kFilmFloatMax; }
+
 AR_FN bool film_sample_valid(const Spec& L) {
   for (int i = 0; i < kLanes; ++i)
     if (!film_value_valid(float(L.v[i]))) return false;
@@ -84,9 +89,8 @@ AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
   }
 
   // The light image is one independent estimate per pass: it adds to S1, S2 and, on even
-  // passes, S1A of the display channel, and does not count as a camera sample. Splats are
-  // checked like camera samples (0008 d6): one bad component drops the pixel's whole entry and
-  // counts it. Light emitters carry s in their strength (0003 d10), so 1/s applies here too, in
+  // passes, S1A of the display channel, and does not count as a camera sample. A NaN or
+  // Inf component (film_splat_valid) drops the pixel's whole entry and counts it (0008 d6). Light emitters carry s in their strength (0003 d10), so 1/s applies here too, in
   // film_moment_add.
   if (f.splat != nullptr) {
     const bool even = (kg.session.pass_index & 1u) == 0u;
@@ -96,7 +100,7 @@ AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
     f.splat[pixel] = 0.0f;
     f.splat[f.plane_stride + pixel] = 0.0f;
     f.splat[2ull * f.plane_stride + pixel] = 0.0f;
-    if (film_value_valid(r) && film_value_valid(g) && film_value_valid(b)) {
+    if (film_splat_valid(r) && film_splat_valid(g) && film_splat_valid(b)) {
       film_moment_add(f, f.moment[0].offset, pixel, double(r), even);
       film_moment_add(f, f.moment[0].offset + 1u, pixel, double(g), even);
       film_moment_add(f, f.moment[0].offset + 2u, pixel, double(b), even);

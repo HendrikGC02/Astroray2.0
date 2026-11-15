@@ -380,7 +380,12 @@ TEST_CASE("film_resolve/bad splat dropped and counted") {
   ar::film_splat_add(rig.kg, 3, ar::Real3{0.5f, 0.25f, 0.125f});
   rig.resolve();
   const ar::FilmData& d = rig.data();
-  for (uint32_t j = 0; j < 3; ++j) {
+  // A negative component is an out-of-gamut colour, not an invalid sample: folded normally.
+  CHECK(d.invalid[1] == 0u);
+  CHECK(d.s1[2 * d.plane_stride + 1] == -0.5);
+  CHECK(d.s2[2 * d.plane_stride + 1] == 0.25);
+  CHECK(d.s1[1] == 1.0);
+  for (const uint32_t j : {0u, 2u}) {
     INFO("pixel " << j);
     CHECK(d.invalid[j] == 1u);
     for (uint32_t q = 0; q < 3; ++q) {
