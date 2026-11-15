@@ -502,7 +502,7 @@ TEST_CASE("light_sampler/scene table rebuilds only for emissive changes") {
   t = fx.scene.lights();
   CHECK(fx.scene.light_rebuilds() == 3);
   REQUIRE(t->lights.size() == 2);
-  CHECK(t->lights[0].strength == 4.0f);
+  CHECK(t->lights[0].strength == 4.0f * float(t->radiance_scale));
   fx.commit([&](Edit& e) {
     ar_material_desc me = {};
     me.surface_graph = GE, me.emission_sampling = AR_EMISSION_SAMPLING_BACK;

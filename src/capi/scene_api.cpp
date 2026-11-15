@@ -11,6 +11,7 @@
 #include <string>
 
 #include "astroray/astroray.h"
+#include "host/light/lamps.h"
 #include "host/material/material_store.h"
 #include "host/scene/edit.h"
 #include "host/scene/mesh.h"
@@ -275,6 +276,24 @@ AR_API ar_status ar_edit_set_graph(ar_edit h, ar_key key, uint32_t target, const
     }
   }
   return staging_call(h, [&](Edit& e) { return h->owner->scene->materials->set_graph(e, key, desc); });
+  });
+}
+// Point, sphere, rectangle and disk lamps; SPOT and SUN land in M4.
+AR_API ar_status ar_edit_set_light(ar_edit h, ar_key key, const ar_light_desc* desc) {
+  AR_RECORD(ar_edit_set_light, ar_rec_of(h), h, key, desc);
+  AR_RECORD_BODY({
+  if (h && h->edit && desc && (desc->type == AR_LIGHT_SPOT || desc->type == AR_LIGHT_SUN)) {
+    try {
+      const std::string why = "ar_edit_set_light: spot and sun lights are not implemented in this build (M4)";
+      h->owner->scene->ctx().log.line("WARNING", why);
+      return fail(h, AR_ERR_UNSUPPORTED, why);
+    } catch (...) {
+      return AR_ERR_UNSUPPORTED;
+    }
+  }
+  return staging_call(h, [&](Edit& e) {
+    return astroray::host::set_light(e, key, desc, h->owner->scene->materials->table());
+  });
   });
 }
 AR_API ar_status ar_edit_set_world(ar_edit h, const ar_world_desc* desc) {

@@ -58,6 +58,23 @@ struct InstanceTable {
 // volume 5. Bit 6 (medium boundary) stays unset until media exist; bit 7 is never set.
 uint8_t visibility_mask(uint32_t visibility);
 
+// The ray classes a lamp's instance may carry; shadow is never among them (0004 D8).
+inline constexpr uint32_t kLampRayVisibility =
+    AR_VISIBILITY_CAMERA | AR_VISIBILITY_DIFFUSE | AR_VISIBILITY_GLOSSY | AR_VISIBILITY_TRANSMISSION;
+
+// A lamp's instance: no geometry (task 105 builds the lamp shape from the light record), its
+// transform on every motion step, its light index in the light table, and its camera, diffuse,
+// glossy and transmission visibility, never shadow (0004 D8: lamps never block shadow rays).
+struct LampInstanceIn {
+  ar_key key = 0;
+  ar_xform xf = {};
+  uint32_t visibility = 0;
+  uint8_t light_group = 0;
+  uint32_t light_index = ar::kNoLightIndex;
+};
+// A copy of `base` (may be null) with one instance appended per lamp, in order.
+std::shared_ptr<InstanceTable> append_lamp_instances(const InstanceTable* base, const std::vector<LampInstanceIn>& lamps);
+
 // The two edit entry points (the C API forwards here). set_instances copies the arrays,
 // then validates and builds on a worker, so a bad instance rejects the generation
 // (GENERATION_REJECTED, detail names the instance index and key). update_transforms patches

@@ -569,7 +569,7 @@ typedef struct ar_spectrum_ref {
 /* Sizes in metres. POINT and SPOT: size_x is the radius. SUN: none (sun_angle is the disc).
    AREA_RECT: size_x by size_y full extents. AREA_ELLIPSE: size_x and size_y are full extents
    (diameters), like Blender's lamp size; equal sizes are a disk, and the engine halves them
-   into the ellipse record's radii. */
+   into the ellipse record's radii. spread is in radians (pi = a full hemisphere), like Blender's RNA. */
 typedef struct ar_light_desc {
     ar_spectrum_ref color;
     ar_key graph;

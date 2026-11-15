@@ -102,6 +102,21 @@ uint8_t visibility_mask(uint32_t v) {
   return m;
 }
 
+std::shared_ptr<InstanceTable> append_lamp_instances(const InstanceTable* base, const std::vector<LampInstanceIn>& lamps) {
+  auto t = base ? std::make_shared<InstanceTable>(*base) : std::make_shared<InstanceTable>();
+  for (const LampInstanceIn& l : lamps) {
+    Instance in;
+    in.object_key = l.key;
+    in.visibility = l.visibility & kLampRayVisibility;
+    in.mask = visibility_mask(in.visibility);
+    in.light_group = l.light_group;
+    in.light_index = l.light_index;
+    t->instances.push_back(in);
+    for (uint32_t s = 0; s < t->motion_steps; ++s) t->xf.push_back(l.xf);
+  }
+  return t;
+}
+
 ar_status set_instances(Edit& edit, const ar_instances_desc* desc) {
   if (!desc) return edit.fail("invalid argument: instances desc is null");
   if (desc->motion_steps == 0) return edit.fail("invalid argument: instances motion_steps is 0");

@@ -44,6 +44,8 @@
 
 namespace astroray::host {
 
+struct LightTable;  // host/light/light_builder.h
+
 struct SessionOptions {
   uint32_t mode = AR_SESSION_MODE_VIEWPORT;
   uint32_t max_width = 0;
@@ -204,6 +206,10 @@ class Session {
   ResponseTable response_;
   WavelengthTable wavelengths_;
   std::unique_ptr<Film> film_;
+  // The light table (and with it the radiance scale s) latched for this epoch: one snapshot, written at
+  // each new epoch with inv_radiance_scale = 1 / s and kept until the next. Task 102 binds this same
+  // table; null for a scene without material and mesh stores.
+  std::shared_ptr<const LightTable> epoch_lights_;
   std::unique_ptr<DisplayRing> ring_;
   mutable std::mutex ring_mutex_;  // guards only the ring_ pointer (created, reset), never a pass
   std::string observer_hash_;      // hex, written with film_ under render_mutex_
