@@ -2,6 +2,7 @@
 # Isolated Blender launcher (0009 d17a). Dot-source this file.
 . (Join-Path $PSScriptRoot 'lock.ps1')
 . (Join-Path $PSScriptRoot 'proc.ps1')
+. (Join-Path $PSScriptRoot 'python.ps1')
 
 function Invoke-ArBlender {
   # Returns @{ ExitCode; Log; Waited }. ExitCode -1 means timeout.
@@ -11,8 +12,8 @@ function Invoke-ArBlender {
     [int]$TimeoutS = 300
   )
   $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-  $exe = Join-Path $env:ASTRORAY_BLENDER 'blender.exe'
-  if (-not $env:ASTRORAY_BLENDER -or -not (Test-Path $exe)) {
+  $exe = Join-Path (Get-ArBlenderRoot) 'blender.exe'
+  if (-not (Test-Path $exe)) {
     throw "blender.exe not found at '$exe'; set ASTRORAY_BLENDER to the Blender 5.3 install folder"
   }
   $scriptPath = (Resolve-Path $Script).Path
@@ -53,8 +54,8 @@ function Invoke-ArBlender {
 function Invoke-ArBlenderCommand {
   # Runs `blender --command <args>` (no profile isolation needed; nothing is installed). Returns the exit code.
   param([Parameter(Mandatory)][string[]]$Args, [int]$TimeoutS = 600)
-  $exe = Join-Path $env:ASTRORAY_BLENDER 'blender.exe'
-  if (-not $env:ASTRORAY_BLENDER -or -not (Test-Path $exe)) {
+  $exe = Join-Path (Get-ArBlenderRoot) 'blender.exe'
+  if (-not (Test-Path $exe)) {
     throw "blender.exe not found at '$exe'; set ASTRORAY_BLENDER to the Blender 5.3 install folder"
   }
   $null = Enter-ArMachineLock
