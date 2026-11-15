@@ -286,6 +286,29 @@ D3 arvo_double(D3 v0, D3 v1, D3 v2, D3 p, double u0, double u1) {
   const double ct = 1 - u1 * (1 - dot3(cp, b));
   return unit3(b * ct + unit3(cp - b * dot3(cp, b)) * std::sqrt(std::max(0.0, 1 - ct * ct)));
 }
+// Möller-Trumbore in double: t and the weights (b1, b2) of v1 and v2, false for a miss.
+// Ref: Möller and Trumbore 1997, "Fast, Minimum Storage Ray/Triangle Intersection", JGT 2(1).
+bool ray_triangle(D3 o, D3 d, D3 v0, D3 v1, D3 v2, double* t, double* b1, double* b2) {
+  const D3 e1 = v1 - v0, e2 = v2 - v0, pv = cross3(d, e2);
+  const double det = dot3(e1, pv);
+  if (std::fabs(det) < 1e-14) return false;
+  const D3 tv = o - v0, qv = cross3(tv, e1);
+  *b1 = dot3(tv, pv) / det, *b2 = dot3(d, qv) / det, *t = dot3(e2, qv) / det;
+  return *b1 >= 0 && *b2 >= 0 && *b1 + *b2 <= 1 && *t > 0;
+}
+
+// The projected solid angle of a convex polygon seen from p with normal n (all of it above the
+// tangent plane): Lambert's formula, half the sum over edges of the edge's angle times n . its unit
+// edge normal. Ref: Arvo 1995, "Applications of Irradiance Tensors to the Simulation of
+// Non-Lambertian Phenomena", SIGGRAPH (Lambert's formula, section 3).
+double projected_solid_angle(const std::vector<D3>& v, D3 p, D3 n) {
+  double sum = 0;
+  for (size_t i = 0; i < v.size(); ++i) {
+    const D3 a = unit3(v[i] - p), b = unit3(v[(i + 1) % v.size()] - p);
+    sum += std::acos(clamp1(dot3(a, b))) * dot3(n, unit3(cross3(a, b)));
+  }
+  return 0.5 * std::fabs(sum);
+}
 bool near(double a, double b, double rel) { return std::fabs(a - b) <= rel * std::fabs(b) + 1e-30; }
 
 ar::SpectrumRef illuminant(float v) { return ar::make_const_ref(ar::SpectrumSemantic::ILLUMINANT, ar::Real(v)); }
@@ -502,6 +525,26 @@ TEST_CASE("nee/a miss after a diffuse bounce is weighted against world NEE") {
 }
 
 
+TEST_CASE("nee/a hit outside the light index ends invalid") {
+  // A BSDF ray (after a diffuse bounce) reaches the emitter, instance 1, in a scene whose
+  // instance count says 1: light_of_hit returns kLightIndexInvalid, never kNoLight, so the emission
+  // weight cannot be taken and the sample fails loudly.
+  Rig rig(Emitter::CONSTANT);
+  ar::SceneData sd = *rig.kg.scene;
+  sd.instance_count = 1;
+  rig.kg.scene = &sd;
+  for (uint32_t s = 0; s < kSlots; ++s) {
+    rig.hit_inst[s] = 1u, rig.bounces[s] = ar::U16x6{{1, 1, 0, 0, 0, 0}};
+    rig.ray_o[s] = ar::Real3{0, 0, 0}, rig.ray_d[s] = ar::Real3{0, 0, 1};
+  }
+  rig.run();
+  for (uint32_t s = 0; s < kSlots; ++s) {
+    CHECK(rig.term[s] == uint8_t(ar::Term::INVALID));
+    CHECK(rig.next_stage[s] == uint8_t(ar::Stage::TERMINATED));
+    const float v = rig.film->data().slot_L[4u * rig.sample_id[s]];
+    CHECK(!(v == v));  // NaN: the resolve counts it
+  }
+}
 TEST_CASE("nee/spherical triangle sampling matches double") {
   // The float sampler against the double replica of the same map, from 2^17 context points in
   // [-1, 1]^3 below two triangles 3 above (well-shaped, and a sliver), uniforms from the sampler's
@@ -537,6 +580,98 @@ TEST_CASE("nee/spherical triangle sampling matches double") {
 
 TEST_SUITE("gate") {
 
+TEST_CASE("nee/emissive triangle lit receiver is unbiased with both strategies") {
+  // A Lambertian receiver (albedo rho) at z = 0 under the emitter quad at z = 1 (two one-sided
+  // triangle lights facing down). Each path: shade_surface at the receiver (NEE item, delivered
+  // here as the item's contribution) and its BSDF ray, intersected with the emitter here and shaded
+  // by shade_surface as a hit after a diffuse bounce (emission with the MIS weight from
+  // light_of_hit, pmf and tri_pdf_li at the previous vertex). The sum must be unbiased:
+  // E = beta / avg(r_u) rho / pi Le PSA, PSA the receiver's projected solid angle of the quad
+  // (pbrt's estimator divides by avg(r_u), 1 at the camera). Each lane is z-tested.
+  constexpr uint32_t kPaths = 1u << 14, kPasses = 8;
+  constexpr double kRho = 0.7, kPi = 3.14159265358979323846;
+  Rig rig(Emitter::CONSTANT, kPaths);
+  rig.kg.session.max_bounces[0] = 1;  // the emitter vertex adds its emission and ends
+  ar::SceneData sd = *rig.kg.scene;
+  std::vector<ar::ConstantBlock> blocks(sd.material_constants, sd.material_constants + rig.kg.material_constant_count);
+  ar::ConstantBlock& b = blocks[sd.material_headers[sd.material_header_count].const_offset];  // the receiver's (default)
+  ar::SpectrumRef grey{};
+  grey.kind = uint8_t(ar::SpectrumKind::CONSTANT), grey.p[0] = float(kRho);
+  b.base_weight = 1.0f, b.base_color = grey, b.base_diffuse_roughness = 0.0f, b.base_metalness = 0.0f;
+  b.specular_weight = 0.0f, b.emission_luminance = 0.0f;
+  sd.material_constants = blocks.data();
+  rig.kg.scene = &sd;
+  const uint32_t n_lights = rig.kg.light_sampler->light_count;
+  REQUIRE(n_lights == 2u);
+  const std::vector<D3> quad{{-1, 1, 1}, {1, 1, 1}, {1, -1, 1}, {-1, -1, 1}};
+  const std::vector<ar::Real3> ray_d0 = rig.ray_d;
+  std::vector<double> res[ar::kLanes];
+  uint64_t nee_items = 0, hits = 0;
+  std::vector<uint32_t> hit_queue;
+  for (uint32_t pass = 0; pass < kPasses; ++pass) {
+    for (uint32_t s = 0; s < kPaths; ++s) {
+      rig.event_index[s] = uint16_t(pass), rig.bounces[s] = ar::U16x6{{0, 0, 0, 0, 0, 0}};
+      rig.next_stage[s] = uint8_t(ar::Stage::SHADE_SURFACE), rig.ray_d[s] = ray_d0[s], rig.flags[s] = 0u;
+      rig.hit_inst[s] = 0u, rig.hit_prim[s] = s & 1u, rig.beta[s] = ar::spec_fill(ar::Real(0.75));
+      rig.hit_uv[s] = ar::Real2{ar::Real(0.05 + 0.6 * double((s * 7919u) % 1000u) / 1000.0),
+                                ar::Real(0.05 + 0.3 * double((s * 104729u) % 1000u) / 1000.0)};
+      rig.sh_next[s] = uint8_t(ar::Stage::SHADOW_TERMINATED);
+    }
+    for (uint32_t i = 0; i < 4u * kPaths; ++i) rig.film->data().slot_L[i] = 0.0f;
+    std::vector<ar::Real3> P(kPaths);
+    for (uint32_t s = 0; s < kPaths; ++s) {
+      ar::ShadeContext c{};
+      REQUIRE(ar::shade_context_build(rig.kg, s, &c));
+      P[s] = c.P;
+    }
+    rig.run();
+    hit_queue.clear();
+    for (uint32_t s = 0; s < kPaths; ++s) {
+      if (rig.next_stage[s] != uint8_t(ar::Stage::INTERSECT_CLOSEST)) continue;
+      const D3 o{rig.ray_o[s].x, rig.ray_o[s].y, rig.ray_o[s].z}, d{rig.ray_d[s].x, rig.ray_d[s].y, rig.ray_d[s].z};
+      for (uint32_t l = 0; l < n_lights; ++l) {
+        const ar::LightRecord& lr = rig.kg.lights[l];
+        const auto vtx = [&](int k) { const ar::Real3 v = ar::tri_vertex(lr, k); return D3{v.x, v.y, v.z}; };
+        double th, b1, b2;
+        if (!ray_triangle(o, d, vtx(0), vtx(1), vtx(2), &th, &b1, &b2)) continue;
+        rig.hit_inst[s] = ar::tri_instance(lr), rig.hit_prim[s] = ar::tri_index(lr);
+        rig.hit_uv[s] = ar::Real2{ar::Real(b1), ar::Real(b2)}, rig.hit_t[s] = ar::Real(th);
+        rig.next_stage[s] = uint8_t(ar::Stage::SHADE_SURFACE);
+        hit_queue.push_back(s);
+        break;
+      }
+    }
+    hits += hit_queue.size();
+    rig.kg.main_queue = hit_queue.data();
+    cpu_stage_shade_surface(rig.kg, ar::StepEntry{0, uint32_t(hit_queue.size()), 0}, 0, uint32_t(hit_queue.size()));
+    rig.kg.main_queue = rig.queue.data();
+    for (uint32_t s = 0; s < kPaths; ++s) {
+      const uint32_t it = rig.item_of(s), sample = rig.sample_id[s];
+      const bool item = rig.sh_next[it] == uint8_t(ar::Stage::INTERSECT_SHADOW);
+      nee_items += item;
+      const double psa = projected_solid_angle(quad, D3{P[s].x, P[s].y, P[s].z}, D3{0, 0, 1});
+      const ar::Spec le = ar::light_emission(rig.kg.lights[0], ar::Lambda{{rig.lambda_t[s].v[0], rig.lambda_t[s].v[1],
+                                                                           rig.lambda_t[s].v[2], rig.lambda_t[s].v[3]}},
+                                             rig.kg.tables->observer);
+      for (int k = 0; k < ar::kLanes; ++k) {
+        const double x = double(rig.film->data().slot_L[4u * sample + uint32_t(k)]) + (item ? double(rig.sh_contrib[it].v[k]) : 0.0);
+        const double e = 0.75 / double(ar::avg(rig.r_u[s])) * kRho / kPi * double(le.v[k]) * psa;
+        res[k].push_back(x - e);
+      }
+    }
+  }
+  CHECK(nee_items > uint64_t(kPaths) * kPasses / 2);
+  CHECK(hits > uint64_t(kPaths) * kPasses / 4);
+  for (int k = 0; k < ar::kLanes; ++k) {
+    double m = 0, v = 0;
+    for (double r : res[k]) m += r;
+    m /= double(res[k].size());
+    for (double r : res[k]) v += (r - m) * (r - m);
+    const double se = std::sqrt(v / double(res[k].size() - 1) / double(res[k].size()));
+    MESSAGE("lane " << k << ": mean residual " << m << ", standard error " << se << ", z " << m / se);
+    CHECK(std::fabs(m / se) < 5.0);
+  }
+}
 TEST_CASE("nee/alias test frequency at 2^20 bins") {
   // 2^20 bins that keep light A with probability q = 1e-4 and otherwise give bin 1, whose light is B,
   // so A's pmf is q (2^20 - 1) / 2^20. The alias test's uniform is independent of the 32-bit bin (RULINGS.md 73);
