@@ -22,6 +22,7 @@ struct RunArgs {
   ArReplayOptions overrides;  // every field kReplayUnset unless given
   uint32_t passes = 16;       // bench only
   uint32_t warmup = 2;        // bench only
+  bool auto_samples = false;  // bench set the sample count itself; not reported as a user override
 };
 
 // Returns kContinue or the exit code. `needs_out` is true for render and dump.
@@ -41,6 +42,9 @@ int run_sessions(Replayed& r, uint32_t timeout_ms);
 
 // Prints each session's report table and returns the highest level seen (-1 when empty).
 int print_reports(Replayed& r);
+
+// True when the state is CONVERGED and every committed generation is active or rejected.
+bool settled_and_converged(const ar_progress& p);
 
 const char* status_name(ar_status s);
 std::string text(const uint8_t* p, size_t cap);

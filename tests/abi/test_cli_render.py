@@ -34,7 +34,7 @@ def load(name, path):
 
 
 def make_recording(abi, ops, lib, path, ctx_log, bad_generation=False, close_session=False,
-                   unsupported_node=False):
+                   unsupported_node=False, no_settings=False, sessions=1):
     """Records the scene; with bad_generation a mesh the engine rejects is committed after the
     session was created (an ERROR report entry once it is validated)."""
     a = abi
@@ -79,13 +79,30 @@ def make_recording(abi, ops, lib, path, ctx_log, bad_generation=False, close_ses
     s.samples = s.viewport_samples = SPP
     s.max_bounces = 4
     s.pixel_filter, s.pixel_filter_width, s.film_exposure, s.seed = a.AR_FILTER_BOX, 1.0, 1.0, 11
-    assert lib.ar_edit_set_settings(edit, ctypes.byref(s)) == a.AR_OK
+    if not no_settings:
+        assert lib.ar_edit_set_settings(edit, ctypes.byref(s)) == a.AR_OK
     gen = ctypes.c_uint64()
     assert lib.ar_edit_commit(edit, ctypes.byref(gen)) == a.AR_OK
 
     sdesc = a.ar_session_desc(a.AR_SESSION_MODE_VIEWPORT, 4, 4, a.AR_DENOISER_NONE)
-    session = ctypes.c_void_p()
-    assert lib.ar_session_create(scene, ctypes.byref(sdesc), ctypes.byref(session)) == a.AR_OK
+    made = []
+    for _ in range(sessions):
+        session = ctypes.c_void_p()
+        made.append(session)
+        assert lib.ar_session_create(scene, ctypes.byref(sdesc), ctypes.byref(session)) == a.AR_OK
+        record_view(a, lib, session)
+    if bad_generation:
+        add_bad_mesh(a, lib, scene, edit, gen)
+    if close_session:  # the addon closes its sessions; the replay must still render them
+        assert lib.ar_session_close(session) == a.AR_OK
+    # Destroys are recorded too; the CLI replays with keep_alive and owns the handles.
+    for session in made:
+        lib.ar_session_destroy(session)
+    lib.ar_scene_destroy(scene)
+    lib.ar_context_destroy(ctx)
+
+
+def record_view(a, lib, session):
     v = a.ar_view_desc()
     v.region_width, v.region_height, v.render_scale = 4, 4, 1.0
     for i in (0, 5, 10):
@@ -96,7 +113,9 @@ def make_recording(abi, ops, lib, path, ctx_log, bad_generation=False, close_ses
     assert lib.ar_session_set_view(session, ctypes.byref(v)) == a.AR_OK
     assert lib.ar_session_start(session) == a.AR_OK
 
-    if bad_generation:
+
+def add_bad_mesh(a, lib, scene, edit, gen):
+    if True:
         quad = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], dtype=np.float32)
         assert lib.ar_scene_edit_begin(scene, ctypes.byref(edit)) == a.AR_OK
         d = a.ar_mesh_desc()
@@ -116,13 +135,6 @@ def make_recording(abi, ops, lib, path, ctx_log, bad_generation=False, close_ses
         fill(b.corner_normals, b.corner_normals_count, np.float32, np.tile([0, 0, 1], 4))
         assert lib.ar_edit_item_commit(edit, BAD_MESH) == a.AR_OK
         assert lib.ar_edit_commit(edit, ctypes.byref(gen)) == a.AR_OK
-
-    if close_session:  # the addon closes its sessions; the replay must still render them
-        assert lib.ar_session_close(session) == a.AR_OK
-    # Destroys are recorded too; the CLI replays with keep_alive and owns the handles.
-    lib.ar_session_destroy(session)
-    lib.ar_scene_destroy(scene)
-    lib.ar_context_destroy(ctx)
 
 
 class TestCliRender(unittest.TestCase):
@@ -147,6 +159,11 @@ class TestCliRender(unittest.TestCase):
         cls.rec_unsupported = os.path.join(SCENES, "069_unsupported_world_node.arrec")
         make_recording(cls.abi, cls.ops, cls.lib, cls.rec_unsupported, os.path.join(cls.tmp.name, "rec4.log"),
                        unsupported_node=True)
+        cls.rec_no_settings = os.path.join(SCENES, "069_no_settings.arrec")
+        make_recording(cls.abi, cls.ops, cls.lib, cls.rec_no_settings, os.path.join(cls.tmp.name, "rec5.log"),
+                       no_settings=True)
+        cls.rec_two = os.path.join(SCENES, "069_two_sessions.arrec")
+        make_recording(cls.abi, cls.ops, cls.lib, cls.rec_two, os.path.join(cls.tmp.name, "rec6.log"), sessions=2)
         cls.rec_bad = os.path.join(SCENES, "069_rejected_generation.arrec")
         make_recording(cls.abi, cls.ops, cls.lib, cls.rec_bad, os.path.join(cls.tmp.name, "rec2.log"),
                        bad_generation=True)
@@ -229,29 +246,51 @@ class TestCliRender(unittest.TestCase):
     def test_spp_override(self):
         r, out = self.render(["--spp", "4"])
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("override applied: --spp 4", r.stdout)
         head, planes = self.planes(out)
         self.assertEqual(head["SPP"], 4)
         self.assertTrue((planes["display.0.NSAMP"] == 4).all())
 
-    def test_size_override(self):
-        r, out = self.render(["--size", "8x6", "--spp", "2"])
+    def test_size_override_same_aspect(self):
+        r, out = self.render(["--size", "8x8", "--spp", "2"])
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("override applied: --size 8x8", r.stdout)
         _, planes = self.planes(out)
-        self.assertEqual(planes["display.0"].shape, (6, 8))
+        self.assertEqual(planes["display.0"].shape, (8, 8))
+
+    def test_size_override_refuses_another_aspect(self):
+        r, out = self.render(["--size", "8x6"])
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("--size refused", r.stdout)
+        self.assertFalse(os.path.exists(out))
+
+    def test_override_without_a_matching_call_is_an_error(self):
+        for flag, value in (("--spp", "4"), ("--seed", "5"), ("--size", "8x8")):
+            r, out = self.render([flag, value], rec=self.rec_no_settings)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn(f"override {flag} was not applied (the recording has no matching call)", r.stdout)
+            self.assertFalse(os.path.exists(out))
 
     def test_seed_override(self):
+        r, out = self.render()
+        self.assertEqual(self.planes(out)[0]["SEED"], 11)  # the recorded seed
         r, out = self.render(["--seed", "99"])
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        head, _ = self.planes(out)
-        self.assertEqual(head["SEED"], 99)
+        self.assertIn("override applied: --seed 99", r.stdout)
+        self.assertEqual(self.planes(out)[0]["SEED"], 99)
 
     def test_device_override(self):
         r, _ = self.render(["--device", "cpu"])
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("override applied: --device cpu", r.stdout)
         r = self.run_cli(["render", self.rec, "-o", os.path.join(self.tmp.name, "n.fits"), "--device", "cuda"],
                          CUDA_VISIBLE_DEVICES="-1")
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)  # no silent fallback to the CPU
         self.assertIn("replay failed", r.stdout)
+
+    def test_report_is_headed_by_the_build(self):
+        r, _ = self.render()
+        self.assertRegex(r.stdout, r"(?m)^report build: sha=\w+ cuda=\S*$")
 
     def test_dump_writes_every_channel(self):
         r, out = self.render(cmd="dump")
@@ -264,7 +303,7 @@ class TestCliRender(unittest.TestCase):
         r = self.run_cli(["bench", self.rec, "--passes", "32", "--warmup", "2"])
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         lines = [json.loads(ln) for ln in r.stdout.splitlines() if ln.startswith("{")]
-        keys = {"sha", "machine", "driver", "cuda", "scene", "metric", "value", "unit", "n", "spread", "date"}
+        keys = {"sha", "machine", "driver", "cuda", "scene", "metric", "value", "unit", "n", "spread"}  # 0009 d22
         for ln in lines:
             self.assertEqual(set(ln), keys)
             self.assertEqual(ln["scene"], "069_empty_world")
@@ -273,6 +312,14 @@ class TestCliRender(unittest.TestCase):
                                         "steps_per_pass"})
         self.assertGreater(metrics["pass_ms"]["value"], 0.0)
         self.assertGreaterEqual(metrics["pass_ms"]["n"], 1)
+        self.assertEqual(metrics["rays_closest"]["value"], 16)  # one camera ray per pixel of the 4x4 film
+        self.assertAlmostEqual(metrics["kernel_ms_per_sample"]["value"], metrics["pass_ms"]["value"] / 16,
+                               delta=1e-6 * max(1.0, metrics["pass_ms"]["value"]))
+
+    def test_bench_refuses_two_sessions(self):
+        r = self.run_cli(["bench", self.rec_two])
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("exactly one", r.stdout)
 
     def test_usage_errors(self):
         self.assertEqual(self.run_cli(["render", self.rec]).returncode, 2)

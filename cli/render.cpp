@@ -123,6 +123,10 @@ int Replayed::open(const RunArgs& a) {
   opt.log_path = "astroray_cli.log";  // the ABI requires a log path; it lands in the working directory
   opt.keep_alive = true;
   const ar_status st = ar_replay_file(a.recording.c_str(), opt, &res);
+  if (res.size_refused) {
+    printf("--size refused: %s\n", res.message.c_str());
+    return kExitUsage;
+  }
   if (st == AR_ERR_ABI_MISMATCH) {
     printf("ABI mismatch: %s\n", res.message.c_str());
     return kExitAbi;
@@ -137,11 +141,39 @@ int Replayed::open(const RunArgs& a) {
            res.message.c_str());
     return kExitFailure;
   }
+  // Ref: Ruling 71: an override the replay could not apply is an error; each applied one is printed.
+  struct Check {
+    const char* flag;
+    bool requested;
+    uint32_t bits;
+    std::string value;
+    bool user;
+  };
+  const ArReplayOptions& o = a.overrides;
+  const Check checks[] = {
+      {"--device", o.device_kind != kReplayUnset, kAppliedDevice,
+       o.device_kind == AR_DEVICE_CUDA ? "cuda:" + std::to_string(o.device_index) : "cpu", true},
+      {"--seed", o.seed != kReplayUnset, kAppliedSeed, std::to_string(o.seed), true},
+      {"--size", o.width != kReplayUnset, kAppliedSize, std::to_string(o.width) + "x" + std::to_string(o.height), true},
+      {"--spp", o.samples != kReplayUnset, kAppliedSamples, std::to_string(o.samples), !a.auto_samples}};
+  for (const Check& c : checks) {
+    if (!c.requested) continue;
+    if ((res.applied & c.bits) != c.bits) {
+      printf("override %s was not applied (the recording has no matching call)\n", c.flag);
+      return kExitFailure;
+    }
+    if (c.user) printf("override applied: %s %s\n", c.flag, c.value.c_str());
+  }
   if (res.sessions.empty()) {
     printf("the recording creates no session: nothing to render\n");
     return kExitFailure;
   }
   return kContinue;
+}
+
+bool settled_and_converged(const ar_progress& p) {
+  return p.state == AR_STATE_CONVERGED &&
+         (p.active_generation == p.pending_generation || p.failed_generation == p.pending_generation);
 }
 
 int run_sessions(Replayed& r, uint32_t timeout_ms) {
@@ -171,8 +203,7 @@ int run_sessions(Replayed& r, uint32_t timeout_ms) {
         printf("session %zu ended in state %u: %s\n", i, p.state, text(msg, sizeof msg).c_str());
         return kExitFailure;
       }
-      const bool settled = p.active_generation == p.pending_generation || p.failed_generation == p.pending_generation;
-      if (p.state == AR_STATE_CONVERGED && settled) break;
+      if (settled_and_converged(p)) break;
       if (clock::now() > end) {
         printf("session %zu: not converged after %u ms (state %u, %u spp)\n", i, timeout_ms, p.state,
                p.samples_per_pixel);
@@ -188,6 +219,11 @@ int run_sessions(Replayed& r, uint32_t timeout_ms) {
 
 int print_reports(Replayed& r) {
   int highest = -1;
+  // The report is printed with the build that produced it. The ABI has no call that writes to the
+  // context log, so the table goes to stdout only.
+  ar_build_record b{};
+  if (ar_build_info(&b) == AR_OK)
+    printf("report build: sha=%s cuda=%s\n", text(b.git_sha, sizeof b.git_sha).c_str(), text(b.cuda, sizeof b.cuda).c_str());
   for (size_t i = 0; i < r.res.sessions.size(); ++i) {
     ar_report_info info{};
     if (ar_session_report_info(r.res.sessions[i], &info) != AR_OK) {

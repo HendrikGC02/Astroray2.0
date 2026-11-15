@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // astroray_cli bench: renders a recording and prints one history line per metric.
 // Ref: 0009 d22 (history line fields: sha, machine, driver, cuda, scene, metric, value, unit, n,
-// spread, date); 0004 D29 (per-pass counters; words 0-3 are rays_closest, rays_shadow, steps, launches).
+// spread; the date is the file's concern, Ruling 71); 0004 D29 (per-pass counters; words 0-3 are rays_closest, rays_shadow, steps, launches).
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <ctime>
 #include <string>
 #include <thread>
 #include <vector>
@@ -33,12 +32,12 @@ std::string stem(const std::string& path) {
 }
 
 struct Line {
-  std::string sha, machine, driver, cuda, scene, date;
+  std::string sha, machine, driver, cuda, scene;
   void emit(const char* metric, double value, const char* unit, size_t n, double spread) const {
     printf("{\"sha\": \"%s\", \"machine\": \"%s\", \"driver\": \"%s\", \"cuda\": \"%s\", \"scene\": \"%s\", "
-           "\"metric\": \"%s\", \"value\": %.9g, \"unit\": \"%s\", \"n\": %zu, \"spread\": %.9g, \"date\": \"%s\"}\n",
+           "\"metric\": \"%s\", \"value\": %.9g, \"unit\": \"%s\", \"n\": %zu, \"spread\": %.9g}\n",
            json_escape(sha).c_str(), json_escape(machine).c_str(), json_escape(driver).c_str(),
-           json_escape(cuda).c_str(), json_escape(scene).c_str(), metric, value, unit, n, spread, date.c_str());
+           json_escape(cuda).c_str(), json_escape(scene).c_str(), metric, value, unit, n, spread);
   }
 };
 
@@ -48,9 +47,16 @@ int bench_cmd(int argc, char** argv) {
   RunArgs a;
   if (int rc = parse_run_args("bench", argc, argv, false, true, a); rc != kContinue) return rc;
   // The pass count is the sample target, so the session stops by itself after warmup + passes.
-  if (a.overrides.samples == kReplayUnset) a.overrides.samples = a.warmup + a.passes;
+  if (a.overrides.samples == kReplayUnset) {
+    a.overrides.samples = a.warmup + a.passes;
+    a.auto_samples = true;
+  }
   Replayed r;
   if (int rc = r.open(a); rc != kContinue) return rc;
+  if (r.res.sessions.size() != 1) {
+    printf("bench: the recording creates %zu sessions; bench times exactly one\n", r.res.sessions.size());
+    return kExitFailure;
+  }
   ar_session s = r.res.sessions[0];
   ar_progress p{};
   if (ar_session_get_progress(s, &p) != AR_OK) { printf("bench: progress failed\n"); return kExitFailure; }
@@ -72,7 +78,7 @@ int bench_cmd(int argc, char** argv) {
       last_spp = p.samples_per_pixel;
       if (last_spp > a.warmup) ms.push_back(p.last_pass_ms);
     }
-    if (p.state == AR_STATE_CONVERGED) break;
+    if (settled_and_converged(p)) break;
     if (std::chrono::steady_clock::now() > end) { printf("bench: not converged after 10 minutes\n"); return kExitFailure; }
     std::this_thread::yield();
   }
@@ -95,17 +101,12 @@ int bench_cmd(int argc, char** argv) {
   l.driver = "unknown";  // the ABI exposes no driver query (see info)
   l.cuda = text(b.cuda, sizeof b.cuda);
   l.scene = stem(a.recording);
-  char date[32];
-  const std::time_t t = std::time(nullptr);
-  std::tm utc{};
-  gmtime_s(&utc, &t);
-  std::strftime(date, sizeof date, "%Y-%m-%dT%H:%M:%SZ", &utc);
-  l.date = date;
 
   std::sort(ms.begin(), ms.end());
   const double median = ms[ms.size() / 2], spread = ms.back() - ms.front();
   l.emit("pass_ms", median, "ms", ms.size(), spread);
-  // A pass is one sample for every pixel: the per-sample time is the pass time over the film's pixels.
+  // A pass is one sample for every pixel, so the samples in a pass are the film's pixels. The time is the
+  // pass wall time, host work included, until task 093's kernel timers exist. Ref: Ruling 71.
   ar_pass_info pi{};
   if (ar_session_pass_info(s, 0, &pi) != AR_OK || pi.width == 0 || pi.height == 0) {
     printf("bench: the film size is unreadable\n");
