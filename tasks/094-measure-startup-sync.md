@@ -5,7 +5,7 @@ Scope: tools/measure_startup.ps1 (one-off; deleted when this task lands), tests/
 Out of scope: first frame vs Cycles (095); viewport rate (096).
 Reference: OptiX 9.1 Programming Guide (disk cache location and invalidation).
 Do:
-1. B-18: warm (cache present) and cold (empty cache directory passed in `cache_dir` and the driver's compute cache cleared through `CUDA_CACHE_PATH` pointed at an empty folder) time from `ar_scene_create` to init-thread completion, 10 runs each; include `create_motion_variant()` (041) once to time the motion pipeline's cold compile (R47, 0002 Risk 4).
+1. B-18: warm (cache present) and cold (empty cache directory passed in `cache_dir` and the driver's compute cache cleared through `CUDA_CACHE_PATH` pointed at an empty folder) time from `ar_scene_create` to init-thread completion, 10 runs each; include `create_motion_variant()` (041) once to time the motion pipeline's cold compile (R47, 0002 Risk 4). Each run uses a fresh process (fresh CUDA context), and the timed span ends after the first `optixLaunch` completes, since OptiX may compile lazily at pipeline or launch time (041's 48 ms module creation is not the whole cost).
 2. B-21 / 0007 V22: tests/blender/gui_main_thread_timing.py instruments every ABI call the addon makes on the main thread (first scene and session create, close, edits, display acquire) on b5m; report max per function against 5 ms, host-data copies excluded.
 3. B-22: time from an image-affecting edit commit to the start of the new pass (log timestamps), sync and rebuild excluded.
 4. B-28: resolve and sample_add traffic share of pass time at 1080p and 4K (Nsight or per-kernel event timing). B-29: kernel time per 1080p sample with every statistic on vs off.
