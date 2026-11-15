@@ -17,6 +17,6 @@ Depends on: 063, 022.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
 - Done: tools/etables, data/tables/e_diel_refl.bin + MANIFEST entry, tables.h, stack.h, test_lobe_stack.cpp, tasks/064.canary.patch. CMakeLists.txt got the etables target (outside the Scope list, but a target needs it).
-- OpenPBRParams does not exist yet: stack.h defines the M1a subset under the 0005 item 2c names; the full record replaces it. Stack entry points take the table (EDielTable) first because KernelGlobals has no tables member yet.
+- Stack entry points take the landed OpenPBRParams (056) and the table (EDielTable) first because KernelGlobals has no tables member yet.
 - Layering uses E_diel at the specular_weight-modulated eta (equals the task text at weight 1) times specular_color, per lane.
 - Furnace (IOR 1.5, roughness 0.25/0.5/1): E in [0.99464, 1.00081]; lowest at roughness 0.25, mu_o 0.05.

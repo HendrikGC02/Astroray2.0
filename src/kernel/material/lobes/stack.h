@@ -27,22 +27,10 @@
 #include "material/lobes/ggx.h"
 #include "material/lobes/lobe.h"
 #include "material/lobes/tables.h"
+#include "material/openpbr_params.h"
 #include "portability.h"
 
 AR_NS_BEGIN
-
-// The fields of the resolved record (0005 item 2c) that the M1a stack reads, under the record's
-// names. The full record replaces this struct and keeps these members.
-struct OpenPBRParams {
-  Real base_weight;
-  Real base_diffuse_roughness;
-  Real specular_weight;
-  Real specular_roughness;
-  Real closure_weight;
-  Spec base_color;
-  Spec specular_color;
-  Spec specular_ior;
-};
 
 struct StackSelect {
   Real p_spec;  // probability of choosing the specular lobe

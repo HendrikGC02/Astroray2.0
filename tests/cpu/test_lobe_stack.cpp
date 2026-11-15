@@ -59,7 +59,7 @@ struct Fixture {
 
 OpenPBRParams make_params(const double color[4], const double ior[4], double weight, double rough, double base_weight,
                           const double base[4], double diff_rough, double closure) {
-  OpenPBRParams p;
+  OpenPBRParams p = {};
   for (int i = 0; i < ar::kLanes; ++i) {
     p.specular_color.v[i] = Real(color[i]);
     p.specular_ior.v[i] = Real(ior[i]);
