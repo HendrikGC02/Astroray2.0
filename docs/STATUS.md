@@ -26,7 +26,11 @@ up to 4.3e-3 per channel on saturated emitters (023); `check fast` runs 9-10 s
 after a rebuild (B-08 is 10 s). The material VM copies 056's kSlotSemantic into
 vm/store_slot.h (nvcc rejects the shared inline constexpr; a test pins the rows),
 which should become one device-visible definition in constant_block.h. 0006's
-required interval rules in the opcode generator have no owning task yet.
+required interval rules in the opcode generator have no owning task yet. M1b (Mix/Add
+Shader): 058's compiler rejects one value feeding two EMIT_LE nodes; insert a
+copy or clone shared constants. Tooling: a doctest case outside a tier suite is
+skipped without a warning; a new test file once needed a CMakeLists touch to
+reconfigure.
 
 ## Budget headroom
 Not measured yet: no gate has run. Spike numbers: docs/spikes/*/RESULTS.md.
