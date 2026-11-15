@@ -18,3 +18,4 @@ Budget: declares shade_surface's first spill and stack baseline (VM kernel: <= 1
 Depends on: 041, 049, 061, 070, 102, 103, 114, 029.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
+- 2026-11-16: started; questions to the lead before code (IndexMA source, default material record).
