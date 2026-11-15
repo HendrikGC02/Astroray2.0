@@ -1,0 +1,26 @@
+diff --git a/src/kernel/light/area_disk.h b/src/kernel/light/area_disk.h
+index 96ec6e0..6b35fa6 100644
+--- a/src/kernel/light/area_disk.h
++++ b/src/kernel/light/area_disk.h
+@@ -22,7 +22,7 @@ AR_FN Real disk_radius(const LightRecord& r) { return Real(r.size[0]); }
+ AR_FN Real disk_area(const LightRecord& r) { return kLightPi * disk_radius(r) * disk_radius(r); }
+ 
+ AR_FN Spec disk_radiance(const LightRecord& r, const Lambda& lam, const ObserverView& obs) {
+-  return light_emission(r, lam, obs) / (kLightPi * disk_area(r));
++  return light_emission(r, lam, obs) / disk_area(r);
+ }
+ 
+ AR_FN Real3 disk_point(const LightRecord& r, Real2 u) {
+diff --git a/src/kernel/light/area_rect.h b/src/kernel/light/area_rect.h
+index 75f6314..53453a0 100644
+--- a/src/kernel/light/area_rect.h
++++ b/src/kernel/light/area_rect.h
+@@ -154,7 +154,7 @@ AR_FN Real rect_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Real
+   if (!sphquad_init(g, ctx.p, &q)) return Real(0);
+   Real pdf;
+   if (q.S >= kRectMinSolidAngle) {
+-    pdf = Real(1) / q.S;
++    pdf = Real(2) / q.S;
+   } else {
+     const Real3 d = hit.p - ctx.p;
+     const Real d2 = dot(d, d);

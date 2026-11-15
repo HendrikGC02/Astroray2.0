@@ -15,3 +15,6 @@ Budget: none.
 Depends on: 065.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
+- Area lamps in src/kernel/light/area_rect.h and area_disk.h, rows in light.h (LightType AREA_RECT, AREA_DISK; light_make_area; area checks in light_problem).
+- Record convention: xf columns 0 and 1 span the rectangle, front = -Z column; rect size[0] x size[1] are full width and height; a disk's size[0] is the RADIUS (size[1] = 0), so 068 halves Blender's disk diameter.
+- Rectangle falls back to area sampling below 1e-2 sr (exact for its own pdf d^2 / (cos A)); both branches are tested.
