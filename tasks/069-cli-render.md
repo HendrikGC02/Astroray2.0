@@ -17,3 +17,6 @@ Depends on: 033, 104, 103.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
 - Blocked before code: replayer has no device/seed/size/spp override (tools/abigen.py) and no ABI/report channel for active test hooks (astroray.h, session.cpp); both outside Scope. Reported to lead.
+- Done on branch task/069-cli-render: replayer overrides (abigen.py), cli render/dump/bench, test, canary. Item 5 moved to 076.
+- Only the sessions-that-render tests fail: no CPU intersect_closest stage until 114 (session faults 0xC0000005). Rebase on 114 and rerun.
+- render and dump both write AR_FITS_DUMP: the ABI has no Combined-only file kind. New cli/cli.h added (shared helpers).
