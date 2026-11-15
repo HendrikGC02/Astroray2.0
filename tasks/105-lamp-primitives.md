@@ -16,3 +16,4 @@ Budget: the OptiX module grows by one intersection and one closest-hit program; 
 Depends on: 068, 041, 037.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
+- Stopped before code: lamp shapes cannot reach EmbreeScene or OptixAccel without a new parameter in embree_scene.h and optix_accel.h (both outside Scope); needs lead.
