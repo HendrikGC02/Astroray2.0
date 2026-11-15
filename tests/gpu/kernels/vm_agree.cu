@@ -31,6 +31,8 @@ extern "C" __global__ void ar_vm_agree(const float* in, float* out, uint32_t n, 
   table.z_nodes = z_nodes;
   table.coeffs = coeffs;
   ar::SceneTables tables = {};
+  tables.images = nullptr;  // no image table: TEX_IMAGE samples magenta (tex_agree.cu has images)
+  tables.image_count = 0;
   tables.rgb2spec = &table;
   tables.observer.cmf = nullptr;  // the ops use the illuminant only
   tables.observer.illum = illum;

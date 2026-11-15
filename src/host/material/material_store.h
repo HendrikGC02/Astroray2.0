@@ -69,8 +69,9 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   // Edit calls. A status other than AR_OK leaves its reason in edit.last_error().
   ar_status set_graph(Edit& edit, ar_key key, const ar_graph_desc* desc);
   ar_status set_material(Edit& edit, ar_key key, const ar_material_desc* desc);
-  // Images live in their own store but activate with the material pass: a material whose
-  // emission estimate read an image is recompiled when that image changes.
+  // Images live in their own store but activate with the material pass: a material that samples
+  // an image (or whose emission estimate read one) is recompiled when that key is set, replaced
+  // or removed, so its program always holds the slot of the image active under the key.
   ar_status set_image(Edit& edit, const ar_image_desc* desc);
   ImageStore& images() { return *images_; }
   // ar_edit_set_world: the world recompiles in this edit's pass, and again whenever its graph is
@@ -96,7 +97,7 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   static void apply_open(const Open& o, GraphMap& graphs, DescMap& materials);
   // Whether the edit compiles this material: set in it, or its graph set or removed in it.
   static bool compiles(const Open& o, ar_key key, const ar_material_desc& d);
-  // Whether the edit replaced or removed (or reset away) an image the material's estimate read.
+  // Whether the edit set, replaced or removed (or reset away) an image the material reads.
   static bool uses_changed_image(const MaterialOutput& out, const Open& o);
   // The world as of `o` applied to `world` (unset: none), and whether `o` recompiles it.
   static void apply_world(const Open& o, std::optional<ar_world_desc>& world);

@@ -43,8 +43,15 @@ struct Fixture {
   std::vector<uint8_t> jh_bytes;
   astroray::ObserverTables obs;
   ar::Rgb2SpecTable table;
+  // A 3x2 sRGB image for TEX_IMAGE, slot 0 of the table; slot 1 is outside it.
+  std::vector<uint8_t> texels = {0, 40, 255, 128, 7, 64, 200, 90, 13, 1, 254, 77, 33, 160, 99, 250, 20, 180};
+  ar::DeviceImageView image = {};
   ar::SceneTables tables;
   Fixture() {
+    image.texels = uint64_t(uintptr_t(texels.data()));
+    image.width = 3, image.height = 2, image.channels = 3, image.encoding = uint32_t(ar::TexEncoding::SRGB);
+    tables.images = &image;
+    tables.image_count = 1;
     auto ob = read_data("spectral/observer.bin");
     std::string err = astroray::parse_observer(ob.data(), ob.size(), &obs);
     REQUIRE_MESSAGE(err.empty(), err);
@@ -238,16 +245,23 @@ TEST_CASE("vm/fold equals interpret") {
                             h.regs.r[22] == float(g.ctx.P.x) && h.regs.r[23] == float(g.ctx.P.y) &&
                             h.regs.r[24] == float(g.ctx.P.z));
     }
-    {  // TEX_IMAGE: magenta until the filter exists.
-      Prog p;
-      p.op(Op::TEX_IMAGE, 16, 0, 0, {0u}).end();
-      Rig h = g;
-      REQUIRE(h.run(p) == VmStatus::OK);
-      float want[3];
-      ar::op_tex_image(want);
-      t.fold("TEX_IMAGE", bits(h.regs.r[16]) == bits(want[0]) && bits(h.regs.r[17]) == bits(want[1]) &&
-                              bits(h.regs.r[18]) == bits(want[2]));
-      t.ref("TEX_IMAGE", h.regs.r[16] == 1.0f && bits(h.regs.r[17]) == 0u && h.regs.r[18] == 1.0f);
+    {  // TEX_IMAGE in every mode at (r0, r1) in [-4, 4), outside [0, 1) so Repeat and Extend both
+       // act; slot 1 is outside the table and samples magenta.
+      for (uint32_t mode = 0; mode < 4; ++mode) {
+        Prog p;
+        p.op(Op::TEX_IMAGE, 16, 0, 0, {0u, mode}).op(Op::TEX_IMAGE, 19, 0, 0, {1u, mode}).end();
+        Rig h = g;
+        REQUIRE(h.run(p) == VmStatus::OK);
+        float want[3];
+        ar::op_tex_image(g.tables, 0u, mode, x, want);
+        bool fold_ok = true, ref_ok = h.regs.r[19] == 1.0f && bits(h.regs.r[20]) == 0u && h.regs.r[21] == 1.0f;
+        for (int k = 0; k < 3; ++k) {
+          fold_ok = fold_ok && bits(h.regs.r[16 + k]) == bits(want[k]);
+          ref_ok = ref_ok && h.regs.r[16 + k] >= 0.0f && h.regs.r[16 + k] <= 1.0f;  // decoded bytes lie in [0, 1]
+        }
+        t.fold("TEX_IMAGE", fold_ok);
+        t.ref("TEX_IMAGE", ref_ok);
+      }
     }
     {  // RGB_LIFT with each semantic, at the context's wavelengths.
       Prog p;
@@ -573,7 +587,8 @@ TEST_CASE("vm/errors stop the run") {
   add("ADD_F32X3 src 30", Prog().op(Op::ADD_F32X3, 0, 30, 0), VmStatus::BAD_REGISTER);
   add("LOAD_CTX_P dst 30", Prog().op(Op::LOAD_CTX_P, 30), VmStatus::BAD_REGISTER);
   add("LOAD_CTX_UV dst 30", Prog().op(Op::LOAD_CTX_UV, 30, 0), VmStatus::BAD_REGISTER);
-  add("TEX_IMAGE dst 30", Prog().op(Op::TEX_IMAGE, 30, 0, 0, {0u}), VmStatus::BAD_REGISTER);
+  add("TEX_IMAGE dst 30", Prog().op(Op::TEX_IMAGE, 30, 0, 0, {0u, 0u}), VmStatus::BAD_REGISTER);
+  add("TEX_IMAGE uv 30", Prog().op(Op::TEX_IMAGE, 0, 30, 0, {0u, 0u}), VmStatus::BAD_REGISTER);
   add("RGB_LIFT dst 29", Prog().op(Op::RGB_LIFT, 29, 0, 0), VmStatus::BAD_REGISTER);
   add("RGB_LIFT src 30", Prog().op(Op::RGB_LIFT, 0, 30, 0), VmStatus::BAD_REGISTER);
   add("EMIT_LE needs 4 (a = 29)", Prog().op(Op::EMIT_LE, 29), VmStatus::BAD_REGISTER);
@@ -585,6 +600,7 @@ TEST_CASE("vm/errors stop the run") {
   add("STORE_SLOT src 32", Prog().op(Op::STORE_SLOT, 32, 0, 0, {0u}), VmStatus::BAD_REGISTER);
   // Operands the op does not accept.
   add("LOAD_CTX_UV set 2", Prog().op(Op::LOAD_CTX_UV, 0, 2), VmStatus::BAD_OPERAND);
+  add("TEX_IMAGE mode 4", Prog().op(Op::TEX_IMAGE, 0, 3, 0, {0u, 4u}), VmStatus::BAD_OPERAND);
   add("RGB_LIFT semantic IOR", Prog().op(Op::RGB_LIFT, 0, 4, 3), VmStatus::BAD_OPERAND);
   add("RGB_LIFT semantic 255", Prog().op(Op::RGB_LIFT, 0, 4, 255), VmStatus::BAD_OPERAND);
   add("STORE_SLOT slot 37", Prog().op(Op::STORE_SLOT, 0, 0, 0, {37u}), VmStatus::BAD_OPERAND);
@@ -636,6 +652,14 @@ TEST_CASE("vm/errors stop the run") {
     l.op(Op::RGB_LIFT, 8, 0, 0).end();
     CHECK(ar::run_entry(l.w.data(), 4, &g.regs, g.ctx, none, &g.rec, &g.le) == VmStatus::NULL_POINTER);
     CHECK(ar::run_entry(p.w.data(), 4, &g.regs, g.ctx, none, &g.rec, &g.le) == VmStatus::NULL_POINTER);
+    // No image table is a scene without images: magenta. A count without its array is named.
+    Prog x;
+    x.op(Op::TEX_IMAGE, 8, 0, 0, {0u, 0u}).end();
+    CHECK(ar::run_entry(x.w.data(), 4, &g.regs, g.ctx, none, &g.rec, &g.le) == VmStatus::OK);
+    CHECK((g.regs.r[8] == 1.0f && g.regs.r[9] == 0.0f && g.regs.r[10] == 1.0f));
+    ar::SceneTables dangling = {};
+    dangling.image_count = 1;
+    CHECK(ar::run_entry(x.w.data(), 4, &g.regs, g.ctx, dangling, &g.rec, &g.le) == VmStatus::NULL_POINTER);
   }
 
   // The last register of each width is fine: the checks are exact, not conservative.

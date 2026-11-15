@@ -16,6 +16,7 @@
 #include "../../kernel/vm/ops/mul_f32x3.h"
 #include "../../kernel/vm/ops/mul_f32x3_f32.h"
 #include "../../kernel/vm/ops/store_slot.h"
+#include "../../kernel/vm/ops/tex_image.h"
 #include "graph.h"
 #include "regalloc.h"
 
@@ -41,6 +42,7 @@ struct Work {
   std::vector<int> topo;  // stable topological order: smallest ready index first
   std::vector<char> isc;  // value is a compile-time constant
   std::vector<Vec3> cv;
+  std::vector<uint32_t> slot;  // TEX_IMAGE nodes: the image table slot, or kTexNoImage
 };
 
 std::vector<int> stable_topo(const Graph& g) {
@@ -209,7 +211,8 @@ bool build_entry(const Work& w, const std::vector<char>& marked, const std::vect
       case Op::ADD_F32X3: code->push_back(word(nd.op, a, in(0), in(1))); break;
       case Op::TEX_IMAGE:
         code->push_back(word(nd.op, a, in(0)));
-        code->push_back(uint32_t(w.g.i32[nd.i32_first]));
+        code->push_back(w.slot[size_t(i)]);
+        code->push_back(uint32_t(w.g.i32[nd.i32_first + 1]));
         break;
       case Op::RGB_LIFT: code->push_back(word(nd.op, a, in(0), uint32_t(w.g.i32[nd.i32_first]))); break;
       case Op::STORE_SLOT: {
@@ -297,7 +300,8 @@ Vec3 estimate_input(const Work& w, int i, MeanCtx* x) {
 
 }  // namespace
 
-CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means) {
+CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means,
+                              const ImageSlotFn* slots) {
   CompileResult res;
   Work w;
   w.table = &table;
@@ -360,8 +364,8 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
       }
     }
   }
-  res.images.assign(images.begin(), images.end());
   if (std::none_of(is_root.begin(), is_root.end(), [](char c) { return c != 0; })) {
+    res.images.assign(images.begin(), images.end());
     res.constant_surface = true;
     res.ok = true;
     return res;
@@ -382,6 +386,18 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
     return m;
   };
   const std::vector<char> emit_set = mark(is_emit_root), all_set = mark(is_root);
+  // Every sampled key resolves to its slot now (0005 item 34: a missing image is magenta with a
+  // report entry); the program depends on the key either way, so setting it later recompiles.
+  std::set<uint32_t> missing;
+  w.slot.assign(n, ar::kTexNoImage);
+  for (size_t i = 0; i < n; ++i) {
+    if (!all_set[i] || w.g.nodes[i].op != Op::TEX_IMAGE) continue;
+    const uint32_t key = uint32_t(w.g.i32[w.g.nodes[i].i32_first]);
+    images.insert(key);
+    if (slots != nullptr && !(*slots)(key, &w.slot[i])) w.slot[i] = ar::kTexNoImage, missing.insert(key);
+  }
+  res.images.assign(images.begin(), images.end());
+  res.missing_images.assign(missing.begin(), missing.end());
   std::vector<uint32_t> surface, emission;
   if (!build_entry(w, all_set, emit_set, &surface, &res.error)) return res;
   const bool has_emission = std::any_of(is_emit_root.begin(), is_emit_root.end(), [](char c) { return c != 0; });
@@ -470,7 +486,8 @@ MaterialOutput magenta_material(const ar::Rgb2SpecTable& table, uint32_t code, c
   return m;
 }
 
-MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable& table, const ImageMeanFn* means) {
+MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable& table, const ImageMeanFn* means,
+                                const ImageSlotFn* slots) {
   // Unsupported nodes first, every one of them, not only the first (0001 V15).
   MaterialOutput unsupported;
   for (uint32_t i = 0; d.nodes != nullptr && i < d.node_count; ++i) {
@@ -489,7 +506,7 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
     return m;
   }
   MaterialOutput m;
-  m.compiled = compile_surface(d, table, means);
+  m.compiled = compile_surface(d, table, means, slots);
   if (!m.compiled.ok) return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, m.compiled.error);
   // Only CONSTANT and RGB resolve in M1a (spectrum_ref.h); TABLE, BLACKBODY and CAUCHY_ABBE land in M1b.
   for (int s = 0; s < int(ar::Slot::COUNT_); ++s) {
@@ -499,6 +516,8 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
   }
   finish(&m);
   if (m.compiled.clamp_flags != 0) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "RGB clamped");
+  for (uint32_t key : m.compiled.missing_images)
+    add_entry(&m, AR_REPORT_IMAGE_UNREADABLE, "image key " + std::to_string(key) + " is not set");
   return m;
 }
 

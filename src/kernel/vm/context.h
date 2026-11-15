@@ -12,6 +12,7 @@
 #include "../core/spectrum.h"
 #include "../core/vec.h"
 #include "../portability.h"
+#include "../scene/texture_view.h"
 
 AR_NS_BEGIN
 
@@ -30,9 +31,13 @@ struct ShadeContext {
   Lambda lambda_t;      // the path's transport wavelengths
 };
 
+// The image table is indexed by the slot the compiler resolved from an image key (the image
+// store's dense slots); a slot at or past image_count samples magenta. The kernel never searches.
 struct SceneTables {
   const Rgb2SpecTable* rgb2spec;
   ObserverView observer;
+  const DeviceImageView* images;
+  uint32_t image_count;
 };
 
 AR_NS_END
