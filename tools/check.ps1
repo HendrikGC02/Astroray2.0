@@ -113,6 +113,11 @@ try {
     # CI never runs them. After 'scenes' because they render its recordings.
     @{ Name = 'gpu abi tests'; Tag = 'local'; Lock = $true; Echo = '^cli render cuda'; Run = {
         if (Test-Path 'tests/abi') { & $py -I -m unittest discover -s tests/abi -p 'gpu_test_*.py' } } },
+    # 0009 d11, d16 (072): analytic scenes on CPU and GPU at 32x32 through the CLI, after 'scenes'.
+    @{ Name = 'analytic cpu'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL) analytic'; Run = {
+        & $py -I tools/analytic.py --gate --device cpu } },
+    @{ Name = 'analytic cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL) analytic'; Run = {
+        & $py -I tools/analytic.py --gate --device cuda } },
     @{ Name = 'cpu gate tests'; Tag = 'cpu'; Lock = $true; Identity = $exe; Run = { & $exe --tier=gate } },
     # B-24 compile row (0009 d13, 0005 V7): the test prints the median compile time of a fixed
     # 100-node graph; the limit is the "ms per 100 nodes" figure of the row in budgets.toml.

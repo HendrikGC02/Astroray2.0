@@ -192,6 +192,8 @@ typedef struct ar_edit_s* ar_edit;
 #define AR_FILTER_BOX 0
 #define AR_FILTER_GAUSSIAN 1
 #define AR_FILTER_BLACKMAN_HARRIS 2
+#define AR_SAMPLER_SOBOL 0
+#define AR_SAMPLER_INDEPENDENT 1
 #define AR_CRYPTO_OBJECT 0x1
 #define AR_CRYPTO_MATERIAL 0x2
 #define AR_CRYPTO_ASSET 0x4
@@ -361,7 +363,7 @@ typedef struct ar_settings {
     float collecting_area;
     uint32_t denoise_start_sample;
     uint32_t allow_spill;
-    uint32_t pad0;
+    uint32_t sampler_mode;
 } ar_settings;
 
 /* Geometry, images, volumes. */

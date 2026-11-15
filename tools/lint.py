@@ -289,6 +289,10 @@ def budgets(c):
     for k, v in (("full_statistical", 2000), ("analytic_scenes", 256)):
         if fp.get(k) != v:
             c.find(toml_path, 1, "budgets", f"[family_provisional] {k} must be {v} (0009 d15)")
+    sizes = {**fp, **data.get("family", {})}
+    for k, n in data.get("family_members", {}).items():
+        if k not in sizes or not isinstance(n, int) or n > sizes[k]:
+            c.find(toml_path, 1, "budgets", f"[family_members] {k} = {n} exceeds or lacks its family size m")
 
 
 HISTORY_KEYS = {"sha": str, "machine": str, "driver": str, "cuda": str, "scene": str,

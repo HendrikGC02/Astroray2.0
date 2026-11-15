@@ -29,8 +29,9 @@ constexpr uint64_t kDisplayAt = kFilmDataAt + align_up(sizeof(ar::FilmData), 256
 constexpr uint64_t kGlobalsBytes = kDisplayAt + sizeof(ar::DisplayTarget);
 // One pass is one sample per active pixel (0004 D25); the adaptive tail is not built.
 constexpr uint32_t kSamplesPerPass = 1;
-// The sampler every pass uses: bind_globals sets it and the FITS provenance names it.
-constexpr uint32_t kSamplerMode = ar::SAMPLER_SOBOL;
+// The ABI's sampler mode is the kernel's value (ruling 60): bind_globals passes the latched settings'
+// mode through and the FITS provenance names it.
+static_assert(AR_SAMPLER_SOBOL == ar::SAMPLER_SOBOL && AR_SAMPLER_INDEPENDENT == ar::SAMPLER_INDEPENDENT);
 // The slice wait() sleeps between checks of the poisoned flag, which no notification announces:
 // the period Scene::wait_init uses.
 constexpr auto kWaitSlice = std::chrono::milliseconds(50);
@@ -326,15 +327,17 @@ FitsProvenance Session::fits_provenance_locked() const {
   // is still attached: release() runs before detach_scene().
   FitsProvenance pv;
   uint32_t filter = AR_FILTER_BOX;
+  uint32_t sampler = AR_SAMPLER_SOBOL;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     pv.spp = uint32_t(stats_.samples_done);
     if (const auto s = scene_.settings()) {
       pv.seed = s->s.seed;
       filter = s->s.pixel_filter;
+      sampler = s->s.sampler_mode;
     }
   }
-  pv.sampler_mode = kSamplerMode == ar::SAMPLER_SOBOL ? "sobol" : "independent";
+  pv.sampler_mode = sampler == AR_SAMPLER_INDEPENDENT ? "independent" : "sobol";
   pv.observer_hash = observer_hash_;
   // No working-space name and no wavelength-pdf name is defined yet, so the file says so instead of
   // naming something that is not one.
@@ -538,13 +541,14 @@ void Session::bind_globals() {
   u.samples_done = uint32_t(samples_done);
   u.samples_per_pass = kSamplesPerPass;
   u.pass_index = pass_index_;
-  u.sampler_mode = kSamplerMode;
+  u.sampler_mode = AR_SAMPLER_SOBOL;  // no settings yet: the ABI's zero default
   u.test_hooks = hooks_.bits;
   in.active_pixels = active_->list();
   in.camera = camera_ready_ ? static_cast<const ar::CameraView*>(camera_buf_.ptr) : nullptr;
   in.filter = filter_ready_ ? static_cast<const ar::FilterTable*>(filter_buf_.ptr) : nullptr;
   if (const auto s = scene_.settings()) {
     u.seed = s->s.seed;
+    u.sampler_mode = s->s.sampler_mode;
     // PathStateSoA::bounces order: total, diffuse, glossy, transmission, volume, transparent.
     const uint32_t b[6] = {s->s.max_bounces,          s->s.diffuse_bounces, s->s.glossy_bounces,
                            s->s.transmission_bounces, s->s.volume_bounces,  s->s.transparent_bounces};
