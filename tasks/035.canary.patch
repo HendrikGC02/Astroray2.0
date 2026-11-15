@@ -1,8 +1,8 @@
 diff --git a/src/host/scene/mesh.cpp b/src/host/scene/mesh.cpp
-index 87e9c90..e875978 100644
+index df81efe..45a4c40 100644
 --- a/src/host/scene/mesh.cpp
 +++ b/src/host/scene/mesh.cpp
-@@ -76,7 +76,7 @@ struct Staged {
+@@ -80,7 +80,7 @@ struct Staged {
  
  void check_finite(const float* p, uint64_t n, const char* what, uint64_t per_step, const std::string& who) {
    for (uint64_t i = 0; i < n; ++i)
@@ -11,7 +11,7 @@ index 87e9c90..e875978 100644
        std::string at = per_step ? " (step " + std::to_string(i / per_step) + ", element " + std::to_string((i % per_step) / 3) + ")"
                                  : " (corner " + std::to_string(i / 3) + ")";
        throw std::runtime_error(who + what + "[" + std::to_string(i) + "] is not finite" + at);
-@@ -119,7 +119,7 @@ std::shared_ptr<MeshRecord> build_record(const ar_mesh_desc& d, const std::vecto
+@@ -140,7 +140,7 @@ std::shared_ptr<MeshRecord> build_record(const ar_mesh_desc& d, const std::vecto
                                 (f + 1 == F ? "; the last face_start must be below corner_count" : ""));
    }
    for (uint32_t c = 0; c < C; ++c)
