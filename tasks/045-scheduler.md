@@ -21,3 +21,4 @@ Budget: host only.
 Depends on: 043, 044, 026.
 Size: M (about 450 lines); stop and report at 2x.
 Progress:
+- Scheduler, counters, stub-stage tests and CPU tile-coverage check implemented. Refill uses a host-rewritten stage[TERMINATED] entry (step_table.h comment); production registration is CpuDevice::register_production_stages. stub_stages is header-only (tests/cpu glob takes test_*.cpp only). lamp_crossings and shadow_rays_emitted stay 0 until a stage gets counter slots in KernelGlobals (out of this scope).
