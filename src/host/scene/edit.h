@@ -36,6 +36,10 @@ struct EditItem {
   // predicate of the edit's final key set, before the job is handed to a worker.
   std::function<void(const std::function<bool(ar_key)>&)> bind;
   bool replaces_subject = true;     // false: leaves the key's scene report entries alone
+  // If set, item_commit hands it a function that queues the job instead of queueing at
+  // once; the item calls it when its job may run (a dependency finished). It must call it
+  // exactly once, on any thread, and never block a worker waiting for another job.
+  std::function<void(std::function<void()>)> schedule;
   bool needs_device = true;         // waits for init and re-raises its failure
   std::function<void()> release;    // after the job finished: free arena blocks
   std::function<void()> on_active;  // generation became active: free replaced objects

@@ -6,7 +6,7 @@
 // lookups), d22 (positions-only path), V15 (invalid indices, NaN positions).
 #pragma once
 #include <cstdint>
-#include <future>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -63,14 +63,28 @@ struct MeshRecord {
   uint64_t ledger_id = 0;
 };
 
+// Resolution of one ingest: its topology, or null when it failed, was dropped or never ran.
+// Dependent jobs are continuations, never waits: when_done runs the callback at once if resolved,
+// otherwise it runs on whichever thread resolves the gate, and must not block.
+class TopoGate {
+ public:
+  void resolve(std::shared_ptr<const MeshTopology> t);  // first call wins
+  void when_done(std::function<void()> fn);
+  std::shared_ptr<const MeshTopology> topology() const;  // valid once resolved
+
+ private:
+  mutable std::mutex mutex_;
+  bool done_ = false;
+  std::shared_ptr<const MeshTopology> topo_;
+  std::vector<std::function<void()>> waiting_;
+};
+
 // A mesh ingest that has been staged and not yet resolved: what a later positions-only
 // edit validates against, pending generations included.
 struct MeshDeclaration {
   uint64_t id = 0;  // equals the topology id it will produce
   uint32_t vertex_count = 0, corner_count = 0, motion_steps = 1;
-  // Fulfilled by the ingest job (null when it failed or never ran): lets a positions-only
-  // job check its counts against the real base mesh.
-  std::shared_future<std::shared_ptr<const MeshTopology>> topo;
+  std::shared_ptr<TopoGate> gate;
 };
 
 // Checks a positions-only update's staged counts against its base topology; throws

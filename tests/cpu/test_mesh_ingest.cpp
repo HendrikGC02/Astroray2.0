@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <chrono>
 #include <functional>
 #include <future>
 #include <string>
@@ -432,6 +433,33 @@ TEST_CASE("mesh/zero-area and unclippable faces do not reject") {
   CHECK(t.fan_fallback == 1);
   CHECK(t.corners == std::vector<uint32_t>{5, 6, 7, 5, 7, 8, 5, 8, 9});
   CHECK(t.face == std::vector<uint32_t>{1, 1, 1});
+}
+
+TEST_CASE("mesh/queued positions edits never block the pool") {
+  // More positions-only edits than workers wait on one ingest; they run as continuations
+  // when it resolves, whether it succeeds or is rejected. A worker that waited for the
+  // ingest would hang here, so the wait is bounded.
+  for (bool bad : {false, true}) {
+    ContextState ctx;
+    Scene scene(ctx, SceneConfig{2, {}});
+    scene.meshes = std::make_shared<MeshStore>();
+    Blocker blocker;
+    blocker.stage(scene);
+    commit_quad(scene, 5, [bad](ar_mesh_buffers& b) {
+      if (bad) (*b.positions)[3] = std::nanf("");
+    });
+    for (int i = 0; i < 5; ++i) commit_positions(scene, 5, float(i + 2));
+    blocker.release.set_value();
+    auto done = std::async(std::launch::async, [&] { scene.generations().wait_idle(); });
+    REQUIRE(done.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    CHECK(scene.generations().active() == 7);
+    if (bad) {
+      CHECK(!scene.meshes->find(5));
+    } else {
+      REQUIRE(scene.meshes->find(5));
+      CHECK(scene.meshes->find(5)->bounds_max[0] == 6.0f);  // the last edit wins
+    }
+  }
 }
 
 }  // TEST_SUITE

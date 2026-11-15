@@ -100,7 +100,7 @@ void Edit::submit(const std::shared_ptr<EditItem>& item) {
   std::shared_ptr<Pending> pending = pending_;
   scene_.generations().job_started(*pending);
   try {
-    scene_.pool().submit([scene, pending, item] {
+    auto task = [scene, pending, item] {
       std::string fail;
       uint64_t subject = item->key;
       try {
@@ -120,7 +120,10 @@ void Edit::submit(const std::shared_ptr<EditItem>& item) {
         // A throwing release must not hide the job's own outcome.
       }
       scene->generations().job_done(pending, subject, fail);
-    });
+    };
+    auto queue = [scene, task] { scene->pool().submit(task); };
+    if (item->schedule) item->schedule(queue);
+    else queue();
   } catch (...) {
     scene_.generations().job_done(pending, item->key, "");  // undo job_started
     throw;

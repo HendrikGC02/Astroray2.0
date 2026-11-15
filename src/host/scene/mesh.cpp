@@ -190,15 +190,6 @@ std::shared_ptr<MeshRecord> build_record(const ar_mesh_desc& d, const std::vecto
 // A shared slot the job fills and on_active installs.
 using ResultSlot = std::shared_ptr<std::shared_ptr<const MeshRecord>>;
 
-// Fulfils a declaration's future exactly once: with the topology, or null on failure or drop.
-struct Gate {
-  std::promise<std::shared_ptr<const MeshTopology>> promise;
-  std::atomic<bool> done{false};
-  void fulfil(std::shared_ptr<const MeshTopology> t) {
-    if (!done.exchange(true)) promise.set_value(std::move(t));
-  }
-};
-
 struct Blocks {
   std::vector<Arena::Block> list;
 };
@@ -238,6 +229,32 @@ void release_ledger(const std::shared_ptr<Ledger>& l, uint64_t id) {
   }
 }
 }  // namespace
+
+void TopoGate::resolve(std::shared_ptr<const MeshTopology> t) {
+  std::vector<std::function<void()>> run;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (done_) return;
+    done_ = true;
+    topo_ = std::move(t);
+    run.swap(waiting_);
+  }
+  for (auto& fn : run) fn();
+}
+void TopoGate::when_done(std::function<void()> fn) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!done_) {
+      waiting_.push_back(std::move(fn));
+      return;
+    }
+  }
+  fn();
+}
+std::shared_ptr<const MeshTopology> TopoGate::topology() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return topo_;
+}
 
 MeshTopology::~MeshTopology() { release_ledger(ledger, ledger_id); }
 MeshRecord::~MeshRecord() { release_ledger(ledger, ledger_id); }
@@ -354,10 +371,10 @@ ar_status mesh_begin(Scene& scene, Edit& edit, const ar_mesh_desc* desc, ar_mesh
   b.attributes_count = n.attributes;
 
   const uint64_t id = store->next_id();
-  auto gate = std::make_shared<Gate>();
+  auto gate = std::make_shared<TopoGate>();
   MeshDeclaration decl;
   decl.id = id, decl.vertex_count = d.vertex_count, decl.corner_count = d.corner_count, decl.motion_steps = d.motion_steps;
-  decl.topo = gate->promise.get_future().share();
+  decl.gate = gate;
   auto result = std::make_shared<std::shared_ptr<const MeshRecord>>();
   auto ledger = store->shared_ledger();
   ContextState* ctx = &scene.ctx();
@@ -367,15 +384,15 @@ ar_status mesh_begin(Scene& scene, Edit& edit, const ar_mesh_desc* desc, ar_mesh
     try {
       rec = build_record(d, attrs, n, *staged, id, ledger, *ctx);
     } catch (...) {
-      gate->fulfil(nullptr);
+      gate->resolve(nullptr);
       throw;
     }
-    gate->fulfil(rec->topo);
+    gate->resolve(rec->topo);
     *result = rec;
   };
   item->on_active = [store, result] { store->install(*result); };
   item->on_dropped = [store, key, id, gate, result] {
-    gate->fulfil(nullptr);  // an item that never ran must not strand a waiting positions job
+    gate->resolve(nullptr);  // an item that never ran must not strand a waiting positions job
     store->undeclare(key, id);
     result->reset();
   };
@@ -419,11 +436,14 @@ ar_status positions_begin(Scene& scene, Edit& edit, ar_key key, ar_positions_buf
   auto update = std::make_shared<Update>();
   Scene* sc = &scene;
   const uint64_t base_id = base->id;
-  auto fut = base->topo;
+  auto gate = base->gate;
   // Ref: 0007 d22. The job needs the base topology only to check counts; the record is
   // linked to the active topology at activation, never copied here.
-  item->job = [fut, np, nn, staged, update, key] {
-    std::shared_ptr<const MeshTopology> t = fut.get();  // the base ingest job always fulfils it
+  // The job is scheduled when the base ingest resolves (never a worker waiting): a base that
+  // failed or was dropped resolves to null, the job still runs and its generation resolves.
+  item->schedule = [gate](std::function<void()> queue) { gate->when_done(std::move(queue)); };
+  item->job = [gate, np, nn, staged, update, key] {
+    std::shared_ptr<const MeshTopology> t = gate->topology();
     if (t) check_position_counts(*t, np, nn);
     const std::string who = (t ? t->name : key_label(key)) + ": ";
     const uint64_t V3 = t ? uint64_t(t->vertex_count) * 3 : 0;
