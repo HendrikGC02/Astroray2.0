@@ -94,10 +94,10 @@ AR_FN SplatFootprint splat_footprint(const FilterTable& t, Real px, Real py) {
   f.px = px;
   f.py = py;
   // Centres c = i + 0.5 with -r <= px - c < r, that is px - r - 0.5 < i <= px + r - 0.5.
-  f.x0 = static_cast<int>(floor(px - r - Real(0.5))) + 1;
-  f.y0 = static_cast<int>(floor(py - r - Real(0.5))) + 1;
-  f.nx = static_cast<int>(floor(px + r - Real(0.5))) - f.x0 + 1;
-  f.ny = static_cast<int>(floor(py + r - Real(0.5))) - f.y0 + 1;
+  f.x0 = static_cast<int>(ar::floor(px - r - Real(0.5))) + 1;
+  f.y0 = static_cast<int>(ar::floor(py - r - Real(0.5))) + 1;
+  f.nx = static_cast<int>(ar::floor(px + r - Real(0.5))) - f.x0 + 1;
+  f.ny = static_cast<int>(ar::floor(py + r - Real(0.5))) - f.y0 + 1;
   Real sx = Real(0), sy = Real(0);
   for (int i = 0; i < f.nx; ++i) sx += filter_density(t, px - (Real(f.x0 + i) + Real(0.5)));
   for (int j = 0; j < f.ny; ++j) sy += filter_density(t, py - (Real(f.y0 + j) + Real(0.5)));
