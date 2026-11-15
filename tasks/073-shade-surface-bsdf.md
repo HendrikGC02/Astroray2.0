@@ -17,3 +17,4 @@ Budget: declared shade_surface delta (spills, stack); gate time +5 s.
 Depends on: 072, 064, 038.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
+- 073 implementer: stopped before code; out-of-Scope files and the vacuous A1 RR-off variant reported to the lead.
