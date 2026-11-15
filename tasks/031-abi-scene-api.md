@@ -17,3 +17,7 @@ Budget: none.
 Depends on: 013, 030.
 Size: M (about 450 lines of header); stop and report at 2x.
 Progress:
+- Header declares 0007 d5 in full (59 functions incl. report polling and last_error); descriptors and constants as in the appendix, which now holds the decided mesh, positions, instances, light and spectrum rows.
+- Staged buffer fields are T** (grammar): each points at an engine-owned slot holding the array pointer; counts are engine-written u64 fields (appendix conventions paragraph).
+- unimplemented.cpp defines minimal ar_scene_s/ar_session_s/ar_edit_s so stubs can store last_error; no live handle exists yet, so the text is untestable until 032/052.
+- ar_scene_create stub cannot set the context's last error (struct private to context.cpp); 032 replaces it.
