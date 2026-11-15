@@ -91,6 +91,17 @@ AR_FN void sample_set_flags(const KernelGlobals& kg, uint32_t slot, uint32_t fla
   f.slot_flags[slot] = flags;
 }
 
+// Marks the sample invalid: its slot holds NaN, so the resolve's film_sample_valid rejects it, counts
+// it in the invalid counter and leaves n alone, whatever was added to the slot before (a later
+// delivery adds to NaN and stays NaN). Called by the stage that found the non-finite value.
+// Ref: 0008 d6 (invalid samples are counted, never averaged); 0004 D17.
+AR_FN void sample_mark_invalid(const KernelGlobals& kg, uint32_t slot) {
+  const FilmData& f = *kg.film;
+  AR_ASSERT(slot < f.slot_capacity);
+  const float nan = bit_cast<float>(0x7fc00000u);
+  for (int i = 0; i < kLanes; ++i) f.slot_L[4u * slot + uint32_t(i)] = nan;
+}
+
 AR_FN void film_add(const KernelGlobals& kg, uint32_t plane, uint32_t pixel, Real v) {
   const FilmData& f = *kg.film;
   AR_ASSERT(f.add != nullptr && pixel < f.plane_stride);

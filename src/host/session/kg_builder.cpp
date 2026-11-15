@@ -2,6 +2,7 @@
 // Ref: docs/decisions/0002-kernel-architecture.md D4, D13; RULINGS 70. See kg_builder.h.
 #include "host/session/kg_builder.h"
 
+#include "host/light/light_builder.h"
 #include "kernel/film/film_write.h"
 
 namespace astroray::host {
@@ -41,6 +42,7 @@ ar::KernelGlobals build_kernel_globals(const SceneTableSet* set, const KgSession
   kg.tables = scene.vm;
   kg.lights = static_cast<const ar::LightRecord*>(scene.tables[static_cast<uint32_t>(TableId::LIGHTS)]->ptr());
   kg.light_sampler = scene.light_sampler;
+  kg.world_light = scene.lights ? scene.lights->world_light : ar::kNoLight;
   kg.e_diel = scene.e_diel;
   kg.material_slot_count = scene.counts[static_cast<uint32_t>(TableId::MATERIAL_SLOTS)];
   kg.material_program_words = scene.counts[static_cast<uint32_t>(TableId::MATERIAL_PROGRAMS)];

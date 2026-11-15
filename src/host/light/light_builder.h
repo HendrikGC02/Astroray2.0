@@ -47,6 +47,8 @@ struct LightTable {
   // epoch; 102 binds that same table.
   double radiance_scale = 1.0;
   uint32_t lamp_first = 0;
+  // Index of the constant world among `lights`, ar::kNoLight when the scene has none.
+  uint32_t world_light = ~0u;
   std::vector<LampInstanceIn> lamp_instances;
   ar::LightSamplerView view() const;
   uint64_t bytes() const;
