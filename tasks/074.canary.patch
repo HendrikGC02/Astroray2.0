@@ -1,3 +1,16 @@
+diff --git a/src/kernel/sample/dims.h b/src/kernel/sample/dims.h
+index ec7b716..ec3344f 100644
+--- a/src/kernel/sample/dims.h
++++ b/src/kernel/sample/dims.h
+@@ -22,7 +22,7 @@ inline constexpr uint32_t DIM_CAM_TIME = 4;
+ inline constexpr uint32_t DIM_CAM_WAVELENGTH = 5;
+ inline constexpr uint32_t DIM_CAM_HERO = 6;
+ // The alias-test uniform of the light sampler, mixed with the event index per vertex (RULINGS.md 73).
+-inline constexpr uint32_t DIM_CAM_ALIAS_Q = 7;
++inline constexpr uint32_t DIM_CAM_ALIAS_Q = 3;
+ 
+ // Light path, dims 0-7.
+ inline constexpr uint32_t DIM_LIGHT_PICK = 0;
 diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
 index 1fdb6b4..140669b 100644
 --- a/src/kernel/stages/shade_background.h
@@ -25,10 +38,19 @@ index 6f9ae8f..03baab4 100644
  }
  
 diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
-index 25e5f12..b862583 100644
+index 773f5fe..ff3aef6 100644
 --- a/src/kernel/stages/shade_surface.h
 +++ b/src/kernel/stages/shade_surface.h
-@@ -226,7 +226,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+@@ -214,7 +214,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+     // event index, a bijection of the 32 bits for each vertex, so it is uniform and independent of
+     // every dimension of the event block.
+     const uint32_t q_bits = camera_path_draw_bits(kg, sample, DIM_CAM_ALIAS_Q) ^ uint32_t(mix_bits(uint64_t(e)));
+-    const Real u_alias = bits_to_unit(q_bits);
++    const Real u_alias = bits_to_unit(uint32_t(uint64_t(bits) * uint64_t(lsv.bin_count))) + Real(0) * Real(q_bits);
+     const SampledLight sl = light_sampler_sample(lsv, lctx, bits, u_alias);
+     if (!(sl.pmf > Real(0))) break;
+     const LightRecord& lr = kg.lights[sl.light];
+@@ -229,7 +229,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
        path_end(kg, slot, Term::INVALID);
        return;
      }
@@ -37,7 +59,7 @@ index 25e5f12..b862583 100644
      const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
      ShadowSegment seg;
      if (ls.infinite)
-@@ -239,8 +239,11 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+@@ -242,8 +242,11 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
      sh_ray_o(kg, sh) = seg.origin;
      sh_ray_d(kg, sh) = seg.dir;
      sh_tmax(kg, sh) = seg.tmax;
@@ -50,7 +72,7 @@ index 25e5f12..b862583 100644
      if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
      nee_state = ls.deferred_le ? 2u : 1u;
      if (!ls.deferred_le) break;
-@@ -252,7 +255,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+@@ -255,7 +258,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
    }
    if (nee_state == 2u) {
      // The deferred Le carries no radiance scale (068 folds s into light records only).
