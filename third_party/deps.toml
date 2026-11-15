@@ -17,6 +17,16 @@ purpose = "unit test framework, third_party/doctest/doctest.h"
 record = "0009"
 
 [[dep]]
+name = "stb_image"
+version = "2.32"
+url = "https://raw.githubusercontent.com/nothings/stb/9600522de53973336fa033a289858a4354cbb04c/stb_image.h"
+sha256 = "deb4f18c9ca21b751a1323019031c94c0bf5ca1d2929ef5913cc56f00aab6e91"
+spdx = "MIT OR Unlicense"
+kind = "vendored"
+purpose = "8-bit PNG, JPEG, TGA and BMP decoding in one host TU, third_party/stb/stb_image.h; nothings/stb commit 9600522de53973336fa033a289858a4354cbb04c"
+record = "0001 D9.1, R20; 0007 d13"
+
+[[dep]]
 name = "embree"
 version = "4.4.1"
 url = "https://github.com/HendrikGC02/Astroray2.0/releases/download/deps-embree-4.4.1/embree-4.4.1-astroray-win64-mt.zip"
