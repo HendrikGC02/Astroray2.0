@@ -25,3 +25,18 @@ if(TARGET astroray_engine)
     target_link_libraries(astroray_engine PRIVATE ${_ar_embree_root}/lib/${_lib}.lib)
   endforeach()
 endif()
+
+# OptiX headers (fetched, not redistributable: 0001 D7.4) for the CUDA device sources only
+# (0001 D5.2: OptiX headers are included in src/device/cuda and src/kernel_gpu). A source
+# property, not a target one, so host code cannot include them.
+# Ref: 0009 d6; third_party/deps.toml "optix-headers".
+function(astroray_optix_headers_for_cuda_device_sources)
+  astroray_dep_dir(optix-headers 9.1.0 _optix_dir)
+  file(GLOB _optix_inc ${_optix_dir}/extracted/*/include)
+  list(LENGTH _optix_inc _n)
+  if(NOT _n EQUAL 1)
+    message(FATAL_ERROR "optix-headers 9.1.0: expected one include directory under ${_optix_dir}/extracted, found ${_n}")
+  endif()
+  file(GLOB _cuda_sources ${CMAKE_SOURCE_DIR}/src/device/cuda/*.cpp)
+  set_source_files_properties(${_cuda_sources} DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTIES INCLUDE_DIRECTORIES ${_optix_inc})
+endfunction()
