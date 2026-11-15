@@ -4,8 +4,8 @@
 // over the device-read count), D6.
 #include "stages/queue_build.h"
 
-extern "C" __global__ void AR_LAUNCH_BOUNDS(ar::kLaunch_queue_build_count.threads,
-                                            ar::kLaunch_queue_build_count.min_blocks)
+extern "C" __global__ void AR_LAUNCH_BOUNDS(ar::kLaunch_k_queue_build_count.threads,
+                                            ar::kLaunch_k_queue_build_count.min_blocks)
     k_queue_build_count(const ar::KernelGlobals* __restrict__ kg) {
   const ar::KernelGlobals& g = *kg;
   const uint32_t tiles = ar::queue_tile_count(g);

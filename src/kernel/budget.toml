@@ -14,26 +14,26 @@ spill_load = 0
 compile_s = 1.3
 gated = "merge"
 
-[kernel.queue_build_count]
-regs = 20
+[kernel.k_queue_build_count]
+regs = 27
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.3
+compile_s = 1.23
 gated = "merge"
 
-[kernel.queue_build_scan]
-regs = 20
+[kernel.k_queue_build_scan]
+regs = 40
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.3
+compile_s = 1.28
 gated = "merge"
 
-[kernel.queue_build_scatter]
-regs = 20
-stack = 0
+[kernel.k_queue_build_scatter]
+regs = 40
+stack = 64
 spill_store = 0
 spill_load = 0
-compile_s = 1.3
+compile_s = 1.22
 gated = "merge"
