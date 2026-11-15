@@ -58,6 +58,22 @@ struct SceneConfig {
 };
 
 // ar_settings and ar_camera_desc with their copy-in arrays owned.
+struct ImageArrays;     // host/image/image_store.h
+struct MaterialArrays;  // host/material/material_store.h
+
+// One immutable view of the active state, captured under the generation tracker's lock so every
+// part belongs to `generation` (RULINGS 70): the instances, the material and image arrays, the
+// active mesh record of every key the instances reference (null when none is active), and, when
+// asked for, the light table built from that same state.
+struct SceneSnapshot {
+  uint64_t generation = 0;
+  std::shared_ptr<const InstanceTable> instances;
+  std::shared_ptr<const MaterialArrays> materials;
+  std::shared_ptr<const ImageArrays> images;
+  std::map<ar_key, std::shared_ptr<const MeshRecord>> meshes;
+  std::shared_ptr<const LightTable> lights;
+};
+
 struct StoredSettings {
   ar_settings s{};
   std::vector<ar_name> passes, aovs;
@@ -116,6 +132,9 @@ class Scene {
   // a material's emission sampling is out of range.
   std::shared_ptr<const LightTable> lights();
   uint64_t light_rebuilds() const;  // how many times lights() rebuilt the table
+  // The active state as one snapshot; `with_lights` also builds (or reuses) the light table of it,
+  // when the scene has material and mesh stores. Lock order: tracker, then state and stores.
+  SceneSnapshot snapshot(bool with_lights);
   // A lamp the activating generation set (068). Lamps count only while their key is in the active
   // generation's key set, so a removed or reset-away lamp drops out without a callback.
   void publish_lamp(std::shared_ptr<const Lamp> lamp);

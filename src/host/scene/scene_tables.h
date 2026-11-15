@@ -22,6 +22,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -127,8 +128,9 @@ struct SceneTableSet {
   std::shared_ptr<const MaterialArrays> materials;
   std::shared_ptr<const ImageArrays> images;
   std::shared_ptr<const LightTable> lights;
+  uint64_t generation = 0;                              // the generation they all belong to
   std::shared_ptr<const InstanceTable> base_instances;  // the scene's, before lamp records
-  std::vector<std::shared_ptr<const MeshRecord>> mesh_records;  // by mesh index (key order)
+  std::map<ar_key, std::shared_ptr<const MeshRecord>> mesh_records;  // key order is mesh order
 
   std::array<std::shared_ptr<const DeviceTable>, kTableCount> tables;
   std::array<uint32_t, kTableCount> counts{};  // elements per table
@@ -153,10 +155,21 @@ struct SceneTableCache {
   std::shared_ptr<const ObserverTables> observer;
 };
 
-// The set for the scene's active state with `lights` (the session's epoch table; null for none):
-// the cached one when the snapshot is unchanged, else a new one that reuses every unchanged copy.
-// Throws std::runtime_error (or what the device throws) whose text names the table that failed;
-// the cache then keeps its previous set.
-std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene, std::shared_ptr<const LightTable> lights);
+// An upload that may succeed at a later latch (RULINGS 70): its text names the table, and
+// `generation` is the snapshot's.
+class TableUploadFailed : public std::runtime_error {
+ public:
+  TableUploadFailed(const std::string& what, uint64_t generation) : std::runtime_error(what), generation_(generation) {}
+  uint64_t generation() const noexcept { return generation_; }
+
+ private:
+  uint64_t generation_;
+};
+
+// The set for one snapshot of the scene's active state (Scene::snapshot, light table included):
+// the cached set when the snapshot is unchanged, else a new one that reuses every unchanged copy.
+// Throws TableUploadFailed for a retryable failure; the cache then keeps its previous set. A
+// sticky DeviceError, a device init failure and host out-of-memory keep their own type.
+std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene);
 
 }  // namespace astroray::host

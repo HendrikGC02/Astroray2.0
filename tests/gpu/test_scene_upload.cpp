@@ -7,16 +7,20 @@
 // Ref: docs/decisions/0002-kernel-architecture.md D4, D13; 0007 d9, d14; RULINGS 70.
 #include <doctest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "device/cuda/scene_upload.h"
+#include "host/data_resource.h"
 #include "host/device.h"
+#include "host/image/image_store.h"
 #include "host/light/lamps.h"
 #include "host/light/light_builder.h"
 #include "host/material/material_store.h"
@@ -179,11 +183,88 @@ uint64_t fnv(uint64_t h, const uint8_t* p, size_t n) {
   return h;
 }
 
-// The bytes of element `i` of table `id`, downloaded from the set's own copy.
-std::vector<uint8_t> element(Device& dev, const SceneTableSet& s, TableId id, uint32_t elem, uint32_t i) {
-  std::vector<uint8_t> b(elem);
-  dev.download(b.data(), s.tables[static_cast<uint32_t>(id)]->buffer(), uint64_t(i) * elem, elem);
-  return b;
+// What a table should hold, from the host sources: its count and its first and last element.
+struct HostRow {
+  uint32_t count = 0;
+  std::vector<uint8_t> first, last;
+};
+
+template <class T>
+HostRow row_of(const T* data, size_t count) {
+  HostRow r;
+  r.count = uint32_t(count);
+  if (count == 0) return r;
+  const uint8_t* a = reinterpret_cast<const uint8_t*>(data);
+  r.first.assign(a, a + sizeof(T));
+  r.last.assign(a + (count - 1) * sizeof(T), a + count * sizeof(T));
+  return r;
+}
+
+uint64_t addr(const std::shared_ptr<const DeviceTable>& t) { return t ? uint64_t(reinterpret_cast<uintptr_t>(t->ptr())) : 0; }
+
+// Every table's expected row, built from the scene's own arrays (store arrays as they are, derived
+// records rebuilt here); only device addresses inside records come from the set's copies.
+std::vector<HostRow> host_rows(Scene& scene, const SceneTableSet& set) {
+  std::vector<HostRow> rows(kRows);
+  const auto at = [&](TableId id) -> HostRow& { return rows[static_cast<uint32_t>(id)]; };
+  const auto base = scene.instances();
+  const auto lights = scene.lights();
+  const auto mats = scene.materials->arrays();
+  const auto imgs = scene.materials->images().arrays();
+  // Instances: the scene's, then one per lamp; mesh index = rank of the key among referenced keys.
+  const auto table = append_lamp_instances(base.get(), lights->lamp_instances);
+  std::map<ar_key, uint32_t> rank;
+  for (const Instance& in : base->instances) rank[in.geom_key] = 0;
+  uint32_t k = 0;
+  for (auto& kv : rank) kv.second = k++;
+  std::vector<ar::DeviceInstanceRecord> inst;
+  for (uint32_t i = 0; i < table->instances.size(); ++i)
+    inst.push_back(instance_record(*table, i, i < base->instances.size() ? rank.at(table->instances[i].geom_key) : kNoMeshIndex));
+  at(TableId::INSTANCES) = row_of(inst.data(), inst.size());
+  std::vector<ar::DeviceMeshView> views;
+  for (auto& kv : rank) {
+    const auto rec = scene.meshes->find(kv.first);
+    const MeshCopy& c = *set.meshes.at(kv.first);
+    ar::DeviceMeshView v{};
+    v.positions = addr(c.positions), v.tri_vertex = addr(c.tri_vertex), v.tri_corners = addr(c.tri_corners);
+    v.corner_normals = addr(c.corner_normals), v.uv = addr(c.uv), v.tri_material = addr(c.tri_material);
+    v.vertex_count = rec->topo->vertex_count, v.triangle_count = rec->topo->triangle_count();
+    v.corner_count = rec->topo->corner_count, v.uv_layer_count = rec->topo->uv_layer_count;
+    views.push_back(v);
+  }
+  at(TableId::MESHES) = row_of(views.data(), views.size());
+  std::vector<uint32_t> slots;
+  for (ar_key key : base->material_pool)
+    slots.push_back(uint32_t(std::lower_bound(mats->keys.begin(), mats->keys.end(), key) - mats->keys.begin()));
+  at(TableId::MATERIAL_SLOTS) = row_of(slots.data(), slots.size());
+  at(TableId::MATERIAL_HEADERS) = row_of(mats->headers.data(), mats->headers.size());
+  at(TableId::MATERIAL_PROGRAMS) = row_of(mats->programs.data(), mats->programs.size());
+  at(TableId::MATERIAL_CONSTANTS) = row_of(mats->constants.data(), mats->constants.size());
+  std::vector<ar::DeviceImageView> iv = imgs->views;
+  for (size_t i = 0; i < iv.size(); ++i) iv[i].texels = addr(set.texels[i]);
+  at(TableId::IMAGES) = row_of(iv.data(), iv.size());
+  at(TableId::LIGHTS) = row_of(lights->lights.data(), lights->lights.size());
+  at(TableId::LIGHT_BINS) = row_of(lights->bins.data(), lights->bins.size());
+  at(TableId::LIGHT_BIN_LIGHT) = row_of(lights->bin_light.data(), lights->bin_light.size());
+  at(TableId::LIGHT_PMF) = row_of(lights->pmf.data(), lights->pmf.size());
+  const ar::Rgb2SpecTable& jh = scene.materials->table();
+  const size_t res = size_t(jh.res);
+  at(TableId::RGB2SPEC_NODES) = row_of(jh.z_nodes, res);
+  at(TableId::RGB2SPEC_COEFFS) = row_of(jh.coeffs, 9 * res * res * res);
+  static ObserverTables obs;
+  DataBlob blob;
+  REQUIRE(find_data("spectral/observer.bin", &blob));
+  REQUIRE(parse_observer(blob.data, blob.size, &obs).empty());
+  at(TableId::OBSERVER_CMF) = row_of(&obs.cmf[0][0], 3 * size_t(kObserverSamples));
+  at(TableId::OBSERVER_ILLUM) = row_of(obs.d65, size_t(kObserverSamples));
+  static float srgb[ar::kSrgbTableSize];
+  ar::srgb_decode_table(srgb);
+  at(TableId::SRGB_DECODE) = row_of(srgb, ar::kSrgbTableSize);
+  REQUIRE(find_data("tables/e_diel_refl.bin", &blob));
+  ar::EDielTable e;
+  REQUIRE(ar::e_diel_view(blob.data, blob.size, &e) == nullptr);
+  at(TableId::E_DIEL) = row_of(e.e, size_t(ar::kEDielN) * ar::kEDielN * ar::kEDielN);
+  return rows;
 }
 
 // Every unique copy the set holds, with its bytes.
@@ -210,8 +291,7 @@ TEST_CASE("scene_upload/checksums match host") {
   Rig r;
   r.build();
   ModuleDevice& dev = r.dev();
-  const auto lights = r.scene->lights();
-  auto set = acquire_scene_tables(*r.scene, lights);
+  auto set = acquire_scene_tables(*r.scene);
   KgSession in;  // the session part is not read by kg_checksum
   const ar::KernelGlobals kg = build_kernel_globals(set.get(), in);
   DeviceBuffer kgb = dev.allocate(LedgerCategory::TABLES, sizeof kg, Owner{});
@@ -227,38 +307,27 @@ TEST_CASE("scene_upload/checksums match host") {
   std::vector<uint8_t> rows(out.bytes);
   dev.download(rows.data(), out, 0, out.bytes);
 
+  const std::vector<HostRow> want = host_rows(*r.scene, *set);
   for (uint32_t t = 0; t < kRows; ++t) {
     const TableId id = TableId(t);
     const uint8_t* row = rows.data() + uint64_t(t) * kRow;
     uint32_t count = 0, elem = 0;
     std::memcpy(&count, row, 4), std::memcpy(&elem, row + 4, 4);
-    const uint32_t n = elem < kElemMax ? elem : kElemMax;
-    uint64_t gpu = fnv(14695981039346656037ull, row, 4);
-    if (count != 0) gpu = fnv(fnv(gpu, row + 8, n), row + 8 + kElemMax, n);
-    uint64_t host = 14695981039346656037ull;
-    const uint32_t want = set->counts[t];
-    host = fnv(host, reinterpret_cast<const uint8_t*>(&want), 4);
-    if (want != 0) {
-      const auto first = element(dev, *set, id, elem, 0), last = element(dev, *set, id, elem, want - 1);
-      host = fnv(fnv(host, first.data(), n), last.data(), n);
-    }
+    const HostRow& h = want[t];
+    REQUIRE(elem <= kElemMax);
+    uint64_t gpu = fnv(14695981039346656037ull, row, 4), host = fnv(14695981039346656037ull,
+                                                                   reinterpret_cast<const uint8_t*>(&h.count), 4);
+    if (count != 0) gpu = fnv(fnv(gpu, row + 8, elem), row + 8 + kElemMax, elem);
+    if (h.count != 0) host = fnv(fnv(host, h.first.data(), h.first.size()), h.last.data(), h.last.size());
     const uint64_t bytes = set->tables[t]->bytes();
     std::printf("scene_upload table %-22s count %8u bytes %10llu checksum gpu %016llx host %016llx\n", table_name(id),
                 count, (unsigned long long)bytes, (unsigned long long)gpu, (unsigned long long)host);
-    CHECK_MESSAGE(count == want, table_name(id));
+    CHECK_MESSAGE(count == h.count, table_name(id));
     CHECK_MESSAGE(gpu == host, table_name(id));
-    CHECK_MESSAGE(bytes == uint64_t(want) * elem, table_name(id));
+    CHECK_MESSAGE(bytes == uint64_t(h.count) * elem, table_name(id));
   }
-  // The copies hold what the stores hold.
-  const auto mats = r.scene->materials->arrays();
-  CHECK((element(dev, *set, TableId::MATERIAL_CONSTANTS, sizeof(ar::ConstantBlock), 0) ==
-        std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(mats->constants.data()),
-                             reinterpret_cast<const uint8_t*>(mats->constants.data()) + sizeof(ar::ConstantBlock))));
-  CHECK((element(dev, *set, TableId::LIGHTS, sizeof(ar::LightRecord), 3) ==
-        std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(&lights->lights[3]),
-                             reinterpret_cast<const uint8_t*>(&lights->lights[3]) + sizeof(ar::LightRecord))));
-  CHECK(set->counts[static_cast<uint32_t>(TableId::INSTANCES)] == 2u);
-  CHECK(set->counts[static_cast<uint32_t>(TableId::MATERIAL_PROGRAMS)] > 0u);  // material 43 runs a program
+  CHECK(want[static_cast<uint32_t>(TableId::INSTANCES)].count == 2u);
+  CHECK(want[static_cast<uint32_t>(TableId::MATERIAL_PROGRAMS)].count > 0u);  // material 43 runs a program
   dev.free(kgb);
   dev.free(out);
 }
@@ -268,7 +337,7 @@ TEST_CASE("scene_upload/material edit uploads only material tables") {
   r.build();
   ModuleDevice& dev = r.dev();
   auto lights = r.scene->lights();
-  auto first = acquire_scene_tables(*r.scene, lights);
+  auto first = acquire_scene_tables(*r.scene);
   std::printf("scene_upload first upload: %llu bytes\n", (unsigned long long)first->bytes_moved);
   // The ledger holds exactly the set's copies.
   CHECK(r.held->ledger->total() == set_bytes(*first));
@@ -276,7 +345,7 @@ TEST_CASE("scene_upload/material edit uploads only material tables") {
   r.set_material_43(0.9f);
   lights = r.scene->lights();
   REQUIRE((lights == first->lights));  // the edit moved no light
-  auto second = acquire_scene_tables(*r.scene, lights);
+  auto second = acquire_scene_tables(*r.scene);
   REQUIRE((second != first));
   std::printf("scene_upload material edit: %llu bytes re-uploaded\n", (unsigned long long)second->bytes_moved);
   uint64_t material_bytes = 0;

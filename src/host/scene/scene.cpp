@@ -229,6 +229,21 @@ std::shared_ptr<const InstanceTable> Scene::instances_with_lamps(const LightTabl
   return append_lamp_instances(instances().get(), table.lamp_instances);
 }
 
+SceneSnapshot Scene::snapshot(bool with_lights) {
+  SceneSnapshot s;
+  generations_.with_active([&](uint64_t generation) {
+    s.generation = generation;
+    s.instances = instances();
+    if (materials) s.materials = materials->arrays(), s.images = materials->images().arrays();
+    if (s.instances)
+      for (const Instance& in : s.instances->instances)
+        if (in.geom_key != 0 || in.light_index == ar::kNoLightIndex)
+          s.meshes[in.geom_key] = meshes ? meshes->find(in.geom_key) : nullptr;
+    if (with_lights && materials && meshes) s.lights = lights();
+  });
+  return s;
+}
+
 uint64_t Scene::light_rebuilds() const {
   std::lock_guard<std::mutex> lock(state_.mutex);
   return state_.light_rebuilds;

@@ -444,7 +444,6 @@ void Session::release() {
   // The ring stays until the session is destroyed: a frame the host acquired remains readable
   // after CLOSED and is released then (display_release), so no thread reads freed memory.
   film_.reset();
-  epoch_lights_.reset();
   tables_.reset();  // the pin: the set's copies go when no session holds them (RULINGS 70)
   session_tables_ = SessionTables{};
   active_.reset();
@@ -582,21 +581,27 @@ uint64_t Session::pass_camera_samples() const {
   return camera_ready_ && filter_ready_ && tables_ ? uint64_t(active_->count()) * kSamplesPerPass : 0;
 }
 
-void Session::latch_tables(uint64_t generation) {
-  // RULINGS 70: a failed upload keeps the previous set, records the generation and names the
-  // table in one entry; the next latch retries.
+bool Session::latch_tables() {
+  // RULINGS 70: a failed upload keeps the previous set, records the snapshot's generation and
+  // names the table in one entry per failed generation; the next latch retries. Failures that
+  // cannot heal (a sticky device error, device init, host memory) are not caught: they fail the
+  // session (0001 D2.5).
+  const auto before = tables_;
   try {
-    tables_ = acquire_scene_tables(scene_, epoch_lights_);
+    tables_ = acquire_scene_tables(scene_);
     tables_retry_ = false;
-  } catch (const std::bad_alloc&) {
-    throw;  // host memory: the session fails, as everywhere else
-  } catch (const std::exception& e) {
+  } catch (const TableUploadFailed& e) {
     tables_retry_ = true;
-    upload_failed_.store(generation, std::memory_order_release);
-    const double value[2] = {0.0, 0.0};
-    report_.raise(AR_REPORT_GENERATION_REJECTED, 0, e.what(), 1, value, generation);
-    ctx_.log.line("WARNING", std::string("session: ") + e.what() + "; rendering the previous scene tables");
+    const uint64_t g = e.generation();
+    upload_failed_.store(g, std::memory_order_release);
+    if (g != upload_failed_reported_) {
+      upload_failed_reported_ = g;
+      const double value[2] = {double(g), 0.0};
+      report_.raise(AR_REPORT_GENERATION_REJECTED, 0, e.what(), 1, value, g);
+      ctx_.log.line("WARNING", std::string("session: ") + e.what() + "; rendering the previous scene tables");
+    }
   }
+  return tables_ != before;
 }
 
 ar::FilmData Session::film_host_view(std::vector<uint32_t>* invalid) const {
@@ -708,8 +713,11 @@ void Session::render_loop() {
     }
     std::unique_lock<std::mutex> render(render_mutex_);
     const uint64_t active = scene_.generations().active();
+    // A retry that pins a new set changes the image, so it starts an epoch like any image change
+    // (RULINGS 69, 70).
+    const bool retried = tables_retry_ && latch_tables();
     // An interrupted pass forces the epoch (latch.h), even if the pending view went back.
-    const LatchResult lr = latch_.latch(active, expect_epoch_);
+    const LatchResult lr = latch_.latch(active, expect_epoch_ || retried);
     {
       // The interrupt flag follows the state just latched: an interrupt raised for pending state
       // this latch consumed is spent, one raised for state still pending stays (0007 d25).
@@ -717,15 +725,12 @@ void Session::render_loop() {
       scheduler_->epoch_pending = latch_.interrupt_due(scene_.generations().active());
     }
     expect_epoch_ = false;
-    if (lr.new_epoch || tables_retry_) {
+    if (lr.new_epoch) {
       // s moves only when emitters change, and every activated commit starts an epoch, so one
-      // epoch's samples never mix two values (0003 d10).
-      // One table for the whole epoch: s and the lights it was folded into come from the same snapshot.
-      if (lr.new_epoch) epoch_lights_ = (scene_.materials && scene_.meshes) ? scene_.lights() : nullptr;
-      const auto before = tables_;
-      latch_tables(lr.generation);
-      // A retry that succeeds changes what is rendered, so its samples start a fresh film too.
-      if (lr.new_epoch || tables_ != before) begin_epoch();
+      // epoch's samples never mix two values (0003 d10). The set and its light table come from one
+      // snapshot, so s and the lights it was folded into agree.
+      if (!retried) latch_tables();
+      begin_epoch();
       const LightTable* lt = tables_ ? tables_->lights.get() : nullptr;
       film_->data().inv_radiance_scale = lt ? 1.0 / lt->radiance_scale : 1.0;
     }

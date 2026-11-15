@@ -4,6 +4,7 @@
 #include "host/scene/scene_tables.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 
@@ -71,11 +72,17 @@ std::shared_ptr<const DeviceTable> DeviceTable::put(const UploadTarget& t, Ledge
 }
 
 DeviceTable::~DeviceTable() {
-  // Teardown cannot throw; the scene's device outlives every set (sessions drop theirs before CLOSED).
+  // Teardown cannot throw; a failure is printed, never dropped (as CudaDevice teardown does). The
+  // scene's device outlives every set: sessions drop theirs before CLOSED.
   try {
     if (device_) device_->free(buffer_);
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "astroray: freeing a scene table failed: %s\n", e.what());
+  }
+  try {
     if (ledger_ && ledger_id_) ledger_->remove(ledger_id_);
-  } catch (...) {
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "astroray: releasing a scene table's ledger record failed: %s\n", e.what());
   }
 }
 
@@ -127,6 +134,23 @@ ar::DeviceInstanceRecord instance_record(const InstanceTable& table, uint32_t i,
 namespace {
 
 // Builds `next` from the scene snapshot it names, reusing `prev`'s copies of unchanged sources.
+// Inside a catch: a retryable failure becomes TableUploadFailed naming what failed; a sticky
+// device error, host out-of-memory and anything already named keep their type (0001 D2.5).
+[[noreturn]] void rethrow_upload(const std::string& what, uint64_t generation) {
+  try {
+    throw;
+  } catch (const TableUploadFailed&) {
+    throw;
+  } catch (const DeviceError& e) {
+    if (e.sticky()) throw;
+    throw TableUploadFailed(what + ": " + e.what(), generation);
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const std::exception& e) {
+    throw TableUploadFailed(what + ": " + e.what(), generation);
+  }
+}
+
 class SetBuilder {
  public:
   SetBuilder(const UploadTarget& t, SceneTableSet& next, const SceneTableSet* prev) : t_(t), n_(next), p_(prev) {}
@@ -142,8 +166,8 @@ class SetBuilder {
     }
     try {
       n_.tables[i] = make();
-    } catch (const std::exception& e) {
-      throw std::runtime_error(std::string("uploading the ") + table_name(id) + ": " + e.what());
+    } catch (...) {
+      rethrow_upload(std::string("uploading the ") + table_name(id), n_.generation);
     }
     n_.uploaded[i] = true;
     n_.bytes_moved += n_.tables[i]->moved();
@@ -161,46 +185,45 @@ class SetBuilder {
 
 }  // namespace
 
-std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene, std::shared_ptr<const LightTable> lights) {
+std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
+  // Lock order: the cache, then the tracker (inside snapshot), then the stores.
   SceneTableCache& cache = scene.table_cache();
   std::lock_guard<std::mutex> lock(cache.mutex);
+  SceneSnapshot snap = scene.snapshot(true);
   auto next = std::make_shared<SceneTableSet>();
   SceneTableSet& n = *next;
-  if (scene.materials) n.materials = scene.materials->arrays(), n.images = scene.materials->images().arrays();
-  n.lights = std::move(lights);
-  n.base_instances = scene.instances();
-  std::map<ar_key, std::shared_ptr<const MeshRecord>> recs;
-  if (n.base_instances)
-    for (size_t i = 0; i < n.base_instances->instances.size(); ++i) {
-      const ar_key k = n.base_instances->instances[i].geom_key;
-      auto rec = scene.meshes ? scene.meshes->find(k) : nullptr;
-      if (!rec)
-        throw std::runtime_error("uploading the instances: instance " + std::to_string(i) + " references geometry key " +
-                                 std::to_string(k) + ", which has no active mesh");
-      recs[k] = std::move(rec);
-    }
-  for (auto& kv : recs) n.mesh_records.push_back(kv.second);
+  n.generation = snap.generation;
+  n.materials = std::move(snap.materials), n.images = std::move(snap.images);
+  n.lights = std::move(snap.lights);
+  n.base_instances = std::move(snap.instances);
+  n.mesh_records = std::move(snap.meshes);
+  for (const auto& kv : n.mesh_records)
+    if (!kv.second)
+      throw TableUploadFailed("uploading the instances: an instance references geometry key " + std::to_string(kv.first) +
+                                  ", which has no active mesh",
+                              n.generation);
   const SceneTableSet* p = cache.current.get();
   if (p && p->materials == n.materials && p->images == n.images && p->lights == n.lights &&
       p->base_instances == n.base_instances && p->mesh_records == n.mesh_records)
     return cache.current;
 
-  Device* device = scene.device();  // waits for device init; throws its failure
+  Device* device = scene.device();  // waits for device init; its failure is not retryable
   const UploadTarget t{device, scene.meshes ? scene.meshes->shared_ledger() : nullptr, Owner{}};
   SetBuilder b(t, n, p);
   const auto sp = [](const auto& s) { return std::shared_ptr<const void>(s); };
 
   // Geometry: one copy per key, kept while its record is.
-  bool meshes_same = p && p->meshes.size() == recs.size();
-  for (auto& kv : recs) {
+  bool meshes_same = p && p->mesh_records.size() == n.mesh_records.size();
+  for (const auto& kv : n.mesh_records) {
     const MeshCopy* old = nullptr;
     if (p) {
-      auto it = p->meshes.find(kv.first);
-      if (it != p->meshes.end()) old = it->second.get();
-      const bool same_rec = old && std::find(p->mesh_records.begin(), p->mesh_records.end(), kv.second) != p->mesh_records.end();
-      if (same_rec) {
-        n.meshes[kv.first] = it->second;
-        continue;
+      const auto it = p->meshes.find(kv.first);
+      if (it != p->meshes.end()) {
+        old = it->second.get();
+        if (p->mesh_records.at(kv.first) == kv.second) {
+          n.meshes[kv.first] = it->second;
+          continue;
+        }
       }
     }
     meshes_same = false;
@@ -210,8 +233,8 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene, std::sha
       if (!old || old->topology_id != copy->topology_id)
         n.bytes_moved += copy->tri_vertex->moved() + copy->tri_corners->moved() + copy->uv->moved() + copy->tri_material->moved();
       n.meshes[kv.first] = std::move(copy);
-    } catch (const std::exception& e) {
-      throw std::runtime_error("uploading the geometry of key " + std::to_string(kv.first) + ": " + e.what());
+    } catch (...) {
+      rethrow_upload("uploading the geometry of key " + std::to_string(kv.first), n.generation);
     }
   }
   std::vector<ar::DeviceMeshView> views;
@@ -277,8 +300,8 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene, std::sha
       texels_same = false;
       try {
         n.texels.push_back(b.put(LedgerCategory::TEXTURES, src->texels.data(), src->texels.size(), sp(imgs->images[i])));
-      } catch (const std::exception& e) {
-        throw std::runtime_error("uploading the texels of image slot " + std::to_string(i) + ": " + e.what());
+      } catch (...) {
+        rethrow_upload("uploading the texels of image slot " + std::to_string(i), n.generation);
       }
       n.bytes_moved += n.texels.back()->moved();
     }

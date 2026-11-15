@@ -90,6 +90,9 @@ class GenerationTracker {
   void abort(const std::shared_ptr<Pending>& p);
 
   uint64_t active() const;
+  // Runs fn(active) under the tracker lock, where every on_active runs: what fn reads of the
+  // active state belongs to one generation. fn must not call back into the tracker.
+  void with_active(const std::function<void(uint64_t)>& fn) const;
   uint64_t pending() const;  // last number handed out
   uint64_t failed() const;   // last rejected generation, 0 if none
   // Blocks until every committed generation has been activated or dropped.
