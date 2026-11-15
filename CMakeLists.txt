@@ -16,6 +16,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # to ship, no PDB files to track.
 set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
 set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
+# The Windows headers define min and max as macros, which break ar::min and ar::max in the
+# kernel headers whatever the include order; no target wants them.
+if(WIN32)
+  add_compile_definitions("NOMINMAX=")  # empty, as the sources that define it themselves, so no redefinition warning
+endif()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out/bin)
 

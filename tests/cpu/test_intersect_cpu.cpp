@@ -94,7 +94,7 @@ struct Rig {
       table.instances.push_back(in);
       table.xf.push_back(translate(3.0f * float(i)));
     }
-    accel = std::make_unique<EmbreeScene>(embree, meshes, table, ledger, pool);
+    accel = std::make_unique<EmbreeScene>(embree, meshes, table, std::vector<ar::LightRecord>{}, ledger, pool);
     mesh_views[0] = {};
     mesh_views[0].tri_material = uint64_t(reinterpret_cast<uintptr_t>(tri_material.data()));
     mesh_views[0].triangle_count = 2;

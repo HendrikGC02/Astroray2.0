@@ -2,12 +2,16 @@
 // The one OptiX module: traversal only, no material, medium or VM code (ruling 18). The two
 // raygens walk their step-table segment with a grid-stride loop, trace, write the hit record or
 // the shadow outcome the CPU intersect stages write, and run route_hit; nothing else is here.
+// Lamps (0004 D8): rectangles use the triangle program, disks `__intersection__lamp`, spheres the
+// built-in sphere intersection; the last two report through `__closesthit__lamp`. A lamp instance
+// never carries the shadow mask bit, so the shadow raygen cannot meet one.
 // Payload: 0 t, 1 primitive, 2 instance, 3 u, 4 v (the HitRecord fields of kernel/geom/hit.h).
 // Ref: docs/decisions/0002-kernel-architecture.md D11 (programs, flags, mask table, payload);
 // OptiX 9.1 Programming Guide (optixTrace, payload access); Cycles kernel/device/optix/kernel.cu
 // (Apache-2.0) for the program structure.
 #include <optix_device.h>
 
+#include "geom/lamp_intersect.h"
 #include "geom/ray_offset.h"
 #include "stages/route_hit.h"
 
@@ -74,4 +78,22 @@ extern "C" __global__ void __closesthit__tri() {
   optixSetPayload_2(optixGetInstanceId());
   optixSetPayload_3(__float_as_uint(b.x));
   optixSetPayload_4(__float_as_uint(b.y));
+}
+
+// The disk lamp (unit disk in object space, placed by the instance transform): the same test as
+// Embree's user geometry. Ref: OptiX 9.1 Programming Guide, optixReportIntersection.
+extern "C" __global__ void __intersection__lamp() {
+  const float3 o = optixGetObjectRayOrigin(), d = optixGetObjectRayDirection();
+  float t;
+  if (ar::lamp_disk_intersect(ar::Real3{o.x, o.y, o.z}, ar::Real3{d.x, d.y, d.z}, optixGetRayTmin(), optixGetRayTmax(), &t))
+    optixReportIntersection(t, 0);
+}
+
+// Disk and sphere lamps: no barycentrics, so u and v are 0.
+extern "C" __global__ void __closesthit__lamp() {
+  optixSetPayload_0(__float_as_uint(optixGetRayTmax()));
+  optixSetPayload_1(optixGetPrimitiveIndex());
+  optixSetPayload_2(optixGetInstanceId());
+  optixSetPayload_3(0u);
+  optixSetPayload_4(0u);
 }

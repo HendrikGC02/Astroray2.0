@@ -106,7 +106,7 @@ TEST_CASE("optix_accel/ledger sums") {
   const InstanceTable table = make_table(keys, 0.f);
   f.upload->upload_instances(table);
   CHECK(f.accel->update_gas(*f.upload) == 3);
-  f.accel->build_tlas(*f.upload, table);
+  f.accel->build_tlas(*f.upload, table, std::vector<ar::LightRecord>{});
 
   uint64_t gas_sum = 0;
   for (ar_key k : {10, 11, 12}) {
@@ -132,7 +132,7 @@ TEST_CASE("optix_accel/transform update rebuilds only tlas") {
   InstanceTable table = make_table(keys, 0.f);
   f.upload->upload_instances(table);
   f.accel->update_gas(*f.upload);
-  f.accel->build_tlas(*f.upload, table);
+  f.accel->build_tlas(*f.upload, table, std::vector<ar::LightRecord>{});
   const uint64_t gas_builds = f.accel->gas_builds(), tlas_builds = f.accel->tlas_builds();
   const uint64_t h10 = f.accel->gas_handle(10), h11 = f.accel->gas_handle(11);
   auto check_instances = [&](float shift) {
@@ -154,7 +154,7 @@ TEST_CASE("optix_accel/transform update rebuilds only tlas") {
   table = make_table(keys, 5.f);  // every transform moved
   f.upload->upload_instances(table);
   CHECK(f.accel->update_gas(*f.upload) == 0);
-  f.accel->build_tlas(*f.upload, table);
+  f.accel->build_tlas(*f.upload, table, std::vector<ar::LightRecord>{});
   CHECK(f.accel->gas_builds() == gas_builds);
   CHECK(f.accel->tlas_builds() == tlas_builds + 1);
   CHECK(f.accel->gas_handle(10) == h10);
@@ -170,7 +170,7 @@ TEST_CASE("optix_accel/tlas instances read back") {
   table.instances[2].mask = 0x5A;
   f.upload->upload_instances(table);
   f.accel->update_gas(*f.upload);
-  f.accel->build_tlas(*f.upload, table);
+  f.accel->build_tlas(*f.upload, table, std::vector<ar::LightRecord>{});
   const auto got = f.accel->read_tlas_instances();
   REQUIRE(got.size() == 3);
   CHECK(got[2].instance_id == 2);
@@ -204,9 +204,9 @@ TEST_CASE("optix_accel/stale gas is an error") {
   f.upload->sync_mesh(grid_mesh(11, 5, 5, 2));
   const InstanceTable table = make_table({10, 11}, 0.f);
   f.upload->upload_instances(table);
-  CHECK_THROWS_AS(f.accel->build_tlas(*f.upload, table), std::runtime_error);  // no GAS yet
+  CHECK_THROWS_AS(f.accel->build_tlas(*f.upload, table, std::vector<ar::LightRecord>{}), std::runtime_error);  // no GAS yet
   f.accel->update_gas(*f.upload);
-  f.accel->build_tlas(*f.upload, table);
+  f.accel->build_tlas(*f.upload, table, std::vector<ar::LightRecord>{});
   CHECK(f.accel->tlas_handle() != 0);
   f.upload->retain_only({10});
   f.accel->update_gas(*f.upload);
@@ -220,7 +220,7 @@ TEST_CASE("optix_accel/remove frees gas") {
   const InstanceTable table = make_table({10, 11}, 0.f);
   f.upload->upload_instances(table);
   f.accel->update_gas(*f.upload);
-  f.accel->build_tlas(*f.upload, table);
+  f.accel->build_tlas(*f.upload, table, std::vector<ar::LightRecord>{});
   const uint64_t baseline = f.ledger.total();
   const uint64_t baseline_accel = f.ledger.category_total(LedgerCategory::ACCELERATION);
 

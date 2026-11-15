@@ -16,13 +16,16 @@
 #include <stdexcept>
 
 #include "device/cuda/module_loader.h"
+#include "device/cuda/optix_accel.h"
 #include "kernel/launch_config.h"
 
 namespace astroray::host {
 namespace {
 
-// Programs, in SBT order: raygen closest, raygen shadow, miss, triangle hit group.
-constexpr uint32_t kProgramCount = 4;
+// Program groups, in SBT order: raygen closest, raygen shadow, miss, then one hit group per
+// instance sbtOffset (kSbtTriangle, kSbtLampDisk, kSbtLampSphere of optix_accel.h).
+constexpr uint32_t kHitFirst = 3;
+constexpr uint32_t kProgramCount = kHitFirst + kSbtHitGroups;
 constexpr uint32_t kRecordBytes = OPTIX_SBT_RECORD_HEADER_SIZE;  // no record data: every program reads the launch params
 static_assert(kRecordBytes % OPTIX_SBT_RECORD_ALIGNMENT == 0, "SBT records stay aligned back to back");
 
@@ -32,6 +35,7 @@ double ms_since(std::chrono::steady_clock::time_point t0) {
 
 struct Variant {
   OptixModule module = nullptr;
+  OptixModule builtin_sphere = nullptr;  // the built-in sphere intersection of the lamp spheres
   OptixProgramGroup groups[kProgramCount] = {};
   OptixPipeline pipeline = nullptr;
   DeviceBuffer sbt;
@@ -56,6 +60,7 @@ struct TraversalPipeline::Impl {
     for (OptixProgramGroup g : v.groups)
       if (g) optixProgramGroupDestroy(g);
     if (v.module) optixModuleDestroy(v.module);
+    if (v.builtin_sphere) optixModuleDestroy(v.builtin_sphere);
     ctx.device().free(v.sbt);
     v = Variant();
   }
@@ -71,7 +76,10 @@ struct TraversalPipeline::Impl {
     popt.numAttributeValues = 2;  // triangle barycentrics
     popt.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
     popt.pipelineLaunchParamsVariableName = "ar_params";
-    popt.usesPrimitiveTypeFlags = static_cast<unsigned int>(OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE);
+    // Triangles (meshes, rectangle lamps), custom primitives (disk lamps), built-in spheres (sphere lamps).
+    popt.usesPrimitiveTypeFlags = static_cast<unsigned int>(OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE |
+                                                            OPTIX_PRIMITIVE_TYPE_FLAGS_CUSTOM |
+                                                            OPTIX_PRIMITIVE_TYPE_FLAGS_SPHERE);
 
     OptixModuleCompileOptions mopt = {};
     mopt.maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT;
@@ -82,6 +90,11 @@ struct TraversalPipeline::Impl {
     ctx.check(optixModuleCreate(octx, &mopt, &popt, reinterpret_cast<const char*>(image.bytes.data()),
                                 image.bytes.size(), nullptr, nullptr, &v.module),
               "optixModuleCreate");
+    OptixBuiltinISOptions bopt = {};
+    bopt.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_SPHERE;
+    bopt.usesMotionBlur = motion_blur ? 1 : 0;
+    bopt.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE;  // as the lamp GAS of OptixAccel
+    ctx.check(optixBuiltinISModuleGet(octx, &mopt, &popt, &bopt, &v.builtin_sphere), "optixBuiltinISModuleGet");
     v.times.module_ms = ms_since(t0);
 
     t0 = std::chrono::steady_clock::now();
@@ -93,9 +106,23 @@ struct TraversalPipeline::Impl {
     desc[1].raygen = {v.module, "__raygen__intersect_shadow"};
     desc[2].kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
     desc[2].miss = {v.module, "__miss__traverse"};
-    desc[3].kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;  // the triangle hit group; no any-hit, no intersection
-    desc[3].hitgroup.moduleCH = v.module;
-    desc[3].hitgroup.entryFunctionNameCH = "__closesthit__tri";
+    // No any-hit anywhere (every lamp and material is opaque here).
+    OptixProgramGroupDesc& tri = desc[kHitFirst + kSbtTriangle];  // meshes and rectangle lamps
+    tri.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
+    tri.hitgroup.moduleCH = v.module;
+    tri.hitgroup.entryFunctionNameCH = "__closesthit__tri";
+    OptixProgramGroupDesc& disk = desc[kHitFirst + kSbtLampDisk];  // custom primitive
+    disk.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
+    disk.hitgroup.moduleIS = v.module;
+    disk.hitgroup.entryFunctionNameIS = "__intersection__lamp";
+    disk.hitgroup.moduleCH = v.module;
+    disk.hitgroup.entryFunctionNameCH = "__closesthit__lamp";
+    OptixProgramGroupDesc& sphere = desc[kHitFirst + kSbtLampSphere];  // built-in sphere
+    sphere.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
+    sphere.hitgroup.moduleIS = v.builtin_sphere;
+    sphere.hitgroup.entryFunctionNameIS = nullptr;
+    sphere.hitgroup.moduleCH = v.module;
+    sphere.hitgroup.entryFunctionNameCH = "__closesthit__lamp";
     ctx.check(optixProgramGroupCreate(octx, desc, kProgramCount, &gopt, nullptr, nullptr, v.groups),
               "optixProgramGroupCreate");
 
@@ -133,9 +160,9 @@ struct TraversalPipeline::Impl {
     sbt.missRecordBase = base + 2 * kRecordBytes;
     sbt.missRecordStrideInBytes = kRecordBytes;
     sbt.missRecordCount = 1;
-    sbt.hitgroupRecordBase = base + 3 * kRecordBytes;
+    sbt.hitgroupRecordBase = base + kHitFirst * kRecordBytes;
     sbt.hitgroupRecordStrideInBytes = kRecordBytes;
-    sbt.hitgroupRecordCount = 1;
+    sbt.hitgroupRecordCount = kSbtHitGroups;
     ctx.check(optixLaunch(v.pipeline, stream, reinterpret_cast<CUdeviceptr>(params.ptr), sizeof p, &sbt, width, 1, 1),
               "optixLaunch");
   }

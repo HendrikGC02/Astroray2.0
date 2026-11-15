@@ -26,6 +26,7 @@
 #include "host/fault.h"
 #include "host/scene/instances.h"
 #include "host/thread_pool.h"
+#include "light/light.h"
 #include "stages/route_hit.h"
 
 using namespace astroray;
@@ -36,7 +37,6 @@ namespace {
 
 constexpr ar_key kQuadKey = 5;
 constexpr uint8_t kCamera = 0x01, kDiffuse = 0x02;
-constexpr uint32_t kLamp = 7;
 
 std::shared_ptr<MeshRecord> quad_record() {
   auto t = std::make_shared<MeshTopology>();
@@ -63,16 +63,24 @@ ar_xform translate(float x) {
   return t;
 }
 
-// Instances at x = 0, 3, 6: 0 plain, 1 a lamp, 2 camera rays only (no shadow bit).
+// The lamp of instance 1: a 1 x 1 rectangle where the quad would be, facing down. Its two triangles
+// split along the same diagonal as the quad's, so the hand-typed rays below hit the same ones.
+std::vector<ar::LightRecord> make_lights() {
+  return {ar::light_make_area(ar::LightType::AREA_RECT, ar::Real3{3.5f, 0.5f, 0.0f}, ar::Real3{1, 0, 0}, ar::Real3{0, 1, 0},
+                              1.0f, 1.0f, 1.0f, ar::SpectrumRef{})};
+}
+
+// Instances at x = 0, 3, 6: 0 plain, 1 a lamp (the geometry key is unused for a lamp), 2 camera
+// rays only (no shadow bit).
 InstanceTable make_table() {
   InstanceTable table;
   table.motion_steps = 1;
-  const uint8_t masks[3] = {0xFF, 0xFF, kCamera};
+  const uint8_t masks[3] = {0xFF, visibility_mask(kLampRayVisibility), kCamera};  // a lamp has no shadow bit (0004 D8)
   for (int i = 0; i < 3; ++i) {
     Instance in;
     in.geom_key = kQuadKey;
     in.mask = masks[i];
-    if (i == 1) in.light_index = kLamp;
+    if (i == 1) in.light_index = 0;
     table.instances.push_back(in);
     table.xf.push_back(translate(3.0f * float(i)));
   }
@@ -139,7 +147,7 @@ Pools make_pools() {
   p.step.stage[static_cast<uint32_t>(Stage::INTERSECT_CLOSEST)] = {1, n - 1, 0};
 
   p.add_shadow(0.5f, 0.25f, 100.0f);  // quad of instance 0 at t = 2
-  p.add_shadow(3.5f, 0.25f, 2.5f);    // the lamp quad at t = 2, inside tmax; the SHADOW bit is set on it
+  p.add_shadow(3.5f, 0.25f, 2.5f);    // the lamp rectangle at t = 2, inside tmax; a lamp has no shadow bit
   p.add_shadow(0.5f, 0.25f, 1.5f);    // tmax ends before the surface
   p.add_shadow(9.5f, 0.25f, 100.0f);  // nothing there
   p.add_shadow(6.5f, 0.25f, 100.0f);  // instance 2 has no shadow bit
@@ -178,7 +186,7 @@ void run_cpu(const InstanceTable& table, Pools& p) {
   MeshStore meshes;
   meshes.install(quad_record());
   EmbreeDevice embree;
-  EmbreeScene accel(embree, meshes, table, ledger, pool);
+  EmbreeScene accel(embree, meshes, table, make_lights(), ledger, pool);
   std::vector<ar::DeviceInstanceRecord> records(table.instances.size());
   for (size_t i = 0; i < records.size(); ++i) records[i] = {}, records[i].light_index = table.instances[i].light_index;
   ar::SceneData scene{};
@@ -245,7 +253,7 @@ void run_gpu(Gpu& g, const InstanceTable& table, Pools& p, uint32_t width) {
   g.upload->sync_mesh(quad_record());
   g.upload->upload_instances(table);
   g.accel->update_gas(*g.upload);
-  g.accel->build_tlas(*g.upload, table);
+  g.accel->build_tlas(*g.upload, table, make_lights());
   Device& dev = *g.dev;
 
   std::vector<DeviceBuffer> owned;
@@ -375,7 +383,7 @@ TEST_CASE("optix_trace/shadow occluded") {
   CHECK(occluded > 20);
   CHECK(delivered > 20);
   CHECK(gpu.s_next[0] == uint8_t(Stage::SHADOW_TERMINATED));  // quad at t = 2 inside tmax 100
-  CHECK(gpu.s_next[1] == uint8_t(Stage::SHADOW_TERMINATED));
+  CHECK(gpu.s_next[1] == uint8_t(Stage::SHADE_SHADOW));       // the lamp never blocks
   CHECK(gpu.s_next[2] == uint8_t(Stage::SHADE_SHADOW));       // tmax ends before the surface
   CHECK(gpu.s_next[3] == uint8_t(Stage::SHADE_SHADOW));       // nothing there
   CHECK(gpu.s_next[4] == uint8_t(Stage::SHADE_SHADOW));       // instance 2 lacks the shadow bit
