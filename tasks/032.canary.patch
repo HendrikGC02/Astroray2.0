@@ -1,8 +1,8 @@
 diff --git a/src/host/scene/generation.cpp b/src/host/scene/generation.cpp
-index 055f0a7..135edc8 100644
+index 252e510..ce0d0ea 100644
 --- a/src/host/scene/generation.cpp
 +++ b/src/host/scene/generation.cpp
-@@ -93,7 +93,7 @@ void GenerationTracker::pump_locked() {
+@@ -107,12 +107,12 @@ void GenerationTracker::pump_locked() {
    while (!queue_.empty() && queue_.front()->outstanding == 0) {
      std::shared_ptr<Pending> p = std::move(queue_.front());
      queue_.pop_front();
@@ -11,11 +11,17 @@ index 055f0a7..135edc8 100644
        for (auto& f : p->on_dropped) f();
        failed_ = p->number;
        const double value[2] = {static_cast<double>(p->number), 0.0};
+       report_.raise(AR_REPORT_GENERATION_REJECTED, p->failed_key, p->failed_detail, 1, value, p->number);
+-      if (drop_hook_) drop_hook_(queue_);
++      if (drop_hook_ && p->number == 0) drop_hook_(queue_);
+       ctx_.log.line("ERROR", "generation " + std::to_string(p->number) + " rejected: key " +
+                                  std::to_string(p->failed_key) + ": " + p->failed_detail);
+     } else {
 diff --git a/src/host/scene/scene.cpp b/src/host/scene/scene.cpp
-index 092c518..ca300c2 100644
+index c1d2005..7921773 100644
 --- a/src/host/scene/scene.cpp
 +++ b/src/host/scene/scene.cpp
-@@ -42,7 +42,7 @@ Scene::~Scene() {
+@@ -63,7 +63,7 @@ Scene::~Scene() {
  std::unique_ptr<Edit> Scene::begin_edit() {
    {
      std::lock_guard<std::mutex> lock(edit_mutex_);
