@@ -194,6 +194,21 @@ try {
       if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'fetch deps failed' }
       # Every CPU gate step a later task tags `cpu` reaches hosted CI through this loop.
       foreach ($s in $gateSteps | Where-Object { $_.Tag -eq 'cpu' }) { Invoke-GateStep $s }
+      # Headless sync suite (0007 d16, 0009 d12) against the pinned bpy wheel; ci.yml installs it from
+      # .github/ci-requirements.txt, and a local CI=true run installs it here when it is missing.
+      $r = Step 'headless sync tests' {
+        & $py -I -c 'import bpy' 2>$null
+        if ($LASTEXITCODE -ne 0) {
+          $line = Select-String -Path .github/ci-requirements.txt -Pattern '^bpy==' | Select-Object -First 1
+          if (-not $line) { 'bpy is not pinned in .github/ci-requirements.txt'; $global:LASTEXITCODE = 1; return }
+          $req = Join-Path $root 'out/check/bpy-requirements.txt'
+          Set-Content -Path $req -Value $line.Line
+          & $py -I -m pip install --require-hashes --no-deps -r $req
+          if ($LASTEXITCODE -ne 0) { return }
+        }
+        & $py -I tests/blender/headless/run_all.py
+      }
+      if ($r.Code -ne 0) { Show-Tail $r 10; Fail 'headless sync tests failed (out/check/ci.log)' }
       # build.ps1 sets the MSVC environment only in its own process, so read the compiler version
       # CMake recorded when it configured; it is the exact cl that built the tests.
       $cm = Get-ChildItem out/build/CMakeFiles -Recurse -Filter CMakeCXXCompiler.cmake | Select-Object -First 1
