@@ -167,7 +167,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
 
     P = ctx.P, Ng = ctx.Ng, N = ctx.N, wo = ctx.wo;
     flags = ctx.front_face != 0u ? (flags | FRONT_FACE) : (flags & ~FRONT_FACE);
-    if (ok && total == 0u) {
+    // Written even when the VM failed (the AOVs name the hit), whenever the material tables exist.
+    if (s.material_pass_index != nullptr && s.material_headers != nullptr && total == 0u) {
       const uint32_t index = kg.session.samples_done + sample % kg.session.samples_per_pass;
       film_primary_aov(kg, sample, index, &flags, P, N, ctx.uv[0].x, ctx.uv[0].y, load_ro(s.material_pass_index + mat));
     }
@@ -179,9 +180,12 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
         const uint32_t light = light_of_hit(kg, inst, prim);
         ok = light != kLightIndexInvalid;  // a hit outside the scene's tables: fail the sample
         if (ok && light != kNoLight) {
+          // light_of_hit names emissive triangles only (lamps cross in shade_light), so the
+          // triangle's own pdf_li stands for the dispatch.
+          AR_ASSERT(LightType(kg.lights[light].type) == LightType::TRIANGLE);
           const LightSampleContext prev = prev_light_context(kg, slot);
           p_light = light_sampler_pmf(*kg.light_sampler, prev, light) *
-                    light_pdf_li(kg.lights[light], prev, -wo, LightHit{P, Ng});
+                    tri_pdf_li(kg.lights[light], prev, -wo, LightHit{P, Ng});
         }
       }
       contribution = le * ps_beta(kg, slot) *

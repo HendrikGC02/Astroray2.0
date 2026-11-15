@@ -474,8 +474,8 @@ TEST_CASE("nee/a miss after a diffuse bounce is weighted against world NEE") {
 TEST_SUITE("gate") {
 
 TEST_CASE("nee/alias test frequency at 2^20 bins") {
-  // 2^20 bins that all keep light A with probability q = 1e-4 and otherwise give light B, so A's
-  // pmf is exactly q. The alias test's uniform is independent of the 32-bit bin (RULINGS.md 73);
+  // 2^20 bins that keep light A with probability q = 1e-4 and otherwise give bin 1, whose light is B,
+  // so A's pmf is q (2^20 - 1) / 2^20. The alias test's uniform is independent of the 32-bit bin (RULINGS.md 73);
   // the remainder of bits * n would leave it 12 bits at this bin count and pick A with probability
   // 1 / 4096 = 2.4 q. 16 passes of 2^16 paths through the stage, a different event index each.
   constexpr uint32_t kPaths = 1u << 16, kPasses = 16, kBins = 1u << 20;
@@ -485,8 +485,10 @@ TEST_CASE("nee/alias test frequency at 2^20 bins") {
   rig.use_lamps({ar::light_make(ar::LightType::POINT, a, 0, ar::Real(10), illuminant(1.0f)),
                  ar::light_make(ar::LightType::POINT, b, 0, ar::Real(10), illuminant(1.0f))},
                 {kQ, 1.0f - kQ});
-  rig.bins.assign(kBins, ar::AliasBin{kQ, 1u});
+  rig.bins.assign(kBins, ar::AliasBin{kQ, 1u});  // the alias is bin 1, which always gives light B
   rig.bin_light.assign(kBins, 0u);
+  rig.bins[1] = ar::AliasBin{1.0f, 1u}, rig.bin_light[1] = 1u;
+  rig.pmf[0] = float(double(kQ) * double(kBins - 1) / double(kBins)), rig.pmf[1] = 1.0f - rig.pmf[0];
   rig.sampler = ar::LightSamplerView{rig.bins.data(), rig.bin_light.data(), rig.pmf.data(), kBins, 2};
   const std::vector<ar::Real3> ray_d = rig.ray_d;
   uint64_t picked_a = 0, items = 0;
@@ -505,7 +507,7 @@ TEST_CASE("nee/alias test frequency at 2^20 bins") {
     }
   }
   REQUIRE(items == uint64_t(kPaths) * kPasses);  // both lamps light every path
-  const double mean = double(kQ) * double(items), sd = std::sqrt(mean);
+  const double mean = double(rig.pmf[0]) * double(items), sd = std::sqrt(mean);
   MESSAGE("light A picked " << picked_a << " times, expected " << mean << " +- " << sd);
   CHECK(std::fabs(double(picked_a) - mean) < 5.0 * sd);
 }

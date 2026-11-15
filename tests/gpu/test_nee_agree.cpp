@@ -148,6 +148,13 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
     }
     for (uint32_t k = 0; k < 3; ++k) tri_v[3 * t + k] = 3 * t + k;
   }
+  // Triangles 0 and 1 are also the emitters (instance 1): well-shaped, not random slivers. Arvo's
+  // spherical-triangle sampling of a sliver seen near edge-on is ill-conditioned (the ulp
+  // differences of acos / sinpi between the devices then move the sample by up to 7e-4 rad), which
+  // is the sampler's conditioning, not an agreement defect of the stage.
+  const float good[18] = {-0.6f, -0.6f, 0.0f, 0.6f, -0.5f, 0.1f, 0.0f, 0.6f, 0.05f,
+                          0.2f, 0.1f, 0.3f, 1.0f, 0.2f, 0.2f, 0.5f, 0.9f, 0.25f};
+  for (uint32_t k = 0; k < 18; ++k) pos[k] = good[k];
   ar::DeviceMeshView mv{};
   mv.positions = uint64_t(uintptr_t(put(pos.data(), pos.size() * 4)));
   mv.tri_vertex = uint64_t(uintptr_t(put(tri_v.data(), tri_v.size() * 4)));
