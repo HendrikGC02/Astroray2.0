@@ -15,6 +15,8 @@
 #include "../core/vec.h"
 #include "../kernel_globals.h"
 #include "../portability.h"
+#include "../state/flags.h"
+#include "../state/termination.h"
 #include "../spectral/wavelength.h"
 #include "response.h"
 
@@ -53,6 +55,12 @@ struct FilmData {
   float* splat;       // SPLAT planes, same component order as the display channel
   float* slot_L;      // slot_capacity * 4 lanes
   uint32_t* slot_flags;
+
+  // Statistics and primary-hit AOV channels (0008 d10, d12): first plane within the ADD or COUNT
+  // plane kind, -1 when not requested.
+  int32_t bounce_sum, bounce_max;  // ADD, COUNT
+  int32_t term_hist;               // COUNT x 16 (Term values), on request
+  int32_t aov_position, aov_normal, aov_uv, aov_material;  // ADD x 3, 3, 2, 1
 
   ResponseTableView response;
   WavelengthTableView wavelengths;
@@ -102,6 +110,56 @@ AR_FN void film_splat_add(const KernelGlobals& kg, uint32_t pixel, const Real3& 
   atomic_add(f.splat + pixel, float(value.x));
   atomic_add(f.splat + f.plane_stride + pixel, float(value.y));
   atomic_add(f.splat + 2ull * f.plane_stride + pixel, float(value.z));
+}
+
+// The pixel plane index of a slot: slot = j * k + m for active pixel j of the render
+// sub-rectangle (0008 d3), the same mapping the resolve uses.
+AR_FN uint32_t film_slot_pixel(const KernelGlobals& kg, uint32_t slot) {
+  const FilmData& f = *kg.film;
+  const uint32_t j = slot / kg.session.samples_per_pass;
+  return (j / f.rect_width) * f.width + j % f.rect_width;  // pixel_id(x, y, width) of sample/keys.h
+}
+
+// Path end: one path of the slot's pixel ended. bounces_total counts scattering events (surface
+// or real volume scatter, delta included, null collisions excluded); a tail pass can end several
+// paths of one pixel in one launch, hence atomics. Mean = ADD / n at readback, max is COUNT max.
+// Ref: 0008 d12 (statistics table); 0004 D28 (path-end statistics); 0003 d22 (Term).
+AR_FN void film_path_end_stats(const KernelGlobals& kg, uint32_t slot, uint32_t bounces_total, Term term) {
+  const FilmData& f = *kg.film;
+  const uint32_t pixel = film_slot_pixel(kg, slot);
+  if (f.bounce_sum >= 0) film_add(kg, uint32_t(f.bounce_sum), pixel, Real(bounces_total));
+  if (f.bounce_max >= 0) film_count_max(kg, uint32_t(f.bounce_max), pixel, bounces_total);
+  if (f.term_hist >= 0) film_count_add(kg, uint32_t(f.term_hist) + uint32_t(term), pixel, 1u);
+}
+
+// Primary-hit AOVs, written by the surface stage at depth 0, once across pass-throughs
+// (AOV_WRITTEN in the path's flags; 0003 d21). Position and material id keep only sample 0 so an
+// id stays exact; normal and UV accumulate over samples (readback divides by n), which
+// antialiases them. This split is the rule 0008 d10 takes from Cycles
+// intern/cycles/kernel/film/data_passes.h (ids and position from sample 0, the rest accumulated).
+// Ref: 0008 d10; 0003 d21. The Cycles file was not readable when this was written: verify the
+// split against it before M1b.
+AR_FN void film_primary_aov(const KernelGlobals& kg, uint32_t slot, uint32_t sample_index, uint32_t* path_flags,
+                            const Real3& position, const Real3& normal, Real u, Real v, uint32_t material_id) {
+  if ((*path_flags & AOV_WRITTEN) != 0u) return;
+  *path_flags |= AOV_WRITTEN;
+  const FilmData& f = *kg.film;
+  const uint32_t pixel = film_slot_pixel(kg, slot);
+  if (f.aov_position >= 0 && sample_index == 0u) {
+    film_add(kg, uint32_t(f.aov_position), pixel, position.x);
+    film_add(kg, uint32_t(f.aov_position) + 1u, pixel, position.y);
+    film_add(kg, uint32_t(f.aov_position) + 2u, pixel, position.z);
+  }
+  if (f.aov_material >= 0 && sample_index == 0u) film_add(kg, uint32_t(f.aov_material), pixel, Real(material_id));
+  if (f.aov_normal >= 0) {
+    film_add(kg, uint32_t(f.aov_normal), pixel, normal.x);
+    film_add(kg, uint32_t(f.aov_normal) + 1u, pixel, normal.y);
+    film_add(kg, uint32_t(f.aov_normal) + 2u, pixel, normal.z);
+  }
+  if (f.aov_uv >= 0) {
+    film_add(kg, uint32_t(f.aov_uv), pixel, u);
+    film_add(kg, uint32_t(f.aov_uv) + 1u, pixel, v);
+  }
 }
 
 AR_NS_END

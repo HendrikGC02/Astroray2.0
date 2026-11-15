@@ -8,6 +8,7 @@ namespace astroray::host {
 namespace {
 
 constexpr uint64_t kAlign = 256;
+constexpr uint32_t kTermCount = uint32_t(ar::Term::CANCELLED) + 1u;  // Term is appended to, never reordered
 uint64_t round_up(uint64_t v) { return (v + kAlign - 1) / kAlign * kAlign; }
 
 struct Regions {
@@ -52,6 +53,17 @@ FilmLayout FilmLayout::build(const FilmRequest& req) {
   all.push_back({"display", ChannelKind::Moment, 3, ar::kFilmDisplayResponse});
   for (const ChannelRequest& c : req.extra) all.push_back(c);
   if (req.light_pass) all.push_back({"splat", ChannelKind::Splat, 3, 0});
+  if (req.statistics) {
+    all.push_back({"bounces", ChannelKind::Add, 1, 0});
+    all.push_back({"bounce_max", ChannelKind::Count, 1, 0});
+  }
+  if (req.termination_stats) all.push_back({"term", ChannelKind::Count, kTermCount, 0});
+  if (req.primary_aov) {
+    all.push_back({"aov_position", ChannelKind::Add, 3, 0});
+    all.push_back({"aov_normal", ChannelKind::Add, 3, 0});
+    all.push_back({"aov_uv", ChannelKind::Add, 2, 0});
+    all.push_back({"aov_material", ChannelKind::Add, 1, 0});
+  }
 
   uint32_t moment_channels = 0;
   for (const ChannelRequest& c : all) {
@@ -130,6 +142,13 @@ ar::FilmData FilmLayout::bind(void* base) const {
   d.splat = splat_components_ ? reinterpret_cast<float*>(b + r.splat) : nullptr;
   d.slot_L = reinterpret_cast<float*>(b + r.slot_L);
   d.slot_flags = reinterpret_cast<uint32_t*>(b + r.slot_flags);
+  d.bounce_sum = offset("bounces");
+  d.bounce_max = offset("bounce_max");
+  d.term_hist = offset("term");
+  d.aov_position = offset("aov_position");
+  d.aov_normal = offset("aov_normal");
+  d.aov_uv = offset("aov_uv");
+  d.aov_material = offset("aov_material");
   d.film_exposure = 1.0;
   d.inv_radiance_scale = 1.0;
   return d;
