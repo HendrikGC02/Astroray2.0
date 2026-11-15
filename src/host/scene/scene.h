@@ -107,16 +107,13 @@ class Scene {
   // a material's emission sampling is out of range.
   std::shared_ptr<const LightTable> lights();
   uint64_t light_rebuilds() const;  // how many times lights() rebuilt the table
-  // The radiance scale s = 2^k of the active light table (0003 d10), already folded into its
-  // strengths and the estimate terms; 074's emission program must multiply by it too. The film
-  // divides by it. Calls lights().
-  double radiance_scale();
   // A lamp the activating generation set (068). Lamps count only while their key is in the active
   // generation's key set, so a removed or reset-away lamp drops out without a callback.
   void publish_lamp(std::shared_ptr<const Lamp> lamp);
-  // The active instances plus one record per lamp carrying the lamp's index in lights()'s table
-  // (calls lights()); null when there are neither instances nor lamps.
-  std::shared_ptr<const InstanceTable> instances_with_lamps();
+  // The active instances plus one record per lamp of `table`, which carries each lamp's light
+  // index. Never null (an empty scene gives an empty table). It reads only `table` and the active
+  // instances, so the light indices are those of the snapshot the caller holds.
+  std::shared_ptr<const InstanceTable> instances_with_lamps(const LightTable& table) const;
 
  private:
   friend class Edit;
@@ -137,8 +134,6 @@ class Scene {
     std::vector<std::shared_ptr<const MeshRecord>> light_meshes;  // pins the records light_key names
     std::map<ar_key, std::shared_ptr<const Lamp>> lamps;          // as set; live ones are in known_active
     std::vector<std::shared_ptr<const Lamp>> light_lamps;         // the last build's lamps, pinned for light_key
-    double radiance = 1.0;                                        // s of the last build
-    uint32_t lamp_first = 0;                                     // light index of light_lamps[0]
     std::shared_ptr<const LightTable> lights;
     uint64_t light_rebuilds = 0;
   };

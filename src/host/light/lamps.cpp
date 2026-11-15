@@ -12,7 +12,6 @@ namespace astroray::host {
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
-constexpr uint32_t kLampVisibility = AR_VISIBILITY_CAMERA | AR_VISIBILITY_DIFFUSE | AR_VISIBILITY_GLOSSY | AR_VISIBILITY_TRANSMISSION;
 
 ar::Real3 r3(double x, double y, double z) { return ar::Real3{ar::Real(x), ar::Real(y), ar::Real(z)}; }
 
@@ -37,13 +36,24 @@ std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const
     if (!std::isfinite(f)) throw std::invalid_argument("light transform is not finite");
   if (d.type != AR_LIGHT_POINT && d.type != AR_LIGHT_AREA_RECT && d.type != AR_LIGHT_AREA_ELLIPSE)
     throw std::invalid_argument("light type " + std::to_string(d.type) + " is not supported in this build");
-  if (d.visibility & ~uint32_t(kLampVisibility | AR_VISIBILITY_SHADOW | AR_VISIBILITY_VOLUME))
+  if (d.visibility & ~uint32_t(kLampRayVisibility | AR_VISIBILITY_SHADOW | AR_VISIBILITY_VOLUME))
     throw std::invalid_argument("light visibility has bits outside AR_VISIBILITY_*");
   if (d.light_group > 255) throw std::invalid_argument("light_group above 255");
   if (!std::isfinite(d.power) || d.power < 0.0f) throw std::invalid_argument("light power must be finite and not negative");
   if (!std::isfinite(d.size_x) || d.size_x < 0.0f || !std::isfinite(d.size_y) || d.size_y < 0.0f)
     throw std::invalid_argument("light size must be finite and not negative");
   auto approx = [&](const std::string& s) { lamp->approximations.push_back(s); };
+  // A descriptor the engine cannot read is refused; one it can read but not honour is approximated
+  // and raised (CLAUDE.md rule 5).
+  if (d.color.kind != AR_SPECTRUM_RGB && d.color.kind != AR_SPECTRUM_BLACKBODY && d.color.kind != AR_SPECTRUM_TABLE)
+    throw std::invalid_argument("light color kind " + std::to_string(d.color.kind) + " is out of range");
+  for (float c : d.color.rgb)
+    if (!std::isfinite(c)) throw std::invalid_argument("light color is not finite");
+  if (d.color.table_count != 0 && d.color.kind != AR_SPECTRUM_TABLE)
+    throw std::invalid_argument("light color table_count must be 0 unless the kind is TABLE (0007 appendix ar_spectrum_ref)");
+  if (d.color.kind == AR_SPECTRUM_TABLE && d.color.table_count != 0 && (!d.color.table_wavelength_nm || !d.color.table_value))
+    throw std::invalid_argument("light color table pointer is null with a nonzero count");
+  if (d.cast_shadow == 0) approx("light cast_shadow off renders with shadows");
 
   // Colour: RGB packs to an ILLUMINANT ref; the other kinds are M1b / M4 and render as the
   // colour's RGB when given, else white.
@@ -60,6 +70,7 @@ std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const
   ar::SpectrumRef color;
   uint32_t flags = 0;
   ar::make_rgb_ref(table, rgb, ar::SpectrumSemantic::ILLUMINANT, &color, &flags);
+  if (flags & ar::kRgbNegativeClamped) approx("light color clamped (a negative component became 0)");
 
   const ar::Real3 pos = r3(d.xf.m[3], d.xf.m[7], d.xf.m[11]);
   lamp->centre[0] = double(pos.x), lamp->centre[1] = double(pos.y), lamp->centre[2] = double(pos.z);
@@ -73,7 +84,16 @@ std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const
   } else {
     const double w = double(d.size_x) * col_len(d.xf, 0), h = double(d.size_y) * col_len(d.xf, 1);
     const ar::Real3 ax = col_dir(d.xf, 0), ay = col_dir(d.xf, 1);
-    if (d.spread < 180.0f) approx("light spread " + std::to_string(d.spread) + " degrees renders as 180 (M4)");
+    // Spread is in radians like Blender's RNA (pi = a full hemisphere); narrower is M4.
+    if (d.spread < float(kPi) - 1e-4f) approx("light spread " + std::to_string(d.spread) + " rad renders as pi (M4)");
+    // Cycles aims the lamp along -column 2; the record's front is -cross(col 0, col 1), which
+    // differs for a mirrored transform. D6 fixes no such case, so it is raised, not followed.
+    {
+      const ar::Real3 z = ar::cross(ax, ay);
+      const double c2[3] = {d.xf.m[2], d.xf.m[6], d.xf.m[10]};
+      if (double(z.x) * c2[0] + double(z.y) * c2[1] + double(z.z) * c2[2] < 0.0)
+        approx("light transform is mirrored; it faces the opposite way to Cycles' -column 2");
+    }
     if (d.type == AR_LIGHT_AREA_RECT) {
       cycles_area = w * h;
       lamp->record = ar::light_make_area(ar::LightType::AREA_RECT, pos, ax, ay, ar::Real(w), ar::Real(h), ar::Real(1), color);
@@ -95,7 +115,7 @@ std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const
   lamp->record.strength = float(double(d.power) * (d.normalize ? 1.0 : cycles_area));
   lamp->record.light_group = uint8_t(d.light_group);
   lamp->record.visibility = d.visibility;
-  lamp->visibility = d.visibility & kLampVisibility;  // the instance never carries the shadow bit
+  lamp->visibility = d.visibility & kLampRayVisibility;  // the instance never carries the shadow bit
   if (const char* why = ar::light_problem(lamp->record)) throw std::invalid_argument(why);
   return lamp;
 }
@@ -147,6 +167,20 @@ double emitter_peak(const LightInput& light, const ar::ObserverView& obs) {
   std::vector<EmissionTerm> own;
   if (light.terms.empty()) own.push_back({light.record.emission, light.record.strength});
   const std::vector<EmissionTerm>& terms = light.terms.empty() ? own : light.terms;
+  // 0003 d10 asks for the emitter's radiance; a lamp's record holds power P, so divide by D6's
+  // geometric factor: intensity P / (4 pi) for a delta point, radiance P / (4 pi^2 r^2) for a
+  // sphere and P / (pi A) for an area lamp. Triangles and the world already hold radiance.
+  double geometry = 1.0;
+  if (light.terms.empty()) {
+    const ar::LightRecord& r = light.record;
+    switch (ar::LightType(r.type)) {
+      case ar::LightType::POINT: geometry = 4.0 * kPi; break;
+      case ar::LightType::SPHERE: geometry = 4.0 * kPi * kPi * double(r.size[0]) * double(r.size[0]); break;
+      case ar::LightType::AREA_RECT: geometry = kPi * double(r.size[0]) * double(r.size[1]); break;
+      case ar::LightType::AREA_DISK: geometry = kPi * kPi * double(r.size[0]) * double(r.size[0]); break;
+      default: break;
+    }
+  }
   double peak = 0.0;
   for (int i = 0; i < ar::kObsSamples; i += ar::kLanes) {
     ar::Lambda lam;
@@ -158,7 +192,7 @@ double emitter_peak(const LightInput& light, const ar::ObserverView& obs) {
     }
     for (int k = 0; k < ar::kLanes && i + k < ar::kObsSamples; ++k) peak = std::max(peak, sum[k]);
   }
-  return peak;
+  return peak / geometry;
 }
 
 double radiance_scale(const std::vector<double>& peaks) {

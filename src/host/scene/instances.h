@@ -58,6 +58,10 @@ struct InstanceTable {
 // volume 5. Bit 6 (medium boundary) stays unset until media exist; bit 7 is never set.
 uint8_t visibility_mask(uint32_t visibility);
 
+// The ray classes a lamp's instance may carry; shadow is never among them (0004 D8).
+inline constexpr uint32_t kLampRayVisibility =
+    AR_VISIBILITY_CAMERA | AR_VISIBILITY_DIFFUSE | AR_VISIBILITY_GLOSSY | AR_VISIBILITY_TRANSMISSION;
+
 // A lamp's instance: no geometry (task 105 builds the lamp shape from the light record), its
 // transform on every motion step, its light index in the light table, and its camera, diffuse,
 // glossy and transmission visibility, never shadow (0004 D8: lamps never block shadow rays).

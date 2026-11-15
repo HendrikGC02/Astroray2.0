@@ -104,11 +104,10 @@ uint8_t visibility_mask(uint32_t v) {
 
 std::shared_ptr<InstanceTable> append_lamp_instances(const InstanceTable* base, const std::vector<LampInstanceIn>& lamps) {
   auto t = base ? std::make_shared<InstanceTable>(*base) : std::make_shared<InstanceTable>();
-  constexpr uint32_t kRays = AR_VISIBILITY_CAMERA | AR_VISIBILITY_DIFFUSE | AR_VISIBILITY_GLOSSY | AR_VISIBILITY_TRANSMISSION;
   for (const LampInstanceIn& l : lamps) {
     Instance in;
     in.object_key = l.key;
-    in.visibility = l.visibility & kRays;
+    in.visibility = l.visibility & kLampRayVisibility;
     in.mask = visibility_mask(in.visibility);
     in.light_group = l.light_group;
     in.light_index = l.light_index;

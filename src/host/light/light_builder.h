@@ -17,6 +17,7 @@
 #include "../../kernel/light/light_sampler.h"
 #include "host/ledger.h"
 #include "host/material/compiler.h"
+#include "host/scene/instances.h"
 
 namespace astroray::host {
 
@@ -40,6 +41,13 @@ struct LightTable {
   std::vector<uint32_t> bin_light;
   std::vector<float> pmf;          // per light
   ar::SceneSphere scene = {};
+  // The rest of one snapshot, built under the scene's one lock (068): the radiance scale s of 0003
+  // d10, already folded into the strengths and estimate terms (the film divides by it), the light
+  // index of the first lamp, and the lamps' instance records. A session keeps one table for an
+  // epoch; 102 binds that same table.
+  double radiance_scale = 1.0;
+  uint32_t lamp_first = 0;
+  std::vector<LampInstanceIn> lamp_instances;
   ar::LightSamplerView view() const;
   uint64_t bytes() const;
 

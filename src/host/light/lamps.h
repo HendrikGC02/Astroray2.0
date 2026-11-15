@@ -45,10 +45,13 @@ std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const
 ar_status set_light(Edit& edit, ar_key key, const ar_light_desc* desc, const ar::Rgb2SpecTable& table);
 
 // The smallest sphere holding `s` and the lamp's bound (an empty `s`, radius 0, is replaced).
+// Ref: closed form for two spheres at distance d: radius (d + r1 + r2) / 2, centre on the line of centres
+// (Ericson, Real-Time Collision Detection, 2005, section 4.3 on bounding spheres).
 ar::SceneSphere enclose(const ar::SceneSphere& s, const Lamp& lamp);
 
-// Largest over the observer table support of the light's spectral emission strength * S(lambda)
-// (the power estimate's spectral peak; 0004 D9 gives power = geometry * emission).
+// Largest over the observer table support of the light's spectral radiance: strength * S(lambda),
+// divided by the lamp's D6 geometric factor (see lamps.cpp)
+// (0004 D6; 0003 d10).
 double emitter_peak(const LightInput& light, const ar::ObserverView& obs);
 
 // s = 2^k with the largest peak times s in [1, 2); 1 when every peak is 0. Throws

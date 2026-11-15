@@ -171,7 +171,7 @@ std::shared_ptr<const LightTable> Scene::lights() {
   if (state_.lights && in.key == state_.light_key) return state_.lights;
   in = gather_scene_lights(state_.instances.get(), *meshes, *mats, world.get(), true);
   with_lamps(&in);
-  state_.lamp_first = uint32_t(in.lights.size());
+  const uint32_t lamp_first = uint32_t(in.lights.size());
   for (const auto& l : lamps) {
     LightInput li;
     li.record = l->record;
@@ -183,24 +183,32 @@ std::shared_ptr<const LightTable> Scene::lights() {
   // divides it out again. The key covers every emitter, so s changes only with a rebuild.
   std::vector<double> peaks;
   for (const LightInput& li : in.lights) peaks.push_back(emitter_peak(li, obs));
-  state_.radiance = host::radiance_scale(peaks);
+  const double s = host::radiance_scale(peaks);
   for (LightInput& li : in.lights) {
-    li.record.strength = float(double(li.record.strength) * state_.radiance);
-    for (EmissionTerm& t : li.terms) t.strength = float(double(t.strength) * state_.radiance);
+    li.record.strength = float(double(li.record.strength) * s);
+    for (EmissionTerm& t : li.terms) t.strength = float(double(t.strength) * s);
   }
-  state_.lights = build_light_table(in.lights, in.scene, obs, meshes->shared_ledger());
+  // One immutable snapshot: the lights, s, and the lamps' instance records agree by construction.
+  // The table is ours and unpublished until the assignment below, so the cast is safe.
+  auto table = std::const_pointer_cast<LightTable>(build_light_table(in.lights, in.scene, obs, meshes->shared_ledger()));
+  table->radiance_scale = s;
+  table->lamp_first = lamp_first;
+  for (size_t i = 0; i < lamps.size(); ++i) {
+    const Lamp& l = *lamps[i];
+    table->lamp_instances.push_back({l.key, l.xf, l.visibility, l.record.light_group, lamp_first + uint32_t(i)});
+  }
+  // Entries whose key is in neither the active nor the latest key set are gone for good; one between
+  // its publish and its key-set update is in the latest set, so it stays.
+  for (auto it = state_.lamps.begin(); it != state_.lamps.end();)
+    it = (state_.known_active.count({AR_KIND_LIGHT, it->first}) == 0 && state_.known.count({AR_KIND_LIGHT, it->first}) == 0)
+             ? state_.lamps.erase(it)
+             : std::next(it);
+  state_.lights = std::move(table);
   state_.light_key = std::move(in.key);
   state_.light_meshes = std::move(in.meshes);
   state_.light_lamps = std::move(lamps);
   ++state_.light_rebuilds;
   return state_.lights;
-}
-
-double Scene::radiance_scale() {
-  if (!materials || !meshes) return 1.0;  // a scene without stores has no emitters
-  lights();
-  std::lock_guard<std::mutex> lock(state_.mutex);
-  return state_.radiance;
 }
 
 void Scene::publish_lamp(std::shared_ptr<const Lamp> lamp) {
@@ -209,15 +217,8 @@ void Scene::publish_lamp(std::shared_ptr<const Lamp> lamp) {
   state_.lamps[k] = std::move(lamp);
 }
 
-std::shared_ptr<const InstanceTable> Scene::instances_with_lamps() {
-  lights();
-  std::lock_guard<std::mutex> lock(state_.mutex);
-  std::vector<LampInstanceIn> in;
-  for (size_t i = 0; i < state_.light_lamps.size(); ++i) {
-    const Lamp& l = *state_.light_lamps[i];
-    in.push_back({l.key, l.xf, l.visibility, l.record.light_group, state_.lamp_first + uint32_t(i)});
-  }
-  return append_lamp_instances(state_.instances.get(), in);
+std::shared_ptr<const InstanceTable> Scene::instances_with_lamps(const LightTable& table) const {
+  return append_lamp_instances(instances().get(), table.lamp_instances);
 }
 
 uint64_t Scene::light_rebuilds() const {

@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "host/data_resource.h"
+#include "host/light/light_builder.h"
 #include "host/scene/camera.h"
 #include "host/thread.h"
 #include "kernel/sample/sobol.h"
@@ -439,6 +440,7 @@ void Session::release() {
   // The ring stays until the session is destroyed: a frame the host acquired remains readable
   // after CLOSED and is released then (display_release), so no thread reads freed memory.
   film_.reset();
+  epoch_lights_.reset();
   active_.reset();
   device_.free(camera_buf_);
   device_.free(filter_buf_);
@@ -676,7 +678,9 @@ void Session::render_loop() {
       begin_epoch();
       // s moves only when emitters change, and every activated commit starts an epoch, so one
       // epoch's samples never mix two values (0003 d10).
-      film_->data().inv_radiance_scale = 1.0 / scene_.radiance_scale();
+      // One table for the whole epoch: s and the lights it was folded into come from the same snapshot.
+      epoch_lights_ = (scene_.materials && scene_.meshes) ? scene_.lights() : nullptr;
+      film_->data().inv_radiance_scale = epoch_lights_ ? 1.0 / epoch_lights_->radiance_scale : 1.0;
     }
     apply_view();
     if (lr.changed) update_camera_and_filter(lr.generation);
