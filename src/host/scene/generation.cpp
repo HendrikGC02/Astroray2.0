@@ -139,6 +139,11 @@ void GenerationTracker::pump_locked(bool& activated) {
   }
 }
 
+void GenerationTracker::with_active(const std::function<void(uint64_t)>& fn) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  fn(active_);
+}
+
 uint64_t GenerationTracker::add_listener(Listener listener) {
   std::lock_guard<std::mutex> lock(listeners_mutex_);
   const uint64_t id = next_listener_++;

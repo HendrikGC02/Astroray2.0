@@ -63,6 +63,28 @@ ar_status session_call(ar_session h, const char* function, F&& f, bool allow_clo
   }
 }
 
+// The session's own device (RULINGS 70): CPU sessions get a CPU device with a worker pool, CUDA
+// sessions their own CudaDevice (own stream and globals) on the context's device, each with its
+// own ledger. Out of the entry point for the same reason as scene_api.cpp's cuda_init.
+std::shared_ptr<astroray::host::Device> session_device(astroray::ContextState& ctx, uint32_t kind, uint32_t index) {
+  if (kind == AR_DEVICE_CPU) {
+    const unsigned cores = std::thread::hardware_concurrency();
+    return astroray::host::make_cpu_session_device(ctx, cores ? cores : 1u);
+  }
+#ifdef ASTRORAY_GPU
+  struct Held {
+    astroray::host::Ledger ledger;  // declared first: destroyed after the device
+    std::unique_ptr<astroray::host::ModuleDevice> device;
+  };
+  auto held = std::make_shared<Held>();
+  held->device = astroray::host::make_cuda_device(held->ledger, index);
+  return std::shared_ptr<astroray::host::Device>(held, held->device.get());
+#else
+  (void)index;
+  throw SessionUnsupported("ar_session_create: this build has no CUDA backend");
+#endif
+}
+
 }  // namespace
 
 ar_recorder* ar_rec_of(ar_session h) { return h ? h->recorder : nullptr; }
@@ -82,12 +104,9 @@ AR_API ar_status ar_session_create(ar_scene scene, const ar_session_desc* desc, 
     if (!desc) return fail(scene, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_create desc is null");
     uint32_t kind = 0, index = 0;
     astroray::context_device_of_state(ctx, &kind, &index);
-    if (kind != AR_DEVICE_CPU)
-      return fail(scene, AR_ERR_UNSUPPORTED, "ar_session_create: CUDA sessions are not supported yet");
     auto h = std::make_unique<ar_session_s>();
     h->recorder = ar_rec_of(scene);
-    const unsigned cores = std::thread::hardware_concurrency();
-    std::shared_ptr<astroray::host::Device> device = astroray::host::make_cpu_session_device(ctx, cores ? cores : 1u);
+    std::shared_ptr<astroray::host::Device> device = session_device(ctx, kind, index);
     astroray::host::SessionOptions o;
     o.mode = desc->mode;
     o.max_width = desc->max_width;
@@ -101,6 +120,8 @@ AR_API ar_status ar_session_create(ar_scene scene, const ar_session_desc* desc, 
     return AR_OK;
   } catch (const SessionUnsupported& e) {
     return fail(scene, AR_ERR_UNSUPPORTED, e.what());
+  } catch (const astroray::host::DeviceError& e) {
+    return fail(scene, e.status(), e.what());
   } catch (const std::invalid_argument& e) {
     return fail(scene, AR_ERR_INVALID_ARGUMENT, std::string("invalid argument: ") + e.what());
   } catch (const std::bad_alloc&) {

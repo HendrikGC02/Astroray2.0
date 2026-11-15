@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Ref: docs/decisions/0007-blender-integration.md d5, d23, d25, d27, d29; 0004 D25; 0008 d3, d12;
-// RULINGS 52 (cancel between launches), 69 (generation numbers of latched views).
+// RULINGS 52 (cancel between launches), 69 (generation numbers of latched views), 70 (uploads at
+// the latch, pinned table sets).
 #include "host/session/session.h"
 
 #include <algorithm>
@@ -281,6 +282,7 @@ SessionProgress Session::progress() const {
     p.failed_generation = scene_.generations().failed();
     p.epoch = latch_.epoch();
   }
+  p.failed_generation = std::max(p.failed_generation, upload_failed_.load(std::memory_order_acquire));
   p.samples_per_pixel = uint32_t(stats_.samples_done);
   p.last_pass_ms = last_pass_ms_;
   p.state = state_;
@@ -303,7 +305,11 @@ uint32_t Session::film_samples(uint32_t j) const {
   if (!film_) throw std::logic_error("film_samples: the session has no film");
   const ar::FilmData& f = film_->data();
   if (j >= f.rect_width * f.rect_height) throw std::out_of_range("film_samples: pixel outside the render rectangle");
-  return f.n[ar::film_active_pixel(f, j)];
+  uint32_t n = 0;
+  const uint64_t at = uint64_t(reinterpret_cast<const char*>(f.n + ar::film_active_pixel(f, j)) -
+                               static_cast<const char*>(film_->buffer().ptr));
+  device_.download(&n, film_->buffer(), at, sizeof n);  // the plane is device memory on CUDA
+  return n;
 }
 
 void Session::render_size(uint32_t* width, uint32_t* height) const {
@@ -408,9 +414,7 @@ void Session::allocate() {
   wavelengths_ = WavelengthTableBuilder().build();
 
   auto film = std::make_unique<Film>(device_, layout_, options_.owner);
-  // The tables are host memory: right for the CPU device, the only one sessions run on yet.
-  film->data().response = response_view(response_);
-  film->data().wavelengths = {wavelengths_.edges.data(), wavelengths_.cdf.data(), wavelengths_.bins()};
+  session_tables_ = upload_session_tables(device_, options_.owner, response_, wavelengths_, film->data());
   {
     // Published under the render lock so a readback on another thread sees a whole film.
     std::lock_guard<std::mutex> render(render_mutex_);
@@ -440,7 +444,8 @@ void Session::release() {
   // The ring stays until the session is destroyed: a frame the host acquired remains readable
   // after CLOSED and is released then (display_release), so no thread reads freed memory.
   film_.reset();
-  epoch_lights_.reset();
+  tables_.reset();  // the pin: the set's copies go when no session holds them (RULINGS 70)
+  session_tables_ = SessionTables{};
   active_.reset();
   device_.free(camera_buf_);
   device_.free(filter_buf_);
@@ -487,32 +492,39 @@ void Session::apply_view() {
 }
 
 void Session::bind_globals() {
-  ar::KernelGlobals kg{};
+  KgSession in;
   char* base = static_cast<char*>(globals_buf_.ptr);
-  kg.film = reinterpret_cast<ar::FilmData*>(base + kFilmDataAt);
-  kg.display = reinterpret_cast<ar::DisplayTarget*>(base + kDisplayAt);
+  in.film = reinterpret_cast<ar::FilmData*>(base + kFilmDataAt);
+  in.display = reinterpret_cast<ar::DisplayTarget*>(base + kDisplayAt);
   const ar::FilmData& f = film_->data();
-  kg.session.width = f.rect_width;
-  kg.session.height = f.rect_height;
+  ar::SessionUniforms& u = in.uniforms;
+  u.width = f.rect_width;
+  u.height = f.rect_height;
   uint64_t samples_done;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     samples_done = stats_.samples_done;
   }
-  kg.session.samples_done = uint32_t(samples_done);
-  kg.session.samples_per_pass = kSamplesPerPass;
-  kg.session.pass_index = pass_index_;
-  kg.session.sampler_mode = kSamplerMode;
-  kg.session.test_hooks = hooks_.bits;
-  kg.active_pixels = active_->list();
-  kg.camera = camera_ready_ ? static_cast<const ar::CameraView*>(camera_buf_.ptr) : nullptr;
-  kg.filter = filter_ready_ ? static_cast<const ar::FilterTable*>(filter_buf_.ptr) : nullptr;
+  u.samples_done = uint32_t(samples_done);
+  u.samples_per_pass = kSamplesPerPass;
+  u.pass_index = pass_index_;
+  u.sampler_mode = kSamplerMode;
+  u.test_hooks = hooks_.bits;
+  in.active_pixels = active_->list();
+  in.camera = camera_ready_ ? static_cast<const ar::CameraView*>(camera_buf_.ptr) : nullptr;
+  in.filter = filter_ready_ ? static_cast<const ar::FilterTable*>(filter_buf_.ptr) : nullptr;
   if (const auto s = scene_.settings()) {
-    kg.session.seed = s->s.seed;
+    u.seed = s->s.seed;
     // PathStateSoA::bounces order: total, diffuse, glossy, transmission, volume, transparent.
     const uint32_t b[6] = {s->s.max_bounces,          s->s.diffuse_bounces, s->s.glossy_bounces,
                            s->s.transmission_bounces, s->s.volume_bounces,  s->s.transparent_bounces};
-    std::memcpy(kg.session.max_bounces, b, sizeof b);
+    std::memcpy(u.max_bounces, b, sizeof b);
+  }
+  const ar::KernelGlobals kg = build_kernel_globals(tables_.get(), in);
+  if (tables_) {
+    // Rule 5: a null pointer that is not optional is a builder bug, never a silent fallback.
+    const std::vector<std::string> missing = missing_pointers(kg, *tables_, false);
+    if (!missing.empty()) throw std::logic_error("kernel globals: " + missing.front() + " is null");
   }
   device_.upload(globals_buf_, 0, &kg, sizeof kg);
   device_.upload(globals_buf_, kFilmDataAt, &f, sizeof f);
@@ -566,7 +578,42 @@ void Session::build_active() {
 
 uint64_t Session::pass_camera_samples() const {
   if (options_.test_camera_samples_per_pass != 0) return options_.test_camera_samples_per_pass;
-  return camera_ready_ && filter_ready_ ? uint64_t(active_->count()) * kSamplesPerPass : 0;
+  return camera_ready_ && filter_ready_ && tables_ ? uint64_t(active_->count()) * kSamplesPerPass : 0;
+}
+
+bool Session::latch_tables() {
+  // RULINGS 70: a failed upload keeps the previous set, records the snapshot's generation and
+  // names the table in one entry per failed generation; the next latch retries. Failures that
+  // cannot heal (a sticky device error, device init, host memory) are not caught: they fail the
+  // session (0001 D2.5).
+  const auto before = tables_;
+  try {
+    tables_ = acquire_scene_tables(scene_);
+    tables_retry_ = false;
+  } catch (const TableUploadFailed& e) {
+    tables_retry_ = true;
+    const uint64_t g = e.generation();
+    upload_failed_.store(g, std::memory_order_release);
+    if (g != upload_failed_reported_) {
+      upload_failed_reported_ = g;
+      const double value[2] = {double(g), 0.0};
+      report_.raise(AR_REPORT_GENERATION_REJECTED, 0, e.what(), 1, value, g);
+      ctx_.log.line("WARNING", std::string("session: ") + e.what() + "; rendering the previous scene tables");
+    }
+  }
+  return tables_ != before;
+}
+
+ar::FilmData Session::film_host_view(std::vector<uint32_t>* invalid) const {
+  // The invalid-sample plane, read where the host can: in place on the CPU device, by download on
+  // CUDA, rows of the render rectangle only.
+  ar::FilmData f = film_->data();
+  if (device_.kind() == AR_DEVICE_CPU) return f;
+  invalid->resize(uint64_t(f.width) * f.rect_height);
+  const uint64_t at = uint64_t(reinterpret_cast<const char*>(f.invalid) - static_cast<const char*>(film_->buffer().ptr));
+  device_.download(invalid->data(), film_->buffer(), at, invalid->size() * 4);
+  f.invalid = invalid->data();
+  return f;
 }
 
 void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
@@ -581,7 +628,8 @@ void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
   bind_globals();
   device_.launch(KernelId::FILM_RESOLVE, active_->count());
   device_.synchronize();
-  invalid_.report(film_->data(), report_, generation);
+  std::vector<uint32_t> invalid;
+  invalid_.report(film_host_view(&invalid), report_, generation);
   ++pass_index_;
   ++passes_in_epoch_;
   std::lock_guard<std::mutex> lock(mutex_);
@@ -665,8 +713,11 @@ void Session::render_loop() {
     }
     std::unique_lock<std::mutex> render(render_mutex_);
     const uint64_t active = scene_.generations().active();
+    // A retry that pins a new set changes the image, so it starts an epoch like any image change
+    // (RULINGS 69, 70).
+    const bool retried = tables_retry_ && latch_tables();
     // An interrupted pass forces the epoch (latch.h), even if the pending view went back.
-    const LatchResult lr = latch_.latch(active, expect_epoch_);
+    const LatchResult lr = latch_.latch(active, expect_epoch_ || retried);
     {
       // The interrupt flag follows the state just latched: an interrupt raised for pending state
       // this latch consumed is spent, one raised for state still pending stays (0007 d25).
@@ -675,12 +726,13 @@ void Session::render_loop() {
     }
     expect_epoch_ = false;
     if (lr.new_epoch) {
-      begin_epoch();
       // s moves only when emitters change, and every activated commit starts an epoch, so one
-      // epoch's samples never mix two values (0003 d10).
-      // One table for the whole epoch: s and the lights it was folded into come from the same snapshot.
-      epoch_lights_ = (scene_.materials && scene_.meshes) ? scene_.lights() : nullptr;
-      film_->data().inv_radiance_scale = epoch_lights_ ? 1.0 / epoch_lights_->radiance_scale : 1.0;
+      // epoch's samples never mix two values (0003 d10). The set and its light table come from one
+      // snapshot, so s and the lights it was folded into agree.
+      if (!retried) latch_tables();
+      begin_epoch();
+      const LightTable* lt = tables_ ? tables_->lights.get() : nullptr;
+      film_->data().inv_radiance_scale = lt ? 1.0 / lt->radiance_scale : 1.0;
     }
     apply_view();
     if (lr.changed) update_camera_and_filter(lr.generation);

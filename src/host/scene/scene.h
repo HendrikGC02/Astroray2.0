@@ -35,6 +35,8 @@ struct ObserverTables;  // host/data_resource.h
 
 namespace astroray::host {
 
+class Device;           // host/device.h
+struct SceneTableCache;  // host/scene/scene_tables.h
 class Edit;
 class MeshStore;  // host/scene/mesh.h
 struct MeshRecord;
@@ -50,9 +52,28 @@ struct SceneConfig {
   // Runs on the init thread (CUDA context and module loading); the returned object is kept
   // until the scene is destroyed. Empty on the CPU device. A throw is the init failure.
   std::function<std::shared_ptr<void>()> init;
+  // The scene's device inside init's result: it uploads scene tables and charges the scene's
+  // ledger (RULINGS 70). Empty on the CPU device.
+  std::function<Device*(void*)> device_of;
 };
 
 // ar_settings and ar_camera_desc with their copy-in arrays owned.
+struct ImageArrays;     // host/image/image_store.h
+struct MaterialArrays;  // host/material/material_store.h
+
+// One immutable view of the active state, captured under the generation tracker's lock so every
+// part belongs to `generation` (RULINGS 70): the instances, the material and image arrays, the
+// active mesh record of every key the instances reference (null when none is active), and, when
+// asked for, the light table built from that same state.
+struct SceneSnapshot {
+  uint64_t generation = 0;
+  std::shared_ptr<const InstanceTable> instances;
+  std::shared_ptr<const MaterialArrays> materials;
+  std::shared_ptr<const ImageArrays> images;
+  std::map<ar_key, std::shared_ptr<const MeshRecord>> meshes;
+  std::shared_ptr<const LightTable> lights;
+};
+
 struct StoredSettings {
   ar_settings s{};
   std::vector<ar_name> passes, aovs;
@@ -87,6 +108,10 @@ class Scene {
   // Blocks until the init thread is done; throws std::runtime_error with its failure.
   void wait_init();
   bool init_done();
+  // The device init made (wait_init first, so it throws the init failure); null on a CPU context.
+  Device* device();
+  // The scene's table sets (host/scene/scene_tables.h): the one cache every session shares.
+  SceneTableCache& table_cache() { return *tables_; }
 
   // The last active generation's stored state (later tasks' jobs read it).
   std::shared_ptr<const StoredSettings> settings() const;
@@ -107,6 +132,9 @@ class Scene {
   // a material's emission sampling is out of range.
   std::shared_ptr<const LightTable> lights();
   uint64_t light_rebuilds() const;  // how many times lights() rebuilt the table
+  // The active state as one snapshot; `with_lights` also builds (or reuses) the light table of it,
+  // when the scene has material and mesh stores. Lock order: tracker, then state and stores.
+  SceneSnapshot snapshot(bool with_lights);
   // A lamp the activating generation set (068). Lamps count only while their key is in the active
   // generation's key set, so a removed or reset-away lamp drops out without a callback.
   void publish_lamp(std::shared_ptr<const Lamp> lamp);
@@ -149,6 +177,9 @@ class Scene {
   bool init_done_ = false;
   std::string init_error_;
   std::shared_ptr<void> init_result_;
+  std::function<Device*(void*)> device_of_;
+  // After init_result_, so the table copies on the scene's device go first.
+  std::unique_ptr<SceneTableCache> tables_;
   std::thread init_thread_;
   std::mutex edit_mutex_;
   bool edit_open_ = false;

@@ -4,8 +4,9 @@
 // scene, film and table pointers. Passed by const reference only (a by-value copy
 // costs per-launch parameter traffic, 0002 D4); the struct lives in device memory,
 // one copy per session. Feature switches are runtime fields, uniform per launch.
-// Scene, film and table members are opaque types; the task that needs a member
-// defines its struct and fills the pointer (upload: 102).
+// Scene, film and table members are opaque types defined by their own headers;
+// host/session/kg_builder.h fills every pointer, on both devices, and says which ones a
+// feature set leaves unused.
 // Ref: docs/decisions/0002-kernel-architecture.md D4 (arguments), D6 (step table,
 // queues), D8 (feature switches are KernelGlobals fields), D13;
 // docs/decisions/0003-spectral-model-and-path-state.md d19-d20, d23.
@@ -44,11 +45,13 @@ struct SessionUniforms {
 };
 
 // Opaque until the task that needs them defines them.
-struct SceneData;
-struct FilmData;
-struct WavelengthTable;
-struct Rgb2SpecTables;
+struct SceneData;    // scene/scene_view.h
+struct FilmData;     // film/film_write.h
+struct SceneTables;  // vm/context.h: the VM's rgb2spec, observer, image and sRGB tables
 struct DisplayTarget;
+struct LightRecord;       // light/light_record.h
+struct LightSamplerView;  // light/light_sampler.h
+struct EDielTable;        // material/lobes/tables.h
 struct CameraView;   // camera/camera.h
 struct FilterTable;  // film/filter.h
 
@@ -67,8 +70,7 @@ struct KernelGlobals {
 
   const SceneData* scene;
   FilmData* film;
-  const WavelengthTable* wavelengths;
-  const Rgb2SpecTables* rgb2spec;
+  const SceneTables* tables;
 
   // queue_build's per-tile histograms (sched/step_table.h, stages/queue_build.h): kStageCount + 1
   // counters per tile of both pools. Written only by the three queue_build kernels. Last member
@@ -88,6 +90,17 @@ struct KernelGlobals {
   // host/film/filter_table.h). Last members so the offsets the CUDA device reads stay put.
   const CameraView* camera;
   const FilterTable* filter;
+
+  // The light table the session latched for its epoch (068): records by light index, the alias
+  // sampler over them (light_sampler->light_count lights), and the GGX dielectric E table (064).
+  const LightRecord* lights;
+  const LightSamplerView* light_sampler;
+  const EDielTable* e_diel;
+  // Lengths of the scene arrays SceneData does not count: material-pool entries (material_slots),
+  // program words and constant blocks.
+  uint32_t material_slot_count;
+  uint32_t material_program_words;
+  uint32_t material_constant_count;
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is
