@@ -18,3 +18,4 @@ Budget: B-24 compile row now gated.
 Depends on: 058, 016, 104.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
+- Started: compiler outputs and magenta policy in compiler.cpp; asked lead for scene.h (store member) and report activation order.
