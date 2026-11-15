@@ -176,3 +176,10 @@ add_custom_command(
   COMMENT "astroray_extension: blender extension build"
   VERBATIM)
 add_custom_target(astroray_extension DEPENDS ${ASTRORAY_EXT_ZIP})
+
+# Command-line host: public ABI only, through the DLL import library (0001 D1.4).
+add_executable(astroray_cli cli/main.cpp)
+astroray_target_warnings(astroray_cli)
+target_include_directories(astroray_cli PRIVATE ${CMAKE_SOURCE_DIR}/include ${ASTRORAY_GEN_DIR})
+target_link_libraries(astroray_cli PRIVATE astroray_core)
+add_dependencies(astroray_cli astroray_core)
