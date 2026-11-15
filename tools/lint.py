@@ -287,8 +287,57 @@ def history(c):
                     last = o["date"]
 
 
+# Ref: 0001 D9.1 (closed list of what ships vendored or as a fetched binary).
+D9_1_ALLOWED = {"doctest", "embree", "oidn", "onetbb", "nanovdb", "stb_image", "tinyexr", "mikktspace"}
+DEP_FIELDS = ["name", "version", "url", "sha256", "spdx", "kind", "purpose", "record"]
+DEP_KINDS = {"vendored", "fetched-binary", "fetched-not-redistributable", "tool-python", "tool-binary"}
+
+
+def deps(c):
+    """Ref: tasks/008, 0001 D9.1, D9.6: deps.toml is complete, on the closed list, and renders THIRD_PARTY.md."""
+    import importlib.util
+    import tomllib
+    toml_path = "third_party/deps.toml"
+    if toml_path not in c.files:
+        return
+    try:
+        with open(os.path.join(c.root, toml_path), "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, ValueError) as e:
+        c.find(toml_path, 1, "deps", f"cannot parse: {e}")
+        return
+    names = set()
+    for d in data.get("dep", []):
+        name = d.get("name", "?")
+        names.add(name)
+        for k in DEP_FIELDS:
+            if not isinstance(d.get(k), str) or not d[k].strip():
+                c.find(toml_path, 1, "deps", f"{name}: missing field {k}")
+        if d.get("kind") not in DEP_KINDS:
+            c.find(toml_path, 1, "deps", f"{name}: kind {d.get('kind')!r} is not one of {sorted(DEP_KINDS)}")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(d.get("sha256", ""))):
+            c.find(toml_path, 1, "deps", f"{name}: sha256 is not 64 lowercase hex digits")
+        if d.get("kind") in ("vendored", "fetched-binary") and name not in D9_1_ALLOWED:
+            c.find(toml_path, 1, "deps", f"{name}: not on the 0001 D9.1 closed list")
+    notice = "THIRD_PARTY.md"
+    if notice not in c.files:
+        c.find(toml_path, 1, "deps", f"{notice} is missing: run tools/thirdparty.py")
+    else:
+        spec = importlib.util.spec_from_file_location(
+            "thirdparty", os.path.join(os.path.dirname(os.path.abspath(__file__)), "thirdparty.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        with open(os.path.join(c.root, notice), encoding="utf-8", newline="") as f:
+            if f.read().replace("\r\n", "\n") != mod.render(data):
+                c.find(notice, 1, "deps", "differs from tools/thirdparty.py output: run it")
+    vendored = {p.split("/")[1] for p in c.files if p.startswith("third_party/") and p.count("/") >= 2}
+    for v in sorted(vendored - names):
+        c.find(f"third_party/{v}", 1, "deps", f"{v}: vendored directory has no entry in deps.toml")
+
+
 SECTIONS = {"spdx": spdx, "nvidia": nvidia, "ascii-ps1": ascii_ps1, "caps": caps,
-            "skip": skip, "taskfile": taskfile, "budgets": budgets, "history": history}
+            "skip": skip, "taskfile": taskfile, "budgets": budgets, "history": history,
+            "deps": deps}
 
 
 def run(root, files, sections):

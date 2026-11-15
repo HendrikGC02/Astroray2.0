@@ -1,0 +1,1 @@
+third_party/deps.toml:1: [deps] libfoo: not on the 0001 D9.1 closed list

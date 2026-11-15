@@ -1,0 +1,1 @@
+third_party/libbar:1: [deps] libbar: vendored directory has no entry in deps.toml

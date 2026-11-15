@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every dependency (0001 D9.1-D9.2, D9.6; 0009 d6). tools/fetch.ps1 deps fetches the
+# fetched-* entries into third_party/_cache/<name>-<version>/; tools/thirdparty.py renders
+# THIRD_PARTY.md from this file. kind: vendored | fetched-binary | fetched-not-redistributable
+# | tool-python | tool-binary (the tool-* kinds are fetched only by hosted CI, never shipped).
+# For a vendored entry sha256 is that of the committed file named in `purpose`.
+# `[[borrowed]]` rows (0001 D7.2) are appended by the tasks that borrow code.
+
+[[dep]]
+name = "doctest"
+version = "2.4.12"
+url = "https://github.com/doctest/doctest/releases/download/v2.4.12/doctest.h"
+sha256 = "94029a7d32da24a56249658147dbd2b33ff0b9ed665295cbbaf19aafff5b0ced"
+spdx = "MIT"
+kind = "vendored"
+purpose = "unit test framework, third_party/doctest/doctest.h"
+record = "0009"
+
+[[dep]]
+name = "embree"
+version = "4.4.1"
+url = "https://github.com/HendrikGC02/Astroray2.0/releases/download/deps-embree-4.4.1/embree-4.4.1-astroray-win64-mt.zip"
+sha256 = "d16fe3a147641e22aa0d83e69f9e32e75d23aa87ac8ed6985ef425f24c9f85f8"
+spdx = "Apache-2.0"
+kind = "fetched-binary"
+purpose = "CPU ray traversal; our static build without TBB"
+record = "0001 D9.1, D9.2; 0002 D11"
+
+[[dep]]
+name = "optix-headers"
+version = "9.1.0"
+url = "https://github.com/NVIDIA/optix-dev/archive/f1f6dd803f3159992d248178f6e09421c6eb8b6d.zip"
+sha256 = "2f9699a7bfa4d100b01113245aabdadbdb0f5157e52ce11f0643a5dccd0211a1"
+spdx = "LicenseRef-NVIDIA-OptiX"
+kind = "fetched-not-redistributable"
+purpose = "OptiX headers at build time; NVIDIA/optix-dev tag v9.1.0 = commit f1f6dd803f3159992d248178f6e09421c6eb8b6d"
+record = "0001 D7.4, D9.1; 0002 D11"
+
+[[dep]]
+name = "numpy"
+version = "2.3.4"
+url = "https://files.pythonhosted.org/packages/09/97/fd421e8bc50766665ad35536c2bb4ef916533ba1fdd053a62d96cc7c8b95/numpy-2.3.4-cp313-cp313-win_amd64.whl"
+sha256 = "56209416e81a7893036eea03abcb91c130643eb14233b2515c90dcac963fe99d"
+spdx = "BSD-3-Clause"
+kind = "tool-python"
+purpose = "test tooling on hosted CI (Blender's bundled NumPy is used locally)"
+record = "0009 d2"
+
+[[dep]]
+name = "libfoo"
+version = "1.0"
+url = "https://example.invalid/libfoo.zip"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+spdx = "MIT"
+kind = "vendored"
+purpose = "fake"
+record = "none"
