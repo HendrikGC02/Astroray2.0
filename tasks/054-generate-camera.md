@@ -16,3 +16,8 @@ Budget: two device TUs; declared spills 0, stack <= 128 B.
 Depends on: 052, 053, 048, 024, 029.
 Size: M (about 400 lines plus record text); stop and report at 2x.
 Progress:
+- Active-pixel list: film-owned (host/film/active_pixels), written by film_build_active, read-only for the rest; text in 0008 d3 and 0002 D8.
+- KernelGlobals: active_pixels is now non-const (one writer, film_build_active); camera and filter pointers added after display; SessionUniforms.test_hooks.
+- generate_camera.h stores in groups and skips the time draw without motion: 37 regs, stack 128 B, 0 spills (budget rows measured).
+- Cone spread = atan(film_extent.y / height) (JCGT 2021 pixel angle, shift folded in). ray_type = 0x1 (AR_VISIBILITY_CAMERA).
+- GPU agreement: ray_d, lambda_t, cone max 0 on 10^6 samples; canary needs a CUDA-only breakage for the GPU case.

@@ -1,0 +1,25 @@
+diff --git a/src/kernel/stages/generate_camera.h b/src/kernel/stages/generate_camera.h
+index 574e49a..2f1c261 100644
+--- a/src/kernel/stages/generate_camera.h
++++ b/src/kernel/stages/generate_camera.h
+@@ -88,7 +88,7 @@ AR_FN void stage_generate_camera(const KernelGlobals& kg, uint32_t item, const S
+   // lambda_t = lambda_f at the start of a path (0003 d2); the resolve recomputes lambda_f and pf
+   // from the same key and dimension (film_resolve_pixel).
+   {
+-    const FilmWavelengths fw = sample_film_wavelengths(kg.film->wavelengths, camera_draw(kg, key, DIM_CAM_WAVELENGTH));
++    const FilmWavelengths fw = sample_film_wavelengths(kg.film->wavelengths, camera_draw(kg, key, DIM_CAM_HERO));
+     Spec lambda_t;
+     for (int i = 0; i < kLanes; ++i) lambda_t.v[i] = fw.lf.nm[i];
+     ps_lambda_t(kg, slot) = lambda_t;
+@@ -113,7 +113,11 @@ AR_FN void stage_generate_camera(const KernelGlobals& kg, uint32_t item, const S
+   cs.film = camera_film_position(kg, key);
+   const CameraRay ray = camera_generate_ray(*kg.camera, cs);
+   ps_ray_o(kg, slot) = ray.o;
++#if AR_CUDA_BUILD
++  ps_ray_d(kg, slot) = Real3{ray.d.x + Real(1e-3), ray.d.y, ray.d.z};
++#else
+   ps_ray_d(kg, slot) = ray.d;
++#endif
+   ps_cone(kg, slot) = Real2{Real(0), camera_cone_spread(*kg.camera)};
+ }
+ 
