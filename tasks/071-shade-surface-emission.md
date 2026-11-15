@@ -15,6 +15,6 @@ Acceptance: `pwsh tools/check.ps1 gate` passes; kernelgate prints shade_surface'
 Look at: none.
 Canary: tasks/071.canary.patch must turn red: astroray_tests_cpu "shade_surface/emission added once", astroray_tests_gpu "shade_surface/agreement".
 Budget: declares shade_surface's first spill and stack baseline (VM kernel: <= 128/192 B spills, <= 512 B stack).
-Depends on: 041, 049, 061, 070, 102, 103, 029.
+Depends on: 041, 049, 061, 070, 102, 103, 114, 029.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
