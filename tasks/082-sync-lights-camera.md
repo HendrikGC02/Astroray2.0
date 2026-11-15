@@ -1,7 +1,7 @@
 # 082 Lamp, camera, view and settings sync
 Goal: lamps, camera and render settings do not reach the engine -> point and area lamps, the perspective camera and viewport view, and the M1a render settings are synced with their exact Blender meanings, and engine camera rays match Blender's projection.
 Read first: 0007 d20 (classification order), d49 (view hash), d37 (native properties read directly), docs/decisions/0007-appendix-abi.md (`ar_light_desc`, `ar_spectrum_ref`, `ar_camera_desc`/`ar_view_desc`, `ar_settings`), 0003 d11 (Blender watts pass through, factor 1), d15 (working space refuses other ids), 0007 V18.
-Scope: blender/astroray/sync/lights.py, sync/camera.py, sync/settings.py, blender/astroray/properties.py (`scene.astroray` with only the settings M1a uses), tests/blender/test_camera_ndc.py, tests/blender/headless/test_lights_sync.py.
+Scope: blender/astroray/sync/lights.py, sync/camera.py, sync/settings.py, blender/astroray/properties.py, blender/astroray/__init__.py (register properties only) (`scene.astroray` with only the settings M1a uses), tests/blender/test_camera_ndc.py, tests/blender/headless/test_lights_sync.py.
 Out of scope: spot and sun lamps, light node trees, IES (M4: such a lamp is not rendered and a visible report line names it); the world (083, which owns the graph emitter); thin lens, orthographic and panoramic cameras (reported by the engine as CAMERA_UNSUPPORTED, 053).
 Reference: Cycles `intern/cycles/blender/camera.cpp` and `light.cpp` (Apache-2.0) for Blender's camera and lamp parameter meanings.
 Do:
@@ -13,6 +13,6 @@ Acceptance: the headless and Blender tests pass; `check ci` passes.
 Look at: none.
 Canary: tasks/082.canary.patch must turn red: tests/blender/test_camera_ndc.py "TestCameraNdc.test_shift_x".
 Budget: none.
-Depends on: 081, 068, 053, 071.
+Depends on: 081, 068, 053, 071, 117 (only test_camera_ndc.py).
 Size: M (about 400 lines Python); stop and report at 2x.
 Progress:

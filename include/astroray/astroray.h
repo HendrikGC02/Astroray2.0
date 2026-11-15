@@ -96,6 +96,7 @@ typedef struct ar_edit_s* ar_edit;
 #define AR_REPORT_REGION_DELTA_BLOCKED 41
 #define AR_REPORT_LIGHT_PATH_IN_REGION 42
 #define AR_REPORT_CAMERA_UNSUPPORTED 43
+#define AR_REPORT_PASS_UNSUPPORTED 44
 
 /* Session mode, state and display mode (0007 decisions 5, 28, 40). */
 #define AR_SESSION_MODE_VIEWPORT 0

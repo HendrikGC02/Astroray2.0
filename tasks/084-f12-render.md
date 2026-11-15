@@ -11,11 +11,11 @@ Do:
 4. One .blend writer for every builder: scenes/lib/ar.py also writes a JSON description of what it recorded (meshes, constant Principled inputs, lamps, world colour, camera, settings), and scenes/lib/blend_writer.py, run inside headless Blender through Invoke-ArBlender, builds the .blend from it; a1_furnace gains `--blend <path>` (Principled with Specular IOR Level 0 and Roughness 0 on a UV sphere; world Background colour), so the addon and the builder describe one scene.
 5. smoke_a1.py (Invoke-ArBlender): installs the staged zip, opens the .blend, renders 64x64 at the analytic harness's spp with the addon on the CPU device, saves the Combined pass as a FITS-compatible float dump the harness reads, and passes A1's truth; the addon's recording and the builder's recording are both rendered with `astroray_cli dump` on CPU at a fixed seed, and tools/exporter_equivalence.py compares the deterministic AOVs (position, normal, material id, UV) within float tolerance (0009 d17a exporter equivalence, done through film output because R59 forbids a scene-state dump).
 6. check.ps1 `gate` adds the smoke after the GPU tests (one Blender start; time reported against B-09).
-7. From 071: sessions never request the primary AOVs (FilmRequest::primary_aov), so IndexMA, Position, Normal and UV never reach readback from a session; the F12 render requests the AOV passes the view layer enables and passes them to the film request.
+7. The F12 render puts the AOV passes the view layer enables into `ar_settings.passes`; task 117 makes the session film allocate them.
 Acceptance: `pwsh tools/check.ps1 gate` passes with the smoke; pressing F12 on the A1 .blend in an interactive Blender shows the furnace image (the lead's look).
 Look at: out/evidence/084/a1_f12.png (Blender's render result saved as PNG).
 Canary: tasks/084.canary.patch must turn red: tests/blender/smoke_a1.py "TestSmoke.test_a1_analytic", `tools/exporter_equivalence.py` (the patch drops corner normals in mesh sync).
 Budget: gate time grows by one Blender start plus the render; report it (0009 Risks: Blender start-up per process).
-Depends on: 083, 104, 073, 070.
+Depends on: 083, 104, 073, 070, 117.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:

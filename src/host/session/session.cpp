@@ -40,6 +40,34 @@ bool terminal(uint32_t state) {
   return state == AR_STATE_CONVERGED || state == AR_STATE_CLOSED || state == AR_STATE_FAILED;
 }
 
+// The film request of the settings `s` (null: none committed yet). Pass names are matched against
+// what list_passes enumerates for a film with every channel this build can produce, so readback's
+// table stays the one mapping from names to channels (0008 d10, d13a). A name outside that list is
+// appended to `unknown`. Combined and the statistics are always on (0008 d12).
+FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, std::vector<std::string>* unknown) {
+  FilmRequest req;
+  req.max_width = o.max_width;
+  req.max_height = o.max_height;
+  req.statistics = true;  // 0008 d12: on by default; the bounce heat map reads it
+  if (!s || s->passes.empty()) return req;
+  FilmRequest all = req;
+  all.primary_aov = true;
+  const std::vector<PassDesc> produced = list_passes(FilmLayout::build(all));
+  for (const ar_name& n : s->passes) {
+    const char* text = reinterpret_cast<const char*>(n.text);
+    const std::string name(text, std::find(text, text + sizeof n.text, '\0'));
+    const auto it = std::find_if(produced.begin(), produced.end(), [&](const PassDesc& p) { return p.name == name; });
+    if (it == produced.end()) unknown->push_back(name);
+    else if (it->source == PassSource::Aov) req.primary_aov = true;
+  }
+  return req;
+}
+
+bool same_channels(const FilmLayout& a, const FilmLayout& b) {
+  return std::equal(a.channels().begin(), a.channels().end(), b.channels().begin(), b.channels().end(),
+                    [](const FilmChannel& x, const FilmChannel& y) { return x.name == y.name; });
+}
+
 }  // namespace
 
 Session::Session(Scene& scene, Device& device, const SessionOptions& options)
@@ -50,11 +78,10 @@ Session::Session(Scene& scene, Device& device, const SessionOptions& options)
   if (options.denoiser > AR_DENOISER_DLSS_RR) throw std::invalid_argument("session: unknown denoiser");
   if (options.denoiser != AR_DENOISER_NONE)
     throw SessionUnsupported("session: denoisers are not supported in this build yet");
-  FilmRequest req;
-  req.max_width = options.max_width;
-  req.max_height = options.max_height;
-  req.statistics = true;  // 0008 d12: on by default; the bounce heat map reads it
-  layout_ = FilmLayout::build(req);
+  // What the settings committed so far request; the render thread rebuilds it from the settings it
+  // latches (sync_film), which also reports names it cannot produce.
+  std::vector<std::string> unknown;
+  layout_ = FilmLayout::build(film_request(options, scene.settings().get(), &unknown));
   render_size_ = uint64_t(options.max_width) << 32 | options.max_height;
   hooks_ = read_test_hooks();
   SchedulerConfig cfg;
@@ -350,7 +377,13 @@ FitsProvenance Session::fits_provenance_locked() const {
 void Session::read_film(const std::function<void(const FilmReadContext&)>& fn) const {
   std::lock_guard<std::mutex> render(render_mutex_);
   if (!film_) throw std::invalid_argument("the session has no film (still initializing, or closed)");
-  fn(FilmReadContext{device_, *film_, fits_provenance_locked()});
+  uint64_t revision;
+  {
+    // film_ and the revision are published together under both locks (sync_film).
+    std::lock_guard<std::mutex> lock(mutex_);
+    revision = pass_revision_;
+  }
+  fn(FilmReadContext{device_, *film_, fits_provenance_locked(), revision});
 }
 
 std::optional<DisplayFrame> Session::display_acquire(uint64_t after_frame) {
@@ -433,12 +466,10 @@ void Session::allocate() {
     ctx_.log.line("INFO", line);
   }
 #endif
-  auto film = std::make_unique<Film>(device_, layout_, options_.owner);
-  session_tables_ = upload_session_tables(device_, options_.owner, response_, wavelengths_, film->data());
   {
     // Published under the render lock so a readback on another thread sees a whole film.
     std::lock_guard<std::mutex> render(render_mutex_);
-    film_ = std::move(film);
+    sync_film();
     static const char* hex = "0123456789abcdef";
     observer_hash_.clear();
     for (uint8_t b : obs.observer_hash) observer_hash_ += {hex[b >> 4], hex[b & 15]};
@@ -453,6 +484,33 @@ void Session::allocate() {
   auto ring = std::make_unique<DisplayRing>(frame_bytes);
   std::lock_guard<std::mutex> lock(ring_mutex_);
   ring_ = std::move(ring);
+}
+
+void Session::sync_film() {
+  // Called with render_mutex_ held, before the first pass and at every epoch start: the settings
+  // only change with an activated commit, and every one starts an epoch (0007 d25).
+  const auto s = scene_.settings();
+  if (film_ && s == film_settings_) return;
+  // Held, not just compared: a new settings object can then never reuse the old one's address.
+  film_settings_ = s;
+  std::vector<std::string> unknown;
+  const FilmLayout layout = FilmLayout::build(film_request(options_, s.get(), &unknown));
+  // Ruling 74: one entry per name and settings change, detail = the pass name; the render goes on
+  // without the pass.
+  for (const std::string& name : unknown) {
+    const double value[2] = {0.0, 0.0};
+    report_.raise(AR_REPORT_PASS_UNSUPPORTED, 0, name, 1, value, latch_.generation());
+  }
+  if (film_ && same_channels(layout, film_->layout())) return;
+  auto film = std::make_unique<Film>(device_, layout, options_.owner);
+  // The response and wavelength views live in the film's FilmData; bind_globals uploads the new
+  // film's address before the next launch.
+  SessionTables tables = upload_session_tables(device_, options_.owner, response_, wavelengths_, film->data());
+  film_ = std::move(film);
+  session_tables_ = std::move(tables);
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!same_channels(layout, layout_)) ++pass_revision_;
+  layout_ = layout;
 }
 
 void Session::release() {
@@ -476,6 +534,7 @@ void Session::release() {
   // The ring stays until the session is destroyed: a frame the host acquired remains readable
   // after CLOSED and is released then (display_release), so no thread reads freed memory.
   film_.reset();
+  film_settings_.reset();
   tables_.reset();  // the pin: the set's copies go when no session holds them (RULINGS 70)
   session_tables_ = SessionTables{};
   active_.reset();
@@ -773,6 +832,7 @@ void Session::render_loop() {
       // epoch's samples never mix two values (0003 d10). The set and its light table come from one
       // snapshot, so s and the lights it was folded into agree.
       if (!retried) latch_tables();
+      sync_film();  // a changed pass request rebuilds the film here, before the reset
       begin_epoch();
       const LightTable* lt = tables_ ? tables_->lights.get() : nullptr;
       film_->data().inv_radiance_scale = lt ? 1.0 / lt->radiance_scale : 1.0;

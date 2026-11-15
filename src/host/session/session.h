@@ -86,6 +86,7 @@ struct FilmReadContext {
   Device& device;
   const Film& film;
   FitsProvenance provenance;
+  uint64_t pass_revision = 0;  // of film's layout (ruling 75)
 };
 
 struct SessionStats {
@@ -134,8 +135,15 @@ class Session {
   void scene_generation_activated();
 
   SessionProgress progress() const;
-  // The pass list's layout: built at construction, so it is valid in INITIALIZING.
-  const FilmLayout& layout() const { return layout_; }
+  // The pass list's layout, a copy: built at construction from the settings committed by then, so
+  // it is valid in INITIALIZING, and replaced when the render thread rebuilds the film for a
+  // changed pass request (0008 d13a: readback enumerates what the layout allocated). `revision`
+  // receives the pass-list revision of that layout (ruling 75).
+  FilmLayout layout(uint64_t* revision = nullptr) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (revision) *revision = pass_revision_;
+    return layout_;
+  }
   // The render sub-rectangle as of the last pass boundary (the maximum size before any).
   void render_size(uint32_t* width, uint32_t* height) const;
   // Runs `fn` with the film under the render lock, so it sees a state between two passes. It
@@ -176,6 +184,9 @@ class Session {
   void throw_if_failed_locked(const char* what) const;
   void allocate();
   void release();
+  // Builds the film from the scene's settings when they changed since the film was built and the
+  // pass request differs, and reports requested passes this build cannot produce.
+  void sync_film();
   void begin_epoch();
   void apply_view();
   bool converged_locked() const;
@@ -201,7 +212,9 @@ class Session {
   SessionOptions options_;
   Report report_;
   Latch latch_;
-  FilmLayout layout_;  // built once at construction from the film request
+  FilmLayout layout_;  // film_'s layout (from the settings at construction until the first film); under mutex_
+  // Ruling 75: counts layouts whose channel list differs from the last published one; under mutex_.
+  uint64_t pass_revision_ = 0;
 
   // Render-thread objects. scheduler_ is created with the session (it allocates nothing until
   // its first pass with work) and freed by the render thread at exit; the API thread touches
@@ -210,6 +223,7 @@ class Session {
   ResponseTable response_;
   WavelengthTable wavelengths_;
   std::unique_ptr<Film> film_;
+  std::shared_ptr<const StoredSettings> film_settings_;  // the settings film_ was last checked against
   // The scene table set the session renders, pinned until the next set (RULINGS 70). It holds the
   // light table of its snapshot (null for a scene without material and mesh stores), and
   // inv_radiance_scale = 1 / s follows it: after a failed upload the session keeps its previous
@@ -285,6 +299,9 @@ struct ar_session_s {
   std::string last_error;
   ar_recorder* recorder = nullptr;  // cached at create: the scene may be destroyed after CLOSED
   bool closed = false;  // after ar_session_close only wait, progress and destroy are accepted
+  // The pass-list revision ar_session_pass_count last reported; pass_info and read_pass refuse
+  // another (ruling 75).
+  std::atomic<uint64_t> pass_revision{0};
   std::shared_ptr<astroray::host::Device> device;
   std::unique_ptr<astroray::host::Session> session;
 };
