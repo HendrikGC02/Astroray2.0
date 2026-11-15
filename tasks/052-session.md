@@ -1,7 +1,7 @@
 # 052 Sessions: render thread, pass loop, generation latch and epochs
 Goal: scenes cannot be rendered -> `ar_session_create` starts a session whose render thread runs passes (scheduler, resolve, present), latches pending views and finished commits into generations at pass boundaries, starts epochs on image-affecting changes and cancels between launches.
 Read first: 0007 d5 (session functions), d23 (threads), d25 (generations coalesced at pass boundaries, interrupt rule), d27 (cancellation), 0004 D25 (epoch reset rules); docs/decisions/0007-appendix-abi.md (`ar_session_desc`).
-Scope: src/host/session/session.{h,cpp}, src/host/session/latch.{h,cpp}, src/capi/session_api.cpp, src/capi/unimplemented.cpp, tests/cpu/test_session.cpp, tests/abi/test_session_lifecycle.py.
+Scope: src/host/session/session.{h,cpp}, src/host/session/latch.{h,cpp}, src/capi/session_api.cpp, src/capi/unimplemented.cpp, tests/cpu/test_session.cpp, tests/abi/test_session_lifecycle.py; added by the lead: src/device/cpu/cpu_device.cpp (film kernel registration) and cpu_device.h (comment only); CMakeLists.txt and cmake/kernels.cmake (the DLL never linked astroray_kernels_cpu: the guarded link ran before astroray_engine existed); src/capi/context.cpp (context_device_of_state, so session create can refuse CUDA); src/host/scene/generation.{h,cpp} (activation listeners: an idle session wakes on a commit and a commit can interrupt a presented pass, d25); include lines only of src/kernel/core/packet.h, src/kernel/sample/{dims,sobol,hash}.h (relative nested includes so host code can include film/resolve.h and sample/sobol.h).
 Out of scope: progress, report polling, display acquire, pass readback, counters and FITS (104); progressive batching (086); resolution controller and OIDN (M2); camera ray generation and the active-pixel list (054, 101: until then a session renders zero work and resolves empty passes).
 Reference: none.
 Do:
@@ -18,3 +18,7 @@ Budget: host only.
 Depends on: 045, 047, 051, 032, 033.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
+- Size accepted by the lead as one task (diff about 4x the M estimate: render-thread state machine, latch, C API, tests).
+- Rulings applied: 69 (latched views keep the active generation), get_progress minimal (state, generations, epoch), CUDA sessions refused, every activated commit starts an epoch.
+- Departures accepted: pools allocate at the first pass with work (045 rule); ring slots are host memory, not ledgered; render scale != 1, borders and denoisers refused; cancel parks in PAUSED.
+- Canary: tasks/052.canary.patch (interrupt before present, no film clear) turns both named cases red.
