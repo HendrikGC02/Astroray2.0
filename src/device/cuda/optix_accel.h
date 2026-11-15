@@ -39,8 +39,9 @@ struct OptixGas {
   std::shared_ptr<const MeshRecord> record;
 };
 
-// One built instance structure and the geometry structures it instances. `handle` is 0 only for a
-// TLAS built without instances when OptiX has no empty structure to give.
+// One built instance structure and the geometry structures it instances. A TLAS built without
+// instances is a valid non-zero traversable that traces to a miss (scene_accel_gpu/empty scene), so
+// a handle of 0 never occurs and is never accepted as SceneData::accel.
 struct OptixTlas {
   ~OptixTlas();
   Device* device = nullptr;

@@ -51,7 +51,7 @@ struct Rig {
   ContextState ctx;
   std::shared_ptr<Held> held = std::make_shared<Held>();
   std::unique_ptr<Scene> scene;
-  explicit Rig(bool cuda) {
+  explicit Rig(bool cuda, bool populate = true) {
     SceneConfig cfg;
     cfg.workers = 2;
     if (cuda) {
@@ -67,7 +67,7 @@ struct Rig {
     scene = std::make_unique<Scene>(ctx, std::move(cfg));
     scene->meshes = std::make_shared<MeshStore>();
     scene->materials = std::make_shared<MaterialStore>(scene->meshes->shared_ledger());
-    build();
+    if (populate) build();
   }
   template <class F>
   void commit(F&& body) {
@@ -253,6 +253,16 @@ TEST_CASE("scene_accel_gpu/matches cpu") {
   CHECK(std::fabs(g[0].t - 10.0f) < 1e-4f);
   CHECK(std::fabs(g[1].t - 7.0f) < 1e-4f);
   CHECK(std::fabs(g[2].t - 9.0f) < 1e-4f);
+}
+
+TEST_CASE("scene_accel_gpu/empty scene") {
+  Rig r(true, false);
+  const auto set = acquire_scene_tables(*r.scene);
+  REQUIRE(set->accel);
+  const auto missing = missing_pointers(build_kernel_globals(set.get(), KgSession{}), *set, false);
+  REQUIRE(std::find(missing.begin(), missing.end(), "scene.accel") == missing.end());
+  const auto h = trace_cuda(r, *set, {{0.5f, 0.5f}});
+  CHECK(h[0].inst == ar::kNoInstance);
 }
 
 TEST_CASE("scene_accel_gpu/ledger and reuse") {

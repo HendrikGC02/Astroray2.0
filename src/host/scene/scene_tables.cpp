@@ -267,13 +267,15 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
       p->mesh_records == n.mesh_records) {
     n.accel = p->accel;
   } else {
+    // A missing builder is a configuration error and must not turn into a retryable failure.
+    AccelBuilder& builder = scene.accel_builder();
     try {
       AccelInput in;
       in.instances = instances.get();
       in.lights = lt_records;
       in.host_ledger = t.host_ledger;
       for (const auto& kv : n.mesh_records) in.meshes[kv.first] = AccelMesh{kv.second, n.meshes.at(kv.first)};
-      n.accel = scene.accel_builder().build(in, p ? p->accel.get() : nullptr);
+      n.accel = builder.build(in, p ? p->accel.get() : nullptr);
     } catch (...) {
       rethrow_upload("building the traversal structures", n.generation);
     }

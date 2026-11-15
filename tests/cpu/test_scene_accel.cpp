@@ -30,6 +30,7 @@
 #include "host/session/kg_builder.h"
 #include "host/thread_pool.h"
 #include "stages/route_hit.h"
+#include "vm/ops.h"
 
 using namespace astroray;
 using namespace astroray::host;
@@ -91,6 +92,32 @@ struct Rig {
       REQUIRE(e.item_commit(kQuad) == AR_OK);
     });
     place_quad(0.0f);
+  }
+  // Material `key` with a constant Emission graph (graph key = key + 1000).
+  void material(ar_key key, float strength) {
+    std::vector<ar_graph_node> nodes;
+    std::vector<ar_graph_link> links;
+    std::vector<float> f;
+    const auto add = [&](ar::Op op, std::vector<float> fp) {
+      ar_graph_node n = {};
+      n.op = uint32_t(op), n.f32_first = uint32_t(f.size()), n.f32_count = uint32_t(fp.size());
+      f.insert(f.end(), fp.begin(), fp.end());
+      nodes.push_back(n);
+      return uint32_t(nodes.size()) - 1;
+    };
+    const uint32_t c = add(ar::Op::CONST_F32X3, {1.0f, 0.5f, 0.25f}), s = add(ar::Op::CONST_F32, {strength});
+    const uint32_t e = add(ar::Op::EMIT_LE, {});
+    links.push_back({c, 0u, e, 0u});
+    links.push_back({s, 0u, e, 1u});
+    ar_graph_desc d = {};
+    d.node_count = uint32_t(nodes.size()), d.link_count = uint32_t(links.size()), d.f32_count = uint32_t(f.size());
+    d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data();
+    commit([&](Edit& ed) {
+      REQUIRE(scene.materials->set_graph(ed, key + 1000, &d) == AR_OK);
+      ar_material_desc m = {};
+      m.surface_graph = key + 1000;
+      REQUIRE(scene.materials->set_material(ed, key, &m) == AR_OK);
+    });
   }
   // The quad's one instance, its object translated by `x` along x.
   void place_quad(float x) {
@@ -211,6 +238,38 @@ TEST_CASE("scene_accel/transform edit rebuilds only the instance structure") {
   const auto third = acquire_scene_tables(r.scene);
   CHECK((third == second));
   CHECK(builder.counters().tlas_builds == b.tlas_builds);
+}
+
+// A material-only edit changes the set but not the geometry, so the structure is the same object;
+// editing a lamp changes the TLAS (the lamp's placement) and nothing else.
+TEST_CASE("scene_accel/whole structure reuse and lamp edit") {
+  Rig r;
+  r.build();
+  AccelBuilder& builder = r.scene.accel_builder();
+  const auto first = acquire_scene_tables(r.scene);
+  const AccelCounters a = builder.counters();
+  const std::vector<std::pair<float, float>> probe{{5.2f, 0.3f}};
+  CHECK(std::fabs(trace(*first, probe)[0].t - 7.0f) < 1e-5f);
+
+  r.material(43, 0.5f);  // referenced by no instance
+  const auto second = acquire_scene_tables(r.scene);
+  REQUIRE((second != first));
+  CHECK((second->accel == first->accel));
+  CHECK(builder.counters().tlas_builds == a.tlas_builds);
+  CHECK(builder.counters().gas_builds == a.gas_builds);
+
+  // The rectangle lamp moves to z = 4 and grows to 4 x 4: the probe now hits at t = 6.
+  r.commit([&](Edit& e) {
+    ar_light_desc rect = Rig::lamp(AR_LIGHT_AREA_RECT, 5, 0, 4, 4, 4);
+    REQUIRE(set_light(e, kRectLamp, &rect, r.scene.materials->table()) == AR_OK);
+  });
+  const auto third = acquire_scene_tables(r.scene);
+  CHECK((third->accel != second->accel));
+  const AccelCounters b = builder.counters();
+  CHECK(b.tlas_builds == a.tlas_builds + 1u);
+  CHECK(b.gas_builds == a.gas_builds);
+  CHECK(std::fabs(trace(*third, probe)[0].t - 6.0f) < 1e-5f);
+  CHECK(std::fabs(trace(*second, probe)[0].t - 7.0f) < 1e-5f);  // the pinned older set is unchanged
 }
 
 TEST_CASE("scene_accel/empty scene has a valid structure") {

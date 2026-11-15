@@ -260,13 +260,21 @@ void EmbreeScene::init(EmbreeDevice& device, const InstanceTable& table, const s
   const auto t0 = std::chrono::steady_clock::now();
   Impl& s = *impl_;
   RTCDevice dev = device.impl_->dev;
-  const int64_t before = device.impl_->bytes.load();
-  // Everything this build creates, so it can carry the build's one ledger record.
-  std::vector<std::shared_ptr<Shared>> fresh;
-  const auto adopt = [&](RTCScene scene, std::shared_ptr<const MeshRecord> rec) {
+  // Each structure is charged to the ledger on its own, by Embree's memory monitor over the call
+  // that builds it, and released with its last holder. The monitor counts the whole device, which
+  // belongs to this one scene and is only built on under the scene's table lock, so a serial
+  // build sees nothing but its own allocations. Triangle scenes built on a pool run together and
+  // are charged as one batch record that their last holder releases.
+  const auto device_bytes = [&] { return device.impl_->bytes.load(); };
+  uint64_t charged = 0;
+  const auto charge_of = [&](int64_t used_bytes) -> std::shared_ptr<Charge> {
+    if (used_bytes <= 0) return nullptr;
+    charged += uint64_t(used_bytes);
+    return std::make_shared<Charge>(ledger, uint64_t(used_bytes));
+  };
+  const auto adopt = [&](RTCScene scene, std::shared_ptr<const MeshRecord> rec, std::shared_ptr<Charge> charge) {
     auto sh = std::make_shared<Shared>();
-    sh->scene = scene, sh->record = std::move(rec), sh->keep = s.keep;
-    fresh.push_back(sh);
+    sh->scene = scene, sh->record = std::move(rec), sh->keep = s.keep, sh->charge = std::move(charge);
     ++gas_built;
     return sh;
   };
@@ -323,20 +331,33 @@ void EmbreeScene::init(EmbreeDevice& device, const InstanceTable& table, const s
     built[j] = build_gas(dev, *todo[j].second);
     check(dev, "triangle scene");
   };
+  std::vector<std::shared_ptr<Charge>> gas_charge(todo.size());
   try {
     if (pool && todo.size() > 1) {
+      const int64_t m0 = device_bytes();
       pool->parallel_for(uint32_t(todo.size()), 1, [&](uint32_t first, uint32_t last) {
         for (uint32_t j = first; j < last; ++j) build_one(j);
       });
+      const auto batch = charge_of(device_bytes() - m0);
+      for (auto& c : gas_charge) c = batch;
     } else {
-      for (uint32_t j = 0; j < todo.size(); ++j) build_one(j);
+      for (uint32_t j = 0; j < todo.size(); ++j) {
+        const int64_t m0 = device_bytes();
+        build_one(j);
+        gas_charge[j] = charge_of(device_bytes() - m0);
+      }
     }
   } catch (...) {
     for (RTCScene b : built)
       if (b) rtcReleaseScene(b);
     throw;
   }
-  for (size_t j = 0; j < todo.size(); ++j) s.gas.emplace(todo[j].first, adopt(built[j], todo[j].second));
+  for (size_t j = 0; j < todo.size(); ++j) s.gas.emplace(todo[j].first, adopt(built[j], todo[j].second, gas_charge[j]));
+
+  // The instance scene's own memory: its geometries and tree, measured around its construction
+  // with the lamp scenes (charged separately inside) taken out.
+  const int64_t top_m0 = device_bytes();
+  int64_t lamp_bytes = 0;
 
   // The instance scene: transform and mask per instance, instance id = table index.
   s.top = rtcNewScene(dev);
@@ -353,8 +374,11 @@ void EmbreeScene::init(EmbreeDevice& device, const InstanceTable& table, const s
         ++gas_reused;
       }
       if (!ls) {
+        const int64_t m0 = device_bytes();
         RTCScene scene = build_lamp_scene(dev, shape[i]);
-        ls = adopt(scene, nullptr);
+        const int64_t used = device_bytes() - m0;
+        lamp_bytes += used;
+        ls = adopt(scene, nullptr, charge_of(used));
         check(dev, "lamp scene");
       }
       inner = ls->scene;
@@ -376,12 +400,8 @@ void EmbreeScene::init(EmbreeDevice& device, const InstanceTable& table, const s
   check(dev, "instance scene");
   s.instances = uint32_t(table.instances.size());
 
-  const int64_t used = device.impl_->bytes.load() - before;
-  if (used > 0) {
-    s.bytes = uint64_t(used);
-    s.charge = std::make_shared<Charge>(ledger, s.bytes);
-    for (auto& f : fresh) f->charge = s.charge;
-  }
+  s.charge = charge_of(device_bytes() - top_m0 - lamp_bytes);
+  s.bytes = charged;
   build_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
