@@ -93,6 +93,7 @@ struct Rig {
     ar::sample_set_flags(kg, slot, flags);
   }
   void resolve() {
+    film->check_resolve_fits(kg.session.samples_per_pass);
     cpu_film_resolve(kg, 0, ar::film_resolve_count(kg));
     kg.session.samples_done += kg.session.samples_per_pass;
     kg.session.pass_index += 1;
@@ -339,6 +340,111 @@ TEST_CASE("film_resolve/cpu single thread twice bit-identical") {
   }
   REQUIRE(dumps[0].size() == dumps[1].size());
   CHECK(std::memcmp(dumps[0].data(), dumps[1].data(), dumps[0].size()) == 0);
+}
+
+TEST_CASE("film_resolve/radiance scale divides camera and splat") {
+  // s = 4 (0003 d10): the host folded s into every emitter, so camera samples and light-tracing
+  // splats both come back divided by it, in every moment plane.
+  FilmRequest r;
+  r.max_width = 2, r.max_height = 1;
+  r.light_pass = true;
+  r.adaptive_sampling = true;
+  Rig rig(r);
+  rig.data().inv_radiance_scale = 0.25;
+  rig.begin_pass(1);
+  rig.add(0, 0, lanes(2.0f));
+  rig.add(1, 0, lanes(0.0f));
+  ar::film_splat_add(rig.kg, 0, ar::Real3{1.0f, 1.0f, 1.0f});
+  ar::film_splat_add(rig.kg, 1, ar::Real3{2.0f, 4.0f, 8.0f});
+  rig.resolve();
+  const ar::FilmData& d = rig.data();
+  CHECK(d.s1[0] == 0.5 + 0.25);
+  CHECK(d.s2[0] == 0.25 + 0.0625);
+  CHECK(d.s1a[0] == 0.5 + 0.25);  // sample index 0 and pass 0 are both even
+  CHECK(d.s1[1] == 0.5);
+  CHECK(d.s1[d.plane_stride + 1] == 1.0);
+  CHECK(d.s1[2 * d.plane_stride + 1] == 2.0);
+  CHECK(d.s2[2 * d.plane_stride + 1] == 4.0);
+}
+
+TEST_CASE("film_resolve/bad splat dropped and counted") {
+  FilmRequest r;
+  r.max_width = 4, r.max_height = 1;
+  r.light_pass = true;
+  Rig rig(r);
+  rig.begin_pass(1);
+  for (uint32_t j = 0; j < 4; ++j) rig.add(j, 0, lanes(0.0f));
+  ar::film_splat_add(rig.kg, 0, ar::Real3{1.0f, kNaN, 1.0f});
+  ar::film_splat_add(rig.kg, 1, ar::Real3{1.0f, 1.0f, -0.5f});
+  ar::film_splat_add(rig.kg, 2, ar::Real3{kInf, 1.0f, 1.0f});
+  ar::film_splat_add(rig.kg, 3, ar::Real3{0.5f, 0.25f, 0.125f});
+  rig.resolve();
+  const ar::FilmData& d = rig.data();
+  for (uint32_t j = 0; j < 3; ++j) {
+    INFO("pixel " << j);
+    CHECK(d.invalid[j] == 1u);
+    for (uint32_t q = 0; q < 3; ++q) {
+      CHECK(d.s1[q * d.plane_stride + j] == 0.0);
+      CHECK(d.s2[q * d.plane_stride + j] == 0.0);
+    }
+  }
+  CHECK(d.invalid[3] == 0u);
+  CHECK(d.s1[3] == 0.5);
+  CHECK(d.s1[d.plane_stride + 3] == 0.25);
+  // The whole plane is clear, the dropped entries included.
+  for (uint32_t i = 0; i < 3 * 4; ++i) CHECK(d.splat[i] == 0.0f);
+}
+
+TEST_CASE("film_resolve/rows are bottom first and the render rectangle is a view") {
+  // 4x3 allocation, 3x2 rectangle: pixel (x, y) of the rectangle is plane index y * 4 + x, row 0
+  // (the first plane row) is the bottom row of the image (0008 d1). Distinct value per pixel.
+  FilmRequest r;
+  r.max_width = 4, r.max_height = 3;
+  Rig rig(r);
+  rig.film->set_render_size(3, 2);
+  rig.begin_pass(1);
+  for (uint32_t y = 0; y < 2; ++y)
+    for (uint32_t x = 0; x < 3; ++x) rig.add(y * 3 + x, 0, lanes(1.0f + float(x) + 10.0f * float(y)));
+  rig.resolve();
+  const ar::FilmData& d = rig.data();
+  for (uint32_t y = 0; y < 3; ++y)
+    for (uint32_t x = 0; x < 4; ++x) {
+      INFO("x " << x << " y " << y);
+      const bool inside = x < 3 && y < 2;
+      CHECK(d.s1[y * 4 + x] == (inside ? 1.0 + x + 10.0 * y : 0.0));
+      CHECK(d.n[y * 4 + x] == (inside ? 1u : 0u));
+    }
+  // The pass would overflow the slots by one sample per pixel.
+  CHECK_THROWS_AS(rig.film->check_resolve_fits(rig.film->data().slot_capacity / 6 + 1), std::length_error);
+  CHECK_NOTHROW(rig.film->check_resolve_fits(2));
+}
+
+TEST_CASE("film_resolve/sub rectangle uses the allocated width in the sample key") {
+  // The camera keys a pixel with pixel_id at the allocated size (sample/keys.h), so the resolve
+  // must recompute the same wavelengths: expected values below use that id, with wavelengths
+  // that differ per pixel, and a rectangle narrower than the allocation.
+  FilmRequest r;
+  r.max_width = 4, r.max_height = 3;
+  r.slot_capacity = 6;
+  r.extra = {{"band", ChannelKind::Moment, 1, 3}};
+  Rig rig(r, false);
+  rig.film->set_render_size(3, 2);
+  rig.begin_pass(1);
+  rig.kg.session.samples_done = 5;  // an arbitrary sample index
+  ar::Spec L;
+  for (int i = 0; i < 4; ++i) L.v[i] = 0.5f + 0.25f * float(i);
+  for (uint32_t j = 0; j < 6; ++j) rig.add(j, 0, L);
+  rig.resolve();
+  const ar::FilmData& d = rig.data();
+  const ar::WavelengthTableView wt = d.wavelengths;
+  for (uint32_t y = 0; y < 2; ++y)
+    for (uint32_t x = 0; x < 3; ++x) {
+      const ar::Real u = ar::draw(ar::SAMPLER_SOBOL, ar::pixel_id(x, y, 4), 5u, 0u, ar::DIM_CAM_WAVELENGTH, 7u);
+      const ar::FilmWavelengths fw = ar::sample_film_wavelengths(wt, u);
+      const double expected = ar::convert(d.response, L, fw.lf, ar::film_weights(0u, fw.pf), 3);
+      INFO("x " << x << " y " << y);
+      CHECK(std::fabs(d.s1[3 * d.plane_stride + y * 4 + x] - expected) <= 1e-12 * std::fabs(expected));
+    }
 }
 
 }  // TEST_SUITE

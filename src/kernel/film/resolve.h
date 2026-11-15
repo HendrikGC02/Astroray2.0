@@ -3,7 +3,8 @@
 // fp64 moments with plain read-add-write (one writer per pixel, no atomics), then clears them.
 //   per valid sample m of pixel j: x_c = convert(...) / s;  S1 += x;  S2 += x^2;
 //   S1A += x when the sample index n + m is even;  n += 1
-// An invalid sample (NaN, Inf, any negative lane) is counted and skipped. Until the pass has
+// Invalidity is value-based (0008 d6; no flag bit): a sample with a NaN, Inf or negative lane is
+// counted and skipped. Until the pass has
 // an active-pixel list (task 101), active pixel j is pixel j of the render sub-rectangle.
 // Ref: docs/decisions/0008-film-outputs-denoise.md d3 (Resolve), d4 (SPLAT fold), d6 (invalid
 // samples), d7 (conversion); 0003 d2 and d23 (wavelengths recomputed from the camera key),
@@ -22,12 +23,12 @@ AR_NS_BEGIN
 // float::max as a literal, so the kernel needs no <cfloat>.
 inline constexpr float kFilmFloatMax = 3.402823466e38f;
 
+// Negated comparisons are false for NaN, so NaN, negatives and +Inf all fail.
+AR_FN bool film_value_valid(float v) { return v >= 0.0f && v <= kFilmFloatMax; }
+
 AR_FN bool film_sample_valid(const Spec& L) {
-  for (int i = 0; i < kLanes; ++i) {
-    const float v = float(L.v[i]);
-    // Negated comparisons are false for NaN, so NaN, negatives and +Inf all fail.
-    if (!(v >= 0.0f && v <= kFilmFloatMax)) return false;
-  }
+  for (int i = 0; i < kLanes; ++i)
+    if (!film_value_valid(float(L.v[i]))) return false;
   return true;
 }
 
@@ -83,17 +84,24 @@ AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
   }
 
   // The light image is one independent estimate per pass: it adds to S1, S2 and, on even
-  // passes, S1A of the display channel, and does not count as a camera sample.
+  // passes, S1A of the display channel, and does not count as a camera sample. Splats are
+  // checked like camera samples (0008 d6): one bad component drops the pixel's whole entry and
+  // counts it. Light emitters carry s in their strength (0003 d10), so 1/s applies here too, in
+  // film_moment_add.
   if (f.splat != nullptr) {
     const bool even = (kg.session.pass_index & 1u) == 0u;
-    for (uint32_t q = 0; q < f.splat_components; ++q) {
-      const uint64_t from = uint64_t(q) * f.plane_stride + pixel;
-      const double v = double(f.splat[from]);
-      f.splat[from] = 0.0f;
-      const uint64_t at = uint64_t(f.moment[0].offset + q) * f.plane_stride + pixel;
-      f.s1[at] += v;
-      f.s2[at] += v * v;
-      if (f.s1a != nullptr && even) f.s1a[at] += v;
+    const float r = f.splat[pixel];
+    const float g = f.splat[f.plane_stride + pixel];
+    const float b = f.splat[2ull * f.plane_stride + pixel];
+    f.splat[pixel] = 0.0f;
+    f.splat[f.plane_stride + pixel] = 0.0f;
+    f.splat[2ull * f.plane_stride + pixel] = 0.0f;
+    if (film_value_valid(r) && film_value_valid(g) && film_value_valid(b)) {
+      film_moment_add(f, f.moment[0].offset, pixel, double(r), even);
+      film_moment_add(f, f.moment[0].offset + 1u, pixel, double(g), even);
+      film_moment_add(f, f.moment[0].offset + 2u, pixel, double(b), even);
+    } else {
+      f.invalid[pixel] += 1u;
     }
   }
 }

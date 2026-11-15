@@ -132,6 +132,7 @@ struct GpuRig {
   }
   // One pass: the session uniforms advance as the scheduler's do.
   void resolve(uint32_t k) {
+    film->check_resolve_fits(k);
     kg.session.samples_per_pass = k;
     dev->upload(kg_buf, 0, &kg, sizeof(kg));
     const ar::KernelGlobals* kg_dev = static_cast<const ar::KernelGlobals*>(kg_buf.ptr);
@@ -191,6 +192,7 @@ TEST_CASE("film_resolve/gpu matches cpu") {
     for (uint32_t& f : flags) f = rng.next() < 0.25 ? ar::SECONDARIES_TERMINATED : 0u;
     std::vector<float> splat(size_t(3) * pixels);
     for (float& v : splat) v = pass == 1 ? float(rng.next()) : 0.0f;
+    if (pass == 1) splat[5] = kNaN;  // a bad splat is dropped and counted on both devices
 
     gpu.set_slots(lanes, flags);
     gpu.set_splat(splat);

@@ -96,6 +96,10 @@ class Film {
 
   // The sub-rectangle in use. Throws std::invalid_argument above the allocated size or at zero.
   void set_render_size(uint32_t width, uint32_t height);
+  // The scheduler calls this before every resolve launch: the pass's samples are
+  // rect_width * rect_height * k slots and must fit the slot buffer (0008 d3). Throws
+  // std::length_error naming the three numbers.
+  void check_resolve_fits(uint32_t k) const;
   // A clear, not an allocation (epoch reset).
   void clear();
 

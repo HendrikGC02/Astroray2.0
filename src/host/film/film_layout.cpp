@@ -154,6 +154,14 @@ void Film::set_render_size(uint32_t width, uint32_t height) {
   data_.rect_height = height;
 }
 
+void Film::check_resolve_fits(uint32_t k) const {
+  const uint64_t need = uint64_t(data_.rect_width) * data_.rect_height * k;
+  if (need > data_.slot_capacity)
+    throw std::length_error("film: a pass of " + std::to_string(uint64_t(data_.rect_width) * data_.rect_height) +
+                            " active pixels x " + std::to_string(k) + " samples needs " + std::to_string(need) +
+                            " slots, the film holds " + std::to_string(data_.slot_capacity));
+}
+
 void Film::clear() { device_.memset(buffer_, 0, 0, buffer_.bytes); }
 
 double moment_mean(double s1, uint32_t n) {

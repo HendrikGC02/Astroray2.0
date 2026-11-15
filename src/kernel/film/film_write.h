@@ -68,7 +68,8 @@ AR_FN void sample_add(const KernelGlobals& kg, uint32_t slot, const Spec& L) {
   for (int i = 0; i < kLanes; ++i) atomic_add(f.slot_L + 4u * slot + uint32_t(i), float(L.v[i]));
 }
 
-// Path end: the final flags (SECONDARIES_TERMINATED, ...) of the sample. One writer per slot.
+// Path end: the final flags (SECONDARIES_TERMINATED, ...) of the sample. Whether a sample is
+// invalid is decided from its values by the resolve (0008 d6), not by a flag. One writer per slot.
 AR_FN void sample_set_flags(const KernelGlobals& kg, uint32_t slot, uint32_t flags) {
   const FilmData& f = *kg.film;
   AR_ASSERT(slot < f.slot_capacity);
