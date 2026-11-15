@@ -23,8 +23,9 @@ using namespace astroray;
 TEST_SUITE("gate") {
 
 TEST_CASE("fault/access violation poisons context") {
-  // A fixed directory, emptied first, so one run leaves exactly one dump to inspect.
-  const fs::path dir = fs::temp_directory_path() / "astroray_fault_test";
+  // A per-process directory (worktrees run in parallel), emptied first, so one run leaves
+  // exactly one dump to inspect.
+  const fs::path dir = fs::temp_directory_path() / ("astroray_fault_test_" + std::to_string(GetCurrentProcessId()));
   fs::remove_all(dir);
   fs::create_directories(dir);
 
@@ -62,7 +63,7 @@ TEST_CASE("fault/access violation poisons context") {
 // Only last_error, destroy and create take a context today; last_error is the one call
 // that can show the poisoned state. Add other ctx-taking calls here as they appear.
 TEST_CASE("fault/C API last_error returns the fault message on a poisoned context") {
-  const fs::path dir = fs::temp_directory_path() / "astroray_fault_capi_test";
+  const fs::path dir = fs::temp_directory_path() / ("astroray_fault_capi_test_" + std::to_string(GetCurrentProcessId()));
   fs::remove_all(dir);
   fs::create_directories(dir);
   const std::string log_path = (dir / "ctx.log").string();
