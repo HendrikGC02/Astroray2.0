@@ -17,3 +17,4 @@ Budget: none.
 Depends on: 067, 036.
 Size: S (about 250 lines); stop and report at 2x.
 Progress:
+- Started: lamps.{h,cpp} (records, instances, radiance scale), scene lamp input, ar_edit_set_light.
