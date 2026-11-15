@@ -16,3 +16,4 @@ Budget: one device TU; declared spills 0, stack <= 128 B.
 Depends on: 102, 067, 029.
 Size: S (about 200 lines); stop and report at 2x.
 Progress:
+- Started: world light is found by a reverse scan of the light table (no world index in KernelGlobals); registering the stage in CpuDevice is outside Scope.
