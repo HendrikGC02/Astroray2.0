@@ -11,7 +11,7 @@ Do:
 4. Tests: fast: table lookup at grid points equals stored values; selection probabilities sum to 1 and eval of the mixture equals the sum of weighted lobes; gate: white furnace (base_color 1, specular_weight 1) of the stack at roughness 0.25, 0.5, 1 and IOR 1.5: 0.99 <= E <= 1.002 per 0005 Verification 1 for the lossless configuration; chi-squared of the mixture sampler.
 Acceptance: `out/bin/etables.exe e_diel_refl` reproduces the committed table byte for byte and prints its run time; `pwsh tools/check.ps1 fast` passes; `out/bin/astroray_tests_cpu.exe --tier=gate -tc="lobe_stack/*"` prints the furnace E per configuration.
 Look at: none.
-Canary: tasks/064.canary.patch must turn red: astroray_tests_cpu "lobe_stack/white furnace", "lobe_stack/selection shared".
+Canary: tasks/064.canary.patch must turn red: astroray_tests_cpu "lobe_stack/white furnace", "lobe_stack/selection shared", "lobe_stack/white furnace out of range ior" (IOR 4 furnace), "lobe_stack/eta clamp".
 Budget: none on build (generator outside the default target).
 Depends on: 063, 022.
 Size: M (about 350 lines); stop and report at 2x.
@@ -20,3 +20,4 @@ Progress:
 - Stack entry points take the landed OpenPBRParams (056) and the table (EDielTable) first because KernelGlobals has no tables member yet.
 - Layering uses E_diel at the specular_weight-modulated eta (equals the task text at weight 1) times specular_color, per lane.
 - Furnace (IOR 1.5, roughness 0.25/0.5/1): E in [0.99464, 1.00081]; lowest at roughness 0.25, mu_o 0.05.
+- eta outside the table range [1, 3] is clamped once in stack_select for lobe and table and flagged (StackSelect::eta_clamped, bool* out-param of the entry points); host wiring to AR_REPORT_SPECTRUM_OUT_OF_RANGE is a later task.
