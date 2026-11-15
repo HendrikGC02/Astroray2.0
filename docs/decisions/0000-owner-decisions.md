@@ -53,3 +53,11 @@ Decisions made by the owner. Later records build on these; they change only if t
 - **OptiX and DLSS licences:** follow the pattern Blender itself ships (compiled OptiX modules in an open-source product; DLSS loaded from the driver, never bundled). This is a reading, not legal advice.
 - **Unit anchor:** as 0003 decision 11. Science channels from Blender-unit emitters are flagged, not refused.
 - **OptiX denoiser:** not built for 2.0. "DLSS together with the other denoisers" (decision 24) is read as OIDN plus DLSS; it is added only with a measured win (0008).
+
+## 2026-11-15, build start
+
+30. **Sign-off.** The owner signed off the planning records; the build phase starts.
+31. **Speed over ceremony.** Build to the first release as fast as possible. The lead may run more than two implementers at once (0009 d27's limit is lifted; the machine lock still serialises builds). Use Sonnet implementers for the work, Haiku digests for bulk reading, Opus for review and critical thinking; testing stays at what the task files and gates require, with no extra testing beyond them. Opus review is required for kernel, physics, sampling, ABI and process diffs; other diffs land on green checks and their canary.
+32. **Open-weight worker (0009 q3):** yes. OpenCode's DeepSeek flash model may do mechanical edits through one wrapper that returns a diff and a transcript.
+33. **Subagent cache:** subagents keep the one-hour prompt cache (`subagentPromptCacheTtl`), overriding 0009 Appendix A.
+34. **Repository:** public on the owner's GitHub from the start of the build phase (O6).

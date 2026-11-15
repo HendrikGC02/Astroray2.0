@@ -136,7 +136,7 @@ ShareAlike on ExoMol applies to adaptations of the data; a table derived from it
 
 ### 7. What v1 chose
 
-- `LICENSE`: MIT, "Copyright (c) 2026 HendrikGC02". VERIFIED (read-only): `C:\Users\hgcom\OneDrive\Astroray\Astroray_repo\Astroray\LICENSE`
+- `LICENSE`: MIT, "Copyright (c) 2026 HendrikGC02". VERIFIED (read-only): `<v1 checkout>\LICENSE`
 - `THIRD_PARTY.md` lists:
   - Jakob-Hanika `.coeff` (9.4 MB, taken from `geometrian/simple-spectral`, claimed Apache-2.0).
   - CIE CMF and D65 tables generated via Colour-Science (BSD-3), "public domain (CIE standards)".

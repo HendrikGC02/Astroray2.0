@@ -1,21 +1,20 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "autoMemoryEnabled": false,
+  "promptCacheTtl": "1h",
+  "subagentPromptCacheTtl": "1h",
   "enabledPlugins": {
     "superpowers@claude-plugins-official": false,
     "context7@claude-plugins-official": true
   },
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "git status -sb"
-          }
-        ]
-      }
+  "permissions": {
+    "deny": [
+      "Bash(git stash*)",
+      "PowerShell(git stash*)",
+      "Bash(git push --force*)",
+      "PowerShell(git push --force*)",
+      "Bash(git push -f*)",
+      "PowerShell(git push -f*)"
     ]
-  },
-  "promptCacheTtl": "1h",
-  "subagentPromptCacheTtl": "1h"
+  }
 }
