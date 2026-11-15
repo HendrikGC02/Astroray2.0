@@ -21,3 +21,4 @@ Progress:
 - Only the sessions-that-render tests fail: no CPU intersect_closest stage until 114 (session faults 0xC0000005). Rebase on 114 and rerun.
 - render and dump both write AR_FITS_DUMP: the ABI has no Combined-only file kind. New cli/cli.h added (shared helpers).
 - render and dump both write the film DUMP (no Combined-only file kind yet); accepted for M1a. --help says it is not a science file. keep_alive also skips ar_session_close.
+- Ruling 71 applied: applied-override mask, --size aspect refusal, bench fields; no ABI call writes the context log, so the report table goes to stdout only (D2.11 log write not done).
