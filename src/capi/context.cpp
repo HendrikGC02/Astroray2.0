@@ -11,6 +11,7 @@
 #include "host/device_probe.h"
 #include "host/fault.h"
 #include "host/log.h"
+#include "host/scene/scene.h"
 
 struct ar_context_s : astroray::ContextState {
   std::string last_error;
@@ -172,6 +173,13 @@ AR_API ar_status ar_context_last_error(ar_context ctx, uint32_t capacity, uint8_
 }
 
 }  // extern "C"
+
+astroray::ContextState& astroray::context_state(ar_context ctx) { return *ctx; }
+void astroray::context_set_error(ar_context ctx, const std::string& text) { ctx->last_error = text; }
+void astroray::context_device(ar_context ctx, uint32_t* kind, uint32_t* index) {
+  *kind = ctx->kind;
+  *index = ctx->index;
+}
 
 #ifdef AR_GATE_HOOKS
 astroray::ContextState& astroray::fault_test_context_state(ar_context ctx) { return *ctx; }

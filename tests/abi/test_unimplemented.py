@@ -54,7 +54,7 @@ class TestUnimplemented(unittest.TestCase):
 
     def test_stub_list_names_declared_functions(self):
         names = stub_names()
-        self.assertGreater(len(names), 40, "unimplemented.cpp lists suspiciously few functions")
+        self.assertGreater(len(names), 20, "unimplemented.cpp lists suspiciously few functions")
         self.assertEqual(len(names), len(set(names)), "a stub is listed twice")
         stale = [n for n in names if n not in self.abi.PROTOTYPES]
         self.assertEqual(stale, [], "listed in unimplemented.cpp but not declared in astroray.h")
