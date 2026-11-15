@@ -16,6 +16,7 @@
 #include "device/cpu/cpu_device.h"
 #include "host/film/film_layout.h"
 #include "host/film/film_view.h"
+#include "host/light/light_builder.h"
 #include "host/material/material_store.h"
 #include "host/scene/mesh.h"
 #include "vm/ops.h"
@@ -31,7 +32,6 @@
 #include "kernel/vm/context.h"
 #include "kernel_cpu/stage_cpu.h"
 
-void cpu_stage_shade_background(const ar::KernelGlobals& kg, const ar::StepEntry& step, uint32_t first, uint32_t last);
 
 using namespace astroray;
 using namespace astroray::host;
@@ -97,6 +97,7 @@ struct MissRig {
     kg.film = &film->data();
     kg.tables = &tables;
     kg.lights = lights.data();
+    kg.world_light = 1;  // the table is [decoy, world, decoy]
     kg.light_sampler = &sampler;
     kg.session.width = kSlots;
     kg.session.height = 1;
@@ -135,6 +136,24 @@ TEST_CASE("shade_background/miss adds beta times the world radiance") {
   const ar::FilmData& f = rig.film->data();
   CHECK(f.count[uint64_t(f.bounce_max) * f.plane_stride + 2] == 3u);
   CHECK(f.count[uint64_t(f.bounce_paths) * f.plane_stride + 2] == 1u);
+}
+
+TEST_CASE("shade_background/a scene without a world is black and ends escaped") {
+  MissRig rig(2.5f);
+  rig.kg.world_light = ar::kNoLight;
+  rig.run();
+  for (uint32_t s = 0; s < kSlots; ++s) {
+    for (int l = 0; l < ar::kLanes; ++l) CHECK(rig.slot_value(s).v[l] == 0.0f);
+    CHECK(rig.term[s] == uint8_t(ar::Term::ESCAPED));
+    CHECK(rig.next_stage[s] == uint8_t(ar::Stage::TERMINATED));
+    CHECK(rig.hist(ar::Term::ESCAPED, s) == 1u);
+  }
+}
+
+TEST_CASE("shade_background/the cpu session device runs the stage") {
+  ContextState ctx;
+  std::shared_ptr<Device> dev = make_cpu_session_device(ctx, 1);
+  CHECK(static_cast<const CpuDevice&>(*dev).stage_fn(ar::Stage::SHADE_BACKGROUND) == &cpu_stage_shade_background);
 }
 
 TEST_CASE("shade_background/non-finite contribution ends invalid and adds nothing") {
@@ -220,7 +239,14 @@ struct WorldGraph {
 
 TEST_SUITE("gate") {
 
-TEST_CASE("shade_background/empty scene shows world") {
+struct Rendered {
+  std::vector<float> mean, var;
+  std::vector<uint32_t> invalid;
+  uint32_t world_light = 0;
+};
+
+// Renders the empty scene to convergence; without a world the scene has no world light at all.
+Rendered render_empty_scene(bool with_world) {
   ContextState ctx;
   Scene scene(ctx, SceneConfig{1, {}});
   scene.meshes = std::make_shared<MeshStore>();
@@ -239,8 +265,10 @@ TEST_CASE("shade_background/empty scene shows world") {
     s.seed = 11;
     auto e = scene.begin_edit();
     REQUIRE(e);
-    REQUIRE(scene.materials->set_graph(*e, 40, &d) == AR_OK);
-    REQUIRE(scene.materials->set_world(*e, &w) == AR_OK);
+    if (with_world) {
+      REQUIRE(scene.materials->set_graph(*e, 40, &d) == AR_OK);
+      REQUIRE(scene.materials->set_world(*e, &w) == AR_OK);
+    }
     REQUIRE(e->set_settings(&s) == AR_OK);
     uint64_t generation = 0;
     REQUIRE(e->commit(&generation) == AR_OK);
@@ -266,8 +294,11 @@ TEST_CASE("shade_background/empty scene shows world") {
   REQUIRE(session.wait(60000));
   REQUIRE(session.progress().state == AR_STATE_CONVERGED);
 
-  std::vector<float> mean, var;
-  std::vector<uint32_t> invalid;
+  Rendered out;
+  std::vector<float>& mean = out.mean;
+  std::vector<float>& var = out.var;
+  std::vector<uint32_t>& invalid = out.invalid;
+  out.world_light = scene.lights()->world_light;
   session.read_film([&](const FilmReadContext& c) {
     FilmView view(c.device, c.film);
     const auto passes = list_passes(c.film.layout());
@@ -281,6 +312,15 @@ TEST_CASE("shade_background/empty scene shows world") {
     invalid = view.invalid_counts();
   });
   REQUIRE(mean.size() == size_t(kW) * kH * 3);
+  return out;
+}
+
+TEST_CASE("shade_background/empty scene shows world") {
+  const Rendered r = render_empty_scene(true);
+  const std::vector<float>& mean = r.mean;
+  const std::vector<float>& var = r.var;
+  const std::vector<uint32_t>& invalid = r.invalid;
+  CHECK(r.world_light == 0u);  // no emissive triangles or lamps: the world is the only light
 
   // The display RGB of the world is its colour times strength (a white-balanced display group,
   // exposure 1). Every pixel and component must agree within 5 standard errors of its own mean;
@@ -306,6 +346,13 @@ TEST_CASE("shade_background/empty scene shows world") {
   CHECK(outside == 0u);
   CHECK(bad_invalid == 0u);
   for (uint32_t c = 0; c < 3; ++c) CHECK(std::fabs(pooled[c] - expect[c]) <= 5.0 * std::sqrt(pooled_var[c]) + 1e-6);
+}
+
+TEST_CASE("shade_background/empty scene without a world is black") {
+  const Rendered r = render_empty_scene(false);
+  CHECK(r.world_light == ar::kNoLight);
+  for (float m : r.mean) CHECK(m == 0.0f);
+  for (uint32_t i : r.invalid) CHECK(i == 0u);
 }
 
 }  // TEST_SUITE

@@ -24,7 +24,6 @@
 #include "host/thread_pool.h"
 #include "stages/shade_background.h"
 
-void cpu_stage_shade_background(const ar::KernelGlobals& kg, const ar::StepEntry& step, uint32_t first, uint32_t last);
 
 using namespace astroray;
 using namespace astroray::host;
@@ -136,6 +135,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
   kg.tables = static_cast<const ar::SceneTables*>(tables_buf.ptr);
   kg.lights = static_cast<const ar::LightRecord*>(lights_buf.ptr);
   kg.light_sampler = static_cast<const ar::LightSamplerView*>(sampler_buf.ptr);
+  kg.world_light = 1;  // [decoy, world, decoy]
   kg.session.width = kFilmW;
   kg.session.height = kFilmH;
   kg.session.samples_per_pass = kK;

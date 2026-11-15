@@ -101,6 +101,9 @@ struct KernelGlobals {
   uint32_t material_slot_count;
   uint32_t material_program_words;
   uint32_t material_constant_count;
+  // Index of the world light in `lights`, kNoLight (~0u) when the scene has none: a camera miss
+  // then renders black. The initialiser keeps a value-initialised KernelGlobals at "no world".
+  uint32_t world_light = 0xFFFFFFFFu;
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is

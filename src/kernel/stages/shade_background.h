@@ -20,14 +20,12 @@
 
 AR_NS_BEGIN
 
-// The world's record, or nullptr when the scene has none. The host table lists emissive
-// triangles, then the world, then the lamps (Scene::lights), so scanning from the end meets the
-// world after only the lamps.
+// The world's record, or nullptr when the scene has none (the host light table records its
+// index, kg_builder copies it).
 AR_FN const LightRecord* world_light(const KernelGlobals& kg) {
-  AR_ASSERT(kg.lights != nullptr && kg.light_sampler != nullptr);
-  for (uint32_t i = kg.light_sampler->light_count; i > 0u; --i)
-    if (LightType(kg.lights[i - 1u].type) == LightType::WORLD_CONST) return &kg.lights[i - 1u];
-  return nullptr;
+  if (kg.world_light == kNoLight) return nullptr;
+  AR_ASSERT(kg.lights != nullptr && kg.light_sampler != nullptr && kg.world_light < kg.light_sampler->light_count);
+  return &kg.lights[kg.world_light];
 }
 
 AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
@@ -49,3 +47,10 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
 }
 
 AR_NS_END
+
+#if !AR_CUDA_BUILD
+// CPU chunk function, defined by AR_CPU_STAGE in kernel_cpu/shade_background.cpp; registered by
+// make_cpu_session_device.
+void cpu_stage_shade_background(const ar::KernelGlobals& kg, const ar::StepEntry& step, uint32_t first,
+                                uint32_t last);
+#endif

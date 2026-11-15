@@ -65,6 +65,10 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
     // light_power's geometric factor (1, pi A, 4 pi^2 R^2) times the weighted energy (D9, D10).
     const double imp = energy * double(ar::light_power(li.record, scene, ar::Real(1)));
     if (!std::isfinite(imp) || imp < 0.0) throw std::runtime_error("light importance is not finite and non-negative");
+    if (li.record.type == uint8_t(ar::LightType::WORLD_CONST)) {
+      if (t->world_light != ar::kNoLight) throw std::runtime_error("light table: more than one world light");
+      t->world_light = uint32_t(t->lights.size());
+    }
     t->lights.push_back(li.record);
     t->importance.push_back(imp);
     sum += imp;
