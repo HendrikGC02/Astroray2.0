@@ -1,0 +1,38 @@
+diff --git a/blender/astroray/sync/camera.py b/blender/astroray/sync/camera.py
+index 96fd4ac..50736b1 100644
+--- a/blender/astroray/sync/camera.py
++++ b/blender/astroray/sync/camera.py
+@@ -85,6 +85,7 @@ def final(depsgraph, scene, origin=(0.0, 0.0, 0.0)):
+     lines = []
+     f = _camera_fields(ob.data, ob, scene, lines)
+     proj = ob.calc_matrix_camera(depsgraph, x=w, y=h, scale_x=r.pixel_aspect_x, scale_y=r.pixel_aspect_y)
++    proj[0][2] = proj[1][2] = 0.0  # canary: drops the lens shift
+     f["cam_to_world"] = _rows3x4(ob.matrix_world, np.asarray(origin, np.float64))
+     f["projection_inverse"] = _flat(np.linalg.inv(np.asarray(proj, np.float64)))
+     return f, lines
+diff --git a/blender/astroray/sync/lights.py b/blender/astroray/sync/lights.py
+index 8d85f57..fe0dc07 100644
+--- a/blender/astroray/sync/lights.py
++++ b/blender/astroray/sync/lights.py
+@@ -54,7 +54,7 @@ def describe(inst, origin, lightgroups):
+         color = tuple(c * t for c, t in zip(color, light.temperature_color))
+     f = {
+         "color": color,
+-        "power": light.energy * math.exp2(light.exposure),
++        "power": light.energy * math.exp2(light.exposure) * 0.5,  # canary
+         "normalize": int(light.normalize), "cast_shadow": int(light.use_shadow),
+         "spread": math.pi, "size_x": 0.0, "size_y": 0.0,
+         "light_group": lightgroups.get(ob.original.lightgroup, 0),
+diff --git a/blender/astroray/sync/settings.py b/blender/astroray/sync/settings.py
+index a06c808..1808738 100644
+--- a/blender/astroray/sync/settings.py
++++ b/blender/astroray/sync/settings.py
+@@ -45,7 +45,7 @@ def build(scene, colorspace, passes=()):
+         "output_width": r.resolution_x, "output_height": r.resolution_y,
+         "resolution_percent": r.resolution_percentage,
+         "samples": a.samples, "viewport_samples": a.viewport_samples,
+-        "seed": a.seed, "animated_seed": int(a.use_animated_seed),
++        "seed": a.seed + 1,  # canary "animated_seed": int(a.use_animated_seed),
+         "max_bounces": a.max_bounces, "min_bounces": a.min_bounces,
+         # Only the total limit exists in M1a; a per-type limit of 0 would end such paths at once,
+         # so each equals the total and never binds before it.

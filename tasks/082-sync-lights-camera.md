@@ -17,3 +17,7 @@ Depends on: 081, 068, 053, 071, 117 (only test_camera_ndc.py).
 Size: M (about 400 lines Python); stop and report at 2x.
 Progress:
 - Blocked before coding: Session::Session (src/host/session/session.cpp:53) builds FilmRequest with only statistics; ar_settings.passes/aov_names are copied (scene/edit.cpp:168) but never reach the layout, so no position AOV is readable from a session; the NDC test (step 4) needs it. Needs an engine change outside Scope.
+- Rebased on main with 117 specified: lights.py, camera.py, settings.py, properties.py and the headless lamp/settings tests are in; headless 13/13 pass.
+- test_camera_ndc.py written to 117's contract (Position via ar_settings.passes, read_pass); every case reaches the Position lookup and stops there until 117 lands. No engine change made.
+- properties.register() is not yet called from blender/astroray/__init__.py (outside Scope); 084 or the lead must wire it. Settings sync needs scene.astroray.
+- Motion blur, render border, film transparent, soft-falloff point lamps, light node trees give report lines; the engine's own camera lines (ORTHO, PANO, DOF) are not duplicated.
