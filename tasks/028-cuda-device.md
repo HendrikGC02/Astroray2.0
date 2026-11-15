@@ -12,12 +12,13 @@ Do:
 5. test_sampler_agree.cpp (gate): sampler_agree.cu evaluates `sample()` and `sample_independent()` for 10^6 host-generated (id, index, stream, d) tuples; the CPU build of the same function (compiled into the test) must match bit for bit (0003 check 24, 0009 d17(i)); prints the count compared and differences (must be 0).
 Acceptance: `pwsh tools/build.ps1` passes; `out/bin/astroray_tests_gpu.exe --tier=gate` passes and prints `compared=1000000 differences=0`; a test that launches selftest with an out-of-range pointer is not added here (099 owns fault injection).
 Look at: none.
-Canary: tasks/028.canary.patch must turn red: astroray_tests_gpu "sampler/cpu gpu bitwise".
+Canary: tasks/028.canary.patch must turn red: astroray_tests_gpu "sampler/cpu gpu bitwise", "cuda_device/selftest launch and memory", "cuda_device/refusals", "cuda_device/reserve rule refusal", "cuda_device/reserve rule decision", "cuda_device/failure messages", "cuda_device/sticky error classification".
 Budget: first GPU test run; report its time (counts toward B-09's kernel part).
 Depends on: 026, 027.
 Size: M (about 450 lines); stop and report at 2x.
 Progress:
-- CudaDevice, module_loader and astroray_tests_gpu built; `--tier=gate`: 5 cases pass, `compared=1000000 differences=0`, 0.4 s.
+- CudaDevice, module_loader and astroray_tests_gpu built; `--tier=gate`: 7 cases pass, `compared=1000000 differences=0`, 0.4 s.
 - Test-only hooks sit on `ModuleDevice` in src/host/device.h (lint `seam` forbids tests including a cuda path); `make_cuda_device`, `cuda_result_is_sticky`, `cuda_latent_error` are declared there too.
 - Latent-error check is a doctest listener: it fails the run naming the case, not the case itself (doctest cannot fail a case from test_case_end).
-- Canary tasks/028.canary.patch turns all five cases red (applied, rebuilt, run, reverted).
+- Canary tasks/028.canary.patch turns all seven cases red (applied, rebuilt, run, reverted).
+- Review fixes: every kernel takes only the KernelGlobals pointer (the count only sizes the grid); debug post-launch wait names the kernel; refusal text is "needs X GiB for <category>, Y GiB free (reserve R GiB)" via `DeviceAllocationRefused`; `reserve_allows` is a pure function.

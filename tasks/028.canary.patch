@@ -1,5 +1,5 @@
 diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
-index 06f60d4..6858782 100644
+index 527bef1..66f2719 100644
 --- a/src/device/cuda/cuda_device.cpp
 +++ b/src/device/cuda/cuda_device.cpp
 @@ -97,7 +97,6 @@ bool cuda_result_is_sticky(int r) {
@@ -10,7 +10,16 @@ index 06f60d4..6858782 100644
      case CUDA_ERROR_LAUNCH_TIMEOUT:
      case CUDA_ERROR_ASSERT:
      case CUDA_ERROR_HARDWARE_STACK_ERROR:
-@@ -271,7 +270,7 @@ void CudaDevice::upload(const DeviceBuffer& dst, uint64_t offset, const void* sr
+@@ -117,7 +116,7 @@ bool cuda_result_is_sticky(int r) {
+ 
+ std::string cuda_failure_message(int r, const char* name, const char* text, const char* call, const char* kernel) {
+   const std::string what = std::string(name ? name : "CUDA_ERROR_?") + ": " + (text ? text : "unknown error");
+-  const std::string where = std::string(call) + ((kernel && *kernel) ? std::string(" (") + kernel + ")" : "");
++  const std::string where = std::string(call) + ((kernel && *kernel && false) ? std::string(" (") + kernel + ")" : "");
+   if (cuda_result_is_sticky(r)) return DeviceError::sticky_text(what + " in " + where);
+   return "CUDA error in " + where + ": " + what;
+ }
+@@ -279,7 +278,7 @@ void CudaDevice::upload(const DeviceBuffer& dst, uint64_t offset, const void* sr
    if (bytes == 0) return;
    Impl& s = *impl_;
    s.bind();
@@ -19,7 +28,7 @@ index 06f60d4..6858782 100644
            "cuMemcpyHtoDAsync");
    s.sync();
  }
-@@ -304,7 +303,7 @@ void CudaDevice::launch(ar::Stage stage, uint32_t grid) {
+@@ -312,7 +311,7 @@ void CudaDevice::launch(ar::Stage stage, uint32_t grid) {
    const uint32_t i = static_cast<uint32_t>(stage);
    if (i >= ar::kStageCount) throw std::invalid_argument("CudaDevice: stage " + number(i) + " does not exist");
    if (stage == ar::Stage::TERMINATED || stage == ar::Stage::SHADOW_TERMINATED)
@@ -28,16 +37,29 @@ index 06f60d4..6858782 100644
    s.bind();
    const std::string name = kStageNames[i];
    const CUfunction f = s.named_function(name, "k_" + name);
-@@ -381,7 +380,8 @@ bool CudaDevice::may_allocate(uint64_t need, uint64_t* available_bytes) {
-   // Ref: 0007 d14 reserve rule: proceed only if need + R <= free, free as reported now.
-   // The refusal reports what may be allocated, free - R.
-   *available_bytes = free_bytes > kCudaReserveBytes ? free_bytes - kCudaReserveBytes : 0;
--  return need <= free_bytes && free_bytes - need >= kCudaReserveBytes;
-+  (void)need;
-+  return true;
+@@ -394,7 +393,7 @@ bool CudaDevice::may_allocate(uint64_t need, uint64_t* available_bytes) {
+ std::string CudaDevice::refusal_text(LedgerCategory category, uint64_t need, uint64_t available) const {
+   constexpr double kGiB = 1073741824.0;
+   char buf[200];
+-  std::snprintf(buf, sizeof buf, "needs %.2f GiB for %s, %.2f GiB free (reserve %.2f GiB)",
++  std::snprintf(buf, sizeof buf, "needs %.2f GiB for %s, %.2f GiB available (reserve %.2f GiB)",
+                 static_cast<double>(need) / kGiB, ledger_category_name(category), static_cast<double>(available) / kGiB,
+                 static_cast<double>(kCudaReserveBytes) / kGiB);
+   return buf;
+diff --git a/src/host/device.h b/src/host/device.h
+index 6ef7569..2353329 100644
+--- a/src/host/device.h
++++ b/src/host/device.h
+@@ -191,7 +191,8 @@ inline constexpr uint64_t kCudaReserveBytes = 3ull << 29;  // 1.5 GiB
+ // only if need + reserve <= free, free being what cuMemGetInfo reports at that moment.
+ // Written so no sum can overflow.
+ inline bool reserve_allows(uint64_t need, uint64_t free_bytes, uint64_t reserve) {
+-  return free_bytes >= reserve && need <= free_bytes - reserve;
++  (void)reserve;
++  return need <= free_bytes;
  }
  
- void* CudaDevice::alloc_memory(uint64_t bytes) {
+ // The message of a CUDA failure (0002 D15): which call, for which kernel when there is one,
 diff --git a/src/kernel/sample/sobol.h b/src/kernel/sample/sobol.h
 index 9880357..fff11b6 100644
 --- a/src/kernel/sample/sobol.h
