@@ -1,0 +1,1 @@
+src/kernel/n.h:1: [kernel] header does not open AR_NS_BEGIN

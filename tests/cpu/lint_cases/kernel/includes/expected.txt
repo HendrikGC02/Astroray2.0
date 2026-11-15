@@ -1,0 +1,8 @@
+src/kernel/inc.h:10: [kernel] #include <algorithm> is not allowed in kernel code
+src/kernel/inc.h:11: [kernel] #include "vector" is not allowed in kernel code
+src/kernel/inc.h:1: [kernel] header does not open AR_NS_BEGIN
+src/kernel/inc.h:6: [kernel] #include <vector> is not allowed in kernel code
+src/kernel/inc.h:7: [kernel] #include <cmath> is not allowed in kernel code
+src/kernel/inc.h:8: [kernel] #include <intrin.h> is not allowed in kernel code
+src/kernel/inc.h:9: [kernel] #include "../other.h" is not allowed in kernel code
+src/kernel/portability.h:6: [kernel] #include <vector> is not allowed in kernel code

@@ -1,0 +1,3 @@
+src/kernel/s.h:12: [kernel] static non-const variable at namespace scope
+src/kernel/s.h:4: [kernel] static non-const variable at namespace scope
+src/kernel/s.h:5: [kernel] static non-const variable at namespace scope

@@ -73,6 +73,16 @@ try {
     ($r.Out | Select-Object -Last 8) | ForEach-Object { Write-Host $_ }
     Fail 'tests failed (out/check/fast.log)'
   }
+  # Identity (0009 d5): the binary must be this commit's, on embedded kernels.
+  $b = $r.Out | Select-String -Pattern '^build: sha=(\S+) dirty=[01] kernels=(.*)$' | Select-Object -First 1
+  if (-not $b) { Fail 'tests printed no build line' }
+  $head = (& git rev-parse HEAD).Trim()
+  if ($b.Matches[0].Groups[1].Value -ne $head) {
+    Fail "binary sha $($b.Matches[0].Groups[1].Value) is not HEAD $head"
+  }
+  if ($b.Matches[0].Groups[2].Value -ne 'embedded') {
+    Fail "kernel source is '$($b.Matches[0].Groups[2].Value)', not embedded (ASTRORAY_KERNEL_DIR set?)"
+  }
   $slow = @()
   foreach ($ln in $r.Out) {
     if ($ln -match '^\s*([0-9]+\.[0-9]+) s: (.+)$' -and [double]$Matches[1] -gt $perTest) {

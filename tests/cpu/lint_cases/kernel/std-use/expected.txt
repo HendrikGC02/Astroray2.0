@@ -1,0 +1,3 @@
+src/kernel/s.h:5: [kernel] std:: is not allowed in kernel code (containers, algorithms, math)
+src/kernel/s.h:6: [kernel] std:: is not allowed in kernel code (containers, algorithms, math)
+src/kernel/s.h:7: [kernel] std:: is not allowed in kernel code (containers, algorithms, math)

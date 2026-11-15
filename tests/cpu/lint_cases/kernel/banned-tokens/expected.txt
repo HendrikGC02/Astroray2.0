@@ -1,0 +1,12 @@
+src/kernel/b.h:10: [kernel] banned in kernel code (__noinline__): __noinline__
+src/kernel/b.h:11: [kernel] banned in kernel code: long double
+src/kernel/b.h:12: [kernel] banned in kernel code (thread-local storage): thread_local
+src/kernel/b.h:13: [kernel] asm is allowed only in portability.h
+src/kernel/b.h:5: [kernel] banned in kernel code (virtual functions): virtual
+src/kernel/b.h:6: [kernel] banned in kernel code (exceptions): throw
+src/kernel/b.h:7: [kernel] banned in kernel code (exceptions): catch
+src/kernel/b.h:7: [kernel] banned in kernel code (exceptions): try
+src/kernel/b.h:8: [kernel] banned in kernel code (heap allocation): delete
+src/kernel/b.h:8: [kernel] banned in kernel code (heap allocation): new
+src/kernel/b.h:9: [kernel] banned in kernel code (heap allocation): free
+src/kernel/b.h:9: [kernel] banned in kernel code (heap allocation): malloc
