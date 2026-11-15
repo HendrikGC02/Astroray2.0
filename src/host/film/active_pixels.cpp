@@ -16,7 +16,7 @@ ActivePixels::ActivePixels(Device& device, uint32_t max_width, uint32_t max_heig
 ActivePixels::~ActivePixels() { device_.free(buffer_); }
 
 uint32_t ActivePixels::plan(const ar::FilmData& film) {
-  const uint64_t u = uint64_t(film.rect_width) * film.rect_height;
+  const uint64_t u = ar::film_build_active_count(film);
   if (u > capacity_)
     throw std::length_error("active pixels: the render rectangle has " + std::to_string(u) +
                             " pixels, the list holds " + std::to_string(capacity_));

@@ -10,6 +10,7 @@
 
 #include "host/device.h"
 #include "kernel/film/film_write.h"
+#include "kernel/stages/film_build_active.h"
 
 namespace astroray::host {
 
@@ -27,9 +28,10 @@ class ActivePixels {
   uint32_t* list() const { return static_cast<uint32_t*>(buffer_.ptr); }
   uint32_t capacity() const { return capacity_; }
 
-  // The count u of the pass that film_build_active will write: every pixel of the film's render
-  // sub-rectangle (M1a; adaptive compaction is M4's). Throws std::length_error when it exceeds the
-  // capacity, which means the film was resized past this list. The launch uses this many items.
+  // M1a stand-in for the device-written count: u of the pass that film_build_active will write,
+  // every pixel of the render sub-rectangle (film_build_active_count). Under M4 compaction the
+  // kernel writes u to a device word the host reads before the refill (0008 d3) and this goes.
+  // Throws std::length_error when u exceeds the capacity (the film was resized past this list).
   uint32_t plan(const ar::FilmData& film);
   // The count of the last plan(), 0 before the first.
   uint32_t count() const { return count_; }

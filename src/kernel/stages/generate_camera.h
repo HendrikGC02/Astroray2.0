@@ -18,6 +18,7 @@
 #include "../camera/camera.h"
 #include "../core/real.h"
 #include "../core/spectrum.h"
+#include "../film/camera_wavelengths.h"
 #include "../film/film_write.h"
 #include "../film/filter.h"
 #include "../kernel_globals.h"
@@ -88,7 +89,7 @@ AR_FN void stage_generate_camera(const KernelGlobals& kg, uint32_t item, const S
   // lambda_t = lambda_f at the start of a path (0003 d2); the resolve recomputes lambda_f and pf
   // from the same key and dimension (film_resolve_pixel).
   {
-    const FilmWavelengths fw = sample_film_wavelengths(kg.film->wavelengths, camera_draw(kg, key, DIM_CAM_WAVELENGTH));
+    const FilmWavelengths fw = camera_film_wavelengths(kg.session, kg.film->wavelengths, key.id, key.index);
     Spec lambda_t;
     for (int i = 0; i < kLanes; ++i) lambda_t.v[i] = fw.lf.nm[i];
     ps_lambda_t(kg, slot) = lambda_t;

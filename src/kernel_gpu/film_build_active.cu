@@ -8,7 +8,7 @@ extern "C" __global__ void AR_LAUNCH_BOUNDS(ar::kLaunch_k_film_build_active.thre
                                             ar::kLaunch_k_film_build_active.min_blocks)
     k_film_build_active(const ar::KernelGlobals* __restrict__ kg) {
   const ar::KernelGlobals& g = *kg;
-  for (uint32_t j = blockIdx.x * blockDim.x + threadIdx.x; j < ar::film_build_active_count(g);
+  for (uint32_t j = blockIdx.x * blockDim.x + threadIdx.x; j < ar::film_build_active_count(*g.film);
        j += gridDim.x * blockDim.x)
     ar::film_build_active_pixel(g, j);
 }

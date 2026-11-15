@@ -24,8 +24,10 @@
 #include "host/film/active_pixels.h"
 #include "host/film/film_layout.h"
 #include "host/film/filter_table.h"
+#include "host/film/response_table.h"
 #include "host/spectral/wavelength_table.h"
 #include "host/thread_pool.h"
+#include "film/resolve.h"
 #include "stages/film_build_active.h"
 #include "stages/generate_camera.h"
 
@@ -76,6 +78,7 @@ struct Rig {
   ThreadPool pool;
   CpuDevice dev;
   WavelengthTable wavelengths = WavelengthTableBuilder().build();
+  ResponseTable response;
   std::unique_ptr<Film> film;
   std::unique_ptr<ActivePixels> active;
   std::unique_ptr<ar::FilterTable> filter = std::make_unique<ar::FilterTable>(build_filter_table({}));
@@ -90,9 +93,27 @@ struct Rig {
     FilmRequest req;
     req.max_width = kFilmW;
     req.max_height = kFilmH;
+    req.slot_capacity = kSlots;
     film = std::make_unique<Film>(dev, FilmLayout::build(req), Owner{1, 1});
     film->set_render_size(kRectW, kRectH);
     film->data().wavelengths = {wavelengths.edges.data(), wavelengths.cdf.data(), wavelengths.bins()};
+    // A response that varies with wavelength, so a wrong film wavelength changes the resolved value:
+    // channels 0-2 are the display group, ramps over 300-900 nm.
+    response.display_first = 0;
+    response.photon_scale = 1e-9 / (6.62607015e-34 * 299792458.0);
+    response.y_w = 0.8;
+    const double m[9] = {1, 0.1, 0, 0, 1, 0.2, 0.1, 0, 1};
+    for (int i = 0; i < 9; ++i) response.m_ws[i] = m[i];
+    for (uint32_t c = 0; c < 3; ++c) {
+      response.channels.push_back({2 * c, 2, ar::RESPONSE_ENERGY, 0});
+      response.knot_nm.push_back(300.0f);
+      response.knot_nm.push_back(900.0f);
+      response.knot_value.push_back(1.0f);
+      response.knot_value.push_back(1.0f + 0.5f * float(c + 1));
+    }
+    film->data().response = response_view(response);
+    film->data().film_exposure = 1.0;
+    film->data().inv_radiance_scale = 1.0;
     active = std::make_unique<ActivePixels>(dev, kFilmW, kFilmH, Owner{1, 1});
     ar::for_each_always_field(path, [&](size_t bytes, void** slot) {
       arrays.emplace_back(bytes * kSlots, 0xAB);  // poison: a field generate_camera forgets stays 0xAB
@@ -204,31 +225,51 @@ TEST_CASE("generate_camera/active pixel list") {
 }
 
 TEST_CASE("generate_camera/resolve recomputes same wavelengths") {
+  // 0003 check 26, first half: the film_resolve kernel itself, run on slots whose values are known,
+  // must convert at the wavelengths generate_camera started the paths with. The expected sums use
+  // the stored lambda_t and the table's own bin pdfs, so a wrong dimension, or the pass-local m
+  // instead of n + m, in either kernel changes S1.
   Rig r;
-  const ar::WavelengthTableView& t = r.film->data().wavelengths;
-  for (uint32_t pass = 0; pass < kPasses; ++pass) {
-    const uint32_t n = pass * kK;
-    r.run_pass(n, kK);
-    for (uint32_t j = 0; j < kPixels; ++j) {
-      for (uint32_t m = 0; m < kK; ++m) {
-        // Exactly the resolve's recomputation (film_resolve_pixel): pixel plane index, sample
-        // index n + m, stream 0, the wavelength dimension.
-        const uint32_t pixel = ar::film_active_pixel(r.film->data(), j);
-        const ar::Real u = ar::draw(r.kg.session.sampler_mode, pixel, n + m, 0u, ar::DIM_CAM_WAVELENGTH, r.kg.session.seed);
-        const ar::FilmWavelengths fw = ar::sample_film_wavelengths(t, u);
-        const uint32_t slot = r.queue[j * kK + m];
-        for (int i = 0; i < ar::kLanes; ++i) {
-          CHECK(r.path.lambda_t[slot].v[i] == fw.lf.nm[i]);  // lambda_t starts as lambda_f
-          // pf from the table's own bins: the pdf of a bin is its CDF step over its width.
-          const float nm = fw.lf.nm[i];
-          uint32_t b = 0;
-          while (b + 1 < t.bins && t.edges[b + 1] <= nm) ++b;
-          const float pdf = (t.cdf[b + 1] - t.cdf[b]) / (t.edges[b + 1] - t.edges[b]);
-          CHECK(fw.pf.v[i] == doctest::Approx(pdf).epsilon(1e-5));
-        }
-      }
+  const ar::FilmData& f = r.film->data();
+  const uint32_t n = 4;
+  r.run_pass(n, kK);  // n = 4: a resolve that used m would draw other wavelengths
+  const ar::WavelengthTableView& t = f.wavelengths;
+  std::vector<double> expect(size_t(3) * kFilmW * kFilmH, 0.0);
+  for (uint32_t sample = 0; sample < kSlots; ++sample) {
+    ar::Spec L;
+    for (int i = 0; i < ar::kLanes; ++i) {
+      L.v[i] = 0.25f + 0.0625f * float(i) + 0.015625f * float(sample % 13);
+      f.slot_L[4u * sample + uint32_t(i)] = L.v[i];
+    }
+    f.slot_flags[sample] = 0u;
+    const uint32_t slot = r.queue[sample];
+    ar::Lambda lf;
+    ar::Spec pf;
+    for (int i = 0; i < ar::kLanes; ++i) {
+      lf.nm[i] = r.path.lambda_t[slot].v[i];  // lambda_t starts as lambda_f
+      uint32_t b = 0;
+      while (b + 1 < t.bins && t.edges[b + 1] <= lf.nm[i]) ++b;
+      pf.v[i] = (t.cdf[b + 1] - t.cdf[b]) / (t.edges[b + 1] - t.edges[b]);
+    }
+    const ar::Spec w = ar::film_weights(0u, pf);
+    const ar::DisplayRgb rgb = ar::display_rgb(f.response, L, lf, w, f.film_exposure);
+    const uint32_t j = sample / kK;
+    const uint32_t pixel = (j / kRectW) * kFilmW + j % kRectW;
+    for (int c = 0; c < 3; ++c) expect[size_t(c) * f.plane_stride + pixel] += rgb.v[c];
+  }
+  r.film->check_resolve_fits(kK);
+  cpu_film_resolve(r.kg, 0, ar::film_resolve_count(r.kg));
+  uint32_t checked = 0;
+  for (uint32_t j = 0; j < kPixels; ++j) {
+    const uint32_t pixel = (j / kRectW) * kFilmW + j % kRectW;
+    CHECK(f.n[pixel] == kK);
+    for (int c = 0; c < 3; ++c) {
+      const double want = expect[size_t(c) * f.plane_stride + pixel];
+      CHECK(f.s1[size_t(f.moment[0].offset + c) * f.plane_stride + pixel] == doctest::Approx(want).epsilon(1e-4));
+      ++checked;
     }
   }
+  CHECK(checked == kPixels * 3u);
 }
 
 TEST_CASE("generate_camera/initial state") {
@@ -261,11 +302,16 @@ TEST_CASE("generate_camera/initial state") {
     const uint32_t hero = uint32_t(double(u) * 4.0);
     CHECK(r.path.flags[slot] == (hero << ar::HERO_LANE_SHIFT));
     heroes.insert(hero);
-    // The filter offset keeps the film position within the filter support of the pixel centre.
+    // The film position is the pixel centre plus the importance-sampled filter offset of dims 0 and 1
+    // (0008 d5; production path, no PIXEL_CENTRE hook).
     ar::Real2 film{};
     REQUIRE(ray_pixel(r, slot, &film));
-    CHECK(std::fabs(film.x - (j % kRectW + 0.5)) <= r.filter->radius + 1e-3);
-    CHECK(std::fabs(film.y - (j / kRectW + 0.5)) <= r.filter->radius + 1e-3);
+    const ar::Real ux = ar::draw(ar::SAMPLER_SOBOL, pixel, 4 + m, 0u, ar::DIM_CAM_FILTER_X, r.kg.session.seed);
+    const ar::Real uy = ar::draw(ar::SAMPLER_SOBOL, pixel, 4 + m, 0u, ar::DIM_CAM_FILTER_Y, r.kg.session.seed);
+    const ar::FilterOffset off = ar::sample_filter(*r.filter, ux, uy);
+    CHECK(film.x == doctest::Approx(j % kRectW + 0.5 + off.dx).epsilon(1e-4));
+    CHECK(film.y == doctest::Approx(j / kRectW + 0.5 + off.dy).epsilon(1e-4));
+    CHECK(std::fabs(off.dx) > 0.0f);  // the offset is not silently zero
   }
   CHECK(heroes.size() > 1);  // 70 draws reach more than one lane
   CHECK(AR_VISIBILITY_CAMERA == ar::kRayTypeCamera);

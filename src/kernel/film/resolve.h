@@ -16,6 +16,7 @@
 #include "../sample/dims.h"
 #include "../sample/keys.h"
 #include "../sample/sobol.h"
+#include "camera_wavelengths.h"
 #include "film_write.h"
 
 AR_NS_BEGIN
@@ -66,9 +67,7 @@ AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
       continue;
     }
     const uint32_t index = n0 + m;
-    const Real u = draw(kg.session.sampler_mode, pixel, index, 0u, DIM_CAM_WAVELENGTH,
-                        kg.session.seed);
-    const FilmWavelengths fw = sample_film_wavelengths(f.wavelengths, u);
+    const FilmWavelengths fw = camera_film_wavelengths(kg.session, f.wavelengths, pixel, index);
     const Spec w = film_weights(flags, fw.pf);
     const bool even = (index & 1u) == 0u;
     for (uint32_t c = 0; c < f.moment_channel_count; ++c) {
