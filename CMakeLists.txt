@@ -136,7 +136,23 @@ target_compile_definitions(astroray_core PRIVATE AR_BUILDING_CORE)
 target_include_directories(astroray_core PRIVATE ${ASTRORAY_GEN_DIR})
 target_link_libraries(astroray_core PRIVATE ${_ar_engine_libs})
 
+# Family sizes for the statistical harness, read from tools/budgets.toml [family*]
+# (0009 d15). file(GENERATE) rewrites the header only when the content changed.
+file(READ ${CMAKE_SOURCE_DIR}/tools/budgets.toml _ar_budgets_toml)
+foreach(_k GATE:gate_statistical FULL:full_statistical ANALYTIC:analytic_scenes)
+  string(REPLACE ":" ";" _kv ${_k})
+  list(GET _kv 0 _name)
+  list(GET _kv 1 _key)
+  if(NOT _ar_budgets_toml MATCHES "(^|\n)${_key} *= *([0-9]+)")
+    message(FATAL_ERROR "tools/budgets.toml has no '${_key} = <n>' family size")
+  endif()
+  string(APPEND _ar_families_h "#define AR_FAMILY_${_name} ${CMAKE_MATCH_2}\n")
+endforeach()
+file(GENERATE OUTPUT ${ASTRORAY_GEN_DIR}/families.h CONTENT "// generated from tools/budgets.toml\n#pragma once\n${_ar_families_h}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tools/budgets.toml)
+
 add_executable(astroray_tests_cpu tests/cpu/main.cpp ${ASTRORAY_TEST_CPU_SOURCES})
+target_include_directories(astroray_tests_cpu PRIVATE ${CMAKE_SOURCE_DIR}/tests ${ASTRORAY_GEN_DIR})
 astroray_target_warnings(astroray_tests_cpu)
 target_include_directories(astroray_tests_cpu SYSTEM PRIVATE third_party/doctest)
 target_link_libraries(astroray_tests_cpu PRIVATE ${_ar_engine_libs})
