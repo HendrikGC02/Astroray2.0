@@ -75,7 +75,7 @@ std::vector<ar::LightRecord> make_lights() {
 InstanceTable make_table() {
   InstanceTable table;
   table.motion_steps = 1;
-  const uint8_t masks[3] = {0xFF, 0xFF, kCamera};
+  const uint8_t masks[3] = {0xFF, visibility_mask(kLampRayVisibility), kCamera};  // a lamp has no shadow bit (0004 D8)
   for (int i = 0; i < 3; ++i) {
     Instance in;
     in.geom_key = kQuadKey;
@@ -147,7 +147,7 @@ Pools make_pools() {
   p.step.stage[static_cast<uint32_t>(Stage::INTERSECT_CLOSEST)] = {1, n - 1, 0};
 
   p.add_shadow(0.5f, 0.25f, 100.0f);  // quad of instance 0 at t = 2
-  p.add_shadow(3.5f, 0.25f, 2.5f);    // the lamp quad at t = 2, inside tmax; the SHADOW bit is set on it
+  p.add_shadow(3.5f, 0.25f, 2.5f);    // the lamp rectangle at t = 2, inside tmax; a lamp has no shadow bit
   p.add_shadow(0.5f, 0.25f, 1.5f);    // tmax ends before the surface
   p.add_shadow(9.5f, 0.25f, 100.0f);  // nothing there
   p.add_shadow(6.5f, 0.25f, 100.0f);  // instance 2 has no shadow bit
@@ -383,7 +383,7 @@ TEST_CASE("optix_trace/shadow occluded") {
   CHECK(occluded > 20);
   CHECK(delivered > 20);
   CHECK(gpu.s_next[0] == uint8_t(Stage::SHADOW_TERMINATED));  // quad at t = 2 inside tmax 100
-  CHECK(gpu.s_next[1] == uint8_t(Stage::SHADOW_TERMINATED));
+  CHECK(gpu.s_next[1] == uint8_t(Stage::SHADE_SHADOW));       // the lamp never blocks
   CHECK(gpu.s_next[2] == uint8_t(Stage::SHADE_SHADOW));       // tmax ends before the surface
   CHECK(gpu.s_next[3] == uint8_t(Stage::SHADE_SHADOW));       // nothing there
   CHECK(gpu.s_next[4] == uint8_t(Stage::SHADE_SHADOW));       // instance 2 lacks the shadow bit
