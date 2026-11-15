@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // shade_background: a camera path that left the scene sees the constant world. It adds
 // Le(lambda_t) * beta to the sample's slot (weight 1: MIS against NEE arrives with 074) and ends
-// the path ESCAPED. A non-finite contribution adds nothing and ends the path INVALID (rule 5), so
-// one bad value never reaches the film. Light-path misses never get here (route_hit, 0002 D8).
+// the path ESCAPED. A non-finite contribution adds nothing, marks the sample invalid (the resolve counts it
+// and leaves n alone, 0008 d6) and ends the path INVALID (rule 5). Light-path misses never get here (route_hit, 0002 D8).
 // Radiance already carries the radiance scale s in the light record (068); the film divides it
 // out, so it is not applied here.
 // Ref: docs/decisions/0004-integrator.md D5, D6 (world row), D28; 0002 D8 (shade_background);
@@ -40,8 +40,10 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
     const Spec contribution = light_emission(*world, lam, kg.tables->observer) * ps_beta(kg, slot);
     if (is_finite(contribution))
       sample_add(kg, slot, contribution);
-    else
+    else {
+      sample_mark_invalid(kg, slot);
       term = Term::INVALID;
+    }
   }
   path_end(kg, slot, term);
 }

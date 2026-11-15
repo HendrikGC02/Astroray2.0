@@ -106,7 +106,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
   soa.beta = static_cast<ar::Spec*>(beta_buf.ptr);
   DeviceBuffer soa_buf = put(&soa, sizeof soa);
 
-  // The light table: an RGB illuminant world between two decoy lamps, so the scan is exercised.
+  // The light table: an RGB illuminant world between two decoy lamps, so a wrong index would read a lamp.
   ar::SpectrumRef colour{};
   colour.kind = uint8_t(ar::SpectrumKind::RGB);
   colour.semantic = uint8_t(ar::SpectrumSemantic::ILLUMINANT);
@@ -209,16 +209,29 @@ TEST_CASE("shade_background/agreement") {
   CHECK(ended == kN);
   CHECK(invalid > 500u);
   CHECK(escaped + invalid == kN);
+  // An invalid sample's slot is NaN on both devices (sample_mark_invalid): the NaN positions must match
+  // exactly, and are zeroed before the finite comparison below.
+  std::vector<float> lc = c.slot_L, lg = g.slot_L;
+  uint32_t nan_lanes = 0, nan_mismatch = 0;
+  for (size_t i = 0; i < lc.size(); ++i) {
+    const bool a = !(lc[i] == lc[i]), b = !(lg[i] == lg[i]);
+    nan_lanes += a;
+    nan_mismatch += a != b;
+    if (a) lc[i] = 0.0f;
+    if (b) lg[i] = 0.0f;
+  }
+  CHECK(nan_mismatch == 0u);
+  CHECK(nan_lanes == 4u * invalid);
   double total = 0.0;
-  for (float v : c.slot_L) total += double(v);
+  for (float v : lc) total += double(v);
   CHECK(total > 1.0e4);  // radiance really was added, so agreement is not two zeros
 
   // Radiance (4 lanes per path): the evaluation class.
   agree::Results rc, rg;
   rc.n = rg.n = kN;
   rc.stride = rg.stride = 4;
-  rc.v.assign(c.slot_L.begin(), c.slot_L.end());
-  rg.v.assign(g.slot_L.begin(), g.slot_L.end());
+  rc.v.assign(lc.begin(), lc.end());
+  rg.v.assign(lg.begin(), lg.end());
   const agree::Stats e = agree::compare(rg, rc, agree::Metric::REL_L2);
   CHECK(agree::report("shade_background", "slot radiance nofma vs cpu float", e, agree::Cls::EVAL,
                       agree::NOFMA_VS_CPU_FLOAT).pass);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // shade_background (0004 D5, D6, D28; 0002 D8): a hand-built miss adds exactly beta * Lw to its
-// slot and ends ESCAPED with its statistics; a non-finite contribution adds nothing and ends
-// INVALID; and a CPU session on an empty scene with a constant world resolves every pixel to the
+// slot and ends ESCAPED with its statistics; a non-finite contribution marks its sample invalid
+// (counted by the resolve, n unchanged) and ends INVALID; and a CPU session on an empty scene with a constant world resolves every pixel to the
 // world's display RGB.
 // Ref: docs/decisions/0004-integrator.md D5, D6, D28; 0003 d22; 0008 d3, d12.
 #include <doctest.h>
@@ -15,7 +15,11 @@
 
 #include "device/cpu/cpu_device.h"
 #include "host/film/film_layout.h"
+#include "film/resolve.h"
 #include "host/film/film_view.h"
+#include "host/film/response_table.h"
+#include "host/spectral/wavelength_table.h"
+#include "stages/film_build_active.h"
 #include "host/light/light_builder.h"
 #include "host/material/material_store.h"
 #include "host/scene/mesh.h"
@@ -48,6 +52,8 @@ struct MissRig {
   Ledger ledger;
   ThreadPool pool;
   CpuDevice dev;
+  ResponseTable response;
+  WavelengthTable wavelengths;
   std::unique_ptr<Film> film;
   ar::KernelGlobals kg{};
   ar::PathStateSoA path{};
@@ -71,6 +77,23 @@ struct MissRig {
     req.termination_stats = true;
     film = std::make_unique<Film>(dev, FilmLayout::build(req), Owner{1, 1});
 
+    // Flat tables, as in test_film_stats: a slot of lanes v / 256 resolves to x = v in every component.
+    response.display_first = 0;
+    response.photon_scale = 1e-9 / (6.62607015e-34 * 299792458.0);
+    response.y_w = 1.0;
+    const double m[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    for (int i = 0; i < 9; ++i) response.m_ws[i] = m[i];
+    for (uint32_t c = 0; c < 3; ++c) {
+      response.channels.push_back({2 * c, 2, ar::RESPONSE_ENERGY, 0});
+      response.knot_nm.push_back(300.0f);
+      response.knot_nm.push_back(900.0f);
+      response.knot_value.push_back(1.0f);
+      response.knot_value.push_back(1.0f);
+    }
+    wavelengths.edges = {360.0f, 616.0f};
+    wavelengths.cdf = {0.0f, 1.0f};
+    film->data().response = response_view(response);
+    film->data().wavelengths = {wavelengths.edges.data(), wavelengths.cdf.data(), wavelengths.bins()};
     const ar::SpectrumRef c = ar::make_const_ref(ar::SpectrumSemantic::REFLECTANCE, ar::Real(1));
     ar::LightRecord decoy = ar::light_make(ar::LightType::POINT, ar::Real3{0, 0, 0}, ar::Real(0), ar::Real(100), c);
     lights = {decoy, ar::light_make_world(ar::Real(world_strength), c), decoy};
@@ -102,8 +125,15 @@ struct MissRig {
     kg.session.width = kSlots;
     kg.session.height = 1;
     kg.session.samples_per_pass = 1;
+    kg.session.seed = 7u;
+    kg.session.sampler_mode = ar::SAMPLER_SOBOL;
   }
 
+  // One resolve of the four slots, as the session does after the pass drains.
+  void resolve() {
+    film->check_resolve_fits(1);
+    cpu_film_resolve(kg, 0, ar::film_resolve_count(kg));
+  }
   void run() { cpu_stage_shade_background(kg, step, 0, kSlots); }
   ar::Spec slot_value(uint32_t slot) const {
     ar::Spec s;
@@ -156,18 +186,23 @@ TEST_CASE("shade_background/the cpu session device runs the stage") {
   CHECK(static_cast<const CpuDevice&>(*dev).stage_fn(ar::Stage::SHADE_BACKGROUND) == &cpu_stage_shade_background);
 }
 
-TEST_CASE("shade_background/non-finite contribution ends invalid and adds nothing") {
+TEST_CASE("shade_background/non-finite contribution ends invalid and is counted, not averaged") {
   const float inf = std::numeric_limits<float>::infinity();
   const float nan = std::numeric_limits<float>::quiet_NaN();
   {
     MissRig rig(inf);  // an infinite world
     rig.run();
     for (uint32_t s = 0; s < kSlots; ++s) {
-      for (int l = 0; l < ar::kLanes; ++l) CHECK(rig.slot_value(s).v[l] == 0.0f);
+      for (int l = 0; l < ar::kLanes; ++l) CHECK(!ar::film_value_valid(float(rig.slot_value(s).v[l])));
       CHECK(rig.term[s] == uint8_t(ar::Term::INVALID));
       CHECK(rig.hist(ar::Term::INVALID, s) == 1u);
       CHECK(rig.hist(ar::Term::ESCAPED, s) == 0u);
       CHECK(rig.next_stage[s] == uint8_t(ar::Stage::TERMINATED));
+    }
+    rig.resolve();  // 0008 d6: counted in the invalid counter, n does not move
+    for (uint32_t p = 0; p < kSlots; ++p) {
+      CHECK(rig.film->data().invalid[p] == 1u);
+      CHECK(rig.film->data().n[p] == 0u);
     }
   }
   {
@@ -175,10 +210,32 @@ TEST_CASE("shade_background/non-finite contribution ends invalid and adds nothin
     rig.beta[1].v[2] = nan;
     rig.run();
     CHECK(rig.term[1] == uint8_t(ar::Term::INVALID));
-    for (int l = 0; l < ar::kLanes; ++l) CHECK(rig.slot_value(1).v[l] == 0.0f);
+    CHECK(!ar::film_sample_valid(rig.slot_value(1)));
     CHECK(rig.term[0] == uint8_t(ar::Term::ESCAPED));
     CHECK(rig.slot_value(0).v[0] == rig.beta[0].v[0]);
+    rig.resolve();
+    CHECK(rig.film->data().invalid[1] == 1u);
+    CHECK(rig.film->data().n[1] == 0u);
+    for (uint32_t p : {0u, 2u, 3u}) {
+      CHECK(rig.film->data().invalid[p] == 0u);
+      CHECK(rig.film->data().n[p] == 1u);
+    }
   }
+}
+
+TEST_CASE("shade_background/the table records the world's index") {
+  // [emissive triangle, world, point]: the index is the world's position, not 0 or the last.
+  const ar::SpectrumRef c = ar::make_const_ref(ar::SpectrumSemantic::REFLECTANCE, ar::Real(1));
+  const std::vector<float> cmf(3 * ar::kObsSamples, 0.0f), illum(ar::kObsSamples, 1.0f);
+  const ar::ObserverView obs{cmf.data(), illum.data()};
+  const ar::SceneSphere sphere{ar::Real3{0, 0, 0}, ar::Real(10)};
+  LightInput tri, world, point;
+  tri.record = ar::light_make_triangle(ar::Real3{0, 0, 0}, ar::Real3{1, 0, 0}, ar::Real3{0, 1, 0}, 0, 0, 0, ar::Real(1), c);
+  world.record = ar::light_make_world(ar::Real(1), c);
+  point.record = ar::light_make(ar::LightType::POINT, ar::Real3{0, 0, 1}, ar::Real(0), ar::Real(1), c);
+  CHECK(build_light_table({tri, world, point}, sphere, obs, nullptr)->world_light == 1u);
+  CHECK(build_light_table({tri, point}, sphere, obs, nullptr)->world_light == ar::kNoLight);
+  CHECK_THROWS_AS(build_light_table({tri, world, point, world}, sphere, obs, nullptr), std::runtime_error);
 }
 
 }  // TEST_SUITE
@@ -243,6 +300,8 @@ struct Rendered {
   std::vector<float> mean, var;
   std::vector<uint32_t> invalid;
   uint32_t world_light = 0;
+  std::vector<uint32_t> n;
+  double radiance_scale = 1.0, inv_radiance_scale = 1.0;
 };
 
 // Renders the empty scene to convergence; without a world the scene has no world light at all.
@@ -299,6 +358,7 @@ Rendered render_empty_scene(bool with_world) {
   std::vector<float>& var = out.var;
   std::vector<uint32_t>& invalid = out.invalid;
   out.world_light = scene.lights()->world_light;
+  out.radiance_scale = scene.lights()->radiance_scale;
   session.read_film([&](const FilmReadContext& c) {
     FilmView view(c.device, c.film);
     const auto passes = list_passes(c.film.layout());
@@ -310,6 +370,8 @@ Rendered render_empty_scene(bool with_world) {
       read_pass(view, p, AR_QUANTITY_VARIANCE, uint32_t(var.size()), var.data());
     }
     invalid = view.invalid_counts();
+    out.n = view.sample_counts();
+    out.inv_radiance_scale = c.film.data().inv_radiance_scale;
   });
   REQUIRE(mean.size() == size_t(kW) * kH * 3);
   return out;
@@ -321,6 +383,10 @@ TEST_CASE("shade_background/empty scene shows world") {
   const std::vector<float>& var = r.var;
   const std::vector<uint32_t>& invalid = r.invalid;
   CHECK(r.world_light == 0u);  // no emissive triangles or lamps: the world is the only light
+  // s != 1, so applying it twice or not dividing it out would show in the means below.
+  CHECK(r.radiance_scale != 1.0);
+  CHECK(r.inv_radiance_scale == 1.0 / r.radiance_scale);
+  for (uint32_t n : r.n) CHECK(n == kSpp);  // an invalid sample would be missing from n
 
   // The display RGB of the world is its colour times strength (a white-balanced display group,
   // exposure 1). Every pixel and component must agree within 5 standard errors of its own mean;

@@ -1,7 +1,7 @@
 # 103 shade_background: the constant world on camera-path misses
 Goal: camera rays that miss add nothing -> `shade_background` adds the constant world radiance (067) times beta for camera-path misses and ends the path with ESCAPED and its statistics, on CPU and GPU, so an empty scene renders its world colour.
 Read first: 0002 D8 (shade_background row), D10 (OTHER stack class), 0004 D5 (accumulation through the slot), D6 (world row), D28 (path-end statistics); 0003 d22 (termination); src/kernel/light/world_const.h.
-Scope: src/kernel/stages/shade_background.h, src/kernel/stages/shade_common.h (path end, shared with 071), src/kernel_cpu/shade_background.cpp, src/kernel_gpu/shade_background.cu, src/kernel/launch_config.h, src/kernel/budget.toml, tests/cpu/test_shade_background.cpp, tests/gpu/test_shade_background_agree.cpp.
+Scope: src/kernel/stages/shade_background.h, src/kernel/stages/shade_common.h (path end, shared with 071), src/kernel_cpu/shade_background.cpp, src/kernel_gpu/shade_background.cu, src/kernel/launch_config.h, src/kernel/budget.toml, src/kernel/film/film_write.h (sample_mark_invalid, reused by 071), src/kernel/kernel_globals.h (world_light member), src/host/light/light_builder.{h,cpp} (the table records the world's index), src/host/session/kg_builder.cpp (copies it), src/device/cpu/cpu_device.cpp (registers the stage in make_cpu_session_device), tests/cpu/test_shade_background.cpp, tests/gpu/test_shade_background_agree.cpp.
 Out of scope: MIS weighting of world hits after a BSDF bounce (074); environment maps (M1b); light-path misses (route_hit terminates them, 039).
 Reference: Cycles `kernel/integrator/shade_background.h` (Apache-2.0) for stage structure.
 Do:
