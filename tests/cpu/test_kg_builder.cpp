@@ -179,7 +179,7 @@ TEST_CASE("kg_builder/no null tables") {
                         (const void*)kg.scene->material_slots, (const void*)kg.scene->material_headers,
                         (const void*)kg.scene->material_constants, (const void*)kg.light_sampler->bins})
     CHECK(p != nullptr);
-  CHECK(kg.scene->accel == nullptr);  // marked unused until task 114
+  CHECK(kg.scene->accel != nullptr);  // the snapshot's traversal structure (114)
 
   const auto mats = r.scene.materials->arrays();
   const auto imgs = r.scene.materials->images().arrays();

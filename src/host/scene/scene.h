@@ -36,6 +36,7 @@ struct ObserverTables;  // host/data_resource.h
 namespace astroray::host {
 
 class Device;           // host/device.h
+class AccelBuilder;     // host/scene/accel.h
 struct SceneTableCache;  // host/scene/scene_tables.h
 class Edit;
 class MeshStore;  // host/scene/mesh.h
@@ -55,6 +56,9 @@ struct SceneConfig {
   // The scene's device inside init's result: it uploads scene tables and charges the scene's
   // ledger (RULINGS 70). Empty on the CPU device.
   std::function<Device*(void*)> device_of;
+  // The scene's traversal-structure builder inside init's result (the OptiX one, created on the init
+  // thread with the device). Empty on the CPU device: the scene then owns an Embree builder.
+  std::function<AccelBuilder*(void*)> accel_of;
 };
 
 // ar_settings and ar_camera_desc with their copy-in arrays owned.
@@ -110,6 +114,8 @@ class Scene {
   bool init_done();
   // The device init made (wait_init first, so it throws the init failure); null on a CPU context.
   Device* device();
+  // The builder of this scene's traversal structures (waits for device init like device()).
+  AccelBuilder& accel_builder();
   // The scene's table sets (host/scene/scene_tables.h): the one cache every session shares.
   SceneTableCache& table_cache() { return *tables_; }
 
@@ -178,6 +184,8 @@ class Scene {
   std::string init_error_;
   std::shared_ptr<void> init_result_;
   std::function<Device*(void*)> device_of_;
+  std::function<AccelBuilder*(void*)> accel_of_;
+  std::unique_ptr<AccelBuilder> cpu_accel_;  // declared before tables_, so it outlives their snapshots
   // After init_result_, so the table copies on the scene's device go first.
   std::unique_ptr<SceneTableCache> tables_;
   std::thread init_thread_;

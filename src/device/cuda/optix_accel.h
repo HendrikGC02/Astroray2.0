@@ -1,19 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
-// Acceleration structures: one compacted triangle GAS per geometry key, built in batches
-// from one temporary arena, and one TLAS per generation, always rebuilt and never refit.
-// GAS persist across edits and are rebuilt only for keys whose uploaded data changed.
-// Every buffer, the temporary arena included, is a ledger record of category ACCELERATION
-// (instance arrays are TABLES) made through the OptixContext's device.
+// Acceleration structures. A GAS is one compacted triangle structure per mesh record (or one unit
+// lamp shape), a TLAS one instance structure per scene snapshot. Both are immutable once built and
+// held by shared_ptr: a snapshot's TLAS keeps the GAS it instances alive, a later snapshot shares
+// the GAS of every unchanged record, and each buffer is freed by its last holder, so nothing a
+// pinned snapshot traces is ever freed under it (RULINGS 70). Every buffer, the temporary arena
+// included, is a ledger record of category ACCELERATION (instance arrays are TABLES) made through
+// the OptixContext's device.
+// OptixAccelBuilder is the scene's builder (host/scene/accel.h); OptixAccel is the older stateful
+// view of the same builders for the traversal tests: it tracks uploads by version and reports
+// counters.
 // Ref: OptiX 9.1 Programming Guide, acceleration structure build and compaction;
-// docs/decisions/0007-blender-integration.md d11, d14; 0002 D11.
+// docs/decisions/0007-blender-integration.md d11, d14; 0002 D11; RULINGS 70.
 #pragma once
+#include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
+#include <memory>
 #include <vector>
 
 #include "device/cuda/optix_context.h"
-#include "kernel/light/light_record.h"
 #include "device/cuda/scene_upload.h"
+#include "host/scene/accel.h"
+#include "kernel/light/light_record.h"
 
 namespace astroray::host {
 
@@ -21,10 +30,80 @@ namespace astroray::host {
 // mesh and rectangle-lamp triangles, the disk-lamp custom primitive, the lamp built-in sphere.
 inline constexpr uint32_t kSbtTriangle = 0, kSbtLampDisk = 1, kSbtLampSphere = 2, kSbtHitGroups = 3;
 
+// One built geometry structure. `record` is the identity it was built from (null for a lamp shape).
+struct OptixGas {
+  ~OptixGas();
+  Device* device = nullptr;
+  DeviceBuffer buffer;
+  uint64_t handle = 0, emitted = 0, uncompacted = 0;
+  std::shared_ptr<const MeshRecord> record;
+};
+
+// One built instance structure and the geometry structures it instances. A TLAS built without
+// instances is a valid non-zero traversable that traces to a miss (scene_accel_gpu/empty scene), so
+// a handle of 0 never occurs and is never accepted as SceneData::accel.
+struct OptixTlas {
+  ~OptixTlas();
+  Device* device = nullptr;
+  DeviceBuffer buffer, instances;
+  uint64_t handle = 0;
+  uint32_t instance_count = 0;
+  std::vector<std::shared_ptr<const OptixGas>> keep;
+};
+
+// What one mesh GAS is built from: the arrays of its device copy.
+struct OptixGasJob {
+  ar_key key = 0;
+  DeviceMeshView view{};
+  std::shared_ptr<const MeshRecord> record;
+};
+
+class OptixAccelBuilder : public AccelBuilder {
+ public:
+  OptixAccelBuilder(OptixContext& context, Owner owner) : context_(context), owner_(owner) {}
+
+  // The scene's builder: GAS of every record the previous snapshot did not build, the lamp shapes,
+  // and the TLAS. A mesh without triangles has no GAS and its instances are left out; a delta
+  // point lamp has no primitive and is left out. Throws std::runtime_error for a light index out
+  // of range, a light that is not a lamp, a lamp whose mask carries the shadow bit, and an
+  // instance whose key has no mesh, and DeviceError for an OptiX or CUDA failure.
+  std::shared_ptr<const SnapshotAccel> build(const AccelInput& in, const SnapshotAccel* prev) override;
+  AccelCounters counters() const override { return {gas_builds_, gas_reused_, tlas_builds_}; }
+
+  // The building blocks (also OptixAccel's). Triangle GAS in batches from one temporary arena.
+  std::vector<std::shared_ptr<OptixGas>> build_gas(const std::vector<OptixGasJob>& jobs);
+  // The unit shape of a lamp (an ar::LampShape: RECT, DISK or SPHERE), built uncompacted.
+  std::shared_ptr<OptixGas> build_lamp_gas(uint8_t shape);
+  // `mesh(instance, key)` gives the GAS of a mesh instance, or null to leave it out, and throws
+  // for a key it cannot resolve; `lamp(shape)` gives the shared unit GAS of a lamp shape.
+  using MeshLookup = std::function<std::shared_ptr<const OptixGas>(uint32_t instance, ar_key key)>;
+  using LampLookup = std::function<std::shared_ptr<const OptixGas>(uint8_t shape)>;
+  std::shared_ptr<OptixTlas> build_tlas(const InstanceTable* table, const std::vector<ar::LightRecord>& lights,
+                                        const MeshLookup& mesh, const LampLookup& lamp);
+
+ private:
+  OptixContext& context_;
+  Owner owner_;
+  std::atomic<uint64_t> gas_builds_{0}, gas_reused_{0}, tlas_builds_{0};
+};
+
+// The scene's builder as make_optix_accel_builder returns it: it owns the scene's OptiX context
+// (created on the init thread with the device), which the scene's pipelines must share, since a
+// traversable only works in the context that built it.
+struct OptixContextHolder {
+  OptixContextHolder(Device& device, uint32_t device_index) : context(device, device_index) {}
+  OptixContext context;
+};
+class SceneOptixBuilder final : private OptixContextHolder, public OptixAccelBuilder {
+ public:
+  SceneOptixBuilder(Device& device, uint32_t device_index)
+      : OptixContextHolder(device, device_index), OptixAccelBuilder(context, Owner{}) {}
+  OptixContext& optix_context() { return context; }
+};
+
 class OptixAccel {
  public:
-  OptixAccel(OptixContext& context, Owner owner);
-  ~OptixAccel();
+  OptixAccel(OptixContext& context, Owner owner) : core_(context, owner), context_(context) {}
   OptixAccel(const OptixAccel&) = delete;
   OptixAccel& operator=(const OptixAccel&) = delete;
 
@@ -44,8 +123,8 @@ class OptixAccel {
   void build_tlas(const SceneUpload& upload, const InstanceTable& table, const std::vector<ar::LightRecord>& lights);
 
   // OptixTraversableHandle; 0 when there is none or when update_gas changed a GAS since the
-  // last build_tlas (the old TLAS may point at freed memory, so nothing may trace it).
-  uint64_t tlas_handle() const { return tlas_handle_; }
+  // last build_tlas (the TLAS of that build is no longer the current geometry).
+  uint64_t tlas_handle() const { return tlas_stale_ || !tlas_ ? 0 : tlas_->handle; }
   uint64_t gas_handle(ar_key key) const;
   uint64_t gas_bytes(ar_key key) const;  // compacted size; 0 when the key has no GAS
   uint64_t gas_emitted_size(ar_key key) const;      // OPTIX_PROPERTY_TYPE_COMPACTED_SIZE of the build
@@ -59,7 +138,7 @@ class OptixAccel {
   };
   std::vector<TlasInstance> read_tlas_instances() const;
   uint64_t gas_bytes_total() const;
-  uint64_t tlas_bytes() const { return tlas_buffer_.bytes; }
+  uint64_t tlas_bytes() const { return tlas_ ? tlas_->buffer.bytes : 0; }
   uint32_t gas_count() const { return uint32_t(gas_.size()); }
 
   // Counters for tests and the statistics report.
@@ -68,20 +147,16 @@ class OptixAccel {
   double last_gas_ms() const { return last_gas_ms_; }  // wall time of the last update_gas that built
 
  private:
-  struct Gas {
-    uint64_t version = 0, handle = 0, emitted = 0, uncompacted = 0;
-    DeviceBuffer buffer;
+  struct Entry {
+    uint64_t version = 0;
+    std::shared_ptr<OptixGas> gas;
   };
-  void free_gas(Gas& g);
-  void ensure_lamp_gas(uint8_t shape);  // an ar::LampShape
-
+  OptixAccelBuilder core_;
   OptixContext& context_;
-  Owner owner_;
-  std::map<ar_key, Gas> gas_;
-  Gas lamp_gas_[4];  // by ar::LampShape (kernel/geom/lamp_intersect.h); NONE and INVALID stay empty
-  DeviceBuffer tlas_buffer_, tlas_instances_;
-  uint32_t tlas_instance_count_ = 0;
-  uint64_t tlas_handle_ = 0;
+  std::map<ar_key, Entry> gas_;
+  std::shared_ptr<OptixGas> lamp_gas_[4];  // by ar::LampShape; NONE and INVALID stay empty
+  std::shared_ptr<OptixTlas> tlas_;
+  bool tlas_stale_ = false;
   uint64_t gas_builds_ = 0, tlas_builds_ = 0;
   double last_gas_ms_ = 0;
 };

@@ -9,6 +9,7 @@
 #include "host/light/lamps.h"
 #include "host/light/light_builder.h"
 #include "host/material/material_store.h"
+#include "host/scene/accel.h"
 #include "host/scene/edit.h"
 #include "host/scene/mesh.h"
 #include "host/scene/scene_tables.h"
@@ -23,7 +24,7 @@ void apply_known(std::set<std::pair<uint32_t, uint64_t>>& known, const Pending& 
 }
 
 Scene::Scene(ContextState& ctx, SceneConfig config)
-    : ctx_(ctx), generations_(ctx, report_), device_of_(std::move(config.device_of)),
+    : ctx_(ctx), generations_(ctx, report_), device_of_(std::move(config.device_of)), accel_of_(std::move(config.accel_of)),
       tables_(std::make_unique<SceneTableCache>()) {
   unsigned workers = config.workers;
   if (workers == 0) workers = std::max(1u, std::min(8u, std::thread::hardware_concurrency() / 2));
@@ -247,6 +248,20 @@ SceneSnapshot Scene::snapshot(bool with_lights) {
 uint64_t Scene::light_rebuilds() const {
   std::lock_guard<std::mutex> lock(state_.mutex);
   return state_.light_rebuilds;
+}
+
+AccelBuilder& Scene::accel_builder() {
+  wait_init();
+  if (accel_of_ && init_result_) {
+    AccelBuilder* b = accel_of_(init_result_.get());
+    if (!b) throw std::runtime_error("the scene's device made no acceleration structure builder");
+    return *b;
+  }
+  // A scene with a device must bring its own builder: Embree structures cannot serve a CUDA scene.
+  if (device_of_) throw std::logic_error("the scene has a device but no acceleration structure builder (SceneConfig::accel_of)");
+  std::lock_guard<std::mutex> lock(init_mutex_);
+  if (!cpu_accel_) cpu_accel_ = make_cpu_accel_builder();
+  return *cpu_accel_;
 }
 
 }  // namespace astroray::host

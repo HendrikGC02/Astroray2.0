@@ -6,6 +6,7 @@
 // (hit record, ray-type mask, opaque shadow rule, camera rays without any-hit).
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 
 #include "device/cpu/embree_ray.h"
 #include "device/cpu/embree_scene.h"
@@ -19,7 +20,9 @@ using astroray::host::EmbreeScene;
 
 RTCScene accel_of(const ar::KernelGlobals& kg) {
   const ar::SceneData& s = ar::scene_of(kg);
-  AR_ASSERT(s.accel != nullptr);
+  // Every session of a scene gets its snapshot's structure (114), also for an empty scene, so a null here
+  // is a bug that must not reach a dereference in a release build (CLAUDE.md rule 5).
+  if (s.accel == nullptr) throw std::logic_error("intersect: SceneData::accel is null (the scene tables carry no traversal structure)");
   return static_cast<RTCScene>(static_cast<const EmbreeScene*>(s.accel)->handle());
 }
 

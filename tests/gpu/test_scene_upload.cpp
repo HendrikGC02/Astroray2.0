@@ -74,6 +74,7 @@ struct Graph {
 struct Held {
   std::shared_ptr<Ledger> ledger = std::make_shared<Ledger>();
   std::unique_ptr<ModuleDevice> device;
+  std::unique_ptr<AccelBuilder> accel;
 };
 
 struct Rig {
@@ -86,9 +87,11 @@ struct Rig {
     auto h = held;
     cfg.init = [h]() -> std::shared_ptr<void> {
       h->device = make_cuda_device(*h->ledger, 0);
+      h->accel = make_optix_accel_builder(*h->device, 0);
       return h;
     };
     cfg.device_of = [](void* p) -> Device* { return static_cast<Held*>(p)->device.get(); };
+    cfg.accel_of = [](void* p) -> AccelBuilder* { return static_cast<Held*>(p)->accel.get(); };
     scene = std::make_unique<Scene>(ctx, std::move(cfg));
     scene->meshes = std::make_shared<MeshStore>();
     scene->materials = std::make_shared<MaterialStore>(scene->meshes->shared_ledger());
@@ -340,7 +343,7 @@ TEST_CASE("scene_upload/material edit uploads only material tables") {
   auto first = acquire_scene_tables(*r.scene);
   std::printf("scene_upload first upload: %llu bytes\n", (unsigned long long)first->bytes_moved);
   // The ledger holds exactly the set's copies.
-  CHECK(r.held->ledger->total() == set_bytes(*first));
+  CHECK(r.held->ledger->total() == set_bytes(*first) + first->accel->bytes);  // the traversal structures are ledgered too
 
   r.set_material_43(0.9f);
   lights = r.scene->lights();
@@ -364,7 +367,7 @@ TEST_CASE("scene_upload/material edit uploads only material tables") {
 
   // Retirement: the old copies go with their last holder, the cache now holds only the second set.
   first.reset();
-  CHECK(r.held->ledger->total() == set_bytes(*second));
+  CHECK(r.held->ledger->total() == set_bytes(*second) + second->accel->bytes);
   second.reset();
   r.scene->table_cache().current.reset();
   CHECK(r.held->ledger->total() == 0);
