@@ -15,33 +15,13 @@
 #include "host/device.h"
 #include "host/scene/instances.h"
 #include "host/scene/mesh.h"
+#include "kernel/scene/scene_view.h"
 
 namespace astroray::host {
 
-// One entry of the device mesh table, indexed by `DeviceInstanceRecord::mesh`. A hit reads
-// the triangle's corners from tri_corners, then normals by corner, UVs by layer and corner,
-// and the material slot by triangle (0007 d10).
-struct DeviceMeshView {
-  uint64_t positions;        // float3 x vertex_count, the representative motion step
-  uint64_t tri_vertex;       // uint3 x triangle_count: vertex indices (what the GAS reads)
-  uint64_t tri_corners;      // uint3 x triangle_count: corner indices
-  uint64_t corner_normals;   // float3 x corner_count
-  uint64_t uv;               // float2 x corner_count, uv_layer_count layers back to back
-  uint64_t tri_material;     // int32 x triangle_count
-  uint32_t vertex_count, triangle_count, corner_count, uv_layer_count;
-};
-static_assert(sizeof(DeviceMeshView) == 64, "device layout");
-
-struct DeviceInstanceRecord {
-  uint32_t mesh;  // index into the mesh table (upload_instances throws for a key that was never uploaded)
-  uint32_t random_id, pass_index, crypto_object, crypto_asset;
-  uint32_t flags;  // AR_INSTANCE_*
-  uint32_t material_offset, material_count, light_index;
-  uint32_t mask, light_group;
-  float color[4];
-  float object_to_world[12];  // row-major 3x4, the representative motion step
-};
-static_assert(sizeof(DeviceInstanceRecord) == 108, "device layout");
+// The device layouts live in the kernel-visible scene view: one definition for CPU and GPU.
+using ar::DeviceInstanceRecord;
+using ar::DeviceMeshView;
 
 // The geometry of one key on the device. `version` moves whenever an array is replaced, so
 // acceleration code rebuilds exactly the keys whose data changed.

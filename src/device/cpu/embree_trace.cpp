@@ -1,23 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "device/cpu/embree_trace.h"
 
-#include <embree4/rtcore.h>
+#include "device/cpu/embree_ray.h"
 
 namespace astroray::host {
 
 namespace {
 
 // Ray i of the batch as an Embree ray (single precision).
-RTCRay make_ray(const RayBatch& r, uint32_t i, unsigned mask) {
-  RTCRay ray;
-  ray.org_x = float(r.ox[i]), ray.org_y = float(r.oy[i]), ray.org_z = float(r.oz[i]);
-  ray.dir_x = float(r.dx[i]), ray.dir_y = float(r.dy[i]), ray.dir_z = float(r.dz[i]);
-  ray.tnear = float(r.tmin[i]);
-  ray.tfar = float(r.tmax[i]);
-  ray.mask = mask;
-  ray.flags = 0;
-  ray.time = 0.0f;
-  return ray;
+RTCRay batch_ray(const RayBatch& r, uint32_t i, unsigned mask) {
+  return make_ray(float(r.ox[i]), float(r.oy[i]), float(r.oz[i]), float(r.dx[i]), float(r.dy[i]), float(r.dz[i]),
+                  float(r.tmin[i]), float(r.tmax[i]), mask);
 }
 
 }  // namespace
@@ -30,7 +23,7 @@ void trace_closest(const EmbreeScene& scene, const RayBatch& rays, const uint8_t
     rtcInitIntersectArguments(&args);
     for (uint32_t i = first; i < last; ++i) {
       RTCRayHit rh;
-      rh.ray = make_ray(rays, i, mask[i]);
+      rh.ray = batch_ray(rays, i, mask[i]);
       rh.hit.geomID = RTC_INVALID_GEOMETRY_ID;
       rh.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
       rtcIntersect1(s, &rh, &args);
@@ -52,7 +45,7 @@ void trace_occluded(const EmbreeScene& scene, const RayBatch& rays, uint32_t cou
     RTCOccludedArguments args;
     rtcInitOccludedArguments(&args);
     for (uint32_t i = first; i < last; ++i) {
-      RTCRay ray = make_ray(rays, i, kShadowRayMask);
+      RTCRay ray = batch_ray(rays, i, kShadowRayMask);
       rtcOccluded1(s, &ray, &args);
       // Embree signals an occluded ray by setting tfar to -inf.
       occluded[i] = ray.tfar < 0.0f ? 1 : 0;

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "../../../include/astroray/astroray.h"
+#include "../../kernel/scene/scene_view.h"
 
 namespace astroray::host {
 
@@ -24,8 +25,6 @@ struct InstanceSummary {
   std::vector<ar_key> geom, object;
 };
 
-constexpr uint32_t kNoLight = ~0u;  // light_index of geometry instances
-
 struct Instance {
   ar_key geom_key = 0;
   ar_key object_key = 0;
@@ -36,7 +35,7 @@ struct Instance {
   uint32_t flags = 0;       // AR_INSTANCE_*: shading and light pass only, never mask bits
   uint8_t light_group = 0;
   uint32_t material_offset = 0, material_count = 0;  // slice of material_pool; 0 = default
-  uint32_t light_index = kNoLight;  // set by the lamp-instance task (068)
+  uint32_t light_index = ar::kNoLightIndex;  // set by the lamp-instance task (068)
 };
 
 // The motion step rendered until M8 for S steps: (S - 1) / 2 in integer division, so the
