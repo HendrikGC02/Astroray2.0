@@ -150,9 +150,7 @@ TEST_CASE("embree/representative motion step") {
   // the one at z = 0, so a ray from z = 2 hits at t = 2.
   std::vector<float> pos;
   for (float z : {5.0f, 0.0f, -5.0f})
-    for (float v : {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f, 0.f}) pos.push_back(v);
-  for (size_t s = 0; s < 3; ++s)
-    for (size_t k = 0; k < 4; ++k) pos[(s * 4 + k) * 3 + 2] = (s == 0 ? 5.0f : s == 1 ? 0.0f : -5.0f);
+    for (float v : {0.f, 0.f, z, 1.f, 0.f, z, 1.f, 1.f, z, 0.f, 1.f, z}) pos.push_back(v);
   Rig r;
   r.meshes.install(quad_record(7, {0, 1, 2, 3}, pos, 3));
   r.add(0xFF, 0.0f, 0, 7);
