@@ -547,13 +547,16 @@ TEST_CASE("nee/a hit outside the light index ends invalid") {
 }
 TEST_CASE("nee/spherical triangle sampling matches double") {
   // The float sampler against the double replica of the same map, from 2^17 context points in
-  // [-1, 1]^3 below two triangles 3 above (well-shaped, and a sliver), uniforms from the sampler's
+  // [-1, 1]^3 below three triangles 3 above (two well-shaped, a sliver) and from points just below a
+  // large one (solid angle above pi), uniforms from the sampler's
   // independent stream. pbrt's float form strayed 1.1e-4 to 1.4e-4 rad at p99.9 (small u.x: the
   // cos(beta') -> sin(beta') step); Peters' steps measure 1.7e-6 to 2.6e-6.
-  const ar::Real3 tris[3][3] = {{{-0.6f, -0.6f, 3.0f}, {0.6f, -0.5f, 3.1f}, {0.0f, 0.6f, 3.05f}},
+  const ar::Real3 tris[4][3] = {{{-0.6f, -0.6f, 3.0f}, {0.6f, -0.5f, 3.1f}, {0.0f, 0.6f, 3.05f}},
                                 {{0.2f, 0.1f, 3.3f}, {1.0f, 0.2f, 3.2f}, {0.5f, 0.9f, 3.25f}},
-                                {{-0.9f, 0.0f, 3.0f}, {0.9f, 0.05f, 3.2f}, {0.0f, 0.12f, 3.1f}}};
-  for (int t = 0; t < 3; ++t) {
+                                {{-0.9f, 0.0f, 3.0f}, {0.9f, 0.05f, 3.2f}, {0.0f, 0.12f, 3.1f}},
+                                {{-3.0f, -3.0f, 1.3f}, {3.0f, -3.0f, 1.3f}, {0.0f, 4.0f, 1.3f}}};
+  uint32_t large = 0;  // samples with Omega > pi (Q + S < 0: atan2, not atan, gives Omega / 2)
+  for (int t = 0; t < 4; ++t) {
     const ar::LightRecord r = ar::light_make_triangle(tris[t][0], tris[t][1], tris[t][2], 0, 0, ar::kLightTwoSided, 1.0f,
                                                       illuminant(1.0f));
     const D3 v[3] = {{tris[t][0].x, tris[t][0].y, tris[t][0].z}, {tris[t][1].x, tris[t][1].y, tris[t][1].z},
@@ -561,7 +564,10 @@ TEST_CASE("nee/spherical triangle sampling matches double") {
     std::vector<double> ang;
     for (uint32_t i = 0; i < (1u << 17); ++i) {
       const auto unit = [&](uint32_t d) { return ar::sample_independent(i, uint32_t(t), 0, d, 74u); };
-      const ar::Real3 p{2 * unit(0) - 1, 2 * unit(1) - 1, 2 * unit(2) - 1};
+      // Triangle 3 is large and 0.3 to 0.5 above the points nearest it: Omega up to about 5 sr.
+      const ar::Real3 p = t < 3 ? ar::Real3{2 * unit(0) - 1, 2 * unit(1) - 1, 2 * unit(2) - 1}
+                                : ar::Real3{0.6f * unit(0) - 0.3f, 0.6f * unit(1) - 0.3f, 0.2f * unit(2) + 0.8f};
+      if (t == 3) large += ar::tri_solid_angle(r, p) > ar::kLightPi;
       const ar::Real2 u{unit(3), unit(4)};
       ar::Real3 q{0, 0, 0};
       REQUIRE(ar::tri_sample_spherical(r, p, u, &q));
@@ -575,6 +581,7 @@ TEST_CASE("nee/spherical triangle sampling matches double") {
     MESSAGE("triangle " << t << ": p99.9 " << p999 << " rad, max " << worst << " rad");
     CHECK(p999 < 5e-6);  // half the agreement test's direction limit (0002 D12 class DIRECTION, 1e-5)
   }
+  CHECK(large > (1u << 16));
 }
 }  // TEST_SUITE
 

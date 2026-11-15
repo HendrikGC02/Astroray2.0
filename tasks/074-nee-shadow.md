@@ -15,7 +15,7 @@ Do:
 Acceptance: `pwsh tools/check.ps1 gate` passes with A1 and a1_world_half on both devices; kernelgate shows the shade_surface delta and a shade_shadow row with 0 spills.
 Look at: none.
 Canary: tasks/074.canary.patch must turn red: `tools/analytic.py --scene a1_world_half --device cpu` (the patch drops the MIS weight on world hits), astroray_tests_cpu "nee/late delivery lands in slot".
-Budget: declared shade_surface delta for NEE; one new device TU.
+Budget: declared shade_surface delta for NEE; one new device TU; k_shade_background regs 40 -> 62, world MIS; accepted by the lead; k_shade_surface 128 regs, 384 B stack, 0 spills, compile 4.6 s under R72's 5.0 s.
 Depends on: 073, 067, 068, 116.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:

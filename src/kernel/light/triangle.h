@@ -64,7 +64,7 @@ AR_FN bool tri_sees(const LightRecord& r, Real3 p, Real3 n) {
 //  - with theta = u.x Omega / 2, o = (V cos theta - S sin theta) a + (Q sin theta) c, and c' is a
 //    reflected about o: c' = 2 (a.o) / (o.o) o - a, unit by construction;
 //  - s2 = b.c', s = 1 - u.y (1 - s2) by fused multiply-adds, t = sqrt((1 - s^2) / (1 - s2^2)), or
-//    t = u.y (its limit) when 1 - s2^2 <= 0; the direction is (s - t s2) b + t c', unit by
+//    t = sqrt(u.y) (its limit) when 1 - s2^2 <= 0; the direction is (s - t s2) b + t c', unit by
 //    construction (no normalisation).
 // Then the point of the triangle in that direction from clamped barycentrics, as pbrt does. False
 // when the spherical triangle is degenerate.
@@ -95,7 +95,8 @@ AR_FN bool tri_sample_spherical(const LightRecord& r, Real3 p, Real2 u, Real3* o
   const Real s2 = dot(b, cp);
   const Real cs = ar::fma(u.y, s2, ar::fma(-u.y, Real(1), Real(1)));  // (1 - u.y) + u.y s2: cos from b
   const Real d = Real(1) - s2 * s2;
-  const Real t = d > Real(0) ? ar::sqrt(ar::max(Real(0), Real(1) - cs * cs) / d) : u.y;
+  // As s2 -> 1, 1 - cs^2 ~ 2 u.y (1 - s2) and d ~ 2 (1 - s2), so t -> sqrt(u.y).
+  const Real t = d > Real(0) ? ar::sqrt(ar::max(Real(0), Real(1) - cs * cs) / d) : ar::sqrt(u.y);
   const Real3 w = b * (cs - t * s2) + cp * t;  const Real3 e1 = v1 - v0, e2 = v2 - v0;
   const Real3 s1 = cross(w, e2);
   const Real divisor = dot(s1, e1);
