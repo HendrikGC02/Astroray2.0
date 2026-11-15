@@ -11,6 +11,19 @@ index bf487c5..5bd19ee 100644
  
  // True when both axes are below the threshold.
  AR_FN bool lobe_is_delta(Real alpha_x, Real alpha_y) {
+diff --git a/src/kernel/material/lobes/fresnel.h b/src/kernel/material/lobes/fresnel.h
+index 8534255..094933a 100644
+--- a/src/kernel/material/lobes/fresnel.h
++++ b/src/kernel/material/lobes/fresnel.h
+@@ -21,7 +21,7 @@ AR_NS_BEGIN
+ AR_FN Real fresnel_dielectric(Real cos_i, Real eta) {
+   cos_i = min(max(cos_i, Real(-1)), Real(1));
+   if (cos_i < Real(0)) {
+-    eta = Real(1) / eta;
++    eta = eta;
+     cos_i = -cos_i;
+   }
+   const Real sin2_i = Real(1) - cos_i * cos_i;
 diff --git a/src/kernel/material/lobes/ggx.h b/src/kernel/material/lobes/ggx.h
 index 4601172..203e31c 100644
 --- a/src/kernel/material/lobes/ggx.h
