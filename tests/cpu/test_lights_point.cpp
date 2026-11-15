@@ -85,6 +85,12 @@ bool finite_spec(const Spec& s) {
   return true;
 }
 
+bool zero_spec(const Spec& s) {
+  for (int i = 0; i < 4; ++i)
+    if (s.v[i] != Real(0)) return false;
+  return true;
+}
+
 // splitmix64; the kernel sampler is not under test here.
 struct Rng {
   uint64_t s;
@@ -133,6 +139,14 @@ TEST_SUITE("fast") {
     CHECK_FALSE(ar::light_valid(bad));  // negative radius
     bad.size[0] = 0.0f;
     CHECK_FALSE(ar::light_valid(bad));  // a sphere has a positive radius
+    bad = sp;
+    bad.size[0] = 1e-30f;  // r^2 underflows: L and 1 / (4 pi r^2) overflow float
+    CHECK_FALSE(ar::light_valid(bad));
+    CHECK(ar::light_problem(bad) != nullptr);
+    bad.size[0] = 1e-12f;  // r^2 = 1e-24 is far above P / (4 pi^2 FLT_MAX), about 2e-38
+    CHECK(ar::light_valid(bad));
+    bad.size[0] = 1e-19f;  // r^2 = 1e-38 < 2e-38: L = P / (4 pi^2 r^2) would exceed FLT_MAX
+    CHECK_FALSE(ar::light_valid(bad));
     bad = pt;
     bad.size[0] = 0.25f;
     CHECK_FALSE(ar::light_valid(bad));  // a point lamp has radius 0
@@ -365,10 +379,20 @@ TEST_SUITE("fast") {
       }
       Rng rng{st::mix_bits(uint64_t(radius * 1000) + 11)};
       const ar::SceneSphere world{r3(0, 0, 0), Real(100)};
+      // The first draws are fixed: u_dir = (0, 0), the first Sobol point, and (0, 0.5) map to the
+      // rim of the concentric disk, the horizon, where the cosine pdf is 0.
+      const Real2 fixed_ud[5] = {r2(0, 0), r2(0, 0.5), r2(0.5, 0.5), r2(0.25, 0.75), r2(0.9, 0.1)};
       for (int k = 0; k < 200; ++k) {
-        const Real2 up = r2(rng.next(), rng.next()), ud = r2(rng.next(), rng.next());
+        const Real2 up = r2(rng.next(), rng.next());
+        const Real2 ud = k < 5 ? fixed_ud[k] : r2(rng.next(), rng.next());
         const LightLeSample s = ar::light_sample_le(lamp, up, ud, lanes(), obs.view, world);
-        if (!(s.pdf_dir > Real(0))) continue;
+        if (!(s.pdf_dir > Real(0))) {
+          CHECK(zero_spec(s.Le));
+          continue;
+        }
+        // Within 1e-2 of the horizon the float direction's own rounding (1e-7) is no longer small
+        // against its cosine, so cos from the ray and from the pdf disagree by more than 2e-4.
+        if (double(s.pdf_dir) * kPi < 1e-2) continue;
         const D3 nrm = unit3(sub3(d3(s.ray.o), D3{1, 2, 3}));
         const double cosd = dot3(nrm, d3(s.ray.d));
         for (int l = 0; l < 4; ++l) {
@@ -401,6 +425,7 @@ TEST_SUITE("fast") {
     const ar::LightBounds b = ar::light_bounds(lamp);
     CHECK(close(double(b.bbox.lo.x), 2.5, kPinTol));
     CHECK(close(double(b.bbox.hi.z), 4.5, kPinTol));
+    CHECK(rel_close(double(b.theta_o), kPi, kPinTol));
     CHECK(rel_close(double(b.theta_e), kPi / 2, kPinTol));
     CHECK_FALSE(b.two_sided);
   }
@@ -428,7 +453,7 @@ TEST_SUITE("fast") {
             CHECK(std::isfinite(double(s.pdf)));
             CHECK(finite_spec(s.Le));
             if (s.pdf == Real(0)) {
-              CHECK(s.Le.v[0] == Real(0));
+              CHECK(zero_spec(s.Le));
             } else {
               CHECK(s.pdf > Real(0));
               CHECK(s.dist > Real(0));
@@ -443,8 +468,34 @@ TEST_SUITE("fast") {
             CHECK(finite_spec(e.Le));
             CHECK(std::isfinite(double(e.pdf_pos)));
             CHECK(std::isfinite(double(e.pdf_dir)));
-            if (e.pdf_pos == Real(0)) CHECK(e.Le.v[0] == Real(0));
+            // No sample means pdf 0 and Le 0 together, whichever pdf is the zero one.
+            if (e.pdf_pos == Real(0) || e.pdf_dir == Real(0)) {
+              CHECK(zero_spec(e.Le));
+              CHECK(e.pdf_pos == Real(0));
+              CHECK(e.pdf_dir == Real(0));
+            }
           }
+    // u_dir on the rim of the concentric disk is the horizon: pdf_dir 0 must come with Le 0, in
+    // both builds ((0, 0.5) gives a rim point of exactly unit length).
+    {
+      const LightRecord lamp = make_sphere(r3(0, 0, 5), 1.0);
+      const Real2 rim[] = {r2(0, 0), r2(0, 0.5), r2(0.5, 0)};
+      int horizon = 0;
+      for (const Real2& ud : rim)
+        for (Real a : vals)
+          for (Real b : vals) {
+            const LightLeSample e = ar::light_sample_le(lamp, Real2{a, b}, ud, lanes(), obs.view, world);
+            if (e.pdf_dir == Real(0)) {
+              ++horizon;
+              CHECK(zero_spec(e.Le));
+              CHECK(e.pdf_pos == Real(0));
+            } else {
+              CHECK(e.pdf_pos > Real(0));
+              CHECK(finite_spec(e.Le));
+            }
+          }
+      CHECK(horizon >= 4);  // at least (0, 0.5) with each u_pos
+    }
     for (Real a : vals)
       for (Real b : vals) {
         const LightRecord lamp = make_point(r3(0, 0, 5));

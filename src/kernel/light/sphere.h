@@ -101,7 +101,10 @@ AR_FN LightLeSample sphere_sample_le(const LightRecord& r, Real2 u_pos, Real2 u_
   s.Le = sphere_radiance(r, lam, obs);
   s.pdf_pos = Real(1) / (Real(4) * kLightPi * radius * radius);
   s.pdf_dir = local.z / kLightPi;
-  if (!is_finite(s.Le) || !(s.pdf_pos - s.pdf_pos == Real(0))) return light_le_none();  // r^2 underflow or L overflow
+  // pbrt-v4 DiffuseAreaLight::SampleLe: a direction on the horizon (cosine pdf 0) is no sample.
+  if (s.pdf_dir == Real(0)) return light_le_none();
+  // Backstop only: light_problem refuses radii whose L or 1 / (4 pi r^2) overflows.
+  if (!is_finite(s.Le) || !(s.pdf_pos - s.pdf_pos == Real(0))) return light_le_none();
   return s;
 }
 
