@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "host/data_resource.h"
+#include "host/light/light_builder.h"
 #include "host/scene/edit.h"
 
 namespace astroray::host {
@@ -68,6 +69,7 @@ struct MaterialStore::Open {
   std::map<ar_key, ar_material_desc> materials;
   std::set<ar_key> removed_graphs, removed_materials;
   std::set<ar_key> images, removed_images;  // image keys this edit set and removed
+  std::optional<ar_world_desc> world;  // set in this edit
 };
 
 struct MaterialStore::Pass {
@@ -80,6 +82,10 @@ struct MaterialStore::Pass {
     std::shared_ptr<const MaterialOutput> out;
   };
   std::vector<Item> items;  // compiled on the worker from the latest state as bind predicted it
+  bool world = false;       // the world recompiles: predicted desc and graph, and the output
+  ar_world_desc world_desc = {};
+  std::shared_ptr<const StoredGraph> world_graph;
+  std::shared_ptr<const WorldOutput> world_out;
 };
 
 MaterialStore::MaterialStore(std::shared_ptr<Ledger> ledger)
@@ -107,8 +113,18 @@ ar_status MaterialStore::ensure_pass(Edit& edit) {
     self->bind(pass);
   };
   item->job = [self, pass] {
-    for (Pass::Item& it : pass->items)
+    for (Pass::Item& it : pass->items) {
       it.out = std::make_shared<const MaterialOutput>(compile_one(self->table_, it.desc, it.graph.get(), nullptr));
+      // An emission sampling value outside Blender's five, or an estimate the light table cannot
+      // weigh, is a bad material and rejects the generation.
+      try {
+        emission_sidedness(it.desc.emission_sampling, it.out->emission_estimate);
+      } catch (const std::invalid_argument& e) {
+        throw ItemFailure(it.key, e.what());
+      }
+    }
+    if (pass->world)
+      pass->world_out = std::make_shared<const WorldOutput>(compile_world(pass->world_desc, pass->world_graph.get(), self->table_));
   };
   item->on_active = [self, pass, scene] { self->activate(*scene, *pass); };
   item->on_dropped = [self, pass] { self->dropped(*pass); };
@@ -155,6 +171,15 @@ ar_status MaterialStore::set_material(Edit& edit, ar_key key, const ar_material_
   return AR_OK;
 }
 
+// Keyless like the camera: the world is part of the material pass, which sees every graph.
+ar_status MaterialStore::set_world(Edit& edit, const ar_world_desc* d) {
+  if (d == nullptr) return edit.fail("invalid argument: ar_edit_set_world desc is null");
+  const ar_world_desc copy = *d;
+  if (ar_status st = ensure_pass(edit)) return st;
+  open_->world = copy;
+  return AR_OK;
+}
+
 ar_status MaterialStore::set_image(Edit& edit, const ar_image_desc* d) {
   if (d == nullptr) return edit.fail("invalid argument: ar_edit_set_image desc is null");
   if (ar_status st = ensure_pass(edit)) return st;
@@ -194,6 +219,16 @@ void MaterialStore::apply_open(const Open& o, GraphMap& graphs, DescMap& materia
   for (const auto& kv : o.materials) materials[kv.first] = kv.second;
 }
 
+void MaterialStore::apply_world(const Open& o, std::optional<ar_world_desc>& world) {
+  if (o.reset) world.reset();
+  if (o.world) world = o.world;
+}
+
+bool MaterialStore::world_compiles(const Open& o, const std::optional<ar_world_desc>& world) {
+  if (o.world) return true;
+  return world && (o.graphs.count(world->surface_graph) != 0 || o.removed_graphs.count(world->surface_graph) != 0);
+}
+
 bool MaterialStore::compiles(const Open& o, ar_key key, const ar_material_desc& d) {
   return o.materials.count(key) != 0 || o.graphs.count(d.surface_graph) != 0 || o.removed_graphs.count(d.surface_graph) != 0;
 }
@@ -204,7 +239,14 @@ void MaterialStore::bind(const std::shared_ptr<Pass>& pass) {
   const Open& o = *pass->open;
   std::lock_guard<std::mutex> lock(mutex_);
   apply_open(o, latest_graphs_, latest_materials_);
+  apply_world(o, latest_world_);
   queued_.push_back(pass);
+  if (latest_world_ && world_compiles(o, latest_world_)) {
+    pass->world = true;
+    pass->world_desc = *latest_world_;
+    auto gi = latest_graphs_.find(latest_world_->surface_graph);
+    if (gi != latest_graphs_.end()) pass->world_graph = gi->second;
+  }
   for (const auto& kv : latest_materials_) {
     if (!compiles(o, kv.first, kv.second)) continue;
     Pass::Item it;
@@ -225,7 +267,8 @@ void MaterialStore::dropped(const Pass& pass) {
   latest_graphs_ = graphs_;
   latest_materials_.clear();
   for (const auto& kv : materials_) latest_materials_[kv.first] = kv.second.desc;
-  for (const auto& p : queued_) apply_open(*p->open, latest_graphs_, latest_materials_);
+  latest_world_ = world_;
+  for (const auto& p : queued_) apply_open(*p->open, latest_graphs_, latest_materials_), apply_world(*p->open, latest_world_);
 }
 
 void MaterialStore::rebuild_locked() {
@@ -242,6 +285,7 @@ void MaterialStore::rebuild_locked() {
     a->programs.insert(a->programs.end(), m.compiled.program.begin(), m.compiled.program.end());
     a->constants.push_back(m.compiled.block);
     a->emission_estimates.push_back(m.emission_estimate);
+    a->emission_sampling.push_back(kv.second.desc.emission_sampling);
   }
   const uint64_t bytes = a->bytes();
   const uint64_t id = bytes != 0 ? ledger_->add(Owner{}, LedgerCategory::TABLES, bytes) : 0;
@@ -258,6 +302,8 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
     std::shared_ptr<const MaterialOutput> out;
   };
   std::vector<Done> done;
+  ar_key old_world = 0;
+  std::shared_ptr<const WorldOutput> new_world;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     queued_.erase(std::remove_if(queued_.begin(), queued_.end(), [&](const auto& p) { return p.get() == &pass; }),
@@ -296,12 +342,30 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
       done.push_back({kv.first, o.materials.count(kv.first) != 0, out});
     }
     rebuild_locked();
+    // The world, by the same rule: the worker's output when its prediction holds, else compiled here.
+    apply_world(o, world_);
+    if (!world_) {
+      if (world_out_) old_world = world_out_->subject;
+      world_out_.reset();
+    } else if (world_compiles(o, world_)) {
+      auto gi = graphs_.find(world_->surface_graph);
+      const std::shared_ptr<const StoredGraph> graph = gi != graphs_.end() ? gi->second : nullptr;
+      std::shared_ptr<const WorldOutput> out = pass.world_out;
+      if (!out || pass.world_graph != graph || std::memcmp(&pass.world_desc, &*world_, sizeof(ar_world_desc)) != 0)
+        out = std::make_shared<const WorldOutput>(compile_world(*world_, graph.get(), table_));
+      if (world_out_) old_world = world_out_->subject;
+      world_out_ = out;
+      new_world = out;
+    }
   }
   // A material set in this edit had its old entries removed with its keyed item (the tracker
   // clears replaced subjects before on_active); a dependent is not a subject, so clear it here.
   std::vector<uint64_t> dependents;
   for (const Done& d : done)
     if (!d.own) dependents.push_back(d.key);
+  // The world is no keyed item either: its previous entries go before the new ones are raised.
+  if (old_world != 0) dependents.push_back(old_world);
+  if (new_world && new_world->subject != 0) dependents.push_back(new_world->subject);
   if (!dependents.empty()) scene.report().on_generation_active(pass.generation, dependents, false);
   for (const Done& d : done)
     for (const MaterialEntry& e : d.out->entries) {
@@ -309,6 +373,16 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
       scene.report().raise(e.code, d.key, e.detail, 1, nullptr, pass.generation);
     }
   images_->raise_entries(scene, pass.generation);
+  if (new_world)
+    for (const MaterialEntry& e : new_world->entries) {
+      scene.ctx().log.line("WARNING", "world: " + e.detail + (new_world->magenta ? " (rendered magenta)" : ""));
+      scene.report().raise(e.code, new_world->subject, e.detail, 1, nullptr, pass.generation);
+    }
+}
+
+std::shared_ptr<const WorldOutput> MaterialStore::world() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return world_out_;
 }
 
 std::shared_ptr<const MaterialArrays> MaterialStore::arrays() const {

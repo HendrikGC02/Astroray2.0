@@ -30,13 +30,16 @@ namespace astroray {
 ContextState& context_state(ar_context_s* ctx);
 void context_set_error(ar_context_s* ctx, const std::string& text);
 void context_device(ar_context_s* ctx, uint32_t* kind, uint32_t* index);
+struct ObserverTables;  // host/data_resource.h
 }  // namespace astroray
 
 namespace astroray::host {
 
 class Edit;
 class MeshStore;  // host/scene/mesh.h
+struct MeshRecord;
 class MaterialStore;  // host/material/material_store.h
+struct LightTable;    // host/light/light_builder.h
 
 // Applies one generation's key-set changes (reset, removes, then inserts).
 void apply_known(std::set<std::pair<uint32_t, uint64_t>>& known, const Pending& p);
@@ -97,6 +100,12 @@ class Scene {
   // (optimistic like `known`, rebuilt when a generation is dropped).
   std::shared_ptr<const InstanceSummary> latest_instances() const;
   void publish_instances(std::shared_ptr<const InstanceTable> table);
+  // The light table of the active state (lamps join in 068). Rebuilt on the call only when its
+  // inputs changed (gather_scene_lights' key), under the state lock; call it at the session's
+  // latch, never per pass or launch. Throws std::runtime_error when observer.bin is unusable or
+  // a material's emission sampling is out of range.
+  std::shared_ptr<const LightTable> lights();
+  uint64_t light_rebuilds() const;  // how many times lights() rebuilt the table
 
  private:
   friend class Edit;
@@ -112,6 +121,11 @@ class Scene {
     std::shared_ptr<const InstanceTable> instances;
     uint64_t tlas_epoch = 0;
     std::shared_ptr<const InstanceSummary> inst_latest, inst_active;
+    std::shared_ptr<const ObserverTables> observer;  // loaded by the first lights()
+    std::vector<uint8_t> light_key;
+    std::vector<std::shared_ptr<const MeshRecord>> light_meshes;  // pins the records light_key names
+    std::shared_ptr<const LightTable> lights;
+    uint64_t light_rebuilds = 0;
   };
   void close_edit();
 

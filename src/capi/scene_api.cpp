@@ -256,11 +256,11 @@ AR_API ar_status ar_edit_set_astro(ar_edit h, ar_key key, const ar_astro_desc* a
   });
 }
 // Graphs cross as flat arrays and compile on a worker at commit (0007 d8); only SURFACE graphs
-// compile in M1a, the other targets refuse loudly. Each call stages and commits its own item.
+// and WORLD graphs compile in M1a (the world's in the material pass), the other targets refuse loudly. Each call stages and commits its own item.
 AR_API ar_status ar_edit_set_graph(ar_edit h, ar_key key, uint32_t target, const ar_graph_desc* desc) {
   AR_RECORD(ar_edit_set_graph, ar_rec_of(h), h, key, target, desc);
   AR_RECORD_BODY({
-  if (h && h->edit && target != AR_TARGET_SURFACE) {
+  if (h && h->edit && target != AR_TARGET_SURFACE && target != AR_TARGET_WORLD) {
     // An enum range error is the caller's (0007 d9); a declared target without a compiler yet
     // is this build's. Both are logged like Edit's own refusals.
     const bool known = target <= AR_TARGET_WORLD;
@@ -275,6 +275,12 @@ AR_API ar_status ar_edit_set_graph(ar_edit h, ar_key key, uint32_t target, const
     }
   }
   return staging_call(h, [&](Edit& e) { return h->owner->scene->materials->set_graph(e, key, desc); });
+  });
+}
+AR_API ar_status ar_edit_set_world(ar_edit h, const ar_world_desc* desc) {
+  AR_RECORD(ar_edit_set_world, ar_rec_of(h), h, desc);
+  AR_RECORD_BODY({
+  return edit_call(h, [&](Edit& e) { return h->owner->scene->materials->set_world(e, desc); });
   });
 }
 AR_API ar_status ar_edit_set_material(ar_edit h, ar_key key, const ar_material_desc* desc) {

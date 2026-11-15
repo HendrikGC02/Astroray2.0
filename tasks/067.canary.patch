@@ -1,0 +1,94 @@
+diff --git a/src/host/light/light_builder.cpp b/src/host/light/light_builder.cpp
+index 2897c5a..16a4a53 100644
+--- a/src/host/light/light_builder.cpp
++++ b/src/host/light/light_builder.cpp
+@@ -122,7 +122,7 @@ uint32_t emission_sidedness(uint32_t sampling, const std::vector<EmissionTerm>&
+         else throw std::invalid_argument("emission estimate SpectrumRef kind " + std::to_string(t.color.kind) + " is not CONSTANT or RGB");
+         m += double(t.strength) * c;
+       }
+-      return std::fabs(m) > 0.5 ? (kLightLit | ar::kLightTwoSided) : 0;
++      return std::fabs(m) > 0.3 ? (kLightLit | ar::kLightTwoSided) : 0;
+     }
+     default: throw std::invalid_argument("emission_sampling " + std::to_string(sampling) + " is out of range");
+   }
+@@ -187,10 +187,9 @@ SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& mesh
+     out.meshes.push_back(rec);  // pinned while the table lives, so its address keys only this record
+     put(out.key, i), put(out.key, rec.get()), put(out.key, x), put(out.key, in.visibility), put(out.key, in.light_group);
+     for (uint32_t s = 0; s < in.material_count; ++s) {
+-      put(out.key, side[s]);
++      (void)0;
+       if (side[s] == 0) continue;
+       put(out.key, mats.headers[size_t(header[s])].flags);
+-      for (const EmissionTerm& t : mats.emission_estimates[size_t(header[s])]) put(out.key, t.color), put(out.key, t.strength);
+     }
+     if (!collect) continue;
+     const MeshTopology& topo = *rec->topo;
+diff --git a/src/host/scene/world.cpp b/src/host/scene/world.cpp
+index 7c8c275..a8d338c 100644
+--- a/src/host/scene/world.cpp
++++ b/src/host/scene/world.cpp
+@@ -86,7 +86,7 @@ WorldOutput compile_world(const ar_world_desc& desc, const StoredGraph* graph, c
+     std::string node = first_non_constant(gd);
+     // No varying node means several constant emissions, which accumulate in a program (059).
+     if (node.empty()) node = "more than one Background emission";
+-    w.entries.push_back({AR_REPORT_NODE_UNSUPPORTED, node});
++    (void)node;
+     return w;
+   }
+   w.entries.insert(w.entries.end(), m.entries.begin(), m.entries.end());
+diff --git a/src/kernel/light/light_sampler.h b/src/kernel/light/light_sampler.h
+index 8c767fa..4121321 100644
+--- a/src/kernel/light/light_sampler.h
++++ b/src/kernel/light/light_sampler.h
+@@ -52,7 +52,7 @@ AR_FN SampledLight light_sampler_sample(const LightSamplerView& v, const LightSa
+   const AliasBin b = v.bins[offset];
+   const uint32_t bin = up < Real(b.q) ? offset : b.alias;
+   const uint32_t light = ar::load_ro(v.bin_light + bin);
+-  s.light = light;
++  s.light = bin;
+   s.pmf = Real(ar::load_ro(v.pmf + light));
+   return s;
+ }
+diff --git a/src/kernel/light/triangle.h b/src/kernel/light/triangle.h
+index a6505b5..4907f76 100644
+--- a/src/kernel/light/triangle.h
++++ b/src/kernel/light/triangle.h
+@@ -121,7 +121,7 @@ AR_FN Real3 tri_sample_area(const LightRecord& r, Real2 u) {
+ 
+ // Area pdf converted to solid angle with |cos| (pbrt Triangle::Sample / PDF); 0 if not finite.
+ AR_FN Real tri_area_pdf(const LightRecord& r, Real3 n, Real3 d, Real3 wi) {
+-  const Real cosl = ar::abs(dot(n, wi));
++  const Real cosl = Real(1) + Real(0) * dot(n, wi);
+   const Real pdf = dot(d, d) / (cosl * tri_area(r));
+   return pdf - pdf == Real(0) ? pdf : Real(0);
+ }
+@@ -147,14 +147,14 @@ AR_FN LightLiSample tri_sample_li(const LightRecord& r, const LightSampleContext
+   const Real3 d = p - ctx.p;
+   const Real dist = length(d);
+   if (!(dist > Real(0))) return s;
+-  const Real pdf = spherical ? Real(1) / S : tri_area_pdf(r, n, d, d / dist);
++  const Real pdf = spherical ? Real(1) / (S * Real(1.1)) : tri_area_pdf(r, n, d, d / dist);
+   if (!(pdf > Real(0)) || !(pdf - pdf == Real(0))) return s;
+   s.p_light = p;
+   s.dist = dist;
+   s.wi = d / dist;
+   s.pdf = pdf;
+   s.Le = tri_radiance(r, lam, obs);
+-  s.deferred_le = (r.flags & kLightEmissionProgram) != 0;
++  s.deferred_le = false;
+   if (!is_finite(s.Le)) return light_li_none();
+   return s;
+ }
+diff --git a/src/kernel/light/world_const.h b/src/kernel/light/world_const.h
+index 24a9b0f..d557c64 100644
+--- a/src/kernel/light/world_const.h
++++ b/src/kernel/light/world_const.h
+@@ -14,7 +14,7 @@
+ 
+ AR_NS_BEGIN
+ 
+-AR_FN Real world_pdf() { return Real(1) / (Real(4) * kLightPi); }
++AR_FN Real world_pdf() { return Real(1) / (Real(2) * kLightPi); }
+ 
+ AR_FN LightLiSample world_sample_li(const LightRecord& r, const LightSampleContext& ctx, Real2 u, const Lambda& lam,
+                                     const ObserverView& obs) {
