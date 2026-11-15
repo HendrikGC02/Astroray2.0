@@ -19,3 +19,8 @@ Budget: none.
 Depends on: 057, 031.
 Size: M (about 500 lines); stop and report at 2x.
 Progress:
+- Implemented graph, compiler, regalloc in src/host/material; ops.def operand tokens (uvset, lift, regrgbs, slotimm, jmpoff) validated by opsgen.
+- Graph nodes use ops.def opcodes as `op`; one output (socket 0); STORE_SLOT input type follows the slot. RGB_LIFT never folds (wavelength dependent).
+- Constant stores always go to the block; the program holds only run-time stores. Entry table [surface, 0, emission, 0]; both entries carry their own code.
+- A lone constant EMIT_LE folds to emission_color/emission_luminance; several stay in code. closure_weight stores are an error (selection's).
+- Canary: tasks/058.canary.patch (TEX_IMAGE folded, allocator never fails).
