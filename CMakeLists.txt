@@ -27,3 +27,16 @@ include(cmake/sources.cmake)
 add_executable(astroray_tests_cpu tests/cpu/main.cpp ${ASTRORAY_TEST_CPU_SOURCES})
 astroray_target_warnings(astroray_tests_cpu)
 target_include_directories(astroray_tests_cpu SYSTEM PRIVATE third_party/doctest)
+
+# The header grammar check is a build step: a violation fails the build (0001 D2.10).
+# The stamp output keeps `ninja -n` clean once the check has passed.
+find_program(ASTRORAY_PYTHON NAMES python python3 REQUIRED)
+set(ASTRORAY_ABI_STAMP ${CMAKE_BINARY_DIR}/abigen.stamp)
+add_custom_command(
+  OUTPUT ${ASTRORAY_ABI_STAMP}
+  COMMAND ${ASTRORAY_PYTHON} -I ${CMAKE_SOURCE_DIR}/tools/abigen.py --check ${CMAKE_SOURCE_DIR}/include/astroray/astroray.h
+  COMMAND ${CMAKE_COMMAND} -E touch ${ASTRORAY_ABI_STAMP}
+  DEPENDS ${CMAKE_SOURCE_DIR}/include/astroray/astroray.h ${CMAKE_SOURCE_DIR}/tools/abigen.py
+  COMMENT "abigen --check astroray.h"
+  VERBATIM)
+add_custom_target(astroray_abigen ALL DEPENDS ${ASTRORAY_ABI_STAMP})
