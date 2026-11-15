@@ -41,8 +41,11 @@ struct Fixture {
   // One 1x1 linear image in slot 0, for compiled programs that sample.
   std::vector<uint8_t> texel = {51, 102, 204};
   ar::DeviceImageView image = {};
+  float srgb[ar::kSrgbTableSize];
   ar::SceneTables tables;
   Fixture() {
+    ar::srgb_decode_table(srgb);
+    tables.srgb_decode = srgb;
     image.texels = uint64_t(uintptr_t(texel.data()));
     image.width = image.height = 1, image.channels = 3, image.encoding = uint32_t(ar::TexEncoding::LINEAR);
     tables.images = &image;

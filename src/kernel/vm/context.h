@@ -33,11 +33,13 @@ struct ShadeContext {
 
 // The image table is indexed by the slot the compiler resolved from an image key (the image
 // store's dense slots); a slot at or past image_count samples magenta. The kernel never searches.
+// srgb_decode is the host-built srgb_decode_table (color/srgb.h) Closest lookups read.
 struct SceneTables {
   const Rgb2SpecTable* rgb2spec;
   ObserverView observer;
   const DeviceImageView* images;
   uint32_t image_count;
+  const float* srgb_decode;
 };
 
 AR_NS_END

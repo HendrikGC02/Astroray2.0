@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "astroray/astroray.h"
+#include "../../kernel/color/srgb.h"
 #include "../../kernel/scene/texture_view.h"
 #include "host/ledger.h"
 
@@ -58,6 +59,7 @@ struct ImageArrays {
   std::vector<ar_key> keys;
   std::vector<ar::DeviceImageView> views;
   std::vector<std::shared_ptr<const Image>> images;
+  std::array<float, ar::kSrgbTableSize> srgb_decode = {};  // SceneTables::srgb_decode
 };
 
 class ImageStore : public std::enable_shared_from_this<ImageStore> {

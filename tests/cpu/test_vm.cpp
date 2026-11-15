@@ -46,8 +46,11 @@ struct Fixture {
   // A 3x2 sRGB image for TEX_IMAGE, slot 0 of the table; slot 1 is outside it.
   std::vector<uint8_t> texels = {0, 40, 255, 128, 7, 64, 200, 90, 13, 1, 254, 77, 33, 160, 99, 250, 20, 180};
   ar::DeviceImageView image = {};
+  float srgb[ar::kSrgbTableSize];
   ar::SceneTables tables;
   Fixture() {
+    ar::srgb_decode_table(srgb);
+    tables.srgb_decode = srgb;
     image.texels = uint64_t(uintptr_t(texels.data()));
     image.width = 3, image.height = 2, image.channels = 3, image.encoding = uint32_t(ar::TexEncoding::SRGB);
     tables.images = &image;

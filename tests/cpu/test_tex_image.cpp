@@ -37,8 +37,11 @@ double iec_decode(double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.
 struct Img4 {
   std::vector<uint8_t> t;
   ar::DeviceImageView view = {};
+  float srgb[ar::kSrgbTableSize];
   ar::SceneTables tables = {};
   explicit Img4(ar::TexEncoding enc) : t(4 * 4 * 3) {
+    ar::srgb_decode_table(srgb);
+    tables.srgb_decode = srgb;
     for (int y = 0; y < 4; ++y)
       for (int x = 0; x < 4; ++x)
         for (int c = 0; c < 3; ++c) t[size_t((y * 4 + x) * 3 + c)] = uint8_t((x * 61 + y * 23 + c * 97 + 5) % 256);
@@ -157,7 +160,10 @@ TEST_CASE("tex_image/grey and rgba expand, missing slot is magenta") {
   views[0].width = 2, views[0].height = 2, views[0].channels = 1, views[0].encoding = uint32_t(ar::TexEncoding::DATA);
   views[1].texels = uint64_t(uintptr_t(rgba.data()));
   views[1].width = 1, views[1].height = 1, views[1].channels = 4, views[1].encoding = uint32_t(ar::TexEncoding::LINEAR);
+  float srgb[ar::kSrgbTableSize];
+  ar::srgb_decode_table(srgb);
   ar::SceneTables tb = {};
+  tb.srgb_decode = srgb;
   tb.images = views;
   tb.image_count = 2;
   const float k = 1.0f / 255.0f;

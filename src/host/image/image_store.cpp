@@ -20,9 +20,12 @@ namespace fs = std::filesystem;
 
 // The linear-RGB mean: each texel is decoded by the transfer function before averaging (the
 // mean of the light, not of the code values). Grey images count as r = g = b; alpha is ignored.
+// An sRGB texel's value is the kernel's own table entry for the byte (Closest returns exactly it).
 std::array<float, 3> image_mean(const Image& im) {
+  float srgb[ar::kSrgbTableSize];
+  ar::srgb_decode_table(srgb);
   double lut[256];
-  for (int i = 0; i < 256; ++i) lut[i] = im.encoding == ar::TexEncoding::SRGB ? ar::srgb_to_linear(i / 255.0) : i / 255.0;
+  for (int i = 0; i < 256; ++i) lut[i] = im.encoding == ar::TexEncoding::SRGB ? double(srgb[i]) : i / 255.0;
   double sum[3] = {0, 0, 0};
   const uint8_t* t = im.texels.data();
   const size_t n = size_t(im.width) * im.height;
@@ -89,8 +92,11 @@ bool interop_encoding(uint32_t v, ar::TexEncoding* out) {
   }
 }
 
-ImageStore::ImageStore(std::shared_ptr<Ledger> ledger)
-    : ledger_(std::move(ledger)), arrays_(std::make_shared<ImageArrays>()), magenta_(magenta(0, std::string()).image) {}
+ImageStore::ImageStore(std::shared_ptr<Ledger> ledger) : ledger_(std::move(ledger)), magenta_(magenta(0, std::string()).image) {
+  auto a = std::make_shared<ImageArrays>();
+  ar::srgb_decode_table(a->srgb_decode.data());
+  arrays_ = std::move(a);
+}
 
 ImageStore::~ImageStore() {
   if (ledger_id_ != 0) ledger_->remove(ledger_id_);
@@ -242,6 +248,7 @@ void ImageStore::remove(bool reset, const std::set<ar_key>& removed, const std::
 
 void ImageStore::rebuild_locked() {
   auto a = std::make_shared<ImageArrays>();
+  a->srgb_decode = arrays_->srgb_decode;
   uint64_t bytes = 0;
   std::set<const Image*> counted;  // a cached image shared by several keys is one allocation
   for (uint32_t s = 0; s < slot_keys_.size(); ++s) {
