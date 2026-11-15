@@ -1,3 +1,16 @@
+diff --git a/src/kernel/light/triangle.h b/src/kernel/light/triangle.h
+index b5e45f0..cb96446 100644
+--- a/src/kernel/light/triangle.h
++++ b/src/kernel/light/triangle.h
+@@ -87,7 +87,7 @@ AR_FN bool tri_sample_spherical(const LightRecord& r, Real3 p, Real2 u, Real3* o
+   const Real Q = Real(1) + dot(a, b), S = dot(a, c) + dot(b, c);
+   const Real half = ar::atan2(V, Q + S);  // Omega / 2, in [0, pi)
+   if (!(half > Real(0))) return false;
+-  const LightSinCos th = light_sincos(u.x * half);  // area_rect.h: no sinf / cosf on the GPU
++  const LightSinCos th = light_sincos(u.x * half * Real(1.001));  // area_rect.h: no sinf / cosf on the GPU
+   const Real3 o = a * (V * th.c - S * th.s) + c * (Q * th.s);
+   const Real oo = dot(o, o);
+   if (!(oo > Real(0))) return false;
 diff --git a/src/kernel/sample/dims.h b/src/kernel/sample/dims.h
 index ec7b716..ec3344f 100644
 --- a/src/kernel/sample/dims.h
