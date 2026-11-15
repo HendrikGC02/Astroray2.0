@@ -61,39 +61,21 @@ AR_FN Real2 camera_film_position(const KernelGlobals& kg, const SamplerKey& key)
   return Real2{Real(key.id % width) + Real(0.5) + dx, Real(key.id / width) + Real(0.5) + dy};
 }
 
+// Each group is computed and stored before the next starts: the sampler's direction tables sit
+// on the GPU stack, so keeping few values live across draws holds the kernel inside the stack and
+// spill limits of 0002 D10.
 AR_FN void stage_generate_camera(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
   const uint32_t slot = load_ro(kg.main_queue + step.start + item);
   const uint32_t sample_id = step.shadow_base + item;
   const SessionUniforms& s = kg.session;
   const SamplerKey key = camera_key(kg.active_pixels, sample_id, s.samples_done, s.samples_per_pass);
 
-  CameraSample cs;
-  cs.film = camera_film_position(kg, key);
-  cs.lens = Real2{camera_draw(kg, key, DIM_CAM_LENS_U), camera_draw(kg, key, DIM_CAM_LENS_V)};
-  cs.time = camera_draw(kg, key, DIM_CAM_TIME);
-  const CameraRay ray = camera_generate_ray(*kg.camera, cs);
-
-  // lambda_t = lambda_f at the start of a path (0003 d2); the resolve recomputes lambda_f and pf
-  // from the same key and dimension (film_resolve_pixel).
-  const FilmWavelengths fw = sample_film_wavelengths(kg.film->wavelengths, camera_draw(kg, key, DIM_CAM_WAVELENGTH));
-  Spec lambda_t;
-  for (int i = 0; i < kLanes; ++i) lambda_t.v[i] = fw.lf.nm[i];
-
-  // Hero lane floor(4 u) (0003 d6); the clamp guards u rounding up to 1.
-  uint32_t hero = uint32_t(camera_draw(kg, key, DIM_CAM_HERO) * Real(4));
-  if (hero > 3u) hero = 3u;
-
   ps_sample_id(kg, slot) = sample_id;
   ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::INTERSECT_CLOSEST);
   ps_term(kg, slot) = static_cast<uint8_t>(Term::ACTIVE);
   ps_ray_type(kg, slot) = kRayTypeCamera;
-  ps_flags(kg, slot) = set_hero_lane(0u, hero);  // PATH_KIND clear: a camera path
   ps_bounces(kg, slot) = U16x6{{0, 0, 0, 0, 0, 0}};
   ps_event_index(kg, slot) = 0;
-  ps_ray_o(kg, slot) = ray.o;
-  ps_ray_d(kg, slot) = ray.d;
-  ps_cone(kg, slot) = Real2{Real(0), camera_cone_spread(*kg.camera)};
-  ps_lambda_t(kg, slot) = lambda_t;
   ps_beta(kg, slot) = spec_fill(Real(1));
   ps_r_u(kg, slot) = spec_fill(Real(1));
   ps_r_l(kg, slot) = spec_fill(Real(1));
@@ -102,8 +84,37 @@ AR_FN void stage_generate_camera(const KernelGlobals& kg, uint32_t item, const S
   ps_prev_ng(kg, slot) = 0u;
   ps_prev_ns(kg, slot) = 0u;
   ps_prev_dist(kg, slot) = Real(0);
-  // ray_time exists only with motion blur (M8): the camera time is not stored without it.
-  if (kg.path->ray_time != nullptr) ps_ray_time(kg, slot) = cs.time;
+
+  // lambda_t = lambda_f at the start of a path (0003 d2); the resolve recomputes lambda_f and pf
+  // from the same key and dimension (film_resolve_pixel).
+  {
+    const FilmWavelengths fw = sample_film_wavelengths(kg.film->wavelengths, camera_draw(kg, key, DIM_CAM_WAVELENGTH));
+    Spec lambda_t;
+    for (int i = 0; i < kLanes; ++i) lambda_t.v[i] = fw.lf.nm[i];
+    ps_lambda_t(kg, slot) = lambda_t;
+  }
+
+  // Hero lane floor(4 u) (0003 d6); the clamp guards u rounding up to 1. PATH_KIND stays clear:
+  // a camera path.
+  {
+    uint32_t hero = uint32_t(camera_draw(kg, key, DIM_CAM_HERO) * Real(4));
+    if (hero > 3u) hero = 3u;
+    ps_flags(kg, slot) = set_hero_lane(0u, hero);
+  }
+
+  // ray_time exists only with motion blur (M8): the time is neither drawn nor stored without it.
+  CameraSample cs;
+  cs.lens = Real2{Real(0), Real(0)};  // dims 2-3: the pinhole has no lens
+  cs.time = Real(0);
+  if (kg.path->ray_time != nullptr) {
+    cs.time = camera_draw(kg, key, DIM_CAM_TIME);
+    ps_ray_time(kg, slot) = cs.time;
+  }
+  cs.film = camera_film_position(kg, key);
+  const CameraRay ray = camera_generate_ray(*kg.camera, cs);
+  ps_ray_o(kg, slot) = ray.o;
+  ps_ray_d(kg, slot) = ray.d;
+  ps_cone(kg, slot) = Real2{Real(0), camera_cone_spread(*kg.camera)};
 }
 
 AR_NS_END
