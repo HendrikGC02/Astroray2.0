@@ -41,6 +41,7 @@ struct SceneData;
 struct FilmData;
 struct WavelengthTable;
 struct Rgb2SpecTables;
+struct DisplayTarget;
 
 struct KernelGlobals {
   const PathStateSoA* path;
@@ -67,6 +68,10 @@ struct KernelGlobals {
   // per-tile histograms and offset scratch. Written only by sort_count and sort_scatter.
   uint32_t* sort_queue;
   uint32_t* sort_counts;
+
+  // film_present and film_heatmap: where they write (film/present.h). Last member so the offsets
+  // the CUDA device reads stay put.
+  DisplayTarget* display;
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is

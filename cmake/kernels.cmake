@@ -77,7 +77,7 @@ if(ASTRORAY_GPU)
 
   # Tests of the gate hooks build src/kernel_gpu/test_*.cu; no release build sets this.
   # film_resolve accumulates the fp64 moments of 0008 d3, the one other FP64 kernel.
-  set(AR_GPU_F64_MODULES advance_geodesic_f64 film_resolve)
+  set(AR_GPU_F64_MODULES advance_geodesic_f64 film_resolve film_present)
   option(AR_GATE_HOOKS "Build src/kernel_gpu/test_*.cu and define AR_GATE_HOOKS" OFF)
 
   # Production line of 0002 D10 and D12: no fast math, no rdc, correctly rounded divide and

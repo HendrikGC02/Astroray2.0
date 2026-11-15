@@ -54,7 +54,9 @@ struct LaunchRow {
   X(k_sort_count, 256, 0, 0, OTHER) \
   X(k_sort_scatter, 256, 0, 0, OTHER) \
   X(k_route_hit, 256, 0, 0, OTHER) \
-  X(k_film_resolve, 256, 1, 0, OTHER)
+  X(k_film_resolve, 256, 1, 0, OTHER) \
+  X(k_film_present, 256, 0, 0, OTHER) \
+  X(k_film_heatmap, 256, 0, 0, OTHER)
 
 // The OptiX programs of optix_traverse.cu, named as their PTX entries (tools/kernelgate.py matches
 // them). No constants are generated: the names contain a double underscore, reserved in C++.

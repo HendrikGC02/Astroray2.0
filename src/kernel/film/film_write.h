@@ -145,6 +145,18 @@ AR_FN void film_path_end_stats(const KernelGlobals& kg, uint32_t slot, uint32_t 
   if (f.term_hist >= 0) film_count_add(kg, uint32_t(f.term_hist) + uint32_t(term), pixel, 1u);
 }
 
+// Mean scattering events per path of a pixel: ADD plane / paths ended (not n: an invalid sample is
+// excluded from n but its path still ended). False when no path ended or the statistics were not
+// requested; *mean is untouched then. The one source for the host readback and the heat map.
+// Ref: 0008 d12 (statistics table).
+AR_FN bool film_bounce_mean_value(const FilmData& f, uint32_t pixel, Real* mean) {
+  if (f.bounce_sum < 0 || f.bounce_paths < 0) return false;
+  const uint32_t paths = f.count[uint64_t(f.bounce_paths) * f.plane_stride + pixel];
+  if (paths == 0u) return false;
+  *mean = Real(f.add[uint64_t(f.bounce_sum) * f.plane_stride + pixel]) / Real(paths);
+  return true;
+}
+
 // Primary-hit AOVs, written by the surface stage at depth 0, once across pass-throughs
 // (AOV_WRITTEN in the path's flags; 0003 d21; 0008 d10). Position and material id keep only
 // sample 0 so an id stays exact (these channels are marked sample0 in the layout: readback must
