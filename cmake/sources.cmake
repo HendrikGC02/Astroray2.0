@@ -13,3 +13,23 @@ file(GLOB_RECURSE _ar_host_sources ${CMAKE_SOURCE_DIR}/src/host/*.cpp)
 file(GLOB _ar_device_cpu_sources ${CMAKE_SOURCE_DIR}/src/device/cpu/*.cpp)
 set(ASTRORAY_ENGINE_SOURCES ${_ar_host_sources} ${_ar_device_cpu_sources})
 file(GLOB ASTRORAY_CAPI_SOURCES ${CMAKE_SOURCE_DIR}/src/capi/*.cpp)
+
+# A test file with `// ar-f64` in its first 5 lines is compiled a second time
+# with AR_REAL_DOUBLE into the same executable (0002 D3); the copy is a generated
+# wrapper that defines the macro and includes the file. tools/build.ps1 writes
+# the matching `f64 <file>` lines into sources.txt.
+set(_ar_f64_sources)
+foreach(_f IN LISTS ASTRORAY_TEST_CPU_SOURCES)
+  file(STRINGS ${_f} _head LIMIT_COUNT 5)
+  string(FIND "${_head}" "// ar-f64" _pos)
+  if(NOT _pos EQUAL -1)
+    get_filename_component(_n ${_f} NAME_WE)
+    set(_w ${CMAKE_BINARY_DIR}/f64/${_n}_f64.cpp)
+    file(GENERATE OUTPUT ${_w}
+         CONTENT "#define AR_REAL_DOUBLE\n#include \"${_f}\"\n")
+    list(APPEND _ar_f64_sources ${_w})
+  endif()
+endforeach()
+list(APPEND ASTRORAY_TEST_CPU_SOURCES ${_ar_f64_sources})
+
+include(${CMAKE_CURRENT_LIST_DIR}/kernels.cmake)

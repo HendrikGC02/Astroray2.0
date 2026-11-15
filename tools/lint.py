@@ -333,11 +333,225 @@ def deps(c):
     vendored = {p.split("/")[1] for p in c.files if p.startswith("third_party/") and p.count("/") >= 2}
     for v in sorted(vendored - names):
         c.find(f"third_party/{v}", 1, "deps", f"{v}: vendored directory has no entry in deps.toml")
+# ---- kernel section ---------------------------------------------------------
+# Ref: docs/decisions/0002-kernel-architecture.md D1, D2.
+KERNEL_EXT = (".h", ".hpp", ".cuh", ".inl", ".cpp", ".cu")
+KERNEL_PORTABILITY = "src/kernel/portability.h"
+KERNEL_BANNED = {
+    "virtual": "virtual functions",
+    "throw": "exceptions",
+    "try": "exceptions",
+    "catch": "exceptions",
+    "new": "heap allocation",
+    "delete": "heap allocation",
+    "malloc": "heap allocation",
+    "free": "heap allocation",
+    "__noinline__": "__noinline__",
+    "thread_local": "thread-local storage",
+}
+KERNEL_ASM = {"asm", "__asm", "__asm__"}
+KERNEL_MATH = (r"sqrt|exp|expm1|log|sin|cos|tan|atan2|atan|acos|asin|pow|fma|fabs|floor|ceil|cosh|sinh|tanh"
+               r"|log2|log10|exp2|fmod|cbrt|hypot|round|trunc")
+# ar::sqrt( is the sanctioned spelling; bare `::sqrt(` and `sqrt(` are not.
+MATH_CALL_RE = re.compile(rf"(?<![\w.>])(?<!\w::)(?:{KERNEL_MATH})f?\s*\(")
+KERNEL_TOKEN_RE = re.compile(r"""
+    (?P<hex>0[xX][0-9a-fA-F']+[uUlL]*)
+  | (?P<num>(?:\d[\d']*(?P<dot>\.[\d']*)?|(?P<lead>\.\d[\d']*))(?P<exp>[eE][+-]?\d+)?(?P<suf>[A-Za-z_]*))
+  | (?P<id>[A-Za-z_]\w*)
+  | (?P<op>\S)
+""", re.X)
+INCLUDE_RE = re.compile(r'^\s*#\s*include\s*([<"])([^>"]*)[>"]')
+PP_RE = re.compile(r"^\s*#\s*(\w+)\s*(.*)$")
+
+
+def blank_comments(text):
+    """Replace comments with spaces, keeping newlines and offsets; strings are respected."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"' or (ch == "'" and not (i and text[i - 1].isalnum())):
+            j = i + 1
+            while j < n and text[j] != ch and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("".join(x if x == "\n" else " " for x in text[i:j]))
+            i = j
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def blank_strings(text):
+    return re.sub(r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'',
+                  lambda m: m.group(0)[0] + " " * (len(m.group(0)) - 2) + m.group(0)[-1], text)
+
+
+def kernel_header(c, p, name):
+    """A quoted include passes only if it names a file inside src/kernel/, found
+    relative to the including file or to src/kernel/ (so "vector" and "../x.h" fail)."""
+    for base in (os.path.dirname(p), "src/kernel"):
+        q = os.path.normpath(os.path.join(base, name)).replace(os.sep, "/")
+        if q.startswith("src/kernel/") and q in c.files:
+            return True
+    return False
+
+
+def kernel_scan(c, p):
+    is_port = p == KERNEL_PORTABILITY
+    lines = blank_comments("\n".join(c.lines(p))).split("\n")
+    seen = set()
+
+    def find(line, rule, msg):
+        if (line, rule) not in seen:
+            seen.add((line, rule))
+            c.find(p, line, "kernel", msg)
+
+    # Preprocessor pass: includes, the AR_DEBUG region of each line, and which
+    # lines are directives (their braces and semicolons are not C++ statements).
+    debug = [False] * len(lines)
+    pp = [False] * len(lines)
+    stack = []  # one bool per open #if: is it an AR_DEBUG region right now
+    cont = False
+    keep = []
+    for n, ln in enumerate(lines, 1):
+        debug[n - 1] = any(stack)
+        m = PP_RE.match(ln)
+        pp[n - 1] = bool(m) or cont
+        cont = pp[n - 1] and ln.rstrip().endswith("\\")
+        if not m:
+            keep.append(ln)
+            continue
+        d, rest = m.group(1), m.group(2)
+        keep.append(ln if d == "define" else "")
+        if d == "include":
+            im = INCLUDE_RE.match(ln)
+            ok = im and ((im.group(1) == '"' and kernel_header(c, p, im.group(2)))
+                         or (im.group(1) == "<" and im.group(2) in ("cstdint", "cfloat"))
+                         or (is_port and im.group(1) == "<" and im.group(2) in ("cmath", "intrin.h")))
+            if not ok:
+                find(n, "include", f"#include {rest} is not allowed in kernel code")
+        elif d in ("if", "ifdef"):
+            stack.append(bool(re.search(r"\bAR_DEBUG\b", rest)) and "!" not in rest)
+        elif d == "ifndef":
+            stack.append(False)
+        elif d in ("else", "elif") and stack:
+            stack[-1] = False
+        elif d == "endif" and stack:
+            stack.pop()
+    text = blank_strings("\n".join(keep))
+    starts = [0] + [m.end() for m in re.finditer("\n", text)]
+
+    def line_of(off):
+        lo, hi = 0, len(starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            lo, hi = (mid, hi) if starts[mid] <= off else (lo, mid - 1)
+        return lo + 1
+
+    if not is_port:
+        for m in MATH_CALL_RE.finditer(text):
+            find(line_of(m.start()), "math", "direct math call; use the ar:: wrappers of portability.h")
+        for m in re.finditer(r"\bstd\s*::", text):
+            find(line_of(m.start()), "std", "std:: is not allowed in kernel code (containers, algorithms, math)")
+
+    toks = [(m.lastgroup if m.lastgroup in ("hex", "id", "op") else "num", m) for m in KERNEL_TOKEN_RE.finditer(text)]
+    parens = []  # token before each open parenthesis
+    braces = []  # True where the brace opens a namespace or extern block
+    stmt = []
+    prev = None
+    for k, (kind, m) in enumerate(toks):
+        t = m.group(0)
+        ln = line_of(m.start())
+        if kind == "id":
+            if t in KERNEL_BANNED:
+                find(ln, t, f"banned in kernel code ({KERNEL_BANNED[t]}): {t}")
+            elif t in KERNEL_ASM and not is_port:
+                find(ln, "asm", "asm is allowed only in portability.h")
+            elif t == "long" and k + 1 < len(toks) and toks[k + 1][1].group(0) == "double":
+                find(ln, "longdouble", "banned in kernel code: long double")
+            elif re.fullmatch(r"(?:f|s|sn|v)?printf", t) and not debug[ln - 1]:
+                find(ln, "printf", "printf is allowed only inside #ifdef AR_DEBUG")
+        elif kind == "num":
+            if (m.group("dot") or m.group("lead") or m.group("exp")) and not m.group("suf"):
+                if (parens[-1] if parens else None) not in ("Real", "float", "double"):
+                    find(ln, "literal " + t, f"unsuffixed floating literal {t}; write Real({t})")
+        if pp[ln - 1]:
+            if t == "(":
+                parens.append(prev)
+            elif t == ")" and parens:
+                parens.pop()
+            prev = t
+            continue
+        if t == "(":
+            parens.append(prev)
+        elif t == ")" and parens:
+            parens.pop()
+        if kind == "id" and t in ("AR_NS_BEGIN", "AR_NS_END"):
+            stmt = []  # these macros open and close the namespace; no `;` follows them
+        elif kind == "op" and t in ";{}" and not parens:
+            if t == "{":
+                braces.append(any(x in ("namespace", "extern") for x in stmt))
+            elif t == "}" and braces:
+                braces.pop()
+            elif t == ";" and stmt and stmt[0] == "static" and all(braces):
+                call = "(" in stmt and ("=" not in stmt or stmt.index("(") < stmt.index("="))
+                if not call and not {"const", "constexpr"} & set(stmt):
+                    find(ln, "static", "static non-const variable at namespace scope")
+            stmt = []
+        else:
+            stmt.append(t)
+        prev = t
+
+    if p.endswith((".h", ".hpp", ".cuh")) and not is_port and p != "src/kernel/core/real.h":
+        if not any(k == "id" and m.group(0) == "AR_NS_BEGIN" for k, m in toks):
+            find(1, "nsbegin", "header does not open AR_NS_BEGIN")
+
+
+def kernel(c):
+    for p in c.files:
+        if p.startswith("src/kernel/") and p.endswith(KERNEL_EXT):
+            kernel_scan(c, p)
+
+
+# ---- seam section: 0001 D5.2 and V3, R39 --------------------------------------
+SEAM_SRC_EXT = (".h", ".hpp", ".cuh", ".inl", ".cpp", ".cu", ".c")
+SEAM_RULES = (  # (include path pattern, directories allowed to include it); first match wins
+    (re.compile(r"nvrtc", re.I), ()),
+    (re.compile(r"ngx", re.I), ("src/denoise/dlss/",)),
+    (re.compile(r"embree", re.I), ("src/device/cpu/",)),
+    (re.compile(r"cuda|optix", re.I), ("src/device/", "src/kernel_gpu/")),
+)
+
+
+def seam(c):
+    for p in c.files:
+        if not p.endswith(SEAM_SRC_EXT) or p.startswith("third_party/"):
+            continue
+        for n, ln in enumerate(c.lines(p), 1):
+            m = INCLUDE_RE.match(ln)
+            if not m:
+                continue
+            for pat, allowed in SEAM_RULES:
+                if pat.search(m.group(2)):
+                    if not p.startswith(allowed):
+                        where = "anywhere" if not allowed else "outside " + " or ".join(allowed)
+                        c.find(p, n, "seam", f"include of {m.group(2)} is not allowed {where}")
+                    break
 
 
 SECTIONS = {"spdx": spdx, "nvidia": nvidia, "ascii-ps1": ascii_ps1, "caps": caps,
             "skip": skip, "taskfile": taskfile, "budgets": budgets, "history": history,
-            "deps": deps}
+            "deps": deps, "kernel": kernel, "seam": seam}
 
 
 def run(root, files, sections):
