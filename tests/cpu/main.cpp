@@ -9,7 +9,12 @@
 #include <string>
 #include <vector>
 
+#include "host/build_info.h"
+
 int main(int argc, char** argv) {
+  // First line: check.ps1 compares the sha with HEAD and refuses loose kernels (0009 d5).
+  std::printf("build: sha=%s dirty=%d kernels=%s\n",astroray::kBuildInfo.git_sha,
+              astroray::kBuildInfo.dirty, astroray::kernel_source().c_str());
   std::string tier = "fast";
   std::vector<char*> rest;
   for (int i = 0; i < argc; ++i) {
