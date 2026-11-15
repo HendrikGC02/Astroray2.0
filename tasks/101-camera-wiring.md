@@ -16,3 +16,4 @@ Budget: film_resolve register delta declared (expected 0); host otherwise.
 Depends on: 054, 052, 049.
 Size: M (about 250 lines); stop and report at 2x.
 Progress:
+- Stopped before code: needs files outside Scope (see report to lead): session.h, src/host/device.h + src/device/cuda/cuda_device.cpp (KernelId::FILM_BUILD_ACTIVE), cpu_device.cpp wrapper; CameraView/FilterTable source undefined.
