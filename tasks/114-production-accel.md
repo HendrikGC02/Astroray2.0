@@ -21,4 +21,5 @@ Progress:
 - Unchanged instances, lamps and meshes reuse the previous snapshot's whole structure; an empty scene builds a valid empty structure.
 - CUDA SceneData::accel holds the traversable handle value (scene_view.h); a scene with a device but no accel_of throws (no silent Embree fallback).
 - Embree GAS are built serially: Scene::pool() is a job-queue WorkerPool, not a ThreadPool; Embree parallelizes each commit itself.
-- Canary: CPU path drops lamp instances; CPU case red, GPU case red by disagreement with the CPU.
+- Canary (6 hunks): CPU path drops lamp instances; whole-structure reuse ignores lights; Embree and OptiX GAS reuse off; OptiX empty TLAS handle 0; wrong throw type. Each new case red (GPU ones verified separately).
+- OptiX returns a valid non-zero handle for a zero-instance TLAS (tested); a 0 accel is never accepted. Embree structures are charged to the ledger one by one (measured around each build).
