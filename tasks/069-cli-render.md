@@ -16,3 +16,4 @@ Budget: none.
 Depends on: 033, 104, 103.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
+- Blocked before code: replayer has no device/seed/size/spp override (tools/abigen.py) and no ABI/report channel for active test hooks (astroray.h, session.cpp); both outside Scope. Reported to lead.
