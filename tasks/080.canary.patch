@@ -1,0 +1,22 @@
+--- a/blender/astroray/sync/keys.py
++++ b/blender/astroray/sync/keys.py
+@@ -35,7 +35,7 @@
+     orig_data = inst.object.original.data
+     if data is None or orig_data is None:
+         return False
+-    return data.as_pointer() == orig_data.evaluated_get(depsgraph).as_pointer()
++    return True  # canary: modifiers no longer split geometry
+ 
+ 
+ def _instance_path(inst):
+--- a/blender/astroray/sync/classify.py
++++ b/blender/astroray/sync/classify.py
+@@ -104,7 +104,7 @@
+         else:
+             cache.diagnostics["unlisted_id_type"] += 1
+             print(f"WARNING astroray sync: unlisted ID type {id_type}, full resync")
+-            kinds = (FULL_RESYNC,)
++            kinds = ()  # canary: unlisted types are ignored
+         for kind in kinds:
+             out[(kind, id_type, uid)] = Action(kind, id_type, uid, bits)
+ 

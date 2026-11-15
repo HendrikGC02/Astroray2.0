@@ -16,3 +16,4 @@ Budget: B-11 grows by the wheel install; report the CI duration.
 Depends on: 079, 031, 009.
 Size: M (about 400 lines Python); stop and report at 2x.
 Progress:
+- 080: sync/{keys,classify,edit,cache}.py, headless suite (18 tests, Blender 5.3 and bpy wheel both pass), bpy 5.3.0 pinned in deps.toml, check ci step; canary red on the 2 named cases.
