@@ -13,8 +13,10 @@
 // Material id: the material table entry of the hit triangle (instance slice + triangle slot);
 // the default material (an instance with no slice, or no material tables) is id
 // material_header_count, so a scene has material_header_count + 1 bins.
+// kSortMinMaterials is compared with material_header_count (real materials); the default-material
+// bin does not count, so a scene with one material plus default-material hits stays unsorted.
 // Host contract: pass `sort_grid(count)` as the launch count of both kernels, after queue_build
-// has finished; kg.sort_counts holds 2 * queue_tiles(count) * sort_bins(kg) counters and
+// has finished; reallocate sort_counts whenever material_header_count changes. kg.sort_counts holds 2 * queue_tiles(count) * sort_bins(kg) counters and
 // kg.sort_queue `count` indices.
 // Ref: Cycles device/gpu/parallel_sorted_index.h (Apache-2.0) as the pattern;
 // docs/decisions/0002-kernel-architecture.md D6, D7 step 3, D8; 0007 d10 (slot lookup).
@@ -41,28 +43,14 @@ AR_FN uint32_t sort_segment_count(const KernelGlobals& kg) {
 
 AR_FN uint32_t sort_tile_count(const KernelGlobals& kg) { return queue_tiles(sort_segment_count(kg)); }
 
+// True when the scheduler should run the sort: a large enough segment and at least
+// kSortMinMaterials real materials (0002 D7 step 3).
+AR_FN bool sort_wanted(const KernelGlobals& kg) {
+  return sort_segment_count(kg) >= kSortMinItems && scene_of(kg).material_header_count >= kSortMinMaterials;
+}
+
 // The launch count of both kernels for a segment of `count` items.
 AR_FN uint32_t sort_grid(uint32_t count) { return queue_tiles(count) * kQueueTile; }
-
-// The material id of a hit; the same lookup as hit_material_flags (scene_view.h).
-AR_FN uint32_t hit_material_id(const KernelGlobals& kg, uint32_t inst, uint32_t prim) {
-  const SceneData& s = scene_of(kg);
-  const uint32_t dflt = s.material_header_count;
-  if (s.material_headers == nullptr || s.material_slots == nullptr) return dflt;
-  AR_ASSERT(inst < s.instance_count);
-  const DeviceInstanceRecord& rec = s.instances[inst];
-  const uint32_t count = load_ro(&rec.material_count);
-  if (count == 0u) return dflt;
-  const uint32_t mesh = load_ro(&rec.mesh);
-  AR_ASSERT(mesh < s.mesh_count);
-  AR_ASSERT(prim < load_ro(&s.meshes[mesh].triangle_count));
-  const int32_t* tri_material = reinterpret_cast<const int32_t*>(uintptr_t(load_ro(&s.meshes[mesh].tri_material)));
-  const int32_t slot = load_ro(tri_material + prim);
-  AR_ASSERT(slot >= 0 && uint32_t(slot) < count);
-  const uint32_t table = load_ro(&s.material_slots[load_ro(&rec.material_offset) + uint32_t(slot)]);
-  AR_ASSERT(table < s.material_header_count);
-  return table;
-}
 
 // Material id of the segment's item i.
 AR_FN uint32_t sort_item_material(const KernelGlobals& kg, uint32_t i) {

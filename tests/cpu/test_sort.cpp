@@ -160,4 +160,15 @@ TEST_CASE("sort/thresholds are the provisional values of 0002 D7") {
   CHECK(ar::kSortMinMaterials == 2);
 }
 
+TEST_CASE("sort/one real material plus default hits stays unsorted") {
+  // The default-material bin does not count toward kSortMinMaterials (lead ruling on 0002 D7).
+  Rig r(ar::kSortMinItems, true, 51);
+  r.scene.material_header_count = 1;
+  CHECK(!ar::sort_wanted(r.kg));
+  r.scene.material_header_count = 2;
+  CHECK(ar::sort_wanted(r.kg));
+  r.table.stage[uint32_t(Stage::SHADE_SURFACE)].count = ar::kSortMinItems - 1;
+  CHECK(!ar::sort_wanted(r.kg));
+}
+
 }  // TEST_SUITE
