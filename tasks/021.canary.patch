@@ -1,3 +1,18 @@
+diff --git a/src/kernel/sample/dims.h b/src/kernel/sample/dims.h
+index 8e5daf9..c8b0011 100644
+--- a/src/kernel/sample/dims.h
++++ b/src/kernel/sample/dims.h
+@@ -43,8 +43,8 @@ inline constexpr uint32_t EV_LOBE_CHOICE = 2;  // lobe, Mix and opacity choice
+ inline constexpr uint32_t EV_ROULETTE = 3;     // Russian roulette
+ inline constexpr uint32_t EV_LIGHT_U = 4;      // camera path: light position u, v
+ inline constexpr uint32_t EV_LIGHT_V = 5;
+-inline constexpr uint32_t EV_LIGHT_PICK = 6;  // light pick including the floor branch
+-inline constexpr uint32_t EV_DIST_CHOICE = 7;  // distance-strategy choice (both kinds)
++inline constexpr uint32_t EV_LIGHT_PICK = 7;  // light pick including the floor branch
++inline constexpr uint32_t EV_DIST_CHOICE = 6;  // distance-strategy choice (both kinds)
+ inline constexpr uint32_t EV_CONN_LENS_U = 4;  // light path: the connection's lens sample
+ inline constexpr uint32_t EV_CONN_LENS_V = 5;
+ inline constexpr uint32_t EV_LIGHT_PATH_UNUSED6 = 6;
 diff --git a/src/kernel/sample/sobol.h b/src/kernel/sample/sobol.h
 index 9880357..4e8c2b2 100644
 --- a/src/kernel/sample/sobol.h
