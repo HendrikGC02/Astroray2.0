@@ -37,3 +37,19 @@ spill_store = 0
 spill_load = 0
 compile_s = 1.22
 gated = "merge"
+
+[kernel.k_sort_count]
+regs = 40
+stack = 0
+spill_store = 0
+spill_load = 0
+compile_s = 1.3
+gated = "merge"
+
+[kernel.k_sort_scatter]
+regs = 40
+stack = 0
+spill_store = 0
+spill_load = 0
+compile_s = 1.3
+gated = "merge"
