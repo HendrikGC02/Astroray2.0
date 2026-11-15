@@ -8,7 +8,9 @@
 // Cycles src/scene/svm.cpp and shader_graph.cpp (Apache-2.0) for the compile-and-fold structure.
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -17,6 +19,10 @@
 #include "../../kernel/material/constant_block.h"
 
 namespace astroray::host {
+
+// The linear-RGB mean of the image a TEX_IMAGE immediate names (the image's ar_key). False when
+// the scene has no such image: the lookup then renders magenta, and the estimate uses magenta.
+using ImageMeanFn = std::function<bool(uint32_t image, std::array<float, 3>* rgb)>;
 
 // One term of the emission estimate: Le = color * strength (0005 item 43). A sum of SpectrumRefs is
 // band-summable: each term integrates over a wavelength band on its own.
@@ -37,6 +43,9 @@ struct CompileResult {
   uint32_t clamp_flags = 0;
   uint64_t runtime_slots = 0;           // bit s: RecordSlot s is stored by the program, per point
   std::vector<EmissionTerm> emission;   // one term per EMIT_LE that does not fold to 0
+  // Images the emission estimate read, sorted. Compiled without an ImageMeanFn they count as
+  // mean 1, so the caller recompiles such a result with the means before using it.
+  std::vector<uint32_t> images;
 };
 
 // A report entry the compiler owes for one material (subject = the material key).
@@ -49,18 +58,19 @@ struct MaterialOutput {
   CompileResult compiled;  // ok is true: a material that failed is the magenta one
   uint32_t flags = 0;      // material_header.h bits
   std::vector<EmissionTerm> emission_estimate;  // empty: the estimate is 0
+  std::vector<uint32_t> images;                 // CompileResult::images; recompile when one changes
   std::vector<MaterialEntry> entries;           // one per (code, detail), never duplicated
   bool magenta = false;
 };
 
 // Compiles the SURFACE graph. `table` is the working space's RGB-to-spectrum table.
-CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table);
+CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means = nullptr);
 
 // compile_surface plus the policy of 0005 items 40 and 43: UNSUPPORTED or unknown ops give
 // NODE_UNSUPPORTED (one per node type), a compile error or a SpectrumRef kind M1a cannot resolve
 // gives PROGRAM_REJECTED, and either makes the material magenta; a clamped colour gives
 // NODE_APPROXIMATED. Never throws on bad input.
-MaterialOutput compile_material(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table);
+MaterialOutput compile_material(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means = nullptr);
 
 // The material_header.h flags of a compiled program (0005 item 43).
 uint32_t material_flags(const CompileResult& r);
