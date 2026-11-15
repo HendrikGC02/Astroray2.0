@@ -1,0 +1,2 @@
+fail
+no row in budget.toml

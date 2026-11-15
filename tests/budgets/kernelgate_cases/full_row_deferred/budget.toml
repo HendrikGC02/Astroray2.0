@@ -1,0 +1,7 @@
+[kernel.queue_build_count]
+regs = 40
+stack = 32
+spill_store = 0
+spill_load = 0
+compile_s = 2.0
+gated = "full"

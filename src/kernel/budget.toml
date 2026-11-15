@@ -1,0 +1,15 @@
+# Per-kernel resource baseline of 0002 D10, read by tools/kernelgate.py. One table per CUDA
+# kernel and OptiX program; threads, minimum blocks and stack class live in launch_config.h.
+#   regs, stack  baseline from the last blessed capped build (growth: +5% regs without B, +10% stack)
+#   spill_store, spill_load  allowance in bytes: 0 by default, VM kernels at most 128 / 192 (D10)
+#   compile_s    recorded serial compile time, ranks the TUs the gate times (B-05)
+#   gated        "merge" (checked by `check gate`) or "full" (checked by `check full` only)
+# A change that moves a number edits its row in the same diff (the reviewer sees it).
+
+[kernel.ar_selftest]
+regs = 20
+stack = 0
+spill_store = 0
+spill_load = 0
+compile_s = 1.3
+gated = "merge"

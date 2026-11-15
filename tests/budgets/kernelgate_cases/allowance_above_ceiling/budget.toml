@@ -1,0 +1,7 @@
+[kernel.shade_surface]
+regs = 124
+stack = 304
+spill_store = 256
+spill_load = 192
+compile_s = 2.0
+gated = "merge"

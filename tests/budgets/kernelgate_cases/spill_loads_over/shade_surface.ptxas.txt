@@ -1,0 +1,6 @@
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'shade_surface' for 'sm_120'
+ptxas info    : Function properties for shade_surface
+    304 bytes stack frame, 64 bytes spill stores, 200 bytes spill loads
+ptxas info    : Used 128 registers, used 0 barriers, 304 bytes cumulative stack size
+ptxas info    : Compile time = 0.000 ms
