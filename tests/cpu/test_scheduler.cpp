@@ -102,7 +102,7 @@ void stage_invalid(const ar::KernelGlobals& kg, const ar::StepEntry& step, uint3
 
 }  // namespace
 
-TEST_SUITE("scheduler") {
+TEST_SUITE("fast") {
 
 TEST_CASE("scheduler/stub light paths terminate") {
   // 0002 D8: a stub generate_light whose paths end at their first hit; every light path ends,
