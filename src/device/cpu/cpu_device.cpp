@@ -5,8 +5,11 @@
 
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 
+#include "kernel/film/present.h"
+#include "kernel/film/resolve.h"
 #include "kernel/stages/queue_build.h"
 #include "kernel/stages/route_hit.h"
 #include "kernel/stages/sort.h"
@@ -45,6 +48,10 @@ void CpuDevice::register_scheduler_kernels() {
   register_kernel(KernelId::QUEUE_BUILD_SCATTER, &cpu_queue_build_scatter);
   register_kernel(KernelId::SORT_COUNT, &cpu_sort_count);
   register_kernel(KernelId::SORT_SCATTER, &cpu_sort_scatter);
+  // The per-pass film kernels the session launches after every drained pass.
+  register_kernel(KernelId::FILM_RESOLVE, &cpu_film_resolve);
+  register_kernel(KernelId::FILM_PRESENT, &cpu_film_present);
+  register_kernel(KernelId::FILM_HEATMAP, &cpu_film_heatmap);
 }
 
 void CpuDevice::register_intersect_stages() {
@@ -150,5 +157,18 @@ void* CpuDevice::alloc_memory(uint64_t bytes) {
 }
 
 void CpuDevice::free_memory(void* ptr) { _aligned_free(ptr); }
+
+// Declared in host/session/session.h. The returned pointer shares ownership of the ledger and the
+// thread pool the device needs, so the session's C API handle names no device implementation.
+std::shared_ptr<Device> make_cpu_session_device(ContextState& ctx, unsigned workers) {
+  struct Owned {
+    Ledger ledger;
+    ThreadPool pool;
+    CpuDevice device;
+    Owned(ContextState& c, unsigned w) : pool(c, w), device(ledger, pool) { device.register_production_stages(); }
+  };
+  auto owned = std::make_shared<Owned>(ctx, workers);
+  return std::shared_ptr<Device>(owned, &owned->device);
+}
 
 }  // namespace astroray::host

@@ -54,7 +54,11 @@ class TestUnimplemented(unittest.TestCase):
 
     def test_stub_list_names_declared_functions(self):
         names = stub_names()
-        self.assertGreater(len(names), 20, "unimplemented.cpp lists suspiciously few functions")
+        # Every AR_API line must parse as a stub, so a regex that silently misses entries fails here;
+        # a minimum count would instead break each time a task implements stubs.
+        with open(STUBS, encoding="utf-8") as f:
+            api_lines = len(re.findall(r"^AR_API\b", f.read(), flags=re.M))
+        self.assertEqual(len(names), api_lines, "an AR_API line in unimplemented.cpp did not parse as a stub")
         self.assertEqual(len(names), len(set(names)), "a stub is listed twice")
         stale = [n for n in names if n not in self.abi.PROTOTYPES]
         self.assertEqual(stale, [], "listed in unimplemented.cpp but not declared in astroray.h")

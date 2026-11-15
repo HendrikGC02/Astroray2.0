@@ -239,6 +239,12 @@ void astroray::context_device(ar_context ctx, uint32_t* kind, uint32_t* index) {
   *kind = ctx->kind;
   *index = ctx->index;
 }
+// Declared in host/session/session.h: a session reaches its context only through its scene.
+namespace astroray {
+void context_device_of_state(ContextState& state, uint32_t* kind, uint32_t* index) {
+  context_device(&static_cast<ar_context_s&>(state), kind, index);
+}
+}  // namespace astroray
 
 #ifdef AR_GATE_HOOKS
 astroray::ContextState& astroray::fault_test_context_state(ar_context ctx) { return *ctx; }

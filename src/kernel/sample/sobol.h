@@ -40,9 +40,9 @@
 #pragma once
 #include <cstdint>
 
-#include "core/real.h"
-#include "portability.h"
-#include "sample/hash.h"
+#include "../core/real.h"
+#include "../portability.h"
+#include "hash.h"
 
 AR_NS_BEGIN
 

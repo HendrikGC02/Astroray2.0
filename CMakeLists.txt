@@ -121,6 +121,9 @@ if(ASTRORAY_ENGINE_SOURCES)
   add_library(astroray_engine STATIC ${ASTRORAY_ENGINE_SOURCES})
   astroray_target_warnings(astroray_engine)
   target_link_libraries(astroray_engine PUBLIC astroray_buildinfo dbghelp)
+  # cpu_device.cpp binds the queue_build, sort and film entry points, so every user of the engine
+  # (astroray_core.dll included) needs the float kernel library (cmake/kernels.cmake) to resolve them.
+  target_link_libraries(astroray_engine PUBLIC astroray_kernels_cpu)
   # Fault-injection hooks for the gate tier: in every build type but Release, so the
   # dev preset has them and a shipping build cannot (0001 V14).
   if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")

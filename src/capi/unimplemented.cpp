@@ -3,16 +3,13 @@
 // and, when it has a live handle, leaves "<function>: not implemented in this build" as that
 // handle's last error (0001 D2.5, D2.8; fail loudly, never a silent no-op). The task that
 // implements a function deletes its entry here.
-// The scene and edit handle structs live in host/scene/edit.h (032); the session struct
-// below stays here until 052 creates the first live session handle and moves it.
+// The scene and edit handle structs live in host/scene/edit.h, the session one in
+// host/session/session.h.
 #include <string>
 
 #include "astroray/astroray.h"
 #include "host/scene/edit.h"
-
-struct ar_session_s {
-  std::string last_error;
-};
+#include "host/session/session.h"
 
 namespace {
 
@@ -37,18 +34,6 @@ extern "C" {
 AR_API ar_status ar_scene_trim(ar_scene h) { return unsupported(h, "ar_scene_trim"); }
 
 // Session: one render of one scene.
-AR_API ar_status ar_session_create(ar_scene h, const ar_session_desc*, ar_session*) { return unsupported(h, "ar_session_create"); }
-AR_API ar_status ar_session_close(ar_session h) { return unsupported(h, "ar_session_close"); }
-AR_API ar_status ar_session_destroy(ar_session h) { return unsupported(h, "ar_session_destroy"); }
-AR_API ar_status ar_session_start(ar_session h) { return unsupported(h, "ar_session_start"); }
-AR_API ar_status ar_session_pause(ar_session h) { return unsupported(h, "ar_session_pause"); }
-AR_API ar_status ar_session_resume(ar_session h) { return unsupported(h, "ar_session_resume"); }
-AR_API ar_status ar_session_cancel(ar_session h) { return unsupported(h, "ar_session_cancel"); }
-AR_API ar_status ar_session_set_view(ar_session h, const ar_view_desc*) { return unsupported(h, "ar_session_set_view"); }
-AR_API ar_status ar_session_set_display_mode(ar_session h, uint32_t) { return unsupported(h, "ar_session_set_display_mode"); }
-AR_API ar_status ar_session_get_progress(ar_session h, ar_progress*) { return unsupported(h, "ar_session_get_progress"); }
-AR_API ar_status ar_session_wait(ar_session h, uint32_t) { return unsupported(h, "ar_session_wait"); }
-AR_API ar_status ar_session_last_error(ar_session, uint32_t, uint8_t*) { return AR_ERR_UNSUPPORTED; }
 AR_API ar_status ar_session_report_info(ar_session h, ar_report_info*) { return unsupported(h, "ar_session_report_info"); }
 AR_API ar_status ar_session_report_entry(ar_session h, uint32_t, ar_report_entry*) { return unsupported(h, "ar_session_report_entry"); }
 

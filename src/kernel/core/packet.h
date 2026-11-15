@@ -8,10 +8,10 @@
 #pragma once
 #include <cstdint>
 
-#include "core/real.h"
-#include "core/spectrum.h"
-#include "portability.h"
-#include "state/flags.h"
+#include "real.h"
+#include "spectrum.h"
+#include "../portability.h"
+#include "../state/flags.h"
 
 AR_NS_BEGIN
 
