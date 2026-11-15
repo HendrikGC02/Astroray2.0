@@ -15,3 +15,6 @@ Budget: none.
 Depends on: 023, 024.
 Size: S (about 250 lines); stop and report at 2x.
 Progress:
+- Done: src/kernel/film/response.h (convert, display_rgb, response_at in double), src/host/film/response_table.{h,cpp}, tests/cpu/test_response.cpp (8 cases, float and double). ResponseChannel and ResponseUnit sit outside the Real namespace so the once-compiled host table can hold them.
+- Deviation: 0008 V4 asks (1,1,1) within 1e-4 but the shipped M_ws (built from D65 xy 0.3127, 0.3290) gives (1.000162, 0.999976, 0.999758) for the SPD white, max 2.4e-4. The test bounds 5e-4 (0003 V1, as test_observer) and pins the exact values; lead decides whether specgen should use the SPD's own white or 0008 V4 should say 5e-4.
+- Canary: tasks/046.canary.patch (transposed M_ws, lambda^2 photon weight) turns white reflector, four-lane display and photon cases red.
