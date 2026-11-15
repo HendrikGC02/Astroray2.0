@@ -335,7 +335,7 @@ TEST_CASE("agree/compare metrics") {
   }
   // Lanes add in quadrature: a - b = (3, 0, 4, 0) against |b| = |(0, 0, 0, 10)| is 0.5.
   {
-    const Results a = stride_results(4, {3, 0, 4, 0});
+    const Results a = stride_results(4, {3, 0, 4, 10});
     const Results b = stride_results(4, {0, 0, 0, 10});
     CHECK(std::fabs(compare(a, b, Metric::REL_L2).max - 0.5) < 1e-15);
   }
@@ -536,7 +536,9 @@ TEST_CASE("agree/fma detector") {
 
   // The detector has power: the production module on the same inputs is far outside the limit.
   const Stats prod = compare(run_gpu(*dev, prod_module("agree_pure"), "ar_agree_cancel", s.in, 4), s.f32, Metric::REL_L2);
-  const Verdict power = report("cancel", "(ii) prod vs cpu float (must trip)", prod, Cls::EVAL, NOFMA_VS_CPU_FLOAT);
+  const Verdict power = judge(prod, Cls::EVAL, NOFMA_VS_CPU_FLOAT);
+  std::printf("agree cancel detector power: prod vs cpu float max=%.3e, above the limit on %.1f%% of inputs (%s)%c", prod.max,
+              100.0 * prod.fraction_above(NOFMA_VS_CPU_FLOAT.eval_max), power.pass ? "NOT TRIPPED" : "trips, as required", '\n');
   CHECK(!power.pass);
   CHECK(prod.max > 100.0 * NOFMA_VS_CPU_FLOAT.eval_max);
   CHECK(prod.fraction_above(NOFMA_VS_CPU_FLOAT.eval_max) > 0.1);
