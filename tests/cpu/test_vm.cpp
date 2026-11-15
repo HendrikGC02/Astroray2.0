@@ -115,15 +115,16 @@ struct Tally {
   void ref(const char* op, bool ok) { ref_bad[op] += ok ? 0u : 1u; }
 };
 
-// Equal bits, except that +0 and -0 are the same: the compiler may fold `0 + x` of a known-zero
-// accumulator to x, which differs from the run-time sum only in the sign of a zero.
-bool same_f(float a, float b) { return bits(a) == bits(b) || (a == 0.0f && b == 0.0f); }
-
+// Bit-exact: the fold calls the same op functions from the same zeroed start.
 bool same_spec(const ar::Spec& a, const ar::Spec& b) {
   for (int i = 0; i < ar::kLanes; ++i)
-    if (!same_f(float(a.v[i]), float(b.v[i]))) return false;
+    if (bits(float(a.v[i])) != bits(float(b.v[i]))) return false;
   return true;
 }
+
+// For the independent reference only: Le accumulates onto a +0 start, so (+0 + a) + b differs
+// from the reference sum a + b only when a = b = -0, where one is +0 and the other -0.
+bool same_f(float a, float b) { return bits(a) == bits(b) || (a == 0.0f && b == 0.0f); }
 
 bool in_range(const ar::Spec& s, float lo, float hi) {
   for (int i = 0; i < ar::kLanes; ++i)
@@ -300,7 +301,10 @@ TEST_CASE("vm/fold equals interpret") {
       p.op(Op::EMIT_LE, 0).op(Op::EMIT_LE, 4).end();
       Rig h = g;
       REQUIRE(h.run(p) == VmStatus::OK);
-      ar::Spec want = {};
+      // A volatile +0 start: the interpreter adds onto a +0 held in memory, and a compile-time
+      // zero here would let this TU's optimiser simplify `0 + x` and change the sign of a zero.
+      volatile float zero = 0.0f;
+      ar::Spec want = ar::spec_fill(zero);
       ar::op_emit_le(g.tables, x, x[3], g.ctx.lambda_t, &want);
       ar::op_emit_le(g.tables, x + 4, x[7], g.ctx.lambda_t, &want);
       t.fold("EMIT_LE", same_spec(h.le, want));
