@@ -12,7 +12,7 @@ index 0442eb7..8b1d67e 100644
  }
  
 diff --git a/src/kernel/vm/ops/tex_image.h b/src/kernel/vm/ops/tex_image.h
-index df50600..931f055 100644
+index df50600..b4a91c7 100644
 --- a/src/kernel/vm/ops/tex_image.h
 +++ b/src/kernel/vm/ops/tex_image.h
 @@ -37,7 +37,7 @@ AR_FN float tex_frac(float x, int* ix) {
@@ -24,6 +24,15 @@ index df50600..931f055 100644
    x %= size;
    return x < 0 ? x + size : x;
  }
+@@ -56,7 +56,7 @@ AR_FN void tex_closest(const DeviceImageView& im, const float* srgb_decode, floa
+   iy = tex_wrap(iy, int(im.height), extend);
+   const uint8_t* p = image_texel(im, uint32_t(ix), uint32_t(iy));
+   if (im.encoding == uint32_t(TexEncoding::SRGB)) {
+-    for (uint32_t k = 0; k < 3u; ++k) out[k] = load_ro(srgb_decode + load_ro(p + (im.channels == 1u ? 0u : k)));
++    for (uint32_t k = 0; k < 3u; ++k) out[k] = load_ro(srgb_decode + load_ro(p + k));
+     return;
+   }
+   const Texel t = load_texel(p, im.channels);
 @@ -77,7 +77,9 @@ AR_FN void tex_linear(const DeviceImageView& im, float x, float y, bool extend,
    const bool srgb = im.encoding == uint32_t(TexEncoding::SRGB);
    for (int k = 0; k < 3; ++k) {

@@ -179,6 +179,13 @@ TEST_CASE("tex_image/grey and rgba expand, missing slot is magenta") {
   const double mean4 = 0.25 * (0 + 51 + 102 + 255) / 255.0;
   const double want4[3] = {mean4, mean4, mean4};
   CHECK(near(sample(tb, 0.5f, 0.5f, kLinear, 0), want4, 1e-6));
+  // The same grey bytes tagged sRGB: a Closest lookup decodes the one byte through the table into
+  // all three channels (texel (1, 0) = 51; its neighbours 102 and 255 must not leak in).
+  views[0].encoding = uint32_t(ar::TexEncoding::SRGB);
+  const std::vector<float> gs = sample(tb, 0.75f, 0.25f, kClosest, 0);
+  CHECK((bits(gs[0]) == bits(srgb[51]) && bits(gs[1]) == bits(srgb[51]) && bits(gs[2]) == bits(srgb[51])));
+  CHECK(std::fabs(double(gs[0]) - iec_decode(51.0 / 255.0)) < 1e-6);
+  views[0].encoding = uint32_t(ar::TexEncoding::DATA);
   for (uint32_t slot : {2u, ar::kTexNoImage}) {
     const std::vector<float> m = sample(tb, 0.5f, 0.5f, kLinear, slot);
     CHECK((m[0] == 1.0f && m[1] == 0.0f && m[2] == 1.0f));

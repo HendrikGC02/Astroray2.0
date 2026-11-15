@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // TEX_IMAGE agreement (0005 Verification 6, 0009 d17 step ii): 10^5 lookups, every mode, on an
-// sRGB, a linear grey and a data RGBA image plus a slot outside the table, run on the GPU built
+// sRGB RGB, an sRGB grey and a data RGBA image plus a slot outside the table, run on the GPU built
 // without FMA contraction and on the CPU (float). Closest must be bit-identical (the first 256
 // lookups hit every byte value of the sRGB image at its texel centre, so the sRGB decode is
 // compared on its whole Closest domain); Linear within 1e-6 relative.
@@ -39,12 +39,12 @@ struct HostImage {
   std::vector<uint8_t> t;
 };
 
-// 16x16 sRGB RGB whose red channel takes every byte value once; 5x3 linear grey; 3x2 data RGBA.
+// 16x16 sRGB RGB whose red channel takes every byte value once; 5x3 sRGB grey; 3x2 data RGBA.
 std::vector<HostImage> images() {
   std::vector<HostImage> im(3);
   im[0] = {16, 16, 3, ar::TexEncoding::SRGB, {}};
   for (uint32_t i = 0; i < 256; ++i) im[0].t.insert(im[0].t.end(), {uint8_t(i), uint8_t((i * 7 + 3) & 255u), uint8_t(255 - i)});
-  im[1] = {5, 3, 1, ar::TexEncoding::LINEAR, {}};
+  im[1] = {5, 3, 1, ar::TexEncoding::SRGB, {}};
   for (uint32_t i = 0; i < 15; ++i) im[1].t.push_back(uint8_t((i * 53 + 11) & 255u));
   im[2] = {3, 2, 4, ar::TexEncoding::DATA, {}};
   for (uint32_t i = 0; i < 24; ++i) im[2].t.push_back(uint8_t((i * 89 + 7) & 255u));
