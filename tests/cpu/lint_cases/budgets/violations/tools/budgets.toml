@@ -1,0 +1,18 @@
+[[budget]]
+id = "B-08"
+text = "≤ 12 s"
+limit = 10
+unit = "s"
+
+[[budget]]
+id = "B-12"
+text = "≤ 0.5 s / ≤ 20 s"
+limit = 0.5
+unit = "s"
+
+[family]
+gate_statistical = 2000
+
+[family_provisional]
+full_statistical = 2000
+analytic_scenes = 256

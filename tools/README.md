@@ -9,3 +9,5 @@ Scripts print at most 20 lines, log to out/check/, exit non-zero on failure (000
 - lib/python.ps1: Get-ArPython: Blender 5.3 bundled python (python on CI); callers pass -I.
 - lib/blender.ps1: Invoke-ArBlender -Script -Args -TimeoutS: isolated profile, machine lock, returns exit code and log.
 - lint.py: SPDX, NVIDIA, ASCII ps1, process caps, skip/xfail, task-file format; `--self-test` runs tests/cpu/lint_cases/.
+- budgets.toml: machine copy of 0009 d13 (B-01..B-37) and the d15 family sizes; lint section `budgets` checks it.
+- check.ps1 fast: lint, `build.ps1 -Target astroray_tests_cpu -NoMachineLock -Jobs 4`, fast tests; fails on B-08 (tier) or B-12 (one test). No machine lock. Other tiers come later. build.ps1 -Jobs n passes -j n.

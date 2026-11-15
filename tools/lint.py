@@ -208,8 +208,48 @@ def taskfile(c):
                 c.find(p, pos["Progress:"] + 1, "taskfile", f"{len(tail)} lines after Progress:, at most 10")
 
 
+def budgets(c):
+    """Ref: 0009 d13 (table), d15 (family sizes): tools/budgets.toml is its machine copy."""
+    import tomllib
+    toml_path, rec = "tools/budgets.toml", "docs/decisions/0009-build-test-process.md"
+    if toml_path not in c.files:
+        return
+    if rec not in c.files:
+        c.find(toml_path, 1, "budgets", f"{rec} not found")
+        return
+    table = {}
+    for ln in c.lines(rec):
+        if re.match(r"\| B-\d\d \|", ln):
+            cells = [x.strip() for x in ln.strip().strip("|").split(" | ")]
+            table[cells[0]] = cells[2]
+    try:
+        with open(os.path.join(c.root, toml_path), "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, ValueError) as e:
+        c.find(toml_path, 1, "budgets", f"cannot parse: {e}")
+        return
+    rows = {b.get("id"): b for b in data.get("budget", [])}
+    for i in sorted(set(table) - set(rows)):
+        c.find(toml_path, 1, "budgets", f"{i} is in 0009 d13 but not in budgets.toml")
+    for i in sorted(set(rows) - set(table)):
+        c.find(toml_path, 1, "budgets", f"{i} is in budgets.toml but not in 0009 d13")
+    for i in sorted(set(rows) & set(table)):
+        b = rows[i]
+        if b.get("text") != table[i]:
+            c.find(toml_path, 1, "budgets", f"{i} text differs from the 0009 d13 limit cell")
+        nums = [float(t) for t in re.findall(r"\d+(?:\.\d+)?", b.get("text", ""))]
+        if "limit" in b and float(b["limit"]) not in nums:
+            c.find(toml_path, 1, "budgets", f"{i} limit {b['limit']} is not in its text")
+    if data.get("family", {}).get("gate_statistical") != 2000:
+        c.find(toml_path, 1, "budgets", "[family] gate_statistical must be 2000 (0009 d15)")
+    fp = data.get("family_provisional", {})
+    for k, v in (("full_statistical", 2000), ("analytic_scenes", 256)):
+        if fp.get(k) != v:
+            c.find(toml_path, 1, "budgets", f"[family_provisional] {k} must be {v} (0009 d15)")
+
+
 SECTIONS = {"spdx": spdx, "nvidia": nvidia, "ascii-ps1": ascii_ps1, "caps": caps,
-            "skip": skip, "taskfile": taskfile}
+            "skip": skip, "taskfile": taskfile, "budgets": budgets}
 
 
 def run(root, files, sections):

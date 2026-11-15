@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# tools/build.ps1 [-Target t[,t]] [-Preset dev|cpu] [-CheckOnly] [-NoMachineLock]
+# tools/build.ps1 [-Target t[,t]] [-Preset dev|cpu] [-CheckOnly] [-NoMachineLock] [-Jobs n]
 # Enters the pinned MSVC environment, configures when needed, builds, then proves
 # with `ninja -n` that no work is left (0009 d5, d9).
 # Pins (0009 d2): MSVC toolset 14.44.x from VS 2022 Build Tools 17.14
@@ -14,7 +14,8 @@ param(
   [string[]]$Target = @('all'),
   [ValidateSet('dev', 'cpu')][string]$Preset = 'dev',
   [switch]$CheckOnly,
-  [switch]$NoMachineLock
+  [switch]$NoMachineLock,
+  [int]$Jobs = 0
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -104,7 +105,8 @@ try {
 
     # --- build ---
     $t = $clock.Elapsed.TotalSeconds
-    if ((Run 'cmake' (@('--build', 'out/build', '--target') + $Target)) -ne 0) { Fail "compile failed (see $log)" }
+    $jobArg = if ($Jobs -gt 0) { @('-j', [string]$Jobs) } else { @() }
+    if ((Run 'cmake' (@('--build', 'out/build', '--target') + $Target + $jobArg)) -ne 0) { Fail "compile failed (see $log)" }
     Add-ArStep 'build' ($clock.Elapsed.TotalSeconds - $t)
   }
 

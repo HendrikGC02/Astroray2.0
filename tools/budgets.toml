@@ -1,0 +1,237 @@
+# SPDX-License-Identifier: Apache-2.0
+# Machine copy of docs/decisions/0009-build-test-process.md decision 13 (the record wins;
+# lint section `budgets` fails on any difference). `limit`/`unit` only where a script enforces the row.
+
+[[budget]]
+id = "B-01"
+text = "≤ 5 min"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-02"
+text = "≤ 30 s"
+tier = "report"
+provisional = false
+
+[[budget]]
+id = "B-03"
+text = "≤ 5 s"
+tier = "report"
+provisional = false
+
+[[budget]]
+id = "B-04"
+text = "≤ 5 s"
+tier = "`full`"
+provisional = false
+
+[[budget]]
+id = "B-05"
+text = "≤ 3.0 s"
+tier = "`gate` (≤ 3 changed TUs), `full` (all)"
+provisional = false
+
+[[budget]]
+id = "B-06"
+text = "0002 D10"
+tier = "`gate` (capped build), `full` (uncapped warning)"
+provisional = false
+
+[[budget]]
+id = "B-07"
+text = "≤ 10 s"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-08"
+text = "≤ 10 s"
+limit = 10
+unit = "s"
+tier = "every run"
+provisional = false
+
+[[budget]]
+id = "B-09"
+text = "≤ 3 min; ≤ 120 s"
+tier = "every run"
+provisional = true
+
+[[budget]]
+id = "B-10"
+text = "≤ 20 min"
+tier = "every run"
+provisional = true
+
+[[budget]]
+id = "B-11"
+text = "≤ 15 min"
+tier = "every run"
+provisional = true
+
+[[budget]]
+id = "B-12"
+text = "≤ 0.5 s / ≤ 20 s"
+limit = 0.5
+unit = "s"
+tier = "every run"
+provisional = true
+
+[[budget]]
+id = "B-13"
+text = "≤ 2 ms / ≤ 8 ms (p99 ≤ 3 ms / ≤ 15 ms); ≥ 58/s"
+tier = "`full`"
+provisional = false
+
+[[budget]]
+id = "B-14"
+text = "target ≥ 30/s at full 1080p on B-1M; floor: never < 24/s for > 0.5 s; 60/s is a later goal, reported, not gated"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-15"
+text = "0007 D35"
+tier = "`full`"
+provisional = false
+
+[[budget]]
+id = "B-16"
+text = "+2% / 1.25x of baseline"
+tier = "`gate`"
+provisional = false
+
+[[budget]]
+id = "B-17"
+text = "target 20 ms; fails above 100 ms"
+tier = "`full`"
+provisional = false
+
+[[budget]]
+id = "B-18"
+text = "≤ 300 ms / ≤ 1.5 s"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-19"
+text = "each ≤ 10% of pass time"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-20"
+text = "≤ 1.25x Cycles (7.6 ms / 10 ms)"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-21"
+text = "≤ 5 ms"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-22"
+text = "≤ 2 ms"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-23"
+text = "≤ 50 ms per 10k lights"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-24"
+text = "≤ 2 ms per 100 nodes; ≤ 1 ms; ≤ 300 ms; ≤ 1 ms per frame"
+tier = "`gate` (compile), `full` (rest)"
+provisional = true
+
+[[budget]]
+id = "B-25"
+text = "≤ B(rate) = 1/rate − t_present, rate = B-14's target"
+tier = "`full`"
+provisional = false
+
+[[budget]]
+id = "B-26"
+text = "≤ B(rate)/2 at B-14's target; above it quality steps down (0008 decision 18)"
+tier = "`full`"
+provisional = false
+
+[[budget]]
+id = "B-27"
+text = "≤ B(rate)/2 at B-14's target for 1080p output and at B-14's floor for 4K"
+tier = "on demand (spike F)"
+provisional = false
+
+[[budget]]
+id = "B-28"
+text = "share of B(rate) set from the first measurement"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-29"
+text = "set from the first measurement"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-30"
+text = "set from M-3"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-31"
+text = "≤ 65 ms per 1M triangles; ≤ 1.1 ms per 1M; ≤ 30 ms per 10k instances; ≤ 0.1 ms"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-32"
+text = "stops at the next launch boundary (≤ B-17); ≤ rest of the pass in flight + one pass + present; a frame for a newer view after every completed pass, zero stale frames"
+tier = "`full`"
+provisional = false
+
+[[budget]]
+id = "B-33"
+text = "step down within 100 ms when no frame arrives; reach B-14's floor within 0.5 s; full resolution within 250 ms of interaction stop"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-34"
+text = "≤ 60/s during interaction, ≤ 10/s otherwise; the interval grows on Cycles' viewport display schedule, values copied from `render_scheduler.cpp` on reading"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-35"
+text = "median-of-3 runtime ratio ≤ 1.05"
+tier = "`full`"
+provisional = false
+
+[[budget]]
+id = "B-36"
+text = "≤ 25%"
+tier = "`full`"
+provisional = true
+
+[[budget]]
+id = "B-37"
+text = "50 ms; 100 ms; 1 s; 250 ms; 0.5 s; 0.25 s; ≤ 20 s"
+tier = "`full` (specgen: report)"
+provisional = true
+
+# Family sizes, 0009 d15; reset by the detection-power task (078).
+[family]
+gate_statistical = 2000
+
+[family_provisional]
+full_statistical = 2000
+analytic_scenes = 256
