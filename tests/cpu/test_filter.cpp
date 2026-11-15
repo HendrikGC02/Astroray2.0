@@ -145,24 +145,30 @@ const TablePin kPins[] = {
     {FilterType::BlackmanHarris, 3.0f, {-2.5f, -1.87252712f, -1.7476275f, -0.59155035f, 0.498947531f, 0.501052439f, 1.4930619f, 2.7476275f, 2.87252712f, 3.5f}, 512.000001},
 };
 
-// float64 reference footprint weights, one axis: first pixel, then the weights of
-// consecutive pixels, for a splat at 10.3 (x) and 7.8 (y) at width 1.5:
-// f(x - c) / sum, f the closed forms of density_of, centres c = i + 0.5 with
-// -r <= x - c < r (numpy, float64).
-struct FootPin {
+// float64 reference splat weights for a splat at (10.3, 7.8), width 1.5:
+// f(x - c_x) f(y - c_y) / I^2 with f the closed forms of density_of and the closed-form
+// integrals I = 2 * 0.35875 * w (Blackman-Harris) and w sqrt(pi / 8) erf(1.5 sqrt 8)
+// (Gaussian), centres c = i + 0.5 (python math module, float64).
+struct WeightPin {
   FilterType type;
-  int x0;
-  std::vector<double> wx;
-  int y0;
-  std::vector<double> wy;
+  int px, py;
+  double weight;
 };
-const FootPin kFoot[] = {
-    {FilterType::Box, 10, {1.0}, 7, {0.5, 0.5}},
-    {FilterType::Gaussian, 8, {0.000010172, 0.105249567, 0.888618220, 0.006122007, 0.000000034},
-     6, {0.002718406, 0.803465647, 0.193777813, 0.000038135}},
-    {FilterType::BlackmanHarris, 9, {0.159258516, 0.830638868, 0.010102616},
-     6, {0.003379264, 0.745088310, 0.251532426}},
+const WeightPin kWeights[] = {
+    {FilterType::BlackmanHarris, 10, 7, 0.618836665}, {FilterType::BlackmanHarris, 9, 7, 0.118649648},
+    {FilterType::BlackmanHarris, 11, 8, 0.002540878}, {FilterType::BlackmanHarris, 9, 6, 0.000538122},
+    {FilterType::Gaussian, 10, 7, 0.712880996},       {FilterType::Gaussian, 9, 8, 0.020363803},
 };
+
+// Integral of the un-normalised filter over its support, closed forms.
+double integral_of(FilterType type, double w) {
+  switch (type) {
+    case FilterType::Box: return w;
+    case FilterType::Gaussian: return w * std::sqrt(kPi / 8.0) * std::erf(1.5 * std::sqrt(8.0));
+    case FilterType::BlackmanHarris: return 2 * 0.35875 * w;
+  }
+  return 0.0;
+}
 
 }  // namespace
 
@@ -227,7 +233,8 @@ TEST_SUITE("fast") {
     }
   }
 
-  TEST_CASE("filter/footprint sums to one") {
+  TEST_CASE("filter/footprint weights are unit-integral filter") {
+    // 0008 d4: the weight of every touched pixel is f(dx) f(dy) / I^2 at its centre.
     const FilterType types[3] = {FilterType::Box, FilterType::Gaussian, FilterType::BlackmanHarris};
     const float widths[3] = {1.0f, 1.5f, 3.0f};
     const double pos[6][2] = {{10.3, 7.8}, {0.0, 0.0}, {3.25, 99.5}, {5.9999, 2.0001}, {-1.7, 4.4}, {63.123, 0.5}};
@@ -235,7 +242,10 @@ TEST_SUITE("fast") {
       for (float w : widths) {
         const ar::FilterTable t = host::build_filter_table(FilterSettings{type, w});
         const Density d = density_of(type, w);
-        for (const auto& p : pos) {
+        const double inv_i2 = 1.0 / (integral_of(type, w) * integral_of(type, w));
+        for (const auto& pd : pos) {
+          // The kernel sees the position rounded to Real; the reference uses the same value.
+          const double p[2] = {static_cast<double>(ar::Real(pd[0])), static_cast<double>(ar::Real(pd[1]))};
           INFO("type " << static_cast<int>(type) << " width " << w << " at " << p[0] << "," << p[1]);
           const ar::SplatFootprint f = ar::splat_footprint(t, ar::Real(p[0]), ar::Real(p[1]));
           // The pixel list equals a brute-force scan of centres inside the support.
@@ -253,27 +263,28 @@ TEST_SUITE("fast") {
           };
           scan(p[0], f.x0, f.nx);
           scan(p[1], f.y0, f.ny);
-          double sum = 0.0;
+          double worst = 0.0;
           for (int j = 0; j < f.ny; ++j)
-            for (int i = 0; i < f.nx; ++i) sum += ar::splat_tap_weight(t, f, i, j);
-          CHECK(std::fabs(sum - 1.0) < 1e-6);
+            for (int i = 0; i < f.nx; ++i) {
+              const double want = d.f(p[0] - (f.x0 + i + 0.5)) * d.f(p[1] - (f.y0 + j + 0.5)) * inv_i2;
+              worst = std::fmax(worst, std::fabs(ar::splat_tap_weight(t, f, i, j) - want));
+            }
+          CHECK(worst < 1e-6);
         }
       }
     }
   }
 
-  TEST_CASE("filter/footprint weights equal float64 reference") {
-    for (const FootPin& p : kFoot) {
+  TEST_CASE("filter/splat weights equal pinned float64 values") {
+    for (const WeightPin& p : kWeights) {
       const ar::FilterTable t = host::build_filter_table(FilterSettings{p.type, 1.5f});
       const ar::SplatFootprint f = ar::splat_footprint(t, ar::Real(10.3), ar::Real(7.8));
-      INFO("type " << static_cast<int>(p.type));
-      REQUIRE(f.nx == static_cast<int>(p.wx.size()));
-      REQUIRE(f.ny == static_cast<int>(p.wy.size()));
-      CHECK(f.x0 == p.x0);
-      CHECK(f.y0 == p.y0);
-      for (int j = 0; j < f.ny; ++j)
-        for (int i = 0; i < f.nx; ++i)
-          CHECK(std::fabs(ar::splat_tap_weight(t, f, i, j) - p.wx[i] * p.wy[j]) < 1e-5);
+      INFO("type " << static_cast<int>(p.type) << " pixel " << p.px << "," << p.py);
+      REQUIRE(p.px >= f.x0);
+      REQUIRE(p.px < f.x0 + f.nx);
+      REQUIRE(p.py >= f.y0);
+      REQUIRE(p.py < f.y0 + f.ny);
+      CHECK(std::fabs(ar::splat_tap_weight(t, f, p.px - f.x0, p.py - f.y0) - p.weight) < 1e-6);
     }
   }
 
@@ -307,7 +318,7 @@ TEST_SUITE("fast") {
       REQUIRE(f.ny == 1);
       CHECK(f.x0 == static_cast<int>(std::floor(static_cast<float>(x))));
       CHECK(f.y0 == static_cast<int>(std::floor(static_cast<float>(y))));
-      CHECK(std::fabs(ar::splat_tap_weight(t, f, 0, 0) - 1.0) < 1e-6);
+      CHECK(ar::splat_tap_weight(t, f, 0, 0) == ar::Real(1));
     }
   }
 }

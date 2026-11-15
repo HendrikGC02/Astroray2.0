@@ -110,9 +110,9 @@ ar::FilterTable build_filter_table(const FilterSettings& settings) {
 
   // The density table is the same function on [0, range] scaled to unit
   // integral over [-range, range] (trapezoid rule, double).
-  const int n = ar::kFilterTableSize;
+  const int n = ar::kFilterDensitySize;
   const double h = static_cast<double>(range) / (n - 1);
-  double values[ar::kFilterTableSize];
+  double values[ar::kFilterDensitySize];
   double trapezoid = 0.0;
   for (int i = 0; i < n; ++i) {
     values[i] = static_cast<double>(func(range * (float)i / (float)(n - 1), width));
