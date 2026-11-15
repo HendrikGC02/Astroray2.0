@@ -29,7 +29,18 @@ inline constexpr uint32_t CONSTANT_EMISSION = 1u << 5;
 
 inline constexpr uint32_t kExtIndexMax = (1u << 24) - 1u;
 
-AR_FN uint32_t ext_pack(uint32_t kind, uint32_t index) { return (kind & 0xffu) | ((index & kExtIndexMax) << 8); }
+// False when kind does not fit 8 bits or index does not fit 24; *out is then untouched. The host
+// compiler calls this and reports the overflow; there is no silent truncation.
+AR_FN bool ext_pack_checked(uint32_t kind, uint32_t index, uint32_t* out) {
+  if (kind > 0xffu || index > kExtIndexMax) return false;
+  *out = kind | (index << 8);
+  return true;
+}
+// Kernel-side form for values already validated: an out-of-range argument traps in debug builds.
+AR_FN uint32_t ext_pack(uint32_t kind, uint32_t index) {
+  AR_ASSERT(kind <= 0xffu && index <= kExtIndexMax);
+  return kind | (index << 8);
+}
 AR_FN uint32_t ext_kind(const MaterialHeader& h) { return h.ext & 0xffu; }
 AR_FN uint32_t ext_index(const MaterialHeader& h) { return h.ext >> 8; }
 

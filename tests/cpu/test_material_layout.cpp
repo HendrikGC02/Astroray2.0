@@ -157,13 +157,47 @@ TEST_SUITE("fast") {
     CHECK(sizeof(OpenPBRParams) >= end);
   }
 
+  // 0005 item 10's table (and item 2a for interior_ior), written out here, not read from the header.
+  AR_RT_CASE("material_layout/slot semantic table") {
+    const SpectrumSemantic want[] = {
+        SpectrumSemantic::REFLECTANCE,  // base_color
+        SpectrumSemantic::REFLECTANCE,  // specular_color
+        SpectrumSemantic::IOR,          // specular_ior
+        SpectrumSemantic::REFLECTANCE,  // transmission_color
+        SpectrumSemantic::REFLECTANCE,  // transmission_scatter
+        SpectrumSemantic::REFLECTANCE,  // subsurface_color
+        SpectrumSemantic::UNBOUNDED,    // subsurface_radius_scale
+        SpectrumSemantic::REFLECTANCE,  // fuzz_color
+        SpectrumSemantic::REFLECTANCE,  // coat_color
+        SpectrumSemantic::ILLUMINANT,   // emission_color
+        SpectrumSemantic::IOR};         // interior_ior
+    CHECK(int(ar::Slot::COUNT_) == 11);
+    CHECK(int(ar::Slot::BASE_COLOR) == 0);
+    CHECK(int(ar::Slot::INTERIOR_IOR) == 10);
+    for (int i = 0; i < 11; ++i) {
+      INFO("slot " << i);
+      CHECK(ar::kSlotSemantic[i] == want[i]);
+    }
+  }
+
   AR_RT_CASE("material_layout/header packing and enums") {
     // ext = ext_kind u8 | ext_index u24; the six flag bits are distinct single bits.
     ar::MaterialHeader h = {};
     h.ext = ar::ext_pack(3u, 0x123456u);
     CHECK(ar::ext_kind(h) == 3u);
     CHECK(ar::ext_index(h) == 0x123456u);
-    CHECK(ar::ext_pack(0xffu, 0xffffffffu) == 0xffffffffu);
+    // The largest legal values round-trip; overflow is refused, never truncated.
+    uint32_t packed = 0;
+    REQUIRE(ar::ext_pack_checked(0xffu, ar::kExtIndexMax, &packed));
+    CHECK(packed == 0xffffffffu);
+    h.ext = packed;
+    CHECK(ar::ext_kind(h) == 0xffu);
+    CHECK(ar::ext_index(h) == 0xffffffu);
+    packed = 0xdeadbeefu;
+    CHECK(!ar::ext_pack_checked(0x100u, 0u, &packed));
+    CHECK(!ar::ext_pack_checked(0u, ar::kExtIndexMax + 1u, &packed));
+    CHECK(!ar::ext_pack_checked(0u, 0xffffffffu, &packed));
+    CHECK(packed == 0xdeadbeefu);
     const uint32_t bits[] = {ar::MAY_BE_DELTA,       ar::NON_OPAQUE,         ar::EXTENSION,
                              ar::READS_RAY_TYPE,     ar::CONSTANT_SURFACE,   ar::CONSTANT_EMISSION};
     uint32_t seen = 0;

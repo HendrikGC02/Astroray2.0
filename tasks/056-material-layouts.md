@@ -13,7 +13,7 @@ Do:
 6. Tests (fast): sizes 16, 24, 304 (or less), 128; constant-block defaults equal the spec table for 6 spot-checked inputs; RGB white REFLECTANCE resolves to 1 +- 1e-4 at four wavelengths; ILLUMINANT white resolves to the working-space illuminant; a constant above 1 in a REFLECTANCE slot is clamped (the compiler reports it, 059).
 Acceptance: `pwsh tools/check.ps1 fast` passes with `material_layout/*` cases in float and double.
 Look at: none.
-Canary: tasks/056.canary.patch must turn red: astroray_tests_cpu "material_layout/record size", "material_layout/rgb white reflectance".
+Canary: tasks/056.canary.patch must turn red: astroray_tests_cpu "material_layout/record size", "material_layout/rgb white reflectance", "material_layout/slot semantic table", "material_layout/header packing and enums".
 Budget: none.
 Depends on: 055, 023.
 Size: S (about 300 lines); stop and report at 2x.
