@@ -1,0 +1,13 @@
+diff --git a/src/host/session/kg_builder.cpp b/src/host/session/kg_builder.cpp
+index 100510a..4a32400 100644
+--- a/src/host/session/kg_builder.cpp
++++ b/src/host/session/kg_builder.cpp
+@@ -43,7 +43,7 @@ ar::KernelGlobals build_kernel_globals(const SceneTableSet* set, const KgSession
+   kg.light_sampler = scene.light_sampler;
+   kg.e_diel = scene.e_diel;
+   kg.material_slot_count = scene.counts[static_cast<uint32_t>(TableId::MATERIAL_SLOTS)];
+-  kg.material_program_words = scene.counts[static_cast<uint32_t>(TableId::MATERIAL_PROGRAMS)];
++  kg.material_program_words = scene.counts[static_cast<uint32_t>(TableId::MATERIAL_PROGRAMS)] - 1u;
+   kg.material_constant_count = scene.counts[static_cast<uint32_t>(TableId::MATERIAL_CONSTANTS)];
+   return kg;
+ }

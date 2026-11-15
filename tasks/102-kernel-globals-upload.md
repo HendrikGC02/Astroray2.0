@@ -19,3 +19,6 @@ Depends on: 101, 040, 059, 060, 064, 068.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
 - Read-through done; no code yet. Questions to the lead before coding: session.h and scene.h scope, uploads before ready vs arrays built at activation, accel ownership, one CUDA device per scene vs per session.
+- Built per lead rulings and RULINGS 70: scene_tables (sets per snapshot, last-holder frees), kg_builder (one path; the scheduler keeps the one per-pass copy), CUDA sessions on own devices, scene device on the scene ledger.
+- KernelGlobals: wavelengths/rgb2spec retired for tables; appended lights, light_sampler, e_diel and three material counts. SceneData::accel marked unused (114).
+- kg_builder/* in fast (6 ms each); scene_upload/* in gate. Material edit re-uploads 1148 B (material tables + header); first upload 9.46 MB (rgb2spec 9.4 MB).
