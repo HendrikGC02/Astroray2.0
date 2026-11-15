@@ -1,20 +1,58 @@
+diff --git a/src/host/session/latch.cpp b/src/host/session/latch.cpp
+index 90372c7..c6b9958 100644
+--- a/src/host/session/latch.cpp
++++ b/src/host/session/latch.cpp
+@@ -78,7 +78,6 @@ LatchResult Latch::latch(uint64_t scene_active) {
+   first_ = false;
+   if (r.new_epoch) {
+     ++epoch_;
+-    presented_ = false;
+   }
+   if (r.changed) ++latches_;
+   r.generation = generation_;
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index 26be556..35de4c7 100644
+index cda2a8d..b3df9c8 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
-@@ -130,7 +130,10 @@ void Session::set_view(const ar_view_desc& view) {
-   if (view.camera.motion_steps && !view.camera.motion_xf)
-     throw std::invalid_argument("set_view: motion_steps is non-zero but motion_xf is null");
-   if (latch_.set_view(view)) wake();
--  raise_interrupt_if_due();
-+  {
-+    std::lock_guard<std::mutex> lock(mutex_);
-+    if (scheduler_) scheduler_->epoch_pending = true;
-+  }
+@@ -84,7 +84,6 @@ void Session::throw_if_failed_locked(const char* what) const {
+ void Session::start() {
+   std::lock_guard<std::mutex> lock(mutex_);
+   if (closing_) return;
+-  throw_if_failed_locked("start");
+   started_ = true;
+   paused_ = false;
+   idle_ = false;
+@@ -113,7 +112,6 @@ void Session::cancel() {
+   std::lock_guard<std::mutex> lock(mutex_);
+   if (closing_) return;
+   paused_ = true;
+-  if (scheduler_) scheduler_->cancel = true;
+   wake_cv_.notify_all();
  }
  
- void Session::set_display_mode(uint32_t mode) {
-@@ -265,7 +268,6 @@ bool Session::converged_locked() const {
+@@ -146,7 +144,6 @@ void Session::detach_scene() {
+   }
+   // Outside mutex_: a listener call in flight holds the tracker's listener lock and may be
+   // waiting for mutex_; remove_listener waits for it to finish.
+-  if (const uint64_t id = listener_.exchange(0)) scene_.generations().remove_listener(id);
+ }
+ 
+ void Session::on_thread_exit() {
+@@ -233,12 +230,11 @@ void Session::raise_interrupt_if_due() {
+   // interrupt the next epoch's first pass. Lock order: mutex_, then the tracker, then the latch.
+   std::lock_guard<std::mutex> lock(mutex_);
+   if (!scheduler_ || scene_detached_) return;
+-  if (latch_.interrupt_due(scene_.generations().active())) scheduler_->epoch_pending = true;
++  scheduler_->epoch_pending = true;
+ }
+ 
+ void Session::wake() {
+   std::lock_guard<std::mutex> lock(mutex_);
+-  idle_ = false;
+   // The caller's next wait() must not see the CONVERGED of the state it just changed.
+   if (state_ == AR_STATE_CONVERGED && started_ && !paused_ && !closing_ && !failed_)
+     set_state_locked(AR_STATE_RENDERING);
+@@ -353,7 +349,6 @@ bool Session::converged_locked() const {
  void Session::begin_epoch() {
    // 0004 D25 and 0007 d25: film (per-sample buffer, splat and direct channels included), statistics
    // and sample indices restart; FILM report entries go with the film.
@@ -22,3 +60,29 @@ index 26be556..35de4c7 100644
    invalid_.on_film_reset(report_);
    {
      std::lock_guard<std::mutex> lock(mutex_);
+@@ -408,7 +403,7 @@ void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
+   ++resolves_;
+   if (options_.test_stale_resolve_at_pass != 0 && resolves_ == options_.test_stale_resolve_at_pass) --pass_epoch;
+   // Writes carry their epoch; one from an epoch that has been reset since is dropped (0004 D25).
+-  if (pass_epoch != film_epoch_) {
++  if (pass_epoch + 1 < film_epoch_) {
+     std::lock_guard<std::mutex> lock(mutex_);
+     ++stats_.stale_dropped;
+     return;
+@@ -501,6 +496,8 @@ void Session::render_loop() {
+       if (state_ != AR_STATE_RENDERING) set_state_locked(AR_STATE_RENDERING);
+     }
+     std::unique_lock<std::mutex> render(render_mutex_);
++    static std::mutex canary_serial;
++    std::lock_guard<std::mutex> serial(canary_serial);
+     const uint64_t active = scene_.generations().active();
+     const LatchResult lr = latch_.latch(active);
+     {
+@@ -534,7 +531,6 @@ void Session::render_loop() {
+         expect_epoch_ = true;
+         std::lock_guard<std::mutex> lock(mutex_);
+         ++stats_.passes_interrupted;
+-        continue;
+       }
+       resolve(lr.epoch, lr.generation);
+     }
