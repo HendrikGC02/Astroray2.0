@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "device/cpu/cpu_device.h"
-#include "device/cuda/module_loader.h"
+#include "host/data_resource.h"
 #include "host/device.h"
 #include "host/thread_pool.h"
 #include "stages/queue_build.h"
@@ -143,11 +143,11 @@ TEST_SUITE("gate") {
 
 TEST_CASE("queue_build/embedded kernels load") {
   // The release DLL's way to a kernel: RCDATA K_<NAME> of the stage TU, then k_<name>.
-  for (const char* name : {"queue_build_count", "queue_build_scan", "queue_build_scatter"}) {
+  for (const char* name : {"K_QUEUE_BUILD_COUNT", "K_QUEUE_BUILD_SCAN", "K_QUEUE_BUILD_SCATTER"}) {
     INFO(name);
-    const ModuleImage image = load_module_image(name);
-    CHECK(image.bytes.size() > 1000);
-    CHECK(image.origin.rfind("embedded K_QUEUE_BUILD_", 0) == 0);
+    DataBlob blob;
+    REQUIRE(find_data(name, &blob));
+    CHECK(blob.size > 1000);
   }
   // k_queue_build_count is found and launched through the device (no items: tile count 0).
   Ledger ledger;

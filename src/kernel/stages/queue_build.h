@@ -139,10 +139,8 @@ AR_FN void queue_scatter_tile(const KernelGlobals& kg, uint32_t g) {
 AR_NS_END
 
 #if !AR_CUDA_BUILD
-#include "../../kernel_cpu/stage_cpu.h"
-
 // CPU entry points (src/kernel_cpu/queue_build_*.cpp), CpuKernelFn chunk functions for
-// KernelId::QUEUE_BUILD_COUNT, _SCAN and _SCATTER. The host registers them on its CpuDevice.
+// KernelId::QUEUE_BUILD_COUNT, _SCAN and _SCATTER; the host registers them on its CpuDevice.
 void cpu_queue_build_count(const ar::KernelGlobals& kg, uint32_t first, uint32_t last);
 void cpu_queue_build_scan(const ar::KernelGlobals& kg, uint32_t first, uint32_t last);
 void cpu_queue_build_scatter(const ar::KernelGlobals& kg, uint32_t first, uint32_t last);
