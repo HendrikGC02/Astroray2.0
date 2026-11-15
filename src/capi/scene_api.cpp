@@ -24,22 +24,28 @@ using astroray::host::Scene;
 namespace {
 
 #ifdef ASTRORAY_GPU
-// Everything the CUDA init thread creates, kept alive by the scene.
+// What the CUDA init thread creates, kept alive by the scene: the device charges the scene's
+// ledger, the one its host arrays count in (RULINGS 70).
 struct CudaInit {
-  astroray::host::Ledger ledger;
+  std::shared_ptr<astroray::host::Ledger> ledger;  // outlives the device
   std::unique_ptr<astroray::host::ModuleDevice> device;
-  explicit CudaInit(uint32_t index) : device(astroray::host::make_cuda_device(ledger, index)) {}
 };
 #endif
 
 // The scene's device init for a CUDA context. Kept out of the entry point because the
 // recording macro wraps that body and a preprocessor conditional cannot sit inside it.
-std::function<std::shared_ptr<void>()> cuda_init(uint32_t index) {
+void cuda_init(astroray::host::SceneConfig& cfg, uint32_t index, std::shared_ptr<astroray::host::Ledger> ledger) {
 #ifdef ASTRORAY_GPU
-  return [index]() -> std::shared_ptr<void> { return std::make_shared<CudaInit>(index); };
+  cfg.init = [index, ledger]() -> std::shared_ptr<void> {
+    auto held = std::make_shared<CudaInit>();
+    held->ledger = ledger;
+    held->device = astroray::host::make_cuda_device(*ledger, index);
+    return held;
+  };
+  cfg.device_of = [](void* p) -> astroray::host::Device* { return static_cast<CudaInit*>(p)->device.get(); };
 #else
-  (void)index;
-  return []() -> std::shared_ptr<void> { throw std::runtime_error("this build has no CUDA backend"); };
+  (void)index, (void)ledger;
+  cfg.init = []() -> std::shared_ptr<void> { throw std::runtime_error("this build has no CUDA backend"); };
 #endif
 }
 
@@ -130,10 +136,12 @@ AR_API ar_status ar_scene_create(ar_context ctx, const ar_scene_desc* desc, ar_s
     cfg.workers = desc->worker_threads;
     uint32_t kind = 0, index = 0;
     astroray::context_device(ctx, &kind, &index);
-    if (kind == AR_DEVICE_CUDA) cfg.init = cuda_init(index);
+    // The mesh store (and with it the scene's ledger) exists before the init thread charges it.
+    auto meshes = std::make_shared<astroray::host::MeshStore>();
+    if (kind == AR_DEVICE_CUDA) cuda_init(cfg, index, meshes->shared_ledger());
     auto h = std::make_unique<ar_scene_s>();
     h->scene = std::make_unique<Scene>(astroray::context_state(ctx), std::move(cfg));
-    h->scene->meshes = std::make_shared<astroray::host::MeshStore>();
+    h->scene->meshes = std::move(meshes);
     // Material tables count in the scene's host ledger, beside its geometry.
     h->scene->materials = std::make_shared<astroray::host::MaterialStore>(h->scene->meshes->shared_ledger());
     *out = h.release();

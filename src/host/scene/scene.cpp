@@ -11,6 +11,7 @@
 #include "host/material/material_store.h"
 #include "host/scene/edit.h"
 #include "host/scene/mesh.h"
+#include "host/scene/scene_tables.h"
 #include "host/thread.h"
 
 namespace astroray::host {
@@ -21,7 +22,9 @@ void apply_known(std::set<std::pair<uint32_t, uint64_t>>& known, const Pending& 
   for (const auto& a : p.known_added) known.insert(a);
 }
 
-Scene::Scene(ContextState& ctx, SceneConfig config) : ctx_(ctx), generations_(ctx, report_) {
+Scene::Scene(ContextState& ctx, SceneConfig config)
+    : ctx_(ctx), generations_(ctx, report_), device_of_(std::move(config.device_of)),
+      tables_(std::make_unique<SceneTableCache>()) {
   unsigned workers = config.workers;
   if (workers == 0) workers = std::max(1u, std::min(8u, std::thread::hardware_concurrency() / 2));
   pool_ = std::make_unique<WorkerPool>(ctx, workers);
@@ -88,6 +91,11 @@ void Scene::wait_init() {
     if (ctx_.poisoned.load(std::memory_order_acquire))
       throw std::runtime_error("device init did not finish: " + ctx_.poison_message);
   if (!init_error_.empty()) throw std::runtime_error(init_error_);
+}
+
+Device* Scene::device() {
+  wait_init();
+  return device_of_ && init_result_ ? device_of_(init_result_.get()) : nullptr;
 }
 
 bool Scene::init_done() {

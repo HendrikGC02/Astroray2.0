@@ -37,6 +37,7 @@
 #include "host/session/readback.h"
 #include "host/scheduler.h"
 #include "host/scene/scene.h"
+#include "host/session/kg_builder.h"
 #include "host/session/latch.h"
 #include "host/session/test_hooks.h"
 #include "host/spectral/wavelength_table.h"
@@ -180,6 +181,8 @@ class Session {
   bool converged_locked() const;
   uint32_t sample_limit() const;
   void bind_globals();
+  void latch_tables(uint64_t generation);
+  ar::FilmData film_host_view(std::vector<uint32_t>* invalid) const;
   void update_camera_and_filter(uint64_t generation);
   void build_active();
   uint64_t pass_camera_samples() const;
@@ -206,10 +209,15 @@ class Session {
   ResponseTable response_;
   WavelengthTable wavelengths_;
   std::unique_ptr<Film> film_;
-  // The light table (and with it the radiance scale s) latched for this epoch: one snapshot, written at
-  // each new epoch with inv_radiance_scale = 1 / s and kept until the next. Task 102 binds this same
-  // table; null for a scene without material and mesh stores.
+  // The light table the latch asked for at this epoch (null for a scene without material and mesh
+  // stores), and the scene table set the session renders, pinned until the next set (RULINGS 70).
+  // The set holds the light table it was built with, and inv_radiance_scale = 1 / s follows the
+  // set: after a failed upload the session keeps its previous set and that set's s.
   std::shared_ptr<const LightTable> epoch_lights_;
+  std::shared_ptr<const SceneTableSet> tables_;
+  SessionTables session_tables_;  // response and wavelength tables on the session's device
+  bool tables_retry_ = false;     // the last upload failed: the next latch retries
+  std::atomic<uint64_t> upload_failed_{0};  // generation whose upload failed (ar_progress)
   std::unique_ptr<DisplayRing> ring_;
   mutable std::mutex ring_mutex_;  // guards only the ring_ pointer (created, reset), never a pass
   std::string observer_hash_;      // hex, written with film_ under render_mutex_

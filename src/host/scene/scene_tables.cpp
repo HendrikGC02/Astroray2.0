@@ -1,0 +1,388 @@
+// SPDX-License-Identifier: Apache-2.0
+// Scene table sets: see scene_tables.h for ownership and lifetime.
+// Ref: docs/decisions/0002-kernel-architecture.md D13; 0007 d9, d10, d14; RULINGS 70.
+#include "host/scene/scene_tables.h"
+
+#include <algorithm>
+#include <cstring>
+#include <stdexcept>
+
+#include "host/data_resource.h"
+#include "host/image/image_store.h"
+#include "host/light/light_builder.h"
+#include "host/material/material_store.h"
+#include "host/scene/instances.h"
+#include "host/scene/mesh.h"
+#include "host/scene/scene.h"
+#include "kernel/material/lobes/tables.h"
+#include "kernel/vm/context.h"
+
+namespace astroray::host {
+namespace {
+
+constexpr uint64_t align16(uint64_t v) { return (v + 15) / 16 * 16; }
+
+template <class T>
+const T* as(const std::shared_ptr<const DeviceTable>& t) {
+  return t ? static_cast<const T*>(t->ptr()) : nullptr;
+}
+
+uint64_t addr(const std::shared_ptr<const DeviceTable>& t) {
+  return t ? uint64_t(reinterpret_cast<uintptr_t>(t->ptr())) : 0;
+}
+
+// Embedded data lives as long as the module: a pin that owns nothing.
+std::shared_ptr<const void> static_pin(const void* p) { return std::shared_ptr<const void>(p, [](const void*) {}); }
+
+}  // namespace
+
+const char* table_name(TableId id) {
+  static const char* const names[kTableCount] = {
+      "instances",          "mesh table",      "material slots", "material headers", "material programs",
+      "material constants", "image views",     "light records",  "light alias bins", "light bin lights",
+      "light pmf",          "rgb2spec nodes",  "rgb2spec coefficients", "observer cmf", "observer illuminant",
+      "srgb decode",        "e_diel table",    "table header"};
+  const uint32_t i = static_cast<uint32_t>(id);
+  if (i >= kTableCount) throw std::invalid_argument("table_name: no table " + std::to_string(i));
+  return names[i];
+}
+
+std::shared_ptr<const DeviceTable> DeviceTable::put(const UploadTarget& t, LedgerCategory category, const void* data,
+                                                    uint64_t bytes, std::shared_ptr<const void> pin) {
+  auto d = std::make_shared<DeviceTable>();
+  d->bytes_ = bytes;
+  if (bytes == 0) return d;
+  if (t.device) {
+    d->buffer_ = t.device->allocate(category, bytes, t.owner);
+    d->device_ = t.device;  // from here the destructor frees the buffer, also if the upload throws
+    t.device->upload(d->buffer_, 0, data, bytes);
+    d->ptr_ = d->buffer_.ptr;
+    d->moved_ = bytes;
+  } else if (pin) {
+    d->pin_ = std::move(pin);
+    d->ptr_ = data;
+  } else {
+    d->host_.assign(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + bytes);
+    if (t.host_ledger) d->ledger_id_ = t.host_ledger->add(t.owner, category, bytes), d->ledger_ = t.host_ledger;
+    d->ptr_ = d->host_.data();
+    d->moved_ = bytes;
+  }
+  return d;
+}
+
+DeviceTable::~DeviceTable() {
+  // Teardown cannot throw; the scene's device outlives every set (sessions drop theirs before CLOSED).
+  try {
+    if (device_) device_->free(buffer_);
+    if (ledger_ && ledger_id_) ledger_->remove(ledger_id_);
+  } catch (...) {
+  }
+}
+
+std::shared_ptr<const MeshCopy> upload_mesh(const UploadTarget& t, const std::shared_ptr<const MeshRecord>& rec,
+                                            const MeshCopy* prev) {
+  const MeshTopology& topo = *rec->topo;
+  const uint32_t V = topo.vertex_count;
+  // Ruling 68: the representative motion step.
+  const size_t step = size_t(representative_step(topo.motion_steps));
+  auto m = std::make_shared<MeshCopy>();
+  m->topology_id = topo.id;
+  if (prev && prev->topology_id == topo.id) {
+    m->tri_vertex = prev->tri_vertex, m->tri_corners = prev->tri_corners;
+    m->uv = prev->uv, m->tri_material = prev->tri_material;
+  } else {
+    std::vector<uint32_t> tri_vertex(topo.tri_corners.size());
+    for (size_t i = 0; i < tri_vertex.size(); ++i) tri_vertex[i] = topo.corner_vert[topo.tri_corners[i]];
+    const std::shared_ptr<const void> tp = rec->topo;
+    m->tri_vertex = DeviceTable::put(t, LedgerCategory::GEOMETRY, tri_vertex.data(), tri_vertex.size() * 4);
+    m->tri_corners = DeviceTable::put(t, LedgerCategory::GEOMETRY, topo.tri_corners.data(), topo.tri_corners.size() * 4, tp);
+    m->uv = DeviceTable::put(t, LedgerCategory::GEOMETRY, topo.uv.data(), topo.uv.size() * 4, tp);
+    m->tri_material = DeviceTable::put(t, LedgerCategory::GEOMETRY, topo.tri_material.data(), topo.tri_material.size() * 4, tp);
+  }
+  const std::shared_ptr<const void> rp = rec;
+  m->positions = DeviceTable::put(t, LedgerCategory::GEOMETRY, rec->positions.data() + step * V * 3, uint64_t(V) * 12, rp);
+  m->corner_normals =
+      DeviceTable::put(t, LedgerCategory::GEOMETRY, rec->corner_normals.data(), rec->corner_normals.size() * 4, rp);
+  ar::DeviceMeshView& v = m->view;
+  v.positions = addr(m->positions), v.tri_vertex = addr(m->tri_vertex), v.tri_corners = addr(m->tri_corners);
+  v.corner_normals = addr(m->corner_normals), v.uv = addr(m->uv), v.tri_material = addr(m->tri_material);
+  v.vertex_count = V, v.triangle_count = topo.triangle_count(), v.corner_count = topo.corner_count;
+  v.uv_layer_count = topo.uv_layer_count;
+  return m;
+}
+
+ar::DeviceInstanceRecord instance_record(const InstanceTable& table, uint32_t i, uint32_t mesh_index) {
+  const Instance& s = table.instances[i];
+  ar::DeviceInstanceRecord d{};
+  d.mesh = mesh_index;
+  d.random_id = s.random_id, d.pass_index = s.pass_index, d.crypto_object = s.crypto_object;
+  d.crypto_asset = s.crypto_asset, d.flags = s.flags;
+  d.material_offset = s.material_offset, d.material_count = s.material_count, d.light_index = s.light_index;
+  d.mask = s.mask, d.light_group = s.light_group;
+  std::memcpy(d.color, s.color, sizeof d.color);
+  std::memcpy(d.object_to_world, table.centre(i).m, sizeof d.object_to_world);
+  return d;
+}
+
+namespace {
+
+// Builds `next` from the scene snapshot it names, reusing `prev`'s copies of unchanged sources.
+class SetBuilder {
+ public:
+  SetBuilder(const UploadTarget& t, SceneTableSet& next, const SceneTableSet* prev) : t_(t), n_(next), p_(prev) {}
+
+  // Keeps prev's copy of `id` when `same`, else makes one with `make`. A failure names the table.
+  template <class F>
+  void table(TableId id, bool same, uint32_t count, F&& make) {
+    const uint32_t i = static_cast<uint32_t>(id);
+    n_.counts[i] = count;
+    if (same && p_ && p_->tables[i]) {
+      n_.tables[i] = p_->tables[i];
+      return;
+    }
+    try {
+      n_.tables[i] = make();
+    } catch (const std::exception& e) {
+      throw std::runtime_error(std::string("uploading the ") + table_name(id) + ": " + e.what());
+    }
+    n_.uploaded[i] = true;
+    n_.bytes_moved += n_.tables[i]->moved();
+  }
+  std::shared_ptr<const DeviceTable> put(LedgerCategory c, const void* data, uint64_t bytes,
+                                         std::shared_ptr<const void> pin = nullptr) {
+    return DeviceTable::put(t_, c, data, bytes, std::move(pin));
+  }
+
+ private:
+  const UploadTarget& t_;
+  SceneTableSet& n_;
+  const SceneTableSet* p_;
+};
+
+}  // namespace
+
+std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene, std::shared_ptr<const LightTable> lights) {
+  SceneTableCache& cache = scene.table_cache();
+  std::lock_guard<std::mutex> lock(cache.mutex);
+  auto next = std::make_shared<SceneTableSet>();
+  SceneTableSet& n = *next;
+  if (scene.materials) n.materials = scene.materials->arrays(), n.images = scene.materials->images().arrays();
+  n.lights = std::move(lights);
+  n.base_instances = scene.instances();
+  std::map<ar_key, std::shared_ptr<const MeshRecord>> recs;
+  if (n.base_instances)
+    for (size_t i = 0; i < n.base_instances->instances.size(); ++i) {
+      const ar_key k = n.base_instances->instances[i].geom_key;
+      auto rec = scene.meshes ? scene.meshes->find(k) : nullptr;
+      if (!rec)
+        throw std::runtime_error("uploading the instances: instance " + std::to_string(i) + " references geometry key " +
+                                 std::to_string(k) + ", which has no active mesh");
+      recs[k] = std::move(rec);
+    }
+  for (auto& kv : recs) n.mesh_records.push_back(kv.second);
+  const SceneTableSet* p = cache.current.get();
+  if (p && p->materials == n.materials && p->images == n.images && p->lights == n.lights &&
+      p->base_instances == n.base_instances && p->mesh_records == n.mesh_records)
+    return cache.current;
+
+  Device* device = scene.device();  // waits for device init; throws its failure
+  const UploadTarget t{device, scene.meshes ? scene.meshes->shared_ledger() : nullptr, Owner{}};
+  SetBuilder b(t, n, p);
+  const auto sp = [](const auto& s) { return std::shared_ptr<const void>(s); };
+
+  // Geometry: one copy per key, kept while its record is.
+  bool meshes_same = p && p->meshes.size() == recs.size();
+  for (auto& kv : recs) {
+    const MeshCopy* old = nullptr;
+    if (p) {
+      auto it = p->meshes.find(kv.first);
+      if (it != p->meshes.end()) old = it->second.get();
+      const bool same_rec = old && std::find(p->mesh_records.begin(), p->mesh_records.end(), kv.second) != p->mesh_records.end();
+      if (same_rec) {
+        n.meshes[kv.first] = it->second;
+        continue;
+      }
+    }
+    meshes_same = false;
+    try {
+      auto copy = upload_mesh(t, kv.second, old);
+      n.bytes_moved += copy->positions->moved() + copy->corner_normals->moved();
+      if (!old || old->topology_id != copy->topology_id)
+        n.bytes_moved += copy->tri_vertex->moved() + copy->tri_corners->moved() + copy->uv->moved() + copy->tri_material->moved();
+      n.meshes[kv.first] = std::move(copy);
+    } catch (const std::exception& e) {
+      throw std::runtime_error("uploading the geometry of key " + std::to_string(kv.first) + ": " + e.what());
+    }
+  }
+  std::vector<ar::DeviceMeshView> views;
+  std::map<ar_key, uint32_t> mesh_index;
+  for (auto& kv : n.meshes) mesh_index[kv.first] = uint32_t(views.size()), views.push_back(kv.second->view);
+  b.table(TableId::MESHES, meshes_same, uint32_t(views.size()),
+          [&] { return b.put(LedgerCategory::TABLES, views.data(), views.size() * sizeof(ar::DeviceMeshView)); });
+
+  // Instances: the scene's plus one record per lamp of the latched light table (068).
+  const uint32_t base_count = n.base_instances ? uint32_t(n.base_instances->instances.size()) : 0u;
+  const std::shared_ptr<const InstanceTable> instances =
+      n.lights ? append_lamp_instances(n.base_instances.get(), n.lights->lamp_instances) : n.base_instances;
+  const uint32_t inst_count = instances ? uint32_t(instances->instances.size()) : 0u;
+  const bool inst_same = p && p->base_instances == n.base_instances && p->lights == n.lights && meshes_same;
+  b.table(TableId::INSTANCES, inst_same, inst_count, [&] {
+    std::vector<ar::DeviceInstanceRecord> r(inst_count);
+    for (uint32_t i = 0; i < inst_count; ++i) {
+      const bool lamp = i >= base_count;
+      r[i] = instance_record(*instances, i, lamp ? kNoMeshIndex : mesh_index.at(instances->instances[i].geom_key));
+    }
+    return b.put(LedgerCategory::TABLES, r.data(), r.size() * sizeof(ar::DeviceInstanceRecord));
+  });
+
+  // Materials (059): the arrays in place, and the pool's keys resolved to header indices.
+  const MaterialArrays* mats = n.materials.get();
+  const bool mats_same = p && p->materials == n.materials;
+  const uint32_t pool_count = n.base_instances ? uint32_t(n.base_instances->material_pool.size()) : 0u;
+  b.table(TableId::MATERIAL_SLOTS, mats_same && p->base_instances == n.base_instances, pool_count, [&] {
+    std::vector<uint32_t> slots(pool_count);
+    for (uint32_t i = 0; i < pool_count; ++i) {
+      const ar_key k = n.base_instances->material_pool[i];
+      const auto it = mats ? std::lower_bound(mats->keys.begin(), mats->keys.end(), k) : std::vector<ar_key>::const_iterator();
+      if (!mats || it == mats->keys.end() || *it != k)
+        throw std::runtime_error("material pool entry " + std::to_string(i) + " names material key " +
+                                 std::to_string(k) + ", which has no compiled material");
+      slots[i] = uint32_t(it - mats->keys.begin());
+    }
+    return b.put(LedgerCategory::TABLES, slots.data(), slots.size() * 4);
+  });
+  const auto mp = mats ? sp(n.materials) : nullptr;
+  b.table(TableId::MATERIAL_HEADERS, mats_same, mats ? uint32_t(mats->headers.size()) : 0u, [&] {
+    return mats ? b.put(LedgerCategory::TABLES, mats->headers.data(), mats->headers.size() * sizeof(ar::MaterialHeader), mp)
+                : b.put(LedgerCategory::TABLES, nullptr, 0);
+  });
+  b.table(TableId::MATERIAL_PROGRAMS, mats_same, mats ? uint32_t(mats->programs.size()) : 0u, [&] {
+    return b.put(LedgerCategory::TABLES, mats ? mats->programs.data() : nullptr, mats ? mats->programs.size() * 4 : 0, mp);
+  });
+  b.table(TableId::MATERIAL_CONSTANTS, mats_same, mats ? uint32_t(mats->constants.size()) : 0u, [&] {
+    return b.put(LedgerCategory::TABLES, mats ? mats->constants.data() : nullptr,
+                 mats ? mats->constants.size() * sizeof(ar::ConstantBlock) : 0, mp);
+  });
+
+  // Images (060): texels per slot, kept while the slot holds the same image.
+  const ImageArrays* imgs = n.images.get();
+  const size_t slots = imgs ? imgs->views.size() : 0;
+  bool texels_same = p && p->texels.size() == slots;
+  std::vector<ar::DeviceImageView> image_views(slots);
+  for (size_t i = 0; i < slots; ++i) {
+    const Image* src = imgs->images[i].get();
+    if (p && i < p->texel_sources.size() && p->texel_sources[i] == src) {
+      n.texels.push_back(p->texels[i]);
+    } else {
+      texels_same = false;
+      try {
+        n.texels.push_back(b.put(LedgerCategory::TEXTURES, src->texels.data(), src->texels.size(), sp(imgs->images[i])));
+      } catch (const std::exception& e) {
+        throw std::runtime_error("uploading the texels of image slot " + std::to_string(i) + ": " + e.what());
+      }
+      n.bytes_moved += n.texels.back()->moved();
+    }
+    n.texel_sources.push_back(src);
+    image_views[i] = imgs->views[i];
+    image_views[i].texels = addr(n.texels.back());
+  }
+  b.table(TableId::IMAGES, texels_same, uint32_t(slots),
+          [&] { return b.put(LedgerCategory::TABLES, image_views.data(), slots * sizeof(ar::DeviceImageView)); });
+
+  // The light table (067, 068): the session's epoch snapshot.
+  const LightTable* lt = n.lights.get();
+  const bool lights_same = p && p->lights == n.lights;
+  const auto lp = lt ? sp(n.lights) : nullptr;
+  const auto light_table = [&](TableId id, const void* data, size_t count, size_t elem) {
+    b.table(id, lights_same, uint32_t(count), [&] { return b.put(LedgerCategory::TABLES, data, count * elem, lp); });
+  };
+  light_table(TableId::LIGHTS, lt ? lt->lights.data() : nullptr, lt ? lt->lights.size() : 0, sizeof(ar::LightRecord));
+  light_table(TableId::LIGHT_BINS, lt ? lt->bins.data() : nullptr, lt ? lt->bins.size() : 0, sizeof(ar::AliasBin));
+  light_table(TableId::LIGHT_BIN_LIGHT, lt ? lt->bin_light.data() : nullptr, lt ? lt->bin_light.size() : 0, 4);
+  light_table(TableId::LIGHT_PMF, lt ? lt->pmf.data() : nullptr, lt ? lt->pmf.size() : 0, 4);
+
+  // Constant tables: made once per scene, then shared by every set.
+  const ar::Rgb2SpecTable* jh = scene.materials ? &scene.materials->table() : nullptr;
+  const auto store = jh ? std::shared_ptr<const void>(scene.materials) : nullptr;
+  const uint64_t jh_res = jh ? uint64_t(jh->res) : 0;
+  b.table(TableId::RGB2SPEC_NODES, true, uint32_t(jh_res),
+          [&] { return b.put(LedgerCategory::TABLES, jh ? jh->z_nodes : nullptr, jh_res * 4, store); });
+  b.table(TableId::RGB2SPEC_COEFFS, true, uint32_t(9 * jh_res * jh_res * jh_res),
+          [&] { return b.put(LedgerCategory::TABLES, jh ? jh->coeffs : nullptr, 36 * jh_res * jh_res * jh_res, store); });
+  if (!cache.observer) {
+    DataBlob blob;
+    if (!find_data("spectral/observer.bin", &blob)) throw std::runtime_error("scene tables: spectral/observer.bin is not embedded");
+    auto o = std::make_shared<ObserverTables>();
+    const std::string err = parse_observer(blob.data, blob.size, o.get());
+    if (!err.empty()) throw std::runtime_error("scene tables: " + err);
+    cache.observer = std::move(o);
+  }
+  const auto op = sp(cache.observer);
+  b.table(TableId::OBSERVER_CMF, true, 3 * kObserverSamples,
+          [&] { return b.put(LedgerCategory::TABLES, cache.observer->cmf, sizeof(cache.observer->cmf), op); });
+  b.table(TableId::OBSERVER_ILLUM, true, kObserverSamples,
+          [&] { return b.put(LedgerCategory::TABLES, cache.observer->d65, sizeof(cache.observer->d65), op); });
+  // The host-built decode table (color/srgb.h), the one every ImageArrays carries.
+  std::array<float, ar::kSrgbTableSize> srgb{};
+  ar::srgb_decode_table(srgb.data());
+  b.table(TableId::SRGB_DECODE, true, ar::kSrgbTableSize,
+          [&] { return b.put(LedgerCategory::TABLES, srgb.data(), sizeof srgb); });
+  DataBlob eblob;
+  ar::EDielTable ev;
+  if (!find_data("tables/e_diel_refl.bin", &eblob)) throw std::runtime_error("scene tables: tables/e_diel_refl.bin is not embedded");
+  if (const char* err = ar::e_diel_view(eblob.data, eblob.size, &ev)) throw std::runtime_error(std::string("scene tables: ") + err);
+  b.table(TableId::E_DIEL, true, ar::kEDielN * ar::kEDielN * ar::kEDielN, [&] {
+    return b.put(LedgerCategory::TABLES, ev.e, uint64_t(ar::kEDielN) * ar::kEDielN * ar::kEDielN * 4, static_pin(eblob.data));
+  });
+
+  // The header block: the structs KernelGlobals points to, holding the addresses above.
+  const auto at = [&](TableId id) { return n.tables[static_cast<uint32_t>(id)]; };
+  const auto cnt = [&](TableId id) { return n.counts[static_cast<uint32_t>(id)]; };
+  ar::SceneData& sd = n.scene_host;
+  sd.instances = as<ar::DeviceInstanceRecord>(at(TableId::INSTANCES)), sd.instance_count = cnt(TableId::INSTANCES);
+  sd.meshes = as<ar::DeviceMeshView>(at(TableId::MESHES)), sd.mesh_count = cnt(TableId::MESHES);
+  sd.material_slots = as<uint32_t>(at(TableId::MATERIAL_SLOTS));
+  sd.material_headers = as<ar::MaterialHeader>(at(TableId::MATERIAL_HEADERS));
+  sd.material_header_count = cnt(TableId::MATERIAL_HEADERS);
+  sd.material_programs = as<uint32_t>(at(TableId::MATERIAL_PROGRAMS));
+  sd.material_constants = as<ar::ConstantBlock>(at(TableId::MATERIAL_CONSTANTS));
+  sd.accel = nullptr;  // unused until task 114 builds the production acceleration structures
+  ar::Rgb2SpecTable jt{};
+  if (jh) jt = *jh;
+  jt.z_nodes = as<float>(at(TableId::RGB2SPEC_NODES)), jt.coeffs = as<float>(at(TableId::RGB2SPEC_COEFFS));
+  ar::LightSamplerView lv{as<ar::AliasBin>(at(TableId::LIGHT_BINS)), as<uint32_t>(at(TableId::LIGHT_BIN_LIGHT)),
+                          as<float>(at(TableId::LIGHT_PMF)), cnt(TableId::LIGHT_BINS), cnt(TableId::LIGHTS)};
+  const ar::EDielTable et{as<float>(at(TableId::E_DIEL))};
+  const uint64_t o_vm = align16(sizeof(ar::SceneData)), o_lv = o_vm + align16(sizeof(ar::SceneTables));
+  const uint64_t o_et = o_lv + align16(sizeof(ar::LightSamplerView)), o_jt = o_et + align16(sizeof(ar::EDielTable));
+  const uint64_t header_bytes = o_jt + sizeof(ar::Rgb2SpecTable);
+  // The block's address is known only once it exists, and SceneTables points into it (rgb2spec):
+  // allocate, then write the finished block over it.
+  b.table(TableId::HEADER, false, 1, [&] {
+    std::vector<uint8_t> block(header_bytes, 0);
+    auto h = b.put(LedgerCategory::TABLES, block.data(), header_bytes);
+    const char* base = static_cast<const char*>(h->ptr());
+    ar::SceneTables vt{};
+    vt.rgb2spec = jh ? reinterpret_cast<const ar::Rgb2SpecTable*>(base + o_jt) : nullptr;
+    vt.observer = {as<float>(at(TableId::OBSERVER_CMF)), as<float>(at(TableId::OBSERVER_ILLUM))};
+    vt.images = as<ar::DeviceImageView>(at(TableId::IMAGES)), vt.image_count = cnt(TableId::IMAGES);
+    vt.srgb_decode = as<float>(at(TableId::SRGB_DECODE));
+    std::memcpy(block.data(), &sd, sizeof sd);
+    std::memcpy(block.data() + o_vm, &vt, sizeof vt);
+    std::memcpy(block.data() + o_lv, &lv, sizeof lv);
+    std::memcpy(block.data() + o_et, &et, sizeof et);
+    std::memcpy(block.data() + o_jt, &jt, sizeof jt);
+    if (device) device->upload(h->buffer(), 0, block.data(), header_bytes);
+    else std::memcpy(const_cast<void*>(h->ptr()), block.data(), header_bytes);  // our own host copy
+    return h;
+  });
+  const char* base = static_cast<const char*>(at(TableId::HEADER)->ptr());
+  n.scene = reinterpret_cast<const ar::SceneData*>(base);
+  n.vm = reinterpret_cast<const ar::SceneTables*>(base + o_vm);
+  n.light_sampler = reinterpret_cast<const ar::LightSamplerView*>(base + o_lv);
+  n.e_diel = reinterpret_cast<const ar::EDielTable*>(base + o_et);
+  cache.current = std::move(next);
+  return cache.current;
+}
+
+}  // namespace astroray::host

@@ -35,6 +35,8 @@ struct ObserverTables;  // host/data_resource.h
 
 namespace astroray::host {
 
+class Device;           // host/device.h
+struct SceneTableCache;  // host/scene/scene_tables.h
 class Edit;
 class MeshStore;  // host/scene/mesh.h
 struct MeshRecord;
@@ -50,6 +52,9 @@ struct SceneConfig {
   // Runs on the init thread (CUDA context and module loading); the returned object is kept
   // until the scene is destroyed. Empty on the CPU device. A throw is the init failure.
   std::function<std::shared_ptr<void>()> init;
+  // The scene's device inside init's result: it uploads scene tables and charges the scene's
+  // ledger (RULINGS 70). Empty on the CPU device.
+  std::function<Device*(void*)> device_of;
 };
 
 // ar_settings and ar_camera_desc with their copy-in arrays owned.
@@ -87,6 +92,10 @@ class Scene {
   // Blocks until the init thread is done; throws std::runtime_error with its failure.
   void wait_init();
   bool init_done();
+  // The device init made (wait_init first, so it throws the init failure); null on a CPU context.
+  Device* device();
+  // The scene's table sets (host/scene/scene_tables.h): the one cache every session shares.
+  SceneTableCache& table_cache() { return *tables_; }
 
   // The last active generation's stored state (later tasks' jobs read it).
   std::shared_ptr<const StoredSettings> settings() const;
@@ -149,6 +158,9 @@ class Scene {
   bool init_done_ = false;
   std::string init_error_;
   std::shared_ptr<void> init_result_;
+  std::function<Device*(void*)> device_of_;
+  // After init_result_, so the table copies on the scene's device go first.
+  std::unique_ptr<SceneTableCache> tables_;
   std::thread init_thread_;
   std::mutex edit_mutex_;
   bool edit_open_ = false;
