@@ -16,3 +16,4 @@ Budget: host code plus one table; bytes reported by the upload test.
 Depends on: 067, 068, 102.
 Size: S (about 200 lines); stop and report at 2x.
 Progress:
+- Started: map derived in build_light_table from the final records (one pass, index = record position).
