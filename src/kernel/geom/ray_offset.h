@@ -54,9 +54,12 @@ AR_FN Real3 offset_ray_origin(Real3 p, Real3 ng, Real3 side) {
                ray_offset_detail::offset_component(p.z, n.z)};
 }
 
-// Lamp pass-through re-queue (0004 D8): the origin just past the lamp surface at `p`, along
-// the ray direction `dir`, which serves as both normal and side.
-AR_FN Real3 offset_past_surface(Real3 p, Real3 dir) { return offset_ray_origin(p, dir, dir); }
+// Lamp pass-through re-queue (0004 D8): the origin just past the lamp surface at `p`. The
+// offset runs along the lamp's geometric normal `ng_lamp` toward the side of the ray
+// direction `dir`; using `dir` as the normal could leave a grazing crossing on the incoming
+// side at large coordinates, where the per-component steps differ, and the lamp would be
+// counted twice.
+AR_FN Real3 offset_past_surface(Real3 p, Real3 ng_lamp, Real3 dir) { return offset_ray_origin(p, ng_lamp, dir); }
 
 // A shadow ray from an offset origin to an offset light point; `dir` is a unit vector and
 // the ray is traced over [kRayTmin, tmax].

@@ -241,8 +241,38 @@ TEST_CASE("ray_offset/shadow segment") {
   const ar::ShadowSegment l = ar::shadow_segment_to_lamp(p, ar::Real3{0, 0, 1}, q);
   CHECK(l.origin.z > 0.0f);
   CHECK(std::fabs(l.origin.z + l.dir.z * l.tmax - 3.0f) < 1e-5f);
-  const ar::Real3 past = ar::offset_past_surface(q, ar::Real3{0, 0, 1});
+  const ar::Real3 past = ar::offset_past_surface(q, ar::Real3{0, 0, 1}, ar::Real3{0, 0, 1});
   CHECK(past.z > 3.0f);
+}
+
+TEST_CASE("ray_offset/lamp crossing lands past the plane") {
+  // Grazing crossings of tilted lamp planes at large coordinates: the origin must lie
+  // strictly on the outgoing side of the plane, i.e. (o - p) . ng has the sign of dir . ng.
+  std::mt19937_64 rng(40);
+  std::uniform_real_distribution<double> uni(-1.0, 1.0);
+  uint32_t bad = 0, total = 0;
+  for (const ar::Real3 p : {ar::Real3{1.0e4f, 0.5f, 0.5f}, ar::Real3{-1.0e4f, 0.5f, 0.5f}, ar::Real3{0.5f, 3.0e3f, -0.5f}})
+    for (uint32_t k = 0; k < 20000; ++k) {
+      D3 n{uni(rng), uni(rng), uni(rng)};
+      const double nl = std::sqrt(dot(n, n));
+      n = {n.x / nl, n.y / nl, n.z / nl};
+      // dir = tangent plus a grazing share of the normal, either sign.
+      D3 t = cross(n, D3{uni(rng), uni(rng), uni(rng)});
+      const double tl = std::sqrt(dot(t, t));
+      const double g = (k & 1u ? 1.0 : -1.0) * (1e-4 + 1e-2 * std::fabs(uni(rng)));
+      D3 d{t.x / tl + g * n.x, t.y / tl + g * n.y, t.z / tl + g * n.z};
+      const double dl = std::sqrt(dot(d, d));
+      const ar::Real3 dir{float(d.x / dl), float(d.y / dl), float(d.z / dl)};
+      const ar::Real3 ng{float(n.x), float(n.y), float(n.z)};
+      const ar::Real3 o = ar::offset_past_surface(p, ng, dir);
+      const D3 ngd{ng.x, ng.y, ng.z};
+      const double moved = dot(D3{double(o.x) - p.x, double(o.y) - p.y, double(o.z) - p.z}, ngd);
+      const double want = dot(D3{dir.x, dir.y, dir.z}, ngd);
+      ++total;
+      if (!(moved * want > 0)) ++bad;
+    }
+  std::printf("lamp_crossing_wrong_side=%u/%u\n", bad, total);
+  CHECK(bad == 0u);
 }
 
 }  // TEST_SUITE
