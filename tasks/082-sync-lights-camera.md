@@ -21,3 +21,4 @@ Progress:
 - test_camera_ndc.py written to 117's contract (Position via ar_settings.passes, read_pass); every case reaches the Position lookup and stops there until 117 lands. No engine change made.
 - properties.register() is not yet called from blender/astroray/__init__.py (outside Scope); 084 or the lead must wire it. Settings sync needs scene.astroray.
 - Motion blur, render border, film transparent, soft-falloff point lamps, light node trees give report lines; the engine's own camera lines (ORTHO, PANO, DOF) are not duplicated.
+- 117 landed: NDC test passes, max differences 1.07e-6 to 1.77e-6 (limit 1e-5); canary turns test_shift_x red at 0.4 NDC. properties registered in __init__.py. fast and gate pass.
