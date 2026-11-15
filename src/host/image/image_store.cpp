@@ -74,26 +74,23 @@ struct Stored {
 }  // namespace
 
 std::string interop_name(uint32_t v) {
-  switch (ColorInterop(v)) {
-    case ColorInterop::SRGB_REC709_DISPLAY: return "srgb_rec709_display";
-    case ColorInterop::LIN_REC709_SCENE: return "lin_rec709_scene";
-    case ColorInterop::DATA: return "data";
-    case ColorInterop::SRGB_REC709_SCENE: return "srgb_rec709_scene";
-    case ColorInterop::LIN_REC2020_SCENE: return "lin_rec2020_scene";
-    case ColorInterop::LIN_AP1_SCENE: return "lin_ap1_scene";
-    case ColorInterop::LIN_AP0_SCENE: return "lin_ap0_scene";
-    case ColorInterop::SRGB_P3D65_DISPLAY: return "srgb_p3d65_display";
-    case ColorInterop::LIN_P3D65_SCENE: return "lin_p3d65_scene";
+  switch (v) {
+    case AR_COLOR_INTEROP_SRGB_REC709: return "srgb_rec709_display";
+    case AR_COLOR_INTEROP_LIN_REC709: return "lin_rec709_scene";
+    case AR_COLOR_INTEROP_LIN_REC2020: return "lin_rec2020_scene";
+    case AR_COLOR_INTEROP_LIN_AP1: return "lin_ap1_scene";
+    case AR_COLOR_INTEROP_LIN_AP0: return "lin_ap0_scene";
+    case AR_COLOR_INTEROP_SRGB_P3D65: return "srgb_p3d65_display";
+    case AR_COLOR_INTEROP_DATA: return "data";
+    default: return "unknown interop id " + std::to_string(v);
   }
-  return "unknown interop id " + std::to_string(v);
 }
 
 bool interop_encoding(uint32_t v, ar::TexEncoding* out) {
-  switch (ColorInterop(v)) {
-    case ColorInterop::SRGB_REC709_DISPLAY:
-    case ColorInterop::SRGB_REC709_SCENE: return *out = ar::TexEncoding::SRGB, true;
-    case ColorInterop::LIN_REC709_SCENE: return *out = ar::TexEncoding::LINEAR, true;
-    case ColorInterop::DATA: return *out = ar::TexEncoding::DATA, true;
+  switch (v) {
+    case AR_COLOR_INTEROP_SRGB_REC709: return *out = ar::TexEncoding::SRGB, true;
+    case AR_COLOR_INTEROP_LIN_REC709: return *out = ar::TexEncoding::LINEAR, true;
+    case AR_COLOR_INTEROP_DATA: return *out = ar::TexEncoding::DATA, true;
     default: return false;
   }
 }

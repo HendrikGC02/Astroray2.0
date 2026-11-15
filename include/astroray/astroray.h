@@ -152,6 +152,14 @@ typedef struct ar_edit_s* ar_edit;
 #define AR_ALPHA_PREMULTIPLIED 1
 #define AR_ALPHA_CHANNEL_PACKED 2
 #define AR_ALPHA_IGNORE 3
+/* ar_image_desc.color_interop, in the order of 0007 d21; strings are Blender 5.3 interop ids. */
+#define AR_COLOR_INTEROP_SRGB_REC709 0 /* srgb_rec709_display (5.3 sRGB), also srgb_rec709_scene */
+#define AR_COLOR_INTEROP_LIN_REC709 1 /* lin_rec709_scene */
+#define AR_COLOR_INTEROP_LIN_REC2020 2 /* lin_rec2020_scene */
+#define AR_COLOR_INTEROP_LIN_AP1 3 /* lin_ap1_scene (ACEScg) */
+#define AR_COLOR_INTEROP_LIN_AP0 4 /* lin_ap0_scene (ACES2065-1) */
+#define AR_COLOR_INTEROP_SRGB_P3D65 5 /* srgb_p3d65_display (Display P3) */
+#define AR_COLOR_INTEROP_DATA 6 /* data (Non-Color) */
 #define AR_DOMAIN_POINT 0
 #define AR_DOMAIN_CORNER 1
 #define AR_DOMAIN_FACE 2

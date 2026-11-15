@@ -2,7 +2,7 @@
 // The one translation unit that compiles stb_image. Only the four 8-bit loaders are enabled and
 // there is no stdio: FILE sources are read by the caller and decoded from memory, so the decoder
 // has no path handling and no global state (its failure string is thread-local).
-// Ref: third_party/stb/stb_image.h (nothings/stb, pinned in third_party/deps.toml);
+// Ref: third_party/stb_image/stb_image.h (nothings/stb, pinned in third_party/deps.toml);
 // docs/decisions/0007-blender-integration.md d13.
 #include "host/image/decode.h"
 
@@ -18,7 +18,7 @@
 #define STBI_NO_STDIO
 #define STBI_NO_LINEAR
 #pragma warning(push, 0)
-#include "../../../third_party/stb/stb_image.h"
+#include "../../../third_party/stb_image/stb_image.h"
 #pragma warning(pop)
 
 namespace astroray::host {

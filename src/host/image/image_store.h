@@ -26,21 +26,9 @@ namespace astroray::host {
 class Edit;
 class Scene;
 
-// ar_image_desc::color_interop. astroray.h defines no numbering yet, so this enum is the one:
-// the addon maps Blender 5.3's Image.colorspace_settings.interop_id strings to these values.
-// The first four are decoded; the rest are ids 0007 d21 lists that the 8-bit path does not
-// convert yet (they render magenta with COLORSPACE_UNSUPPORTED); any other value is unknown.
-enum class ColorInterop : uint32_t {
-  SRGB_REC709_DISPLAY = 0,  // "srgb_rec709_display": Blender 5.3's id of its "sRGB" colour space
-  LIN_REC709_SCENE = 1,     // "lin_rec709_scene"
-  DATA = 2,                 // "data" (Non-Color)
-  SRGB_REC709_SCENE = 3,    // "srgb_rec709_scene"
-  LIN_REC2020_SCENE = 4,
-  LIN_AP1_SCENE = 5,
-  LIN_AP0_SCENE = 6,
-  SRGB_P3D65_DISPLAY = 7,
-  LIN_P3D65_SCENE = 8,
-};
+// ar_image_desc::color_interop is one of the AR_COLOR_INTEROP_* values of astroray.h. 0, 1 and 6
+// (sRGB, linear Rec.709, data) decode; the other listed ids (0007 d21) are not converted by the
+// 8-bit path yet and render magenta with COLORSPACE_UNSUPPORTED; any other value is unknown.
 // The interop id string of a value, or "unknown interop id N".
 std::string interop_name(uint32_t color_interop);
 // True and the encoding for the decoded values.

@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include "../../third_party/stb/stb_image.h"  // declarations only: the one implementation is src/host/image/decode.cpp
+#include "../../third_party/stb_image/stb_image.h"  // declarations only: the one implementation is src/host/image/decode.cpp
 #include "host/image/decode.h"
 #include "host/image/image_store.h"
 #include "host/ledger.h"
@@ -92,10 +92,10 @@ struct World {
     scene.generations().wait_idle();
     return g;
   }
-  uint64_t put_memory(ar_key key, const std::vector<uint8_t>& bytes, ColorInterop interop) {
+  uint64_t put_memory(ar_key key, const std::vector<uint8_t>& bytes, uint32_t interop) {
     return put(key, AR_IMAGE_SOURCE_MEMORY, "", bytes, uint32_t(interop));
   }
-  uint64_t put_file(ar_key key, const std::string& name, ColorInterop interop) {
+  uint64_t put_file(ar_key key, const std::string& name, uint32_t interop) {
     return put(key, AR_IMAGE_SOURCE_FILE, data_path(name), {}, uint32_t(interop));
   }
   // The (code, detail) of every report entry whose subject is `key`.
@@ -193,7 +193,7 @@ TEST_CASE("image_ingest/rows bottom up") {
 
 TEST_CASE("image_ingest/truncated png magenta") {
   World w;
-  const uint64_t g = w.put_file(5, "truncated.png", ColorInterop::SRGB_REC709_DISPLAY);
+  const uint64_t g = w.put_file(5, "truncated.png", AR_COLOR_INTEROP_SRGB_REC709);
   CHECK(w.scene.generations().active() == g);  // the generation still activates (0007 d9)
   CHECK(w.scene.generations().failed() == 0);
   check_magenta(w.store->images().find(5));
@@ -202,8 +202,8 @@ TEST_CASE("image_ingest/truncated png magenta") {
   CHECK(e[0].first == AR_REPORT_IMAGE_UNREADABLE);
   CHECK(!e[0].second.empty());  // the decoder's reason
   // A missing file and an empty memory image are unreadable the same way.
-  w.put(6, AR_IMAGE_SOURCE_FILE, data_path("no_such_image.png"), {}, uint32_t(ColorInterop::LIN_REC709_SCENE));
-  w.put_memory(7, {}, ColorInterop::LIN_REC709_SCENE);
+  w.put(6, AR_IMAGE_SOURCE_FILE, data_path("no_such_image.png"), {}, AR_COLOR_INTEROP_LIN_REC709);
+  w.put_memory(7, {}, AR_COLOR_INTEROP_LIN_REC709);
   check_magenta(w.store->images().find(6));
   check_magenta(w.store->images().find(7));
   CHECK(w.entries(6).size() == 1);
@@ -215,7 +215,7 @@ TEST_CASE("image_ingest/unsupported interop magenta") {
   World w;
   const std::vector<uint8_t> rgb = {10, 20, 30};
   const std::vector<uint8_t> bytes = tga(1, 1, rgb);
-  w.put_memory(1, bytes, ColorInterop::LIN_REC2020_SCENE);
+  w.put_memory(1, bytes, AR_COLOR_INTEROP_LIN_REC2020);
   w.put(2, AR_IMAGE_SOURCE_MEMORY, "", bytes, 77);
   for (ar_key k : {ar_key(1), ar_key(2)}) {
     check_magenta(w.store->images().find(k));
@@ -225,8 +225,8 @@ TEST_CASE("image_ingest/unsupported interop magenta") {
   CHECK(w.entries(1)[0].second == "lin_rec2020_scene");
   CHECK(w.entries(2)[0].second == "unknown interop id 77");
   // The ids that are decoded raise nothing.
-  w.put_memory(3, bytes, ColorInterop::SRGB_REC709_SCENE);
-  w.put_memory(4, bytes, ColorInterop::DATA);
+  w.put_memory(3, bytes, AR_COLOR_INTEROP_SRGB_REC709);
+  w.put_memory(4, bytes, AR_COLOR_INTEROP_DATA);
   CHECK(w.entries(3).empty());
   CHECK(w.entries(4).empty());
 }
@@ -236,9 +236,9 @@ TEST_CASE("image_ingest/encoding tag and mean") {
   const std::vector<uint8_t> rgb = {0, 128, 10, 255, 128, 20, 255, 128, 30, 0, 128, 40};
   const std::vector<uint8_t> bytes = tga(2, 2, rgb);
   World w;
-  w.put_memory(1, bytes, ColorInterop::SRGB_REC709_DISPLAY);
-  w.put_memory(2, bytes, ColorInterop::LIN_REC709_SCENE);
-  w.put_memory(3, bytes, ColorInterop::DATA);
+  w.put_memory(1, bytes, AR_COLOR_INTEROP_SRGB_REC709);
+  w.put_memory(2, bytes, AR_COLOR_INTEROP_LIN_REC709);
+  w.put_memory(3, bytes, AR_COLOR_INTEROP_DATA);
   const auto s = w.store->images().find(1), l = w.store->images().find(2), d = w.store->images().find(3);
   REQUIRE((s && l && d));
   CHECK(s->encoding == ar::TexEncoding::SRGB);
@@ -259,16 +259,16 @@ TEST_CASE("image_ingest/encoding tag and mean") {
 TEST_CASE("image_ingest/file memory cache and ledger") {
   World w;
   const std::vector<uint8_t> bytes = read_file("pattern_4x3_rgb.png");
-  w.put_file(1, "pattern_4x3_rgb.png", ColorInterop::SRGB_REC709_DISPLAY);
-  w.put_memory(2, bytes, ColorInterop::SRGB_REC709_DISPLAY);
+  w.put_file(1, "pattern_4x3_rgb.png", AR_COLOR_INTEROP_SRGB_REC709);
+  w.put_memory(2, bytes, AR_COLOR_INTEROP_SRGB_REC709);
   const auto a = w.store->images().find(1), b = w.store->images().find(2);
   REQUIRE((a && b));
   CHECK(a->texels == b->texels);
   // The same file under the same key fields decodes once.
-  w.put_file(3, "pattern_4x3_rgb.png", ColorInterop::SRGB_REC709_DISPLAY);
+  w.put_file(3, "pattern_4x3_rgb.png", AR_COLOR_INTEROP_SRGB_REC709);
   CHECK(w.store->images().find(3).get() == a.get());
   // A different interop id is a different cache entry.
-  w.put_file(4, "pattern_4x3_rgb.png", ColorInterop::DATA);
+  w.put_file(4, "pattern_4x3_rgb.png", AR_COLOR_INTEROP_DATA);
   CHECK(w.store->images().find(4).get() != a.get());
   const auto arrays = w.store->images().arrays();
   REQUIRE(arrays->keys.size() == 4);
@@ -328,7 +328,7 @@ TEST_CASE("image_ingest/emission estimate follows the image mean") {
   auto set_image = [&](Edit& e, const std::vector<uint8_t>& rgb) {
     const std::vector<uint8_t> bytes = tga(2, 1, rgb);
     ar_image_desc d = {};
-    d.key = 5, d.source = AR_IMAGE_SOURCE_MEMORY, d.color_interop = uint32_t(ColorInterop::LIN_REC709_SCENE);
+    d.key = 5, d.source = AR_IMAGE_SOURCE_MEMORY, d.color_interop = AR_COLOR_INTEROP_LIN_REC709;
     d.bytes = bytes.data(), d.byte_count = bytes.size();
     REQUIRE(w.store->set_image(e, &d) == AR_OK);
   };
