@@ -101,10 +101,15 @@ AR_FN uint32_t light_of_hit(const KernelGlobals& kg, uint32_t instance, uint32_t
   const bool inst_ok = instance < s.instance_count;
   AR_ASSERT(inst_ok);
   if (!inst_ok) return kLightIndexInvalid;
+  if (instance_light_index(kg, instance) != kNoLightIndex) return kNoLight;  // a lamp instance
   const uint32_t mesh = load_ro(&s.instances[instance].mesh);
-  const bool tri_ok = mesh >= s.mesh_count || triangle < load_ro(&s.meshes[mesh].triangle_count);
+  const bool mesh_ok = mesh < s.mesh_count;
+  AR_ASSERT(mesh_ok);
+  if (!mesh_ok) return kLightIndexInvalid;
+  const bool tri_ok = triangle < load_ro(&s.meshes[mesh].triangle_count);
   AR_ASSERT(tri_ok);
   if (!tri_ok) return kLightIndexInvalid;
+  AR_ASSERT(kg.light_index != nullptr || kg.lights == nullptr);  // a light table binds its index
   return light_index_lookup(kg.light_index, kg.light_index_words, instance, triangle);
 }
 

@@ -63,7 +63,7 @@ struct Inst {
   float t[3];
 };
 const std::vector<Inst> kInstances = {
-    {100, {42, 50}, {10, 0, 0}},  // two quads: face 0 on slot 0 (emissive), face 1 on slot 1 (not)
+    {100, {42, 50}, {10, 0, 0}},  // two quads: face 0 on slot 1 (not emissive), face 1 on slot 0 (emissive)
     {101, {50}, {0, 10, 0}},      // not emissive
     {101, {43}, {0, 0, 10}},      // emissive
 };
@@ -134,7 +134,7 @@ struct Rig {
       REQUIRE(set_light(e, 200, &l, scene.materials->table()) == AR_OK);
     });
     commit([&](Edit& e) {
-      mesh(e, 100, {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 2, 0, 0, 2, 1, 0}, {0, 1, 2, 3, 1, 4, 5, 2}, {0, 4}, {0, 1});
+      mesh(e, 100, {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 2, 0, 0, 2, 1, 0}, {0, 1, 2, 3, 1, 4, 5, 2}, {0, 4}, {1, 0});
       mesh(e, 101, {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0}, {0, 1, 2, 3}, {0}, {});
     });
     commit([&](Edit& e) {
@@ -213,11 +213,17 @@ TEST_CASE("light_index/emitting triangles map to their light") {
   r.build();
   const auto set = acquire_scene_tables(r.scene);
   REQUIRE(set);
-  // Two triangles of face 0 of instance 0, two of instance 2; then the world and the lamp.
+  // Two triangles of face 1 of instance 0, two of instance 2; then the world and the lamp.
   CHECK(set->lights->lights.size() == 6u);
   CHECK(check_map(r, *set, {42, 43}) == 4u);
   const ar::KernelGlobals kg = build_kernel_globals(set.get(), KgSession{});
   CHECK(kg.light_index_words == set->lights->light_index.size());
+  // Instance 0's slice covers all four triangles, so triangles 0 and 1 read in-slice kNoLight.
+  const std::vector<uint32_t>& map = set->lights->light_index;
+  REQUIRE(map[1] != ar::kNoLight);
+  CHECK(map[map[1]] == 4u);
+  CHECK(ar::light_of_hit(kg, 0, 0) == ar::kNoLight);
+  CHECK(ar::light_of_hit(kg, 0, 1) == ar::kNoLight);
   // The lamp's instance record (after the three geometry instances) is not a triangle light.
   REQUIRE(kg.scene->instance_count == 4u);
   CHECK(ar::light_of_hit(kg, 3, 0) == ar::kNoLight);
