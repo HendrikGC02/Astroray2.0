@@ -1025,7 +1025,7 @@ constexpr uint32_t kReplayUnset = 0xFFFFFFFFu;
 struct ArReplayOptions {
   const char* log_path = nullptr;     // overrides the recorded context log path when set
   const char* record_path = nullptr;  // records the replay when set (else none)
-  bool keep_alive = false;            // skip the recorded *_destroy calls; the caller owns the handles
+  bool keep_alive = false;            // skip the recorded *_destroy and ar_session_close calls; the caller owns the handles
   // Overrides replace the recorded value at these calls only: device_kind and device_index at
   // ar_context_create; seed, width, height and samples at ar_edit_set_settings (samples sets both
   // `samples` and `viewport_samples`); width and height also at ar_session_create (max_width,
@@ -1267,7 +1267,7 @@ ar_status replay_record(State& st, uint32_t fn, Reader& r, Arena& a, bool& stop)
         creating = [p for p in rows if m.classify(n, p)[0] == "hout"]
         if creating:
             s += "      uint64_t new_id = ++st.creates;\n"
-        if n in DESTROYS:
+        if n in DESTROYS or n == "ar_session_close":
             s += "      if (st.opt->keep_alive) return AR_OK;\n"
         s += f"      ar_status code = {n}({cargs(rows)});\n"
         for p in creating:

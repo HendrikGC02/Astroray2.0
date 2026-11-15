@@ -33,7 +33,7 @@ def load(name, path):
     return mod
 
 
-def make_recording(abi, ops, lib, path, ctx_log, bad_generation=False):
+def make_recording(abi, ops, lib, path, ctx_log, bad_generation=False, close_session=False):
     """Records the scene; with bad_generation a mesh the engine rejects is committed after the
     session was created (an ERROR report entry once it is validated)."""
     a = abi
@@ -114,6 +114,8 @@ def make_recording(abi, ops, lib, path, ctx_log, bad_generation=False):
         assert lib.ar_edit_item_commit(edit, BAD_MESH) == a.AR_OK
         assert lib.ar_edit_commit(edit, ctypes.byref(gen)) == a.AR_OK
 
+    if close_session:  # the addon closes its sessions; the replay must still render them
+        assert lib.ar_session_close(session) == a.AR_OK
     # Destroys are recorded too; the CLI replays with keep_alive and owns the handles.
     lib.ar_session_destroy(session)
     lib.ar_scene_destroy(scene)
@@ -136,6 +138,9 @@ class TestCliRender(unittest.TestCase):
         os.makedirs(SCENES, exist_ok=True)
         cls.rec = os.path.join(SCENES, "069_empty_world.arrec")
         make_recording(cls.abi, cls.ops, cls.lib, cls.rec, os.path.join(cls.tmp.name, "rec.log"))
+        cls.rec_closed = os.path.join(SCENES, "069_closed_session.arrec")
+        make_recording(cls.abi, cls.ops, cls.lib, cls.rec_closed, os.path.join(cls.tmp.name, "rec3.log"),
+                       close_session=True)
         cls.rec_bad = os.path.join(SCENES, "069_rejected_generation.arrec")
         make_recording(cls.abi, cls.ops, cls.lib, cls.rec_bad, os.path.join(cls.tmp.name, "rec2.log"),
                        bad_generation=True)
@@ -203,6 +208,17 @@ class TestCliRender(unittest.TestCase):
         self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
         self.assertIn("ABI mismatch", r.stdout)
         self.assertFalse(os.path.exists(out))
+
+    def test_recorded_close_still_renders(self):
+        r, out = self.render(rec=self.rec_closed)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.planes(out)[0]["SPP"], SPP)
+
+    def test_help_says_render_is_not_science(self):
+        for cmd in ("render", "dump"):
+            r = self.run_cli([cmd, "--help"])
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("not a science file", r.stdout)
 
     def test_spp_override(self):
         r, out = self.render(["--spp", "4"])

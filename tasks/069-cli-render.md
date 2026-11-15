@@ -1,7 +1,7 @@
 # 069 astroray_cli render, dump and bench
 Goal: recordings cannot be rendered from the command line -> `astroray_cli render` replays a recording through the public ABI, renders each session to a sample count, writes a FITS image or a full film dump, prints the final report and fails on ERROR entries; `bench` emits history lines.
 Read first: 0001 D1.4 (CLI as primary host, recordings), D2.10 (replay renders each session to its sample count or the CLI's), D2.11 (CLI prints the report, non-zero exit on ERROR), R38, R59 (dump covers film and science output only); 0009 d19 (recordings in out/scenes), d22 (history line).
-Scope: cli/main.cpp, cli/render.cpp, cli/bench.cpp, CMakeLists.txt (generated replayer into astroray_cli), tests/abi/test_cli_render.py.
+Scope: cli/main.cpp, cli/render.cpp, cli/bench.cpp, cli/cli.h, tools/abigen.py (replayer overrides, keep_alive), tests/abi/test_abigen.py, CMakeLists.txt (generated replayer into astroray_cli), tests/abi/test_cli_render.py.
 Out of scope: scene builders (070); any scene-state readback (R59: none exists).
 Reference: none.
 Do:
@@ -20,3 +20,4 @@ Progress:
 - Done on branch task/069-cli-render: replayer overrides (abigen.py), cli render/dump/bench, test, canary. Item 5 moved to 076.
 - Only the sessions-that-render tests fail: no CPU intersect_closest stage until 114 (session faults 0xC0000005). Rebase on 114 and rerun.
 - render and dump both write AR_FITS_DUMP: the ABI has no Combined-only file kind. New cli/cli.h added (shared helpers).
+- render and dump both write the film DUMP (no Combined-only file kind yet); accepted for M1a. --help says it is not a science file. keep_alive also skips ar_session_close.

@@ -58,6 +58,14 @@ int parse_run_args(const char* cmd, int argc, char** argv, bool needs_out, bool 
     return kExitUsage;
   };
   for (int i = 2; i < argc; ++i) {
+    if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+      printf("usage: astroray_cli %s <recording> %s[--spp N] [--device cpu|cuda[:i]] [--seed S] [--size WxH]%s\n", cmd,
+             needs_out ? "-o <file.fits> " : "", is_bench ? " [--passes N] [--warmup W]" : "");
+      if (needs_out)
+        printf("The file is the full film dump (ar_session_write_fits AR_FITS_DUMP), not a science file: the\n"
+               "science file kind is not implemented yet, so render and dump write the same thing.\n");
+      return 0;
+    }
     const char* k = argv[i];
     const bool has_val = i + 1 < argc;
     if (!strcmp(k, "-o") && needs_out && has_val) {
