@@ -18,3 +18,4 @@ Budget: host code; upload bytes per edit reported.
 Depends on: 101, 040, 059, 060, 064, 068.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
+- Read-through done; no code yet. Questions to the lead before coding: session.h and scene.h scope, uploads before ready vs arrays built at activation, accel ownership, one CUDA device per scene vs per session.
