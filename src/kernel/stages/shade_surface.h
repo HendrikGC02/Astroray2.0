@@ -140,13 +140,10 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     return;
   }
   const Spec r_u = ps_r_u(kg, slot);
-  const Real q = roulette_q(beta, ps_eta_scale(kg, slot), r_u, total + 1u, kg.session.min_bounces);
-  if (q > Real(0)) {
-    if (camera_path_draw(kg, sample, event_dim(e, EV_ROULETTE)) < q) {
-      path_end(kg, slot, Term::RUSSIAN_ROULETTE);
-      return;
-    }
-    beta = beta / (Real(1) - q);  // q < 1 here: beta has a positive lane
+  if (!roulette(&beta, ps_eta_scale(kg, slot), r_u, total + 1u, kg.session.min_bounces,
+                camera_path_draw(kg, sample, event_dim(e, EV_ROULETTE)))) {
+    path_end(kg, slot, Term::RUSSIAN_ROULETTE);
+    return;
   }
 
   ps_beta(kg, slot) = beta;

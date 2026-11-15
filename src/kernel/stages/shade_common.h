@@ -67,14 +67,23 @@ AR_FN Real camera_path_draw(const KernelGlobals& kg, uint32_t sample, uint32_t d
 // Russian roulette (0004 D2, after pbrt-v4 VolPathIntegrator::Li): from depth max(2, min_bounces)
 // on, a path survives with probability 1 - q, q = max(0, 1 - max_lane(beta eta_scale / avg(r_u))),
 // and a survivor's beta is divided by 1 - q (Arvo and Kirk 1990). depth is pbrt's: the scattering
-// vertices so far, this one included. max_lane and avg are lane-symmetric (0003 d6). Returns q,
-// 0 where roulette does not apply.
+// vertices so far, this one included. max_lane and avg are lane-symmetric (0003 d6).
+// roulette_q returns q, 0 where roulette does not apply; roulette applies it with the event
+// block's uniform u: false means the path ends, true leaves the survivor's weight in *beta.
 // Ref: pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::Li (Apache-2.0), "Possibly
 // terminate volumetric path with Russian roulette"; docs/decisions/0004-integrator.md D2.
 AR_FN Real roulette_q(const Spec& beta, Real eta_scale, const Spec& r_u, uint32_t depth, uint32_t min_bounces) {
   if (depth < (min_bounces > 2u ? min_bounces : 2u)) return Real(0);
   const Real m = max_lane(beta * (eta_scale / avg(r_u)));
   return m < Real(1) ? Real(1) - m : Real(0);
+}
+AR_FN bool roulette(Spec* beta, Real eta_scale, const Spec& r_u, uint32_t depth, uint32_t min_bounces, Real u) {
+  const Real q = roulette_q(*beta, eta_scale, r_u, depth, min_bounces);
+  if (q > Real(0)) {
+    if (u < q) return false;
+    *beta = *beta / (Real(1) - q);  // q < 1 when beta has a positive lane
+  }
+  return true;
 }
 
 // A unit vector as 32 bits: the octahedral map, each coordinate quantised to snorm16 with

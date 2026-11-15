@@ -164,7 +164,7 @@ AR_MATH2(pow, pow)
 // --warn-on-double-precision-use). MSVC's C++17 library has no sinpi, so the CPU evaluates
 // sin(pi x) in double and rounds once; both stay within about 1 ulp of the true value.
 // Ref: CUDA C++ Programming Guide, appendix "Mathematical Functions" (sinpif, cospif: 1 ulp).
-inline constexpr double kPiDouble = 3.14159265358979323846;  // pi to double precision
+inline constexpr double kPiDouble = double(3.14159265358979323846);  // pi to double precision
 #if AR_CUDA_BUILD
 AR_FN float sinpi(float x) { return ::sinpif(x); }
 AR_FN double sinpi(double x) { return ::sinpi(x); }
