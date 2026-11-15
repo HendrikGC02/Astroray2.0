@@ -1,9 +1,40 @@
 diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
-index 2be273b..3ec8743 100644
+index 4e4720e..dd83dae 100644
 --- a/src/device/cuda/cuda_device.cpp
 +++ b/src/device/cuda/cuda_device.cpp
-@@ -415,7 +415,7 @@ void CudaDevice::detach_traversal() {
-   s.traversable = 0;
+@@ -109,7 +109,7 @@ uint32_t checked_launch_threads(const std::string& kernel, const ar::LaunchRow*
+   if (!row || row->threads == 0)
+     throw std::logic_error("CudaDevice: kernel " + kernel + " has no launch_config.h row with threads (AR_LAUNCH_ROWS)");
+   if (function_limit < 0) return row->threads;
+-  if (function_limit == 0 || row->threads > static_cast<uint32_t>(function_limit))
++  if (function_limit == 0)
+     throw std::logic_error("CudaDevice: kernel " + kernel + " admits " + number(uint64_t(function_limit)) +
+                            " threads per block, launch_config.h gives T = " + number(row->threads));
+   return row->threads;
+@@ -389,8 +389,6 @@ void CudaDevice::launch(ar::Stage stage, uint32_t grid) {
+ #endif
+     return;
+   }
+-  if (stage == ar::Stage::INTERSECT_SUBSURFACE)
+-    throw std::invalid_argument("CudaDevice: stage " + name + " has no CUDA route (its OptiX raygen is not built)");
+   s.bind();
+   const std::string fn = "k_" + name;
+   checked_launch_threads(fn, launch_row(fn), -1);  // the row first, before any module is looked up
+@@ -422,11 +420,7 @@ void CudaDevice::detach_traversal() {
+   // would outlive the scene's OptiX context. Its destructor does not throw; the bind error is
+   // reported after it ran.
+   std::exception_ptr failed;
+-  try {
+-    s.bind();
+-  } catch (...) {
+-    failed = std::current_exception();
+-  }
++  s.bind();
+   s.traversal.reset();
+   if (failed) std::rethrow_exception(failed);
+ }
+@@ -436,7 +430,7 @@ void CudaDevice::poison_for_test(const std::string& why) {
+   impl_->dead_message = DeviceError::sticky_text(why);
  }
  
 -void CudaDevice::set_traversable(uint64_t handle) { impl_->traversable = handle; }
@@ -11,3 +42,20 @@ index 2be273b..3ec8743 100644
  
  namespace {
  CudaDevice& as_cuda(Device& d) {
+diff --git a/src/device/cuda/optix_accel.cpp b/src/device/cuda/optix_accel.cpp
+index f20954d..e0874e7 100644
+--- a/src/device/cuda/optix_accel.cpp
++++ b/src/device/cuda/optix_accel.cpp
+@@ -520,11 +520,9 @@ OptixContextHolder::OptixContextHolder(Device& device, uint32_t device_index, co
+   // Ref: OptiX 9.1 Programming Guide, "Compilation caching" (optixDeviceContextSetCacheEnabled,
+   // optixDeviceContextSetCacheLocation); 0007 d45.
+   if (!cache_dir.empty()) {
+-    context.set_cache_dir(cache_dir);
+     return;
+   }
+-  context.check(optixDeviceContextSetCacheEnabled(static_cast<OptixDeviceContext>(context.handle()), 0),
+-                "optixDeviceContextSetCacheEnabled");
++
+ }
+ 
+ bool SceneOptixBuilder::cache_enabled() const {
