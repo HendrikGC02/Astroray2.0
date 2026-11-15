@@ -1,0 +1,13 @@
+diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
+index 33108fd..e43e810 100644
+--- a/src/host/scene/scene_tables.cpp
++++ b/src/host/scene/scene_tables.cpp
+@@ -269,7 +269,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
+   } else {
+     try {
+       AccelInput in;
+-      in.instances = instances.get();
++      in.instances = device ? instances.get() : n.base_instances.get();
+       in.lights = lt_records;
+       in.host_ledger = t.host_ledger;
+       for (const auto& kv : n.mesh_records) in.meshes[kv.first] = AccelMesh{kv.second, n.meshes.at(kv.first)};
