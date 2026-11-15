@@ -17,3 +17,5 @@ Budget: recording generation time inside the gate; report it.
 Depends on: 069.
 Size: M (about 400 lines Python); stop and report at 2x.
 Progress:
+- Builders a5_emitter and a1_furnace, scenes/lib/{ar,meshes,meta}.py, tools/scenes.py and the gate `scenes` step (tag cpu) written; recordings decode with the builders' values.
+- Renders of both recordings end in "no entry point registered for stage 5" (shade_surface, task 071), as the task expects; the engine accepts both generations.

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# A1: a Lambertian sphere (white-furnace family, lossless configuration) in a uniform world;
+# pixel = rho * Lw on the sphere and Lw elsewhere (0009 d16, d20). The sphere is convex, so the
+# truth does not depend on its tessellation; pixels the sphere's edge crosses are not tested.
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+
+[truth]
+formula = "lambertian_furnace"
+# Grey base colour rho (RGB = rho, rho, rho) and the world's constant radiance Lw.
+rho = 0.5
+world_radiance = 0.8
+# The scene (metres, millimetres): a sphere at the origin, a pinhole camera on the -y axis.
+sphere_radius = 1.0
+camera_distance = 4.0
+focal_mm = 50.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "z_se"
