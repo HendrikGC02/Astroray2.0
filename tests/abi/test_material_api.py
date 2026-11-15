@@ -212,6 +212,11 @@ class TestMaterialApi(unittest.TestCase):
         buf = (ctypes.c_uint8 * 256)()
         self.assertEqual(lib.ar_edit_last_error(e, 256, buf), a.AR_OK)
         self.assertIn("not implemented in this build", bytes(buf).split(b"\0")[0].decode())
+        # Past the declared targets it is an enum range error (0007 d9).
+        self.assertEqual(lib.ar_edit_set_graph(e, GRAPH_GOOD, a.AR_TARGET_WORLD + 1, ctypes.byref(g.desc())),
+                         a.AR_ERR_INVALID_ARGUMENT)
+        self.assertEqual(lib.ar_edit_last_error(e, 256, buf), a.AR_OK)
+        self.assertIn("out of range", bytes(buf).split(b"\0")[0].decode())
         self.assertEqual(lib.ar_edit_abort(e), a.AR_OK)
 
 

@@ -9,13 +9,17 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
+#include <future>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "../../src/host/ledger.h"
 #include "../../src/host/material/compiler.h"
 #include "../../src/host/material/material_store.h"
+#include "host/scene/edit.h"
 #include "material/material_header.h"
 #include "vm/interp.h"
 
@@ -70,7 +74,8 @@ struct GB {
     link(b, n, 1);
     return n;
   }
-  MaterialOutput compile() const {
+  MaterialOutput compile() const { return compile_material(desc(), table()); }
+  ar_graph_desc desc() const {
     ar_graph_desc d = {};
     d.node_count = uint32_t(nodes.size());
     d.link_count = uint32_t(links.size());
@@ -82,7 +87,7 @@ struct GB {
     d.params_f32 = f.data();
     d.params_i32 = i.data();
     d.string_bytes = s.data();
-    return compile_material(d, table());
+    return d;
   }
 };
 
@@ -125,6 +130,8 @@ TEST_CASE("compiler_outputs/may be delta constant roughness") {
   CHECK((roughness(0.0f).flags & ar::MAY_BE_DELTA) != 0);
   CHECK((roughness(1e-4f).flags & ar::MAY_BE_DELTA) != 0);
   CHECK((roughness(0.5f).flags & ar::MAY_BE_DELTA) == 0);
+  CHECK((roughness(0.02f).flags & ar::MAY_BE_DELTA) != 0);  // alpha 4e-4: roughness itself is above 1e-3
+  CHECK((roughness(0.04f).flags & ar::MAY_BE_DELTA) == 0);  // alpha 1.6e-3
   // A coat that can be sampled counts with its own roughness; one of weight 0 cannot be sampled.
   GB coat;
   coat.store(coat.add(Op::CONST_F32, {0.5f}), ar::RecordSlot::specular_roughness);
@@ -146,6 +153,16 @@ TEST_CASE("compiler_outputs/may be delta textured roughness") {
   CHECK((astroray::host::material_flags(r) & ar::MAY_BE_DELTA) != 0);
 }
 
+TEST_CASE("compiler_outputs/runtime slots mark per-point stores") {
+  const uint64_t bit = uint64_t(1) << uint32_t(ar::RecordSlot::base_color);
+  GB textured;
+  textured.store(tex(textured), ar::RecordSlot::base_color);
+  CHECK((textured.compile().compiled.runtime_slots & bit) != 0);
+  GB constant;
+  constant.store(constant.add(Op::CONST_F32X3, {0.2f, 0.4f, 0.6f}), ar::RecordSlot::base_color);
+  CHECK(constant.compile().compiled.runtime_slots == 0);
+}
+
 TEST_CASE("compiler_outputs/emission estimate constant") {
   GB g;
   g.op2(Op::EMIT_LE, g.add(Op::CONST_F32X3, {1.0f, 0.5f, 0.25f}), g.add(Op::CONST_F32, {3.0f}));
@@ -157,6 +174,9 @@ TEST_CASE("compiler_outputs/emission estimate constant") {
   GB dark;
   dark.op2(Op::EMIT_LE, dark.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), dark.add(Op::CONST_F32, {0.0f}));
   CHECK(dark.compile().emission_estimate.empty());  // zero only when emission folds to 0
+  GB black;
+  black.op2(Op::EMIT_LE, black.add(Op::CONST_F32X3, {0.0f, 0.0f, 0.0f}), black.add(Op::CONST_F32, {5.0f}));
+  CHECK(black.compile().emission_estimate.empty());
   CHECK(roughness(0.5f).emission_estimate.empty());
 }
 
@@ -211,6 +231,95 @@ TEST_CASE("compiler_outputs/clamped reflectance is approximated") {
   REQUIRE(m.entries.size() == 1);
   CHECK(m.entries[0].code == AR_REPORT_NODE_APPROXIMATED);
   CHECK(m.entries[0].detail == "RGB clamped");
+}
+
+TEST_CASE("compiler_outputs/dropped generation does not leak into queued ones") {
+  using namespace astroray::host;
+  const ar_key G = 10, H = 11, A = 20, B = 21, BLOCKER = 99;
+  astroray::ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  auto store = std::make_shared<MaterialStore>(std::make_shared<Ledger>());
+  GB good;
+  good.store(good.add(Op::CONST_F32, {0.5f}), ar::RecordSlot::specular_roughness);
+  GB bevel, ao;
+  bevel.unsupported("ShaderNodeBevel");
+  ao.unsupported("ShaderNodeAmbientOcclusion");
+  auto material = [](ar_key graph) {
+    ar_material_desc m = {};
+    m.surface_graph = graph;
+    return m;
+  };
+  auto commit = [&](const std::function<void(Edit&)>& body) {
+    auto e = scene.begin_edit();
+    REQUIRE(e);
+    body(*e);
+    uint64_t g = 0;
+    REQUIRE(e->commit(&g) == AR_OK);
+    store->end_edit();
+    return g;
+  };
+  auto entries = [&](ar_key subject) {
+    scene.report().snapshot();
+    ar_report_info info = {};
+    REQUIRE(scene.report().info(&info) == AR_OK);
+    std::vector<std::string> out;
+    for (uint32_t k = 0; k < info.entry_count; ++k) {
+      ar_report_entry e = {};
+      REQUIRE(scene.report().entry(k, &e) == AR_OK);
+      if (e.subject == subject && e.code == AR_REPORT_NODE_UNSUPPORTED) out.emplace_back(reinterpret_cast<const char*>(e.detail));
+    }
+    return out;
+  };
+  // N: G and H good, A uses G.
+  commit([&](Edit& e) {
+    const ar_graph_desc dg = good.desc();
+    const ar_material_desc ma = material(G);
+    REQUIRE(store->set_graph(e, G, &dg) == AR_OK);
+    REQUIRE(store->set_graph(e, H, &dg) == AR_OK);
+    REQUIRE(store->set_material(e, A, &ma) == AR_OK);
+  });
+  scene.generations().wait_idle();
+  // N+1, dropped: H becomes Bevel and A is removed, with a mesh-like job that fails once released.
+  std::promise<void> release;
+  std::shared_future<void> gate = release.get_future().share();
+  commit([&](Edit& e) {
+    const ar_graph_desc db = bevel.desc();
+    REQUIRE(store->set_graph(e, H, &db) == AR_OK);
+    REQUIRE(e.remove(AR_KIND_MATERIAL, A) == AR_OK);
+    REQUIRE(store->note_remove(e, AR_KIND_MATERIAL, A) == AR_OK);
+    auto blocker = std::make_shared<EditItem>();
+    blocker->key = BLOCKER;
+    blocker->needs_device = false;
+    blocker->job = [gate] {
+      gate.wait();
+      throw std::runtime_error("corner_vert out of range");
+    };
+    REQUIRE(e.stage(blocker) == AR_OK);
+    REQUIRE(e.item_commit(BLOCKER) == AR_OK);
+  });
+  // N+2 and N+3, queued behind it: B uses H; then G becomes AO.
+  commit([&](Edit& e) {
+    const ar_material_desc mb = material(H);
+    REQUIRE(store->set_material(e, B, &mb) == AR_OK);
+  });
+  commit([&](Edit& e) {
+    const ar_graph_desc da = ao.desc();
+    REQUIRE(store->set_graph(e, G, &da) == AR_OK);
+  });
+  release.set_value();
+  scene.generations().wait_idle();
+  REQUIRE(scene.generations().failed() == 2);
+  // B compiled against the active (good) H, not N+1's Bevel; A still exists and recompiled for AO.
+  CHECK(entries(B).empty());
+  CHECK(entries(A) == std::vector<std::string>{"ShaderNodeAmbientOcclusion"});
+  CHECK(store->arrays()->keys == std::vector<ar_key>{A, B});
+  // After the drop the latest state is rebuilt: a later edit of H recompiles B.
+  commit([&](Edit& e) {
+    const ar_graph_desc db = bevel.desc();
+    REQUIRE(store->set_graph(e, H, &db) == AR_OK);
+  });
+  scene.generations().wait_idle();
+  CHECK(entries(B) == std::vector<std::string>{"ShaderNodeBevel"});
 }
 
 }  // TEST_SUITE("fast")

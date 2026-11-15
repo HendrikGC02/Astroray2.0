@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "host/material/material_store.h"
 
+#include <algorithm>
+#include <cstring>
+#include <iterator>
 #include <stdexcept>
 #include <utility>
 
@@ -73,10 +76,9 @@ struct MaterialStore::Pass {
     ar_key key = 0;
     ar_material_desc desc = {};
     std::shared_ptr<const StoredGraph> graph;
-    bool own = true;  // set in this edit (its keyed item replaces its entries); false: a dependent
     std::shared_ptr<const MaterialOutput> out;
   };
-  std::vector<Item> items;
+  std::vector<Item> items;  // compiled on the worker from the latest state as bind predicted it
 };
 
 MaterialStore::MaterialStore(std::shared_ptr<Ledger> ledger)
@@ -101,26 +103,21 @@ ar_status MaterialStore::ensure_pass(Edit& edit) {
   Scene* scene = &edit.scene();
   item->bind = [self, pass, scene](const std::function<bool(ar_key)>&) {
     pass->generation = scene->generations().pending() + 1;  // one open edit: the next number is this commit's
-    self->bind(*pass);
+    self->bind(pass);
   };
   item->job = [self, pass] {
     for (Pass::Item& it : pass->items)
       it.out = std::make_shared<const MaterialOutput>(compile_one(self->table_, it.desc, it.graph.get()));
   };
   item->on_active = [self, pass, scene] { self->activate(*scene, *pass); };
-  item->on_dropped = [self] {
-    // The latest state falls back to the active one; generations still queued behind a dropped
-    // one keep their own results, only the dependents found at a later commit may miss them.
-    std::lock_guard<std::mutex> lock(self->mutex_);
-    self->latest_graphs_ = self->graphs_;
-    self->latest_materials_.clear();
-    for (const auto& kv : self->materials_) self->latest_materials_[kv.first] = kv.second.desc;
-  };
+  item->on_dropped = [self, pass] { self->dropped(*pass); };
   if (ar_status st = edit.stage_internal(item)) return st;
   open_->pass_staged = true;
   return AR_OK;
 }
 
+// The stored object is built and the pass staged before the key is committed, and open_ is
+// written last, so a failure or a throw never leaves a committed key without its data.
 ar_status MaterialStore::set_graph(Edit& edit, ar_key key, const ar_graph_desc* d) {
   if (d == nullptr) return edit.fail("invalid argument: ar_edit_set_graph desc is null");
   auto g = std::make_shared<StoredGraph>();
@@ -135,24 +132,25 @@ ar_status MaterialStore::set_graph(Edit& edit, ar_key key, const ar_graph_desc* 
   item->kind = AR_KIND_GRAPH;
   item->needs_device = false;
   item->job = [] {};  // the material pass compiles; a graph alone has nothing to build
+  if (ar_status st = ensure_pass(edit)) return st;
   if (ar_status st = edit.stage(item)) return st;
   if (ar_status st = edit.item_commit(key)) return st;
-  if (ar_status st = ensure_pass(edit)) return st;
   open_->graphs[key] = std::move(g);
   return AR_OK;
 }
 
 ar_status MaterialStore::set_material(Edit& edit, ar_key key, const ar_material_desc* d) {
   if (d == nullptr) return edit.fail("invalid argument: ar_edit_set_material desc is null");
+  const ar_material_desc copy = *d;
   auto item = std::make_shared<EditItem>();
   item->key = key;
   item->kind = AR_KIND_MATERIAL;
   item->needs_device = false;
   item->job = [] {};  // compiled by the pass, which sees every graph of the edit
+  if (ar_status st = ensure_pass(edit)) return st;
   if (ar_status st = edit.stage(item)) return st;
   if (ar_status st = edit.item_commit(key)) return st;
-  if (ar_status st = ensure_pass(edit)) return st;
-  open_->materials[key] = *d;
+  open_->materials[key] = copy;
   return AR_OK;
 }
 
@@ -171,30 +169,48 @@ ar_status MaterialStore::note_reset(Edit& edit) {
 
 void MaterialStore::end_edit() { open_.reset(); }
 
-// At commit: the edit's final graphs and materials, and the materials it did not set whose
-// graph it set or removed.
-void MaterialStore::bind(Pass& pass) {
-  const Open& o = *pass.open;
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (o.reset) latest_graphs_.clear(), latest_materials_.clear();
+void MaterialStore::apply_open(const Open& o, GraphMap& graphs, DescMap& materials) {
+  if (o.reset) graphs.clear(), materials.clear();
   for (ar_key k : o.removed_graphs)
-    if (!o.graphs.count(k)) latest_graphs_.erase(k);
+    if (!o.graphs.count(k)) graphs.erase(k);
   for (ar_key k : o.removed_materials)
-    if (!o.materials.count(k)) latest_materials_.erase(k);
-  for (const auto& kv : o.graphs) latest_graphs_[kv.first] = kv.second;
-  for (const auto& kv : o.materials) latest_materials_[kv.first] = kv.second;
+    if (!o.materials.count(k)) materials.erase(k);
+  for (const auto& kv : o.graphs) graphs[kv.first] = kv.second;
+  for (const auto& kv : o.materials) materials[kv.first] = kv.second;
+}
+
+bool MaterialStore::compiles(const Open& o, ar_key key, const ar_material_desc& d) {
+  return o.materials.count(key) != 0 || o.graphs.count(d.surface_graph) != 0 || o.removed_graphs.count(d.surface_graph) != 0;
+}
+
+// At commit: what the edit compiles, predicted from the latest state (every queued generation
+// assumed to activate): its own materials and the others whose graph it set or removed.
+void MaterialStore::bind(const std::shared_ptr<Pass>& pass) {
+  const Open& o = *pass->open;
+  std::lock_guard<std::mutex> lock(mutex_);
+  apply_open(o, latest_graphs_, latest_materials_);
+  queued_.push_back(pass);
   for (const auto& kv : latest_materials_) {
-    const ar_key g = kv.second.surface_graph;
-    const bool own = o.materials.count(kv.first) != 0;
-    if (!own && !o.graphs.count(g) && !o.removed_graphs.count(g)) continue;
+    if (!compiles(o, kv.first, kv.second)) continue;
     Pass::Item it;
     it.key = kv.first;
     it.desc = kv.second;
-    it.own = own;
-    auto gi = latest_graphs_.find(g);
+    auto gi = latest_graphs_.find(kv.second.surface_graph);
     if (gi != latest_graphs_.end()) it.graph = gi->second;
-    pass.items.push_back(std::move(it));
+    pass->items.push_back(std::move(it));
   }
+}
+
+// A dropped generation never happened: the latest state is the active one with the generations
+// still queued replayed in order, as Scene rebuilds its known keys.
+void MaterialStore::dropped(const Pass& pass) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  queued_.erase(std::remove_if(queued_.begin(), queued_.end(), [&](const auto& p) { return p.get() == &pass; }),
+                queued_.end());
+  latest_graphs_ = graphs_;
+  latest_materials_.clear();
+  for (const auto& kv : materials_) latest_materials_[kv.first] = kv.second.desc;
+  for (const auto& p : queued_) apply_open(*p->open, latest_graphs_, latest_materials_);
 }
 
 void MaterialStore::rebuild_locked() {
@@ -221,27 +237,48 @@ void MaterialStore::rebuild_locked() {
 
 void MaterialStore::activate(Scene& scene, const Pass& pass) {
   const Open& o = *pass.open;
+  struct Done {
+    ar_key key;
+    bool own;
+    std::shared_ptr<const MaterialOutput> out;
+  };
+  std::vector<Done> done;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (o.reset) graphs_.clear(), materials_.clear();
-    for (ar_key k : o.removed_graphs)
-      if (!o.graphs.count(k)) graphs_.erase(k);
-    for (ar_key k : o.removed_materials)
-      if (!o.materials.count(k)) materials_.erase(k);
-    for (const auto& kv : o.graphs) graphs_[kv.first] = kv.second;
-    for (const Pass::Item& it : pass.items) materials_[it.key] = Active{it.desc, it.out};
+    queued_.erase(std::remove_if(queued_.begin(), queued_.end(), [&](const auto& p) { return p.get() == &pass; }),
+                  queued_.end());
+    DescMap descs;
+    for (const auto& kv : materials_) descs[kv.first] = kv.second.desc;
+    apply_open(o, graphs_, descs);
+    for (auto it = materials_.begin(); it != materials_.end();) it = descs.count(it->first) ? std::next(it) : materials_.erase(it);
+    // What to compile follows from the active state. The worker's output is used when it was
+    // compiled from the same descriptor and graph; after a dropped generation the prediction can
+    // be wrong (another graph, a material that no longer exists, one it missed), and then the
+    // material is compiled here.
+    for (const auto& kv : descs) {
+      if (!compiles(o, kv.first, kv.second)) continue;
+      auto gi = graphs_.find(kv.second.surface_graph);
+      const std::shared_ptr<const StoredGraph> graph = gi != graphs_.end() ? gi->second : nullptr;
+      std::shared_ptr<const MaterialOutput> out;
+      for (const Pass::Item& it : pass.items)
+        if (it.key == kv.first && it.graph == graph && std::memcmp(&it.desc, &kv.second, sizeof(ar_material_desc)) == 0)
+          out = it.out;
+      if (!out) out = std::make_shared<const MaterialOutput>(compile_one(table_, kv.second, graph.get()));
+      materials_[kv.first] = Active{kv.second, out};
+      done.push_back({kv.first, o.materials.count(kv.first) != 0, out});
+    }
     rebuild_locked();
   }
   // A material set in this edit had its old entries removed with its keyed item (the tracker
   // clears replaced subjects before on_active); a dependent is not a subject, so clear it here.
   std::vector<uint64_t> dependents;
-  for (const Pass::Item& it : pass.items)
-    if (!it.own) dependents.push_back(it.key);
+  for (const Done& d : done)
+    if (!d.own) dependents.push_back(d.key);
   if (!dependents.empty()) scene.report().on_generation_active(pass.generation, dependents, false);
-  for (const Pass::Item& it : pass.items)
-    for (const MaterialEntry& e : it.out->entries) {
-      scene.ctx().log.line("WARNING", key_text(it.key) + ": " + e.detail + (it.out->magenta ? " (rendered magenta)" : ""));
-      scene.report().raise(e.code, it.key, e.detail, 1, nullptr, pass.generation);
+  for (const Done& d : done)
+    for (const MaterialEntry& e : d.out->entries) {
+      scene.ctx().log.line("WARNING", key_text(d.key) + ": " + e.detail + (d.out->magenta ? " (rendered magenta)" : ""));
+      scene.report().raise(e.code, d.key, e.detail, 1, nullptr, pass.generation);
     }
 }
 

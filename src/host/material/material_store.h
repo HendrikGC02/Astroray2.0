@@ -11,6 +11,7 @@
 // 0001 D2.11 (entries, SCENE scope).
 #pragma once
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -76,8 +77,15 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
  private:
   struct Open;
   struct Pass;
+  using GraphMap = std::map<ar_key, std::shared_ptr<const StoredGraph>>;
+  using DescMap = std::map<ar_key, ar_material_desc>;
+  // One edit's changes to a graph map and a material map: reset, removes, then sets.
+  static void apply_open(const Open& o, GraphMap& graphs, DescMap& materials);
+  // Whether the edit compiles this material: set in it, or its graph set or removed in it.
+  static bool compiles(const Open& o, ar_key key, const ar_material_desc& d);
   ar_status ensure_pass(Edit& edit);
-  void bind(Pass& pass);
+  void bind(const std::shared_ptr<Pass>& pass);
+  void dropped(const Pass& pass);
   void activate(Scene& scene, const Pass& pass);
   void rebuild_locked();
 
@@ -86,11 +94,13 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   std::shared_ptr<Open> open_;  // one open edit per scene
 
   mutable std::mutex mutex_;
-  // As of the latest commit (pending generations included), for dependents at the next commit.
-  std::map<ar_key, std::shared_ptr<const StoredGraph>> latest_graphs_;
-  std::map<ar_key, ar_material_desc> latest_materials_;
+  // As of the latest commit (queued generations included), for what the next commit compiles;
+  // rebuilt from the active state plus the queued passes when a generation is dropped.
+  GraphMap latest_graphs_;
+  DescMap latest_materials_;
+  std::deque<std::shared_ptr<Pass>> queued_;  // committed, neither active nor dropped, in order
   // As of the active generation.
-  std::map<ar_key, std::shared_ptr<const StoredGraph>> graphs_;
+  GraphMap graphs_;
   struct Active {
     ar_material_desc desc;
     std::shared_ptr<const MaterialOutput> out;

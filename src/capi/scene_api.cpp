@@ -261,10 +261,17 @@ AR_API ar_status ar_edit_set_graph(ar_edit h, ar_key key, uint32_t target, const
   AR_RECORD(ar_edit_set_graph, ar_rec_of(h), h, key, target, desc);
   AR_RECORD_BODY({
   if (h && h->edit && target != AR_TARGET_SURFACE) {
+    // An enum range error is the caller's (0007 d9); a declared target without a compiler yet
+    // is this build's. Both are logged like Edit's own refusals.
+    const bool known = target <= AR_TARGET_WORLD;
+    const ar_status st = known ? AR_ERR_UNSUPPORTED : AR_ERR_INVALID_ARGUMENT;
     try {
-      return fail(h, AR_ERR_UNSUPPORTED, "ar_edit_set_graph: target " + std::to_string(target) + " is not implemented in this build");
+      const std::string why = known ? "ar_edit_set_graph: target " + std::to_string(target) + " is not implemented in this build"
+                                    : "invalid argument: ar_edit_set_graph target " + std::to_string(target) + " out of range";
+      h->owner->scene->ctx().log.line("WARNING", why);
+      return fail(h, st, why);
     } catch (...) {
-      return AR_ERR_UNSUPPORTED;
+      return st;
     }
   }
   return staging_call(h, [&](Edit& e) { return h->owner->scene->materials->set_graph(e, key, desc); });
