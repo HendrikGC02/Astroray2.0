@@ -135,3 +135,19 @@ spill_store = 0
 spill_load = 0
 compile_s = 0
 gated = "full"
+
+[kernel.__intersection__lamp]
+regs = 0
+stack = 0
+spill_store = 0
+spill_load = 0
+compile_s = 0
+gated = "full"
+
+[kernel.__closesthit__lamp]
+regs = 0
+stack = 0
+spill_store = 0
+spill_load = 0
+compile_s = 0
+gated = "full"

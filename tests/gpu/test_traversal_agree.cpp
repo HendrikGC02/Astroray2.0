@@ -106,7 +106,7 @@ void run_cpu(const Records& recs, const InstanceTable& table, const Rays& rays, 
   MeshStore meshes;
   for (const auto& r : recs) meshes.install(r);
   EmbreeDevice embree;
-  EmbreeScene accel(embree, meshes, table, ledger, pool);
+  EmbreeScene accel(embree, meshes, table, std::vector<ar::LightRecord>{}, ledger, pool);
   std::vector<ar::DeviceInstanceRecord> records(table.instances.size());
   for (auto& r : records) r = {};
   ar::SceneData scene{};
@@ -177,7 +177,7 @@ void run_gpu(Gpu& g, const Records& recs, const InstanceTable& table, const Rays
   for (const auto& r : recs) g.upload->sync_mesh(r);
   g.upload->upload_instances(table);
   g.accel->update_gas(*g.upload);
-  g.accel->build_tlas(*g.upload, table);
+  g.accel->build_tlas(*g.upload, table, std::vector<ar::LightRecord>{});
   Device& dev = *g.dev;
   std::vector<DeviceBuffer> owned;
   auto keep = [&](DeviceBuffer b) {

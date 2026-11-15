@@ -12,9 +12,15 @@
 #include <vector>
 
 #include "device/cuda/optix_context.h"
+#include "kernel/geom/lamp_intersect.h"
+#include "kernel/light/light_record.h"
 #include "device/cuda/scene_upload.h"
 
 namespace astroray::host {
+
+// Hit-group record of an instance (the instance's sbtOffset), shared with the pipeline's SBT: the
+// mesh and rectangle-lamp triangles, the disk-lamp custom primitive, the lamp built-in sphere.
+inline constexpr uint32_t kSbtTriangle = 0, kSbtLampDisk = 1, kSbtLampSphere = 2, kSbtHitGroups = 3;
 
 class OptixAccel {
  public:
@@ -28,10 +34,15 @@ class OptixAccel {
   // number of GAS built.
   uint32_t update_gas(const SceneUpload& upload);
   // Rebuilds the TLAS over `table`'s instances (transform, mask, flags from task 036).
-  // Only instances of a mesh with zero triangles are left out. Throws std::runtime_error
+  // Only instances of a mesh with zero triangles are left out. An instance with a light index is
+  // a lamp: its unit-shape GAS (built once per shape, kept across generations) is placed by
+  // lamp_geometry_xform from `lights[light_index]`, the table's transform being ignored; a delta
+  // point lamp has no primitive and is left out. `lights` is the scene's light table, passed
+  // explicitly (empty for a scene without lamps) so a forgotten argument cannot drop lamps.
+  // Throws std::runtime_error for a light index out of range or naming a light that is not a lamp,
   // naming the key when a mesh with triangles has no GAS or one older than its data (call
   // update_gas first) or when an instance's key was never uploaded.
-  void build_tlas(const SceneUpload& upload, const InstanceTable& table);
+  void build_tlas(const SceneUpload& upload, const InstanceTable& table, const std::vector<ar::LightRecord>& lights);
 
   // OptixTraversableHandle; 0 when there is none or when update_gas changed a GAS since the
   // last build_tlas (the old TLAS may point at freed memory, so nothing may trace it).
@@ -63,10 +74,12 @@ class OptixAccel {
     DeviceBuffer buffer;
   };
   void free_gas(Gas& g);
+  void ensure_lamp_gas(ar::LampShape shape);
 
   OptixContext& context_;
   Owner owner_;
   std::map<ar_key, Gas> gas_;
+  Gas lamp_gas_[4];  // by ar::LampShape; NONE and INVALID stay empty
   DeviceBuffer tlas_buffer_, tlas_instances_;
   uint32_t tlas_instance_count_ = 0;
   uint64_t tlas_handle_ = 0;

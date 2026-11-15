@@ -70,7 +70,7 @@ struct Rig {
     table.instances.push_back(in);
     table.xf.push_back(translate(x, z));
   }
-  void build() { scene = std::make_unique<EmbreeScene>(device, meshes, table, ledger, pool); }
+  void build() { scene = std::make_unique<EmbreeScene>(device, meshes, table, std::vector<ar::LightRecord>{}, ledger, pool); }
 };
 
 struct Rays {

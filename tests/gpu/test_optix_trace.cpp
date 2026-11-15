@@ -178,7 +178,7 @@ void run_cpu(const InstanceTable& table, Pools& p) {
   MeshStore meshes;
   meshes.install(quad_record());
   EmbreeDevice embree;
-  EmbreeScene accel(embree, meshes, table, ledger, pool);
+  EmbreeScene accel(embree, meshes, table, std::vector<ar::LightRecord>{}, ledger, pool);
   std::vector<ar::DeviceInstanceRecord> records(table.instances.size());
   for (size_t i = 0; i < records.size(); ++i) records[i] = {}, records[i].light_index = table.instances[i].light_index;
   ar::SceneData scene{};
@@ -245,7 +245,7 @@ void run_gpu(Gpu& g, const InstanceTable& table, Pools& p, uint32_t width) {
   g.upload->sync_mesh(quad_record());
   g.upload->upload_instances(table);
   g.accel->update_gas(*g.upload);
-  g.accel->build_tlas(*g.upload, table);
+  g.accel->build_tlas(*g.upload, table, std::vector<ar::LightRecord>{});
   Device& dev = *g.dev;
 
   std::vector<DeviceBuffer> owned;

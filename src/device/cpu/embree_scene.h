@@ -9,8 +9,10 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "host/ledger.h"
+#include "kernel/light/light_record.h"
 #include "host/scene/instances.h"
 #include "host/scene/mesh.h"
 #include "host/thread_pool.h"
@@ -37,10 +39,16 @@ class EmbreeScene {
   // Builds one robust triangle scene per distinct geometry key of `table` (on `pool`), using
   // each mesh's representative motion step, then the instance scene carrying each instance's
   // transform and its 8-bit mask. Records the structures' host memory in `ledger` under
-  // ACCELERATION. Throws std::runtime_error naming the instance when a geometry key has no
-  // mesh in `meshes`, and with Embree's text when Embree reports an error.
-  EmbreeScene(EmbreeDevice& device, const MeshStore& meshes, const InstanceTable& table, Ledger& ledger,
-              ThreadPool& pool);
+  // ACCELERATION. An instance with a light index is a lamp: its primitive (two triangles, a
+  // user-geometry disk or a sphere point, a delta point lamp none) is built from
+  // `lights[light_index]` and placed by lamp_geometry_xform (kernel/geom/lamp_intersect.h), the
+  // instance transform of the table being ignored. `lights` is the scene's light table, passed
+  // explicitly (empty for a scene without lamps) so that a forgotten argument cannot drop lamps.
+  // Throws std::runtime_error naming the instance when a geometry key has no mesh in `meshes`,
+  // when a light index is out of range or names a light that is not a lamp, and with Embree's
+  // text when Embree reports an error.
+  EmbreeScene(EmbreeDevice& device, const MeshStore& meshes, const InstanceTable& table,
+              const std::vector<ar::LightRecord>& lights, Ledger& ledger, ThreadPool& pool);
   ~EmbreeScene();
   EmbreeScene(const EmbreeScene&) = delete;
   EmbreeScene& operator=(const EmbreeScene&) = delete;
