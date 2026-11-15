@@ -1,5 +1,5 @@
 diff --git a/src/kernel/film/resolve.h b/src/kernel/film/resolve.h
-index d9f0578..bb2446c 100644
+index 757d32f..d751ba4 100644
 --- a/src/kernel/film/resolve.h
 +++ b/src/kernel/film/resolve.h
 @@ -62,7 +62,7 @@ AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
