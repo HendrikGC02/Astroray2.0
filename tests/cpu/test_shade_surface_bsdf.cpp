@@ -229,18 +229,27 @@ TEST_SUITE("fast") {
 TEST_CASE("shade_surface_bsdf/lambert beta") {
   Rig rig(1);
   rig.lambert(0.5f);
+  rig.event_index[0] = 3;  // the uniforms come from event block 3 (dims 8 + 12 * 3, 0003 d23)
   ar::ShadeContext c{};
   ar::OpenPBRParams rec;
   rig.vertex(0, &c, &rec);
   const ar::Spec beta0 = rig.beta[0], ru0 = rig.r_u[0];
+  const ar::Frame frame = ar::frame_from_normal(c.N);
+  const ar::LobeSample want_s = ar::stack_sample(
+      *rig.kg.e_diel, rec, frame, c.wo, ar::camera_path_draw(rig.kg, 0, ar::event_dim(3, ar::EV_LOBE_CHOICE)),
+      ar::Real2{ar::camera_path_draw(rig.kg, 0, ar::event_dim(3, ar::EV_BSDF_U)),
+                ar::camera_path_draw(rig.kg, 0, ar::event_dim(3, ar::EV_BSDF_V))},
+      ar::TransportMode::Radiance);
   rig.run();
   REQUIRE(rig.term[0] == uint8_t(ar::Term::ACTIVE));
   CHECK(rig.next_stage[0] == uint8_t(ar::Stage::INTERSECT_CLOSEST));
   const ar::Real3 wi = rig.ray_d[0];
+  CHECK(wi.x == want_s.wi.x);
+  CHECK(wi.y == want_s.wi.y);
+  CHECK(wi.z == want_s.wi.z);
   CHECK(std::fabs(double(ar::length(wi)) - 1.0) < 1e-6);
   // The expected update from the lobe stack's own eval and pdf at the sampled direction:
   // beta * f |cos theta_i| / pdf with cos against the shading normal, r_u unchanged, r_l = r_u / pdf.
-  const ar::Frame frame = ar::frame_from_normal(c.N);
   const ar::LobeEval e = ar::stack_eval(*rig.kg.e_diel, rec, frame, c.wo, wi, ar::TransportMode::Radiance);
   REQUIRE(e.pdf > 0.0f);
   const double cos_i = std::fabs(double(ar::dot(wi, c.N)));
@@ -256,7 +265,7 @@ TEST_CASE("shade_surface_bsdf/lambert beta") {
   CHECK(rig.bounces[0].v[0] == 1u);
   CHECK(rig.bounces[0].v[1] == 1u);
   CHECK(rig.bounces[0].v[2] == 0u);
-  CHECK(rig.event_index[0] == 1u);
+  CHECK(rig.event_index[0] == 4u);
   CHECK((rig.flags[0] & ar::LAST_BOUNCE_SPECULAR) == 0u);
   CHECK(rig.ray_type[0] == ar::kRayTypeDiffuse);
   CHECK(rig.prev_ng[0] == ar::oct_encode(c.Ng));
@@ -268,6 +277,40 @@ TEST_CASE("shade_surface_bsdf/lambert beta") {
   CHECK(rig.ray_o[0].z == o.z);
   CHECK(rig.ray_o[0].z > 0.0f);  // above the quad, on the side the ray leaves to
   CHECK(wi.z > 0.0f);
+}
+
+TEST_CASE("shade_surface_bsdf/a delta sample") {
+  // A smooth specular layer alone (roughness 0, base weight 0): the stack returns the mirror
+  // direction with pdf p_spec and f = F / cos theta_o, so beta = beta0 F / p_spec, r_l = r_u / p_spec,
+  // LAST_BOUNCE_SPECULAR is set for 074's emitter MIS, and the vertex counts as glossy.
+  Rig rig(1);
+  rig.specular();
+  rig.block().specular_roughness = 0.0f;
+  ar::ShadeContext c{};
+  ar::OpenPBRParams rec;
+  rig.vertex(0, &c, &rec);
+  const ar::Spec beta0 = rig.beta[0], ru0 = rig.r_u[0];
+  const ar::Real mu = ar::dot(c.wo, c.N);
+  const ar::StackSelect sel = ar::stack_select(*rig.kg.e_diel, rec, mu);
+  const ar::Spec fr = ar::fresnel_dielectric_weighted(mu, sel.eta, ar::Real(1));
+  rig.run();
+  REQUIRE(rig.term[0] == uint8_t(ar::Term::ACTIVE));
+  CHECK((rig.flags[0] & ar::LAST_BOUNCE_SPECULAR) != 0u);
+  CHECK(rig.ray_type[0] == ar::kRayTypeGlossy);
+  CHECK(rig.bounces[0].v[0] == 1u);
+  CHECK(rig.bounces[0].v[1] == 0u);
+  CHECK(rig.bounces[0].v[2] == 1u);
+  const ar::Real3 mirror = c.N * (ar::Real(2) * mu) - c.wo;
+  CHECK(std::fabs(double(rig.ray_d[0].x - mirror.x)) < 1e-6);
+  CHECK(std::fabs(double(rig.ray_d[0].y - mirror.y)) < 1e-6);
+  CHECK(std::fabs(double(rig.ray_d[0].z - mirror.z)) < 1e-6);
+  REQUIRE(sel.p_spec > 0.0f);
+  for (int l = 0; l < ar::kLanes; ++l) {
+    const double want = double(beta0.v[l]) * double(fr.v[l]) / double(sel.p_spec);
+    CHECK(std::fabs(double(rig.beta[0].v[l]) - want) <= 1e-5 * want);
+    CHECK(std::fabs(double(rig.r_l[0].v[l]) - double(ru0.v[l]) / double(sel.p_spec)) <= 1e-6 * double(rig.r_l[0].v[l]));
+    CHECK(rig.r_u[0].v[l] == ru0.v[l]);
+  }
 }
 
 TEST_CASE("shade_surface_bsdf/a glossy sample counts as glossy") {
@@ -366,7 +409,9 @@ TEST_CASE("shade_surface_bsdf/the total limit ends after emission") {
 
 TEST_CASE("shade_surface_bsdf/reflections below the geometric surface end") {
   // Corner normals tilted 60 degrees from Ng: a cosine lobe about N puts many directions under the
-  // quad, which must end ZERO_THROUGHPUT; every continuing ray leaves above it (0005 item 8).
+  // quad, which must end ZERO_THROUGHPUT; every continuing ray leaves above it (0005 item 8). The
+  // cosine is taken against N (0004 D1): a survivor of the Lambertian lobe about N has
+  // f |cos| / pdf = rho exactly, which a cosine against Ng would not give.
   Rig rig(2048);
   rig.lambert(0.5f);
   rig.tilt_normals(0.866f, 0.5f);
@@ -378,6 +423,10 @@ TEST_CASE("shade_surface_bsdf/reflections below the geometric surface end") {
     if (rig.term[s] != uint8_t(ar::Term::ACTIVE)) continue;
     ++active;
     CHECK(rig.ray_d[s].z > 0.0f);
+    for (int l = 0; l < ar::kLanes; ++l) {
+      const double want = 0.5 * double(ar::Real(0.5 + 0.125 * double(l)));  // rho times the rig's beta0
+      CHECK(std::fabs(double(rig.beta[s].v[l]) - want) <= 1e-4 * want);
+    }
   }
   CHECK(zero > rig.n / 20);
   CHECK(active > rig.n / 2);
