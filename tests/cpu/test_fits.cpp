@@ -84,7 +84,10 @@ std::string card_value(const std::vector<uint8_t>& f, size_t hdu_start, const st
       std::string v = card.substr(10);
       const size_t b = v.find_first_not_of(' ');
       v = v.substr(b);
-      if (v[0] == '\'') return v.substr(1, v.find('\'', 1) - 1);
+      if (v[0] == '\'') {  // trailing blanks of a string are not significant (FITS 4.0 4.2.1)
+        std::string s = v.substr(1, v.find('\'', 1) - 1);
+        return s.substr(0, s.find_last_not_of(' ') + 1);
+      }
       return v.substr(0, v.find_first_of(' '));
     }
   }

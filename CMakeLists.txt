@@ -240,14 +240,23 @@ endforeach()
 if(bad)
   message(FATAL_ERROR "negative_compile: an outcome differs from its expectation")
 endif()
+file(TOUCH ${STAMP})
 ]=])
-add_custom_target(astroray_negative_compile
+# The stamp keeps `ninja -n` clean after a pass (0009 d5); it is stale when a case or any header changes.
+# The case list is read at configure time: a new case needs a reconfigure (delete out/build/sources.txt).
+file(GLOB _ar_nc_cases ${CMAKE_SOURCE_DIR}/tests/cpu/negative_compile/*.cpp)
+file(GLOB_RECURSE _ar_nc_headers ${CMAKE_SOURCE_DIR}/src/*.h)
+set(_ar_nc_stamp ${CMAKE_BINARY_DIR}/negative_compile.stamp)
+add_custom_command(
+  OUTPUT ${_ar_nc_stamp}
   COMMAND ${CMAKE_COMMAND} -DCXX=${CMAKE_CXX_COMPILER} -DCASE_DIR=${CMAKE_SOURCE_DIR}/tests/cpu/negative_compile
           -DSRC=${CMAKE_SOURCE_DIR}/src -DINC=${CMAKE_SOURCE_DIR}/include -DOBJ_DIR=${CMAKE_BINARY_DIR}/negative_compile
-          -P ${_ar_nc_script}
+          -DSTAMP=${_ar_nc_stamp} -P ${_ar_nc_script}
+  DEPENDS ${_ar_nc_cases} ${_ar_nc_headers}
   COMMENT "negative_compile cases"
   USES_TERMINAL
   VERBATIM)
+add_custom_target(astroray_negative_compile DEPENDS ${_ar_nc_stamp})
 
 # Test-only replay driver for tests/abi/test_recorder.py: the generated replayer over the public ABI.
 add_executable(replay_driver tests/abi/replay_driver.cpp ${ASTRORAY_GEN_DIR}/replayer.cpp)

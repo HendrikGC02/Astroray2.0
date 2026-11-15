@@ -1,4 +1,5 @@
 // expect: compile
+// SPDX-License-Identifier: Apache-2.0
 // Positive control: the same calls with film types compile, so each failing case fails because of
 // DisplayImage and not because of a missing include or a changed signature.
 #include "host/film/display_image.h"

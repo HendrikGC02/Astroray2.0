@@ -1,4 +1,5 @@
 // expect: fail DisplayImage
+// SPDX-License-Identifier: Apache-2.0
 // A denoised image must not reach the FITS writer (0008 d17).
 #include "host/film/display_image.h"
 #include "host/film/film_view.h"
