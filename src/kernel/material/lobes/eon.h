@@ -213,7 +213,9 @@ AR_FN LobeSample eon_sample(const EonParams& p, Real3 wo, Real2 u, TransportMode
   const Real pc = Real(1) - pu;
   Real pdf_c;
   Real3 wi;
-  if (u.x <= pu) {
+  // Strict, unlike Listing 4's `<=`: at pu = 0 (roughness 0) u.x = 0 would otherwise pick the
+  // uniform lobe and divide 0 by 0. With `<`, pu = 0 never selects it, and u.x < pu implies pu > 0.
+  if (u.x < pu) {
     const Real z = u.x / pu;
     const Real sin_t = ar::sqrt(max(Real(0), Real(1) - z * z));
     const Real phi = Real(2) * kEonPi * u.y;

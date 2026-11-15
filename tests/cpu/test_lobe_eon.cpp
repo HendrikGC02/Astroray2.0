@@ -208,6 +208,40 @@ TEST_SUITE("fast") {
     CHECK(checked == 9 * 256);
   }
 
+  AR_RT_CASE("lobe_eon/boundary uniforms") {
+    // u in [0, 1): 0 and the largest Real below 1 are legal. At r = 0, P_u = 0 and u1 = 0 must
+    // not select the uniform lobe (0 / 0).
+    const Real lo = Real(0), hi = std::nextafter(Real(1), Real(0));
+    const Real vals[] = {lo, hi};
+    const double r_list[] = {0.0, 0.5, 1.0};
+    const double mu_list[] = {0.05, 0.5, 1.0};
+    for (double r : r_list)
+      for (double mu : mu_list)
+        for (Real u1 : vals)
+          for (Real u2 : vals) {
+            const EonParams p = make_params(r);
+            const Real3 wo = dir_from(mu, 0.8);
+            const LobeSample s = ar::eon_sample(p, wo, Real2{u1, u2}, TransportMode::Radiance);
+            INFO("r=" << r << " mu=" << mu << " u=(" << double(u1) << "," << double(u2) << ")");
+            CHECK(std::isfinite(double(s.wi.x)));
+            CHECK(std::isfinite(double(s.wi.y)));
+            CHECK(std::isfinite(double(s.wi.z)));
+            CHECK(std::isfinite(double(s.pdf)));
+            for (int l = 0; l < 4; ++l) CHECK(std::isfinite(double(s.f.v[l])));
+            // "No sample" (pdf 0, f 0) is the contract for a direction exactly on the horizon: the
+            // uniform lobe's z = 0 rim (u1 = 0 with P_u > 0) or the CLTC rim (u1 -> 1). At r = 0
+            // (P_u = 0, cosine sampling) u1 = 0 is the pole, so a sample is mandatory there.
+            if (r == 0.0 && u1 == lo) {
+              CHECK(s.pdf > Real(0));
+              CHECK(s.wi.z > Real(0));
+            } else if (s.pdf == Real(0)) {
+              for (int l = 0; l < 4; ++l) CHECK(s.f.v[l] == Real(0));
+            } else {
+              CHECK(s.wi.z > Real(0));
+            }
+          }
+  }
+
   AR_RT_CASE("lobe_eon/roughness 0 is Lambertian") {
     const EonParams p = make_params(0.0);
     const double wo_mu[] = {0.05, 0.4, 1.0};
