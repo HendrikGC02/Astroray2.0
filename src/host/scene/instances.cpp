@@ -140,6 +140,11 @@ ar_status set_instances(Edit& edit, const ar_instances_desc* desc) {
   edit.instance_stage().count = d->n;
   edit.instance_stage().steps = d->steps;
   edit.instance_stage().has_set = true;
+  auto sum = std::make_shared<InstanceSummary>();
+  sum->steps = d->steps;
+  sum->geom = d->geom;
+  sum->object = d->object;
+  edit.instance_stage().summary = std::move(sum);
   return AR_OK;
 }
 
@@ -153,10 +158,10 @@ ar_status update_transforms(Edit& edit, uint32_t n, const uint32_t* idx, const a
   } else {
     if (edit.reset_requested())
       return edit.fail("invalid argument: update_transforms after ar_edit_reset needs a set_instances in the same edit");
-    auto t = edit.scene().instances();
+    auto t = edit.scene().latest_instances();
     if (!t) return edit.fail("invalid argument: update_transforms with no instances in the scene");
-    count = static_cast<uint32_t>(t->instances.size());
-    steps = t->motion_steps;
+    count = static_cast<uint32_t>(t->geom.size());
+    steps = t->steps;
   }
   if (steps != 1) return edit.fail("invalid argument: update_transforms needs motion_steps == 1; use set_instances");
   for (uint32_t k = 0; k < n; ++k) {
@@ -195,23 +200,34 @@ ar_status update_transforms(Edit& edit, uint32_t n, const uint32_t* idx, const a
   return edit.stage_internal(item);
 }
 
+void apply_instance_summary(std::shared_ptr<const InstanceSummary>& cur, const Pending& p) {
+  if (p.inst_set)
+    cur = p.inst_set;
+  else if (p.inst_reset)
+    cur.reset();
+}
+
 void queue_instance_check(Edit& edit) {
   if (edit.instance_stage().has_set || edit.reset_requested()) return;  // new table, or cleared
   auto removed = std::make_shared<std::set<uint64_t>>(edit.removed_geometry());
   if (removed->empty()) return;
   Scene* scene = &edit.scene();
+  // The latest committed table, pending generations included, as of this commit.
+  auto latest = scene->latest_instances();
   auto item = std::make_shared<EditItem>();
   item->needs_device = false;
-  // Checks the table active when the job runs; an earlier generation still in flight is
-  // not visible to it.
-  item->job = [scene, removed] {
-    auto t = scene->instances();
-    if (!t) return;
-    for (uint32_t i = 0; i < t->instances.size(); ++i) {
-      const Instance& in = t->instances[i];
-      if (removed->count(in.geom_key))
-        reject(i, in.object_key, "geometry key " + std::to_string(in.geom_key) + " is removed by this edit but still instanced");
-    }
+  item->job = [scene, removed, latest] {
+    auto fail = [&](uint32_t i, ar_key object, ar_key geom) {
+      reject(i, object, "geometry key " + std::to_string(geom) + " is removed by this edit but still instanced");
+    };
+    if (latest)
+      for (uint32_t i = 0; i < latest->geom.size(); ++i)
+        if (removed->count(latest->geom[i])) fail(i, latest->object[i], latest->geom[i]);
+    // Also the table active now: if a pending generation that set the latest one is
+    // dropped, the active table is what remains.
+    if (auto t = scene->instances())
+      for (uint32_t i = 0; i < t->instances.size(); ++i)
+        if (removed->count(t->instances[i].geom_key)) fail(i, t->instances[i].object_key, t->instances[i].geom_key);
   };
   edit.stage_internal(item);
 }

@@ -87,6 +87,9 @@ class Scene {
   // that moves whenever they change, which tells the device tasks the TLAS is dirty.
   std::shared_ptr<const InstanceTable> instances() const;
   uint64_t tlas_epoch() const;
+  // The instance summary as of the latest committed generation, pending ones included
+  // (optimistic like `known`, rebuilt when a generation is dropped).
+  std::shared_ptr<const InstanceSummary> latest_instances() const;
   void publish_instances(std::shared_ptr<const InstanceTable> table);
 
  private:
@@ -102,6 +105,7 @@ class Scene {
     std::map<uint64_t, ar_astro_desc> astro;  // stored, no effect until M10
     std::shared_ptr<const InstanceTable> instances;
     uint64_t tlas_epoch = 0;
+    std::shared_ptr<const InstanceSummary> inst_latest, inst_active;
   };
   void close_edit();
 

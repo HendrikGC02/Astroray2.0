@@ -211,6 +211,8 @@ ar_status Edit::commit(uint64_t* generation) {
   p.known_reset = delta.known_reset;
   p.known_removed = delta.known_removed;
   p.known_added = delta.known_added;
+  delta.inst_reset = p.inst_reset = reset_;
+  delta.inst_set = p.inst_set = instances_.summary;
   Scene::State& st = scene_.state_;
   for (const auto& kv : staged_) {
     p.subjects.push_back(kv.first);
@@ -224,6 +226,7 @@ ar_status Edit::commit(uint64_t* generation) {
                          removed = removed_, delta] {
     std::lock_guard<std::mutex> lock(st.mutex);
     apply_known(st.known_active, delta);
+    apply_instance_summary(st.inst_active, delta);
     if (reset) {
       st.settings.reset();
       st.camera.reset();
@@ -247,6 +250,7 @@ ar_status Edit::commit(uint64_t* generation) {
   *generation = scene_.generations().commit(pending_, [&] {
     std::lock_guard<std::mutex> lock(st.mutex);
     apply_known(st.known, p);
+    apply_instance_summary(st.inst_latest, p);
   });
   finished_ = true;  // only now: nothing after the commit can throw
   return AR_OK;

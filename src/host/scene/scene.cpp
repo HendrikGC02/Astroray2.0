@@ -24,6 +24,8 @@ Scene::Scene(ContextState& ctx, SceneConfig config) : ctx_(ctx), generations_(ct
     std::lock_guard<std::mutex> lock(state_.mutex);
     state_.known = state_.known_active;
     for (const auto& q : queued) apply_known(state_.known, *q);
+    state_.inst_latest = state_.inst_active;
+    for (const auto& q : queued) apply_instance_summary(state_.inst_latest, *q);
   });
   arena_.set_prefault_request([this] { pool_->submit([this] { arena_.prefault_one(); }); });
   auto init = std::move(config.init);
@@ -111,6 +113,10 @@ bool Scene::known(uint32_t kind, ar_key key) const {
 std::shared_ptr<const InstanceTable> Scene::instances() const {
   std::lock_guard<std::mutex> lock(state_.mutex);
   return state_.instances;
+}
+std::shared_ptr<const InstanceSummary> Scene::latest_instances() const {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  return state_.inst_latest;
 }
 uint64_t Scene::tlas_epoch() const {
   std::lock_guard<std::mutex> lock(state_.mutex);

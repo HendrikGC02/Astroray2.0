@@ -78,6 +78,7 @@ class Edit {
   struct InstanceStage {
     bool has_set = false;
     uint32_t count = 0, steps = 1;
+    std::shared_ptr<const InstanceSummary> summary;  // of this edit's last set_instances
   };
   InstanceStage& instance_stage() { return instances_; }
 

@@ -7,6 +7,7 @@
 // Ref: 0002 D11 (visibility mask table), 0007 d12 (edit map), d15 (motion steps), d18 (keys).
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "../../../include/astroray/astroray.h"
@@ -14,6 +15,14 @@
 namespace astroray::host {
 
 class Edit;
+struct Pending;
+
+// What a later edit may validate against before the table is built: per instance the
+// geometry and object keys, and the motion step count. Built synchronously from the desc.
+struct InstanceSummary {
+  uint32_t steps = 1;
+  std::vector<ar_key> geom, object;
+};
 
 constexpr uint32_t kNoLight = ~0u;  // light_index of geometry instances
 
@@ -54,6 +63,8 @@ uint8_t visibility_mask(uint32_t visibility);
 // indices are checked at the call against this edit's table or else the active one.
 ar_status set_instances(Edit& edit, const ar_instances_desc* desc);
 ar_status update_transforms(Edit& edit, uint32_t n, const uint32_t* idx, const ar_xform* xf);
+// Applies one generation's effect to a latest-committed or active summary.
+void apply_instance_summary(std::shared_ptr<const InstanceSummary>& cur, const Pending& p);
 // Called by Edit::commit: an edit that removes geometry without a new set_instances gets a
 // job that rejects the generation when the active table still references a removed key.
 void queue_instance_check(Edit& edit);

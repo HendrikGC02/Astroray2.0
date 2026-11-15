@@ -3,6 +3,7 @@
 #include <doctest.h>
 
 #include <cmath>
+#include <future>
 #include <limits>
 #include <memory>
 #include <string>
@@ -269,6 +270,46 @@ TEST_CASE("instances/dangling geometry rejects generation") {
     REQUIRE(scene.instances() != before);
     CHECK(scene.instances()->instances.size() == 2);
   }
+}
+
+TEST_CASE("instances/remove behind a pending set") {
+  // N sets a table that uses geometry 200; N+1 removes 200 without set_instances. Both are
+  // committed before N has activated (its geometry job is held), so only the latest
+  // committed table can see the reference.
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  Desc base(1);
+  install(scene, base);
+  std::promise<void> release;
+  std::shared_future<void> gate = release.get_future().share();
+  uint64_t gn = 0, gn1 = 0;
+  {
+    Desc d(2);
+    d.geom[0] = d.geom[1] = 200;
+    auto e = scene.begin_edit();
+    auto held = geometry(200);
+    held->job = [gate] { gate.wait(); };
+    REQUIRE(e->stage(held) == AR_OK);
+    REQUIRE(e->item_commit(200) == AR_OK);
+    REQUIRE(set_instances(*e, d.get()) == AR_OK);
+    REQUIRE(e->commit(&gn) == AR_OK);
+  }
+  {
+    auto e = scene.begin_edit();
+    REQUIRE(e);
+    REQUIRE(e->remove(AR_KIND_GEOMETRY, 200) == AR_OK);
+    uint32_t idx = 1;
+    ar_xform x{};
+    CHECK(update_transforms(*e, 1, &idx, &x) == AR_OK);  // count 2 comes from the pending table
+    idx = 2;
+    CHECK(update_transforms(*e, 1, &idx, &x) == AR_ERR_INVALID_ARGUMENT);
+    REQUIRE(e->commit(&gn1) == AR_OK);
+  }
+  release.set_value();
+  scene.generations().wait_idle();
+  CHECK(scene.generations().failed() == gn1);
+  CHECK(rejected(scene, 1000, {"instance 0 (object key 1000): geometry key 200 is removed"}));
+  CHECK(scene.instances()->instances.size() == 2);  // N+1 was rejected, N stays active
 }
 
 TEST_CASE("instances/reset with set_instances") {
