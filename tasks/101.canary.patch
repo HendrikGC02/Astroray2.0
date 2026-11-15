@@ -1,0 +1,26 @@
+diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
+index f9fe9b2..4990bd3 100644
+--- a/src/host/session/session.cpp
++++ b/src/host/session/session.cpp
+@@ -561,7 +561,7 @@ void Session::build_active() {
+ 
+ uint64_t Session::pass_camera_samples() const {
+   if (options_.test_camera_samples_per_pass != 0) return options_.test_camera_samples_per_pass;
+-  return camera_ready_ && filter_ready_ ? uint64_t(active_->count()) * kSamplesPerPass : 0;
++  return camera_ready_ && filter_ready_ ? uint64_t(active_->count()) * kSamplesPerPass - 1 : 0;
+ }
+ 
+ void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
+diff --git a/src/kernel/film/resolve.h b/src/kernel/film/resolve.h
+index 83572cb..8d5f0c4 100644
+--- a/src/kernel/film/resolve.h
++++ b/src/kernel/film/resolve.h
+@@ -51,7 +51,7 @@ AR_FN void film_moment_add(const FilmData& f, uint32_t plane, uint32_t pixel, do
+ AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
+   const FilmData& f = *kg.film;
+   // pixel_id(x, y, width) is the plane index, so one value serves as key and address.
+-  const uint32_t pixel = kg.active_pixels[j];
++  const uint32_t pixel = j;
+   for (uint32_t m = 0; m < kg.session.samples_per_pass; ++m) {
+     const uint32_t k = kg.session.samples_per_pass;
+     const uint32_t n0 = kg.session.samples_done;

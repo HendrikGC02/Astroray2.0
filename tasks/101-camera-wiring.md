@@ -16,4 +16,9 @@ Budget: film_resolve register delta declared (expected 0); host otherwise.
 Depends on: 054, 052, 049.
 Size: M (about 250 lines); stop and report at 2x.
 Progress:
-- Stopped before code: needs files outside Scope (see report to lead): session.h, src/host/device.h + src/device/cuda/cuda_device.cpp (KernelId::FILM_BUILD_ACTIVE), cpu_device.cpp wrapper; CameraView/FilterTable source undefined.
+- Done per lead rulings: KernelId::FILM_BUILD_ACTIVE (device.h, cuda names); resolve, present, heat map and film_slot_pixel read kg.active_pixels; film_active_pixel stays (film_build_active writes the list with it).
+- Session: ActivePixels, CameraView and FilterTable buffers (TABLES/FILM ledger), camera from the latched view (zero origin, 0003 d26), filter from scene settings; no camera or filter -> no camera work; test_camera_samples_per_pass is a test override.
+- Deviations: FILM_BUILD_ACTIVE registered in register_scheduler_kernels (the session tests need it); generate_camera only in make_cpu_session_device. Invalid camera descriptor is logged, not reported: test_session counts report entries and I may not edit it.
+- Fixtures given kg.active_pixels (no assertion changed): test_film_resolve, test_film_stats, test_present, test_present_gpu.
+- Registers: film_resolve +0, present +0, heat map +1 (24), build_active and generate_camera +0.
+- Canary: camera_wiring/every pixel sampled red on CPU; film_resolve_gpu/active list order red with a GPU-only break (run through check gate).
