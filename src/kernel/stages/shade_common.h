@@ -121,7 +121,7 @@ AR_FN bool shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeCont
   const Real3 ng_raw = cross(xform_dir(x, p1 - p0), xform_dir(x, p2 - p0)) * det_sign;
   const Real ng_len2 = dot(ng_raw, ng_raw);
   if (!(ng_len2 > Real(0)) || !(ng_len2 - ng_len2 == Real(0))) return false;  // zero, NaN or Inf
-  Real3 ng = ng_raw / sqrt(ng_len2);
+  Real3 ng = ng_raw / ar::sqrt(ng_len2);
 
   const uint32_t k0 = load_ro(tri_corners + 3u * prim), k1 = load_ro(tri_corners + 3u * prim + 1u),
                  k2 = load_ro(tri_corners + 3u * prim + 2u);
@@ -129,7 +129,7 @@ AR_FN bool shade_context_build(const KernelGlobals& kg, uint32_t slot, ShadeCont
       load_float3(normals, k0) * w0 + load_float3(normals, k1) * bary.x + load_float3(normals, k2) * bary.y;
   const Real3 n_raw = Real3{dot(c0, n_obj), dot(c1, n_obj), dot(c2, n_obj)} * det_sign;
   const Real n_len2 = dot(n_raw, n_raw);
-  Real3 n = (n_len2 > Real(0) && n_len2 - n_len2 == Real(0)) ? n_raw / sqrt(n_len2) : ng;
+  Real3 n = (n_len2 > Real(0) && n_len2 - n_len2 == Real(0)) ? n_raw / ar::sqrt(n_len2) : ng;
 
   const uint32_t layers = load_ro(&mv.uv_layer_count), corners = load_ro(&mv.corner_count);
   const float* uv = reinterpret_cast<const float*>(uintptr_t(load_ro(&mv.uv)));
