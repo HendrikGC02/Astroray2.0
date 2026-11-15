@@ -32,6 +32,9 @@ from ar_sync import camera, edit as edit_mod, instances, keys, lights, mesh, set
 
 GEN = os.path.join(ROOT, "out", "build", "gen")
 DLL = os.path.join(ROOT, "out", "bin", "astroray_core.dll")
+# Set before the engine DLL loads: its static CRT copies the environment when it is loaded, so a
+# later assignment is not seen by read_test_hooks.
+os.environ["ASTRORAY_TEST_PIXEL_CENTRE"] = "1"
 TOLERANCE = 1e-5  # NDC, 0007 V18
 
 
@@ -57,7 +60,6 @@ class Rendered:
     """One CPU session over the current Blender scene, converged at one sample per pixel."""
 
     def __init__(self, scene, cam_fields, width, height):
-        os.environ["ASTRORAY_TEST_PIXEL_CENTRE"] = "1"
         self.lib = ctypes.CDLL(DLL)
         ABI.check(self.lib)
         ABI.bind(self.lib)
@@ -131,11 +133,13 @@ class Rendered:
 
 
 def make_scene(width, height, **cam_props):
-    """A 100 m plane at z = 0 and a tilted camera 5 m above it that sees only the plane."""
+    """A 16 m plane at z = 0 and a tilted camera 5 m above it that sees only the plane. The plane is
+    large enough to fill every frustum here and no larger: float32 intersection error grows with the
+    triangle's extent, and the 1e-5 NDC tolerance is a camera tolerance, not a 100 m one."""
     scene = support.reset_scene()
     scene.render.resolution_x, scene.render.resolution_y, scene.render.resolution_percentage = width, height, 100
     me = bpy.data.meshes.new("Plane")
-    me.from_pydata([(-50, -50, 0), (50, -50, 0), (50, 50, 0), (-50, 50, 0)], [], [(0, 1, 2, 3)])
+    me.from_pydata([(-8, -8, 0), (8, -8, 0), (8, 8, 0), (-8, 8, 0)], [], [(0, 1, 2, 3)])
     ob = bpy.data.objects.new("Plane", me)
     scene.collection.objects.link(ob)
     cam = bpy.data.cameras.new("Cam")
@@ -228,7 +232,10 @@ class TestCameraNdc(unittest.TestCase):
         """The real generated structs: an edit with settings, camera and every lamp kind commits."""
         scene, co = make_scene(64, 48)
         for kind, loc in (("POINT", (0, 0, 8)), ("AREA", (1, 0, 8)), ("SPOT", (2, 0, 8))):
-            ob = bpy.data.objects.new(kind, bpy.data.lights.new(kind, kind))
+            light = bpy.data.lights.new(kind, kind)
+            if kind == "POINT":
+                light.use_soft_falloff, light.shadow_soft_size = True, 0.25  # reported as approximated
+            ob = bpy.data.objects.new(kind, light)
             scene.collection.objects.link(ob)
             ob.location = loc
         bpy.context.view_layer.update()
