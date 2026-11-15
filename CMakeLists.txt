@@ -181,6 +181,11 @@ set_source_files_properties(${CMAKE_SOURCE_DIR}/src/capi/context.cpp ${CMAKE_SOU
 astroray_target_warnings(astroray_tests_cpu)
 target_include_directories(astroray_tests_cpu SYSTEM PRIVATE third_party/doctest)
 target_link_libraries(astroray_tests_cpu PRIVATE ${_ar_engine_libs})
+# Ref: CMake target_precompile_headers. Test TUs rebuild after every kernel header change;
+# doctest and the std headers are the shared, stable part of that cost.
+target_precompile_headers(astroray_tests_cpu PRIVATE ${CMAKE_SOURCE_DIR}/tests/cpu/pch.h)
+# main.cpp defines DOCTEST_CONFIG_IMPLEMENT before the include, so it cannot take the PCH.
+set_source_files_properties(${CMAKE_SOURCE_DIR}/tests/cpu/main.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 add_dependencies(astroray_tests_cpu astroray_opsgen)
 
 # Installable Blender extension zip (0007 d45, 0001 D10.2): stage the addon, the

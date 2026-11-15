@@ -15,3 +15,5 @@ Budget: B-08 headroom is the point; report it.
 Depends on: 006.
 Size: S (about 40 lines); stop and report at 2x.
 Progress:
+- Baseline (touch real.h, then check fast): 10.2 / 11.0 / 9.8 s. With pch.h (doctest + 21 std headers): 7.4 / 7.5 / 7.3 s (build 4.8-5.0 s, tests 1.7 s, lint 0.5 s). All PASS B-08 (10 s), but the 7 s target is missed by ~0.3-0.5 s.
+- Remaining cost is the Real-dependent kernel header parse in ~40 TUs at -Jobs 4 plus ~1 s build.ps1 overhead; both out of Scope. main.cpp must skip the PCH (defines DOCTEST_CONFIG_IMPLEMENT).
