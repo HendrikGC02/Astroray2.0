@@ -17,6 +17,8 @@ NONE_RULE = "NONE_SURFACE_ONLY"
 DISPOSITIONS = ("implemented", "approximated", "ignored", "unsupported")
 COSTS = ("CHEAP", "MEM", "TEX")
 TYPES = ("", "f32", "f32x3", "spec")
+# Operand tokens: the bytes the interpreter reads (ops.def header).
+OPERANDS = ("reg", "imm", "uvset", "lift", "regrgbs", "slotimm", "jmpoff")
 OPS_DEF = "src/kernel/vm/ops.def"
 LOWERING = "blender/astroray/materials/lowering_table.py"
 NODE_LIST = "tests/data/shader_node_types_5_3.txt"
@@ -60,6 +62,9 @@ def parse_table(text):
                  volume=vol == "true", test_only=test == "true", line=no)
         if r["result"] not in TYPES:
             raise OpsError(f"ops.def:{no}: {name}: unknown result type {r['result']!r}")
+        for tok in r["operands"].split("+") if r["operands"] else ():
+            if tok not in OPERANDS:
+                raise OpsError(f"ops.def:{no}: {name}: unknown operand token {tok!r}")
         if cost not in COSTS:
             raise OpsError(f"ops.def:{no}: {name}: unknown cost class {cost}")
         rows.append(r)
