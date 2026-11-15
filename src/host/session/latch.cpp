@@ -60,10 +60,10 @@ bool Latch::epoch_pending_locked(uint64_t scene_active) const {
   return has_pending_view_ && (!has_view_ || !pending_view_.same_as(view_));
 }
 
-LatchResult Latch::latch(uint64_t scene_active) {
+LatchResult Latch::latch(uint64_t scene_active, bool force_epoch) {
   std::lock_guard<std::mutex> lock(mutex_);
   LatchResult r;
-  r.new_epoch = epoch_pending_locked(scene_active);
+  r.new_epoch = force_epoch || epoch_pending_locked(scene_active);
   r.changed = r.new_epoch || pending_mode_ != mode_;
   if (has_pending_view_) {
     view_ = std::move(pending_view_);

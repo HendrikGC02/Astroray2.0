@@ -502,15 +502,14 @@ void Session::render_loop() {
     }
     std::unique_lock<std::mutex> render(render_mutex_);
     const uint64_t active = scene_.generations().active();
-    const LatchResult lr = latch_.latch(active);
+    // An interrupted pass forces the epoch (latch.h), even if the pending view went back.
+    const LatchResult lr = latch_.latch(active, expect_epoch_);
     {
       // The interrupt flag follows the state just latched: an interrupt raised for pending state
       // this latch consumed is spent, one raised for state still pending stays (0007 d25).
       std::lock_guard<std::mutex> lock(mutex_);
       scheduler_->epoch_pending = latch_.interrupt_due(scene_.generations().active());
     }
-    if (expect_epoch_ && !lr.new_epoch)
-      throw std::logic_error("session: a pass was interrupted for a new epoch, but the next latch started none");
     expect_epoch_ = false;
     if (lr.new_epoch) begin_epoch();
     apply_view();

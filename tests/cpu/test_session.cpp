@@ -346,4 +346,33 @@ TEST_CASE("session/epoch change interrupts a presented pass") {
   CHECK(r.s->stats().passes_interrupted == 1);
 }
 
+TEST_CASE("session/view away and back after an interrupt forces an epoch") {
+  // Orbit away and straight back (B, then the latched A) while a pass of a presented state runs:
+  // B interrupts the pass, A makes the pending view equal the latched one, and the next latch must
+  // still start an epoch, because the interrupted pass left partial writes only the reset clears.
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  g_gates[0].reset();
+  g_gates[0].hold_at = 2;
+  Rig r(ctx, scene, 8, 1024, &gen_terminate<0>);
+  r.s->set_view(view_of(6, 6));  // A, latched at the first boundary
+  r.s->start();
+  REQUIRE(until([&] { return g_gates[0].count() >= 2; }));
+  CHECK(r.s->stats().passes_resolved == 1);
+  CHECK(r.s->latch().epoch() == 1);
+  r.s->set_view(view_of(4, 4));  // B: the presented state is interrupted
+  r.s->set_view(view_of(6, 6));  // back to A before the boundary
+  g_gates[0].hold(3);
+  REQUIRE(until([&] { return g_gates[0].count() >= 3; }));
+  const SessionStats st = r.s->stats();
+  CHECK(state(*r.s) == AR_STATE_RENDERING);
+  CHECK(st.passes_interrupted == 1);
+  CHECK(st.passes_resolved == 1);
+  CHECK(st.samples_done == 0);  // the epoch reset ran: the film restarts
+  CHECK(r.s->latch().epoch() == 2);
+  CHECK(r.s->latch().view().v.region_width == 6);
+  g_gates[0].release();
+  CHECK(until([&] { return r.s->stats().passes_resolved >= 2; }));
+  CHECK(r.s->failure().empty());
+}
 }  // TEST_SUITE

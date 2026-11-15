@@ -160,7 +160,7 @@ class Session {
   uint64_t passes_in_epoch_ = 0;
   uint32_t pass_index_ = 0;
   uint64_t resolves_ = 0;           // resolve calls over the session (the stale-resolve test hook)
-  bool expect_epoch_ = false;       // the last pass was interrupted: the next latch must start an epoch
+  bool expect_epoch_ = false;       // the last pass was interrupted: the next latch forces an epoch
 
   mutable std::mutex render_mutex_;  // held by the render thread for a pass and its present
   mutable std::mutex mutex_;         // state below

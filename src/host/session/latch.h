@@ -40,7 +40,10 @@ class Latch {
   bool set_display_mode(uint32_t mode);
 
   // Render thread, at a pass boundary. `scene_active` is the scene's active generation.
-  LatchResult latch(uint64_t scene_active);
+  // `force_epoch` starts an epoch whatever is pending: after an interrupted pass, whose partial
+  // per-sample, splat and direct-channel writes only an epoch reset clears (0007 d25), even when the
+  // view returned to the latched one before the boundary.
+  LatchResult latch(uint64_t scene_active, bool force_epoch = false);
   // The latched generation has presented a frame (the interrupt rule's condition).
   void mark_presented();
   // True when pending state would start an epoch and the latched generation has already
