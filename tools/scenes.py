@@ -2,6 +2,8 @@
 """Regenerates every scene recording: scenes/<name>/build.py -> out/scenes/<name>.arrec (0009 d19).
 
 Usage: <python> -I tools/scenes.py [--force] [name ...]
+A default run skips scenes whose meta.toml has build.on_demand = true and prints one line naming them;
+naming a scene builds it.
 A recording is rebuilt only when the hash of its sources changed: the scene's own files, the
 shared scenes/lib code, and the generated binding and slot table it is written against. Recordings
 are never committed. Each scene's meta.toml is validated first; any failure exits non-zero.
@@ -30,10 +32,11 @@ def scene_names():
                   if os.path.isfile(os.path.join(SCENES, d, "build.py")))
 
 
-def source_hash(name):
-    """SHA-256 over the file names and bytes of everything the recording is a function of."""
+def source_hash(name, sources=()):
+    """SHA-256 over the file names and bytes of everything the recording is a function of: the
+    scene's folder, scenes/lib, and the folders its meta.toml lists under build.sources."""
     files = list(SHARED)
-    for d in (os.path.join(SCENES, name), os.path.join(SCENES, "lib")):
+    for d in (os.path.join(SCENES, name), os.path.join(SCENES, "lib"), *(os.path.join(ROOT, x) for x in sources)):
         files += sorted(os.path.join(d, f) for f in os.listdir(d) if f.endswith((".py", ".toml")))
     h = hashlib.sha256()
     for p in files:
@@ -61,6 +64,12 @@ def main():
     ap.add_argument("--force", action="store_true", help="rebuild even when up to date")
     args = ap.parse_args()
     names = args.names or scene_names()
+    if not args.names:
+        # On-demand scenes (fetched assets, large textures) are built only when named; say so, never skip silently.
+        skipped = [n for n in names if meta.load(os.path.join(SCENES, n, "meta.toml"))["build"]["on_demand"]]
+        names = [n for n in names if n not in skipped]
+        if skipped:
+            print("scenes: on demand, not built: " + ", ".join(skipped))
     unknown = [n for n in names if n not in scene_names()]
     if unknown:
         print(f"FAIL scenes: no builder for {unknown}")
@@ -70,8 +79,8 @@ def main():
     built = current = 0
     for name in names:
         try:
-            meta.load(os.path.join(SCENES, name, "meta.toml"))
-            digest = source_hash(name)
+            m = meta.load(os.path.join(SCENES, name, "meta.toml"))
+            digest = source_hash(name, m["build"]["sources"])
         except (meta.MetaError, OSError, RuntimeError) as e:
             print(f"FAIL scenes: {name}: {e}")
             return 1

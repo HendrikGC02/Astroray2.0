@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Bitterli's Cornell box (CC0, assets/manifest.toml cornell_box), M1a showcase (ROADMAP M1a "Owner
+# sees"), lit by a point lamp of equal power at the lamp's centre (the lamp is 2 cm below the ceiling,
+# so indirect light near it is noisy: a point lamp has no area to sample).
+# Lambertian walls and boxes as constant base colours with specular_weight 0 (the M1a material set);
+# the archive's own units are used as metres (the box is 2 wide, the lamp 0.47 x 0.38). The black
+# world is the archive's (it has no environment). Shared code: scenes/cornell/. No truth: a showcase scene.
+class = "G"
+units = "m"
+spectra = ["rgb"]
+assets = ["cornell_box"]
+single_witness = false
+
+# Built only when named (tools/scenes.py cornell_point): it needs the fetched Bitterli archive (not in CI).
+[build]
+on_demand = true
+sources = ["scenes/cornell"]

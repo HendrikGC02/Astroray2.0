@@ -4,7 +4,9 @@
 Fields: class (A, D, O, B, G), truth (a table: `formula` names the closed form in
 scenes/lib/truths.py, the other keys are its parameters; the builder reads its scene values from
 here so the truth and the scene cannot drift apart), tolerance, eps_sys (default 0), spectra,
-units ("m"), assets, single_witness.
+units ("m"), assets, single_witness, build (optional table: `on_demand` = true keeps the scene out
+of a default tools/scenes.py run, for scenes that need fetched assets or are big; `sources` lists repository
+folders outside the scene's own whose .py and .toml files the builder imports, hashed with it).
 `tolerance` is a table naming the rule, never a number chosen per scene: kind = "z_se" is
 |mean - truth| <= z * SE + eps_sys with z from the analytic family (0009 d15, d16); kind =
 "oracle" is the per-pixel Sidak test of d16; kind = "exact" is for deterministic classes.
@@ -16,7 +18,7 @@ import tomllib
 CLASSES = ("A", "D", "O", "B", "G")
 TOLERANCE_KINDS = ("z_se", "oracle", "exact")
 SPECTRA = ("rgb", "blackbody", "table", "none")
-KEYS = {"class", "truth", "tolerance", "eps_sys", "spectra", "units", "assets", "single_witness"}
+KEYS = {"class", "truth", "tolerance", "eps_sys", "spectra", "units", "assets", "single_witness", "build"}
 REQUIRED = {"class", "units", "spectra"}
 
 
@@ -65,6 +67,15 @@ def load(path):
     if not isinstance(sw, bool):
         raise MetaError(f"{where}: single_witness must be true or false")
     m["single_witness"] = sw
+    b = m.get("build", {})
+    if not isinstance(b, dict) or set(b) - {"on_demand", "sources"}:
+        raise MetaError(f"{where}: build is a table with only on_demand and sources")
+    if not isinstance(b.get("on_demand", False), bool):
+        raise MetaError(f"{where}: build.on_demand must be true or false")
+    src = b.get("sources", [])
+    if not isinstance(src, list) or any(not isinstance(x, str) or os.path.isabs(x) or ".." in x.split("/") for x in src):
+        raise MetaError(f"{where}: build.sources is a list of repository-relative folders")
+    m["build"] = {"on_demand": b.get("on_demand", False), "sources": src}
     return m
 
 

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# S3 / B-TX (0007 d35, 0009 d20): the textured scene the first-frame gate and the bench set name.
+# Neither record specifies it; this is its definition (confirmed by the lead):
+#   geometry   1,000 instances (a 40 x 25 grid, 2.4 m pitch, random z rotation, scale 0.8-1.0 and
+#              height 0-3 m) of 50 unique UV-mapped meshes, 20 instances each: UV spheres of 840 to
+#              1,160 triangles (21 to 29 segments, 21 rings), squashed and bumped per mesh, smooth
+#              normals; about 1.0 M triangles instanced (the size of B-1M), about 50 k unique
+#   textures   32 distinct 2048 x 2048 RGBA8 sRGB PNG files, generated deterministically by
+#              make_textures.py into out/scenes/s3_textures/ (eight procedural patterns, four scales
+#              each; no external asset); 512 MB decoded, a third more with mips
+#   materials  one per texture: Image Texture (Linear, Repeat, UV set 0) drives the base colour,
+#              roughness 0.5, other inputs at their defaults; mesh i uses texture i mod 32
+#   light      one 60 x 60 m rectangular area lamp, facing down 45 m over the grid's centre, of
+#              irradiance 3 W/m2 there (B-1M's sun, as an area lamp until sun lamps land in M4)
+#   world      constant (0.3, 0.35, 0.4), strength 1
+#   camera     35 mm on a 36 mm sensor, 1920 x 1080, 16 spp, seed 4242, Sobol
+# Rationale: textures dominate this scene's sync, decode and upload, which is what d35 wants S3 to
+# measure; the geometry is B-1M's size so the two differ in textures, not triangles.
+class = "B"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+
+# Built only when named (tools/scenes.py s3_textured): it writes 32 textures of 2048x2048 first.
+[build]
+on_demand = true

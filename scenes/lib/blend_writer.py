@@ -6,12 +6,13 @@ or import `build(desc, path)` from a script that already runs there (tests/blend
 The Astroray extension must be enabled: the sampling settings live in `scene.astroray`.
 One writer serves every builder, so the addon renders what the builder recorded. It covers what the
 M1a addon translates: triangle meshes with per-corner normals and UVs, Principled BSDF materials with
-constant inputs, point and rectangle/ellipse area lamps, a constant world colour and a pinhole camera.
+constant inputs or a base colour from a file-backed sRGB Image Texture (a material entry's
+"base_color_image"), point and rectangle/ellipse area lamps, a constant world colour and a pinhole camera.
 Instances come in three kinds so the addon's sync sees what a Blender user makes (B-5M): "object"
 (an object per instance, meshes shared between objects are linked duplicates), "collection" (an empty
 instancing a collection that holds the mesh, the collection excluded from the view layer) and
 "points" (a geometry-nodes modifier, Instance on Points, over a vertex-only host mesh; translations
-only). Anything else in a description raises, never guesses (CLAUDE.md rule 5). Task 090 extends it.
+only). Anything else in a description raises, never guesses (CLAUDE.md rule 5).
 `--no-extension` writes a scene for Cycles (engine Cycles, `scene.cycles.samples`) when the Astroray
 extension is not installed in the Blender that runs the writer, as for the Cycles comparisons.
 Ref: blender/astroray/materials/translate.py _principled (the input mapping, reversed here: Specular
@@ -72,13 +73,48 @@ def _mesh(bpy, d):
     return me
 
 
-def _material(bpy, d):
+_IMAGE_KEYS = {"path", "colorspace", "interpolation", "extension"}
+_INTERPOLATION = ("Linear", "Closest")
+_EXTENSION = ("REPEAT", "EXTEND")
+
+
+def _image_texture(bpy, tree, d, images, what):
+    """An Image Texture node over a file-backed sRGB image, flat projection, its Vector input open
+    (the default UV map, as translate.py _tex_image reads it). One image datablock per path: the
+    engine refuses generated images until M1b, so the file stays the source."""
+    if set(d) != _IMAGE_KEYS:
+        raise BlendWriterError(f"{what}: an image entry has keys {sorted(d)}, wants {sorted(_IMAGE_KEYS)}")
+    if d["colorspace"] != "sRGB":
+        raise BlendWriterError(f"{what}: image colour space {d['colorspace']!r}; the writer sets sRGB only")
+    if d["interpolation"] not in _INTERPOLATION or d["extension"] not in _EXTENSION:
+        raise BlendWriterError(f"{what}: interpolation {d['interpolation']!r} / extension {d['extension']!r} "
+                               f"are not in {_INTERPOLATION} / {_EXTENSION}")
+    if not os.path.isfile(d["path"]):
+        raise BlendWriterError(f"{what}: image file {d['path']} does not exist")
+    if d["path"] not in images:
+        img = bpy.data.images.load(d["path"], check_existing=False)
+        img.colorspace_settings.name = "sRGB"
+        img.alpha_mode = "STRAIGHT"
+        images[d["path"]] = img
+    node = tree.nodes.new("ShaderNodeTexImage")
+    node.image = images[d["path"]]
+    node.interpolation, node.extension, node.projection = d["interpolation"], d["extension"], "FLAT"
+    return node
+
+
+def _material(bpy, d, images):
     mat = bpy.data.materials.new(f"material {d['key']}")
     mat.use_nodes = True
     tree = mat.node_tree
     tree.nodes.remove(next(n for n in tree.nodes if n.type == "BSDF_PRINCIPLED"))
     node = tree.nodes.new("ShaderNodeBsdfPrincipled")
     tree.links.new(node.outputs["BSDF"], next(n for n in tree.nodes if n.type == "OUTPUT_MATERIAL").inputs["Surface"])
+    image = d.get("base_color_image")
+    if image is not None:
+        if "base_color" in d["inputs"]:
+            raise BlendWriterError(f"material {d['key']}: base_color is both a constant and an image")
+        tex = _image_texture(bpy, tree, image, images, f"material {d['key']}")
+        tree.links.new(tex.outputs["Color"], node.inputs["Base Color"])
     for name, value in d["inputs"].items():
         if name in _FIXED:
             if value != _FIXED[name]:
@@ -108,6 +144,11 @@ def _light(bpy, d):
         light.shape, light.size, light.size_y, light.spread = shape, d["size"][0], d["size"][1], d["spread"]
     ob = bpy.data.objects.new(light.name, light)
     ob.matrix_world = _matrix(d["xf"])
+    # ar.Scene.light() records every ray type; a lamp object made by bpy.data.objects.new is
+    # invisible to the camera by default, which would hide the Cornell box's lamp.
+    for attr in ("visible_camera", "visible_diffuse", "visible_glossy", "visible_transmission", "visible_shadow",
+                 "visible_volume_scatter"):
+        setattr(ob, attr, True)
     return ob
 
 
@@ -184,7 +225,7 @@ def build(desc, path, extension=True):
                  bpy.data.worlds):
         for datablock in list(coll):
             coll.remove(datablock)
-    for coll in (bpy.data.collections, bpy.data.node_groups):
+    for coll in (bpy.data.collections, bpy.data.node_groups, bpy.data.images):
         for datablock in list(coll):
             coll.remove(datablock)
     scene = bpy.context.scene
@@ -219,7 +260,8 @@ def build(desc, path, extension=True):
         setattr(bpy.context.view_layer, _PASS_FLAGS[name], True)
 
     meshes = {m["key"]: _mesh(bpy, m) for m in desc["meshes"]}
-    materials = {m["key"]: _material(bpy, m) for m in desc["materials"]}
+    images = {}
+    materials = {m["key"]: _material(bpy, m, images) for m in desc["materials"]}
     slots, groups = {}, {}
     for i, inst in enumerate(desc["instances"]):
         if inst["geom"] not in meshes:

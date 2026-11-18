@@ -449,6 +449,21 @@ class Scene:
         self._call(self.lib.ar_edit_set_material(self.edit_h, key, ctypes.byref(m)), "ar_edit_set_material")
         return key
 
+    def textured_material(self, image_key, path, roughness=0.5, linear=True, extend=False):
+        """A material whose base colour is image `image_key` (made by image(key, path=...) from the same
+        file `path`) sampled at UV set 0, with the given roughness. Linear or Closest, Repeat or Extend.
+        The description records the file path as `base_color_image` for scenes/lib/blend_writer.py."""
+        g = self.graph()
+        g.store("base_color", g.tex_image(g.uv(), image_key, linear=linear, extend=extend))
+        g.store("specular_roughness", roughness)
+        key = self.material_from_graph(g)
+        self._desc["materials"].append({
+            "key": key, "inputs": {"specular_roughness": float(roughness)}, "emission": None,
+            "base_color_image": {"path": os.path.abspath(path), "colorspace": "sRGB",
+                                 "interpolation": "Linear" if linear else "Closest",
+                                 "extension": "EXTEND" if extend else "REPEAT"}})
+        return key
+
     def world(self, rgb, strength=1.0):
         """A constant world: colour times strength as the world graph's emission."""
         a = self.abi
