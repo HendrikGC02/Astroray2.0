@@ -32,18 +32,19 @@ None. Unowned follow-ups (a task that touches the area takes them):
   negative radiance before conversion (047).
 - Addon: translate.py copies RecordSlot ids, SEM_REFLECTANCE and TEX bits from C headers, guarded by a drift test;
   opsgen/abigen should export them (083). CMake's astroray_extension target is not in ALL (084). The build record prints `cuda=none` on CUDA runs (106).
-- Tests: check 14 (sampler/hero lane independence) fails on a constant hero only through a NaN chi2 exception and
-  cannot see a hero fixed in generate_camera (078); the per-pixel analytic z of 5.50 misses 1 % albedo errors on
-  A1 and a4_sphere (energy tests catch them, 078). Flaky once: `cpu_device/parallel_for rethrows` (0.515 s vs B-12),
-  `wavelengths/stratified lane positions`. Fault tests leave astroray_fault_* dirs in temp; some files mix CRLF/LF.
+- Tests: check 14 passes a constant hero only via a NaN chi2 exception and misses a hero fixed in generate_camera;
+  per-pixel analytic z 5.50 misses 1 % albedo errors on A1/a4_sphere (energy tests catch them) (078). Flaky once:
+  `cpu_device/parallel_for rethrows`, `wavelengths/stratified lane positions`. Fault tests leave temp dirs.
 - To settle (076, 107): Russian roulette starts at depth >= max(2, min_bounces) (0004 D2), so min = max bounces does
   not disable it, unlike kernel_globals.h, ar.py and the addon text (check Cycles, fix kernel or text); AUTO emission
   needs an estimate > 0.5 (067; confirm vs Cycles); NaN material inputs render black with no INVALID_SAMPLE (report it).
+- Viewport sync (111): material/node-group/image edits resend the object's mesh (Blender's extra geometry tag),
+  any LIGHT update resends lights (`_object_kinds`), settings edits resend lights and the instance table, the first
+  move after a full sync sends set_instances; film_exposure has no visible effect in the viewport (086/111).
 - M1b: Mix/Add Shader needs 058's compiler to accept one value feeding two EMIT_LE; textured Roughness and Specular
   IOR Level need a colour-to-float op (Cycles: luminance); 083 Do 7 (auto-converted Emission flag, per-term RGB for
   AUTO); a spectral AR_SPECTRUM_BLACKBODY lamp option (082 folds temperature to RGB as Cycles does).
 
 ## Budget headroom
-Landing gates ~135-145 s of B-09's 180 s after 089 (B-1M tripwire ~19 s, Blender smoke ~18-21 s, analytic ~20 s per
-device); new gate work must find time. `check fast` 5-7 s warm, 9-10 s after a header rebuild (B-08 is 10 s).
-Spike numbers: docs/spikes/*/RESULTS.md.
+Landing gates ~115-125 s of B-09's 180 s after 121 overlapped the CPU and GPU halves (tripwire ~18 s, Blender smoke
+~20 s). `check fast` 5-7 s warm; it can exceed B-08 under load or after a rebuild. Spikes: docs/spikes/*/RESULTS.md.
