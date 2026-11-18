@@ -15,4 +15,4 @@ Canary: tasks/108.canary.patch must turn red: astroray_tests_gpu "dev_reload/swa
 Budget: none (dev builds only).
 Depends on: 099.
 Size: S (about 200 lines); stop and report at 2x.
-Progress:
+Progress: started
