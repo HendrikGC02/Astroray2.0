@@ -626,6 +626,11 @@ void* CudaDevice::alloc_memory(uint64_t bytes) {
 
 void CudaDevice::free_memory(void* ptr) {
   Impl& s = *impl_;
+  // After a sticky error every call returns it and the context is lost with the process (0001 D2.5), so
+  // there is nothing to give back. Film, active-pixel and table destructors free through here and cannot
+  // throw: a throw would std::terminate the process that is meant to stay up on its CPU device. The failure
+  // itself was reported when the error surfaced.
+  if (s.dead) return;
   s.bind();
   s.check(s.cu.cuMemFree_(reinterpret_cast<CUdeviceptr>(ptr)), "cuMemFree");
 }
