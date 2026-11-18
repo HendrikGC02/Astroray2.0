@@ -249,7 +249,7 @@ class TestSmoke(unittest.TestCase):
         self.assertIsNotNone(cap.arrays, "no partial result was read")
         done = cap.arrays[2]
         print(f"RESULT smoke cancel: {seconds:.1f} s, per-pixel count {int(done.min())}..{int(done.max())} of {samples}")
-        self.assertLess(int(done.max()), samples)
+        self.assertLess(int(done.max()), samples // 4)  # cancelled after 0.5 s: a few percent of the target at most
         self.assertGreater(int(done.max()), 0)
         self.assertLess(seconds, 15.0)
 
