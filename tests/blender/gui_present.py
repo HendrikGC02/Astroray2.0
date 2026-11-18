@@ -485,6 +485,8 @@ class TestPresent(unittest.TestCase):
         self.assertEqual(g, sorted(g))
         self.assertGreater(g[-1], g[0])
         # Every frame the viewport acquired, shown or not: a frame older than one already shown was refused.
+        ids = [a["id"] for a in STATE["acquired"]]
+        self.assertEqual(ids, sorted(set(ids)), "a frame was acquired twice: acquire must pass the last frame seen")
         shown, rejected = -1, 0
         for a in STATE["acquired"]:
             if a["presented"]:

@@ -31,7 +31,7 @@ index 37bec44..e05343c 100644
      def set_stripe_bytes(self, n):
          """Test-only: restripe from the next upload on."""
 diff --git a/blender/astroray/viewport.py b/blender/astroray/viewport.py
-index 51d07fa..eca76c4 100644
+index 51d07fa..e12c182 100644
 --- a/blender/astroray/viewport.py
 +++ b/blender/astroray/viewport.py
 @@ -67,7 +67,7 @@ class ViewportJob(render_final.Job):
@@ -61,7 +61,26 @@ index 51d07fa..eca76c4 100644
              moves = all(a.id_type == "OBJECT" and a.mask == C.TRANSFORM for a in inst)
              if not (inst and moves and not new_geoms and self.table is not None
                      and instances.sync_transforms(e, abi, self.table, depsgraph, {a.uid for a in inst})):
-@@ -237,7 +237,7 @@ class ViewportJob(render_final.Job):
+@@ -165,8 +165,8 @@ class ViewportJob(render_final.Job):
+         self._ensure_session(w, h)
+         s = self.session
+         f, _ = camera.viewport(depsgraph.scene, context.space_data, rv3d, depsgraph)
+-        digest = camera.view_hash(rv3d, w, h, rv3d.view_perspective == "CAMERA")
+-        if self.views.update(lambda sess, v: native.call(lib.ar_session_set_view, sess, v), abi, s, f, digest, w, h):
++        digest = object()
++        if self.views.update(lambda sess, v: native.call(lib.ar_session_set_view, sess, v), abi, s, f, digest, w - 1, h):
+             self.events.append("set_view")
+         if not self._started:
+             render_final._ok(lib, native.call(lib.ar_session_start, s), "ar_session_start",
+@@ -201,7 +201,6 @@ class ViewportJob(render_final.Job):
+         if not frame.frame_id:
+             return False
+         try:
+-            self._last_id = frame.frame_id
+             shown = self.present.wants(frame)
+             if self.acquired is not None:
+                 self.acquired.append({"id": frame.frame_id, "generation": frame.generation, "presented": shown})
+@@ -237,7 +236,7 @@ class ViewportJob(render_final.Job):
          """A session whose film is the region's; created on the first draw. A region that outgrows it gets a new
          session and the old one is retired in d23's two steps (closed now, destroyed by a timer), so the draw
          never waits for it."""
@@ -70,7 +89,7 @@ index 51d07fa..eca76c4 100644
              return
          lib, abi = self.lib, self.abi
          if self.session.value:
-@@ -310,13 +310,9 @@ class ViewportJob(render_final.Job):
+@@ -310,13 +309,9 @@ class ViewportJob(render_final.Job):
              return None  # close() took it
          prog = self.abi.ar_progress()
          native.call(self.lib.ar_session_get_progress, session, ctypes.byref(prog))
