@@ -78,19 +78,19 @@ def unsupported_strings(em):
 class Session:
     """One CPU session over the current scene; keeps the report and the Combined pass."""
 
-    def __init__(self, scene, plane, material, world):
+    def __init__(self, scene, plane, material, world, extra=()):
         self.lib = ctypes.CDLL(DLL)
         ABI.check(self.lib)
         ABI.bind(self.lib)
         self.ctx, self.scene_h, self.session = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
         self._tmp = tempfile.TemporaryDirectory()
         try:
-            self._build(scene, plane, material, world)
+            self._build(scene, plane, material, world, extra)
         except BaseException:
             self.close()
             raise
 
-    def _build(self, scene, plane, material, world):
+    def _build(self, scene, plane, material, world, extra):
         lib, a = self.lib, ABI
         ok(lib.ar_context_create(ctypes.byref(a.ar_context_desc(
             a.AR_DEVICE_CPU, 0, os.path.join(self._tmp.name, "context.log").encode(), None)),
@@ -107,8 +107,13 @@ class Session:
         self.graph = translate.translate_material(material.evaluated_get(dg), km, OP)
         with edit_mod.Edit(a, lib, self.scene_h) as e:
             settings.set_settings(e, a, fields)
-            mesh.sync_mesh(e, a, plane.data, int(table.arrays["geom_keys"][0]), "Plane")
+            for ob in (plane, *(o for o, _ in extra)):
+                gk = int(table.arrays["geom_keys"][table.by_object[ob.original.session_uid][0]])
+                mesh.sync_mesh(e, a, ob.data, gk, ob.name)
             translate.set_material(e, a, km, material.original.session_uid, self.graph)
+            for _, m in extra:
+                translate.set_material(e, a, km, m.original.session_uid,
+                                       translate.translate_material(m.evaluated_get(dg), km, OP))
             self.world_graph = world_sync.sync(e, a, world.evaluated_get(dg) if world else None, km, OP)
             instances.set_instances(e, a, table)
             camera.set_camera(e, a, cam_fields)
@@ -192,8 +197,8 @@ def new_scene(world_color=(1.0, 1.0, 1.0)):
     return scene, plane, mat, world
 
 
-def render(scene, plane, mat, world):
-    s = Session(scene, plane, mat, world)
+def render(scene, plane, mat, world, extra=()):
+    s = Session(scene, plane, mat, world, extra)
     try:
         return s.combined(), s.entries(), s.graph
     finally:
@@ -222,21 +227,31 @@ class TestMaterials(unittest.TestCase):
         PROPS.unregister()
 
     def test_two_node_types_two_entries(self):
-        """A Glass and a Toon BSDF: magenta, one NODE_UNSUPPORTED per node type (0007 V20)."""
+        """Two Glass (one material) and a Toon (another): magenta, one NODE_UNSUPPORTED per node type (0007 V20)."""
         scene, plane, mat, world = new_scene()
         t = mat.node_tree
         out = node(t, "ShaderNodeOutputMaterial")
         # The inlined tree holds only nodes the output reaches, and Surface and Volume are the
         # only output sockets that keep a shader link (Blender drops a shader linked to
-        # Displacement as invalid; a Mix Shader would be a third unsupported type). So one Glass
-        # and one Toon reach the output here.
-        toon = t.nodes.new("ShaderNodeBsdfToon")
-        t.links.new(toon.outputs["BSDF"], out.inputs["Surface"])
+        # Displacement as invalid). So two Glass nodes reach this material's output, and the
+        # Toon is in a second material on a second object (outside the camera's view).
+        t.links.new(t.nodes.new("ShaderNodeBsdfGlass").outputs["BSDF"], out.inputs["Surface"])
         t.links.new(t.nodes.new("ShaderNodeBsdfGlass").outputs["BSDF"], out.inputs["Volume"])
-        img, entries, graph = render(scene, plane, mat, world)
+        mat2 = bpy.data.materials.new("Mat2")
+        mat2.use_nodes = True
+        t2 = mat2.node_tree
+        t2.links.new(t2.nodes.new("ShaderNodeBsdfToon").outputs["BSDF"],
+                     node(t2, "ShaderNodeOutputMaterial").inputs["Surface"])
+        me2 = bpy.data.meshes.new("Plane2")
+        me2.from_pydata([(100, 100, 0), (101, 100, 0), (101, 101, 0)], [], [(0, 1, 2)])
+        me2.materials.append(mat2)
+        plane2 = bpy.data.objects.new("Plane2", me2)
+        scene.collection.objects.link(plane2)
+        bpy.context.view_layer.update()
+        img, entries, graph = render(scene, plane, mat, world, extra=((plane2, mat2),))
         rgb = centre_rgb(img)
         print(f"RESULT unsupported material centre rgb {rgb}, entries {entries}")
-        self.assertEqual(set(unsupported_strings(graph)), {"ShaderNodeBsdfGlass", "ShaderNodeBsdfToon"})
+        self.assertEqual(unsupported_strings(graph), ["ShaderNodeBsdfGlass", "ShaderNodeBsdfGlass"])
         self.assertTrue(is_magenta(rgb), f"expected magenta, got {rgb}")
         got = sorted(d for c, d in entries if c == AR_REPORT_NODE_UNSUPPORTED)
         self.assertEqual(got, ["ShaderNodeBsdfGlass", "ShaderNodeBsdfToon"])

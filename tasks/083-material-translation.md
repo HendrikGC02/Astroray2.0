@@ -21,3 +21,4 @@ Size: M (about 350 lines Python); stop and report at 2x.
 Progress:
 Started 083.
 Done Do 1-6 and tests; test_materials.py 11 cases pass, canary red on 3. Not done: Do 7 (converted-emission flag needs astroray.h and 0007 appendix; EmissionTerm RGB triple needs compiler.cpp: outside Scope). Linked Roughness/IOR Level have no lowering (no colour-to-float op). check full does not run Blender tests yet (084).
+Do 7 deferred to M1b by lead ruling (no Emission node or Mix/Add Shader in M1a, at most one EMIT_LE term per material); no header or appendix edit.
