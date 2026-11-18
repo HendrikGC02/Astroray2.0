@@ -213,6 +213,11 @@ TEST_CASE("batching/scale changes are ignored") {
   CHECK_FALSE(b.interacting(3.26));
 }
 
+}  // TEST_SUITE
+
+// Wall-clock cases: the interaction window alone is 250 ms, over the fast tier's 0.5 s per test (B-12).
+TEST_SUITE("gate") {
+
 TEST_CASE("batching/session one pass per update during interaction") {
   // The view changes every 5 ms for 0.4 s while each pass takes 2 ms: every published frame carries
   // exactly one resolved pass, and frames are at least 1/60 s apart (the render thread waits out
