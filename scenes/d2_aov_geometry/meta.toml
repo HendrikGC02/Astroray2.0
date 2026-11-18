@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# D2 (0009 d17(iv), d20): a few hundred instanced meshes (boxes, spheres, planes) with one material
+# each, varied scales and orientations, seen by a pinhole camera. Every material has its own pass
+# index, so the IndexMA AOV names the instance hit. CPU and GPU dumps of the recording must agree on
+# the primary-hit AOVs: material ids equal, positions within 1e-5 relative, normals within 1e-5 rad,
+# UV within 1e-5 (tools/aov_agree.py). One deliberate pair of instances shares mesh and transform
+# (coincident faces): which of the two a ray reports is a traversal tie, so pixels on the pair are
+# excluded and counted.
+class = "D"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+[truth]
+size = 64
+spp = 1
+seed = 7
+instances = 300
+# Instance centres are drawn in the box [-extent, extent]^3, scales in [scale_min, scale_max].
+extent = 4.0
+scale_min = 0.25
+scale_max = 0.9
+# The coincident pair: a box of this size at this point, in front of the others, and the pass
+# indices of its two materials (the other instances take 1..instances). tools/aov_agree.py excludes
+# the pixels whose material id is one of these on either device.
+pair_pass_indices = [301, 302]
+pair_position = [0.0, -4.5, 0.0]
+pair_size = 1.5
+camera_position = [0.0, -14.0, 3.0]
+focal_mm = 55.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "exact"

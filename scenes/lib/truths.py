@@ -293,10 +293,65 @@ def uniform_enclosure(t, width, height):
     return [("Y", row, np.full((height, width), value), "pixels")]
 
 
+def read_png_rgb8(path):
+    """(h, w, 3) uint8 of an 8-bit RGB, non-interlaced PNG whose rows all use filter type 0 (what
+    scenes/d1_uv_chart/build.py writes), rows in file order (top first); anything else raises.
+    Ref: PNG, ISO/IEC 15948 (chunk layout, IHDR fields, filter byte per scanline)."""
+    import zlib
+    with open(path, "rb") as f:
+        raw = f.read()
+    if raw[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(f"{path}: not a PNG")
+    pos, idat, head = 8, b"", None
+    while pos < len(raw):
+        n, tag = struct.unpack(">I4s", raw[pos:pos + 8])
+        data = raw[pos + 8:pos + 8 + n]
+        if tag == b"IHDR":
+            head = struct.unpack(">IIBBBBB", data)
+        elif tag == b"IDAT":
+            idat += data
+        pos += 12 + n
+    if head is None or head[2:] != (8, 2, 0, 0, 0):
+        raise ValueError(f"{path}: not 8-bit RGB, filter method 0, no interlace")
+    w, h = head[0], head[1]
+    rows = np.frombuffer(zlib.decompress(idat), dtype=np.uint8).reshape(h, 1 + 3 * w)
+    if (rows[:, 0] != 0).any():
+        raise ValueError(f"{path}: a scanline uses a filter other than 0")
+    return rows[:, 1:].reshape(h, w, 3)
+
+
+def srgb_to_linear(c):
+    """The sRGB electro-optical transfer of encoded values in [0, 1]. Ref: IEC 61966-2-1:1999."""
+    c = np.asarray(c, dtype=np.float64)
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def chart_linear(t, width, height):
+    """D1's chart as display RGB (3, height, width), rows bottom-up: each texel's 8-bit sRGB value
+    decoded to linear, times the emission strength."""
+    img = read_png_rgb8(os.path.join(ROOT, t["chart"]))
+    if img.shape[:2] != (height, width):
+        raise ValueError(f"the chart is {img.shape[1]}x{img.shape[0]}; texture_chart needs one texel per pixel "
+                         f"({width}x{height})")
+    return srgb_to_linear(img[::-1].astype(np.float64) / 255.0).transpose(2, 0, 1) * float(t["strength"])
+
+
+def texture_chart(t, width, height):
+    """D1: an emission-only plane textured with the chart through Closest filtering fills the view,
+    one texel per pixel, rows bottom-up (0008 d1). Closest picks the texel in its stored 8-bit sRGB
+    encoding, which is then decoded (0005 item 34), and the RGB emission returns as the same
+    working-space RGB in the mean (0003 d12), so every pixel's display RGB is the decoded texel
+    colour times the strength. One check per channel, tested per pixel or, with a [truth] block,
+    per block (tools/analytic.py)."""
+    rgb = chart_linear(t, width, height)
+    eye = np.eye(3)
+    return [(c, eye[i], rgb[i], "pixels") for i, c in enumerate("RGB")]
+
+
 FORMULAS = {"emitter_radiance": emitter_radiance, "display_luminance": display_luminance,
             "lambertian_furnace": lambertian_furnace, "lamp_over_plane": lamp_over_plane,
             "disk_over_plane": disk_over_plane, "lit_furnace": lit_furnace, "mode_agreement": mode_agreement,
-            "uniform_enclosure": uniform_enclosure}
+            "uniform_enclosure": uniform_enclosure, "texture_chart": texture_chart}
 
 
 def evaluate(truth_table, width, height):
