@@ -1,7 +1,7 @@
 # 076 Integrator checks: Russian roulette, shadow lifetime, closed box, radiance scale; work-counter baselines
 Goal: the M1a integrator is not checked end to end -> renders verify Russian roulette, shadow delivery after slot refill with starved pools, termination and bounce statistics and the radiance scale, and the B-16 work counters and timing tripwire become gate checks.
 Read first: 0004 Verification rows D2, D4/D5, D28; 0002 Verification row D5 (shadow pool below demand); 0008 V8; 0003 check 15; 0009 d18 (work counters, tripwire), B-16; src/host/session/test_hooks.h (101).
-Scope: scenes/d2_rr_furnace/, scenes/d4_lifetime/, scenes/d28_closed_box/, scenes/d15_radiance_scale/, scenes/lib/truths.py, tools/integrator_checks.py, src/host/session/test_hooks.{h,cpp} (`ASTRORAY_TEST_POOL`, `ASTRORAY_TEST_RADIANCE_SCALE`), src/host/scheduler.cpp and src/host/light/lamps.cpp (read those hooks), tools/check.ps1 (gate steps, B-16), tests/budgets/counters.toml.
+Scope: scenes/d2_rr_furnace/, scenes/d4_lifetime/, scenes/d28_closed_box/, scenes/d15_radiance_scale/, scenes/lib/truths.py, tools/integrator_checks.py, src/host/session/test_hooks.{h,cpp} (`ASTRORAY_TEST_POOL`, `ASTRORAY_TEST_RADIANCE_SCALE`), src/host/scheduler.cpp and src/host/light/lamps.cpp (read those hooks), tools/check.ps1 (gate steps, B-16), tests/budgets/counters.toml. Lead ruling: src/host/scheduler.h (SchedulerConfig::shadow_capacity_override), tools/analytic.py (gate_members includes integrator_checks') and tools/budgets.toml (analytic_scenes 58 -> 64), src/capi/session_api.cpp (ASTRORAY_TEST_THREADS sizes CPU session workers).
 Out of scope: transparent-shadow layers in the lifetime test (M2: 0004's row asks for 8 non-opaque layers, which M1a cannot build; this task uses opaque occluders); edit-and-revert, determinism, replay and report checks (107); per-type limits (M2).
 Reference: none beyond the cited verification rows.
 Do:
@@ -21,3 +21,4 @@ Size: M (about 300 lines); stop and report at 2x.
 Progress:
 - started on task/076-integrator-checks
 - design read; stopped before code: scope questions (scheduler.h, analytic.py/budgets.toml family, CPU threads=1) sent to lead
+- lead ruling: Q1 scheduler.h joins; POOL=MAIN[,SHADOW], SHADOW >= max k. Q2 analytic.py/budgets.toml 58->64. Q3 hook ASTRORAY_TEST_THREADS=N via session_api.cpp. Q4 d28 via NSAMP/bounce_paths. Tripwire CUDA only.
