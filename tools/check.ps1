@@ -19,6 +19,7 @@ Set-Location $root
 . (Join-Path $PSScriptRoot 'lib/lock.ps1')
 . (Join-Path $PSScriptRoot 'lib/summary.ps1')
 . (Join-Path $PSScriptRoot 'lib/python.ps1')
+. (Join-Path $PSScriptRoot 'lib/blender.ps1')
 if ($Tier -notin @('fast', 'gate', 'full', 'ci')) {
   Write-Host "FAIL check: unknown tier '$Tier' (fast, gate, full, ci)"
   exit 2
@@ -133,7 +134,16 @@ try {
          $ms = [double]$m.Matches[0].Groups[1].Value
          if ($ms -gt [double]$limit) { Fail "material compile: $ms ms per 100 nodes is above B-24's $limit ms" }
          Write-Host "B-24 compile: $ms ms per 100 nodes (limit $limit ms)" } },
-    @{ Name = 'gpu gate tests'; Tag = 'local'; Lock = $true; Identity = $gpuExe; Run = { & $gpuExe --tier=gate } }
+    @{ Name = 'gpu gate tests'; Tag = 'local'; Lock = $true; Identity = $gpuExe; Run = { & $gpuExe --tier=gate } },
+    # 0009 d11, d17a (084): one Blender start installs the staged extension zip, runs the 083 material tests,
+    # renders A1's .blend through F12 on the CPU device and checks it against A1's truth and the builder's
+    # recording (exporter equivalence). The zip is built first; Invoke-ArBlender's own output goes to the log.
+    @{ Name = 'blender smoke'; Tag = 'local'; Lock = $true; Echo = '^(RESULT smoke|Ran |OK$|FAILED)'; Run = {
+        & pwsh -NoProfile -File tools/build.ps1 -Target astroray_extension
+        if ($LASTEXITCODE -ne 0) { return }
+        $r = Invoke-ArBlender -Script 'tests/blender/smoke_a1.py' -Args @('--with-materials') -TimeoutS 400 6>$null
+        foreach ($f in $r.Log, "$($r.Log).err") { if (Test-Path $f) { Get-Content $f } }
+        $global:LASTEXITCODE = $r.ExitCode } }
   )
   function Invoke-GateStep($s) {
     if ($s.Lock) { $script:waited += Enter-ArTreeLock (Join-Path $root 'out/build') }

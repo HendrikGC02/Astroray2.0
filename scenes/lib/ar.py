@@ -7,8 +7,10 @@ Needs a built tree: out/bin/astroray_core.dll and out/build/gen/_abi.py, _ops.py
 Ref: docs/decisions/0009-build-test-process.md d19; 0007-appendix-abi.md (descriptors, TEX_IMAGE
 parameters); src/kernel/vm/ops/store_slot.h (record slots, read from the file, never copied).
 """
+import base64
 import ctypes
 import importlib.util
+import json
 import math
 import os
 import re
@@ -60,6 +62,17 @@ SLOTS = _record_slots()
 
 class AbiError(RuntimeError):
     pass
+
+
+def _arr(a, dtype):
+    """A NumPy array as JSON: dtype, shape and base64 bytes (a mesh is too large for a list)."""
+    a = np.ascontiguousarray(a, dtype=dtype)
+    return {"dtype": np.dtype(dtype).name, "shape": list(a.shape), "b64": base64.b64encode(a.tobytes()).decode("ascii")}
+
+
+def array_from_json(d):
+    """The inverse of _arr, for scenes/lib/blend_writer.py."""
+    return np.frombuffer(base64.b64decode(d["b64"]), dtype=d["dtype"]).reshape(d["shape"]).copy()
 
 
 def name64(text, n=64):
@@ -207,8 +220,14 @@ class Scene:
     Use it as a context manager: a build that raises leaves no recording behind, because the
     recording is written beside its target and renamed only when `finish` succeeds."""
 
-    def __init__(self, path, device="cpu", workers=2):
+    def __init__(self, path, device="cpu", workers=2, description=None):
         self.path = os.path.abspath(path)
+        # What the builder recorded, for scenes/lib/blend_writer.py (one writer for every builder,
+        # task 084): written as JSON by finish() when `description` names a file. Only what a Blender
+        # scene can say is kept: constant Principled inputs, lamps, a constant world, a pinhole camera.
+        self.description_path = os.path.abspath(description) if description else None
+        self._desc = {"meshes": [], "materials": [], "instances": [], "lights": [], "world": None,
+                      "camera": None, "settings": None}
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         self._tmp = tempfile.TemporaryDirectory()
         self.abi = _load("_ar_abi", os.path.join(GEN, "_abi.py"))
@@ -305,6 +324,11 @@ class Scene:
         if uv is not None:
             self._fill(b.uv, b.uv_count, np.float32, uv)
         self._call(self.lib.ar_edit_item_commit(self.edit_h, key), "ar_edit_item_commit")
+        self._desc["meshes"].append({
+            "key": key, "name": name, "positions": _arr(positions, np.float32),
+            "corner_vert": _arr(corner_vert, np.int32), "face_start": _arr(face_start, np.int32),
+            "normals": _arr(np.asarray(normals).reshape(-1, 3), np.float32),
+            "uv": None if uv is None else _arr(np.asarray(uv).reshape(-1, 2), np.float32)})
 
     def mesh_from(self, key, m, name="mesh"):
         """Submits a scenes/lib/meshes.py Mesh."""
@@ -364,6 +388,10 @@ class Scene:
         d.colors, d.visibility, d.flags, d.light_groups = keep["col"], keep["vis"], keep["flags"], keep["lg"]
         d.material_offsets, d.material_counts, d.material_keys = keep["moff"], keep["mcnt"], keep["mkeys"]
         self._call(self.lib.ar_edit_set_instances(self.edit_h, ctypes.byref(d)), "ar_edit_set_instances")
+        self._desc["instances"] = [
+            {"geom": it["geom"], "materials": list(it["materials"]),
+             "xf": [float(v) for v in np.asarray(it.get("xf", IDENTITY), np.float64).reshape(-1)[:12]],
+             "visibility": it.get("visibility", ALL_VISIBILITY)} for it in items]
 
     # -- shading ---------------------------------------------------------------------------------
     def graph(self):
@@ -384,7 +412,13 @@ class Scene:
             g.store(name, value)
         if emission is not None:
             g.emission(*emission)
-        return self.material_from_graph(g, emission_sampling)
+        key = self.material_from_graph(g, emission_sampling)
+        self._desc["materials"].append({
+            "key": key, "inputs": {k: ([float(x) for x in v] if not np.isscalar(v) else float(v))
+                                   for k, v in (inputs or {}).items()},
+            "emission": None if emission is None else {"rgb": [float(x) for x in emission[0]],
+                                                       "strength": float(emission[1])}})
+        return key
 
     def material_from_graph(self, graph, emission_sampling=None):
         """A material whose surface graph is `graph` (a Graph with textures or other nodes)."""
@@ -408,6 +442,7 @@ class Scene:
         w = a.ar_world_desc()
         w.surface_graph = gkey
         self._call(self.lib.ar_edit_set_world(self.edit_h, ctypes.byref(w)), "ar_edit_set_world")
+        self._desc["world"] = {"rgb": [float(x) for x in rgb], "strength": float(strength)}
 
     def light(self, kind, xf=IDENTITY, rgb=(1.0, 1.0, 1.0), power=1.0, size=(0.0, 0.0), spread=math.pi,
               spot_size=0.0, spot_blend=0.0, sun_angle=0.0, normalize=1, cast_shadow=1):
@@ -428,6 +463,10 @@ class Scene:
         d.sun_angle, d.spread, d.power, d.normalize, d.cast_shadow = sun_angle, spread, power, normalize, cast_shadow
         key = self.key()
         self._call(self.lib.ar_edit_set_light(self.edit_h, key, ctypes.byref(d)), "ar_edit_set_light")
+        self._desc["lights"].append({
+            "kind": kind, "xf": [float(v) for v in np.asarray(xf, np.float64).reshape(-1)[:12]],
+            "rgb": [float(x) for x in rgb], "power": float(power), "size": [float(x) for x in size],
+            "spread": float(spread), "normalize": int(normalize), "cast_shadow": int(cast_shadow)})
         return key
 
     # -- camera and settings --------------------------------------------------------------------------
@@ -442,13 +481,16 @@ class Scene:
         self._call(self.lib.ar_edit_set_camera(self.edit_h, ctypes.byref(c)), "ar_edit_set_camera")
         self._camera = c
         self.size = (width, height)
+        self._desc["camera"] = {
+            "cam_to_world": [float(v) for v in look_at(position, target, up)], "focal_mm": float(focal_mm),
+            "sensor_mm": float(sensor_mm), "width": width, "height": height, "near": 0.01, "far": 1000.0}
 
     def settings(self, spp, width, height, seed=1, max_bounces=8, pixel_filter="box", filter_width=1.0,
-                 sampler="sobol", min_bounces=0):
+                 sampler="sobol", min_bounces=0, passes=()):
         """Samples per pixel, seed, total bounce limit, minimum bounces before Russian roulette (at or
         above max_bounces disables it, as in Cycles), pixel filter (box, gaussian,
         blackman_harris), output size and sampler mode (sobol, or independent where a test needs
-        the exact variance of the mean, 0008 d3)."""
+        the exact variance of the mean, 0008 d3). `passes` names the extra film passes (0008 d10)."""
         a = self.abi
         filters = {"box": a.AR_FILTER_BOX, "gaussian": a.AR_FILTER_GAUSSIAN, "blackman_harris": a.AR_FILTER_BLACKMAN_HARRIS}
         if pixel_filter not in filters:
@@ -462,8 +504,19 @@ class Scene:
         s.max_bounces, s.min_bounces, s.seed = max_bounces, min_bounces, seed
         s.pixel_filter, s.pixel_filter_width, s.film_exposure = filters[pixel_filter], filter_width, 1.0
         s.sampler_mode = samplers[sampler]
+        names = (a.ar_name * max(1, len(passes)))()
+        for i, p in enumerate(passes):
+            raw = p.encode()
+            if len(raw) >= 64:
+                raise ValueError(f"pass name '{p}' is longer than 63 bytes")
+            names[i].text[:len(raw) + 1] = list(raw) + [0]
+        s.passes, s.pass_count = ctypes.cast(names, ctypes.POINTER(a.ar_name)), len(passes)
         self._call(self.lib.ar_edit_set_settings(self.edit_h, ctypes.byref(s)), "ar_edit_set_settings")
         self.size = (width, height)
+        self._desc["settings"] = {
+            "spp": spp, "width": width, "height": height, "seed": seed, "max_bounces": max_bounces,
+            "min_bounces": min_bounces, "pixel_filter": pixel_filter, "filter_width": float(filter_width),
+            "sampler": sampler, "passes": list(passes)}
 
     # -- end ----------------------------------------------------------------------------------------
     def finish(self):
@@ -485,3 +538,7 @@ class Scene:
         self._teardown()
         self._finished = True
         os.replace(self._partial, self.path)
+        if self.description_path:
+            os.makedirs(os.path.dirname(self.description_path), exist_ok=True)
+            with open(self.description_path, "w", encoding="utf-8") as f:
+                json.dump(self._desc, f)
