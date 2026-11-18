@@ -50,11 +50,8 @@ def _ops():
 
 
 def device_of(scene):
-    """The F12 device. The render panel's property does not exist yet, so the choice is the ID
-    property `astroray_device` on the scene ("CPU" or "CUDA"); anything else raises."""
-    name = scene.get("astroray_device", "CPU")
-    if name not in DEVICES:
-        raise RenderFailed(f"astroray: scene property astroray_device is {name!r}; use 'CPU' or 'CUDA'")
+    """The F12 device: scene.astroray.device (an enum, so always CPU or CUDA)."""
+    name = scene.astroray.device
     if name not in native.devices():
         raise RenderFailed(f"astroray: device {name} is unavailable (the engine context is poisoned)")
     return name

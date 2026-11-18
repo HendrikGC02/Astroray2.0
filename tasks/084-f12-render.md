@@ -15,13 +15,13 @@ Do:
 8. From 083: engine.py is not yet wired to materials/translate.py and sync/world.py. Call them from the full sync (pass `_ops.OP_ID` and the key map) and call `TranslationCache.invalidate(actions)` with classification's MATERIALS actions.
 Acceptance: `pwsh tools/check.ps1 gate` passes with the smoke; pressing F12 on the A1 .blend in an interactive Blender shows the furnace image (the lead's look).
 Look at: out/evidence/084/a1_f12.png (Blender's render result saved as PNG).
-Canary: tasks/084.canary.patch must turn red: tests/blender/smoke_a1.py "TestSmoke.test_a1_analytic", `tools/exporter_equivalence.py` (the patch drops corner normals in mesh sync).
+Canary: tasks/084.canary.patch must turn red: tests/blender/smoke_a1.py "TestSmoke.test_a1_analytic", "TestSmoke.test_exporter_equivalence" (the patch flips corner normals in mesh sync).
 Budget: gate time grows by one Blender start plus the render; report it (0009 Risks: Blender start-up per process).
 Depends on: 083, 104, 073, 070, 117.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
 Implemented: render_final.py (Job: update = ar_edit_reset + full sync through 080-083, render = session loop, previews, cancel, reports), engine.py, blend_writer.py, ar.py JSON description, a1 --blend/--passes/--sampler, smoke_a1.py, exporter_equivalence.py, gate step 'blender smoke'.
-Device: no scene.astroray.device property exists (properties.py is outside Scope); the F12 device is the scene ID property astroray_device ('CPU' default or 'CUDA'). The render panel's property needs an owner.
+Device: scene.astroray.device enum (CPU default, CUDA), added to properties.py by lead ruling.
 Engine DLL has its own CRT, so ASTRORAY_RECORD set from Python is read by render_final.context() and passed as record_path.
 Canary flips corner normals (zeroing them leaves A1 unchanged: a convex furnace is shape independent), so both named cases go red.
 Gate 99.7 s of 180 s with the smoke (smoke step 21.4 s incl. test_materials, about 78 s before); out/evidence/084/a1_f12.png mean over tested pixels 0.64064 vs truth 0.64065.

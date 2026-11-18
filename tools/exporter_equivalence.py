@@ -7,10 +7,13 @@ equivalence ..." on agreement, 1 and "FAIL ..." lines otherwise).
 The scene state itself cannot be dumped (R59), so equivalence is measured through film output: position,
 normal, UV and material id of the first hit at sample 0 depend only on geometry, transforms, camera and
 the material table, not on shading. Both dumps must come from one seed, size, spp and sampler mode.
-Tolerances are absolute, per plane, from the first measurement on A1 at 64x64 (differences seen: position
-9.4e-6, UV 1.6e-5, normal 1.2e-4): Position (metres) and UV follow the ray through two camera matrices
-(the builder's and Blender's calc_matrix_camera), which differ in the last float32 bits and are amplified
-at grazing hits (1e-4 and 5e-5); Normal is looser (2e-3) because Blender stores custom corner normals
+Tolerances are absolute, per plane. Position (metres) and UV follow the ray through two camera matrices
+(the builder's and Blender's calc_matrix_camera). float32 has a 6e-8 relative step, so the matrices and
+the inverse projection differ by a few steps (about 1e-6 in a ray direction at unit scale); at the
+sphere's grazing hits the hit point moves by that error divided by the cosine of the incidence angle
+(cos down to about 0.03 gives roughly 3e-5), and UV (range 0 to 1 over a sphere of radius 1) moves by
+the same amount at most, so UV gets 5e-5 and Position, in metres on a sphere of radius 1, 1e-4. They
+are derived, not fitted; the first measurement (position 9.4e-6, UV 1.6e-5) sits well inside. Normal is looser (2e-3) because Blender stores custom corner normals
 quantised and renormalises them; the material id is an integer and must match exactly.
 Ref: docs/decisions/0009-build-test-process.md d17a, d19; docs/decisions/RULINGS.md R59.
 """

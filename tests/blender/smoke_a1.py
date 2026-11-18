@@ -141,7 +141,7 @@ def run_smoke(work, evidence):
     blend_writer.build(blend + ".json", blend)
     bpy.ops.wm.open_mainfile(filepath=blend)
     scene = bpy.context.scene
-    scene["astroray_device"] = "CPU"
+    scene.astroray.device = "CPU"
     scene.render.resolution_x = scene.render.resolution_y = SIZE
     scene.astroray.samples = analytic.MIN_SPP
     scene.astroray.seed = analytic.seed_for("a1_furnace")
