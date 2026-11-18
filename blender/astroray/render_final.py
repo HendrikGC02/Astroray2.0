@@ -33,8 +33,16 @@ VIEW_LAYER_PASSES = (("use_pass_z", "Depth"), ("use_pass_position", "Position"),
                      ("use_pass_object_index", "IndexOB"), ("use_pass_material_index", "IndexMA"),
                      ("use_pass_mist", "Mist"), ("use_pass_vector", "Vector"))
 
-_contexts = {}  # device name -> (ar_context, record path or None); one per device for the extension's lifetime (0007 d4)
-_live = weakref.WeakSet()  # every Job not yet closed, so shutdown() can end them before the contexts (0007 d28)
+_contexts = {}  # device name -> _Context; one per device for the extension's lifetime (0007 d4)
+
+
+class _Context:
+    """An ar_context, the recording path it was created with, and the jobs whose scenes live on it
+    (weakly: an engine instance owns its job). shutdown() walks contexts, then jobs."""
+
+    def __init__(self, handle, record):
+        self.handle, self.record = handle, record
+        self.jobs = weakref.WeakSet()
 
 
 class RenderFailed(RuntimeError):
@@ -79,13 +87,13 @@ def _ok(lib, status, what, last_error=None, handle=None):
 
 
 def context(device):
-    """The context of `device`, created on first use, recording when ASTRORAY_RECORD is set (0007 d4).
+    """The _Context of `device`, created on first use, recording when ASTRORAY_RECORD is set (0007 d4).
     The path is read here and passed in the descriptor: the engine DLL has its own C runtime, which
     does not see variables that Python set after the process started."""
     record = os.environ.get("ASTRORAY_RECORD")
     held = _contexts.get(device)
     if held is not None:
-        return held[0]
+        return held
     lib, abi = native.load(), _abi()
     abi.bind(lib)
     ctx = ctypes.c_void_p()
@@ -93,8 +101,8 @@ def context(device):
                                record.encode() if record else None)
     _ok(lib, native.call(lib.ar_context_create, ctypes.byref(desc), ctypes.byref(ctx)),
         "ar_context_create")
-    _contexts[device] = (ctx, record)
-    return ctx
+    _contexts[device] = _Context(ctx, record)
+    return _contexts[device]
 
 
 def record_warning(device):
@@ -102,8 +110,8 @@ def record_warning(device):
     with: the recorder opens with the context, so a later change cannot take effect."""
     held = _contexts.get(device)
     now = os.environ.get("ASTRORAY_RECORD")
-    if held is not None and held[1] != now:
-        return (f"ASTRORAY_RECORD is {now!r} but this device's context was created with {held[1]!r}; "
+    if held is not None and held.record != now:
+        return (f"ASTRORAY_RECORD is {now!r} but this device's context was created with {held.record!r}; "
                 "the recording does not follow (restart Blender to change it)")
     return None
 
@@ -112,10 +120,11 @@ def shutdown():
     """Ends every live job (session, then scene: 0007 d28), then destroys the contexts (a recording
     is complete only after this, 0001 D1.4). A later Job.close or __del__ finds nothing to destroy."""
     lib = native.load()
-    for job in list(_live):
-        job.close()
+    for held in _contexts.values():
+        for job in list(held.jobs):
+            job.close()
     for dev in list(_contexts):
-        native.call(lib.ar_context_destroy, _contexts.pop(dev)[0])
+        native.call(lib.ar_context_destroy, _contexts.pop(dev).handle)
 
 
 def break_requested(engine):
@@ -185,7 +194,7 @@ class Job:
         self.first = True
         # Everything render() needs from Blender, read by update() (0007 d23: render() reads no scene).
         self.size, self.samples, self.layer = None, None, None
-        _live.add(self)
+        self._context = None
 
     def update(self, depsgraph):
         """ar_edit_reset, then a full sync of the depsgraph's view layer (0007 d48)."""
@@ -193,7 +202,12 @@ class Job:
         scene, view_layer = depsgraph.scene, depsgraph.view_layer
         self.device = device_of(scene)
         warning = record_warning(self.device)
-        ctx = context(self.device)
+        held = context(self.device)
+        if self._context is not None and self._context is not held:
+            raise RenderFailed("astroray: the device changed between updates of one render; start it again")
+        self._context = held
+        held.jobs.add(self)
+        ctx = held.handle
         self.size, self.samples, self.layer = render_size(scene), scene.astroray.samples, view_layer.name
         if not self.scene_h.value:
             workers = max(1, min(8, (os.cpu_count() or 2) // 2))
@@ -311,7 +325,8 @@ class Job:
         if self.scene_h.value:
             native.call(self.lib.ar_scene_destroy, self.scene_h)
             self.scene_h = ctypes.c_void_p()
-        _live.discard(self)
+        if self._context is not None:
+            self._context.jobs.discard(self)
 
 
 def read_pass(lib, abi, session, name, quantity):

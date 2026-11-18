@@ -32,6 +32,7 @@ CLI = os.path.join(ROOT, "out", "bin", "astroray_cli.exe")
 for sub in ("tools", os.path.join("scenes", "lib")):
     sys.path.insert(0, os.path.join(ROOT, sub))
 import analytic  # noqa: E402
+import ar  # noqa: E402
 import blend_writer  # noqa: E402
 import exporter_equivalence  # noqa: E402
 import meta  # noqa: E402
@@ -264,8 +265,10 @@ class TestSmoke(unittest.TestCase):
                 self._render(1)
         finally:
             me.vertices[0].co = keep
-        print(f"RESULT smoke error entry: {str(cm.exception)[:200]!r}")
-        self.assertIn("GENERATION_REJECTED", str(cm.exception))
+        print(f"RESULT smoke error entry: {str(cm.exception)[:300]!r}")
+        # Blender fails any render whose engine reported an ERROR, with that report's own text; the
+        # "astroray: " prefix is added only where _report raises RenderFailed for an ERROR entry.
+        self.assertIn("astroray: GENERATION_REJECTED:", str(cm.exception))
 
     def test_exporter_equivalence(self):
         t = meta.load(os.path.join(ROOT, "scenes", "a1_furnace", "meta.toml"))["truth"]
@@ -276,9 +279,19 @@ class TestSmoke(unittest.TestCase):
         with open(os.path.join(self.state["work"], "a1.blend.json"), encoding="utf-8") as f:
             want = blend_writer._array(json.load(f)["meshes"][0]["normals"])
         quant = float(np.linalg.norm(got.reshape(-1, 3) - want, axis=1).max())
-        print(f"RESULT smoke stored-normal error Q = {quant:.3g}")
+        min_len = exporter_equivalence.min_interpolated_length(want)
+        print(f"RESULT smoke stored-normal error Q = {quant:.3g}, minimum interpolated length {min_len:.5f}")
+        # The two cameras as sent: the builder's from the description, the addon's from its own sync.
+        c = json.loads(open(os.path.join(self.state["work"], "a1.blend.json"), encoding="utf-8").read())["camera"]
+        cam_b = {"cam_to_world": c["cam_to_world"], "projection_inverse": list(
+            ar.projection_inverse(c["width"], c["height"], c["focal_mm"], c["sensor_mm"]))}
+        f, _ = importlib.import_module(MODULE + ".sync.camera").final(bpy.context.evaluated_depsgraph_get(),
+                                                                       bpy.context.scene)
+        cam_a = {"cam_to_world": f["cam_to_world"], "projection_inverse": f["projection_inverse"]}
+        geometry = {"camera_distance": t["camera_distance"], "radius": t["sphere_radius"],
+                    "segments": t["segments"], "rings": t["rings"]}
         ok, lines = exporter_equivalence.compare(self.state["dumps"]["addon"], self.state["dumps"]["builder"],
-                                                 t["camera_distance"], t["sphere_radius"], quant)
+                                                 geometry, cam_a, cam_b, quant, min_len)
         for ln in lines:
             print("RESULT smoke " + ln)
         self.assertTrue(ok, "\n".join(lines))

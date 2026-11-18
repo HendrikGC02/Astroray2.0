@@ -14,9 +14,13 @@ IOR Level is half the OpenPBR specular_weight, 0005 item 42), blender/astroray/s
 """
 import base64
 import json
+import os
 import sys
 
 import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ar import ALL_VISIBILITY  # noqa: E402  (every ray type, the Blender default)
 
 # OpenPBR record input -> (Principled input name, scale into it).
 _PRINCIPLED = {"base_color": ("Base Color", 1.0), "specular_roughness": ("Roughness", 1.0),
@@ -31,9 +35,6 @@ _FILTERS = {"box": "BOX", "gaussian": "GAUSSIAN", "blackman_harris": "BLACKMAN_H
 
 class BlendWriterError(ValueError):
     """A description entry the writer cannot apply; never skipped (CLAUDE.md rule 5)."""
-
-
-ALL_VISIBILITY = 0x3F  # scenes/lib/ar.py: every ray type, the Blender default
 
 
 def _array(d):
