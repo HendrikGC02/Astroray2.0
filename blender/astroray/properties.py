@@ -34,8 +34,12 @@ _offered = []  # Blender keeps no copy of the strings an items callback returns
 def device_items(self, context):
     """Only what native.devices() offers: after a sticky CUDA error just the CPU (0007 d44). The numbers
     are fixed, so a scene saved with CUDA selected no longer matches an item; device_of refuses it loudly."""
-    from . import native
-    _offered[:] = [_DEVICE_ITEMS[d] for d in native.devices()]
+    if __package__:
+        from . import native
+        offered = native.devices()
+    else:  # loaded as a bare file by a headless test with no native module beside it: both devices
+        offered = list(_DEVICE_ITEMS)
+    _offered[:] = [_DEVICE_ITEMS[d] for d in offered]
     return _offered
 
 
