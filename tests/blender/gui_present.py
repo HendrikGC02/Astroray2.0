@@ -100,7 +100,6 @@ class Driver:
 
     def step_setup(self):
         win, area, region = self.find_area()
-        win.cursor_warp(win.width // 2, win.height // 2)  # then away from the popup (see step_settle)
         space = area.spaces.active
         space.shading.type = "RENDERED"
         space.overlay.show_overlays = False
@@ -132,8 +131,6 @@ class Driver:
         return SETTLE_S
 
     def step_settle(self):
-        win, _, _ = self.find_area()
-        win.cursor_warp(5, 5)  # the first-start popup of a factory profile closes when the pointer leaves it
         self.pre = self.job.frames[-1]
         STATE["pre"] = self.pre
         STATE["events_before_edit"] = list(self.job.events)
@@ -158,7 +155,7 @@ class Driver:
     def step_after_move_settle(self):
         STATE["post"] = self.job.frames[-1]
         STATE["events_after_move"] = list(self.job.events)
-        self.screenshot("viewport.png")
+        self.screenshot("viewport_edit.png")
         self.sphere.location.x -= 0.5  # a second plain move: the transform patch path
         self.go("after_second_move")
         return 0.1
@@ -196,6 +193,65 @@ class Driver:
             return 0.1
         STATE["events_final"] = list(self.job.events)
         STATE["handles_final"] = (self.job.session.value, self.job.scene_h.value)
+        self.go("cam_setup")
+        return 0.1
+
+    def step_cam_setup(self):
+        """A scene without a camera, plus an area lamp and a textured plane, in a user (not camera) view."""
+        import math
+        from mathutils import Euler, Vector
+        scene = bpy.context.scene
+        cam = scene.camera
+        scene.camera = None
+        bpy.data.objects.remove(cam)
+        light = bpy.data.objects.new("Lamp", bpy.data.lights.new("Lamp", "AREA"))
+        light.data.energy, light.data.size = 800.0, 3.0
+        light.location = (-1.0, -2.0, 3.0)
+        light.rotation_euler = (math.radians(30), 0.0, math.radians(-20))
+        scene.collection.objects.link(light)
+        img = bpy.data.images.new("Checker", 8, 8)
+        px = np.ones((8, 8, 4), np.float32)
+        px[:, :, :3] = (np.indices((8, 8)).sum(axis=0) % 2)[:, :, None] * 0.7 + 0.1
+        img.pixels.foreach_set(px.reshape(-1))
+        mat = bpy.data.materials.new("PlaneMat")
+        mat.use_nodes = True
+        tex = mat.node_tree.nodes.new("ShaderNodeTexImage")
+        tex.image, tex.interpolation = img, "Closest"
+        mat.node_tree.links.new(tex.outputs["Color"], mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"])
+        me = bpy.data.meshes.new("Plane")
+        me.from_pydata([(-3, -3, 0), (3, -3, 0), (3, 3, 0), (-3, 3, 0)], [], [(0, 1, 2, 3)])
+        me.uv_layers.new(name="UVMap").data.foreach_set("uv", (0, 0, 4, 0, 4, 4, 0, 4))
+        me.materials.append(mat)
+        plane = bpy.data.objects.new("Plane", me)
+        plane.location = (0.0, 0.0, -1.2)
+        scene.collection.objects.link(plane)
+        _, area, _ = self.find_area()
+        rv3d = area.spaces.active.region_3d
+        rv3d.view_perspective = "PERSP"
+        rv3d.view_location = Vector((0.0, 0.0, -0.3))
+        rv3d.view_distance = 9.0
+        rv3d.view_rotation = Euler((math.radians(70), 0.0, math.radians(25))).to_quaternion()
+        area.spaces.active.shading.type = "RENDERED"
+        STATE["t_switch"] = time.monotonic()
+        self.go("p2_first_frame")
+        return 0.05
+
+    def step_p2_first_frame(self):
+        job = self.find_job()
+        if job is None or job.t_first_frame is None:
+            if self.timed_out():
+                raise RuntimeError(f"no frame in the camera-less scene; events {job and job.events}")
+            return 0.05
+        self.job = job
+        STATE["p2_seconds"] = job.t_first_frame - STATE["t_switch"]
+        STATE["p2_events"] = list(job.events)
+        job.frames = []
+        self.go("p2_settle")
+        return SETTLE_S + 1.0
+
+    def step_p2_settle(self):
+        STATE["p2_frame"] = self.job.frames[-1] if self.job.frames else None
+        self.screenshot("viewport.png")
         return self.end()
 
     def screenshot(self, name):
@@ -204,6 +260,7 @@ class Driver:
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with bpy.context.temp_override(window=win, area=area, region=region):
             bpy.ops.screen.screenshot_area(filepath=out)
+        STATE.setdefault("screenshots", {})[name] = (out, (region.x - area.x, region.y - area.y, region.width, region.height))
         STATE["screenshot"] = out
         STATE["screenshot_region"] = (region.x - area.x, region.y - area.y, region.width, region.height)
 
@@ -270,22 +327,48 @@ class TestPresent(unittest.TestCase):
 
     def test_screenshot_shows_the_frame(self):
         """What reached the screen: the area shows the moved sphere right of the centre and above it
-        (a screenshot's rows are top-down; the PNG is read back bottom-up by Blender)."""
-        x0, y0, w, h = STATE["screenshot_region"]
-        img = bpy.data.images.load(STATE["screenshot"])
-        px = np.array(img.pixels[:], np.float32).reshape(img.size[1], img.size[0], 4)[:, :, :3]
-        reg = px[y0:y0 + h, x0:x0 + w]  # bottom-up, like the frame
-        # A factory profile's first-start popup covers the middle of the screen below the top 30 %; the
-        # sphere moved up, so its upper cap is in that band (and would be missing if rows were flipped).
-        band = reg[int(h * 0.7):].mean(axis=2)
-        bg = np.median(band[:8, :8])
-        mask = band < bg - 0.05
+        (the PNG is read back bottom-up by Blender, like the frame)."""
+        reg, w, h = self.region_pixels("viewport_edit.png")
+        lum = reg.mean(axis=2)
+        bg = np.median(lum[:8, :8])
+        mask = lum < bg - 0.05
         ys, xs = np.nonzero(mask)
-        cx = xs.mean() / w
-        print(f"RESULT present screenshot {img.size[0]}x{img.size[1]} region {w}x{h}: top band background {bg:.3f}, "
-              f"{mask.sum()} sphere pixels, their centre x {cx:.3f}")
+        cx, cy = xs.mean() / w, ys.mean() / h
+        print(f"RESULT present screenshot region {w}x{h}: background {bg:.3f}, {mask.sum()} sphere pixels, "
+              f"centre ({cx:.3f}, {cy:.3f})")
         self.assertGreater(mask.sum(), 500)
-        self.assertGreater(cx, 0.55)
+        self.assertGreater(cx, 0.58)
+        self.assertGreater(cy, 0.52)
+
+    @staticmethod
+    def region_pixels(name):
+        path, (x0, y0, w, h) = STATE["screenshots"][name]
+        img = bpy.data.images.load(path)
+        px = np.array(img.pixels[:], np.float32).reshape(img.size[1], img.size[0], 4)[:, :, :3]
+        return px[y0:y0 + h, x0:x0 + w], w, h
+
+    def test_camera_less_scene_presents(self):
+        """A scene without a camera, in a user view, with a lamp and a textured plane, presents a frame of
+        the region's size that is not black, with no failure."""
+        f = STATE["p2_frame"] or {}
+        ev = STATE["p2_events"]
+        print(f"RESULT present camera-less: first frame {STATE['p2_seconds'] * 1000:.0f} ms after switching to "
+              f"Rendered, events {ev}")
+        self.assertNotIn("failed", ev)
+        self.assertTrue(STATE["p2_frame"], "no frame was presented")
+        rgb = f["rgb"]
+        self.assertTrue(np.isfinite(rgb).all())
+        self.assertGreater(float(rgb.mean()), 0.01)
+        self.assertLess(STATE["p2_seconds"], 5.0)
+
+    def test_acceptance_screenshot(self):
+        """The acceptance look: the lamp-lit textured plane on the screen, measured."""
+        reg, w, h = self.region_pixels("viewport.png")
+        lum = reg.mean(axis=2)
+        print(f"RESULT present acceptance screenshot {w}x{h}: luminance min {lum.min():.3f} mean {lum.mean():.3f} "
+              f"max {lum.max():.3f}, std {lum.std():.3f}, pixels above 0.02: {int((lum > 0.02).sum())}")
+        self.assertGreater(float(lum.std()), 0.02)  # structure on screen, not a flat fill
+        self.assertGreater(int((lum > 0.02).sum()), w * h // 10)
 
     def test_close_destroys(self):
         """Leaving Rendered closes the session at once and the timer destroys session, then scene, once

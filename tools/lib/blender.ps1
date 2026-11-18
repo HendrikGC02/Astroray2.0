@@ -33,8 +33,19 @@ function Invoke-ArBlender {
       $saved[$k] = [Environment]::GetEnvironmentVariable($k)
       [Environment]::SetEnvironmentVariable($k, (Join-Path $profileDir $vars[$k]))
     }
-    $argv = @('--factory-startup', '--python-exit-code', '1', '--python', $scriptPath, '--') + $Args
-    if (-not $Gui) { $argv = @('--background') + $argv }
+    $argv = @('--python-exit-code', '1', '--python', $scriptPath, '--') + $Args
+    if (-not $Gui) { $argv = @('--background', '--factory-startup') + $argv }
+    else {
+      # A fresh profile opens the Quick Setup popup over the window. --factory-startup ignores saved
+      # preferences, so a windowed run seeds the (isolated, otherwise default) profile with a userpref
+      # that hides the splash and starts from it.
+      $seed = Start-ArProcess -Name 'blender-seed' -File $exe -LogPath (Join-Path $profileDir 'seed.log') -ArgList @(
+        '--background', '--factory-startup', '--python-expr',
+        'import bpy; bpy.context.preferences.view.show_splash = False; bpy.ops.wm.save_userpref()')
+      if (-not $seed.WaitForExit(120000)) { Stop-ArProcess -Id $seed.Id; throw 'seeding the Blender profile timed out' }
+      $seed.WaitForExit()
+      if (-not (Test-Path (Join-Path $profileDir 'config/userpref.blend'))) { throw 'seeding the Blender profile wrote no userpref.blend' }
+    }
     $p = Start-ArProcess -Name 'blender' -File $exe -ArgList $argv -LogPath $log
     if (-not $p.WaitForExit($TimeoutS * 1000)) {
       Stop-ArProcess -Id $p.Id

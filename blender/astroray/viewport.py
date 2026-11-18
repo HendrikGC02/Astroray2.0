@@ -46,6 +46,7 @@ class ViewportJob(render_final.Job):
         self._engine = None
         self._reported, self._revision = set(), None
         self._polling = False
+        self.t_first_frame = None  # monotonic time of the first upload
 
     # ---- view_update
 
@@ -63,7 +64,7 @@ class ViewportJob(render_final.Job):
 
     def _sync(self, depsgraph):
         if self.first:
-            super().update(depsgraph)
+            super().update(depsgraph, need_camera=False)
             self._after_full(depsgraph)
             return
         actions = classify.classify(depsgraph, self.cache)
@@ -73,7 +74,7 @@ class ViewportJob(render_final.Job):
         if classify.FULL_RESYNC in kinds:
             self.tcache.forget_all()
             self.first = True
-            super().update(depsgraph)
+            super().update(depsgraph, need_camera=False)
             self._after_full(depsgraph)
             return
         self.tcache.invalidate([a for a in actions if a.kind == classify.MATERIALS])
@@ -84,23 +85,8 @@ class ViewportJob(render_final.Job):
 
     def _after_full(self, depsgraph):
         self.table = None
-        self.geom_keys = set(self._scan(depsgraph)[0])
+        self.geom_keys = set(render_final.scan(depsgraph, self.keymap)[0])
         self.events.append("full")
-
-    def _scan(self, depsgraph):
-        """(geometry key -> evaluated object, material uid -> material) of the visible instances; the same
-        walk as render_final.full_sync's."""
-        geoms, mats = {}, {}
-        for inst in depsgraph.object_instances:
-            if inst.object.type not in instances.GEOMETRY_TYPES:
-                continue
-            gid = keys.geometry_identity(inst, depsgraph)
-            if gid is not None:
-                geoms.setdefault(self.keymap.key(gid), inst.object)
-            for slot in inst.object.material_slots:
-                if slot.material is not None:
-                    mats.setdefault(slot.material.original.session_uid, slot.material)
-        return geoms, mats
 
     def _apply(self, e, depsgraph, actions, kinds):
         """One edit, in 0007 d20's order. Camera actions need nothing: the viewport's camera is the view."""
@@ -114,7 +100,7 @@ class ViewportJob(render_final.Job):
         if C.WORLD in kinds:
             world = scene.world
             world_sync.sync(e, abi, world.evaluated_get(depsgraph) if world else None, self.keymap, self.op_id)
-        geoms, mats = self._scan(depsgraph)
+        geoms, mats = render_final.scan(depsgraph, self.keymap)
         new_geoms = set(geoms) - self.geom_keys
         if C.MATERIALS in kinds or C.INSTANCES in kinds:
             for uid, mat in mats.items():
@@ -196,6 +182,8 @@ class ViewportJob(render_final.Job):
             self._last_id = frame.frame_id
             if self.present.wants(frame):
                 self.present.upload(frame)
+                if self.t_first_frame is None:
+                    self.t_first_frame = time.monotonic()
                 if self.frames is not None:
                     self._log_frame(frame)
         finally:
