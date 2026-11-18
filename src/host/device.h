@@ -140,6 +140,9 @@ class Device {
   // Returns when every launched kernel has finished.
   virtual void synchronize() = 0;
   virtual uint32_t kind() const = 0;  // AR_DEVICE_CPU or AR_DEVICE_CUDA
+  // The GPU architecture ("sm_86") when the device runs code the runtime tests do not cover (0002 D15,
+  // 0001 D3.3: only sm_120 is tested), else empty. The session raises UNTESTED_DEVICE once from it.
+  virtual std::string untested_architecture() const { return {}; }
 
  protected:
   // The device's reserve rule (0007 d14, R19; the CUDA side is 028): true when `need`

@@ -109,6 +109,26 @@ TestHooks read_test_hooks() {
     out.unit_radiance_scale = true;
     out.active.push_back("RADIANCE_SCALE=1");
   }
+  // 0002 D15 injections. A flag hook is exactly "1": any other value would inject nothing, silently.
+  const struct {
+    const char* name;
+    bool* flag;
+  } flags[] = {{"CORRUPT_CUBIN", &out.corrupt_cubin}, {"FAIL_INIT", &out.fail_init}, {"GPU_FAULT", &out.gpu_fault},
+                                          {"LAUNCH_TIMING", &out.launch_timing}};
+  for (const auto& f : flags) {
+    if (!env_value(f.name, &value)) continue;
+    if (value != "1") throw std::invalid_argument(std::string("ASTRORAY_TEST_") + f.name + "=" + value + " is not 1");
+    *f.flag = true;
+    out.active.push_back(std::string(f.name) + "=1");
+  }
+  if (env_value("DRIVER_VERSION", &value)) {
+    out.driver_version = uint32_t(positive("DRIVER_VERSION", value, 99999));
+    out.active.push_back("DRIVER_VERSION=" + value);
+  }
+  if (env_value("COMPUTE_CAPABILITY", &value)) {
+    out.compute_capability = uint32_t(positive("COMPUTE_CAPABILITY", value, 999));
+    out.active.push_back("COMPUTE_CAPABILITY=" + value);
+  }
 #endif
   return out;
 }

@@ -14,6 +14,14 @@ spill_load = 0
 compile_s = 1.3
 gated = "merge"
 
+[kernel.ar_test_fault]
+regs = 8
+stack = 0
+spill_store = 0
+spill_load = 0
+compile_s = 1.2
+gated = "full"
+
 [kernel.k_queue_build_count]
 regs = 27
 stack = 0
