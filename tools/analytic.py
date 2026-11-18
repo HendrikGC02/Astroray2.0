@@ -4,7 +4,7 @@ at 32x32, reads each pixel's mean and variance of the mean from the dump and com
 with the closed-form truth of scenes/lib/truths.py.
 
 Usage: <python> -I tools/analytic.py --scene <name> | --gate --device cpu|cuda [--spp N] [--seed S] [--png P]
-       <python> -I tools/analytic.py --scene <comparison scene> --device D --null PAIRS [--null-mode M]
+       <python> -I tools/analytic.py --scene <comparison scene> --device D --null PAIRS
 Prints one line per scene channel and a final PASS or FAIL line with the worst pixel's z and a
 reproduce command; exits non-zero on failure.
 
@@ -446,13 +446,15 @@ def run(scene, device, spp, seed, png=None):
     return ok
 
 
-def null_calibration(scene, device, pairs, mode, spp=None):
-    """Null run of a comparison scene's block test: `pairs` pairs of renders in the same NEE mode
-    with independent seeds, so every difference is noise. Counts the checks that would alarm at the
-    Sidak thresholds the gate uses (block check: any block beyond z; image-mean check) and prints the
-    |z| tail of the blocks with SE > 0 (black background blocks have mean and SE 0 and test nothing)
-    against the normal, for the tested channel Y (its SE is the Minkowski bound, so its z is
-    conservative) and for G alone (exact variance). A calibration, not a fitted threshold."""
+def null_calibration(scene, device, pairs, pair, spp=None):
+    """Null run of a comparison scene's block test for the mode pair (a, b) the gate checks:
+    `pairs` independent-seed render pairs. Every mode is unbiased, so with correct code every
+    difference is noise, and a cross-mode pair keeps the skew of the single-strategy estimator (a
+    same-mode pair would cancel it). Counts the checks that would alarm at the Sidak thresholds the
+    gate uses (block check: any block beyond z; image-mean check) and prints the tails of the signed
+    z = (a - b) / SE of the blocks with SE > 0 (black background blocks test nothing) against the
+    normal, two-sided and each side, for the tested channel Y (its SE is the Minkowski bound, so its
+    z is conservative) and for G alone (exact variance). A calibration, not a fitted threshold."""
     m, rec = scene_paths(scene)
     size, spp, block_size = comparison_plan(m["truth"], spp)
     rows = {"Y": truths.working_luminance_row(), "G": np.array([0.0, 1.0, 0.0])}
@@ -463,8 +465,8 @@ def null_calibration(scene, device, pairs, mode, spp=None):
     t0 = time.perf_counter()
     for i in range(pairs):
         got = []
-        for j in (0, 1):
-            r = render_mode(rec, device, spp, mix_bits(fnv1a(f"null:{scene}:{mode}:{i}:{j}")) & 0xFFFFFFFF, size, mode)
+        for mode in pair:
+            r = render_mode(rec, device, spp, mix_bits(fnv1a(f"null:{scene}:{pair}:{i}:{mode}")) & 0xFFFFFFFF, size, mode)
             if isinstance(r, str):
                 raise RuntimeError(r)
             got.append(r)
@@ -472,22 +474,25 @@ def null_calibration(scene, device, pairs, mode, spp=None):
             (ma, va), (mb, vb) = (channel(row, *g) for g in got)
             bm = [block(x, s, block_size) for x, s in ((ma, 1), (va, 2), (mb, 1), (vb, 2))]
             se = np.sqrt(bm[1] + bm[3])
-            z = np.abs(bm[0] - bm[2])[se > 0] / se[se > 0]
+            z = (bm[0] - bm[2])[se > 0] / se[se > 0]
             zb[k].extend(z)
             if k == "Y":
-                alarms += int((z > zb_crit).any())
-                zi.append(abs(ma.mean() - mb.mean()) / (math.sqrt(va.sum() + vb.sum()) / ma.size))
+                alarms += int((np.abs(z) > zb_crit).any())
+                zi.append((ma.mean() - mb.mean()) / (math.sqrt(va.sum() + vb.sum()) / ma.size))
     nd = statistics.NormalDist()
     tails = []
     for k, v in zb.items():
         v = np.asarray(v)
-        tails.append(f"{k} over {v.size} blocks: " + ", ".join(
-            f"|z|>{c}: {int((v > c).sum())} (normal {v.size * 2 * nd.cdf(-c):.1f})" for c in (2, 3, 4))
-            + f", max {v.max():.2f}")
-    print(f"null {scene} {device} {mode}~{mode}: {pairs} pairs, {size}x{size} at {spp} spp, {block_size}x{block_size} "
-          f"blocks; block-check alarms {alarms} of {pairs} at z {zb_crit:.2f} (expected "
-          f"{pairs * sidak(FAMILY_ALPHA, fam):.4f}); image-mean alarms {sum(z > zi_crit for z in zi)} at z "
-          f"{zi_crit:.2f}, max {max(zi):.2f}; tails: {'; '.join(tails)}; {time.perf_counter() - t0:.0f} s")
+        cuts = (2.0, 3.0, 4.0, round(zb_crit, 2))
+        tails.append(f"{k} over {v.size} blocks (normal one side): " + ", ".join(
+            f"z>{c}: {int((v > c).sum())} z<-{c}: {int((v < -c).sum())} ({v.size * nd.cdf(-c):.2f})" for c in cuts)
+            + f", min {v.min():+.2f} max {v.max():+.2f}, skew {float(((v - v.mean()) ** 3).mean() / v.std() ** 3):+.3f}")
+    zi = np.asarray(zi)
+    print(f"null {scene} {device} {pair[0]}~{pair[1]}: {pairs} pairs, {size}x{size} at {spp} spp, "
+          f"{block_size}x{block_size} blocks; block-check alarms {alarms} of {pairs} at z {zb_crit:.2f} (expected "
+          f"{pairs * sidak(FAMILY_ALPHA, fam):.4f}); image-mean alarms {int((np.abs(zi) > zi_crit).sum())} at z "
+          f"{zi_crit:.2f}, min {zi.min():+.2f} max {zi.max():+.2f}; tails: {'; '.join(tails)}; "
+          f"{time.perf_counter() - t0:.0f} s")
 
 
 def main():
@@ -500,14 +505,14 @@ def main():
     ap.add_argument("--seed", type=int, help="default: seed_for(scene name), task 020's rule")
     ap.add_argument("--png", help="write the render here (one scene only), display scaled so truth is 0.5")
     ap.add_argument("--null", type=int, metavar="PAIRS", help="null calibration of a comparison scene: PAIRS "
-                    "same-mode pairs (null_calibration), no test")
-    ap.add_argument("--null-mode", default="on", choices=("on", "off", "light_only"))
+                    "render pairs for each mode pair its [truth] pairs name (null_calibration), no test")
     a = ap.parse_args()
     if bool(a.scene) == a.gate:
         ap.error("give --scene or --gate")
     if a.null:
         for s in a.scene or ap.error("--null takes --scene"):
-            null_calibration(s, a.device, a.null, a.null_mode, a.spp)
+            for pair in meta.load(os.path.join(ROOT, "scenes", s, "meta.toml"))["truth"]["pairs"]:
+                null_calibration(s, a.device, a.null, tuple(pair), a.spp)
         return 0
     if a.gate:
         check_family()

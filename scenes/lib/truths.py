@@ -134,8 +134,6 @@ def lamp_over_plane(t, width, height):
     E). Lamps never occlude (0004 D8). Pixels the disc's edge may cross are NaN (excluded): the
     sphere is exact, so the ball test of sphere_pixel_classes applies with r_in = R.
     Ref: Golub and Welsch 1969 (Gauss-Legendre nodes, numpy.polynomial.legendre.leggauss)."""
-    if width != height:
-        raise ValueError("lamp_over_plane assumes a square image")
     rho, power, radius = float(t["rho"]), float(t["power"]), float(t["lamp_radius"])
     lamp = [float(v) for v in t["lamp_position"]]
     cam = float(t["camera_height"])
@@ -144,17 +142,11 @@ def lamp_over_plane(t, width, height):
         raise ValueError("truth colour must be an RGB triple")
     if not lamp[2] > radius:
         raise ValueError("the lamp must lie wholly above the plane")
+    x, y, wq = _pixel_quadrature(t, width, height)
+    e_mean = np.einsum("hwab,a,b->hw", lamp_irradiance(power, lamp, x, y), wq, wq)
     half = float(t["sensor_mm"]) / (2.0 * float(t["focal_mm"]))
     edges = (np.arange(width + 1) / width * 2.0 - 1.0) * half
-    nodes, weights = np.polynomial.legendre.leggauss(8)
     lo, hi = edges[:-1], edges[1:]
-    # film coordinates of the quadrature nodes per pixel column / row: (n, 8)
-    f = (lo + hi)[:, None] / 2.0 + (hi - lo)[:, None] / 2.0 * nodes[None, :]
-    wq = weights / 2.0  # each axis' weights sum to 1
-    fx = f[None, :, None, :]  # (1, w, 1, 8): column
-    fy = f[:, None, :, None]  # (h, 1, 8, 1): row, bottom-up
-    e = lamp_irradiance(power, lamp, cam * fx, cam * fy)  # (h, w, 8, 8)
-    e_mean = np.einsum("hwab,a,b->hw", e, wq, wq)
     plane = rho / np.pi * e_mean
     truth = plane
     if radius > 0.0:
