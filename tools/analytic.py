@@ -68,7 +68,10 @@ COUNTER_SPP = 4
 #   d8 on~off, 100 pairs: 52 block-check alarms (0.004 expected), 0 image alarms; Y z>4.99: 67 / 0
 #     of 2400 blocks, skew +1.81. FAILS: the pixel row straddling the floor's near edge holds a
 #     few floor samples, so BSDF-only (off) lighting there is a rare event and its VAR is
-#     underestimated (mean block z +1 in that row). Open with the lead (task 106).
+#     underestimated (mean block z +1 in that row). So d8 is tested on the image mean only, as the
+#     0004 D8 row asks (lead ruling, [truth] image_mean_only). Its image-mean z over the same 100
+#     pairs: 0 alarms at 4.11, min -2.16 max +1.99, mean -0.17 sd 0.93 skew +0.06; z>1 / z<-1: 10
+#     / 19 (15.9 each), z>2 / z<-2: 0 / 3 (2.3), beyond 3: 0 (0.13). Normal.
 DEVICES = ("cpu", "cuda")
 FAMILY_ALPHA = 0.01  # 0009 d15
 # tests/common/stat.cpp kRepoConstant and the FNV-1a / MixBits rule of seed_for() (task 020).
@@ -491,11 +494,14 @@ def null_calibration(scene, device, pairs, pair, spp=None):
             f"z>{c}: {int((v > c).sum())} z<-{c}: {int((v < -c).sum())} ({v.size * nd.cdf(-c):.2f})" for c in cuts)
             + f", min {v.min():+.2f} max {v.max():+.2f}, skew {float(((v - v.mean()) ** 3).mean() / v.std() ** 3):+.3f}")
     zi = np.asarray(zi)
+    itail = ", ".join(f"z>{c}: {int((zi > c).sum())} z<-{c}: {int((zi < -c).sum())} ({zi.size * nd.cdf(-c):.2f})"
+                      for c in (1.0, 2.0, 3.0))
+    iskew = float(((zi - zi.mean()) ** 3).mean() / zi.std() ** 3)
     print(f"null {scene} {device} {pair[0]}~{pair[1]}: {pairs} pairs, {size}x{size} at {spp} spp, "
           f"{block_size}x{block_size} blocks; block-check alarms {alarms} of {pairs} at z {zb_crit:.2f} (expected "
           f"{pairs * sidak(FAMILY_ALPHA, fam):.4f}); image-mean alarms {int((np.abs(zi) > zi_crit).sum())} at z "
-          f"{zi_crit:.2f}, min {zi.min():+.2f} max {zi.max():+.2f}; tails: {'; '.join(tails)}; "
-          f"{time.perf_counter() - t0:.0f} s")
+          f"{zi_crit:.2f}, min {zi.min():+.2f} max {zi.max():+.2f}, mean {zi.mean():+.3f} sd {zi.std():.3f} skew "
+          f"{iskew:+.3f}, {itail}; tails: {'; '.join(tails)}; {time.perf_counter() - t0:.0f} s")
 
 
 def main():

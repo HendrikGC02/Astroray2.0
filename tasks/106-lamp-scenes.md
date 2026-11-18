@@ -1,7 +1,7 @@
 # 106 Lamp scenes A3, lit furnace, NEE on/off and stacked lamps, with the NEE test hook
 Goal: area-lamp transport and MIS are not checked against physics -> A3 (disk over a plane), the small lit furnace, NEE on/off/BSDF-only agreement and stacked lamps pass on CPU and GPU, driven by a gate-build hook that switches the NEE mode.
 Read first: 0004 D1 (point and area check, lit furnace), D8 (stacked lamps), 0004 Verification rows D1, D8; 0009 d20 (A3 disk emitter over a plane), d16 (harness); src/host/session/test_hooks.h (101).
-Scope: src/host/session/test_hooks.{h,cpp} (NEE row), src/kernel/kernel_globals.h (SessionUniforms field), src/kernel/stages/shade_surface.h, shade_background.h and shade_light.h (read the NEE mode), scenes/a3_disk/, scenes/lit_furnace_small/, scenes/d1_nee_onoff/, scenes/d8_stacked_lamps/, scenes/lib/truths.py, tools/analytic.py (two-render comparison), tools/check.ps1, tests/cpu/test_nee.cpp (Do 4); lead ruling: tools/budgets.toml [family_members] analytic_scenes only, by exactly the added members.
+Scope: src/host/session/test_hooks.{h,cpp} (NEE row), src/kernel/kernel_globals.h (SessionUniforms field), src/kernel/stages/shade_surface.h, shade_background.h and shade_light.h (read the NEE mode), scenes/a3_disk/, scenes/lit_furnace_small/, scenes/d1_nee_onoff/, scenes/d8_stacked_lamps/, scenes/lib/truths.py, tools/analytic.py (two-render comparison), tools/check.ps1, tests/cpu/test_nee.cpp (Do 4); lead ruling: tools/budgets.toml [family_members] analytic_scenes only, by exactly the added members; d8 tested on the image mean per the D8 row (lead ruling).
 Out of scope: spot and sun lamps (M4); light paths (M5); an ABI setting for NEE (none: this is a test hook).
 Reference: Veach 1997, ch. 9 (estimators combined by MIS must agree); Howell, Menguc and Siegel, Thermal Radiation Heat Transfer, disk-to-differential-area configuration factor (A3 truth).
 Do:
@@ -24,5 +24,5 @@ Progress:
 - pair checks test pixel blocks: BSDF-only gives zero-hit pixels (mean and VAR 0) per pixel; comparison is per scene formula, no --compare flag
 - furnace no-bias check: 16384 spp CPU, Y image mean 0.268208 vs truth 0.268276 (z -1.43), resolves 0.073%; worst pixel z +3.53
 - lead option (c): d1, d8 render 64x64 at 64 spp, tested in 8x8 blocks (4096 samples each); a3, furnace stay 32x32 at 1024
-- cross-mode null `analytic.py --scene S --device cpu --null 100`: d1 on~off and on~light_only 0 alarms, tails normal; d8 on~off 52/100 block alarms (skew +1.81, floor near-edge row); open, numbers in analytic.py
+- cross-mode null `analytic.py --scene S --device cpu --null 100`: d1 on~off, on~light_only 0 alarms, tails normal; d8 blocks 52/100 alarms (skew +1.81, floor near-edge row), d8 image mean 0 alarms, sd 0.93, skew +0.06, normal tails; d8 now image mean only
 - CPU vs CUDA a3 dumps differ (display max rel 4.5e-7, VAR 8.8e-7; NSAMP and bounces equal): same integer-RNG paths, float rounding apart; DEVICE header cpu / cuda

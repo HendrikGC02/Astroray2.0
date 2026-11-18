@@ -259,15 +259,17 @@ def mode_agreement(t, width, height):
     """d1, d8: no closed form; renders of the same scene under different NEE test modes
     (ASTRORAY_TEST_NEE, RULINGS.md 77) must agree in the mean (Veach 1997, ch. 9: MIS and each
     strategy alone are unbiased estimators of one integral). For every pair in [truth] pairs, display
-    Y per pixel block ([truth] size, spp, block) and as the image mean; the third field is the
-    pair of modes, not a truth array."""
+    Y per pixel block ([truth] size, spp, block) and as the image mean, or as the image mean only
+    when [truth] image_mean_only is true; the third field is the pair of modes, not a truth array."""
     row = working_luminance_row()
+    blocks = not t.get("image_mean_only", False)
     checks = []
     for a, b in t["pairs"]:
         for m in (a, b):
             if m not in ("on", "off", "light_only"):
                 raise ValueError(f"unknown NEE mode {m!r}")
-        checks.append((f"Y {a}~{b}", row, (a, b), "pair_pixels"))
+        if blocks:
+            checks.append((f"Y {a}~{b}", row, (a, b), "pair_pixels"))
         checks.append((f"Y image mean {a}~{b}", row, (a, b), "pair_image"))
     return checks
 
