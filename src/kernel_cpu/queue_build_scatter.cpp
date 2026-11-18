@@ -14,5 +14,5 @@ void cpu_queue_build_scatter(const ar::KernelGlobals& kg, uint32_t first, uint32
   const uint32_t from = (first + ar::kQueueTile - 1) / ar::kQueueTile;
   uint32_t to = (last + ar::kQueueTile - 1) / ar::kQueueTile;
   if (to > tiles) to = tiles;
-  for (uint32_t g = from; g < to; ++g) ar::queue_scatter_tile(kg, g, 0, 1);
+  for (uint32_t g = from; g < to; ++g) ar::queue_scatter_tile(kg, g);
 }

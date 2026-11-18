@@ -10,16 +10,16 @@
 // D4, D6, D7 remedy (c).
 #include "stages/queue_build.h"
 
-static_assert(ar::kLaunch_k_queue_build_scan.threads % ar::kQueueLanes == 0, "a block holds whole warps");
+static_assert(ar::kLaunch_k_queue_build_scan.threads % ar::kQueueScanLanes == 0, "a block holds whole warps");
 
 extern "C" __global__ void AR_LAUNCH_BOUNDS(ar::kLaunch_k_queue_build_scan.threads,
                                             ar::kLaunch_k_queue_build_scan.min_blocks)
     k_queue_build_scan(const ar::KernelGlobals* __restrict__ kg) {
   const ar::KernelGlobals& g = *kg;
   const uint32_t thread = blockIdx.x * blockDim.x + threadIdx.x;
-  const uint32_t lane = threadIdx.x % ar::kQueueLanes;
-  const uint32_t warps = gridDim.x * blockDim.x / ar::kQueueLanes;
+  const uint32_t lane = threadIdx.x % ar::kQueueScanLanes;
+  const uint32_t warps = gridDim.x * blockDim.x / ar::kQueueScanLanes;
   const uint32_t units = ar::queue_scan_tiles(ar::queue_tile_count(g));
-  for (uint32_t u = thread / ar::kQueueLanes; u < units; u += warps)
-    ar::queue_scan_tile(g, u, lane, ar::kQueueLanes);
+  for (uint32_t u = thread / ar::kQueueScanLanes; u < units; u += warps)
+    ar::queue_scan_tile(g, u, lane, ar::kQueueScanLanes);
 }

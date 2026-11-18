@@ -81,16 +81,16 @@ struct LaunchRow {
 AR_LAUNCH_ROWS(AR_LAUNCH_ROW_CONST)
 #undef AR_LAUNCH_ROW_CONST
 
-// Items of a pool that one queue_build tile counts and scatters in order (the "block" of 0002
-// D6's block histogram), by one GPU warp or one CPU loop. PROVISIONAL; the material sort tiles by it too (sort.h).
+// Items of a pool that one queue_build work unit counts and scatters in order (the "block" of
+// 0002 D6's block histogram). One unit is one GPU thread or one CPU loop; 1,024 is also the CPU
+// chunk of D4, so a chunk is one unit. PROVISIONAL; the material sort tiles by it too (sort.h).
 inline constexpr uint32_t kQueueTile = 1024;
 
-// queue_build_scan's look-back tile (0002 D7 remedy (c)): kQueueScanRows histogram rows.
-// PROVISIONAL: chosen on B-1M and B-5M at 1080p (task 118's Result).
+// queue_build_scan's look-back tile (0002 D7 remedy (c)): kQueueScanRows histogram rows, scanned
+// by kQueueScanLanes units, one GPU warp with a lane per bin (the CPU runs one unit).
+// PROVISIONAL: rows chosen on B-1M and B-5M at 1080p (task 118's Result).
 inline constexpr uint32_t kQueueScanRows = 32;
-// Units that share one queue_build tile or scan tile: one GPU warp (the vote of ar::ballot is
-// warp-wide). The CPU runs one unit per tile.
-inline constexpr uint32_t kQueueLanes = 32;
+inline constexpr uint32_t kQueueScanLanes = 32;
 
 // The shade_surface material sort runs when the segment holds at least kSortMinItems paths and
 // the scene has at least kSortMinMaterials materials; the scheduler (045) reads both.
