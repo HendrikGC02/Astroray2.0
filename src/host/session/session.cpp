@@ -844,7 +844,15 @@ void Session::render_loop() {
       sync_film();  // a changed pass request rebuilds the film here, before the reset
       begin_epoch();
       const LightTable* lt = tables_ ? tables_->lights.get() : nullptr;
-      film_->data().inv_radiance_scale = lt ? 1.0 / lt->radiance_scale : 1.0;
+      const double inv_s = lt ? 1.0 / lt->radiance_scale : 1.0;
+      if (inv_s != film_->data().inv_radiance_scale) {
+        // s is invisible in the film by design (0003 d10), so the log is where a test (0003 check 15)
+        // sees the value the render used.
+        int e = 0;
+        std::frexp(inv_s, &e);  // inv_s = 2^-k exactly, so e = 1 - k
+        ctx_.log.line("INFO", "session: radiance scale s = 2^" + std::to_string(1 - e));
+      }
+      film_->data().inv_radiance_scale = inv_s;
     }
     apply_view();
     if (lr.changed) update_camera_and_filter(lr.generation);

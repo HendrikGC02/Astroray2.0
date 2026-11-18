@@ -44,8 +44,11 @@ DEVICES = ("cpu", "cuda")
 # off, d4's default-pool render. Their block statistic departs from analytic.py's per-pixel z at
 # MIN_SPP, so it was null-calibrated (`--check d2_rr_furnace --check d4_lifetime --device cpu --null
 # 100`, signed block z of correct code, one-sided normal count in brackets):
-#   d2 rr_on, 6400 blocks: 0 alarms at 4.99; mean -0.001 sd 0.947 skew -0.047; z>3 / z<-3: 8 / 11 (8.6).
-#   d2 rr_off: 0 alarms; sd 0.391 (Y's SE is the Minkowski bound, conservative); none beyond 2.
+#   d2 (max_depth 48) rr_on, 6400 blocks: 0 alarms at 4.99; mean -0.036 sd 0.971 skew -0.121; z>3 /
+#     z<-3: 6 / 14 (8.6). The image mean is unbiased (mean / truth - 1 = -8e-5, SE 2.8e-4); the
+#     negative z mean is roulette's skew: a block that drew few long paths is low with a low VAR.
+#   d2 rr_off: 0 alarms; sd 0.385 (Y's SE is the Minkowski bound, conservative); none beyond 2;
+#     mean / truth - 1 = +2.0e-5 (SE 1.4e-5); the truth is the series, Le / (1 - rho) less rho^49 = 1.8e-5.
 #   d4 default, 1600 blocks: 0 alarms at 4.71; mean -0.009 sd 0.943 skew -0.169; z>3 / z<-3: 0 / 2 (2.2).
 TRUTH_RENDERS = (("d2_rr_furnace", "rr_on"), ("d2_rr_furnace", "rr_off"), ("d4_lifetime", "default"))
 # B-16 (0009 d18): the A fixtures that need no B-1M scene, and d28; the tripwire runs on the largest.
@@ -190,7 +193,26 @@ def check_d28(device):
                 f"{int(pl['bounce_max'].min())}..{int(pl['bounce_max'].max())} (max_depth {d})")
 
 
+def logged_scale_exponents(log):
+    """The k of every "radiance scale s = 2^k" line session.cpp logs when an epoch's s changes."""
+    return [int(ln.rsplit("2^", 1)[1]) for ln in log.splitlines() if "session: radiance scale s = 2^" in ln]
+
+
 def check_d15(device):
+    """The automatic s must not be 1 (else the comparison is trivial): read from the context log of
+    an in-process render, and s = 1 under the hook; then the two CLI films must be bit-identical."""
+    auto_k = logged_scale_exponents(in_process("d15_radiance_scale", device)[3])
+    # The hook must be in the environment the engine DLL starts with (its C runtime does not see
+    # os.environ edits), so the hooked render runs in a child process.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ASTRORAY_TEST_")}
+    env["ASTRORAY_TEST_RADIANCE_SCALE"] = "1"
+    r = subprocess.run([sys.executable, "-I", os.path.abspath(__file__), "--log-scale", "d15_radiance_scale", "--device",
+                        device], capture_output=True, text=True, env=env, timeout=600)
+    if r.returncode != 0:
+        raise RuntimeError(f"hooked in-process render failed: {r.stdout}{r.stderr}")
+    unit_k = [int(v) for v in r.stdout.split()]
+    if len(auto_k) != 1 or auto_k[0] == 0 or any(unit_k):
+        return False, f"automatic s = 2^{auto_k} must be one value other than 2^0, hooked s = 2^{unit_k or [0]} must be 2^0"
     t = truth_of("d15_radiance_scale")
     rec, s = recording("d15_radiance_scale"), seed("d15", "all")
     _, auto, _ = dump(rec, device, t["spp"], t["size"], s)
@@ -198,7 +220,7 @@ def check_d15(device):
     if "RADIANCE_SCALE=1" not in out:
         raise RuntimeError("the CLI's report lists no TEST_HOOK_ACTIVE entry for ASTRORAY_TEST_RADIANCE_SCALE")
     differ = sorted(k for k in auto if not np.array_equal(auto[k], one[k]))
-    return not differ, ("film bit-identical with automatic s and s = 1 over " + f"{len(auto)} planes"
+    return not differ, (f"automatic s = 2^{auto_k[0]}; film bit-identical with it and with s = 1 over {len(auto)} planes"
                         if not differ else f"planes differ: {differ}")
 
 
@@ -252,14 +274,15 @@ class _InProcess(ar.Scene):
         # Words 0-3, then kStageCount stage items, then 11 words of which state_bytes_moved and
         # shadow_item_bytes_moved are the seventh and eighth (src/host/counters.h).
         counters = dict(zip(COUNTER_KEYS, (words[0], words[1], words[2], words[3], words[n - 5], words[n - 4])))
-        type(self).result = (counters, times, w * h * self.samples)
         self._teardown()
+        with open(os.path.join(self._tmp.name, "context.log"), encoding="utf-8", errors="replace") as f:
+            log = f.read()
+        type(self).result = (counters, times, w * h * self.samples, log)
 
 
 def in_process(scene, device, runs=1, spp=None):
-    """Builds `scene` with its own builder into this process and renders it `runs` times."""
-    for k in [k for k in os.environ if k.startswith("ASTRORAY_TEST_")]:
-        del os.environ[k]
+    """Builds `scene` with its own builder into this process and renders it `runs` times, under the
+    environment this process started with. Returns (counters, run seconds, samples, context log)."""
     cls = type("_Run", (_InProcess,), {"device": device, "runs": runs, "spp": spp})
     mod = load_builder(scene)
     real, mod.ar.Scene = mod.ar.Scene, cls
@@ -280,7 +303,7 @@ def check_counters(device, measured):
     base = load_baselines().get(device, {})
     ok, parts = True, []
     for scene in COUNTER_SCENES:
-        counters, _, _ = in_process(scene, device)
+        counters = in_process(scene, device)[0]
         measured.setdefault(device, {})[scene] = counters
         b = base.get(scene)
         if b is None:
@@ -302,7 +325,7 @@ def check_tripwire(device, measured):
     base = load_baselines().get("tripwire", {}).get(device, {})
     ok, parts = True, []
     for spp in TRIPWIRE_SPP:
-        _, times, samples = in_process(TRIPWIRE_SCENE, device, runs=TRIPWIRE_RUNS + 1, spp=spp)
+        _, times, samples, _ = in_process(TRIPWIRE_SCENE, device, runs=TRIPWIRE_RUNS + 1, spp=spp)
         ms = min(times[1:]) * 1e3 / samples
         key = f"ms_per_sample_{spp}spp"
         measured.setdefault("tripwire", {}).setdefault(device, {})[key] = ms
@@ -346,11 +369,10 @@ def null_calibration(scene, device, n):
     nd = statistics.NormalDist()
     t = truth_of(scene)
     for sc, variant in [r for r in TRUTH_RENDERS if r[0] == scene]:
-        zs, alarms, crit = [], 0, None
-        env = {}
+        zs, alarms, crit, rel = [], 0, None, []
         for i in range(n):
             _, pl, _ = dump(recording(sc, variant), device, t["spp"], t["size"],
-                            analytic.mix_bits(analytic.fnv1a(f"null:{sc}:{variant}:{i}")) & 0xFFFFFFFF, env)
+                            analytic.mix_bits(analytic.fnv1a(f"null:{sc}:{variant}:{i}")) & 0xFFFFFFFF)
             row = truths.evaluate(t, t["size"], t["size"])[0]
             mean, var = analytic.channel(row[1], *display(pl))
             k = int(t["block"])
@@ -358,11 +380,15 @@ def null_calibration(scene, device, n):
             z = (bm - bt) / np.sqrt(bv)
             crit = analytic.pixel_z(analytic.family_m(), bm.size)
             alarms += int((np.abs(z) > crit).any())
+            rel.append(float(mean.mean() / row[2].mean() - 1.0))
             zs.extend(z.ravel())
         v = np.asarray(zs)
         tails = ", ".join(f"z>{c}: {int((v > c).sum())} z<-{c}: {int((v < -c).sum())} ({v.size * nd.cdf(-c):.2f})"
                           for c in (2.0, 3.0, 4.0))
         skew = float(((v - v.mean()) ** 3).mean() / v.std() ** 3)
+        rel = np.asarray(rel)
+        print(f"null {sc} {variant} {device}: image mean / truth - 1 over the seeds {rel.mean():+.2e} "
+              f"(SE {rel.std() / math.sqrt(rel.size):.1e})")
         print(f"null {sc} {variant} {device}: {n} seeds, {v.size} blocks; alarms {alarms} at z {crit:.2f} (expected "
               f"{n * analytic.sidak(analytic.FAMILY_ALPHA, analytic.family_m()):.4f}); mean {v.mean():+.3f} sd "
               f"{v.std():.3f} skew {skew:+.3f} min {v.min():+.2f} max {v.max():+.2f}; {tails}")
@@ -374,8 +400,12 @@ def main():
     ap.add_argument("--gate", action="store_true", help="every check")
     ap.add_argument("--device", required=True, choices=DEVICES)
     ap.add_argument("--bless", action="store_true", help="rewrite this device's counters.toml baselines")
+    ap.add_argument("--log-scale", metavar="SCENE", help=argparse.SUPPRESS)  # check_d15's child
     ap.add_argument("--null", type=int, metavar="N", help="null calibration of d2 or d4's block test")
     a = ap.parse_args()
+    if a.log_scale:
+        print(" ".join(str(k) for k in logged_scale_exponents(in_process(a.log_scale, a.device)[3])))
+        return 0
     if bool(a.check) == a.gate:
         ap.error("give --check or --gate")
     if a.null:

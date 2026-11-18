@@ -16,7 +16,10 @@ single_witness = false
 formula = "uniform_enclosure"
 rho = 0.8
 radiance = 0.2
-max_depth = 8
+# The row's truth is Le / (1 - rho) = 1.0: with max_depth 48 the series falls short of it by
+# rho^49 = 1.8e-5 relative, far below a block's relative SE (about 2 %) and the image mean's (0.25 %),
+# so the check tests Le / (1 - rho) to within its resolution, both with roulette on and off.
+max_depth = 48
 # size x size at spp, tested in block x block pixel blocks: 64 blocks of 1024 samples each.
 size = 64
 spp = 16

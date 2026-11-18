@@ -25,3 +25,4 @@ Progress:
 - hooks POOL/THREADS/RADIANCE_SCALE + TEST_HOOK_ACTIVE (45; report_codes.def needed one line too). Scenes d2/d4/d28/d15, truths uniform_enclosure, tools/integrator_checks.py, gate steps.
 - found: min_bounces = max_bounces still roulettes the last continuation (roulette_q depth >= max(2, min)); scenes use max+1. Emissive enclosure needs emission_sampling FRONT_BACK (AUTO drops Le < 0.5).
 - null 100 seeds CPU: d2 on/off, d4 0 alarms, unbiased. Canary red on all six checks; second-shadow-ray demo fails counters.
+- review fixes: d15 reads the automatic s from a session log line (2^-2) and needs s = 2^0 under the hook; d2 max_depth 48 (rho^49 = 1.8e-5); canary forces s = 1 and sleeps 20 ms per step.
