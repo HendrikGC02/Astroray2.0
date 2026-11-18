@@ -143,15 +143,8 @@ def render_size(scene):
             max(1, int(r.resolution_y * r.resolution_percentage / 100)))
 
 
-def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, istate):
-    """Everything of one view layer, in 0007 d20's apply order with full reads. Returns (report
-    lines for what Blender asks for and the engine does not do, the camera fields)."""
-    lightgroups = instances.lightgroup_indices(view_layer)
-    fields, lines = settings.build(scene, _colorspace(), view_layer_passes(view_layer), lightgroups)
-    settings.set_settings(edit, abi, fields)
-    world = scene.world
-    world_sync.sync(edit, abi, world.evaluated_get(depsgraph) if world else None, keymap, op_id)
-
+def scan(depsgraph, keymap):
+    """(geometry key -> evaluated object, material uid -> material) of the instances in a depsgraph."""
     geoms, mats = {}, {}
     for inst in depsgraph.object_instances:
         if inst.object.type not in instances.GEOMETRY_TYPES:
@@ -162,6 +155,21 @@ def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, is
         for slot in inst.object.material_slots:
             if slot.material is not None:
                 mats.setdefault(slot.material.original.session_uid, slot.material)
+    return geoms, mats
+
+
+def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, istate, need_camera=True):
+    """Everything of one view layer, in 0007 d20's apply order with full reads. Returns (report
+    lines for what Blender asks for and the engine does not do, the camera fields). The viewport
+    passes need_camera=False: its view comes from the region (set_view), so a scene without a camera
+    syncs, and the camera fields are None; F12 raises without one."""
+    lightgroups = instances.lightgroup_indices(view_layer)
+    fields, lines = settings.build(scene, _colorspace(), view_layer_passes(view_layer), lightgroups)
+    settings.set_settings(edit, abi, fields)
+    world = scene.world
+    world_sync.sync(edit, abi, world.evaluated_get(depsgraph) if world else None, keymap, op_id)
+
+    geoms, mats = scan(depsgraph, keymap)
     # Images after the world and before the materials (0007 d20): a TEX_IMAGE holds only the image's key.
     trees = [m.original.evaluated_get(depsgraph).node_tree for m in mats.values()]
     if world and world.node_tree:
@@ -175,6 +183,8 @@ def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, is
         with mesh.mesh_of(ob) as me:
             mesh.sync_mesh(edit, abi, me, key, ob.original.name)
     instances.set_instances(edit, abi, instances.build(depsgraph, keymap, lightgroups=lightgroups))
+    if not need_camera:
+        return lines, None
     cam, cam_lines = camera.final(depsgraph, scene)
     camera.set_camera(edit, abi, cam)
     return lines + cam_lines, cam
@@ -202,7 +212,7 @@ class Job:
         self.size, self.samples, self.layer = None, None, None
         self._context = None
 
-    def update(self, depsgraph):
+    def update(self, depsgraph, need_camera=True):
         """ar_edit_reset, then a full sync of the depsgraph's view layer (0007 d48)."""
         lib, abi = self.lib, self.abi
         scene, view_layer = depsgraph.scene, depsgraph.view_layer
@@ -226,7 +236,7 @@ class Job:
         with edit_mod.Edit(abi, lib, self.scene_h) as e:
             e.call("ar_edit_reset")
             self.lines, self.camera = full_sync(e, abi, self.op_id, depsgraph, scene, view_layer,
-                                                self.keymap, self.tcache, self.istate)
+                                                self.keymap, self.tcache, self.istate, need_camera)
         self.cache.remember(depsgraph, scene)
         if warning:
             self.lines.append(warning)
