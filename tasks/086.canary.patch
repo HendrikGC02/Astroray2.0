@@ -1,8 +1,8 @@
 diff --git a/blender/astroray/heatmap_draw.py b/blender/astroray/heatmap_draw.py
-index 3ed1149..9db94c2 100644
+index 4208593..d37536b 100644
 --- a/blender/astroray/heatmap_draw.py
 +++ b/blender/astroray/heatmap_draw.py
-@@ -69,7 +69,7 @@ class HeatmapDraw:
+@@ -73,7 +73,7 @@ class HeatmapDraw:
          import gpu
          from gpu_extras.presets import draw_texture_2d
          gpu.state.blend_set("NONE")
@@ -12,10 +12,10 @@ index 3ed1149..9db94c2 100644
      def free(self):
          if self._handler is not None:
 diff --git a/src/host/session/batching.cpp b/src/host/session/batching.cpp
-index 4b748f5..e5e248a 100644
+index a3d0b86..ae17864 100644
 --- a/src/host/session/batching.cpp
 +++ b/src/host/session/batching.cpp
-@@ -53,7 +53,6 @@ uint32_t Batching::passes_per_update(double now_s, double pass_s, uint64_t sampl
+@@ -64,7 +64,6 @@ uint32_t Batching::passes_per_update(double now_s, double pass_s, uint64_t sampl
    double settled;
    {
      std::lock_guard<std::mutex> lock(mutex_);
