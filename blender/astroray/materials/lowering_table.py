@@ -2,8 +2,9 @@
 # Node lowering table: bpy ShaderNode type name -> how the material compiler
 # handles it. tools/opsgen.py joins it with ops.def and the 5.3 node list into
 # the coverage matrix; a node type missing here is `unsupported` (magenta).
-# Real entries arrive with the lowerings (task 083).
-# Ref: docs/decisions/0005-material-model.md item 40.
+# translate.py lowers exactly the types listed here (a test pins the two sets
+# equal), so a lowering is one row here plus one function there.
+# Ref: docs/decisions/0005-material-model.md items 40, 41, 42.
 #
 # Schema, read without executing this file:
 #   "ShaderNodeFoo": {
@@ -11,4 +12,40 @@
 #       "ops": ["MUL_F32", ...],   # names from ops.def the lowering emits
 #       "note": "free text without commas",
 #   }
-LOWERING = {}
+LOWERING = {
+    "ShaderNodeBsdfPrincipled": {
+        "disposition": "implemented",
+        "ops": ["CONST_F32", "CONST_F32X3", "RGB_LIFT", "STORE_SLOT", "EMIT_LE"],
+        "note": "Base Color; Roughness; Specular IOR Level as specular_weight 2L; Emission; every other input at a non-default value or linked is magenta until M1b",
+    },
+    "ShaderNodeTexImage": {
+        "disposition": "implemented",
+        "ops": ["TEX_IMAGE", "LOAD_CTX_UV"],
+        "note": "Linear or Closest; Repeat or Extend; flat projection; Color output only",
+    },
+    "ShaderNodeTexCoord": {
+        "disposition": "implemented",
+        "ops": ["LOAD_CTX_UV"],
+        "note": "UV output only (UV set 0)",
+    },
+    "ShaderNodeUVMap": {
+        "disposition": "implemented",
+        "ops": ["LOAD_CTX_UV"],
+        "note": "UV output of the default UV set only (UV set 0)",
+    },
+    "ShaderNodeOutputMaterial": {
+        "disposition": "implemented",
+        "ops": [],
+        "note": "active output; Surface only (Volume and Displacement links are magenta)",
+    },
+    "ShaderNodeOutputWorld": {
+        "disposition": "implemented",
+        "ops": [],
+        "note": "active output; Surface only (Volume links are magenta)",
+    },
+    "ShaderNodeBackground": {
+        "disposition": "implemented",
+        "ops": ["CONST_F32", "CONST_F32X3", "EMIT_LE"],
+        "note": "constant Color times Strength only",
+    },
+}
