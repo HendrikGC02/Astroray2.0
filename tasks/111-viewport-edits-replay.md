@@ -16,3 +16,4 @@ Budget: none on tiers (`check full` Blender suite).
 Depends on: 085, 110, 107.
 Size: M (about 300 lines Python); stop and report at 2x.
 Progress:
+- started (implementer)
