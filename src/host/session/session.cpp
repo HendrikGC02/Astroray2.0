@@ -926,9 +926,12 @@ void Session::render_loop() {
         samples = stats_.samples_done;
       }
       const bool mode_change = lr.changed && !lr.new_epoch;
+      // The first pass of an epoch shows the new state at once (and lets the interrupt rule see a
+      // presented state); the publish gap still bounds the rate.
+      const bool gap_ok = t - last_present_s_ >= batching_.publish_gap_s(t);
+      const bool first = passes_in_epoch_ == 1;
       show = done || mode_change ||
-             (unpresented_ >= batching_.passes_per_update(t, last_pass_ms_ * 1e-3, samples) &&
-              t - last_present_s_ >= batching_.publish_gap_s(t));
+             (gap_ok && (first || unpresented_ >= batching_.passes_per_update(t, last_pass_ms_ * 1e-3, samples)));
     }
     if (show) {
       present(lr.generation);
