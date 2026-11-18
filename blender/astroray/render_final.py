@@ -12,6 +12,7 @@ The timing constants are 0009 B-37's: 100 ms wait timeout, 1 s preview interval.
 import ctypes
 import os
 import time
+import weakref
 
 import numpy as np
 
@@ -32,7 +33,8 @@ VIEW_LAYER_PASSES = (("use_pass_z", "Depth"), ("use_pass_position", "Position"),
                      ("use_pass_object_index", "IndexOB"), ("use_pass_material_index", "IndexMA"),
                      ("use_pass_mist", "Mist"), ("use_pass_vector", "Vector"))
 
-_contexts = {}  # device name -> ar_context; one per device for the extension's lifetime (0007 d4)
+_contexts = {}  # device name -> (ar_context, record path or None); one per device for the extension's lifetime (0007 d4)
+_live = weakref.WeakSet()  # every Job not yet closed, so shutdown() can end them before the contexts (0007 d28)
 
 
 class RenderFailed(RuntimeError):
@@ -80,26 +82,46 @@ def context(device):
     """The context of `device`, created on first use, recording when ASTRORAY_RECORD is set (0007 d4).
     The path is read here and passed in the descriptor: the engine DLL has its own C runtime, which
     does not see variables that Python set after the process started."""
-    ctx = _contexts.get(device)
-    if ctx is not None:
-        return ctx
+    record = os.environ.get("ASTRORAY_RECORD")
+    held = _contexts.get(device)
+    if held is not None:
+        return held[0]
     lib, abi = native.load(), _abi()
     abi.bind(lib)
     ctx = ctypes.c_void_p()
-    record = os.environ.get("ASTRORAY_RECORD")
     desc = abi.ar_context_desc(getattr(abi, DEVICES[device]), 0, _log_path().encode(),
                                record.encode() if record else None)
     _ok(lib, native.call(lib.ar_context_create, ctypes.byref(desc), ctypes.byref(ctx)),
         "ar_context_create")
-    _contexts[device] = ctx
+    _contexts[device] = (ctx, record)
     return ctx
 
 
+def record_warning(device):
+    """A visible line when ASTRORAY_RECORD no longer matches what the device's context was created
+    with: the recorder opens with the context, so a later change cannot take effect."""
+    held = _contexts.get(device)
+    now = os.environ.get("ASTRORAY_RECORD")
+    if held is not None and held[1] != now:
+        return (f"ASTRORAY_RECORD is {now!r} but this device's context was created with {held[1]!r}; "
+                "the recording does not follow (restart Blender to change it)")
+    return None
+
+
 def shutdown():
-    """Destroys the contexts (a recording is complete only after this, 0001 D1.4)."""
+    """Ends every live job (session, then scene: 0007 d28), then destroys the contexts (a recording
+    is complete only after this, 0001 D1.4). A later Job.close or __del__ finds nothing to destroy."""
     lib = native.load()
+    for job in list(_live):
+        job.close()
     for dev in list(_contexts):
-        native.call(lib.ar_context_destroy, _contexts.pop(dev))
+        native.call(lib.ar_context_destroy, _contexts.pop(dev)[0])
+
+
+def break_requested(engine):
+    """Blender's test_break(); a module function so a test can stand in for the user's Escape (a
+    Python subclass cannot override the engine's own RNA method)."""
+    return engine.test_break()
 
 
 def view_layer_passes(view_layer):
@@ -161,13 +183,18 @@ class Job:
         self.lines = []
         self.session = ctypes.c_void_p()
         self.first = True
+        # Everything render() needs from Blender, read by update() (0007 d23: render() reads no scene).
+        self.size, self.samples, self.layer = None, None, None
+        _live.add(self)
 
     def update(self, depsgraph):
         """ar_edit_reset, then a full sync of the depsgraph's view layer (0007 d48)."""
         lib, abi = self.lib, self.abi
         scene, view_layer = depsgraph.scene, depsgraph.view_layer
         self.device = device_of(scene)
+        warning = record_warning(self.device)
         ctx = context(self.device)
+        self.size, self.samples, self.layer = render_size(scene), scene.astroray.samples, view_layer.name
         if not self.scene_h.value:
             workers = max(1, min(8, (os.cpu_count() or 2) // 2))
             _ok(lib, native.call(lib.ar_scene_create, ctx, ctypes.byref(abi.ar_scene_desc(None, workers, 0)),
@@ -180,26 +207,35 @@ class Job:
             self.lines, self.camera = full_sync(e, abi, self.op_id, depsgraph, scene, view_layer,
                                                 self.keymap, self.tcache)
         self.cache.remember(depsgraph, scene)
+        if warning:
+            self.lines.append(warning)
         self.first = False
 
-    def render(self, engine, depsgraph):
-        """Runs a FINAL session to completion; Combined goes into the RenderResult."""
+    def render(self, engine):
+        """Runs a FINAL session to completion; Combined goes into the RenderResult. Uses only what
+        update() captured."""
         lib, abi = self.lib, self.abi
-        scene = depsgraph.scene
-        w, h = render_size(scene)
+        if self.size is None or not self.scene_h.value:
+            raise RenderFailed("astroray: render() before a successful update()")
+        w, h = self.size
         for line in self.lines:
             engine.report({"WARNING"}, line)
-        sd = abi.ar_session_desc(abi.AR_SESSION_MODE_FINAL, w, h, abi.AR_DENOISER_NONE)
-        _ok(lib, native.call(lib.ar_session_create, self.scene_h, ctypes.byref(sd), ctypes.byref(self.session)),
-            "ar_session_create", "ar_scene_last_error", self.scene_h)
-        view = camera.view_desc(abi, self.camera, w, h)
-        _ok(lib, native.call(lib.ar_session_set_view, self.session, ctypes.byref(view)),
-            "ar_session_set_view", "ar_session_last_error", self.session)
-        _ok(lib, native.call(lib.ar_session_start, self.session), "ar_session_start",
-            "ar_session_last_error", self.session)
-        result = engine.begin_result(0, 0, w, h, layer=depsgraph.view_layer.name)
         try:
-            self._wait(engine, result, w, h, scene.astroray.samples)
+            sd = abi.ar_session_desc(abi.AR_SESSION_MODE_FINAL, w, h, abi.AR_DENOISER_NONE)
+            _ok(lib, native.call(lib.ar_session_create, self.scene_h, ctypes.byref(sd),
+                                 ctypes.byref(self.session)),
+                "ar_session_create", "ar_scene_last_error", self.scene_h)
+            view = camera.view_desc(abi, self.camera, w, h)
+            _ok(lib, native.call(lib.ar_session_set_view, self.session, ctypes.byref(view)),
+                "ar_session_set_view", "ar_session_last_error", self.session)
+            _ok(lib, native.call(lib.ar_session_start, self.session), "ar_session_start",
+                "ar_session_last_error", self.session)
+        except BaseException:
+            self._close_session()  # a half-built session is destroyed at once
+            raise
+        result = engine.begin_result(0, 0, w, h, layer=self.layer)
+        try:
+            self._wait(engine, result, w, h, self.samples)
         finally:
             engine.end_result(result)
             self._close_session()
@@ -216,7 +252,7 @@ class Job:
             engine.update_stats("", f"Sample {prog.samples_per_pixel}/{samples}")
             if prog.state in (abi.AR_STATE_CONVERGED, abi.AR_STATE_FAILED, abi.AR_STATE_CLOSED):
                 break
-            if engine.test_break() and not cancelled:
+            if break_requested(engine) and not cancelled:
                 native.call(lib.ar_session_cancel, s)
                 cancelled = True
             if cancelled and prog.state in (abi.AR_STATE_PAUSED, abi.AR_STATE_TRIMMED):
@@ -270,10 +306,12 @@ class Job:
             self.session = ctypes.c_void_p()
 
     def close(self):
+        """Session, then scene (0007 d28); idempotent, so a __del__ after shutdown() does nothing."""
         self._close_session()
         if self.scene_h.value:
             native.call(self.lib.ar_scene_destroy, self.scene_h)
             self.scene_h = ctypes.c_void_p()
+        _live.discard(self)
 
 
 def read_pass(lib, abi, session, name, quantity):
@@ -285,9 +323,10 @@ def read_pass(lib, abi, session, name, quantity):
         native.call(lib.ar_session_pass_info, session, i, ctypes.byref(info))
         if bytes(info.name).split(b"\0")[0].decode("utf-8") != name:
             continue
-        buf = np.zeros(info.width * info.height * info.component_count, np.float32)
+        comps = 1 if quantity == abi.AR_QUANTITY_COUNT else info.component_count  # COUNT is per pixel
+        buf = np.zeros(info.width * info.height * comps, np.float32)
         _ok(lib, native.call(lib.ar_session_read_pass, session, i, quantity, buf.size,
                              buf.ctypes.data_as(ctypes.POINTER(ctypes.c_float))),
             f"ar_session_read_pass({name})", "ar_session_last_error", session)
-        return buf.reshape(info.height, info.width, info.component_count)
+        return buf.reshape(info.height, info.width, comps)
     raise RenderFailed(f"astroray: the session offers no {name} pass")

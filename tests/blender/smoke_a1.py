@@ -14,10 +14,11 @@ Ref: docs/decisions/0009-build-test-process.md d11, d16, d17a; 0007 d27.
 """
 import glob
 import importlib.util
+import json
 import os
-import struct
 import subprocess
 import sys
+import time
 import unittest
 
 import numpy as np
@@ -115,7 +116,7 @@ class Capture:
                 a = render_final._abi()
                 capture.arrays = tuple(
                     render_final.read_pass(job.lib, a, job.session, "Combined", q)
-                    for q in (a.AR_QUANTITY_MEAN, a.AR_QUANTITY_VARIANCE))
+                    for q in (a.AR_QUANTITY_MEAN, a.AR_QUANTITY_VARIANCE, a.AR_QUANTITY_COUNT))
             capture._orig(job)
 
         render_final.Job._close_session = close
@@ -171,12 +172,13 @@ def run_smoke(work, evidence):
     img.save_render(png, scene=scene)
     exr = bpy.data.images.load(os.path.join(work, "f12.exr"))
     exr.colorspace_settings.name = "Non-Color"
-    mean, var = (np.moveaxis(a, 2, 0).astype(np.float64) for a in cap.arrays)
+    mean, var = (np.moveaxis(a, 2, 0).astype(np.float64) for a in cap.arrays[:2])
+    count = cap.arrays[2][:, :, 0]
     rr = np.array(exr.pixels[:], np.float32).reshape(SIZE, SIZE, 4)[:, :, :3]
     write_fits(os.path.join(evidence, "a1_f12_combined.fits"),
                {**{f"display.{c}": mean[c] for c in range(3)}, **{f"display.{c}.VAR": var[c] for c in range(3)},
-                **{f"display.{c}.NSAMP": np.full((SIZE, SIZE), analytic.MIN_SPP) for c in range(3)}},
-               {"SPP": analytic.MIN_SPP, "SEED": scene.astroray.seed, "SAMPLER": "sobol", "DEVICE": "cpu"})
+                **{f"display.{c}.NSAMP": count for c in range(3)}},
+               {"SPP": int(count.max()), "SEED": scene.astroray.seed, "SAMPLER": "sobol", "DEVICE": "cpu"})
     dumps = {}
     for name, path in (("addon", rec), ("builder", os.path.join(work, "a1_builder.arrec"))):
         out = os.path.join(work, f"a1_{name}.fits")
@@ -185,7 +187,8 @@ def run_smoke(work, evidence):
         if p.returncode != 0:
             raise RuntimeError(f"astroray_cli dump {path} exited {p.returncode}:\n{p.stdout}{p.stderr}")
         dumps[name] = out
-    return {"mean": mean, "var": var, "result": rr, "png": png, "dumps": dumps}
+    return {"mean": mean, "var": var, "count": count, "result": rr, "png": png, "dumps": dumps, "rf": rf,
+            "work": work}
 
 
 class TestSmoke(unittest.TestCase):
@@ -211,8 +214,70 @@ class TestSmoke(unittest.TestCase):
         a = self.state["mean"].transpose(1, 2, 0)
         np.testing.assert_allclose(self.state["result"], a, rtol=0, atol=1e-6)
 
+    def test_samples_reached(self):
+        """The render ran every requested sample: the engine's per-pixel COUNT equals samples."""
+        self.assertTrue((self.state["count"] == analytic.MIN_SPP).all(),
+                        f"COUNT {np.unique(self.state['count'])}, asked for {analytic.MIN_SPP}")
+
+    def _render(self, samples):
+        """F12 again on the open scene; returns the Capture and the seconds taken."""
+        rf = self.state["rf"]
+        scene = bpy.context.scene
+        scene.astroray.samples = samples
+        scene.render.image_settings.file_format = "OPEN_EXR"
+        cap = Capture(rf)
+        t0 = time.monotonic()
+        try:
+            bpy.ops.render.render(write_still=False)
+        finally:
+            cap.restore()
+            rf.shutdown()
+        return cap, time.monotonic() - t0
+
+    def test_cancel_returns_partial_result(self):
+        """test_break() ends the render early through ar_session_cancel and the partial result is kept
+        (0007 d27). 8192 samples take about half a minute; the cancel comes after 0.5 s."""
+        rf = self.state["rf"]
+        samples, stop_at = 8192, time.monotonic() + 0.5
+        original = rf.break_requested
+        rf.break_requested = lambda engine: time.monotonic() > stop_at
+        try:
+            cap, seconds = self._render(samples)
+        finally:
+            rf.break_requested = original
+        self.assertIsNotNone(cap.arrays, "no partial result was read")
+        done = cap.arrays[2]
+        print(f"RESULT smoke cancel: {seconds:.1f} s, per-pixel count {int(done.min())}..{int(done.max())} of {samples}")
+        self.assertLess(int(done.max()), samples)
+        self.assertGreater(int(done.max()), 0)
+        self.assertLess(seconds, 15.0)
+
+    def test_error_entry_fails_render(self):
+        """An engine ERROR entry (a NaN vertex: the generation is rejected) fails the render and its
+        text reaches the error (0001 D2.11)."""
+        me = next(m for m in bpy.data.meshes if len(m.vertices) > 10)
+        keep = me.vertices[0].co.copy()
+        me.vertices[0].co = (float("nan"),) * 3
+        try:
+            with self.assertRaises(RuntimeError) as cm:
+                self._render(1)
+        finally:
+            me.vertices[0].co = keep
+        print(f"RESULT smoke error entry: {str(cm.exception)[:200]!r}")
+        self.assertIn("GENERATION_REJECTED", str(cm.exception))
+
     def test_exporter_equivalence(self):
-        ok, lines = exporter_equivalence.compare(self.state["dumps"]["addon"], self.state["dumps"]["builder"])
+        t = meta.load(os.path.join(ROOT, "scenes", "a1_furnace", "meta.toml"))["truth"]
+        # The storage error of the normals Blender holds (INT16_2D), as the addon reads them.
+        me = next(m for m in bpy.data.meshes if len(m.vertices) > 10)
+        got = np.empty(len(me.loops) * 3, np.float32)
+        me.corner_normals.foreach_get("vector", got)
+        with open(os.path.join(self.state["work"], "a1.blend.json"), encoding="utf-8") as f:
+            want = blend_writer._array(json.load(f)["meshes"][0]["normals"])
+        quant = float(np.linalg.norm(got.reshape(-1, 3) - want, axis=1).max())
+        print(f"RESULT smoke stored-normal error Q = {quant:.3g}")
+        ok, lines = exporter_equivalence.compare(self.state["dumps"]["addon"], self.state["dumps"]["builder"],
+                                                 t["camera_distance"], t["sphere_radius"], quant)
         for ln in lines:
             print("RESULT smoke " + ln)
         self.assertTrue(ok, "\n".join(lines))
@@ -235,6 +300,7 @@ if __name__ == "__main__":
         ok = run_materials()
     loader = unittest.defaultTestLoader
     if "-k" in ARGS:  # land's canary runs one named case
-        loader.testNamePatterns = [ARGS[ARGS.index("-k") + 1]]
+        pat = ARGS[ARGS.index("-k") + 1]
+        loader.testNamePatterns = [pat if "*" in pat else f"*{pat}*"]  # as unittest's own -k
     res = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(loader.loadTestsFromTestCase(TestSmoke))
     sys.exit(0 if ok and res.wasSuccessful() else 1)

@@ -30,7 +30,8 @@ def build(out, blend=None, passes=(), sampler="independent"):
         mesh = s.key()
         s.mesh_from(mesh, meshes.uv_sphere(t["sphere_radius"], t["segments"], t["rings"]), "sphere")
         mat = s.material({"base_weight": 1.0, "base_color": (rho, rho, rho), "base_diffuse_roughness": 0.0,
-                          "base_metalness": 0.0, "specular_weight": 0.0})
+                          "base_metalness": 0.0, "specular_weight": 0.0,
+                          "specular_roughness": 0.0})
         s.instances([{"geom": mesh, "materials": [mat]}])
         s.world((1.0, 1.0, 1.0), t["world_radiance"])
         s.settings(SPP, WIDTH, HEIGHT, seed=SEED, sampler=sampler, passes=passes)

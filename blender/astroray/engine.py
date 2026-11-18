@@ -9,7 +9,6 @@ import bpy
 from . import render_final
 
 _MSG = "Astroray: not implemented until task {}"
-_jobs = {}  # id(engine instance) -> render_final.Job (see __del__)
 
 
 class AstrorayRenderEngine(bpy.types.RenderEngine):
@@ -24,29 +23,34 @@ class AstrorayRenderEngine(bpy.types.RenderEngine):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._job = None
+        self._failure = None
 
     def __del__(self):
-        # The struct is already gone here, so the job is found by identity, not by attribute.
-        job = _jobs.pop(id(self), None)
+        # As Cycles' engine does, the job lives on the instance. The attribute is unreachable only
+        # when Blender removed the struct first (unregister), and shutdown() has closed every job then.
+        try:
+            job = self._job
+        except (AttributeError, ReferenceError):
+            return
         if job is not None:
             job.close()
 
     def update(self, data, depsgraph):
+        self._failure = None
         try:
-            job = _jobs.get(id(self))
-            if job is None:
-                job = _jobs[id(self)] = render_final.Job()
-            job.update(depsgraph)
-        except Exception as e:  # reported; render() then has no synced scene to run
-            failed = _jobs.pop(id(self), None)
-            if failed is not None:
-                failed.close()
-            self.report({"ERROR"}, str(e))
-            raise
+            if self._job is None:
+                self._job = render_final.Job()
+            self._job.update(depsgraph)
+        except Exception as e:  # reported now; render() raises the same text
+            self._failure = str(e)
+            self.report({"ERROR"}, self._failure)
 
     def render(self, depsgraph):
+        if self._failure is not None:
+            raise render_final.RenderFailed(self._failure)
         try:
-            _jobs[id(self)].render(self, depsgraph)
+            self._job.render(self)
         except Exception as e:
             self.report({"ERROR"}, str(e))
             raise

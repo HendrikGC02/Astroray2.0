@@ -29,6 +29,13 @@ _PASS_FLAGS = {"Depth": "use_pass_z", "Position": "use_pass_position", "Normal":
 _FILTERS = {"box": "BOX", "gaussian": "GAUSSIAN", "blackman_harris": "BLACKMAN_HARRIS"}
 
 
+class BlendWriterError(ValueError):
+    """A description entry the writer cannot apply; never skipped (CLAUDE.md rule 5)."""
+
+
+ALL_VISIBILITY = 0x3F  # scenes/lib/ar.py: every ray type, the Blender default
+
+
 def _array(d):
     return np.frombuffer(base64.b64decode(d["b64"]), dtype=d["dtype"]).reshape(d["shape"]).copy()
 
@@ -66,10 +73,10 @@ def _material(bpy, d):
     for name, value in d["inputs"].items():
         if name in _FIXED:
             if value != _FIXED[name]:
-                raise ValueError(f"material {d['key']}: {name} = {value} has no Principled BSDF equivalent")
+                raise BlendWriterError(f"material {d['key']}: {name} = {value} has no Principled BSDF equivalent")
             continue
         if name not in _PRINCIPLED:
-            raise ValueError(f"material {d['key']}: input '{name}' is not covered by the blend writer")
+            raise BlendWriterError(f"material {d['key']}: input '{name}' is not covered by the blend writer")
         socket, scale = _PRINCIPLED[name]
         node.inputs[socket].default_value = (*value, 1.0) if isinstance(value, list) else value * scale
     if d["emission"] is not None:
@@ -81,7 +88,7 @@ def _material(bpy, d):
 def _light(bpy, d):
     kinds = {"point": ("POINT", None), "rect": ("AREA", "RECTANGLE"), "ellipse": ("AREA", "ELLIPSE")}
     if d["kind"] not in kinds:
-        raise ValueError(f"lamp type '{d['kind']}' is not covered by the blend writer")
+        raise BlendWriterError(f"lamp type '{d['kind']}' is not covered by the blend writer")
     typ, shape = kinds[d["kind"]]
     light = bpy.data.lights.new(f"light {d['kind']}", typ)
     light.color, light.energy = d["rgb"], d["power"]
@@ -104,7 +111,7 @@ def build(desc, path):
             desc = json.load(f)
     for k in ("camera", "settings", "world"):
         if desc[k] is None:
-            raise ValueError(f"the description has no {k}")
+            raise BlendWriterError(f"the description has no {k}")
     # Not read_factory_settings: it would disable the extension this scene is written for.
     for coll in (bpy.data.objects, bpy.data.meshes, bpy.data.materials, bpy.data.lights, bpy.data.cameras,
                  bpy.data.worlds):
@@ -114,6 +121,10 @@ def build(desc, path):
     if not hasattr(scene, "astroray"):
         raise RuntimeError("the Astroray extension is not enabled: scene.astroray is missing")
     st = desc["settings"]
+    if st["sampler"] != "sobol":
+        # Blender has no sampler setting and the addon always samples in Sobol mode.
+        raise BlendWriterError(f"sampler '{st['sampler']}' cannot be set in a .blend; build the description "
+                               "with sampler='sobol' (a1_furnace/build.py --sampler sobol)")
     scene.render.engine = "ASTRORAY"
     scene.render.resolution_x, scene.render.resolution_y, scene.render.resolution_percentage = st["width"], st["height"], 100
     a = scene.astroray
@@ -127,9 +138,18 @@ def build(desc, path):
     materials = {m["key"]: _material(bpy, m) for m in desc["materials"]}
     slots = {}
     for i, inst in enumerate(desc["instances"]):
+        if inst["geom"] not in meshes:
+            raise BlendWriterError(f"instance {i}: geometry key {inst['geom']} is not a recorded mesh")
+        missing = [mk for mk in inst["materials"] if mk not in materials]
+        if missing:
+            raise BlendWriterError(f"instance {i}: material keys {missing} were not made by Scene.material() "
+                                   "(material_from_graph has no .blend equivalent)")
+        if inst["visibility"] != ALL_VISIBILITY:
+            raise BlendWriterError(f"instance {i}: visibility {inst['visibility']:#x} is not the default "
+                                   f"{ALL_VISIBILITY:#x}; the writer sets no ray visibility")
         me = meshes[inst["geom"]]
         if me.name in slots and slots[me.name] != inst["materials"]:
-            raise ValueError("two instances of one mesh with different material lists need object-linked slots")
+            raise BlendWriterError("two instances of one mesh with different material lists need object-linked slots")
         if me.name not in slots:
             slots[me.name] = inst["materials"]
             for mk in inst["materials"]:
