@@ -182,6 +182,15 @@ struct CudaDevice::Impl {
 
   std::mutex mutex;  // guards the module and function tables
   std::unordered_map<std::string, CUmodule> modules;  // embedded or dev-directory, by name
+  // Development reload (0002 D14): the directory as it was at creation, and per loaded module the stamp of
+  // the file that was loaded and the stamp of the last changed file that failed to load.
+  struct Watch {
+    ModuleStamp loaded;
+    bool failed = false;
+    ModuleStamp failed_stamp;
+  };
+  std::string dev_dir;
+  std::unordered_map<std::string, Watch> watched;
   std::vector<CUmodule> file_modules;                 // test modules, by handle
   std::unordered_map<std::string, CUfunction> functions;
   std::unordered_map<std::string, uint32_t> block_threads;  // checked block size, by kernel name
@@ -192,6 +201,7 @@ struct CudaDevice::Impl {
   // the context, stream and event acquired so far.
   void init(uint32_t index) {
     hooks = read_test_hooks();
+    dev_dir = dev_kernel_dir();
     fault_pending = hooks.gpu_fault;
     check(cu.cuInit_(0), "cuInit");
     int driver = 0;
@@ -307,7 +317,13 @@ struct CudaDevice::Impl {
     auto f = functions.find(key);
     if (f != functions.end()) return f->second;
     auto m = modules.find(module);
-    if (m == modules.end()) m = modules.emplace(module, load_image(module, load_module_image(module, hooks.corrupt_cubin))).first;
+    if (m == modules.end()) {
+      Watch w;
+      if (!dev_dir.empty() && !module_file_stamp(module, dev_dir, &w.loaded))
+        throw DeviceError("kernel module file for " + module + " is missing from " + dev_dir);
+      m = modules.emplace(module, load_image(module, load_module_image(module, hooks.corrupt_cubin, dev_dir))).first;
+      if (!dev_dir.empty()) watched[module] = w;  // stat before the read: a later edit differs from it
+    }
     CUfunction func = nullptr;
     check(cu.cuModuleGetFunction_(&func, m->second, fn.c_str()), "cuModuleGetFunction", fn.c_str());
     functions.emplace(key, func);
@@ -562,6 +578,52 @@ void CudaDevice::synchronize() { impl_->sync(); }
 std::string CudaDevice::untested_architecture() const {
   // 0001 D3.3: sm_120 is the only tested hardware; this build has no PTX JIT path to time.
   return impl_->arch == "sm_120" ? std::string() : impl_->arch;
+}
+
+ModuleReload CudaDevice::poll_module_reload() {
+  Impl& s = *impl_;
+  ModuleReload out;
+  if (s.dev_dir.empty()) return out;
+  s.bind();
+  std::lock_guard<std::mutex> lock(s.mutex);
+  for (auto& kv : s.watched) {
+    const std::string& name = kv.first;
+    Impl::Watch& w = kv.second;
+    ModuleStamp now;
+    if (!module_file_stamp(name, s.dev_dir, &now)) {
+      // A rebuild in progress or a deleted file: the loaded image keeps running; say so once.
+      if (!w.failed) out.failed.push_back({name, "kernel module file is missing from " + s.dev_dir});
+      w.failed = true;
+      w.failed_stamp = ModuleStamp{~0ull, 0};
+      continue;
+    }
+    if (now == w.loaded || (w.failed && now == w.failed_stamp)) continue;
+    try {
+      const ModuleImage image = load_module_image(name, s.hooks.corrupt_cubin, s.dev_dir);
+      const CUmodule fresh = s.load_image(name, image);
+      s.sync();  // nothing launched from the old image is still running
+      s.check(s.cu.cuModuleUnload_(s.modules[name]), "cuModuleUnload", name.c_str());
+      s.modules[name] = fresh;
+      const std::string prefix = name + "/";
+      for (auto f = s.functions.begin(); f != s.functions.end();) {
+        if (f->first.compare(0, prefix.size(), prefix) == 0) {
+          s.block_threads.erase(f->first.substr(prefix.size()));
+          f = s.functions.erase(f);
+        } else {
+          ++f;
+        }
+      }
+      w.loaded = now;
+      w.failed = false;
+      out.swapped.push_back(name);
+    } catch (const DeviceError& e) {
+      if (e.sticky()) throw;
+      w.failed = true;
+      w.failed_stamp = now;
+      out.failed.push_back({name, e.what()});
+    }
+  }
+  return out;
 }
 
 uint32_t CudaDevice::load_module_file(const std::string& path) {

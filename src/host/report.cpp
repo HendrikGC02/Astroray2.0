@@ -100,6 +100,17 @@ void Report::on_film_reset() {
   remove_if_locked([](const ar_report_entry& e) { return kRows[e.code - 1].scope == ReportScope::FILM; });
 }
 
+uint32_t Report::remove(uint32_t code, uint64_t subject) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  uint32_t n = 0;
+  remove_if_locked([&](const ar_report_entry& e) {
+    const bool hit = e.code == code && e.subject == subject;
+    n += hit ? 1u : 0u;
+    return hit;
+  });
+  return n;
+}
+
 void Report::snapshot() {
   std::lock_guard<std::mutex> lock(mutex_);
   snap_.clear();

@@ -76,6 +76,14 @@ void fill_shadow(ar::ShadowItemSoA& soa, const StateLayout& l, char* base) {
 #undef AR_SHADOW_FIELD_SHARED
 }
 
+// The KERNEL_MODULE_FALLBACK subject of a module: one entry per module, so a later good load can remove it
+// (FNV-1a of the module name; Ref: 0002 D15 dev-module row).
+uint64_t module_subject(const std::string& name) {
+  uint64_t h = 1469598103934665603ull;
+  for (char c : name) h = (h ^ static_cast<uint8_t>(c)) * 1099511628211ull;
+  return h;
+}
+
 }  // namespace
 
 Scheduler::Scheduler(Device& device, const SchedulerConfig& cfg) : config(cfg), device_(device) {
@@ -234,6 +242,22 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
   launched_.clear();
   for (;;) {
     if (at_boundary(&status)) return status;
+    // Dev kernel reload (0002 D14, D15): a rebuilt module is swapped here, before the step's first launch.
+    // A swap ends the pass like an epoch change, so nothing mixes two images; a failed load keeps the
+    // previous image and leaves one warning entry per module until a good file loads.
+    {
+      const ModuleReload r = device_.poll_module_reload();
+      if (config.report) {
+        const double none[2] = {0.0, 0.0};
+        for (const auto& f : r.failed) {
+          config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, module_subject(f.module));
+          config.report->raise(AR_REPORT_KERNEL_MODULE_FALLBACK, module_subject(f.module),
+                               f.module + ": " + f.error + " (the previous image keeps running)", 1, none, 0);
+        }
+        for (const auto& m : r.swapped) config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, module_subject(m));
+      }
+      if (!r.swapped.empty()) return PassStatus::EPOCH_PENDING;
+    }
     const std::vector<uint32_t> prev_launched = std::move(launched_);
     launched_.clear();
     // 1. Partition both pools up to their high-water marks.

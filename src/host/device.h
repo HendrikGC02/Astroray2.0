@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "host/ledger.h"
 #include "kernel/kernel_globals.h"
@@ -69,6 +70,18 @@ class DeviceAllocationRefused : public AllocationRefused {
 
  private:
   std::string text_;
+};
+
+// What a development build's step-boundary check found (0002 D14, D15): stage modules whose file changed
+// and now run the new image, and modules whose changed file failed to load (the previous image keeps
+// running). Each failure is reported once per changed file.
+struct ModuleReload {
+  struct Failure {
+    std::string module;
+    std::string error;
+  };
+  std::vector<std::string> swapped;
+  std::vector<Failure> failed;
 };
 
 class Device {
@@ -144,6 +157,10 @@ class Device {
   // The GPU architecture ("sm_86") when the device runs code the runtime tests do not cover (0002 D15,
   // 0001 D3.3: only sm_120 is tested), else empty. The session raises UNTESTED_DEVICE once from it.
   virtual std::string untested_architecture() const { return {}; }
+  // Called by the scheduler at each step boundary, before the step's first launch: swaps in the stage
+  // modules rebuilt in the development kernel directory. Nothing to do on a device without loose
+  // modules (CPU stages are rebuilt and restarted, 0002 D14).
+  virtual ModuleReload poll_module_reload() { return {}; }
 
  protected:
   // The device's reserve rule (0007 d14, R19; the CUDA side is 028): true when `need`
