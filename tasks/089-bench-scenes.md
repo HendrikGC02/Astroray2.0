@@ -18,3 +18,5 @@ Depends on: 070, 084, 076.
 Size: M (about 350 lines Python); stop and report at 2x.
 Progress:
 - started
+- builders b1m/b5m, writer kinds (object, collection, points), bench entries done; .blend counts and 1080p renders verified.
+- BLOCKED: tripwire/counters need tools/integrator_checks.py (not in Scope) and counts printing needs tools/scenes.py; lead decides.
