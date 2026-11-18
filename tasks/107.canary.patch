@@ -1,5 +1,18 @@
+diff --git a/src/host/film/film_stats.cpp b/src/host/film/film_stats.cpp
+index e0ce9d2..92bc54d 100644
+--- a/src/host/film/film_stats.cpp
++++ b/src/host/film/film_stats.cpp
+@@ -52,7 +52,7 @@ void InvalidSampleReporter::report(const ar::FilmData& f, Report& report, uint64
+                            "without InvalidSampleReporter::on_film_reset");
+   if (total == reported_) return;
+   const double value[2] = {0, 0};
+-  report.raise(AR_REPORT_INVALID_SAMPLE, 0, "", total - reported_, value, generation);
++  report.raise(AR_REPORT_INVALID_SAMPLE, 0, "", total - reported_ + 1, value, generation);
+   reported_ = total;
+ }
+ 
 diff --git a/src/host/report.cpp b/src/host/report.cpp
-index 9668b65..0224d76 100644
+index 9668b65..33b2d1e 100644
 --- a/src/host/report.cpp
 +++ b/src/host/report.cpp
 @@ -55,7 +55,7 @@ ar_status Report::raise(uint32_t code, uint64_t subject, const std::string& deta
@@ -11,7 +24,7 @@ index 9668b65..0224d76 100644
      e.subject = subject;
      e.first_generation = generation;
      e.last_generation = generation;
-@@ -91,7 +91,7 @@ void Report::on_generation_active(uint64_t, const std::vector<uint64_t>& subject
+@@ -91,13 +91,13 @@ void Report::on_generation_active(uint64_t, const std::vector<uint64_t>& subject
    remove_if_locked([&](const ar_report_entry& e) {
      if (e.code == AR_REPORT_GENERATION_REJECTED) return true;
      if (kRows[e.code - 1].scope != ReportScope::SCENE) return false;
@@ -20,6 +33,13 @@ index 9668b65..0224d76 100644
    });
  }
  
+ void Report::on_film_reset() {
+   std::lock_guard<std::mutex> lock(mutex_);
+-  remove_if_locked([](const ar_report_entry& e) { return kRows[e.code - 1].scope == ReportScope::FILM; });
++  remove_if_locked([](const ar_report_entry& e) { return kRows[e.code - 1].scope == ReportScope::SESSION; });
+ }
+ 
+ void Report::snapshot() {
 diff --git a/src/host/scheduler.cpp b/src/host/scheduler.cpp
 index cf0e4d0..22ac4de 100644
 --- a/src/host/scheduler.cpp

@@ -232,8 +232,7 @@ TEST_CASE("v15/invalid sample count equals the injected samples") {
 
 TEST_CASE("v15/a film reset removes the FILM entries") {
   Fixture f;
-  const uint64_t injected = uint64_t(kW) * kH * kSpp;
-  REQUIRE(counts(*f.s, AR_REPORT_INVALID_SAMPLE) == std::vector<uint64_t>{injected});
+  REQUIRE(counts(*f.s, AR_REPORT_INVALID_SAMPLE).size() == 1);  // the count is the other case's
   // Replacing the material starts a new epoch, which clears the film and its FILM entries; the
   // replacement cannot inject, so nothing raises them again. (A settings-only reset would
   // rebuild the material tables and drop the patched program.)
