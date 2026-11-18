@@ -204,14 +204,13 @@ struct Running {
     session->close();
     session->join();
   }
-  // The session has resolved at least `passes` passes in its current epoch.
+  // The session has resolved at least `passes` samples per pixel in its current epoch. progress() takes
+  // only the short state lock; film_samples takes the render lock, which a session that renders
+  // back to back hands out only after seconds.
   bool wait_passes(uint32_t passes, uint32_t timeout_ms = 20000) const {
-    for (uint32_t t = 0; t < timeout_ms; t += 5) {
-      try {
-        if (session->film_samples(0) >= passes) return true;
-      } catch (const std::logic_error&) {  // no film yet
-      }
-      Sleep(5);
+    for (uint32_t t = 0; t < timeout_ms; ++t) {
+      if (session->progress().samples_per_pixel >= passes) return true;
+      Sleep(1);
     }
     return false;
   }
@@ -265,8 +264,7 @@ TEST_CASE("dev_reload/swap at step boundary") {
   REQUIRE(r.wait_passes(1));                 // the first pass of the new epoch ran on the new module
   const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   // B-04: from the module file landing in the directory to the end of the first pass rendered with it.
-  std::printf("dev_reload: new module written to first pass on it %.1f ms (epoch reset after %.1f ms, that pass took %.1f ms; B-04 limit 5000 ms for the whole edit, nvcc separate)
-", ms, ms_epoch, double(s.progress().last_pass_ms));
+  std::printf("dev_reload: new module written to first pass on it %.1f ms (epoch reset after %.1f ms, that pass took %.1f ms; B-04 limit 5000 ms for the whole edit, nvcc separate)\n", ms, ms_epoch, double(s.progress().last_pass_ms));
   CHECK(ms <= 5000.0);
   REQUIRE(r.wait_passes(4));
   const double after = r.combined_mean();
@@ -299,7 +297,7 @@ TEST_CASE("dev_reload/corrupted module keeps previous") {
   CHECK(detail.find("CUDA_ERROR") != std::string::npos);  // the loader's own error
   CHECK(e[0].level == AR_LEVEL_WARNING);
   // It keeps rendering on the old image: same epoch, passes still accumulate, no storm of repeats.
-  const uint32_t n = s.film_samples(0);
+  const uint32_t n = s.progress().samples_per_pixel;
   REQUIRE(r.wait_passes(n + 3));
   Sleep(200);
   CHECK(s.progress().epoch == epoch);
