@@ -4,10 +4,12 @@ pass index, so IndexMA names the instance), varied per-axis scales and Euler ori
 from a fixed NumPy seed, and one deliberate pair of instances with the same mesh and transform
 (coincident faces), in a dim constant world (0009 d17(iv), d20). Usage: build.py --out <path.arrec>.
 Parameters come from meta.toml. The AOVs are requested with the Position pass (0008 d10: Position
-brings Normal, UV and IndexMA). Prints the pair's two pass indices on its `counts:` line.
+brings Normal, UV and IndexMA). Prints the pair's two pass indices on its `counts:` line, and writes
+<out>.layout.json (meshes and instance transforms) for tools/aov_agree.py's normal and UV bounds.
 Ref: docs/decisions/0009-build-test-process.md d17(iv), d19, d20; 0008 d10."""
 import argparse
 import ctypes
+import json
 import math
 import os
 import sys
@@ -51,11 +53,15 @@ def build(out):
     rng = np.random.default_rng(RNG_SEED)
     size = int(t["size"])
     with ar.Scene(out) as s:
-        shapes = [s.key() for _ in range(3)]
-        s.mesh_from(shapes[0], meshes.box(1.0, 1.0, 1.0), "box")
-        s.mesh_from(shapes[1], meshes.uv_sphere(0.5, 24, 12), "sphere")
-        s.mesh_from(shapes[2], meshes.plane(1.0, 1.0), "plane")
-        items = []
+        names = ("box", "sphere", "plane")
+        shape_meshes = (meshes.box(1.0, 1.0, 1.0), meshes.uv_sphere(0.5, 24, 12), meshes.plane(1.0, 1.0))
+        shapes = [s.key() for _ in names]
+        for key, m, name in zip(shapes, shape_meshes, names):
+            s.mesh_from(key, m, name)
+        items, layout = [], {"meshes": {}, "instances": []}
+        for m, name in zip(shape_meshes, names):
+            layout["meshes"][name] = {"positions": m.positions[m.corner_vert].tolist(), "normals": m.normals.tolist(),
+                                      "uv": m.uv.tolist()}
         n = int(t["instances"])
         for i in range(n):
             rot = euler_xyz(*rng.uniform(0.0, 2.0 * math.pi, 3))
@@ -64,6 +70,7 @@ def build(out):
             xf = np.concatenate([rot * scale[None, :], centre[:, None]], axis=1).reshape(12)
             rgb = tuple(float(v) for v in rng.uniform(0.1, 0.9, 3))
             items.append({"geom": shapes[i % 3], "materials": [material(s, rgb, i + 1)], "xf": xf})
+            layout["instances"].append({"pass_index": i + 1, "mesh": names[i % 3], "xf": xf.tolist()})
         # The coincident pair: one box mesh, one transform, two materials.
         rot = euler_xyz(0.3, 0.5, 0.7) * float(t["pair_size"])
         xf = np.concatenate([rot, np.asarray(t["pair_position"], float)[:, None]], axis=1).reshape(12)
@@ -72,11 +79,16 @@ def build(out):
             raise ValueError("pair_pass_indices must be two distinct indices above the instance count")
         for idx, rgb in zip(pair, ((0.9, 0.1, 0.1), (0.1, 0.1, 0.9))):
             items.append({"geom": shapes[0], "materials": [material(s, rgb, idx)], "xf": xf})
+            layout["instances"].append({"pass_index": idx, "mesh": "box", "xf": xf.tolist()})
         s.instances(items)
         s.world((1.0, 1.0, 1.0), 0.5)
         s.settings(int(t["spp"]), size, size, seed=int(t["seed"]), max_bounces=1, passes=("Position",))
         s.camera(t["camera_position"], (0.0, 0.0, 0.0), t["focal_mm"], t["sensor_mm"], size, size)
         s.finish()
+    # What tools/aov_agree.py derives its normal and UV bounds from: each mesh's corners (position,
+    # normal, UV, three per triangle) and each instance's pass index, mesh and 3x4 transform.
+    with open(out + ".layout.json", "w", encoding="utf-8") as f:
+        json.dump(layout, f)
     print(f"counts: {n + 2} instances, coincident pair pass indices {pair[0]} {pair[1]}")
 
 

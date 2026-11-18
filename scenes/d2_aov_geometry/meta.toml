@@ -27,7 +27,7 @@ pair_pass_indices = [301, 302]
 pair_position = [0.0, -4.5, 0.0]
 pair_size = 1.5
 camera_position = [0.0, -14.0, 3.0]
-focal_mm = 30.0
+focal_mm = 55.0
 sensor_mm = 36.0
 
 [tolerance]
