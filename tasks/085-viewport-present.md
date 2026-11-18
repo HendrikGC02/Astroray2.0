@@ -17,3 +17,4 @@ Budget: view_draw time per present is measured in 096 (B-13).
 Depends on: 084, 051.
 Size: M (about 350 lines Python); stop and report at 2x.
 Progress:
+- started (085)
