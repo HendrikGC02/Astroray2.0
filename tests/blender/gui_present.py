@@ -288,9 +288,8 @@ class Driver:
         STATE["gens"] = [f["generation"] for f in self.job.frames]
         STATE["acquired"] = list(self.job.acquired)
         STATE["all_frames"] = list(self.job.frames)
-        # Leaving Rendered: the spy keeps the session "not yet closed" for 4 polls of the destroying timer.
+        # Leaving Rendered: the spy logs the native close and destroy calls.
         self.spy = LibSpy(self.job.lib, self.job.abi)
-        self.spy.hold[self.job.session.value] = 4
         STATE["main_session"], STATE["main_scene"] = self.job.session.value, self.job.scene_h.value
         self.job.lib = self.spy
         _, area, _ = self.find_area()
@@ -306,7 +305,6 @@ class Driver:
         STATE["events_final"] = list(self.job.events)
         STATE["handles_final"] = (self.job.session.value, self.job.scene_h.value)
         STATE["close_native"] = self.spy.native()
-        STATE["close_calls"] = list(self.spy.calls)
         self.go("g_start")
         return 0.5
 
@@ -441,7 +439,8 @@ class Driver:
             if self.timed_out():
                 raise RuntimeError(f"scenario {self.scn}: scene never destroyed; events {self.job.events}; parked {self.job.parked} session {self.job.session.value} retired {[r.value for r in self.job.retired]} reaper {self.job._reaper_on}")
             return 0.1
-        STATE["scn_" + self.scn] = {"native": self.spy.native(), "events": list(self.job.events),
+        STATE["scn_" + self.scn] = {"native": self.spy.native(), "calls": list(self.spy.calls),
+                                    "events": list(self.job.events),
                                     "session": STATE["scn_session_" + self.scn],
                                     "scene": STATE["scn_scene_" + self.scn]}
         STATE["s_after"] = time.monotonic()
@@ -530,7 +529,7 @@ class Driver:
 
 PHASE_OF = {
     "test_gpu_unpack_matches_host": "grow", "test_region_growth_retires_session": "grow",
-    "test_overlapping_retirements_end_with_the_scene": "scn:overlap",
+    "test_overlapping_retirements_end_with_the_scene": "scn:overlap", "test_close_waits_for_closed": "scn:overlap",
     "test_failed_timer_registration_destroys_once": "scn:failpark",
     "test_failed_create_then_park_destroys_session_first": "scn:failcreate",
     "test_camera_less_scene_presents": "p2", "test_acceptance_screenshot": "p2",
@@ -698,16 +697,18 @@ class TestPresent(unittest.TestCase):
         self.assertEqual(STATE["handles_final"], (None, None))
 
     def test_close_waits_for_closed(self):
-        """The destroy waits for CLOSED: the spy kept the closed session reporting RENDERING for 4 polls, and
-        the destroy came after those polls, when the last state the job saw was CLOSED."""
+        """The destroy waits for CLOSED: in the overlap scenario the spy kept the first session reporting
+        RENDERING for 40 polls after its close; it was destroyed only after those polls, when the last state
+        the job saw was CLOSED."""
         abi_closed = importlib.import_module(MODULE + "._abi").AR_STATE_CLOSED
-        s = STATE["main_session"]
-        calls = STATE["close_calls"]
-        i = next(k for k, c in enumerate(calls) if c[0] == "ar_session_destroy" and c[1] == s)
-        before = [c[2] for c in calls[:i] if c[0] == "progress" and c[1] == s]
-        print(f"RESULT present close: states seen before the destroy {before}, state at the destroy {calls[i][2]}")
+        r = STATE["scn_overlap"]
+        s0, calls = r["session"], r["calls"]
+        i = next(k for k, c in enumerate(calls) if c[0] == "ar_session_destroy" and c[1] == s0)
+        before = [c[2] for c in calls[:i] if c[0] == "progress" and c[1] == s0]
+        print(f"RESULT present close: {len(before)} polls of the held session before its destroy, "
+              f"{sum(1 for st in before if st != abi_closed)} not CLOSED; state at the destroy {calls[i][2]}")
         self.assertEqual(calls[i][2], abi_closed)
-        self.assertEqual(sum(1 for st in before if st != abi_closed), 4)
+        self.assertEqual(sum(1 for st in before if st != abi_closed), 40)
 
     def test_gpu_unpack_matches_host(self):
         """The persistent texture read back from the GPU equals the host frame, bit for bit in half precision,
