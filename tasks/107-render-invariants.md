@@ -18,3 +18,6 @@ Depends on: 076, 033.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
 Started.
+Do 1-3, 5 done: integrator_checks d25, determinism, record_replay (scene d25_edit_revert); gate +3.2 s, no family change (the checks are exact, not statistical).
+Do 4 partial: test_v15_render.py holds the exit-status and magenta-replacement tests only. INVALID_SAMPLE count and film-reset tests are blocked: graph.cpp refuses TEST_INJECT_NAN and the compiler has no encoding for it; the ABI clamps inf and NaN inputs. Needs a lead ruling.
+Canary: tasks/107.canary.patch turns d25, determinism, record_replay and both v15 tests red; no hunk for test_invalid_count (does not exist).
