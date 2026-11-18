@@ -16,3 +16,4 @@ Budget: target B-09 headroom of at least 40 s.
 Depends on: none.
 Size: S (about 150 lines); stop and report at 2x.
 Progress:
+- started (task/121-gate-overlap)
