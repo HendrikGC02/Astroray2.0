@@ -267,7 +267,7 @@ def mode_agreement(t, width, height):
     """d1, d8: no closed form; renders of the same scene under different NEE test modes
     (ASTRORAY_TEST_NEE, RULINGS.md 77) must agree in the mean (Veach 1997, ch. 9: MIS and each
     strategy alone are unbiased estimators of one integral). For every pair in [truth] pairs, display
-    Y per pixel block (tools/analytic.py PAIR_BLOCK) and as the image mean; the third field is the
+    Y per pixel block ([truth] size, spp, block) and as the image mean; the third field is the
     pair of modes, not a truth array."""
     row = working_luminance_row()
     checks = []

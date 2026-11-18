@@ -4,6 +4,7 @@ at 32x32, reads each pixel's mean and variance of the mean from the dump and com
 with the closed-form truth of scenes/lib/truths.py.
 
 Usage: <python> -I tools/analytic.py --scene <name> | --gate --device cpu|cuda [--spp N] [--seed S] [--png P]
+       <python> -I tools/analytic.py --scene <comparison scene> --device D --null PAIRS [--null-mode M]
 Prints one line per scene channel and a final PASS or FAIL line with the worst pixel's z and a
 reproduce command; exits non-zero on failure.
 
@@ -12,7 +13,7 @@ sampler's independent mode, which the harness requires), eps_sys from meta.toml 
 Also, per channel: not black where truth is not, not constant where truth varies.
 Comparison scenes (truths.py mode_agreement, RULINGS.md 77) have no truth: the harness renders the
 scene once per NEE mode named by its pairs (ASTRORAY_TEST_NEE, independent seeds) and compares two
-renders per block of PAIR_BLOCK x PAIR_BLOCK pixels and as the image mean,
+renders per pixel block and as the image mean (size, spp and block from [truth], comparison_plan),
 |mean_a - mean_b| <= z sqrt(VAR_a + VAR_b) + eps_sys.
 Ref: docs/decisions/0009-build-test-process.md d15, d16; Sidak 1967 (thresholds); Veach 1997,
 ch. 9 (MIS and each strategy alone estimate the same integral).
@@ -54,8 +55,17 @@ GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace", "a1_world_half", "a4_poin
 # pixel of the in-process render that reads the counters (one pass suffices: counters are per pass).
 CROSSING_SCENES = ("d8_stacked_lamps",)
 COUNTER_SPP = 4
-# Comparison scenes test blocks of PAIR_BLOCK x PAIR_BLOCK pixels (check_scene: rare-event skew).
-PAIR_BLOCK = 4
+# Comparison scenes (truths.py mode_agreement) set [truth] size, spp and block: a pass costs about
+# 2.7 ms on both devices whatever the image size (launch-bound), so they render a larger image at
+# fewer spp and test blocks of block x block pixels holding block^2 spp >= MIN_SPP samples
+# (comparison_plan). The threshold stays Sidak at the family alpha; a null run only shows that the
+# block statistic is normal enough for it. Null run (106, 64x64 at 64 spp, 8x8 blocks, CPU, 100
+# same-mode pairs with independent seeds each; `--scene S --device cpu --null 100 --null-mode M`):
+# d1 on, off, light_only and d8 on, off gave 0 block-check and 0 image-mean alarms in 500 checks
+# each (0.02 expected at the per-check alpha 3.9e-5). Over the blocks with SE > 0, G (exact
+# variance) had |z| > 2 / > 3 / > 4 in 284, 279, 285, 107, 97 / 8, 17, 14, 6, 5 / 0 blocks against
+# a normal 291, 291, 291, 109, 109 / 17.3, 17.3, 17.3, 6.5, 6.5 / 0.4, 0.2 (max |z| 3.89); Y, the
+# tested channel, sat below that (209-224 beyond 2 in d1) because its SE is the Minkowski bound.
 DEVICES = ("cpu", "cuda")
 FAMILY_ALPHA = 0.01  # 0009 d15
 # tests/common/stat.cpp kRepoConstant and the FNV-1a / MixBits rule of seed_for() (task 020).
@@ -148,7 +158,7 @@ def check_channel(mean, var, truth, z, eps_sys):
     return not reasons, reasons, worst
 
 
-def load_dump(path, spp, device):
+def load_dump(path, spp, device, size=SIZE):
     spec = importlib.util.spec_from_file_location("_fits_read_analytic", FITS_READ)
     fr = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fr)
@@ -165,8 +175,8 @@ def load_dump(path, spp, device):
     mean = np.stack([planes[f"display.{c}"] for c in range(3)]).astype(np.float64)
     var = np.stack([planes[f"display.{c}.VAR"] for c in range(3)]).astype(np.float64)
     nsamp = np.stack([planes[f"display.{c}.NSAMP"] for c in range(3)])
-    if mean.shape != (3, SIZE, SIZE) or not (nsamp == spp).all():
-        raise RuntimeError(f"the dump is {mean.shape[1:]} with NSAMP {np.unique(nsamp)}, expected {SIZE}x{SIZE} at {spp}")
+    if mean.shape != (3, size, size) or not (nsamp == spp).all():
+        raise RuntimeError(f"the dump is {mean.shape[1:]} with NSAMP {np.unique(nsamp)}, expected {size}x{size} at {spp}")
     return mean, var
 
 
@@ -200,15 +210,14 @@ def channel(w, mean, var):
     return cmean, np.tensordot(np.abs(w), np.sqrt(var), axes=1) ** 2
 
 
-def block(x, power):
-    """Sum of x over PAIR_BLOCK x PAIR_BLOCK pixel blocks divided by PAIR_BLOCK^(2 power): the block
-    mean for power 1, the variance of the block mean (from pixel variances) for power 2."""
-    k = PAIR_BLOCK
+def block(x, power, k):
+    """Sum of x over k x k pixel blocks divided by k^(2 power): the block mean for power 1, the
+    variance of the block mean (from pixel variances) for power 2."""
     h, w = x.shape
     return x.reshape(h // k, k, w // k, k).sum(axis=(1, 3)) / float(k) ** (2 * power)
 
 
-def check_scene(mean, var, checks, m, eps_sys, max_relative=None, renders=None):
+def check_scene(mean, var, checks, m, eps_sys, max_relative=None, renders=None, block_size=1):
     """Every check of one scene on one device. mean and var are the (3, h, w) display planes of the
     render with NEE on, which truth checks read; renders maps an NEE mode to its (mean, var) for
     pair checks. checks come from truths.evaluate.
@@ -222,11 +231,13 @@ def check_scene(mean, var, checks, m, eps_sys, max_relative=None, renders=None):
         if kind in ("pair_pixels", "pair_image"):
             (ma, va), (mb, vb) = (channel(w, *renders[mode]) for mode in truth)
             if kind == "pair_pixels":
-                # Blocks of PAIR_BLOCK^2 pixels: a single-strategy estimator of a small light is a
-                # rare-event sum, too skewed per pixel for the normal threshold (a pixel with no BSDF
-                # hit in all its samples has mean and variance 0); a block mean holds 16 times the
-                # events. Block means of independent pixel means: variance sum(VAR) / k^4.
-                ma, va, mb, vb = (block(x, s) for x, s in ((ma, 1), (va, 2), (mb, 1), (vb, 2)))
+                # Blocks of block_size^2 pixels (comparison_plan): a single-strategy estimator of a
+                # small light is a rare-event sum, too skewed per pixel for the normal threshold (a
+                # pixel with no BSDF hit in all its samples has mean and variance 0); a block pools
+                # the events of all its pixels. Block means of independent pixel means: variance
+                # sum(VAR) / k^4.
+                k = block_size
+                ma, va, mb, vb = (block(x, s, k) for x, s in ((ma, 1), (va, 2), (mb, 1), (vb, 2)))
                 passed, reasons, worst = check_channel(ma, va + vb, mb, pixel_z(m, ma.size), eps_sys)
             else:
                 n2 = ma.size ** 2
@@ -333,10 +344,46 @@ def crossing_report(scene, device):
           f"({crossings} of {rays}), {steps} steps per pass, one pass of {SIZE}x{SIZE} at NEE on")
 
 
-def run(scene, device, spp, seed, png=None):
-    """Renders and checks one scene; prints its lines and returns True on PASS."""
-    t0 = time.perf_counter()
-    check_spp(spp)
+def comparison_plan(t, spp=None):
+    """(size, spp, block) of a scene: SIZE at spp (default MIN_SPP) with per-pixel tests for a truth
+    scene; [truth] size, spp (or `spp`) and block for a comparison scene, refused unless every block
+    holds at least MIN_SPP samples (the calibrated minimum per tested unit)."""
+    if t["formula"] != "mode_agreement":
+        spp = MIN_SPP if spp is None else spp
+        check_spp(spp)
+        return SIZE, spp, 1
+    size, block_size = int(t["size"]), int(t["block"])
+    spp = int(t["spp"]) if spp is None else spp
+    if size % block_size:
+        raise ValueError(f"[truth] size {size} is not a multiple of block {block_size}")
+    if block_size * block_size * spp < MIN_SPP:
+        raise ValueError(f"block {block_size}^2 x {spp} spp = {block_size * block_size * spp} samples per block, "
+                         f"below the calibrated minimum {MIN_SPP}")
+    return size, spp, block_size
+
+
+def render_mode(rec, device, spp, seed, size, mode):
+    """One CLI dump of `rec` with ASTRORAY_TEST_NEE = mode ("on" leaves it unset); returns
+    (mean, var) or the CLI's output as a string on failure."""
+    env = {k: v for k, v in os.environ.items() if k != "ASTRORAY_TEST_NEE"}
+    if mode != "on":
+        env["ASTRORAY_TEST_NEE"] = mode
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "dump.fits")
+        r = subprocess.run([CLI, "dump", rec, "-o", out, "--device", device, "--spp", str(spp),
+                            "--seed", str(seed), "--size", f"{size}x{size}"],
+                           capture_output=True, text=True, cwd=tmp, timeout=600, env=env)
+        if r.returncode != 0:
+            return f"astroray_cli exited {r.returncode} (NEE {mode})\n{r.stdout}{r.stderr}"
+        return load_dump(out, spp, device, size)
+
+
+def mode_seed(seed, mode):
+    """Each mode gets its own seed, so pair renders are independent and their variances add."""
+    return seed if mode == "on" else mix_bits(seed ^ fnv1a(mode)) & 0xFFFFFFFF
+
+
+def scene_paths(scene):
     m = meta.load(os.path.join(ROOT, "scenes", scene, "meta.toml"))
     if m["class"] != "A":
         raise ValueError(f"scene {scene} is class {m['class']}, not analytic")
@@ -344,30 +391,29 @@ def run(scene, device, spp, seed, png=None):
     for p in (CLI, rec):
         if not os.path.exists(p):
             raise FileNotFoundError(f"{p} missing: run tools/build.ps1 and tools/scenes.py first")
+    return m, rec
+
+
+def run(scene, device, spp, seed, png=None):
+    """Renders and checks one scene; prints its lines and returns True on PASS. spp None: the
+    scene's default (comparison_plan)."""
+    t0 = time.perf_counter()
+    m, rec = scene_paths(scene)
+    size, spp, block_size = comparison_plan(m["truth"], spp)
     repro = (f"<python> -I tools/analytic.py --scene {scene} --device {device} --spp {spp} --seed {seed}")
-    checks = truths.evaluate(m["truth"], SIZE, SIZE)
+    checks = truths.evaluate(m["truth"], size, size)
     # The NEE modes the checks need (ASTRORAY_TEST_NEE, RULINGS.md 77): "on" for truth checks.
     modes = sorted({mode for c in checks if c[3].startswith("pair_") for mode in c[2]} | {"on"})
     renders = {}
     for mode in modes:
-        # Each mode gets its own seed, so pair renders are independent and their variances add.
-        mseed = seed if mode == "on" else mix_bits(seed ^ fnv1a(mode)) & 0xFFFFFFFF
-        env = {k: v for k, v in os.environ.items() if k != "ASTRORAY_TEST_NEE"}
-        if mode != "on":
-            env["ASTRORAY_TEST_NEE"] = mode
-        with tempfile.TemporaryDirectory() as tmp:
-            out = os.path.join(tmp, "dump.fits")
-            r = subprocess.run([CLI, "dump", rec, "-o", out, "--device", device, "--spp", str(spp),
-                                "--seed", str(mseed), "--size", f"{SIZE}x{SIZE}"],
-                               capture_output=True, text=True, cwd=tmp, timeout=600, env=env)
-            if r.returncode != 0:
-                print(r.stdout + r.stderr)
-                print(f"FAIL analytic {scene} {device}: astroray_cli exited {r.returncode} (NEE {mode}); "
-                      f"reproduce: {repro}")
-                return False
-            renders[mode] = load_dump(out, spp, device)
+        r = render_mode(rec, device, spp, mode_seed(seed, mode), size, mode)
+        if isinstance(r, str):
+            print(r)
+            print(f"FAIL analytic {scene} {device}: {r.splitlines()[0]}; reproduce: {repro}")
+            return False
+        renders[mode] = r
     results = check_scene(*renders["on"], checks, family_m(), m["eps_sys"], m.get("tolerance", {}).get("max_relative"),
-                          renders)
+                          renders, block_size)
     ok = all(r[1] for r in results)
     worst_all = None
     for (name, passed, reasons, worst, cmean, tmean), check in zip(results, checks):
@@ -390,13 +436,58 @@ def run(scene, device, spp, seed, png=None):
                    default=float(mean.max()))
         write_png(png, mean, 0.5 / tmax if tmax > 0 else 1.0)
     secs = time.perf_counter() - t0
-    paired = any(c[3] == "pair_pixels" for c in checks)
-    units = (SIZE // PAIR_BLOCK) ** 2 if paired else SIZE * SIZE
+    units = (size // block_size) ** 2
+    unit = "block" if block_size > 1 else "pixel"
     print(f"{'PASS' if ok else 'FAIL'} analytic {scene} {device}: worst z {worst_all[0]:+.2f} "
-          f"({worst_all[2]} at {worst_all[1]}) against per-{'block' if paired else 'pixel'} z "
-          f"{pixel_z(family_m(), units):.2f} "
-          f"+ eps_sys {m['eps_sys']:g}, {spp} spp, seed {seed}, {secs:.1f} s; reproduce: {repro}")
+          f"({worst_all[2]} at {worst_all[1]}) against per-{unit} z {pixel_z(family_m(), units):.2f} "
+          f"+ eps_sys {m['eps_sys']:g}, {size}x{size} at {spp} spp"
+          + (f" in {block_size}x{block_size} blocks" if block_size > 1 else "")
+          + f", seed {seed}, {secs:.1f} s; reproduce: {repro}")
     return ok
+
+
+def null_calibration(scene, device, pairs, mode, spp=None):
+    """Null run of a comparison scene's block test: `pairs` pairs of renders in the same NEE mode
+    with independent seeds, so every difference is noise. Counts the checks that would alarm at the
+    Sidak thresholds the gate uses (block check: any block beyond z; image-mean check) and prints the
+    |z| tail of the blocks with SE > 0 (black background blocks have mean and SE 0 and test nothing)
+    against the normal, for the tested channel Y (its SE is the Minkowski bound, so its z is
+    conservative) and for G alone (exact variance). A calibration, not a fitted threshold."""
+    m, rec = scene_paths(scene)
+    size, spp, block_size = comparison_plan(m["truth"], spp)
+    rows = {"Y": truths.working_luminance_row(), "G": np.array([0.0, 1.0, 0.0])}
+    fam = family_m()
+    zb_crit, zi_crit = pixel_z(fam, (size // block_size) ** 2), pixel_z(fam, 1)
+    zb = {k: [] for k in rows}
+    zi, alarms = [], 0
+    t0 = time.perf_counter()
+    for i in range(pairs):
+        got = []
+        for j in (0, 1):
+            r = render_mode(rec, device, spp, mix_bits(fnv1a(f"null:{scene}:{mode}:{i}:{j}")) & 0xFFFFFFFF, size, mode)
+            if isinstance(r, str):
+                raise RuntimeError(r)
+            got.append(r)
+        for k, row in rows.items():
+            (ma, va), (mb, vb) = (channel(row, *g) for g in got)
+            bm = [block(x, s, block_size) for x, s in ((ma, 1), (va, 2), (mb, 1), (vb, 2))]
+            se = np.sqrt(bm[1] + bm[3])
+            z = np.abs(bm[0] - bm[2])[se > 0] / se[se > 0]
+            zb[k].extend(z)
+            if k == "Y":
+                alarms += int((z > zb_crit).any())
+                zi.append(abs(ma.mean() - mb.mean()) / (math.sqrt(va.sum() + vb.sum()) / ma.size))
+    nd = statistics.NormalDist()
+    tails = []
+    for k, v in zb.items():
+        v = np.asarray(v)
+        tails.append(f"{k} over {v.size} blocks: " + ", ".join(
+            f"|z|>{c}: {int((v > c).sum())} (normal {v.size * 2 * nd.cdf(-c):.1f})" for c in (2, 3, 4))
+            + f", max {v.max():.2f}")
+    print(f"null {scene} {device} {mode}~{mode}: {pairs} pairs, {size}x{size} at {spp} spp, {block_size}x{block_size} "
+          f"blocks; block-check alarms {alarms} of {pairs} at z {zb_crit:.2f} (expected "
+          f"{pairs * sidak(FAMILY_ALPHA, fam):.4f}); image-mean alarms {sum(z > zi_crit for z in zi)} at z "
+          f"{zi_crit:.2f}, max {max(zi):.2f}; tails: {'; '.join(tails)}; {time.perf_counter() - t0:.0f} s")
 
 
 def main():
@@ -405,12 +496,19 @@ def main():
     ap.add_argument("--gate", action="store_true", help="the gate's scenes (GATE_SCENES), after checking "
                     "the declared family size")
     ap.add_argument("--device", required=True, choices=DEVICES)
-    ap.add_argument("--spp", type=int, default=MIN_SPP)
+    ap.add_argument("--spp", type=int, help=f"default: {MIN_SPP}, or a comparison scene's [truth] spp")
     ap.add_argument("--seed", type=int, help="default: seed_for(scene name), task 020's rule")
     ap.add_argument("--png", help="write the render here (one scene only), display scaled so truth is 0.5")
+    ap.add_argument("--null", type=int, metavar="PAIRS", help="null calibration of a comparison scene: PAIRS "
+                    "same-mode pairs (null_calibration), no test")
+    ap.add_argument("--null-mode", default="on", choices=("on", "off", "light_only"))
     a = ap.parse_args()
     if bool(a.scene) == a.gate:
         ap.error("give --scene or --gate")
+    if a.null:
+        for s in a.scene or ap.error("--null takes --scene"):
+            null_calibration(s, a.device, a.null, a.null_mode, a.spp)
+        return 0
     if a.gate:
         check_family()
     scenes = list(GATE_SCENES) if a.gate else a.scene

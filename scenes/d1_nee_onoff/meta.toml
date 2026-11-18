@@ -3,7 +3,7 @@
 # BSDF-hit strategy (rectangle, disk and sphere lamps, an emissive quad, a dim constant world),
 # rendered with MIS (on), BSDF sampling only (off) and light sampling only (light_only). The three
 # estimators are unbiased for the same image (Veach 1997, ch. 9), so on~off and on~light_only must
-# agree within their joint SE, per 4x4 pixel block and as the image mean (truths.py
+# agree within their joint SE, per 8x8 pixel block and as the image mean (truths.py
 # mode_agreement). A wrong MIS weight, pdf or selection pmf on either strategy moves one mode
 # against the others. Every light subtends enough of the visible plane's sky that BSDF sampling
 # alone hits it many times per block.
@@ -15,6 +15,11 @@ single_witness = false
 [truth]
 formula = "mode_agreement"
 pairs = [["on", "off"], ["on", "light_only"]]
+# The harness renders size x size at spp and tests block x block pixel blocks (tools/analytic.py
+# comparison_plan): 64 blocks of 8x8 pixels hold 4096 samples each.
+size = 64
+spp = 64
+block = 8
 rho = 0.8
 world_radiance = 0.05
 # Blender watts; positions in metres. Every lamp faces the plane and lies between the plane and the
