@@ -443,6 +443,7 @@ class Driver:
             if self.timed_out(40.0):
                 raise RuntimeError("the viewport never converged")
             return 0.1
+        STATE["first_meshes"] = list(STATE["meshes"])  # what the first full sync sent, before any edit
         self.go("next")
         return 0.4
 
@@ -542,9 +543,9 @@ class TestEdits(unittest.TestCase):
         if "setup" in STATE["errors"]:
             self.fail(STATE["errors"]["setup"])
         print(f"RESULT meshes sent by the first sync: {STATE['meshes'][:12]}", flush=True)
-        self.assertIn(("GnTemplate", 6), STATE["meshes"])
-        self.assertIn(("GnHost", 0), STATE["meshes"])
-        self.assertEqual(sum(1 for m in STATE["meshes"] if m == ("GnTemplate", 6)), 1)
+        self.assertIn(("GnTemplate", 6), STATE["first_meshes"])
+        self.assertIn(("GnHost", 0), STATE["first_meshes"])
+        self.assertEqual(sum(1 for m in STATE["first_meshes"] if m == ("GnTemplate", 6)), 1)
 
     def edit(self, name):
         """What the run recorded for one edit, or the failure that kept it from being recorded."""
