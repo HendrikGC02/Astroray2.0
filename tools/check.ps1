@@ -137,10 +137,8 @@ try {
     @{ Name = 'gpu gate tests'; Tag = 'local'; Lock = $true; Identity = $gpuExe; Run = { & $gpuExe --tier=gate } },
     # 0009 d11, d17a (084): one Blender start installs the staged extension zip, runs the 083 material tests,
     # renders A1's .blend through F12 on the CPU device and checks it against A1's truth and the builder's
-    # recording (exporter equivalence). The zip is built first; Invoke-ArBlender's own output goes to the log.
-    @{ Name = 'blender smoke'; Tag = 'local'; Lock = $true; Echo = '^(RESULT smoke|Ran |OK$|FAILED)'; Run = {
-        & pwsh -NoProfile -File tools/build.ps1 -Target astroray_extension
-        if ($LASTEXITCODE -ne 0) { return }
+    # recording (exporter equivalence). The smoke builds the zip itself; Invoke-ArBlender's own output goes to the log.
+    @{ Name = 'blender smoke'; Tag = 'local'; Echo = '^(RESULT smoke|Ran |OK$|FAILED)'; Run = {
         $r = Invoke-ArBlender -Script 'tests/blender/smoke_a1.py' -Args @('--with-materials') -TimeoutS 400 6>$null
         foreach ($f in $r.Log, "$($r.Log).err") { if (Test-Path $f) { Get-Content $f } }
         $global:LASTEXITCODE = $r.ExitCode } }

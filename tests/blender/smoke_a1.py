@@ -55,6 +55,12 @@ def install_and_enable():
     and enables it in this process."""
     import addon_utils
 
+    # The zip must be this tree's: a stale one would test yesterday's addon (land's canary changes
+    # sources and builds only `all`). The nested Blender of the extension build shares the machine lock.
+    b = subprocess.run(["pwsh", "-NoProfile", "-File", os.path.join(ROOT, "tools", "build.ps1"),
+                        "-Target", "astroray_extension"], capture_output=True, text=True, timeout=600)
+    if b.returncode != 0:
+        raise RuntimeError("building the extension zip failed: " + b.stdout + b.stderr)
     r = subprocess.run([bpy.app.binary_path, "--command", "extension", "install-file", "-r", "user_default",
                         zip_path()], capture_output=True, text=True, timeout=240)
     if r.returncode != 0:
