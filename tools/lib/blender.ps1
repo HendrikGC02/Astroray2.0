@@ -9,7 +9,8 @@ function Invoke-ArBlender {
   param(
     [Parameter(Mandatory)][string]$Script,
     [string[]]$Args = @(),
-    [int]$TimeoutS = 300
+    [int]$TimeoutS = 300,
+    [switch]$Gui   # a windowed Blender (no --background); the script drives everything and must exit on its own
   )
   $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
   $exe = Join-Path (Get-ArBlenderRoot) 'blender.exe'
@@ -32,7 +33,8 @@ function Invoke-ArBlender {
       $saved[$k] = [Environment]::GetEnvironmentVariable($k)
       [Environment]::SetEnvironmentVariable($k, (Join-Path $profileDir $vars[$k]))
     }
-    $argv = @('--background', '--factory-startup', '--python-exit-code', '1', '--python', $scriptPath, '--') + $Args
+    $argv = @('--factory-startup', '--python-exit-code', '1', '--python', $scriptPath, '--') + $Args
+    if (-not $Gui) { $argv = @('--background') + $argv }
     $p = Start-ArProcess -Name 'blender' -File $exe -ArgList $argv -LogPath $log
     if (-not $p.WaitForExit($TimeoutS * 1000)) {
       Stop-ArProcess -Id $p.Id

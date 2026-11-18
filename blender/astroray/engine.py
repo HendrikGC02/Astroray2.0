@@ -2,13 +2,12 @@
 """The Astroray render engine registration (0007 d2). No Python threads.
 
 F12 (0007 d23, d27, d28, d48): update() syncs the view layer into this instance's engine scene on
-the job thread, render() runs a session on it. The viewport lands in task 085.
+the job thread, render() runs a session on it. The viewport (d23, d25, d26): view_update and
+view_draw drive a viewport.ViewportJob stored on the instance like the F12 job.
 """
 import bpy
 
-from . import render_final
-
-_MSG = "Astroray: not implemented until task {}"
+from . import render_final, viewport
 
 
 class AstrorayRenderEngine(bpy.types.RenderEngine):
@@ -33,7 +32,9 @@ class AstrorayRenderEngine(bpy.types.RenderEngine):
             job = self._job
         except (AttributeError, ReferenceError):
             return
-        if job is not None:
+        if isinstance(job, viewport.ViewportJob):
+            job.park()  # two-step destruction (d23): close now, a timer destroys
+        elif job is not None:
             job.close()
 
     def update(self, data, depsgraph):
@@ -56,10 +57,13 @@ class AstrorayRenderEngine(bpy.types.RenderEngine):
             raise
 
     def view_update(self, context, depsgraph):
-        self.report({"ERROR"}, _MSG.format("085"))
+        if self._job is None:
+            self._job = viewport.ViewportJob()
+        self._job.view_update(self, context, depsgraph)
 
     def view_draw(self, context, depsgraph):
-        self.report({"ERROR"}, _MSG.format("085"))
+        if self._job is not None:
+            self._job.view_draw(self, context, depsgraph)
 
 
 def register():
