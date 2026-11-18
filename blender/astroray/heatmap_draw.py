@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Heat-map display modes: the engine's RGBA8 sRGB frame drawn outside the view transform.
 
-Route (probe P4, task 086): ROUTE is filled in by the probe's result, see below.
+Route (probe P4, task 086): drawing in view_draw without bind_display_space_shader was tried first and
+Blender still applied the view transform (an AgX screenshot of a uniform viridis(1.0) frame came out as a
+desaturated yellow, 99/255 off), so the frame is drawn from a SpaceView3D POST_PIXEL handler, which runs
+after the view transform.
 Ref: docs/decisions/0007-blender-integration.md d40 (heat maps draw so the user's view transform cannot
 distort them; P4 tries `view_draw` without `bind_display_space_shader` first, a `SpaceView3D` POST_PIXEL
 handler otherwise), d30 (the single 8-bit exception to RGBA16F, ruling 57), V10 (exact sRGB under AgX).
@@ -11,7 +14,7 @@ import ctypes
 
 import numpy as np
 
-ROUTE = "view_draw without bind_display_space_shader"  # P4: chosen route, see Progress of task 086
+ROUTE = "SpaceView3D POST_PIXEL handler"  # P4: the simpler route failed, see the module docstring
 
 
 def check_layout(frame):
@@ -35,6 +38,9 @@ class HeatmapDraw:
 
     def __init__(self):
         self._texture = None
+        self._handler = None
+        self.region = 0     # as_pointer() of the region view_draw last asked to show the heat map in; 0 = none
+        self.size = (0, 0)
         self.uploads = 0
 
     def upload(self, frame):
@@ -46,13 +52,29 @@ class HeatmapDraw:
                                              data=gpu.types.Buffer("FLOAT", flat.size, flat))
         self.uploads += 1
 
-    def draw(self, width, height):
-        if self._texture is None:
+    def show(self, region, width, height):
+        """view_draw: this region shows the heat map from now on (the handler does the drawing)."""
+        import bpy
+        self.region, self.size = region.as_pointer(), (width, height)
+        if self._handler is None:
+            self._handler = bpy.types.SpaceView3D.draw_handler_add(self._draw_post_pixel, (), "WINDOW", "POST_PIXEL")
+
+    def hide(self):
+        self.region = 0
+
+    def _draw_post_pixel(self):
+        import bpy
+        if self._texture is None or bpy.context.region.as_pointer() != self.region:
             return
         import gpu
         from gpu_extras.presets import draw_texture_2d
         gpu.state.blend_set("NONE")
-        draw_texture_2d(self._texture, (0, 0), width, height)
+        draw_texture_2d(self._texture, (0, 0), *self.size)
 
     def free(self):
+        if self._handler is not None:
+            import bpy
+            bpy.types.SpaceView3D.draw_handler_remove(self._handler, "WINDOW")
+            self._handler = None
+        self.region = 0
         self._texture = None

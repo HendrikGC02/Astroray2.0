@@ -198,8 +198,9 @@ class ViewportJob(render_final.Job):
         if prog.state == abi.AR_STATE_FAILED:
             render_final._ok(lib, 1, "the session (state FAILED)", "ar_session_last_error", s)
         if self.showing_heat:
-            self.heat.draw(w, h)  # outside the view transform (0007 d40)
+            self.heat.show(region, w, h)  # drawn by the POST_PIXEL handler, outside the view transform (0007 d40)
         else:
+            self.heat.hide()
             self.present.draw(engine, depsgraph.scene, w, h)
         busy = prog.state in (abi.AR_STATE_INITIALIZING, abi.AR_STATE_RENDERING)
         if busy or got:
