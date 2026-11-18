@@ -18,3 +18,4 @@ Budget: gate time +10 s.
 Depends on: 075.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
+- started (task/106-lamp-scenes)
