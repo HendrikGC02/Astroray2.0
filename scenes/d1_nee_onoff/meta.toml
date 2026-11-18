@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0004 D1 NEE on/off (RULINGS.md 77): one grey Lambertian plane lit by every light type that has a
+# BSDF-hit strategy (rectangle, disk and sphere lamps, an emissive quad, a dim constant world),
+# rendered with MIS (on), BSDF sampling only (off) and light sampling only (light_only). The three
+# estimators are unbiased for the same image (Veach 1997, ch. 9), so on~off and on~light_only must
+# agree within their joint SE, per 8x8 pixel block and as the image mean (truths.py
+# mode_agreement). A wrong MIS weight, pdf or selection pmf on either strategy moves one mode
+# against the others. Every light subtends enough of the visible plane's sky that BSDF sampling
+# alone hits it many times per block.
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+[truth]
+formula = "mode_agreement"
+pairs = [["on", "off"], ["on", "light_only"]]
+# The harness renders size x size at spp and tests block x block pixel blocks (tools/analytic.py
+# comparison_plan): 64 blocks of 8x8 pixels hold 4096 samples each.
+size = 64
+spp = 64
+block = 8
+rho = 0.8
+world_radiance = 0.05
+# Blender watts; positions in metres. Every lamp faces the plane and lies between the plane and the
+# camera; the camera sees the rectangle's and the disk's backs, the sphere and the quad's back.
+rect = { position = [0.5, 0.4, 0.8], size = [1.0, 0.8], power = 10.0 }
+disk = { position = [-0.5, -0.4, 0.7], diameter = 0.8, power = 8.0 }
+sphere = { position = [0.5, -0.5, 0.5], radius = 0.25, power = 8.0 }
+quad = { position = [-0.5, 0.5, 0.8], size = 0.6, strength = 3.0 }
+plane_size = 6.0
+camera_height = 3.0
+focal_mm = 50.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "z_se"

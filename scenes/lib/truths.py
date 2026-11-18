@@ -4,7 +4,8 @@
 A truth function takes the [truth] table and the image size and returns a list of checks, each
 (name, weights, truth, kind): the measured channel is weights . (display R, G, B) per pixel and
 truth is an (height, width) array in display units (working-space RGB, film exposure 1). kind
-"pixels" tests every pixel, "image" tests the image mean. Every check is one member of the
+"pixels" tests every pixel, "image" tests the image mean; "pair_pixels" and "pair_image" compare
+two renders instead (mode_agreement). Every check is one member of the
 analytic family per device (tools/analytic.py).
 Ref: docs/decisions/0009-build-test-process.md d16, d20; 0003 d11 (display Y, the unit anchor);
 src/host/data_resource.h (observer.bin layout).
@@ -133,8 +134,6 @@ def lamp_over_plane(t, width, height):
     E). Lamps never occlude (0004 D8). Pixels the disc's edge may cross are NaN (excluded): the
     sphere is exact, so the ball test of sphere_pixel_classes applies with r_in = R.
     Ref: Golub and Welsch 1969 (Gauss-Legendre nodes, numpy.polynomial.legendre.leggauss)."""
-    if width != height:
-        raise ValueError("lamp_over_plane assumes a square image")
     rho, power, radius = float(t["rho"]), float(t["power"]), float(t["lamp_radius"])
     lamp = [float(v) for v in t["lamp_position"]]
     cam = float(t["camera_height"])
@@ -143,17 +142,11 @@ def lamp_over_plane(t, width, height):
         raise ValueError("truth colour must be an RGB triple")
     if not lamp[2] > radius:
         raise ValueError("the lamp must lie wholly above the plane")
+    x, y, wq = _pixel_quadrature(t, width, height)
+    e_mean = np.einsum("hwab,a,b->hw", lamp_irradiance(power, lamp, x, y), wq, wq)
     half = float(t["sensor_mm"]) / (2.0 * float(t["focal_mm"]))
     edges = (np.arange(width + 1) / width * 2.0 - 1.0) * half
-    nodes, weights = np.polynomial.legendre.leggauss(8)
     lo, hi = edges[:-1], edges[1:]
-    # film coordinates of the quadrature nodes per pixel column / row: (n, 8)
-    f = (lo + hi)[:, None] / 2.0 + (hi - lo)[:, None] / 2.0 * nodes[None, :]
-    wq = weights / 2.0  # each axis' weights sum to 1
-    fx = f[None, :, None, :]  # (1, w, 1, 8): column
-    fy = f[:, None, :, None]  # (h, 1, 8, 1): row, bottom-up
-    e = lamp_irradiance(power, lamp, cam * fx, cam * fy)  # (h, w, 8, 8)
-    e_mean = np.einsum("hwab,a,b->hw", e, wq, wq)
     plane = rho / np.pi * e_mean
     truth = plane
     if radius > 0.0:
@@ -173,8 +166,117 @@ def lamp_over_plane(t, width, height):
     return [(c, eye[i], truth * colour[i], "pixels") for i, c in enumerate("RGB")]
 
 
+def _pixel_quadrature(t, width, height):
+    """World (x, y) on the plane z = 0 of the 8 x 8 Gauss-Legendre nodes of every pixel of the
+    look-down pinhole view lamp_over_plane describes, and the per-axis weights (each summing to 1).
+    Returns (x (1, w, 1, 8), y (h, 1, 8, 1), wq (8,)); rows bottom-up.
+    Ref: Golub and Welsch 1969 (numpy.polynomial.legendre.leggauss)."""
+    if width != height:
+        raise ValueError("the look-down plane truths assume a square image")
+    cam = float(t["camera_height"])
+    half = float(t["sensor_mm"]) / (2.0 * float(t["focal_mm"]))
+    edges = (np.arange(width + 1) / width * 2.0 - 1.0) * half
+    nodes, weights = np.polynomial.legendre.leggauss(8)
+    lo, hi = edges[:-1], edges[1:]
+    f = (lo + hi)[:, None] / 2.0 + (hi - lo)[:, None] / 2.0 * nodes[None, :]
+    return cam * f[None, :, None, :], cam * f[:, None, :, None], weights / 2.0
+
+
+def disk_factor(a, h, r):
+    """Configuration factor from a differential area to a parallel coaxial-offset disk: the disk
+    (radius r) faces the element from height h, the element is a distance a from the disk's axis.
+    F = 1/2 [1 - (a^2 + h^2 - r^2) / sqrt((a^2 + h^2 + r^2)^2 - 4 r^2 a^2)], which is the catalog
+    form with H = h / a, R = r / a, Z = 1 + H^2 + R^2 multiplied through by a^2, so a = 0 (on the
+    axis) is defined and gives r^2 / (r^2 + h^2).
+    Ref: Howell, Menguc and Siegel, Thermal Radiation Heat Transfer (configuration factor catalog,
+    differential planar element to a parallel disk, case B-13)."""
+    a2, h2, r2 = a * a, h * h, r * r
+    return 0.5 * (1.0 - (a2 + h2 - r2) / np.sqrt((a2 + h2 + r2) ** 2 - 4.0 * r2 * a2))
+
+
+def disk_over_plane(t, width, height):
+    """A3: a disk lamp of radius r at lamp_position, facing straight down (its emitting front, local
+    -Z), over a Lambertian plane z = 0 of grey albedo rho, black world, the look-down pinhole camera
+    of lamp_over_plane above the disk. The disk is a Lambertian emitter of radiance L = P / (pi^2
+    r^2) (0004 D6 area row: L = P / (pi A)), so E = pi L F and a plane pixel is colour rho L F, F
+    from disk_factor averaged over the pixel's square (8 x 8 Gauss-Legendre). The camera sees only
+    the disk's back, which emits nothing, and lamps never occlude (0004 D8), so no pixel is
+    excluded: a two-sided disk shows."""
+    rho, power, radius = float(t["rho"]), float(t["power"]), float(t["lamp_radius"])
+    lx, ly, lz = (float(v) for v in t["lamp_position"])
+    colour = np.asarray(t["colour"], dtype=np.float64)
+    if colour.shape != (3,) or not radius > 0.0:
+        raise ValueError("disk_over_plane needs an RGB colour and a radius > 0")
+    if not (0.0 < lz < float(t["camera_height"])):
+        raise ValueError("the disk must lie between the plane and the camera")
+    x, y, wq = _pixel_quadrature(t, width, height)
+    f = disk_factor(np.hypot(x - lx, y - ly), lz, radius)
+    radiance = power / (np.pi ** 2 * radius * radius)
+    plane = rho * radiance * np.einsum("hwab,a,b->hw", f, wq, wq)
+    eye = np.eye(3)
+    return [(c, eye[i], plane * colour[i], "pixels") for i, c in enumerate("RGB")]
+
+
+def _sphere_outside_view(t, centre, radius):
+    """True if a sphere lies wholly outside the look-down camera's view pyramid: beyond one of its
+    four side planes by more than its radius."""
+    cam = float(t["camera_height"])
+    half = float(t["sensor_mm"]) / (2.0 * float(t["focal_mm"]))
+    cx, cy, cz = centre
+    norm = np.sqrt(1.0 + half * half)
+    return any((abs(c) - half * (cam - cz)) / norm > radius for c in (cx, cy))
+
+
+def lit_furnace(t, width, height):
+    """Small lit furnace (0004 D1 row): a Lambertian plane z = 0 of grey albedo rho in a constant
+    world of radiance Lw, lit by a small sphere lamp of radius R outside the camera's view, rendered
+    with max_depth = 1, black elsewhere. The plane sees the world over its whole upper hemisphere
+    (lamps never occlude, 0004 D8), so a plane pixel is colour (rho Lw + rho / pi E) with E =
+    pi Le (R / D)^2 cos theta, Le = P / (4 pi^2 R^2), i.e. L_r = rho Le (R / d)^2 below the lamp
+    (lamp_irradiance), averaged over the pixel by 8 x 8 Gauss-Legendre. The plane cannot see
+    itself, so max_depth = 1 drops nothing. Checks: R, G, B per pixel and the image mean of display
+    Y, whose z SE the harness holds to [tolerance] max_relative (0.5%) of the truth."""
+    rho, power, radius = float(t["rho"]), float(t["power"]), float(t["lamp_radius"])
+    lamp = [float(v) for v in t["lamp_position"]]
+    lw = float(t["world_radiance"])
+    colour = np.asarray(t["colour"], dtype=np.float64)
+    if colour.shape != (3,):
+        raise ValueError("truth colour must be an RGB triple")
+    if not lamp[2] > radius:
+        raise ValueError("the lamp must lie wholly above the plane")
+    if not _sphere_outside_view(t, lamp, radius):
+        raise ValueError("the lamp must lie outside the camera's view")
+    x, y, wq = _pixel_quadrature(t, width, height)
+    e = np.einsum("hwab,a,b->hw", lamp_irradiance(power, lamp, x, y), wq, wq)
+    plane = rho * lw + rho / np.pi * e
+    eye = np.eye(3)
+    checks = [(c, eye[i], plane * colour[i], "pixels") for i, c in enumerate("RGB")]
+    row = working_luminance_row()
+    return checks + [("Y image mean", row, plane * float(row @ colour), "image")]
+
+
+def mode_agreement(t, width, height):
+    """d1, d8: no closed form; renders of the same scene under different NEE test modes
+    (ASTRORAY_TEST_NEE, RULINGS.md 77) must agree in the mean (Veach 1997, ch. 9: MIS and each
+    strategy alone are unbiased estimators of one integral). For every pair in [truth] pairs, display
+    Y per pixel block ([truth] size, spp, block) and as the image mean, or as the image mean only
+    when [truth] image_mean_only is true; the third field is the pair of modes, not a truth array."""
+    row = working_luminance_row()
+    blocks = not t.get("image_mean_only", False)
+    checks = []
+    for a, b in t["pairs"]:
+        for m in (a, b):
+            if m not in ("on", "off", "light_only"):
+                raise ValueError(f"unknown NEE mode {m!r}")
+        if blocks:
+            checks.append((f"Y {a}~{b}", row, (a, b), "pair_pixels"))
+        checks.append((f"Y image mean {a}~{b}", row, (a, b), "pair_image"))
+    return checks
+
+
 FORMULAS = {"emitter_radiance": emitter_radiance, "display_luminance": display_luminance,
-            "lambertian_furnace": lambertian_furnace, "lamp_over_plane": lamp_over_plane}
+            "lambertian_furnace": lambertian_furnace, "lamp_over_plane": lamp_over_plane,
+            "disk_over_plane": disk_over_plane, "lit_furnace": lit_furnace, "mode_agreement": mode_agreement}
 
 
 def evaluate(truth_table, width, height):

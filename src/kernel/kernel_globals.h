@@ -28,6 +28,15 @@ AR_NS_BEGIN
 // PIXEL_CENTRE: generate_camera takes the filter offset as 0, so every camera ray goes through its
 // pixel centre.
 inline constexpr uint32_t TEST_HOOK_PIXEL_CENTRE = 1u << 0;
+// NEE mode (ASTRORAY_TEST_NEE, RULINGS.md 77), two exclusive bits; neither is the default MIS of
+// light and BSDF sampling. The three estimators must agree in the mean (Veach 1997, ch. 9):
+// NEE_OFF: BSDF sampling only. No light sample, no shadow item; an emitter hit is weighted 1.
+// NEE_LIGHT_ONLY: light sampling only. The NEE weight drops the BSDF pdf; an emitter reached after
+// a non-delta bounce adds nothing. Emission at the first vertex or after a delta bounce counts in
+// every mode, because no light sample can reach it. Unbiased only while every light has pmf > 0
+// (0004 D9: a pmf-0 light is reached by BSDF rays alone), which the test scenes ensure.
+inline constexpr uint32_t TEST_HOOK_NEE_OFF = 1u << 1;
+inline constexpr uint32_t TEST_HOOK_NEE_LIGHT_ONLY = 1u << 2;
 
 // Constant for a whole pass. max_bounces uses the order of PathStateSoA::bounces:
 // total, diffuse, glossy, transmission, volume, transparent.

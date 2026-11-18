@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# A3 disk: a disk lamp facing down over a grey Lambertian plane, camera above the disk; pixel =
+# rho L F with F the disk configuration factor (0009 d20; truths.py disk_over_plane). The disk is
+# off the camera axis, so a swapped or mirrored image axis shows; the camera sees only its back,
+# which emits nothing, so a two-sided disk shows. The plane is lit by NEE and by BSDF rays crossing
+# the disk (shade_light), combined by the balance heuristic.
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+# eps_sys defaults to 0: nothing in this scene is approximated.
+[truth]
+formula = "disk_over_plane"
+rho = 0.8
+colour = [1.0, 1.0, 1.0]
+# Blender watts (0003 d11, factor 1), normalised: L = P / (pi A), A = pi r^2.
+power = 8.0
+lamp_position = [0.3, -0.2, 1.0]
+lamp_radius = 0.5
+# The scene (metres, millimetres): as A4, a square plane at z = 0 facing +z and a pinhole camera on
+# the +z axis looking down with image +y along world +y. The builder refuses a plane that does not
+# fill the view.
+plane_size = 6.0
+camera_height = 4.0
+focal_mm = 50.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "z_se"

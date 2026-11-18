@@ -18,7 +18,9 @@ struct TestHooks {
   std::vector<std::string> active;  // names of the hooks that are on, for the CLI's report
 };
 
-// Any value but "" and "0" turns a hook on. Empty in builds without AR_GATE_HOOKS.
+// Any value but "" and "0" turns a flag hook on. ASTRORAY_TEST_NEE takes on, off or light_only
+// (RULINGS.md 77) and throws std::invalid_argument on any other non-empty value. Empty in builds
+// without AR_GATE_HOOKS.
 TestHooks read_test_hooks();
 
 }  // namespace astroray::host

@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0004 D8 stacked lamps: two rectangle lamps, one above the other, both facing down toward a grey
+# Lambertian floor and toward a pinhole camera placed low beside them, so camera rays and the
+# floor's BSDF rays cross both lamps' emitting faces in one segment (one crossing per step, no cap).
+# NEE on (MIS) and off (BSDF sampling only) must agree within their joint SE as the image mean
+# (truths.py mode_agreement, RULINGS.md 77), which is what the D8 Verification row asks ("Means
+# within 3 SE"); a crossing that loses or misweights the second lamp moves one mode. There is no
+# block test (lead ruling): the pixel row on the floor's near edge holds few floor samples, so
+# BSDF-only lighting there is a rare event, and the cross-mode null run gave 52 block-check alarms
+# in 100 pairs (tools/analytic.py comment). The harness also reports lamp crossings per closest-hit
+# ray and steps per pass from the engine's counters (0004 D8, D29).
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+[truth]
+formula = "mode_agreement"
+pairs = [["on", "off"]]
+image_mean_only = true
+# The harness renders size x size at spp (tools/analytic.py comparison_plan); block = size: the one
+# tested unit is the whole image.
+size = 64
+spp = 64
+block = 64
+rho = 0.8
+# Blender watts; metres. The upper lamp is larger, so it shows around the lower one from below.
+lower = { position = [0.0, 0.0, 1.0], size = 0.8, power = 20.0 }
+upper = { position = [0.0, 0.0, 1.4], size = 1.4, power = 20.0 }
+floor_size = 3.0
+camera_position = [3.0, 0.0, 0.4]
+camera_target = [0.0, 0.0, 0.7]
+focal_mm = 24.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "z_se"

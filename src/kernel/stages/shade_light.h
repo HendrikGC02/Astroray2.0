@@ -15,7 +15,9 @@
 // second crossing, from inside on the way out, meets the non-emitting side and adds nothing.
 // MIS: as shade_surface's emission hit, with p_light = pmf(ctx_prev, light) pdf_li(ctx_prev, wi)
 // from the previous vertex's context after a non-delta bounce, and weight 1 / avg(r_u) at the
-// first vertex or after a delta bounce (LAST_BOUNCE_SPECULAR).
+// first vertex or after a delta bounce (LAST_BOUNCE_SPECULAR). The NEE test modes
+// (kernel_globals.h TEST_HOOK_NEE_*) weight the hit 1 (off) or drop it after a non-delta bounce
+// (light_only); the crossing itself is unchanged.
 // Lamp records already carry the radiance scale s (068), so Le is not multiplied by it here.
 // Lamp crossings are counted by the scheduler from this stage's item count (0004 D29): every
 // item is one crossing. A non-finite contribution marks the sample invalid and ends the path
@@ -105,12 +107,17 @@ AR_FN void stage_shade_light(const KernelGlobals& kg, uint32_t item, const StepE
   const LampCrossing hit = lamp_crossing(rec, o, d, ps_hit_t(kg, slot));
   const uint32_t flags = ps_flags(kg, slot);
 
-  if (hit.valid && (flags & PATH_KIND) == 0u && dot(d, hit.n) < Real(0)) {
+  // NEE test modes (kernel_globals.h TEST_HOOK_NEE_*): off weights every hit 1; light_only drops a
+  // hit that NEE could have sampled, i.e. one after a non-delta bounce.
+  const uint32_t hooks = kg.session.test_hooks;
+  const bool after_scatter = ps_bounces(kg, slot).v[0] > 0u && (flags & LAST_BOUNCE_SPECULAR) == 0u;
+  const bool dropped = after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u;
+  if (hit.valid && (flags & PATH_KIND) == 0u && dot(d, hit.n) < Real(0) && !dropped) {
     const uint32_t sample = ps_sample_id(kg, slot);
     const Spec lt = ps_lambda_t(kg, slot);
     Lambda lam;
     for (int i = 0; i < kLanes; ++i) lam.nm[i] = lt.v[i];
-    const bool weighted = ps_bounces(kg, slot).v[0] > 0u && (flags & LAST_BOUNCE_SPECULAR) == 0u;
+    const bool weighted = after_scatter && (hooks & TEST_HOOK_NEE_OFF) == 0u;
     Real p_light = Real(0);
     if (weighted) {
       const LightSampleContext prev = prev_light_context(kg, slot);
