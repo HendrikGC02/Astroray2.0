@@ -42,9 +42,9 @@ import smoke_a1  # noqa: E402  (the zip install and the argument helpers)
 
 MODULE = smoke_a1.MODULE
 ARGS = smoke_a1.ARGS
-WATCHDOG_S = 240.0
+WATCHDOG_S = 270.0  # land's canary run gives Blender 300 s
 SETTLE_S = 2.0       # let the first generation render a while before the sphere moves
-STEP_TIMEOUT_S = 90.0
+STEP_TIMEOUT_S = 25.0  # every step takes a few seconds; a failing phase must not eat the budget
 T0 = time.monotonic()
 STATE = {"errors": {}}
 SCENARIOS = ("overlap", "failpark", "failcreate")
@@ -147,7 +147,9 @@ class Driver:
     def tick(self):
         try:
             if time.monotonic() - T0 > WATCHDOG_S:
-                raise RuntimeError(f"watchdog: still in step {self.step_name}")
+                STATE["errors"]["watchdog"] = f"watchdog: still in step {self.step_name}"
+                print(STATE["errors"]["watchdog"], flush=True)
+                return self.end()
             return getattr(self, "step_" + self.step_name)()
         except Exception:
             phase = self.phase()
@@ -539,6 +541,8 @@ class TestPresent(unittest.TestCase):
     def setUp(self):
         """A case needs its own phase to have completed; an earlier phase that failed does not matter to it
         except through the state it left (each phase starts from a plain viewport)."""
+        if "watchdog" in STATE["errors"]:
+            self.fail(STATE["errors"]["watchdog"])
         phase = PHASE_OF.get(self._testMethodName, "main")
         if phase in STATE["errors"]:
             self.fail(f"the {phase} phase of the viewport sequence did not complete:\n" + STATE["errors"][phase])
