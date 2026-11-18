@@ -51,17 +51,25 @@ def instrument(engine_cls):
     """Adds loggers for the callbacks under test; the originals still run."""
     log = STATE["log"]
 
-    def wrap(name):
-        orig = getattr(engine_cls, name, None)
+    # Blender checks the argument count of each override, so the wrappers spell their signatures out.
+    o_update, o_render, o_view_update = engine_cls.update, engine_cls.render, engine_cls.view_update
 
-        def call(self, *a, **k):
-            log.append((time.monotonic() - T0, name, id(self)))
-            return orig(self, *a, **k) if orig else None
-        call.__name__ = name
-        setattr(engine_cls, name, call)
+    def update(self, data, depsgraph):
+        log.append((time.monotonic() - T0, "update", id(self)))
+        return o_update(self, data, depsgraph)
 
-    for name in ("view_update", "update", "render"):
-        wrap(name)
+    def render(self, depsgraph):
+        log.append((time.monotonic() - T0, "render", id(self)))
+        try:
+            return o_render(self, depsgraph)
+        finally:
+            log.append((time.monotonic() - T0, "render_returned", id(self)))
+
+    def view_update(self, context, depsgraph):
+        log.append((time.monotonic() - T0, "view_update", id(self)))
+        return o_view_update(self, context, depsgraph)
+
+    engine_cls.update, engine_cls.render, engine_cls.view_update = update, render, view_update
     for name in ("view_pause", "view_resume"):
         def make(n):
             def call(self, context):
@@ -189,7 +197,7 @@ class TestPause(unittest.TestCase):
         self.assertEqual({i for _, i in pauses} & vids, vids, "view_pause was not called on every viewport engine")
         first_update = min(t for t, _ in by("update"))
         self.assertTrue(all(start <= t <= first_update for t, _ in pauses), "view_pause came outside F12's start")
-        last_render = max(t for t, _ in by("render"))
+        last_render = max(t for t, _ in by("render_returned"))
         self.assertEqual({i for _, i in resumes} & vids, vids, "view_resume was not called on every viewport engine")
         self.assertTrue(all(t >= last_render for t, _ in resumes), "view_resume came before F12's render returned")
 
