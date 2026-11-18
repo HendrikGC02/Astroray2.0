@@ -1,5 +1,5 @@
 diff --git a/src/kernel/stages/queue_build.h b/src/kernel/stages/queue_build.h
-index c477589..549d926 100644
+index c477589..e8c1e35 100644
 --- a/src/kernel/stages/queue_build.h
 +++ b/src/kernel/stages/queue_build.h
 @@ -162,7 +162,7 @@ AR_FN uint32_t queue_lookback(const uint32_t* counts, uint32_t tiles, uint32_t u
@@ -11,3 +11,12 @@ index c477589..549d926 100644
      if (w >= kScanPrefix) break;
    }
    return exclusive;
+@@ -182,7 +182,7 @@ AR_FN void queue_scan_tile(const KernelGlobals& kg, uint32_t u, uint32_t lane, u
+     uint32_t aggregate = 0;
+     for (uint32_t r = first; r < last; ++r) aggregate += counts[uint64_t(r) * kQueueBins + b];
+     uint32_t* status = counts + uint64_t(last - 1u) * kQueueBins + b;
+-    if (u != 0) queue_status_store(status, kScanAggregate | aggregate);
++    if (u != 0) queue_status_store(status, kScanPrefix | aggregate);
+     const uint32_t exclusive = queue_lookback(counts, tiles, u, b);
+     AR_ASSERT(exclusive + aggregate <= kScanValueMask);
+     queue_status_store(status, kScanPrefix | (exclusive + aggregate));

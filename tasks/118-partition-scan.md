@@ -11,7 +11,7 @@ Do:
 4. Write back 0002 D7 (remedy (c) adopted, with the measured share) and D8 (kernel names) in the same change.
 Acceptance: `pwsh tools/check.ps1 gate` passes; the PR body holds the before/after table; partition share on b1m and b5m reported against B-19.
 Look at: out/evidence/118/timeline_b1m.png (one pass, as 093's plot).
-Canary: tasks/118.canary.patch must turn red: astroray_tests_cpu "queue_build/single-pass scan over many scan tiles" "queue_build/look-back adds aggregates up to the first inclusive prefix" (the patch drops scan tile 0's value from the look-back), astroray_tests_gpu "queue_build/cpu gpu agree at full pool size".
+Canary: tasks/118.canary.patch must turn red: astroray_tests_cpu "queue_build/single-pass scan over many scan tiles" "queue_build/look-back adds aggregates up to the first inclusive prefix" "queue_build/look-back reads a published aggregate" (hunk 1 drops scan tile 0's value from the look-back, hunk 2 publishes the aggregate with the inclusive-prefix flag), astroray_tests_gpu "queue_build/cpu gpu agree at full pool size".
 Budget: no gate time added; kernel rows recorded at measured values; compile time within B-05.
 Depends on: 093.
 Size: M (about 300 lines); stop and report at 2x.
@@ -21,3 +21,4 @@ Progress:
 - count/scatter: one warp per tile with ar::ballot + popcount (Kernighan loop, nvcc emits POPC); 237/269 -> 50/94 us. Grid kept at tiles*kQueueTile: a tight grid (tiles*32, measured 42/80 us) breaks test_scheduler.cpp's `grid > 1024` precondition (out of scope).
 - B-1M partition 59.8 -> 15.0 % of pass, B-5M 38.9 -> 6.8 %; bench pass_ms 41.10 -> 17.31 (B-1M), 66.71 -> 42.67 (B-5M). B-19 still fails (B-1M idle 33 %, B-5M sort 52.5 %).
 - 0002 D7 (c) and D8 written back; budget rows count 38 regs, scatter 52 regs / stack 0; canary verified red (3 cases).
+- review: added 'look-back reads a published aggregate' (out-of-order scan tiles on CPU threads) and canary hunk 2 (aggregate published with the prefix flag); k_queue_build_scan row confirmed at measured 40 regs, 0 stack, 0 spills.
