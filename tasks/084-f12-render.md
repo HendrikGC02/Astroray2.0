@@ -20,3 +20,4 @@ Budget: gate time grows by one Blender start plus the render; report it (0009 Ri
 Depends on: 083, 104, 073, 070, 117.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
+started
