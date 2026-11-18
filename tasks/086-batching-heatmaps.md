@@ -16,4 +16,7 @@ Budget: none on kernels.
 Depends on: 085.
 Size: M (about 350 lines); stop and report at 2x.
 Progress:
-- started (086)
+- P4 probe: drawing in view_draw without bind_display_space_shader still got AgX applied (uniform viridis(1.0) frame came out [198,190,135]); chosen route is a SpaceView3D POST_PIXEL handler (heatmap_draw.py).
+- Blender's overlay step maps 8-bit values 1->6, 5->13, 37->42, 100->100, 128->127, 231->230 (decode piecewise sRGB, display encode ~gamma 2.2; same under AgX/Standard, dither on/off): exact +-1 sRGB (V10) is impossible below ~60/255; test checks view-transform independence (AgX vs Standard identical) and <=10/255 from the frame. Lead to rule on V10 wording.
+- Schedule copied (0.1/0.25/0.5/1.0/2.0 s on settled time, 32-sample condition), B-34 row and budgets.toml updated; passes per update rounded DOWN to a power of two (the fetched source summary did not give the rounding direction).
+- Found: viewport_samples edits do not sync live (classify.settings_signature ignores scene.astroray); gui test uses a new job instead.
