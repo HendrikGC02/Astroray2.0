@@ -37,6 +37,10 @@ None. Unowned follow-ups (a task that touches the area takes them):
   cannot see a hero fixed in generate_camera (078); the per-pixel analytic z of 5.50 misses 1 % albedo errors on
   A1 and a4_sphere (energy tests catch them, 078). Flaky once: `cpu_device/parallel_for rethrows` (0.515 s vs B-12),
   `wavelengths/stratified lane positions`. Fault tests leave astroray_fault_* dirs in temp; some files mix CRLF/LF.
+- Semantics to settle (076): roulette_q applies Russian roulette at depth >= max(2, min_bounces) as 0004 D2 says, so
+  min_bounces = max_bounces does not disable it, contrary to kernel_globals.h, ar.py settings() and the addon's
+  property text; check Cycles' path_state_continuation_probability and fix the kernel or the text. AUTO emission
+  sampling makes a mesh a light only above an estimate of 0.5 (067): confirm that matches Cycles.
 - M1b: Mix/Add Shader needs 058's compiler to accept one value feeding two EMIT_LE; textured Roughness and Specular
   IOR Level need a colour-to-float op (Cycles: luminance); 083 Do 7 (auto-converted Emission flag, per-term RGB for
   AUTO); a spectral AR_SPECTRUM_BLACKBODY lamp option (082 folds temperature to RGB as Cycles does).
