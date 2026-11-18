@@ -21,3 +21,7 @@ units = "m"
 spectra = ["rgb"]
 assets = []
 single_witness = false
+
+# Built only when named (tools/scenes.py s3_textured): it writes 32 textures of 2048x2048 first.
+[build]
+on_demand = true

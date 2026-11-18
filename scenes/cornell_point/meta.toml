@@ -10,3 +10,8 @@ units = "m"
 spectra = ["rgb"]
 assets = ["cornell_box"]
 single_witness = false
+
+# Built only when named (tools/scenes.py cornell_point): it needs the fetched Bitterli archive (not in CI).
+[build]
+on_demand = true
+sources = ["scenes/cornell"]
