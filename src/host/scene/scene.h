@@ -184,6 +184,7 @@ class Scene {
   bool init_done_ = false;
   std::string init_error_;
   bool init_device_error_ = false;  // the init failure was a DeviceError: wait_init keeps its type
+  bool init_device_sticky_ = false;  // ... and its sticky flag
   std::shared_ptr<void> init_result_;
   std::function<Device*(void*)> device_of_;
   std::function<AccelBuilder*(void*)> accel_of_;

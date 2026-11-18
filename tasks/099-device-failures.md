@@ -18,3 +18,4 @@ Progress: started (implementer)
 - Done: injections (corrupt image, old driver/cc floor, failing init worker, untested arch), fault kernel + CLI/ctypes child tests, B-17 timing hook; 11.2 ms longest launch (sort_scatter) on b5m 1080p.
 - Found: a dead device's frees threw from Film/ActivePixels destructors (std::terminate): CudaDevice::free_memory is a no-op once dead. SESSION_FAILED is now raised before the FAILED state (a host polling state then report raced).
 - Lead ruling: abi test renamed gpu_test_fault_cli.py (local gpu abi tests step, no skip); check full now runs `astroray_tests_gpu --tier=full` (whole tier, 1 case, ~4 s). Gate 168 s of 180 (compile timing +17 s: launch_config.h changed).
+- Known gaps (review): the SESSION_FAILED-before-FAILED and DEVICE_INIT_FAILED-before-waiters orderings are not pinned by a test (race windows); the stored init failure's sticky flag has no test.

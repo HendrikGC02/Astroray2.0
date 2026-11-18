@@ -306,7 +306,7 @@ struct CudaDevice::Impl {
     auto f = functions.find(key);
     if (f != functions.end()) return f->second;
     auto m = modules.find(module);
-    if (m == modules.end()) m = modules.emplace(module, load_image(module, load_module_image(module))).first;
+    if (m == modules.end()) m = modules.emplace(module, load_image(module, load_module_image(module, hooks.corrupt_cubin))).first;
     CUfunction func = nullptr;
     check(cu.cuModuleGetFunction_(&func, m->second, fn.c_str()), "cuModuleGetFunction", fn.c_str());
     functions.emplace(key, func);

@@ -11,7 +11,6 @@
 #include "host/build_info.h"
 #include "host/data_resource.h"
 #include "host/device.h"
-#include "host/session/test_hooks.h"
 
 namespace astroray::host {
 namespace {
@@ -40,9 +39,9 @@ ModuleImage load_undamaged(const std::string& name);
 
 }  // namespace
 
-ModuleImage load_module_image(const std::string& name) {
+ModuleImage load_module_image(const std::string& name, bool corrupt) {
   ModuleImage image = load_undamaged(name);
-  if (name.rfind("optix_", 0) != 0 && read_test_hooks().corrupt_cubin) damage(image);
+  if (corrupt && name.rfind("optix_", 0) != 0) damage(image);
   return image;
 }
 

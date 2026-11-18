@@ -23,7 +23,9 @@ struct ModuleImage {
 // malformed name and DeviceError when the image is missing or unreadable. A dev build
 // with ASTRORAY_KERNEL_DIR set reads only from that directory: a missing file is an
 // error, never a fall back to the embedded copy.
-ModuleImage load_module_image(const std::string& name);
+// `corrupt` (ASTRORAY_TEST_CORRUPT_CUBIN, read once by the device that asks) hands over a damaged
+// copy of a cubin; OptiX PTX is never damaged. The caller decides, so no environment is read here.
+ModuleImage load_module_image(const std::string& name, bool corrupt = false);
 
 // Test modules only (never embedded): reads the file at `path`. Throws DeviceError when
 // it cannot be read.

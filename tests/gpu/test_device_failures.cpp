@@ -6,7 +6,7 @@
 // host scene data kept), and a GPU other than sm_120 (a warning once per session, the render proceeds).
 // Each case ends in an ar_status-bearing DeviceError and a report entry; nothing renders silently.
 // The sticky-fault row (an out-of-bounds kernel write) breaks CUDA for the process, so it runs in a
-// child process: tests/abi/test_gpu_fault_cli.py. The `full` case at the end prints the longest launch
+// child process: tests/abi/gpu_test_fault_cli.py. The `full` case at the end prints the longest launch
 // of a 1080p render of b5m against 0009 B-17.
 // Ref: docs/decisions/0002-kernel-architecture.md D15; 0001 D2.5, D2.8, D3.5; 0009 B-17.
 #include <doctest.h>
@@ -88,6 +88,17 @@ struct Rig {
     scene->materials->end_edit();
     e.reset();
     scene->generations().wait_idle();
+  }
+  void commit_settings() {
+    commit([&](Edit& e) {
+      ar_settings st{};
+      st.samples = st.viewport_samples = 4;
+      st.max_bounces = 2;
+      st.pixel_filter = AR_FILTER_BOX;
+      st.pixel_filter_width = 1.0f;
+      st.film_exposure = 1.0f;
+      REQUIRE(e.set_settings(&st) == AR_OK);
+    });
   }
   void commit_lamp() {
     commit([&](Edit& e) {
@@ -173,12 +184,24 @@ DeviceError refused_device() {
   return DeviceError("unreachable");
 }
 
-SessionOptions small_session() {
+SessionOptions small_session(bool test_work = true) {
   SessionOptions o;
   o.max_width = o.max_height = 16;
   o.owner = Owner{0, 1};
-  o.test_camera_samples_per_pass = 16;  // work for the first pass without a view
+  // Work for the first pass without a view: only for a session that fails before any kernel runs.
+  if (test_work) o.test_camera_samples_per_pass = 16;
   return o;
+}
+
+ar_view_desc small_view() {
+  ar_view_desc v{};
+  v.region_width = v.region_height = 16;
+  v.render_scale = 1.0f;
+  v.camera.cam_to_world.m[0] = v.camera.cam_to_world.m[5] = v.camera.cam_to_world.m[10] = 1.0f;
+  const float p[16] = {0.5f, 0, 0, 0, 0, 0.375f, 0, 0, 0, 0, 0, -1.0f, 0, 0, 0, 1.0f};
+  for (int i = 0; i < 16; ++i) v.camera.projection_inverse[i] = p[i];
+  v.camera.type = AR_CAMERA_PERSP;
+  return v;
 }
 
 }  // namespace
@@ -189,19 +212,19 @@ TEST_CASE("device_failures/corrupt module image") {
   // The copy of an embedded stage cubin the loader hands over loses its header; the embedded bytes stay.
   const ModuleImage clean = load_module_image("generate_camera");
   {
-    Hook h("CORRUPT_CUBIN", "1");
-    const ModuleImage damaged = load_module_image("generate_camera");
+    const ModuleImage damaged = load_module_image("generate_camera", true);
     REQUIRE(damaged.bytes.size() == clean.bytes.size());
     CHECK(damaged.bytes != clean.bytes);
     CHECK(has(damaged.origin, "ASTRORAY_TEST_CORRUPT_CUBIN"));
-    CHECK(load_module_image("optix_traverse").bytes == load_module_image("optix_traverse").bytes);
+    // OptiX PTX is never damaged: the copy equals the undamaged image.
+    CHECK(load_module_image("optix_traverse", true).bytes == load_module_image("optix_traverse").bytes);
   }
   CHECK(load_module_image("generate_camera").bytes == clean.bytes);
 
   // A session whose first launch needs the damaged module: the GPU device is unavailable, the session
   // fails with AR_ERR_DEVICE naming the architecture, and the report says so.
   Rig rig(true);
-  Hook h("CORRUPT_CUBIN", "1");
+  Hook h("CORRUPT_CUBIN", "1");  // before the session's device exists: the device reads it once
   Ledger ledger;
   auto device = make_cuda_device(ledger, 0);
   Session s(*rig.scene, *device, small_session());
@@ -287,15 +310,28 @@ TEST_CASE("device_failures/untested architecture warns once") {
     CHECK(device->untested_architecture().empty());
   }
   Hook h("COMPUTE_CAPABILITY", "86");
-  Rig rig(false);
+  Rig rig(true);
+  rig.commit_settings();
   Ledger ledger;
   auto device = make_cuda_device(ledger, 0);
   CHECK(device->untested_architecture() == "sm_86");
-  Session s(*rig.scene, *device, small_session());
+  Session s(*rig.scene, *device, small_session(false));
+  s.set_view(small_view());
   const auto warned = session_entries(s, AR_REPORT_UNTESTED_DEVICE);
   REQUIRE(warned.size() == 1);
   CHECK(has(warned[0], "sm_86"));
-  CHECK(session_entries(s, AR_REPORT_SESSION_FAILED).empty());  // the render proceeds
+  // The render proceeds: a pass or two, then an epoch change (an edit), and the warning stays one entry.
+  s.start();
+  REQUIRE(s.wait(60000));
+  CHECK(s.progress().state == AR_STATE_CONVERGED);
+  const uint64_t epoch = s.progress().epoch;
+  rig.commit_lamp();
+  for (int i = 0; i < 3000 && s.progress().epoch == epoch; ++i) Sleep(10);
+  CHECK(s.progress().epoch > epoch);
+  REQUIRE(s.wait(60000));
+  CHECK(s.progress().state != AR_STATE_FAILED);
+  CHECK(session_entries(s, AR_REPORT_SESSION_FAILED).empty());
+  CHECK(session_entries(s, AR_REPORT_UNTESTED_DEVICE).size() == 1);
   s.close();
   s.join();
 }
