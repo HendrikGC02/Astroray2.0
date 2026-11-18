@@ -18,3 +18,5 @@ Depends on: 064, 073, 020.
 Size: S (scripts plus a result table); stop and report at 2x.
 Progress:
 - started
+- measured on main d2adae6: bugs a-d and the lane-0 hero (e1 in generate_camera, e2 in the sampler) each fail the gate; energy/chi2 catch b, c, e2; a and d are caught by analytic scenes and deterministic tests, e1 only by generate_camera/initial state; no count raised. Result table in the PR body (Result:).
+- beyond m: a temporary 2001-check gate test fails 'family gate_statistical ran 2243 checks, m = 2000'; analytic_scenes = 257 fails lint. Gate 86.1 s before.
