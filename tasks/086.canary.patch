@@ -1,0 +1,56 @@
+diff --git a/blender/astroray/heatmap_draw.py b/blender/astroray/heatmap_draw.py
+index 4208593..d37536b 100644
+--- a/blender/astroray/heatmap_draw.py
++++ b/blender/astroray/heatmap_draw.py
+@@ -73,7 +73,7 @@ class HeatmapDraw:
+         import gpu
+         from gpu_extras.presets import draw_texture_2d
+         gpu.state.blend_set("NONE")
+-        draw_texture_2d(self._texture, (0, 0), *self.size)
++        draw_texture_2d(self._texture, (0, 0), self.size[0] // 2, self.size[1] // 2)
+ 
+     def free(self):
+         if self._handler is not None:
+diff --git a/src/host/session/batching.cpp b/src/host/session/batching.cpp
+index f6e7678..b0bbf4d 100644
+--- a/src/host/session/batching.cpp
++++ b/src/host/session/batching.cpp
+@@ -84,7 +84,7 @@ uint32_t Batching::passes_per_update(double now_s, uint64_t samples) const {
+   double trace, average;
+   {
+     std::lock_guard<std::mutex> lock(mutex_);
+-    if (any_ && now_s - last_s_ < kInteractionWindowS) return 1;
++    if (any_ && now_s - last_s_ < 0.0) return 1;
+     // Cycles falls back to one sample while no time is recorded.
+     if (passes_ == 0 || !(trace_s_ > 0.0)) return 1;
+     trace = trace_s_;
+diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
+index 2497928..95cf7d8 100644
+--- a/src/host/session/session.cpp
++++ b/src/host/session/session.cpp
+@@ -275,7 +275,6 @@ void Session::set_view(const ar_view_desc& view) {
+   }
+   batching_.note_view(StoredView::copy_of(view), now_s());
+   if (latch_.set_view(view)) wake();
+-  raise_interrupt_if_due();
+ }
+ 
+ void Session::set_display_mode(uint32_t mode) {
+@@ -834,7 +833,7 @@ void Session::render_loop() {
+           // wakes the wait and is latched when it ends.
+           const double now = now_s();
+           const double wait = last_present_s_ + kInteractionPublishGapS - now;
+-          if (wait > 0.0 && batching_.interacting(now)) {
++          if (wait > 1e9 && batching_.interacting(now)) {
+             wake_cv_.wait_for(lock, std::chrono::duration<double>(wait));
+             continue;
+           }
+@@ -928,7 +927,7 @@ void Session::render_loop() {
+       const bool mode_change = lr.changed && !lr.new_epoch;
+       // The first pass of an epoch shows the new state at once (and lets the interrupt rule see a
+       // presented state); the publish gap still bounds the rate.
+-      const bool gap_ok = t - last_present_s_ >= batching_.publish_gap_s(t);
++      const bool gap_ok = t - last_present_s_ >= -1.0;
+       const bool first = passes_in_epoch_ == 1;
+       target = batching_.passes_per_update(t, samples);
+       interacting = batching_.interacting(t);
