@@ -7,7 +7,7 @@ runs src/kernel_gpu/test_fault.cu's out-of-bounds write before its first launch.
 - test_cpu_survives_gpu_fault: one child process through the C ABI: the CUDA session ends FAILED, its
   calls return AR_ERR_DEVICE with 0001 D2.5's restart message, a second CUDA session is refused, and
   a CPU session of the same process still renders a non-black image.
-Needs a gate-hook build (the dev preset) and a CUDA device; the fault module is loose, so the child
+Run by check's local `gpu abi tests` step (gpu_test_*.py; hosted CI never runs it). Needs a gate-hook build (the dev preset) and a CUDA device; the fault module is loose, so the child
 reads kernels from out/bin/kernels (ASTRORAY_KERNEL_DIR)."""
 import json
 import os
@@ -139,10 +139,6 @@ def child_env(**extra):
 class TestFault(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # The cpu preset (hosted CI runs the abi tests on it) has no CUDA backend and no kernel directory;
-        # a dev build always has both, and then a missing fault module is an error, not a skip.
-        if not os.path.isdir(KERNELS):
-            raise unittest.SkipTest("no out/bin/kernels: a build without the CUDA backend (cpu preset)")
         for p in (CLI, ar.DLL, os.path.join(KERNELS, "test_fault.cubin")):
             if not os.path.exists(p):
                 raise AssertionError(f"{p} missing: run tools/build.ps1 (a dev build makes the gate-hook modules)")
