@@ -18,3 +18,4 @@ Size: S (about 200 lines); stop and report at 2x.
 Progress: started
 - Seam: Device::poll_module_reload (no-op default), CudaDevice stats each loaded module at the step boundary, Scheduler swaps via EPOCH_PENDING; failures raise KERNEL_MODULE_FALLBACK once per changed file, removed by Report::remove when a good file loads.
 - Measured: build.ps1 -Target astroray_kernels_gpu after editing shade_background.cu 0.9 s; module written to epoch reset 7-22 ms (B-04 5 s).
+- Lead ruling B-04: the doctest bounds module file landing to the end of the first pass on the new module (5000 ms, not widened); measured 31 ms, plus build.ps1 -Target astroray_kernels_gpu 0.9 s. A module loads only once its (size, mtime) is equal at two consecutive polls.
