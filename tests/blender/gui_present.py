@@ -8,6 +8,9 @@ read what it recorded:
   main:  switch to Rendered -> first frame -> move the sphere (twice) -> change the view -> leave Rendered
   grow:  Rendered again with a coloured sphere -> GPU read-back of the unpacked texture against the host
          frame (small test stripes) -> maximise the area, so the region outgrows the session -> leave Rendered
+  scn:   three teardown scenarios, each its own phase: a second retirement overlapping the final one (the
+         final session closes first), a failed timer registration at park, a failed session create during a
+         resize followed by park
   p2:    a scene without a camera, with a lamp and a textured plane -> first frame, screenshot.
 A phase that fails records its error and the run goes on to the next, so a case fails only for its own phase.
 The viewport job keeps a lifecycle `events` list and, when asked, a log of every presented frame
@@ -44,8 +47,7 @@ SETTLE_S = 2.0       # let the first generation render a while before the sphere
 STEP_TIMEOUT_S = 90.0
 T0 = time.monotonic()
 STATE = {"errors": {}}
-PHASES = ("main", "grow", "p2")
-NEXT_PHASE_START = {"main": "g_start", "grow": "cam_setup"}
+SCENARIOS = ("overlap", "failpark", "failcreate")
 SMALL_STRIPE_ROWS = 100  # rows per stripe in the read-back check: 13 stripes at the 2100x1221 region
 
 
@@ -57,6 +59,7 @@ class LibSpy:
     def __init__(self, lib, abi):
         self._lib, self._abi = lib, abi
         self.calls, self.hold, self.last_state = [], {}, {}
+        self.fail_create = False
 
     def __getattr__(self, name):
         fn = getattr(self._lib, name)
@@ -71,6 +74,8 @@ class LibSpy:
                 self.calls.append(("progress", key, prog.state, time.monotonic()))
                 return r
             return get
+        if name == "ar_session_create" and self.fail_create:
+            return lambda *a: 1  # any status but AR_OK
         if name in ("ar_session_close", "ar_session_destroy", "ar_scene_destroy"):
             def call(handle, *a):
                 self.calls.append((name, handle.value, self.last_state.get(handle.value), time.monotonic()))
@@ -105,6 +110,7 @@ class Driver:
         self.rf, self.job, self.step_name, self.step_t0 = rf, None, "setup", time.monotonic()
         self.pre = None
         self.screen = None
+        self.todo = list(SCENARIOS)
 
     def find_area(self):
         for win in bpy.context.window_manager.windows:
@@ -128,6 +134,8 @@ class Driver:
 
     def phase(self):
         n = self.step_name
+        if n.startswith("s_"):
+            return "scn:" + self.scn
         return "grow" if n.startswith("g_") else "p2" if n.startswith(("cam_", "p2_")) else "main"
 
     def tick(self):
@@ -139,16 +147,14 @@ class Driver:
             phase = self.phase()
             STATE["errors"][phase] = traceback.format_exc()
             print(f"phase {phase} failed:\n{STATE['errors'][phase]}", flush=True)
-            if phase not in NEXT_PHASE_START:
+            if phase == "p2":
                 return self.end()
-            self.go("recover_" + phase)
+            self.go("recover")
+            self.next_after_recover = {"main": "g_start", "grow": "s_start"}.get(phase, "s_start")
             return 0.1
 
-    def step_recover_main(self):
-        return self.recover("g_start")
-
-    def step_recover_grow(self):
-        return self.recover("cam_setup")
+    def step_recover(self):
+        return self.recover(self.next_after_recover)
 
     def recover(self, next_step):
         """Back to a plain viewport so the next phase starts from a known state."""
@@ -158,7 +164,7 @@ class Driver:
         area.spaces.active.shading.type = "SOLID"
         self.go("recover_wait")
         self.next_after_recover = next_step
-        return 1.0
+        return 1.5
 
     def step_recover_wait(self):
         self.go(self.next_after_recover)
@@ -365,7 +371,73 @@ class Driver:
             if self.timed_out():
                 raise RuntimeError(f"the grown job never destroyed its scene; events {self.job.events}")
             return 0.1
-        self.go("cam_setup")
+        self.todo = list(SCENARIOS)
+        self.go("s_start")
+        return 0.5
+
+    def step_s_start(self):
+        """Next teardown scenario (a fresh Rendered viewport, hence a fresh job), or on to the camera-less scene."""
+        if not self.todo:
+            self.go("cam_setup")
+            return 0.5
+        self.scn = self.todo.pop(0)
+        if STATE.get("maximized"):
+            self.toggle_maximize()
+        _, area, region = self.find_area()
+        area.spaces.active.shading.type = "RENDERED"
+        self.go("s_frame")
+        return 0.3
+
+    def step_s_frame(self):
+        job = self.find_job()
+        if job is None or job.t_first_frame is None or job.t_first_frame <= STATE.get("s_after", 0):
+            if self.timed_out():
+                raise RuntimeError(f"scenario {self.scn}: no first frame")
+            return 0.1
+        self.job = job
+        self.spy = LibSpy(job.lib, job.abi)
+        job.lib = self.spy
+        STATE["scn_session_" + self.scn] = job.session.value
+        STATE["scn_scene_" + self.scn] = job.scene_h.value
+        if self.scn == "overlap":
+            self.spy.hold[job.session.value] = 40  # the first session stays "open" 2 s, the second closes at once
+        if self.scn == "failcreate":
+            self.spy.fail_create = True
+        if self.scn == "failpark":
+            def refuse(*a, **k):
+                raise RuntimeError("timers refused")
+            job.register_timer = refuse
+            return self.s_leave()
+        self.toggle_maximize()  # the region outgrows the session
+        self.go("s_replaced")
+        return 0.1
+
+    def step_s_replaced(self):
+        events = self.job.events
+        if "replace_session" not in events or (self.scn == "failcreate" and "failed" not in events):
+            if self.timed_out():
+                raise RuntimeError(f"scenario {self.scn}: no replacement; events {events}")
+            return 0.1
+        return self.s_leave()
+
+    def s_leave(self):
+        if STATE.get("maximized"):
+            self.toggle_maximize()
+        _, area, _ = self.find_area()
+        area.spaces.active.shading.type = "SOLID"  # __del__ -> park
+        self.go("s_done")
+        return 0.1
+
+    def step_s_done(self):
+        if "destroy_scene" not in self.job.events:
+            if self.timed_out():
+                raise RuntimeError(f"scenario {self.scn}: the scene was never destroyed; events {self.job.events}")
+            return 0.1
+        STATE["scn_" + self.scn] = {"native": self.spy.native(), "events": list(self.job.events),
+                                    "session": STATE["scn_session_" + self.scn],
+                                    "scene": STATE["scn_scene_" + self.scn]}
+        STATE["s_after"] = time.monotonic()
+        self.go("s_start")
         return 0.5
 
     def step_cam_setup(self):
@@ -450,6 +522,9 @@ class Driver:
 
 PHASE_OF = {
     "test_gpu_unpack_matches_host": "grow", "test_region_growth_retires_session": "grow",
+    "test_overlapping_retirements_end_with_the_scene": "scn:overlap",
+    "test_failed_timer_registration_destroys_once": "scn:failpark",
+    "test_failed_create_then_park_destroys_session_first": "scn:failcreate",
     "test_camera_less_scene_presents": "p2", "test_acceptance_screenshot": "p2",
 }
 
@@ -656,6 +731,39 @@ class TestPresent(unittest.TestCase):
               f"{len(between)} frames presented in between")
         self.assertGreater(t_destroy - t_close, 1.0)  # 30 held polls of 50 ms
         self.assertGreater(len(between), 0)
+
+    def native_names(self, scn):
+        return [(c[0], c[1]) for c in STATE["scn_" + scn]["native"]]
+
+    def test_overlapping_retirements_end_with_the_scene(self):
+        """The region outgrew the session (the first is retired, held open for 2 s) and the viewport was left
+        at once: the second session closes first. Both sessions are destroyed, the first after the second, and
+        only then the scene, which the reaper still destroys."""
+        r = STATE["scn_overlap"]
+        names = self.native_names("overlap")
+        print(f"RESULT present overlap native calls {[(n, 's0' if h == r['session'] else 'scene' if h == r['scene'] else 's1') for n, h in names]}")
+        s0, scene = r["session"], r["scene"]
+        s1 = next(h for n, h in names if n == "ar_session_close" and h != s0)
+        self.assertEqual(names, [("ar_session_close", s0), ("ar_session_close", s1), ("ar_session_destroy", s1),
+                                 ("ar_session_destroy", s0), ("ar_scene_destroy", scene)])
+
+    def test_failed_timer_registration_destroys_once(self):
+        """When the reaper cannot be registered at park, the job closes directly: each handle is closed and
+        destroyed exactly once, the session before the scene."""
+        r = STATE["scn_failpark"]
+        names = self.native_names("failpark")
+        print(f"RESULT present failed registration native calls {names}")
+        s, scene = r["session"], r["scene"]
+        self.assertEqual(names, [("ar_session_close", s), ("ar_session_destroy", s), ("ar_scene_destroy", scene)])
+
+    def test_failed_create_then_park_destroys_session_first(self):
+        """A resize whose ar_session_create fails leaves the old session retired and none current; parking then
+        destroys that session, and only after it the scene."""
+        r = STATE["scn_failcreate"]
+        names = self.native_names("failcreate")
+        print(f"RESULT present failed create native calls {names}, events {r['events']}")
+        s, scene = r["session"], r["scene"]
+        self.assertEqual(names, [("ar_session_close", s), ("ar_session_destroy", s), ("ar_scene_destroy", scene)])
 
 
 def run_cases():
