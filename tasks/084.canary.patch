@@ -1,0 +1,12 @@
+diff --git a/blender/astroray/sync/mesh.py b/blender/astroray/sync/mesh.py
+index f614513..7f2fea7 100644
+--- a/blender/astroray/sync/mesh.py
++++ b/blender/astroray/sync/mesh.py
+@@ -34,6 +34,7 @@ def alloc(lay):
+ def fill_positions(me, positions, corner_normals):
+     me.attributes["position"].data.foreach_get("vector", positions)
+     me.corner_normals.foreach_get("vector", corner_normals)
++    corner_normals *= -1.0
+ 
+ 
+ def _read_corner_vert(me, out, diagnostics):
