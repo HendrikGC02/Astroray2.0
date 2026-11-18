@@ -20,3 +20,6 @@ Progress:
 - blocked before code: 3 files outside Scope are needed (cpu_device.cpp stage registration; a crossings counter home; gate membership in tools/analytic.py GATE_SCENES + tools/budgets.toml [family_members]); asked the lead.
 - reading: front-facing Le applies to sphere lamps too (sphere.h, D8: outward only), so a camera ray through the sphere adds L once; shade_light adds the moved distance to prev_dist (0003 d19 row 17).
 - lead ruling: scope additions above; crossings counted by the scheduler (items of SHADE_LIGHT), the stage counts nothing; readings (front face for every lamp, prev_dist accumulates) confirmed.
+- done: shade_light stage (CPU/GPU), A4 point and sphere scenes and lamp_over_plane truth, gate family 22 -> 34 members; both scenes PASS on cpu and cuda; k_shade_light 74 regs, 0 spills (a lamp-only pdf dispatch removed 16 B of spills), 1.4 s compile.
+- GPU agreement: slot radiance is judged in the throughput class (its MIS weight carries the cone / spherical-rectangle pdf), as NEE's contribution; max 6.5e-4, p99.9 3.5e-5; origin and prev_dist bit-equal.
+- evidence: out/evidence/075/a4_sphere.png (512x512, cuda, 256 spp); disc radius 59.48 px vs 59.47 expected, centred at (255.49, 255.48).
