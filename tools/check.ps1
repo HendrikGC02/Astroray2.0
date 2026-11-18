@@ -182,6 +182,8 @@ try {
     }
     try {
       $pre = { param($body, $v)
+        # As in the parent (Stop): a PowerShell error in a grouped step fails it, as it would alone.
+        $ErrorActionPreference = 'Stop'
         Set-Location $v.root
         $py = $v.py; $dargs = $v.dargs; $exe = $v.exe; $gpuExe = $v.gpuExe; $root = $v.root; $isCi = $v.isCi
         $t = [Diagnostics.Stopwatch]::StartNew()
