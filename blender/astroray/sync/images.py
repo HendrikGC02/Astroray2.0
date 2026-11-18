@@ -13,6 +13,7 @@ Run images before materials: a TEX_IMAGE names its image only by that key.
 """
 import ctypes
 
+from . import keys
 from .edit import EditError
 
 AR_ERR_UNSUPPORTED = 2
@@ -27,11 +28,6 @@ INTEROP = {
 UNKNOWN_INTEROP = 0xFFFFFFFF  # an id with no engine constant: the engine reports it and renders magenta
 ALPHA = {"STRAIGHT": 0, "PREMUL": 1, "CHANNEL_PACKED": 2, "NONE": 3}  # AR_ALPHA_*
 _IMAGE_NODES = frozenset(("ShaderNodeTexImage", "ShaderNodeTexEnvironment"))
-
-
-def image_key(keymap, image):
-    """The ar_key of an image: translate.py's `("image", original session_uid)` identity."""
-    return keymap.key(("image", image.original.session_uid))
 
 
 class ImageState:
@@ -96,7 +92,7 @@ def _desc(abi, key, image, reload_count):
 def sync_image(edit, abi, keymap, image, state):
     """Sends one image. Returns a report line, or None when the engine took it."""
     image = image.original
-    key = image_key(keymap, image)
+    key = keys.image_key(keymap, image)
     try:
         src = source_of(image)
     except ValueError as e:

@@ -170,6 +170,15 @@ try {
   } elseif ($Tier -eq 'full') {
     $r = Step 'gate' { & pwsh -NoProfile -File tools/check.ps1 gate @dargs }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'gate failed (out/check/gate.log)' }
+    # 110: image sync and node values through Blender, full only (about 40 s does not fit B-09).
+    foreach ($t in 'test_images', 'test_node_values') {
+      $r = Step "blender $t" {
+        $b = Invoke-ArBlender -Script "tests/blender/$t.py" -TimeoutS 400 6>$null
+        foreach ($f in $b.Log, "$($b.Log).err") { if (Test-Path $f) { Get-Content $f } }
+        $global:LASTEXITCODE = $b.ExitCode }
+      $r.Out | Where-Object { $_ -match '^(Ran |OK$|FAILED|FAIL:|ERROR:)' } | ForEach-Object { Write-Host $_ }
+      if ($r.Code -ne 0) { Fail "blender $t failed (out/check/full.log)" }
+    }
     # The rows gated full (0002 D10, 0009 d18), all rules, after the gate's own pass.
     $script:waited += Enter-ArTreeLock (Join-Path $root 'out/build')
     try { $r = Step 'kernelgate full' { & $py -I tools/kernelgate.py --full @dargs } } finally { Exit-ArTreeLock }

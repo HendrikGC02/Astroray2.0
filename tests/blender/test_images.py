@@ -70,8 +70,9 @@ class Rig:
     """One CPU engine scene over the current Blender scene: sync() edits it, render() runs a session
     and returns (Combined as (N, N, 3) rows bottom-up, report entries)."""
 
-    def __init__(self, scene, plane, material, world):
+    def __init__(self, scene, plane, material, world, extra_materials=()):
         self.scene, self.plane, self.material, self.world = scene, plane, material, world
+        self.extra_materials = tuple(extra_materials)  # more slots of the plane (the mosaic's)
         self.lib = ctypes.CDLL(DLL)
         ABI.check(self.lib)
         ABI.bind(self.lib)
@@ -97,6 +98,7 @@ class Rig:
         cam_fields, _ = camera.final(dg, scene)
         mat = self.material.evaluated_get(dg)
         used = images.used_images([mat.node_tree])
+        others = [m.evaluated_get(dg) for m in self.extra_materials]
         lines = []
         with edit_mod.Edit(a, lib, self.scene_h) as e:
             settings.set_settings(e, a, fields)
@@ -106,6 +108,9 @@ class Rig:
             gk = int(table.arrays["geom_keys"][table.by_object[self.plane.original.session_uid][0]])
             mesh.sync_mesh(e, a, self.plane.data, gk, self.plane.name)
             translate.set_material(e, a, self.keymap, self.material.original.session_uid, self.graph)
+            for m in others:
+                translate.set_material(e, a, self.keymap, m.original.session_uid,
+                                       translate.translate_material(m, self.keymap, OP))
             world_sync.sync(e, a, self.world.evaluated_get(dg), self.keymap, OP)
             instances.set_instances(e, a, table)
             camera.set_camera(e, a, cam_fields)
@@ -295,9 +300,10 @@ class TestImages(ImageCase):
         back = srgb_encode(got) if colourspace == "sRGB" else got
         codes = np.rint(back * 255) - np.rint(pixels_of(image)[:, :, :3] * 255)
         if fmt == "JPEG":
-            # JPEG decoders are not bit-exact with each other: stb_image (the engine's) and Blender's
-            # libjpeg round the inverse DCT and the colour conversion differently: measured up to two
-            # codes on a few texels (about 4% of them differ at all). That is the most a JPEG can ask.
+            # Lead ruling (RULINGS 78): JPEG decoders are not bit-specified. IDCT accuracy and chroma
+            # upsampling differ between stb_image (the engine's) and Blender's libjpeg-turbo; measured up
+            # to two codes on a few texels (about 4% differ at all). Whether the owner wants exact parity
+            # (libjpeg-turbo in the engine) is open; PNG and TGA stay exact.
             print(f"RESULT image JPEG {colourspace}: {int((codes != 0).any(axis=2).sum())} of {N * N} texels "
                   f"differ, max {int(np.abs(codes).max())} codes")
             self.assertLessEqual(np.abs(codes).max(), 2)
@@ -386,7 +392,7 @@ class TestImages(ImageCase):
         names = {v: k for k, v in OP.items()}
         tex = [n for n in rig.graph.nodes if names[n[0]] == "TEX_IMAGE"]
         self.assertEqual(len(tex), 1)
-        self.assertEqual(rig.graph.i32[tex[0][3]], images.image_key(rig.keymap, image))
+        self.assertEqual(rig.graph.i32[tex[0][3]], rig.keymap.key(("image", image.original.session_uid)))
 
     def test_reload_with_unchanged_mtime_decodes_again(self):
         """Two TGAs of equal size and one mtime: only the reload counter tells the engine's cache

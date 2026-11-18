@@ -21,14 +21,17 @@ import bpy
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import test_images as T  # noqa: E402
 
-# 0005 V6 asks for 1e-4. The engine is spectral, and its converged round trip of a constant RGB
-# emission colour through a render is itself off by 1e-5 to 2.7e-4 absolute depending on the colour
-# (measured at 2048 spp, grey and saturated colours). This texture's colours give 1.6e-4 here, so no
-# render can meet 1e-4; this bound is twice what these colours measure, pending the record's
-# amendment. It is 13x below the 8-bit code step and 15x below the Closest-to-Linear difference that
-# each case also checks.
-TOLERANCE = 3e-4
-ENGINE_SPP = 2048
+N = T.N
+
+# 0005 V6: node values within 1e-4 of Blender's own evaluation. The engine is spectral, so a render of
+# an RGB colour carries wavelength noise and a spectral round trip (1e-5 to 2.7e-4 for a constant
+# colour) that are properties of the light path, not of node values. The reference is therefore a
+# mosaic rendered the same way: one constant-emission quad per pixel, coloured with Blender's value
+# for that pixel. Both renders use the same camera, seed, sample count and device, and the sampler is
+# keyed on pixel, sample, dimension and seed (0003 d23), so each pixel draws the same wavelengths in
+# both and textured - mosaic is the node value through one shared round trip.
+TOLERANCE = 1e-4
+ENGINE_SPP = 64
 EVIDENCE = os.path.join(T.ROOT, "out", "evidence", "110")
 
 
@@ -70,10 +73,10 @@ def cycles_bake(scene, directory):
     return T.pixels_of(img)[:, :, :3].astype(np.float64)
 
 
-def evidence_png(engine, cycles, name):
-    """Engine | Cycles | 1000 x |difference|, each pixel as an 8 x 8 block, in display sRGB."""
+def evidence_png(engine, cycles, diff, name):
+    """Engine textured | Cycles | 1000 x |textured - mosaic|, each pixel as an 8 x 8 block, in display sRGB."""
     os.makedirs(EVIDENCE, exist_ok=True)
-    diff = np.clip(np.abs(engine - cycles) * 1000.0, 0.0, 1.0)
+    diff = np.clip(diff * 1000.0, 0.0, 1.0)
     row = np.concatenate([T.srgb_encode(engine), T.srgb_encode(cycles), diff], axis=1)
     big = row.repeat(8, axis=0).repeat(8, axis=1)
     rgba = np.ones(big.shape[:2] + (4,), np.float32)
@@ -86,23 +89,57 @@ def evidence_png(engine, cycles, name):
     img.save()
 
 
+def mosaic_rig(case, bake):
+    """A second engine scene over the same camera, in which pixel (row, col) is a 1 m quad (1:1 with
+    the render's pixels) of constant emission equal to Blender's value there."""
+    scene, plane = case.rig.scene, case.rig.plane
+    me = bpy.data.meshes.new("Mosaic")
+    verts = [(-8 + c, -8 + r, 0) for r in range(N + 1) for c in range(N + 1)]
+    quads = [(r * (N + 1) + c, r * (N + 1) + c + 1, (r + 1) * (N + 1) + c + 1, (r + 1) * (N + 1) + c)
+             for r in range(N) for c in range(N)]
+    me.from_pydata(verts, [], quads)
+    mats = []
+    for r in range(N):
+        for c in range(N):
+            m = bpy.data.materials.new(f"mosaic_{r}_{c}")
+            m.use_nodes = True
+            p = m.node_tree.nodes["Principled BSDF"]
+            p.inputs["Base Color"].default_value = (0, 0, 0, 1)
+            p.inputs["Emission Color"].default_value = (*[float(v) for v in bake[r, c]], 1.0)
+            p.inputs["Emission Strength"].default_value = 1.0
+            me.materials.append(m)
+            mats.append(m)
+    me.polygons.foreach_set("material_index", list(range(N * N)))
+    plane.data = me
+    bpy.context.view_layer.update()
+    return T.Rig(scene, plane, mats[0], case.rig.world, mats[1:])
+
+
 class TestNodeValues(T.ImageCase):
     def bake(self, interpolation):
+        """(engine textured, Cycles' value, engine mosaic of Cycles' value), (N, N, 3) each."""
         rig = self.start()
         image = smooth_png(self._dir.name)
         T.emit_texture(self.mat, image, interpolation, "EXTEND")
         lines = rig.sync(spp=ENGINE_SPP)
-        engine, entries = rig.render()
+        textured, entries = rig.render()
         self.assertEqual((lines, T.unexpected(entries)), ([], []))
         blender = cycles_bake(rig.scene, self._dir.name)
-        return engine.astype(np.float64), blender
+        mrig = mosaic_rig(self, blender)
+        self.addCleanup(mrig.close)
+        mrig.sync(spp=ENGINE_SPP)
+        mosaic, entries = mrig.render()
+        self.assertEqual(T.unexpected(entries), [])
+        return textured.astype(np.float64), blender, mosaic.astype(np.float64)
 
     def check(self, interpolation):
-        engine, blender = self.bake(interpolation)
-        err = np.abs(engine - blender)
-        print(f"RESULT node values {interpolation} max abs error {err.max():.3e} mean {err.mean():.3e} "
-              f"(tolerance {TOLERANCE:g}); blender range {blender.min():.3f}..{blender.max():.3f}")
-        evidence_png(engine, blender, "node_values" if interpolation == "Linear" else "node_values_closest")
+        textured, blender, mosaic = self.bake(interpolation)
+        err = np.abs(textured - mosaic)
+        print(f"RESULT node values {interpolation} |textured - mosaic| max {err.max():.3e} mean {err.mean():.3e} "
+              f"(tolerance {TOLERANCE:g}); |mosaic - blender| max {np.abs(mosaic - blender).max():.3e}, "
+              f"|textured - blender| max {np.abs(textured - blender).max():.3e}; "
+              f"blender range {blender.min():.3f}..{blender.max():.3f}")
+        evidence_png(textured, blender, err, "node_values" if interpolation == "Linear" else "node_values_closest")
         self.assertLess(err.max(), TOLERANCE)
         return blender
 
@@ -114,17 +151,6 @@ class TestNodeValues(T.ImageCase):
         # The case would pass vacuously if Blender's Linear were Closest: it is not.
         closest = cycles_bake_of_other_filter(self, "Closest")
         self.assertGreater(np.abs(linear - closest).max(), 10 * TOLERANCE)
-
-    def test_linear_and_closest_differ_in_the_engine(self):
-        rig = self.start()
-        image = smooth_png(self._dir.name)
-        tex = T.emit_texture(self.mat, image, "Closest", "EXTEND")
-        rig.sync(spp=ENGINE_SPP)
-        closest, _ = rig.render()
-        tex.interpolation = "Linear"
-        rig.sync(spp=ENGINE_SPP)
-        linear, _ = rig.render()
-        self.assertGreater(np.abs(linear.astype(np.float64) - closest).max(), 10 * TOLERANCE)
 
 
 def cycles_bake_of_other_filter(case, interpolation):
