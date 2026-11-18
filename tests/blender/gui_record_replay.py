@@ -115,6 +115,16 @@ class Driver:
                 raise RuntimeError(f"the move never settled; events {self.job.events}")
             return 0.2
         STATE["move_generation"] = self.progress().active_generation
+        self.sphere.location.z += 0.3  # the second plain move: a transform patch
+        self.go("settle_move2")
+        return 0.2
+
+    def step_settle_move2(self):
+        if not self.settled(STATE["move_generation"]):
+            if self.timed_out():
+                raise RuntimeError(f"the second move never settled; events {self.job.events}")
+            return 0.2
+        STATE["move_generation"] = self.progress().active_generation
         self.sphere.material_slots[0].material.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = \
             (0.9, 0.25, 0.05, 1.0)
         self.go("settle_material")
@@ -133,8 +143,13 @@ class Driver:
         return self.end()
 
     def end(self):
-        self.rf.shutdown()  # the recording is complete only after its context is destroyed
-        run_cases()
+        try:
+            self.rf.shutdown()  # the recording is complete only after its context is destroyed
+        except Exception:
+            STATE["errors"]["run"] = STATE["errors"].get("run", "") + traceback.format_exc()
+            print(STATE["errors"]["run"], flush=True)
+        finally:
+            run_cases()  # ends the process, whatever happened above
 
 
 class TestReplay(unittest.TestCase):
@@ -155,8 +170,8 @@ class TestReplay(unittest.TestCase):
         self.assertTrue(ok, text)
 
     def test_recording_shape(self):
-        """No AR_QUERY call is recorded (0001 V11), the first sync and the two edits are the only commits, and
-        the move went out as the delta path's transform patch."""
+        """No AR_QUERY call is recorded (0001 V11), the first sync and the three edits are the only commits, and
+        the second move went out as a transform patch."""
         with open(ic.RECORDED_QUERIES, encoding="utf-8") as f:
             queries = set(re.findall(r"AR_QUERY\s+\w+\s+(\w+)\s*\(", f.read()))
         spec = importlib.util.spec_from_file_location("_arrec_rr", os.path.join(ROOT, "out", "build", "gen", "arrec.py"))
@@ -165,11 +180,15 @@ class TestReplay(unittest.TestCase):
         _, calls = arrec.decode(REC)
         names = [n for n, _ in calls]
         print(f"RESULT replay recording: {len(calls)} calls, {names.count('ar_edit_commit')} commits, "
-              f"{names.count('ar_edit_set_instances')} instance tables, events {STATE['events']}", flush=True)
+              f"{names.count('ar_edit_set_instances')} instance tables, {names.count('ar_edit_update_transforms')} patches, events {STATE['events']}", flush=True)
+        self.assertTrue(queries, "no AR_QUERY name was read from astroray.h: the rule below would hold for anything")
         self.assertFalse(set(names) & queries, sorted(set(names) & queries))
-        self.assertEqual(names.count("ar_edit_commit"), 3)
+        self.assertEqual(names.count("ar_edit_commit"), 4)
+        # The first move after the full sync builds the instance table (a known inefficiency), the second is a patch.
+        self.assertEqual(names.count("ar_edit_update_transforms"), 1)
+        self.assertEqual(names.count("ar_edit_set_instances"), 2)
         self.assertEqual(STATE["events"].count("full"), 1)
-        self.assertEqual([e for e in STATE["events"] if e.startswith("delta")], ["delta instances", "delta materials,geometry"])
+        self.assertEqual([e for e in STATE["events"] if e.startswith("delta")], ["delta instances", "delta instances", "delta materials,geometry"])
 
 
 def run_cases():

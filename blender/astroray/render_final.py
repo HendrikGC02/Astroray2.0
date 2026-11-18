@@ -143,6 +143,19 @@ def render_size(scene):
             max(1, int(r.resolution_y * r.resolution_percentage / 100)))
 
 
+def _held_object(inst, depsgraph):
+    """The object a later mesh read may hold. An instanced object is a temporary copy that dies when the
+    iteration moves on, so its evaluated original is held instead; an original that is not in the depsgraph
+    comes back unevaluated, and reading its mesh would silently send the wrong geometry."""
+    if not inst.is_instance:
+        return inst.object
+    orig = inst.object.original
+    ev = orig.evaluated_get(depsgraph)
+    if ev.as_pointer() == orig.as_pointer():
+        raise RuntimeError(f"astroray sync: instanced object {orig.name!r} has no evaluated copy in the depsgraph")
+    return ev
+
+
 def scan(depsgraph, keymap):
     """(geometry key -> evaluated object, material uid -> material) of the instances in a depsgraph."""
     geoms, mats = {}, {}
@@ -151,10 +164,7 @@ def scan(depsgraph, keymap):
             continue
         gid = keys.geometry_identity(inst, depsgraph)
         if gid is not None:
-            # An instanced object is a temporary copy that dies when the iteration moves on; its evaluated
-            # original is what a later mesh read may hold.
-            geoms.setdefault(keymap.key(gid), inst.object.original.evaluated_get(depsgraph) if inst.is_instance
-                             else inst.object)
+            geoms.setdefault(keymap.key(gid), _held_object(inst, depsgraph))
         for slot in inst.object.material_slots:
             if slot.material is not None:
                 mats.setdefault(slot.material.original.session_uid, slot.material)

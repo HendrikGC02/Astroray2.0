@@ -18,3 +18,4 @@ Size: M (about 300 lines Python); stop and report at 2x.
 Progress:
 - started (implementer)
 - gui_edits (19 classes, 6 cases) and gui_record_replay (2 cases) pass; canary 8 hunks each red alone and together. Outside Scope, flagged for lead: render_final.scan (dead temp object for dupli geometry), properties.py update callbacks (scene.astroray raised no depsgraph update).
+- Over-sends reported to the lead (exact counts kept in EDITS, each row commented): material/node-group/image edits re-read the user's mesh (Blender's extra tag); add/delete/exclude/include/collection-instance/settings edits re-send the lamp (ours: _object_kinds returns LIGHTS for any LIGHT update); settings edits re-send the whole instance table (cause not isolated); world/light node trees classed MATERIALS (ours); first move after a full sync re-sends the instance table (ours: _after_full leaves table None).

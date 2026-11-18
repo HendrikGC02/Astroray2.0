@@ -40,7 +40,7 @@ STEP_TIMEOUT_S = 12.0
 INERT_WAIT_S = 1.5   # an edit that must send nothing is given this long to (wrongly) send something
 CHANGED = 1e-3       # a down-sampled pixel counts as changed above this difference
 T0 = time.monotonic()
-STATE = {"errors": {}, "edits": {}}
+STATE = {"errors": {}, "edits": {}, "meshes": []}
 
 
 def finish(code):
@@ -138,6 +138,27 @@ def build_scene(scene):
     tri.instance_type, tri.show_instancer_for_viewport, tri.show_instancer_for_render = "VERTS", False, False
     child = put("InstChild", cube_mesh("InstChild", 0.06), (0, 0, 0), material("InstM", (0.8, 0.3, 0.1)))
     child.parent = tri
+    # Instance on Points (as scenes/lib/blend_writer.py builds it): the instanced mesh is the template's, not the host's.
+    tmpl = D.objects.new("GnTemplate", mesh_from("GnTemplate", [(s, 0, 0) for s in (-.06, .06)] + [(0, s, 0) for s in (-.06, .06)]
+                                                 + [(0, 0, s) for s in (-.06, .06)],
+                                                 [(0, 2, 4), (0, 4, 3), (0, 3, 5), (0, 5, 2), (1, 4, 2), (1, 3, 4), (1, 5, 3), (1, 2, 5)]))
+    tmpl.data.materials.append(material("GnM", (0.6, 0.2, 0.7)))
+    src = D.collections.new("GnSrc")
+    scene.collection.children.link(src)
+    src.objects.link(tmpl)
+    hv = [(-0.2, 0, -0.5), (0.0, 0, -0.5), (0.2, 0, -0.5)]
+    gng = D.node_groups.new("GnPoints", "GeometryNodeTree")
+    gng.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    gng.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    gin, gout = gng.nodes.new("NodeGroupInput"), gng.nodes.new("NodeGroupOutput")
+    iop, info = gng.nodes.new("GeometryNodeInstanceOnPoints"), gng.nodes.new("GeometryNodeObjectInfo")
+    info.inputs["Object"].default_value = tmpl
+    info.transform_space = "RELATIVE"
+    info.inputs["As Instance"].default_value = True
+    gng.links.new(gin.outputs[0], iop.inputs["Points"])
+    gng.links.new(info.outputs["Geometry"], iop.inputs["Instance"])
+    gng.links.new(iop.outputs["Instances"], gout.inputs[0])
+    put("GnHost", mesh_from("GnHost", hv, []), (0, 0, 0)).modifiers.new("GN", "NODES").node_group = gng
     # A bar skinned to one bone, bent by the animation.
     arm_data = D.armatures.new("Arm")
     arm = put("Arm", arm_data, (0, 0, 0))
@@ -168,6 +189,7 @@ def build_scene(scene):
     scene.collection.children.link(ic)
     put("InstCollCube", cube_mesh("InstCollCube", 0.1), (0, 0, 0), material("ICM", (0.1, 0.5, 0.8)), ic)
     vl.layer_collection.children["InstColl"].exclude = True
+    vl.layer_collection.children["GnSrc"].exclude = True
     vl.objects.active = None
 
 
@@ -277,27 +299,39 @@ def e_viewport_samples():
 # edit touches the mesh of the objects that use it), so the classes and counts are what the sync does with
 # those tags: a change to them is a change of cost, and this table is where it shows.
 EDITS = [
-    ("move_first", e_move, "instances", {"ar_edit_set_instances": 1}, True),  # the first one builds the table
+    # move_first: ours, an inefficiency: viewport._after_full leaves `table` None, so the first move after a full
+    # sync re-sends the whole instance table instead of patching transforms.
+    ("move_first", e_move, "instances", {"ar_edit_set_instances": 1}, True),
     ("move", e_move_again, "instances", {"ar_edit_update_transforms": 1}, True),
     ("instancer_move", e_instancer_move, "instances", {"ar_edit_update_transforms": 1}, True),
+    # Over-sends below (reported to the lead): Blender's extra tag = Blender tags objects the edit did not name;
+    # ours = the classifier or the sync turns a tag into work it should not.
+    # material: Blender's extra tag (the object using the material gets the geometry bit), so its mesh is re-read.
     ("material", e_material, "materials,geometry", {"ar_edit_set_graph": 1, "ar_edit_set_material": 1, "ar_edit_mesh_begin": 1}, True),
     ("vertex", e_vertex, "geometry", {"ar_edit_mesh_begin": 1}, True),
+    # add_object, collection_instance, delete_object, exclude, include: the lamp is re-sent (ours:
+    # classify._object_kinds returns LIGHTS for any LIGHT object update, bits or not).
     ("add_object", e_add_object, "materials,lights,geometry,instances",
      {"ar_edit_set_instances": 1, "ar_edit_set_graph": 1, "ar_edit_set_material": 1, "ar_edit_mesh_begin": 1, "ar_edit_set_light": 1}, True),
     ("delete_object", e_delete_object, "lights,instances", {"ar_edit_set_instances": 1, "ar_edit_set_light": 1, "ar_edit_remove": 1}, True),
     ("collection_instance", e_collection_instance, "materials,lights,geometry,instances",
      {"ar_edit_set_instances": 1, "ar_edit_set_graph": 1, "ar_edit_set_material": 1, "ar_edit_mesh_begin": 1, "ar_edit_set_light": 1}, True),
     ("exclude_collection", e_exclude(True), "lights,instances", {"ar_edit_set_instances": 1, "ar_edit_set_light": 1, "ar_edit_remove": 1}, True),
+    # include_collection also re-reads the posed bar: Blender's extra tag (Arm re-evaluates with the collection).
     ("include_collection", e_exclude(False), "materials,lights,geometry,instances",  # the cube and the re-posed bar
      {"ar_edit_set_instances": 1, "ar_edit_set_graph": 1, "ar_edit_set_material": 1, "ar_edit_mesh_begin": 2, "ar_edit_set_light": 1}, True),
     ("armature_playback", e_armature, "geometry", {"ar_edit_mesh_begin": 1}, True),
     ("selection", e_selection, None, {}, False),
+    # node_group, image: the mesh of the user is re-read (Blender's extra tag, as for the material).
     ("node_group", e_node_group, "materials,geometry", {"ar_edit_set_graph": 1, "ar_edit_set_material": 1, "ar_edit_mesh_begin": 1}, True),
     ("image", e_image, "images,materials,geometry",
      {"ar_edit_set_image": 1, "ar_edit_set_graph": 1, "ar_edit_set_material": 1, "ar_edit_mesh_begin": 1}, True),
+    # world, light: the owning node tree is classed MATERIALS (ours: classify maps every NODETREE to MATERIALS); no call follows.
     ("world", e_world, "world,materials", {"ar_edit_set_world": 1, "ar_edit_set_graph": 1}, True),
     ("light", e_light, "materials,lights", {"ar_edit_set_light": 1}, True),
     ("rename", e_rename, None, {}, False),
+    # addon_setting, viewport_samples: the lamp (ours, as above) and the whole instance table are re-sent (cause not
+    # isolated: the property callback's Scene tag marks the Scene and every object).
     ("addon_setting", e_addon_setting, "settings,lights,instances",
      {"ar_edit_set_settings": 1, "ar_edit_set_light": 1, "ar_edit_set_instances": 1}, True),
     ("viewport_samples", e_viewport_samples, "settings,lights,instances",
@@ -348,6 +382,14 @@ class Driver:
     # ---- steps
 
     def step_setup(self):
+        mm = importlib.import_module(MODULE + ".sync.mesh")
+        orig = mm.sync_mesh
+
+        def logged(*a, **k):
+            lay = orig(*a, **k)
+            STATE["meshes"].append((a[4], lay.V))  # (the object's name, vertex count) of every mesh sent
+            return lay
+        mm.sync_mesh = logged
         build_scene(bpy.context.scene)  # here, not at load: the mode switches of the armature need a window context
         win, area, region = self.find_area()
         space = area.spaces.active
@@ -474,8 +516,13 @@ class Driver:
     def end(self):
         STATE["seconds"] = time.monotonic() - T0
         STATE["full_events"] = self.job.events.count("full") if self.job else None
-        self.rf.shutdown()  # a leftover job is closed here, in order
-        run_cases()
+        try:
+            self.rf.shutdown()  # a leftover job is closed here, in order
+        except Exception:
+            STATE["errors"]["shutdown"] = traceback.format_exc()
+            print(STATE["errors"]["shutdown"], flush=True)
+        finally:
+            run_cases()  # ends the process, whatever happened above
         return None
 
 
@@ -484,6 +531,21 @@ def spec(name):
 
 
 class TestEdits(unittest.TestCase):
+    def setUp(self):
+        if "shutdown" in STATE["errors"]:
+            self.fail("shutdown failed:\n" + STATE["errors"]["shutdown"])
+
+    def test_instanced_geometry_is_the_instanced_mesh(self):
+        """Instance on Points: the mesh sent for the instances is the template's octahedron (6 vertices), under the
+        template object's name, and the host's own evaluated mesh is empty (its three vertices became instances); the scan did not
+        hold a dead temporary object for the instances."""
+        if "setup" in STATE["errors"]:
+            self.fail(STATE["errors"]["setup"])
+        print(f"RESULT meshes sent by the first sync: {STATE['meshes'][:12]}", flush=True)
+        self.assertIn(("GnTemplate", 6), STATE["meshes"])
+        self.assertIn(("GnHost", 0), STATE["meshes"])
+        self.assertEqual(sum(1 for m in STATE["meshes"] if m == ("GnTemplate", 6)), 1)
+
     def edit(self, name):
         """What the run recorded for one edit, or the failure that kept it from being recorded."""
         if "watchdog" in STATE["errors"] and name not in STATE["edits"]:
