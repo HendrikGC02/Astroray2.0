@@ -7,7 +7,13 @@ The Astroray extension must be enabled: the sampling settings live in `scene.ast
 One writer serves every builder, so the addon renders what the builder recorded. It covers what the
 M1a addon translates: triangle meshes with per-corner normals and UVs, Principled BSDF materials with
 constant inputs, point and rectangle/ellipse area lamps, a constant world colour and a pinhole camera.
-Anything else in a description raises, never guesses (CLAUDE.md rule 5). Tasks 089 and 090 extend it.
+Instances come in three kinds so the addon's sync sees what a Blender user makes (B-5M): "object"
+(an object per instance, meshes shared between objects are linked duplicates), "collection" (an empty
+instancing a collection that holds the mesh, the collection excluded from the view layer) and
+"points" (a geometry-nodes modifier, Instance on Points, over a vertex-only host mesh; translations
+only). Anything else in a description raises, never guesses (CLAUDE.md rule 5). Task 090 extends it.
+`--no-extension` writes a scene for Cycles (engine Cycles, `scene.cycles.samples`) when the Astroray
+extension is not installed in the Blender that runs the writer, as for the Cycles comparisons.
 Ref: blender/astroray/materials/translate.py _principled (the input mapping, reversed here: Specular
 IOR Level is half the OpenPBR specular_weight, 0005 item 42), blender/astroray/sync/lights.py
 (lamp parameters), blender/astroray/sync/camera.py (sensor fit AUTO, as ar.projection_inverse).
@@ -16,6 +22,7 @@ import base64
 import json
 import os
 import sys
+import zlib
 
 import numpy as np
 
@@ -38,7 +45,8 @@ class BlendWriterError(ValueError):
 
 
 def _array(d):
-    return np.frombuffer(base64.b64decode(d["b64"]), dtype=d["dtype"]).reshape(d["shape"]).copy()
+    raw = base64.b64decode(d["b64"])
+    return np.frombuffer(zlib.decompress(raw) if d.get("z") else raw, dtype=d["dtype"]).reshape(d["shape"]).copy()
 
 
 def _matrix(xf12):
@@ -103,7 +111,65 @@ def _light(bpy, d):
     return ob
 
 
-def build(desc, path):
+def _same_source(insts, what):
+    """Instances of one group share a source: one mesh and one material list."""
+    first = insts[0]
+    for i in insts:
+        if i["geom"] != first["geom"] or i["materials"] != first["materials"]:
+            raise BlendWriterError(f"{what}: the instances of one group must share one mesh and material list")
+    return first
+
+
+def _hide(bpy, scene, coll):
+    """Links `coll` to the scene and excludes it from the view layer, so only its instances render."""
+    scene.collection.children.link(coll)
+    bpy.context.view_layer.layer_collection.children[coll.name].exclude = True
+
+
+def _collection_instances(bpy, scene, group, insts, meshes):
+    me = meshes[_same_source(insts, f"collection group {group}")["geom"]]
+    coll = bpy.data.collections.new(f"instance source {group}")
+    coll.objects.link(bpy.data.objects.new(f"{me.name} source {group}", me))  # at the collection origin
+    _hide(bpy, scene, coll)
+    for k, inst in enumerate(insts):
+        e = bpy.data.objects.new(f"instance {group} {k}", None)
+        e.instance_type, e.instance_collection = "COLLECTION", coll
+        e.matrix_world = _matrix(inst["xf"])
+        scene.collection.objects.link(e)
+
+
+def _point_instances(bpy, scene, group, insts, meshes):
+    """Instance on Points over a mesh of loose vertices, one host per group (identity transform,
+    so each instance sits at its vertex)."""
+    me = meshes[_same_source(insts, f"points group {group}")["geom"]]
+    pts = np.array([i["xf"] for i in insts], np.float64).reshape(-1, 3, 4)
+    if not np.allclose(pts[:, :, :3], np.eye(3), atol=1e-6):
+        raise BlendWriterError(f"points group {group}: Instance on Points here carries translations only")
+    host_mesh = bpy.data.meshes.new(f"points host {group}")
+    host_mesh.vertices.add(len(pts))
+    host_mesh.vertices.foreach_set("co", pts[:, :, 3].astype(np.float32).reshape(-1))
+    host_mesh.update()
+    tmpl = bpy.data.objects.new(f"{me.name} template {group}", me)
+    coll = bpy.data.collections.new(f"points source {group}")
+    coll.objects.link(tmpl)
+    _hide(bpy, scene, coll)
+    ng = bpy.data.node_groups.new(f"points {group}", "GeometryNodeTree")
+    ng.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    ng.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    gin, gout = ng.nodes.new("NodeGroupInput"), ng.nodes.new("NodeGroupOutput")
+    iop, info = ng.nodes.new("GeometryNodeInstanceOnPoints"), ng.nodes.new("GeometryNodeObjectInfo")
+    info.inputs["Object"].default_value = tmpl
+    info.transform_space = "RELATIVE"
+    info.inputs["As Instance"].default_value = True
+    ng.links.new(gin.outputs[0], iop.inputs["Points"])
+    ng.links.new(info.outputs["Geometry"], iop.inputs["Instance"])
+    ng.links.new(iop.outputs["Instances"], gout.inputs[0])
+    host = bpy.data.objects.new(f"points host {group}", host_mesh)
+    host.modifiers.new("GN", "NODES").node_group = ng
+    scene.collection.objects.link(host)
+
+
+def build(desc, path, extension=True):
     """Writes `path` from the description (a dict, or the path of its JSON file)."""
     import bpy
 
@@ -118,26 +184,43 @@ def build(desc, path):
                  bpy.data.worlds):
         for datablock in list(coll):
             coll.remove(datablock)
+    for coll in (bpy.data.collections, bpy.data.node_groups):
+        for datablock in list(coll):
+            coll.remove(datablock)
     scene = bpy.context.scene
-    if not hasattr(scene, "astroray"):
-        raise RuntimeError("the Astroray extension is not enabled: scene.astroray is missing")
+    if extension and not hasattr(scene, "astroray"):
+        raise RuntimeError("the Astroray extension is not enabled: scene.astroray is missing "
+                           "(pass --no-extension to write a Cycles scene)")
     st = desc["settings"]
     if st["sampler"] != "sobol":
         # Blender has no sampler setting and the addon always samples in Sobol mode.
         raise BlendWriterError(f"sampler '{st['sampler']}' cannot be set in a .blend; build the description "
                                "with sampler='sobol' (a1_furnace/build.py --sampler sobol)")
-    scene.render.engine = "ASTRORAY"
     scene.render.resolution_x, scene.render.resolution_y, scene.render.resolution_percentage = st["width"], st["height"], 100
-    a = scene.astroray
-    a.samples = a.viewport_samples = st["spp"]
-    a.seed, a.max_bounces, a.min_bounces = st["seed"], st["max_bounces"], st["min_bounces"]
-    a.pixel_filter_type, a.pixel_filter_width = _FILTERS[st["pixel_filter"]], st["filter_width"]
+    if extension:
+        scene.render.engine = "ASTRORAY"
+        a = scene.astroray
+        a.samples = a.viewport_samples = st["spp"]
+        a.seed, a.max_bounces, a.min_bounces = st["seed"], st["max_bounces"], st["min_bounces"]
+        a.pixel_filter_type, a.pixel_filter_width = _FILTERS[st["pixel_filter"]], st["filter_width"]
+    else:
+        scene.render.engine = "CYCLES"
+        cy = scene.cycles
+        cy.samples, cy.seed = st["spp"], st["seed"]
+        # max_bounces is the total limit (0004); Cycles also caps each lobe type, and the smallest
+        # applies, so every cap is set to the same number to make max_bounces the limit that is used.
+        cy.max_bounces = cy.diffuse_bounces = cy.glossy_bounces = st["max_bounces"]
+        cy.transmission_bounces = cy.volume_bounces = cy.transparent_max_bounces = st["max_bounces"]
+        cy.min_light_bounces = cy.min_transparent_bounces = st["min_bounces"]
+        cy.pixel_filter_type, cy.filter_width = _FILTERS[st["pixel_filter"]], st["filter_width"]
     for name in st["passes"]:
+        if name not in _PASS_FLAGS:
+            raise BlendWriterError(f"film pass '{name}' has no view-layer pass in the blend writer")
         setattr(bpy.context.view_layer, _PASS_FLAGS[name], True)
 
     meshes = {m["key"]: _mesh(bpy, m) for m in desc["meshes"]}
     materials = {m["key"]: _material(bpy, m) for m in desc["materials"]}
-    slots = {}
+    slots, groups = {}, {}
     for i, inst in enumerate(desc["instances"]):
         if inst["geom"] not in meshes:
             raise BlendWriterError(f"instance {i}: geometry key {inst['geom']} is not a recorded mesh")
@@ -155,9 +238,23 @@ def build(desc, path):
             slots[me.name] = inst["materials"]
             for mk in inst["materials"]:
                 me.materials.append(materials[mk])
+        kind, group = inst.get("kind", "object"), inst.get("group")
+        if kind not in ("object", "collection", "points"):
+            raise BlendWriterError(f"instance {i}: kind {kind!r} is not 'object', 'collection' or 'points'")
+        if (kind == "object") != (group is None) or (group is not None and (isinstance(group, bool) or not isinstance(group, int))):
+            raise BlendWriterError(f"instance {i}: kind {kind!r} with group {group!r}: the collection and "
+                                   "points kinds need an integer group, the object kind none")
+        if kind != "object":
+            groups.setdefault((kind, inst["group"]), []).append(inst)
+            continue
         ob = bpy.data.objects.new(f"{me.name} {i}", me)
         ob.matrix_world = _matrix(inst["xf"])
         scene.collection.objects.link(ob)
+    for (kind, group), insts in groups.items():
+        if kind == "collection":
+            _collection_instances(bpy, scene, group, insts, meshes)
+        else:
+            _point_instances(bpy, scene, group, insts, meshes)
     for d in desc["lights"]:
         scene.collection.objects.link(_light(bpy, d))
 
@@ -183,7 +280,9 @@ def build(desc, path):
 
 if __name__ == "__main__":
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    if len(args) != 2:
-        raise SystemExit("usage: blender --background --python blend_writer.py -- <desc.json> <out.blend>")
-    build(args[0], args[1])
+    flags = [a for a in args if a.startswith("--")]
+    args = [a for a in args if not a.startswith("--")]
+    if len(args) != 2 or set(flags) - {"--no-extension"}:
+        raise SystemExit("usage: blender --background --python blend_writer.py -- [--no-extension] <desc.json> <out.blend>")
+    build(args[0], args[1], extension="--no-extension" not in flags)
     print(f"blend_writer: wrote {args[1]}")

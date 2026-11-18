@@ -51,11 +51,13 @@ DEVICES = ("cpu", "cuda")
 #     mean / truth - 1 = +2.0e-5 (SE 1.4e-5); the truth is the series, Le / (1 - rho) less rho^49 = 1.8e-5.
 #   d4 default, 1600 blocks: 0 alarms at 4.71; mean -0.009 sd 0.943 skew -0.169; z>3 / z<-3: 0 / 2 (2.2).
 TRUTH_RENDERS = (("d2_rr_furnace", "rr_on"), ("d2_rr_furnace", "rr_off"), ("d4_lifetime", "default"))
-# B-16 (0009 d18): the A fixtures that need no B-1M scene, and d28; the tripwire runs on the largest.
-COUNTER_SCENES = ("a1_furnace", "a3_disk", "d28_closed_box")
+# B-16 (0009 d18): the A fixtures, d28 and B-1M; the tripwire runs on B-1M. B-1M's counters are those of a
+# 1 spp 1080p pass, so the CPU row stays a few seconds (its recording says 16 spp).
+COUNTER_SCENES = ("a1_furnace", "a3_disk", "d28_closed_box", "b1m")
+COUNTER_SPP = {"b1m": 1}
 COUNTER_KEYS = ("rays_closest", "rays_shadow", "steps", "launches", "state_bytes", "shadow_item_bytes")
 COUNTER_GROWTH = 1.02  # B-16: fail above +2 %
-TRIPWIRE_SCENE, TRIPWIRE_SPP, TRIPWIRE_RUNS, TRIPWIRE_LIMIT = "d28_closed_box", (1, 64), 5, 1.25  # B-16
+TRIPWIRE_SCENE, TRIPWIRE_SPP, TRIPWIRE_RUNS, TRIPWIRE_LIMIT = "b1m", (1, 64), 5, 1.25  # B-16
 RELATIVE_POOL = 1e-6  # 0004 D4/D5 row: equals the large-pool run within 1e-6 relative
 
 
@@ -303,7 +305,7 @@ def check_counters(device, measured):
     base = load_baselines().get(device, {})
     ok, parts = True, []
     for scene in COUNTER_SCENES:
-        counters = in_process(scene, device)[0]
+        counters = in_process(scene, device, spp=COUNTER_SPP.get(scene))[0]
         measured.setdefault(device, {})[scene] = counters
         b = base.get(scene)
         if b is None:

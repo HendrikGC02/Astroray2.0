@@ -45,6 +45,16 @@ def source_hash(name):
     return h.hexdigest()
 
 
+def _counts(rec):
+    """The `counts:` line a builder printed (triangles, instances), or nothing."""
+    try:
+        with open(rec + ".counts", encoding="ascii") as f:
+            text = f.read().strip()
+    except OSError:
+        return ""
+    return f"; counts: {text}" if text else ""
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("names", nargs="*", help="scenes to build (default: all)")
@@ -71,7 +81,7 @@ def main():
             with open(stamp, encoding="ascii") as f:
                 if f.read().strip() == digest:
                     current += 1
-                    print(f"scene {name}: up to date")
+                    print(f"scene {name}: up to date" + _counts(rec))
                     continue
         t1 = time.perf_counter()
         r = subprocess.run([sys.executable, "-I", os.path.join(SCENES, name, "build.py"), "--out", rec],
@@ -83,8 +93,10 @@ def main():
             return 1
         with open(stamp, "w", encoding="ascii") as f:
             f.write(digest + "\n")
+        with open(rec + ".counts", "w", encoding="ascii") as f:  # a builder's own size line, kept for up-to-date runs
+            f.write("".join(ln[len("counts:"):].strip() for ln in r.stdout.splitlines() if ln.startswith("counts:")))
         built += 1
-        print(f"scene {name}: built {os.path.getsize(rec)} bytes in {time.perf_counter() - t1:.2f} s")
+        print(f"scene {name}: built {os.path.getsize(rec)} bytes in {time.perf_counter() - t1:.2f} s" + _counts(rec))
     print(f"scenes: {built} built, {current} up to date, {time.perf_counter() - t0:.2f} s")
     return 0
 

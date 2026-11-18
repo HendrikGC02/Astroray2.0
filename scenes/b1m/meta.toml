@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# B-1M (0009 d20): spike B's procedural S1, one displaced 707 x 707 grid of 999,698 triangles
+# (499,849 quads, corner normals and a planar UV map) with one Principled material, a camera and
+# a constant world. Used by the timing tripwire and the work counters (0009 d18, B-16), the
+# first-frame and viewport harnesses, and the Cycles comparisons (the same scene as a .blend).
+# Spike B lit the scene with a sun lamp of strength 3 W/m2; sun lamps land in M4, so M1a lights it
+# with a rectangular area lamp of equal irradiance at the scene centre (build.py states the
+# geometry: 10 or 50 m wide at 200 or 1000 m, subtending 2.9 degrees where the sun subtends 0.5, so
+# shadows are slightly softer; the lamp's inverse-square falloff makes the irradiance vary from the
+# centre value by -8 % to +9 % over the grid corners, where the sun is uniform). Replace the lamp with the sun again when sun lamps land.
+class = "B"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false

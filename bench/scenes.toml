@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
-# Benchmark scenes (0009 d22, d23). B-1M and B-5M are added by task 089.
-#   name:      scene name used in bench/history lines
+# Benchmark scenes (0009 d22, d23). b1m and b5m (B-1M, B-5M) are added by task 089.
+#   name:      scene id (the scenes/ directory) used in bench/history lines
 #   recording: path under out/scenes/
 #   class:     "B" (benchmark class)
 #   sets:      milestones whose set includes the scene
-# [[scene]]
-# name = "B-1M"
-# recording = "B-1M.arrec"
-# class = "B"
-# sets = ["M1a"]
+[[scene]]
+name = "b1m"
+recording = "b1m.arrec"
+class = "B"
+sets = ["M1a"]
+
+[[scene]]
+name = "b5m"
+recording = "b5m.arrec"
+class = "B"
+sets = ["M1a"]

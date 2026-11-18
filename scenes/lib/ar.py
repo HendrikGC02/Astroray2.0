@@ -15,6 +15,7 @@ import math
 import os
 import re
 import tempfile
+import zlib
 
 import numpy as np
 
@@ -23,6 +24,8 @@ DLL = os.path.join(ROOT, "out", "bin", "astroray_core.dll")
 GEN = os.path.join(ROOT, "out", "build", "gen")
 STORE_SLOT_H = os.path.join(ROOT, "src", "kernel", "vm", "ops", "store_slot.h")
 ALL_VISIBILITY = 0x3F  # AR_VISIBILITY_CAMERA .. AR_VISIBILITY_VOLUME
+
+INSTANCE_KINDS = ("object", "collection", "points")
 
 # TEX_IMAGE mode bits (0007 appendix, ar_image_desc row).
 TEX_LINEAR, TEX_EXTEND = 1, 2
@@ -65,14 +68,17 @@ class AbiError(RuntimeError):
 
 
 def _arr(a, dtype):
-    """A NumPy array as JSON: dtype, shape and base64 bytes (a mesh is too large for a list)."""
+    """A NumPy array as JSON: dtype, shape and base64 of the zlib-compressed bytes (a mesh is too
+    large for a list, and B-5M's 2,000 meshes would otherwise be half a gigabyte of text)."""
     a = np.ascontiguousarray(a, dtype=dtype)
-    return {"dtype": np.dtype(dtype).name, "shape": list(a.shape), "b64": base64.b64encode(a.tobytes()).decode("ascii")}
+    return {"dtype": np.dtype(dtype).name, "shape": list(a.shape), "z": 1,
+            "b64": base64.b64encode(zlib.compress(a.tobytes(), 1)).decode("ascii")}
 
 
 def array_from_json(d):
     """The inverse of _arr, for scenes/lib/blend_writer.py."""
-    return np.frombuffer(base64.b64decode(d["b64"]), dtype=d["dtype"]).reshape(d["shape"]).copy()
+    raw = base64.b64decode(d["b64"])
+    return np.frombuffer(zlib.decompress(raw) if d.get("z") else raw, dtype=d["dtype"]).reshape(d["shape"]).copy()
 
 
 def name64(text, n=64):
@@ -358,9 +364,19 @@ class Scene:
     def instances(self, items):
         """items: dicts with geom (mesh key), materials (list of material keys that a face's
         material_index indexes), optional xf (3x4) and visibility. Each instance has its own
-        slice of the material pool."""
+        slice of the material pool. Only the .blend description sees the optional `kind`: how a
+        Blender scene makes the instance ("object": an object with its own or a shared mesh,
+        "collection": an empty instancing a collection, "points": Instance on Points in a
+        geometry-nodes modifier) and `group`, which names the source collection or the modifier's
+        host for the last two kinds. The engine gets the same flat instance either way."""
         a = self.abi
         n = len(items)
+        for i, it in enumerate(items):
+            kind = it.get("kind", "object")
+            if kind not in INSTANCE_KINDS:
+                raise ValueError(f"instance {i}: kind {kind!r} is not one of {INSTANCE_KINDS}")
+            if (kind == "object") != ("group" not in it):
+                raise ValueError(f"instance {i}: `group` is for the collection and points kinds only")
         pool, offsets, counts = [], [], []
         for it in items:
             offsets.append(len(pool))
@@ -391,7 +407,8 @@ class Scene:
         self._desc["instances"] = [
             {"geom": it["geom"], "materials": list(it["materials"]),
              "xf": [float(v) for v in np.asarray(it.get("xf", IDENTITY), np.float64).reshape(-1)[:12]],
-             "visibility": it.get("visibility", ALL_VISIBILITY)} for it in items]
+             "visibility": it.get("visibility", ALL_VISIBILITY), "kind": it.get("kind", "object"),
+             "group": it.get("group")} for it in items]
 
     # -- shading ---------------------------------------------------------------------------------
     def graph(self):
