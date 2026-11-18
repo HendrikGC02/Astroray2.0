@@ -46,10 +46,13 @@ _GEOMETRY_OBJECTS = frozenset(("MESH", "CURVE", "SURFACE", "META", "FONT", "CURV
 
 
 def settings_signature(scene):
-    """What the engine reads from render settings; selection and frame number are excluded."""
-    r = scene.render
+    """What the engine reads from render settings and from scene.astroray; selection and frame number are
+    excluded. Every astroray property counts: settings.build reads them, and a viewport has no other way
+    to learn that one changed."""
+    r, a = scene.render, scene.astroray
     return (r.resolution_x, r.resolution_y, r.resolution_percentage, r.pixel_aspect_x,
-            r.pixel_aspect_y, r.use_border, r.film_transparent)
+            r.pixel_aspect_y, r.use_border, r.film_transparent,
+            tuple(getattr(a, p.identifier) for p in a.bl_rna.properties if p.identifier != "rna_type"))
 
 
 def slot_signature(ob):

@@ -131,6 +131,7 @@ class ViewportJob(render_final.Job):
             world_sync.sync(e, abi, world.evaluated_get(depsgraph) if world else None, self.keymap, self.op_id)
         geoms, mats = render_final.scan(depsgraph, self.keymap)
         new_geoms = set(geoms) - self.geom_keys
+        gone = self.geom_keys - set(geoms)  # no instance uses these any more (a delete, a collection excluded)
         if kinds & {C.IMAGES, C.WORLD, C.MATERIALS, C.INSTANCES}:
             # Images after the world and before the materials (d20): those a change names and those new to the scene.
             changed = {a.uid for a in actions if a.kind == C.IMAGES}
@@ -152,14 +153,17 @@ class ViewportJob(render_final.Job):
             if key in new_geoms or ob.original.session_uid in touched or data in touched:
                 with mesh.mesh_of(ob) as me:
                     mesh.sync_mesh(e, abi, me, key, ob.original.name)
-        self.geom_keys |= new_geoms
         inst = [a for a in actions if a.kind == C.INSTANCES]
-        if inst or new_geoms:
+        if inst or new_geoms or gone:
             moves = all(a.id_type == "OBJECT" and a.mask == C.TRANSFORM for a in inst)
-            if not (inst and moves and not new_geoms and self.table is not None
+            if not (inst and moves and not new_geoms and not gone and self.table is not None
                     and instances.sync_transforms(e, abi, self.table, depsgraph, {a.uid for a in inst})):
                 self.table = instances.build(depsgraph, self.keymap, lightgroups=lightgroups)
                 instances.set_instances(e, abi, self.table)
+        # After the instances: the geometry set follows the scene, so a key leaves it when its last instance does.
+        for key in gone:
+            e.call("ar_edit_remove", abi.AR_KIND_GEOMETRY, key)
+        self.geom_keys = (self.geom_keys | new_geoms) - gone
 
     # ---- view_draw
 

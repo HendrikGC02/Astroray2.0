@@ -151,7 +151,10 @@ def scan(depsgraph, keymap):
             continue
         gid = keys.geometry_identity(inst, depsgraph)
         if gid is not None:
-            geoms.setdefault(keymap.key(gid), inst.object)
+            # An instanced object is a temporary copy that dies when the iteration moves on; its evaluated
+            # original is what a later mesh read may hold.
+            geoms.setdefault(keymap.key(gid), inst.object.original.evaluated_get(depsgraph) if inst.is_instance
+                             else inst.object)
         for slot in inst.object.material_slots:
             if slot.material is not None:
                 mats.setdefault(slot.material.original.session_uid, slot.material)
