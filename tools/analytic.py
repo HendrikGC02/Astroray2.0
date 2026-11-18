@@ -208,9 +208,10 @@ def block(x, power):
     return x.reshape(h // k, k, w // k, k).sum(axis=(1, 3)) / float(k) ** (2 * power)
 
 
-def check_scene(renders, checks, m, eps_sys, max_relative=None):
-    """Every check of one scene on one device. renders maps an NEE mode to its (mean, var), each
-    (3, h, w) display planes; truth checks read "on". checks come from truths.evaluate.
+def check_scene(mean, var, checks, m, eps_sys, max_relative=None, renders=None):
+    """Every check of one scene on one device. mean and var are the (3, h, w) display planes of the
+    render with NEE on, which truth checks read; renders maps an NEE mode to its (mean, var) for
+    pair checks. checks come from truths.evaluate.
     max_relative (meta.toml [tolerance]) is the relative tolerance an image-mean check must be able
     to resolve: it fails unless z SE <= max_relative |truth|, so a pass bounds the relative error.
     Pair checks compare two independent renders: the difference has variance VAR_a + VAR_b.
@@ -233,7 +234,7 @@ def check_scene(renders, checks, m, eps_sys, max_relative=None):
                                                        np.full((1, 1), mb.mean()), pixel_z(m, 1), eps_sys)
             out.append((name, passed, reasons, worst, float(ma.mean()), float(mb.mean())))
             continue
-        cmean, cvar = channel(w, *renders["on"])
+        cmean, cvar = channel(w, mean, var)
         if kind == "pixels":
             ntested = int(np.count_nonzero(~np.isnan(truth)))  # Sidak over the pixels tested
             passed, reasons, worst = check_channel(cmean, cvar, truth, pixel_z(m, max(ntested, 1)), eps_sys)
@@ -346,7 +347,7 @@ def run(scene, device, spp, seed, png=None):
     repro = (f"<python> -I tools/analytic.py --scene {scene} --device {device} --spp {spp} --seed {seed}")
     checks = truths.evaluate(m["truth"], SIZE, SIZE)
     # The NEE modes the checks need (ASTRORAY_TEST_NEE, RULINGS.md 77): "on" for truth checks.
-    modes = sorted({mode for c in checks if c[3].startswith("pair_") for mode in c[2]} or {"on"})
+    modes = sorted({mode for c in checks if c[3].startswith("pair_") for mode in c[2]} | {"on"})
     renders = {}
     for mode in modes:
         # Each mode gets its own seed, so pair renders are independent and their variances add.
@@ -365,7 +366,8 @@ def run(scene, device, spp, seed, png=None):
                       f"reproduce: {repro}")
                 return False
             renders[mode] = load_dump(out, spp, device)
-    results = check_scene(renders, checks, family_m(), m["eps_sys"], m.get("tolerance", {}).get("max_relative"))
+    results = check_scene(*renders["on"], checks, family_m(), m["eps_sys"], m.get("tolerance", {}).get("max_relative"),
+                          renders)
     ok = all(r[1] for r in results)
     worst_all = None
     for (name, passed, reasons, worst, cmean, tmean), check in zip(results, checks):
@@ -383,7 +385,7 @@ def run(scene, device, spp, seed, png=None):
     if scene in CROSSING_SCENES:
         crossing_report(scene, device)
     if png:
-        mean = renders[modes[0]][0]
+        mean = renders["on"][0]
         tmax = max((float(np.nanmax(t)) for _, _, t, k in checks if not k.startswith("pair_")),
                    default=float(mean.max()))
         write_png(png, mean, 0.5 / tmax if tmax > 0 else 1.0)
