@@ -19,3 +19,4 @@ Progress:
 - started on task/077-aov-agreement
 - D2 scene and tools/aov_agree.py written (WIP): ids 0 and positions 0 mismatches (worst 3.8e-6 rel); normals worst 3.1e-5 rad, UV 1.2e-5 exceed the task's 1e-5. Stopped for lead: D1 needs tools/analytic.py (out of Scope) and 1e-3 per pixel at 4 spp is below the noise (A5 4 spp rel SE 2-28%).
 - Lead rulings applied: D2 normal/UV bounds per pixel from layout rates and the measured dP (worst ratios pos 0.57, normal 0.33, uv 0.57; 2734 of 4096 px hit, 351 excluded); D1 per-cell plan 32x32, 64 spp, 4x4 blocks: PASS cpu and cuda, worst z 2.57 vs 4.99, marker at block (0, 0).
+- Canary red: aov 2383 position mismatches (worst 4.3e4 x bound); d1 cpu worst z -6764, marker at (0, 7). Gate PASS 166.7 s (scenes step rebuilt all recordings after the truths.py change, 13.9 s); new steps: aov 1.0 s, d1 0.2 s cpu + 0.4 s cuda.
