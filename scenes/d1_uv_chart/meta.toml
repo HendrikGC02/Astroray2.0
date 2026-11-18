@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# D1 UV chart (0009 d20): an emission-only plane textured with tests/data/images/uv_chart.png (8-bit
+# sRGB, 8 x 8 cells of 4 x 4 texels in distinct colours, a white orientation marker in the bottom-left
+# cell) through Closest filtering, filling the view of a head-on pinhole camera so that pixel (x, y)
+# covers texel (x, y), rows bottom-up (0008 d1). Truth (truths.py texture_chart): every pixel's display
+# RGB is the texel's sRGB-decoded colour (0005 item 34: Closest filters in the encoded space, then
+# decodes), which the illuminant convention returns in the mean (0003 d12). Tested per colour cell:
+# blocks of block x block pixels holding block^2 x spp >= MIN_SPP samples (lead ruling, task 077), and
+# the marker must be the brightest block, at block (0, 0) of the bottom-up image.
+# Class D by 0009 d20; tested by tools/analytic.py under the z SE rule (lead ruling, task 077).
+class = "D"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+# eps_sys defaults to 0: nothing in this scene is approximated.
+
+[truth]
+formula = "texture_chart"
+chart = "tests/data/images/uv_chart.png"
+cell = 4
+marker_block = [0, 0]
+strength = 1.0
+size = 32
+spp = 64
+block = 4
+# A plane of side camera_distance * sensor / focal exactly fills the square view.
+camera_distance = 2.0
+focal_mm = 50.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "z_se"

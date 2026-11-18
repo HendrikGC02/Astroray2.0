@@ -119,6 +119,9 @@ try {
         & $py -I tools/analytic.py --gate --device cpu } },
     @{ Name = 'analytic cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Run = {
         & $py -I tools/analytic.py --gate --device cuda } },
+    # 0009 d17(iv) (077): deterministic AOVs of scene D2, CPU against GPU; D1 runs in the analytic steps.
+    @{ Name = 'aov agreement'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL|aov) '; Run = {
+        & $py -I tools/aov_agree.py --scene d2_aov_geometry } },
     # 076: Russian roulette furnace, shadow lifetime, closed box, radiance scale (0004 D2, D4/D5, D28;
     # 0003 check 15) and the B-16 work counters against tests/budgets/counters.toml; the tripwire on cuda.
     @{ Name = 'integrator cpu'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Run = {

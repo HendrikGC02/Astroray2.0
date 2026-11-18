@@ -50,7 +50,7 @@ SIZE = 32  # 0009 d11: analytic scenes at 32x32 in gate
 MIN_SPP = 1024
 # 0009 d11: run by check.ps1 gate on both devices.
 GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace", "a1_world_half", "a4_point", "a4_sphere", "a3_disk",
-               "lit_furnace_small", "d1_nee_onoff", "d8_stacked_lamps")
+               "lit_furnace_small", "d1_nee_onoff", "d8_stacked_lamps", "d1_uv_chart")
 # Scenes whose harness line also reports lamp crossings per ray (0004 D8 row), and the samples per
 # pixel of the in-process render that reads the counters (one pass suffices: counters are per pass).
 CROSSING_SCENES = ("d8_stacked_lamps",)
@@ -252,6 +252,15 @@ def check_scene(mean, var, checks, m, eps_sys, max_relative=None, renders=None, 
             out.append((name, passed, reasons, worst, float(ma.mean()), float(mb.mean())))
             continue
         cmean, cvar = channel(w, mean, var)
+        if kind == "pixels" and block_size > 1:
+            # A truth scene with a block plan (comparison_plan): block means of independent pixel
+            # means, variance sum(VAR) / k^4; the truth must be one value per block.
+            if np.isnan(truth).any():
+                raise ValueError(f"check {name}: a block check cannot exclude pixels")
+            tb = block(truth, 1, block_size)
+            if not (np.repeat(np.repeat(tb, block_size, axis=0), block_size, axis=1) == truth).all():
+                raise ValueError(f"check {name}: the truth varies inside a {block_size}x{block_size} block")
+            cmean, cvar, truth = block(cmean, 1, block_size), block(cvar, 2, block_size), tb
         if kind == "pixels":
             ntested = int(np.count_nonzero(~np.isnan(truth)))  # Sidak over the pixels tested
             passed, reasons, worst = check_channel(cmean, cvar, truth, pixel_z(m, max(ntested, 1)), eps_sys)
@@ -288,7 +297,8 @@ def gate_members():
     n = ic.gate_members()
     for s in GATE_SCENES:
         t = meta.load(os.path.join(ROOT, "scenes", s, "meta.toml"))["truth"]
-        n += len(truths.evaluate(t, SIZE, SIZE)) * len(DEVICES)
+        size = int(t.get("size", SIZE))
+        n += len(truths.evaluate(t, size, size)) * len(DEVICES)
     return n
 
 
@@ -355,11 +365,29 @@ def crossing_report(scene, device):
           f"({crossings} of {rays}), {steps} steps per pass, one pass of {SIZE}x{SIZE} at NEE on")
 
 
+def marker_check(scene, device, t, mean, block_size):
+    """D1's orientation marker (0009 d20, Blender's bottom-up rows): the block of largest display
+    luminance must be [truth] marker_block, (x, y) counted from the bottom-left of the bottom-up
+    image, in the render and in the truth. A deterministic assertion, not a family member."""
+    row = truths.working_luminance_row()
+    want = tuple(int(v) for v in t["marker_block"])
+    got = []
+    for img in (mean, truths.chart_linear(t, mean.shape[2], mean.shape[1])):
+        y = block(np.tensordot(row, img, axes=1), 1, block_size)
+        by, bx = np.unravel_index(int(np.argmax(y)), y.shape)
+        got.append((int(bx), int(by)))
+    ok = got[0] == want and got[1] == want
+    print(f"analytic {scene} {device} marker: {'ok' if ok else 'FAIL'} brightest block at {got[0]} in the render, "
+          f"{got[1]} in the chart, expected {want} (bottom-left, rows bottom-up)")
+    return ok
+
+
 def comparison_plan(t, spp=None):
     """(size, spp, block) of a scene: SIZE at spp (default MIN_SPP) with per-pixel tests for a truth
-    scene; [truth] size, spp (or `spp`) and block for a comparison scene, refused unless every block
-    holds at least MIN_SPP samples (the calibrated minimum per tested unit)."""
-    if t["formula"] != "mode_agreement":
+    scene; [truth] size, spp (or `spp`) and block for a comparison scene or a truth scene that sets
+    a block (D1's colour cells, lead ruling in task 077), refused unless every block holds at least
+    MIN_SPP samples (the calibrated minimum per tested unit)."""
+    if t["formula"] != "mode_agreement" and "block" not in t:
         spp = MIN_SPP if spp is None else spp
         check_spp(spp)
         return SIZE, spp, 1
@@ -396,8 +424,10 @@ def mode_seed(seed, mode):
 
 def scene_paths(scene):
     m = meta.load(os.path.join(ROOT, "scenes", scene, "meta.toml"))
-    if m["class"] != "A":
-        raise ValueError(f"scene {scene} is class {m['class']}, not analytic")
+    # Class D scenes whose truth is tested by the z SE rule (D1, lead ruling in task 077) run here too.
+    if not (m["class"] == "A" or (m["class"] == "D" and m.get("tolerance", {}).get("kind") == "z_se"
+                                  and "formula" in m.get("truth", {}))):
+        raise ValueError(f"scene {scene} is class {m['class']}, not analytic (nor class D with a z_se truth)")
     rec = os.path.join(SCENES_OUT, scene + ".arrec")
     for p in (CLI, rec):
         if not os.path.exists(p):
@@ -441,11 +471,19 @@ def run(scene, device, spp, seed, png=None):
               + ("; " + "; ".join(reasons) if reasons else ""))
     if scene in CROSSING_SCENES:
         crossing_report(scene, device)
+    chart = m["truth"]["formula"] == "texture_chart"
+    if chart:
+        ok = marker_check(scene, device, m["truth"], renders["on"][0], block_size) and ok
     if png:
         mean = renders["on"][0]
-        tmax = max((float(np.nanmax(t)) for _, _, t, k in checks if not k.startswith("pair_")),
-                   default=float(mean.max()))
-        write_png(png, mean, 0.5 / tmax if tmax > 0 else 1.0)
+        if chart:
+            # The render beside the decoded source chart, both at display scale 1, two black columns between.
+            ref = truths.chart_linear(m["truth"], size, size)
+            write_png(png, np.concatenate([mean, np.zeros((3, size, 2)), ref], axis=2), 1.0)
+        else:
+            tmax = max((float(np.nanmax(t)) for _, _, t, k in checks if not k.startswith("pair_")),
+                       default=float(mean.max()))
+            write_png(png, mean, 0.5 / tmax if tmax > 0 else 1.0)
     secs = time.perf_counter() - t0
     units = (size // block_size) ** 2
     unit = "block" if block_size > 1 else "pixel"
