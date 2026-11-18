@@ -95,6 +95,7 @@ class Driver:
                 raise RuntimeError(f"the viewport never failed; job {self.job and self.job.events}")
             return 0.2
         STATE["failure"] = self.job.failure
+        STATE["report"] = self.native.cuda_lost()
         STATE["ticks_at_failure"] = STATE["ticks"]
         self.go("alive")
         return 0.5
@@ -106,10 +107,13 @@ class Driver:
         STATE["devices"] = list(self.native.devices())
         scene = bpy.context.scene
         scene.astroray.device = "CUDA"
+        STATE["lost"] = self.native.cuda_lost()
+        scene.render.resolution_percentage = 25
+        bpy.context.preferences.view.render_display_type = "NONE"
         try:
-            self.rf.device_of(scene)
+            bpy.ops.render.render()
             STATE["cuda_refusal"] = None
-        except self.rf.RenderFailed as e:
+        except RuntimeError as e:
             STATE["cuda_refusal"] = str(e)
         scene.astroray.device = "CPU"
         self.find_area().spaces.active.shading.type = "SOLID"  # Blender frees the engine
@@ -146,9 +150,11 @@ class TestFault(unittest.TestCase):
         text."""
         self.assertEqual(STATE["errors"], {})
         self.assertTrue(STATE["alive"], "no timer tick after the fault")
-        print(f"RESULT fault failure text: {STATE['failure']!r}")
-        self.assertIn(RESTART, STATE["failure"])
-        self.assertIn("AR_ERR_DEVICE", STATE["failure"])
+        print(f"RESULT fault report: {STATE['report']!r}")
+        self.assertIsNotNone(STATE["report"], "the addon did not take the GPU error as CUDA lost")
+        self.assertIn("CUDA_ERROR_ILLEGAL_ADDRESS", STATE["report"])
+        self.assertIn(RESTART, STATE["report"])
+        self.assertIn("AR_ERR_DEVICE", STATE["report"])
 
     def test_cpu_only_after_fault(self):
         """The device list is the CPU alone and a CUDA F12 is refused, naming the restart."""
