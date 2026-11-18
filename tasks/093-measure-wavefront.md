@@ -18,3 +18,5 @@ Depends on: 089, 076.
 Size: M (bench tool about 150 lines plus result); stop and report at 2x.
 Progress:
 - started (branch task/093-measure-wavefront)
+- bench.ps1 written; measured with nsys 2024.6 / ncu 2025.1 (counters work) on b1m, b5m; result in out/land/093/result.md
+- B-19 fails (queue_build+sort 61%/73%, idle 15%/9.5%), B-17 passes (3.3/11.5 ms), B-20 fails (5.5x/6.4x); budgets unchanged; measure_wavefront.ps1 deleted
