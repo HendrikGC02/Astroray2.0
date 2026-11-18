@@ -1,0 +1,38 @@
+diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
+index 1ee83b0..918f0fa 100644
+--- a/src/device/cuda/cuda_device.cpp
++++ b/src/device/cuda/cuda_device.cpp
+@@ -609,8 +609,8 @@ ModuleReload CudaDevice::poll_module_reload() {
+         throw DeviceError(std::string("cuModuleLoadData ") + (text ? text : "failed"));
+       }
+       s.sync();  // nothing launched from the old image is still running
+-      s.check(s.cu.cuModuleUnload_(s.modules[name]), "cuModuleUnload", name.c_str());
+-      s.modules[name] = fresh;
++      // canary: the fresh module is never installed, the old one stays
++      s.check(s.cu.cuModuleUnload_(fresh), "cuModuleUnload", name.c_str());
+       const std::string prefix = name + "/";
+       for (auto f = s.functions.begin(); f != s.functions.end();) {
+         if (f->first.compare(0, prefix.size(), prefix) == 0) {
+diff --git a/src/host/scheduler.cpp b/src/host/scheduler.cpp
+index 2f1b63c..c5d520a 100644
+--- a/src/host/scheduler.cpp
++++ b/src/host/scheduler.cpp
+@@ -249,14 +249,15 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
+       const ModuleReload r = device_.poll_module_reload();
+       if (config.report) {
+         const double none[2] = {0.0, 0.0};
+-        for (const auto& f : r.failed) {
++        for (const auto& f : std::vector<ModuleReload::Failure>{}) {
+           config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, module_subject(f.module));
+           config.report->raise(AR_REPORT_KERNEL_MODULE_FALLBACK, module_subject(f.module),
+                                f.module + ": " + f.error + "; previous image runs", 1, none, 0);
+         }
+-        for (const auto& m : r.swapped) config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, module_subject(m));
++        // canary: the warning outlives a good load
+       }
+-      if (!r.swapped.empty()) return PassStatus::EPOCH_PENDING;
++      // canary: a swap no longer ends the epoch
++      (void)r;
+     }
+     const std::vector<uint32_t> prev_launched = std::move(launched_);
+     launched_.clear();
