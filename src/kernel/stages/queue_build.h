@@ -26,9 +26,10 @@
 // inclusive prefix, look-back until the first inclusive prefix); Blelloch 1990, "Prefix Sums and
 // Their Applications" (the sequential order the CPU runs); Cycles
 // device/gpu/parallel_active_index.h (Apache-2.0; a lane's offset in its warp is the popcount of
-// the ballot of the lanes below it, applied here per bin); Warren, "Hacker's Delight", 2nd ed.,
-// section 5-1 (population count by clearing the lowest set bit);
+// the ballot of the lanes below it, applied here per bin);
 // docs/decisions/0002-kernel-architecture.md D5, D6, D7, D8.
+// The look-back scan (scan_rows_tile) takes any (rows x bins) histogram; the material sort
+// (sort.h) scans its (tile x material) histogram with it.
 #pragma once
 #include <cstdint>
 
@@ -70,15 +71,6 @@ AR_FN uint32_t queue_scan_tiles(uint32_t tiles) {
 // The launch count a host passes to queue_build_scan: kQueueLanes units per scan tile.
 AR_FN uint32_t queue_scan_grid(uint32_t high_water_main, uint32_t high_water_shadow) {
   return queue_scan_tiles(queue_tiles(high_water_main) + queue_tiles(high_water_shadow)) * kQueueLanes;
-}
-
-// Population count of a warp vote mask by clearing the lowest set bit (Warren, section 5-1).
-// nvcc recognises the loop and emits one POPC (checked in the sm_120 SASS); the CPU's masks are
-// 0 or 1.
-AR_FN uint32_t queue_popc(uint32_t x) {
-  uint32_t n = 0;
-  for (; x != 0; x &= x - 1u) ++n;
-  return n;
 }
 
 // The histogram bin of a next_stage value in a pool: its Stage value if that stage belongs to
@@ -127,7 +119,7 @@ AR_FN void queue_count_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane, 
   for (uint32_t b = 0; b < kQueueBins; ++b) hist[b] = 0;
   for (uint32_t base = t.first; base < t.last; base += lanes) {
     const uint32_t bin = queue_item_bin(t, next, base + lane);
-    for (uint32_t b = 0; b < kQueueBins; ++b) hist[b] += queue_popc(ballot(bin == b));
+    for (uint32_t b = 0; b < kQueueBins; ++b) hist[b] += popc(ballot(bin == b));
   }
   for (uint32_t b = 0; b < kQueueBins; ++b)
     if (b % lanes == lane) row[b] = hist[b];
@@ -137,7 +129,10 @@ AR_FN void queue_count_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane, 
 // of the scan tile, so it needs no memory of its own. The count kernel leaves a row count there,
 // below 2^30, which reads as "nothing published"; flag and value share one word, so a reader
 // sees both or neither and no fence is needed (Merrill and Garland 2016, section 4). Values
-// stay below 2^30: a pool holds at most 2^21 (main) or 2^22 (shadow) items (0002 D5).
+// stay below 2^30 because a column counts the items of one pool or of a segment of one: a pool
+// holds at most 2^21 (main) or 2^22 (shadow) items (0002 D5). queue_build's columns span one
+// pool; the material sort's span the SHADE_SURFACE segment, at most the main pool's 2^21 items
+// whatever the number of materials (sort.h asserts it).
 inline constexpr uint32_t kScanValueMask = (1u << 30) - 1u;
 inline constexpr uint32_t kScanAggregate = 1u << 30;  // the scan tile's own sum
 inline constexpr uint32_t kScanPrefix = 2u << 30;     // the inclusive prefix through the scan tile
@@ -147,19 +142,20 @@ inline constexpr uint32_t kScanPrefix = 2u << 30;     // the inclusive prefix th
 AR_FN uint32_t queue_status_load(const uint32_t* p) { return *static_cast<const volatile uint32_t*>(p); }
 AR_FN void queue_status_store(uint32_t* p, uint32_t v) { *static_cast<volatile uint32_t*>(p) = v; }
 
-// The histogram row that holds scan tile u's status (its last row).
-AR_FN uint32_t queue_scan_status_row(uint32_t u, uint32_t tiles) {
+// The histogram row that holds scan tile u's status (its last row) in a histogram of `rows` rows.
+AR_FN uint32_t queue_scan_status_row(uint32_t u, uint32_t rows) {
   const uint32_t end = (u + 1u) * kQueueScanRows;
-  return (end < tiles ? end : tiles) - 1u;
+  return (end < rows ? end : rows) - 1u;
 }
 
-// The exclusive prefix of `bin` for scan tile u: the predecessors' published values from u - 1
-// down, adding aggregates until the first inclusive prefix, and waiting on a predecessor that
-// has published nothing yet (it is running: a predecessor has a lower unit index).
-AR_FN uint32_t queue_lookback(const uint32_t* counts, uint32_t tiles, uint32_t u, uint32_t bin) {
+// The exclusive prefix of `bin` for scan tile u of a (rows x bins) histogram: the predecessors'
+// published values from u - 1 down, adding aggregates until the first inclusive prefix, and
+// waiting on a predecessor that has published nothing yet (it is running: a predecessor has a
+// lower unit index).
+AR_FN uint32_t scan_lookback(const uint32_t* counts, uint32_t rows, uint32_t bins, uint32_t u, uint32_t bin) {
   uint32_t exclusive = 0;
   for (uint32_t p = u; p-- > 0;) {
-    const uint32_t* status = counts + uint64_t(queue_scan_status_row(p, tiles)) * kQueueBins + bin;
+    const uint32_t* status = counts + uint64_t(queue_scan_status_row(p, rows)) * bins + bin;
     uint32_t w = queue_status_load(status);
     while (w < kScanAggregate) w = queue_status_load(status);
     exclusive += w & kScanValueMask;
@@ -168,31 +164,44 @@ AR_FN uint32_t queue_lookback(const uint32_t* counts, uint32_t tiles, uint32_t u
   return exclusive;
 }
 
-// Kernel 2 for scan tile u, by `lanes` cooperating units of which this is `lane` (a GPU warp,
-// or one CPU loop): lane l scans the bins l, l + lanes, ... Its rows become inclusive offsets
-// (the status row keeps its flag). The last scan tile's lane 0 waits for every bin's total and
-// finishes the step table with the producers' k from launch_config.h; high_water is left as
-// the host wrote it.
-AR_FN void queue_scan_tile(const KernelGlobals& kg, uint32_t u, uint32_t lane, uint32_t lanes) {
-  uint32_t* counts = kg.queue_counts;
-  const uint32_t tiles = queue_tile_count(kg);
+// The same over queue_build's histogram (kQueueBins columns).
+AR_FN uint32_t queue_lookback(const uint32_t* counts, uint32_t tiles, uint32_t u, uint32_t bin) {
+  return scan_lookback(counts, tiles, kQueueBins, u, bin);
+}
+
+// Scan tile u of a (rows x bins) histogram of per-tile counts, by `lanes` cooperating units of
+// which this is `lane` (a GPU warp, or one CPU loop): lane l scans the bins l, l + lanes, ...
+// The scan tile's rows become inclusive offsets down each column (the status row keeps its
+// flag, so readers mask with kScanValueMask); once every scan tile has run, the last row holds
+// every column's total.
+AR_FN void scan_rows_tile(uint32_t* counts, uint32_t rows, uint32_t bins, uint32_t u, uint32_t lane,
+                          uint32_t lanes) {
   const uint32_t first = u * kQueueScanRows;
-  const uint32_t last = first + kQueueScanRows < tiles ? first + kQueueScanRows : tiles;
-  for (uint32_t b = lane; first < last && b < kQueueBins; b += lanes) {
+  const uint32_t last = first + kQueueScanRows < rows ? first + kQueueScanRows : rows;
+  for (uint32_t b = lane; first < last && b < bins; b += lanes) {
     uint32_t aggregate = 0;
-    for (uint32_t r = first; r < last; ++r) aggregate += counts[uint64_t(r) * kQueueBins + b];
-    uint32_t* status = counts + uint64_t(last - 1u) * kQueueBins + b;
+    for (uint32_t r = first; r < last; ++r) aggregate += counts[uint64_t(r) * bins + b];
+    uint32_t* status = counts + uint64_t(last - 1u) * bins + b;
     if (u != 0) queue_status_store(status, kScanAggregate | aggregate);
-    const uint32_t exclusive = queue_lookback(counts, tiles, u, b);
+    const uint32_t exclusive = scan_lookback(counts, rows, bins, u, b);
     AR_ASSERT(exclusive + aggregate <= kScanValueMask);
     queue_status_store(status, kScanPrefix | (exclusive + aggregate));
     uint32_t running = exclusive;
     for (uint32_t r = first; r + 1u < last; ++r) {
-      uint32_t& c = counts[uint64_t(r) * kQueueBins + b];
+      uint32_t& c = counts[uint64_t(r) * bins + b];
       running += c;
       c = running;
     }
   }
+}
+
+// Kernel 2 for scan tile u, by `lanes` units as in scan_rows_tile, over queue_counts. The last
+// scan tile's lane 0 waits for every bin's total and finishes the step table with the
+// producers' k from launch_config.h; high_water is left as the host wrote it.
+AR_FN void queue_scan_tile(const KernelGlobals& kg, uint32_t u, uint32_t lane, uint32_t lanes) {
+  uint32_t* counts = kg.queue_counts;
+  const uint32_t tiles = queue_tile_count(kg);
+  scan_rows_tile(counts, tiles, kQueueBins, u, lane, lanes);
   if (u + 1u != queue_scan_tiles(tiles) || lane != 0) return;
   StepTable& table = *const_cast<StepTable*>(kg.step_table);
   uint32_t total[kQueueBins];
@@ -229,8 +238,8 @@ AR_FN void queue_scatter_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane
     const uint32_t bin = queue_item_bin(t, next, i);
     for (uint32_t b = 0; b < kStageCount; ++b) {
       const uint32_t votes = ballot(bin == b);
-      if (bin == b) queue[at[b] + queue_popc(votes & below)] = i;
-      at[b] += queue_popc(votes);
+      if (bin == b) queue[at[b] + popc(votes & below)] = i;
+      at[b] += popc(votes);
     }
   }
 }

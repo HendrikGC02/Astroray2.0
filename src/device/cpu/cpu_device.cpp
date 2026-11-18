@@ -41,6 +41,9 @@ const char* tiled_grid(const ar::KernelGlobals& kg, KernelId kernel, uint32_t* g
     case KernelId::SORT_SCATTER:
       *grid = ar::sort_grid(ar::sort_segment_count(kg));
       return kernel == KernelId::SORT_COUNT ? "SORT_COUNT" : "SORT_SCATTER";
+    case KernelId::SORT_SCAN:
+      *grid = 1;
+      return "SORT_SCAN";
     default:
       return nullptr;
   }
@@ -60,6 +63,7 @@ void CpuDevice::register_scheduler_kernels() {
   register_kernel(KernelId::QUEUE_BUILD_SCAN, &cpu_queue_build_scan);
   register_kernel(KernelId::QUEUE_BUILD_SCATTER, &cpu_queue_build_scatter);
   register_kernel(KernelId::SORT_COUNT, &cpu_sort_count);
+  register_kernel(KernelId::SORT_SCAN, &cpu_sort_scan);
   register_kernel(KernelId::SORT_SCATTER, &cpu_sort_scatter);
   // The per-pass film kernels the session launches after every drained pass.
   register_kernel(KernelId::FILM_RESOLVE, &cpu_film_resolve);

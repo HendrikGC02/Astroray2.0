@@ -112,6 +112,18 @@ AR_FN uint32_t ballot(bool pred) {
 #endif
 }
 
+// Population count, for the ranks of a warp vote. Explicit on both targets, so the GPU's one
+// POPC does not depend on nvcc recognising a bit loop. MSVC's __popcnt emits POPCNT, which
+// every AVX2 CPU has; the CPU device requires AVX2 (0001 D3.6, 0002 D12).
+// Ref: CUDA Math API, integer intrinsics (__popc); Microsoft C++ docs, __popcnt16/__popcnt/__popcnt64.
+AR_FN uint32_t popc(uint32_t x) {
+#if AR_CUDA_BUILD
+  return static_cast<uint32_t>(__popc(x));
+#else
+  return __popcnt(x);
+#endif
+}
+
 AR_FN uint32_t lane_id() {
 #if AR_CUDA_BUILD
   uint32_t id;

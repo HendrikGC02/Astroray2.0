@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// sort on the GPU: the two kernels, loaded from the cubins embedded in this executable and
+// sort on the GPU: the three kernels, loaded from the cubins embedded in this executable and
 // launched through CudaDevice, produce the same sorted segment as the CPU device for the same
 // scene and queue. The sort is integer code, so agreement is bit-exact (0009 d17(i)).
 // Ref: docs/decisions/0002-kernel-architecture.md D4, D6, D7 step 3, D14; 0009 d3, d17(i).
@@ -25,6 +25,7 @@ namespace {
 constexpr uint32_t kHeaders = 5;
 constexpr uint32_t kTriangles = 256;
 constexpr uint32_t kSegmentStart = 7;
+constexpr uint32_t kInstances = 6;
 
 struct Rng {
   uint64_t x;
@@ -37,34 +38,41 @@ struct Rng {
 };
 
 // One input: hit per path slot and the queue order. Scene: one mesh whose triangle t has slot
-// t % 4; instance i has a slice of 4 pool entries holding random header ids; the last instance
-// has no slice (default material).
+// t % per_instance; instance i has a slice of per_instance pool entries holding random header
+// ids (or, with `cover`, entry k of the pool holds header k % headers, so every material
+// occurs); the last instance has no slice (default material).
 struct Input {
-  uint32_t count;
+  uint32_t count, headers, per_instance;
   std::vector<uint32_t> hit_inst, hit_prim, queue;
   std::vector<int32_t> tri_slot;
   std::vector<uint32_t> slots;
   std::vector<ar::DeviceInstanceRecord> instances;
-  std::vector<ar::MaterialHeader> headers;
+  std::vector<ar::MaterialHeader> header_table;
+
+  // The material id of path slot p by the tables above (headers = the default material).
+  uint32_t material_of(uint32_t p) const {
+    if (hit_inst[p] + 1 == kInstances) return headers;
+    return slots[hit_inst[p] * per_instance + uint32_t(tri_slot[hit_prim[p]])];
+  }
 };
 
-constexpr uint32_t kInstances = 6;
-
-Input make_input(uint32_t count, uint64_t seed) {
+Input make_input(uint32_t count, uint64_t seed, uint32_t headers = kHeaders, uint32_t per_instance = 4,
+                 bool cover = false) {
   Rng rng{seed};
   Input in;
-  in.count = count;
-  for (uint32_t t = 0; t < kTriangles; ++t) in.tri_slot.push_back(int32_t(t % 4));
+  in.count = count, in.headers = headers, in.per_instance = per_instance;
+  for (uint32_t t = 0; t < kTriangles; ++t) in.tri_slot.push_back(int32_t(t % per_instance));
   in.instances.resize(kInstances);
   for (uint32_t i = 0; i < kInstances; ++i) {
     auto& r = in.instances[i];
     r = {};
     r.light_index = ar::kNoLightIndex;
-    r.material_offset = i * 4;
-    r.material_count = i + 1 == kInstances ? 0u : 4u;
-    for (uint32_t s = 0; s < 4; ++s) in.slots.push_back(rng.next() % kHeaders);
+    r.material_offset = i * per_instance;
+    r.material_count = i + 1 == kInstances ? 0u : per_instance;
+    for (uint32_t s = 0; s < per_instance; ++s)
+      in.slots.push_back(cover ? uint32_t(in.slots.size()) % headers : rng.next() % headers);
   }
-  in.headers.assign(kHeaders, ar::MaterialHeader{0, 0, 0, 0});
+  in.header_table.assign(headers, ar::MaterialHeader{0, 0, 0, 0});
   in.hit_inst.resize(count), in.hit_prim.resize(count);
   for (uint32_t i = 0; i < count; ++i) in.hit_inst[i] = rng.next() % kInstances, in.hit_prim[i] = rng.next() % kTriangles;
   in.queue.assign(kSegmentStart + count, 0xFFFFFFFFu);
@@ -87,14 +95,14 @@ std::vector<uint32_t> run_sort(Device& dev, const Input& in) {
   const uint32_t tiles = ar::queue_tiles(in.count);
   DeviceBuffer inst = put(dev, LedgerCategory::TABLES, in.instances);
   DeviceBuffer slots = put(dev, LedgerCategory::TABLES, in.slots);
-  DeviceBuffer headers = put(dev, LedgerCategory::TABLES, in.headers);
+  DeviceBuffer headers = put(dev, LedgerCategory::TABLES, in.header_table);
   DeviceBuffer tri = put(dev, LedgerCategory::TABLES, in.tri_slot);
   DeviceBuffer hit_inst = put(dev, LedgerCategory::MAIN_PATH_POOL, in.hit_inst);
   DeviceBuffer hit_prim = put(dev, LedgerCategory::MAIN_PATH_POOL, in.hit_prim);
   DeviceBuffer queue = put(dev, LedgerCategory::QUEUE_SORT_INDICES, in.queue);
   std::vector<uint32_t> blank(in.count, 0xFFFFFFFFu);
   DeviceBuffer sorted = put(dev, LedgerCategory::QUEUE_SORT_INDICES, blank);
-  DeviceBuffer counts = dev.allocate(LedgerCategory::QUEUE_SORT_INDICES, sizeof(uint32_t) * 2 * tiles * (kHeaders + 1), Owner{1, 0});
+  DeviceBuffer counts = dev.allocate(LedgerCategory::QUEUE_SORT_INDICES, sizeof(uint32_t) * 2 * tiles * (in.headers + 1), Owner{1, 0});
 
   ar::DeviceMeshView mesh{};
   mesh.tri_material = reinterpret_cast<uintptr_t>(tri.ptr);
@@ -107,7 +115,7 @@ std::vector<uint32_t> run_sort(Device& dev, const Input& in) {
   scene.mesh_count = 1;
   scene.material_slots = static_cast<const uint32_t*>(slots.ptr);
   scene.material_headers = static_cast<const ar::MaterialHeader*>(headers.ptr);
-  scene.material_header_count = kHeaders;
+  scene.material_header_count = in.headers;
   DeviceBuffer scene_buf = put(dev, LedgerCategory::TABLES, std::vector<ar::SceneData>{scene});
 
   ar::PathStateSoA path{};
@@ -131,6 +139,7 @@ std::vector<uint32_t> run_sort(Device& dev, const Input& in) {
 
   const uint32_t grid = ar::sort_grid(in.count);
   dev.launch(KernelId::SORT_COUNT, grid);
+  dev.launch(KernelId::SORT_SCAN, ar::sort_scan_grid(in.count));
   dev.launch(KernelId::SORT_SCATTER, grid);
   dev.synchronize();
   std::vector<uint32_t> out(in.count);
@@ -146,7 +155,7 @@ std::vector<uint32_t> run_sort(Device& dev, const Input& in) {
 TEST_SUITE("gate") {
 
 TEST_CASE("sort/embedded kernels load") {
-  for (const char* name : {"K_SORT_COUNT", "K_SORT_SCATTER"}) {
+  for (const char* name : {"K_SORT_COUNT", "K_SORT_SCAN", "K_SORT_SCATTER"}) {
     INFO(name);
     DataBlob blob;
     REQUIRE(find_data(name, &blob));
@@ -161,6 +170,7 @@ TEST_CASE("sort/cpu gpu agree") {
   ThreadPool pool(ctx, 8);
   CpuDevice cpu(cpu_ledger, pool);
   cpu.register_kernel(KernelId::SORT_COUNT, &cpu_sort_count);
+  cpu.register_kernel(KernelId::SORT_SCAN, &cpu_sort_scan);
   cpu.register_kernel(KernelId::SORT_SCATTER, &cpu_sort_scatter);
   // 300,000 items (293 tiles, the last partial) and a segment of one partial tile.
   uint64_t diff = 0;
@@ -173,6 +183,42 @@ TEST_CASE("sort/cpu gpu agree") {
   }
   std::printf("sort: cpu gpu differences=%llu\n", static_cast<unsigned long long>(diff));
   CHECK(diff == 0);
+  CHECK(gpu_ledger.total() == 0);
+  CHECK(cpu_ledger.total() == 0);
+}
+
+TEST_CASE("sort/300 materials cpu gpu agree with a bucket reference") {
+  // 1,000,003 items (977 tiles, 31 scan tiles, 301 bins, every material hit): the GPU's
+  // look-back scan runs across many warps. Both devices must equal the reference, which appends
+  // each segment item to its material's bucket in segment order and concatenates the buckets.
+  Ledger gpu_ledger, cpu_ledger;
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  ContextState ctx;
+  ThreadPool pool(ctx, 8);
+  CpuDevice cpu(cpu_ledger, pool);
+  cpu.register_kernel(KernelId::SORT_COUNT, &cpu_sort_count);
+  cpu.register_kernel(KernelId::SORT_SCAN, &cpu_sort_scan);
+  cpu.register_kernel(KernelId::SORT_SCATTER, &cpu_sort_scatter);
+  const Input in = make_input(1000003u, 71, 300, 64, true);
+  std::vector<std::vector<uint32_t>> bucket(in.headers + 1);
+  for (uint32_t i = 0; i < in.count; ++i) {
+    const uint32_t p = in.queue[kSegmentStart + i];
+    bucket[in.material_of(p)].push_back(p);
+  }
+  std::vector<uint32_t> want;
+  uint32_t empty = 0;
+  for (const std::vector<uint32_t>& b : bucket) empty += b.empty(), want.insert(want.end(), b.begin(), b.end());
+  CHECK(empty == 0);
+  const std::vector<uint32_t> g = run_sort(*gpu, in);
+  const std::vector<uint32_t> c = run_sort(cpu, in);
+  REQUIRE(g.size() == want.size());
+  REQUIRE(c.size() == want.size());
+  uint64_t gpu_wrong = 0, cpu_wrong = 0;
+  for (size_t i = 0; i < want.size(); ++i) gpu_wrong += g[i] != want[i], cpu_wrong += c[i] != want[i];
+  std::printf("sort 300 materials: gpu wrong=%llu cpu wrong=%llu\n", static_cast<unsigned long long>(gpu_wrong),
+              static_cast<unsigned long long>(cpu_wrong));
+  CHECK(gpu_wrong == 0);
+  CHECK(cpu_wrong == 0);
   CHECK(gpu_ledger.total() == 0);
   CHECK(cpu_ledger.total() == 0);
 }

@@ -275,6 +275,8 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
       if (at_boundary(&status)) return status;
       launch_kernel(KernelId::SORT_COUNT, sort_launch);
       if (at_boundary(&status)) return status;
+      launch_kernel(KernelId::SORT_SCAN, ar::sort_scan_grid(n));
+      if (at_boundary(&status)) return status;
       launch_kernel(KernelId::SORT_SCATTER, sort_launch);
       // The stage reads its segment of main_queue, so the sorted indices replace it.
       device_.copy(main_queue_buf_, uint64_t(t.stage[ss].start) * 4, sort_queue_buf_, 0, uint64_t(n) * 4);

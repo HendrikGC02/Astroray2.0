@@ -53,7 +53,7 @@ AR_FN void stage_<name>(const KernelGlobals& kg, uint32_t item, const StepEntry&
 
 **D6. Queues (deterministic partition, no append queues).**
 - Every pool item carries `next_stage` (u8, closed enum `Stage`). Each pool has its own `TERMINATED` value.
-- `queue_build` performs one stable partition over both pools by `next_stage`, each pool up to its high-water mark (the largest slot index used this pass). It writes per-stage segments of pool-local indices. It runs as three kernels (block histogram, scan over blocks, stable scatter), a reduce-then-scan prefix sum (Blelloch 1990; pattern from Cycles `device/gpu/parallel_active_index.h`, `parallel_prefix_sum.h`).
+- `queue_build` performs one stable partition over both pools by `next_stage`, each pool up to its high-water mark (the largest slot index used this pass). It writes per-stage segments of pool-local indices. It runs as three kernels (block histogram, scan over blocks, stable scatter); the scan is D7 remedy (c)'s single-pass scan with decoupled look-back (Merrill and Garland 2016; scatter pattern from Cycles `device/gpu/parallel_active_index.h`).
 - The scan kernel also fills the **step table**: per stage, the segment start and launch count, and for producers the shadow-slot base (D5), plus the refill count (D7). The table is computed on the device by the same stage function on both targets.
 - Segments are in item-index order. The main `TERMINATED` segment is the free-slot list for refill. The main pool is not physically compacted unless D7 remedy (b) is adopted by measurement.
 
@@ -78,7 +78,7 @@ A pass ends when the work counter is exhausted and every segment except the two 
 | Kernel | Pool | Owns |
 |---|---|---|
 | `queue_build_{count,scan,scatter}` | both | partition, step table (D6): count and scatter one warp per tile, scan a single-pass decoupled look-back over the tile histograms (D7 remedy (c)) |
-| `sort_{count,scatter}` | main | material sort of `shade_surface` |
+| `sort_{count,scan,scatter}` | main | material sort of `shade_surface` (D7 step 3): count and scatter one thread per tile, scan the `queue_build` look-back scan over the (tile x material) histogram |
 | `film_build_active` | per pass (film) | writes the film-owned active-pixel list at pass start: every pixel of the render sub-rectangle in M1a, adaptive compaction in M4 (0008 d3); one thread per listed pixel, no `Stage` value |
 | `generate_camera` | main | refill launch: slot init from the active-pixel list (read-only): pixel, sample, wavelengths (0003), camera ray with time, converged pixels are absent from the list (`film_build_active`, 0004 D16) |
 | `generate_light` | main | light-path init (method 0004; wavelengths from the sensor table, recomputed from the seed, ruling 7) |
