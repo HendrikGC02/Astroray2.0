@@ -19,6 +19,14 @@ launches = 47
 state_bytes = 877002
 shadow_item_bytes = 100352
 
+[cpu.b1m]
+rays_closest = 3920309
+rays_shadow = 1603898
+steps = 166
+launches = 1377
+state_bytes = 1556532226
+shadow_item_bytes = 153302331
+
 [cpu.d28_closed_box]
 rays_closest = 20480
 rays_shadow = 16384
@@ -43,6 +51,14 @@ launches = 47
 state_bytes = 877002
 shadow_item_bytes = 100352
 
+[cuda.b1m]
+rays_closest = 3920311
+rays_shadow = 1603897
+steps = 18
+launches = 95
+state_bytes = 1556532854
+shadow_item_bytes = 153302233
+
 [cuda.d28_closed_box]
 rays_closest = 20480
 rays_shadow = 16384
@@ -52,5 +68,5 @@ state_bytes = 7073792
 shadow_item_bytes = 1605632
 
 [tripwire.cuda]
-ms_per_sample_1spp = 0.0198731
-ms_per_sample_64spp = 0.00108527
+ms_per_sample_1spp = 6.08787e-05
+ms_per_sample_64spp = 2.06085e-05
