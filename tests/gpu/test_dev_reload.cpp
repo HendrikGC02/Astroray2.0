@@ -82,6 +82,12 @@ void write_bytes(const fs::path& p, const char* data, size_t n) {
   fs::rename(tmp, p);
 }
 
+// Writes part of a module in place, as a rebuild does: the file is visible half-written between two calls.
+void write_part(const fs::path& p, const char* data, size_t n, bool append) {
+  std::ofstream f(p, std::ios::binary | (append ? std::ios::app : std::ios::trunc));
+  f.write(data, static_cast<std::streamsize>(n));
+}
+
 struct Held {
   std::shared_ptr<Ledger> ledger = std::make_shared<Ledger>();
   std::unique_ptr<ModuleDevice> device;
@@ -222,6 +228,7 @@ struct Running {
     for (size_t j = 0; j < m.size() / 3; ++j) sum += m[j * 3];
     return sum / double(m.size() / 3);
   }
+  CudaDevice& cuda() const { return dynamic_cast<CudaDevice&>(*device); }
   std::vector<ar_report_entry> fallback_entries() const {
     const ar_report_info info = session->report_snapshot();
     std::vector<ar_report_entry> out;
@@ -257,10 +264,10 @@ TEST_CASE("dev_reload/swap at step boundary") {
   const double ms_epoch = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   REQUIRE(r.wait_passes(1));                 // the first pass of the new epoch ran on the new module
   const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-  std::printf("dev_reload: new module written to first pass on it %.1f ms (epoch reset after %.1f ms; B-04 limit 5000 ms for the whole edit, nvcc separate)\n", ms, ms_epoch);
-  // The engine owns the swap (detection, load, epoch reset); nvcc is the build's part of B-04. The first pass
-  // after it also waits on whatever else the machine runs, so it is printed, not bounded.
-  CHECK(ms_epoch <= 5000.0);
+  // B-04: from the module file landing in the directory to the end of the first pass rendered with it.
+  std::printf("dev_reload: new module written to first pass on it %.1f ms (epoch reset after %.1f ms, that pass took %.1f ms; B-04 limit 5000 ms for the whole edit, nvcc separate)
+", ms, ms_epoch, double(s.progress().last_pass_ms));
+  CHECK(ms <= 5000.0);
   REQUIRE(r.wait_passes(4));
   const double after = r.combined_mean();
   std::printf("dev_reload: Combined mean before %.6g, after %.6g\n", before, after);
@@ -278,6 +285,7 @@ TEST_CASE("dev_reload/corrupted module keeps previous") {
   const std::vector<char> good = read_bytes(kd.module("shade_background"));
   REQUIRE(good.size() > 64);
 
+  const uint64_t attempts0 = r.cuda().module_load_attempts();
   // A truncated module: the previous image keeps running and exactly one entry names module and error.
   write_bytes(kd.module("shade_background"), good.data(), good.size() / 2);
   std::vector<ar_report_entry> e;
@@ -299,6 +307,8 @@ TEST_CASE("dev_reload/corrupted module keeps previous") {
   e = r.fallback_entries();
   REQUIRE(e.size() == 1);
   CHECK(e[0].count == 1);
+  // The bad file was tried once: a retry at every step would reload it again and again.
+  CHECK(r.cuda().module_load_attempts() == attempts0 + 1);
 
   // The file is fixed: it loads, the epoch resets and the entry is gone.
   write_bytes(kd.module("shade_background"), good.data(), good.size());
@@ -306,6 +316,37 @@ TEST_CASE("dev_reload/corrupted module keeps previous") {
   CHECK(s.progress().epoch == epoch + 1);
   CHECK(r.fallback_entries().empty());
   CHECK(s.progress().state != AR_STATE_FAILED);
+
+  // From here the test drives the step-boundary check itself, with the render thread idle.
+  s.pause();
+  Sleep(300);
+  CudaDevice& dev = r.cuda();
+  const auto empty = [](const ModuleReload& m) { return m.swapped.empty() && m.failed.empty() && m.recovered.empty(); };
+  const fs::path module = kd.module("shade_background");
+
+  // A rebuild writes in place. Half a module is not loaded, and neither is a stamp that changed since the
+  // previous check; the swap comes when two consecutive checks see the same file.
+  const std::vector<char> variant = read_bytes(fs::path(AR_TEST_KERNEL_DIR) / "reload_variant.cubin");
+  write_part(module, variant.data(), variant.size() / 2, false);
+  CHECK(empty(dev.poll_module_reload()));
+  write_part(module, variant.data() + variant.size() / 2, variant.size() - variant.size() / 2, true);
+  CHECK(empty(dev.poll_module_reload()));
+  const ModuleReload settled = dev.poll_module_reload();
+  CHECK(settled.swapped.size() == 1);
+  CHECK(settled.failed.empty());
+  CHECK(r.fallback_entries().empty());
+
+  // A file that goes missing is reported once; when it comes back equal to the running image the failure
+  // clears (the scheduler removes the warning on `recovered`).
+  fs::rename(module, module.string() + ".away");
+  CHECK(empty(dev.poll_module_reload()));
+  const ModuleReload gone = dev.poll_module_reload();
+  CHECK(gone.failed.size() == 1);
+  CHECK(empty(dev.poll_module_reload()));
+  fs::rename(module.string() + ".away", module);
+  const ModuleReload back = dev.poll_module_reload();
+  CHECK(back.recovered.size() == 1);
+  CHECK(back.failed.empty());
 }
 
 }  // TEST_SUITE

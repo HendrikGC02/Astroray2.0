@@ -76,14 +76,6 @@ void fill_shadow(ar::ShadowItemSoA& soa, const StateLayout& l, char* base) {
 #undef AR_SHADOW_FIELD_SHARED
 }
 
-// The KERNEL_MODULE_FALLBACK subject of a module: one entry per module, so a later good load can remove it
-// (FNV-1a of the module name; Ref: 0002 D15 dev-module row).
-uint64_t module_subject(const std::string& name) {
-  uint64_t h = 1469598103934665603ull;
-  for (char c : name) h = (h ^ static_cast<uint8_t>(c)) * 1099511628211ull;
-  return h;
-}
-
 }  // namespace
 
 Scheduler::Scheduler(Device& device, const SchedulerConfig& cfg) : config(cfg), device_(device) {
@@ -249,12 +241,14 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
       const ModuleReload r = device_.poll_module_reload();
       if (config.report) {
         const double none[2] = {0.0, 0.0};
+        // One entry per module (its subject), so a later good file removes it whatever the error text was.
         for (const auto& f : r.failed) {
-          config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, module_subject(f.module));
-          config.report->raise(AR_REPORT_KERNEL_MODULE_FALLBACK, module_subject(f.module),
+          config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, f.subject);
+          config.report->raise(AR_REPORT_KERNEL_MODULE_FALLBACK, f.subject,
                                f.module + ": " + f.error + "; previous image runs", 1, none, 0);
         }
-        for (const auto& m : r.swapped) config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, module_subject(m));
+        for (const auto& m : r.swapped) config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, m.subject);
+        for (const auto& m : r.recovered) config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, m.subject);
       }
       if (!r.swapped.empty()) return PassStatus::EPOCH_PENDING;
     }

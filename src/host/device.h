@@ -72,16 +72,17 @@ class DeviceAllocationRefused : public AllocationRefused {
   std::string text_;
 };
 
-// What a development build's step-boundary check found (0002 D14, D15): stage modules whose file changed
-// and now run the new image, and modules whose changed file failed to load (the previous image keeps
-// running). Each failure is reported once per changed file.
+// What a development build's step-boundary check found (0002 D14, D15): modules whose file changed and now
+// run the new image (`swapped`), modules whose changed file failed to load so the previous image keeps
+// running (`failed`, once per changed file), and modules whose failing file is gone again because the file
+// matches the running image (`recovered`). `subject` is the module's fixed id for report entries.
 struct ModuleReload {
-  struct Failure {
+  struct Entry {
     std::string module;
-    std::string error;
+    uint64_t subject = 0;
+    std::string error;  // `failed` only
   };
-  std::vector<std::string> swapped;
-  std::vector<Failure> failed;
+  std::vector<Entry> swapped, recovered, failed;
 };
 
 class Device {

@@ -186,9 +186,12 @@ struct CudaDevice::Impl {
   // the file that was loaded and the stamp of the last changed file that failed to load.
   struct Watch {
     ModuleStamp loaded;
-    bool failed = false;
+    bool has_pending = false;  // a stamp that differs from `loaded`, seen at the previous poll
+    ModuleStamp pending;
+    bool failed = false;       // the file at `failed_stamp` could not be loaded
     ModuleStamp failed_stamp;
   };
+  uint64_t load_attempts = 0;
   std::string dev_dir;
   std::unordered_map<std::string, Watch> watched;
   std::vector<CUmodule> file_modules;                 // test modules, by handle
@@ -580,25 +583,47 @@ std::string CudaDevice::untested_architecture() const {
   return impl_->arch == "sm_120" ? std::string() : impl_->arch;
 }
 
+// The report subject of a module: its place in the fixed module tables (stages, then scheduler and film
+// kernels), so one KERNEL_MODULE_FALLBACK entry belongs to one module (0002 D8, D15).
+static uint64_t module_subject(const std::string& name) {
+  for (uint32_t i = 0; i < ar::kStageCount; ++i)
+    if (name == kStageNames[i]) return 1u + i;
+  for (uint32_t i = 0; i < kKernelIdCount; ++i)
+    if (name == kKernelNames[i]) return 1000u + i;
+  throw std::logic_error("CudaDevice: module " + name + " is in neither module table");
+}
+
+uint64_t CudaDevice::module_load_attempts() const { return impl_->load_attempts; }
+
 ModuleReload CudaDevice::poll_module_reload() {
   Impl& s = *impl_;
   ModuleReload out;
   if (s.dev_dir.empty()) return out;
   s.bind();
   std::lock_guard<std::mutex> lock(s.mutex);
+  // A missing file has this stamp, so it goes through the same two-poll settling as an edit.
+  const ModuleStamp missing{~0ull, 0};
   for (auto& kv : s.watched) {
     const std::string& name = kv.first;
     Impl::Watch& w = kv.second;
     ModuleStamp now;
-    if (!module_file_stamp(name, s.dev_dir, &now)) {
-      // A rebuild in progress or a deleted file: the loaded image keeps running; say so once.
-      if (!w.failed) out.failed.push_back({name, "kernel module file is missing from " + s.dev_dir});
-      w.failed = true;
-      w.failed_stamp = ModuleStamp{~0ull, 0};
+    if (!module_file_stamp(name, s.dev_dir, &now)) now = missing;
+    if (now == w.loaded) {  // the file matches the running image again
+      w.has_pending = false;
+      if (w.failed) out.recovered.push_back({name, module_subject(name), {}});
+      w.failed = false;
       continue;
     }
-    if (now == w.loaded || (w.failed && now == w.failed_stamp)) continue;
+    // A rebuild writes the file in place, in pieces: load only a stamp seen at two consecutive polls.
+    if (!w.has_pending || w.pending != now) {
+      w.has_pending = true;
+      w.pending = now;
+      continue;
+    }
+    if (w.failed && now == w.failed_stamp) continue;  // already reported; wait for the next edit
+    ++s.load_attempts;
     try {
+      if (now == missing) throw DeviceError("kernel module file is missing from " + s.dev_dir);
       const ModuleImage image = load_module_image(name, s.hooks.corrupt_cubin, s.dev_dir);
       // The loader's own result, short: the report detail holds 128 bytes.
       CUmodule fresh = nullptr;
@@ -622,13 +647,14 @@ ModuleReload CudaDevice::poll_module_reload() {
         }
       }
       w.loaded = now;
+      w.has_pending = false;
       w.failed = false;
-      out.swapped.push_back(name);
+      out.swapped.push_back({name, module_subject(name), {}});
     } catch (const DeviceError& e) {
       if (e.sticky()) throw;
       w.failed = true;
       w.failed_stamp = now;
-      out.failed.push_back({name, e.what()});
+      out.failed.push_back({name, module_subject(name), e.what()});
     }
   }
   return out;

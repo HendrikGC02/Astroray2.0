@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Test-only module (never embedded): the shade_background stage plus a known constant. Task 108
+// Test-only module (never embedded): the shade_background stage plus a known constant. The dev-reload test
 // copies it over shade_background.cubin in a temporary ASTRORAY_KERNEL_DIR, so a pass that ran this
 // module shows kReloadConstant in every escaped path's sample, which the production stage does not add
 // to a scene with no world.
