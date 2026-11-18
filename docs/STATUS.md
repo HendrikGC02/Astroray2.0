@@ -36,15 +36,14 @@ None. Unowned follow-ups (a task that touches the area takes them):
   cannot see a hero fixed in generate_camera (078); the per-pixel analytic z of 5.50 misses 1 % albedo errors on
   A1 and a4_sphere (energy tests catch them, 078). Flaky once: `cpu_device/parallel_for rethrows` (0.515 s vs B-12),
   `wavelengths/stratified lane positions`. Fault tests leave astroray_fault_* dirs in temp; some files mix CRLF/LF.
-- Semantics to settle (076): roulette_q applies Russian roulette at depth >= max(2, min_bounces) as 0004 D2 says, so
-  min_bounces = max_bounces does not disable it, contrary to kernel_globals.h, ar.py settings() and the addon's
-  property text; check Cycles' path_state_continuation_probability and fix the kernel or the text. AUTO emission
-  sampling makes a mesh a light only above an estimate of 0.5 (067): confirm that matches Cycles.
+- To settle (076, 107): Russian roulette starts at depth >= max(2, min_bounces) (0004 D2), so min = max bounces does
+  not disable it, unlike kernel_globals.h, ar.py and the addon text (check Cycles, fix kernel or text); AUTO emission
+  needs an estimate > 0.5 (067; confirm vs Cycles); NaN material inputs render black with no INVALID_SAMPLE (report it).
 - M1b: Mix/Add Shader needs 058's compiler to accept one value feeding two EMIT_LE; textured Roughness and Specular
   IOR Level need a colour-to-float op (Cycles: luminance); 083 Do 7 (auto-converted Emission flag, per-term RGB for
   AUTO); a spectral AR_SPECTRUM_BLACKBODY lamp option (082 folds temperature to RGB as Cycles does).
 
 ## Budget headroom
-Landing gates run ~138 s of B-09's 180 s after 106 (kernel part ~36 s of 120 s; Blender smoke ~18-21 s,
-analytic ~20 s per device); 076 (+20 s) and 107 (+10 s) are budgeted into the rest, so new gate work must find time; `check fast` 5-7 s warm,
-9-10 s after a header rebuild (B-08 is 10 s). Spike numbers: docs/spikes/*/RESULTS.md.
+Landing gates ~135-145 s of B-09's 180 s after 089 (B-1M tripwire ~19 s, Blender smoke ~18-21 s, analytic ~20 s per
+device); new gate work must find time. `check fast` 5-7 s warm, 9-10 s after a header rebuild (B-08 is 10 s).
+Spike numbers: docs/spikes/*/RESULTS.md.
