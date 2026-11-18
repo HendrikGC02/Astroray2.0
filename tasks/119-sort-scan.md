@@ -17,3 +17,8 @@ Depends on: 118.
 Size: S (about 200 lines); stop and report at 2x.
 Progress:
 - started (task/119-sort-scan).
+- Lead ruling: option A (k_sort_scan, third sort kernel); out-of-scope files recorded on the Scope line.
+- Scan split into scan_rows_tile(counts, rows, bins) in queue_build.h; queue_build and sort_scan call it. ar::popc in portability.h, used by queue_build (POPC still in SASS).
+- B-5M sort 23.59 ms = 53.6 % -> 10.07 ms = 33.0 % of the pass; longest sort launch 11.3 -> ~1.8 ms; pass 42.67 -> 29.02 ms (bench). B-1M: no sort launched.
+- kSortMinItems re-check on B-5M: 29.02 ms sorted vs 17.93 ms unsorted; shade_surface is slower sorted (5.30 vs 4.33 ms). Value left at 65536 for the lead.
+- Canary: two hunks, each verified red on its own (sort cases; registration check).
