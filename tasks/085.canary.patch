@@ -1,8 +1,8 @@
 diff --git a/blender/astroray/viewport.py b/blender/astroray/viewport.py
-index 106a4c9..304a246 100644
+index e150e35..4b820b9 100644
 --- a/blender/astroray/viewport.py
 +++ b/blender/astroray/viewport.py
-@@ -64,7 +64,7 @@ class ViewportJob(render_final.Job):
+@@ -65,7 +65,7 @@ class ViewportJob(render_final.Job):
  
      def _sync(self, depsgraph):
          if self.first:
@@ -11,7 +11,7 @@ index 106a4c9..304a246 100644
              self._after_full(depsgraph)
              return
          actions = classify.classify(depsgraph, self.cache)
-@@ -74,7 +74,7 @@ class ViewportJob(render_final.Job):
+@@ -75,7 +75,7 @@ class ViewportJob(render_final.Job):
          if classify.FULL_RESYNC in kinds:
              self.tcache.forget_all()
              self.first = True
@@ -20,7 +20,7 @@ index 106a4c9..304a246 100644
              self._after_full(depsgraph)
              return
          self.tcache.invalidate([a for a in actions if a.kind == classify.MATERIALS])
-@@ -118,7 +118,7 @@ class ViewportJob(render_final.Job):
+@@ -138,7 +138,7 @@ class ViewportJob(render_final.Job):
                      mesh.sync_mesh(e, abi, me, key, ob.original.name)
          self.geom_keys |= new_geoms
          inst = [a for a in actions if a.kind == C.INSTANCES]
@@ -29,7 +29,7 @@ index 106a4c9..304a246 100644
              moves = all(a.id_type == "OBJECT" and a.mask == C.TRANSFORM for a in inst)
              if not (inst and moves and not new_geoms and self.table is not None
                      and instances.sync_transforms(e, abi, self.table, depsgraph, {a.uid for a in inst})):
-@@ -180,7 +180,7 @@ class ViewportJob(render_final.Job):
+@@ -200,7 +200,7 @@ class ViewportJob(render_final.Job):
              return False
          try:
              self._last_id = frame.frame_id
@@ -38,7 +38,7 @@ index 106a4c9..304a246 100644
                  self.present.upload(frame)
                  if self.t_first_frame is None:
                      self.t_first_frame = time.monotonic()
-@@ -266,7 +266,6 @@ class ViewportJob(render_final.Job):
+@@ -286,7 +286,6 @@ class ViewportJob(render_final.Job):
              native.call(self.lib.ar_session_get_progress, self.session, ctypes.byref(prog))
              if prog.state != self.abi.AR_STATE_CLOSED:
                  return POLL_S
