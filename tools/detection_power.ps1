@@ -46,7 +46,7 @@ $bugs = @{
   'e1' = @(E 'src/kernel/stages/generate_camera.h' 'uint32_t hero = uint32_t(camera_draw(kg, key, DIM_CAM_HERO) * Real(4));' 'uint32_t hero = 0u * uint32_t(camera_draw(kg, key, DIM_CAM_HERO) * Real(4));')
   'e2' = @(E 'src/kernel/sample/sobol.h' '  const uint32_t block = d >> 2;' "  if (d == 6u) return 0u;`n  const uint32_t block = d >> 2;")
   'm-gate' = @(E 'tests/cpu/test_stat_harness.cpp' $null $mTest)
-  'm-analytic' = @(E 'tools/budgets.toml' 'analytic_scenes = 22' 'analytic_scenes = 257')
+  'm-analytic' = @(E 'tools/budgets.toml' 'analytic_scenes = 34' 'analytic_scenes = 257')
 }
 if (-not $bugs.ContainsKey($Row)) { throw "unknown row '$Row' ($($bugs.Keys -join ', '))" }
 $edits = $bugs[$Row]
