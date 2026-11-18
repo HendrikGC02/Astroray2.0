@@ -82,11 +82,13 @@ AR_LAUNCH_ROWS(AR_LAUNCH_ROW_CONST)
 #undef AR_LAUNCH_ROW_CONST
 
 // Items of a pool that one queue_build tile counts and scatters in order (the "block" of 0002
-// D6's block histogram), by one GPU warp or one CPU loop. PROVISIONAL; the material sort tiles by it too (sort.h).
+// D6's block histogram), by one GPU warp or one CPU loop. PROVISIONAL; the material sort tiles
+// by it too (sort.h).
 inline constexpr uint32_t kQueueTile = 1024;
 
-// queue_build_scan's look-back tile (0002 D7 remedy (c)): kQueueScanRows histogram rows.
-// PROVISIONAL: chosen on B-1M and B-5M at 1080p (task 118's Result).
+// queue_build_scan's look-back tile (0002 D7 remedy (c)): kQueueScanRows histogram rows, so the
+// largest pools (6,144 rows) make 192 scan tiles. PROVISIONAL, not tuned: 8 us per launch on
+// B-1M and B-5M at 1080p (task 118).
 inline constexpr uint32_t kQueueScanRows = 32;
 // Units that share one queue_build tile or scan tile: one GPU warp (the vote of ar::ballot is
 // warp-wide). The CPU runs one unit per tile.

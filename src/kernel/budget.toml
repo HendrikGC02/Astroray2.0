@@ -23,7 +23,7 @@ compile_s = 1.2
 gated = "full"
 
 [kernel.k_queue_build_count]
-regs = 27
+regs = 38
 stack = 0
 spill_store = 0
 spill_load = 0
@@ -39,8 +39,8 @@ compile_s = 1.28
 gated = "merge"
 
 [kernel.k_queue_build_scatter]
-regs = 40
-stack = 64
+regs = 52
+stack = 0
 spill_store = 0
 spill_load = 0
 compile_s = 1.22
