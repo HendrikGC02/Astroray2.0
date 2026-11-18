@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0004 D8 stacked lamps: two rectangle lamps, one above the other, both facing down toward a grey
+# Lambertian floor and toward a pinhole camera placed low beside them, so camera rays and the
+# floor's BSDF rays cross both lamps' emitting faces in one segment (one crossing per step, no cap).
+# NEE on (MIS) and off (BSDF sampling only) must agree within their joint SE, per 4x4 pixel block
+# and as the image mean (truths.py mode_agreement, RULINGS.md 77); a crossing that loses or
+# misweights the second lamp moves one mode. The floor is small, so every floor point sees the lamps
+# under a solid angle BSDF sampling alone hits many times per block. The harness also reports lamp crossings per closest-hit ray and steps
+# per pass from the engine's counters (0004 D8, D29).
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+[truth]
+formula = "mode_agreement"
+pairs = [["on", "off"]]
+rho = 0.8
+# Blender watts; metres. The upper lamp is larger, so it shows around the lower one from below.
+lower = { position = [0.0, 0.0, 1.0], size = 0.8, power = 20.0 }
+upper = { position = [0.0, 0.0, 1.4], size = 1.4, power = 20.0 }
+floor_size = 3.0
+camera_position = [3.0, 0.0, 0.4]
+camera_target = [0.0, 0.0, 0.7]
+focal_mm = 24.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "z_se"

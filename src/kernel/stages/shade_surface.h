@@ -10,6 +10,9 @@
 // vertex's context rebuilt from prev_ng, prev_ns and prev_dist; at the first vertex or after a
 // delta bounce (LAST_BOUNCE_SPECULAR) it is divided by avg(r_u) only. The light of a hit triangle
 // is light_of_hit's; a triangle that is no light (or has pmf 0, 0004 D9) gets p_light 0.
+// The NEE test modes (kernel_globals.h TEST_HOOK_NEE_*): off emits no shadow item and weights
+// emission 1; light_only drops emission after a non-delta bounce and the BSDF pdf from the NEE
+// weight (Veach 1997, ch. 9: each strategy alone is unbiased).
 // NEE, as pbrt-v4 VolPathIntegrator::SampleLd: the context point is the hit offset toward wo
 // (pbrt offsets it for a reflection-only BSDF); the light is picked by the alias sampler from the
 // event block's pick dimension (32 bits: the bin) with the alias test's uniform from per-path
@@ -173,8 +176,11 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
       film_primary_aov(kg, sample, index, &flags, P, N, ctx.uv[0].x, ctx.uv[0].y, load_ro(s.material_pass_index + mat));
     }
     Spec contribution = spec_fill(Real(0));
-    if (ok && max_lane(le) > Real(0)) {
-      const bool weighted = total > 0u && !arrived_specular;
+    const uint32_t hooks = kg.session.test_hooks;
+    const bool after_scatter = total > 0u && !arrived_specular;
+    // NEE test modes (kernel_globals.h): light_only drops emission NEE could have sampled.
+    if (ok && max_lane(le) > Real(0) && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
+      const bool weighted = after_scatter && (hooks & TEST_HOOK_NEE_OFF) == 0u;
       Real p_light = Real(0);
       if (weighted) {
         const uint32_t light = light_of_hit(kg, inst, prim);
@@ -205,7 +211,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
       return;
     }
 
-    // NEE from this vertex.
+    // NEE from this vertex; none in the NEE_OFF test mode (BSDF sampling alone).
+    if ((hooks & TEST_HOOK_NEE_OFF) != 0u) break;
     const uint32_t e = ps_event_index(kg, slot);
     const LightSamplerView& lsv = *kg.light_sampler;
     const LightSampleContext lctx = light_context_point(offset_ray_origin(P, Ng, wo), Ng, N);
@@ -222,7 +229,9 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     const LightLiSample ls = light_sample_li(lr, lctx, ul, ctx.lambda_t, obs);
     if (!(ls.pdf > Real(0))) break;
     const LobeEval ev = stack_eval(*kg.e_diel, rec, frame_from_normal(N), wo, ls.wi, TransportMode::Radiance);
-    Spec nee = ps_beta(kg, slot) * ev.f * (abs_dot(ls.wi, N) * mis_nee_scale(ps_r_u(kg, slot), sl.pmf * ls.pdf, ev.pdf, ls.delta));
+    // NEE_LIGHT_ONLY: the BSDF strategy is off, so its pdf leaves the weight.
+    const Real p_bsdf = (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u ? Real(0) : ev.pdf;
+    Spec nee = ps_beta(kg, slot) * ev.f * (abs_dot(ls.wi, N) * mis_nee_scale(ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta));
     if (!ls.deferred_le) nee *= ls.Le;
     if (!is_finite(nee)) {
       sample_mark_invalid(kg, sample);
@@ -310,7 +319,9 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   ps_ray_d(kg, slot) = bs.wi;
   ps_ray_type(kg, slot) = glossy ? kRayTypeGlossy : kRayTypeDiffuse;
   ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::INTERSECT_CLOSEST);
-}AR_NS_END
+}
+
+AR_NS_END
 
 #if !AR_CUDA_BUILD
 // CPU chunk function, defined by AR_CPU_STAGE in kernel_cpu/shade_surface.cpp; registered by

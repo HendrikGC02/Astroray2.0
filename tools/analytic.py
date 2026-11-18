@@ -10,7 +10,12 @@ reproduce command; exits non-zero on failure.
 Rule per pixel: |mean - truth| <= z SE + eps_sys, SE = sqrt(VAR) (0008 d3, exact in the
 sampler's independent mode, which the harness requires), eps_sys from meta.toml (default 0).
 Also, per channel: not black where truth is not, not constant where truth varies.
-Ref: docs/decisions/0009-build-test-process.md d15, d16; Sidak 1967 (thresholds).
+Comparison scenes (truths.py mode_agreement, RULINGS.md 77) have no truth: the harness renders the
+scene once per NEE mode named by its pairs (ASTRORAY_TEST_NEE, independent seeds) and compares two
+renders per block of PAIR_BLOCK x PAIR_BLOCK pixels and as the image mean,
+|mean_a - mean_b| <= z sqrt(VAR_a + VAR_b) + eps_sys.
+Ref: docs/decisions/0009-build-test-process.md d15, d16; Sidak 1967 (thresholds); Veach 1997,
+ch. 9 (MIS and each strategy alone estimate the same integral).
 """
 import argparse
 import importlib.util
@@ -42,7 +47,15 @@ SIZE = 32  # 0009 d11: analytic scenes at 32x32 in gate
 # 64 spp the skewed spectral samples put the worst |z| at 5.48 against 5.50. Lower values need their
 # own null run first. At 1024 spp a 1% emission error is about 7.7 SE in A5's green channel.
 MIN_SPP = 1024
-GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace", "a1_world_half", "a4_point", "a4_sphere")  # 0009 d11: run by check.ps1 gate on both devices
+# 0009 d11: run by check.ps1 gate on both devices.
+GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace", "a1_world_half", "a4_point", "a4_sphere", "a3_disk",
+               "lit_furnace_small", "d1_nee_onoff", "d8_stacked_lamps")
+# Scenes whose harness line also reports lamp crossings per ray (0004 D8 row), and the samples per
+# pixel of the in-process render that reads the counters (one pass suffices: counters are per pass).
+CROSSING_SCENES = ("d8_stacked_lamps",)
+COUNTER_SPP = 4
+# Comparison scenes test blocks of PAIR_BLOCK x PAIR_BLOCK pixels (check_scene: rare-event skew).
+PAIR_BLOCK = 4
 DEVICES = ("cpu", "cuda")
 FAMILY_ALPHA = 0.01  # 0009 d15
 # tests/common/stat.cpp kRepoConstant and the FNV-1a / MixBits rule of seed_for() (task 020).
@@ -176,20 +189,51 @@ def write_png(path, rgb, scale, enlarge=8):
                 chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 
-def check_scene(mean, var, checks, m, eps_sys):
-    """Every check of one scene on one device. mean and var are (3, h, w) display planes; checks
-    come from truths.evaluate. Returns [(name, pass, reasons, worst, measured mean, truth mean)]."""
-    npix = mean.shape[1] * mean.shape[2]
+def channel(w, mean, var):
+    """The channel w . (R, G, B) of (3, h, w) planes and a bound on its variance of the mean."""
+    w = np.asarray(w, dtype=np.float64)
+    cmean = np.tensordot(w, mean, axes=1)
+    if np.count_nonzero(w) == 1:
+        return cmean, np.tensordot(w * w, var, axes=1)
+    # The dump has no covariance between channels, so the SE of a combination is bounded by the sum
+    # of the parts' SEs (Minkowski inequality for standard deviations).
+    return cmean, np.tensordot(np.abs(w), np.sqrt(var), axes=1) ** 2
+
+
+def block(x, power):
+    """Sum of x over PAIR_BLOCK x PAIR_BLOCK pixel blocks divided by PAIR_BLOCK^(2 power): the block
+    mean for power 1, the variance of the block mean (from pixel variances) for power 2."""
+    k = PAIR_BLOCK
+    h, w = x.shape
+    return x.reshape(h // k, k, w // k, k).sum(axis=(1, 3)) / float(k) ** (2 * power)
+
+
+def check_scene(renders, checks, m, eps_sys, max_relative=None):
+    """Every check of one scene on one device. renders maps an NEE mode to its (mean, var), each
+    (3, h, w) display planes; truth checks read "on". checks come from truths.evaluate.
+    max_relative (meta.toml [tolerance]) is the relative tolerance an image-mean check must be able
+    to resolve: it fails unless z SE <= max_relative |truth|, so a pass bounds the relative error.
+    Pair checks compare two independent renders: the difference has variance VAR_a + VAR_b.
+    Returns [(name, pass, reasons, worst, measured mean, truth mean)]; for a pair, the means of the
+    two renders."""
     out = []
     for name, w, truth, kind in checks:
-        w = np.asarray(w, dtype=np.float64)
-        cmean = np.tensordot(w, mean, axes=1)
-        if np.count_nonzero(w) == 1:
-            cvar = np.tensordot(w * w, var, axes=1)
-        else:
-            # The dump has no covariance between channels, so the SE of a combination is bounded
-            # by the sum of the parts' SEs (Minkowski inequality for standard deviations).
-            cvar = np.tensordot(np.abs(w), np.sqrt(var), axes=1) ** 2
+        if kind in ("pair_pixels", "pair_image"):
+            (ma, va), (mb, vb) = (channel(w, *renders[mode]) for mode in truth)
+            if kind == "pair_pixels":
+                # Blocks of PAIR_BLOCK^2 pixels: a single-strategy estimator of a small light is a
+                # rare-event sum, too skewed per pixel for the normal threshold (a pixel with no BSDF
+                # hit in all its samples has mean and variance 0); a block mean holds 16 times the
+                # events. Block means of independent pixel means: variance sum(VAR) / k^4.
+                ma, va, mb, vb = (block(x, s) for x, s in ((ma, 1), (va, 2), (mb, 1), (vb, 2)))
+                passed, reasons, worst = check_channel(ma, va + vb, mb, pixel_z(m, ma.size), eps_sys)
+            else:
+                n2 = ma.size ** 2
+                passed, reasons, worst = check_channel(np.full((1, 1), ma.mean()), np.full((1, 1), (va.sum() + vb.sum()) / n2),
+                                                       np.full((1, 1), mb.mean()), pixel_z(m, 1), eps_sys)
+            out.append((name, passed, reasons, worst, float(ma.mean()), float(mb.mean())))
+            continue
+        cmean, cvar = channel(w, *renders["on"])
         if kind == "pixels":
             ntested = int(np.count_nonzero(~np.isnan(truth)))  # Sidak over the pixels tested
             passed, reasons, worst = check_channel(cmean, cvar, truth, pixel_z(m, max(ntested, 1)), eps_sys)
@@ -198,9 +242,16 @@ def check_scene(mean, var, checks, m, eps_sys):
                 raise ValueError(f"check {name}: an image-mean check cannot exclude pixels")
             # The image mean of independent pixel means: variance sum(VAR) / npix^2, one test at the
             # family's per-test alpha.
-            passed, reasons, worst = check_channel(
-                np.full((1, 1), cmean.mean()), np.full((1, 1), cvar.sum() / npix ** 2),
-                np.full((1, 1), truth.mean()), pixel_z(m, 1), eps_sys)
+            se, tmean, z = math.sqrt(cvar.sum()) / cmean.size, float(truth.mean()), pixel_z(m, 1)
+            passed, reasons, worst = check_channel(np.full((1, 1), cmean.mean()), np.full((1, 1), se * se),
+                                                   np.full((1, 1), tmean), z, eps_sys)
+            if max_relative is not None:
+                if not z * se + eps_sys <= max_relative * abs(tmean):
+                    passed = False
+                    reasons.append(f"z SE + eps_sys = {(z * se + eps_sys) / abs(tmean):.2%} of the truth cannot "
+                                   f"resolve the stated {max_relative:.2%}: raise the spp")
+                else:
+                    reasons.append(f"resolves {(z * se + eps_sys) / abs(tmean):.3%} <= {max_relative:.2%}")
         else:
             raise ValueError(f"check {name}: unknown kind {kind!r}")
         tested = ~np.isnan(truth)
@@ -235,6 +286,52 @@ def check_spp(spp):
                          "threshold is not calibrated there; run a null calibration before lowering it")
 
 
+def crossing_report(scene, device):
+    """Prints lamp crossings per closest-hit ray and steps per pass of `scene` (0004 D8 row: reported
+    against 0002's budgets, not tested). The CLI's dump carries no counters, so the scene is built
+    in this process through the ABI binding (scenes/<scene>/build.py populate), rendered at
+    COUNTER_SPP with NEE on, and ar_session_read_counters gives the last pass's words in
+    src/host/session/readback.cpp counter_words order: rays_closest, rays_shadow, steps, launches,
+    kStageCount stage items, then 11 words of which lamp_crossings is the ninth, so it is word
+    n - 3 of n. Ref: tests/abi/test_session_api.py test_counters (the word count from the error)."""
+    import ctypes
+    import ar  # scenes/lib, on the path above
+    spec = importlib.util.spec_from_file_location(f"_build_{scene}", os.path.join(ROOT, "scenes", scene, "build.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    os.environ.pop("ASTRORAY_TEST_NEE", None)
+    with tempfile.TemporaryDirectory() as tmp, ar.Scene(os.path.join(tmp, "counters.arrec"), device=device) as s:
+        a, lib = s.abi, s.lib
+        mod.populate(s, spp=COUNTER_SPP, size=SIZE)
+        gen = ctypes.c_uint64()
+        s._call(lib.ar_edit_commit(s.edit_h, ctypes.byref(gen)), "ar_edit_commit")
+        sd = a.ar_session_desc(a.AR_SESSION_MODE_FINAL, SIZE, SIZE, a.AR_DENOISER_NONE)
+        s._call(lib.ar_session_create(s.scene_h, ctypes.byref(sd), ctypes.byref(s.session_h)), "ar_session_create")
+        v = a.ar_view_desc()
+        ctypes.memmove(ctypes.byref(v.camera), ctypes.byref(s._camera), ctypes.sizeof(a.ar_camera_desc))
+        v.region_width, v.region_height, v.render_scale = SIZE, SIZE, 1.0
+        s._call(lib.ar_session_set_view(s.session_h, ctypes.byref(v)), "ar_session_set_view")
+        s._call(lib.ar_session_start(s.session_h), "ar_session_start")
+        s._call(lib.ar_session_wait(s.session_h, 60000), "ar_session_wait")
+        p = a.ar_progress()
+        s._call(lib.ar_session_get_progress(s.session_h, ctypes.byref(p)), "ar_session_get_progress")
+        if p.state != a.AR_STATE_CONVERGED:
+            raise RuntimeError(f"crossings {scene} {device}: the session did not converge (state {p.state})")
+        probe = (ctypes.c_uint64 * 1)()
+        if lib.ar_session_read_counters(s.session_h, 0, probe) != a.AR_ERR_INVALID_ARGUMENT:
+            raise RuntimeError("ar_session_read_counters accepted a zero-length buffer")
+        err = (ctypes.c_uint8 * 256)()
+        lib.ar_session_last_error(s.session_h, 256, err)
+        n = int(bytes(err).split(b"\0")[0].decode().rsplit("need ", 1)[1])
+        words = (ctypes.c_uint64 * n)()
+        s._call(lib.ar_session_read_counters(s.session_h, n, words), "ar_session_read_counters")
+        rays, steps, crossings = words[0], words[2], words[n - 3]
+    if rays == 0:
+        raise RuntimeError(f"crossings {scene} {device}: the last pass traced no closest-hit rays")
+    print(f"crossings analytic {scene} {device}: {crossings / rays:.3f} lamp crossings per closest-hit ray "
+          f"({crossings} of {rays}), {steps} steps per pass, one pass of {SIZE}x{SIZE} at NEE on")
+
+
 def run(scene, device, spp, seed, png=None):
     """Renders and checks one scene; prints its lines and returns True on PASS."""
     t0 = time.perf_counter()
@@ -247,33 +344,55 @@ def run(scene, device, spp, seed, png=None):
         if not os.path.exists(p):
             raise FileNotFoundError(f"{p} missing: run tools/build.ps1 and tools/scenes.py first")
     repro = (f"<python> -I tools/analytic.py --scene {scene} --device {device} --spp {spp} --seed {seed}")
-    with tempfile.TemporaryDirectory() as tmp:
-        out = os.path.join(tmp, "dump.fits")
-        r = subprocess.run([CLI, "dump", rec, "-o", out, "--device", device, "--spp", str(spp),
-                            "--seed", str(seed), "--size", f"{SIZE}x{SIZE}"],
-                           capture_output=True, text=True, cwd=tmp, timeout=600)
-        if r.returncode != 0:
-            print(r.stdout + r.stderr)
-            print(f"FAIL analytic {scene} {device}: astroray_cli exited {r.returncode}; reproduce: {repro}")
-            return False
-        mean, var = load_dump(out, spp, device)
     checks = truths.evaluate(m["truth"], SIZE, SIZE)
-    results = check_scene(mean, var, checks, family_m(), m["eps_sys"])
+    # The NEE modes the checks need (ASTRORAY_TEST_NEE, RULINGS.md 77): "on" for truth checks.
+    modes = sorted({mode for c in checks if c[3].startswith("pair_") for mode in c[2]} or {"on"})
+    renders = {}
+    for mode in modes:
+        # Each mode gets its own seed, so pair renders are independent and their variances add.
+        mseed = seed if mode == "on" else mix_bits(seed ^ fnv1a(mode)) & 0xFFFFFFFF
+        env = {k: v for k, v in os.environ.items() if k != "ASTRORAY_TEST_NEE"}
+        if mode != "on":
+            env["ASTRORAY_TEST_NEE"] = mode
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "dump.fits")
+            r = subprocess.run([CLI, "dump", rec, "-o", out, "--device", device, "--spp", str(spp),
+                                "--seed", str(mseed), "--size", f"{SIZE}x{SIZE}"],
+                               capture_output=True, text=True, cwd=tmp, timeout=600, env=env)
+            if r.returncode != 0:
+                print(r.stdout + r.stderr)
+                print(f"FAIL analytic {scene} {device}: astroray_cli exited {r.returncode} (NEE {mode}); "
+                      f"reproduce: {repro}")
+                return False
+            renders[mode] = load_dump(out, spp, device)
+    results = check_scene(renders, checks, family_m(), m["eps_sys"], m.get("tolerance", {}).get("max_relative"))
     ok = all(r[1] for r in results)
     worst_all = None
-    for name, passed, reasons, worst, cmean, tmean in results:
+    for (name, passed, reasons, worst, cmean, tmean), check in zip(results, checks):
         if worst_all is None or abs(worst[0]) > abs(worst_all[0]):
             worst_all = (worst[0], worst[1], name)
-        excluded = int(np.isnan(next(c[2] for c in checks if c[0] == name)).sum())
-        print(f"analytic {scene} {device} {name}: {'ok' if passed else 'FAIL'} mean {cmean:.6f} "
-              f"truth {tmean:.6f} worst z {worst[0]:+.2f} at {worst[1]}"
-              + (f", {excluded} excluded pixels" if excluded else "") + ("" if passed else "; " + "; ".join(reasons)))
+        if check[3].startswith("pair_"):
+            label = f"{check[2][0]} {cmean:.6f} {check[2][1]} {tmean:.6f}"
+            excluded = 0
+        else:
+            label = f"mean {cmean:.6f} truth {tmean:.6f}"
+            excluded = int(np.isnan(check[2]).sum())
+        print(f"analytic {scene} {device} {name}: {'ok' if passed else 'FAIL'} {label} worst z {worst[0]:+.2f} "
+              f"at {worst[1]}" + (f", {excluded} excluded pixels" if excluded else "")
+              + ("; " + "; ".join(reasons) if reasons else ""))
+    if scene in CROSSING_SCENES:
+        crossing_report(scene, device)
     if png:
-        tmax = max(float(np.nanmax(t)) for _, _, t, _ in checks)
+        mean = renders[modes[0]][0]
+        tmax = max((float(np.nanmax(t)) for _, _, t, k in checks if not k.startswith("pair_")),
+                   default=float(mean.max()))
         write_png(png, mean, 0.5 / tmax if tmax > 0 else 1.0)
     secs = time.perf_counter() - t0
+    paired = any(c[3] == "pair_pixels" for c in checks)
+    units = (SIZE // PAIR_BLOCK) ** 2 if paired else SIZE * SIZE
     print(f"{'PASS' if ok else 'FAIL'} analytic {scene} {device}: worst z {worst_all[0]:+.2f} "
-          f"({worst_all[2]} at {worst_all[1]}) against per-pixel z {pixel_z(family_m(), SIZE * SIZE):.2f} "
+          f"({worst_all[2]} at {worst_all[1]}) against per-{'block' if paired else 'pixel'} z "
+          f"{pixel_z(family_m(), units):.2f} "
           f"+ eps_sys {m['eps_sys']:g}, {spp} spp, seed {seed}, {secs:.1f} s; reproduce: {repro}")
     return ok
 
