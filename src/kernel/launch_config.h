@@ -87,8 +87,8 @@ AR_LAUNCH_ROWS(AR_LAUNCH_ROW_CONST)
 inline constexpr uint32_t kQueueTile = 1024;
 
 // queue_build_scan's look-back tile (0002 D7 remedy (c)): kQueueScanRows histogram rows, so the
-// largest pools (6,144 rows) make 192 scan tiles. PROVISIONAL, not tuned: 8 us per launch on
-// B-1M and B-5M at 1080p (task 118).
+// largest pools (6,144 rows) make 192 scan tiles. PROVISIONAL, not tuned; measured in
+// 0002 D7 (c).
 inline constexpr uint32_t kQueueScanRows = 32;
 // Units that share one queue_build tile or scan tile: one GPU warp (the vote of ar::ballot is
 // warp-wide). The CPU runs one unit per tile.

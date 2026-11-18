@@ -10,7 +10,9 @@
 #include <doctest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <thread>
 #include <vector>
 
 #include "device/cpu/cpu_device.h"
@@ -264,6 +266,55 @@ TEST_CASE("queue_build/look-back adds aggregates up to the first inclusive prefi
   CHECK(ar::queue_lookback(counts.data(), tiles, 2, 3) == 15);   // 5 + 10
   CHECK(ar::queue_lookback(counts.data(), tiles, 3, 3) == 100);
   CHECK(ar::queue_lookback(counts.data(), tiles, 5, 3) == 108);  // 1 + 7 + 100
+}
+
+TEST_CASE("queue_build/look-back reads a published aggregate") {
+  // Scan tiles out of order, as the GPU may run them: scan tile 1 runs while tile 0 has not
+  // started, one thread per bin. It must publish kScanAggregate | (the sum of its 32 raw rows)
+  // and then wait, since tile 0's status row still holds a raw count. A successor's look-back
+  // over that published word and tile 0's inclusive prefix must add both. Then tile 0 runs,
+  // tiles 2 and 3 follow, and the partition equals the reference.
+  constexpr uint32_t kMain = 100000, kShadow = 1000;
+  Rig r(random_pool(kMain, Pool::MAIN, 31), random_pool(kShadow, Pool::SHADOW, 32));
+  for (int p = 0; p < 2; ++p) std::fill(r.queue[p].begin(), r.queue[p].end(), kSentinel);
+  r.table.high_water[0] = kMain;
+  r.table.high_water[1] = kShadow;
+  const uint32_t grid = ar::queue_build_grid(kMain, kShadow);
+  r.dev.launch(KernelId::QUEUE_BUILD_COUNT, grid);
+  const uint32_t tiles = ar::queue_tiles(kMain) + ar::queue_tiles(kShadow);  // 98 + 1 rows
+  REQUIRE(ar::queue_scan_tiles(tiles) == 4);
+  const uint32_t R = ar::kQueueScanRows, B = ar::kQueueBins;
+  // Expected values from the raw rows, before any scan tile has run.
+  std::vector<uint32_t> incl0(B, 0), agg1(B, 0);
+  for (uint32_t b = 0; b < B; ++b)
+    for (uint32_t row = 0; row < 2 * R; ++row) (row < R ? incl0 : agg1)[b] += r.counts[row * B + b];
+
+  std::vector<std::thread> tile1;
+  for (uint32_t b = 0; b < B; ++b) tile1.emplace_back([&r, b] { ar::queue_scan_tile(r.kg, 1, b, ar::kQueueBins); });
+  const uint32_t* status1 = r.counts.data() + (2 * R - 1) * B;
+  bool published = true;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  for (uint32_t b = 0; b < B; ++b)
+    while (ar::queue_status_load(status1 + b) < ar::kScanAggregate)
+      if (std::chrono::steady_clock::now() > deadline) {
+        published = false;
+        break;
+      }
+  // Tile 1 is still waiting on tile 0: its words are exactly what it published.
+  std::vector<uint32_t> snapshot(r.counts.begin(), r.counts.end());
+  for (uint32_t b = 0; b < B; ++b) snapshot[(R - 1) * B + b] = ar::kScanPrefix | incl0[b];
+  ar::queue_scan_tile(r.kg, 0, 0, 1);
+  for (auto& t : tile1) t.join();
+  REQUIRE(published);
+  for (uint32_t b = 0; b < B; ++b) {
+    INFO("bin " << b);
+    CHECK(snapshot[(2 * R - 1) * B + b] == (ar::kScanAggregate | agg1[b]));
+    CHECK(ar::queue_lookback(snapshot.data(), tiles, 2, b) == incl0[b] + agg1[b]);
+  }
+  ar::queue_scan_tile(r.kg, 2, 0, 1);
+  ar::queue_scan_tile(r.kg, 3, 0, 1);
+  r.dev.launch(KernelId::QUEUE_BUILD_SCATTER, grid);
+  check_against_reference(r, kMain, kShadow);
 }
 
 TEST_CASE("queue_build/crafted step table") {
