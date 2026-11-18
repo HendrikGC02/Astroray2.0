@@ -103,3 +103,16 @@ index ca21b6b..d2e2595 100644
          "max_bounces": a.max_bounces, "min_bounces": a.min_bounces,
          # Only the total limit exists in M1a; a per-type limit of 0 would end such paths at once,
          # so each equals the total and never binds before it.
+diff --git a/blender/astroray/render_final.py b/blender/astroray/render_final.py
+index 911dfbd..ca8417a 100644
+--- a/blender/astroray/render_final.py
++++ b/blender/astroray/render_final.py
+@@ -164,7 +164,7 @@ def scan(depsgraph, keymap):
+             continue
+         gid = keys.geometry_identity(inst, depsgraph)
+         if gid is not None:
+-            geoms.setdefault(keymap.key(gid), _held_object(inst, depsgraph))
++            geoms.setdefault(keymap.key(gid), inst.object)
+         for slot in inst.object.material_slots:
+             if slot.material is not None:
+                 mats.setdefault(slot.material.original.session_uid, slot.material)
