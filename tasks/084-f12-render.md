@@ -20,4 +20,8 @@ Budget: gate time grows by one Blender start plus the render; report it (0009 Ri
 Depends on: 083, 104, 073, 070, 117.
 Size: M (about 400 lines); stop and report at 2x.
 Progress:
-started
+Implemented: render_final.py (Job: update = ar_edit_reset + full sync through 080-083, render = session loop, previews, cancel, reports), engine.py, blend_writer.py, ar.py JSON description, a1 --blend/--passes/--sampler, smoke_a1.py, exporter_equivalence.py, gate step 'blender smoke'.
+Device: no scene.astroray.device property exists (properties.py is outside Scope); the F12 device is the scene ID property astroray_device ('CPU' default or 'CUDA'). The render panel's property needs an owner.
+Engine DLL has its own CRT, so ASTRORAY_RECORD set from Python is read by render_final.context() and passed as record_path.
+Canary flips corner normals (zeroing them leaves A1 unchanged: a convex furnace is shape independent), so both named cases go red.
+Gate 99.7 s of 180 s with the smoke (smoke step 21.4 s incl. test_materials, about 78 s before); out/evidence/084/a1_f12.png mean over tested pixels 0.64064 vs truth 0.64065.
