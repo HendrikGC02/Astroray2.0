@@ -4,7 +4,8 @@
 // 1), a rectangle lamp the balance weight against the BSDF pdf, each in the path's reserved
 // shadow slot with the sample's id as target and an offset segment ending at the lamp; a lamp
 // below the surface emits no item. A program-emission triangle light (deferred Le) gives the same
-// item as an equal constant emitter, so its emission entry is evaluated, times s, once.
+// item as an equal constant emitter, so its emission entry is evaluated, times s, once; with Le
+// coloured by UV, the item carries Le at the sampled point (checked by hand from the point).
 // shade_shadow adds a delivered item to its target slot after the path ended and its pool slot
 // was refilled. A miss after a diffuse bounce carries the balance weight against world NEE.
 // Ref: docs/decisions/0004-integrator.md D1, D4, D5, D9; 0002 D5, D16; 0003 d10, d20, d23;
@@ -48,11 +49,14 @@ struct Graph {
   std::vector<ar_graph_node> nodes;
   std::vector<ar_graph_link> links;
   std::vector<float> f;
-  int add(ar::Op op, std::vector<float> fp) {
+  std::vector<int32_t> i32;
+  int add(ar::Op op, std::vector<float> fp, std::vector<int32_t> ip = {}) {
     ar_graph_node n = {};
     n.op = uint32_t(op);
     n.f32_first = uint32_t(f.size()), n.f32_count = uint32_t(fp.size());
+    n.i32_first = uint32_t(i32.size()), n.i32_count = uint32_t(ip.size());
     f.insert(f.end(), fp.begin(), fp.end());
+    i32.insert(i32.end(), ip.begin(), ip.end());
     nodes.push_back(n);
     return int(nodes.size()) - 1;
   }
@@ -62,18 +66,27 @@ struct Graph {
     links.push_back({uint32_t(c), 0u, uint32_t(e), 0u});
     links.push_back({uint32_t(s), 0u, uint32_t(e), 1u});
   }
+  // Emission whose colour is the point's UV coordinates (u, v, 0): Le varies over the triangle.
+  void emit_uv(float strength) {
+    const int c = add(ar::Op::LOAD_CTX_UV, {}, {0}), s = add(ar::Op::CONST_F32, {strength});
+    const int e = add(ar::Op::EMIT_LE, {});
+    links.push_back({uint32_t(c), 0u, uint32_t(e), 0u});
+    links.push_back({uint32_t(s), 0u, uint32_t(e), 1u});
+  }
   ar_graph_desc desc() const {
     ar_graph_desc d = {};
     d.node_count = uint32_t(nodes.size()), d.link_count = uint32_t(links.size()), d.f32_count = uint32_t(f.size());
-    d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data();
+    d.i32_count = uint32_t(i32.size());
+    d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data(), d.params_i32 = i32.data();
     return d;
   }
 };
 
 // What lights the receiver: hand-built lamps replace the scene's table, or the scene holds an
 // emitter quad at z = 1 facing down whose radiance 4 is one constant Emission (folded into the
-// constant block) or two Emissions of 2 (the program's emission entry: deferred Le).
-enum class Emitter { NONE, CONSTANT, PROGRAM };
+// constant block), two Emissions of 2 (the program's emission entry: deferred Le), or an Emission
+// of strength 4 coloured by the point's UV (a program whose Le varies over the quad).
+enum class Emitter { NONE, CONSTANT, PROGRAM, PROGRAM_UV };
 
 // A quad of half-size 1 at z = 0 facing +z (instance 0, the default material) receives; slot i
 // hits it at a point of its first triangle with sample id kSlots - 1 - i, and owns shadow slot
@@ -120,7 +133,8 @@ struct Rig {
       if (emitter != Emitter::NONE) {
         Graph g;
         if (emitter == Emitter::CONSTANT) g.emit({1.0f, 0.5f, 0.25f}, 4.0f);
-        else g.emit({1.0f, 0.5f, 0.25f}, 2.0f), g.emit({1.0f, 0.5f, 0.25f}, 2.0f);
+        else if (emitter == Emitter::PROGRAM) g.emit({1.0f, 0.5f, 0.25f}, 2.0f), g.emit({1.0f, 0.5f, 0.25f}, 2.0f);
+        else g.emit_uv(4.0f);
         const ar_graph_desc d = g.desc();
         REQUIRE(scene.materials->set_graph(e, kEmit + 1000, &d) == AR_OK);
         ar_material_desc m = {};
@@ -435,6 +449,38 @@ TEST_CASE("nee/program emission is evaluated at the light point") {
       CHECK(near(double(b.sh_contrib[it].v[k]), double(a.sh_contrib[it].v[k]), 1e-5));
     }
   }
+  // An emission constant over the quad cannot tell where on the triangle it was evaluated. With Le
+  // = lift(u, v, 0) * 4 the item must carry Le at the sampled point: the constant item times
+  // Le(uv(q)) / Le_const, with uv(q) worked out by hand from the point q where the shadow segment
+  // ends. The quad's local (x, y) in [-1, 1]^2 has UV ((x + 1) / 2, (y + 1) / 2) at every corner, so
+  // UV is that affine map everywhere; the instance flips y and z (local y = -world y). q is the
+  // light point moved off the triangle by a few ulps (0002 D16), so Le(uv(q)) is good to ~1e-6.
+  Rig c(Emitter::PROGRAM_UV);
+  REQUIRE(c.set->lights->radiance_scale == a.set->lights->radiance_scale);
+  REQUIRE((c.set->lights->lights[0].flags & ar::kLightEmissionProgram) != 0u);
+  c.run();
+  const float rgb_const[3] = {1.0f, 0.5f, 0.25f};
+  double spread = 0.0;  // the sampled points must differ, or the check could not see a swap
+  for (uint32_t s = 0; s < kSlots; ++s) {
+    const uint32_t it = c.item_of(s);
+    REQUIRE(c.sh_next[it] == uint8_t(ar::Stage::INTERSECT_SHADOW));
+    const ar::Real3 q = c.sh_o[it] + c.sh_d[it] * c.sh_tmax[it];
+    REQUIRE(std::fabs(double(q.z) - 1.0) < 1e-4);
+    const float rgb_q[3] = {float((double(q.x) + 1.0) / 2.0), float((1.0 - double(q.y)) / 2.0), 0.0f};
+    spread = std::max(spread, std::fabs(double(rgb_q[0]) - 0.5) + std::fabs(double(rgb_q[1]) - 0.5));
+    ar::Lambda lam;
+    for (int k = 0; k < ar::kLanes; ++k) lam.nm[k] = c.lambda_t[s].v[k];
+    ar::Spec le_q = ar::spec_fill(ar::Real(0)), le_const = ar::spec_fill(ar::Real(0));
+    ar::op_emit_le(*c.kg.tables, rgb_q, 4.0f, lam, &le_q);
+    ar::op_emit_le(*c.kg.tables, rgb_const, 4.0f, lam, &le_const);
+    for (int k = 0; k < ar::kLanes; ++k) {
+      REQUIRE(le_const.v[k] > ar::Real(0));
+      const double want = double(a.sh_contrib[it].v[k]) * double(le_q.v[k]) / double(le_const.v[k]);
+      CHECK(want > 0.0);
+      CHECK(near(double(c.sh_contrib[it].v[k]), want, 1e-4));
+    }
+  }
+  CHECK(spread > 0.1);
 }
 
 TEST_CASE("nee/late delivery lands in slot") {
