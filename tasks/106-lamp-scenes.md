@@ -9,6 +9,8 @@ Do:
 2. Scenes and truths: a3_disk (disk lamp over a Lambertian plane, camera above: per-pixel truth from the disk configuration factor); lit_furnace_small (max_depth = 1: L_r = rho L_e (R/d)^2 within 0.5%, 0004 D1); d1_nee_onoff (on, off and bsdf_only renders of an area-lamp scene agree: `tools/analytic.py --compare` checks two renders' means within the joint SE); d8_stacked_lamps (two stacked area lamps facing the camera, on and off agree; crossings per ray reported).
 3. check.ps1 `gate` runs every scene above on CPU (`cpu` tag) and GPU at 32x32.
 4. From 074: "nee/program emission is evaluated at the light point" uses an emission that is constant over the triangle, so swapped barycentrics or vertex order would pass. Make the program's Le vary over the triangle (for example a TEX_IMAGE on UV, 061) and check the item against the value at the sampled point computed by hand; extend the canary to swap two barycentrics.
+5. From 075: shade_background.h line 11 holds a literal `
+` inside a comment, which joins its two Ref lines; split them while editing that file.
 Acceptance: `pwsh tools/check.ps1 gate` passes with the four scenes on both devices and prints crossings per ray for d8; `out/bin/astroray_cli.exe render` of a3_disk at 512x512 writes an image the lead inspects.
 Look at: out/evidence/106/a3_disk.png.
 Canary: tasks/106.canary.patch must turn red: `tools/analytic.py --scene d8_stacked_lamps --device cuda` (the patch skips the MIS weight in shade_light), `tools/analytic.py --scene a3_disk --device cpu` (the patch makes the disk lamp two-sided), astroray_tests_cpu "nee/program emission is evaluated at the light point" (the patch swaps two barycentrics where the light point's emission is evaluated).
