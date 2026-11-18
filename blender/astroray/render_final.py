@@ -18,7 +18,7 @@ import numpy as np
 
 from . import native
 from .materials import translate
-from .sync import camera, classify, edit as edit_mod, instances, keys, lights, mesh, settings
+from .sync import camera, classify, edit as edit_mod, images, instances, keys, lights, mesh, settings
 from .sync import world as world_sync
 from .sync.cache import SyncCache
 
@@ -143,7 +143,7 @@ def render_size(scene):
             max(1, int(r.resolution_y * r.resolution_percentage / 100)))
 
 
-def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache):
+def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, istate):
     """Everything of one view layer, in 0007 d20's apply order with full reads. Returns (report
     lines for what Blender asks for and the engine does not do, the camera fields)."""
     lightgroups = instances.lightgroup_indices(view_layer)
@@ -162,6 +162,11 @@ def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache):
         for slot in inst.object.material_slots:
             if slot.material is not None:
                 mats.setdefault(slot.material.original.session_uid, slot.material)
+    # Images after the world and before the materials (0007 d20): a TEX_IMAGE holds only the image's key.
+    trees = [m.original.evaluated_get(depsgraph).node_tree for m in mats.values()]
+    if world and world.node_tree:
+        trees.append(world.node_tree)
+    lines.extend(images.sync(edit, abi, keymap, images.used_images(trees), istate))
     for uid, mat in mats.items():
         em = tcache.get(mat.original.evaluated_get(depsgraph), keymap, op_id)
         translate.set_material(edit, abi, keymap, uid, em)
@@ -188,6 +193,7 @@ class Job:
         self.device = None
         self.scene_h = ctypes.c_void_p()
         self.keymap, self.cache, self.tcache = keys.KeyMap(), SyncCache(), translate.TranslationCache()
+        self.istate = images.ImageState()
         self.camera = None
         self.lines = []
         self.session = ctypes.c_void_p()
@@ -216,10 +222,11 @@ class Job:
         if not self.first:  # later updates of one engine instance: drop what Blender changed
             actions = classify.classify(depsgraph, self.cache)
             self.tcache.invalidate([a for a in actions if a.kind == classify.MATERIALS])
+            self.istate.note_updates(actions, classify.IMAGES)
         with edit_mod.Edit(abi, lib, self.scene_h) as e:
             e.call("ar_edit_reset")
             self.lines, self.camera = full_sync(e, abi, self.op_id, depsgraph, scene, view_layer,
-                                                self.keymap, self.tcache)
+                                                self.keymap, self.tcache, self.istate)
         self.cache.remember(depsgraph, scene)
         if warning:
             self.lines.append(warning)

@@ -29,6 +29,12 @@ class KeyMap:
         return len(self._map)
 
 
+def image_key(keymap, image):
+    """The ar_key of an image: its original's session_uid. translate.py (TEX_IMAGE) and sync/images.py
+    both call this, so a texture node and the image the engine holds can never disagree."""
+    return keymap.key(("image", image.original.session_uid))
+
+
 def is_real_object_data(inst, depsgraph):
     """True when inst.object.data is the shared evaluated copy of its original data."""
     data = inst.object.data

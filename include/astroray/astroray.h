@@ -497,6 +497,7 @@ typedef struct ar_image_desc {
     uint32_t color_interop;
     uint32_t alpha_mode;
     uint32_t udim_tile;
+    uint32_t reload_count;
     uint32_t width;
     uint32_t height;
     uint64_t byte_count;

@@ -21,6 +21,8 @@ the caller, so the module runs over stubs.
 """
 import ctypes
 
+from ..sync import keys
+
 # Graph targets, report codes and emission sampling come from the generated binding (`abi`,
 # passed in by the callers). These engine constants have no generated export, so they are copied
 # here and a test (test_engine_constants_match_the_headers) parses the headers and pins them.
@@ -208,7 +210,7 @@ def _tex_image(em, node, keymap, socket_name):
             return None
     mode = (TEX_LINEAR if node.interpolation == "Linear" else 0) | \
            (TEX_EXTEND if node.extension == "EXTEND" else 0)
-    key = keymap.key(("image", image.original.session_uid))
+    key = keys.image_key(keymap, image)
     if key > 0xFFFFFFFF:
         # TEX_IMAGE carries the low 32 bits of the u64 key (0007 appendix); KeyMap is a counter,
         # so a wider key means 2^32 datablocks, and truncating would alias two images.
