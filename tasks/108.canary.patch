@@ -1,8 +1,8 @@
 diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
-index 8153290..b41fa71 100644
+index 8153290..c8d0e43 100644
 --- a/src/device/cuda/cuda_device.cpp
 +++ b/src/device/cuda/cuda_device.cpp
-@@ -609,17 +609,17 @@ ModuleReload CudaDevice::poll_module_reload() {
+@@ -609,17 +609,18 @@ ModuleReload CudaDevice::poll_module_reload() {
      if (!module_file_stamp(name, s.dev_dir, &now)) now = missing;
      if (now == w.loaded) {  // the file matches the running image again
        w.has_pending = false;
@@ -19,11 +19,12 @@ index 8153290..b41fa71 100644
        continue;
      }
 -    if (w.failed && now == w.failed_stamp) continue;  // already reported; wait for the next edit
-+    // canary: a failed file is tried again at every step
++    // canary: a failed file is tried again at the next steps (bounded: the driver stalls on endless bad loads)
++    if (w.failed && now == w.failed_stamp && s.load_attempts >= 3) continue;
      ++s.load_attempts;
      try {
        if (now == missing) throw DeviceError("kernel module file is missing from " + s.dev_dir);
-@@ -634,8 +634,8 @@ ModuleReload CudaDevice::poll_module_reload() {
+@@ -634,8 +635,8 @@ ModuleReload CudaDevice::poll_module_reload() {
          throw DeviceError(std::string("cuModuleLoadData ") + (text ? text : "failed"));
        }
        s.sync();  // nothing launched from the old image is still running
