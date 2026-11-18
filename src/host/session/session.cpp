@@ -450,15 +450,20 @@ void Session::fail(const std::string& why, const DeviceError* device_error) {
     failure_sticky_ = device_error != nullptr && device_error->sticky();
     // Stop the pass in flight; the render loop parks until close.
     if (scheduler_) scheduler_->cancel = true;
+    // The entry goes in before the state changes, so a host that sees FAILED and then reads the report
+    // finds it (lock order mutex_, then the report, as report_snapshot takes them).
+    try {
+      const double value[2] = {0.0, 0.0};
+      report_.raise(AR_REPORT_SESSION_FAILED, 0, why, 1, value, latch_.generation());
+    } catch (...) {
+      // Out of memory while reporting: the state and the stored text still say it.
+    }
     set_state_locked(AR_STATE_FAILED);
     wake_cv_.notify_all();
   }
   try {
     ctx_.log.line("ERROR", "session failed: " + why);
-    const double value[2] = {0.0, 0.0};
-    report_.raise(AR_REPORT_SESSION_FAILED, 0, why, 1, value, latch_.generation());
   } catch (...) {
-    // Out of memory while reporting: the state and the stored text still say it.
   }
 }
 

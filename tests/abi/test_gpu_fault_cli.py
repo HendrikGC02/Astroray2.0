@@ -139,6 +139,10 @@ def child_env(**extra):
 class TestFault(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # The cpu preset (hosted CI runs the abi tests on it) has no CUDA backend and no kernel directory;
+        # a dev build always has both, and then a missing fault module is an error, not a skip.
+        if not os.path.isdir(KERNELS):
+            raise unittest.SkipTest("no out/bin/kernels: a build without the CUDA backend (cpu preset)")
         for p in (CLI, ar.DLL, os.path.join(KERNELS, "test_fault.cubin")):
             if not os.path.exists(p):
                 raise AssertionError(f"{p} missing: run tools/build.ps1 (a dev build makes the gate-hook modules)")

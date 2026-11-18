@@ -1,0 +1,65 @@
+diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
+index f400cbe..4874dc9 100644
+--- a/src/device/cuda/cuda_device.cpp
++++ b/src/device/cuda/cuda_device.cpp
+@@ -211,7 +211,7 @@ struct CudaDevice::Impl {
+     // Ref: 0001 D3.5 (R590 floor, compute capability floor), D2.8; 0002 D15 "Driver too old, unsupported
+     // GPU": the context is refused, with the found and required driver and the GPU architecture.
+     const astroray::DeviceStatus status = astroray::cuda_device_status(driver, major, minor);
+-    if (status.status != AR_OK)
++    if (false && status.status != AR_OK)
+       throw DeviceError("GPU device unavailable: " + status.reason + " (GPU " + arch + ")");
+     check(cu.cuDevicePrimaryCtxRetain_(&ctx, device), "cuDevicePrimaryCtxRetain");
+     bind();
+@@ -337,7 +337,7 @@ struct CudaDevice::Impl {
+ 
+   // With ASTRORAY_TEST_LAUNCH_TIMING: waits for the launch that began at `t0` and keeps the longest.
+   void note_launch(const char* name, std::chrono::steady_clock::time_point t0) {
+-    if (!hooks.launch_timing) return;
++    if (true) return;
+     sync(name);
+     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+     ++timed_launches;
+@@ -560,7 +560,7 @@ void CudaDevice::synchronize() { impl_->sync(); }
+ 
+ std::string CudaDevice::untested_architecture() const {
+   // 0001 D3.3: sm_120 is the only tested hardware; this build has no PTX JIT path to time.
+-  return impl_->arch == "sm_120" ? std::string() : impl_->arch;
++  return std::string();
+ }
+ 
+ uint32_t CudaDevice::load_module_file(const std::string& path) {
+@@ -630,7 +630,6 @@ void CudaDevice::free_memory(void* ptr) {
+   // there is nothing to give back. Film, active-pixel and table destructors free through here and cannot
+   // throw: a throw would std::terminate the process that is meant to stay up on its CPU device. The failure
+   // itself was reported when the error surfaced.
+-  if (s.dead) return;
+   s.bind();
+   s.check(s.cu.cuMemFree_(reinterpret_cast<CUdeviceptr>(ptr)), "cuMemFree");
+ }
+diff --git a/src/device/cuda/module_loader.cpp b/src/device/cuda/module_loader.cpp
+index 4ffe89e..653be5e 100644
+--- a/src/device/cuda/module_loader.cpp
++++ b/src/device/cuda/module_loader.cpp
+@@ -32,7 +32,7 @@ ModuleImage read_file(const std::filesystem::path& path) {
+ // PTX the driver compiles, not cubins, and keep their text.
+ void damage(ModuleImage& image) {
+   const size_t n = std::min<size_t>(image.bytes.size(), 64);
+-  std::fill(image.bytes.begin(), image.bytes.begin() + static_cast<std::ptrdiff_t>(n), uint8_t{0xA5});
++  (void)n;
+   image.origin += " (damaged by ASTRORAY_TEST_CORRUPT_CUBIN)";
+ }
+ 
+diff --git a/src/host/scene/scene.cpp b/src/host/scene/scene.cpp
+index 110ee6e..9427a55 100644
+--- a/src/host/scene/scene.cpp
++++ b/src/host/scene/scene.cpp
+@@ -79,7 +79,7 @@ Scene::Scene(ContextState& ctx, SceneConfig config)
+       if (!err.empty()) {
+         try {
+           const double value[2] = {0.0, 0.0};
+-          report_.raise(AR_REPORT_DEVICE_INIT_FAILED, 0, err, 1, value, 0);
++          (void)value;
+         } catch (...) {
+           // Out of memory while reporting: wait_init still throws the text.
+         }
