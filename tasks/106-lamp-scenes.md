@@ -22,4 +22,7 @@ Progress:
 - lead rulings: modes on|off|light_only (R77), CLI hook line dropped, counters via Python ABI, budgets family row, fix shade_surface/background formatting
 - four scenes pass CPU and CUDA in gate (144.4 s of 180); family 34 -> 60; canary turns all three named cases red
 - pair checks test 4x4 pixel blocks: BSDF-only gives zero-hit pixels (mean and VAR 0) per pixel; comparison is per scene formula, no --compare flag
-- OVER BUDGET: +38.5 s gate (CPU 17.9, CUDA 20.6) vs +10 s; passes are latency bound (~2.7 ms/pass both devices), so fewer pixels saves nothing; needs lead
+- furnace no-bias check: 16384 spp CPU, Y image mean 0.268208 vs truth 0.268276 (z -1.43), resolves 0.073%; worst pixel z +3.53
+- lead option (c): d1, d8 render 64x64 at 64 spp, tested in 8x8 blocks (4096 samples each); a3, furnace stay 32x32 at 1024
+- null calibration `analytic.py --scene S --device cpu --null 100 --null-mode M` (d1 on/off/light_only, d8 on/off): 0 block and 0 image alarms of 500 checks; G |z| tail normal (max 3.89), Y conservative (Minkowski SE); numbers in analytic.py
+- CPU vs CUDA a3 dumps differ (display max rel 4.5e-7, VAR 8.8e-7; NSAMP and bounces equal): same integer-RNG paths, float rounding apart; DEVICE header cpu / cuda
