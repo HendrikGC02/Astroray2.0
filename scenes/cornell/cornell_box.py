@@ -2,11 +2,9 @@
 """Bitterli's Cornell box (CC0) in two variants: `cornell_area`, the original rectangular lamp as an
 area lamp, and `cornell_point`, a point lamp of equal power at the lamp's centre (ROADMAP M1a "Owner
 sees"). Materials are the M1a set: constant base colour from the Lambertian albedo, specular_weight 0.
-Usage: build.py --out <dir>/cornell.arrec [--variant area|point] [--blend <path.blend>]
-Without --variant both recordings are written beside --out, as cornell_area.arrec and
-cornell_point.arrec (tools/scenes.py runs one builder per directory), and --out itself is a copy of the
-area one. --blend needs a --variant and writes <blend>.json, the description scenes/lib/blend_writer.py
-turns into the .blend.
+Not a scene itself (no build.py here): scenes/cornell_area/build.py and scenes/cornell_point/build.py call
+main(variant), so tools/scenes.py maps each directory to one recording. --blend writes <blend>.json, the
+description scenes/lib/blend_writer.py turns into the .blend.
 Lamp: an area lamp's radiance is L = P / (pi A) (0004 D7, front face only), so the authored radiance
 (17, 12, 4) on the 0.47 x 0.38 rectangle is P = pi A max(L) with colour L / max(L), and the colour times
 P is the flux in each channel. A point lamp has I = P / (4 pi) (0004 D6), so the same colour and P
@@ -16,7 +14,6 @@ docs/decisions/0004-integrator.md D6, D7; 0009 d20 (G class)."""
 import argparse
 import math
 import os
-import shutil
 import sys
 
 import numpy as np
@@ -75,19 +72,11 @@ def build(variant, out, blend=None):
     return triangles, len(instances), len(materials)
 
 
-if __name__ == "__main__":
+def main(variant):
+    """Command line of a variant's build.py: --out <path.arrec> [--blend <path.blend>]; prints the counts line."""
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--out", required=True, help="the .arrec to write (with no --variant, its directory gets both)")
-    ap.add_argument("--variant", choices=("area", "point"))
+    ap.add_argument("--out", required=True, help="the .arrec to write")
     ap.add_argument("--blend", help="the .blend this variant is for; writes <blend>.json beside it")
     a = ap.parse_args()
-    if a.blend and not a.variant:
-        ap.error("--blend needs --variant")
-    if a.variant:
-        counts = build(a.variant, a.out, a.blend)
-    else:
-        d = os.path.dirname(os.path.abspath(a.out))
-        for v in ("area", "point"):
-            counts = build(v, os.path.join(d, f"cornell_{v}.arrec"))
-        shutil.copyfile(os.path.join(d, "cornell_area.arrec"), a.out)
-    print(f"counts: {counts[0]} triangles, {counts[1]} instances, {counts[2]} materials")
+    t, n, m = build(variant, a.out, a.blend)
+    print(f"counts: {t} triangles, {n} instances, {m} materials")

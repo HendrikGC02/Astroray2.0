@@ -36,22 +36,6 @@ SPP = 16
 WIDTH, HEIGHT = 1920, 1080
 
 
-class TexturedScene(ar.Scene):
-    """ar.Scene with a material whose base colour is an Image Texture. The .blend description gets the
-    file path so blend_writer.py can make the same node."""
-
-    def textured_material(self, image_key, path, roughness):
-        g = self.graph()
-        g.store("base_color", g.tex_image(g.uv(), image_key, linear=True, extend=False))
-        g.store("specular_roughness", roughness)
-        key = self.material_from_graph(g)
-        self._desc["materials"].append({
-            "key": key, "inputs": {"specular_roughness": float(roughness)}, "emission": None,
-            "base_color_image": {"path": os.path.abspath(path), "colorspace": "sRGB",
-                                 "interpolation": "Linear", "extension": "REPEAT"}})
-        return key
-
-
 def vertex_normals(pos, cv):
     """Smooth per-vertex normals (area-weighted face normals), as corner normals."""
     t = cv.reshape(-1, 3)
@@ -79,7 +63,7 @@ def unique_mesh(i, rng):
 def build(out, blend=None):
     rng = np.random.default_rng(SEED)
     paths = make_textures.ensure()
-    with TexturedScene(out, description=blend + ".json" if blend else None) as s:
+    with ar.Scene(out, description=blend + ".json" if blend else None) as s:
         image_keys = [s.key() for _ in range(N_TEXTURES)]
         for k, p in zip(image_keys, paths):
             s.image(k, path=p)

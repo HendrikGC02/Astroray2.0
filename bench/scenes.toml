@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Benchmark scenes (0009 d22, d23). b1m and b5m (B-1M, B-5M) are added by task 089; b_tx and the
 # showcase scenes by task 090.
-#   name:      scene id used in bench/history lines (b_tx is scenes/s3_textured, cornell_* come from
-#              the one builder scenes/cornell)
+#   name:      scene id used in bench/history lines (b_tx is scenes/s3_textured; the cornell_* directories share
+#              scenes/cornell/cornell_box.py)
 #   recording: path under out/scenes/
 #   class:     "B" (benchmark class) or "G" (showcase: gallery only, never timed)
 #   sets:      milestones whose set includes the scene

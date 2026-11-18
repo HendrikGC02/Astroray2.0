@@ -1,7 +1,7 @@
 # 090 Showcase and textured scenes: Cornell box and S3 (B-TX)
 Goal: the owner's M1a showcase has no scenes -> Bitterli's CC0 Cornell box is converted into a builder lit by an area lamp and a point lamp, and the textured scene S3 (B-TX), which 0007 names but never specifies, is defined here and built as a builder and a .blend.
 Read first: docs/ROADMAP.md M1a "Owner sees" and rule 4 (scene-builder versions), 0007 d35 (S3 in the first-frame gate), 0009 d20 (B-TX), d21 (assets); docs/research/16-test-scenes-and-assets.md (Bitterli Cornell Box entry); assets/manifest.toml.
-Scope: scenes/cornell/{build.py,meta.toml}, scenes/cornell/convert_bitterli.py, scenes/s3_textured/{build.py,meta.toml}, scenes/s3_textured/make_textures.py, scenes/lib/blend_writer.py (Image Texture nodes), bench/scenes.toml.
+Scope: scenes/cornell/{build.py,meta.toml}, scenes/cornell/convert_bitterli.py, scenes/s3_textured/{build.py,meta.toml}, scenes/s3_textured/make_textures.py, scenes/lib/blend_writer.py (Image Texture nodes), bench/scenes.toml; lead ruling: scenes/cornell_area/{build.py,meta.toml}, scenes/cornell_point/{build.py,meta.toml}, scenes/lib/ar.py (textured_material).
 Out of scope: Classroom (M3), HDRI worlds (M1b), metals (M1b).
 Reference: Bitterli rendering resources, Cornell Box (CC0), the Mitsuba or pbrt scene file in the fetched archive.
 Do:
@@ -17,3 +17,4 @@ Size: M (about 350 lines Python); stop and report at 2x.
 Progress:
 - started
 - scenes/cornell (area + point), scenes/s3_textured, blend_writer Image Texture, bench/scenes.toml written; CUDA render of cornell_area exit 0; .blend files render with the addon (checks pending)
+- lead ruling: two directories cornell_area and cornell_point over scenes/cornell/cornell_box.py; ar.Scene.textured_material replaces the subclass; check fast/gate and scenes rerun
