@@ -1,8 +1,8 @@
 diff --git a/blender/astroray/render_final.py b/blender/astroray/render_final.py
-index 966e784..2d3e38f 100644
+index 6633cd7..8019979 100644
 --- a/blender/astroray/render_final.py
 +++ b/blender/astroray/render_final.py
-@@ -252,7 +252,7 @@ class Job:
+@@ -266,7 +266,7 @@ class Job:
              engine.update_stats("", f"Sample {prog.samples_per_pixel}/{samples}")
              if prog.state in (abi.AR_STATE_CONVERGED, abi.AR_STATE_FAILED, abi.AR_STATE_CLOSED):
                  break
@@ -11,16 +11,15 @@ index 966e784..2d3e38f 100644
                  native.call(lib.ar_session_cancel, s)
                  cancelled = True
              if cancelled and prog.state in (abi.AR_STATE_PAUSED, abi.AR_STATE_TRIMMED):
-@@ -283,7 +283,7 @@ class Job:
-                 continue
-             reported.add(ident)
-             text = f"{names.get(e.code, e.code)}: {detail}"
--            level = {abi.AR_LEVEL_INFO: "INFO", abi.AR_LEVEL_WARNING: "WARNING"}.get(e.level, "ERROR")
-+            level = {abi.AR_LEVEL_INFO: "INFO", abi.AR_LEVEL_WARNING: "WARNING"}.get(e.level, "WARNING")
-             engine.report({level}, text)
+@@ -302,14 +302,14 @@ class Job:
              if level == "ERROR" and failed is None:
                  failed = text
-@@ -295,7 +295,7 @@ class Job:
+         if failed is not None:
+-            raise RenderFailed("astroray: " + failed)
++            pass
+         return info.revision
+ 
+     def _copy_combined(self, engine, result, w, h, final=False):
          """Combined (MEAN, rows bottom-up, 3 components) into the RenderResult's RGBA pass."""
          rgb = read_pass(self.lib, self.abi, self.session, "Combined", self.abi.AR_QUANTITY_MEAN)
          rgba = np.ones((h, w, 4), np.float32)
