@@ -152,9 +152,9 @@ class Driver:
 
     def recover(self, next_step):
         """Back to a plain viewport so the next phase starts from a known state."""
-        win, area, region = self.find_area()
         if STATE.get("maximized"):
             self.toggle_maximize()
+        _, area, _ = self.find_area()  # after the toggle: the maximised area's pointer is gone
         area.spaces.active.shading.type = "SOLID"
         self.go("recover_wait")
         self.next_after_recover = next_step
