@@ -17,3 +17,4 @@ Depends on: 085, 110, 107.
 Size: M (about 300 lines Python); stop and report at 2x.
 Progress:
 - started (implementer)
+- gui_edits (19 classes, 6 cases) and gui_record_replay (2 cases) pass; canary 8 hunks each red alone and together. Outside Scope, flagged for lead: render_final.scan (dead temp object for dupli geometry), properties.py update callbacks (scene.astroray raised no depsgraph update).
