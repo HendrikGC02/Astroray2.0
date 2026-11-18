@@ -14,7 +14,7 @@ Do:
 7. Gate headroom (lead): after 084's Blender smoke (~18 s) and 106's scenes (~15 s) the gate runs about 150 s of B-09's 180 s, and 107 needs +10 s after you. Render-heavy checks are launch-bound (~2.7 ms per pass on either device, 106), so prefer fewer passes on larger images with block tests at >= MIN_SPP samples per block (106's plan and null calibration in tools/analytic.py) over many passes at 32x32.
 Acceptance: `pwsh tools/check.ps1 gate` passes with every check above listed in its summary; a local edit adding a second shadow ray per vertex makes the counter check fail (0009 Verification row 18).
 Look at: none.
-Canary: tasks/076.canary.patch must turn red: `tools/integrator_checks.py --check d4_lifetime` (the patch drops late deliveries), `tools/integrator_checks.py --check d28_closed_box` (the patch skips the termination count at MAX_BOUNCE).
+Canary: tasks/076.canary.patch must turn red: `tools/integrator_checks.py --check d4_lifetime --device cpu` (the patch drops late deliveries), `tools/integrator_checks.py --check d28_closed_box --device cpu` (the patch skips the termination count at MAX_BOUNCE).
 Budget: gate time +20 s at most; report the total against B-09.
 Depends on: 106.
 Size: M (about 300 lines); stop and report at 2x.
