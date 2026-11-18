@@ -269,11 +269,13 @@ TEST_CASE("queue_build/look-back adds aggregates up to the first inclusive prefi
 }
 
 TEST_CASE("queue_build/look-back reads a published aggregate") {
-  // Scan tiles out of order, as the GPU may run them: scan tile 1 runs while tile 0 has not
-  // started, one thread per bin. It must publish kScanAggregate | (the sum of its 32 raw rows)
-  // and then wait, since tile 0's status row still holds a raw count. A successor's look-back
-  // over that published word and tile 0's inclusive prefix must add both. Then tile 0 runs,
-  // tiles 2 and 3 follow, and the partition equals the reference.
+  // Scan tiles out of order, as the GPU may run them: scan tile 1 runs on its own thread (one
+  // unit, so it scans bin after bin) while tile 0 has not run. For each bin it must publish
+  // kScanAggregate | (the sum of its 32 raw rows) and then wait, since tile 0's status for that
+  // bin still holds a raw count. While it waits, a successor's look-back over that published
+  // word and tile 0's inclusive prefix must add both; then this thread runs tile 0 for that bin
+  // only, which releases tile 1 to its next bin. Only these two threads run, so the case does
+  // not depend on the core count. Then tiles 2 and 3 run and the partition equals the reference.
   constexpr uint32_t kMain = 100000, kShadow = 1000;
   Rig r(random_pool(kMain, Pool::MAIN, 31), random_pool(kShadow, Pool::SHADOW, 32));
   for (int p = 0; p < 2; ++p) std::fill(r.queue[p].begin(), r.queue[p].end(), kSentinel);
@@ -289,27 +291,31 @@ TEST_CASE("queue_build/look-back reads a published aggregate") {
   for (uint32_t b = 0; b < B; ++b)
     for (uint32_t row = 0; row < 2 * R; ++row) (row < R ? incl0 : agg1)[b] += r.counts[row * B + b];
 
-  std::vector<std::thread> tile1;
-  for (uint32_t b = 0; b < B; ++b) tile1.emplace_back([&r, b] { ar::queue_scan_tile(r.kg, 1, b, ar::kQueueBins); });
+  std::thread tile1([&r] { ar::queue_scan_tile(r.kg, 1, 0, 1); });
   const uint32_t* status1 = r.counts.data() + (2 * R - 1) * B;
-  bool published = true;
+  std::vector<uint32_t> published(B, 0), lookback(B, 0);
+  bool in_time = true;
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-  for (uint32_t b = 0; b < B; ++b)
-    while (ar::queue_status_load(status1 + b) < ar::kScanAggregate)
-      if (std::chrono::steady_clock::now() > deadline) {
-        published = false;
-        break;
-      }
-  // Tile 1 is still waiting on tile 0: its words are exactly what it published.
-  std::vector<uint32_t> snapshot(r.counts.begin(), r.counts.end());
-  for (uint32_t b = 0; b < B; ++b) snapshot[(R - 1) * B + b] = ar::kScanPrefix | incl0[b];
-  ar::queue_scan_tile(r.kg, 0, 0, 1);
-  for (auto& t : tile1) t.join();
-  REQUIRE(published);
+  for (uint32_t b = 0; b < B; ++b) {
+    while (in_time && ar::queue_status_load(status1 + b) < ar::kScanAggregate) {
+      in_time = std::chrono::steady_clock::now() < deadline;
+      std::this_thread::yield();
+    }
+    // Tile 1 waits on tile 0's bin b: its word is exactly what it published.
+    published[b] = ar::queue_status_load(status1 + b);
+    // A successor's view of bin b: tile 1's published word and tile 0's inclusive prefix.
+    std::vector<uint32_t> snapshot(r.counts.size(), 0);
+    snapshot[(2 * R - 1) * B + b] = published[b];
+    snapshot[(R - 1) * B + b] = ar::kScanPrefix | incl0[b];
+    lookback[b] = ar::queue_lookback(snapshot.data(), tiles, 2, b);
+    ar::queue_scan_tile(r.kg, 0, b, B);  // tile 0, bin b only: publishes its inclusive prefix
+  }
+  tile1.join();
+  REQUIRE(in_time);
   for (uint32_t b = 0; b < B; ++b) {
     INFO("bin " << b);
-    CHECK(snapshot[(2 * R - 1) * B + b] == (ar::kScanAggregate | agg1[b]));
-    CHECK(ar::queue_lookback(snapshot.data(), tiles, 2, b) == incl0[b] + agg1[b]);
+    CHECK(published[b] == (ar::kScanAggregate | agg1[b]));
+    CHECK(lookback[b] == incl0[b] + agg1[b]);
   }
   ar::queue_scan_tile(r.kg, 2, 0, 1);
   ar::queue_scan_tile(r.kg, 3, 0, 1);

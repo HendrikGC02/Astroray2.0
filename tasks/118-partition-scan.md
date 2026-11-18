@@ -22,3 +22,4 @@ Progress:
 - B-1M partition 59.8 -> 15.0 % of pass, B-5M 38.9 -> 6.8 %; bench pass_ms 41.10 -> 17.31 (B-1M), 66.71 -> 42.67 (B-5M). B-19 still fails (B-1M idle 33 %, B-5M sort 52.5 %).
 - 0002 D7 (c) and D8 written back; budget rows count 38 regs, scatter 52 regs / stack 0; canary verified red (3 cases).
 - review: added 'look-back reads a published aggregate' (out-of-order scan tiles on CPU threads) and canary hunk 2 (aggregate published with the prefix flag); k_queue_build_scan row confirmed at measured 40 regs, 0 stack, 0 spills.
+- CI fix: the published-aggregate case runs two threads (tile 1, one unit; the test thread releases tile 0 bin by bin): 4.6-4.8 ms with the process on 2 cores (was 1.6 s on CI); both canary hunks still turn it red.
