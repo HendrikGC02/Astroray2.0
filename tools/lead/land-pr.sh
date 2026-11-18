@@ -12,7 +12,12 @@ br=$(git worktree list --porcelain | awk -v b="refs/heads/task/$n-" '/^branch /{
 [ -z "$wt" ] && { echo "no worktree for task $n"; exit 1; }
 for attempt in 1 2 3; do
   (cd "$wt" && timeout 1500 pwsh -NoProfile -File /c/Astroray2.0/tools/land.ps1 prepare $n 2>&1 | tail -3) | tee /tmp/prep_$n.txt
-  grep -q "^PASS prepare" /tmp/prep_$n.txt || { echo "prepare failed"; exit 1; }
+  if ! grep -q "^PASS prepare" /tmp/prep_$n.txt; then
+    # A failed prepare leaves its "(land)" commit (the task-file deletion) on the branch; undo it so the
+    # implementer and the next attempt see the task file.
+    if git -C "$wt" log -1 --format=%s | grep -q '(land)$'; then git -C "$wt" revert --no-edit HEAD >/dev/null && echo "reverted the (land) commit"; fi
+    echo "prepare failed"; exit 1
+  fi
   sha=$(git -C "$wt" rev-parse HEAD)
   pr=$(gh pr list --head "$br" --state open --json number -q '.[0].number')
   if [ -z "$pr" ]; then
