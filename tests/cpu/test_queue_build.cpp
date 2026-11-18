@@ -10,7 +10,9 @@
 #include <doctest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <thread>
 #include <vector>
 
 #include "device/cpu/cpu_device.h"
@@ -101,7 +103,7 @@ struct Rig {
     table.high_water[1] = hw_shadow;
     const uint32_t grid = ar::queue_build_grid(hw_main, hw_shadow);
     dev.launch(KernelId::QUEUE_BUILD_COUNT, grid);
-    dev.launch(KernelId::QUEUE_BUILD_SCAN, 1);
+    dev.launch(KernelId::QUEUE_BUILD_SCAN, ar::queue_scan_grid(hw_main, hw_shadow));
     dev.launch(KernelId::QUEUE_BUILD_SCATTER, grid);
   }
   void build() { build(uint32_t(next[0].size()), uint32_t(next[1].size())); }
@@ -218,6 +220,107 @@ TEST_CASE("queue_build/stable partition is independent of the worker count") {
   CHECK(one.queue[0] == many.queue[0]);
   CHECK(one.queue[1] == many.queue[1]);
   CHECK(std::memcmp(&one.table, &many.table, sizeof one.table) == 0);
+}
+
+TEST_CASE("queue_build/single-pass scan over many scan tiles") {
+  // 400,000 main and 200,000 shadow items: 587 histogram rows, so 19 scan tiles of 32 rows
+  // chain their prefixes through the look-back. Main items come in runs of 50,000 of
+  // INTERSECT_CLOSEST, SHADE_SURFACE, TERMINATED (three segments, every other main segment
+  // empty), so most scan tiles hold zeros in two of the three columns; shadow items in runs of
+  // 70,000 of INTERSECT_SHADOW and SHADOW_TERMINATED, SHADE_SHADOW empty.
+  constexpr uint32_t kMain = 400000, kShadow = 200000;
+  const Stage main_runs[] = {Stage::INTERSECT_CLOSEST, Stage::SHADE_SURFACE, Stage::TERMINATED};
+  const Stage shadow_runs[] = {Stage::INTERSECT_SHADOW, Stage::SHADOW_TERMINATED};
+  std::vector<uint8_t> m(kMain), s(kShadow);
+  for (uint32_t i = 0; i < kMain; ++i) m[i] = U8(main_runs[(i / 50000) % 3]);
+  for (uint32_t i = 0; i < kShadow; ++i) s[i] = U8(shadow_runs[(i / 70000) % 2]);
+  Rig r(m, s);
+  r.build();
+  CHECK(ar::queue_scan_tiles(ar::queue_tiles(kMain) + ar::queue_tiles(kShadow)) == 19);
+  check_against_reference(r, kMain, kShadow);
+  // Typed from the runs: 8 runs of 50,000 in the order closest, surface, terminated, ...
+  CHECK(r.table.stage[S(Stage::INTERSECT_CLOSEST)].start == 0);
+  CHECK(r.table.stage[S(Stage::SHADE_SURFACE)].start == 150000);
+  CHECK(r.table.stage[S(Stage::TERMINATED)].start == 300000);
+  CHECK(r.table.refill_count == 100000);
+  CHECK(r.table.stage[S(Stage::SHADE_SHADOW)].start == 130000);
+  CHECK(r.table.stage[S(Stage::SHADOW_TERMINATED)].count == 70000);
+  // The last item of each segment is the last index of its last run.
+  CHECK(r.queue[0][149999] == 349999);
+  CHECK(r.queue[0][299999] == 399999);
+  CHECK(r.queue[0][399999] == 299999);
+}
+
+TEST_CASE("queue_build/look-back adds aggregates up to the first inclusive prefix") {
+  // Five of six scan tiles' status words in bin 3, typed by hand: tile 0 inclusive 10, tile 1
+  // aggregate 5, tile 2 inclusive 100, tile 3 aggregate 7, tile 4 aggregate 1. On the CPU the
+  // scan tiles run in order and the look-back meets an inclusive prefix at once; this is the
+  // walk the GPU takes when its predecessors are still running.
+  const uint32_t tiles = 6 * ar::kQueueScanRows;
+  std::vector<uint32_t> counts(tiles * ar::kQueueBins, 0);
+  const uint32_t status[5] = {ar::kScanPrefix | 10u, ar::kScanAggregate | 5u, ar::kScanPrefix | 100u,
+                              ar::kScanAggregate | 7u, ar::kScanAggregate | 1u};
+  for (uint32_t u = 0; u < 5; ++u) counts[(ar::kQueueScanRows * (u + 1) - 1) * ar::kQueueBins + 3] = status[u];
+  CHECK(ar::queue_lookback(counts.data(), tiles, 0, 3) == 0);
+  CHECK(ar::queue_lookback(counts.data(), tiles, 1, 3) == 10);
+  CHECK(ar::queue_lookback(counts.data(), tiles, 2, 3) == 15);   // 5 + 10
+  CHECK(ar::queue_lookback(counts.data(), tiles, 3, 3) == 100);
+  CHECK(ar::queue_lookback(counts.data(), tiles, 5, 3) == 108);  // 1 + 7 + 100
+}
+
+TEST_CASE("queue_build/look-back reads a published aggregate") {
+  // Scan tiles out of order, as the GPU may run them: scan tile 1 runs on its own thread (one
+  // unit, so it scans bin after bin) while tile 0 has not run. For each bin it must publish
+  // kScanAggregate | (the sum of its 32 raw rows) and then wait, since tile 0's status for that
+  // bin still holds a raw count. While it waits, a successor's look-back over that published
+  // word and tile 0's inclusive prefix must add both; then this thread runs tile 0 for that bin
+  // only, which releases tile 1 to its next bin. Only these two threads run, so the case does
+  // not depend on the core count. Then tiles 2 and 3 run and the partition equals the reference.
+  constexpr uint32_t kMain = 100000, kShadow = 1000;
+  Rig r(random_pool(kMain, Pool::MAIN, 31), random_pool(kShadow, Pool::SHADOW, 32));
+  for (int p = 0; p < 2; ++p) std::fill(r.queue[p].begin(), r.queue[p].end(), kSentinel);
+  r.table.high_water[0] = kMain;
+  r.table.high_water[1] = kShadow;
+  const uint32_t grid = ar::queue_build_grid(kMain, kShadow);
+  r.dev.launch(KernelId::QUEUE_BUILD_COUNT, grid);
+  const uint32_t tiles = ar::queue_tiles(kMain) + ar::queue_tiles(kShadow);  // 98 + 1 rows
+  REQUIRE(ar::queue_scan_tiles(tiles) == 4);
+  const uint32_t R = ar::kQueueScanRows, B = ar::kQueueBins;
+  // Expected values from the raw rows, before any scan tile has run.
+  std::vector<uint32_t> incl0(B, 0), agg1(B, 0);
+  for (uint32_t b = 0; b < B; ++b)
+    for (uint32_t row = 0; row < 2 * R; ++row) (row < R ? incl0 : agg1)[b] += r.counts[row * B + b];
+
+  std::thread tile1([&r] { ar::queue_scan_tile(r.kg, 1, 0, 1); });
+  const uint32_t* status1 = r.counts.data() + (2 * R - 1) * B;
+  std::vector<uint32_t> published(B, 0), lookback(B, 0);
+  bool in_time = true;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  for (uint32_t b = 0; b < B; ++b) {
+    while (in_time && ar::queue_status_load(status1 + b) < ar::kScanAggregate) {
+      in_time = std::chrono::steady_clock::now() < deadline;
+      std::this_thread::yield();
+    }
+    // Tile 1 waits on tile 0's bin b: its word is exactly what it published.
+    published[b] = ar::queue_status_load(status1 + b);
+    // A successor's view of bin b: tile 1's published word and tile 0's inclusive prefix.
+    std::vector<uint32_t> snapshot(r.counts.size(), 0);
+    snapshot[(2 * R - 1) * B + b] = published[b];
+    snapshot[(R - 1) * B + b] = ar::kScanPrefix | incl0[b];
+    lookback[b] = ar::queue_lookback(snapshot.data(), tiles, 2, b);
+    ar::queue_scan_tile(r.kg, 0, b, B);  // tile 0, bin b only: publishes its inclusive prefix
+  }
+  tile1.join();
+  REQUIRE(in_time);
+  for (uint32_t b = 0; b < B; ++b) {
+    INFO("bin " << b);
+    CHECK(published[b] == (ar::kScanAggregate | agg1[b]));
+    CHECK(lookback[b] == incl0[b] + agg1[b]);
+  }
+  ar::queue_scan_tile(r.kg, 2, 0, 1);
+  ar::queue_scan_tile(r.kg, 3, 0, 1);
+  r.dev.launch(KernelId::QUEUE_BUILD_SCATTER, grid);
+  check_against_reference(r, kMain, kShadow);
 }
 
 TEST_CASE("queue_build/crafted step table") {

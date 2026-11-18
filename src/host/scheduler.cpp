@@ -242,7 +242,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     const uint32_t grid = ar::queue_build_grid(hw_main, hw_shadow);
     launch_kernel(KernelId::QUEUE_BUILD_COUNT, grid);
     if (at_boundary(&status)) return status;
-    launch_kernel(KernelId::QUEUE_BUILD_SCAN, 1);  // never 0: scan runs once whatever the count
+    launch_kernel(KernelId::QUEUE_BUILD_SCAN, ar::queue_scan_grid(hw_main, hw_shadow));  // never 0
     if (at_boundary(&status)) return status;
     launch_kernel(KernelId::QUEUE_BUILD_SCATTER, grid);
 

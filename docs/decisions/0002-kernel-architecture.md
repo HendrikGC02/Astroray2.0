@@ -71,13 +71,13 @@ A pass ends when the work counter is exhausted and every segment except the two 
 **Overhead estimate (derivation, not a measurement).** One bounce takes two steps (intersect, shade), and its shadow item is traced in the next step alongside. At a default maximum depth of 12, a pass needs about 26 steps, plus one per alpha layer on the longest path (D11). A step costs 3 partition launches, up to about 8 stage launches and one round trip (unmeasured under WDDM). Partition traffic at 1080p 1 spp is about 40 MB per step. The resulting overhead share, derived in 0009 B-19's basis from these counts, is **above B-19**. It is measured before breadth work (Risks 2). Remedies, in order:
 - (a) Fixed grids, and the step sequence captured as a CUDA graph. This removes the round trip and is host-only because of D4.
 - (b) Compact the main pool when live paths drop below a quarter of its high-water mark (Cycles `compact_main_paths`).
-- (c) Fuse the three partition kernels into one single-pass scan.
+- (c) Fuse the three partition kernels into one single-pass scan. **Adopted (task 118, ruling 79 order: first).** The scan over tile histograms is a single-pass scan with decoupled look-back (Merrill and Garland 2016, NVR-2016-002, sections 4-5) across many warps instead of D6's one-block reduce-then-scan; count and scatter take one warp per tile. The kernels stay three: the scatter needs every segment's total (its start) before it places an item, which no single pass over the tiles knows. Measured at 1080p, 1 spp, 64 passes after 8 burn-in (nsys): `queue_build` is 15.0 % of the B-1M pass (was 59.8 %; 3.05 ms of 19.85 ms) and 6.8 % of B-5M (was 38.9 %; 3.07 ms of 45.04 ms); scan 826 to 8 µs per launch. B-19 still fails on B-1M (partition 15.0 %, GPU idle 33.4 %) and on B-5M through the sort (52.5 %, task 119).
 
 **D8. Kernel list (complete).** One kernel per TU. Each step kernel owns one queue segment and writes `next_stage` for every item it processes. Semantics belong to the cited record; names, pools, launch bounds and budget rows belong here (ruling 6).
 
 | Kernel | Pool | Owns |
 |---|---|---|
-| `queue_build_{count,scan,scatter}` | both | partition, step table (D6) |
+| `queue_build_{count,scan,scatter}` | both | partition, step table (D6): count and scatter one warp per tile, scan a single-pass decoupled look-back over the tile histograms (D7 remedy (c)) |
 | `sort_{count,scatter}` | main | material sort of `shade_surface` |
 | `film_build_active` | per pass (film) | writes the film-owned active-pixel list at pass start: every pixel of the render sub-rectangle in M1a, adaptive compaction in M4 (0008 d3); one thread per listed pixel, no `Stage` value |
 | `generate_camera` | main | refill launch: slot init from the active-pixel list (read-only): pixel, sample, wavelengths (0003), camera ray with time, converged pixels are absent from the list (`film_build_active`, 0004 D16) |
