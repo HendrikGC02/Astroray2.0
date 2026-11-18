@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// Ref: 0007 V18; RULINGS.md 77 (NEE modes); host/session/test_hooks.h.
+// Ref: 0007 V18; RULINGS.md 77 (NEE modes); 0002 D5 (shadow-slot reservation, k per producer);
+// host/session/test_hooks.h.
 #include "host/session/test_hooks.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <stdexcept>
 
+#include "host/scheduler.h"
 #include "kernel/kernel_globals.h"
+#include "kernel/launch_config.h"
 
 namespace astroray::host {
 namespace {
@@ -40,6 +44,25 @@ bool env_value(const char* name, std::string* out) {
   std::free(v);
   return !out->empty();
 }
+
+// A positive decimal integer no larger than `max`, else throws naming the variable.
+uint64_t positive(const std::string& var, const std::string& text, uint64_t max) {
+  uint64_t v = 0;
+  bool ok = !text.empty() && text.size() <= 19;
+  for (char c : text) ok = ok && c >= '0' && c <= '9';
+  if (ok) v = std::stoull(text);
+  if (!ok || v == 0 || v > max)
+    throw std::invalid_argument("ASTRORAY_TEST_" + var + ": '" + text + "' is not an integer in [1, " +
+                                std::to_string(max) + "]");
+  return v;
+}
+
+// The largest k of any producer stage: a shadow pool below it never fits one producer item.
+uint32_t max_shadow_items() {
+  uint32_t k = 0;
+  for (uint32_t s = 0; s < ar::kStageCount; ++s) k = std::max(k, ar::stage_shadow_items(static_cast<ar::Stage>(s)));
+  return k;
+}
 #endif
 
 }  // namespace
@@ -62,6 +85,29 @@ TestHooks read_test_hooks() {
       throw std::invalid_argument("ASTRORAY_TEST_NEE=" + value + " is not one of on, off, light_only");
     out.bits |= mode->bits;
     out.active.push_back("NEE=" + value);
+  }
+  if (env_value("POOL", &value)) {
+    const size_t comma = value.find(',');
+    // The main pool's ceiling is 0002 D5's; the shadow pool's is twice it, as the scheduler's default.
+    out.pool_main = positive("POOL", value.substr(0, comma), kMaxPoolCapacity);
+    if (comma != std::string::npos) {
+      out.pool_shadow = positive("POOL", value.substr(comma + 1), 2 * kMaxPoolCapacity);
+      if (out.pool_shadow < max_shadow_items())
+        throw std::invalid_argument("ASTRORAY_TEST_POOL: shadow capacity " + std::to_string(out.pool_shadow) +
+                                    " is below the " + std::to_string(max_shadow_items()) +
+                                    " shadow items one producer item may emit per step");
+    }
+    out.active.push_back("POOL=" + value);
+  }
+  if (env_value("THREADS", &value)) {
+    out.threads = uint32_t(positive("THREADS", value, 256));
+    out.active.push_back("THREADS=" + value);
+  }
+  if (env_value("RADIANCE_SCALE", &value)) {
+    // Only s = 1 is a test of 0003 check 15; any other value would be read as a scale and is refused.
+    if (value != "1") throw std::invalid_argument("ASTRORAY_TEST_RADIANCE_SCALE=" + value + " is not 1");
+    out.unit_radiance_scale = true;
+    out.active.push_back("RADIANCE_SCALE=1");
   }
 #endif
   return out;

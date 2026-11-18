@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "host/scene/edit.h"
+#include "host/session/test_hooks.h"
 
 namespace astroray::host {
 
@@ -201,7 +202,9 @@ double radiance_scale(const std::vector<double>& peaks) {
     if (!std::isfinite(p) || p < 0.0) throw std::invalid_argument("emitter radiance peak is not finite and non-negative");
     m = std::max(m, p);
   }
-  if (m == 0.0) return 1.0;
+  // ASTRORAY_TEST_RADIANCE_SCALE=1 (gate builds): s = 1, so a render compares bit for bit with the
+  // automatic s (0003 Verification check 15). Read here, where every light table takes its s.
+  if (m == 0.0 || read_test_hooks().unit_radiance_scale) return 1.0;
   int e = 0;
   std::frexp(m, &e);  // m = f 2^e with f in [0.5, 1), so m 2^(1 - e) is in [1, 2)
   return std::ldexp(1.0, 1 - e);

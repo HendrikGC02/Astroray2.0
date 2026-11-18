@@ -89,22 +89,23 @@ void Scheduler::release_buffers() {
                           &sort_queue_buf_, &sort_counts_buf_, &kg_buf_, &soa_buf_})
     device_.free(*b);
   capacity_ = 0;
+  shadow_capacity_ = 0;
   sort_material_count_ = ~0u;
 }
 
-void Scheduler::ensure_buffers(uint64_t cap) {
+void Scheduler::ensure_buffers(uint64_t cap, uint64_t shadow_cap) {
   const bool same_features = std::memcmp(&features_, &config.features, sizeof(ar::StateFeatures)) == 0;
-  if (cap != capacity_ || !same_features) {
+  if (cap != capacity_ || shadow_cap != shadow_capacity_ || !same_features) {
     release_buffers();
     features_ = config.features;
     const Owner o = config.owner;
     const StateLayout pl = path_state_layout(features_, cap);
-    const StateLayout sl = shadow_item_layout(features_, 2 * cap);
+    const StateLayout sl = shadow_item_layout(features_, shadow_cap);
     path_buf_ = device_.allocate(LedgerCategory::MAIN_PATH_POOL, pl.total_bytes, o);
     shadow_buf_ = device_.allocate(LedgerCategory::SHADOW_POOL, sl.total_bytes, o);
     main_queue_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, cap * 4, o);
-    shadow_queue_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, 2 * cap * 4, o);
-    const uint64_t tiles = ar::queue_tiles(uint32_t(cap)) + ar::queue_tiles(uint32_t(2 * cap));
+    shadow_queue_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, shadow_cap * 4, o);
+    const uint64_t tiles = ar::queue_tiles(uint32_t(cap)) + ar::queue_tiles(uint32_t(shadow_cap));
     counts_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, tiles * ar::kQueueBins * 4, o);
     step_buf_ = device_.allocate(LedgerCategory::TABLES, sizeof(ar::StepTable), o);
     sort_queue_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, cap * 4, o);
@@ -123,6 +124,7 @@ void Scheduler::ensure_buffers(uint64_t cap) {
     path_ = p;
     shadow_ = s;
     capacity_ = cap;
+    shadow_capacity_ = shadow_cap;
   }
   // sort_counts holds 2 x tiles x (material_header_count + 1) counters (sort.h), so it follows
   // the scene's material count.
@@ -187,7 +189,10 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
                                             : (device_.kind() == AR_DEVICE_CPU ? kCpuPoolCapacity : kMaxPoolCapacity);
   limit = std::min({limit, kMaxPoolCapacity, config.max_capacity});
   const uint64_t cap = std::min(total, limit);
-  ensure_buffers(cap);
+  // The shadow pool is twice the main pool (0002 D5) unless a test starves it: producers then hold
+  // back the items the free slots cannot cover (step_table.h), which ASTRORAY_TEST_POOL exercises.
+  const uint64_t shadow_cap = config.shadow_capacity_override ? config.shadow_capacity_override : 2 * cap;
+  ensure_buffers(cap, shadow_cap);
   if (config.report && !capacity_reported_) {
     const double value[2] = {double(cap), 0.0};
     config.report->raise(AR_REPORT_POOL_CAPACITY, 0, "main path pool capacity", 1, value, 0);
@@ -218,9 +223,9 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     device_.upload(main_queue_buf_, 0, identity.data(), cap * 4);
     const uint64_t at = uint64_t(reinterpret_cast<const char*>(shadow_.next_stage) -
                                  reinterpret_cast<const char*>(shadow_buf_.ptr));
-    device_.memset(shadow_buf_, at, static_cast<uint8_t>(Stage::SHADOW_TERMINATED), 2 * cap);
+    device_.memset(shadow_buf_, at, static_cast<uint8_t>(Stage::SHADOW_TERMINATED), shadow_cap);
   }
-  const uint32_t hw_shadow = uint32_t(2 * cap);
+  const uint32_t hw_shadow = uint32_t(shadow_cap);
   uint32_t hw_main = 0;
   uint64_t next_work = 0;
   device_.memset(step_buf_, 0, 0, sizeof(ar::StepTable));

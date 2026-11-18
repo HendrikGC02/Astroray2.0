@@ -74,8 +74,11 @@ void check_pass_revision(ar_session h, uint64_t revision) {
 // own ledger. Out of the entry point for the same reason as scene_api.cpp's cuda_init.
 std::shared_ptr<astroray::host::Device> session_device(astroray::ContextState& ctx, uint32_t kind, uint32_t index) {
   if (kind == AR_DEVICE_CPU) {
+    // ASTRORAY_TEST_THREADS (gate builds) fixes the worker count, for the threads=1 runs of 0004
+    // D4/D5 and 0002 D12; the session reads the same hooks again for its report.
+    const unsigned forced = astroray::host::read_test_hooks().threads;
     const unsigned cores = std::thread::hardware_concurrency();
-    return astroray::host::make_cpu_session_device(ctx, cores ? cores : 1u);
+    return astroray::host::make_cpu_session_device(ctx, forced ? forced : cores ? cores : 1u);
   }
 #ifdef ASTRORAY_GPU
   struct Held {

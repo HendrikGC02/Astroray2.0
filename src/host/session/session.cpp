@@ -84,9 +84,17 @@ Session::Session(Scene& scene, Device& device, const SessionOptions& options)
   layout_ = FilmLayout::build(film_request(options, scene.settings().get(), &unknown));
   render_size_ = uint64_t(options.max_width) << 32 | options.max_height;
   hooks_ = read_test_hooks();
+  // A test hook changes what a render measures, so each active one is visible in the report (0001
+  // D2.11 TEST_HOOK_ACTIVE); production builds have none.
+  for (const std::string& name : hooks_.active) {
+    const double value[2] = {0.0, 0.0};
+    report_.raise(AR_REPORT_TEST_HOOK_ACTIVE, 0, name, 1, value, 0);
+  }
   SchedulerConfig cfg;
   cfg.report = &report_;
   cfg.owner = options.owner;
+  cfg.capacity_override = hooks_.pool_main;
+  cfg.shadow_capacity_override = hooks_.pool_shadow;
   scheduler_ = std::make_unique<Scheduler>(device_, cfg);
   // Registered before the thread starts, so a commit activated meanwhile is never missed.
   listener_ = scene_.generations().add_listener([this] { scene_generation_activated(); });

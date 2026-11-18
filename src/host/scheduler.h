@@ -53,6 +53,7 @@ struct SchedulerConfig {
   uint32_t material_header_count = 0;  // the scene's, for the sort threshold and its scratch size
   uint64_t max_capacity = kMaxPoolCapacity;  // the path-pool row the ledger allows
   uint64_t capacity_override = 0;            // tests: force the pool capacity (still bounded by the work)
+  uint64_t shadow_capacity_override = 0;     // tests: force the shadow pool below its default 2 x capacity
   bool permute = false;                      // AR_DEBUG_PERMUTE, see Scheduler constructor
   Report* report = nullptr;                  // POOL_CAPACITY goes here, once per scheduler
   Owner owner{};
@@ -85,7 +86,7 @@ class Scheduler {
   uint64_t capacity() const { return capacity_; }
 
  private:
-  void ensure_buffers(uint64_t capacity);
+  void ensure_buffers(uint64_t capacity, uint64_t shadow_capacity);
   void release_buffers();
   bool at_boundary(PassStatus* status);
   void launch_stage(ar::Stage stage, const ar::StepTable& table);
@@ -96,6 +97,7 @@ class Scheduler {
   PassCounters counters_;
   ar::KernelGlobals kg_{};
   uint64_t capacity_ = 0;
+  uint64_t shadow_capacity_ = 0;
   ar::StateFeatures features_{};
   uint32_t sort_material_count_ = ~0u;
   bool capacity_reported_ = false;
