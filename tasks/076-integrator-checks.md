@@ -20,3 +20,4 @@ Depends on: 106.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
 - started on task/076-integrator-checks
+- design read; stopped before code: scope questions (scheduler.h, analytic.py/budgets.toml family, CPU threads=1) sent to lead
