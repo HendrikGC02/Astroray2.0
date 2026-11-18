@@ -1,7 +1,7 @@
 # 075 shade_light (lamp crossings) and A4 point and sphere
 Goal: lamps seen by camera and BSDF rays add nothing -> `shade_light` adds MIS-weighted front-facing lamp radiance for camera paths and re-queues the ray past the lamp without changing bounce counters or the event index, and A4 (point and sphere lamps over a Lambertian plane) passes on CPU and GPU.
 Read first: 0004 D8 (lamp intersection and shade_light), D1 (MIS for lamp hits), D6 (energy conventions), D7 (pdf consistency), 0004 Verification rows D6, D8; 0009 d20 (A4 sphere and point lights).
-Scope: src/kernel/stages/shade_light.h, src/kernel_cpu/shade_light.cpp, src/kernel_gpu/shade_light.cu, src/kernel/launch_config.h, src/kernel/budget.toml, scenes/a4_point/, scenes/a4_sphere/, scenes/lib/truths.py, tools/check.ps1 (gate steps), tests/cpu/test_shade_light.cpp, tests/gpu/test_shade_light_agree.cpp.
+Scope: src/kernel/stages/shade_light.h, src/kernel_cpu/shade_light.cpp, src/kernel_gpu/shade_light.cu, src/kernel/launch_config.h, src/kernel/budget.toml, scenes/a4_point/, scenes/a4_sphere/, scenes/lib/truths.py, tools/check.ps1 (gate steps), tests/cpu/test_shade_light.cpp, tests/gpu/test_shade_light_agree.cpp; lead ruling: src/device/cpu/cpu_device.cpp (SHADE_LIGHT registration), src/host/scheduler.cpp (lamp_crossings line), tools/analytic.py (GATE_SCENES), tools/budgets.toml ([family_members] analytic_scenes).
 Out of scope: A3, the lit furnace, NEE on/off and stacked lamps with the NEE test hook (106); spot and sun lamps, IES and light node trees (M4); light paths through lamps (M5, they pass through already by route_hit and this stage).
 Reference: Cycles `kernel/integrator/shade_light.h` (Apache-2.0).
 Do:
@@ -19,3 +19,4 @@ Progress:
 - started
 - blocked before code: 3 files outside Scope are needed (cpu_device.cpp stage registration; a crossings counter home; gate membership in tools/analytic.py GATE_SCENES + tools/budgets.toml [family_members]); asked the lead.
 - reading: front-facing Le applies to sphere lamps too (sphere.h, D8: outward only), so a camera ray through the sphere adds L once; shade_light adds the moved distance to prev_dist (0003 d19 row 17).
+- lead ruling: scope additions above; crossings counted by the scheduler (items of SHADE_LIGHT), the stage counts nothing; readings (front face for every lamp, prev_dist accumulates) confirmed.
