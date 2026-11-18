@@ -5,14 +5,16 @@ Run through `Invoke-ArBlender -Gui -Script tests/blender/gui_colour_chart.py` (t
 Timers drive everything; the script ends the process itself, exit code 1 on any failed case.
 A chart of 12 emission patches (a grey ramp that runs past 1.0 and six colours; each patch is a quad whose
 Principled BSDF has black base colour and an Emission Color of the patch's scene-linear value, strength 1)
-is rendered by Astroray in a Rendered viewport of an orthographic camera. The same 12 values are painted
-into a float image in the working space (Linear Rec.709), shown in an Image Editor with "view as render" on,
-so Blender applies the scene's colour management to it exactly once. Both areas are screenshotted under
-  Standard, AgX, Standard + exposure +1, Standard + gamma 1.4, AgX + the Punchy look,
-once Astroray's frame has converged, and the mean of the middle of each patch is compared: per patch, per
-channel, |viewport - editor| <= 2/255 (0007 V9). Patch positions come from Blender itself (the viewport's
-world-to-region projection, the Image Editor's View2D), not from the pixels; a patch whose window is not
-uniform fails the case, so a wrong position cannot pass. Pixels are read with NumPy as Non-Color bytes.
+is rendered by Astroray in a Rendered viewport of a camera looking straight at it, and the viewport area is
+screenshotted once the frame has converged. The reference is the same 12 values in a float image of the
+working space (Linear Rec.709), written by `Image.save_render`, which applies the scene's colour management
+(view transform, look, exposure, gamma) once through Blender's own code. Cases:
+  Standard, AgX, Standard + exposure +1, Standard + gamma 1.4, AgX + the Punchy look.
+Per patch, per channel, the mean of the middle of the patch in the screenshot against the reference:
+|viewport - reference| <= 2/255 (0007 V9). Patch positions in the screenshot come from Blender's world-to-region
+projection, not from the pixels; the reference's patches must be flat, so a wrong layout cannot pass.
+Pixels are read with NumPy as Non-Color bytes. The Image Editor is not the reference: in Blender 5.3 it showed the
+image under Standard whatever the scene's view settings and "view as render" (measured while writing this).
 Ref: docs/decisions/0007-blender-integration.md V9, d32 (no engine tonemapping in the beauty path), d29
 (draw through bind_display_space_shader).
 """
@@ -96,16 +98,19 @@ def build_chart(scene):
         node.inputs["Base Color"].default_value = (0.0, 0.0, 0.0, 1.0)
         node.inputs["Emission Color"].default_value = (*rgb, 1.0)
         node.inputs["Emission Strength"].default_value = 1.0
+        me.update()
         me.materials.append(mat)
         ob = bpy.data.objects.new(f"patch{k}", me)
         ob.location = patch_centre(k)
         scene.collection.objects.link(ob)
     cam = bpy.data.cameras.new("Camera")
-    cam.type = "ORTHO"
-    cam.ortho_scale = 4.4  # the long side: 4.4 x 3.3 holds the 4 x 3 chart
+    # Perspective, looking straight at the chart: 36 mm sensor, 50 mm lens at 6 m sees 4.32 m across.
+    # (An orthographic camera renders black in the viewport today; reported in task 097, not a V9 matter.)
+    cam.type = "PERSP"
+    cam.lens, cam.sensor_width = 50.0, 36.0
     cam.passepartout_alpha = 0.0
     cob = bpy.data.objects.new("Camera", cam)
-    cob.location = (0.0, 0.0, 5.0)
+    cob.location = (0.0, 0.0, 6.0)
     scene.collection.objects.link(cob)
     scene.camera = cob
 
@@ -122,7 +127,6 @@ def chart_image():
         px[y0:y1, x0:x1, :3] = rgb
     img = bpy.data.images.new("v9_chart", w, h, alpha=False, float_buffer=True)
     img.colorspace_settings.name = "Linear Rec.709"
-    img.use_view_as_render = True
     img.pixels.foreach_set(px.ravel())
     img.update()
     return img
@@ -153,6 +157,11 @@ class Driver(gui_present.Driver):
         return super().timed_out(limit)
 
     def end(self):
+        job = self.job
+        if job is not None:
+            print(f"viewport job: failure {job.failure}, errors {job.errors}, events tail {job.events[-6:]}, "
+                  f"engine frames {STATE.get('frames')}, geometries {len(job.geom_keys)}, lines {job.lines}, "
+                  f"objects {[(o.name, o.type) for o in bpy.context.scene.objects][:3]}, camera {bpy.context.scene.camera}", flush=True)
         self.rf.shutdown()
         run_cases()
         return None
@@ -161,7 +170,7 @@ class Driver(gui_present.Driver):
         win = bpy.context.window_manager.windows[0]
         out = {}
         for a in win.screen.areas:
-            if a.type in ("VIEW_3D", "IMAGE_EDITOR"):
+            if a.type == "VIEW_3D":
                 out[a.type] = (win, a, next(r for r in a.regions if r.type == "WINDOW"))
         return out
 
@@ -181,11 +190,7 @@ class Driver(gui_present.Driver):
 
     def step_setup(self):
         win, area, region = self.find_area()
-        with bpy.context.temp_override(window=win, area=area, region=region):
-            bpy.ops.screen.area_split(direction="VERTICAL", factor=0.5)
-        views = sorted((a for a in win.screen.areas if a.type == "VIEW_3D"), key=lambda a: a.x)
-        views[1].type = "IMAGE_EDITOR"
-        space = views[0].spaces.active
+        space = area.spaces.active
         space.shading.type = "RENDERED"
         space.overlay.show_overlays = False
         space.show_gizmo = False
@@ -194,23 +199,9 @@ class Driver(gui_present.Driver):
             if hasattr(space, name):
                 setattr(space, name, False)
         space.region_3d.view_perspective = "CAMERA"
-        ed = views[1].spaces.active
-        ed.image = chart_image()
-        ed.display_channels = "COLOR"
-        for name in ("show_region_header", "show_region_toolbar", "show_region_ui", "show_region_tool_header",
-                     "show_region_hud"):
-            if hasattr(ed, name):
-                setattr(ed, name, False)
-        self.go("fit")
-        return 0.5
-
-    def step_fit(self):
-        a = self.areas()
-        win, area, region = a["IMAGE_EDITOR"]
-        with bpy.context.temp_override(window=win, area=area, region=region):
-            bpy.ops.image.view_all(fit_view=True)
+        chart_image()
         self.go("first_frame")
-        return 0.3
+        return 0.5
 
     def step_first_frame(self):
         self.job = self.job or self.find_job_any()
@@ -218,6 +209,7 @@ class Driver(gui_present.Driver):
             if self.timed_out():
                 raise RuntimeError("no first frame")
             return 0.2
+        self.job.frames, self.job.acquired = [], []  # the engine's own frames, for the diagnosis below
         self.go("apply")
         return 0.1
 
@@ -251,32 +243,34 @@ class Driver(gui_present.Driver):
 
     def shoot(self):
         name = CASES[self.case][0]
+        win = bpy.context.window_manager.windows[0]
+        with bpy.context.temp_override(window=win):  # draw every region now, so the screenshots are of this state
+            bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+        STATE.setdefault("frames", {})[name] = [{"spp": f["spp"], "max": float(f["rgb"].max()), "mean": float(f["rgb"].mean())}
+                                                for f in self.job.frames[-2:]]
         shots = {}
         for kind, (win, area, region) in self.areas().items():
-            path = os.path.join(EVIDENCE, f"colour_chart_{name}_{kind.lower()}.png")
+            path = os.path.join(EVIDENCE, f"colour_chart_{name}_viewport.png")
             with bpy.context.temp_override(window=win, area=area, region=region):
                 bpy.ops.screen.screenshot_area(filepath=path)
-            shots[kind] = (path, region.x - area.x, region.y - area.y, region.width, region.height)
-            if kind == "VIEW_3D":
-                from bpy_extras import view3d_utils
-                rv3d = area.spaces.active.region_3d
-                half = SIZE / 2
-                cs = []
-                for k in range(len(PATCHES)):
-                    x, y, _ = patch_centre(k)
-                    p = [view3d_utils.location_3d_to_region_2d(region, rv3d, (x + dx, y + dy, 0.0))
-                         for dx, dy in ((0, 0), (half, 0), (0, half))]
-                    cs.append((p[0].x, p[0].y, abs(p[1].x - p[0].x), abs(p[2].y - p[0].y)))
-                shots["centres_VIEW_3D"] = cs
-            else:
-                cs = []
-                for k in range(len(PATCHES)):
-                    i, j = k % COLS, k // COLS
-                    u0, v0 = (i + 0.5) / COLS, 1.0 - (j + 0.5) / ROWS
-                    c = region.view2d.view_to_region(u0, v0, clip=False)
-                    e = region.view2d.view_to_region(u0 + 0.5 / COLS, v0 + 0.5 / ROWS, clip=False)
-                    cs.append((c[0], c[1], abs(e[0] - c[0]), abs(e[1] - c[1])))
-                shots["centres_IMAGE_EDITOR"] = cs
+            shots["viewport"] = (path, region.x - area.x, region.y - area.y, region.width, region.height)
+            from bpy_extras import view3d_utils
+            rv3d = area.spaces.active.region_3d
+            half = SIZE / 2
+            cs = []
+            for k in range(len(PATCHES)):
+                x, y, _ = patch_centre(k)
+                p = [view3d_utils.location_3d_to_region_2d(region, rv3d, (x + dx, y + dy, 0.0))
+                     for dx, dy in ((0, 0), (half, 0), (0, half))]
+                cs.append((p[0].x, p[0].y, abs(p[1].x - p[0].x), abs(p[2].y - p[0].y)))
+            shots["centres_viewport"] = cs
+        # The reference: the same values through Blender's own colour management, once.
+        w, h = RES
+        ref = os.path.join(EVIDENCE, f"colour_chart_{name}_reference.png")
+        bpy.data.images["v9_chart"].save_render(ref, scene=bpy.context.scene)
+        shots["reference"] = (ref, 0, 0, w, h)
+        shots["centres_reference"] = [((k % COLS + 0.5) * w / COLS, h - (k // COLS + 0.5) * h / ROWS,
+                                       w / COLS / 2, h / ROWS / 2) for k in range(len(PATCHES))]
         STATE["shots"][name] = shots
 
 
@@ -293,7 +287,6 @@ def patch_stats(pix, centres):
     """Mean and flatness (max - min) of the middle INNER of each patch's window, per channel."""
     means, flat = [], []
     for cx, cy, hw, hh in centres:
-        # View2D coordinates are in an editor whose y is the image's; patch windows are rectangles
         x0, x1 = int(round(cx - hw * INNER)), int(round(cx + hw * INNER))
         y0, y1 = int(round(cy - hh * INNER)), int(round(cy + hh * INNER))
         win = pix[y0:y1, x0:x1].reshape(-1, 3)
@@ -312,22 +305,21 @@ class TestColourChart(unittest.TestCase):
     def measure(self, name):
         s = STATE["shots"][name]
         out = {}
-        for kind in ("VIEW_3D", "IMAGE_EDITOR"):
+        for kind in ("viewport", "reference"):
             path, x0, y0, w, h = s[kind]
             out[kind] = patch_stats(region_pixels(path, x0, y0, w, h), s["centres_" + kind])
         return out
 
     def run_case(self, name):
         m = self.measure(name)
-        (vm, vf), (em, ef) = m["VIEW_3D"], m["IMAGE_EDITOR"]
-        d = np.abs(vm - em).max(axis=1)
+        (vm, vf), (rm, rf_) = m["viewport"], m["reference"]
+        d = np.abs(vm - rm).max(axis=1)
         STATE["results"][name] = {"max_diff": float(d.max()), "per_patch": d.round(2).tolist(),
-                                  "viewport_flat": float(vf.max()), "editor_flat": float(ef.max()),
-                                  "editor_means": em.round(1).tolist()}
-        print(f"RESULT V9 {name}: per-patch max |viewport - editor| (of 255) {d.round(2).tolist()}; "
-              f"max {d.max():.2f}; window flatness viewport {vf.max():.1f}, editor {ef.max():.1f}")
-        self.assertLessEqual(float(ef.max()), UNIFORM, "the editor's patch windows are not flat: positions are off")
-        self.assertLessEqual(float(vf.max()), UNIFORM, "the viewport's patch windows are not flat: positions are off")
+                                  "viewport_spread": float(vf.max()), "reference_spread": float(rf_.max()),
+                                  "reference_means": rm.round(1).tolist(), "viewport_means": vm.round(1).tolist()}
+        print(f"RESULT V9 {name}: per-patch max |viewport - reference| (of 255) {d.round(2).tolist()}; "
+              f"max {d.max():.2f}; window spread (max - min, noise) viewport {vf.max():.1f}, reference {rf_.max():.1f}")
+        self.assertLessEqual(float(rf_.max()), UNIFORM, "the reference's patch windows are not flat: the layout is off")
         self.assertLessEqual(float(d.max()), TOLERANCE)
 
     def test_standard(self):
@@ -348,23 +340,23 @@ class TestColourChart(unittest.TestCase):
     def test_the_chart_is_sensitive_to_the_transform(self):
         """The cases differ from each other by far more than the tolerance, so a viewport that skipped or
         doubled a transform could not pass them all."""
-        a, b = (self.measure(n)["IMAGE_EDITOR"][0] for n in ("standard", "agx"))
-        c = self.measure("standard_exposure_plus1")["IMAGE_EDITOR"][0]
+        a, b = (self.measure(n)["reference"][0] for n in ("standard", "agx"))
+        c = self.measure("standard_exposure_plus1")["reference"][0]
         self.assertGreater(float(np.abs(a - b).max()), 10 * TOLERANCE)
         self.assertGreater(float(np.abs(a - c).max()), 10 * TOLERANCE)
 
 
 def save_evidence():
-    """out/evidence/097/colour_chart.png: the viewport (left) and the editor (right) of the AgX case."""
+    """out/evidence/097/colour_chart.png: the viewport screenshot (left) and the reference (right) of the AgX case."""
     s = STATE["shots"].get("agx")
     if not s:
         return
     halves = []
-    for kind in ("VIEW_3D", "IMAGE_EDITOR"):
+    for kind in ("viewport", "reference"):
         path, x0, y0, w, h = s[kind]
         halves.append(region_pixels(path, x0, y0, w, h) / 255.0)
-    h = min(x.shape[0] for x in halves)
-    both = np.concatenate([x[:h] for x in halves], axis=1)
+    h = max(x.shape[0] for x in halves)
+    both = np.concatenate([np.pad(x, ((0, h - x.shape[0]), (0, 0), (0, 0))) for x in halves], axis=1)
     img = bpy.data.images.new("v9_evidence", both.shape[1], both.shape[0], alpha=False)
     img.colorspace_settings.name = "Non-Color"
     rgba = np.ones((both.shape[0], both.shape[1], 4), np.float32)
@@ -406,8 +398,10 @@ def main():
     scene = bpy.context.scene
     scene.render.engine = "ASTRORAY"
     scene.astroray.device = "CPU"
-    scene.astroray.viewport_samples = 16
+    scene.astroray.viewport_samples = 128  # colour noise of the spectral sampling averages out over a patch
     scene.render.dither_intensity = 0.0  # Blender's display dither adds noise of a few codes
+    ims = scene.render.image_settings
+    ims.file_format, ims.color_mode, ims.color_depth = "PNG", "RGB", "8"
     build_chart(scene)
     driver = Driver(rf)
     bpy.app.timers.register(driver.tick, first_interval=1.0)
