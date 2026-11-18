@@ -130,7 +130,23 @@ class Driver:
         self.go("settle")
         return SETTLE_S
 
+    def converged(self):
+        import ctypes
+        prog = self.job.abi.ar_progress()
+        self.job.lib.ar_session_get_progress(self.job.session, ctypes.byref(prog))
+        return prog.state == self.job.abi.AR_STATE_CONVERGED
+
     def step_settle(self):
+        # Early passes of a progressive film are not normalised yet (corner pixels read 0.66..0.82 for the
+        # world's 0.8), so the pre-edit frame is taken once the viewport's 64 samples are done.
+        if not self.converged():
+            if self.timed_out():
+                raise RuntimeError("the first generation never converged")
+            return 0.1
+        self.go("settle_done")
+        return 0.3
+
+    def step_settle_done(self):
         self.pre = self.job.frames[-1]
         STATE["pre"] = self.pre
         STATE["events_before_edit"] = list(self.job.events)
@@ -181,6 +197,7 @@ class Driver:
             return 0.1
         STATE["events_after_view"] = list(self.job.events)
         STATE["gens"] = [f["generation"] for f in self.job.frames]
+        STATE["all_frames"] = list(self.job.frames)
         _, area, _ = self.find_area()
         area.spaces.active.shading.type = "SOLID"  # Blender frees the engine: __del__ closes the session
         self.go("closing")
@@ -285,6 +302,7 @@ class TestPresent(unittest.TestCase):
         rgb = f["rgb"]
         self.assertTrue(np.isfinite(rgb).all())
         corner = rgb[:3, :3].mean()
+        print("RESULT present corner by frame " + " ".join(f"g{x['generation']}:{x['rgb'][:3, :3].mean():.4f}" for x in STATE["all_frames"][:8]))
         c = dark_centroid(rgb)
         sphere = rgb[rgb.mean(axis=2) < 0.6].mean()
         print(f"RESULT present corner {corner:.4f} (want 0.8), sphere {sphere:.4f} (want 0.4), pixels {c[2]}")
