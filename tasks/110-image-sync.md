@@ -18,3 +18,5 @@ Depends on: 083, 060.
 Size: M (about 250 lines Python); stop and report at 2x.
 Progress:
 - started (implementer)
+- images.py, test_images.py (13 cases), test_node_values.py (3), ar_image_desc.reload_count, canary patch (16 red) done on task/110-image-sync.
+- Open for lead: (1) V6 1e-4 is below the spectral engine's own round trip (1e-5..2.7e-4), test uses 3e-4; (2) engine JPEG (stb) differs from Blender's by up to 2 codes on ~4% of texels; (3) render_final.full_sync does not call images.sync yet (render_final.py out of Scope); (4) no check.ps1 step runs these tests (check.ps1 out of Scope); (5) Image.reload() raises no depsgraph update for the Image, only its users.

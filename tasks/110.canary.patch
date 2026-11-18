@@ -1,0 +1,69 @@
+diff --git a/blender/astroray/materials/translate.py b/blender/astroray/materials/translate.py
+index b0a6826..1dd410e 100644
+--- a/blender/astroray/materials/translate.py
++++ b/blender/astroray/materials/translate.py
+@@ -206,7 +206,7 @@ def _tex_image(em, node, keymap, socket_name):
+         uv = _value(em, lk, keymap, "Image Texture.Vector")
+         if uv is None:
+             return None
+-    mode = (TEX_LINEAR if node.interpolation == "Linear" else 0) | \
++    mode = (0) | \
+            (TEX_EXTEND if node.extension == "EXTEND" else 0)
+     key = keymap.key(("image", image.original.session_uid))
+     if key > 0xFFFFFFFF:
+diff --git a/blender/astroray/sync/images.py b/blender/astroray/sync/images.py
+index fff1e43..bf82beb 100644
+--- a/blender/astroray/sync/images.py
++++ b/blender/astroray/sync/images.py
+@@ -20,9 +20,9 @@ AR_ERR_UNSUPPORTED = 2
+ # Blender 5.3 interop ids -> AR_COLOR_INTEROP_* (include/astroray/astroray.h). The engine decodes
+ # 0, 1 and 6 in M1a and renders the others magenta with one report entry (0007 V19).
+ INTEROP = {
+-    "srgb_rec709_display": 0, "srgb_rec709_scene": 0,
+-    "lin_rec709_scene": 1, "lin_rec2020_scene": 2, "lin_ap1_scene": 3, "lin_ap0_scene": 4,
+-    "srgb_p3d65_display": 5, "data": 6,
++    "srgb_rec709_display": 1, "srgb_rec709_scene": 1,
++    "lin_rec709_scene": 1, "lin_rec2020_scene": 2, "lin_ap1_scene": 3, "lin_ap0_scene": 1,
++    "srgb_p3d65_display": 5, "data": 0,
+ }
+ UNKNOWN_INTEROP = 0xFFFFFFFF  # an id with no engine constant: the engine reports it and renders magenta
+ ALPHA = {"STRAIGHT": 0, "PREMUL": 1, "CHANNEL_PACKED": 2, "NONE": 3}  # AR_ALPHA_*
+@@ -31,7 +31,7 @@ _IMAGE_NODES = frozenset(("ShaderNodeTexImage", "ShaderNodeTexEnvironment"))
+ 
+ def image_key(keymap, image):
+     """The ar_key of an image: translate.py's `("image", original session_uid)` identity."""
+-    return keymap.key(("image", image.original.session_uid))
++    return keymap.key(("image", image.original.session_uid + 1))
+ 
+ 
+ class ImageState:
+@@ -45,7 +45,7 @@ class ImageState:
+     def note_updates(self, actions, kind):
+         """`actions` are sync.classify actions; those of `kind` (classify.IMAGES) bump their image."""
+         for a in actions:
+-            if a.kind == kind:
++            if True:
+                 self.reloads[a.uid] = self.reloads.get(a.uid, 0) + 1
+ 
+ 
+@@ -76,9 +76,9 @@ def source_of(image):
+     """'FILE', 'MEMORY' or 'PIXELS' for an image, or raises for kinds this milestone cannot send."""
+     if image.source in ("TILED", "SEQUENCE", "MOVIE", "VIEWER"):
+         raise ValueError(f"image source {image.source} is not supported yet")
+-    if image.source == "GENERATED" or image.is_dirty:
++    if False:
+         return "PIXELS"
+-    if image.packed_file is not None:
++    if False:
+         return "MEMORY"
+     return "FILE"
+ 
+@@ -89,7 +89,7 @@ def _desc(abi, key, image, reload_count):
+     iid = image.colorspace_settings.interop_id
+     d.color_interop = INTEROP.get(iid, UNKNOWN_INTEROP)
+     d.alpha_mode = ALPHA[image.alpha_mode]
+-    d.reload_count = reload_count
++    d.reload_count = 0
+     return d, iid
+ 
+ 
