@@ -31,10 +31,10 @@ index 6338694..82c5dd1 100644
      def set_stripe_bytes(self, n):
          """Test-only: restripe from the next upload on."""
 diff --git a/blender/astroray/viewport.py b/blender/astroray/viewport.py
-index 997ab4c..660c1da 100644
+index 4707969..5c800a6 100644
 --- a/blender/astroray/viewport.py
 +++ b/blender/astroray/viewport.py
-@@ -70,7 +70,7 @@ class ViewportJob(render_final.Job):
+@@ -74,7 +74,7 @@ class ViewportJob(render_final.Job):
  
      def _sync(self, depsgraph):
          if self.first:
@@ -43,7 +43,7 @@ index 997ab4c..660c1da 100644
              self._after_full(depsgraph)
              return
          actions = classify.classify(depsgraph, self.cache)
-@@ -80,7 +80,7 @@ class ViewportJob(render_final.Job):
+@@ -84,7 +84,7 @@ class ViewportJob(render_final.Job):
          if classify.FULL_RESYNC in kinds:
              self.tcache.forget_all()
              self.first = True
@@ -52,7 +52,7 @@ index 997ab4c..660c1da 100644
              self._after_full(depsgraph)
              return
          self.tcache.invalidate([a for a in actions if a.kind == classify.MATERIALS])
-@@ -143,7 +143,7 @@ class ViewportJob(render_final.Job):
+@@ -147,7 +147,7 @@ class ViewportJob(render_final.Job):
                      mesh.sync_mesh(e, abi, me, key, ob.original.name)
          self.geom_keys |= new_geoms
          inst = [a for a in actions if a.kind == C.INSTANCES]
@@ -61,7 +61,7 @@ index 997ab4c..660c1da 100644
              moves = all(a.id_type == "OBJECT" and a.mask == C.TRANSFORM for a in inst)
              if not (inst and moves and not new_geoms and self.table is not None
                      and instances.sync_transforms(e, abi, self.table, depsgraph, {a.uid for a in inst})):
-@@ -168,8 +168,8 @@ class ViewportJob(render_final.Job):
+@@ -172,8 +172,8 @@ class ViewportJob(render_final.Job):
          self._ensure_session(w, h)
          s = self.session
          f, _ = camera.viewport(depsgraph.scene, context.space_data, rv3d, depsgraph)
@@ -72,7 +72,7 @@ index 997ab4c..660c1da 100644
              self.events.append("set_view")
          if not self._started:
              render_final._ok(lib, native.call(lib.ar_session_start, s), "ar_session_start",
-@@ -204,7 +204,6 @@ class ViewportJob(render_final.Job):
+@@ -208,7 +208,6 @@ class ViewportJob(render_final.Job):
          if not frame.frame_id:
              return False
          try:
@@ -80,7 +80,7 @@ index 997ab4c..660c1da 100644
              shown = self.present.wants(frame)
              if self.acquired is not None:
                  self.acquired.append({"id": frame.frame_id, "generation": frame.generation, "presented": shown})
-@@ -240,7 +239,7 @@ class ViewportJob(render_final.Job):
+@@ -244,11 +243,15 @@ class ViewportJob(render_final.Job):
          """A session whose film is the region's; created on the first draw. A region that outgrows it gets a new
          session and the old one is retired in d23's two steps (closed now, destroyed by a timer), so the draw
          never waits for it."""
@@ -89,38 +89,71 @@ index 997ab4c..660c1da 100644
              return
          lib, abi = self.lib, self.abi
          if self.session.value:
-@@ -308,20 +307,33 @@ class ViewportJob(render_final.Job):
+-            self._retire_current()
++            old, self.session = self.session, ctypes.c_void_p()
++            self._start_reaper()
++            self.retired.append(old)
++            native.call(self.lib.ar_session_close, old)
++            self.events.append("session_close")
+             self.events.append("replace_session")
          try:
+             sd = abi.ar_session_desc(abi.AR_SESSION_MODE_VIEWPORT, w, h, abi.AR_DENOISER_NONE)
+@@ -315,9 +318,14 @@ class ViewportJob(render_final.Job):
              self._start_reaper()
-         except Exception:
+         except Exception as e:
+             self._note(f"no timer to destroy the viewport session ({e}); destroying it directly")
+-            self.close()  # destroys directly, once; raises if something failed on the way
 +            if self.session.value:
 +                self.retired.append(self.session)
-             self.close()  # no timer to wait for (interpreter going down): destroy directly, once
++            self.close()
              return
          self.parked = True
-         session, self.session = self.session, ctypes.c_void_p()
-+        if not session.value and self.scene_h.value:
++        if not self.session.value and self.scene_h.value:
 +            scene, self.scene_h = self.scene_h, ctypes.c_void_p()
 +            native.call(self.lib.ar_scene_destroy, scene)
-         if session.value:
-             self._retire(session)
+         if self.session.value:
+             self._retire_current()
  
-     def _reap(self):
-         """Each tick: destroy every retired session that reports CLOSED; destroy the scene only when the job is
-         parked, no session is current and none is retired. Ends itself when it has nothing left to wait for."""
+@@ -340,7 +348,7 @@ class ViewportJob(render_final.Job):
+         what could not be destroyed stays listed for close()."""
+         try:
+             return self._reap_once()
+-        except Exception as e:
++        except ZeroDivisionError as e:
+             self._reap_failures += 1
+             self._note(f"viewport teardown tick failed ({self._reap_failures}): {e}")
+             if self._reap_failures < MAX_REAP_FAILURES:
+@@ -350,12 +358,20 @@ class ViewportJob(render_final.Job):
+             return None
+ 
+     def _reap_once(self):
 +        def closed(x):
 +            q = self.abi.ar_progress()
 +            native.call(self.lib.ar_session_get_progress, x, ctypes.byref(q))
 +            return q.state == self.abi.AR_STATE_CLOSED
-+        if self.parked and not self.session.value and self.retired and self.scene_h.value                 and all(closed(x) for x in self.retired):
++        if self.parked and not self.session.value and self.retired and self.scene_h.value and all(closed(x) for x in self.retired):
 +            scene, self.scene_h = self.scene_h, ctypes.c_void_p()
 +            native.call(self.lib.ar_scene_destroy, scene)
 +            self.events.append("destroy_scene")
+         errors = []
          for session in list(self.retired):
-             prog = self.abi.ar_progress()
-             native.call(self.lib.ar_session_get_progress, session, ctypes.byref(prog))
--            if prog.state == self.abi.AR_STATE_CLOSED:
-+            if True:
-                 self._destroy_session(session, "timer")
-         if self.parked and not self.session.value and not self.retired:
+             try:
+                 prog = self.abi.ar_progress()
+                 native.call(self.lib.ar_session_get_progress, session, ctypes.byref(prog))
+-                if prog.state == self.abi.AR_STATE_CLOSED:
++                if True:
+                     self._destroy_session(session, "timer")
+             except Exception as e:  # the others still get their turn
+                 errors.append(str(e))
+@@ -402,10 +418,7 @@ class ViewportJob(render_final.Job):
+         errors = []
+         for session in handles:
+             for name in ("ar_session_close", "ar_session_destroy"):
+-                try:
+-                    native.call(getattr(self.lib, name), session)
+-                except Exception as e:
+-                    errors.append(f"{name}: {e}")
++                native.call(getattr(self.lib, name), session)
+             self.events.append("destroy_session via close")
+         try:
              self._destroy_scene()
