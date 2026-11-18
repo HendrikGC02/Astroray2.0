@@ -142,6 +142,7 @@ class Driver:
         return self.sampling("solid", "material", after=self.to_material)
 
     def to_material(self):
+        print("PROBE P5 Material Preview on", flush=True)
         for win in bpy.context.window_manager.windows:
             for area in win.screen.areas:
                 if area.type == "VIEW_3D":
@@ -189,7 +190,7 @@ def main():
     else:
         smoke_a1.install_and_enable()  # the scene's engine is the addon's: Blender must know it
     driver = Driver(blend)
-    bpy.app.timers.register(driver.tick, first_interval=3.0)
+    bpy.app.timers.register(driver.tick, first_interval=3.0, persistent=True)  # a file load drops other timers
 
 
 if __name__ == "__main__":
