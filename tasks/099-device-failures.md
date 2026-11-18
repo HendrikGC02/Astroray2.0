@@ -1,7 +1,7 @@
 # 099 Device failure contract: injected failures and GPU fault containment
 Goal: device failure paths are untested -> each 0002 D15 case other than the dev-module rows is injected and produces its status and report entry with nothing rendered silently, a GPU kernel fault ends CUDA for the process while a CPU session in the same process keeps rendering, and the longest launch stays within B-17.
 Read first: 0002 D15 (failure contract table, injection tests), 0001 D2.5 (sticky errors, messages), D2.8, V14; 0009 B-17; src/host/session/test_hooks.h (101).
-Scope: src/device/cuda/cuda_device.cpp, src/device/cuda/module_loader.cpp, src/host/scene/scene.cpp (init failure path), src/host/session/test_hooks.{h,cpp} (fault and capability hooks), src/kernel_gpu/test_fault.cu (prefix `test_`: gate-hook builds only, 027), tests/gpu/test_device_failures.cpp, tests/abi/test_gpu_fault_cli.py.
+Scope: src/device/cuda/cuda_device.cpp, src/device/cuda/module_loader.cpp, src/host/scene/scene.cpp (init failure path), src/host/session/test_hooks.{h,cpp} (fault and capability hooks), src/kernel_gpu/test_fault.cu (prefix `test_`: gate-hook builds only, 027), tests/gpu/test_device_failures.cpp, tests/abi/test_gpu_fault_cli.py. Lead ruling adds: cmake/kernels.cmake (test_*.cu under the engine's AR_GATE_HOOKS condition), src/kernel/launch_config.h and src/kernel/budget.toml (ar_test_fault rows), src/host/session/session.{h,cpp} and src/capi/session_api.cpp (DeviceError keeps AR_ERR_DEVICE), src/host/device.h (untested_architecture), src/host/scene/scene.h, include/astroray/astroray.h, src/host/report_codes.def and 0001 D2.11 (DEVICE_INIT_FAILED, ruling 63), src/device/cuda/cuda_device.h.
 Out of scope: dev-module reload and corrupted dev modules (108); fault containment inside Blender (109); OIDN and DLSS failures (M1b, M8); trim and spill (later milestones).
 Reference: CUDA Driver API error codes (sticky errors require a process restart, URL in 0001 Sources).
 Do:
@@ -15,3 +15,6 @@ Budget: test_fault.cu carries a budget row gated in `full`.
 Depends on: 089, 015, 076.
 Size: M (about 350 lines); stop and report at 2x.
 Progress: started (implementer)
+- Done: injections (corrupt image, old driver/cc floor, failing init worker, untested arch), fault kernel + CLI/ctypes child tests, B-17 timing hook; 11.2 ms longest launch (sort_scatter) on b5m 1080p.
+- Found: a dead device's frees threw from Film/ActivePixels destructors (std::terminate): CudaDevice::free_memory is a no-op once dead. SESSION_FAILED is now raised before the FAILED state (a host polling state then report raced).
+- Not in check.ps1: gpu --tier=full is never run, so device_failures/longest launch within B-17 runs by hand; abi test skips only when out/bin/kernels is absent (cpu preset).

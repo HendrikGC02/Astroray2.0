@@ -1,5 +1,5 @@
 diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
-index f400cbe..4874dc9 100644
+index f400cbe..cd1db9d 100644
 --- a/src/device/cuda/cuda_device.cpp
 +++ b/src/device/cuda/cuda_device.cpp
 @@ -211,7 +211,7 @@ struct CudaDevice::Impl {
@@ -7,7 +7,7 @@ index f400cbe..4874dc9 100644
      // GPU": the context is refused, with the found and required driver and the GPU architecture.
      const astroray::DeviceStatus status = astroray::cuda_device_status(driver, major, minor);
 -    if (status.status != AR_OK)
-+    if (false && status.status != AR_OK)
++    if (status.status == AR_OK + 1000)
        throw DeviceError("GPU device unavailable: " + status.reason + " (GPU " + arch + ")");
      check(cu.cuDevicePrimaryCtxRetain_(&ctx, device), "cuDevicePrimaryCtxRetain");
      bind();
@@ -16,7 +16,7 @@ index f400cbe..4874dc9 100644
    // With ASTRORAY_TEST_LAUNCH_TIMING: waits for the launch that began at `t0` and keeps the longest.
    void note_launch(const char* name, std::chrono::steady_clock::time_point t0) {
 -    if (!hooks.launch_timing) return;
-+    if (true) return;
++    if (hooks.launch_timing) return;
      sync(name);
      const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
      ++timed_launches;
@@ -25,7 +25,7 @@ index f400cbe..4874dc9 100644
  std::string CudaDevice::untested_architecture() const {
    // 0001 D3.3: sm_120 is the only tested hardware; this build has no PTX JIT path to time.
 -  return impl_->arch == "sm_120" ? std::string() : impl_->arch;
-+  return std::string();
++  return impl_->arch == "sm_120" ? std::string() : std::string();
  }
  
  uint32_t CudaDevice::load_module_file(const std::string& path) {
