@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# B-5M (0009 d20): spike B's procedural S2, 2,000 unique meshes of 2,520 triangles (5.04 M unique
+# triangles), 300 materials with distinct constant base colours and roughness 0.5, and 10,000 mesh
+# instances (2,000 own-mesh objects, 5,000 linked duplicates, 2,000 collection instances, 1,000
+# geometry-nodes instances over a 40 x 25 grid; the spike's 10,001 counts the modifier's host). The
+# first-frame gate's large scene (0007 d35). Seed 12345, the spike's draw order.
+# Spike B lit the scene with a sun lamp of strength 3 W/m2; sun lamps land in M4, so M1a lights it
+# with a rectangular area lamp of equal irradiance at the scene centre (build.py states the
+# geometry). Replace the lamp with the sun again when sun lamps land.
+class = "B"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
