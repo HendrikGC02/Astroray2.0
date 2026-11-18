@@ -20,3 +20,6 @@ Size: M (about 300 lines); stop and report at 2x.
 Progress:
 - started (task/106-lamp-scenes)
 - lead rulings: modes on|off|light_only (R77), CLI hook line dropped, counters via Python ABI, budgets family row, fix shade_surface/background formatting
+- four scenes pass CPU and CUDA in gate (144.4 s of 180); family 34 -> 60; canary turns all three named cases red
+- pair checks test 4x4 pixel blocks: BSDF-only gives zero-hit pixels (mean and VAR 0) per pixel; comparison is per scene formula, no --compare flag
+- OVER BUDGET: +38.5 s gate (CPU 17.9, CUDA 20.6) vs +10 s; passes are latency bound (~2.7 ms/pass both devices), so fewer pixels saves nothing; needs lead
