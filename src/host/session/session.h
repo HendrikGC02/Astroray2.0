@@ -62,6 +62,19 @@ struct SessionOptions {
   // Test hook, zero in production: resolved pass number n (1-based, counted over the session) is
   // handed to the resolve tagged with the previous epoch, so the stale-write drop can be seen.
   uint64_t test_stale_resolve_at_pass = 0;
+  // Test hook, false in production: keep one PresentRecord per published frame (present_log).
+  bool test_record_presents = false;
+};
+
+// One published frame as the render thread saw it: when (the steady clock the batching uses), how
+// many passes had been resolved over the session, the epoch, whether interaction was on, and the
+// passes per update the schedule asked for at that moment.
+struct PresentRecord {
+  double t_s = 0.0;
+  uint64_t passes_resolved = 0;
+  uint64_t epoch = 0;
+  bool interacting = false;
+  uint32_t target = 0;
 };
 
 // Input the session refuses because it does not support it yet (AR_ERR_UNSUPPORTED at the ABI).
@@ -169,6 +182,8 @@ class Session {
   ar_report_info report_snapshot();
   void report_entry(uint32_t index, ar_report_entry* out) const;
   SessionStats stats() const;
+  // Tests: the frames published so far (empty unless SessionOptions::test_record_presents).
+  std::vector<PresentRecord> present_log() const;
   std::string failure() const;
   Report& report() { return report_; }
   const Latch& latch() const { return latch_; }
@@ -258,6 +273,7 @@ class Session {
   Batching batching_;               // interaction and passes per displayed update (0007 d49, d50)
   uint32_t unpresented_ = 0;        // resolved passes since the last published frame
   double last_present_s_ = -1e9;    // now_s() of the last present
+  std::vector<PresentRecord> present_log_;  // under mutex_
   bool expect_epoch_ = false;       // the last pass was interrupted: the next latch forces an epoch
 
   mutable std::mutex render_mutex_;  // held by the render thread for a pass and its present
