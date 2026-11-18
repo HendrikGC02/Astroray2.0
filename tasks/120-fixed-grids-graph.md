@@ -8,6 +8,7 @@ Do:
 1. Launch every stage with a fixed grid sized from the pool capacity (D4 makes this host-only: kernels read their counts from the step table), and capture a step's launch sequence as a CUDA graph replayed per step; keep the refill and the pending-generation check between steps (cancellation latency stays one step); CPU unchanged.
 2. Results unchanged: the GPU film and counters bit-identical to before on the gate's agreement and integrator checks (determinism check, 107).
 3. Re-measure b1m and b5m at 1080p, 1 spp, 64 passes (093's method): idle %, partition + sort %, longest launch, pass ms, kernel time per sample vs Cycles' 7.37 / 10.39 ms (093's re-measure); state the outcome: B-19 passes -> record; fails -> say so (the lead decides on remedy (b) and spike C, 093 Do 5); B-20 with the per-kernel breakdown.
+4. From 118: one warp per tile would cut count/scatter further (50/94 -> 42/80 us) but tests/cpu/test_scheduler.cpp requires grid > 1024; fixed grids revisit that test (it joins Scope). tools/bench.ps1 -Scene b1m,b5m through `pwsh -File` passes the list as one string; fix it (tools/bench.ps1 joins Scope).
 Acceptance: `pwsh tools/check.ps1 gate` passes; the PR body holds the before/after table and the outcome.
 Look at: out/evidence/120/timeline_b1m.png.
 Canary: tasks/120.canary.patch must turn red: astroray_tests_gpu with the new graph-replay case (the patch replays a stale graph after a step-table change).

@@ -8,6 +8,7 @@ Do:
 1. Compute the per-material offsets with one scan over the (tile x material) histogram (118's scan function, one source), so scatter tiles read their offsets instead of summing columns; output order identical to today (stable within a material).
 2. Tests: sorted order bit-identical to the current implementation and CPU vs GPU, with 300 materials and >= 1,000,000 items; the existing sort tests unchanged.
 3. Re-measure b5m (and b1m, single material: the sort must not launch) with tools/bench.ps1 and nsys as in 093: sort GPU time as % of pass, longest launch (B-17); with the sort cheap, re-check kSortMinItems by one measurement on b5m (sorted vs unsorted pass time) and record it; PR body Result: with commands.
+4. From 118: 0002 D6 still calls the partition a reduce-then-scan (Blelloch 1990); point it at D7 (c)'s single-pass scan. The warp ranking's popcount is a loop nvcc happens to turn into POPC: add an explicit portable `ar::popc` (src/kernel/portability.h joins Scope) and use it in queue_build and the sort.
 Acceptance: `pwsh tools/check.ps1 gate` passes; the PR body holds the before/after table.
 Look at: none.
 Canary: tasks/119.canary.patch must turn red: astroray_tests_cpu with the new sort case (the patch shifts one material's offset), astroray_tests_gpu sort agreement case.
