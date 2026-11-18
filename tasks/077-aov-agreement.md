@@ -17,3 +17,4 @@ Depends on: 076, 061.
 Size: S (about 250 lines); stop and report at 2x.
 Progress:
 - started on task/077-aov-agreement
+- D2 scene and tools/aov_agree.py written (WIP): ids 0 and positions 0 mismatches (worst 3.8e-6 rel); normals worst 3.1e-5 rad, UV 1.2e-5 exceed the task's 1e-5. Stopped for lead: D1 needs tools/analytic.py (out of Scope) and 1e-3 per pixel at 4 spp is below the noise (A5 4 spp rel SE 2-28%).
