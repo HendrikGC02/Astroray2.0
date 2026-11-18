@@ -75,18 +75,20 @@ try {
   Write-Host "row $Row`: $(@($edits).Count) edit(s) in $($files -join ', ')"
   & git diff --stat | Write-Host
 
+  # Build first, so the gate's B-08/B-09 clocks see a warm tree, as on an ordinary second run, and
+  # a failure is the bug's, not the rebuild's.
+  $b = & pwsh -NoProfile -File tools/build.ps1 -Target all,astroray_kernels_gpu_nofma 2>&1 | ForEach-Object { "$_" }
+  $b | Set-Content (Join-Path $dir 'build.log')
+  if ($LASTEXITCODE -ne 0) { $b | Select-Object -Last 5 | ForEach-Object { Write-Host $_ }; throw 'build failed' }
   $sw = [Diagnostics.Stopwatch]::StartNew()
-  $g = & pwsh -NoProfile -File tools/check.ps1 gate 2>&1 | ForEach-Object { "$_" }
+  $g =& pwsh -NoProfile -File tools/check.ps1 gate 2>&1 | ForEach-Object { "$_" }
   $gc = $LASTEXITCODE
   $g | Set-Content (Join-Path $dir 'gate.log')
   Write-Host "== check gate: exit $gc, wall $([math]::Round($sw.Elapsed.TotalSeconds, 1)) s"
   $g | Select-Object -Last 8 | ForEach-Object { Write-Host "  $_" }
   if ($Row -eq 'baseline' -or $Row -like 'm-*') { return }
 
-  # The gate stops at its first failure: build everything, then run each suite to the end.
-  $b = & pwsh -NoProfile -File tools/build.ps1 -Target all,astroray_kernels_gpu_nofma 2>&1 | ForEach-Object { "$_" }
-  $b | Set-Content (Join-Path $dir 'build.log')
-  if ($LASTEXITCODE -ne 0) { $b | Select-Object -Last 5 | ForEach-Object { Write-Host $_ }; throw 'build failed' }
+  # The gate stops at its first failure: run each suite to the end.
   $suites = [ordered]@{
     'cpu-fast' = { & (Join-Path $root 'out/bin/astroray_tests_cpu.exe') --tier=fast }
     'cpu-gate' = { & (Join-Path $root 'out/bin/astroray_tests_cpu.exe') --tier=gate }
