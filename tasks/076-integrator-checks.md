@@ -22,3 +22,6 @@ Progress:
 - started on task/076-integrator-checks
 - design read; stopped before code: scope questions (scheduler.h, analytic.py/budgets.toml family, CPU threads=1) sent to lead
 - lead ruling: Q1 scheduler.h joins; POOL=MAIN[,SHADOW], SHADOW >= max k. Q2 analytic.py/budgets.toml 58->64. Q3 hook ASTRORAY_TEST_THREADS=N via session_api.cpp. Q4 d28 via NSAMP/bounce_paths. Tripwire CUDA only.
+- hooks POOL/THREADS/RADIANCE_SCALE + TEST_HOOK_ACTIVE (45; report_codes.def needed one line too). Scenes d2/d4/d28/d15, truths uniform_enclosure, tools/integrator_checks.py, gate steps.
+- found: min_bounces = max_bounces still roulettes the last continuation (roulette_q depth >= max(2, min)); scenes use max+1. Emissive enclosure needs emission_sampling FRONT_BACK (AUTO drops Le < 0.5).
+- null 100 seeds CPU: d2 on/off, d4 0 alarms, unbiased. Canary red on all six checks; second-shadow-ray demo fails counters.
