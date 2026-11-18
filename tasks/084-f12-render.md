@@ -12,6 +12,7 @@ Do:
 5. smoke_a1.py (Invoke-ArBlender): installs the staged zip, opens the .blend, renders 64x64 at the analytic harness's spp with the addon on the CPU device, saves the Combined pass as a FITS-compatible float dump the harness reads, and passes A1's truth; the addon's recording and the builder's recording are both rendered with `astroray_cli dump` on CPU at a fixed seed, and tools/exporter_equivalence.py compares the deterministic AOVs (position, normal, material id, UV) within float tolerance (0009 d17a exporter equivalence, done through film output because R59 forbids a scene-state dump).
 6. check.ps1 `gate` adds the smoke after the GPU tests (one Blender start; time reported against B-09).
 7. The F12 render puts the AOV passes the view layer enables into `ar_settings.passes`; task 117 makes the session film allocate them.
+8. From 083: engine.py is not yet wired to materials/translate.py and sync/world.py. Call them from the full sync (pass `_ops.OP_ID` and the key map) and call `TranslationCache.invalidate(actions)` with classification's MATERIALS actions.
 Acceptance: `pwsh tools/check.ps1 gate` passes with the smoke; pressing F12 on the A1 .blend in an interactive Blender shows the furnace image (the lead's look).
 Look at: out/evidence/084/a1_f12.png (Blender's render result saved as PNG).
 Canary: tasks/084.canary.patch must turn red: tests/blender/smoke_a1.py "TestSmoke.test_a1_analytic", `tools/exporter_equivalence.py` (the patch drops corner normals in mesh sync).

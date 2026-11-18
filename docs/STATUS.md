@@ -39,7 +39,9 @@ Pending does not record whether it is display-only (0007 d12); the flag and its 
 task owns them yet. Each CPU session owns its Ledger (052), so session allocations appear in no context or scene total;
 104's ar_progress ledger fields read the session's own. Lamp temperature is Cycles' RGB fold of the blackbody (082); a
 spectral AR_SPECTRUM_BLACKBODY option is open for M1b. PASS_UNSUPPORTED entries (ruling 74) persist for a session's
-life; no task owns clearing them.
+life; no task owns clearing them. M1b from 083: Principled Roughness and Specular IOR Level linked from a texture are
+UNSUPPORTED (no colour-to-float op; Cycles converts by luminance); 083 Do 7 (the auto-converted Emission flag, each
+EMIT_LE term's RGB for AUTO) waits for the Emission node and Mix/Add Shader.
 
 ## Budget headroom
 Landing gates run 43-55 s of B-09's 180 s (kernel part 11-21 s of 120 s); `check fast` 5-7 s warm,
