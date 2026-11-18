@@ -18,3 +18,4 @@ Progress:
 - started
 - scenes/cornell (area + point), scenes/s3_textured, blend_writer Image Texture, bench/scenes.toml written; CUDA render of cornell_area exit 0; .blend files render with the addon (checks pending)
 - lead ruling: two directories cornell_area and cornell_point over scenes/cornell/cornell_box.py; ar.Scene.textured_material replaces the subclass; check fast/gate and scenes rerun
+Lead ruling: Cornell and S3 recordings are on demand ([build] on_demand in meta.toml; scenes/lib/meta.py and tools/scenes.py joined Scope): hosted ci has no fetched assets.
