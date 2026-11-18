@@ -21,9 +21,9 @@ the caller, so the module runs over stubs.
 """
 import ctypes
 
-# include/astroray/astroray.h
-TARGET_SURFACE, TARGET_WORLD = 0, 4
-EMISSION_SAMPLING_AUTO = 1
+# Graph targets, report codes and emission sampling come from the generated binding (`abi`,
+# passed in by the callers). These engine constants have no generated export, so they are copied
+# here and a test (test_engine_constants_match_the_headers) parses the headers and pins them.
 # vm/ops/store_slot.h RecordSlot ids: scalars 0-23 in AR_RECORD_SCALARS order, then the spectral
 # slots in AR_RECORD_SPECTRAL order.
 SLOT_SPECULAR_WEIGHT, SLOT_SPECULAR_ROUGHNESS, SLOT_BASE_COLOR = 3, 4, 24
@@ -31,6 +31,10 @@ SLOT_SPECULAR_WEIGHT, SLOT_SPECULAR_ROUGHNESS, SLOT_BASE_COLOR = 3, 4, 24
 SEM_REFLECTANCE = 0
 # vm/ops/tex_image.h mode bits
 TEX_LINEAR, TEX_EXTEND = 1, 2
+# Blender's Cycles property group `material.cycles.emission_sampling` items; the ABI has
+# AR_EMISSION_SAMPLING_<name> for each (a test checks the binding). Another value is reported.
+EMISSION_SAMPLING_NAMES = ("NONE", "AUTO", "FRONT", "BACK", "FRONT_BACK")
+_IMAGE_SOURCES = frozenset(("FILE", "GENERATED"))
 
 # Principled inputs lowered by this module; every other one must be at its default and unlinked.
 _LOWERED_INPUTS = frozenset(("Base Color", "Roughness", "Specular IOR Level", "Emission Color",
@@ -63,6 +67,7 @@ class GraphEmitter:
         self.f32 = []
         self.i32 = []
         self.strings = []
+        self.emission_sampling = "AUTO"  # materials only
 
     def add(self, op, f32=(), i32=(), string=None):
         """Appends one op node and returns its index."""
@@ -158,6 +163,10 @@ def _link_of(sock):
 
 # Lowerings of non-shader nodes, by output socket: f(em, node, keymap, op_id) -> emitter node.
 def _uv(em, node, keymap, socket_name):
+    if node.from_instancer:
+        # The instancer's UV comes from another object's mesh; the ABI has no such context.
+        em.unsupported(f"{node.bl_idname}.from_instancer")
+        return None
     if node.bl_idname == "ShaderNodeUVMap" and node.uv_map:
         # Only the default UV set is addressable (the ABI carries UV set 0); a named set could be
         # any index, so it is not guessed.
@@ -176,6 +185,9 @@ def _tex_image(em, node, keymap, socket_name):
         return None
     if image is None:
         em.unsupported("Image Texture.image")
+        return None
+    if image.source not in _IMAGE_SOURCES:
+        em.unsupported("Image Texture.source")  # TILED, SEQUENCE, MOVIE and VIEWER need 110's work
         return None
     if node.interpolation not in ("Linear", "Closest"):
         em.unsupported("Image Texture.interpolation")
@@ -197,7 +209,12 @@ def _tex_image(em, node, keymap, socket_name):
     mode = (TEX_LINEAR if node.interpolation == "Linear" else 0) | \
            (TEX_EXTEND if node.extension == "EXTEND" else 0)
     key = keymap.key(("image", image.original.session_uid))
-    n = em.add("TEX_IMAGE", i32=(key & 0xFFFFFFFF, mode))
+    if key > 0xFFFFFFFF:
+        # TEX_IMAGE carries the low 32 bits of the u64 key (0007 appendix); KeyMap is a counter,
+        # so a wider key means 2^32 datablocks, and truncating would alias two images.
+        em.unsupported("Image Texture.image key")
+        return None
+    n = em.add("TEX_IMAGE", i32=(key, mode))
     em.link(uv, n, 0)
     return n
 
@@ -225,6 +242,10 @@ def _value(em, link, keymap, label):
         if src.bl_idname in lowered_types():
             em.unsupported(label)
         return None
+    if link.from_socket.type != link.to_socket.type:
+        # Blender converts vector to colour silently; the engine lowers no conversions in M1a.
+        em.unsupported(label)
+        return None
     return fn(em, src, keymap, link.from_socket.name)
 
 
@@ -251,6 +272,9 @@ def _scalar(em, sock, label):
 
 def _principled(em, node, keymap):
     ins = node.inputs
+    # `distribution` (GGX or Multiscatter GGX) and `subsurface_method` are not checked: 0005 item
+    # 42 maps Distribution to "compensation always on, ignored (info)", and the subsurface method
+    # only matters when Subsurface Weight is non-default, which is reported by name below.
     for s in ins:
         name = s.name
         if name in _LOWERED_INPUTS or name == "Weight" or not s.enabled:
@@ -296,6 +320,16 @@ def _surface(em, tree, keymap, out_type, label):
     return None if lk is None else lk.from_node
 
 
+def _emission_sampling(em, material):
+    """The material's Emission Sampling name; one the ABI enum lacks is reported (Cycles'
+    NONE, AUTO, FRONT, BACK and FRONT_BACK all exist there)."""
+    name = material.cycles.emission_sampling
+    if name not in EMISSION_SAMPLING_NAMES:
+        em.unsupported(f"Material.emission_sampling {name}")
+        return "AUTO"
+    return name
+
+
 def translate_material(material, keymap, op_id):
     """The SURFACE graph of one evaluated material, as a GraphEmitter."""
     em = GraphEmitter(op_id)
@@ -306,6 +340,7 @@ def translate_material(material, keymap, op_id):
         em.unsupported("Material without nodes")
         return em
     scan_unsupported(em, tree)
+    em.emission_sampling = _emission_sampling(em, material)
     src = _surface(em, tree, keymap, "ShaderNodeOutputMaterial", "Material Output")
     if src is None:
         return em
@@ -405,10 +440,10 @@ def set_material(edit, abi, keymap, uid, em, name=""):
     material_key = keymap.key(("material", uid))
     graph_key = keymap.key(("graph", "SURFACE", uid))
     desc, keep = em.to_desc(abi)
-    edit.call("ar_edit_set_graph", graph_key, TARGET_SURFACE, ctypes.byref(desc))
+    edit.call("ar_edit_set_graph", graph_key, abi.AR_TARGET_SURFACE, ctypes.byref(desc))
     m = abi.ar_material_desc()
     m.surface_graph = graph_key
-    m.emission_sampling = EMISSION_SAMPLING_AUTO
+    m.emission_sampling = getattr(abi, "AR_EMISSION_SAMPLING_" + em.emission_sampling)
     edit.call("ar_edit_set_material", material_key, ctypes.byref(m))
     del keep
     return material_key

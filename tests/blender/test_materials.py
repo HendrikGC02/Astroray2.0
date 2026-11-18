@@ -10,6 +10,7 @@ import ctypes
 import importlib
 import importlib.util
 import os
+import re
 import sys
 import tempfile
 import types
@@ -27,7 +28,6 @@ import support  # noqa: E402
 GEN = os.path.join(ROOT, "out", "build", "gen")
 DLL = os.path.join(ROOT, "out", "bin", "astroray_core.dll")
 ADDON = os.path.join(ROOT, "blender", "astroray")
-AR_REPORT_NODE_UNSUPPORTED = 10
 
 
 def _load(name, path):
@@ -52,6 +52,7 @@ OPS = _load("ar_ops", os.path.join(GEN, "_ops.py"))
 PROPS = _load("ar_properties", os.path.join(ADDON, "properties.py"))
 LOWERING_TABLE = _load("ar_lowering", os.path.join(ADDON, "materials", "lowering_table.py"))
 OP = OPS.OP_ID
+AR_REPORT_NODE_UNSUPPORTED = ABI.AR_REPORT_NODE_UNSUPPORTED
 W, H = 32, 24
 
 
@@ -267,6 +268,12 @@ class TestMaterials(unittest.TestCase):
         src = nodes[inputs_of(graph, stores[0])[0]]
         self.assertEqual((src["op"], src["f32"]), ("CONST_F32", [0.0]))
         self.assertEqual(unsupported_strings(graph), [])
+        # A nonzero level: specular_weight = 2L (0005 item 42), so 0.3 gives 0.6.
+        node(mat.node_tree, "ShaderNodeBsdfPrincipled").inputs["Specular IOR Level"].default_value = 0.3
+        em = translate.translate_material(mat, keys.KeyMap(), OP)
+        n3 = decode(em)
+        st = next(i for i, n in enumerate(n3) if n["op"] == "STORE_SLOT" and n["i32"] == [translate.SLOT_SPECULAR_WEIGHT])
+        self.assertAlmostEqual(n3[inputs_of(em, st)[0]]["f32"][0], 0.6, places=6)
         rgb = centre_rgb(img)
         print(f"RESULT specular level 0 centre rgb {rgb}, entries {entries}")
         self.assertFalse(is_magenta(rgb), f"unexpected magenta {rgb}")
@@ -317,9 +324,16 @@ class TestMaterials(unittest.TestCase):
         self.assertEqual(tex_ops[0]["i32"], [km.key(("image", tex.image.session_uid)), translate.TEX_EXTEND])
         self.assertEqual([n["op"] for n in nodes if n["op"] in ("RGB_LIFT", "LOAD_CTX_UV")], ["LOAD_CTX_UV", "RGB_LIFT"])
         self.assertEqual(unsupported_strings(em), [])
+        tex.interpolation, tex.extension = "Linear", "REPEAT"
+        lin = [n for n in decode(translate.translate_material(mat, km, OP)) if n["op"] == "TEX_IMAGE"]
+        self.assertEqual(lin[0]["i32"][1], translate.TEX_LINEAR)
         tex.interpolation = "Cubic"
         self.assertEqual(unsupported_strings(translate.translate_material(mat, km, OP)),
                          ["Image Texture.interpolation"])
+        tex.interpolation = "Linear"
+        tex.image.source = "TILED"
+        self.assertEqual(unsupported_strings(translate.translate_material(mat, km, OP)),
+                         ["Image Texture.source"])
 
     def test_other_principled_inputs_are_reported_by_name(self):
         scene, plane, mat, world = new_scene()
@@ -352,6 +366,61 @@ class TestMaterials(unittest.TestCase):
         for n in translate.lowered_types():
             self.assertEqual(by[n], "implemented", n)
 
+    def test_uv_into_colour_and_colour_into_vector_are_reported_by_consumer(self):
+        scene, plane, mat, world = new_scene()
+        t = mat.node_tree
+        p = node(t, "ShaderNodeBsdfPrincipled")
+        t.links.new(t.nodes.new("ShaderNodeTexCoord").outputs["UV"], p.inputs["Base Color"])
+        self.assertEqual(unsupported_strings(translate.translate_material(mat, keys.KeyMap(), OP)),
+                         ["Principled BSDF.Base Color"])
+        t.links.clear()
+        t.links.new(p.outputs["BSDF"], node(t, "ShaderNodeOutputMaterial").inputs["Surface"])
+        tex = t.nodes.new("ShaderNodeTexImage")
+        tex.image = bpy.data.images.new("Img2", 4, 4)
+        tex2 = t.nodes.new("ShaderNodeTexImage")
+        tex2.image = tex.image
+        t.links.new(tex2.outputs["Color"], tex.inputs["Vector"])
+        t.links.new(tex.outputs["Color"], p.inputs["Base Color"])
+        self.assertEqual(unsupported_strings(translate.translate_material(mat, keys.KeyMap(), OP)),
+                         ["Image Texture.Vector"])
+
+    def test_instancer_uv_and_emission_sampling(self):
+        scene, plane, mat, world = new_scene()
+        t = mat.node_tree
+        uv = t.nodes.new("ShaderNodeTexCoord")
+        uv.from_instancer = True
+        tex = t.nodes.new("ShaderNodeTexImage")
+        tex.image = bpy.data.images.new("Img3", 4, 4)
+        t.links.new(uv.outputs["UV"], tex.inputs["Vector"])
+        t.links.new(tex.outputs["Color"], node(t, "ShaderNodeBsdfPrincipled").inputs["Base Color"])
+        self.assertEqual(unsupported_strings(translate.translate_material(mat, keys.KeyMap(), OP)),
+                         ["ShaderNodeTexCoord.from_instancer"])
+        mat.cycles.emission_sampling = "FRONT"
+        self.assertEqual(translate.translate_material(mat, keys.KeyMap(), OP).emission_sampling, "FRONT")
+        for name in translate.EMISSION_SAMPLING_NAMES:
+            self.assertTrue(hasattr(ABI, "AR_EMISSION_SAMPLING_" + name), name)
+
+    def test_engine_constants_match_the_headers(self):
+        """The constants with no generated export are pinned to the C++ headers they copy."""
+        def read(*parts):
+            with open(os.path.join(ROOT, "src", "kernel", *parts), encoding="utf-8") as f:
+                return f.read()
+
+        ss = read("vm", "ops", "store_slot.h")
+        scalars = re.search(r"#define AR_RECORD_SCALARS\(X\)(.*?)\n#define|\n// The spectral", ss, re.S)
+        scalar_names = re.findall(r"X\((\w+)\)", re.search(r"AR_RECORD_SCALARS\(X\)(.*?)// The spectral", ss, re.S).group(1))
+        spectral = re.findall(r"X\((\w+), \w+, \w+\)", re.search(r"AR_RECORD_SPECTRAL\(X\)(.*)", ss).group(1).split("\n")[0])
+        ids = {n: i for i, n in enumerate(scalar_names + spectral)}
+        self.assertEqual((ids["specular_weight"], ids["specular_roughness"], ids["base_color"]),
+                         (translate.SLOT_SPECULAR_WEIGHT, translate.SLOT_SPECULAR_ROUGHNESS, translate.SLOT_BASE_COLOR))
+        ti = read("vm", "ops", "tex_image.h")
+        self.assertEqual(int(re.search(r"kTexLinear = (\d+)u", ti).group(1)), translate.TEX_LINEAR)
+        self.assertEqual(int(re.search(r"kTexExtend = (\d+)u", ti).group(1)), translate.TEX_EXTEND)
+        sr = read("material", "spectrum_ref.h")
+        first = re.search(r"enum class SpectrumSemantic[^{]*\{\s*(\w+) = 0", sr).group(1)
+        self.assertEqual(first, "REFLECTANCE")
+        self.assertEqual(translate.SEM_REFLECTANCE, 0)
+
     def test_translation_cache_retranslates_only_what_changed(self):
         scene, plane, mat, world = new_scene()
         other = bpy.data.materials.new("Other")
@@ -359,19 +428,27 @@ class TestMaterials(unittest.TestCase):
         group = bpy.data.node_groups.new("G", "ShaderNodeTree")
         gn = mat.node_tree.nodes.new("ShaderNodeGroup")
         gn.node_tree = group
+        # Both materials must be in the depsgraph to have evaluated copies; the cache is fed those
+        # copies (as the engine does) and must still key by the original's session_uid.
+        scene.collection.objects.link(bpy.data.objects.new("P2", bpy.data.meshes.new("M2")))
+        scene.objects["P2"].data.materials.append(other)
+        bpy.context.view_layer.update()
+        dg = support.depsgraph()
+        ev_mat, ev_other = mat.evaluated_get(dg), other.evaluated_get(dg)
+        self.assertIsNot(ev_mat, mat)
         cache, km = translate.TranslationCache(), keys.KeyMap()
         Act = lambda id_type, uid: types.SimpleNamespace(id_type=id_type, uid=uid)  # noqa: E731
-        cache.get(mat, km, OP)
-        cache.get(other, km, OP)
-        cache.get(mat, km, OP)
+        cache.get(ev_mat, km, OP)
+        cache.get(ev_other, km, OP)
+        cache.get(ev_mat, km, OP)
         self.assertEqual(cache.translations, 2)
         cache.invalidate([Act("MATERIAL", other.session_uid)])
-        cache.get(mat, km, OP)
-        cache.get(other, km, OP)
+        cache.get(ev_mat, km, OP)
+        cache.get(ev_other, km, OP)
         self.assertEqual(cache.translations, 3)
         cache.invalidate([Act("NODETREE", group.session_uid)])  # a group in mat's raw tree
-        cache.get(mat, km, OP)
-        cache.get(other, km, OP)
+        cache.get(ev_mat, km, OP)
+        cache.get(ev_other, km, OP)
         self.assertEqual(cache.translations, 4)
 
 

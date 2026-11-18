@@ -20,7 +20,7 @@ def sync(edit, abi, world, keymap, op_id):
     em = translate.translate_world(world, keymap, op_id)
     graph_key = keymap.key(("graph", "WORLD", world.original.session_uid))
     desc, keep = em.to_desc(abi)
-    edit.call("ar_edit_set_graph", graph_key, translate.TARGET_WORLD, ctypes.byref(desc))
+    edit.call("ar_edit_set_graph", graph_key, abi.AR_TARGET_WORLD, ctypes.byref(desc))
     w = abi.ar_world_desc()
     w.surface_graph = graph_key
     edit.call("ar_edit_set_world", ctypes.byref(w))
