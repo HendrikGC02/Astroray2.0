@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Bitterli's Cornell box (CC0, assets/manifest.toml cornell_box), M1a showcase (ROADMAP M1a "Owner
+# sees"): `cornell_area` lights it with the archive's rectangular lamp as an area lamp, `cornell_point`
+# with a point lamp of equal power at the lamp's centre. build.py writes both recordings
+# (cornell_area.arrec, cornell_point.arrec) and, with --variant and --blend, one .blend each.
+# Lambertian walls and boxes as constant base colours with specular_weight 0 (the M1a material set);
+# the archive's own units are used as metres (the box is 2 wide, the lamp 0.47 x 0.38). The black
+# world is the archive's (it has no environment). No truth: a showcase scene.
+class = "G"
+units = "m"
+spectra = ["rgb"]
+assets = ["cornell_box"]
+single_witness = false

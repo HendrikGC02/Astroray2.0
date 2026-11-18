@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-# Benchmark scenes (0009 d22, d23). b1m and b5m (B-1M, B-5M) are added by task 089.
-#   name:      scene id (the scenes/ directory) used in bench/history lines
+# Benchmark scenes (0009 d22, d23). b1m and b5m (B-1M, B-5M) are added by task 089; b_tx and the
+# showcase scenes by task 090.
+#   name:      scene id used in bench/history lines (b_tx is scenes/s3_textured, cornell_* come from
+#              the one builder scenes/cornell)
 #   recording: path under out/scenes/
-#   class:     "B" (benchmark class)
+#   class:     "B" (benchmark class) or "G" (showcase: gallery only, never timed)
 #   sets:      milestones whose set includes the scene
 [[scene]]
 name = "b1m"
@@ -14,4 +16,24 @@ sets = ["M1a"]
 name = "b5m"
 recording = "b5m.arrec"
 class = "B"
+sets = ["M1a"]
+
+# B-TX (0009 d20), the textured S3 of 0007 d35; defined in scenes/s3_textured/meta.toml.
+[[scene]]
+name = "b_tx"
+recording = "s3_textured.arrec"
+class = "B"
+sets = ["M1a"]
+
+# Bitterli's Cornell box under an area lamp and a point lamp (ROADMAP M1a "Owner sees").
+[[scene]]
+name = "cornell_area"
+recording = "cornell_area.arrec"
+class = "G"
+sets = ["M1a"]
+
+[[scene]]
+name = "cornell_point"
+recording = "cornell_point.arrec"
+class = "G"
 sets = ["M1a"]

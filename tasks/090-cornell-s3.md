@@ -16,3 +16,4 @@ Depends on: 088, 070, 083, 089, 110.
 Size: M (about 350 lines Python); stop and report at 2x.
 Progress:
 - started
+- scenes/cornell (area + point), scenes/s3_textured, blend_writer Image Texture, bench/scenes.toml written; CUDA render of cornell_area exit 0; .blend files render with the addon (checks pending)
