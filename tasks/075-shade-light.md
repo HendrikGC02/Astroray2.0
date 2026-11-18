@@ -11,7 +11,7 @@ Do:
 4. Tests: CPU (fast): a hand-built lamp hit adds the weighted Le once, re-queues INTERSECT_CLOSEST from past the lamp and leaves bounces and event_index unchanged.
 Acceptance: `pwsh tools/check.ps1 gate` passes with both scenes on both devices; `out/bin/astroray_cli.exe render` of a4_sphere at 512x512 writes an image the lead inspects.
 Look at: out/evidence/075/a4_sphere.png.
-Canary: tasks/075.canary.patch must turn red: `tools/analytic.py --scene a4_sphere --device cpu` (the patch uses 4 pi r^2 instead of 4 pi^2 r^2 in the sphere's radiance), astroray_tests_cpu "shade_light/requeue keeps event index".
+Canary: tasks/075.canary.patch must turn red: `tools/analytic.py --scene a4_sphere --device cpu` (the patch uses 4 pi r^2 instead of 4 pi^2 r^2 in the sphere's radiance), astroray_tests_cpu "shade_light/requeue keeps event index"; lead ruling: also `tools/analytic.py --scene a4_point --device cpu` (the patch uses 2 pi instead of 4 pi in the point lamp's intensity) and astroray_tests_gpu "shade_light/agreement" (a CUDA-only hunk scales the added radiance by 1.001).
 Budget: one VM-class device TU (lamp emission is constant in M1a); gate time +6 s.
 Depends on: 074, 105.
 Size: M (about 300 lines); stop and report at 2x.
@@ -23,3 +23,4 @@ Progress:
 - done: shade_light stage (CPU/GPU), A4 point and sphere scenes and lamp_over_plane truth, gate family 22 -> 34 members; both scenes PASS on cpu and cuda; k_shade_light 74 regs, 0 spills (a lamp-only pdf dispatch removed 16 B of spills), 1.4 s compile.
 - GPU agreement: slot radiance is judged in the throughput class (its MIS weight carries the cone / spherical-rectangle pdf), as NEE's contribution; max 6.5e-4, p99.9 3.5e-5; origin and prev_dist bit-equal.
 - evidence: out/evidence/075/a4_sphere.png (512x512, cuda, 256 spp); disc radius 59.48 px vs 59.47 expected, centred at (255.49, 255.48).
+- review fixes: CPU test adds weighted rectangle and disk crossings (pmf x pdf in double) and the non-lamp record's INVALID path; canary gains the point-intensity and GPU-only hunks, all four named cases red. Gate time grew about 12 s with the A4 runs and the agreement test (lead: accepted, B-09 holds).

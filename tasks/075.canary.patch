@@ -1,3 +1,16 @@
+diff --git a/src/kernel/light/point.h b/src/kernel/light/point.h
+index 9a8aaf2..dc49516 100644
+--- a/src/kernel/light/point.h
++++ b/src/kernel/light/point.h
+@@ -12,7 +12,7 @@
+ AR_NS_BEGIN
+ 
+ AR_FN Spec point_intensity(const LightRecord& r, const Lambda& lam, const ObserverView& obs) {
+-  return light_emission(r, lam, obs) / (Real(4) * kLightPi);
++  return light_emission(r, lam, obs) / (Real(2) * kLightPi);
+ }
+ 
+ // The context point on the lamp has no direction: no sample rather than an infinite Le.
 diff --git a/src/kernel/light/sphere.h b/src/kernel/light/sphere.h
 index cfad1af..5cc5234 100644
 --- a/src/kernel/light/sphere.h
@@ -12,10 +25,22 @@ index cfad1af..5cc5234 100644
  
  // sin^2 of the cone's half angle for a context point at squared distance d2 from the centre;
 diff --git a/src/kernel/stages/shade_light.h b/src/kernel/stages/shade_light.h
-index 65d2ace..d3684fa 100644
+index 65d2ace..b0b5030 100644
 --- a/src/kernel/stages/shade_light.h
 +++ b/src/kernel/stages/shade_light.h
-@@ -141,6 +141,7 @@ AR_FN void stage_shade_light(const KernelGlobals& kg, uint32_t item, const StepE
+@@ -124,7 +124,11 @@ AR_FN void stage_shade_light(const KernelGlobals& kg, uint32_t item, const StepE
+       path_end(kg, slot, Term::INVALID);
+       return;
+     }
++#if AR_CUDA_BUILD
++    sample_add(kg, sample, contribution * Real(1.001));
++#else
+     sample_add(kg, sample, contribution);
++#endif
+   }
+ 
+   if (!hit.valid) {  // a lamp instance whose record is no lamp shape: a broken table, fail loudly
+@@ -141,6 +145,7 @@ AR_FN void stage_shade_light(const KernelGlobals& kg, uint32_t item, const StepE
    const Real3 o_next = offset_past_surface(hit.p, hit.n, d);
    ps_prev_dist(kg, slot) = ps_prev_dist(kg, slot) + dot(o_next - o, d) / dot(d, d);
    ps_ray_o(kg, slot) = o_next;
