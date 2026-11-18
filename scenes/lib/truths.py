@@ -108,8 +108,73 @@ def lambertian_furnace(t, width, height):
     return [(c, eye[i], truth, "pixels") for i, c in enumerate("RGB")]
 
 
+def lamp_irradiance(power, lamp, x, y):
+    """Irradiance at (x, y, 0) on the plane z = 0 (normal +z) from a point lamp of power P at `lamp`,
+    or from a sphere lamp of power P centred there that lies wholly above the plane: E = I cos
+    theta / D^2 with I = P / (4 pi) for the point (0004 D6); E = pi L (R / D)^2 cos theta with L =
+    P / (4 pi^2 R^2) for the sphere, which is the same P cos theta / (4 pi D^2) (a uniformly
+    bright sphere above the tangent plane irradiates a point as a point source at its centre).
+    cos theta = z_lamp / D, D the distance to the lamp's centre.
+    Ref: docs/research/09-test-validation.md S4 (E = pi L (R/d)^2; E = I cos / d^2);
+    docs/decisions/0004-integrator.md D6 (point/sphere row: I = P / 4 pi, L = P / (4 pi^2 r^2))."""
+    lx, ly, lz = (float(v) for v in lamp)
+    d2 = (x - lx) ** 2 + (y - ly) ** 2 + lz * lz
+    return power / (4.0 * np.pi) * lz / d2 ** 1.5
+
+
+def lamp_over_plane(t, width, height):
+    """A4: a point lamp (lamp_radius 0) or sphere lamp over a Lambertian plane z = 0 of grey albedo
+    rho, seen by a pinhole camera on the +z axis looking straight down (scenes/lib/ar.py look_at
+    with up +y: film x is world x, film y is world y, rows bottom-up), black world. A plane pixel is
+    colour rho / pi E (0009 d20), E from lamp_irradiance averaged over the pixel's square (box filter
+    of width 1) by 8 x 8 Gauss-Legendre quadrature, so the truth is the pixel's mean, not its centre.
+    A sphere lamp must sit on the camera axis; its disc is seen directly with radiance L = P /
+    (4 pi^2 R^2) (0004 D6) in front of the plane, so a pixel the disc covers is colour (L + rho / pi
+    E). Lamps never occlude (0004 D8). Pixels the disc's edge may cross are NaN (excluded): the
+    sphere is exact, so the ball test of sphere_pixel_classes applies with r_in = R.
+    Ref: Golub and Welsch 1969 (Gauss-Legendre nodes, numpy.polynomial.legendre.leggauss)."""
+    if width != height:
+        raise ValueError("lamp_over_plane assumes a square image")
+    rho, power, radius = float(t["rho"]), float(t["power"]), float(t["lamp_radius"])
+    lamp = [float(v) for v in t["lamp_position"]]
+    cam = float(t["camera_height"])
+    colour = np.asarray(t["colour"], dtype=np.float64)
+    if colour.shape != (3,):
+        raise ValueError("truth colour must be an RGB triple")
+    if not lamp[2] > radius:
+        raise ValueError("the lamp must lie wholly above the plane")
+    half = float(t["sensor_mm"]) / (2.0 * float(t["focal_mm"]))
+    edges = (np.arange(width + 1) / width * 2.0 - 1.0) * half
+    nodes, weights = np.polynomial.legendre.leggauss(8)
+    lo, hi = edges[:-1], edges[1:]
+    # film coordinates of the quadrature nodes per pixel column / row: (n, 8)
+    f = (lo + hi)[:, None] / 2.0 + (hi - lo)[:, None] / 2.0 * nodes[None, :]
+    wq = weights / 2.0  # each axis' weights sum to 1
+    fx = f[None, :, None, :]  # (1, w, 1, 8): column
+    fy = f[:, None, :, None]  # (h, 1, 8, 1): row, bottom-up
+    e = lamp_irradiance(power, lamp, cam * fx, cam * fy)  # (h, w, 8, 8)
+    e_mean = np.einsum("hwab,a,b->hw", e, wq, wq)
+    plane = rho / np.pi * e_mean
+    truth = plane
+    if radius > 0.0:
+        if lamp[0] != 0.0 or lamp[1] != 0.0:
+            raise ValueError("a sphere lamp must sit on the camera axis (the disc test assumes it)")
+        dist = cam - lamp[2]
+        if dist <= radius:
+            raise ValueError("the camera is inside the sphere lamp")
+        t_r = radius / np.sqrt(dist * dist - radius * radius)
+        near = np.where((lo <= 0) & (hi >= 0), 0.0, np.minimum(np.abs(lo), np.abs(hi)))
+        far = np.maximum(np.abs(lo), np.abs(hi))
+        r_far = np.hypot(far[None, :], far[:, None])
+        r_near = np.hypot(near[None, :], near[:, None])
+        radiance = power / (4.0 * np.pi ** 2 * radius * radius)
+        truth = np.where(r_far < t_r, radiance + plane, np.where(r_near > t_r, plane, np.nan))
+    eye = np.eye(3)
+    return [(c, eye[i], truth * colour[i], "pixels") for i, c in enumerate("RGB")]
+
+
 FORMULAS = {"emitter_radiance": emitter_radiance, "display_luminance": display_luminance,
-            "lambertian_furnace": lambertian_furnace}
+            "lambertian_furnace": lambertian_furnace, "lamp_over_plane": lamp_over_plane}
 
 
 def evaluate(truth_table, width, height):
