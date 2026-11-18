@@ -21,7 +21,7 @@ import weakref
 
 import numpy as np
 
-from . import native, present, render_final
+from . import heatmap_draw, native, present, render_final
 from .materials import translate
 from .sync import camera, classify, edit as edit_mod, images, instances, keys, mesh, settings
 from .sync import world as world_sync, lights
@@ -30,10 +30,17 @@ POLL_S = 0.05  # 0009 B-37: completion poll period
 MAX_REAP_FAILURES = 20  # consecutive failed teardown ticks (one second) before the reaper stops retrying
 
 
+# scene.astroray.display_mode items to the engine's AR_DISPLAY_* ids (properties.DISPLAY_MODE_ITEMS)
+_DISPLAY_MODES = {"BEAUTY": 0, "SAMPLE_COUNT": 1, "BOUNCE_COUNT": 2}
+
+
 class ViewportJob(render_final.Job):
     def __init__(self):
         super().__init__()
         self.present = present.Present()
+        self.heat = heatmap_draw.HeatmapDraw()
+        self.showing_heat = False  # the frame on screen is a heat map
+        self._mode_sent = None     # display mode last sent to the current session
         self.views = camera.ViewSync()
         self.events = []          # lifecycle, in order; the tests read it
         self.frames = None        # a list when a test wants every presented frame logged
@@ -175,6 +182,11 @@ class ViewportJob(render_final.Job):
         digest = camera.view_hash(rv3d, w, h, rv3d.view_perspective == "CAMERA")
         if self.views.update(lambda sess, v: native.call(lib.ar_session_set_view, sess, v), abi, s, f, digest, w, h):
             self.events.append("set_view")
+        mode = _DISPLAY_MODES[depsgraph.scene.astroray.display_mode]
+        if mode != self._mode_sent:
+            native.call(lib.ar_session_set_display_mode, s, mode)
+            self._mode_sent = mode
+            self.events.append(f"display_mode {mode}")
         if not self._started:
             render_final._ok(lib, native.call(lib.ar_session_start, s), "ar_session_start",
                              "ar_session_last_error", s)
@@ -185,7 +197,10 @@ class ViewportJob(render_final.Job):
         self._revision = self._report(engine, self._reported, self._revision)
         if prog.state == abi.AR_STATE_FAILED:
             render_final._ok(lib, 1, "the session (state FAILED)", "ar_session_last_error", s)
-        self.present.draw(engine, depsgraph.scene, w, h)
+        if self.showing_heat:
+            self.heat.draw(w, h)  # outside the view transform (0007 d40)
+        else:
+            self.present.draw(engine, depsgraph.scene, w, h)
         busy = prog.state in (abi.AR_STATE_INITIALIZING, abi.AR_STATE_RENDERING)
         if busy or got:
             engine.tag_redraw()
@@ -213,12 +228,18 @@ class ViewportJob(render_final.Job):
             if self.acquired is not None:
                 self.acquired.append({"id": frame.frame_id, "generation": frame.generation, "presented": shown})
             if shown:
-                self.present.upload(frame)
+                if frame.format == abi.AR_DISPLAY_FORMAT_DIAG_RGBA8:
+                    self.heat.upload(frame)
+                    self.present.generation = frame.generation  # one "generation on screen" for both routes
+                    self.showing_heat = True
+                else:
+                    self.present.upload(frame)
+                    self.showing_heat = False
                 if self.t_first_frame is None:
                     self.t_first_frame = time.monotonic()
                 if self.frames is not None:
                     self._log_frame(frame)
-                if self.check_uploads > 0:
+                if self.check_uploads > 0 and not self.showing_heat:
                     self.check_uploads -= 1
                     self._check_upload(frame)
         finally:
@@ -233,11 +254,23 @@ class ViewportJob(render_final.Job):
                                    "stripes": len(self.present._shown.stripes),
                                    "colour_spread": float((host[:, :, :3].max(axis=2) - host[:, :, :3].min(axis=2)).max())})
 
+    def _spp(self):
+        """Samples per pixel of the session's epoch as of now (test log: the batching cases read the growth)."""
+        prog = self.abi.ar_progress()
+        native.call(self.lib.ar_session_get_progress, self.session, ctypes.byref(prog))
+        return prog.samples_per_pixel
+
     def _log_frame(self, frame):
-        px = present.frame_words(frame).view(np.float16).reshape(frame.height, frame.width, 4)
         step = max(1, min(frame.width, frame.height) // 64)
+        if self.showing_heat:  # RGBA8: the bytes, and their 0..1 scaling as "rgb"
+            px8 = heatmap_draw.frame_bytes(frame)
+            self.frames.append({"id": frame.frame_id, "generation": frame.generation, "t": time.monotonic(),
+                                "size": (frame.width, frame.height), "heat": True, "mode": self._mode_sent,
+                                "bytes": px8.copy(), "spp": self._spp(), "rgb": px8[::step, ::step, :3].astype(np.float32) / 255.0})
+            return
+        px = present.frame_words(frame).view(np.float16).reshape(frame.height, frame.width, 4)
         self.frames.append({"id": frame.frame_id, "generation": frame.generation, "t": time.monotonic(),
-                            "size": (frame.width, frame.height),
+                            "size": (frame.width, frame.height), "spp": self._spp(),
                             "rgb": px[::step, ::step, :3].astype(np.float32)})
 
     def _ensure_session(self, w, h):
@@ -256,6 +289,7 @@ class ViewportJob(render_final.Job):
                                               ctypes.byref(self.session)),
                              "ar_session_create", "ar_scene_last_error", self.scene_h)
             self.views = camera.ViewSync()
+            self._mode_sent = None
             self._last_id = 0
             self.present.generation = -1  # a new session numbers its frames afresh
             self._max = (w, h)
@@ -388,6 +422,7 @@ class ViewportJob(render_final.Job):
             if self._context is not None:  # what render_final.Job.close does after the scene
                 self._context.jobs.discard(self)
             self.present.free()
+            self.heat.free()
 
     def close(self):
         """Every session (closed first, as ar_session_destroy of a live render would otherwise wait), then the
