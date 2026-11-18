@@ -15,6 +15,7 @@
 #include "kernel/stages/queue_build.h"
 #include "kernel/stages/route_hit.h"
 #include "kernel/stages/shade_background.h"
+#include "kernel/stages/shade_light.h"
 #include "kernel/stages/shade_shadow.h"
 #include "kernel/stages/shade_surface.h"
 #include "kernel/stages/sort.h"
@@ -187,6 +188,7 @@ std::shared_ptr<Device> make_cpu_session_device(ContextState& ctx, unsigned work
       device.register_stage(ar::Stage::SHADE_BACKGROUND, &cpu_stage_shade_background);
       device.register_stage(ar::Stage::SHADE_SURFACE, &cpu_stage_shade_surface);
       device.register_stage(ar::Stage::SHADE_SHADOW, &cpu_stage_shade_shadow);
+      device.register_stage(ar::Stage::SHADE_LIGHT, &cpu_stage_shade_light);
     }
   };
   auto owned = std::make_shared<Owned>(ctx, workers);
