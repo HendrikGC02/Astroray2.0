@@ -20,8 +20,8 @@ Size: M (about 300 lines); stop and report at 2x.
 Progress:
 - started (task/106-lamp-scenes)
 - lead rulings: modes on|off|light_only (R77), CLI hook line dropped, counters via Python ABI, budgets family row, fix shade_surface/background formatting
-- four scenes pass CPU and CUDA in gate (144.4 s of 180); family 34 -> 60; canary turns all three named cases red
-- pair checks test 4x4 pixel blocks: BSDF-only gives zero-hit pixels (mean and VAR 0) per pixel; comparison is per scene formula, no --compare flag
+- four scenes pass CPU and CUDA in gate; family 34 -> 60; canary turns all three named cases red
+- pair checks test pixel blocks: BSDF-only gives zero-hit pixels (mean and VAR 0) per pixel; comparison is per scene formula, no --compare flag
 - furnace no-bias check: 16384 spp CPU, Y image mean 0.268208 vs truth 0.268276 (z -1.43), resolves 0.073%; worst pixel z +3.53
 - lead option (c): d1, d8 render 64x64 at 64 spp, tested in 8x8 blocks (4096 samples each); a3, furnace stay 32x32 at 1024
 - null calibration `analytic.py --scene S --device cpu --null 100 --null-mode M` (d1 on/off/light_only, d8 on/off): 0 block and 0 image alarms of 500 checks; G |z| tail normal (max 3.89), Y conservative (Minkowski SE); numbers in analytic.py
