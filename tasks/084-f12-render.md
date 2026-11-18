@@ -25,3 +25,4 @@ Device: scene.astroray.device enum (CPU default, CUDA), added to properties.py b
 Engine DLL has its own CRT, so ASTRORAY_RECORD set from Python is read by render_final.context() and passed as record_path.
 Canary flips corner normals (zeroing them leaves A1 unchanged: a convex furnace is shape independent), so both named cases go red.
 Gate 99.7 s of 180 s with the smoke (smoke step 21.4 s incl. test_materials, about 78 s before); out/evidence/084/a1_f12.png mean over tested pixels 0.64064 vs truth 0.64065.
+Review fixes: render() uses only what update() captured; job on the instance, live jobs closed by shutdown(); named blend_writer errors; tolerances computed (normal bound = the mesh's own INT16_2D storage error read back from Blender); cancel and ERROR-entry cases; previews, Specular IOR scale and the ASTRORAY_RECORD warning are untested.
