@@ -31,7 +31,7 @@ None. Unowned follow-ups (a task that touches the area takes them):
   eta_clamped has no counter, so SPECTRUM_OUT_OF_RANGE never fires from shading (073); light splats must reject
   negative radiance before conversion (047).
 - Addon: translate.py copies RecordSlot ids, SEM_REFLECTANCE and TEX bits from C headers, guarded by a drift test;
-  opsgen/abigen should export them (083). CMake's astroray_extension target is not in ALL (084).
+  opsgen/abigen should export them (083). CMake's astroray_extension target is not in ALL (084). The build record prints `cuda=none` on CUDA runs (106).
 - Tests: check 14 (sampler/hero lane independence) fails on a constant hero only through a NaN chi2 exception and
   cannot see a hero fixed in generate_camera (078); the per-pixel analytic z of 5.50 misses 1 % albedo errors on
   A1 and a4_sphere (energy tests catch them, 078). Flaky once: `cpu_device/parallel_for rethrows` (0.515 s vs B-12),
