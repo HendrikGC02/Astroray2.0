@@ -91,27 +91,34 @@ def recording(scene, variant="default"):
     return off
 
 
-def dump(rec, device, spp, size, seed, env_extra=None):
-    """One `astroray_cli dump`; returns (header, {EXTNAME: array}, stdout). Raises on failure."""
+def read_fits(path):
+    """(header, {EXTNAME: array}) of a film dump."""
     spec = importlib.util.spec_from_file_location("_fits_read_ic", analytic.FITS_READ)
     fr = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fr)
+    with open(path, "rb") as f:
+        hdus = fr.read_hdus(f.read())
+    return hdus[0][0], {h["EXTNAME"]: np.asarray(d) for h, d in hdus[1:]}
+
+
+def dump(rec, device, spp, size, seed, env_extra=None):
+    """One `astroray_cli dump`; returns (header, {EXTNAME: array}, stdout). Raises on failure.
+    spp None replays the recording as it is, with no --spp, --seed or --size override."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("ASTRORAY_TEST_")}
     env.update(env_extra or {})
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "dump.fits")
-        r = subprocess.run([analytic.CLI, "dump", rec, "-o", out, "--device", device, "--spp", str(spp), "--seed",
-                            str(seed), "--size", f"{size}x{size}"], capture_output=True, text=True, cwd=tmp,
-                           timeout=600, env=env)
+        args = [analytic.CLI, "dump", rec, "-o", out, "--device", device]
+        if spp is not None:
+            args += ["--spp", str(spp), "--seed", str(seed), "--size", f"{size}x{size}"]
+        r = subprocess.run(args, capture_output=True, text=True, cwd=tmp, timeout=600, env=env)
         if r.returncode != 0:
             raise RuntimeError(f"astroray_cli exited {r.returncode} ({env_extra})\n{r.stdout}{r.stderr}")
-        with open(out, "rb") as f:
-            hdus = fr.read_hdus(f.read())
-    head = hdus[0][0]
-    if head.get("DEVICE") != device or head.get("SPP") != spp or head.get("SAMPLER") != "independent":
+        head, planes = read_fits(out)
+    if head.get("DEVICE") != device or head.get("SAMPLER") != "independent" or (spp is not None and head.get("SPP") != spp):
         raise RuntimeError(f"dump header DEVICE {head.get('DEVICE')} SPP {head.get('SPP')} SAMPLER "
                            f"{head.get('SAMPLER')}: expected {device}, {spp}, independent")
-    return head, {h["EXTNAME"]: np.asarray(d) for h, d in hdus[1:]}, r.stdout
+    return head, planes, r.stdout
 
 
 def display(planes):
@@ -226,6 +233,20 @@ def check_d15(device):
                         if not differ else f"planes differ: {differ}")
 
 
+def read_counter_words(scene, sh):
+    """The counters of session `sh`'s last pass (ar_session_read_counters, counter_words order in
+    src/host/session/readback.cpp); the call's own "need N" error text gives N."""
+    lib = scene.lib
+    probe = (ctypes.c_uint64 * 1)()
+    lib.ar_session_read_counters(sh, 0, probe)
+    err = (ctypes.c_uint8 * 256)()
+    lib.ar_session_last_error(sh, 256, err)
+    n = int(bytes(err).split(b"\0")[0].decode().rsplit("need ", 1)[1])
+    words = (ctypes.c_uint64 * n)()
+    scene._call(lib.ar_session_read_counters(sh, n, words), "ar_session_read_counters")
+    return list(words)
+
+
 class _InProcess(ar.Scene):
     """ar.Scene whose finish() renders in this process instead of writing a recording: commit,
     one FINAL session per run, then the counters of its last pass (ar_session_read_counters, in
@@ -264,13 +285,8 @@ class _InProcess(ar.Scene):
             self._call(lib.ar_session_get_progress(sh, ctypes.byref(p)), "ar_session_get_progress")
             if p.state != a.AR_STATE_CONVERGED:
                 raise RuntimeError(f"in-process render did not converge (state {p.state})")
-            probe = (ctypes.c_uint64 * 1)()
-            lib.ar_session_read_counters(sh, 0, probe)
-            err = (ctypes.c_uint8 * 256)()
-            lib.ar_session_last_error(sh, 256, err)
-            n = int(bytes(err).split(b"\0")[0].decode().rsplit("need ", 1)[1])
-            words = (ctypes.c_uint64 * n)()
-            self._call(lib.ar_session_read_counters(sh, n, words), "ar_session_read_counters")
+            words = read_counter_words(self, sh)
+            n = len(words)
             lib.ar_session_destroy(sh)
             self.session_h = ctypes.c_void_p()
         # Words 0-3, then kStageCount stage items, then 11 words of which state_bytes_moved and
@@ -286,6 +302,12 @@ def in_process(scene, device, runs=1, spp=None):
     """Builds `scene` with its own builder into this process and renders it `runs` times, under the
     environment this process started with. Returns (counters, run seconds, samples, context log)."""
     cls = type("_Run", (_InProcess,), {"device": device, "runs": runs, "spp": spp})
+    run_builder(scene, cls)
+    return cls.result
+
+
+def run_builder(scene, cls):
+    """Runs `scene`'s builder with `cls` standing in for ar.Scene; returns the builder module."""
     mod = load_builder(scene)
     real, mod.ar.Scene = mod.ar.Scene, cls
     try:
@@ -293,7 +315,223 @@ def in_process(scene, device, runs=1, spp=None):
             mod.build(os.path.join(tmp, "unused.arrec"))
     finally:
         mod.ar.Scene = real
-    return cls.result
+    return mod
+
+
+# --- task 107: render invariants (0004 D25, 0002 D6-D7 and D12, 0001 V11) -------------------------
+INVARIANT_SCENE = "d25_edit_revert"  # one small scene serves the three checks
+REL_FILM = 1e-6  # GPU film repeatability and edit-and-revert (0004 D25, 0002 D12)
+
+
+class _Driven(ar.Scene):
+    """ar.Scene whose finish() renders in this process like `astroray_cli dump` of its own recording:
+    commit, one session (`mode` final or viewport), settle, then `edit_steps(scene)` (a list of
+    {graph key: Graph}, each one edit that must settle before the next), then the film dump of the
+    last state to `out`, plus the film after each step as out + ".stepN"."""
+    device, mode, edit_steps, out, counters = "cpu", "final", None, None, None
+
+    def __init__(self, path, **kw):
+        kw["device"] = type(self).device
+        super().__init__(path, **kw)
+        self.surface_graphs = {}
+
+    def set_graph(self, key, graph, target=None):
+        super().set_graph(key, graph, target)
+        if target is None:
+            self.surface_graphs[key] = graph
+
+    def _progress(self, sh):
+        p = self.abi.ar_progress()
+        self._call(self.lib.ar_session_get_progress(sh, ctypes.byref(p)), "ar_session_get_progress")
+        if p.state == self.abi.AR_STATE_FAILED:
+            raise RuntimeError("the session failed")
+        return p
+
+    def _settle(self, sh, gen, after_epoch):
+        """Waits until generation `gen` is active in an epoch after `after_epoch` and has converged."""
+        end = time.perf_counter() + 120
+        while True:
+            p = self._progress(sh)
+            if p.state == self.abi.AR_STATE_CONVERGED and p.active_generation == gen and p.epoch > after_epoch:
+                return
+            if time.perf_counter() > end:
+                raise RuntimeError(f"generation {gen} did not converge (state {p.state}, epoch {p.epoch})")
+            self.lib.ar_session_wait(sh, 20)
+
+    def _write(self, sh, path):
+        self._call(self.lib.ar_session_write_fits(sh, path.encode(), self.abi.AR_FITS_DUMP), "ar_session_write_fits")
+
+    def finish(self):
+        a, lib, cls = self.abi, self.lib, type(self)
+        gen = ctypes.c_uint64()
+        self._call(lib.ar_edit_commit(self.edit_h, ctypes.byref(gen)), "ar_edit_commit")
+        w, h = self.size
+        mode = a.AR_SESSION_MODE_FINAL if cls.mode == "final" else a.AR_SESSION_MODE_VIEWPORT
+        sh = ctypes.c_void_p()
+        sd = a.ar_session_desc(mode, w, h, a.AR_DENOISER_NONE)
+        self._call(lib.ar_session_create(self.scene_h, ctypes.byref(sd), ctypes.byref(sh)), "ar_session_create")
+        self.session_h = sh
+        v = a.ar_view_desc()
+        ctypes.memmove(ctypes.byref(v.camera), ctypes.byref(self._camera), ctypes.sizeof(a.ar_camera_desc))
+        v.region_width, v.region_height, v.render_scale = w, h, 1.0
+        self._call(lib.ar_session_set_view(sh, ctypes.byref(v)), "ar_session_set_view")
+        self._call(lib.ar_session_start(sh), "ar_session_start")
+        self._settle(sh, gen.value, -1)
+        for i, graphs in enumerate(cls.edit_steps(self) if cls.edit_steps else ()):
+            epoch = self._progress(sh).epoch
+            self._call(lib.ar_scene_edit_begin(self.scene_h, ctypes.byref(self.edit_h)), "ar_scene_edit_begin")
+            for key, graph in graphs.items():
+                self.set_graph(key, graph)
+            self._call(lib.ar_edit_commit(self.edit_h, ctypes.byref(gen)), "ar_edit_commit")
+            self._settle(sh, gen.value, epoch)
+            self._write(sh, f"{cls.out}.step{i}")
+        self._write(sh, cls.out)
+        cls.counters = read_counter_words(self, sh)
+        lib.ar_session_close(sh)
+        end = time.perf_counter() + 20
+        while self._progress(sh).state != a.AR_STATE_CLOSED and time.perf_counter() < end:
+            lib.ar_session_wait(sh, 10)
+        lib.ar_session_destroy(sh)
+        self.session_h = ctypes.c_void_p()
+        self._teardown()
+
+
+def edit_and_revert(mod):
+    """edit_steps for the d25 builder: the plane's material graph re-submitted edited, then authored."""
+    def steps(scene):
+        if len(scene.surface_graphs) != 1:
+            raise RuntimeError(f"{INVARIANT_SCENE} must hold exactly one surface graph")
+        (key,) = scene.surface_graphs
+        out = []
+        for edited in (True, False):
+            g = scene.graph()
+            for name, value in mod.material_inputs(edited).items():
+                g.store(name, value)
+            out.append({key: g})
+        return out
+    return steps
+
+
+def drive_child(device, outdir, kinds):
+    """The child process of child_run: `replay` renders the scene as its builder authored it (a final
+    session, like the CLI's replay of its recording), `edit_revert` renders it in a viewport session
+    after an edit and its revert, and then fresh in a second context. Films go to outdir."""
+    if "replay" in kinds:
+        cls = type("_Replay", (_Driven,), {"device": device, "mode": "final", "out": os.path.join(outdir, "replay.fits")})
+        run_builder(INVARIANT_SCENE, cls)
+        with open(os.path.join(outdir, "replay.json"), "w") as f:
+            f.write(str(cls.counters[-1]))  # permuted_launches, the last counter word
+    if "edit_revert" in kinds:
+        mod = load_builder(INVARIANT_SCENE)
+        for name, steps in (("edited", edit_and_revert(mod)), ("fresh", None)):
+            cls = type("_Viewport", (_Driven,), {"device": device, "mode": "viewport", "edit_steps": staticmethod(steps)
+                                                 if steps else None, "out": os.path.join(outdir, name + ".fits")})
+            run_builder(INVARIANT_SCENE, cls)
+
+
+_CHILDREN = {}
+
+
+def child_run(device, permute=False):
+    """Runs drive_child in a child process (the engine DLL reads its hooks from the environment the
+    process started with): CPU at one thread, AR_DEBUG_PERMUTE on when `permute`. Returns {name:
+    planes} and the permuted-launch count; memoised, since three checks read the same renders."""
+    key = (device, permute)
+    if key not in _CHILDREN:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ASTRORAY_TEST_") and k != "AR_DEBUG_PERMUTE"}
+        if device == "cpu":
+            env["ASTRORAY_TEST_THREADS"] = "1"
+        if permute:
+            env["AR_DEBUG_PERMUTE"] = "1"
+        kinds = "replay" if permute else "replay,edit_revert"
+        with tempfile.TemporaryDirectory() as tmp:
+            r = subprocess.run([sys.executable, "-I", os.path.abspath(__file__), "--drive", kinds, "--device", device,
+                                "--drive-out", tmp], capture_output=True, text=True, env=env, timeout=600)
+            if r.returncode != 0:
+                raise RuntimeError(f"in-process child failed ({kinds}, {device}): {r.stdout}{r.stderr}")
+            films = {}
+            for name, file in (("replay", "replay.fits"), ("edited", "edited.fits"), ("fresh", "fresh.fits"),
+                               ("edited_step0", "edited.fits.step0")):
+                if os.path.exists(os.path.join(tmp, file)):
+                    films[name] = read_fits(os.path.join(tmp, file))[1]
+            with open(os.path.join(tmp, "replay.json")) as f:
+                films["permuted_launches"] = int(f.read())
+        _CHILDREN[key] = films
+    return _CHILDREN[key]
+
+
+def compare_films(a, b, device):
+    """(equal, text). CPU: every plane bit-identical (threads = 1). CUDA: the display means and
+    variances within REL_FILM relative, every other plane (sample counts, bounce statistics: the
+    deterministic AOVs) bit-identical (0002 D12)."""
+    if sorted(a) != sorted(b):
+        return False, f"planes differ in name: {sorted(set(a) ^ set(b))}"
+    bad, worst = [], 0.0
+    for k in sorted(a):
+        x, y = a[k], b[k]
+        soft = device == "cuda" and k.startswith("display.") and not k.endswith(".NSAMP")
+        if not soft:
+            if x.tobytes() != y.tobytes():
+                bad.append(k)
+            continue
+        x, y = x.astype(np.float64), y.astype(np.float64)
+        scale = np.maximum(np.abs(x), np.abs(y))
+        rel = float(np.max(np.where(scale > 0, np.abs(x - y) / np.where(scale > 0, scale, 1.0), 0.0)))
+        worst = max(worst, rel)
+        if not rel <= REL_FILM:
+            bad.append(f"{k} ({rel:.2e})")
+    how = f"bit-identical, {len(a)} planes" if device == "cpu" else \
+        f"display within {worst:.1e} relative (limit {REL_FILM:g}), other planes bit-identical"
+    return not bad, how if not bad else f"planes differ: {bad}"
+
+
+def check_d25(device):
+    """0004 D25 row: render, edit the material, render, revert it, render, against a fresh render of
+    the same seed; and the edited render must differ from it (else the edit proves nothing)."""
+    r = child_run(device)
+    ok, text = compare_films(r["edited"], r["fresh"], device)
+    moved = float(np.max(np.abs(r["edited_step0"]["display.1"].astype(np.float64) - r["fresh"]["display.1"])))
+    return ok and moved > 0, f"edit and revert vs fresh: {text}; the edit itself moved display G by {moved:.3g}"
+
+
+RECORDED_QUERIES = os.path.join(ROOT, "include", "astroray", "astroray.h")
+
+
+def check_record_replay(device):
+    """0001 V11, CLI part: the scene's recording holds no AR_QUERY call and its mesh item carries its
+    UV staged array; `astroray_cli dump` of it equals the same builder driving the ABI in this
+    process (CPU one thread: bit for bit)."""
+    import re
+    with open(RECORDED_QUERIES, encoding="utf-8") as f:
+        queries = set(re.findall(r"AR_QUERY\s+\w+\s+(\w+)\s*\(", f.read()))
+    spec = importlib.util.spec_from_file_location("_arrec_ic", os.path.join(ROOT, "out", "build", "gen", "arrec.py"))
+    arrec = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(arrec)
+    rec = recording(INVARIANT_SCENE)
+    _, calls = arrec.decode(rec)
+    held = sorted({n for n, _ in calls} & queries)
+    uv = [dict((f, c) for f, _, c, _ in a["staged"]).get("uv", 0) for n, a in calls if n == "ar_edit_item_commit"]
+    if held or not calls or not any(uv):
+        return False, f"recording holds {len(calls)} calls, queries {held}, uv counts of its item commits {uv}"
+    env = {"ASTRORAY_TEST_THREADS": "1"} if device == "cpu" else None
+    _, cli, _ = dump(rec, device, None, 0, 0, env)
+    ok, text = compare_films(cli, child_run(device)["replay"], device)
+    return ok, f"{len(calls)} recorded calls, none a query, uv staged ({max(uv)} floats); CLI dump vs in-process: {text}"
+
+
+def check_determinism(device):
+    """0002 D12 and D6-D7. CUDA: two renders of one recording agree (film within 1e-6 relative,
+    deterministic AOVs bit-identical). CPU at one thread: AR_DEBUG_PERMUTE changes the launch order
+    inside every segment and the film stays bit-identical."""
+    if device == "cuda":
+        rec = recording(INVARIANT_SCENE)
+        ok, text = compare_films(dump(rec, device, None, 0, 0)[1], dump(rec, device, None, 0, 0)[1], device)
+        return ok, f"cuda twice: {text}"
+    plain, permuted = child_run(device), child_run(device, permute=True)
+    ok, text = compare_films(plain["replay"], permuted["replay"], device)
+    launches = permuted["permuted_launches"]
+    ok &= launches > 0 and plain["permuted_launches"] == 0
+    return ok, f"permuted ({launches} launches shuffled) vs unpermuted at threads=1: {text}"
 
 
 def load_baselines():
@@ -360,7 +598,8 @@ def bless(device, measured):
 
 
 CHECKS = {"d2_rr_furnace": check_d2, "d4_lifetime": check_d4, "d28_closed_box": check_d28,
-          "d15_radiance_scale": check_d15, "counters": check_counters, "tripwire": check_tripwire}
+          "d15_radiance_scale": check_d15, "counters": check_counters, "tripwire": check_tripwire,
+          "d25": check_d25, "determinism": check_determinism, "record_replay": check_record_replay}
 
 
 def null_calibration(scene, device, n):
@@ -403,8 +642,13 @@ def main():
     ap.add_argument("--device", required=True, choices=DEVICES)
     ap.add_argument("--bless", action="store_true", help="rewrite this device's counters.toml baselines")
     ap.add_argument("--log-scale", metavar="SCENE", help=argparse.SUPPRESS)  # check_d15's child
+    ap.add_argument("--drive", help=argparse.SUPPRESS)  # child_run's child: replay,edit_revert
+    ap.add_argument("--drive-out", help=argparse.SUPPRESS)
     ap.add_argument("--null", type=int, metavar="N", help="null calibration of d2 or d4's block test")
     a = ap.parse_args()
+    if a.drive:
+        drive_child(a.device, a.drive_out, a.drive.split(","))
+        return 0
     if a.log_scale:
         print(" ".join(str(k) for k in logged_scale_exponents(in_process(a.log_scale, a.device)[3])))
         return 0

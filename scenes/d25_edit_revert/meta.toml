@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0004 D25 row: a grey Lambertian plane under a rectangle lamp, seen from above. A material edit
+# (base colour to `edited_colour`) and its revert, between two renders of the same seed, must give the
+# film of a fresh render: bit-identical on the CPU at one thread, within 1e-6 relative on the GPU.
+# The edited colour is far from the grey one so that a revert that kept any state of the edit shows.
+# tools/integrator_checks.py d25 drives the edits in-process; the recording is the fresh scene.
+class = "D"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+[truth]
+rho = 0.6
+edited_colour = [0.9, 0.2, 0.2]
+size = 16
+spp = 8
+lamp_position = [0.6, 0.0, 1.2]
+lamp_size = 0.5
+lamp_power = 4.0
+camera_height = 3.0
+focal_mm = 35.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "exact"
