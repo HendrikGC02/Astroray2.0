@@ -11,7 +11,7 @@ Do:
 4. From 086: classify.settings_signature ignores scene.astroray, so editing viewport_samples (or any addon setting) never reaches a live viewport session; include an addon-setting edit in Do 1's matrix and fix the signature (blender/astroray/sync/classify.py joins Scope).
 Acceptance: both GUI scripts pass through `Invoke-ArBlender -Gui` and print one line per edit class.
 Look at: none.
-Canary: tasks/111.canary.patch must turn red: tests/blender/gui_edits.py "TestEdits.test_move_patches_transforms_only", "TestEdits.test_geometry_set_follows_the_scene", "TestEdits.test_data_edits_use_their_own_setter", "TestEdits.test_inert_edits_send_nothing", "TestEdits.test_only_the_unlisted_type_resyncs_fully", "TestEdits.test_every_edit_changes_the_frame", tests/blender/gui_record_replay.py "TestReplay.test_bit_identical", "TestReplay.test_recording_shape" (lead ruling: all eight cases).
+Canary: tasks/111.canary.patch must turn red: tests/blender/gui_edits.py "TestEdits.test_move_patches_transforms_only", "TestEdits.test_geometry_set_follows_the_scene", "TestEdits.test_data_edits_use_their_own_setter", "TestEdits.test_inert_edits_send_nothing", "TestEdits.test_only_the_unlisted_type_resyncs_fully", "TestEdits.test_every_edit_changes_the_frame", "TestEdits.test_instanced_geometry_is_the_instanced_mesh", tests/blender/gui_record_replay.py "TestReplay.test_bit_identical", "TestReplay.test_recording_shape" (lead ruling: all nine cases).
 Budget: none on tiers (`check full` Blender suite).
 Depends on: 085, 110, 107.
 Size: M (about 300 lines Python); stop and report at 2x.
