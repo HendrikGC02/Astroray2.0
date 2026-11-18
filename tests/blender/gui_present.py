@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 """The viewport present, in a windowed Blender (task 085): A1 in Rendered shading.
 
 Run through `Invoke-ArBlender -Gui -Script tests/blender/gui_present.py` (the land canary adds `-k <case>`).
