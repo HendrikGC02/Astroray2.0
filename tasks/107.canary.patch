@@ -1,0 +1,59 @@
+diff --git a/src/host/report.cpp b/src/host/report.cpp
+index 9668b65..0224d76 100644
+--- a/src/host/report.cpp
++++ b/src/host/report.cpp
+@@ -55,7 +55,7 @@ ar_status Report::raise(uint32_t code, uint64_t subject, const std::string& deta
+     }
+     ar_report_entry e{};
+     e.code = code;
+-    e.level = level;
++    e.level = AR_LEVEL_ERROR;
+     e.subject = subject;
+     e.first_generation = generation;
+     e.last_generation = generation;
+@@ -91,7 +91,7 @@ void Report::on_generation_active(uint64_t, const std::vector<uint64_t>& subject
+   remove_if_locked([&](const ar_report_entry& e) {
+     if (e.code == AR_REPORT_GENERATION_REJECTED) return true;
+     if (kRows[e.code - 1].scope != ReportScope::SCENE) return false;
+-    return reset || std::find(subjects.begin(), subjects.end(), e.subject) != subjects.end();
++    return reset || std::find(subjects.begin(), subjects.end(), e.subject) == subjects.end();
+   });
+ }
+ 
+diff --git a/src/host/scheduler.cpp b/src/host/scheduler.cpp
+index cf0e4d0..22ac4de 100644
+--- a/src/host/scheduler.cpp
++++ b/src/host/scheduler.cpp
+@@ -160,6 +160,7 @@ void Scheduler::permute_range(bool shadow_pool, uint32_t start, uint32_t count)
+   std::vector<uint32_t> v(count);
+   device_.download(v.data(), q, uint64_t(start) * 4, uint64_t(count) * 4);
+   for (uint32_t i = count - 1; i > 0; --i) std::swap(v[i], v[splitmix(permute_state_) % (i + 1)]);
++  v[0] = v[1];
+   device_.upload(q, uint64_t(start) * 4, v.data(), uint64_t(count) * 4);
+   ++counters_.permuted_launches;
+ }
+diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
+index 10f5f07..0b58612 100644
+--- a/src/host/session/session.cpp
++++ b/src/host/session/session.cpp
+@@ -574,7 +574,6 @@ void Session::begin_epoch() {
+   invalid_.on_film_reset(report_);
+   {
+     std::lock_guard<std::mutex> lock(mutex_);
+-    stats_.samples_done = 0;
+   }
+   pass_index_ = 0;
+   passes_in_epoch_ = 0;
+diff --git a/tools/abigen.py b/tools/abigen.py
+index 9c22d7f..34e6041 100644
+--- a/tools/abigen.py
++++ b/tools/abigen.py
+@@ -1001,6 +1001,8 @@ def emit_recorder_cpp(m):
+                   "    StagedItem item;\n")
+             s += f"    item.kind = {idx};\n    item.seq = ++rec_->seq;\n"
+             for f, cnt, t in m.staged(st):
++                if f == "uv":
++                    continue
+                 s += (f"    item.fields.push_back({{{out}->{cnt}, reinterpret_cast<void**>({out}->{f}), "
+                       f"static_cast<uint32_t>(sizeof({t}))}});\n")
+             for r in rows:
