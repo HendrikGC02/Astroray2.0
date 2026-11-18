@@ -407,7 +407,6 @@ class TestMaterials(unittest.TestCase):
                 return f.read()
 
         ss = read("vm", "ops", "store_slot.h")
-        scalars = re.search(r"#define AR_RECORD_SCALARS\(X\)(.*?)\n#define|\n// The spectral", ss, re.S)
         scalar_names = re.findall(r"X\((\w+)\)", re.search(r"AR_RECORD_SCALARS\(X\)(.*?)// The spectral", ss, re.S).group(1))
         spectral = re.findall(r"X\((\w+), \w+, \w+\)", re.search(r"AR_RECORD_SPECTRAL\(X\)(.*)", ss).group(1).split("\n")[0])
         ids = {n: i for i, n in enumerate(scalar_names + spectral)}
