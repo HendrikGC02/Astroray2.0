@@ -82,6 +82,19 @@ AR_FN Spec lamp_radiance(const LightRecord& r, const Lambda& lam, const Observer
   return spec_fill(Real(0));
 }
 
+// light_pdf_li for the three lamp types only: the triangle and world rows of the full dispatch
+// can never be reached here and would only add code to the kernel.
+AR_FN Real lamp_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Real3 wi, const LightHit& hit) {
+  switch (LightType(r.type)) {
+    case LightType::SPHERE: return sphere_pdf_li(r, ctx, wi, hit);
+    case LightType::AREA_RECT: return rect_pdf_li(r, ctx, wi, hit);
+    case LightType::AREA_DISK: return disk_pdf_li(r, ctx, wi, hit);
+    default: break;
+  }
+  AR_ASSERT(false);
+  return Real(0);
+}
+
 AR_FN void stage_shade_light(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
   const uint32_t slot = load_ro(kg.main_queue + step.start + item);
   const uint32_t light = instance_light_index(kg, ps_hit_inst(kg, slot));
@@ -102,7 +115,7 @@ AR_FN void stage_shade_light(const KernelGlobals& kg, uint32_t item, const StepE
     if (weighted) {
       const LightSampleContext prev = prev_light_context(kg, slot);
       p_light = light_sampler_pmf(*kg.light_sampler, prev, light) *
-                light_pdf_li(rec, prev, normalize(d), LightHit{hit.p, hit.n});
+                lamp_pdf_li(rec, prev, normalize(d), LightHit{hit.p, hit.n});
     }
     const Spec contribution = lamp_radiance(rec, lam, kg.tables->observer) * ps_beta(kg, slot) *
                               mis_emitter_scale(ps_r_u(kg, slot), weighted ? ps_r_l(kg, slot) : Spec{}, p_light, weighted);
