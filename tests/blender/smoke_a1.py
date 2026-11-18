@@ -216,6 +216,7 @@ class TestSmoke(unittest.TestCase):
 
     def test_samples_reached(self):
         """The render ran every requested sample: the engine's per-pixel COUNT equals samples."""
+        print(f"RESULT smoke COUNT {int(self.state['count'].min())}..{int(self.state['count'].max())} of {analytic.MIN_SPP}")
         self.assertTrue((self.state["count"] == analytic.MIN_SPP).all(),
                         f"COUNT {np.unique(self.state['count'])}, asked for {analytic.MIN_SPP}")
 
