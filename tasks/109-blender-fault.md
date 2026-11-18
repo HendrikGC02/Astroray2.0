@@ -15,3 +15,4 @@ Depends on: 099, 085.
 Size: S (about 150 lines); stop and report at 2x.
 Progress:
 - started
+- gui_fault.py passes (3 cases); native.note_failure + engine._contain take a GPU error as CUDA lost; check fast/gate and canary below.
