@@ -11,7 +11,7 @@ Do:
 4. Tests: test_batching.cpp (fast): with a synthetic clock, one pass per update during interaction, growing counts afterwards matching the copied schedule, interaction ends 250 ms after the last event, scale changes ignored; gui_batching.py (GUI): frame log during and after a scripted orbit on a small scene shows one pass per displayed update during interaction and growth after, publish rates within B-34 (0007 V23 on a small scene; S2 in 096); a screenshot of viridis patches under AgX matches exact sRGB +-1/255 (0007 V10).
 Acceptance: `pwsh tools/check.ps1 fast` passes with `batching/*`; gui_batching.py passes through `Invoke-ArBlender -Gui`; 0009's B-34 row shows the copied values.
 Look at: out/evidence/086/heatmap_samples.png and out/evidence/086/heatmap_bounces.png (viewport screenshots of both modes).
-Canary: tasks/086.canary.patch must turn red: astroray_tests_cpu "batching/one pass during interaction", tests/blender/gui_batching.py "TestHeatmap.test_viridis_exact".
+Canary: tasks/086.canary.patch must turn red: astroray_tests_cpu "batching/one pass during interaction", "batching/session one pass per update during interaction", "batching/session passes follow the schedule after interaction", "batching/session interrupt and first pass under rapid views" (lead ruling: session cases added), tests/blender/gui_batching.py "TestHeatmap.test_viridis_exact".
 Budget: none on kernels.
 Depends on: 085.
 Size: M (about 350 lines); stop and report at 2x.
