@@ -44,6 +44,28 @@ def sun_lamp(s, centre, distance, size, strength, euler):
     s.light("rect", xf=xf, power=math.pi * distance ** 2 * strength, size=(size, size))
 
 
+def smooth_vertex_normals(pos, quads):
+    """Blender's smooth vertex normal: each face normal (Newell, here the cross of a quad's
+    diagonals) weighted by the face's corner angle at the vertex, summed and normalised. The spike
+    sets use_smooth on every polygon, so this is what Blender shades with; verified against
+    Mesh.corner_normals of the same mesh in Blender 5.3 (the maximum angle difference is in the task's
+    report).
+    Ref: Blender source/blender/blenkernel/intern/mesh_normals.cc (vertex normals from face normals
+    with corner-angle weights); make_scenes.py build_s1 (use_smooth = True)."""
+    p = pos.astype(np.float64)
+    fn = np.cross(p[quads[:, 2]] - p[quads[:, 0]], p[quads[:, 3]] - p[quads[:, 1]])
+    fn /= np.linalg.norm(fn, axis=1, keepdims=True)
+    acc = np.zeros((len(p), 3))
+    for c in range(4):
+        a = p[quads[:, (c + 3) % 4]] - p[quads[:, c]]
+        b = p[quads[:, (c + 1) % 4]] - p[quads[:, c]]
+        cosang = (a * b).sum(1) / (np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1))
+        w = np.arccos(np.clip(cosang, -1.0, 1.0))
+        for k in range(3):
+            acc[:, k] += np.bincount(quads[:, c], weights=w * fn[:, k], minlength=len(p))
+    return (acc / np.linalg.norm(acc, axis=1, keepdims=True)).astype(np.float32)
+
+
 def grid():
     """(positions, corner_vert, face_start, normals, uv) of the displaced grid. Vertex (i, j) is
     j * (N + 1) + i; a quad is counter-clockwise seen from +z, as Blender's create_grid."""
@@ -51,18 +73,14 @@ def grid():
     x, y = np.meshgrid(xs, xs)  # x varies fastest in memory
     z = 0.4 * np.sin(x * 1.7) * np.cos(y * 1.3) + 0.05 * np.sin(x * 9) * np.sin(y * 11)
     pos = np.stack([x, y, z.astype(np.float32)], axis=-1).reshape(-1, 3)
-    # Smooth normals from the height field's own gradient: the spike shades the mesh smooth.
-    gx = 0.4 * 1.7 * np.cos(1.7 * x) * np.cos(1.3 * y) + 0.05 * 9 * np.cos(9 * x) * np.sin(11 * y)
-    gy = -0.4 * 1.3 * np.sin(1.7 * x) * np.sin(1.3 * y) + 0.05 * 11 * np.sin(9 * x) * np.cos(11 * y)
-    vn = np.stack([-gx, -gy, np.ones_like(gx)], axis=-1).reshape(-1, 3)
-    vn /= np.linalg.norm(vn, axis=1, keepdims=True)
     i, j = np.meshgrid(np.arange(N), np.arange(N))
     v00 = (j * (N + 1) + i).reshape(-1)
     corner_vert = np.stack([v00, v00 + 1, v00 + N + 2, v00 + N + 1], axis=1).reshape(-1).astype(np.int32)
     face_start = (np.arange(N * N, dtype=np.int32) * 4)
+    vn = smooth_vertex_normals(pos, corner_vert.reshape(-1, 4))
     # Planar UV over the grid, the spike's add_uv: xy * 0.1 + 0.5.
     uv = pos[corner_vert, :2] * 0.1 + 0.5
-    return pos, corner_vert, face_start, vn[corner_vert].astype(np.float32), uv.astype(np.float32)
+    return pos, corner_vert, face_start, vn[corner_vert], uv.astype(np.float32)
 
 
 def build(out, blend=None):

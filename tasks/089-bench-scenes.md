@@ -10,7 +10,7 @@ Do:
 3. Extend scenes/lib/blend_writer.py (084) so it writes the same scenes as .blend files into out/scenes/, reproducing make_scenes.py's Blender-side construction (linked duplicates, collection instances and the geometry-nodes instancer for b5m) so the addon sync sees the real instance kinds; S2's sun is replaced by the same area lamp as in the builder. Cycles comparisons in 093 and 095 use these .blend files.
 4. bench/scenes.toml: entries for b1m and b5m with sets `M1a`.
 5. The B-16 timing tripwire (076) switches to B-1M kernel time per 1080p sample at 1 and 64 spp; counters.toml gains B-1M rows on CPU and GPU.
-Acceptance: `<python> tools/scenes.py` writes b1m.arrec and b5m.arrec and prints triangle and instance counts (1,0xx,xxx; 5,04x,xxx unique in 10,001 instances); `out/bin/astroray_cli.exe render out/scenes/b1m.arrec -o out/tmp/b1m.fits --spp 4 --size 1920x1080 --device cuda` exits 0; the .blend files open in Blender with the same counts.
+Acceptance: `<python> tools/scenes.py` writes b1m.arrec and b5m.arrec and prints triangle and instance counts (999,698 triangles, make_scenes.py build_s1 n = 707; 5,040,000 unique in 10,000 mesh instances, the spike's 10,001st being the empty geometry-nodes host; lead ruling); `out/bin/astroray_cli.exe render out/scenes/b1m.arrec -o out/tmp/b1m.fits --spp 4 --size 1920x1080 --device cuda` exits 0; the .blend files open in Blender with the same counts.
 Look at: out/evidence/089/b1m.png and out/evidence/089/b5m.png (1080p renders, 16 spp).
 Canary: none: no test added (the tripwire and counter rows changed are checked by `check gate` itself; the reviewer verifies the counts printed).
 Budget: tripwire runtime inside B-09; report it.
@@ -21,3 +21,4 @@ Progress:
 - builders b1m/b5m, writer kinds (object, collection, points), bench entries done; .blend counts and 1080p renders verified.
 - BLOCKED: tripwire/counters need tools/integrator_checks.py (not in Scope) and counts printing needs tools/scenes.py; lead decides.
 - lead ruling: integrator_checks.py and scenes.py in Scope; b1m tripwire and counters blessed through --bless (see report).
+- lead review fixes: Blender-weighted smooth normals (b1m), create_uvsphere vertex order (b5m), writer raises on bad kind/group, Cycles bounce caps; verified in Blender.

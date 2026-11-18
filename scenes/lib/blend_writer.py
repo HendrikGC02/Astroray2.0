@@ -205,9 +205,17 @@ def build(desc, path, extension=True):
         a.pixel_filter_type, a.pixel_filter_width = _FILTERS[st["pixel_filter"]], st["filter_width"]
     else:
         scene.render.engine = "CYCLES"
-        scene.cycles.samples = st["spp"]
-        scene.cycles.seed, scene.cycles.max_bounces = st["seed"], st["max_bounces"]
+        cy = scene.cycles
+        cy.samples, cy.seed = st["spp"], st["seed"]
+        # max_bounces is the total limit (0004); Cycles also caps each lobe type, and the smallest
+        # applies, so every cap is set to the same number to make max_bounces the limit that is used.
+        cy.max_bounces = cy.diffuse_bounces = cy.glossy_bounces = st["max_bounces"]
+        cy.transmission_bounces = cy.volume_bounces = cy.transparent_max_bounces = st["max_bounces"]
+        cy.min_light_bounces = cy.min_transparent_bounces = st["min_bounces"]
+        cy.pixel_filter_type, cy.filter_width = _FILTERS[st["pixel_filter"]], st["filter_width"]
     for name in st["passes"]:
+        if name not in _PASS_FLAGS:
+            raise BlendWriterError(f"film pass '{name}' has no view-layer pass in the blend writer")
         setattr(bpy.context.view_layer, _PASS_FLAGS[name], True)
 
     meshes = {m["key"]: _mesh(bpy, m) for m in desc["meshes"]}
@@ -230,7 +238,12 @@ def build(desc, path, extension=True):
             slots[me.name] = inst["materials"]
             for mk in inst["materials"]:
                 me.materials.append(materials[mk])
-        kind = inst.get("kind", "object")
+        kind, group = inst.get("kind", "object"), inst.get("group")
+        if kind not in ("object", "collection", "points"):
+            raise BlendWriterError(f"instance {i}: kind {kind!r} is not 'object', 'collection' or 'points'")
+        if (kind == "object") != (group is None) or (group is not None and (isinstance(group, bool) or not isinstance(group, int))):
+            raise BlendWriterError(f"instance {i}: kind {kind!r} with group {group!r}: the collection and "
+                                   "points kinds need an integer group, the object kind none")
         if kind != "object":
             groups.setdefault((kind, inst["group"]), []).append(inst)
             continue
@@ -238,7 +251,10 @@ def build(desc, path, extension=True):
         ob.matrix_world = _matrix(inst["xf"])
         scene.collection.objects.link(ob)
     for (kind, group), insts in groups.items():
-        (_collection_instances if kind == "collection" else _point_instances)(bpy, scene, group, insts, meshes)
+        if kind == "collection":
+            _collection_instances(bpy, scene, group, insts, meshes)
+        else:
+            _point_instances(bpy, scene, group, insts, meshes)
     for d in desc["lights"]:
         scene.collection.objects.link(_light(bpy, d))
 

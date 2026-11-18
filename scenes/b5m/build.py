@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """B-5M builder: spike B's S2, 2,000 unique meshes of 2,520 triangles (5.04 M unique triangles),
-300 materials with distinct constant base colours, and 10,000 mesh instances: 2,000 objects with
+300 materials with distinct constant base colours (roughness 0.5, make_scenes.py line 46), and 10,000 mesh instances: 2,000 objects with
 their own mesh, 5,000 linked duplicates, 2,000 collection instances and 1,000 geometry-nodes
 instances (0009 d20). The random draws are the spike's, in its order, so meshes, colours and
 transforms are the same. Usage: build.py --out <path.arrec> [--blend <path.blend>]; --blend also
@@ -45,25 +45,40 @@ def sun_lamp(s, centre, distance, size, strength, euler):
             size=(size, size))
 
 
+# Blender's create_uvsphere spins one meridian and merges the seam, which leaves vertices in an order the
+# 5 degree grid does not give: vertex 0 is the top pole, 1-24 and 25 (the bottom pole) the first
+# meridian's merged part at azimuth 90 degrees, then 35 meridians of 35 rings (azimuth 80, 70, ... 0, 350,
+# ... 100 degrees, ring 1 to 35 from the top), then the 11 remaining azimuth-90 vertices. The spike draws
+# noise per vertex index, so the order matters; these are the ring numbers (angle from +z in 5 degree
+# steps) of the first and last parts, read from bmesh.ops.create_uvsphere(u_segments=36, v_segments=36,
+# radius=1) in Blender 5.3 and verified there for every index (position difference in the task report).
+_SEAM_HEAD = (0, 2, 3, 5, 6, 10, 11, 12, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 25, 26, 28, 30, 31, 34, 35, 36)
+_SEAM_TAIL = (1, 4, 7, 8, 9, 13, 18, 27, 29, 32, 33)
+
+
 def sphere_template(segments=36, rings=36):
-    """Blender's create_uvsphere(36, 36, radius 1): poles on +-z, rings - 1 rings of `segments`
-    vertices, quads between rings and triangles at the poles (1,262 vertices, 2,520 triangles).
-    Returns positions and the faces as a list of index tuples."""
-    theta = np.pi * np.arange(1, rings) / rings
-    phi = 2 * np.pi * np.arange(segments) / segments
-    ring = np.stack([np.outer(np.sin(theta), np.cos(phi)), np.outer(np.sin(theta), np.sin(phi)),
-                     np.repeat(np.cos(theta)[:, None], segments, axis=1)], axis=-1).reshape(-1, 3)
-    pos = np.concatenate([[[0, 0, 1]], ring, [[0, 0, -1]]]).astype(np.float32)
-    top, bottom = 0, len(pos) - 1
-    at = lambda r, k: 1 + r * segments + k % segments  # noqa: E731
-    faces = []
-    for k in range(segments):
-        faces.append((top, at(0, k), at(0, k + 1)))
-    for r in range(rings - 2):
-        for k in range(segments):
-            faces.append((at(r, k), at(r + 1, k), at(r + 1, k + 1), at(r, k + 1)))
-    for k in range(segments):
-        faces.append((bottom, at(rings - 2, k + 1), at(rings - 2, k)))
+    """Blender's create_uvsphere(36, 36, radius 1) vertex order (1,262 vertices; poles on +-z) and
+    faces (1,296: quads and pole triangles, 2,520 triangles), outward counter-clockwise.
+    Returns positions and the faces as index tuples (the face order is ours; the set matches)."""
+    if (segments, rings) != (36, 36):
+        raise ValueError("the vertex order table is for a 36 x 36 sphere")
+    order = [(t, 9) for t in _SEAM_HEAD]
+    for m in list(range(8, -1, -1)) + list(range(35, 9, -1)):
+        order += [(t, m) for t in range(1, rings)]
+    order += [(t, 9) for t in _SEAM_TAIL]
+    theta = np.pi * np.array([t for t, _ in order]) / rings
+    phi = 2 * np.pi * np.array([m for _, m in order]) / segments
+    pos = np.stack([np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)], axis=-1).astype(np.float32)
+    index = {}
+    for i, (t, m) in enumerate(order):
+        index[(t, m)] = i
+        if t in (0, rings):
+            index.update({(t, k): i for k in range(segments)})
+    at = lambda t, m: index[(t, m % segments)]  # noqa: E731
+    faces = [(at(0, k), at(1, k), at(1, k + 1)) for k in range(segments)]
+    for t in range(1, rings - 1):
+        faces += [(at(t, k), at(t + 1, k), at(t + 1, k + 1), at(t, k + 1)) for k in range(segments)]
+    faces += [(at(rings, k), at(rings - 1, k + 1), at(rings - 1, k)) for k in range(segments)]
     return pos, faces
 
 
@@ -95,9 +110,13 @@ def instance_plan(rng):
         loc = (float(rng.uniform(0, COLS * 3.0)), float(rng.uniform(0, 40 * 3.0)), float(rng.uniform(9.0, 14.0)))
         k = j % N_COLLECTION_SOURCES
         items.append({"mesh": (k * 37) % N_UNIQUE, "xf": ar.translation(loc), "kind": "collection", "group": k})
-    # The spike's host sits at (45, 60, 16) with a template at the origin and Object Info in
-    # Relative space, so an instance's world translation is the grid point itself: the host
-    # translation cancels against the relative transform (verified against the evaluated depsgraph).
+    # make_scenes.py lines 148-172: GNTEMPLATE (meshes[7]) at the origin, a GeometryNodeMeshGrid of
+    # 90 x 60 (Size X, Size Y) with 40 x 25 vertices (lines 157-160) feeding Instance on Points, Object
+    # Info with transform_space RELATIVE (line 164), the host GNHOST at (45, 60, 16) (line 172). In
+    # Relative space the template's transform is taken relative to the host, so the host's offset
+    # cancels and an instance sits at its grid point, x in [-45, 45], y in [-30, 30], z = 0: the grid
+    # overlaps the corner of the unique-object grid at x, y in [0, 147]. That is the spike's own layout
+    # (checked against the evaluated depsgraph in Blender: transforms agree to 6e-5).
     nx, ny = GN_GRID
     for y in np.linspace(-GN_SIZE[1] / 2, GN_SIZE[1] / 2, ny):
         for x in np.linspace(-GN_SIZE[0] / 2, GN_SIZE[0] / 2, nx):
