@@ -21,6 +21,8 @@ inline constexpr double kSettledPublishGapS = 1.0 / 10.0;      // 0009 B-34: at 
 // Cycles' viewport display interval (seconds) after `settled_s` seconds of rendering without
 // interaction and `samples` samples per pixel done in the epoch.
 double display_interval_s(double settled_s, uint64_t samples);
+// Cycles' round_num_samples_to_power_of_2: the nearer power of two, a tie going up.
+uint32_t round_to_power_of_2(uint32_t n);
 
 class Batching {
  public:
@@ -33,7 +35,7 @@ class Batching {
   // True from an interaction event until kInteractionWindowS after the last one.
   bool interacting(double now_s) const;
   // Passes to run before the next displayed update: 1 during interaction, afterwards the display
-  // interval over the time one pass takes, rounded down to a power of two, at least 1.
+  // interval over the time one pass takes (at least 1), rounded as Cycles does.
   uint32_t passes_per_update(double now_s, double pass_s, uint64_t samples) const;
   // Smallest time between two published frames.
   double publish_gap_s(double now_s) const;

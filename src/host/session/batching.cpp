@@ -8,13 +8,24 @@
 //   SPDX-FileCopyrightText: 2011-2022 Blender Foundation
 //   SPDX-License-Identifier: Apache-2.0
 // Licensed under the Apache License, Version 2.0; see https://www.apache.org/licenses/LICENSE-2.0.
-// The passes per update follow that file's calculate_num_samples_per_update (interval over the
-// time per sample, at least 1, rounded to a power of two; here rounded down).
+// The passes per update follow that file's RenderScheduler::calculate_num_samples_per_update
+// (max(int(interval / time per sample), 1)) and the static helper round_num_samples_to_power_of_2
+// (1 stays 1, a power of two stays, otherwise the nearer of the powers of two above and below, a tie
+// going up), both read from the raw file 2026-11-19.
 #include "host/session/batching.h"
 
 #include <algorithm>
 
 namespace astroray::host {
+
+uint32_t round_to_power_of_2(uint32_t n) {
+  if (n <= 1) return 1;
+  if ((n & (n - 1)) == 0) return n;
+  uint32_t up = 1;
+  while (up < n) up <<= 1;
+  const uint32_t down = up - (up >> 1);
+  return (up - n) <= (n - down) ? up : down;
+}
 
 double display_interval_s(double settled_s, uint64_t samples) {
   if (settled_s < 1.0) return 0.1;
@@ -58,9 +69,8 @@ uint32_t Batching::passes_per_update(double now_s, double pass_s, uint64_t sampl
   }
   if (!(pass_s > 0.0)) return 1;
   const double want = display_interval_s(settled, samples) / pass_s;
-  uint32_t n = 1;
-  while (n < (1u << 20) && double(n) * 2.0 <= want) n *= 2;
-  return n;
+  const uint32_t n = want >= double(1u << 20) ? (1u << 20) : std::max(uint32_t(want), 1u);
+  return round_to_power_of_2(n);
 }
 
 double Batching::publish_gap_s(double now_s) const {

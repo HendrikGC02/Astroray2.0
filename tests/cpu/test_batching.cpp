@@ -39,8 +39,9 @@ TEST_CASE("batching/passes grow after interaction") {
   const double end = 10.0 + kInteractionWindowS;
   // Cycles' schedule: interval 0.1, 0.25, 0.5, 1.0 s, then 2.0 s once 32 samples are done.
   struct Row { double settled; uint64_t samples; double interval; uint32_t passes; };
-  const Row rows[] = {{0.0, 4, 0.1, 16},   {0.99, 4, 0.1, 16}, {1.0, 4, 0.25, 32}, {2.0, 4, 0.5, 64},
-                      {4.0, 4, 1.0, 128},  {7.9, 31, 1.0, 128}, {8.0, 31, 1.0, 128}, {8.0, 32, 2.0, 256}};
+  // interval / 4 ms = 25, 62, 125, 250, 500 samples; Cycles rounds to the nearer power of two.
+  const Row rows[] = {{0.0, 4, 0.1, 32},   {0.99, 4, 0.1, 32}, {1.0, 4, 0.25, 64}, {2.0, 4, 0.5, 128},
+                      {4.0, 4, 1.0, 256},  {7.9, 31, 1.0, 256}, {8.0, 31, 1.0, 256}, {8.0, 32, 2.0, 512}};
   uint32_t last = 0;
   for (const Row& r : rows) {
     CHECK(display_interval_s(r.settled, r.samples) == doctest::Approx(r.interval));
@@ -48,6 +49,15 @@ TEST_CASE("batching/passes grow after interaction") {
     CHECK(r.passes >= last);
     last = r.passes;
   }
+  // round_num_samples_to_power_of_2: 1 stays, powers stay, else the nearer one, a tie (6, 12) going up.
+  CHECK(round_to_power_of_2(0) == 1);
+  CHECK(round_to_power_of_2(1) == 1);
+  CHECK(round_to_power_of_2(8) == 8);
+  CHECK(round_to_power_of_2(5) == 4);
+  CHECK(round_to_power_of_2(6) == 8);
+  CHECK(round_to_power_of_2(7) == 8);
+  CHECK(round_to_power_of_2(11) == 8);
+  CHECK(round_to_power_of_2(12) == 16);
   // A pass slower than the interval still makes progress: at least one pass per update.
   CHECK(b.passes_per_update(end + 5.0, 3.0, 100) == 1);
   CHECK(b.publish_gap_s(end) == doctest::Approx(0.1));

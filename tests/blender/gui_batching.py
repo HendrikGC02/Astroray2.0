@@ -192,6 +192,7 @@ class Driver(gui_present.Driver):
         scene = bpy.context.scene
         scene.view_settings.view_transform = "AgX"
         scene.view_settings.look = "None"
+        scene.render.dither_intensity = 0.0  # Blender's display dither adds noise of a few codes to dark values
         scene.astroray.viewport_samples = 8
         scene.astroray.display_mode = "SAMPLE_COUNT"
         _, area, _ = self.find_area()
@@ -237,7 +238,19 @@ class Driver(gui_present.Driver):
         job.lib.ar_session_get_progress(job.session, ctypes.byref(prog))
         return prog.state == job.abi.AR_STATE_CONVERGED
 
+    def settled(self, mode):
+        """True once no new frame of this mode arrived during the last wait: a frame logged a moment ago may
+        not be the one on screen yet, so the screenshot waits for a quiet tick (and a redraw)."""
+        f = self.heat_frame(mode)
+        if f["id"] != self.__dict__.get("seen_id"):
+            self.seen_id = f["id"]
+            self.find_area()[1].tag_redraw()
+            return False
+        return True
+
     def step_h_samples_shot(self):
+        if not self.settled(1):
+            return 0.7
         STATE["samples_frame"] = self.heat_frame(1)
         self.screenshot("heatmap_samples.png")
         bpy.context.scene.view_settings.view_transform = "Standard"  # the same frame under another transform
@@ -263,6 +276,8 @@ class Driver(gui_present.Driver):
         return 0.7
 
     def step_h_bounces_shot(self):
+        if not self.settled(2):
+            return 0.7
         STATE["bounces_frame"] = self.heat_frame(2)
         self.screenshot("heatmap_bounces.png")
         STATE["heat_events"] = list(self.job.events)
@@ -337,27 +352,35 @@ class TestBatching(Case):
 class TestHeatmap(Case):
     phase = "heat"
 
-    # Blender draws an overlay (here the heat map) through its own fixed display step: the 8-bit values are
-    # decoded with the piecewise sRGB curve and encoded again by the display's curve, which in 5.3's config
-    # is not the piecewise one. A measured ramp (draw_texture_2d of 0..255, either view transform, dither on
-    # or off) comes back as 1->6, 5->13, 37->42, 100->100, 128->127, 231->230: identical to the frame above
-    # about 100/255, up to 9/255 near a value of 7. That step is the display's, not the view transform's (its largest deviation is about 9/255, plus 1 for rounding), so what
-    # V10 can check is that the view transform has no effect and the deviation stays within it.
-    DISPLAY_STEP = 10
+    # What Blender 5.3 does to an overlay such as the heat map's POST_PIXEL draw (T below). The overlay
+    # framebuffer is SRGBA_8_8_8_8 (source/blender/gpu/intern/gpu_viewport.cc, gpu_viewport_textures_create)
+    # and the final merge, source/blender/imbuf/opencolorio/shaders/gpu_shader_display_transform_frag.glsl
+    # (overlay branch of main), samples it (hardware sRGB decode to linear), multiplies the render colour
+    # by 1 - alpha, adds the overlay and encodes with pow(rgb, 1.0 / 2.2). For an opaque overlay:
+    # screen = 255 * srgb_to_linear(code / 255) ** (1 / 2.2). The view transform acts on the render
+    # colour only, which the opaque overlay replaces.
+    @staticmethod
+    def overlay_transfer(codes):
+        c = codes.astype(np.float64) / 255.0
+        lin = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+        return np.rint(255.0 * lin ** (1.0 / 2.2)).astype(np.int16)
 
     def check_screen(self, name, frame):
         reg = region_pixels(name)
         px = frame["bytes"][:, :, :3].astype(np.int16)
         self.assertEqual(reg.shape, px.shape)
         d = np.abs(reg - px)
-        print(f"RESULT heat {name}: region {px.shape[1]}x{px.shape[0]}, max |screen - frame| {int(d.max())}/255, "
-              f"mean {d.mean():.2f}")
+        t = self.overlay_transfer(px)
+        d = np.abs(reg - t)
+        print(f"RESULT heat {name}: region {px.shape[1]}x{px.shape[0]}, max |screen - T(frame)| {int(d.max())}/255, "
+              f"pixels beyond 1: {int((d.max(axis=2) > 1).sum())}; max |screen - frame| "
+              f"{int(np.abs(reg - px).max())}/255 (the overlay step, not a defect)")
         return reg, px, d
 
     def test_viridis_exact(self):
-        """0007 V10: a converged Sample count frame is viridis(1.0) everywhere, and the screen is the same
-        under AgX and under Standard (+-1/255: the view transform does not reach the heat map) and within the
-        display's own step of the engine's bytes."""
+        """0007 V10: (a) a converged Sample count frame is viridis(1.0) in every pixel, exactly; (b) the screen
+        is the same under AgX and under Standard (+-1/255), so the view transform does not reach the heat
+        map; (c) the screen is Blender's overlay transfer T of the frame, +-1."""
         f = STATE["samples_frame"]
         reg, px, d = self.check_screen("heatmap_samples.png", f)
         std = region_pixels("heatmap_samples_standard.png")
@@ -365,9 +388,9 @@ class TestHeatmap(Case):
         between = int(np.abs(reg - std).max())
         print(f"RESULT heat samples frame: min {flat.min(axis=0).tolist()} max {flat.max(axis=0).tolist()}, "
               f"screen mean {reg.reshape(-1, 3).mean(axis=0).round(2).tolist()}, AgX vs Standard max diff {between}")
-        self.assertLessEqual(int(np.abs(flat - np.array(VIRIDIS_1)).max()), 1)
+        self.assertEqual(int(np.abs(flat - np.array(VIRIDIS_1)).max()), 0)
         self.assertLessEqual(between, 1)
-        self.assertLessEqual(int(d.max()), self.DISPLAY_STEP)
+        self.assertLessEqual(int(d.max()), 1)
 
     def test_bounce_count_patches(self):
         """The furnace's sky is 0 bounces (viridis 0), the sphere has paths that bounce, and the screen
@@ -379,9 +402,9 @@ class TestHeatmap(Case):
         colours = np.unique(flat, axis=0)
         print(f"RESULT heat bounces: corner {sky.mean(axis=0).round(1).tolist()}, {len(colours)} distinct colours, "
               f"{int((np.abs(flat - np.array(VIRIDIS_0)).max(axis=1) > 8).sum())} pixels off viridis(0)")
-        self.assertLessEqual(int(np.abs(sky - np.array(VIRIDIS_0)).max()), 1)
+        self.assertEqual(int(np.abs(sky - np.array(VIRIDIS_0)).max()), 0)
         self.assertGreater(int((np.abs(flat - np.array(VIRIDIS_0)).max(axis=1) > 8).sum()), 500)
-        self.assertLessEqual(int(d.max()), self.DISPLAY_STEP)
+        self.assertLessEqual(int(d.max()), 1)
 
     def test_mode_reaches_the_engine(self):
         """Switching the property sends the mode to the session (Beauty first, then 1, then 2)."""
