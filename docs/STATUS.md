@@ -20,31 +20,26 @@ worker (O32); GPU performance counters enabled for all users (0002 q1, task 093)
 ROADMAP "Open items".
 
 ## Red items
-None. Follow-ups noted for later tasks: the ABI exposes no CUDA probe reason or driver version (017); JH table round
-trip is 1.1-1.6e-3 off-grid near white and up to 4.3e-3 per channel on saturated emitters (023). The material VM copies
-056's kSlotSemantic into vm/store_slot.h (nvcc rejects the shared inline constexpr; a test pins the rows), which should
-become one device-visible definition in constant_block.h. 0006's required interval rules in the opcode generator have no
-owning task yet. M1b (Mix/Add Shader): 058's compiler rejects one value feeding two EMIT_LE nodes; insert a copy or
-clone shared constants. Tooling: a new test file once needed a CMakeLists touch to reconfigure. 032's CUDA init uses its
-own Ledger, not the context's (fix with 035/041), and the CUDA context is created on the init thread, so workers must
-make it current. The fault tests leave astroray_fault_*_<pid> directories in the system temp dir. Some files mix CRLF
-and LF (CMakeLists.txt, tests/cpu/test_fault.cpp). Flaky once, passed on rerun: `cpu_device/parallel_for rethrows`
-(0.515 s against B-12's 0.5 s) and `wavelengths/stratified lane positions` (068). stack_sample's eta_clamped has no
-kernel counter, so SPECTRUM_OUT_OF_RANGE is never reported from shading; no task owns it yet (from 073). Light-tracing
-splats must reject negative spectral radiance where they are written, before conversion: the resolve checks only NaN and
-Inf on the converted SPLAT plane (047). 051's display ring copies with a synchronous Device::download into heap slots:
-the pinned slots and copy stream of 0007 d29 need the Device seam to gain both; no task owns this yet, and it must be
-written before 096 measures the viewport rate. 052 starts an epoch for every activated commit, because a commit's
-Pending does not record whether it is display-only (0007 d12); the flag and its use belong with settings sync, and no
-task owns them yet. Each CPU session owns its Ledger (052), so session allocations appear in no context or scene total;
-104's ar_progress ledger fields read the session's own. Lamp temperature is Cycles' RGB fold of the blackbody (082); a
-spectral AR_SPECTRUM_BLACKBODY option is open for M1b. PASS_UNSUPPORTED entries (ruling 74) persist for a session's
-life; no task owns clearing them. M1b from 083: Principled Roughness and Specular IOR Level linked from a texture are
-UNSUPPORTED (no colour-to-float op; Cycles converts by luminance); 083 Do 7 (the auto-converted Emission flag, each
-EMIT_LE term's RGB for AUTO) waits for the Emission node and Mix/Add Shader. translate.py (083) copies the RecordSlot
-ids, SEM_REFLECTANCE and the TEX mode bits from C headers (a test parses the headers and fails on drift); opsgen or
-abigen should export them; no task owns this.
+None. Unowned follow-ups (a task that touches the area takes them):
+- ABI/host: no CUDA probe reason or driver version (017); 032's CUDA init uses its own Ledger and creates the context
+  on the init thread (workers make it current); CPU session Ledgers sit outside context and scene totals (052, 104);
+  052 starts an epoch per activated commit (no display-only flag, 0007 d12); 051's display ring downloads
+  synchronously (0007 d29's pinned slots and copy stream are needed before 096); PASS_UNSUPPORTED entries persist for
+  a session's life (ruling 74).
+- Kernel: JH round trip 1.1-1.6e-3 off-grid near white, 4.3e-3 on saturated emitters (023); vm/store_slot.h copies
+  kSlotSemantic (should be one device-visible definition); 0006's interval rules have no opcode-generator owner;
+  eta_clamped has no counter, so SPECTRUM_OUT_OF_RANGE never fires from shading (073); light splats must reject
+  negative radiance before conversion (047).
+- Addon: translate.py copies RecordSlot ids, SEM_REFLECTANCE and TEX bits from C headers, guarded by a drift test;
+  opsgen/abigen should export them (083). CMake's astroray_extension target is not in ALL (084).
+- Tests: check 14 (sampler/hero lane independence) fails on a constant hero only through a NaN chi2 exception and
+  cannot see a hero fixed in generate_camera (078); the per-pixel analytic z of 5.50 misses 1 % albedo errors on
+  A1 and a4_sphere (energy tests catch them, 078). Flaky once: `cpu_device/parallel_for rethrows` (0.515 s vs B-12),
+  `wavelengths/stratified lane positions`. Fault tests leave astroray_fault_* dirs in temp; some files mix CRLF/LF.
+- M1b: Mix/Add Shader needs 058's compiler to accept one value feeding two EMIT_LE; textured Roughness and Specular
+  IOR Level need a colour-to-float op (Cycles: luminance); 083 Do 7 (auto-converted Emission flag, per-term RGB for
+  AUTO); a spectral AR_SPECTRUM_BLACKBODY lamp option (082 folds temperature to RGB as Cycles does).
 
 ## Budget headroom
-Landing gates run 43-55 s of B-09's 180 s (kernel part 11-21 s of 120 s); `check fast` 5-7 s warm,
+Landing gates run 77-110 s of B-09's 180 s (kernel part 14-40 s of 120 s; 084 adds a ~21 s Blender smoke); `check fast` 5-7 s warm,
 9-10 s after a header rebuild (B-08 is 10 s). Spike numbers: docs/spikes/*/RESULTS.md.
