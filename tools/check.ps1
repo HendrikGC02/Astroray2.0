@@ -238,7 +238,7 @@ try {
       $r.Out | Where-Object { $_ -match '^(Ran |OK$|FAILED|FAIL:|ERROR:)' } | ForEach-Object { Write-Host $_ }
       if ($r.Code -ne 0) { Fail "blender $bt failed (out/check/full.log)" }
     }
-    # Windowed-Blender scripts (085, 109, ...): every tests/blender/gui_*.py, one run and one line each. Each
+    # Windowed-Blender scripts: every tests/blender/gui_*.py, one run and one line each. Each
     # script drives itself by timers and ends the process; a non-zero exit fails the tier.
     foreach ($gf in (Get-ChildItem 'tests/blender' -Filter 'gui_*.py' | Sort-Object Name)) {
       $gn = $gf.BaseName
