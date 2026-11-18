@@ -17,3 +17,5 @@ Depends on: 074, 105.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
 - started
+- blocked before code: 3 files outside Scope are needed (cpu_device.cpp stage registration; a crossings counter home; gate membership in tools/analytic.py GATE_SCENES + tools/budgets.toml [family_members]); asked the lead.
+- reading: front-facing Le applies to sphere lamps too (sphere.h, D8: outward only), so a camera ray through the sphere adds L once; shade_light adds the moved distance to prev_dist (0003 d19 row 17).
