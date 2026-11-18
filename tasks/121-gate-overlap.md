@@ -17,3 +17,7 @@ Depends on: none.
 Size: S (about 150 lines); stop and report at 2x.
 Progress:
 - started (task/121-gate-overlap)
+- check.ps1: Group tag on gate steps, concurrent jobs per group (g1 analytic cpu|cuda, g2 integrator cpu|gpu abi tests, g3 cpu|gpu gate tests); tripwire, material compile, aov, smoke stay alone.
+- summary.ps1: Add-ArExcluded/Get-ArSeconds, in-run tree-lock and build waits leave the tier clock (were counted before).
+- Before (main 0257c5f): 171.8 / 145.2 / 143.8 s, kernel part 13.8 / 13.3 / 13.3 s. After: 120.8 / 114.2 / 114.4 s, kernel part 13.9 / 13.5 / 13.4 s.
+- Tripwire after 6.21-6.23e-5 / 2.06e-5 ms per sample vs before 6.2e-5 / 2.05e-5 (baseline 6.34e-5 / 2.05e-5): same. Not run: check.ps1 ci (needs the bpy wheel download).
