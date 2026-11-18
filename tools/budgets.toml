@@ -206,7 +206,7 @@ provisional = true
 
 [[budget]]
 id = "B-34"
-text = "≤ 60/s during interaction, ≤ 10/s otherwise; the display interval grows on Cycles' viewport schedule (`render_scheduler.cpp`): 0.1 s for the first 1 s without interaction, 0.25 s to 2 s, 0.5 s to 4 s, 1 s to 8 s or while under 32 samples, then 2 s; passes per update = max(int(interval / pass time), 1), rounded to the nearer power of two, a tie going up (Cycles' `round_num_samples_to_power_of_2`)"
+text = "≤ 60/s during interaction, ≤ 10/s otherwise; the display interval grows on Cycles' viewport schedule (`render_scheduler.cpp`): 0.1 s for the first 1 s of path-trace time since the last view or scene change, 0.25 s to 2 s, 0.5 s to 4 s, 1 s to 8 s or while under 32 samples, then 2 s; passes per update = max(int(interval / average pass time of the epoch), 1), rounded to the nearer power of two, a tie going up (Cycles' `round_num_samples_to_power_of_2`)"
 tier = "`full`"
 provisional = true
 

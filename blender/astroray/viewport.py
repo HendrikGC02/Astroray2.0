@@ -256,7 +256,7 @@ class ViewportJob(render_final.Job):
                                    "colour_spread": float((host[:, :, :3].max(axis=2) - host[:, :, :3].min(axis=2)).max())})
 
     def _spp(self):
-        """Samples per pixel of the session's epoch as of now (test log: the batching cases read the growth)."""
+        """Samples per pixel of the epoch as of now (test log). ar_display_frame carries no sample count, so this is read when the frame is acquired, a moment after it was published."""
         prog = self.abi.ar_progress()
         native.call(self.lib.ar_session_get_progress, self.session, ctypes.byref(prog))
         return prog.samples_per_pixel
