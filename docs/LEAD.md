@@ -64,5 +64,9 @@ implementer on its existing branch and worktree, briefed from this section and i
   a lead commit on local main rides into a landing's squash only if the task branch was rebased on
   it; after each merge, `git rebase origin/main` on main (never reset away a local-only commit) and
   push main when it still carries lead commits.
+- land.ps1 runs Canary commands verbatim (every required argument, e.g. `--device cpu`), and it does not
+  rebuild out/scenes: after main changes the ABI, a branch's recordings are stale and analytic/integrator
+  canaries fail "without the patch". Rerun `tools/scenes.py` in the worktree (through tools/lib/python.ps1)
+  and land again. Keep every shell's cwd out of a worktree that is about to land.
 - Stale worktree directories with no git registration: .claude/worktrees/agent-a3a823bde1b1e2a0c,
   agent-a61c36ff96e523f48, agent-a631435169fa2c847 (safe to delete after a look).
