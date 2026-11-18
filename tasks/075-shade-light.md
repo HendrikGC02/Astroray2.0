@@ -16,3 +16,4 @@ Budget: one VM-class device TU (lamp emission is constant in M1a); gate time +6 
 Depends on: 074, 105.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
+- started
