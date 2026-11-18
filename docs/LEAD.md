@@ -68,5 +68,8 @@ implementer on its existing branch and worktree, briefed from this section and i
   rebuild out/scenes: after main changes the ABI, a branch's recordings are stale and analytic/integrator
   canaries fail "without the patch". Rerun `tools/scenes.py` in the worktree (through tools/lib/python.ps1)
   and land again. Keep every shell's cwd out of a worktree that is about to land.
+- Any change under tests/ (including a re-blessed tests/budgets/counters.toml) needs a canary patch.
+- If hosted `ci` never starts for a landing PR ("ci is not success" with no run listed), close and reopen
+  the PR to fire pull_request again, wait for it, then `tools/land.ps1 merge NNN`.
 - Stale worktree directories with no git registration: .claude/worktrees/agent-a3a823bde1b1e2a0c,
   agent-a61c36ff96e523f48, agent-a631435169fa2c847 (safe to delete after a look).
