@@ -1,0 +1,13 @@
+diff --git a/src/kernel/stages/queue_build.h b/src/kernel/stages/queue_build.h
+index c477589..549d926 100644
+--- a/src/kernel/stages/queue_build.h
++++ b/src/kernel/stages/queue_build.h
+@@ -162,7 +162,7 @@ AR_FN uint32_t queue_lookback(const uint32_t* counts, uint32_t tiles, uint32_t u
+     const uint32_t* status = counts + uint64_t(queue_scan_status_row(p, tiles)) * kQueueBins + bin;
+     uint32_t w = queue_status_load(status);
+     while (w < kScanAggregate) w = queue_status_load(status);
+-    exclusive += w & kScanValueMask;
++    if (p != 0) exclusive += w & kScanValueMask;
+     if (w >= kScanPrefix) break;
+   }
+   return exclusive;
