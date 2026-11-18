@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0004 D4/D5 shadow lifetime (opaque part; 0002 D5 shadow pool below demand): d2's closed emissive
+# furnace with four opaque boxes inside, all in the one grey emissive material, Russian roulette
+# from the earliest depth (min_bounces 0, so paths end at varied steps and slots refill while their
+# shadow items are in flight). NEE items toward the sphere are often blocked by a box and often not.
+# The truth is d2's (truths.py uniform_enclosure: the occluders carry the same material, so radiance
+# stays uniform). tools/integrator_checks.py renders it with ASTRORAY_TEST_POOL forcing the main pool
+# to 2^10 and the shadow pool to 64 slots, at ASTRORAY_TEST_THREADS=1 twice (bit-identical), and with
+# the default pools (equal within 1e-6 relative), and tests the default-pool render against the truth.
+# Transparent shadow layers (the row's 8 non-opaque layers) wait for M2.
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+# eps_sys defaults to 0: the truth is exact for flat-faceted geometry.
+[truth]
+formula = "uniform_enclosure"
+rho = 0.8
+radiance = 0.2
+max_depth = 8
+# 48 x 48 = 2304 camera samples per pass against a 1024-slot main pool, so every pass refills;
+# 16 blocks of 12 x 12 pixels hold 1152 samples each.
+size = 48
+spp = 8
+block = 12
+sphere_radius = 1.0
+segments = 32
+rings = 16
+focal_mm = 18.0
+sensor_mm = 36.0
+# Opaque boxes: centre and edge lengths (metres), all inside the sphere and clear of the camera.
+boxes = [
+  { centre = [0.35, 0.45, 0.0], size = [0.2, 0.2, 0.6] },
+  { centre = [-0.4, 0.5, 0.2], size = [0.25, 0.15, 0.25] },
+  { centre = [0.0, 0.55, -0.4], size = [0.5, 0.1, 0.15] },
+  { centre = [0.0, -0.5, 0.0], size = [0.3, 0.3, 0.3] },
+]
+# ASTRORAY_TEST_POOL for the starved runs: main pool 2^10 (the row's), shadow pool 64 slots.
+pool = "1024,64"
+
+[tolerance]
+kind = "z_se"

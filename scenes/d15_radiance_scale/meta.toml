@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0003 Verification check 15, first part: a grey Lambertian plane lit by a rectangle lamp, seen from
+# above, black world, with an in-range emitter whose radiance (P / (pi A) = 5.1 times the colour's
+# spectral peak) puts the automatic radiance scale s = 2^k well away from 1 (k <= -2, 0003 d10).
+# tools/integrator_checks.py renders it with the automatic s and with ASTRORAY_TEST_RADIANCE_SCALE=1
+# and requires the two films to be bit-identical: s is a power of two folded into every emitter and
+# divided out by the resolve, so it must change no bit. The 1e9 K / 3 K part needs BLACKBODY lights.
+class = "D"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+[truth]
+rho = 0.6
+size = 32
+spp = 4
+lamp_position = [0.6, 0.0, 1.2]
+lamp_size = 0.5
+lamp_power = 4.0
+camera_height = 3.0
+focal_mm = 35.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "exact"

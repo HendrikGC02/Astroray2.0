@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0004 D2 closed furnace: a pinhole camera at the centre of a closed sphere whose inside is grey
+# Lambertian of albedo rho and emits a white radiance Le everywhere, black world (nothing escapes).
+# Every surface emits Le and reflects rho, so radiance is the same everywhere and a path of at most
+# max_depth bounces sees Le sum_{k=0..max_depth} rho^k, which tends to Le / (1 - rho) (truths.py
+# uniform_enclosure). tools/integrator_checks.py renders it with Russian roulette on (this
+# recording: min_bounces 0) and off (min_bounces = max_depth + 1, built by the check) and tests display
+# Y per block against that truth.
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+# eps_sys defaults to 0: the truth is exact for the faceted sphere, whose normals are flat.
+[truth]
+formula = "uniform_enclosure"
+rho = 0.8
+radiance = 0.2
+max_depth = 8
+# size x size at spp, tested in block x block pixel blocks: 64 blocks of 1024 samples each.
+size = 64
+spp = 16
+block = 8
+sphere_radius = 1.0
+segments = 32
+rings = 16
+focal_mm = 24.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "z_se"
