@@ -15,7 +15,8 @@ final C ABI, with every gate live from the first task. Open task files and
 their order: `tasks/README.md`.
 
 ## Open owner questions
-During M1a: deleting superseded records (0009 q4). Answered: open-weight
+During M1a: deleting superseded records (0009 q4). New: exact JPEG decode parity with Blender (libjpeg-turbo) or the
+2-code bound of ruling 78. Answered: open-weight
 worker (O32); GPU performance counters enabled for all users (0002 q1, task 093). Later ones:
 ROADMAP "Open items".
 
