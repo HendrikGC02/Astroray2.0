@@ -55,7 +55,8 @@ struct LaunchControl {
     cv.notify_all();
     const uint32_t ms = sleep_ms;
     lock.unlock();
-    if (ms) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+    // Spin: sleep_for on Windows rounds up to the scheduler tick, far above a 2 ms pass.
+    for (const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms); std::chrono::steady_clock::now() < until;) {}
     lock.lock();
     cv.wait(lock, [&] { return hold_at != n; });
   }
@@ -219,7 +220,7 @@ TEST_CASE("batching/scale changes are ignored") {
 TEST_SUITE("gate") {
 
 TEST_CASE("batching/session one pass per update during interaction") {
-  // The view changes every 5 ms for 0.4 s while each pass takes 2 ms: every published frame carries
+  // The view changes every 20 ms for 0.4 s while each pass takes 2 ms: every published frame carries
   // exactly one resolved pass, and frames are at least 1/60 s apart (the render thread waits out
   // the gap instead of running passes that would share a frame).
   ContextState ctx;
@@ -232,7 +233,7 @@ TEST_CASE("batching/session one pass per update during interaction") {
   const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
   for (uint32_t i = 0; std::chrono::steady_clock::now() < end; ++i) {
     r.s->set_view(view_of(4 + (i & 1), 4 + (i & 1)));
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
   const auto log = r.s->present_log();
   r.s->close();
