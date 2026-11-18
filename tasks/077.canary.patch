@@ -11,6 +11,22 @@ index 92fc041..415240d 100644
      if (comp != 2) {
        std::memcpy(dst, src, size_t(w) * to);
      } else {
+diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
+index 81e17e7..e3b5d9c 100644
+--- a/src/kernel/stages/shade_surface.h
++++ b/src/kernel/stages/shade_surface.h
+@@ -173,7 +173,11 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+     // Written even when the VM failed (the AOVs name the hit), whenever the material tables exist.
+     if (s.material_pass_index != nullptr && s.material_headers != nullptr && total == 0u) {
+       const uint32_t index = kg.session.samples_done + sample % kg.session.samples_per_pass;
++#if AR_CUDA_BUILD  // canary: GPU-only corruption of the normal, UV and material AOVs
++      film_primary_aov(kg, sample, index, &flags, P, normalize(N + Real3{Real(1e-2), Real(0), Real(0)}), ctx.uv[0].x + Real(1e-3), ctx.uv[0].y, load_ro(s.material_pass_index + mat) + 1u);
++#else
+       film_primary_aov(kg, sample, index, &flags, P, N, ctx.uv[0].x, ctx.uv[0].y, load_ro(s.material_pass_index + mat));
++#endif
+     }
+     Spec contribution = spec_fill(Real(0));
+     const uint32_t hooks = kg.session.test_hooks;
 diff --git a/src/kernel_gpu/optix_traverse.cu b/src/kernel_gpu/optix_traverse.cu
 index 60ed35e..f919f85 100644
 --- a/src/kernel_gpu/optix_traverse.cu

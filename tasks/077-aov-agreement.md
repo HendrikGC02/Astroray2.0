@@ -11,7 +11,7 @@ Do:
 4. check.ps1 `gate` runs both on both devices.
 Acceptance: `pwsh tools/check.ps1 gate` passes and prints the AOV mismatch counts (all 0) and the excluded pixel count; `<python> tools/analytic.py --scene d1_uv_chart --device cuda` passes (lead ruling: its [truth] plan fixes 64 spp).
 Look at: out/evidence/077/d1_uv_chart.png (the render beside the source chart).
-Canary: tasks/077.canary.patch must turn red: `tools/aov_agree.py --scene d2_aov_geometry` (the patch swaps u and v in the GPU barycentrics), `tools/analytic.py --scene d1_uv_chart --device cpu` (the patch flips image rows at decode; lead ruling: no --spp, the plan fixes it).
+Canary: tasks/077.canary.patch must turn red: `tools/aov_agree.py --scene d2_aov_geometry` (the patch swaps u and v in the GPU barycentrics and, lead ruling, corrupts the GPU normal, UV and material-id AOVs, each shown red on its own), `tools/analytic.py --scene d1_uv_chart --device cpu` (the patch flips image rows at decode; lead ruling: no --spp, the plan fixes it).
 Budget: gate time +5 s.
 Depends on: 076, 061.
 Size: S (about 250 lines); stop and report at 2x.
@@ -20,3 +20,4 @@ Progress:
 - D2 scene and tools/aov_agree.py written (WIP): ids 0 and positions 0 mismatches (worst 3.8e-6 rel); normals worst 3.1e-5 rad, UV 1.2e-5 exceed the task's 1e-5. Stopped for lead: D1 needs tools/analytic.py (out of Scope) and 1e-3 per pixel at 4 spp is below the noise (A5 4 spp rel SE 2-28%).
 - Lead rulings applied: D2 normal/UV bounds per pixel from layout rates and the measured dP (worst ratios pos 0.57, normal 0.33, uv 0.57; 2734 of 4096 px hit, 351 excluded); D1 per-cell plan 32x32, 64 spp, 4x4 blocks: PASS cpu and cuda, worst z 2.57 vs 4.99, marker at block (0, 0).
 - Canary red: aov 2383 position mismatches (worst 4.3e4 x bound); d1 cpu worst z -6764, marker at (0, 7). Gate PASS 166.7 s (scenes step rebuilt all recordings after the truths.py change, 13.9 s); new steps: aov 1.0 s, d1 0.2 s cpu + 0.4 s cuda.
+- Review fixes: pair tie needs pair ids on both devices; float32 terms recounted (P gamma_11, N gamma_12 + gamma_5, UV gamma_7); worst ratios pos 0.568, normal 0.316, uv 0.583. Canary hunks red alone: swap pos 2383, normal 2383, uv 2383, material 2383; pair out of view FAILs.
