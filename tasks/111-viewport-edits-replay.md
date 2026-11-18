@@ -7,6 +7,7 @@ Reference: none.
 Do:
 1. gui_edits.py (GUI Blender run): scripted edits per 0007 V4 (move, instancer move, material, vertex, add and delete object, collection instance, collection exclude toggle, armature playback, selection, node group, image, world, light, rename, an unlisted type); for each, the expected action class and call counts, no full resync except the unlisted type, and the frame after the edit differs from the pre-edit frame (captured with the frame log, not by eye).
 2. gui_record_replay.py: record a viewport sync of the smoke scene with progress and two edits (ASTRORAY_RECORD), replay with `astroray_cli render --device cpu --seed 7`; bit-identical to the same calls driven directly through the ABI in-process; the recording holds no AR_QUERY call (0001 V11).
+3. From 085: the viewport's delta sync never sends ar_edit_remove for the geometry of deleted objects (the geometry set only grows); the add-and-delete edit of Do 1 must remove it (blender/astroray/viewport.py joins Scope).
 Acceptance: both GUI scripts pass through `Invoke-ArBlender -Gui` and print one line per edit class.
 Look at: none.
 Canary: tasks/111.canary.patch must turn red: tests/blender/gui_record_replay.py "TestReplay.test_bit_identical", tests/blender/gui_edits.py "TestEdits.test_move_patches_transforms_only".
