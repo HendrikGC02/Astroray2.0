@@ -101,7 +101,7 @@ struct Rig {
     table.high_water[1] = hw_shadow;
     const uint32_t grid = ar::queue_build_grid(hw_main, hw_shadow);
     dev.launch(KernelId::QUEUE_BUILD_COUNT, grid);
-    dev.launch(KernelId::QUEUE_BUILD_SCAN, 1);
+    dev.launch(KernelId::QUEUE_BUILD_SCAN, ar::queue_scan_grid(hw_main, hw_shadow));
     dev.launch(KernelId::QUEUE_BUILD_SCATTER, grid);
   }
   void build() { build(uint32_t(next[0].size()), uint32_t(next[1].size())); }
@@ -218,6 +218,52 @@ TEST_CASE("queue_build/stable partition is independent of the worker count") {
   CHECK(one.queue[0] == many.queue[0]);
   CHECK(one.queue[1] == many.queue[1]);
   CHECK(std::memcmp(&one.table, &many.table, sizeof one.table) == 0);
+}
+
+TEST_CASE("queue_build/single-pass scan over many scan tiles") {
+  // 400,000 main and 200,000 shadow items: 587 histogram rows, so 19 scan tiles of 32 rows
+  // chain their prefixes through the look-back. Main items come in runs of 50,000 of
+  // INTERSECT_CLOSEST, SHADE_SURFACE, TERMINATED (three segments, every other main segment
+  // empty), so most scan tiles hold zeros in two of the three columns; shadow items in runs of
+  // 70,000 of INTERSECT_SHADOW and SHADOW_TERMINATED, SHADE_SHADOW empty.
+  constexpr uint32_t kMain = 400000, kShadow = 200000;
+  const Stage main_runs[] = {Stage::INTERSECT_CLOSEST, Stage::SHADE_SURFACE, Stage::TERMINATED};
+  const Stage shadow_runs[] = {Stage::INTERSECT_SHADOW, Stage::SHADOW_TERMINATED};
+  std::vector<uint8_t> m(kMain), s(kShadow);
+  for (uint32_t i = 0; i < kMain; ++i) m[i] = U8(main_runs[(i / 50000) % 3]);
+  for (uint32_t i = 0; i < kShadow; ++i) s[i] = U8(shadow_runs[(i / 70000) % 2]);
+  Rig r(m, s);
+  r.build();
+  CHECK(ar::queue_scan_tiles(ar::queue_tiles(kMain) + ar::queue_tiles(kShadow)) == 19);
+  check_against_reference(r, kMain, kShadow);
+  // Typed from the runs: 8 runs of 50,000 in the order closest, surface, terminated, ...
+  CHECK(r.table.stage[S(Stage::INTERSECT_CLOSEST)].start == 0);
+  CHECK(r.table.stage[S(Stage::SHADE_SURFACE)].start == 150000);
+  CHECK(r.table.stage[S(Stage::TERMINATED)].start == 300000);
+  CHECK(r.table.refill_count == 100000);
+  CHECK(r.table.stage[S(Stage::SHADE_SHADOW)].start == 130000);
+  CHECK(r.table.stage[S(Stage::SHADOW_TERMINATED)].count == 70000);
+  // The last item of each segment is the last index of its last run.
+  CHECK(r.queue[0][149999] == 349999);
+  CHECK(r.queue[0][299999] == 399999);
+  CHECK(r.queue[0][399999] == 299999);
+}
+
+TEST_CASE("queue_build/look-back adds aggregates up to the first inclusive prefix") {
+  // Five of six scan tiles' status words in bin 3, typed by hand: tile 0 inclusive 10, tile 1
+  // aggregate 5, tile 2 inclusive 100, tile 3 aggregate 7, tile 4 aggregate 1. On the CPU the
+  // scan tiles run in order and the look-back meets an inclusive prefix at once; this is the
+  // walk the GPU takes when its predecessors are still running.
+  const uint32_t tiles = 6 * ar::kQueueScanRows;
+  std::vector<uint32_t> counts(tiles * ar::kQueueBins, 0);
+  const uint32_t status[5] = {ar::kScanPrefix | 10u, ar::kScanAggregate | 5u, ar::kScanPrefix | 100u,
+                              ar::kScanAggregate | 7u, ar::kScanAggregate | 1u};
+  for (uint32_t u = 0; u < 5; ++u) counts[(ar::kQueueScanRows * (u + 1) - 1) * ar::kQueueBins + 3] = status[u];
+  CHECK(ar::queue_lookback(counts.data(), tiles, 0, 3) == 0);
+  CHECK(ar::queue_lookback(counts.data(), tiles, 1, 3) == 10);
+  CHECK(ar::queue_lookback(counts.data(), tiles, 2, 3) == 15);   // 5 + 10
+  CHECK(ar::queue_lookback(counts.data(), tiles, 3, 3) == 100);
+  CHECK(ar::queue_lookback(counts.data(), tiles, 5, 3) == 108);  // 1 + 7 + 100
 }
 
 TEST_CASE("queue_build/crafted step table") {

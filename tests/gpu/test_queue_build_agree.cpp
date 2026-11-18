@@ -73,7 +73,7 @@ Result run_queue_build(Device& dev, const std::vector<uint8_t>& main_next, const
 
   const uint32_t grid = ar::queue_build_grid(n[0], n[1]);
   dev.launch(KernelId::QUEUE_BUILD_COUNT, grid);
-  dev.launch(KernelId::QUEUE_BUILD_SCAN, 1);
+  dev.launch(KernelId::QUEUE_BUILD_SCAN, ar::queue_scan_grid(n[0], n[1]));
   dev.launch(KernelId::QUEUE_BUILD_SCATTER, grid);
   dev.synchronize();
 
@@ -177,6 +177,47 @@ TEST_CASE("queue_build/cpu gpu agree") {
   CHECK(diff_invalid == 0);
   CHECK(diff_starved == 0);
   if (diff_random + diff_invalid + diff_starved == 0) std::printf("segments identical\n");
+}
+
+TEST_CASE("queue_build/cpu gpu agree at full pool size") {
+  // The scheduler's largest pools, 2^21 main and 2^22 shadow items: 6,144 histogram rows, 192
+  // scan tiles whose prefixes chain through the GPU look-back while their predecessors run.
+  // Main items in runs of 100,000 of INTERSECT_CLOSEST, SHADE_SURFACE, TERMINATED with random
+  // values between runs; shadow items in runs of INTERSECT_SHADOW and SHADOW_TERMINATED. Other
+  // segments are empty. Both devices must give the reference stable partition, not only agree.
+  constexpr uint32_t kMain = 1u << 21, kShadow = 1u << 22;
+  const Stage main_runs[] = {Stage::INTERSECT_CLOSEST, Stage::SHADE_SURFACE, Stage::TERMINATED};
+  std::vector<uint8_t> m(kMain), s(kShadow);
+  for (uint32_t i = 0; i < kMain; ++i) m[i] = uint8_t(main_runs[(i / 100000) % 3]);
+  for (uint32_t i = 0; i < kShadow; ++i)
+    s[i] = uint8_t((i / 150000) % 2 == 0 ? Stage::INTERSECT_SHADOW : Stage::SHADOW_TERMINATED);
+  const std::vector<uint8_t> noise = random_values(kMain, 21, false, 0);
+  for (uint32_t i = 0; i < kMain; i += 7) m[i] = noise[i];
+
+  Ledger ledger;
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(ledger, 0);
+  const Result g = run_queue_build(*gpu, m, s);
+  uint64_t wrong = 0;
+  const std::vector<uint8_t>* next[2] = {&m, &s};
+  for (int p = 0; p < 2; ++p) {
+    // The reference: every stage of the pool in Stage order, its items in index order.
+    std::vector<uint32_t> want;
+    for (uint32_t st = 0; st < ar::kStageCount; ++st) {
+      if ((ar::stage_pool(static_cast<Stage>(st)) == Pool::SHADOW) != (p == 1)) continue;
+      CHECK(g.table.stage[st].start == want.size());
+      for (uint32_t i = 0; i < next[p]->size(); ++i)
+        if ((*next[p])[i] == st) want.push_back(i);
+    }
+    REQUIRE(want.size() == g.queue[p].size());
+    for (size_t i = 0; i < want.size(); ++i) wrong += want[i] != g.queue[p][i];
+  }
+  CHECK(g.table.invalid_items == 0);
+  CHECK(ledger.total() == 0);
+  const uint64_t diff = differences(m, s);
+  std::printf("queue_build full pools: reference differences=%llu cpu differences=%llu\n",
+              static_cast<unsigned long long>(wrong), static_cast<unsigned long long>(diff));
+  CHECK(wrong == 0);
+  CHECK(diff == 0);
 }
 
 }  // TEST_SUITE
