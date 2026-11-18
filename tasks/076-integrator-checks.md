@@ -19,3 +19,4 @@ Budget: gate time +20 s at most; report the total against B-09.
 Depends on: 106.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
+- started on task/076-integrator-checks
