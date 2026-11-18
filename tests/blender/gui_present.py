@@ -226,10 +226,15 @@ class Driver:
         light.location = (-1.0, -2.0, 3.0)
         light.rotation_euler = (math.radians(30), 0.0, math.radians(-20))
         scene.collection.objects.link(light)
-        img = bpy.data.images.new("Checker", 8, 8)
+        # A file-backed image: generated images wait for the engine's PIXELS support (images.py).
+        gen = bpy.data.images.new("CheckerGen", 8, 8)
         px = np.ones((8, 8, 4), np.float32)
         px[:, :, :3] = (np.indices((8, 8)).sum(axis=0) % 2)[:, :, None] * 0.7 + 0.1
-        img.pixels.foreach_set(px.reshape(-1))
+        gen.pixels.foreach_set(px.reshape(-1))
+        path = os.path.join(ROOT, "out", "smoke", "checker.png")
+        gen.filepath_raw, gen.file_format = path, "PNG"
+        gen.save()
+        img = bpy.data.images.load(path)
         mat = bpy.data.materials.new("PlaneMat")
         mat.use_nodes = True
         tex = mat.node_tree.nodes.new("ShaderNodeTexImage")
@@ -385,8 +390,15 @@ class TestPresent(unittest.TestCase):
         lum = reg.mean(axis=2)
         print(f"RESULT present acceptance screenshot {w}x{h}: luminance min {lum.min():.3f} mean {lum.mean():.3f} "
               f"max {lum.max():.3f}, std {lum.std():.3f}, pixels above 0.02: {int((lum > 0.02).sum())}")
-        self.assertGreater(float(lum.std()), 0.02)  # structure on screen, not a flat fill
-        self.assertGreater(int((lum > 0.02).sum()), w * h // 10)
+        # A patch on the plane's near half (fractions of the region, rows bottom-up): the checker image shows
+        # as dark and light cells (checker 0.1 and 0.8 in the file, lit by the lamp), not the magenta of an
+        # image the engine does not have.
+        patch = lum[int(h * 0.226):int(h * 0.329), int(w * 0.325):int(w * 0.425)]
+        lo, hi = np.percentile(patch, [10, 90])
+        print(f"RESULT present checker patch: 10% {lo:.3f}, 90% {hi:.3f}, std {patch.std():.3f}")
+        self.assertGreater(float(hi - lo), 0.3)
+        colour = reg[int(h * 0.226):int(h * 0.329), int(w * 0.325):int(w * 0.425)]
+        self.assertLess(float(np.abs(colour[:, :, 0] - colour[:, :, 1]).mean()), 0.05)  # grey, not magenta
 
     def test_close_destroys(self):
         """Leaving Rendered closes the session at once and the timer destroys session, then scene, once

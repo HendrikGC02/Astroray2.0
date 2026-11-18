@@ -22,7 +22,7 @@ import numpy as np
 
 from . import native, present, render_final
 from .materials import translate
-from .sync import camera, classify, edit as edit_mod, instances, keys, mesh, settings
+from .sync import camera, classify, edit as edit_mod, images, instances, keys, mesh, settings
 from .sync import world as world_sync, lights
 
 POLL_S = 0.05            # 0009 B-37: completion poll period
@@ -40,6 +40,7 @@ class ViewportJob(render_final.Job):
         self.failure = None
         self.table = None         # instance table of the last full instance send, for transform patches
         self.geom_keys = set()
+        self.sent_images = set()  # original session_uids of the images the engine has
         self._max = (0, 0)
         self._started = False
         self._last_id = 0
@@ -78,6 +79,7 @@ class ViewportJob(render_final.Job):
             self._after_full(depsgraph)
             return
         self.tcache.invalidate([a for a in actions if a.kind == classify.MATERIALS])
+        self.istate.note_updates(actions, classify.IMAGES)  # as Job.update does
         with edit_mod.Edit(self.abi, self.lib, self.scene_h) as e:
             self._apply(e, depsgraph, actions, kinds)
         self.cache.remember(depsgraph, depsgraph.scene)
@@ -85,8 +87,19 @@ class ViewportJob(render_final.Job):
 
     def _after_full(self, depsgraph):
         self.table = None
-        self.geom_keys = set(render_final.scan(depsgraph, self.keymap)[0])
+        geoms, mats = render_final.scan(depsgraph, self.keymap)
+        self.geom_keys = set(geoms)
+        self.sent_images = {im.original.session_uid for im in self._used_images(depsgraph, mats)}
         self.events.append("full")
+
+    @staticmethod
+    def _used_images(depsgraph, mats):
+        """Images of the materials and the world, the walk full_sync makes."""
+        trees = [m.original.evaluated_get(depsgraph).node_tree for m in mats.values()]
+        world = depsgraph.scene.world
+        if world and world.node_tree:
+            trees.append(world.node_tree)
+        return images.used_images(trees)
 
     def _apply(self, e, depsgraph, actions, kinds):
         """One edit, in 0007 d20's order. Camera actions need nothing: the viewport's camera is the view."""
@@ -102,6 +115,13 @@ class ViewportJob(render_final.Job):
             world_sync.sync(e, abi, world.evaluated_get(depsgraph) if world else None, self.keymap, self.op_id)
         geoms, mats = render_final.scan(depsgraph, self.keymap)
         new_geoms = set(geoms) - self.geom_keys
+        if kinds & {C.IMAGES, C.WORLD, C.MATERIALS, C.INSTANCES}:
+            # Images after the world and before the materials (d20): those a change names and those new to the scene.
+            changed = {a.uid for a in actions if a.kind == C.IMAGES}
+            used = self._used_images(depsgraph, mats)
+            todo = [im for im in used if im.original.session_uid in changed or im.original.session_uid not in self.sent_images]
+            self.lines.extend(images.sync(e, abi, self.keymap, todo, self.istate))
+            self.sent_images |= {im.original.session_uid for im in todo}
         if C.MATERIALS in kinds or C.INSTANCES in kinds:
             for uid, mat in mats.items():
                 before = self.tcache.translations
