@@ -63,7 +63,7 @@ compile_s = 1.28
 gated = "merge"
 
 [kernel.k_sort_scatter]
-regs = 40
+regs = 38
 stack = 0
 spill_store = 0
 spill_load = 0
