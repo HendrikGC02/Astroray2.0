@@ -8,32 +8,39 @@ docs/decisions/0007-appendix-abi.md (ar_image_desc, AR_COLOR_INTEROP_*). Blender
 Python API: Image.filepath_from_user(), Image.packed_file.data, Image.is_dirty, Image.alpha_mode.
 Generated, half and float images wait for PIXELS support in the engine (M1b), UDIM and mips for M3.
 
-An image is keyed by its original's session_uid, the same key translate.py gives a TEX_IMAGE node.
-Run images before materials: a TEX_IMAGE names its image only by that key.
+An image is keyed by sync.keys.image_key, the same key translate.py gives a TEX_IMAGE node.
+Run images after the world and before materials (0007 d20): a TEX_IMAGE names its image only by that key.
+Every constant sent to the engine is read from the generated binding `abi`, never copied.
 """
 import ctypes
+import re
 
 from . import keys
 from .edit import EditError
 
-AR_ERR_UNSUPPORTED = 2
-
-# Blender 5.3 interop ids -> AR_COLOR_INTEROP_* (include/astroray/astroray.h). The engine decodes
-# 0, 1 and 6 in M1a and renders the others magenta with one report entry (0007 V19).
+# Blender 5.3 interop id -> name of the AR_COLOR_INTEROP_* constant (include/astroray/astroray.h). The
+# engine decodes sRGB, linear Rec.709 and Data in M1a and renders the others magenta with one report
+# entry (0007 V19).
 INTEROP = {
-    "srgb_rec709_display": 0, "srgb_rec709_scene": 0,
-    "lin_rec709_scene": 1, "lin_rec2020_scene": 2, "lin_ap1_scene": 3, "lin_ap0_scene": 4,
-    "srgb_p3d65_display": 5, "data": 6,
+    "srgb_rec709_display": "AR_COLOR_INTEROP_SRGB_REC709", "srgb_rec709_scene": "AR_COLOR_INTEROP_SRGB_REC709",
+    "lin_rec709_scene": "AR_COLOR_INTEROP_LIN_REC709", "lin_rec2020_scene": "AR_COLOR_INTEROP_LIN_REC2020",
+    "lin_ap1_scene": "AR_COLOR_INTEROP_LIN_AP1", "lin_ap0_scene": "AR_COLOR_INTEROP_LIN_AP0",
+    "srgb_p3d65_display": "AR_COLOR_INTEROP_SRGB_P3D65", "data": "AR_COLOR_INTEROP_DATA",
 }
-UNKNOWN_INTEROP = 0xFFFFFFFF  # an id with no engine constant: the engine reports it and renders magenta
-ALPHA = {"STRAIGHT": 0, "PREMUL": 1, "CHANNEL_PACKED": 2, "NONE": 3}  # AR_ALPHA_*
+# An id Blender has and the engine has no constant for: any value outside the AR_COLOR_INTEROP_* range
+# makes the engine report it and render magenta.
+UNKNOWN_INTEROP = 0xFFFFFFFF
+ALPHA = {"STRAIGHT": "AR_ALPHA_STRAIGHT", "PREMUL": "AR_ALPHA_PREMULTIPLIED",
+         "CHANNEL_PACKED": "AR_ALPHA_CHANNEL_PACKED", "NONE": "AR_ALPHA_IGNORE"}
 _IMAGE_NODES = frozenset(("ShaderNodeTexImage", "ShaderNodeTexEnvironment"))
 
 
 class ImageState:
-    """Per-job reload counts by original session_uid. Blender has no reload counter of its own, so a
-    depsgraph update of an image (which Image.reload() causes) bumps ours; the engine's cache key
-    includes it, so a file rewritten within the timestamp resolution still decodes again."""
+    """Per-job reload counts by original session_uid. Blender has no reload counter, so a depsgraph
+    update of the Image datablock bumps ours (Image.update_tag(), a changed filepath, colour space or
+    alpha mode deliver one; Image.reload() alone delivers updates only for the Image's users, so it
+    does not). The engine's cache key includes the count, so a file rewritten within the timestamp
+    resolution still decodes again."""
 
     def __init__(self):
         self.reloads = {}
@@ -83,10 +90,16 @@ def _desc(abi, key, image, reload_count):
     d = abi.ar_image_desc()
     d.key = key
     iid = image.colorspace_settings.interop_id
-    d.color_interop = INTEROP.get(iid, UNKNOWN_INTEROP)
-    d.alpha_mode = ALPHA[image.alpha_mode]
+    d.color_interop = getattr(abi, INTEROP[iid]) if iid in INTEROP else UNKNOWN_INTEROP
+    d.alpha_mode = getattr(abi, ALPHA[image.alpha_mode])
     d.reload_count = reload_count
     return d, iid
+
+
+def _status_of(error):
+    """The ar_status inside an EditError's text ('<function> returned status N...')."""
+    m = re.search(r"returned status (\d+)", str(error))
+    return int(m.group(1)) if m else None
 
 
 def sync_image(edit, abi, keymap, image, state):
@@ -108,9 +121,10 @@ def sync_image(edit, abi, keymap, image, state):
         try:
             edit.call("ar_edit_set_image", ctypes.byref(d))
         except EditError as e:
-            if f"returned status {AR_ERR_UNSUPPORTED}" not in str(e):
+            if _status_of(e) != abi.AR_ERR_UNSUPPORTED:
                 raise
-        return f"image '{image.name}': generated images land in M1b (it renders magenta)"
+        what = "generated images" if image.source == "GENERATED" else "unsaved image edits"
+        return f"image '{image.name}': {what} land in M1b (it renders magenta)"
     if src == "MEMORY":
         data = image.packed_file.data
         d.source = abi.AR_IMAGE_SOURCE_MEMORY

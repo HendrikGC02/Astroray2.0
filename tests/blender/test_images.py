@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Blender image sync: what the engine decodes against Blender's own pixels (0007 d21, V19; task 110).
+"""Blender image sync: what the engine decodes against Blender's own pixels (0007 d21, V19).
 
 Run through Invoke-ArBlender. Each case builds a 16 m plane seen 1:1 by a 16 x 16 pixel
 camera, so one pixel samples one texel centre, and renders the image as Principled emission on a black
@@ -87,7 +87,7 @@ class Rig:
                                     ctypes.byref(self.scene_h)), "ar_scene_create")
 
     def sync(self, spp=2048, send_images=True):
-        """A full sync in 0007 d20's order: settings, world, images, materials, geometry, camera.
+        """A full sync in the order of 0007 d20 for what it covers: settings, world, images, materials; then the plane and camera.
         Returns the image report lines."""
         lib, a, scene = self.lib, ABI, self.scene
         dg = support.depsgraph()
@@ -102,6 +102,7 @@ class Rig:
         lines = []
         with edit_mod.Edit(a, lib, self.scene_h) as e:
             settings.set_settings(e, a, fields)
+            world_sync.sync(e, a, self.world.evaluated_get(dg), self.keymap, OP)
             if send_images:
                 lines = images.sync(e, a, self.keymap, used, self.state)
             self.graph = translate.translate_material(mat, self.keymap, OP)
@@ -111,7 +112,6 @@ class Rig:
             for m in others:
                 translate.set_material(e, a, self.keymap, m.original.session_uid,
                                        translate.translate_material(m, self.keymap, OP))
-            world_sync.sync(e, a, self.world.evaluated_get(dg), self.keymap, OP)
             instances.set_instances(e, a, table)
             camera.set_camera(e, a, cam_fields)
         self.cam_fields = cam_fields
@@ -227,11 +227,13 @@ def pixels_of(image):
 
 
 def srgb_decode(v):
+    """Ref: IEC 61966-2-1:1999, the sRGB transfer function (EOTF side, threshold 0.04045)."""
     v = np.asarray(v, np.float64)
     return np.where(v <= 0.04045, v / 12.92, ((v + 0.055) / 1.055) ** 2.4)
 
 
 def srgb_encode(v):
+    """Ref: IEC 61966-2-1:1999, the sRGB transfer function (OETF side, threshold 0.0031308)."""
     v = np.clip(np.asarray(v, np.float64), 0.0, 1.0)
     return np.where(v <= 0.0031308, v * 12.92, 1.055 * v ** (1 / 2.4) - 0.055)
 
@@ -431,6 +433,180 @@ class TestImages(ImageCase):
                            classify.IMAGES)
         state.note_updates([Act(classify.IMAGES, "IMAGE", 7, 1)], classify.IMAGES)
         self.assertEqual(state.reloads, {7: 2})
+
+
+def render_final_module():
+    """The addon's render_final over the generated binding and the built DLL, without the extension
+    zip: stand-ins for the staged `native`, `_abi` and `_ops` modules, so Job.update and Job.render are
+    the code F12 runs."""
+    name = "ar_addon.render_final"
+    if name not in sys.modules:
+        lib = ctypes.CDLL(DLL)
+        ABI.check(lib)
+        native = types.ModuleType("ar_addon.native")
+        native.load = lambda: lib
+        native.call = lambda fn, *args: fn(*args)
+        native.devices = lambda: ["CPU", "CUDA"]
+        native.poisoned = lambda: False
+        sys.modules["ar_addon.native"] = native
+        sys.modules["ar_addon._abi"] = ABI
+        sys.modules["ar_addon._ops"] = OPS
+        rf = importlib.import_module(name)
+        log = os.path.join(tempfile.mkdtemp(), "context.log")
+        rf._log_path = lambda: log
+    return sys.modules[name]
+
+
+class _Rect:
+    def __init__(self, result):
+        self.result = result
+
+    def foreach_set(self, values):
+        self.result.pixels = np.array(values, np.float32).copy()
+
+
+class _Result:
+    def __init__(self):
+        self.pixels = None
+        self.layers = [types.SimpleNamespace(passes={"Combined": types.SimpleNamespace(rect=_Rect(self))})]
+
+
+class FakeEngine:
+    """What Job.render asks of a bpy.types.RenderEngine: reports are kept, pixels come back as (N, N, 4)."""
+
+    def __init__(self):
+        self.reports, self.result = [], None
+
+    def report(self, kinds, text):
+        self.reports.append((next(iter(kinds)), text))
+
+    def begin_result(self, x, y, w, h, layer=None):
+        self.result = _Result()
+        return self.result
+
+    def end_result(self, result):
+        pass
+
+    def update_result(self, result):
+        pass
+
+    def update_progress(self, p):
+        pass
+
+    def update_stats(self, a, b):
+        pass
+
+    def test_break(self):
+        return False
+
+    def image(self):
+        return self.result.pixels.reshape(N, N, 4)[:, :, :3]
+
+
+def uniform_image(directory, name, fmt, code):
+    """A file-backed N x N image of one RGB byte triple, loaded back from disk."""
+    src = bpy.data.images.new(name + "_src", N, N, alpha=False, float_buffer=False)
+    src.pixels[0]
+    rgba = np.ones((N * N, 4), np.float32)
+    rgba[:, :3] = np.asarray(code, np.float32) / 255.0
+    src.pixels.foreach_set(rgba.reshape(-1))
+    src.file_format = fmt
+    src.filepath_raw = os.path.join(directory, name + {"PNG": ".png", "TARGA": ".tga"}[fmt])
+    src.save()
+    return bpy.data.images.load(src.filepath_raw)
+
+
+def middle(img):
+    """Mean RGB of the central half of an (N, N, 3) image, clear of the plane's edge."""
+    q = N // 4
+    return img[q:N - q, q:N - q].reshape(-1, 3).mean(axis=0)
+
+
+class TestRenderFinal(ImageCase):
+    """The F12 path: Job.update (full_sync) and Job.render on the addon's own code."""
+
+    def job(self, samples=128):
+        rf = render_final_module()
+        scene, plane, mat, world = new_scene()
+        scene.astroray.samples = samples
+        self.mat, self.scene, self.rf = mat, scene, rf
+        job = rf.Job()
+        self.addCleanup(job.close)
+        return job
+
+    def update(self, job):
+        job.update(support.depsgraph())
+
+    def test_f12_renders_an_image_texture(self):
+        job = self.job()
+        image = uniform_image(self._dir.name, "f12", "PNG", (51, 153, 76))
+        emit_texture(self.mat, image)
+        self.update(job)
+        engine = FakeEngine()
+        job.render(engine)
+        mean = middle(engine.image())
+        want = srgb_decode(np.array([51, 153, 76]) / 255.0)
+        print(f"RESULT F12 image texture mean {mean} want {want} reports {engine.reports}")
+        self.assertEqual([r for r in engine.reports if "image" in r[1]], [])
+        self.assertLess(np.abs(mean - want).max(), 0.01)
+
+    def test_f12_reports_generated_and_unsaved_images(self):
+        job = self.job(samples=4)
+        gen = bpy.data.images.new("gen", N, N)
+        dirty = uniform_image(self._dir.name, "dirty", "PNG", (10, 20, 30))
+        dirty.pixels[0] = 0.5
+        self.assertTrue(dirty.is_dirty)
+        t = self.mat.node_tree
+        for im in (gen, dirty):  # unlinked texture nodes still count: the node tree names the image
+            t.nodes.new("ShaderNodeTexImage").image = im
+        self.update(job)
+        engine = FakeEngine()
+        job.render(engine)  # the engine's refusal must not fail the render
+        warnings = [text for kind, text in engine.reports if kind == "WARNING"]
+        self.assertIn("image 'gen': generated images land in M1b (it renders magenta)", warnings)
+        self.assertIn(f"image '{dirty.name}': unsaved image edits land in M1b (it renders magenta)", warnings)
+
+    def test_f12_image_update_re_decodes_an_unchanged_file(self):
+        """A file rewritten with the same size and mtime reaches the engine when Blender tags the Image
+        (update_tag, a changed filepath, colour space or alpha mode): classify.IMAGES -> ImageState ->
+        reload_count -> a new engine cache key."""
+        job = self.job()
+        image = uniform_image(self._dir.name, "re", "TARGA", (200, 40, 40))
+        path = image.filepath_from_user()
+        other = uniform_image(self._dir.name, "re_other", "TARGA", (40, 40, 200))
+        with open(other.filepath_from_user(), "rb") as f:
+            data = f.read()
+        stat = os.stat(path)
+        self.assertEqual(len(data), stat.st_size)
+        emit_texture(self.mat, image)
+        self.update(job)
+        engine = FakeEngine()
+        job.render(engine)
+        first = middle(engine.image())
+        with open(path, "wb") as f:
+            f.write(data)
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        support.in_update(lambda: image.update_tag(), lambda dg: job.update(dg))
+        self.assertEqual(job.istate.reloads, {image.session_uid: 1})
+        engine = FakeEngine()
+        job.render(engine)
+        second = middle(engine.image())
+        print(f"RESULT F12 re-decode first {first} second {second}")
+        self.assertGreater(first[0], 0.4)
+        self.assertGreater(second[2], 0.4)
+        self.assertLess(second[0], 0.1)
+
+    def test_image_reload_alone_delivers_no_image_update(self):
+        """Blender 5.3 behaviour the reload counter depends on: Image.reload() tags the image's users
+        (material, node tree) but not the Image, so only an Image tag bumps the counter."""
+        job = self.job(samples=2)
+        image = uniform_image(self._dir.name, "rl", "PNG", (1, 2, 3))
+        emit_texture(self.mat, image)
+        self.update(job)
+        kinds = support.in_update(lambda: image.reload(),
+                                  lambda dg: {a.kind for a in classify.classify(dg, job.cache)})
+        self.assertIn(classify.MATERIALS, kinds)
+        self.assertNotIn(classify.IMAGES, kinds)
 
 
 if __name__ == "__main__":

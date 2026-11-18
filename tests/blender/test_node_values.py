@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Node values against Blender's own evaluation: the emission-plane bake (0005 Verification 6; task 110).
+"""Node values against Blender's own evaluation: the emission-plane bake (0005 Verification 6).
 
 Run through Invoke-ArBlender. A textured plane whose only light is Principled emission is rendered
 twice at the same 16 x 16 view: by Cycles at 1 spp with a 0.01 px box filter (Blender evaluating the

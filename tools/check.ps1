@@ -170,7 +170,7 @@ try {
   } elseif ($Tier -eq 'full') {
     $r = Step 'gate' { & pwsh -NoProfile -File tools/check.ps1 gate @dargs }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'gate failed (out/check/gate.log)' }
-    # 110: image sync and node values through Blender, full only (about 40 s does not fit B-09).
+    # Image sync and node values through Blender, full only (about 40 s does not fit B-09).
     # Not $t: Step's own stopwatch of that name is visible inside the block (dynamic scope).
     foreach ($bt in 'test_images', 'test_node_values') {
       $r = Step "blender $bt" {

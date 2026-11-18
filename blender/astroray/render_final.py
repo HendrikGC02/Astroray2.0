@@ -150,6 +150,7 @@ def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, is
     fields, lines = settings.build(scene, _colorspace(), view_layer_passes(view_layer), lightgroups)
     settings.set_settings(edit, abi, fields)
     world = scene.world
+    world_sync.sync(edit, abi, world.evaluated_get(depsgraph) if world else None, keymap, op_id)
 
     geoms, mats = {}, {}
     for inst in depsgraph.object_instances:
@@ -161,12 +162,11 @@ def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, is
         for slot in inst.object.material_slots:
             if slot.material is not None:
                 mats.setdefault(slot.material.original.session_uid, slot.material)
-    # Images before everything that names them: a TEX_IMAGE holds only the image's key (0007 d20, d21).
+    # Images after the world and before the materials (0007 d20): a TEX_IMAGE holds only the image's key.
     trees = [m.original.evaluated_get(depsgraph).node_tree for m in mats.values()]
     if world and world.node_tree:
         trees.append(world.node_tree)
     lines.extend(images.sync(edit, abi, keymap, images.used_images(trees), istate))
-    world_sync.sync(edit, abi, world.evaluated_get(depsgraph) if world else None, keymap, op_id)
     for uid, mat in mats.items():
         em = tcache.get(mat.original.evaluated_get(depsgraph), keymap, op_id)
         translate.set_material(edit, abi, keymap, uid, em)
