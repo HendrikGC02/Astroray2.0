@@ -1,0 +1,30 @@
+diff --git a/blender/astroray/viewport.py b/blender/astroray/viewport.py
+index 1a42e1e..66e45dd 100644
+--- a/blender/astroray/viewport.py
++++ b/blender/astroray/viewport.py
+@@ -132,7 +132,7 @@ class ViewportJob(render_final.Job):
+                     mesh.sync_mesh(e, abi, me, key, ob.original.name)
+         self.geom_keys |= new_geoms
+         inst = [a for a in actions if a.kind == C.INSTANCES]
+-        if inst or new_geoms:
++        if False and (inst or new_geoms):
+             moves = all(a.id_type == "OBJECT" and a.mask == C.TRANSFORM for a in inst)
+             if not (inst and moves and not new_geoms and self.table is not None
+                     and instances.sync_transforms(e, abi, self.table, depsgraph, {a.uid for a in inst})):
+@@ -194,7 +194,7 @@ class ViewportJob(render_final.Job):
+             return False
+         try:
+             self._last_id = frame.frame_id
+-            if self.present.wants(frame):
++            if False and self.present.wants(frame):
+                 self.present.upload(frame)
+                 if self.frames is not None:
+                     self._log_frame(frame)
+@@ -278,7 +278,6 @@ class ViewportJob(render_final.Job):
+             native.call(self.lib.ar_session_get_progress, self.session, ctypes.byref(prog))
+             if prog.state != self.abi.AR_STATE_CLOSED:
+                 return POLL_S
+-            self.events.append("closed_seen")
+         self.close()
+         return None
+ 

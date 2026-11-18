@@ -18,3 +18,6 @@ Depends on: 084, 051.
 Size: M (about 350 lines Python); stop and report at 2x.
 Progress:
 - started (085)
+- viewport.py (ViewportJob, a render_final.Job on the same context record), present.py (inline unpack shader), engine.py hooks, `-Gui` switch, gui_present.py (6 cases) done; canary patch turns all red.
+- Do 5 (CPU F12, 512x512, 64 and 1024 spp): the first ar_session_wait blocks 110-117 ms, like every later one (100 ms timeout + 8-17 ms Windows timer slack); not reproduced. 084's impression came from renders that finish inside the first 100 ms (wait returns at the terminal state) and from test_break being polled after the wait.
+- Limits: full_sync (render_final.py, out of Scope) raises without a scene camera, so a camera-less scene gives an error in the viewport; removed objects' geometry is not ar_edit_remove'd; the first-start Quick Setup popup of the isolated profile stays in the screenshot.
