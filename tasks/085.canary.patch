@@ -31,7 +31,7 @@ index 6338694..82c5dd1 100644
      def set_stripe_bytes(self, n):
          """Test-only: restripe from the next upload on."""
 diff --git a/blender/astroray/viewport.py b/blender/astroray/viewport.py
-index 997ab4c..2a8d59f 100644
+index 997ab4c..22c24e1 100644
 --- a/blender/astroray/viewport.py
 +++ b/blender/astroray/viewport.py
 @@ -70,7 +70,7 @@ class ViewportJob(render_final.Job):
@@ -89,7 +89,7 @@ index 997ab4c..2a8d59f 100644
              return
          lib, abi = self.lib, self.abi
          if self.session.value:
-@@ -308,21 +307,28 @@ class ViewportJob(render_final.Job):
+@@ -308,20 +307,32 @@ class ViewportJob(render_final.Job):
          try:
              self._start_reaper()
          except Exception:
@@ -108,15 +108,18 @@ index 997ab4c..2a8d59f 100644
      def _reap(self):
          """Each tick: destroy every retired session that reports CLOSED; destroy the scene only when the job is
          parked, no session is current and none is retired. Ends itself when it has nothing left to wait for."""
-+        if self.parked and not self.session.value and self.scene_h.value:
++        def closed(x):
++            q = self.abi.ar_progress()
++            native.call(self.lib.ar_session_get_progress, x, ctypes.byref(q))
++            return q.state == self.abi.AR_STATE_CLOSED
++        if self.parked and not self.session.value and self.retired and self.scene_h.value                 and all(closed(x) for x in self.retired):
 +            scene, self.scene_h = self.scene_h, ctypes.c_void_p()
 +            native.call(self.lib.ar_scene_destroy, scene)
          for session in list(self.retired):
              prog = self.abi.ar_progress()
              native.call(self.lib.ar_session_get_progress, session, ctypes.byref(prog))
 -            if prog.state == self.abi.AR_STATE_CLOSED:
--                self._destroy_session(session, "timer")
-+            self._destroy_session(session, "timer")
++            if True:
+                 self._destroy_session(session, "timer")
          if self.parked and not self.session.value and not self.retired:
              self._destroy_scene()
-             self._reaper_on = False

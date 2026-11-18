@@ -60,6 +60,7 @@ class LibSpy:
         self._lib, self._abi = lib, abi
         self.calls, self.hold, self.last_state = [], {}, {}
         self.fail_create = False
+        self.destroyed = set()
 
     def __getattr__(self, name):
         fn = getattr(self._lib, name)
@@ -79,6 +80,11 @@ class LibSpy:
         if name in ("ar_session_close", "ar_session_destroy", "ar_scene_destroy"):
             def call(handle, *a):
                 self.calls.append((name, handle.value, self.last_state.get(handle.value), time.monotonic()))
+                if name == "ar_session_destroy":
+                    again = handle.value in self.destroyed
+                    self.destroyed.add(handle.value)
+                    if again:  # recorded as a violation; not passed on, a second destroy would corrupt the engine
+                        return 0
                 return fn(handle, *a)
             return call
         return fn
