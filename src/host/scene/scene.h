@@ -109,7 +109,8 @@ class Scene {
   // Graphs, materials and their compiled arrays (059); created by ar_scene_create.
   std::shared_ptr<MaterialStore> materials;
 
-  // Blocks until the init thread is done; throws std::runtime_error with its failure.
+  // Blocks until the init thread is done; throws its failure: a DeviceError (AR_ERR_DEVICE) when the init
+  // failed in the device, else std::runtime_error.
   void wait_init();
   bool init_done();
   // The device init made (wait_init first, so it throws the init failure); null on a CPU context.
@@ -182,6 +183,8 @@ class Scene {
   std::condition_variable init_cv_;
   bool init_done_ = false;
   std::string init_error_;
+  bool init_device_error_ = false;  // the init failure was a DeviceError: wait_init keeps its type
+  bool init_device_sticky_ = false;  // ... and its sticky flag
   std::shared_ptr<void> init_result_;
   std::function<Device*(void*)> device_of_;
   std::function<AccelBuilder*(void*)> accel_of_;

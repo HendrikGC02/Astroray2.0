@@ -90,6 +90,11 @@ Session::Session(Scene& scene, Device& device, const SessionOptions& options)
     const double value[2] = {0.0, 0.0};
     report_.raise(AR_REPORT_TEST_HOOK_ACTIVE, 0, name, 1, value, 0);
   }
+  // Once per session (0002 D15): an architecture the runtime tests do not cover renders, with this warning.
+  if (const std::string arch = device_.untested_architecture(); !arch.empty()) {
+    const double value[2] = {0.0, 0.0};  // value[0] = PTX JIT seconds: no JIT path exists, so 0
+    report_.raise(AR_REPORT_UNTESTED_DEVICE, 0, arch + ": not covered by runtime tests", 1, value, 0);
+  }
   SchedulerConfig cfg;
   cfg.report = &report_;
   cfg.owner = options.owner;
@@ -129,7 +134,11 @@ void Session::set_state_locked(uint32_t state) {
 }
 
 void Session::throw_if_failed_locked(const char* what) const {
-  if (failed_) throw std::runtime_error(std::string(what) + ": the session failed: " + failure_);
+  if (!failed_) return;
+  const std::string text = std::string(what) + ": the session failed: " + failure_;
+  // 0002 D15: a device failure stays AR_ERR_DEVICE for every later call.
+  if (failure_device_) throw DeviceError(text, failure_sticky_);
+  throw std::runtime_error(text);
 }
 
 void Session::start() {
@@ -431,23 +440,30 @@ void Session::report_entry(uint32_t index, ar_report_entry* out) const {
   *out = report_snap_.entries[index];
 }
 
-void Session::fail(const std::string& why) {
+void Session::fail(const std::string& why, const DeviceError* device_error) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (failed_) return;  // the first failure is the one reported
     failed_ = true;
     failure_ = why;
+    failure_device_ = device_error != nullptr;
+    failure_sticky_ = device_error != nullptr && device_error->sticky();
     // Stop the pass in flight; the render loop parks until close.
     if (scheduler_) scheduler_->cancel = true;
+    // The entry goes in before the state changes, so a host that sees FAILED and then reads the report
+    // finds it (lock order mutex_, then the report, as report_snapshot takes them).
+    try {
+      const double value[2] = {0.0, 0.0};
+      report_.raise(AR_REPORT_SESSION_FAILED, 0, why, 1, value, latch_.generation());
+    } catch (...) {
+      // Out of memory while reporting: the state and the stored text still say it.
+    }
     set_state_locked(AR_STATE_FAILED);
     wake_cv_.notify_all();
   }
   try {
     ctx_.log.line("ERROR", "session failed: " + why);
-    const double value[2] = {0.0, 0.0};
-    report_.raise(AR_REPORT_SESSION_FAILED, 0, why, 1, value, latch_.generation());
   } catch (...) {
-    // Out of memory while reporting: the state and the stored text still say it.
   }
 }
 
@@ -788,6 +804,8 @@ void Session::run() {
   try {
     allocate();
     render_loop();
+  } catch (const DeviceError& e) {
+    fail(e.what(), &e);
   } catch (const std::exception& e) {
     fail(e.what());
   } catch (...) {

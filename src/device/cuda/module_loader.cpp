@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "device/cuda/module_loader.h"
 
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -25,9 +26,28 @@ ModuleImage read_file(const std::filesystem::path& path) {
   return image;
 }
 
+// ASTRORAY_TEST_CORRUPT_CUBIN: the copy handed to the driver loses its header, as a damaged embedded
+// image would (0002 D15 injection). The embedded bytes themselves are never touched. OptiX modules are
+// PTX the driver compiles, not cubins, and keep their text.
+void damage(ModuleImage& image) {
+  const size_t n = std::min<size_t>(image.bytes.size(), 64);
+  std::fill(image.bytes.begin(), image.bytes.begin() + static_cast<std::ptrdiff_t>(n), uint8_t{0xA5});
+  image.origin += " (damaged by ASTRORAY_TEST_CORRUPT_CUBIN)";
+}
+
+ModuleImage load_undamaged(const std::string& name);
+
 }  // namespace
 
-ModuleImage load_module_image(const std::string& name) {
+ModuleImage load_module_image(const std::string& name, bool corrupt) {
+  ModuleImage image = load_undamaged(name);
+  if (corrupt && name.rfind("optix_", 0) != 0) damage(image);
+  return image;
+}
+
+namespace {
+
+ModuleImage load_undamaged(const std::string& name) {
   bool ok = !name.empty();
   for (char c : name) {
     const unsigned char u = static_cast<unsigned char>(c);
@@ -54,6 +74,8 @@ ModuleImage load_module_image(const std::string& name) {
   image.origin = "embedded " + resource;
   return image;
 }
+
+}  // namespace
 
 ModuleImage load_module_image_file(const std::string& path) { return read_file(path); }
 

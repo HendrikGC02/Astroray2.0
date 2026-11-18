@@ -20,12 +20,21 @@ struct TestHooks {
   uint64_t pool_shadow = 0;         // ASTRORAY_TEST_POOL: shadow-pool capacity, 0 = twice the main pool
   uint32_t threads = 0;             // ASTRORAY_TEST_THREADS: CPU session workers, 0 = one per core
   bool unit_radiance_scale = false; // ASTRORAY_TEST_RADIANCE_SCALE=1: s = 1 (0003 check 15)
+  // Device failure injection (0002 D15 injection tests, 099); read by CudaDevice and Scene.
+  bool corrupt_cubin = false;       // ASTRORAY_TEST_CORRUPT_CUBIN=1: modules load from a damaged copy
+  bool fail_init = false;           // ASTRORAY_TEST_FAIL_INIT=1: the scene's device init throws
+  bool launch_timing = false;       // ASTRORAY_TEST_LAUNCH_TIMING=1: each CUDA launch is timed, the longest printed (B-17)
+  bool gpu_fault = false;           // ASTRORAY_TEST_GPU_FAULT=1: the device's first launch runs test_fault.cu
+  uint32_t driver_version = 0;      // ASTRORAY_TEST_DRIVER_VERSION: pretended cuDriverGetVersion, 0 = the real one
+  uint32_t compute_capability = 0;  // ASTRORAY_TEST_COMPUTE_CAPABILITY: pretended 10*major+minor, 0 = the real one
 };
 
 // Any value but "" and "0" turns a flag hook on. ASTRORAY_TEST_NEE takes on, off or light_only
 // (RULINGS.md 77), ASTRORAY_TEST_POOL takes MAIN[,SHADOW] capacities (SHADOW at least the largest
 // shadow items one item emits per step, or the producers could never launch), ASTRORAY_TEST_THREADS
-// a positive worker count and ASTRORAY_TEST_RADIANCE_SCALE exactly "1"; each throws
+// a positive worker count, ASTRORAY_TEST_RADIANCE_SCALE exactly "1", ASTRORAY_TEST_CORRUPT_CUBIN,
+// ASTRORAY_TEST_FAIL_INIT, ASTRORAY_TEST_GPU_FAULT and ASTRORAY_TEST_LAUNCH_TIMING exactly "1" and ASTRORAY_TEST_DRIVER_VERSION and
+// ASTRORAY_TEST_COMPUTE_CAPABILITY a positive integer; each throws
 // std::invalid_argument on any other non-empty value. Empty in builds without AR_GATE_HOOKS.
 TestHooks read_test_hooks();
 

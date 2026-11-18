@@ -202,7 +202,7 @@ class Session {
   void present(uint64_t generation);
   void wake();
   void raise_interrupt_if_due();
-  void fail(const std::string& why);
+  void fail(const std::string& why, const DeviceError* device_error = nullptr);
   void set_state_locked(uint32_t state);
   FitsProvenance fits_provenance_locked() const;
 
@@ -266,6 +266,8 @@ class Session {
   bool closing_ = false;
   bool exited_ = false;
   bool failed_ = false;
+  bool failure_device_ = false;  // the failure was a DeviceError: calls then throw one (AR_ERR_DEVICE)
+  bool failure_sticky_ = false;
   std::string failure_;
   SessionStats stats_;
   bool scene_report_lost_ = false;   // reading the scene's report at detach failed

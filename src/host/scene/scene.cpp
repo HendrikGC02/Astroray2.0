@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "host/data_resource.h"
+#include "host/device.h"
 #include "host/light/lamps.h"
 #include "host/light/light_builder.h"
 #include "host/material/material_store.h"
@@ -13,6 +14,7 @@
 #include "host/scene/edit.h"
 #include "host/scene/mesh.h"
 #include "host/scene/scene_tables.h"
+#include "host/session/test_hooks.h"
 #include "host/thread.h"
 
 namespace astroray::host {
@@ -38,31 +40,59 @@ Scene::Scene(ContextState& ctx, SceneConfig config)
   });
   arena_.set_prefault_request([this] { pool_->submit([this] { arena_.prefault_one(); }); });
   auto init = std::move(config.init);
-  init_thread_ = start_engine_thread(ctx, [this, init = std::move(init)] {
+  // Read once, here: a malformed ASTRORAY_TEST_* value refuses the scene instead of failing the worker.
+  const bool fail_init = read_test_hooks().fail_init;
+  init_thread_ = start_engine_thread(ctx, [this, init = std::move(init), fail_init] {
     std::string err;
+    bool device_error = false, device_sticky = false;
     {
       // Waiters are released however this scope ends.
       struct Done {
         Scene& s;
         std::string& err;
+        bool& device_error;
+        bool& device_sticky;
         ~Done() {
           {
             std::lock_guard<std::mutex> lock(s.init_mutex_);
             s.init_error_ = err;
+            s.init_device_error_ = device_error;
+            s.init_device_sticky_ = device_sticky;
             s.init_done_ = true;
           }
           s.init_cv_.notify_all();
         }
-      } done{*this, err};
+      } done{*this, err, device_error, device_sticky};
       try {
-        if (init) init_result_ = init();
+        if (init) {
+          // Ref: 0002 D15 (failing init worker injection).
+          if (fail_init)
+            throw DeviceError("test hook ASTRORAY_TEST_FAIL_INIT: injected device init failure");
+          init_result_ = init();
+        }
+      } catch (const DeviceError& e) {
+        err = e.what()[0] ? e.what() : "device init failed";
+        device_error = true;
+        device_sticky = e.sticky();
       } catch (const std::exception& e) {
         err = e.what()[0] ? e.what() : "device init failed";
       } catch (...) {
         err = "device init failed: unknown exception";
       }
+      // Posted when it happens (0002 D15), before the waiters are released, not when a session first
+      // needs the device; the first upload re-raises it from wait_init and the host scene data is kept.
+      if (!err.empty()) {
+        try {
+          const double value[2] = {0.0, 0.0};
+          report_.raise(AR_REPORT_DEVICE_INIT_FAILED, 0, err, 1, value, 0);
+        } catch (...) {
+          // Out of memory while reporting: wait_init still throws the text.
+        }
+      }
     }
-    if (!err.empty()) ctx_.log.line("ERROR", "scene device init failed: " + err);
+    if (!err.empty()) {
+      ctx_.log.line("ERROR", "scene device init failed: " + err);
+    }
   });
 }
 
@@ -91,7 +121,10 @@ void Scene::wait_init() {
   while (!init_cv_.wait_for(lock, std::chrono::milliseconds(50), [this] { return init_done_; }))
     if (ctx_.poisoned.load(std::memory_order_acquire))
       throw std::runtime_error("device init did not finish: " + ctx_.poison_message);
-  if (!init_error_.empty()) throw std::runtime_error(init_error_);
+  if (!init_error_.empty()) {
+    if (init_device_error_) throw DeviceError(init_error_, init_device_sticky_);
+    throw std::runtime_error(init_error_);
+  }
 }
 
 Device* Scene::device() {

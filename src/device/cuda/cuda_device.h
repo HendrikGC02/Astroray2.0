@@ -69,6 +69,7 @@ class CudaDevice final : public ModuleDevice {
   void read_step_table(ar::StepTable& out) override;
   void synchronize() override;
   uint32_t kind() const override { return AR_DEVICE_CUDA; }
+  std::string untested_architecture() const override;
 
   uint32_t load_module_file(const std::string& path) override;
   void launch_module_kernel(uint32_t module, const char* function, uint32_t blocks, uint32_t threads,

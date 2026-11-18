@@ -196,6 +196,9 @@ try {
       ($r.Out | Where-Object { $_ -match '^(FAIL|kernelgate:)' } | Select-Object -First 6) | ForEach-Object { Write-Host $_ }
       Fail ('kernelgate full: ' + ($r.Out | Where-Object { $_ -like 'FAIL*' } | Select-Object -First 1))
     }
+    # The GPU suite's full tier (0009 B-17 launch duration, 099): a whole tier, a few seconds today.
+    $r = Step 'gpu full tests' { & $gpuExe --tier=full }
+    if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'gpu full tests failed (out/check/full.log)' }
     $r = Step 'build probe' { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_kernels_gpu_probe }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'probe build failed (out/check/build.log)' }
     $r = Step 'probe registers' { & $py -I tools/kernelgate.py --probe }

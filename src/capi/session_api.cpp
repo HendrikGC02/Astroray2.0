@@ -56,6 +56,8 @@ ar_status session_call(ar_session h, const char* function, F&& f, bool allow_clo
     return fail(h, AR_ERR_INVALID_ARGUMENT, std::string("invalid argument: ") + e.what());
   } catch (const std::bad_alloc&) {
     return fail(h, AR_ERR_OUT_OF_MEMORY, std::string(function) + ": out of host memory");
+  } catch (const astroray::host::DeviceError& e) {
+    return fail(h, e.status(), e.what());
   } catch (const std::exception& e) {
     return fail(h, AR_ERR_INTERNAL, e.what());
   } catch (...) {

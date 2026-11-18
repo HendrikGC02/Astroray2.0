@@ -70,10 +70,17 @@ if(ASTRORAY_GPU)
   # PROVISIONAL (0009 d7): spike A ran -j8 cleanly; a measurement task records peak RAM.
   set_property(GLOBAL APPEND PROPERTY JOB_POOLS nvcc=8)
 
-  # Tests of the gate hooks build src/kernel_gpu/test_*.cu; no release build sets this.
   # film_resolve accumulates the fp64 moments of 0008 d3, the one other FP64 kernel.
   set(AR_GPU_F64_MODULES advance_geodesic_f64 film_resolve film_present)
-  option(AR_GATE_HOOKS "Build src/kernel_gpu/test_*.cu and define AR_GATE_HOOKS" OFF)
+  # Gate hooks (src/kernel_gpu/test_*.cu, -DAR_GATE_HOOKS) are on exactly where the engine's own
+  # AR_GATE_HOOKS is (CMakeLists.txt: every build type but Release), so a hook the host reads always
+  # finds its module and a shipping build has neither. A plain variable, not a cache option: an old
+  # cache entry cannot switch it off. Hook modules are never embedded (data.cmake).
+  if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(AR_GATE_HOOKS OFF)
+  else()
+    set(AR_GATE_HOOKS ON)
+  endif()
 
   # Production line of 0002 D10 and D12: no fast math, no rdc, correctly rounded divide and
   # sqrt, denormals kept, warnings are errors, and any double-precision instruction in a

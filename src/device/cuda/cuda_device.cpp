@@ -12,6 +12,7 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <exception>
@@ -24,6 +25,8 @@
 
 #include "device/cuda/module_loader.h"
 #include "device/cuda/optix_accel.h"
+#include "host/device_probe.h"
+#include "host/session/test_hooks.h"
 #include "kernel/launch_config.h"
 
 namespace astroray::host {
@@ -71,7 +74,7 @@ uint32_t blocks_for(uint32_t items, uint32_t threads) {
 // The driver functions this file uses; each is resolved by its unversioned name for the
 // CUDA version the build compiles against (12.8), so the signatures are cuda.h's.
 #define AR_CU_FUNCTIONS(X)                                                                              \
-  X(cuInit) X(cuDeviceGet) X(cuDeviceGetAttribute) X(cuDevicePrimaryCtxRetain)                          \
+  X(cuInit) X(cuDriverGetVersion) X(cuDeviceGet) X(cuDeviceGetAttribute) X(cuDevicePrimaryCtxRetain)                          \
   X(cuDevicePrimaryCtxRelease) X(cuCtxSetCurrent) X(cuCtxSynchronize) X(cuModuleLoadData)               \
   X(cuModuleUnload) X(cuModuleGetFunction) X(cuFuncGetAttribute) X(cuLaunchKernel) X(cuMemAlloc) X(cuMemFree)                 \
   X(cuMemGetInfo) X(cuMemcpyHtoDAsync) X(cuMemcpyDtoHAsync) X(cuMemcpyDtoDAsync) X(cuMemsetD8Async) X(cuStreamCreate)        \
@@ -162,6 +165,13 @@ struct CudaDevice::Impl {
   CUstream stream = nullptr;
   CUevent done = nullptr;
   std::string arch;  // "sm_120"
+  TestHooks hooks;   // read once at construction (gate builds; empty otherwise)
+  bool fault_pending = false;  // ASTRORAY_TEST_GPU_FAULT: the next launch runs test_fault.cu first
+  // ASTRORAY_TEST_LAUNCH_TIMING: every launch is waited for and timed; the longest is printed when the
+  // device goes (0002 D15's debug wait, 0009 B-17).
+  double longest_launch_ms = 0.0;
+  std::string longest_launch_name;
+  uint64_t timed_launches = 0;
   bool dead = false;
   std::string dead_message;  // the sticky error's message, thrown again by every later call
   CUdeviceptr globals = 0;
@@ -180,14 +190,29 @@ struct CudaDevice::Impl {
   // Separate from the constructor so a failure part-way still runs ~Impl and gives back
   // the context, stream and event acquired so far.
   void init(uint32_t index) {
+    hooks = read_test_hooks();
+    fault_pending = hooks.gpu_fault;
     check(cu.cuInit_(0), "cuInit");
+    int driver = 0;
+    check(cu.cuDriverGetVersion_(&driver), "cuDriverGetVersion");
     check(cu.cuDeviceGet_(&device, static_cast<int>(index)), "cuDeviceGet");
     int major = 0, minor = 0;
     check(cu.cuDeviceGetAttribute_(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device),
           "cuDeviceGetAttribute");
     check(cu.cuDeviceGetAttribute_(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device),
           "cuDeviceGetAttribute");
+    // Test hooks pretend another driver or GPU, so the refusal and the warning run on this machine.
+    if (hooks.driver_version != 0) driver = static_cast<int>(hooks.driver_version);
+    if (hooks.compute_capability != 0) {
+      major = static_cast<int>(hooks.compute_capability / 10);
+      minor = static_cast<int>(hooks.compute_capability % 10);
+    }
     arch = "sm_" + std::to_string(major) + std::to_string(minor);
+    // Ref: 0001 D3.5 (R590 floor, compute capability floor), D2.8; 0002 D15 "Driver too old, unsupported
+    // GPU": the context is refused, with the found and required driver and the GPU architecture.
+    const astroray::DeviceStatus status = astroray::cuda_device_status(driver, major, minor);
+    if (status.status != AR_OK)
+      throw DeviceError("GPU device unavailable: " + status.reason + " (GPU " + arch + ")");
     check(cu.cuDevicePrimaryCtxRetain_(&ctx, device), "cuDevicePrimaryCtxRetain");
     bind();
     // Observes a sticky error left by any other user of the primary context: the call
@@ -198,6 +223,9 @@ struct CudaDevice::Impl {
   }
 
   ~Impl() {
+    if (timed_launches != 0)
+      std::fprintf(stderr, "astroray: longest launch %.3f ms (%s) over %llu launches\n", longest_launch_ms,
+                   longest_launch_name.c_str(), static_cast<unsigned long long>(timed_launches));
     // Teardown cannot throw; a failure is printed, never dropped.
     if (!ctx) return;
     note(cu.cuCtxSetCurrent_(ctx), "cuCtxSetCurrent");
@@ -258,8 +286,15 @@ struct CudaDevice::Impl {
   CUmodule load_image(const std::string& label, const ModuleImage& image) {
     CUmodule m = nullptr;
     const CUresult r = cu.cuModuleLoadData_(&m, image.bytes.data());
-    if (r == CUDA_ERROR_NO_BINARY_FOR_GPU)
-      throw DeviceError("no module image for " + arch + ": " + label + " (" + image.origin + ")");
+    // 0002 D15 "No module image for this GPU": a missing or damaged image makes the device unavailable
+    // and the message names the architecture, whatever the driver calls the defect.
+    if (r == CUDA_ERROR_NO_BINARY_FOR_GPU || r == CUDA_ERROR_INVALID_IMAGE || r == CUDA_ERROR_INVALID_PTX ||
+        r == CUDA_ERROR_UNSUPPORTED_PTX_VERSION || r == CUDA_ERROR_INVALID_SOURCE) {
+      const char* name = nullptr;
+      cu.cuGetErrorName_(r, &name);
+      throw DeviceError("GPU device unavailable: no usable module image for " + arch + ": " + label + " (" +
+                        image.origin + "): " + (name ? name : "CUDA error"));
+    }
     check(r, "cuModuleLoadData", label.c_str());
     return m;
   }
@@ -271,7 +306,7 @@ struct CudaDevice::Impl {
     auto f = functions.find(key);
     if (f != functions.end()) return f->second;
     auto m = modules.find(module);
-    if (m == modules.end()) m = modules.emplace(module, load_image(module, load_module_image(module))).first;
+    if (m == modules.end()) m = modules.emplace(module, load_image(module, load_module_image(module, hooks.corrupt_cubin))).first;
     CUfunction func = nullptr;
     check(cu.cuModuleGetFunction_(&func, m->second, fn.c_str()), "cuModuleGetFunction", fn.c_str());
     functions.emplace(key, func);
@@ -292,10 +327,48 @@ struct CudaDevice::Impl {
   }
 
   void launch(CUfunction f, const char* name, uint32_t blocks, uint32_t threads, void** params) {
+    const auto t0 = std::chrono::steady_clock::now();
     check(cu.cuLaunchKernel_(f, blocks, 1, 1, threads, 1, 1, 0, stream, params, nullptr), "cuLaunchKernel", name);
 #ifndef NDEBUG
     sync(name);  // a debug build waits after every launch so an error names its kernel (D15)
 #endif
+    note_launch(name, t0);
+  }
+
+  // With ASTRORAY_TEST_LAUNCH_TIMING: waits for the launch that began at `t0` and keeps the longest.
+  void note_launch(const char* name, std::chrono::steady_clock::time_point t0) {
+    if (!hooks.launch_timing) return;
+    sync(name);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    ++timed_launches;
+    if (ms > longest_launch_ms) {
+      longest_launch_ms = ms;
+      longest_launch_name = name;
+    }
+  }
+
+  // Ref: 0001 V14 (gate-only fault hook: an out-of-bounds kernel write). Once per device, before the
+  // first real launch, runs test_fault.cu's write far past the bound KernelGlobals allocation and waits:
+  // the sticky error surfaces through sync() exactly as a stage's would.
+  void inject_fault_once() {
+    if (!fault_pending) return;
+    fault_pending = false;
+    require_globals();
+    bind();
+    const ModuleImage image = load_module_image("test_fault");  // gate-hook builds only, loose (ASTRORAY_KERNEL_DIR)
+    const CUmodule m = load_image("test_fault", image);
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      file_modules.push_back(m);
+    }
+    CUfunction f = nullptr;
+    check(cu.cuModuleGetFunction_(&f, m, "ar_test_fault"), "cuModuleGetFunction", "ar_test_fault");
+    CUdeviceptr base = globals;
+    uint64_t index = uint64_t(1) << 40;  // 4 TiB of uint32_t past the allocation: unmapped
+    void* params[] = {&base, &index};
+    check(cu.cuLaunchKernel_(f, 1, 1, 1, 1, 1, 1, 0, stream, params, nullptr), "cuLaunchKernel", "ar_test_fault");
+    sync("ar_test_fault");  // throws the sticky DeviceError; the device is dead for the process
+    throw DeviceError("test hook ASTRORAY_TEST_GPU_FAULT: ar_test_fault did not fault");
   }
 
   void copy_from(void* dst, CUdeviceptr src, uint64_t bytes) {
@@ -368,6 +441,7 @@ void CudaDevice::launch(ar::Stage stage, uint32_t grid) {
   s.require_globals();
   const uint32_t i = static_cast<uint32_t>(stage);
   if (i >= ar::kStageCount) throw std::invalid_argument("CudaDevice: stage " + number(i) + " does not exist");
+  s.inject_fault_once();
   if (stage == ar::Stage::TERMINATED || stage == ar::Stage::SHADOW_TERMINATED)
     throw std::invalid_argument("CudaDevice: stage " + number(i) + " is not launchable");
   const std::string name = kStageNames[i];
@@ -380,6 +454,7 @@ void CudaDevice::launch(ar::Stage stage, uint32_t grid) {
     s.bind();
     // The raygen strides over the step table's count like a kernel; `grid` only sizes the launch.
     const uint32_t width = grid == 0 ? 1u : grid;
+    const auto t0 = std::chrono::steady_clock::now();
     if (stage == ar::Stage::INTERSECT_CLOSEST)
       s.traversal->launch_closest(s.traversable, s.globals_buffer, width);
     else
@@ -387,6 +462,7 @@ void CudaDevice::launch(ar::Stage stage, uint32_t grid) {
 #ifndef NDEBUG
     s.sync(name.c_str());  // as Impl::launch: an error names its stage (D15)
 #endif
+    s.note_launch(name.c_str(), t0);
     return;
   }
   if (stage == ar::Stage::INTERSECT_SUBSURFACE)
@@ -458,6 +534,7 @@ void CudaDevice::launch(KernelId kernel, uint32_t count) {
   s.require_globals();
   const uint32_t i = static_cast<uint32_t>(kernel);
   if (i >= kKernelIdCount) throw std::invalid_argument("CudaDevice: kernel " + number(i) + " does not exist");
+  s.inject_fault_once();
   s.bind();
   const std::string name = kKernelNames[i];
   const std::string fn = "k_" + name;
@@ -480,6 +557,11 @@ void CudaDevice::read_step_table(ar::StepTable& out) {
 }
 
 void CudaDevice::synchronize() { impl_->sync(); }
+
+std::string CudaDevice::untested_architecture() const {
+  // 0001 D3.3: sm_120 is the only tested hardware; this build has no PTX JIT path to time.
+  return impl_->arch == "sm_120" ? std::string() : impl_->arch;
+}
 
 uint32_t CudaDevice::load_module_file(const std::string& path) {
   Impl& s = *impl_;
@@ -544,6 +626,11 @@ void* CudaDevice::alloc_memory(uint64_t bytes) {
 
 void CudaDevice::free_memory(void* ptr) {
   Impl& s = *impl_;
+  // After a sticky error every call returns it and the context is lost with the process (0001 D2.5), so
+  // there is nothing to give back. Film, active-pixel and table destructors free through here and cannot
+  // throw: a throw would std::terminate the process that is meant to stay up on its CPU device. The failure
+  // itself was reported when the error surfaced.
+  if (s.dead) return;
   s.bind();
   s.check(s.cu.cuMemFree_(reinterpret_cast<CUdeviceptr>(ptr)), "cuMemFree");
 }
