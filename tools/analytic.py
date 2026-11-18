@@ -59,13 +59,16 @@ COUNTER_SPP = 4
 # 2.7 ms on both devices whatever the image size (launch-bound), so they render a larger image at
 # fewer spp and test blocks of block x block pixels holding block^2 spp >= MIN_SPP samples
 # (comparison_plan). The threshold stays Sidak at the family alpha; a null run only shows that the
-# block statistic is normal enough for it. Null run (106, 64x64 at 64 spp, 8x8 blocks, CPU, 100
-# same-mode pairs with independent seeds each; `--scene S --device cpu --null 100 --null-mode M`):
-# d1 on, off, light_only and d8 on, off gave 0 block-check and 0 image-mean alarms in 500 checks
-# each (0.02 expected at the per-check alpha 3.9e-5). Over the blocks with SE > 0, G (exact
-# variance) had |z| > 2 / > 3 / > 4 in 284, 279, 285, 107, 97 / 8, 17, 14, 6, 5 / 0 blocks against
-# a normal 291, 291, 291, 109, 109 / 17.3, 17.3, 17.3, 6.5, 6.5 / 0.4, 0.2 (max |z| 3.89); Y, the
-# tested channel, sat below that (209-224 beyond 2 in d1) because its SE is the Minkowski bound.
+# block statistic is normal enough for it. Null run of the pairs the gate checks (106, 64x64 at 64
+# spp, 8x8 blocks, CPU, independent seeds; `--scene S --device cpu --null 100`), signed z = (a - b)
+# / SE over blocks with SE > 0, one-sided normal count in brackets:
+#   d1 on~off, 100 pairs: 0 block and 0 image alarms; Y z>3 / z<-3: 1 / 3 (8.6), |z|>4: 1 (0.4),
+#     skew -0.01; G z>3 / z<-3: 7 / 4 (8.6). Normal.
+#   d1 on~light_only, 100 pairs: 0 / 0 alarms; Y z>3 / z<-3: 2 / 4, |z|>4: 0, skew +0.04. Normal.
+#   d8 on~off, 100 pairs: 52 block-check alarms (0.004 expected), 0 image alarms; Y z>4.99: 67 / 0
+#     of 2400 blocks, skew +1.81. FAILS: the pixel row straddling the floor's near edge holds a
+#     few floor samples, so BSDF-only (off) lighting there is a rare event and its VAR is
+#     underestimated (mean block z +1 in that row). Open with the lead (task 106).
 DEVICES = ("cpu", "cuda")
 FAMILY_ALPHA = 0.01  # 0009 d15
 # tests/common/stat.cpp kRepoConstant and the FNV-1a / MixBits rule of seed_for() (task 020).

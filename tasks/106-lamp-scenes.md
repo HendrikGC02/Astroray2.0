@@ -24,5 +24,5 @@ Progress:
 - pair checks test pixel blocks: BSDF-only gives zero-hit pixels (mean and VAR 0) per pixel; comparison is per scene formula, no --compare flag
 - furnace no-bias check: 16384 spp CPU, Y image mean 0.268208 vs truth 0.268276 (z -1.43), resolves 0.073%; worst pixel z +3.53
 - lead option (c): d1, d8 render 64x64 at 64 spp, tested in 8x8 blocks (4096 samples each); a3, furnace stay 32x32 at 1024
-- null calibration `analytic.py --scene S --device cpu --null 100 --null-mode M` (d1 on/off/light_only, d8 on/off): 0 block and 0 image alarms of 500 checks; G |z| tail normal (max 3.89), Y conservative (Minkowski SE); numbers in analytic.py
+- cross-mode null `analytic.py --scene S --device cpu --null 100`: d1 on~off and on~light_only 0 alarms, tails normal; d8 on~off 52/100 block alarms (skew +1.81, floor near-edge row); open, numbers in analytic.py
 - CPU vs CUDA a3 dumps differ (display max rel 4.5e-7, VAR 8.8e-7; NSAMP and bounces equal): same integer-RNG paths, float rounding apart; DEVICE header cpu / cuda
