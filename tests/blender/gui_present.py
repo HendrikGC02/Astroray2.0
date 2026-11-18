@@ -8,9 +8,10 @@ read what it recorded:
   main:  switch to Rendered -> first frame -> move the sphere (twice) -> change the view -> leave Rendered
   grow:  Rendered again with a coloured sphere -> GPU read-back of the unpacked texture against the host
          frame (small test stripes) -> maximise the area, so the region outgrows the session -> leave Rendered
-  scn:   three teardown scenarios, each its own phase: a second retirement overlapping the final one (the
-         final session closes first), a failed timer registration at park, a failed session create during a
-         resize followed by park
+  scn:   teardown scenarios, each its own phase: a second retirement overlapping the final one (the final
+         session closes first), a failed timer registration at park, a failed session create during a resize
+         followed by park, a failed timer registration during a resize, a failing destroy during the direct
+         close, failing ticks of the reaper
   p2:    a scene without a camera, with a lamp and a textured plane -> first frame, screenshot.
 A phase that fails records its error and the run goes on to the next, so a case fails only for its own phase.
 The viewport job keeps a lifecycle `events` list and, when asked, a log of every presented frame
@@ -44,10 +45,10 @@ MODULE = smoke_a1.MODULE
 ARGS = smoke_a1.ARGS
 WATCHDOG_S = 270.0  # land's canary run gives Blender 300 s
 SETTLE_S = 2.0       # let the first generation render a while before the sphere moves
-STEP_TIMEOUT_S = 25.0  # every step takes a few seconds; a failing phase must not eat the budget
+STEP_TIMEOUT_S = 15.0  # every step takes a few seconds; a failing phase must not eat the budget
 T0 = time.monotonic()
 STATE = {"errors": {}}
-SCENARIOS = ("overlap", "failpark", "failcreate")
+SCENARIOS = ("overlap", "failpark", "failcreate", "failreplace", "failclose", "failtick")
 SMALL_STRIPE_ROWS = 100  # rows per stripe in the read-back check: 13 stripes at the 2100x1221 region
 
 
@@ -61,11 +62,17 @@ class LibSpy:
         self.calls, self.hold, self.last_state = [], {}, {}
         self.fail_create = False
         self.destroyed = set()
+        self.live = set()           # sessions created and not destroyed: the scene is not destroyed under them
+        self.raise_destroy = False  # ar_session_destroy raises (not forwarded)
+        self.raise_progress = 0     # this many ar_session_get_progress calls raise
 
     def __getattr__(self, name):
         fn = getattr(self._lib, name)
         if name == "ar_session_get_progress":
             def get(session, ref):
+                if self.raise_progress > 0:
+                    self.raise_progress -= 1
+                    raise RuntimeError("injected progress failure")
                 r = fn(session, ref)
                 prog, key = ref._obj, session.value
                 if self.hold.get(key, 0) > 0 and prog.state == self._abi.AR_STATE_CLOSED:
@@ -75,16 +82,29 @@ class LibSpy:
                 self.calls.append(("progress", key, prog.state, time.monotonic()))
                 return r
             return get
-        if name == "ar_session_create" and self.fail_create:
-            return lambda *a: 1  # any status but AR_OK
+        if name == "ar_session_create":
+            if self.fail_create:
+                return lambda *a: 1  # any status but AR_OK
+
+            def create(scene, desc, ref):
+                r = fn(scene, desc, ref)
+                if r == 0:
+                    self.live.add(ref._obj.value)
+                return r
+            return create
         if name in ("ar_session_close", "ar_session_destroy", "ar_scene_destroy"):
             def call(handle, *a):
                 self.calls.append((name, handle.value, self.last_state.get(handle.value), time.monotonic()))
                 if name == "ar_session_destroy":
+                    if self.raise_destroy:
+                        raise RuntimeError("injected destroy failure")
                     again = handle.value in self.destroyed
                     self.destroyed.add(handle.value)
                     if again:  # recorded as a violation; not passed on, a second destroy would corrupt the engine
                         return 0
+                    self.live.discard(handle.value)
+                if name == "ar_scene_destroy" and self.live:
+                    return 0  # recorded as a violation; not passed on, the engine would wait on the live session
                 return fn(handle, *a)
             return call
         return fn
@@ -403,16 +423,20 @@ class Driver:
         self.job = job
         self.spy = LibSpy(job.lib, job.abi)
         job.lib = self.spy
+        self.spy.live.add(job.session.value)
         STATE["scn_session_" + self.scn] = job.session.value
         STATE["scn_scene_" + self.scn] = job.scene_h.value
         if self.scn == "overlap":
             self.spy.hold[job.session.value] = 40  # the first session stays "open" 2 s, the second closes at once
         if self.scn == "failcreate":
             self.spy.fail_create = True
-        if self.scn == "failpark":
+        if self.scn in ("failpark", "failreplace", "failclose"):
             def refuse(*a, **k):
                 raise RuntimeError("timers refused")
             job.register_timer = refuse
+        if self.scn == "failclose":
+            self.spy.raise_destroy = True
+        if self.scn in ("failpark", "failclose", "failtick"):
             return self.s_leave()
         self.toggle_maximize()  # the region outgrows the session
         self.go("s_replaced")
@@ -420,7 +444,9 @@ class Driver:
 
     def step_s_replaced(self):
         events = self.job.events
-        if "replace_session" not in events or (self.scn == "failcreate" and "failed" not in events):
+        need = {"overlap": ("replace_session",), "failcreate": ("replace_session", "failed"),
+                "failreplace": ("failed",)}[self.scn]
+        if any(e not in events for e in need):
             if self.timed_out():
                 raise RuntimeError(f"scenario {self.scn}: no replacement; events {events}")
             return 0.1
@@ -430,6 +456,8 @@ class Driver:
         if STATE.get("maximized"):
             self.toggle_maximize()
         _, area, _ = self.find_area()
+        if self.scn == "failtick":
+            self.spy.raise_progress = 2  # the first two ticks of the reaper fail
         area.spaces.active.shading.type = "SOLID"  # __del__ -> park
         self.go("s_done")
         return 0.1
@@ -440,7 +468,7 @@ class Driver:
                 raise RuntimeError(f"scenario {self.scn}: scene never destroyed; events {self.job.events}; parked {self.job.parked} session {self.job.session.value} retired {[r.value for r in self.job.retired]} reaper {self.job._reaper_on}")
             return 0.1
         STATE["scn_" + self.scn] = {"native": self.spy.native(), "calls": list(self.spy.calls),
-                                    "events": list(self.job.events),
+                                    "events": list(self.job.events), "errors": list(self.job.errors),
                                     "session": STATE["scn_session_" + self.scn],
                                     "scene": STATE["scn_scene_" + self.scn]}
         STATE["s_after"] = time.monotonic()
@@ -532,6 +560,9 @@ PHASE_OF = {
     "test_overlapping_retirements_end_with_the_scene": "scn:overlap", "test_close_waits_for_closed": "scn:overlap",
     "test_failed_timer_registration_destroys_once": "scn:failpark",
     "test_failed_create_then_park_destroys_session_first": "scn:failcreate",
+    "test_failed_registration_at_resize_keeps_the_session": "scn:failreplace",
+    "test_failed_destroy_does_not_stop_close": "scn:failclose",
+    "test_failed_teardown_ticks_are_retried": "scn:failtick",
     "test_camera_less_scene_presents": "p2", "test_acceptance_screenshot": "p2",
 }
 
@@ -681,7 +712,7 @@ class TestPresent(unittest.TestCase):
         f.width, f.height, f.format, f.row_bytes = 32, 4, 0, 32 * 8
         pres.check_layout(f)
         f.row_bytes = 32 * 8 + 16
-        with self.assertRaisesRegex(ValueError, "row_bytes .* not width\*8"):
+        with self.assertRaisesRegex(ValueError, r"row_bytes .* not width\*8"):
             pres.check_layout(f)
         f.row_bytes, f.format = 32 * 8, 1
         with self.assertRaisesRegex(ValueError, "not RGBA16F"):
@@ -775,6 +806,36 @@ class TestPresent(unittest.TestCase):
         print(f"RESULT present failed create native calls {names}, events {r['events']}")
         s, scene = r["session"], r["scene"]
         self.assertEqual(names, [("ar_session_close", s), ("ar_session_destroy", s), ("ar_scene_destroy", scene)])
+
+    def test_failed_registration_at_resize_keeps_the_session(self):
+        """The timer cannot be registered when the region outgrows the session: the old session stays where
+        close() finds it, so leaving the viewport destroys it (closed, destroyed once), then the scene."""
+        r = STATE["scn_failreplace"]
+        names = self.native_names("failreplace")
+        print(f"RESULT present failed registration at resize native calls {names}, events {r['events']}")
+        s, scene = r["session"], r["scene"]
+        self.assertIn("failed", r["events"])
+        self.assertEqual(names, [("ar_session_close", s), ("ar_session_destroy", s), ("ar_scene_destroy", scene)])
+
+    def test_failed_destroy_does_not_stop_close(self):
+        """ar_session_destroy fails during the direct close: the scene is still tried, nothing is skipped, and
+        the failure is raised and kept, not swallowed."""
+        r = STATE["scn_failclose"]
+        names = self.native_names("failclose")
+        print(f"RESULT present failed destroy native calls {names}, errors {r['errors']}")
+        s, scene = r["session"], r["scene"]
+        self.assertEqual(names, [("ar_session_close", s), ("ar_session_destroy", s), ("ar_scene_destroy", scene)])
+        self.assertTrue(any("closing the viewport job failed" in e and "ar_session_destroy" in e for e in r["errors"]))
+
+    def test_failed_teardown_ticks_are_retried(self):
+        """Two failing ticks of the reaper are noted and the timer stays alive: the session and the scene are
+        destroyed by a later tick."""
+        r = STATE["scn_failtick"]
+        names = self.native_names("failtick")
+        print(f"RESULT present failing ticks native calls {names}, errors {r['errors']}")
+        s, scene = r["session"], r["scene"]
+        self.assertEqual(names, [("ar_session_close", s), ("ar_session_destroy", s), ("ar_scene_destroy", scene)])
+        self.assertEqual(len([e for e in r["errors"] if "teardown tick failed" in e]), 2)
 
 
 def run_cases():

@@ -15,6 +15,7 @@ Cycles intern/cycles/blender/session.cpp, BlenderSession::view_update and ::view
 The poll period is 0009 B-37's 50 ms.
 """
 import ctypes
+import sys
 import time
 import weakref
 
@@ -26,6 +27,7 @@ from .sync import camera, classify, edit as edit_mod, images, instances, keys, m
 from .sync import world as world_sync, lights
 
 POLL_S = 0.05  # 0009 B-37: completion poll period
+MAX_REAP_FAILURES = 20  # consecutive failed teardown ticks (one second) before the reaper stops retrying
 
 
 class ViewportJob(render_final.Job):
@@ -42,6 +44,8 @@ class ViewportJob(render_final.Job):
         self.parked = False       # RenderEngine.__del__ has run: the reaper ends the job once nothing is left
         self.register_timer = None  # test-only seam: replaces bpy.app.timers.register
         self._reaper_on = False
+        self._reap_failures = 0
+        self.errors = []          # every teardown problem, also printed (never silent)
         self.failure = None
         self.table = None         # instance table of the last full instance send, for transform patches
         self.geom_keys = set()
@@ -244,8 +248,7 @@ class ViewportJob(render_final.Job):
             return
         lib, abi = self.lib, self.abi
         if self.session.value:
-            old, self.session = self.session, ctypes.c_void_p()
-            self._retire(old)
+            self._retire_current()
             self.events.append("replace_session")
         try:
             sd = abi.ar_session_desc(abi.AR_SESSION_MODE_VIEWPORT, w, h, abi.AR_DENOISER_NONE)
@@ -296,10 +299,13 @@ class ViewportJob(render_final.Job):
         (self.register_timer or bpy.app.timers.register)(self._reap, first_interval=POLL_S)
         self._reaper_on = True
 
-    def _retire(self, session):
-        """Step one of d23: ar_session_close, which never blocks; the reaper does step two."""
+    def _retire_current(self):
+        """Step one of d23 for the current session: ar_session_close, which never blocks; the reaper does step
+        two. The reaper is started first and the handle listed before the call, so a failure of either leaves
+        the session where close() finds it."""
         self._start_reaper()
-        self.retired.append(session)  # listed before the call: if it raises, close() still owns the handle
+        session, self.session = self.session, ctypes.c_void_p()
+        self.retired.append(session)
         native.call(self.lib.ar_session_close, session)
         self.events.append("session_close")
 
@@ -307,22 +313,55 @@ class ViewportJob(render_final.Job):
         """RenderEngine.__del__ (d23): close the current session and let the reaper end the job."""
         try:
             self._start_reaper()
-        except Exception:
-            self.close()  # no timer to wait for (interpreter going down): destroy directly, once
+        except Exception as e:
+            self._note(f"no timer to destroy the viewport session ({e}); destroying it directly")
+            self.close()  # destroys directly, once; raises if something failed on the way
             return
         self.parked = True
-        session, self.session = self.session, ctypes.c_void_p()
-        if session.value:
-            self._retire(session)
+        if self.session.value:
+            self._retire_current()
+
+    def _note(self, text):
+        """A teardown problem is never silent: kept, printed, and reported when the engine still exists."""
+        text = "astroray: " + text
+        self.errors.append(text)
+        print(text, file=sys.stderr, flush=True)
+        engine = self._engine() if self._engine else None
+        if engine is not None:
+            try:
+                engine.report({"ERROR"}, text)
+            except Exception:
+                pass
 
     def _reap(self):
         """Each tick: destroy every retired session that reports CLOSED; destroy the scene only when the job is
-        parked, no session is current and none is retired. Ends itself when it has nothing left to wait for."""
+        parked, no session is current and none is retired. Ends itself when it has nothing left to wait for.
+        A failure is noted and the timer stays alive to try again, up to MAX_REAP_FAILURES ticks in a row;
+        what could not be destroyed stays listed for close()."""
+        try:
+            return self._reap_once()
+        except Exception as e:
+            self._reap_failures += 1
+            self._note(f"viewport teardown tick failed ({self._reap_failures}): {e}")
+            if self._reap_failures < MAX_REAP_FAILURES:
+                return POLL_S
+            self._note("viewport teardown gave up; shutdown will destroy what is left")
+            self._reaper_on = False
+            return None
+
+    def _reap_once(self):
+        errors = []
         for session in list(self.retired):
-            prog = self.abi.ar_progress()
-            native.call(self.lib.ar_session_get_progress, session, ctypes.byref(prog))
-            if prog.state == self.abi.AR_STATE_CLOSED:
-                self._destroy_session(session, "timer")
+            try:
+                prog = self.abi.ar_progress()
+                native.call(self.lib.ar_session_get_progress, session, ctypes.byref(prog))
+                if prog.state == self.abi.AR_STATE_CLOSED:
+                    self._destroy_session(session, "timer")
+            except Exception as e:  # the others still get their turn
+                errors.append(str(e))
+        if errors:
+            raise RuntimeError("; ".join(errors))
+        self._reap_failures = 0
         if self.parked and not self.session.value and not self.retired:
             self._destroy_scene()
             self._reaper_on = False
@@ -340,25 +379,39 @@ class ViewportJob(render_final.Job):
     def _destroy_scene(self):
         if self.retired or self.session.value:
             raise RuntimeError("astroray: the scene was about to be destroyed while a session is alive")
-        if self.scene_h.value:
-            scene, self.scene_h = self.scene_h, ctypes.c_void_p()
-            native.call(self.lib.ar_scene_destroy, scene)
-            self.events.append("destroy_scene")
-        if self._context is not None:  # what render_final.Job.close does after the scene
-            self._context.jobs.discard(self)
-        self.present.free()
+        try:
+            if self.scene_h.value:
+                scene, self.scene_h = self.scene_h, ctypes.c_void_p()
+                native.call(self.lib.ar_scene_destroy, scene)
+                self.events.append("destroy_scene")
+        finally:
+            if self._context is not None:  # what render_final.Job.close does after the scene
+                self._context.jobs.discard(self)
+            self.present.free()
 
     def close(self):
         """Every session (closed first, as ar_session_destroy of a live render would otherwise wait), then the
         scene (d23, d28); idempotent. Blocks: shutdown, unregister and the no-timer fallback only. It does
         what Job.close does (session, scene, release from the context's job set) over this class's lists, so
-        it does not call it."""
+        it does not call it. One failing call does not stop the rest: every handle and the scene are tried,
+        and one combined error is raised at the end."""
         handles, self.retired = list(self.retired), []
         if self.session.value:
             handles.append(self.session)
             self.session = ctypes.c_void_p()
+        errors = []
         for session in handles:
-            native.call(self.lib.ar_session_close, session)
-            native.call(self.lib.ar_session_destroy, session)
+            for name in ("ar_session_close", "ar_session_destroy"):
+                try:
+                    native.call(getattr(self.lib, name), session)
+                except Exception as e:
+                    errors.append(f"{name}: {e}")
             self.events.append("destroy_session via close")
-        self._destroy_scene()
+        try:
+            self._destroy_scene()
+        except Exception as e:
+            errors.append(f"ar_scene_destroy: {e}")
+        if errors:
+            text = "closing the viewport job failed: " + "; ".join(errors)
+            self._note(text)
+            raise RuntimeError("astroray: " + text)
