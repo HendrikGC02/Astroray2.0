@@ -16,3 +16,4 @@ Budget: no gate time added.
 Depends on: 118.
 Size: S (about 200 lines); stop and report at 2x.
 Progress:
+- started (task/119-sort-scan).
