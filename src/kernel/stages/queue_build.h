@@ -131,8 +131,9 @@ AR_FN void queue_count_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane, 
 // sees both or neither and no fence is needed (Merrill and Garland 2016, section 4). Values
 // stay below 2^30 because a column counts the items of one pool or of a segment of one: a pool
 // holds at most 2^21 (main) or 2^22 (shadow) items (0002 D5). queue_build's columns span one
-// pool; the material sort's span the SHADE_SURFACE segment, at most the main pool's 2^21 items
-// whatever the number of materials (sort.h asserts it).
+// pool; the material sort's span the SHADE_SURFACE segment, whatever the number of materials.
+// The scheduler clamps the main pool to kMaxPoolCapacity (2^21, scheduler.h), which bounds the
+// segment and so every column; sort.h asserts the 2^30 - 1 packing limit.
 inline constexpr uint32_t kScanValueMask = (1u << 30) - 1u;
 inline constexpr uint32_t kScanAggregate = 1u << 30;  // the scan tile's own sum
 inline constexpr uint32_t kScanPrefix = 2u << 30;     // the inclusive prefix through the scan tile

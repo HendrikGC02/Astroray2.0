@@ -22,3 +22,4 @@ Progress:
 - B-5M sort 23.59 ms = 53.6 % -> 10.07 ms = 33.0 % of the pass; longest sort launch 11.3 -> ~1.8 ms; pass 42.67 -> 29.02 ms (bench). B-1M: no sort launched.
 - kSortMinItems re-check on B-5M: 29.02 ms sorted vs 17.93 ms unsorted; shade_surface is slower sorted (5.30 vs 4.33 ms). Value left at 65536 for the lead.
 - Canary: two hunks, each verified red on its own (sort cases; registration check).
+- Review fixes: status-word comment states the kMaxPoolCapacity clamp; lead ruling keeps k_sort_scan compile_s 1.28 (k_queue_build_scan's time, same TU structure, not timed separately; noted on the row). kSortMinItems stays 65536 (decision carried to 120).

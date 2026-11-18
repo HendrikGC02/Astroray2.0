@@ -59,7 +59,7 @@ regs = 40
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.28
+compile_s = 1.28  # k_queue_build_scan's time for the same TU structure, not timed separately
 gated = "merge"
 
 [kernel.k_sort_scatter]
