@@ -106,7 +106,14 @@ class Driver:
         STATE["alive"] = STATE["ticks"] > STATE["ticks_at_failure"]
         STATE["devices"] = list(self.native.devices())
         scene = bpy.context.scene
-        scene.astroray.device = "CUDA"
+        # The scene still has CUDA stored; the dropdown no longer offers it.
+        props = importlib.import_module(MODULE + ".properties")
+        STATE["items_live"] = [i[0] for i in props.device_items(scene.astroray, bpy.context)]
+        try:  # the real setter: an item the dropdown does not offer is refused
+            scene.astroray.device = "CUDA"
+            STATE["set_cuda"] = "accepted"
+        except TypeError:
+            STATE["set_cuda"] = "refused"
         STATE["lost"] = self.native.cuda_lost()
         scene.render.resolution_percentage = 25
         bpy.context.preferences.view.render_display_type = "NONE"
@@ -129,10 +136,33 @@ class Driver:
         scene.render.filepath = out
         scene.render.image_settings.file_format = "PNG"
         bpy.context.preferences.view.render_display_type = "NONE"
+        scene.astroray.device = "CPU"
         STATE["f12"] = bpy.ops.render.render(write_still=True)
         img = bpy.data.images.load(out, check_existing=False)
         px = np.array(img.pixels[:], np.float32).reshape(-1, 4)
         STATE["cpu_mean"], STATE["cpu_size"] = float(px[:, :3].mean()), tuple(img.size)
+        self.go("update_route")
+        return 0.1
+
+    def step_update_route(self):
+        # A GPU error raised inside F12 update() (here injected: a refused context create reads the same)
+        # takes CUDA off the list too. The process-wide state is cleared first, as a fresh process has it.
+        native, rf = self.native, self.rf
+        saved, real = native._cuda_lost, rf.Job.update
+        text = "astroray: ar_context_create returned status 3: GPU error: injected. " + RESTART
+
+        def failing(job, depsgraph, need_camera=True):
+            raise rf.RenderFailed(text)
+        native._cuda_lost, rf.Job.update = None, failing
+        try:
+            try:
+                bpy.ops.render.render()
+                STATE["route_error"] = None
+            except RuntimeError as e:
+                STATE["route_error"] = str(e)
+            STATE["route_lost"], STATE["route_devices"] = native.cuda_lost(), list(native.devices())
+        finally:
+            rf.Job.update, native._cuda_lost = real, saved
         return self.end()
 
     def end(self):
@@ -160,8 +190,17 @@ class TestFault(unittest.TestCase):
         """The device list is the CPU alone and a CUDA F12 is refused, naming the restart."""
         print(f"RESULT fault devices {STATE.get('devices')}, CUDA refusal {STATE.get('cuda_refusal')!r}")
         self.assertEqual(STATE.get("devices"), ["CPU"])
+        self.assertEqual(STATE.get("items_live"), ["CPU"])  # the dropdown: only the CPU
+        self.assertEqual(STATE.get("set_cuda"), "refused")
         self.assertIsNotNone(STATE.get("cuda_refusal"))
         self.assertIn(RESTART, STATE["cuda_refusal"])
+
+    def test_update_failure_takes_cuda_off(self):
+        """A GPU error raised inside F12 update() is contained like the viewport's."""
+        print(f"RESULT fault update route {STATE.get('route_lost')!r} devices {STATE.get('route_devices')}")
+        self.assertIsNotNone(STATE.get("route_error"))
+        self.assertIsNotNone(STATE.get("route_lost"))
+        self.assertEqual(STATE.get("route_devices"), ["CPU"])
 
     def test_cpu_f12_completes(self):
         """An F12 render on the CPU, in the same process, finishes with a non-black image."""

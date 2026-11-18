@@ -41,13 +41,17 @@ class AstrorayRenderEngine(bpy.types.RenderEngine):
     def update(self, data, depsgraph):
         self._failure = None
         try:
-            if depsgraph.scene.astroray.device == "CUDA" and native.cuda_lost():
-                raise render_final.RenderFailed(native.cuda_lost())  # 0007 d44: CUDA is gone for this process
+            if native.cuda_lost() and depsgraph.scene.astroray.device != "CPU":
+                # 0007 d44: CUDA is gone for this process. A scene saved with CUDA selected matches no item
+                # of the CPU-only dropdown; it is refused here, loudly, never run on the CPU unasked.
+                raise render_final.RenderFailed(native.cuda_lost())
             if self._job is None:
                 self._job = render_final.Job()
             self._job.update(depsgraph)
         except Exception as e:  # reported now; render() raises the same text
-            self._failure = str(e)
+            job = self._job
+            lost = job is not None and native.note_failure(job.lib, job.abi, str(e))
+            self._failure = lost or str(e)
             self.report({"ERROR"}, self._failure)
 
     def render(self, depsgraph):

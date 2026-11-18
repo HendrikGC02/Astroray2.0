@@ -238,6 +238,17 @@ try {
       $r.Out | Where-Object { $_ -match '^(Ran |OK$|FAILED|FAIL:|ERROR:)' } | ForEach-Object { Write-Host $_ }
       if ($r.Code -ne 0) { Fail "blender $bt failed (out/check/full.log)" }
     }
+    # Windowed-Blender scripts (085, 109, ...): every tests/blender/gui_*.py, one run and one line each. Each
+    # script drives itself by timers and ends the process; a non-zero exit fails the tier.
+    foreach ($gf in (Get-ChildItem 'tests/blender' -Filter 'gui_*.py' | Sort-Object Name)) {
+      $gn = $gf.BaseName
+      $r = Step "blender $gn" {
+        $b = Invoke-ArBlender -Gui -Script "tests/blender/$gn.py" -TimeoutS 400 6>$null
+        foreach ($f in $b.Log, "$($b.Log).err") { if (Test-Path $f) { Get-Content $f } }
+        $global:LASTEXITCODE = $b.ExitCode }
+      $r.Out | Where-Object { $_ -match '^(Ran |OK$|FAILED|FAIL:|ERROR:)' } | ForEach-Object { Write-Host $_ }
+      if ($r.Code -ne 0) { Fail "blender $gn failed (out/check/full.log)" }
+    }
     # The rows gated full (0002 D10, 0009 d18), all rules, after the gate's own pass.
     $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $script:waited += $w; Add-ArExcluded $w
     try { $r = Step 'kernelgate full' { & $py -I tools/kernelgate.py --full @dargs } } finally { Exit-ArTreeLock }

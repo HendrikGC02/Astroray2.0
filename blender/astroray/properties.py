@@ -24,10 +24,24 @@ DISPLAY_MODE_ITEMS = (
 )
 
 
+_DEVICE_ITEMS = {
+    "CPU": ("CPU", "CPU", "Render on the CPU", 0),
+    "CUDA": ("CUDA", "CUDA", "Render on the NVIDIA GPU", 1),
+}
+_offered = []  # Blender keeps no copy of the strings an items callback returns
+
+
+def device_items(self, context):
+    """Only what native.devices() offers: after a sticky CUDA error just the CPU (0007 d44). The numbers
+    are fixed, so a scene saved with CUDA selected no longer matches an item; device_of refuses it loudly."""
+    from . import native
+    _offered[:] = [_DEVICE_ITEMS[d] for d in native.devices()]
+    return _offered
+
+
 class AstrorayScene(bpy.types.PropertyGroup):
     device: bpy.props.EnumProperty(
-        name="Device", description="Device that renders F12", default="CPU",
-        items=(("CPU", "CPU", "Render on the CPU"), ("CUDA", "CUDA", "Render on the NVIDIA GPU")))
+        name="Device", description="Device that renders F12", items=device_items)
     display_mode: bpy.props.EnumProperty(
         name="Display Mode", description="What the viewport shows; heat maps ignore the view transform",
         items=DISPLAY_MODE_ITEMS, default="BEAUTY")

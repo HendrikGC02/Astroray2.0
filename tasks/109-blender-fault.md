@@ -1,7 +1,7 @@
 # 109 GPU fault containment inside Blender
 Goal: whether Blender survives an engine GPU fault is untested -> with the addon loaded, a gate-hook GPU fault leaves Blender alive, shows the error through the report, offers only the CPU device afterwards and completes a CPU render.
 Read first: 0007 d44 (addon after a fault), 0007 V15 (Blender fault part); 0001 D2.5, V14; blender/astroray/native.py; task 099's `ASTRORAY_TEST_GPU_FAULT` hook.
-Scope: tests/blender/gui_fault.py, blender/astroray/native.py and blender/astroray/engine.py (only if the CPU-only fallback misbehaves).
+Scope: tests/blender/gui_fault.py, blender/astroray/native.py and blender/astroray/engine.py (only if the CPU-only fallback misbehaves); lead ruling: blender/astroray/properties.py (device items from native.devices()) and tools/check.ps1 (one full step over tests/blender/gui_*.py).
 Out of scope: engine-side injection (099); OIDN failures (M1b).
 Reference: none.
 Do:
@@ -16,3 +16,4 @@ Size: S (about 150 lines); stop and report at 2x.
 Progress:
 - started
 - gui_fault.py passes (3 cases); native.note_failure + engine._contain take a GPU error as CUDA lost; check fast/gate and canary below.
+- lead ruling: properties.py device items callback; update() failures through note_failure; check full runs every gui_*.py (own line each); D2.5 cited at the text match.

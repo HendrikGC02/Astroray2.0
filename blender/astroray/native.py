@@ -87,6 +87,7 @@ def note_failure(lib, abi, failure, session=None):
     offers only the CPU. Returns None for any other failure. `session` is the failed session handle, if
     it still exists: the report entry's detail is cut at 127 characters, its last-error text is not."""
     global _cuda_lost
+    # Matching the text is sound because 0001 D2.5 fixes it: "GPU error: <text>. Save your work and restart Blender."
     if GPU_ERROR not in failure and RESTART not in failure:
         return None
     text, status = failure, ""
