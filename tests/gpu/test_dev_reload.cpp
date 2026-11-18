@@ -20,6 +20,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -194,7 +195,10 @@ struct Running {
   // The session has resolved at least `passes` passes in its current epoch.
   bool wait_passes(uint32_t passes, uint32_t timeout_ms = 20000) const {
     for (uint32_t t = 0; t < timeout_ms; t += 5) {
-      if (session->film_samples(0) >= passes) return true;
+      try {
+        if (session->film_samples(0) >= passes) return true;
+      } catch (const std::logic_error&) {  // no film yet
+      }
       Sleep(5);
     }
     return false;
@@ -276,7 +280,7 @@ TEST_CASE("dev_reload/corrupted module keeps previous") {
   const std::string detail = reinterpret_cast<const char*>(e[0].detail);
   CHECK(detail.find("shade_background") != std::string::npos);
   CHECK(detail.find("CUDA_ERROR") != std::string::npos);  // the loader's own error
-  CHECK(e[0].level == AR_REPORT_WARNING);
+  CHECK(e[0].level == AR_LEVEL_WARNING);
   // It keeps rendering on the old image: same epoch, passes still accumulate, no storm of repeats.
   const uint32_t n = s.film_samples(0);
   REQUIRE(r.wait_passes(n + 3));

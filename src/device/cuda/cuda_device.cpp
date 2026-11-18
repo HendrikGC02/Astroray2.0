@@ -600,7 +600,15 @@ ModuleReload CudaDevice::poll_module_reload() {
     if (now == w.loaded || (w.failed && now == w.failed_stamp)) continue;
     try {
       const ModuleImage image = load_module_image(name, s.hooks.corrupt_cubin, s.dev_dir);
-      const CUmodule fresh = s.load_image(name, image);
+      // The loader's own result, short: the report detail holds 128 bytes.
+      CUmodule fresh = nullptr;
+      const CUresult lr = s.cu.cuModuleLoadData_(&fresh, image.bytes.data());
+      if (lr != CUDA_SUCCESS) {
+        if (cuda_result_is_sticky(static_cast<int>(lr))) s.fail(lr, "cuModuleLoadData", name.c_str());
+        const char* text = nullptr;
+        s.cu.cuGetErrorName_(lr, &text);
+        throw DeviceError(std::string("cuModuleLoadData ") + (text ? text : "failed"));
+      }
       s.sync();  // nothing launched from the old image is still running
       s.check(s.cu.cuModuleUnload_(s.modules[name]), "cuModuleUnload", name.c_str());
       s.modules[name] = fresh;

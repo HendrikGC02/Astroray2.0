@@ -252,7 +252,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
         for (const auto& f : r.failed) {
           config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, module_subject(f.module));
           config.report->raise(AR_REPORT_KERNEL_MODULE_FALLBACK, module_subject(f.module),
-                               f.module + ": " + f.error + " (the previous image keeps running)", 1, none, 0);
+                               f.module + ": " + f.error + "; previous image runs", 1, none, 0);
         }
         for (const auto& m : r.swapped) config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, module_subject(m));
       }
