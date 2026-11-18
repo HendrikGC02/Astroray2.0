@@ -38,7 +38,10 @@ class ViewportJob(render_final.Job):
         self.acquired = None      # likewise every acquired frame: id, generation, whether it was presented (d25)
         self.check_uploads = 0    # test-only: this many uploads are read back from the GPU and compared
         self.upload_checks = []
-        self.retired = []         # sessions closed and waiting for the timer to destroy them (d23)
+        self.retired = []         # sessions closed and waiting for the reaper to destroy them (d23)
+        self.parked = False       # RenderEngine.__del__ has run: the reaper ends the job once nothing is left
+        self.register_timer = None  # test-only seam: replaces bpy.app.timers.register
+        self._reaper_on = False
         self.failure = None
         self.table = None         # instance table of the last full instance send, for transform patches
         self.geom_keys = set()
@@ -242,7 +245,7 @@ class ViewportJob(render_final.Job):
         lib, abi = self.lib, self.abi
         if self.session.value:
             old, self.session = self.session, ctypes.c_void_p()
-            self._retire(old, final=False)
+            self._retire(old)
             self.events.append("replace_session")
         try:
             sd = abi.ar_session_desc(abi.AR_SESSION_MODE_VIEWPORT, w, h, abi.AR_DENOISER_NONE)
@@ -282,62 +285,80 @@ class ViewportJob(render_final.Job):
         return None
 
     # ---- destruction (d23)
+    # One source of truth: `retired` (closed sessions) and `session` (the current one) hold every live handle,
+    # a handle leaves its list before it is destroyed, and the one reaper timer destroys what has closed.
 
-    def _retire(self, session, final):
-        """Step one: ar_session_close, which never blocks. Step two is the timer: it destroys the session once
-        it reports CLOSED and, when this was the job's last session, then the scene. The timer's reference keeps
-        the job (and its place in the context's job set) alive; shutdown() closes it directly if that comes first."""
-        native.call(self.lib.ar_session_close, session)
-        self.retired.append(session)
-        self.events.append("session_close")
+    def _start_reaper(self):
+        """The single timer of this job; registered before any list changes, so a failure leaves state intact."""
+        if self._reaper_on:
+            return
         import bpy
-        bpy.app.timers.register(lambda: self._reap(session, final), first_interval=POLL_S)
+        (self.register_timer or bpy.app.timers.register)(self._reap, first_interval=POLL_S)
+        self._reaper_on = True
+
+    def _retire(self, session):
+        """Step one of d23: ar_session_close, which never blocks; the reaper does step two."""
+        self._start_reaper()
+        self.retired.append(session)  # listed before the call: if it raises, close() still owns the handle
+        native.call(self.lib.ar_session_close, session)
+        self.events.append("session_close")
 
     def park(self):
-        """RenderEngine.__del__ (d23)."""
-        session, self.session = self.session, ctypes.c_void_p()
-        if not session.value:
-            self._destroy_scene()  # no session was ever made: nothing to wait for
-            return
+        """RenderEngine.__del__ (d23): close the current session and let the reaper end the job."""
         try:
-            self._retire(session, final=True)
+            self._start_reaper()
         except Exception:
-            self.session = session
-            self.close()  # no timer to wait for (interpreter going down): destroy directly
+            self.close()  # no timer to wait for (interpreter going down): destroy directly, once
+            return
+        self.parked = True
+        session, self.session = self.session, ctypes.c_void_p()
+        if session.value:
+            self._retire(session)
 
-    def _reap(self, session, final):
-        if session not in self.retired:
-            return None  # close() took it
-        prog = self.abi.ar_progress()
-        native.call(self.lib.ar_session_get_progress, session, ctypes.byref(prog))
-        if prog.state != self.abi.AR_STATE_CLOSED:
-            return POLL_S
-        self._destroy_session(session, "timer")
-        if final:
-            if self.retired:
-                return POLL_S  # an older retired session has its own timer; the scene goes after every session
+    def _reap(self):
+        """Each tick: destroy every retired session that reports CLOSED; destroy the scene only when the job is
+        parked, no session is current and none is retired. Ends itself when it has nothing left to wait for."""
+        for session in list(self.retired):
+            prog = self.abi.ar_progress()
+            native.call(self.lib.ar_session_get_progress, session, ctypes.byref(prog))
+            if prog.state == self.abi.AR_STATE_CLOSED:
+                self._destroy_session(session, "timer")
+        if self.parked and not self.session.value and not self.retired:
             self._destroy_scene()
-        return None
+            self._reaper_on = False
+            return None
+        if not self.parked and not self.retired:
+            self._reaper_on = False
+            return None
+        return POLL_S
 
     def _destroy_session(self, session, via):
+        self.retired = [r for r in self.retired if r.value != session.value]  # off the list first: at most once
         native.call(self.lib.ar_session_destroy, session)
-        self.retired = [r for r in self.retired if r.value != session.value]
         self.events.append(f"destroy_session via {via}")
 
     def _destroy_scene(self):
+        if self.retired or self.session.value:
+            raise RuntimeError("astroray: the scene was about to be destroyed while a session is alive")
         if self.scene_h.value:
-            native.call(self.lib.ar_scene_destroy, self.scene_h)
-            self.scene_h = ctypes.c_void_p()
+            scene, self.scene_h = self.scene_h, ctypes.c_void_p()
+            native.call(self.lib.ar_scene_destroy, scene)
             self.events.append("destroy_scene")
-        if self._context is not None:
+        if self._context is not None:  # what render_final.Job.close does after the scene
             self._context.jobs.discard(self)
         self.present.free()
 
     def close(self):
-        """Every session, then the scene (d23, d28); idempotent. Blocks: shutdown and unregister only."""
-        for session in list(self.retired):
-            self._destroy_session(session, "close")
+        """Every session (closed first, as ar_session_destroy of a live render would otherwise wait), then the
+        scene (d23, d28); idempotent. Blocks: shutdown, unregister and the no-timer fallback only. It does
+        what Job.close does (session, scene, release from the context's job set) over this class's lists, so
+        it does not call it."""
+        handles, self.retired = list(self.retired), []
         if self.session.value:
-            self._destroy_session(self.session, "close")
+            handles.append(self.session)
             self.session = ctypes.c_void_p()
+        for session in handles:
+            native.call(self.lib.ar_session_close, session)
+            native.call(self.lib.ar_session_destroy, session)
+            self.events.append("destroy_session via close")
         self._destroy_scene()

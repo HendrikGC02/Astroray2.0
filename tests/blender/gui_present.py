@@ -431,7 +431,7 @@ class Driver:
     def step_s_done(self):
         if "destroy_scene" not in self.job.events:
             if self.timed_out():
-                raise RuntimeError(f"scenario {self.scn}: the scene was never destroyed; events {self.job.events}")
+                raise RuntimeError(f"scenario {self.scn}: scene never destroyed; events {self.job.events}; parked {self.job.parked} session {self.job.session.value} retired {[r.value for r in self.job.retired]} reaper {self.job._reaper_on}")
             return 0.1
         STATE["scn_" + self.scn] = {"native": self.spy.native(), "events": list(self.job.events),
                                     "session": STATE["scn_session_" + self.scn],

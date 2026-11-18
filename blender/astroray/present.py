@@ -39,13 +39,11 @@ def _compute_shader():
     return gpu.shader.create_from_info(info)
 
 
-DISPLAY_FORMAT_RGBA16F = 0  # include/astroray/astroray.h AR_DISPLAY_FORMAT_RGBA16F
-
-
 def check_layout(frame):
     """The unpack shader indexes rows by width: padded rows or another format would shear or garble the
     picture, so they are refused (the engine writes tightly packed RGBA16F, 0007 appendix)."""
-    if frame.format != DISPLAY_FORMAT_RGBA16F:
+    from . import _abi  # staged by the build, never committed
+    if frame.format != _abi.AR_DISPLAY_FORMAT_RGBA16F:
         raise ValueError(f"astroray: display frame format {frame.format} is not RGBA16F")
     if frame.row_bytes != frame.width * 8:
         raise ValueError(f"astroray: display frame row_bytes {frame.row_bytes} is not width*8 "
