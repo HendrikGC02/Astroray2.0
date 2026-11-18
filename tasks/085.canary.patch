@@ -1,5 +1,5 @@
 diff --git a/blender/astroray/present.py b/blender/astroray/present.py
-index 37bec44..e05343c 100644
+index 6338694..82c5dd1 100644
 --- a/blender/astroray/present.py
 +++ b/blender/astroray/present.py
 @@ -22,7 +22,7 @@ void main() {
@@ -11,9 +11,9 @@ index 37bec44..e05343c 100644
  }
  """
  
-@@ -47,9 +47,6 @@ def check_layout(frame):
-     picture, so they are refused (the engine writes tightly packed RGBA16F, 0007 appendix)."""
-     if frame.format != DISPLAY_FORMAT_RGBA16F:
+@@ -45,9 +45,6 @@ def check_layout(frame):
+     from . import _abi  # staged by the build, never committed
+     if frame.format != _abi.AR_DISPLAY_FORMAT_RGBA16F:
          raise ValueError(f"astroray: display frame format {frame.format} is not RGBA16F")
 -    if frame.row_bytes != frame.width * 8:
 -        raise ValueError(f"astroray: display frame row_bytes {frame.row_bytes} is not width*8 "
@@ -21,7 +21,7 @@ index 37bec44..e05343c 100644
  
  
  def frame_words(frame):
-@@ -85,7 +82,7 @@ class Present:
+@@ -83,7 +80,7 @@ class Present:
  
      def wants(self, frame):
          """d25: only a frame of generation >= the one on screen may replace it."""
@@ -31,10 +31,10 @@ index 37bec44..e05343c 100644
      def set_stripe_bytes(self, n):
          """Test-only: restripe from the next upload on."""
 diff --git a/blender/astroray/viewport.py b/blender/astroray/viewport.py
-index 51d07fa..e12c182 100644
+index 997ab4c..2a8d59f 100644
 --- a/blender/astroray/viewport.py
 +++ b/blender/astroray/viewport.py
-@@ -67,7 +67,7 @@ class ViewportJob(render_final.Job):
+@@ -70,7 +70,7 @@ class ViewportJob(render_final.Job):
  
      def _sync(self, depsgraph):
          if self.first:
@@ -43,7 +43,7 @@ index 51d07fa..e12c182 100644
              self._after_full(depsgraph)
              return
          actions = classify.classify(depsgraph, self.cache)
-@@ -77,7 +77,7 @@ class ViewportJob(render_final.Job):
+@@ -80,7 +80,7 @@ class ViewportJob(render_final.Job):
          if classify.FULL_RESYNC in kinds:
              self.tcache.forget_all()
              self.first = True
@@ -52,7 +52,7 @@ index 51d07fa..e12c182 100644
              self._after_full(depsgraph)
              return
          self.tcache.invalidate([a for a in actions if a.kind == classify.MATERIALS])
-@@ -140,7 +140,7 @@ class ViewportJob(render_final.Job):
+@@ -143,7 +143,7 @@ class ViewportJob(render_final.Job):
                      mesh.sync_mesh(e, abi, me, key, ob.original.name)
          self.geom_keys |= new_geoms
          inst = [a for a in actions if a.kind == C.INSTANCES]
@@ -61,7 +61,7 @@ index 51d07fa..e12c182 100644
              moves = all(a.id_type == "OBJECT" and a.mask == C.TRANSFORM for a in inst)
              if not (inst and moves and not new_geoms and self.table is not None
                      and instances.sync_transforms(e, abi, self.table, depsgraph, {a.uid for a in inst})):
-@@ -165,8 +165,8 @@ class ViewportJob(render_final.Job):
+@@ -168,8 +168,8 @@ class ViewportJob(render_final.Job):
          self._ensure_session(w, h)
          s = self.session
          f, _ = camera.viewport(depsgraph.scene, context.space_data, rv3d, depsgraph)
@@ -72,7 +72,7 @@ index 51d07fa..e12c182 100644
              self.events.append("set_view")
          if not self._started:
              render_final._ok(lib, native.call(lib.ar_session_start, s), "ar_session_start",
-@@ -201,7 +201,6 @@ class ViewportJob(render_final.Job):
+@@ -204,7 +204,6 @@ class ViewportJob(render_final.Job):
          if not frame.frame_id:
              return False
          try:
@@ -80,7 +80,7 @@ index 51d07fa..e12c182 100644
              shown = self.present.wants(frame)
              if self.acquired is not None:
                  self.acquired.append({"id": frame.frame_id, "generation": frame.generation, "presented": shown})
-@@ -237,7 +236,7 @@ class ViewportJob(render_final.Job):
+@@ -240,7 +239,7 @@ class ViewportJob(render_final.Job):
          """A session whose film is the region's; created on the first draw. A region that outgrows it gets a new
          session and the old one is retired in d23's two steps (closed now, destroyed by a timer), so the draw
          never waits for it."""
@@ -89,18 +89,34 @@ index 51d07fa..e12c182 100644
              return
          lib, abi = self.lib, self.abi
          if self.session.value:
-@@ -310,13 +309,9 @@ class ViewportJob(render_final.Job):
-             return None  # close() took it
-         prog = self.abi.ar_progress()
-         native.call(self.lib.ar_session_get_progress, session, ctypes.byref(prog))
--        if prog.state != self.abi.AR_STATE_CLOSED:
--            return POLL_S
--        self._destroy_session(session, "timer")
-         if final:
--            if self.retired:
--                return POLL_S  # an older retired session has its own timer; the scene goes after every session
-             self._destroy_scene()
-+        self._destroy_session(session, "timer")
-         return None
+@@ -308,21 +307,28 @@ class ViewportJob(render_final.Job):
+         try:
+             self._start_reaper()
+         except Exception:
++            if self.session.value:
++                self.retired.append(self.session)
+             self.close()  # no timer to wait for (interpreter going down): destroy directly, once
+             return
+         self.parked = True
+         session, self.session = self.session, ctypes.c_void_p()
++        if not session.value and self.scene_h.value:
++            scene, self.scene_h = self.scene_h, ctypes.c_void_p()
++            native.call(self.lib.ar_scene_destroy, scene)
+         if session.value:
+             self._retire(session)
  
-     def _destroy_session(self, session, via):
+     def _reap(self):
+         """Each tick: destroy every retired session that reports CLOSED; destroy the scene only when the job is
+         parked, no session is current and none is retired. Ends itself when it has nothing left to wait for."""
++        if self.parked and not self.session.value and self.scene_h.value:
++            scene, self.scene_h = self.scene_h, ctypes.c_void_p()
++            native.call(self.lib.ar_scene_destroy, scene)
+         for session in list(self.retired):
+             prog = self.abi.ar_progress()
+             native.call(self.lib.ar_session_get_progress, session, ctypes.byref(prog))
+-            if prog.state == self.abi.AR_STATE_CLOSED:
+-                self._destroy_session(session, "timer")
++            self._destroy_session(session, "timer")
+         if self.parked and not self.session.value and not self.retired:
+             self._destroy_scene()
+             self._reaper_on = False
