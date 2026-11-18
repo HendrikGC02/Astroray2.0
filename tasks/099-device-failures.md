@@ -14,4 +14,4 @@ Canary: tasks/099.canary.patch must turn red: astroray_tests_gpu "device_failure
 Budget: test_fault.cu carries a budget row gated in `full`.
 Depends on: 089, 015, 076.
 Size: M (about 350 lines); stop and report at 2x.
-Progress:
+Progress: started (implementer)
