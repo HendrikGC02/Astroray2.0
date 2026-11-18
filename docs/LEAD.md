@@ -71,5 +71,9 @@ implementer on its existing branch and worktree, briefed from this section and i
 - Any change under tests/ (including a re-blessed tests/budgets/counters.toml) needs a canary patch.
 - If hosted `ci` never starts for a landing PR ("ci is not success" with no run listed), close and reopen
   the PR to fire pull_request again, wait for it, then `tools/land.ps1 merge NNN`.
+- A prepare that passes and then fails (ci red, refused merge) leaves a "(land)" commit on the branch that
+  deletes the task file; `git revert` it in the worktree before the implementer continues or you re-land.
+- A task that adds a tools/lib switch its own canary needs (085's -Gui) cannot prepare with main's
+  land.ps1; run the worktree's tools/land.ps1 prepare, then open the PR and merge with main's.
 - Stale worktree directories with no git registration: .claude/worktrees/agent-a3a823bde1b1e2a0c,
   agent-a61c36ff96e523f48, agent-a631435169fa2c847 (safe to delete after a look).

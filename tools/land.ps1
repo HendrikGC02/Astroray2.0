@@ -208,13 +208,14 @@ function Invoke-Prepare {
       $problems | ForEach-Object { Write-Host "REFUSE land: $_" }
       exit 1
     }
-    # Applying and reverting the canary rewrote source files, so rebuild them now: the gate's fast
-    # tier then times the incremental build of the change itself (B-08), not this tool's own churn.
-    & pwsh -NoProfile -File (Join-Path $root 'tools/build.ps1') -Target astroray_tests_cpu 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) { Refuse 'build after the canary check failed' }
   } else {
     Write-Host 'canary: none (no tests changed, no patch)'
   }
+  # Applying and reverting a canary rewrites source files, and the rebase onto origin/main brings in
+  # every change landed since the branch began; rebuild now so the gate's fast tier (B-08) times
+  # neither this tool's churn nor other tasks' changes.
+  & pwsh -NoProfile -File (Join-Path $root 'tools/build.ps1') -Target astroray_tests_cpu 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host $_ }
+  if ($LASTEXITCODE -ne 0) { Refuse 'build before the gate failed' }
 
   $dir = Join-Path $root "out/land/$Number"
   New-Item -ItemType Directory -Force $dir | Out-Null
