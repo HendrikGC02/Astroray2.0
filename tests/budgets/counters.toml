@@ -1,2 +1,56 @@
-# Work-counter baselines of the gate's B-16 check (0009 d18): one table per fixed scene, holding
-# the PassCounters of src/host/counters.h at fixed seed. Empty until task 076 fills it.
+# Work-counter baselines of the gate's B-16 check (0009 d18), written by
+# `tools/integrator_checks.py --gate --device D --bless`: per device and fixed scene, the counters of
+# the last pass at the scene's seed (+2 % fails), and the CUDA tripwire's wall ms per sample
+# (1.25x fails). An edit here is a re-bless, which the reviewer sees.
+
+[cpu.a1_furnace]
+rays_closest = 1429
+rays_shadow = 199
+steps = 6
+launches = 26
+state_bytes = 609474
+shadow_item_bytes = 19502
+
+[cpu.a3_disk]
+rays_closest = 2281
+rays_shadow = 1024
+steps = 10
+launches = 47
+state_bytes = 877002
+shadow_item_bytes = 100352
+
+[cpu.d28_closed_box]
+rays_closest = 20480
+rays_shadow = 16384
+steps = 12
+launches = 55
+state_bytes = 7073792
+shadow_item_bytes = 1605632
+
+[cuda.a1_furnace]
+rays_closest = 1429
+rays_shadow = 199
+steps = 6
+launches = 26
+state_bytes = 609474
+shadow_item_bytes = 19502
+
+[cuda.a3_disk]
+rays_closest = 2281
+rays_shadow = 1024
+steps = 10
+launches = 47
+state_bytes = 877002
+shadow_item_bytes = 100352
+
+[cuda.d28_closed_box]
+rays_closest = 20480
+rays_shadow = 16384
+steps = 12
+launches = 55
+state_bytes = 7073792
+shadow_item_bytes = 1605632
+
+[tripwire.cuda]
+ms_per_sample_1spp = 0.0198731
+ms_per_sample_64spp = 0.00108527

@@ -32,7 +32,8 @@ def build(out):
     parts = [(sphere, ar.IDENTITY)] + [(meshes.box(*b["size"]), ar.translation(b["centre"])) for b in t["boxes"]]
     with ar.Scene(out) as s:
         mat = s.material({"base_weight": 1.0, "base_color": (rho, rho, rho), "base_diffuse_roughness": 0.0,
-                          "base_metalness": 0.0, "specular_weight": 0.0}, emission=((1.0, 1.0, 1.0), t["radiance"]))
+                          "base_metalness": 0.0, "specular_weight": 0.0}, emission=((1.0, 1.0, 1.0), t["radiance"]),
+                         emission_sampling=s.abi.AR_EMISSION_SAMPLING_FRONT_BACK)
         items = []
         for m, xf in parts:
             key = s.key()

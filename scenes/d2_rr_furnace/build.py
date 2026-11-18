@@ -4,7 +4,8 @@ Lambertian sphere, black world (0004 D2 row; truths.py uniform_enclosure). Usage
 <path.arrec> [--rr off]. Russian roulette is on by default; off sets min_bounces = max_bounces + 1
 (shade_common.h roulette_q applies it from depth max(2, min_bounces), and the last continuation of
 a path is at depth max_bounces).
-The sphere's normals are its facets' own: smooth normals would reject part of each reflected lobe
+Every triangle is a two-sided NEE light (emission_sampling FRONT_BACK; AUTO would drop an emitter
+this dim, light_builder.cpp). The sphere's normals are its facets' own: smooth normals would reject part of each reflected lobe
 below the facet (0005 item 8) and bias every bounce (scenes/a1_furnace/meta.toml).
 Ref: docs/decisions/0004-integrator.md D2 (Verification row); 0009 d19, d20."""
 import argparse
@@ -36,7 +37,8 @@ def populate(s, t, rr=True):
     settings and the camera at the centre."""
     rho = t["rho"]
     mat = s.material({"base_weight": 1.0, "base_color": (rho, rho, rho), "base_diffuse_roughness": 0.0,
-                      "base_metalness": 0.0, "specular_weight": 0.0}, emission=((1.0, 1.0, 1.0), t["radiance"]))
+                      "base_metalness": 0.0, "specular_weight": 0.0}, emission=((1.0, 1.0, 1.0), t["radiance"]),
+                     emission_sampling=s.abi.AR_EMISSION_SAMPLING_FRONT_BACK)
     key = s.key()
     s.mesh_from(key, flat(meshes.uv_sphere(t["sphere_radius"], t["segments"], t["rings"])), "enclosure")
     s.instances([{"geom": key, "materials": [mat]}])
