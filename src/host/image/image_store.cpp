@@ -124,8 +124,10 @@ ImageResult ImageStore::load(const ar_image_desc& d, const std::vector<uint8_t>&
   } else {
     id = "mem:" + content_id(packed) + "|" + std::to_string(packed.size());
   }
-  // The reload counter of 0007 d21 has no field in ar_image_desc yet; it is 0 until the ABI has one.
-  id += "|" + std::to_string(d.color_interop) + "|" + std::to_string(d.alpha_mode) + "|" + std::to_string(d.udim_tile) + "|0";
+  // reload_count is the host's count of explicit reloads: a reload that leaves size and mtime
+  // unchanged (a file rewritten within the timestamp resolution) must still decode again (0007 d21).
+  id += "|" + std::to_string(d.color_interop) + "|" + std::to_string(d.alpha_mode) + "|" + std::to_string(d.udim_tile) + "|" +
+        std::to_string(d.reload_count);
   {
     std::lock_guard<std::mutex> lock(cache_mutex_);
     auto it = cache_.find(id);
