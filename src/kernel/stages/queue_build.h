@@ -115,10 +115,6 @@ AR_FN uint32_t queue_item_bin(const QueueTile& t, const uint8_t* next, uint32_t 
   return i < t.last ? queue_bin(t.pool, next[i]) : kQueueBins;
 }
 
-// Rounds of `lanes` items whose loads a unit issues before it votes on the first: the votes
-// order the rounds, the loads need not wait for them.
-inline constexpr uint32_t kQueueRoundsInFlight = 8;
-
 // Kernel 1 for tile g (g < queue_tile_count), by `lanes` units of which this is `lane`: the
 // tile's histogram. The units take consecutive items, and every unit counts every bin from the
 // votes, so all of them hold the whole histogram; unit b % lanes writes bin b.
@@ -129,11 +125,9 @@ AR_FN void queue_count_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane, 
   AR_ASSERT(next != nullptr);
   uint32_t hist[kQueueBins];
   for (uint32_t b = 0; b < kQueueBins; ++b) hist[b] = 0;
-  for (uint32_t base = t.first; base < t.last; base += lanes * kQueueRoundsInFlight) {
-    uint32_t bins[kQueueRoundsInFlight];
-    for (uint32_t j = 0; j < kQueueRoundsInFlight; ++j) bins[j] = queue_item_bin(t, next, base + j * lanes + lane);
-    for (uint32_t j = 0; j < kQueueRoundsInFlight; ++j)
-      for (uint32_t b = 0; b < kQueueBins; ++b) hist[b] += queue_popc(ballot(bins[j] == b));
+  for (uint32_t base = t.first; base < t.last; base += lanes) {
+    const uint32_t bin = queue_item_bin(t, next, base + lane);
+    for (uint32_t b = 0; b < kQueueBins; ++b) hist[b] += queue_popc(ballot(bin == b));
   }
   for (uint32_t b = 0; b < kQueueBins; ++b)
     if (b % lanes == lane) row[b] = hist[b];
@@ -230,15 +224,13 @@ AR_FN void queue_scatter_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane
   for (uint32_t b = 0; b < kStageCount; ++b)
     at[b] = kg.step_table->stage[b].start + (g == 0 ? 0u : prev[b] & kScanValueMask);
   const uint32_t below = (1u << lane) - 1u;  // the units before this one in its round
-  for (uint32_t base = t.first; base < t.last; base += lanes * kQueueRoundsInFlight) {
-    uint32_t bins[kQueueRoundsInFlight];
-    for (uint32_t j = 0; j < kQueueRoundsInFlight; ++j) bins[j] = queue_item_bin(t, next, base + j * lanes + lane);
-    for (uint32_t j = 0; j < kQueueRoundsInFlight; ++j) {
-      for (uint32_t b = 0; b < kStageCount; ++b) {
-        const uint32_t votes = ballot(bins[j] == b);
-        if (bins[j] == b) queue[at[b] + queue_popc(votes & below)] = base + j * lanes + lane;
-        at[b] += queue_popc(votes);
-      }
+  for (uint32_t base = t.first; base < t.last; base += lanes) {
+    const uint32_t i = base + lane;
+    const uint32_t bin = queue_item_bin(t, next, i);
+    for (uint32_t b = 0; b < kStageCount; ++b) {
+      const uint32_t votes = ballot(bin == b);
+      if (bin == b) queue[at[b] + queue_popc(votes & below)] = i;
+      at[b] += queue_popc(votes);
     }
   }
 }
