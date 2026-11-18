@@ -41,7 +41,9 @@ task owns them yet. Each CPU session owns its Ledger (052), so session allocatio
 spectral AR_SPECTRUM_BLACKBODY option is open for M1b. PASS_UNSUPPORTED entries (ruling 74) persist for a session's
 life; no task owns clearing them. M1b from 083: Principled Roughness and Specular IOR Level linked from a texture are
 UNSUPPORTED (no colour-to-float op; Cycles converts by luminance); 083 Do 7 (the auto-converted Emission flag, each
-EMIT_LE term's RGB for AUTO) waits for the Emission node and Mix/Add Shader.
+EMIT_LE term's RGB for AUTO) waits for the Emission node and Mix/Add Shader. translate.py (083) copies the RecordSlot
+ids, SEM_REFLECTANCE and the TEX mode bits from C headers (a test parses the headers and fails on drift); opsgen or
+abigen should export them; no task owns this.
 
 ## Budget headroom
 Landing gates run 43-55 s of B-09's 180 s (kernel part 11-21 s of 120 s); `check fast` 5-7 s warm,
