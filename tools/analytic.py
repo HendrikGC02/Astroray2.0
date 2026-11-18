@@ -281,8 +281,11 @@ def check_scene(mean, var, checks, m, eps_sys, max_relative=None, renders=None, 
 def gate_members():
     """Family members the gate runs: one per check of each GATE_SCENES scene on each device, plus
     the truth-tested renders of tools/integrator_checks.py (also gate steps)."""
-    import integrator_checks  # tools/, beside this file; imported here because it imports this module
-    n = integrator_checks.gate_members()
+    # By path (python -I puts no script folder on sys.path), here because it imports this module.
+    spec = importlib.util.spec_from_file_location("integrator_checks", os.path.join(ROOT, "tools", "integrator_checks.py"))
+    ic = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ic)
+    n = ic.gate_members()
     for s in GATE_SCENES:
         t = meta.load(os.path.join(ROOT, "scenes", s, "meta.toml"))["truth"]
         n += len(truths.evaluate(t, SIZE, SIZE)) * len(DEVICES)
