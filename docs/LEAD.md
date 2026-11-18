@@ -57,7 +57,7 @@ implementer on its existing branch and worktree, briefed from this section and i
   remedies reordered by measured cost (ruling 79). B-14 needs 118-120 first.
 - Gate is ~150-165 s of B-09's 180 s: new gate work must find time (STATUS Budget headroom).
 - Owner questions raised: exact JPEG parity (ruling 78); 0007 V10 wording if 086 cannot source Blender's
-  overlay transfer. C:\out	mplend_cornell_area.png is a stray file from 090 that a safety check kept the
+  overlay transfer. The file out/tmp/blend_cornell_area.png under the C: drive root is a stray file from 090 that a safety check kept the
   lead from deleting (drive root): the owner removes it.
 - After M1a (task 100): the owner agreed to a Fable planning session for M1b, an Opus review of
   that plan, and a fresh coordinator session.
