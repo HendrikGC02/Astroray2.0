@@ -21,7 +21,13 @@ for attempt in 1 2 3; do
 🤖 Generated with [Claude Code](https://claude.com/claude-code)" | grep -o '[0-9]*$')
   fi
   if [ "$verdict" = PASS ]; then gh pr comment $pr --body "REVIEW PASS $sha" >/dev/null; else gh pr comment $pr --body "REVIEW SKIP $sha (O31)" >/dev/null; fi
-  sleep 15; timeout 1200 gh pr checks $pr --watch --interval 20 >/dev/null 2>&1
+  # Wait for hosted ci on this exact sha: `gh pr checks --watch` can return before the run is registered.
+  # If no run appears (pull_request not fired), close and reopen the PR once to fire it.
+  run=""; for i in $(seq 1 30); do run=$(gh run list --branch "$br" --workflow ci --json databaseId,headSha -q ".[] | select(.headSha==\"$sha\") | .databaseId" | head -1); [ -n "$run" ] && break; sleep 10; done
+  if [ -z "$run" ]; then gh pr close $pr >/dev/null; gh pr reopen $pr >/dev/null; sleep 30
+    run=$(gh run list --branch "$br" --workflow ci --json databaseId,headSha -q ".[] | select(.headSha==\"$sha\") | .databaseId" | head -1); fi
+  [ -n "$run" ] && timeout 1500 gh run watch $run --exit-status >/dev/null 2>&1
+  timeout 600 gh pr checks $pr --watch --interval 20 >/dev/null 2>&1
   out=$(timeout 600 pwsh -NoProfile -File tools/land.ps1 merge $n 2>&1 | tail -5); echo "$out"
   echo "$out" | grep -q "re-run prepare" || break
 done
