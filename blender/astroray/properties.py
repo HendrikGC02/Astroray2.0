@@ -16,11 +16,21 @@ FILTER_ITEMS = (
     ("BLACKMAN_HARRIS", "Blackman-Harris", "Blackman-Harris filter"),
 )
 
+# 0007 d40: the modes M1 draws; the rest of the list arrives with M8. Values are the AR_DISPLAY_* ids.
+DISPLAY_MODE_ITEMS = (
+    ("BEAUTY", "Beauty", "The rendered image", 0),
+    ("SAMPLE_COUNT", "Sample count", "Samples per pixel, viridis from 0 to the viewport sample limit", 1),
+    ("BOUNCE_COUNT", "Bounce count", "Bounces per path, viridis from 0 to Max Bounces", 2),
+)
+
 
 class AstrorayScene(bpy.types.PropertyGroup):
     device: bpy.props.EnumProperty(
         name="Device", description="Device that renders F12", default="CPU",
         items=(("CPU", "CPU", "Render on the CPU"), ("CUDA", "CUDA", "Render on the NVIDIA GPU")))
+    display_mode: bpy.props.EnumProperty(
+        name="Display Mode", description="What the viewport shows; heat maps ignore the view transform",
+        items=DISPLAY_MODE_ITEMS, default="BEAUTY")
     samples: bpy.props.IntProperty(
         name="Render Samples", description="Samples per pixel for F12 renders", default=4096, min=1)
     viewport_samples: bpy.props.IntProperty(

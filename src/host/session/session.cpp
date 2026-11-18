@@ -256,6 +256,15 @@ bool Session::wait(uint32_t timeout_ms) {
   }
 }
 
+std::vector<PresentRecord> Session::present_log() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return present_log_;
+}
+
+double Session::now_s() {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 void Session::set_view(const ar_view_desc& view) {
   if (view.region_width == 0 || view.region_height == 0 || view.region_width > options_.max_width ||
       view.region_height > options_.max_height)
@@ -273,6 +282,7 @@ void Session::set_view(const ar_view_desc& view) {
     std::lock_guard<std::mutex> lock(mutex_);
     throw_if_failed_locked("set_view");
   }
+  batching_.note_view(StoredView::copy_of(view), now_s());
   if (latch_.set_view(view)) wake();
   raise_interrupt_if_due();
 }
@@ -291,6 +301,7 @@ void Session::set_display_mode(uint32_t mode) {
 void Session::scene_generation_activated() {
   // Runs on the thread that activated the generation: nothing may escape into it.
   try {
+    batching_.note_commit(now_s());
     if (latch_.pending(scene_.generations().active())) wake();
     raise_interrupt_if_due();
   } catch (const std::exception& e) {
@@ -594,6 +605,8 @@ void Session::begin_epoch() {
   }
   pass_index_ = 0;
   passes_in_epoch_ = 0;
+  unpresented_ = 0;
+  batching_.begin_epoch();
   film_epoch_ = latch_.epoch();
 }
 
@@ -834,6 +847,15 @@ void Session::render_loop() {
         } else if (idle_) {
           if (state_ != AR_STATE_CONVERGED) set_state_locked(AR_STATE_CONVERGED);
         } else {
+          // 0007 d50: during interaction each displayed update is one pass at most 60 times a
+          // second, so the next pass waits until the last frame is a publish gap old. A new view
+          // wakes the wait and is latched when it ends.
+          const double now = now_s();
+          const double wait = last_present_s_ + kInteractionPublishGapS - now;
+          if (wait > 0.0 && batching_.interacting(now)) {
+            wake_cv_.wait_for(lock, std::chrono::duration<double>(wait));
+            continue;
+          }
           break;
         }
         wake_cv_.wait(lock);
@@ -900,11 +922,45 @@ void Session::render_loop() {
       }
       resolve(lr.epoch, lr.generation);
       const std::chrono::duration<float, std::milli> took = std::chrono::steady_clock::now() - pass_start;
+      batching_.note_pass(double(took.count()) * 1e-3);
       std::lock_guard<std::mutex> lock(mutex_);
       last_pass_ms_ = took.count();
       last_counters_ = scheduler_->counters();
     }
-    if (need_pass || lr.changed) present(lr.generation);
+    // 0007 d50: during interaction every pass is a displayed update; afterwards several passes
+    // run between updates (0009 B-34). The last pass before the session idles always presents, as
+    // does a display-mode change and a latch with no pass to follow it.
+    bool show = lr.changed && !need_pass;
+    uint32_t target = 1;
+    bool interacting = false;
+    if (need_pass) {
+      ++unpresented_;
+      const double t = now_s();
+      bool done;
+      uint64_t samples;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        done = converged_locked();
+        samples = stats_.samples_done;
+      }
+      const bool mode_change = lr.changed && !lr.new_epoch;
+      // The first pass of an epoch shows the new state at once (and lets the interrupt rule see a
+      // presented state); the publish gap still bounds the rate.
+      const bool gap_ok = t - last_present_s_ >= batching_.publish_gap_s(t);
+      const bool first = passes_in_epoch_ == 1;
+      target = batching_.passes_per_update(t, samples);
+      interacting = batching_.interacting(t);
+      show = done || mode_change || (gap_ok && (first || unpresented_ >= target));
+    }
+    if (show) {
+      present(lr.generation);
+      unpresented_ = 0;
+      last_present_s_ = now_s();
+      if (options_.test_record_presents) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        present_log_.push_back({last_present_s_, stats_.passes_resolved, lr.epoch, interacting, target});
+      }
+    }
     render.unlock();
     std::lock_guard<std::mutex> lock(mutex_);
     if (converged_locked() && !latch_.pending(scene_.generations().active())) idle_ = true;

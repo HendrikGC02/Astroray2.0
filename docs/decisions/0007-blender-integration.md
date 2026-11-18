@@ -316,7 +316,7 @@ Not designed here, each needing its own decision: Gaussian splats, legacy partic
 ## Risks and open items
 
 - **TTFF.** Decision 35 gates V7a at ≤ 1.5× Cycles with 1.0× as the goal (owner decision 23); the S2 cold estimate (0.97-1.18×) passes 1.5× but not 1.0×.
-- **Batching schedule** (decision 50): B-34's display-interval values wait on reading Cycles' `render_scheduler.cpp`.
+- **Batching schedule** (decision 50): B-34's display-interval values are recorded, copied from Cycles' `render_scheduler.cpp` (task 086).
 - P1 (= 0005 M-7): does a custom group node keep its identity through `inline_shader_nodes()`? Decides only custom nodes.
 - P2: does Blender 5.3 call `view_pause`/`view_resume` on viewport engines when F12 starts?
 - P3: edit-mode read correctness and cost, and whether `context.window.modal_operators` is populated inside `view_update` during a modal transform (decision 22 falls back to full reads if not). Full reads hold 24/s in edit mode only up to roughly 0.6M triangles (65 ms per 1M); larger edit-mode meshes need remedy 1 (`as_pointer()`).
