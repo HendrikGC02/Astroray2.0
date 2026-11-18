@@ -4,7 +4,8 @@
 Run through `Invoke-ArBlender -Gui -Script tests/blender/probe_p3_modal.py`. A UV sphere with a Wave modifier
 (deform-only, so its evaluated mesh keeps its topology while its vertices move) is in a Rendered viewport.
 The script starts the `G` operator (`transform.translate`, invoked, so it runs modally) and, while it runs,
-changes the modifier every 50 ms so the depsgraph reports a geometry update on the object. The probe wraps
+changes the modifier every 50 ms so the depsgraph reports a geometry update on the object (event_simulate
+needs a Blender flag the launcher does not pass, so no mouse events are sent). The probe wraps
 `ViewportJob.view_update` and records, per call: the window's modal operator ids, the geometry updates in the
 batch, and the evaluated mesh's counts and triangle index array against those of the first read. Cases:
   - the modal operator is listed inside view_update while the transform runs, and none before it started
@@ -164,8 +165,6 @@ class Driver(gui_present.Driver):
         self.n += 1
         ob = bpy.data.objects[OBJECT]
         ob.modifiers["Wave"].height = 0.3 + 0.1 * math.sin(self.n)  # a geometry update, same topology
-        if hasattr(win, "event_simulate"):
-            win.event_simulate(type="MOUSEMOVE", value="NOTHING", x=win.width // 2 + 3 * self.n, y=win.height // 2)
         area.tag_redraw()
         STATE["modal_listed"] = [op.bl_idname for op in win.modal_operators]
         if time.monotonic() - self.step_t0 > MODAL_S:
