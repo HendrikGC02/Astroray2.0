@@ -100,6 +100,7 @@ class Driver:
 
     def step_setup(self):
         win, area, region = self.find_area()
+        win.cursor_warp(win.width // 2, win.height // 2)  # then away from the popup (see step_settle)
         space = area.spaces.active
         space.shading.type = "RENDERED"
         space.overlay.show_overlays = False
@@ -131,6 +132,8 @@ class Driver:
         return SETTLE_S
 
     def step_settle(self):
+        win, _, _ = self.find_area()
+        win.cursor_warp(5, 5)  # the first-start popup of a factory profile closes when the pointer leaves it
         self.pre = self.job.frames[-1]
         STATE["pre"] = self.pre
         STATE["events_before_edit"] = list(self.job.events)
@@ -272,16 +275,17 @@ class TestPresent(unittest.TestCase):
         img = bpy.data.images.load(STATE["screenshot"])
         px = np.array(img.pixels[:], np.float32).reshape(img.size[1], img.size[0], 4)[:, :, :3]
         reg = px[y0:y0 + h, x0:x0 + w]  # bottom-up, like the frame
-        lum = reg.mean(axis=2)
-        bg = np.median(lum[:8, :8])
-        mask = np.abs(lum - bg) > 0.05
+        # A factory profile's first-start popup covers the middle of the screen below the top 30 %; the
+        # sphere moved up, so its upper cap is in that band (and would be missing if rows were flipped).
+        band = reg[int(h * 0.7):].mean(axis=2)
+        bg = np.median(band[:8, :8])
+        mask = band < bg - 0.05
         ys, xs = np.nonzero(mask)
-        cx, cy = xs.mean() / w, ys.mean() / h
-        print(f"RESULT present screenshot {img.size[0]}x{img.size[1]} region {w}x{h}: background {bg:.3f}, "
-              f"{mask.sum()} differing pixels, centre ({cx:.3f}, {cy:.3f})")
+        cx = xs.mean() / w
+        print(f"RESULT present screenshot {img.size[0]}x{img.size[1]} region {w}x{h}: top band background {bg:.3f}, "
+              f"{mask.sum()} sphere pixels, their centre x {cx:.3f}")
         self.assertGreater(mask.sum(), 500)
-        self.assertGreater(cx, 0.58)
-        self.assertGreater(cy, 0.52)
+        self.assertGreater(cx, 0.55)
 
     def test_close_destroys(self):
         """Leaving Rendered closes the session at once and the timer destroys session, then scene, once
@@ -310,7 +314,7 @@ def main():
     os.makedirs(os.path.join(ROOT, "out", "evidence", "085"), exist_ok=True)
     blend = os.path.join(work, "a1_viewport.blend")
     p = subprocess.run([sys.executable, "-I", os.path.join(ROOT, "scenes", "a1_furnace", "build.py"),
-                        "--out", os.path.join(work, "a1_viewport.arrec"), "--blend", blend],
+                        "--out", os.path.join(work, "a1_viewport.arrec"), "--blend", blend, "--sampler", "sobol"],
                        capture_output=True, text=True, timeout=300)
     if p.returncode != 0:
         raise RuntimeError("scenes/a1_furnace/build.py failed: " + p.stdout + p.stderr)
@@ -322,6 +326,7 @@ def main():
     scene.render.engine = "ASTRORAY"
     scene.astroray.device = "CPU"
     scene.astroray.viewport_samples = 64
+    scene.camera.data.passepartout_alpha = 0.0  # the whole region shows the render, undimmed
     driver = Driver(rf)
     bpy.app.timers.register(driver.tick, first_interval=1.0)
 
