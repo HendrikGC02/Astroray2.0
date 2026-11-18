@@ -12,7 +12,7 @@ Do:
 5. From 076: CPU threads=1 runs use the gate-build hook ASTRORAY_TEST_THREADS (076 adds it with ASTRORAY_TEST_POOL); comparison statistics that depart from per-pixel z at MIN_SPP need a null calibration of the exact statistic (106, tools/analytic.py --null); the gate has about 10 s left for this task (B-09).
 Acceptance: `pwsh tools/check.ps1 gate` passes with the three integrator checks listed in its summary; `<python> -m unittest discover -s tests/abi -p "test_v15_render.py"` passes.
 Look at: none.
-Canary: tasks/107.canary.patch must turn red (lead ruling): `tools/integrator_checks.py --check record_replay --device cpu` (the patch skips the recorder's capture of the UV staged array), `astroray_tests_cpu --tier=all -tc="v15/invalid sample count equals the injected samples"` and `-tc="v15/a film reset removes the FILM entries"`, plus d25, determinism and the two tests/abi/test_v15_render.py cases.
+Canary: tasks/107.canary.patch must turn red: `tools/integrator_checks.py --check d25 --device cpu`, `tools/integrator_checks.py --check determinism --device cpu`, `tools/integrator_checks.py --check record_replay --device cpu` (the patch skips the recorder's capture of the UV staged array), tests/abi/test_v15_render.py "TestV15.test_cli_exit_status_follows_error_entries", "TestV15.test_replacing_the_magenta_material_removes_its_entries", astroray_tests_cpu "v15/invalid sample count equals the injected samples", "v15/a film reset removes the FILM entries" (lead ruling: these two moved to C++).
 Budget: gate time +10 s at most.
 Depends on: 076, 033.
 Size: M (about 300 lines); stop and report at 2x.
@@ -20,5 +20,5 @@ Progress:
 Started.
 Do 1-3, 5 done: integrator_checks d25, determinism, record_replay (scene d25_edit_revert); gate +3.2 s, no family change (the checks are exact, not statistical).
 Do 4 partial: test_v15_render.py holds the exit-status and magenta-replacement tests only. INVALID_SAMPLE count and film-reset tests are blocked: graph.cpp refuses TEST_INJECT_NAN and the compiler has no encoding for it; the ABI clamps inf and NaN inputs. Needs a lead ruling.
-Canary: tasks/107.canary.patch turns d25, determinism, record_replay and both v15 tests red; no hunk for test_invalid_count (does not exist).
+The canary turns d25, determinism, record_replay and the four V15 cases red (whole patch applied).
 Lead ruling: INVALID/film-reset cases moved to tests/cpu/test_v15_render.cpp. A real NaN never reaches the check (record slots are gated or clamped), so the case aims TEST_INJECT_NAN past the register file: the VM error takes the same `!ok || !is_finite` branch. Program patched in place after compile.
