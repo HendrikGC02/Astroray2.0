@@ -3,6 +3,7 @@
 $script:ArSteps = @()
 $script:ArTier = ''
 $script:ArClock = $null
+$script:ArExcluded = 0.0
 $script:ArRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 function Start-ArSummary {
@@ -10,10 +11,21 @@ function Start-ArSummary {
   param([Parameter(Mandatory)][string]$Tier)
   $script:ArTier = $Tier
   $script:ArSteps = @()
+  $script:ArExcluded = 0.0
   $script:ArClock = [Diagnostics.Stopwatch]::StartNew()
   $dir = Join-Path $script:ArRoot 'out/check'
   New-Item -ItemType Directory -Force $dir | Out-Null
   Set-Content -Path (Join-Path $dir "$Tier.log") -Value "$Tier $(Get-Date -Format o)"
+}
+
+function Add-ArExcluded {
+  # A lock wait inside the run is not work (0009 d8): it leaves the tier time as well as the budget.
+  param([Parameter(Mandatory)][double]$Seconds)
+  $script:ArExcluded += $Seconds
+}
+
+function Get-ArSeconds {
+  return [math]::Max(0.0, $script:ArClock.Elapsed.TotalSeconds - $script:ArExcluded)
 }
 
 function Add-ArStep {
@@ -24,7 +36,7 @@ function Add-ArStep {
 function Complete-ArSummary {
   # Budget is $null while the tier has no budget row.
   param([bool]$Pass = $true, [double]$Waited = 0, $Budget = $null, [string]$Reason = '')
-  $secs = $script:ArClock.Elapsed.TotalSeconds
+  $secs = Get-ArSeconds
   $dir = Join-Path $script:ArRoot 'out/check'
   $sha = (& git -C $script:ArRoot rev-parse --short HEAD 2>$null)
   $over = ($null -ne $Budget) -and ($secs -gt $Budget)

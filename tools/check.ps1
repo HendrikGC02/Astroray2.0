@@ -76,6 +76,9 @@ try {
   $gpuExe = Join-Path $root 'out/bin/astroray_tests_gpu.exe'
   $dargs = if ($Declared) { @('--declared', $Declared) } else { @() }
 
+  # Group: steps with the same Group, adjacent in this table, run concurrently (CPU device against GPU
+  # device; see Invoke-GateGroup). 'aov agreement', 'integrator cuda' (tripwire) and 'material compile'
+  # are timing-sensitive or use both devices and stay alone.
   # The gate steps (name, tag, kernel part is summed by $kernelSteps, Lock = hold the tree lock,
   # Identity = the exe must print this commit's build line). Each body fails by its exit code.
   $gateSteps = @(
@@ -110,25 +113,26 @@ try {
     # 0009 d19 (070): recordings are generated here, never committed; later steps that render a scene
     # (analytic harness, A1) come after this one. Up-to-date recordings are skipped by source hash.
     @{ Name = 'scenes'; Tag = 'cpu'; Echo = '^scenes:'; Run = { & $py -I tools/scenes.py } },
-    # ABI tests that need a CUDA device (115): gpu_test_*.py, outside the cpu step's test_*.py, so hosted
-    # CI never runs them. After 'scenes' because they render its recordings.
-    @{ Name = 'gpu abi tests'; Tag = 'local'; Lock = $true; Echo = '^cli render cuda'; Run = {
-        if (Test-Path 'tests/abi') { & $py -I -m unittest discover -s tests/abi -p 'gpu_test_*.py' } } },
     # 0009 d11, d16 (072): analytic scenes on CPU and GPU at 32x32 through the CLI, after 'scenes'.
-    @{ Name = 'analytic cpu'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Run = {
+    @{ Name = 'analytic cpu'; Group = 'g1'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Run = {
         & $py -I tools/analytic.py --gate --device cpu } },
-    @{ Name = 'analytic cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Run = {
+    @{ Name = 'analytic cuda'; Group = 'g1'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Run = {
         & $py -I tools/analytic.py --gate --device cuda } },
     # 0009 d17(iv) (077): deterministic AOVs of scene D2, CPU against GPU; D1 runs in the analytic steps.
     @{ Name = 'aov agreement'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL|aov) '; Run = {
         & $py -I tools/aov_agree.py --scene d2_aov_geometry } },
+    # ABI tests that need a CUDA device (115): gpu_test_*.py, outside the cpu step's test_*.py, so hosted
+    # CI never runs them. After 'scenes' because they render its recordings; they overlap 'integrator cpu' (GPU against CPU).
+    @{ Name = 'gpu abi tests'; Tag = 'local'; Lock = $true; Group = 'g2'; Echo = '^cli render cuda'; Run = {
+        if (Test-Path 'tests/abi') { & $py -I -m unittest discover -s tests/abi -p 'gpu_test_*.py' } } },
     # 076: Russian roulette furnace, shadow lifetime, closed box, radiance scale (0004 D2, D4/D5, D28;
     # 0003 check 15) and the B-16 work counters against tests/budgets/counters.toml; the tripwire on cuda.
-    @{ Name = 'integrator cpu'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Run = {
+    @{ Name = 'integrator cpu'; Group = 'g2'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Run = {
         & $py -I tools/integrator_checks.py --gate --device cpu } },
     @{ Name = 'integrator cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Run = {
         & $py -I tools/integrator_checks.py --gate --device cuda } },
-    @{ Name = 'cpu gate tests'; Tag = 'cpu'; Lock = $true; Identity = $exe; Run = { & $exe --tier=gate } },
+    @{ Name = 'cpu gate tests'; Group = 'g3'; Tag = 'cpu'; Lock = $true; Identity = $exe; Run = { & $exe --tier=gate } },
+    @{ Name = 'gpu gate tests'; Group = 'g3'; Tag = 'local'; Lock = $true; Identity = $gpuExe; Run = { & $gpuExe --tier=gate } },
     # B-24 compile row (0009 d13, 0005 V7): the test prints the median compile time of a fixed
     # 100-node graph; the limit is the "ms per 100 nodes" figure of the row in budgets.toml.
     @{ Name = 'material compile'; Tag = 'cpu'; Lock = $true; Identity = $exe; Echo = '^B-24 compile:';
@@ -143,7 +147,6 @@ try {
          $ms = [double]$m.Matches[0].Groups[1].Value
          if ($ms -gt [double]$limit) { Fail "material compile: $ms ms per 100 nodes is above B-24's $limit ms" }
          Write-Host "B-24 compile: $ms ms per 100 nodes (limit $limit ms)" } },
-    @{ Name = 'gpu gate tests'; Tag = 'local'; Lock = $true; Identity = $gpuExe; Run = { & $gpuExe --tier=gate } },
     # 0009 d11, d17a (084): one Blender start installs the staged extension zip, runs the 083 material tests,
     # renders A1's .blend through F12 on the CPU device and checks it against A1's truth and the builder's
     # recording (exporter equivalence). The smoke builds the zip itself; Invoke-ArBlender's own output goes to the log.
@@ -152,9 +155,8 @@ try {
         foreach ($f in $r.Log, "$($r.Log).err") { if (Test-Path $f) { Get-Content $f } }
         $global:LASTEXITCODE = $r.ExitCode } }
   )
-  function Invoke-GateStep($s) {
-    if ($s.Lock) { $script:waited += Enter-ArTreeLock (Join-Path $root 'out/build') }
-    try { $r = Step $s.Name $s.Run } finally { if ($s.Lock) { Exit-ArTreeLock } }
+  # Judge one finished step: its failure names itself, then Identity and Check/Echo as before.
+  function Complete-GateStep($s, $r) {
     if ($r.Code -ne 0) {
       $fl = @($r.Out | Where-Object { $_ -match '^(FAIL|kernelgate:)' })
       if ($fl.Count -gt 0) { ($fl | Select-Object -First 6) | ForEach-Object { Write-Host $_ } } else { Show-Tail $r }
@@ -163,6 +165,44 @@ try {
     }
     if ($s.Identity) { Test-Identity $r $s.Name }
     if ($s.Check) { & $s.Check $r } elseif ($s.Echo) { $r.Out | Where-Object { $_ -match $s.Echo } | ForEach-Object { Write-Host $_ } }
+  }
+  function Invoke-GateStep($s) {
+    if ($s.Lock) { $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $script:waited += $w; Add-ArExcluded $w }
+    try { $r = Step $s.Name $s.Run } finally { if ($s.Lock) { Exit-ArTreeLock } }
+    Complete-GateStep $s $r
+  }
+  # Steps sharing a Group touch different devices and no output, so they run as concurrent jobs under
+  # the one machine lock (0009 d11). Each job is its own process and returns its output and time;
+  # results are judged in table order, so a failure names its own step. Timing-sensitive steps (the
+  # CUDA tripwire, the B-24 compile time) carry no Group and run alone.
+  function Invoke-GateGroup($members) {
+    if ($members.Count -eq 1) { Invoke-GateStep $members[0]; return }
+    if (@($members | Where-Object { $_.Lock }).Count -gt 0) {
+      $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $script:waited += $w; Add-ArExcluded $w
+    }
+    try {
+      $pre = { param($body, $v)
+        Set-Location $v.root
+        $py = $v.py; $dargs = $v.dargs; $exe = $v.exe; $gpuExe = $v.gpuExe; $root = $v.root; $isCi = $v.isCi
+        $t = [Diagnostics.Stopwatch]::StartNew()
+        $global:LASTEXITCODE = 0
+        $out = & ([scriptblock]::Create($body)) 2>&1 | ForEach-Object { "$_" }
+        [pscustomobject]@{ Code = $LASTEXITCODE; Out = @($out); Seconds = $t.Elapsed.TotalSeconds } }
+      $vars = @{ root = "$root"; py = $py; dargs = $dargs; exe = $exe; gpuExe = $gpuExe; isCi = $isCi }
+      $jobs = @($members | ForEach-Object { Start-Job -ScriptBlock $pre -ArgumentList $_.Run.ToString(), $vars })
+      $null = $jobs | Wait-Job
+      $res = @(for ($i = 0; $i -lt $members.Count; $i++) {
+        $o = @(Receive-Job $jobs[$i] -ErrorAction Continue 2>&1)
+        $r = $o | Where-Object { $_ -is [pscustomobject] -and $null -ne $_.Seconds } | Select-Object -Last 1
+        if (-not $r) { $r = [pscustomobject]@{ Code = 1; Out = @($o | ForEach-Object { "$_" }); Seconds = 0.0 } }
+        Remove-Job $jobs[$i] -Force
+        $r })
+    } finally { if (@($members | Where-Object { $_.Lock }).Count -gt 0) { Exit-ArTreeLock } }
+    for ($i = 0; $i -lt $members.Count; $i++) {
+      Add-ArStep $members[$i].Name $res[$i].Seconds ($res[$i].Code -eq 0)
+      Add-Content -Path $log -Value $res[$i].Out
+    }
+    for ($i = 0; $i -lt $members.Count; $i++) { Complete-GateStep $members[$i] $res[$i] }
   }
 
   # Budgets this tier enforces, from the machine copy of 0009 d13.
@@ -175,7 +215,14 @@ try {
   if ($Tier -eq 'gate') {
     $r = Step 'fast' { & pwsh -NoProfile -File tools/check.ps1 fast }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'fast failed (out/check/fast.log)' }
-    foreach ($s in $gateSteps) { Invoke-GateStep $s }
+    $i = 0
+    while ($i -lt $gateSteps.Count) {
+      $g = $gateSteps[$i].Group
+      $n = 1
+      if ($g) { while ($i + $n -lt $gateSteps.Count -and $gateSteps[$i + $n].Group -eq $g) { $n++ } }
+      Invoke-GateGroup @($gateSteps[$i..($i + $n - 1)])
+      $i += $n
+    }
   } elseif ($Tier -eq 'full') {
     $r = Step 'gate' { & pwsh -NoProfile -File tools/check.ps1 gate @dargs }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'gate failed (out/check/gate.log)' }
@@ -190,7 +237,7 @@ try {
       if ($r.Code -ne 0) { Fail "blender $bt failed (out/check/full.log)" }
     }
     # The rows gated full (0002 D10, 0009 d18), all rules, after the gate's own pass.
-    $script:waited += Enter-ArTreeLock (Join-Path $root 'out/build')
+    $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $script:waited += $w; Add-ArExcluded $w
     try { $r = Step 'kernelgate full' { & $py -I tools/kernelgate.py --full @dargs } } finally { Exit-ArTreeLock }
     if ($r.Code -ne 0) {
       ($r.Out | Where-Object { $_ -match '^(FAIL|kernelgate:)' } | Select-Object -First 6) | ForEach-Object { Write-Host $_ }
@@ -221,13 +268,13 @@ try {
     }
     $r = Step 'build' { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_tests_cpu -Preset $(if ($isCi) { 'cpu' } else { 'dev' }) -NoMachineLock -Jobs 4 }
     $bj = Join-Path $root 'out/check/build.json'
-    if (Test-Path $bj) { $waited += [double](Get-Content $bj -Raw | ConvertFrom-Json).waited }
+    if (Test-Path $bj) { $w = [double](Get-Content $bj -Raw | ConvertFrom-Json).waited; $waited += $w; Add-ArExcluded $w }
     if ($r.Code -ne 0) {
       Show-Tail $r 5
       Fail 'build failed (out/check/build.log)'
     }
 
-    $waited += Enter-ArTreeLock (Join-Path $root 'out/build')
+    $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $waited += $w; Add-ArExcluded $w
     if (-not (Test-Path $exe)) { Fail "missing $exe" }
     $r = Step 'tests' { & $exe --tier=fast --duration=true }
     Exit-ArTreeLock
@@ -289,8 +336,8 @@ if ($Tier -eq 'gate') {
   $kp = ($script:ArSteps | Where-Object { $_.name -in $kernelSteps } | Measure-Object -Property seconds -Sum).Sum
   $why = "kernel part {0:N1} s of {1} s" -f $kp, $kernelBudget
   if ($kp -gt $kernelBudget) { Fail "B-09: kernel part $([math]::Round($kp, 1)) s over $kernelBudget s" }
-  if ($script:ArClock.Elapsed.TotalSeconds -gt $budget) { Fail "B-09: tier over $budget s ($why)" }
-} elseif ($Tier -eq 'fast' -and $script:ArClock.Elapsed.TotalSeconds -gt $budget) {
+  if ((Get-ArSeconds) -gt $budget) { Fail "B-09: tier over $budget s ($why)" }
+} elseif ($Tier -eq 'fast' -and (Get-ArSeconds) -gt $budget) {
   $why = "B-08: tier over $budget s"
 }
 $ok = Complete-ArSummary -Pass $true -Waited $waited -Budget $budget -Reason $why
