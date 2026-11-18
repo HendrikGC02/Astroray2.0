@@ -25,9 +25,7 @@ from .materials import translate
 from .sync import camera, classify, edit as edit_mod, images, instances, keys, mesh, settings
 from .sync import world as world_sync, lights
 
-POLL_S = 0.05            # 0009 B-37: completion poll period
-SESSION_HEADROOM = 1.25  # the session's film is sized past the region so a small resize needs no new session
-_BUSY = ("AR_STATE_INITIALIZING", "AR_STATE_RENDERING")
+POLL_S = 0.05  # 0009 B-37: completion poll period
 
 
 class ViewportJob(render_final.Job):
@@ -37,6 +35,10 @@ class ViewportJob(render_final.Job):
         self.views = camera.ViewSync()
         self.events = []          # lifecycle, in order; the tests read it
         self.frames = None        # a list when a test wants every presented frame logged
+        self.acquired = None      # likewise every acquired frame: id, generation, whether it was presented (d25)
+        self.check_uploads = 0    # test-only: this many uploads are read back from the GPU and compared
+        self.upload_checks = []
+        self.retired = []         # sessions closed and waiting for the timer to destroy them (d23)
         self.failure = None
         self.table = None         # instance table of the last full instance send, for transform patches
         self.geom_keys = set()
@@ -200,15 +202,29 @@ class ViewportJob(render_final.Job):
             return False
         try:
             self._last_id = frame.frame_id
-            if self.present.wants(frame):
+            shown = self.present.wants(frame)
+            if self.acquired is not None:
+                self.acquired.append({"id": frame.frame_id, "generation": frame.generation, "presented": shown})
+            if shown:
                 self.present.upload(frame)
                 if self.t_first_frame is None:
                     self.t_first_frame = time.monotonic()
                 if self.frames is not None:
                     self._log_frame(frame)
+                if self.check_uploads > 0:
+                    self.check_uploads -= 1
+                    self._check_upload(frame)
         finally:
             native.call(lib.ar_display_release, s, frame.frame_id)
         return True
+
+    def _check_upload(self, frame):
+        """Test-only: the persistent texture against the host frame, bit for bit (half to float is exact)."""
+        host = present.frame_words(frame).view(np.float16).reshape(frame.height, frame.width, 4).astype(np.float32)
+        tex = self.present.read_back()
+        self.upload_checks.append({"max_diff": float(np.abs(tex - host).max()), "size": (frame.width, frame.height),
+                                   "stripes": len(self.present._shown.stripes),
+                                   "colour_spread": float((host[:, :, :3].max(axis=2) - host[:, :, :3].min(axis=2)).max())})
 
     def _log_frame(self, frame):
         px = present.frame_words(frame).view(np.float16).reshape(frame.height, frame.width, 4)
@@ -218,23 +234,25 @@ class ViewportJob(render_final.Job):
                             "rgb": px[::step, ::step, :3].astype(np.float32)})
 
     def _ensure_session(self, w, h):
-        """A session whose film covers the region; created on the first draw, replaced when the region outgrows it."""
+        """A session whose film is the region's; created on the first draw. A region that outgrows it gets a new
+        session and the old one is retired in d23's two steps (closed now, destroyed by a timer), so the draw
+        never waits for it."""
         if self.session.value and w <= self._max[0] and h <= self._max[1]:
             return
         lib, abi = self.lib, self.abi
         if self.session.value:
-            self._close_session()
-            self.events.append("destroy_session")
-        mw, mh = int(w * SESSION_HEADROOM) + 1, int(h * SESSION_HEADROOM) + 1
+            old, self.session = self.session, ctypes.c_void_p()
+            self._retire(old, final=False)
+            self.events.append("replace_session")
         try:
-            sd = abi.ar_session_desc(abi.AR_SESSION_MODE_VIEWPORT, mw, mh, abi.AR_DENOISER_NONE)
+            sd = abi.ar_session_desc(abi.AR_SESSION_MODE_VIEWPORT, w, h, abi.AR_DENOISER_NONE)
             render_final._ok(lib, native.call(lib.ar_session_create, self.scene_h, ctypes.byref(sd),
                                               ctypes.byref(self.session)),
                              "ar_session_create", "ar_scene_last_error", self.scene_h)
             self.views = camera.ViewSync()
             self._last_id = 0
             self.present.generation = -1  # a new session numbers its frames afresh
-            self._max = (mw, mh)
+            self._max = (w, h)
         except BaseException:
             self._close_session()
             raise
@@ -265,37 +283,61 @@ class ViewportJob(render_final.Job):
 
     # ---- destruction (d23)
 
-    def park(self):
-        """RenderEngine.__del__: ar_session_close now, and a timer that destroys session then scene once
-        the session reports CLOSED. The timer's reference keeps this job, and so its place in the
-        context's job set, alive until then; shutdown() closes it directly if that comes first."""
+    def _retire(self, session, final):
+        """Step one: ar_session_close, which never blocks. Step two is the timer: it destroys the session once
+        it reports CLOSED and, when this was the job's last session, then the scene. The timer's reference keeps
+        the job (and its place in the context's job set) alive; shutdown() closes it directly if that comes first."""
+        native.call(self.lib.ar_session_close, session)
+        self.retired.append(session)
         self.events.append("session_close")
-        if self.session.value:
-            native.call(self.lib.ar_session_close, self.session)
+        import bpy
+        bpy.app.timers.register(lambda: self._reap(session, final), first_interval=POLL_S)
+
+    def park(self):
+        """RenderEngine.__del__ (d23)."""
+        session, self.session = self.session, ctypes.c_void_p()
+        if not session.value:
+            self._destroy_scene()  # no session was ever made: nothing to wait for
+            return
         try:
-            import bpy
-            bpy.app.timers.register(self._reap, first_interval=POLL_S)
+            self._retire(session, final=True)
         except Exception:
+            self.session = session
             self.close()  # no timer to wait for (interpreter going down): destroy directly
 
-    def _reap(self):
-        if not self.session.value and not self.scene_h.value:
-            return None
-        if self.session.value:
-            prog = self.abi.ar_progress()
-            native.call(self.lib.ar_session_get_progress, self.session, ctypes.byref(prog))
-            if prog.state != self.abi.AR_STATE_CLOSED:
-                return POLL_S
-            self.events.append("closed_seen")
-        self.close()
+    def _reap(self, session, final):
+        if session not in self.retired:
+            return None  # close() took it
+        prog = self.abi.ar_progress()
+        native.call(self.lib.ar_session_get_progress, session, ctypes.byref(prog))
+        if prog.state != self.abi.AR_STATE_CLOSED:
+            return POLL_S
+        self._destroy_session(session, "timer")
+        if final:
+            if self.retired:
+                return POLL_S  # an older retired session has its own timer; the scene goes after every session
+            self._destroy_scene()
         return None
 
-    def close(self):
-        """Session, then scene (d23, d28); idempotent."""
-        had_session, had_scene = bool(self.session.value), bool(self.scene_h.value)
-        super().close()
-        if had_session:
-            self.events.append("destroy_session")
-        if had_scene:
+    def _destroy_session(self, session, via):
+        native.call(self.lib.ar_session_destroy, session)
+        self.retired = [r for r in self.retired if r.value != session.value]
+        self.events.append(f"destroy_session via {via}")
+
+    def _destroy_scene(self):
+        if self.scene_h.value:
+            native.call(self.lib.ar_scene_destroy, self.scene_h)
+            self.scene_h = ctypes.c_void_p()
             self.events.append("destroy_scene")
+        if self._context is not None:
+            self._context.jobs.discard(self)
         self.present.free()
+
+    def close(self):
+        """Every session, then the scene (d23, d28); idempotent. Blocks: shutdown and unregister only."""
+        for session in list(self.retired):
+            self._destroy_session(session, "close")
+        if self.session.value:
+            self._destroy_session(self.session, "close")
+            self.session = ctypes.c_void_p()
+        self._destroy_scene()

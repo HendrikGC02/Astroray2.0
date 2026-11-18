@@ -5,7 +5,11 @@ Run through `Invoke-ArBlender -Gui -Script tests/blender/gui_present.py` (the la
 Everything is driven by timers (the viewport only draws while Blender's main loop runs) and the script ends
 the process itself, with exit code 1 on any failed case. One run walks the whole sequence, then the cases
 read what it recorded:
-  switch to Rendered -> first frame -> move the sphere (twice) -> change the view -> leave Rendered.
+  main:  switch to Rendered -> first frame -> move the sphere (twice) -> change the view -> leave Rendered
+  grow:  Rendered again with a coloured sphere -> GPU read-back of the unpacked texture against the host
+         frame (small test stripes) -> maximise the area, so the region outgrows the session -> leave Rendered
+  p2:    a scene without a camera, with a lamp and a textured plane -> first frame, screenshot.
+A phase that fails records its error and the run goes on to the next, so a case fails only for its own phase.
 The viewport job keeps a lifecycle `events` list and, when asked, a log of every presented frame
 (generation and a down-sampled copy of the pixels), so the cases compare numbers, never looks.
 A screenshot of the viewport area goes to out/evidence/085/viewport.png.
@@ -39,7 +43,43 @@ WATCHDOG_S = 240.0
 SETTLE_S = 2.0       # let the first generation render a while before the sphere moves
 STEP_TIMEOUT_S = 90.0
 T0 = time.monotonic()
-STATE = {"error": None}
+STATE = {"errors": {}}
+PHASES = ("main", "grow", "p2")
+NEXT_PHASE_START = {"main": "g_start", "grow": "cam_setup"}
+SMALL_STRIPE_ROWS = 100  # rows per stripe in the read-back check: 13 stripes at the 2100x1221 region
+
+
+class LibSpy:
+    """Stands in for a job's ctypes library: logs the close and destroy calls where they are made, with the
+    state the job last saw for that handle, and can keep a closed session reporting RENDERING for a number of
+    polls, so a destroy that does not wait for CLOSED shows."""
+
+    def __init__(self, lib, abi):
+        self._lib, self._abi = lib, abi
+        self.calls, self.hold, self.last_state = [], {}, {}
+
+    def __getattr__(self, name):
+        fn = getattr(self._lib, name)
+        if name == "ar_session_get_progress":
+            def get(session, ref):
+                r = fn(session, ref)
+                prog, key = ref._obj, session.value
+                if self.hold.get(key, 0) > 0 and prog.state == self._abi.AR_STATE_CLOSED:
+                    self.hold[key] -= 1
+                    prog.state = self._abi.AR_STATE_RENDERING
+                self.last_state[key] = prog.state
+                self.calls.append(("progress", key, prog.state, time.monotonic()))
+                return r
+            return get
+        if name in ("ar_session_close", "ar_session_destroy", "ar_scene_destroy"):
+            def call(handle, *a):
+                self.calls.append((name, handle.value, self.last_state.get(handle.value), time.monotonic()))
+                return fn(handle, *a)
+            return call
+        return fn
+
+    def native(self, key=None):
+        return [c for c in self.calls if c[0] != "progress" and (key is None or c[1] == key)]
 
 
 def finish(code):
@@ -86,15 +126,49 @@ class Driver:
     def timed_out(self):
         return time.monotonic() - self.step_t0 > STEP_TIMEOUT_S
 
+    def phase(self):
+        n = self.step_name
+        return "grow" if n.startswith("g_") else "p2" if n.startswith(("cam_", "p2_")) else "main"
+
     def tick(self):
         try:
             if time.monotonic() - T0 > WATCHDOG_S:
                 raise RuntimeError(f"watchdog: still in step {self.step_name}")
             return getattr(self, "step_" + self.step_name)()
         except Exception:
-            STATE["error"] = traceback.format_exc()
-            print(STATE["error"], flush=True)
-            return self.end()
+            phase = self.phase()
+            STATE["errors"][phase] = traceback.format_exc()
+            print(f"phase {phase} failed:\n{STATE['errors'][phase]}", flush=True)
+            if phase not in NEXT_PHASE_START:
+                return self.end()
+            self.go("recover_" + phase)
+            return 0.1
+
+    def step_recover_main(self):
+        return self.recover("g_start")
+
+    def step_recover_grow(self):
+        return self.recover("cam_setup")
+
+    def recover(self, next_step):
+        """Back to a plain viewport so the next phase starts from a known state."""
+        win, area, region = self.find_area()
+        if STATE.get("maximized"):
+            self.toggle_maximize()
+        area.spaces.active.shading.type = "SOLID"
+        self.go("recover_wait")
+        self.next_after_recover = next_step
+        return 1.0
+
+    def step_recover_wait(self):
+        self.go(self.next_after_recover)
+        return 0.1
+
+    def toggle_maximize(self):
+        win, area, region = self.find_area()
+        with bpy.context.temp_override(window=win, area=area, region=region):
+            bpy.ops.screen.screen_full_area(use_hide_panels=True)
+        STATE["maximized"] = not STATE.get("maximized", False)
 
     # ---- steps
 
@@ -121,6 +195,7 @@ class Driver:
             return 0.2
         if self.job.frames is None:
             self.job.frames = []
+            self.job.acquired = []
             self.job.events.append("frame log on")
         if not self.job.frames:
             if self.timed_out():
@@ -197,7 +272,13 @@ class Driver:
             return 0.1
         STATE["events_after_view"] = list(self.job.events)
         STATE["gens"] = [f["generation"] for f in self.job.frames]
+        STATE["acquired"] = list(self.job.acquired)
         STATE["all_frames"] = list(self.job.frames)
+        # Leaving Rendered: the spy keeps the session "not yet closed" for 4 polls of the destroying timer.
+        self.spy = LibSpy(self.job.lib, self.job.abi)
+        self.spy.hold[self.job.session.value] = 4
+        STATE["main_session"], STATE["main_scene"] = self.job.session.value, self.job.scene_h.value
+        self.job.lib = self.spy
         _, area, _ = self.find_area()
         area.spaces.active.shading.type = "SOLID"  # Blender frees the engine: __del__ closes the session
         self.go("closing")
@@ -210,8 +291,82 @@ class Driver:
             return 0.1
         STATE["events_final"] = list(self.job.events)
         STATE["handles_final"] = (self.job.session.value, self.job.scene_h.value)
-        self.go("cam_setup")
+        STATE["close_native"] = self.spy.native()
+        STATE["close_calls"] = list(self.spy.calls)
+        self.go("g_start")
+        return 0.5
+
+    def step_g_start(self):
+        """Rendered again on A1 with a coloured sphere, so that a swapped half pair in the unpack shows."""
+        scene = bpy.context.scene
+        sphere = next(o for o in scene.objects if o.type == "MESH")
+        sphere.material_slots[0].material.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = \
+            (0.9, 0.25, 0.05, 1.0)
+        sphere.location = (0.0, 0.0, 0.0)
+        _, area, region = self.find_area()
+        area.spaces.active.shading.type = "RENDERED"
+        STATE["grow_region_before"] = (region.width, region.height)
+        self.go("g_first")
+        return 0.2
+
+    def step_g_first(self):
+        job = self.find_job()
+        if job is None:
+            if self.timed_out():
+                raise RuntimeError("no viewport job appeared (grow phase)")
+            return 0.1
+        self.job = job
+        self.job.frames, self.job.acquired = [], []
+        self.job.present.set_stripe_bytes(SMALL_STRIPE_ROWS * STATE["grow_region_before"][0] * 8)
+        self.job.check_uploads = 3
+        self.go("g_checks")
+        return 0.2
+
+    def step_g_checks(self):
+        if len(self.job.upload_checks) < 3:
+            if self.timed_out():
+                raise RuntimeError(f"no read-back checks; events {self.job.events}")
+            return 0.1
+        STATE["upload_checks"] = list(self.job.upload_checks)
+        # The region outgrows the session's film: maximise the area. The spy holds the old session "open".
+        self.spy = LibSpy(self.job.lib, self.job.abi)
+        old = self.job.session.value
+        self.spy.hold[old] = 30
+        self.job.lib = self.spy
+        STATE["grow_old_session"] = old
+        self.job.events.append("grow")
+        self.toggle_maximize()
+        STATE["t_grow"] = time.monotonic()
+        self.job.frames = []
+        self.go("g_after")
         return 0.1
+
+    def step_g_after(self):
+        _, _, region = self.find_area()
+        size = (region.width, region.height)
+        done = [c for c in self.spy.native(STATE["grow_old_session"]) if c[0] == "ar_session_destroy"]
+        new_frames = [f for f in self.job.frames if f["size"] == size and size != STATE["grow_region_before"]]
+        if not (done and new_frames):
+            if self.timed_out():
+                raise RuntimeError(f"no new frame / old destroy after growing to {size}; events {self.job.events}")
+            return 0.1
+        STATE["grow_size"] = size
+        STATE["grow_frames"] = list(self.job.frames)
+        STATE["grow_native"] = self.spy.native(STATE["grow_old_session"])
+        STATE["grow_events"] = list(self.job.events)
+        self.toggle_maximize()
+        _, area, _ = self.find_area()
+        area.spaces.active.shading.type = "SOLID"
+        self.go("g_close")
+        return 0.1
+
+    def step_g_close(self):
+        if "destroy_scene" not in self.job.events:
+            if self.timed_out():
+                raise RuntimeError(f"the grown job never destroyed its scene; events {self.job.events}")
+            return 0.1
+        self.go("cam_setup")
+        return 0.5
 
     def step_cam_setup(self):
         """A scene without a camera, plus an area lamp and a textured plane, in a user (not camera) view."""
@@ -293,10 +448,19 @@ class Driver:
         return None
 
 
+PHASE_OF = {
+    "test_gpu_unpack_matches_host": "grow", "test_region_growth_retires_session": "grow",
+    "test_camera_less_scene_presents": "p2", "test_acceptance_screenshot": "p2",
+}
+
+
 class TestPresent(unittest.TestCase):
     def setUp(self):
-        if STATE["error"]:
-            self.fail("the viewport sequence did not complete:\n" + STATE["error"])
+        """A case needs its own phase to have completed; an earlier phase that failed does not matter to it
+        except through the state it left (each phase starts from a plain viewport)."""
+        phase = PHASE_OF.get(self._testMethodName, "main")
+        if phase in STATE["errors"]:
+            self.fail(f"the {phase} phase of the viewport sequence did not complete:\n" + STATE["errors"][phase])
 
     def test_first_frame_presents(self):
         """Rendered shading presents a frame of the region's size whose pixels are A1's: the world's 0.8
@@ -320,6 +484,28 @@ class TestPresent(unittest.TestCase):
         print(f"RESULT present generations {g[0]}..{g[-1]} over {len(g)} frames")
         self.assertEqual(g, sorted(g))
         self.assertGreater(g[-1], g[0])
+        # Every frame the viewport acquired, shown or not: a frame older than one already shown was refused.
+        shown, rejected = -1, 0
+        for a in STATE["acquired"]:
+            if a["presented"]:
+                self.assertGreaterEqual(a["generation"], shown, f"a stale frame was presented: {a}")
+                shown = a["generation"]
+            else:
+                rejected += 1
+                self.assertLess(a["generation"], shown, f"a current frame was refused: {a}")
+        print(f"RESULT present acquired {len(STATE['acquired'])} frames, {rejected} refused as stale")
+
+    def test_stale_frame_is_refused(self):
+        """d25 directly: with generation 5 on screen, a frame of generation 4 is not wanted, 5 and 6 are. The
+        engine offers no stale frame in a normal run, so the rule is fed one."""
+        pres = importlib.import_module(MODULE + ".present")
+        abi = importlib.import_module(MODULE + "._abi")
+        p = pres.Present()
+        p.generation = 5
+        f = abi.ar_display_frame()
+        for gen, want in ((4, False), (0, False), (5, True), (6, True)):
+            f.generation = gen
+            self.assertEqual(p.wants(f), want, f"generation {gen} against 5")
 
     def test_edit_changes_frame(self):
         """A scripted object move sends a delta (no full resync) and the next presented frame has a newer
@@ -400,14 +586,74 @@ class TestPresent(unittest.TestCase):
         colour = reg[int(h * 0.226):int(h * 0.329), int(w * 0.325):int(w * 0.425)]
         self.assertLess(float(np.abs(colour[:, :, 0] - colour[:, :, 1]).mean()), 0.05)  # grey, not magenta
 
+    def test_padded_frame_is_refused(self):
+        """The unpack shader indexes rows by width, so a frame with padded rows or another format is refused
+        with a clear message rather than shown sheared."""
+        pres = importlib.import_module(MODULE + ".present")
+        abi = importlib.import_module(MODULE + "._abi")
+        f = abi.ar_display_frame()
+        f.width, f.height, f.format, f.row_bytes = 32, 4, 0, 32 * 8
+        pres.check_layout(f)
+        f.row_bytes = 32 * 8 + 16
+        with self.assertRaisesRegex(ValueError, "row_bytes .* not width\*8"):
+            pres.check_layout(f)
+        f.row_bytes, f.format = 32 * 8, 1
+        with self.assertRaisesRegex(ValueError, "not RGBA16F"):
+            pres.check_layout(f)
+
     def test_close_destroys(self):
-        """Leaving Rendered closes the session at once and the timer destroys session, then scene, once
-        CLOSED is reported."""
-        ev = STATE["events_final"]
-        print(f"RESULT present lifecycle {ev}")
-        tail = [e for e in ev if e in ("session_close", "closed_seen", "destroy_session", "destroy_scene")]
-        self.assertEqual(tail, ["session_close", "closed_seen", "destroy_session", "destroy_scene"])
+        """Leaving Rendered: the native calls, as the spy saw them, are ar_session_close, ar_session_destroy,
+        ar_scene_destroy in that order, on the job's own handles."""
+        names = [(c[0], c[1]) for c in STATE["close_native"]]
+        print(f"RESULT present close native calls {names}")
+        s, sc = STATE["main_session"], STATE["main_scene"]
+        self.assertEqual(names, [("ar_session_close", s), ("ar_session_destroy", s), ("ar_scene_destroy", sc)])
         self.assertEqual(STATE["handles_final"], (None, None))
+
+    def test_close_waits_for_closed(self):
+        """The destroy waits for CLOSED: the spy kept the closed session reporting RENDERING for 4 polls, and
+        the destroy came after those polls, when the last state the job saw was CLOSED."""
+        abi_closed = importlib.import_module(MODULE + "._abi").AR_STATE_CLOSED
+        s = STATE["main_session"]
+        calls = STATE["close_calls"]
+        i = next(k for k, c in enumerate(calls) if c[0] == "ar_session_destroy" and c[1] == s)
+        before = [c[2] for c in calls[:i] if c[0] == "progress" and c[1] == s]
+        print(f"RESULT present close: states seen before the destroy {before}, state at the destroy {calls[i][2]}")
+        self.assertEqual(calls[i][2], abi_closed)
+        self.assertEqual(sum(1 for st in before if st != abi_closed), 4)
+
+    def test_gpu_unpack_matches_host(self):
+        """The persistent texture read back from the GPU equals the host frame, bit for bit in half precision,
+        on a coloured scene (a swapped half pair would swap red/green with blue/alpha) with the stripe size
+        forced to 100 rows, so several stripes and row offsets are exercised."""
+        checks = STATE["upload_checks"]
+        for c in checks:
+            print(f"RESULT present gpu unpack {c['size']} in {c['stripes']} stripes: max diff {c['max_diff']:.3g}, "
+                  f"largest channel spread in the frame {c['colour_spread']:.3f}")
+            self.assertGreater(c["stripes"], 5)
+            self.assertEqual(c["max_diff"], 0.0)
+            self.assertGreater(c["colour_spread"], 0.3)  # coloured pixels exist, so a channel mix-up cannot hide
+
+    def test_region_growth_retires_session(self):
+        """A region that outgrows the session's film gets a new session and a frame of the new size, and the
+        old session is closed at once and destroyed by the timer only after it reported CLOSED, while frames
+        kept being presented: the draw never waited for it."""
+        abi_closed = importlib.import_module(MODULE + "._abi").AR_STATE_CLOSED
+        old = STATE["grow_old_session"]
+        native_calls = STATE["grow_native"]
+        names = [c[0] for c in native_calls]
+        print(f"RESULT present growth {STATE['grow_region_before']} -> {STATE['grow_size']}: old session calls {names}, "
+              f"events {[e for e in STATE['grow_events'] if e != 'frame log on']}")
+        self.assertEqual(names, ["ar_session_close", "ar_session_destroy"])
+        self.assertEqual(native_calls[1][2], abi_closed)
+        self.assertIn("replace_session", STATE["grow_events"])
+        self.assertIn("destroy_session via timer", STATE["grow_events"])
+        t_close, t_destroy = native_calls[0][3], native_calls[1][3]
+        between = [f for f in STATE["grow_frames"] if t_close < f["t"] < t_destroy]
+        print(f"RESULT present growth: destroy {1000 * (t_destroy - t_close):.0f} ms after the close, "
+              f"{len(between)} frames presented in between")
+        self.assertGreater(t_destroy - t_close, 1.0)  # 30 held polls of 50 ms
+        self.assertGreater(len(between), 0)
 
 
 def run_cases():
@@ -448,6 +694,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        STATE["error"] = traceback.format_exc()
-        print(STATE["error"], flush=True)
+        STATE["errors"]["main"] = traceback.format_exc()
+        print(STATE["errors"]["main"], flush=True)
         run_cases()

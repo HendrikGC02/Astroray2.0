@@ -39,8 +39,22 @@ def _compute_shader():
     return gpu.shader.create_from_info(info)
 
 
+DISPLAY_FORMAT_RGBA16F = 0  # include/astroray/astroray.h AR_DISPLAY_FORMAT_RGBA16F
+
+
+def check_layout(frame):
+    """The unpack shader indexes rows by width: padded rows or another format would shear or garble the
+    picture, so they are refused (the engine writes tightly packed RGBA16F, 0007 appendix)."""
+    if frame.format != DISPLAY_FORMAT_RGBA16F:
+        raise ValueError(f"astroray: display frame format {frame.format} is not RGBA16F")
+    if frame.row_bytes != frame.width * 8:
+        raise ValueError(f"astroray: display frame row_bytes {frame.row_bytes} is not width*8 "
+                         f"{frame.width * 8}; padded rows are not supported")
+
+
 def frame_words(frame):
     """The frame's pinned host memory as uint32 words, no copy; valid until ar_display_release."""
+    check_layout(frame)
     n = frame.row_bytes * frame.height // 4
     addr = ctypes.cast(frame.data, ctypes.c_void_p).value
     return np.ctypeslib.as_array((ctypes.c_uint32 * n).from_address(addr))
@@ -49,11 +63,11 @@ def frame_words(frame):
 class _Target:
     """The texture and stripe buffers of one frame size."""
 
-    def __init__(self, width, height, row_words):
+    def __init__(self, width, height, row_words, stripe_bytes):
         import gpu
         self.width, self.height = width, height
         self.texture = gpu.types.GPUTexture((width, height), format="RGBA16F")
-        rows = max(1, STRIPE_BYTES // (row_words * 4))
+        rows = max(1, stripe_bytes // (row_words * 4))
         self.stripes = [(r0, min(height, r0 + rows)) for r0 in range(0, height, rows)]
         self.buffers = None  # created by the first upload, which has the data to size them from
 
@@ -61,7 +75,8 @@ class _Target:
 class Present:
     """Uploads display frames and draws the newest one. No instance is shared between viewports."""
 
-    def __init__(self):
+    def __init__(self, stripe_bytes=STRIPE_BYTES):
+        self.stripe_bytes = stripe_bytes  # a test makes it small to exercise several stripes
         self._shader = None
         self._targets = []   # most recently used last
         self._shown = None   # the target holding the frame on screen
@@ -71,6 +86,17 @@ class Present:
     def wants(self, frame):
         """d25: only a frame of generation >= the one on screen may replace it."""
         return frame.generation >= self.generation
+
+    def set_stripe_bytes(self, n):
+        """Test-only: restripe from the next upload on."""
+        self.stripe_bytes = n
+        self._targets.clear()
+        self._shown = None
+
+    def read_back(self):
+        """The persistent texture as (height, width, 4) float32; for tests, it stalls the GPU."""
+        t = self._shown
+        return np.array(t.texture.read(), np.float32).reshape(t.height, t.width, 4)
 
     def upload(self, frame):
         import gpu
@@ -106,7 +132,7 @@ class Present:
                 self._targets.remove(t)
                 self._targets.append(t)
                 return t
-        t = _Target(width, height, row_words)
+        t = _Target(width, height, row_words, self.stripe_bytes)
         self._targets.append(t)
         del self._targets[:-CACHED_SIZES]
         return t
