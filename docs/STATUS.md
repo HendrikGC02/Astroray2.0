@@ -42,5 +42,6 @@ None. Unowned follow-ups (a task that touches the area takes them):
   AUTO); a spectral AR_SPECTRUM_BLACKBODY lamp option (082 folds temperature to RGB as Cycles does).
 
 ## Budget headroom
-Landing gates run 77-110 s of B-09's 180 s (kernel part 14-40 s of 120 s; 084 adds a ~21 s Blender smoke); `check fast` 5-7 s warm,
+Landing gates run ~138 s of B-09's 180 s after 106 (kernel part ~36 s of 120 s; Blender smoke ~18-21 s,
+analytic ~20 s per device); 076 (+20 s) and 107 (+10 s) are budgeted into the rest, so new gate work must find time; `check fast` 5-7 s warm,
 9-10 s after a header rebuild (B-08 is 10 s). Spike numbers: docs/spikes/*/RESULTS.md.
