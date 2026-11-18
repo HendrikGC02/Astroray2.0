@@ -15,12 +15,18 @@ namespace astroray::host {
 
 struct TestHooks {
   uint32_t bits = 0;                // SessionUniforms::test_hooks
-  std::vector<std::string> active;  // names of the hooks that are on, for the CLI's report
+  std::vector<std::string> active;  // names of the hooks that are on, for the session's report
+  uint64_t pool_main = 0;           // ASTRORAY_TEST_POOL: main-pool capacity, 0 = the device default
+  uint64_t pool_shadow = 0;         // ASTRORAY_TEST_POOL: shadow-pool capacity, 0 = twice the main pool
+  uint32_t threads = 0;             // ASTRORAY_TEST_THREADS: CPU session workers, 0 = one per core
+  bool unit_radiance_scale = false; // ASTRORAY_TEST_RADIANCE_SCALE=1: s = 1 (0003 check 15)
 };
 
 // Any value but "" and "0" turns a flag hook on. ASTRORAY_TEST_NEE takes on, off or light_only
-// (RULINGS.md 77) and throws std::invalid_argument on any other non-empty value. Empty in builds
-// without AR_GATE_HOOKS.
+// (RULINGS.md 77), ASTRORAY_TEST_POOL takes MAIN[,SHADOW] capacities (SHADOW at least the largest
+// shadow items one item emits per step, or the producers could never launch), ASTRORAY_TEST_THREADS
+// a positive worker count and ASTRORAY_TEST_RADIANCE_SCALE exactly "1"; each throws
+// std::invalid_argument on any other non-empty value. Empty in builds without AR_GATE_HOOKS.
 TestHooks read_test_hooks();
 
 }  // namespace astroray::host

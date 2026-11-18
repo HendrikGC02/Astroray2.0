@@ -84,9 +84,17 @@ Session::Session(Scene& scene, Device& device, const SessionOptions& options)
   layout_ = FilmLayout::build(film_request(options, scene.settings().get(), &unknown));
   render_size_ = uint64_t(options.max_width) << 32 | options.max_height;
   hooks_ = read_test_hooks();
+  // A test hook changes what a render measures, so each active one is visible in the report (0001
+  // D2.11 TEST_HOOK_ACTIVE); production builds have none.
+  for (const std::string& name : hooks_.active) {
+    const double value[2] = {0.0, 0.0};
+    report_.raise(AR_REPORT_TEST_HOOK_ACTIVE, 0, name, 1, value, 0);
+  }
   SchedulerConfig cfg;
   cfg.report = &report_;
   cfg.owner = options.owner;
+  cfg.capacity_override = hooks_.pool_main;
+  cfg.shadow_capacity_override = hooks_.pool_shadow;
   scheduler_ = std::make_unique<Scheduler>(device_, cfg);
   // Registered before the thread starts, so a commit activated meanwhile is never missed.
   listener_ = scene_.generations().add_listener([this] { scene_generation_activated(); });
@@ -836,7 +844,15 @@ void Session::render_loop() {
       sync_film();  // a changed pass request rebuilds the film here, before the reset
       begin_epoch();
       const LightTable* lt = tables_ ? tables_->lights.get() : nullptr;
-      film_->data().inv_radiance_scale = lt ? 1.0 / lt->radiance_scale : 1.0;
+      const double inv_s = lt ? 1.0 / lt->radiance_scale : 1.0;
+      if (inv_s != film_->data().inv_radiance_scale) {
+        // s is invisible in the film by design (0003 d10), so the log is where a test (0003 check 15)
+        // sees the value the render used.
+        int e = 0;
+        std::frexp(inv_s, &e);  // inv_s = 2^-k exactly, so e = 1 - k
+        ctx_.log.line("INFO", "session: radiance scale s = 2^" + std::to_string(1 - e));
+      }
+      film_->data().inv_radiance_scale = inv_s;
     }
     apply_view();
     if (lr.changed) update_camera_and_filter(lr.generation);

@@ -119,6 +119,12 @@ try {
         & $py -I tools/analytic.py --gate --device cpu } },
     @{ Name = 'analytic cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Run = {
         & $py -I tools/analytic.py --gate --device cuda } },
+    # 076: Russian roulette furnace, shadow lifetime, closed box, radiance scale (0004 D2, D4/D5, D28;
+    # 0003 check 15) and the B-16 work counters against tests/budgets/counters.toml; the tripwire on cuda.
+    @{ Name = 'integrator cpu'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Run = {
+        & $py -I tools/integrator_checks.py --gate --device cpu } },
+    @{ Name = 'integrator cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Run = {
+        & $py -I tools/integrator_checks.py --gate --device cuda } },
     @{ Name = 'cpu gate tests'; Tag = 'cpu'; Lock = $true; Identity = $exe; Run = { & $exe --tier=gate } },
     # B-24 compile row (0009 d13, 0005 V7): the test prints the median compile time of a fixed
     # 100-node graph; the limit is the "ms per 100 nodes" figure of the row in budgets.toml.

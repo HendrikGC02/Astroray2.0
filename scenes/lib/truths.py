@@ -6,7 +6,7 @@ A truth function takes the [truth] table and the image size and returns a list o
 truth is an (height, width) array in display units (working-space RGB, film exposure 1). kind
 "pixels" tests every pixel, "image" tests the image mean; "pair_pixels" and "pair_image" compare
 two renders instead (mode_agreement). Every check is one member of the
-analytic family per device (tools/analytic.py).
+analytic family per device (tools/analytic.py; tools/integrator_checks.py for uniform_enclosure).
 Ref: docs/decisions/0009-build-test-process.md d16, d20; 0003 d11 (display Y, the unit anchor);
 src/host/data_resource.h (observer.bin layout).
 """
@@ -274,9 +274,29 @@ def mode_agreement(t, width, height):
     return checks
 
 
+def uniform_enclosure(t, width, height):
+    """d2, d4: a camera inside a closed enclosure every surface of which is grey Lambertian of albedo
+    rho and emits white radiance Le, black world. The radiance leaving every point is then the same,
+    and with at most D = max_depth bounces a path that has made k bounces adds Le rho^k in
+    expectation (emission is counted at the hit before the bounce limit ends the path), so every
+    pixel is Le sum_{k=0..D} rho^k = Le (1 - rho^(D+1)) / (1 - rho), which tends to Le / (1 - rho)
+    (0004 D2 row) as D grows. It holds with Russian roulette on or off and whatever opaque occluders
+    the enclosure holds, as long as they carry the same material. One check: display Y per pixel,
+    which tools/integrator_checks.py tests in [truth] block x block blocks.
+    Ref: docs/decisions/0004-integrator.md D2 (Verification row); Pharr, Jakob and Humphreys,
+    Physically Based Rendering 4th ed., sec. 13.1 (the Neumann series of the rendering equation)."""
+    rho, le, depth = float(t["rho"]), float(t["radiance"]), int(t["max_depth"])
+    if not 0.0 <= rho < 1.0 or depth < 0:
+        raise ValueError("uniform_enclosure needs 0 <= rho < 1 and max_depth >= 0")
+    row = working_luminance_row()
+    value = le * (1.0 - rho ** (depth + 1)) / (1.0 - rho) * float(row @ np.ones(3))
+    return [("Y", row, np.full((height, width), value), "pixels")]
+
+
 FORMULAS = {"emitter_radiance": emitter_radiance, "display_luminance": display_luminance,
             "lambertian_furnace": lambertian_furnace, "lamp_over_plane": lamp_over_plane,
-            "disk_over_plane": disk_over_plane, "lit_furnace": lit_furnace, "mode_agreement": mode_agreement}
+            "disk_over_plane": disk_over_plane, "lit_furnace": lit_furnace, "mode_agreement": mode_agreement,
+            "uniform_enclosure": uniform_enclosure}
 
 
 def evaluate(truth_table, width, height):

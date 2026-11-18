@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0004 D28 and 0008 V8 statistics: a pinhole camera inside a closed grey Lambertian box lit by a
+# point lamp inside it, black world, Russian roulette off (min_bounces = max_depth + 1). No path can
+# escape or lose its throughput, so every camera sample ends at MAX_BOUNCE after exactly max_depth
+# bounces. tools/integrator_checks.py checks, exactly: the samples resolved equal the camera samples
+# launched (size^2 spp), one path end per sample, and a bounce mean and maximum of max_depth in every
+# pixel. Also a B-16 work-counter fixture (0009 d18) and, as the largest one, the tripwire's scene.
+class = "D"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+[truth]
+rho = 0.7
+max_depth = 4
+size = 64
+spp = 4
+box_size = [2.0, 3.0, 2.0]
+lamp_position = [0.3, 0.8, 0.5]
+lamp_power = 20.0
+focal_mm = 20.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "exact"
