@@ -256,6 +256,10 @@ bool Session::wait(uint32_t timeout_ms) {
   }
 }
 
+double Session::now_s() {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 void Session::set_view(const ar_view_desc& view) {
   if (view.region_width == 0 || view.region_height == 0 || view.region_width > options_.max_width ||
       view.region_height > options_.max_height)
@@ -273,6 +277,7 @@ void Session::set_view(const ar_view_desc& view) {
     std::lock_guard<std::mutex> lock(mutex_);
     throw_if_failed_locked("set_view");
   }
+  batching_.note_view(StoredView::copy_of(view), now_s());
   if (latch_.set_view(view)) wake();
   raise_interrupt_if_due();
 }
@@ -291,6 +296,7 @@ void Session::set_display_mode(uint32_t mode) {
 void Session::scene_generation_activated() {
   // Runs on the thread that activated the generation: nothing may escape into it.
   try {
+    batching_.note_commit(now_s());
     if (latch_.pending(scene_.generations().active())) wake();
     raise_interrupt_if_due();
   } catch (const std::exception& e) {
@@ -594,6 +600,7 @@ void Session::begin_epoch() {
   }
   pass_index_ = 0;
   passes_in_epoch_ = 0;
+  unpresented_ = 0;
   film_epoch_ = latch_.epoch();
 }
 
@@ -904,7 +911,30 @@ void Session::render_loop() {
       last_pass_ms_ = took.count();
       last_counters_ = scheduler_->counters();
     }
-    if (need_pass || lr.changed) present(lr.generation);
+    // 0007 d50: during interaction every pass is a displayed update; afterwards several passes
+    // run between updates (0009 B-34). The last pass before the session idles always presents, as
+    // does a display-mode change and a latch with no pass to follow it.
+    bool show = lr.changed && !need_pass;
+    if (need_pass) {
+      ++unpresented_;
+      const double t = now_s();
+      bool done;
+      uint64_t samples;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        done = converged_locked();
+        samples = stats_.samples_done;
+      }
+      const bool mode_change = lr.changed && !lr.new_epoch;
+      show = done || mode_change ||
+             (unpresented_ >= batching_.passes_per_update(t, last_pass_ms_ * 1e-3, samples) &&
+              t - last_present_s_ >= batching_.publish_gap_s(t));
+    }
+    if (show) {
+      present(lr.generation);
+      unpresented_ = 0;
+      last_present_s_ = now_s();
+    }
     render.unlock();
     std::lock_guard<std::mutex> lock(mutex_);
     if (converged_locked() && !latch_.pending(scene_.generations().active())) idle_ = true;

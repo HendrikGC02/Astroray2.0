@@ -37,6 +37,7 @@
 #include "host/session/readback.h"
 #include "host/scheduler.h"
 #include "host/scene/scene.h"
+#include "host/session/batching.h"
 #include "host/session/kg_builder.h"
 #include "host/session/latch.h"
 #include "host/session/test_hooks.h"
@@ -200,6 +201,7 @@ class Session {
   uint64_t pass_camera_samples() const;
   void resolve(uint64_t pass_epoch, uint64_t generation);
   void present(uint64_t generation);
+  static double now_s();  // seconds on steady_clock, the one clock batching_ sees
   void wake();
   void raise_interrupt_if_due();
   void fail(const std::string& why, const DeviceError* device_error = nullptr);
@@ -253,6 +255,9 @@ class Session {
   uint64_t passes_in_epoch_ = 0;
   uint32_t pass_index_ = 0;
   uint64_t resolves_ = 0;           // resolve calls over the session (the stale-resolve test hook)
+  Batching batching_;               // interaction and passes per displayed update (0007 d49, d50)
+  uint32_t unpresented_ = 0;        // resolved passes since the last published frame
+  double last_present_s_ = -1e9;    // now_s() of the last present
   bool expect_epoch_ = false;       // the last pass was interrupted: the next latch forces an epoch
 
   mutable std::mutex render_mutex_;  // held by the render thread for a pass and its present
