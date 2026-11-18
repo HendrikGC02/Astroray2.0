@@ -155,8 +155,8 @@ class Driver:
     def go(self, name):
         self.step_name, self.step_t0 = name, time.monotonic()
 
-    def timed_out(self):
-        return time.monotonic() - self.step_t0 > STEP_TIMEOUT_S
+    def timed_out(self, limit=STEP_TIMEOUT_S):
+        return time.monotonic() - self.step_t0 > limit
 
     def phase(self):
         n = self.step_name
@@ -249,7 +249,7 @@ class Driver:
         # Early passes of a progressive film are not normalised yet (corner pixels read 0.66..0.82 for the
         # world's 0.8), so the pre-edit frame is taken once the viewport's 64 samples are done.
         if not self.converged():
-            if self.timed_out():
+            if self.timed_out(40.0):  # 64 samples of a 2100x1221 region on the CPU
                 raise RuntimeError("the first generation never converged")
             return 0.1
         self.go("settle_done")
