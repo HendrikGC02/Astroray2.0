@@ -402,6 +402,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   sd.material_headers = as<ar::MaterialHeader>(at(TableId::MATERIAL_HEADERS));
   // The header table's last entry is the default material, one past the counted headers.
   sd.material_header_count = cnt(TableId::MATERIAL_HEADERS) ? cnt(TableId::MATERIAL_HEADERS) - 1u : 0u;
+  n.material_program_count = mats ? mats->program_count : 0u;
   sd.material_programs = as<uint32_t>(at(TableId::MATERIAL_PROGRAMS));
   sd.material_constants = as<ar::ConstantBlock>(at(TableId::MATERIAL_CONSTANTS));
   sd.material_pass_index = as<uint32_t>(at(TableId::MATERIAL_PASS_INDEX));

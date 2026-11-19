@@ -10,6 +10,7 @@
 #include "host/data_resource.h"
 #include "host/light/light_builder.h"
 #include "host/scene/edit.h"
+#include "kernel/stages/sort.h"
 
 namespace astroray::host {
 namespace {
@@ -305,6 +306,7 @@ void MaterialStore::rebuild_locked() {
   a->headers.push_back(h);
   a->constants.push_back(default_.compiled.block);
   a->pass_index.push_back(0u);
+  a->program_count = ar::sort_program_count(a->headers.data(), uint32_t(a->keys.size()));
   const uint64_t bytes = a->bytes();
   const uint64_t id = bytes != 0 ? ledger_->add(Owner{}, LedgerCategory::TABLES, bytes) : 0;
   if (ledger_id_ != 0) ledger_->remove(ledger_id_);

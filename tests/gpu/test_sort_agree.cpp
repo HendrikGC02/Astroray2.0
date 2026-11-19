@@ -247,4 +247,40 @@ TEST_CASE("sort/a warp strides over several tiles") {
   CHECK(cpu_ledger.total() == 0);
 }
 
+TEST_CASE("sort/300 materials over two programs cpu gpu agree with a bucket reference") {
+  // Half the materials fold to constants, half share one program: two programs, so the scheduler
+  // sorts this segment (RULINGS 80), and both devices must equal the stable bucket order.
+  Ledger gpu_ledger, cpu_ledger;
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  ContextState ctx;
+  ThreadPool pool(ctx, 8);
+  CpuDevice cpu(cpu_ledger, pool);
+  cpu.register_kernel(KernelId::SORT_COUNT, &cpu_sort_count);
+  cpu.register_kernel(KernelId::SORT_SCAN, &cpu_sort_scan);
+  cpu.register_kernel(KernelId::SORT_SCATTER, &cpu_sort_scatter);
+  Input in = make_input(300000u, 97, 300, 64, true);
+  for (uint32_t m = 0; m < in.headers; ++m)
+    in.header_table[m] = m % 2 == 0 ? ar::MaterialHeader{0, m, 0, ar::CONSTANT_SURFACE} : ar::MaterialHeader{0, m, 0, 0};
+  const uint32_t programs = ar::sort_program_count(in.header_table.data(), in.headers);
+  CHECK(programs == 2u);
+  REQUIRE(ar::sort_wanted(in.count, programs));
+  std::vector<std::vector<uint32_t>> bucket(in.headers + 1);
+  for (uint32_t i = 0; i < in.count; ++i) {
+    const uint32_t p = in.queue[kSegmentStart + i];
+    bucket[in.material_of(p)].push_back(p);
+  }
+  std::vector<uint32_t> want;
+  for (const std::vector<uint32_t>& b : bucket) want.insert(want.end(), b.begin(), b.end());
+  const std::vector<uint32_t> g = run_sort(*gpu, in, ar::gpu_tile_grid(in.count));
+  const std::vector<uint32_t> c = run_sort(cpu, in, ar::sort_grid(in.count));
+  REQUIRE(g.size() == want.size());
+  REQUIRE(c.size() == want.size());
+  uint64_t gpu_wrong = 0, cpu_wrong = 0;
+  for (size_t i = 0; i < want.size(); ++i) gpu_wrong += g[i] != want[i], cpu_wrong += c[i] != want[i];
+  CHECK(gpu_wrong == 0);
+  CHECK(cpu_wrong == 0);
+  CHECK(gpu_ledger.total() == 0);
+  CHECK(cpu_ledger.total() == 0);
+}
+
 }  // TEST_SUITE

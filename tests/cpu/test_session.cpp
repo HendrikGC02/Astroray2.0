@@ -393,7 +393,7 @@ namespace {
 
 // Every camera path of the pass arrives at SHADE_SURFACE on triangle i % 2 of instance 0, and the
 // stub stage ends it: the sort decision then depends only on the segment size and the scene's
-// material count (kSortMinItems, kSortMinMaterials).
+// program count (kSortMinItems, kSortMinMaterials).
 void gen_to_surface(const ar::KernelGlobals& kg, uint32_t first, uint32_t last) {
   const ar::StepEntry& e = kg.step_table->stage[static_cast<uint32_t>(ar::Stage::TERMINATED)];
   for (uint32_t i = first; i < last; ++i) {
@@ -410,7 +410,11 @@ void surface_terminate(const ar::KernelGlobals& kg, const ar::StepEntry& step, u
     ar::ps_next_stage(kg, kg.main_queue[step.start + i]) = static_cast<uint8_t>(ar::Stage::TERMINATED);
 }
 
-// A quad instanced once with `materials` emission materials in its slot pool.
+// A quad instanced once with `materials` emission materials in its slot pool. Material 0 emits the
+// shading position, a per-point input, so it compiles a program of its own; material 1's graph
+// folds to constants (CONSTANT_SURFACE): `materials` materials run `materials` surface programs.
+// The default material (constant, last in the header table) must not count: with one material it
+// would make a second program.
 void commit_quad(Scene& scene, uint32_t materials) {
   scene.meshes = std::make_shared<MeshStore>();
   scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
@@ -431,7 +435,8 @@ void commit_quad(Scene& scene, uint32_t materials) {
       std::vector<ar_graph_node> nodes(3);
       std::vector<ar_graph_link> links{{0, 0, 2, 0}, {1, 0, 2, 1}};
       std::vector<float> f{1.0f, 0.5f, 0.25f, 1.0f + float(m)};
-      nodes[0].op = uint32_t(ar::Op::CONST_F32X3), nodes[0].f32_count = 3;
+      if (m == 0) nodes[0].op = uint32_t(ar::Op::LOAD_CTX_P);
+      else nodes[0].op = uint32_t(ar::Op::CONST_F32X3), nodes[0].f32_count = 3;
       nodes[1].op = uint32_t(ar::Op::CONST_F32), nodes[1].f32_first = 3, nodes[1].f32_count = 1;
       nodes[2].op = uint32_t(ar::Op::EMIT_LE);
       ar_graph_desc d = {};
@@ -476,10 +481,10 @@ void commit_quad(Scene& scene, uint32_t materials) {
 
 TEST_SUITE("gate") {
 
-TEST_CASE("session/shade_surface items are sorted once the scene has two materials") {
-  // The session hands the pinned table set's material count to the scheduler at each latch, so a
-  // pass whose SHADE_SURFACE segment holds kSortMinItems paths sorts it with two materials and
-  // not with one (0002 D7 step 3).
+TEST_CASE("session/shade_surface items are sorted once the scene has two material programs") {
+  // The session hands the pinned table set's program count to the scheduler at each latch, so a
+  // pass whose SHADE_SURFACE segment holds kSortMinItems paths sorts it with two materials of two
+  // programs and not with one (0002 D7 step 3, RULINGS 80).
   for (uint32_t materials : {2u, 1u}) {
     ContextState ctx;
     Scene scene(ctx, SceneConfig{2, {}, {}});

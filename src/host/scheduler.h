@@ -50,7 +50,8 @@ struct SchedulerConfig {
   // The session's pointers and uniforms (scene, film, tables, active pixels, session). The
   // scheduler fills path, shadow, step_table, the queues and the sort and histogram scratch.
   ar::KernelGlobals globals{};
-  uint32_t material_header_count = 0;  // the scene's, for the sort threshold and its scratch size
+  uint32_t material_header_count = 0;   // the scene's, for the sort's scratch size
+  uint32_t material_program_count = 0;  // its distinct surface programs, for the sort threshold (RULINGS 80)
   uint64_t max_capacity = kMaxPoolCapacity;  // the path-pool row the ledger allows
   uint64_t capacity_override = 0;            // tests: force the pool capacity (still bounded by the work)
   uint64_t shadow_capacity_override = 0;     // tests: force the shadow pool below its default 2 x capacity

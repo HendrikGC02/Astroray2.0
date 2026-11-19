@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# B-5M with every second material's base colour driven by UV (build.py): 300 materials over 151
+# surface programs, for measuring the material sort where programs differ (task 122, RULINGS 80).
+# Geometry, lamp, world, camera and settings are b5m's. Not in a bench set.
+class = "B"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+
+[build]
+on_demand = true
+sources = ["scenes/b5m"]

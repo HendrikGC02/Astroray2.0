@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // sort: a stable counting sort of the SHADE_SURFACE segment by material id, as three kernels
 // (0002 D7 step 3, D8). The host runs it when the segment holds kSortMinItems paths and the
-// scene has kSortMinMaterials materials (launch_config.h) and then reads sort_queue instead of
-// the segment of main_queue.
+// scene's materials run at least kSortMinMaterials distinct surface programs (launch_config.h,
+// RULINGS 80) and then reads sort_queue instead of the segment of main_queue.
 //   count:   per tile of kQueueTile segment items, a histogram of material ids (one row);
 //   scan:    queue_build's single-pass look-back scan (scan_rows_tile, one source) down every
 //            material column of the (tile x material) histogram: row g becomes tile g's
@@ -18,15 +18,24 @@
 // Material id: the material table entry of the hit triangle (instance slice + triangle slot);
 // the default material (an instance with no slice, or no material tables) is id
 // material_header_count, so a scene has material_header_count + 1 bins.
-// kSortMinMaterials is compared with material_header_count (real materials); the default-material
-// bin does not count, so a scene with one material plus default-material hits stays unsorted.
+// kSortMinMaterials is compared with the number of distinct surface programs among the real
+// materials (sort_program_count); the default material does not count, so a scene with one
+// program plus default-material hits stays unsorted. Sorting buys SIMT coherence only between
+// different programs: materials that share a program and differ in constants gain none and lose
+// path-state locality (RULINGS 80). This departs from Cycles, which sorts shade_surface by
+// shader id (intersect_closest.h passes `shader` as the key of integrator_path_next_sorted,
+// state_flow.h INTEGRATOR_SORT_KEY) whenever that kernel runs (path_trace_work_gpu.cpp,
+// kernel_uses_sorting): a Cycles shader corresponds to a material header here, so Cycles would
+// sort B-5M's 300 shaders. Task 120 measured that sort slower on B-5M, hence the program count.
 // Host contract: after queue_build has finished, launch count and scatter with `sort_grid(count)`
 // on the CPU (an item range) or gpu_tile_grid(count) on the GPU (queue_build.h, a warp per tile)
 // and, between them, scan with `sort_scan_grid(count)`; reallocate sort_counts whenever
 // material_header_count changes. kg.sort_counts holds 2 * queue_tiles(count) * sort_bins(kg)
 // counters (the histogram rows, then one scratch row per scatter tile) and kg.sort_queue
 // `count` indices.
-// Ref: Cycles device/gpu/parallel_sorted_index.h (Apache-2.0) as the pattern; Merrill and
+// Ref: Cycles device/gpu/parallel_sorted_index.h (Apache-2.0) as the pattern; Cycles
+// integrator/path_trace_work_gpu.cpp, kernel/integrator/intersect_closest.h and state_flow.h
+// (Apache-2.0) for the shader-id key; RULINGS 80 for the program rule; Merrill and
 // Garland 2016, NVR-2016-002, sections 4-5, through queue_build.h's scan;
 // docs/decisions/0002-kernel-architecture.md D6, D7 step 3, D8; 0007 d10 (slot lookup).
 #pragma once
@@ -52,15 +61,40 @@ AR_FN uint32_t sort_segment_count(const KernelGlobals& kg) {
 
 AR_FN uint32_t sort_tile_count(const KernelGlobals& kg) { return queue_tiles(sort_segment_count(kg)); }
 
-// True when the scheduler should run the sort: a large enough segment and at least
-// kSortMinMaterials real materials (0002 D7 step 3).
-AR_FN bool sort_wanted(uint32_t segment_count, uint32_t material_header_count) {
-  return segment_count >= kSortMinItems && material_header_count >= kSortMinMaterials;
+// The number of distinct surface programs among headers [0, n) (pass material_header_count, so
+// the default material is not counted). Every CONSTANT_SURFACE header is one shared program: its
+// surface entry never runs (shade_surface resolves the constant block only). Any other header's
+// program is the one at its program_offset; identical bytecode at two offsets counts twice. The
+// material store appends programs in header order (material_store.cpp), so offsets of
+// non-constant headers never decrease and equal offsets are adjacent among them.
+AR_FN uint32_t sort_program_count(const MaterialHeader* headers, uint32_t n) {
+  if (headers == nullptr) return 0u;
+  bool constant = false, any = false;
+  uint32_t programs = 0, last = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    const MaterialHeader& h = headers[i];
+    if ((h.flags & CONSTANT_SURFACE) != 0u) {
+      constant = true;
+      continue;
+    }
+    AR_ASSERT(!any || h.program_offset >= last);
+    if (!any || h.program_offset != last) ++programs;
+    any = true, last = h.program_offset;
+  }
+  return programs + (constant ? 1u : 0u);
 }
-// The same rule on the device-resident table and scene (CPU stages and tests); the host
-// scheduler calls the pure form with the counts it already read.
+
+// True when the scheduler should run the sort: a large enough segment and at least
+// kSortMinMaterials distinct surface programs (0002 D7 step 3, RULINGS 80).
+AR_FN bool sort_wanted(uint32_t segment_count, uint32_t program_count) {
+  return segment_count >= kSortMinItems && program_count >= kSortMinMaterials;
+}
+// The same rule on the device-resident table and scene (CPU stages and tests), counting the
+// programs from the headers; the host scheduler calls the pure form with the count the scene
+// tables computed at upload.
 AR_FN bool sort_wanted(const KernelGlobals& kg) {
-  return sort_wanted(sort_segment_count(kg), scene_of(kg).material_header_count);
+  const SceneData& s = scene_of(kg);
+  return sort_wanted(sort_segment_count(kg), sort_program_count(s.material_headers, s.material_header_count));
 }
 
 // The launch count of count and scatter for a segment of `count` items.

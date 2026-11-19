@@ -39,8 +39,9 @@ struct Rig {
   ar::SceneData scene{};
   std::unique_ptr<Scheduler> sched;
 
+  // programs: the scene's distinct surface programs (the sort threshold); by default one per material.
   Rig(uint32_t cameras, uint32_t lights, uint64_t capacity, bool permute = false, uint32_t materials = 0,
-      CpuStageFn surface = &stub::shade_surface)
+      CpuStageFn surface = &stub::shade_surface, int64_t programs = -1)
       : pool(ctx, 8), dev(ledger, pool), res(cameras, lights) {
     dev.register_scheduler_kernels();
     dev.register_kernel(KernelId::GENERATE_CAMERA, &stub::generate_camera);
@@ -57,6 +58,7 @@ struct Rig {
     cfg.globals.film = reinterpret_cast<ar::FilmData*>(&res);
     cfg.globals.scene = &scene;
     cfg.material_header_count = materials;
+    cfg.material_program_count = programs < 0 ? materials : uint32_t(programs);
     cfg.capacity_override = capacity;
     cfg.permute = permute;
     sched = std::make_unique<Scheduler>(dev, cfg);
@@ -156,10 +158,11 @@ TEST_CASE("scheduler/permute invariance") {
 }
 
 TEST_CASE("scheduler/sort host contract") {
-  // 300000 paths in a 2^18 pool with 2 materials (default-material hits): the SHADE_SURFACE segment
-  // passes kSortMinItems, the sort runs, and the result equals the unsorted run.
+  // 300000 paths in a 2^18 pool with 2 materials of 2 programs (default-material hits): the
+  // SHADE_SURFACE segment passes kSortMinItems, the sort runs, and the result equals the unsorted
+  // run, whose 2 materials share one program (RULINGS 80: the threshold counts programs).
   Rig sorted(200000, 100000, 1u << 18, false, 2);
-  Rig plain(200000, 100000, 1u << 18, false, 0);
+  Rig plain(200000, 100000, 1u << 18, false, 2, &stub::shade_surface, 1);
   REQUIRE(sorted.run() == PassStatus::COMPLETE);
   REQUIRE(plain.run() == PassStatus::COMPLETE);
   CHECK(sorted.sched->counters().sorts > 0);

@@ -99,7 +99,8 @@ inline constexpr uint32_t kQueueScanRows = 32;
 inline constexpr uint32_t kQueueLanes = 32;
 
 // The shade_surface material sort runs when the segment holds at least kSortMinItems paths and
-// the scene has at least kSortMinMaterials materials; the scheduler (045) reads both.
+// the scene's materials run at least kSortMinMaterials distinct surface programs (RULINGS 80,
+// sort.h sort_program_count); the scheduler (045) reads both.
 // PROVISIONAL: set by build-phase measurement (0002 D7 step 3, Risks item 7).
 inline constexpr uint32_t kSortMinItems = 65536;
 inline constexpr uint32_t kSortMinMaterials = 2;
