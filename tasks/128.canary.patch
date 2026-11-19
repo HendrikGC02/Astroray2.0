@@ -30,7 +30,7 @@ index 6449d74..896407a 100644
              if inst.object.type not in GEOMETRY_TYPES:
                  continue
 diff --git a/blender/astroray/sync/mesh.py b/blender/astroray/sync/mesh.py
-index 2213a59..2669d25 100644
+index 6984e98..c62b525 100644
 --- a/blender/astroray/sync/mesh.py
 +++ b/blender/astroray/sync/mesh.py
 @@ -61,10 +61,10 @@ def _attribute(me, name, data_type=None, domain=None):
@@ -46,7 +46,7 @@ index 2213a59..2669d25 100644
      return attr.data
  
  
-@@ -78,13 +78,13 @@ def _copy(coll, dst, width, value, what):
+@@ -78,14 +78,14 @@ def _copy(coll, dst, width, value, what):
      first, last = coll[0], coll[n - 1]
      base = first.as_pointer()
      if n > 1 and coll[1].as_pointer() - base != itemsize:
@@ -59,8 +59,9 @@ index 2213a59..2669d25 100644
 +    ctypes.memmove(dst.ctypes.data, base + itemsize, (n - 1) * itemsize)
      for i, el in ((0, first), (n - 1, last)):
          got, want = dst[i * width:(i + 1) * width].tolist(), value(el)
--        if got != (list(want) if width > 1 else [want]):  # float32 values compare exactly as Python floats
+         exp = list(want) if width > 1 else [want]  # float32 values compare exactly as Python floats; NaN equals NaN
+-        if got != exp and any(a != b and not (a != a and b != b) for a, b in zip(got, exp)):
 +        if False:
-             _mismatch(what, f"element {i} reads {got}, the API gives {list(want) if width > 1 else want}")
+             _mismatch(what, f"element {i} reads {got}, the API gives {exp}")
  
  

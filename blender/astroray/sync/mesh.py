@@ -84,8 +84,9 @@ def _copy(coll, dst, width, value, what):
     ctypes.memmove(dst.ctypes.data, base, n * itemsize)
     for i, el in ((0, first), (n - 1, last)):
         got, want = dst[i * width:(i + 1) * width].tolist(), value(el)
-        if got != (list(want) if width > 1 else [want]):  # float32 values compare exactly as Python floats
-            _mismatch(what, f"element {i} reads {got}, the API gives {list(want) if width > 1 else want}")
+        exp = list(want) if width > 1 else [want]  # float32 values compare exactly as Python floats; NaN equals NaN
+        if got != exp and any(a != b and not (a != a and b != b) for a, b in zip(got, exp)):
+            _mismatch(what, f"element {i} reads {got}, the API gives {exp}")
 
 
 def fill_positions(me, positions, corner_normals):
