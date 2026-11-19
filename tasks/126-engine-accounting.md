@@ -10,7 +10,7 @@ Do:
 3. A statistics-off film request (an ABI change goes through the generator; recorder and replayer follow); toggling it changes the counters (0006 V5 style); measure B-29 (time per 1080p sample on and off, b1m) and set the row from the measurement.
 Acceptance: `pwsh tools/check.ps1 gate` passes; the PR body holds the D13 split and the B-29 numbers.
 Look at: none.
-Canary: tasks/126.canary.patch must turn red: astroray_tests_gpu "engine_accounting/b1m ledger total matches the free-memory drop", astroray_tests_cpu "ledger/categories are the budget table rows then the scene categories", astroray_tests_cpu "session/pass time is published with its sample count", tests/abi/test_session_passes.py "TestSessionPasses.test_statistics_off_and_on"
+Canary: tasks/126.canary.patch must turn red: astroray_tests_gpu "engine_accounting/b1m ledger total matches the free-memory drop", astroray_tests_cpu "ledger/categories are the budget table rows then the scene categories", astroray_tests_cpu "ledger/invalid use throws", astroray_tests_cpu "cpu_device/allocation failures leave no ledger record", astroray_tests_cpu "session/pass time is published with its sample count", tests/abi/test_session_passes.py "TestSessionPasses.test_statistics_off_and_on"
 Budget: under 1 s of gate time for the new tests.
 Depends on: 094.
 Size: M (about 300 lines); stop and report at 2x.

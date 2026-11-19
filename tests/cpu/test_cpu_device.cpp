@@ -406,7 +406,7 @@ TEST_CASE("cpu_device/allocation failures leave no ledger record") {
   CpuDevice dev(ledger, pool);
   CHECK_THROWS_WITH_AS(dev.allocate(LedgerCategory::FILM, 0, {}), "device allocation of zero bytes", std::invalid_argument);
   CHECK_THROWS_AS(dev.allocate(LedgerCategory::FILM, 1ull << 62, {}), std::bad_alloc);
-  CHECK_THROWS_AS(dev.allocate(static_cast<LedgerCategory>(16), 64, {}), std::invalid_argument);
+  CHECK_THROWS_AS(dev.allocate(static_cast<LedgerCategory>(kLedgerCategoryCount), 64, {}), std::invalid_argument);
   CHECK(ledger.total() == 0);
   CHECK(ledger.records().empty());
 

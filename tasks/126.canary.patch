@@ -12,7 +12,7 @@ index 0ccad0e..fa977e6 100644
    std::lock_guard<std::mutex> lock(impl_->records_mutex);
    impl_->records.push_back(id);
 diff --git a/src/host/ledger.cpp b/src/host/ledger.cpp
-index 2dc052f..3430cbd 100644
+index 2dc052f..54320ef 100644
 --- a/src/host/ledger.cpp
 +++ b/src/host/ledger.cpp
 @@ -13,7 +13,7 @@ constexpr const char* kNames[kLedgerCategoryCount] = {
@@ -24,6 +24,14 @@ index 2dc052f..3430cbd 100644
  };
  
  std::string refusal_text(LedgerCategory c, uint64_t need, uint64_t available) {
+@@ -40,7 +40,6 @@ AllocationRefused::AllocationRefused(LedgerCategory category, uint64_t need_byte
+ 
+ uint64_t Ledger::add(Owner owner, LedgerCategory category, uint64_t bytes) {
+   if (bytes == 0) throw std::invalid_argument("ledger: an allocation of zero bytes");
+-  ledger_category_name(category);  // rejects an out-of-range category before recording
+   std::lock_guard<std::mutex> lock(mutex_);
+   const uint64_t id = next_id_++;
+   live_.emplace(id, LedgerRecord{owner, category, bytes});
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
 index c183aca..2d93fd7 100644
 --- a/src/host/session/session.cpp
