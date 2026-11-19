@@ -332,11 +332,16 @@ std::shared_ptr<OptixTlas> OptixAccelBuilder::build_tlas(const InstanceTable* ta
     tlas->buffer = dev.allocate(LedgerCategory::ACCELERATION, std::max<uint64_t>(sizes.outputSizeInBytes, 1), owner_);
     arena = dev.allocate(LedgerCategory::ACCELERATION, std::max<uint64_t>(sizes.tempSizeInBytes, 1), owner_);
     dev.synchronize();
+    // OptiX keeps device memory of its own from the first instance build on (126: ~230 MiB, the
+    // same for 1 and 10,000 instances): charged once, at that build, as DEVICE_CONTEXT (0002 D13).
+    const bool charge = context_.claim_first_instance_build();
+    const uint64_t free_before = charge ? context_.free_bytes() : 0;
     OptixTraversableHandle h = 0;
     context_.check(optixAccelBuild(ctx, static_cast<CUstream>(context_.stream()), &options, &in, 1, dptr(arena),
                                    arena.bytes, dptr(tlas->buffer), tlas->buffer.bytes, &h, nullptr, 0),
                    "optixAccelBuild");
     context_.sync();
+    if (charge) context_.record_drop(free_before);
     tlas->handle = h;
   } catch (...) {
     try {

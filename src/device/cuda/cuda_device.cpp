@@ -322,6 +322,8 @@ struct CudaDevice::Impl {
     if (!globals) throw std::logic_error("CudaDevice: no KernelGlobals bound (call set_kernel_globals first)");
   }
 
+  // A module load has no ledger record: loads measured 0 MiB of free memory at cuMemGetInfo's
+  // resolution (126, every stage module on b5m), as did kernel launches.
   CUmodule load_image(const std::string& label, const ModuleImage& image) {
     CUmodule m = nullptr;
     const CUresult r = cu.cuModuleLoadData_(&m, image.bytes.data());
@@ -751,6 +753,19 @@ void CudaDevice::launch_module_kernel(uint32_t module, const char* function, uin
     }
   }
   s.launch(f, function, blocks, threads, const_cast<void**>(args));
+}
+
+bool CudaDevice::memory_info(uint64_t* free_bytes, uint64_t* total_bytes) {
+  Impl& s = *impl_;
+  *free_bytes = 0;
+  *total_bytes = 0;
+  if (s.dead) return false;
+  s.bind();
+  size_t f = 0, t = 0;
+  s.check(s.cu.cuMemGetInfo_(&f, &t), "cuMemGetInfo");
+  *free_bytes = f;
+  *total_bytes = t;
+  return true;
 }
 
 bool CudaDevice::may_allocate(uint64_t need, uint64_t* available_bytes) {

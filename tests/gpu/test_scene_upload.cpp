@@ -346,8 +346,12 @@ TEST_CASE("scene_upload/material edit uploads only material tables") {
   auto lights = r.scene->lights();
   auto first = acquire_scene_tables(*r.scene);
   std::printf("scene_upload first upload: %llu bytes\n", (unsigned long long)first->bytes_moved);
-  // The ledger holds exactly the set's copies.
-  CHECK(r.held->ledger->total() == set_bytes(*first) + first->accel->bytes);  // the traversal structures are ledgered too
+  // The ledger holds exactly the set's copies, beside OptiX's own memory (DEVICE_CONTEXT, 126), which
+  // stays charged while its context lives.
+  const Ledger& l = *r.held->ledger;
+  const auto tables_and_accel = [&l] { return l.total() - l.category_total(LedgerCategory::DEVICE_CONTEXT); };
+  CHECK(l.category_total(LedgerCategory::DEVICE_CONTEXT) > 0u);
+  CHECK(tables_and_accel() == set_bytes(*first) + first->accel->bytes);  // the traversal structures are ledgered too
 
   r.set_material_43(0.9f);
   lights = r.scene->lights();
@@ -372,10 +376,12 @@ TEST_CASE("scene_upload/material edit uploads only material tables") {
 
   // Retirement: the old copies go with their last holder, the cache now holds only the second set.
   first.reset();
-  CHECK(r.held->ledger->total() == set_bytes(*second) + second->accel->bytes);
+  CHECK(tables_and_accel() == set_bytes(*second) + second->accel->bytes);
   second.reset();
   r.scene->table_cache().current.reset();
-  CHECK(r.held->ledger->total() == 0);
+  CHECK(tables_and_accel() == 0);
+  r.held->accel.reset();  // the OptiX context goes with the builder, and its records with it
+  CHECK(l.category_total(LedgerCategory::DEVICE_CONTEXT) == 0u);
   (void)dev;
 }
 

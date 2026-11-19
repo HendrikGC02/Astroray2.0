@@ -26,7 +26,8 @@ namespace {
 
 #ifdef ASTRORAY_GPU
 // What the CUDA init thread creates, kept alive by the scene: the device charges the scene's
-// ledger, the one its host arrays count in (RULINGS 70).
+// device ledger (RULINGS 70), which holds device memory only; host arrays count in the mesh
+// store's ledger.
 struct CudaInit {
   std::shared_ptr<astroray::host::Ledger> ledger;  // outlives the device
   std::unique_ptr<astroray::host::ModuleDevice> device;
@@ -145,14 +146,15 @@ AR_API ar_status ar_scene_create(ar_context ctx, const ar_scene_desc* desc, ar_s
     cfg.workers = desc->worker_threads;
     uint32_t kind = 0, index = 0;
     astroray::context_device(ctx, &kind, &index);
-    // The mesh store (and with it the scene's ledger) exists before the init thread charges it.
+    // The mesh store and its host ledger; the device ledger exists before the init thread charges it.
     auto meshes = std::make_shared<astroray::host::MeshStore>();
     if (kind == AR_DEVICE_CUDA) {
       const std::string cache_dir = desc->cache_dir ? desc->cache_dir : "";
       if (cache_dir.empty())
         astroray::context_state(ctx).log.line(
             "INFO", "scene create: ar_scene_desc.cache_dir is empty, so the OptiX disk cache is disabled");
-      cuda_init(cfg, index, meshes->shared_ledger(), cache_dir);
+      cfg.device_ledger = std::make_shared<astroray::host::Ledger>();
+      cuda_init(cfg, index, cfg.device_ledger, cache_dir);
     }
     auto h = std::make_unique<ar_scene_s>();
     h->scene = std::make_unique<Scene>(astroray::context_state(ctx), std::move(cfg));

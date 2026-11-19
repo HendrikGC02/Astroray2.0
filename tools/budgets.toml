@@ -178,9 +178,9 @@ provisional = false
 
 [[budget]]
 id = "B-29"
-text = "set from the first measurement"
+text = "≤ 2.4% more time per 1080p sample with every statistic on than off"
 tier = "`full`"
-provisional = true
+provisional = false
 
 [[budget]]
 id = "B-30"

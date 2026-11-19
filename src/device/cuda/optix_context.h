@@ -41,7 +41,25 @@ class OptixContext {
   // Waits for the OptiX stream; throws DeviceError on a CUDA error.
   void sync() const;
 
+  // Device memory OptiX takes for itself, outside any allocation of ours: the context, and a fixed
+  // ~230 MiB inside the first instance-AS build (measured on b1m and b5m alike, 126). free_bytes()
+  // is the device's free memory now; record_drop(before) charges the drop since `before` to the
+  // device's ledger as DEVICE_CONTEXT until this context is destroyed (0002 D13: the ledger total
+  // must match the drop in free bytes). Another thread's allocation or free inside the window moves
+  // the reading too, so the category can over- or under-report; that is why each cost is charged
+  // once, as early as it appears: the context at creation, the instance build at the first one
+  // (claim_first_instance_build). Module loads and OptiX module and pipeline creation measured
+  // 0 MiB at cuMemGetInfo's resolution (126, b5m), so they have no record.
+  uint64_t free_bytes() const;
+  void record_drop(uint64_t free_before);
+  // True exactly once per context: the caller is about to make the context's first instance build
+  // and charges its drop with record_drop.
+  bool claim_first_instance_build();
+  // How many instance builds were charged (tests: 1 after any number of builds).
+  uint32_t instance_build_charges() const;
+
  private:
+  void release_records() noexcept;
   struct Impl;
   Device& device_;
   uint32_t index_;

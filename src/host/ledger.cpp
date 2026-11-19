@@ -13,6 +13,7 @@ constexpr const char* kNames[kLedgerCategoryCount] = {
     "shadow-pass split", "geodesic record", "random-walk record",     "film",
     "tables",            "display frame",   "denoiser",               "DLSS",
     "geometry",          "acceleration",    "textures",               "volumes",
+    "device context",
 };
 
 std::string refusal_text(LedgerCategory c, uint64_t need, uint64_t available) {

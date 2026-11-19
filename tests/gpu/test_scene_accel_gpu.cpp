@@ -273,6 +273,10 @@ TEST_CASE("scene_accel_gpu/ledger and reuse") {
   CHECK(first->accel->bytes > 0u);
   // The structures are in the scene's ledger while a snapshot holds them.
   CHECK(r.held->ledger->category_total(LedgerCategory::ACCELERATION) > 0u);
+  // OptiX's own memory is charged once per context, at its first instance build (126).
+  OptixContext& octx = dynamic_cast<SceneOptixBuilder&>(builder).optix_context();
+  const uint64_t context_bytes = r.held->ledger->category_total(LedgerCategory::DEVICE_CONTEXT);
+  CHECK(octx.instance_build_charges() == 1u);
 
   r.place_quad(2.0f);
   auto second = acquire_scene_tables(*r.scene);
@@ -281,6 +285,9 @@ TEST_CASE("scene_accel_gpu/ledger and reuse") {
   CHECK(b.gas_builds == a.gas_builds);  // the GAS are shared by identity, only the TLAS is new
   CHECK(b.gas_reused == a.gas_reused + 3u);
   CHECK(b.tlas_builds == a.tlas_builds + 1u);
+  // The second TLAS build adds no DEVICE_CONTEXT record.
+  CHECK(octx.instance_build_charges() == 1u);
+  CHECK(r.held->ledger->category_total(LedgerCategory::DEVICE_CONTEXT) == context_bytes);
   // The older snapshot's TLAS stays valid while it is held (RULINGS 70).
   const Rays rays{{0.75f, 0.25f}, {2.75f, 0.25f}};
   const auto on_first = trace_cuda(r, *first, rays), on_second = trace_cuda(r, *second, rays);
@@ -289,11 +296,16 @@ TEST_CASE("scene_accel_gpu/ledger and reuse") {
   CHECK(on_second[0].inst == ar::kNoInstance);
   CHECK(on_second[1].inst == 0u);
 
-  // Last holder gone: nothing of the structures is left in the ledger.
+  // Last holder gone: nothing of the structures is left in the ledger. OptiX's own memory (DEVICE_CONTEXT,
+  // 126) stays charged while its context lives and goes with the builder that owns the context.
   first.reset();
   second.reset();
   r.scene->table_cache().current.reset();
-  CHECK(r.held->ledger->total() == 0u);
+  const Ledger& l = *r.held->ledger;
+  CHECK(l.total() - l.category_total(LedgerCategory::DEVICE_CONTEXT) == 0u);
+  CHECK(l.category_total(LedgerCategory::DEVICE_CONTEXT) > 0u);
+  r.held->accel.reset();
+  CHECK(l.category_total(LedgerCategory::DEVICE_CONTEXT) == 0u);
 }
 
 }  // TEST_SUITE

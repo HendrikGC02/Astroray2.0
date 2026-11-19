@@ -171,6 +171,13 @@ class Device {
   // directory; nothing to do on a device without loose modules (CPU stages are rebuilt and restarted,
   // 0002 D14).
   virtual ModuleReload poll_module_reload() { return {}; }
+  // The device's free and total memory now (cuMemGetInfo on CUDA; 0007 d14 reports both). False,
+  // with both 0, on a device without device memory (CPU) and on a dead one.
+  virtual bool memory_info(uint64_t* free_bytes, uint64_t* total_bytes) {
+    *free_bytes = 0;
+    *total_bytes = 0;
+    return false;
+  }
 
  protected:
   // The device's reserve rule (0007 d14, R19; the CUDA side is 028): true when `need`

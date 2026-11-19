@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <thread>
 #include <utility>
 
 #include "host/data_resource.h"
@@ -45,12 +46,13 @@ bool terminal(uint32_t state) {
 // The film request of the settings `s` (null: none committed yet). Pass names are matched against
 // what list_passes enumerates for a film with every channel this build can produce, so readback's
 // table stays the one mapping from names to channels (0008 d10, d13a). A name outside that list is
-// appended to `unknown`. Combined and the statistics are always on (0008 d12).
+// appended to `unknown`, so a statistics pass requested with the statistics off is one too. Combined
+// is always on; the statistics follow ar_settings.statistics, on unless switched off (0008 d12).
 FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, std::vector<std::string>* unknown) {
   FilmRequest req;
   req.max_width = o.max_width;
   req.max_height = o.max_height;
-  req.statistics = true;  // 0008 d12: on by default; the bounce heat map reads it
+  req.statistics = !s || s->s.statistics != AR_STATISTICS_OFF;  // 0008 d12: on by default
   if (!s || s->passes.empty()) return req;
   FilmRequest all = req;
   all.primary_aov = true;
@@ -347,6 +349,8 @@ SessionProgress Session::progress() const {
   p.samples_per_pixel = uint32_t(stats_.samples_done);
   p.film_epoch = published_film_epoch_;
   p.last_pass_ms = last_pass_ms_;
+  p.device_free_bytes = device_free_bytes_;
+  p.device_total_bytes = device_total_bytes_;
   p.state = state_;
   if (p.state != AR_STATE_CLOSED && ctx_.poisoned.load(std::memory_order_acquire)) p.state = AR_STATE_FAILED;
   return p;
@@ -532,6 +536,7 @@ void Session::sync_film() {
   if (film_ && s == film_settings_) return;
   // Held, not just compared: a new settings object can then never reuse the old one's address.
   film_settings_ = s;
+  stats_display_warned_ = false;
   std::vector<std::string> unknown;
   const FilmLayout layout = FilmLayout::build(film_request(options_, s.get(), &unknown));
   // Ruling 74: one entry per name and settings change, detail = the pass name; the render goes on
@@ -751,14 +756,14 @@ bool Session::latch_tables() {
   return tables_ != before;
 }
 
-void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
+bool Session::resolve(uint64_t pass_epoch, uint64_t generation) {
   ++resolves_;
   if (options_.test_stale_resolve_at_pass != 0 && resolves_ == options_.test_stale_resolve_at_pass) --pass_epoch;
   // Writes carry their epoch; one from an epoch that has been reset since is dropped (0004 D25).
   if (pass_epoch != film_epoch_) {
     std::lock_guard<std::mutex> lock(mutex_);
     ++stats_.stale_dropped;
-    return;
+    return false;
   }
   bind_globals();
   // The resolve counts the pass's invalid samples into FilmData::invalid_total as well as the
@@ -772,15 +777,24 @@ void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
   invalid_.report_pass(pass_invalid, uint64_t(active_->count()) * (kSamplesPerPass + 1), report_, generation);
   ++pass_index_;
   ++passes_in_epoch_;
-  std::lock_guard<std::mutex> lock(mutex_);
-  stats_.samples_done += kSamplesPerPass;
-  ++stats_.passes_resolved;
+  return true;
 }
 
 void Session::present(uint64_t generation) {
   bind_globals();
   const ar::FilmData& f = film_->data();
-  const uint32_t mode = latch_.display_mode();
+  uint32_t mode = latch_.display_mode();
+  if (mode == AR_DISPLAY_BOUNCE_COUNT && !film_->layout().find("bounces")) {
+    // ar_settings.statistics is off, so the film has no bounce channel: the beauty is shown and
+    // one PASS_UNSUPPORTED entry per settings change names the pass the heat map reads (ruling 74's
+    // code and detail), never a silent "no data" map.
+    if (!stats_display_warned_) {
+      const double value[2] = {0.0, 0.0};
+      report_.raise(AR_REPORT_PASS_UNSUPPORTED, 0, "AR Bounces", 1, value, generation);
+      stats_display_warned_ = true;
+    }
+    mode = AR_DISPLAY_BEAUTY;
+  }
   ar::DisplayTarget target{present_buf_.ptr, 0u, 0.0f};
   KernelId kernel = KernelId::FILM_PRESENT;
   DisplayFormat format = DisplayFormat::RGBA16F;
@@ -921,11 +935,23 @@ void Session::render_loop() {
         ++stats_.passes_interrupted;
         continue;
       }
-      resolve(lr.epoch, lr.generation);
+      const bool resolved = resolve(lr.epoch, lr.generation);
       const std::chrono::duration<float, std::milli> took = std::chrono::steady_clock::now() - pass_start;
       batching_.note_pass(double(took.count()) * 1e-3);
+      uint64_t free_bytes = 0, total_bytes = 0;
+      device_.memory_info(&free_bytes, &total_bytes);  // the render thread is the device's only caller here
+      if (options_.test_sleep_after_resolve_ms != 0)
+        std::this_thread::sleep_for(std::chrono::milliseconds(options_.test_sleep_after_resolve_ms));
+      // One hold publishes the pass: a poll that sees the new sample count reads this pass's time
+      // and counters, never the previous pass's.
       std::lock_guard<std::mutex> lock(mutex_);
+      if (resolved) {
+        stats_.samples_done += kSamplesPerPass;
+        ++stats_.passes_resolved;
+      }
       last_pass_ms_ = took.count();
+      device_free_bytes_ = free_bytes;
+      device_total_bytes_ = total_bytes;
       last_counters_ = scheduler_->counters();
     }
     // 0007 d50: during interaction every pass is a displayed update; afterwards several passes
