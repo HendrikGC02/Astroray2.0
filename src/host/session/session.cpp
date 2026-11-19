@@ -1006,9 +1006,13 @@ void Session::render_loop() {
       }
     }
     if (show) {
+      // The gap runs from the start of one present to the start of the next: present() itself (the
+      // present kernel and the ring's download, about 1.5 ms at 1080p) would otherwise add to every
+      // capped interval and hold the rate near 55/s instead of B-34's 60/s.
+      const double present_at = now_s();
       present(lr.generation);
       unpresented_ = 0;
-      last_present_s_ = now_s();
+      last_present_s_ = present_at;
       if (options_.test_record_presents) {
         std::lock_guard<std::mutex> lock(mutex_);
         present_log_.push_back({last_present_s_, stats_.passes_resolved, lr.epoch, interacting, target});

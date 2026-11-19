@@ -285,6 +285,61 @@ TEST_CASE("batching/session passes run back to back during interaction") {
   CHECK(gaps[gaps.size() / 2] < kSlowPassMs * 1e-3 + kInteractionPublishGapS);
 }
 
+namespace {
+// The CPU device with its resolve gated: launch `hold_at` of FILM_RESOLVE waits until released.
+LaunchControl g_resolve;
+struct GatedResolveDevice : CpuDevice {
+  using CpuDevice::CpuDevice;
+  using CpuDevice::launch;
+  void launch(KernelId kernel, uint32_t count) override {
+    if (kernel == KernelId::FILM_RESOLVE) g_resolve.on_launch();
+    CpuDevice::launch(kernel, count);
+  }
+};
+struct GatedRig {
+  Ledger ledger;
+  ThreadPool pool;
+  GatedResolveDevice dev;
+  std::unique_ptr<Session> s;  // last: destroyed first
+  GatedRig(ContextState& ctx, Scene& scene) : pool(ctx, 2), dev(ledger, pool) {
+    dev.register_production_stages();
+    dev.register_kernel(KernelId::GENERATE_CAMERA, &gen_terminate);
+    SessionOptions o;
+    o.max_width = o.max_height = 8;
+    o.test_camera_samples_per_pass = 1024;
+    o.test_record_presents = true;
+    s = std::make_unique<Session>(scene, dev, o);
+  }
+};
+}  // namespace
+
+TEST_CASE("batching/session a view change during the resolve presents no frame of the old view") {
+  // On the GPU the resolve waits out most of the pass after its last launch boundary. A view set
+  // then, with the latched view already presented, interrupts there as at any boundary (0007 d25):
+  // pass 2 is held in its resolve while the view changes, so the next frame is the new view's,
+  // never pass 2's frame of the old one.
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  g_launch.reset();
+  g_resolve.reset();
+  g_resolve.hold_at = 2;
+  GatedRig r(ctx, scene);
+  r.s->set_view(view_of(4, 4));
+  r.s->start();
+  REQUIRE(until([&] { return g_resolve.count() >= 2; }));
+  REQUIRE(r.s->present_log().size() == 1);  // pass 1's frame: the latched view has presented
+  r.s->set_view(view_of(5, 5));
+  g_resolve.hold(0);
+  REQUIRE(until([&] { return r.s->present_log().size() >= 2; }));
+  const auto log = r.s->present_log();
+  const SessionStats st = r.s->stats();
+  r.s->close();
+  CHECK(log[0].epoch == 1);
+  CHECK(log[1].epoch == 2);
+  CHECK(log[1].passes_resolved == 2);  // pass 1 and the new view's first pass; pass 2 was interrupted
+  CHECK(st.passes_interrupted >= 1);
+}
+
 TEST_CASE("batching/session passes follow the schedule after interaction") {
   // One view, then 2 ms passes with nothing else happening. Interaction ends 250 ms after the view;
   // from then frames are at least 0.1 s apart and each carries at least the passes the schedule

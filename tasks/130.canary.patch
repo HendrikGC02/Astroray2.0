@@ -1,5 +1,5 @@
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index 5fa86da..d6cee00 100644
+index 9ba95ed..961b70b 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
 @@ -255,3 +255,3 @@ bool Session::wait(uint32_t timeout_ms) {
@@ -18,3 +18,8 @@ index 5fa86da..d6cee00 100644
 +          }
 +          break;
          }
+@@ -933,3 +939,3 @@ void Session::render_loop() {
+       const bool resolved = resolve(lr.epoch, lr.generation);
+-      if (scheduler_->epoch_pending.load(std::memory_order_acquire)) {
++      if (false) {
+         // The resolve waited for the device to finish the pass, which on the GPU is most of the pass
