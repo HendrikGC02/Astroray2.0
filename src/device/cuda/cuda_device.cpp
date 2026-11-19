@@ -187,6 +187,7 @@ struct CudaDevice::Impl {
   // the file that was loaded and the stamp of the last changed file that failed to load.
   struct Watch {
     ModuleStamp loaded;
+    std::string unreadable;    // the filesystem's message when the file exists but cannot be read; empty: absent
     bool has_pending = false;  // a stamp that differs from `loaded`, seen at the previous poll
     ModuleStamp pending;
     bool failed = false;       // the file at `failed_stamp` could not be loaded
@@ -608,7 +609,7 @@ ModuleReload CudaDevice::poll_module_reload() {
     const std::string& name = kv.first;
     Impl::Watch& w = kv.second;
     ModuleStamp now;
-    if (!module_file_stamp(name, s.dev_dir, &now)) now = missing;
+    if (!module_file_stamp(name, s.dev_dir, &now, &w.unreadable)) now = missing;
     if (now == w.loaded) {  // the file matches the running image again
       w.has_pending = false;
       if (w.failed) out.recovered.push_back({name, module_subject(name), {}});
@@ -624,7 +625,9 @@ ModuleReload CudaDevice::poll_module_reload() {
     if (w.failed && now == w.failed_stamp) continue;  // already reported; wait for the next edit
     ++s.load_attempts;
     try {
-      if (now == missing) throw DeviceError("kernel module file is missing from " + s.dev_dir);
+      if (now == missing)
+        throw DeviceError(w.unreadable.empty() ? "kernel module file is missing from " + s.dev_dir
+                                               : "kernel module file cannot be read: " + w.unreadable);
       const ModuleImage image = load_module_image(name, s.hooks.corrupt_cubin, s.dev_dir);
       // The loader's own result, short: the report detail holds 128 bytes.
       CUmodule fresh = nullptr;

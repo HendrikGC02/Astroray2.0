@@ -351,6 +351,8 @@ TEST_CASE("dev_reload/corrupted module keeps previous") {
   const ModuleReload settled = dev.poll_module_reload();
   CHECK(settled.swapped.size() == 1);
   CHECK(settled.failed.empty());
+  // This swap bypassed the scheduler, so no epoch started: the film now mixes passes of two images. The
+  // case reads only the report and the epoch from here on, never the film.
 
   // Back through the scheduler: a file that goes missing raises the warning at the step boundary, and when
   // it returns equal to the running image the scheduler removes it, with no swap and no new epoch.

@@ -72,17 +72,32 @@ ModuleImage load_module_image(const std::string& name, bool corrupt) {
   return load_module_image(name, corrupt, dev_kernel_dir());
 }
 
-bool module_file_stamp(const std::string& name, const std::string& dir, ModuleStamp* out) {
+bool module_file_stamp(const std::string& name, const std::string& dir, ModuleStamp* out, std::string* error) {
   check_name(name);
-  std::error_code ec;
-  const std::filesystem::path p = loose_path(name, dir);
-  const uint64_t size = std::filesystem::file_size(p, ec);
-  if (ec) return false;
-  const auto t = std::filesystem::last_write_time(p, ec);
-  if (ec) return false;
-  out->size = size;
-  out->mtime = static_cast<int64_t>(t.time_since_epoch().count());
-  return true;
+  if (error) error->clear();
+  const std::filesystem::path d(dir);
+  // A cubin for CUDA stages, PTX for OptiX modules; error_code overloads, so a file a rebuild holds goes
+  // through the warning path with the filesystem's own message.
+  for (const char* ext : {".cubin", ".ptx"}) {
+    const std::filesystem::path p = d / (name + ext);
+    std::error_code ec;
+    const uint64_t size = std::filesystem::file_size(p, ec);
+    if (!ec) {
+      const auto t = std::filesystem::last_write_time(p, ec);
+      if (ec) {
+        if (error) *error = ec.message();
+        return false;
+      }
+      out->size = size;
+      out->mtime = static_cast<int64_t>(t.time_since_epoch().count());
+      return true;
+    }
+    if (ec != std::errc::no_such_file_or_directory) {
+      if (error) *error = ec.message();
+      return false;
+    }
+  }
+  return false;
 }
 
 namespace {

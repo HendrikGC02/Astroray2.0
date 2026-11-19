@@ -39,7 +39,9 @@ struct ModuleStamp {
   bool operator==(const ModuleStamp& o) const { return size == o.size && mtime == o.mtime; }
   bool operator!=(const ModuleStamp& o) const { return !(*this == o); }
 };
-bool module_file_stamp(const std::string& name, const std::string& dir, ModuleStamp* out);
+// `error`, when given, stays empty for a file that is genuinely absent and otherwise holds the filesystem's
+// message (a rebuild holding the file, a permission error).
+bool module_file_stamp(const std::string& name, const std::string& dir, ModuleStamp* out, std::string* error = nullptr);
 
 // Test modules only (never embedded): reads the file at `path`. Throws DeviceError when
 // it cannot be read.

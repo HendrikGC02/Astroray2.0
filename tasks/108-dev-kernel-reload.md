@@ -1,7 +1,7 @@
 # 108 Dev kernel reload and the corrupted dev-module fallback
 Goal: kernel edits need an application restart -> with `ASTRORAY_KERNEL_DIR` set in a dev build, a rebuilt stage module is swapped at the next step boundary with the epoch reset within B-04, and a module that fails to load leaves the previous one running with a warning.
 Read first: 0002 D14 (dev module swap), D15 (`KERNEL_MODULE_FALLBACK` row); 0009 d5 (dev reload), B-04; src/device/cuda/module_loader.h.
-Scope: src/device/cuda/module_loader.cpp, src/device/cuda/cuda_device.cpp, src/host/scheduler.cpp (swap at a step boundary), src/host/session/session.cpp (epoch reset on swap), tests/gpu/test_dev_reload.cpp, tests/gpu/kernels/reload_variant.cu; lead ruling: src/host/device.h, src/device/cuda/cuda_device.h, src/device/cuda/module_loader.h (the swap seam and the directory read once at device creation), src/host/report.{h,cpp} (remove by code and subject for the persistent warning).
+Scope: src/device/cuda/module_loader.cpp, src/device/cuda/cuda_device.cpp, src/host/scheduler.cpp (swap at a step boundary), src/host/session/session.cpp (epoch reset on swap), tests/gpu/test_dev_reload.cpp, tests/gpu/kernels/reload_variant.cu; lead ruling: src/host/device.h, src/device/cuda/cuda_device.h, src/device/cuda/module_loader.h (the swap seam and the directory read once at device creation), src/host/report.{h,cpp} (remove by code and subject for the persistent warning), src/host/session/session.{h,cpp} (film_epoch published with the samples reset).
 Out of scope: release builds (no loose modules, R13); CPU stages (rebuild and restart); other failure injections (099).
 Reference: none.
 Do:
@@ -19,3 +19,4 @@ Progress: started
 - Seam: Device::poll_module_reload (no-op default), CudaDevice stats each loaded module at the step boundary, Scheduler swaps via EPOCH_PENDING; failures raise KERNEL_MODULE_FALLBACK once per changed file, removed by Report::remove when a good file loads.
 - Measured: build.ps1 -Target astroray_kernels_gpu after editing shade_background.cu 0.9 s; module written to epoch reset 7-22 ms (B-04 5 s).
 - Lead ruling B-04: the doctest bounds module file landing to the end of the first pass on the new module (5000 ms, not widened); measured 31 ms, plus build.ps1 -Target astroray_kernels_gpu 0.9 s. A module loads only once its (size, mtime) is equal at two consecutive polls.
+- Lead ruling: src/host/session/session.{h,cpp} join Scope for SessionProgress::film_epoch, published with the samples_done reset so tests count passes of the current epoch only.
