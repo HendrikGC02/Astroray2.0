@@ -4,8 +4,9 @@
 # (0005 Risks, 0009 B-24) on S1 = b1m, S2 = b5m (300 materials) and S3 = s3_textured. For every scene and
 # engine it starts -Runs fresh windowed Blender processes (tools/ttff_probe.py), each under the machine
 # lock; one process switches the viewport to Rendered, back to Solid and to Rendered again (the first and the
-# second switch) while tools/ttff_poller.ps1 watches the viewport region. Cycles runs with its log on
-# (--log cycles --log-level 4), from which V7b is read: the first `Rendered N samples` line minus (the
+# second switch) and times every redraw of the viewport region from a POST_PIXEL draw handler (ruling 83, tools/ttff_probe.py;
+# V7a by a framebuffer patch read and by the engine's first-frame event, the table shows both). Cycles runs with its log on
+# (--log cycles,context --log-level 4), from which V7b is read: the first `Rendered N samples` line minus (the
 # `Total time spent synchronizing data: T` line minus T). Astroray's V7b is its first-frame mark minus its
 # first ar_scene_edit_begin mark (blender/astroray render_final.Timeline).
 # The .blend of each scene is written once into out/ttff/ (scenes/<name>/build.py, scenes/lib/blend_writer.py).

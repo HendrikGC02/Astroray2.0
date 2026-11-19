@@ -140,6 +140,72 @@ def viewport_series(root):
     return s
 
 
+# 0007 d35 / decision 23: Astroray's V7a is at most this multiple of Cycles' on every scene and switch.
+FIRST_FRAME_GATE = 1.5
+FF_RE = re.compile(r"^first_frame\.(v7a|v7a_read|v7a_event|v7b)\.(cycles|astroray)\.switch(\d)$")
+
+
+def first_frame_table(history):
+    """{(scene, switch): {"cycles": ms, "astroray": ms}} for V7a (the headline), from the history lines of
+    tools/measure_ttff.ps1; the latest line of each metric wins (lines are in date order)."""
+    last = {}
+    for h in history:
+        m = FF_RE.match(h.get("metric", ""))
+        if m and m.group(1) == "v7a":
+            last[(h["scene"], int(m.group(3)), m.group(2))] = float(h["value"])
+    out = {}
+    for (scene, sw, eng), v in last.items():
+        out.setdefault((scene, sw), {})[eng] = v
+    return {k: v for k, v in sorted(out.items()) if "cycles" in v and "astroray" in v}
+
+
+def first_frame_bars(table, width=640, height=300):
+    """Bars of Astroray/Cycles V7a per scene and switch, with the 1.5x gate and the 1.0x goal as lines."""
+    l, r, t, b = 60, 150, 20, 56
+    ratios = [v["astroray"] / v["cycles"] for v in table.values()]
+    y1 = max(ratios + [FIRST_FRAME_GATE]) * 1.15
+    n = len(table)
+    slot = (width - l - r) / max(n, 1)
+
+    def py(y):
+        return height - b - y / y1 * (height - t - b)
+
+    o = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" role="img" '
+         f'aria-label="first frame, Astroray over Cycles" font-family="sans-serif" font-size="11">',
+         f'<rect x="{l}" y="{t}" width="{width - l - r}" height="{height - t - b}" fill="none" stroke="#999"/>']
+    for k in range(5):
+        v = y1 * k / 4
+        o.append(f'<text x="{l - 4}" y="{py(v) + 4:.1f}" text-anchor="end">{v:.2f}</text>')
+    o.append(f'<text x="12" y="{t + 10}" transform="rotate(-90 12 {t + 10})" text-anchor="end">Astroray / Cycles, V7a</text>')
+    for (scene, sw), v in table.items():
+        i = list(table).index((scene, sw))
+        ratio = v["astroray"] / v["cycles"]
+        x = l + slot * i + slot * 0.2
+        colour = "#2ca02c" if ratio <= FIRST_FRAME_GATE else "#d62728"
+        o.append(f'<rect data-bar="{html.escape(scene)} switch {sw}" x="{x:.1f}" y="{py(ratio):.1f}" width="{slot * 0.6:.1f}" '
+                 f'height="{py(0) - py(ratio):.1f}" fill="{colour}"/>')
+        o.append(f'<text x="{x + slot * 0.3:.1f}" y="{py(ratio) - 3:.1f}" text-anchor="middle">{ratio:.2f}x</text>')
+        o.append(f'<text x="{x + slot * 0.3:.1f}" y="{height - b + 14}" text-anchor="middle">{html.escape(scene)}</text>')
+        o.append(f'<text x="{x + slot * 0.3:.1f}" y="{height - b + 27}" text-anchor="middle">switch {sw}</text>')
+        o.append(f'<text x="{x + slot * 0.3:.1f}" y="{height - b + 40}" text-anchor="middle" fill="#555">'
+                 f'{v["astroray"]:.0f} / {v["cycles"]:.0f} ms</text>')
+    for lab, y, c in ((f"{FIRST_FRAME_GATE}x gate", FIRST_FRAME_GATE, "#d62728"), ("1.0x goal", 1.0, "#555")):
+        o.append(f'<line x1="{l}" x2="{width - r}" y1="{py(y):.1f}" y2="{py(y):.1f}" stroke="{c}" stroke-dasharray="5 3"/>')
+        o.append(f'<text x="{width - r + 4}" y="{py(y) + 4:.1f}" fill="{c}">{lab}</text>')
+    o.append("</svg>")
+    return "\n".join(o)
+
+
+def load_ttff_history(root):
+    """The history lines of the latest tools/measure_ttff.ps1 run that the lead has not committed yet."""
+    paths = sorted(glob.glob(os.path.join(root, "out", "bench", "history-ttff-*.jsonl")))
+    lines = []
+    for p in paths[-1:]:
+        with open(p, encoding="utf-8-sig") as f:
+            lines += [json.loads(ln) for ln in f if ln.strip()]
+    return lines
+
+
 def build_html(history, checks, budgets, viewport=None):
     parts = []
     ts = tier_series(history, checks)
@@ -163,6 +229,11 @@ def build_html(history, checks, budgets, viewport=None):
             parts.append(section(title, svg_plot("Presented updates per second during the orbit", viewport,
                                                  VIEWPORT_LINES, "updates/s")))
             continue
+        if prefix == "first_frame":
+            table = first_frame_table(history)
+            if table:
+                parts.append(section(title, first_frame_bars(table)))
+                continue
         rows = {}
         for h in history:
             if h["metric"].startswith(prefix):
@@ -201,6 +272,52 @@ def write_png(path, rgb):
                 + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 
+def draw_digits(img, s, x, y, scale=2):
+    for ch in s:
+        bits = _DIGITS.get(ch)
+        if bits:
+            for i, bit in enumerate(bits):
+                if bit == "1":
+                    img[y + (i // 3) * scale:y + (i // 3 + 1) * scale, x + (i % 3) * scale:x + (i % 3 + 1) * scale] = 0
+        x += 4 * scale
+
+
+def ttff_png(path, table, scene, width=720, height=420):
+    """Evidence for one scene: V7a in ms as bars, Cycles (blue) and Astroray (red when above the 1.5x line, green
+    when not) side by side per switch, the 1.5x-Cycles line dashed over each Astroray bar, the ms printed above."""
+    l, r, t, b = 60, 20, 24, 30
+    img = np.full((height, width, 3), 255, np.uint8)
+    cols = {sw: v for (sc, sw), v in table.items() if sc == scene}
+    ymax = max(max(v["cycles"], v["astroray"], FIRST_FRAME_GATE * v["cycles"]) for v in cols.values()) * 1.15
+    ytick = 10 ** int(np.floor(np.log10(ymax / 4)))
+    ytick *= max(1, int(round((ymax / 4) / ytick)))
+
+    def py(y):
+        return int(height - b - y / ymax * (height - t - b))
+
+    for v in range(0, int(ymax) + 1, int(ytick)):
+        img[py(v), l:width - r] = 225
+        draw_digits(img, str(v), 4, py(v) - 5)
+    img[t:height - b, l] = 100
+    img[height - b, l:width - r] = 100
+    slot = (width - l - r) // max(len(cols), 1)
+    for i, (sw, v) in enumerate(sorted(cols.items())):
+        x = l + i * slot + slot // 8
+        w = slot // 4
+        ratio = v["astroray"] / v["cycles"]
+        for j, (eng, colour) in enumerate((("cycles", [31, 119, 180]),
+                                           ("astroray", [44, 160, 44] if ratio <= FIRST_FRAME_GATE else [214, 39, 40]))):
+            x0 = x + j * (w + 8)
+            img[py(v[eng]):py(0), x0:x0 + w] = colour
+            draw_digits(img, str(int(round(v[eng]))), x0, py(v[eng]) - 12)
+        gy = py(FIRST_FRAME_GATE * v["cycles"])
+        for xx in range(x - 4, x + 2 * w + 12):
+            if (xx // 5) % 2 == 0:
+                img[gy, xx] = [214, 39, 40]
+        draw_digits(img, str(sw), x + w, height - b + 8)   # the switch number under its pair of bars
+    write_png(path, img)
+
+
 def plot_png(path, series, hlines, ymax=80.0, width=960, height=420):
     """The rate plot as a raster, y in updates/s, x in seconds of the orbit; one colour per series (in the
     order of the dict, the colours of COLORS), the hlines dashed red, a grid every 10/s and every second."""
@@ -218,13 +335,7 @@ def plot_png(path, series, hlines, ymax=80.0, width=960, height=420):
         return [int(hexcolor[i:i + 2], 16) for i in (1, 3, 5)]
 
     def text(s, x, y, scale=2):
-        for ch in s:
-            bits = _DIGITS.get(ch)
-            if bits:
-                for i, bit in enumerate(bits):
-                    if bit == "1":
-                        img[y + (i // 3) * scale:y + (i // 3 + 1) * scale, x + (i % 3) * scale:x + (i % 3 + 1) * scale] = 0
-            x += 4 * scale
+        draw_digits(img, s, x, y, scale)
 
     for v in range(0, int(ymax) + 1, 10):
         img[py(v), l:width - r] = 225
@@ -255,8 +366,15 @@ def selftest():
     hist = [dict(line, metric=m, value=v) for m, v in
             [("tier.fast", 4.0), ("tier.fast", 5.0), ("tier.gate", 100.0), ("tier.gate", 90.0),
              ("build.clean", 60.0), ("build.clean", 61.0), ("build.incr_header", 9.0), ("throughput.mpaths", 3.0)]]
+    ff = [dict(line, scene="b5m", unit="ms", metric=f"first_frame.v7a.{e}.switch{s}", value=v)
+          for s, e, v in ((1, "cycles", 400.0), (1, "astroray", 500.0), (2, "cycles", 300.0), (2, "astroray", 600.0))]
     text = build_html(hist, [], {"B-08": 10.0, "B-09": 180.0})
     write(os.path.join(ROOT, "out", "report", "selftest.html"), text)
+    with_ff = build_html(hist + ff, [], {"B-08": 10.0, "B-09": 180.0})
+    bars = re.findall(r'<rect data-bar="[^"]*"[^>]*fill="(#[0-9a-f]{6})"', with_ff)
+    if sorted(bars) != ["#2ca02c", "#d62728"]:
+        print("selftest FAIL: first-frame bars (2 bars, 1.25x green and 2.00x red)")
+        return 1
     want = 2 + 2 + 1  # tiers fast and gate; build.clean and build.incr_header; one throughput series
     got = text.count("<polyline")
     if got != want:
@@ -281,8 +399,18 @@ def main():
         plot_png(png, {"b1m": series["b1m"]}, VIEWPORT_LINES)
         print(f"wrote {png}")
         return 0
+    if "--ttff-png" in sys.argv[1:]:
+        table = first_frame_table(load_history(ROOT) + load_ttff_history(ROOT))
+        if not any(sc == "b5m" for sc, _ in table):
+            print("no first-frame history for b5m; run tools/measure_ttff.ps1")
+            return 1
+        png = os.path.join(ROOT, "out", "evidence", "127", "ttff_s2.png")
+        ttff_png(png, table, "b5m")
+        print(f"wrote {png}")
+        return 0
     out = os.path.join(ROOT, "out", "report", "index.html")
-    write(out, build_html(load_history(ROOT), load_checks(ROOT), load_budgets(ROOT), viewport_series(ROOT)))
+    write(out, build_html(load_history(ROOT) + load_ttff_history(ROOT), load_checks(ROOT), load_budgets(ROOT),
+                          viewport_series(ROOT)))
     print(f"wrote {out}")
     return 0
 
