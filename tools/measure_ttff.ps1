@@ -26,10 +26,11 @@ param(
   [ValidateSet('auto', 'read', 'event', 'both', 'none')][string]$Source = 'auto',
   [ValidateSet('patch', 'post_view', 'timer')][string]$Read = 'patch',   # where the patch is read (tools/ttff_probe.py)
   [int]$Cell = 3,                       # the patch is 32 x 18 cells of Cell pixels
-  # context = Cycles runs with `--log cycles,context`: the event method needs the log and the anchor lines that put it on the
-  # probe's clock (Blender writes about 6000 context lines a second, so it may slow Cycles a little); plain = `--log cycles`
-  # only and the read method alone, the control that shows what the extra logging costs.
-  [ValidateSet('context', 'plain')][string]$CyclesLog = 'context',
+  # plain = Cycles runs with `--log cycles` (V7b needs it) and the read method alone: the V7a that is compared with Astroray.
+  # context = `--log cycles,context`, which the event method needs for the anchor lines that put Cycles' log on the probe's
+  # clock; Blender then writes about 6000 context lines a second and Cycles is measurably slower (127: 20 to 25 %), so these
+  # runs show the agreement of the two methods, never the ratio.
+  [ValidateSet('context', 'plain')][string]$CyclesLog = 'plain',
   [string]$Fmt = 'UBYTE',               # read_color data_format
   [int]$Chans = 4,
   [int]$TimeoutS = 900,
