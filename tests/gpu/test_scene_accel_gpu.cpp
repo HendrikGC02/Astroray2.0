@@ -289,11 +289,16 @@ TEST_CASE("scene_accel_gpu/ledger and reuse") {
   CHECK(on_second[0].inst == ar::kNoInstance);
   CHECK(on_second[1].inst == 0u);
 
-  // Last holder gone: nothing of the structures is left in the ledger.
+  // Last holder gone: nothing of the structures is left in the ledger. OptiX's own memory (DEVICE_CONTEXT,
+  // 126) stays charged while its context lives and goes with the builder that owns the context.
   first.reset();
   second.reset();
   r.scene->table_cache().current.reset();
-  CHECK(r.held->ledger->total() == 0u);
+  const Ledger& l = *r.held->ledger;
+  CHECK(l.total() - l.category_total(LedgerCategory::DEVICE_CONTEXT) == 0u);
+  CHECK(l.category_total(LedgerCategory::DEVICE_CONTEXT) > 0u);
+  r.held->accel.reset();
+  CHECK(l.category_total(LedgerCategory::DEVICE_CONTEXT) == 0u);
 }
 
 }  // TEST_SUITE
