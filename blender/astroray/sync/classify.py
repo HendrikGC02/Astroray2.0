@@ -87,11 +87,15 @@ def _object_kinds(ob, bits, cache):
     return ()
 
 
-def classify(depsgraph, cache):
-    """Returns the actions to apply, in order, for one batch of depsgraph updates."""
+def classify(depsgraph, cache, evaluated=None):
+    """Returns the actions to apply, in order, for one batch of depsgraph updates. `evaluated`, if given, receives
+    original session_uid -> evaluated ID for every updated ID: walking depsgraph.updates visits every ID node of
+    the depsgraph, so later steps reuse this walk (instances.sync_transforms, InstanceCache.forget)."""
     masks = {}  # (id_type, uid) -> [bits, original ID]
     for u in depsgraph.updates:
         orig = u.id.original
+        if evaluated is not None:
+            evaluated[orig.session_uid] = u.id
         bits = (TRANSFORM if u.is_updated_transform else 0) | \
                (GEOMETRY if u.is_updated_geometry else 0) | \
                (SHADING if u.is_updated_shading else 0)

@@ -53,27 +53,37 @@ def instance_path(inst):
     return (inst.parent.original.session_uid, tuple(inst.persistent_id))
 
 
-def object_identity(inst, path=None):
+def object_identity(inst, path=None, uid=None):
     """Original object session_uid, plus the instance path (parent, persistent_id) for instances.
-    `path` is instance_path(inst) when the caller already has it."""
-    return (inst.object.original.session_uid,) + (instance_path(inst) if path is None else path)
+    `path` is instance_path(inst) and `uid` the original session_uid when the caller already has them."""
+    if uid is None:
+        uid = inst.object.original.session_uid
+    return (uid,) + (instance_path(inst) if path is None else path)
 
 
-def geometry_identity(inst, depsgraph, path=None, real=None):
+def geometry_identity(inst, depsgraph, path=None, real=None, uid=None):
     """None for objects without data; else a tuple that is equal exactly when the geometry is.
-    `real`, if given, caches is_real_object_data per (original uid, evaluated data pointer): the answer
-    depends only on those, and geometry-nodes instances reuse one temporary object for different data."""
-    orig = inst.object.original
-    if orig.data is None:
-        return None
+    `real`, if given, caches per (original uid, evaluated data pointer) the original data's session_uid when
+    is_real_object_data holds, else 0, or None for an object without data: the answer depends only on those, and
+    geometry-nodes instances reuse one temporary object for different data. A caller keeping it across builds
+    forgets a uid's entries when the object or its data is updated (instances.InstanceCache). `uid` is the
+    original session_uid when the caller already has it."""
+    ob = inst.object
+    if uid is None:
+        uid = ob.original.session_uid
     if real is None:
-        is_real = is_real_object_data(inst, depsgraph)
+        orig_data = ob.original.data
+        data_uid = None if orig_data is None else orig_data.session_uid if is_real_object_data(inst, depsgraph) else 0
     else:
-        data = inst.object.data
-        k = (orig.session_uid, data.as_pointer() if data is not None else 0)
-        is_real = real.get(k)
-        if is_real is None:
-            is_real = real[k] = is_real_object_data(inst, depsgraph)
-    if is_real:
-        return ("data", orig.data.session_uid)
-    return ("object", orig.session_uid) + (instance_path(inst) if path is None else path)
+        data = ob.data
+        k = (uid, data.as_pointer() if data is not None else 0)
+        data_uid = real.get(k, -1)
+        if data_uid == -1:
+            orig_data = ob.original.data
+            data_uid = real[k] = (None if orig_data is None else
+                                  orig_data.session_uid if is_real_object_data(inst, depsgraph) else 0)
+    if data_uid is None:
+        return None
+    if data_uid:
+        return ("data", data_uid)
+    return ("object", uid) + (instance_path(inst) if path is None else path)

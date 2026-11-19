@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import support  # noqa: E402
 
 support.load_sync()
-from ar_sync import instances, keys  # noqa: E402
+from ar_sync import cache as cache_mod, instances, keys  # noqa: E402
 
 
 class FakeEdit:
@@ -256,6 +256,176 @@ class TestInstances(unittest.TestCase):
         b = bpy.data.objects["B"]
         self.assertFalse(instances.sync_transforms(edit, None, t, support.depsgraph(), [b.session_uid]))
         self.assertEqual(edit.calls, [])
+
+
+class TestMurmur3Many(unittest.TestCase):
+    def test_bit_identical_to_murmur3_32(self):
+        names = ["", "a", "ab", "abc", "abcd", "abcde", "Cube", "Cube.001", "U0000 0", "é", "名前", "🌌 nebula",
+                 "x" * 63, "long " * 60, "\0nul\0", "tab\tand\nnewline"] + [f"Object.{i:05d}" for i in range(50)]
+        datas = [n.encode("utf-8") for n in names] + [bytes(range(256)), bytes([255]) * 7]
+        got = instances.murmur3_32_many(datas)
+        self.assertEqual(got.dtype, np.uint32)
+        self.assertEqual(got.tolist(), [instances.murmur3_32(d) for d in datas])
+        self.assertEqual(int(instances.murmur3_32_many([b"hello"])[0]), 0x248BFA47)  # 0008 decision 11
+
+
+def updated(edit):
+    """Original session_uids depsgraph.updates names after edit(), as classify's `evaluated` collects them."""
+    return support.in_update(edit, lambda dg: {u.id.original.session_uid for u in dg.updates}) or set()
+
+
+class TestInstanceCache(unittest.TestCase):
+    """build() with a caller-owned InstanceCache equals a build without one after every kind of change, once
+    the IDs the depsgraph names are forgotten."""
+
+    def setUp(self):
+        support.reset_scene()
+        self.km, self.cache = keys.KeyMap(), instances.InstanceCache()
+
+    def build(self):
+        return instances.build(support.depsgraph(), self.km, cache=self.cache)
+
+    def assert_fresh(self, t):
+        fresh = instances.build(support.depsgraph(), self.km)
+        self.assertEqual(t.n, fresh.n)
+        for name, arr in fresh.arrays.items():
+            self.assertEqual(t.arrays[name].tobytes(), arr.tobytes(), name)
+        self.assertEqual(t.material_keys.tolist(), fresh.material_keys.tolist())
+
+    def test_rename(self):
+        a = make("A")
+        self.build()
+        self.cache.forget(updated(lambda: setattr(a, "name", "Renamed")))
+        t = self.build()
+        self.assertEqual(int(t.arrays["crypto_objects"][0]), instances.murmur3_32(b"Renamed"))
+        self.assert_fresh(t)
+
+    def test_relink_data(self):
+        m1, m2 = bpy.data.materials.new("m1"), bpy.data.materials.new("m2")
+        a = make("A")
+        a.data.materials.append(m1)
+        other = bpy.data.meshes.new("other")
+        other.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)], [], [(0, 1, 2), (1, 3, 2)])
+        other.materials.append(m2)
+        other.materials.append(m1)
+        before = self.build()
+        self.cache.forget(updated(lambda: setattr(a, "data", other)))
+        t = self.build()
+        self.assertNotEqual(t.arrays["geom_keys"][0], before.arrays["geom_keys"][0])
+        self.assertEqual(int(t.arrays["material_counts"][0]), 2)
+        self.assert_fresh(t)
+
+    def test_data_linked_slot_change(self):
+        m1, m2 = bpy.data.materials.new("m1"), bpy.data.materials.new("m2")
+        a = make("A")
+        a.data.materials.append(m1)
+        make("B", a.data)
+        self.build()
+
+        a.data.materials[0] = m2
+        self.cache.forget({a.data.session_uid})  # only the mesh: both objects cached with it are dropped
+        t = self.build()
+        self.assertEqual(t.material_keys.tolist(), [self.km.key(("material", m2.session_uid))])
+        self.assert_fresh(t)
+
+    def test_modifier_added_splits_geometry(self):
+        # Not forgotten on purpose: the real-data answer is keyed by the evaluated data pointer too, which a
+        # modifier (or a geometry-nodes instance reusing one temporary object) changes.
+        a = make("A")
+        make("B", a.data)
+        self.build()
+        a.modifiers.new("w", "WAVE")
+        t = self.build()
+        self.assertNotEqual(t.arrays["geom_keys"][0], t.arrays["geom_keys"][1])
+        self.assert_fresh(t)
+
+    def test_new_object(self):
+        a = make("A")
+        self.build()
+        self.cache.forget(updated(lambda: make("C", a.data, loc=(2, 0, 0))))
+        t = self.build()
+        self.assertEqual(t.n, 2)
+        self.assert_fresh(t)
+
+    def test_random_ids_follow_their_instances(self):
+        col = bpy.data.collections.new("c")
+        bpy.context.scene.collection.children.link(col)
+        make("X", collection=col)
+        bpy.context.view_layer.layer_collection.children["c"].exclude = True
+        for loc in ((10, 0, 0), (20, 0, 0)):
+            e = bpy.data.objects.new("inst", None)
+            e.instance_type, e.instance_collection, e.location = "COLLECTION", col, loc
+            bpy.context.scene.collection.objects.link(e)
+        make("Z")
+        t = self.build()
+        dg = support.depsgraph()
+        want = {t.index_of[keys.object_identity(i)]: i.random_id & 0xFFFFFFFF
+                for i in dg.object_instances if i.object.type == "MESH"}
+        self.assertEqual(sorted(want), list(range(t.n)))
+        self.assertEqual([int(t.arrays["random_ids"][i]) for i in range(t.n)], [want[i] for i in range(t.n)])
+
+
+class TestClassifyUpdates(unittest.TestCase):
+    """The step the viewport and F12 take per batch: classify, then forget every ID its walk met."""
+
+    @classmethod
+    def setUpClass(cls):
+        support.acquire_properties()  # classify's settings signature reads scene.astroray
+
+    @classmethod
+    def tearDownClass(cls):
+        support.release_properties()
+
+    def test_forgets_what_the_batch_names(self):
+        support.reset_scene()
+        m1, m2 = bpy.data.materials.new("m1"), bpy.data.materials.new("m2")
+        a = make("A")
+        a.data.materials.append(m1)
+        a.material_slots[0].link = "OBJECT"
+        a.material_slots[0].material = m1
+        km, icache, sc = keys.KeyMap(), instances.InstanceCache(), cache_mod.SyncCache()
+        instances.build(support.depsgraph(), km, cache=icache)
+        sc.remember(support.depsgraph(), bpy.context.scene)
+
+        def swap():
+            a.material_slots[0].material = m2
+        actions, evaluated = support.in_update(swap, lambda dg: instances.classify_updates(dg, sc, icache))
+        self.assertIn(a.session_uid, evaluated)
+        self.assertTrue(actions)
+        t = instances.build(support.depsgraph(), km, cache=icache)
+        self.assertEqual(t.material_keys.tolist(), [km.key(("material", m2.session_uid))])
+
+
+class TestPlainMoveFromClassify(unittest.TestCase):
+    def setUp(self):
+        support.reset_scene()
+
+    def test_evaluated_map_spares_the_updates_walk(self):
+        objs = [make(f"O{i}", loc=(i, 0, 0)) for i in range(3)]
+        _, t = build(origin=(0.5, 0.0, 0.0))
+        mover = objs[1]
+
+        class NoWalk:
+            @property
+            def updates(self):
+                raise AssertionError("sync_transforms walked depsgraph.updates although it was given the objects")
+
+            @property
+            def object_instances(self):
+                raise AssertionError("a plain move of a non-instance object walked object_instances")
+
+        def move():
+            mover.location.x = 7.5
+
+        def patch(dg):
+            ev = {u.id.original.session_uid: u.id for u in dg.updates}
+            return instances.sync_transforms(edit, None, t, NoWalk(), {mover.session_uid: ev[mover.session_uid]},
+                                             origin=(0.5, 0.0, 0.0))
+        edit = FakeEdit()
+        self.assertTrue(support.in_update(move, patch))
+        row = t.index_of[(mover.session_uid,)]
+        self.assertEqual(edit.indices, [row])
+        self.assertEqual(t.xf[row][3], np.float32(7.5) - np.float32(0.5))
 
 
 if __name__ == "__main__":
