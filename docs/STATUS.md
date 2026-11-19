@@ -3,8 +3,7 @@
 Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `tools/status.ps1`, never from here.
 
 ## Phase
-Build phase. Records signed off (O30); speed asked for (O31): several implementers at once, review for
-kernel, physics, ABI and process diffs.
+Build phase (O30); several implementers at once, review for kernel, physics, ABI and process diffs (O31).
 
 ## Current milestone
 M1a "First pixels" (`docs/ROADMAP.md`): textured, lamp-lit meshes render progressively in the Blender 5.3
@@ -12,8 +11,9 @@ viewport and F12 on CUDA and CPU through the final C ABI, every gate live. Open 
 
 ## Open owner questions
 During M1a: deleting superseded records (0009 q4); exact JPEG decode parity with Blender (libjpeg-turbo) or ruling
-78's 2-code bound. Answered: open-weight worker (O32); GPU performance counters for all users (0002 q1, task 093).
-Later ones: ROADMAP "Open items".
+78's 2-code bound; V7a (0007 d35) cannot be captured here: Blender's window is never composed (GDI, WGC and
+Desktop Duplication see only its background; a D3D11 test window is captured), so either the owner sets NVIDIA's "Vulkan/OpenGL
+present method" to the DXGI-layered option, or rules an in-process V7a definition (task 127 parked). Answered: O32, 0002 q1. Later ones: ROADMAP "Open items".
 
 ## Red items
 None. Unowned follow-ups (a task that touches the area takes them):

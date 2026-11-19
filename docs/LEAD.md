@@ -49,9 +49,9 @@ State for the next lead. Agent ids do not carry across sessions; a task still op
 implementer on its existing branch and worktree, briefed from this section and its task file.
 - Landed overnight: 083 (#67), 075 (#68), 078 (#69), 084 (#70), 106 (#71), 110 (#72), 076 (#73), 089 (#74),
   107 (#75), 085 (#76), 090 (#77), 093 (#78), 077 (#79), 099 (#80), 118 (#81), 121 (#82), 086 (#83), 111 (#84),
-  109 (#85), 119 (#86), 097 (#87), 087 (#88), 108 (#89), 092 (#90), 120 (#91). Rulings 76-81 added. 120's dropped graph attempt is kept on the local branch keep/120-graphs-B.
-- In flight (branches task/NNN-*): 094 (start-up and sync measurement), 095 (first frame; harness named
-  tests/blender/probe_ttff.py by ruling so check full does not run it).
+  109 (#85), 119 (#86), 097 (#87), 087 (#88), 108 (#89), 092 (#90), 120 (#91), 094 (#92), 122 (#93), 123 (#94), 095 (#95), 125 (#96), 124 (#97). Rulings 76-81 added. 120's dropped graph attempt is kept on the local branch keep/120-graphs-B.
+- In flight (branches task/NNN-*): 126 (ledger, statistics off), 128 (direct mesh reads; in review), 096 (viewport
+  rate), 127 (V7a capture: parked on an owner decision, see STATUS; branch kept, do not land).
 - Ready next: 122 (sort by distinct programs, ruling 80) and 123 (between-pass idle); 124-126 after 094; then
   re-measure B-19 on b1m/b5m and decide remedy (b) and spike C (093 Do 5). 096 after 123 (B-14 depends on it);
   091 last among measurements (it times tiers, needs a quiet machine); 100 closes M1a.
