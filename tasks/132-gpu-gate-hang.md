@@ -11,9 +11,12 @@ Do:
 4. `cuda_session_trace/no cache dir disables the optix cache` compares listings of the user's shared default OptiX cache, which any other OptiX process (Cycles in Blender, other worktrees) writes, so it failed every run while a stale -wal sat there: make it check the same property without reading the shared database (for example the default location pointed at a private directory for that case, if OptiX honours it there; say what OptiX documents).
 Acceptance: `pwsh tools/check.ps1 gate` passes; the PR body holds the reproduction numbers and the outcome.
 Look at: none.
-Canary: tasks/132.canary.patch must turn red: a test of the timeout (name it in land format), or "none: measurement and tooling only" with the lead's agreement if no test changes.
+Canary: tasks/132.canary.patch must turn red: astroray_tests_gpu "device_failures/cubin layout check refuses truncated images", "device_failures/corrupt module image", "dev_reload/corrupted module keeps previous", "cuda_session_trace/no cache dir disables the optix cache"
 Budget: none added.
 Depends on: none.
 Size: S; stop and report at 2x.
 Progress:
 - started: branch task/132-gpu-gate-hang from origin/main 4c3f048.
+- reproduced: gate x36 (CPU gate tests alongside), hang at run 36 in dev_reload/corrupted module keeps previous (half cubin into cuModuleLoadData); fma detector alone x500, no hang. The original "after agree cancel (ii)" was stdout buffering: report() was the last fflush.
+- fix: ELF-64 layout check before every cuModuleLoadData (gABI ch. 4); dev_reload and device_failures assert the new detail; per-case flushed start lines; check.ps1 GPU steps time-limited (gate 150 s, full 60 s, 10x measured).
+- Do 4: the default-cache case points OPTIX_CACHE_PATH at a private directory and requires OptiX to report it. After the fix: gate x100, no hang (12.6-24.1 s).

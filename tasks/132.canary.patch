@@ -1,0 +1,37 @@
+diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
+index 8e5e1f9..9e8f4b3 100644
+--- a/src/device/cuda/cuda_device.cpp
++++ b/src/device/cuda/cuda_device.cpp
+@@ -331,3 +331,3 @@ struct CudaDevice::Impl {
+     const std::string defect = cubin_layout_defect(image.bytes.data(), image.bytes.size());
+-    if (!defect.empty())
++    if (!defect.empty() && image.origin.empty())
+       throw DeviceError("GPU device unavailable: no usable module image for " + arch + ": " + label + ": " +
+@@ -701,3 +701,3 @@ ModuleReload CudaDevice::poll_module_reload() {
+       const std::string defect = cubin_layout_defect(image.bytes.data(), image.bytes.size());
+-      if (!defect.empty()) throw DeviceError(cubin_layout_message(std::filesystem::path(image.origin).filename().string(), defect));
++      if (!defect.empty()) throw DeviceError(cubin_layout_message(std::string(), defect));
+       // The loader's own result, short: the report detail holds 128 bytes.
+diff --git a/src/device/cuda/module_loader.cpp b/src/device/cuda/module_loader.cpp
+index 48f257f..64b42e9 100644
+--- a/src/device/cuda/module_loader.cpp
++++ b/src/device/cuda/module_loader.cpp
+@@ -180,3 +180,3 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
+       const size_t at = static_cast<size_t>(phoff + i * phentsize);
+-      if (!inside(rd(p, at + 8, 8), rd(p, at + 32, 8), size)) return "segment " + std::to_string(i) + " past the end";
++      if (!inside(rd(p, at + 8, 8), 0, size)) return "segment " + std::to_string(i) + " past the end";
+     }
+@@ -192,3 +192,3 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
+     const uint64_t type = rd(p, at + 4, 4);
+-    if (type != 0 && type != 8 && !inside(rd(p, at + 24, 8), rd(p, at + 32, 8), size))
++    if (type != 0 && type != 8 && !inside(rd(p, at + 24, 8), 0, size))
+       return "section " + std::to_string(i) + " past the end";
+diff --git a/src/device/cuda/optix_accel.cpp b/src/device/cuda/optix_accel.cpp
+index 7878ae7..c8b1a24 100644
+--- a/src/device/cuda/optix_accel.cpp
++++ b/src/device/cuda/optix_accel.cpp
+@@ -530,3 +530,3 @@ OptixContextHolder::OptixContextHolder(Device& device, uint32_t device_index, co
+   }
+-  context.check(optixDeviceContextSetCacheEnabled(static_cast<OptixDeviceContext>(context.handle()), 0),
++  context.check(optixDeviceContextSetCacheEnabled(static_cast<OptixDeviceContext>(context.handle()), 1),
+                 "optixDeviceContextSetCacheEnabled");
