@@ -12,7 +12,7 @@ Do:
 5. Result (PR body `Result:` with each probe's command and outcome).
 Acceptance: each probe script runs through `Invoke-ArBlender -Gui` and prints its outcome; V9 passes; any fallback implemented has its test passing.
 Look at: out/evidence/097/colour_chart.png.
-Canary: tasks/097.canary.patch must turn red: astroray_tests_gpu "cuda_device/reserve rule decision", tests/blender/gui_colour_chart.py "TestColourChart.test_standard" "TestColourChart.test_agx" "TestColourChart.test_exposure_plus1" "TestColourChart.test_gamma" "TestColourChart.test_look" (the patch sets kCudaReserveBytes back to 1.5 GiB and scales red and green in present.py's unpack shader). probe_p5_vram.py records; probe_p2_pause.py and probe_p3_modal.py assert Blender's behaviour, which no addon change can break, so they have no canary.
+Canary: tasks/097.canary.patch must turn red: astroray_tests_gpu "cuda_device/reserve rule decision", tests/blender/gui_colour_chart.py "TestColourChart.test_standard" "TestColourChart.test_agx" "TestColourChart.test_exposure_plus1" "TestColourChart.test_gamma" "TestColourChart.test_look" (the patch sets kCudaReserveBytes back to 1.5 GiB and scales red and green in present.py's unpack shader).
 Budget: none.
 Depends on: 086, 089.
 Size: M (probe scripts plus possible fallbacks); stop and report at 2x.
@@ -25,3 +25,4 @@ Progress:
 - R change HELD: tests/gpu/test_sampler_agree.cpp:293 asserts kCudaReserveBytes == 1610612736; told the lead.
 - lead ruling: the test pinning R follows the record: kCudaReserveBytes = 2 GiB, test_sampler_agree.cpp asserts it, 0007 d14 and ruling 19 text updated; canary covers it (cuda_device/reserve rule decision).
 - lead ruling: P5 reads cuMemGetInfo through its own small context, not through the engine (it has no call for it); free bytes are device-wide, so the reading is the same. P5 now computes R as the growth reading. P3 triangle equality was exercised on quads and pole triangles only (no n-gons).
+- lead: the P5 probe records only; the P2 and P3 probes assert Blender's own behaviour, which no addon change can break, so the canary names no probe.
