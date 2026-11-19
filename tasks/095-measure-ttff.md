@@ -17,3 +17,5 @@ Depends on: 089, 090, 086.
 Size: M (harness about 300 lines plus result); stop and report at 2x.
 Progress:
 - started (lead ruling: harness named tests/blender/probe_ttff.py, not gui_ttff.py; measurement, not a test, so check full does not run it)
+- V7a BLOCKED: CopyFromScreen and PrintWindow of Blender's window return only the class background (64,64,64) here, Vulkan and OpenGL, window foreground and uncloaked; a GDI test window captures fine. In-process POST_PIXEL read_color hangs Blender with Cycles (spike B saw it too). Harness has --source screen|gpu|none; V7b and M-8 measured with none.
+- Stopped at 2x diff (about 860 lines): report.py first-frame section and ttff_s2.png not written; needs a lead decision on V7a capture.
