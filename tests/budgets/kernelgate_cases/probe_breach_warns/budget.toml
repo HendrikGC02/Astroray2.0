@@ -1,0 +1,15 @@
+[kernel.ar_probe_x]
+regs = 128
+stack = 480
+spill_store = 128
+spill_load = 192
+compile_s = 0
+gated = "full"
+
+[kernel.queue_build_count]
+regs = 40
+stack = 0
+spill_store = 0
+spill_load = 0
+compile_s = 2.0
+gated = "merge"

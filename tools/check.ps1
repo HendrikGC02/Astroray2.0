@@ -256,6 +256,9 @@ try {
       $r.Out | Where-Object { $_ -match '^(Ran |OK$|FAILED|FAIL:|ERROR:)' } | ForEach-Object { Write-Host $_ }
       if ($r.Code -ne 0) { Fail "blender $gn failed (out/check/full.log)" }
     }
+    # The probe build first, so kernelgate full reads fresh capped probe cubins (kernels_probe_capped).
+    $r = Step 'build probe' { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_kernels_gpu_probe }
+    if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'probe build failed (out/check/build.log)' }
     # The rows gated full (0002 D10, 0009 d18), all rules, after the gate's own pass.
     $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $script:waited += $w; Add-ArExcluded $w
     try { $r = Step 'kernelgate full' { & $py -I tools/kernelgate.py --full @dargs } } finally { Exit-ArTreeLock }
@@ -266,8 +269,6 @@ try {
     # The GPU suite's full tier (0009 B-17 launch duration, 099): a whole tier, a few seconds today.
     $r = Step 'gpu full tests' { & $gpuExe --tier=full }
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'gpu full tests failed (out/check/full.log)' }
-    $r = Step 'build probe' { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_kernels_gpu_probe }
-    if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'probe build failed (out/check/build.log)' }
     $r = Step 'probe registers' { & $py -I tools/kernelgate.py --probe }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'probe registers failed' }
     # Warnings only (0002 D10, ruling 17): shown, never a failure.

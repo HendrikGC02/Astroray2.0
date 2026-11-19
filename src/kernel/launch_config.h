@@ -46,10 +46,13 @@ struct LaunchRow {
 
 // Add one line per kernel in the task that adds the kernel. ar_selftest is the test module of
 // tests/gpu/kernels/selftest.cu, kept here so the gate has a live row to check. ar_test_fault is
-// src/kernel_gpu/test_fault.cu, a gate-hook build module (never embedded, 0001 V14).
+// src/kernel_gpu/test_fault.cu, a gate-hook build module (never embedded, 0001 V14). ar_probe_m1 is
+// src/kernel_gpu/probe_m1.cu, the M-1 probe (0005 Risks), built by the probe target only; it
+// carries shade_surface's launch bounds.
 #define AR_LAUNCH_ROWS(X) \
   X(ar_selftest, 256, 0, 0, OTHER) \
   X(ar_test_fault, 32, 0, 0, OTHER) \
+  X(ar_probe_m1, 256, 2, 1, VM) \
   X(k_queue_build_count, 256, 0, 0, OTHER) \
   X(k_queue_build_scan, 256, 0, 0, OTHER) \
   X(k_queue_build_scatter, 256, 0, 0, OTHER) \
