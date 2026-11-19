@@ -14,7 +14,7 @@ Per patch, per channel, the mean of the middle of the patch in the screenshot ag
 |viewport - reference| <= 2/255 (0007 V9). Patch positions in the screenshot come from Blender's world-to-region
 projection, not from the pixels; the reference's patches must be flat, so a wrong layout cannot pass.
 Pixels are read with NumPy as Non-Color bytes. The Image Editor is not the reference: in Blender 5.3 it showed the
-image under Standard whatever the scene's view settings and "view as render" (measured while writing this).
+image under Standard whatever the scene's view settings and "view as render".
 Ref: docs/decisions/0007-blender-integration.md V9, d32 (no engine tonemapping in the beauty path), d29
 (draw through bind_display_space_shader).
 """
@@ -105,7 +105,7 @@ def build_chart(scene):
         scene.collection.objects.link(ob)
     cam = bpy.data.cameras.new("Camera")
     # Perspective, looking straight at the chart: 36 mm sensor, 50 mm lens at 6 m sees 4.32 m across.
-    # (An orthographic camera renders black in the viewport today; reported in task 097, not a V9 matter.)
+    # (An orthographic camera renders black in the viewport, so the chart avoids one.)
     cam.type = "PERSP"
     cam.lens, cam.sensor_width = 50.0, 36.0
     cam.passepartout_alpha = 0.0
@@ -338,12 +338,13 @@ class TestColourChart(unittest.TestCase):
         self.run_case("agx_look")
 
     def test_the_chart_is_sensitive_to_the_transform(self):
-        """The cases differ from each other by far more than the tolerance, so a viewport that skipped or
-        doubled a transform could not pass them all."""
-        a, b = (self.measure(n)["reference"][0] for n in ("standard", "agx"))
-        c = self.measure("standard_exposure_plus1")["reference"][0]
-        self.assertGreater(float(np.abs(a - b).max()), 10 * TOLERANCE)
-        self.assertGreater(float(np.abs(a - c).max()), 10 * TOLERANCE)
+        """Each case's reference differs from its base case by more than the tolerance, so a viewport that
+        dropped the exposure, the gamma or the look (or the view transform) would fail that case."""
+        ref = {n: self.measure(n)["reference"][0] for n in ("standard", "agx", "standard_exposure_plus1",
+                                                             "standard_gamma", "agx_look")}
+        for other, base in (("agx", "standard"), ("standard_exposure_plus1", "standard"),
+                            ("standard_gamma", "standard"), ("agx_look", "agx")):
+            self.assertGreater(float(np.abs(ref[other] - ref[base]).max()), TOLERANCE, f"{other} vs {base}")
 
 
 def save_evidence():

@@ -24,3 +24,4 @@ Progress:
 - lead ruling: R is the growth reading (Material Preview minus idle 1.56 GiB + 25% = 1.95, R = 2 GiB) for 0007 d14 and kCudaReserveBytes; V9 reference is Image.save_render, a departure from 'Image Editor' (the editor ignored scene view settings in 5.3); ortho black and bind/unbind canary are follow-ups.
 - R change HELD: tests/gpu/test_sampler_agree.cpp:293 asserts kCudaReserveBytes == 1610612736; told the lead.
 - lead ruling: the test pinning R follows the record: kCudaReserveBytes = 2 GiB, test_sampler_agree.cpp asserts it, 0007 d14 and ruling 19 text updated; canary covers it (cuda_device/reserve rule decision).
+- lead ruling: P5 reads cuMemGetInfo through its own small context, not through the engine (it has no call for it); free bytes are device-wide, so the reading is the same. P5 now computes R as the growth reading. P3 triangle equality was exercised on quads and pole triangles only (no n-gons).

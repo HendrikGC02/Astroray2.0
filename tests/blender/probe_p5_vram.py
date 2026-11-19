@@ -10,15 +10,17 @@ sampled once a second:
   idle:     Blender open on its startup scene, Solid viewport
   solid:    the b5m scene (10,000 instances, 2,000 meshes) loaded, Solid viewport
   material: the same, Material Preview (EEVEE), sampled for 40 s while its shaders compile and draw
-The recorded outcome: R (0007 d14) is the growth Blender can still take after our allocation, so the lead's
-reading is (material - idle) + 25%, rounded up to 2 GiB; the script also prints the largest total + 25%.
-The printed 'within/ABOVE' compares that total with 1.5 GiB and is kept for the record.
+R (0007 d14) is the headroom Blender can still take after our allocation, because free bytes already include
+what it uses at that moment. The probe therefore computes R = (largest Material Preview reading - largest idle
+reading) x 1.25, both from cuMemGetInfo with the probe's own context subtracted, rounded up to 0.5 GiB steps;
+that is R_bytes in the JSON. The totals (desktop included, nvidia-smi too) are printed as context only.
 Ref: docs/decisions/0007-blender-integration.md d14 (reserve rule) and Risks P5;
 CUDA driver API cuMemGetInfo_v2 (cuda.h).
 """
 import ctypes
 import importlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -36,10 +38,11 @@ import blend_writer  # noqa: E402
 import smoke_a1  # noqa: E402
 
 MARGIN = 1.25
-RESERVE_GIB = 1.5
+R_STEP = 0.5 * (1 << 30)  # R is rounded up to this
 GIB = float(1 << 30)
 SAMPLE_S = 1.0
 STATE_S = {"idle": 6, "solid": 8, "material": 40}
+WATCHDOG_S = 300.0  # the idle, load and 40 s Material Preview phases take about 80 s
 T0 = time.monotonic()
 STATE = {"samples": {}}
 EVIDENCE = os.path.join(ROOT, "out", "evidence", "097")
@@ -99,6 +102,9 @@ class Driver:
 
     def tick(self):
         try:
+            if time.monotonic() - T0 > WATCHDOG_S:
+                print(f"watchdog: still in step {self.step}", flush=True)
+                finish(1)
             return getattr(self, "step_" + self.step)()
         except Exception:
             print("probe failed:\n" + traceback.format_exc(), flush=True)
@@ -164,15 +170,18 @@ class Driver:
             used[name] = {"cuda_max": max(r["cuda_used"] for r in rows), "smi_max": max(r["smi_used"] for r in rows),
                           "cuda_final": rows[-1]["cuda_used"], "n": len(rows)}
         peak = max(max(v["cuda_max"], v["smi_max"]) for v in used.values())
-        r = peak * MARGIN
+        growth = used["material"]["cuda_max"] - used["idle"]["cuda_max"]
+        r = math.ceil(growth * MARGIN / R_STEP) * R_STEP
         for name, v in used.items():
             print(f"PROBE P5 {name}: used by Blender and the desktop, max cuMemGetInfo {v['cuda_max'] / GIB:.3f} GiB, "
                   f"nvidia-smi {v['smi_max'] / GIB:.3f} GiB, final {v['cuda_final'] / GIB:.3f} GiB ({v['n']} samples)")
-        verdict = "within" if r <= RESERVE_GIB * GIB else "ABOVE"
-        print(f"PROBE P5 result: largest {peak / GIB:.3f} GiB, R = largest + 25% = {r / GIB:.3f} GiB, "
-              f"{verdict} the provisional {RESERVE_GIB} GiB; total {STATE['total'] / GIB:.2f} GiB", flush=True)
+        print(f"PROBE P5 context only (desktop included): largest total {peak / GIB:.3f} GiB, "
+              f"largest + 25% = {peak * MARGIN / GIB:.3f} GiB; card {STATE['total'] / GIB:.2f} GiB")
+        print(f"PROBE P5 result: growth = Material Preview max - idle max (cuMemGetInfo, own context subtracted) "
+              f"= {growth / GIB:.3f} GiB; x 1.25 = {growth * MARGIN / GIB:.3f} GiB; R rounded up to 0.5 GiB = "
+              f"{r / GIB:.2f} GiB", flush=True)
         os.makedirs(EVIDENCE, exist_ok=True)
-        json.dump({"used": used, "R_bytes": int(r), "samples": STATE["samples"]},
+        json.dump({"used": used, "growth_bytes": int(growth), "R_bytes": int(r), "samples": STATE["samples"]},
                   open(os.path.join(EVIDENCE, "p5_vram.json"), "w"), indent=1)
         finish(0)
 
