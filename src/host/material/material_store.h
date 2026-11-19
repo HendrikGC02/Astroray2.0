@@ -60,6 +60,9 @@ struct MaterialArrays {
   std::vector<std::vector<EmissionTerm>> emission_estimates;  // per header; empty = 0
   std::vector<uint32_t> emission_sampling;  // per header: ar_material_desc's AR_EMISSION_SAMPLING_*
   std::vector<uint32_t> pass_index;         // per header: ar_material_desc::pass_index (IndexMA)
+  // Distinct surface programs among the keyed headers (sort.h sort_program_count): the material
+  // sort's threshold (RULINGS 80), counted once here so no pass reads the headers back.
+  uint32_t program_count = 0;
   uint64_t bytes() const;
 };
 

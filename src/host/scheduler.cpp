@@ -297,7 +297,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     bool progress = false;
     // 3. Sort the SHADE_SURFACE segment by material when worthwhile (sort_wanted).
     const uint32_t ss = static_cast<uint32_t>(Stage::SHADE_SURFACE);
-    if (ar::sort_wanted(t.stage[ss].count, config.material_header_count)) {
+    if (ar::sort_wanted(t.stage[ss].count, config.material_program_count)) {
       const uint32_t n = t.stage[ss].count;
       const uint32_t sort_launch = gpu_ ? ar::gpu_tile_grid(n) : ar::sort_grid(n);
       if (at_boundary(&status)) return status;

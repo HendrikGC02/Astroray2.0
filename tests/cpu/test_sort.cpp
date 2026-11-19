@@ -255,12 +255,66 @@ TEST_CASE("sort/thresholds are the provisional values of 0002 D7") {
 TEST_CASE("sort/one real material plus default hits stays unsorted") {
   // The default-material bin does not count toward kSortMinMaterials (lead ruling on 0002 D7).
   Rig r(ar::kSortMinItems, true, 51);
+  r.headers[1].program_offset = 8;  // headers 0 and 1 run two programs (RULINGS 80 counts programs)
   r.scene.material_header_count = 1;
   CHECK(!ar::sort_wanted(r.kg));
   r.scene.material_header_count = 2;
   CHECK(ar::sort_wanted(r.kg));
   r.table.stage[uint32_t(Stage::SHADE_SURFACE)].count = ar::kSortMinItems - 1;
   CHECK(!ar::sort_wanted(r.kg));
+}
+
+TEST_CASE("sort/one program among many materials stays unsorted") {
+  // B-5M's case (RULINGS 80): 300 materials whose surfaces fold to constants share one program,
+  // so sorting buys no coherence and the segment keeps its order.
+  WideRig r(ar::kSortMinItems, 81);
+  for (ar::MaterialHeader& h : r.headers) h = ar::MaterialHeader{0, 0, 0, ar::CONSTANT_SURFACE};
+  CHECK(ar::sort_program_count(r.headers.data(), kWideHeaders) == 1u);
+  CHECK(!ar::sort_wanted(r.kg));
+  CHECK(!ar::sort_wanted(ar::kSortMinItems, 1u));
+  // Two materials that share one non-constant program: still one program, still unsorted.
+  Rig two(ar::kSortMinItems, true, 82);
+  two.headers[0] = two.headers[1] = ar::MaterialHeader{12, 0, 0, 0};
+  two.scene.material_header_count = 2;
+  CHECK(ar::sort_program_count(two.headers.data(), 2u) == 1u);
+  CHECK(!ar::sort_wanted(two.kg));
+}
+
+TEST_CASE("sort/program count") {
+  // Constant surfaces are one program wherever their offsets point; each other offset is one.
+  std::vector<ar::MaterialHeader> h;
+  for (uint32_t m = 0; m < 300; ++m)
+    h.push_back(m % 2 == 0 ? ar::MaterialHeader{40u * m, 0, 0, ar::CONSTANT_SURFACE | ar::CONSTANT_EMISSION}
+                           : ar::MaterialHeader{40u * m, m, 0, 0});
+  CHECK(ar::sort_program_count(h.data(), 300u) == 151u);
+  CHECK(ar::sort_program_count(h.data(), 1u) == 1u);   // the first header only (a constant one)
+  CHECK(ar::sort_program_count(h.data(), 0u) == 0u);
+  CHECK(ar::sort_program_count(nullptr, 300u) == 0u);  // no material tables
+}
+
+TEST_CASE("sort/300 materials over two programs sort and match a bucket reference") {
+  // Half the materials fold to constants, half share one program: two programs, so the segment
+  // sorts, by material id as before, and equals the stable bucket order.
+  const uint32_t n = 100003;
+  WideRig r(n, 91);
+  for (uint32_t m = 0; m < kWideHeaders; ++m)
+    r.headers[m] = m % 2 == 0 ? ar::MaterialHeader{0, m, 0, ar::CONSTANT_SURFACE} : ar::MaterialHeader{0, m, 0, 0};
+  CHECK(ar::sort_program_count(r.headers.data(), kWideHeaders) == 2u);
+  REQUIRE(ar::sort_wanted(r.kg));
+  const uint32_t grid = ar::sort_grid(n);
+  r.dev.launch(KernelId::SORT_COUNT, grid);
+  r.dev.launch(KernelId::SORT_SCAN, ar::sort_scan_grid(n));
+  r.dev.launch(KernelId::SORT_SCATTER, grid);
+  std::vector<std::vector<uint32_t>> bucket(kWideHeaders + 1);
+  for (uint32_t i = 0; i < n; ++i) {
+    const uint32_t slot = r.queue[kSegmentStart + i];
+    bucket[r.material_of(slot)].push_back(slot);
+  }
+  uint32_t at = 0, wrong = 0;
+  for (const std::vector<uint32_t>& b : bucket)
+    for (uint32_t s : b) wrong += r.sorted[at++] != s;
+  CHECK(at == n);
+  CHECK(wrong == 0);
 }
 
 }  // TEST_SUITE

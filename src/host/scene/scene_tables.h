@@ -152,6 +152,9 @@ struct SceneTableSet {
   const ar::LightSamplerView* light_sampler = nullptr;
   const ar::EDielTable* e_diel = nullptr;
   ar::SceneData scene_host{};
+  // Host only: distinct surface programs among the materials (MaterialArrays::program_count), the
+  // material sort's threshold (RULINGS 80); the scheduler compares it with kSortMinMaterials.
+  uint32_t material_program_count = 0;
 };
 
 // Held by the scene; acquire_scene_tables takes its lock.

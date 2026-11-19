@@ -672,6 +672,7 @@ void Session::bind_globals() {
   // The material sort's threshold and scratch size follow the pinned table set (the scheduler
   // reallocates sort_counts when the count changes).
   scheduler_->config.material_header_count = tables_ ? tables_->scene_host.material_header_count : 0u;
+  scheduler_->config.material_program_count = tables_ ? tables_->material_program_count : 0u;
 }
 
 void Session::update_camera_and_filter(uint64_t generation) {
