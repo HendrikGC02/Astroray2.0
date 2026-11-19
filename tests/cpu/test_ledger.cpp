@@ -78,7 +78,7 @@ TEST_CASE("ledger/records carry scene, session, category and bytes") {
 TEST_CASE("ledger/invalid use throws") {
   Ledger l;
   CHECK_THROWS_WITH_AS(l.add({}, LedgerCategory::FILM, 0), "ledger: an allocation of zero bytes", std::invalid_argument);
-  CHECK_THROWS_WITH_AS(l.add({}, static_cast<LedgerCategory>(16), 8), "ledger: unknown category 16", std::invalid_argument);
+  CHECK_THROWS_WITH_AS(l.add({}, static_cast<LedgerCategory>(17), 8), "ledger: unknown category 17", std::invalid_argument);
   CHECK(l.total() == 0);
   const uint64_t id = l.add({}, LedgerCategory::FILM, 8);
   l.remove(id);

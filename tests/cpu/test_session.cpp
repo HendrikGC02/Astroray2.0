@@ -249,6 +249,31 @@ TEST_CASE("session/stale epoch resolve is dropped") {
   CHECK(s.film_samples(0) == 1);
 }
 
+TEST_CASE("session/pass time is published with its sample count") {
+  // A poll that sees a new sample count reads that pass's time, never the previous pass's (0 before
+  // the first pass): both are published under one lock. The hook holds the render thread between the
+  // resolve and the publish, where publishing the count early would show it without its time.
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  Ledger ledger;
+  ThreadPool pool(ctx, 2);
+  CpuDevice dev(ledger, pool);
+  dev.register_production_stages();
+  SessionOptions o;
+  o.max_width = o.max_height = 4;
+  o.test_sleep_after_resolve_ms = 100;
+  Session s(scene, dev, o);
+  s.start();
+  SessionProgress p;
+  REQUIRE(until([&] {
+    p = s.progress();
+    return p.samples_per_pixel >= 1;
+  }));
+  CHECK(p.samples_per_pixel == 1);
+  CHECK(p.last_pass_ms > 0.0f);
+  REQUIRE(s.wait(20000));
+}
+
 TEST_CASE("session/failed session refuses start, resume and set_view") {
   // A heat map with no sample limit cannot be drawn: the render thread fails the session, and
   // FAILED is final until close (0007 d5; rule 5: no call on it reports success).

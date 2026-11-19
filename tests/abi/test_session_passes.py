@@ -3,8 +3,11 @@
 rulings 74, 75): settings that request Position make ar_session_pass_count and ar_session_pass_info
 list the primary-hit AOVs, ar_session_read_pass returns finite values for Position, a pass name the
 engine cannot produce gives one PASS_UNSUPPORTED entry, and after a commit that rebuilds the film
-an index from the old pass list is refused until pass_count is called again. The scene has no
-geometry (every camera ray misses); tests/cpu/test_session_passes.cpp checks Position on a hit."""
+an index from the old pass list is refused until pass_count is called again. ar_settings.statistics
+(126; 0008 d12, on by default) switches the statistics channels: off, the film has no AR Bounces pass
+and the bounce display raises one PASS_UNSUPPORTED entry; on again, the pass is back; another value
+is refused. The scene has no geometry (every camera ray misses); tests/cpu/test_session_passes.cpp
+checks Position on a hit."""
 import ctypes
 import importlib.util
 import math
@@ -52,7 +55,7 @@ class TestSessionPasses(unittest.TestCase):
         self.assertEqual(lib.ar_scene_create(self.ctx, ctypes.byref(sdesc), ctypes.byref(self.scene)), a.AR_OK)
         self.addCleanup(lib.ar_scene_destroy, self.scene)
 
-    def commit_settings(self, passes):
+    def commit_settings(self, passes, statistics=None, expect=None):
         a, lib = self.abi, self.lib
         edit = ctypes.c_void_p()
         self.assertEqual(lib.ar_scene_edit_begin(self.scene, ctypes.byref(edit)), a.AR_OK)
@@ -63,9 +66,17 @@ class TestSessionPasses(unittest.TestCase):
         s.passes, s.pass_count = names, len(passes)
         s.samples = s.viewport_samples = 2
         s.pixel_filter, s.pixel_filter_width, s.film_exposure = a.AR_FILTER_BOX, 1.0, 1.0
+        s.max_bounces = 4  # the bounce heat map's range
+        if statistics is not None:
+            s.statistics = statistics
         self.assertEqual(lib.ar_edit_set_settings(edit, ctypes.byref(s)), a.AR_OK)
         gen = ctypes.c_uint64()
-        self.assertEqual(lib.ar_edit_commit(edit, ctypes.byref(gen)), a.AR_OK)
+        st = lib.ar_edit_commit(edit, ctypes.byref(gen))
+        if expect is not None:
+            self.assertEqual(st, expect)
+            lib.ar_edit_abort(edit)
+            return None
+        self.assertEqual(st, a.AR_OK)
         return gen.value
 
     def start_session(self):
@@ -143,6 +154,41 @@ class TestSessionPasses(unittest.TestCase):
             if e.code == a.AR_REPORT_PASS_UNSUPPORTED:
                 hits.append((bytes(e.detail).split(b"\0")[0], e.level, e.subject, e.count))
         self.assertEqual(hits, [(UNKNOWN, a.AR_LEVEL_WARNING, 0, 1)])
+
+    def pass_unsupported(self, session):
+        a, lib = self.abi, self.lib
+        info = a.ar_report_info()
+        self.assertEqual(lib.ar_session_report_info(session, ctypes.byref(info)), a.AR_OK)
+        hits = []
+        for i in range(info.entry_count):
+            e = a.ar_report_entry()
+            self.assertEqual(lib.ar_session_report_entry(session, i, ctypes.byref(e)), a.AR_OK)
+            if e.code == a.AR_REPORT_PASS_UNSUPPORTED:
+                hits.append((bytes(e.detail).split(b"\0")[0], e.level, e.subject, e.count))
+        return hits
+
+    def test_statistics_off_and_on(self):
+        a, lib = self.abi, self.lib
+        gen = self.commit_settings([], statistics=a.AR_STATISTICS_OFF)
+        session = self.start_session()
+        self.assertEqual(lib.ar_session_set_display_mode(session, a.AR_DISPLAY_BOUNCE_COUNT), a.AR_OK)
+        self.settle(session, gen)
+        off = self.passes(session)
+        self.assertNotIn("AR Bounces", off)
+        self.assertIn("AR Sample Count", off)  # n is the resolve's, not a statistics channel
+        # The bounce display met a film without statistics: one warning, the render goes on.
+        self.assertEqual(self.pass_unsupported(session), [(b"AR Bounces", a.AR_LEVEL_WARNING, 0, 1)])
+        gen = self.commit_settings([], statistics=a.AR_STATISTICS_ON)
+        self.settle(session, gen)
+        on = self.passes(session)
+        self.assertIn("AR Bounces", on)
+        index, comps = on["AR Bounces"]
+        st, values = self.read(session, index, comps)
+        self.assertEqual(st, a.AR_OK)
+        self.assertTrue(all(math.isfinite(x) for x in values), values)
+        self.assertEqual(len(self.pass_unsupported(session)), 1, "the statistics are on again: no new entry")
+        self.commit_settings([], statistics=a.AR_STATISTICS_OFF + 1, expect=a.AR_ERR_INVALID_ARGUMENT)
+        print(f"statistics off: {len(off)} passes; on: {len(on)} passes (AR Bounces at {index})")
 
     def test_stale_index_after_a_rebuild_is_refused(self):
         # With the AOVs, IndexMA sits where AR Invalid sits without them; both are one-component
