@@ -158,7 +158,7 @@ class Driver:
              "-ProcessId", str(os.getpid()), "-OutPrefix", self.prefix, "-StopFile", self.stop_file,
              "-RegionX", str(STATE["region"][0]), "-RegionY", str(STATE["region"][1]),
              "-RegionW", str(STATE["region"][2]), "-RegionH", str(STATE["region"][3]),
-             "-MaxSeconds", str(WATCHDOG_S)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+             "-MaxSeconds", str(WATCHDOG_S), "-DumpPng", self.prefix + ".png"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         self.go("poller_ready")
         return 0.2
 
@@ -259,9 +259,13 @@ class Driver:
         try:
             if self.poller is not None:
                 text = self.poller.communicate(timeout=60)[0]
-                out["poller"] = text.strip()
+                out["poller"] = (text or "").strip()
                 meta, t, g = load_capture(self.prefix)
                 out["capture"] = meta
+                if meta.get("foreign_checks"):
+                    out["errors"].append(f"{meta['foreign_checks']} checks found another window over the capture area")
+                if meta["rate_hz"] < 30:
+                    out["errors"].append(f"the poller ran at {meta['rate_hz']} Hz")
                 for sw in STATE["switches"]:
                     r = detect(t, g, sw["t_on"], sw["t_off"] - sw["t_on"])
                     r.update(sw)
