@@ -1,0 +1,12 @@
+diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
+index 97c3658..72781e9 100644
+--- a/src/device/cuda/cuda_device.cpp
++++ b/src/device/cuda/cuda_device.cpp
+@@ -484,6 +484,7 @@ void CudaDevice::memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value,
+   // Ref: CUDA C++ Programming Guide, asynchronous concurrent execution (streams).
+   s.check(s.cu.cuMemsetD8Async_(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, value, bytes, s.stream),
+           "cuMemsetD8Async");
++  s.sync();
+ }
+ 
+ void CudaDevice::copy(const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src, uint64_t src_offset,
