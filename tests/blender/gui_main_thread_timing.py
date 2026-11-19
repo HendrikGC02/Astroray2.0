@@ -7,7 +7,8 @@ thread is timed: the first scene and session create, the first full sync of S2 (
 materials), a move, a material edit, a lamp edit, a vertex edit, a view change, display acquire and release on every
 draw, session close and destroy. The timer-driven sequence ends the process itself; exit code 1 on any failed case.
 A call from another thread is not counted. The limit is B-21's, read from tools/budgets.toml; only the calls that copy
-data the host supplied are exempt (EXEMPT), each with the reason it is a copy.
+data the host supplied are exempt (EXEMPT), each with the reason it is a copy, and the process's first
+ar_context_create (EXEMPT_FIRST_CALL, RULINGS 81).
 Ref: docs/decisions/0007-blender-integration.md V22, d23; docs/decisions/0009-build-test-process.md B-21;
 tests/blender/gui_edits.py (the driving pattern).
 """
@@ -288,7 +289,9 @@ def report():
         ms = [m for m, _ in rows]
         worst = max(rows)
         print(f"RESULT main-thread call {name}: n={len(ms)} median {statistics.median(ms):.3f} ms max {worst[0]:.3f} ms "
-              f"(in {worst[1]}){' EXEMPT: ' + EXEMPT[name] if name in EXEMPT else ''}{' OVER' if worst[0] > limit and name not in EXEMPT else ''}",
+              f"(in {worst[1]}){' EXEMPT: ' + EXEMPT[name] if name in EXEMPT else ''}"
+              f"{' FIRST CALL EXEMPT: ' + EXEMPT_FIRST_CALL[name] if name in EXEMPT_FIRST_CALL else ''}"
+              f"{' OVER' if worst[0] > limit and name not in EXEMPT and name not in EXEMPT_FIRST_CALL else ''}",
               flush=True)
     print(f"RESULT B-21 limit {limit} ms; first frame at {STATE.get('first_frame_s')} s; run {STATE['seconds']} s", flush=True)
 

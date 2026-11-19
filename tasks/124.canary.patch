@@ -1,0 +1,34 @@
+diff --git a/src/capi/context.cpp b/src/capi/context.cpp
+index dbc96db..4dbc1fb 100644
+--- a/src/capi/context.cpp
++++ b/src/capi/context.cpp
+@@ -224,7 +224,6 @@ AR_API ar_status ar_context_destroy(ar_context ctx) {
+       if (!rerr.empty()) ctx->log.line("ERROR", "recording " + ctx->record_path + ": " + rerr);
+     }
+     // Waits for every deferred scene free; d23 lets this block at addon unregister and Blender exit.
+-    ctx->reaper.drain();
+     ctx->tombstones.clear();
+     ctx->log.line("INFO", "context destroyed");
+     delete ctx;
+@@ -266,7 +265,7 @@ void astroray::context_retire_scene(ContextState& state, ar_scene_s* h) {
+   // the reaper cannot take it, unwinding frees it here, synchronously.
+   payload->scene = std::move(h->scene);
+   payload->edit = std::move(h->edit);
+-  ctx.reaper.submit(std::move(payload), "scene");
++  payload.reset();
+ }
+ // Declared in host/session/session.h: a session reaches its context only through its scene.
+ namespace astroray {
+diff --git a/src/capi/scene_api.cpp b/src/capi/scene_api.cpp
+index 046c22d..0e1bee4 100644
+--- a/src/capi/scene_api.cpp
++++ b/src/capi/scene_api.cpp
+@@ -175,7 +175,7 @@ AR_API ar_status ar_scene_destroy(ar_scene h) {
+   AR_RECORD_BODY({
+   if (!h) return AR_ERR_INVALID_ARGUMENT;
+   try {
+-    if (!h->scene) return fail(h, AR_ERR_INVALID_ARGUMENT, kDestroyed);
++    if (!h->scene) return AR_OK;
+     // A session that is not CLOSED still holds the scene (its activation listener); destroying the
+     // scene under it is a host error (0007 d5, d23: close, wait for CLOSED, then destroy).
+     if (h->scene->generations().listener_count() != 0)

@@ -11,9 +11,14 @@ Do:
 4. Remove the two entries from KNOWN_BREACHES; gui_main_thread_timing.py passes with B-21 unchanged.
 Acceptance: `pwsh tools/check.ps1 gate` passes; `Invoke-ArBlender -Gui -Script tests/blender/gui_main_thread_timing.py` passes with no known breaches; the PR body holds the before and after call times.
 Look at: none.
-Canary: tasks/124.canary.patch must turn red: the destruction tests you add (name them in land format) and tests/blender/gui_main_thread_timing.py "TestMainThreadTiming.test_no_call_exceeds_b21" (the patch frees the scene synchronously again).
+Canary: tasks/124.canary.patch must turn red: tests/abi/test_scene_api.py "TestSceneApi.test_destroyed_scene_handle_fails_loudly", tests/abi/test_scene_api.py "TestSceneApi.test_context_destroy_waits_for_pending_scene_frees", tests/blender/gui_main_thread_timing.py "TestMainThreadTiming.test_no_call_exceeds_b21"
 Budget: none added.
 Depends on: 094.
 Size: M (about 250 lines); stop and report at 2x.
 Progress:
 - started
+- Measured (b5m, CUDA, CLI): ar_scene_destroy 110.5-113.4 ms = scene table device copies 59.4-59.9, host mesh records 33.5-36.0, OptiX accel 9.3-9.6, rest ~6. First ar_context_create 13-16 ms standalone = first static-cudart call (cudaDriverGetVersion); later 0.2 ms.
+- Per-context reaper thread (src/host/scene/reaper.*) frees destroyed scenes FIFO; the handle becomes a tombstone (AR_ERR_INVALID_ARGUMENT, "destroyed") until ar_context_destroy, which drains first. No new status code (lead).
+- RULINGS 81 (lead): D2.8's synchronous CUDA check stays; B-21 does not count the once-per-process driver init. CPU contexts skip the CUDA probe; the GUI test exempts only the first ar_context_create (EXEMPT_FIRST_CALL).
+- GUI test (lead, option A): step_closing waits for the "scene freed" log line before shutdown, so ar_context_destroy is not timed against a pending free.
+- cache_dir = extension_path_user(__package__, create=True) (0007 d45): OptiX module 85.1-90.7 ms on the first Blender start, 0.9 ms on the second.
