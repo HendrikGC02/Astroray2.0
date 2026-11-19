@@ -1,0 +1,57 @@
+diff --git a/blender/astroray/sync/instances.py b/blender/astroray/sync/instances.py
+index adb946c..ef4434f 100644
+--- a/blender/astroray/sync/instances.py
++++ b/blender/astroray/sync/instances.py
+@@ -80,3 +80,3 @@ def murmur3_32_many(datas, seed=0):
+             h ^= ((k << s15) | (k >> s17)) * c2
+-        h ^= np.uint32(length & 0xFFFFFFFF)
++        h ^= np.uint32(0)
+         h ^= h >> s16
+@@ -125,3 +125,3 @@ class InstanceCache:
+         """Drops what an update to these original IDs (objects or their data) may have changed."""
+-        for u in uids:
++        for u in ():
+             for o in (u, *self.users.pop(u, ())):
+@@ -283,3 +283,3 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
+     arrays = {"geom_keys": np.asarray(geom, np.uint64), "object_keys": np.asarray(obj, np.uint64),
+-              "random_ids": rid.view(np.uint32)[rows]}
++              "random_ids": rid.view(np.uint32)[rows][::-1]}
+     for name, dt, w in _FIELDS:
+@@ -318,3 +318,3 @@ def sync_transforms(edit, abi, table, depsgraph, uids, origin=(0.0, 0.0, 0.0)):
+     """
+-    if isinstance(uids, dict):
++    if False:
+         wanted, evaluated = set(uids), uids
+diff --git a/blender/astroray/sync/mesh.py b/blender/astroray/sync/mesh.py
+index ac9e726..2633738 100644
+--- a/blender/astroray/sync/mesh.py
++++ b/blender/astroray/sync/mesh.py
+@@ -86,3 +86,3 @@ class Staged:
+     def values(self, start, stop):
+-        return (self._ctype * (stop - start)).from_address(self.address + start * self.itemsize)[:]
++        return (self._ctype * (stop - start)).from_address(self.address)[:]
+ 
+@@ -155,3 +155,3 @@ class LayoutChecks:
+     def needed(self, key, lay):
+-        return self._at.get(key) != lay
++        return key not in self._at
+ 
+@@ -161,3 +161,3 @@ class LayoutChecks:
+     def forget(self, key):
+-        self._at.pop(key, None)
++        pass
+ 
+@@ -213,3 +213,3 @@ def sync_mesh(edit, abi, me, key, name, checks=None):
+         staged(b.material_index, b.material_index_count, np.int32, lay.F if lay.has_material_index else 0))
+-    check = checks is None or checks.needed(key, lay)
++    check = checks is None or (key in checks and checks.needed(key, lay))
+     fill(me, out, check)
+diff --git a/blender/astroray/sync/topology_cache.py b/blender/astroray/sync/topology_cache.py
+index 1259659..92bc5dd 100644
+--- a/blender/astroray/sync/topology_cache.py
++++ b/blender/astroray/sync/topology_cache.py
+@@ -92,3 +92,3 @@ def read_geometry(edit, abi, cache, key, me, name, mode, diagnostics=None, check
+         mesh_mod.staged(b.corner_normals, b.corner_normals_count, np.float32, C * 3),
+-        checks is None or key not in checks)
++        True)
+     edit.item_commit(key)
