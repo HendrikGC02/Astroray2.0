@@ -9,6 +9,12 @@ import os
 
 _lib = None
 _poisoned = False
+_cuda_lost = None  # the message shown when a sticky CUDA error ended CUDA for this process
+
+# 0001 D2.5: a sticky CUDA error reaches the host as "GPU error: <text>. Save your work and restart
+# Blender." and every CUDA call afterwards fails with AR_ERR_DEVICE; the CPU device keeps working.
+GPU_ERROR = "GPU error:"
+RESTART = "Save your work and restart Blender."
 
 
 class PoisonedContext(RuntimeError):
@@ -66,5 +72,32 @@ def poisoned():
 
 
 def devices():
-    """Devices offered to the user; only the CPU once the context is poisoned."""
-    return ["CPU"] if _poisoned else ["CPU", "CUDA"]
+    """Devices offered to the user; only the CPU once the context is poisoned or CUDA is lost."""
+    return ["CPU"] if _poisoned or _cuda_lost else ["CPU", "CUDA"]
+
+
+def cuda_lost():
+    """The message of the sticky CUDA error, or None."""
+    return _cuda_lost
+
+
+def note_failure(lib, abi, failure, session=None):
+    """Called with the text of a failed engine job. A GPU error (0001 D2.5) ends CUDA for the process:
+    returns the message to show (the engine's full text with the status name), after which devices()
+    offers only the CPU. Returns None for any other failure. `session` is the failed session handle, if
+    it still exists: the report entry's detail is cut at 127 characters, its last-error text is not."""
+    global _cuda_lost
+    # Matching the text is sound because 0001 D2.5 fixes it: "GPU error: <text>. Save your work and restart Blender."
+    if GPU_ERROR not in failure and RESTART not in failure:
+        return None
+    text, status = failure, ""
+    if session is not None and session.value:
+        if lib.ar_session_start(session) == abi.AR_ERR_DEVICE:  # a failed session answers every call so
+            status = "AR_ERR_DEVICE: "
+        buf = (ctypes.c_uint8 * 512)()
+        if lib.ar_session_last_error(session, 512, buf) == 0 and buf[0]:
+            text = bytes(buf).split(b"\0")[0].decode("utf-8", "replace")
+    if _cuda_lost is None:
+        _cuda_lost = (f"astroray: {status}{text} CUDA is unavailable until Blender restarts; "
+                      "only the CPU device is offered.")
+    return _cuda_lost

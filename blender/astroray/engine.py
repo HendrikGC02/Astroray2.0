@@ -7,7 +7,7 @@ view_draw drive a viewport.ViewportJob stored on the instance like the F12 job.
 """
 import bpy
 
-from . import render_final, viewport
+from . import native, render_final, viewport
 
 
 class AstrorayRenderEngine(bpy.types.RenderEngine):
@@ -24,6 +24,7 @@ class AstrorayRenderEngine(bpy.types.RenderEngine):
         super().__init__(*args, **kwargs)
         self._job = None
         self._failure = None
+        self._contained = False
 
     def __del__(self):
         # As Cycles' engine does, the job lives on the instance. The attribute is unreachable only
@@ -40,11 +41,17 @@ class AstrorayRenderEngine(bpy.types.RenderEngine):
     def update(self, data, depsgraph):
         self._failure = None
         try:
+            if native.cuda_lost() and depsgraph.scene.astroray.device != "CPU":
+                # 0007 d44: CUDA is gone for this process. A scene saved with CUDA selected matches no item
+                # of the CPU-only dropdown; it is refused here, loudly, never run on the CPU unasked.
+                raise render_final.RenderFailed(native.cuda_lost())
             if self._job is None:
                 self._job = render_final.Job()
             self._job.update(depsgraph)
         except Exception as e:  # reported now; render() raises the same text
-            self._failure = str(e)
+            job = self._job
+            lost = job is not None and native.note_failure(job.lib, job.abi, str(e))
+            self._failure = lost or str(e)
             self.report({"ERROR"}, self._failure)
 
     def render(self, depsgraph):
@@ -53,17 +60,30 @@ class AstrorayRenderEngine(bpy.types.RenderEngine):
         try:
             self._job.render(self)
         except Exception as e:
-            self.report({"ERROR"}, str(e))
+            self.report({"ERROR"}, native.note_failure(self._job.lib, self._job.abi, str(e)) or str(e))
             raise
 
     def view_update(self, context, depsgraph):
         if self._job is None:
             self._job = viewport.ViewportJob()
         self._job.view_update(self, context, depsgraph)
+        self._contain()
 
     def view_draw(self, context, depsgraph):
         if self._job is not None:
             self._job.view_draw(self, context, depsgraph)
+            self._contain()
+
+    def _contain(self):
+        """A viewport job that failed with a GPU error (0001 D2.5): report the full text once and take
+        CUDA off the device list (0007 d44). The job keeps its failure, so Blender stays usable."""
+        job = self._job
+        if self._contained or not job.failure:
+            return
+        self._contained = True
+        message = native.note_failure(job.lib, job.abi, job.failure, job.session)
+        if message is not None:
+            self.report({"ERROR"}, message)
 
 
 def register():
