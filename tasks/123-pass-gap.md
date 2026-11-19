@@ -10,9 +10,12 @@ Do:
 3. Re-measure b1m and b5m (120's method): idle %, pass ms, B-19 share; PR body Result: with commands, and say what the remaining idle is.
 Acceptance: `pwsh tools/check.ps1 gate` passes; the PR body holds the before/after table.
 Look at: none.
-Canary: tasks/123.canary.patch must turn red: a test of each reordering that could change results (name it in land format), or "none: measurement and host scheduling only" if no test changes, with the lead's agreement.
+Canary: tasks/123.canary.patch must turn red: astroray_tests_gpu "cuda_transfers/memset is stream-ordered without a wait"
 Budget: no gate time added.
 Depends on: 120.
 Size: S (about 150 lines); stop and report at 2x.
 Progress:
 - started
+- Gap attributed (nsys --trace=cuda + host timestamps, B-1M): 1.75 ms = invalid-plane readback: fresh 8 MiB vector 0.75, pageable download 0.6, host sum 0.3.
+- Kept the vector between passes, dropped the second bind_globals, CUDA memset stream-ordered (test + canary): gap 0.80 ms; idle B-1M 20.0 -> 13.6 %, B-5M 17.3 -> 11.7 %.
+- Remaining gap needs a device-side invalid total (kernel) or pinned memory through the Device seam: out of scope.
