@@ -63,14 +63,16 @@ def log_marker(text):
     print(text, flush=True)
 
 
-def detect(t, g, t_switch, hold, min_pre=5, min_post=20):
-    """The first capture after t_switch that is within 35 % of the baseline-to-settled distance of the settled
-    image, and whose successor is too. Returns a dict of seconds after the switch and the distances."""
+def detect(t, g, t_switch, hold, min_pre=1, min_post=5):
+    """The first read after t_switch that is within 35 % of the baseline-to-settled distance of the settled
+    image, and whose successor is too. The baseline is the last reads before the switch (a still Solid view is
+    not redrawn, so there may be none within a fixed window). Returns seconds after the switch and the distances."""
     dist = lambda a, b: float(np.abs(a - b).mean())
-    pre, post = (t >= t_switch - 0.6) & (t < t_switch), (t >= t_switch) & (t <= t_switch + hold)
-    if pre.sum() < min_pre or post.sum() < min_post:
-        return {"error": f"too few captures (pre {int(pre.sum())}, post {int(post.sum())})"}
-    base = g[pre].mean(axis=0)
+    before = np.nonzero(t < t_switch)[0][-3:]
+    post = (t >= t_switch) & (t <= t_switch + hold)
+    if len(before) < min_pre or post.sum() < min_post:
+        return {"error": f"too few reads (before {len(before)}, after {int(post.sum())})"}
+    base = g[before].mean(axis=0)
     idx = np.nonzero(post)[0]
     settled = g[idx[-5:]].mean(axis=0)
     d0 = dist(base, settled)
@@ -109,10 +111,22 @@ class Driver:
             raise SystemExit("--read patch|post_view|timer")
         self.cell = int(arg("--cell", "3"))
         self.fmt = arg("--fmt", "UBYTE")        # read_color's data_format: FLOAT is 4 bytes a channel, UBYTE 1
-        self.chans = int(arg("--chans", "3"))
+        self.chans = int(arg("--chans", "4"))
+        if self.chans != 4:   # a 3-channel read_color corrupts the heap on Vulkan (127): Blender dies or hangs
+            raise SystemExit("--chans must be 4 (3-channel read_color corrupts the heap, see the task 127 PR)")
         self.redraw_t = []              # one epoch stamp per redraw of the region, taken first thing in the handler
         self.read_t, self.read_g = [], []   # the same stamps for the redraws whose patch was read, and the patches
         self.reads_done = 0
+
+    @staticmethod
+    def anchor():
+        """With `--log context` Blender logs this access of bpy.context.area, with its own clock, at the line
+        number printed here: a pair (log time, epoch time) that measure_ttff.ps1 uses to put Cycles' log lines
+        on this probe's clock. Called a few times per run; the log parser takes the median offset."""
+        ln = sys._getframe().f_lineno + 2
+        t = time.time()
+        bpy.context.area
+        log_marker(f"TTFF_ANCHOR {ln} {t!r}")
 
     def go(self, name):
         self.step, self.t_step = name, time.monotonic()
@@ -204,8 +218,12 @@ class Driver:
         return 0.02
 
     def step_baseline(self):
+        if self.waited(1.0) and not self.waited(1.2):
+            _, area, _ = self.area()
+            area.tag_redraw()   # one redraw of the Solid view late in the baseline, so the reads have a "before"
         if not self.waited(2.0):
             return 0.05
+        self.anchor()
         return self.switch_on()
 
     def switch_on(self):
@@ -230,6 +248,7 @@ class Driver:
         _, area, _ = self.area()
         STATE["switches"][-1]["t_off"] = time.time()
         log_marker(f"TTFF_OFF {self.n}")
+        self.anchor()
         area.spaces.active.shading.type = "SOLID"
         area.tag_redraw()
         self.go("after_off")
@@ -301,6 +320,7 @@ class Driver:
             out["capture"] = {"redraws": int(len(rt)), "seconds": float(rt[-1] - rt[0]) if len(rt) else 0.0,
                               "reads": int(len(self.read_t))}
             t, g = np.array(self.read_t), np.array(self.read_g)
+            out["read_stats"] = [[float(a), float(b.mean()), float(b.max())] for a, b in zip(t, g)] if len(t) else []
             out["switches"] = []
             for i, sw in enumerate(STATE["switches"]):
                 sw = dict(sw)
@@ -309,7 +329,7 @@ class Driver:
                 if self.src == "none":
                     sw["note"] = "V7a not measured"
                 if self.src in ("read", "both"):
-                    r = detect(t, g, sw["t_on"], sw["t_off"] - sw["t_on"], min_pre=3, min_post=5)
+                    r = detect(t, g, sw["t_on"], sw["t_off"] - sw["t_on"])
                     sw["read"] = r
                     sw["read_s"] = r.get("first_frame_s")
                     sw["first_change_s"] = r.get("first_change_s")
