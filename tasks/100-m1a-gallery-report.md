@@ -13,6 +13,6 @@ Acceptance: `<python> tools/gallery.py --milestone M1a` writes every PNG and sid
 Look at: out/gallery/M1a/*.png, out/report/index.html (the lead inspects the showcase scenes and both heat maps, CPU and GPU, as the roadmap's M1a "Look" requires).
 Canary: none: tooling for the milestone close; its outputs are inspected.
 Budget: none on tiers.
-Depends on: 077, 078, 087, 090, 091, 092, 093, 094, 095, 096, 097, 098, 099, 107, 108, 109, 111, 120, 122, 123, 124, 125, 126, 127, 128, 129, 130 (`check full` runs what they add).
+Depends on: 077, 078, 087, 090, 091, 092, 093, 094, 095, 096, 097, 098, 099, 107, 108, 109, 111, 120, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131 (`check full` runs what they add).
 Size: M (about 300 lines Python); stop and report at 2x.
 Progress:
