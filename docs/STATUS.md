@@ -2,12 +2,10 @@
 
 Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `tools/status.ps1`, never from here.
 
-## Phase
-Build phase (O30); several implementers at once, review for kernel, physics, ABI and process diffs (O31).
-
 ## Current milestone
 M1a "First pixels" (`docs/ROADMAP.md`): textured, lamp-lit meshes render progressively in the Blender 5.3
-viewport and F12 on CUDA and CPU through the final C ABI, every gate live. Open tasks: `tasks/README.md`.
+viewport and F12 on CUDA and CPU through the final C ABI, every gate live. Open tasks: `tasks/README.md`. Build
+phase (O30): several implementers at once, review for kernel, physics, ABI and process diffs (O31).
 
 ## Open owner questions
 During M1a: deleting superseded records (0009 q4); exact JPEG decode parity with Blender (libjpeg-turbo) or ruling
@@ -17,8 +15,8 @@ present method" to the DXGI-layered option, or rules an in-process V7a definitio
 
 ## Red items
 None. Unowned follow-ups (a task that touches the area takes them):
-- ABI/host: no CUDA probe reason or driver version (017); 032's CUDA init uses its own Ledger and creates the context
-  on the init thread (workers make it current); CPU session Ledgers sit outside context and scene totals (052, 104);
+- ABI/host: no CUDA probe reason or driver version (017); the scene's CUDA init creates the context on the init
+  thread (workers make it current); OptiX's first TLAS build takes a fixed ~230 MiB it never frees (126);
   052 starts an epoch per activated commit (no display-only flag, 0007 d12); 051's display ring downloads
   synchronously (0007 d29's pinned slots and copy stream are needed before 096); PASS_UNSUPPORTED entries persist for
   a session's life (ruling 74).
@@ -31,8 +29,8 @@ None. Unowned follow-ups (a task that touches the area takes them):
   An orthographic camera gives an all-black Rendered viewport (perspective is right); removing present.py's
   bind/unbind_display_space_shader leaves V9 green: find where the view transform is applied (097).
 - Tests: check 14 passes a constant hero only via a NaN chi2 exception and misses a hero fixed in generate_camera;
-  per-pixel analytic z 5.50 misses 1 % albedo errors on A1/a4_sphere (energy tests catch them) (078). Flaky once:
-  `cpu_device/parallel_for rethrows`, `wavelengths/stratified lane positions`. Fault tests leave temp dirs.
+  per-pixel analytic z 5.50 misses 1 % albedo errors on A1/a4_sphere (energy tests catch them) (078). Flaky once: `cpu_device/parallel_for
+  rethrows`, `wavelengths/stratified lane positions`. Fault tests leave temp dirs.
 - To settle (076, 107): Russian roulette starts at depth >= max(2, min_bounces) (0004 D2), so min = max bounces does
   not disable it, unlike kernel_globals.h, ar.py and the addon text (check Cycles, fix kernel or text); AUTO emission
   needs an estimate > 0.5 (067; confirm vs Cycles); NaN material inputs render black with no INVALID_SAMPLE (report it).
@@ -43,7 +41,8 @@ None. Unowned follow-ups (a task that touches the area takes them):
   IOR Level need a colour-to-float op (Cycles: luminance); 083 Do 7 (auto-converted Emission flag, per-term RGB for
   AUTO); a spectral AR_SPECTRUM_BLACKBODY lamp option (082 folds temperature to RGB as Cycles does). First
   M1b task: M-1 probe spills 130/376 B over 128/192 (stack 480 B fits; 304 B record + 128 B registers stand), D10
-  ladder steps 1-3 on the probe (092). Material/World.use_nodes are deprecated in 5.3 (087).
+  ladder steps 1-3 on the probe (092). Material/World.use_nodes are deprecated in 5.3 (087). Multi-program scenes:
+  the sort still loses 0.8 ms/pass on b5m_two_programs, so ruling 80's locality-preserving key is due (122).
 
 ## Budget headroom
 Landing gates ~130-165 s of B-09's 180 s (tripwire ~18 s, Blender smoke ~20 s); `check full` ~13-15 min. `check fast`
