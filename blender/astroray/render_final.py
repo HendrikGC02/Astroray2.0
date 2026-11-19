@@ -9,6 +9,7 @@ d48 (per view layer: ar_edit_reset, then a full sync with full reads); 0008 d13a
 (Apache-2.0), BlenderSession::render and ::reset_session, for the update/render split.
 The timing constants are 0009 B-37's: 100 ms wait timeout, 1 s preview interval.
 """
+import contextlib
 import ctypes
 import os
 import time
@@ -47,6 +48,33 @@ class _Context:
 
 class RenderFailed(RuntimeError):
     pass
+
+
+class Timeline:
+    """Wall-clock marks and per-phase seconds of one job, for the first-frame phases (0007 d35 V7b) and the
+    translation cost (0005 M-8). One per Job, so no process-global state. With ASTRORAY_TTFF_LOG=1 every
+    mark is also a log line `astroray ttff <label> <epoch seconds>`."""
+
+    def __init__(self):
+        self.log = os.environ.get("ASTRORAY_TTFF_LOG") == "1"
+        self.marks = {}      # label -> first epoch time it was marked
+        self.phase_s = {}    # phase -> seconds, summed over the job's syncs
+        self.materials = []  # per translated material: (inline_s, walk_s, send_s, op nodes)
+
+    def mark(self, label):
+        """Records the first time `label` is reached; later calls do nothing."""
+        if label not in self.marks:
+            self.marks[label] = time.time()
+            if self.log:
+                print(f"astroray ttff {label} {self.marks[label]:.6f}", flush=True)
+
+    @contextlib.contextmanager
+    def phase(self, name):
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.phase_s[name] = self.phase_s.get(name, 0.0) + time.perf_counter() - t0
 
 
 def _abi():
@@ -171,31 +199,44 @@ def scan(depsgraph, keymap):
     return geoms, mats
 
 
-def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, istate, need_camera=True):
+def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, istate, need_camera=True, tl=None):
     """Everything of one view layer, in 0007 d20's apply order with full reads. Returns (report
     lines for what Blender asks for and the engine does not do, the camera fields). The viewport
     passes need_camera=False: its view comes from the region (set_view), so a scene without a camera
-    syncs, and the camera fields are None; F12 raises without one."""
+    syncs, and the camera fields are None; F12 raises without one.
+    `tl` (a Timeline) receives the seconds of each step and the cost of each material."""
+    tl = tl or Timeline()
     lightgroups = instances.lightgroup_indices(view_layer)
-    fields, lines = settings.build(scene, _colorspace(), view_layer_passes(view_layer), lightgroups)
-    settings.set_settings(edit, abi, fields)
-    world = scene.world
-    world_sync.sync(edit, abi, world.evaluated_get(depsgraph) if world else None, keymap, op_id)
+    with tl.phase("settings_world"):
+        fields, lines = settings.build(scene, _colorspace(), view_layer_passes(view_layer), lightgroups)
+        settings.set_settings(edit, abi, fields)
+        world = scene.world
+        world_sync.sync(edit, abi, world.evaluated_get(depsgraph) if world else None, keymap, op_id)
 
-    geoms, mats = scan(depsgraph, keymap)
+    with tl.phase("scan"):
+        geoms, mats = scan(depsgraph, keymap)
     # Images after the world and before the materials (0007 d20): a TEX_IMAGE holds only the image's key.
-    trees = [m.original.evaluated_get(depsgraph).node_tree for m in mats.values()]
-    if world and world.node_tree:
-        trees.append(world.node_tree)
-    lines.extend(images.sync(edit, abi, keymap, images.used_images(trees), istate))
-    for uid, mat in mats.items():
-        em = tcache.get(mat.original.evaluated_get(depsgraph), keymap, op_id)
-        translate.set_material(edit, abi, keymap, uid, em)
-    lines.extend(lights.sync(edit, abi, depsgraph, keymap, lightgroups=lightgroups))
-    for key, ob in geoms.items():
-        with mesh.mesh_of(ob) as me:
-            mesh.sync_mesh(edit, abi, me, key, ob.original.name)
-    instances.set_instances(edit, abi, instances.build(depsgraph, keymap, lightgroups=lightgroups))
+    with tl.phase("images"):
+        trees = [m.original.evaluated_get(depsgraph).node_tree for m in mats.values()]
+        if world and world.node_tree:
+            trees.append(world.node_tree)
+        lines.extend(images.sync(edit, abi, keymap, images.used_images(trees), istate))
+    with tl.phase("materials"):
+        for uid, mat in mats.items():
+            t0 = time.perf_counter()
+            em = tcache.get(mat.original.evaluated_get(depsgraph), keymap, op_id)
+            t1 = time.perf_counter()
+            translate.set_material(edit, abi, keymap, uid, em)
+            t2 = time.perf_counter()
+            tl.materials.append((em.inline_s, t1 - t0 - em.inline_s, t2 - t1, len(em.nodes)))
+    with tl.phase("lights"):
+        lines.extend(lights.sync(edit, abi, depsgraph, keymap, lightgroups=lightgroups))
+    with tl.phase("meshes"):
+        for key, ob in geoms.items():
+            with mesh.mesh_of(ob) as me:
+                mesh.sync_mesh(edit, abi, me, key, ob.original.name)
+    with tl.phase("instances"):
+        instances.set_instances(edit, abi, instances.build(depsgraph, keymap, lightgroups=lightgroups))
     if not need_camera:
         return lines, None
     cam, cam_lines = camera.final(depsgraph, scene)
@@ -224,6 +265,7 @@ class Job:
         # Everything render() needs from Blender, read by update() (0007 d23: render() reads no scene).
         self.size, self.samples, self.layer = None, None, None
         self._context = None
+        self.timeline = Timeline()
 
     def update(self, depsgraph, need_camera=True):
         """ar_edit_reset, then a full sync of the depsgraph's view layer (0007 d48)."""
@@ -246,10 +288,12 @@ class Job:
             actions = classify.classify(depsgraph, self.cache)
             self.tcache.invalidate([a for a in actions if a.kind == classify.MATERIALS])
             self.istate.note_updates(actions, classify.IMAGES)
+        self.timeline.mark("edit_begin")
         with edit_mod.Edit(abi, lib, self.scene_h) as e:
             e.call("ar_edit_reset")
             self.lines, self.camera = full_sync(e, abi, self.op_id, depsgraph, scene, view_layer,
-                                                self.keymap, self.tcache, self.istate, need_camera)
+                                                self.keymap, self.tcache, self.istate, need_camera, self.timeline)
+        self.timeline.mark("edit_commit")
         self.cache.remember(depsgraph, scene)
         if warning:
             self.lines.append(warning)

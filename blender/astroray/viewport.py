@@ -68,6 +68,7 @@ class ViewportJob(render_final.Job):
     # ---- view_update
 
     def view_update(self, engine, context, depsgraph):
+        self.timeline.mark("view_update")
         self._engine = weakref.ref(engine)
         if self.failure:
             return
@@ -195,9 +196,12 @@ class ViewportJob(render_final.Job):
             render_final._ok(lib, native.call(lib.ar_session_start, s), "ar_session_start",
                              "ar_session_last_error", s)
             self._started = True
+            self.timeline.mark("session_start")
         got = self._present_newest()
         prog = abi.ar_progress()
         native.call(lib.ar_session_get_progress, s, ctypes.byref(prog))
+        if prog.state == abi.AR_STATE_RENDERING:
+            self.timeline.mark("rendering")
         self._revision = self._report(engine, self._reported, self._revision)
         if prog.state == abi.AR_STATE_FAILED:
             render_final._ok(lib, 1, "the session (state FAILED)", "ar_session_last_error", s)
@@ -242,6 +246,7 @@ class ViewportJob(render_final.Job):
                     self.showing_heat = False
                 if self.t_first_frame is None:
                     self.t_first_frame = time.monotonic()
+                self.timeline.mark("first_frame")
                 if self.frames is not None:
                     self._log_frame(frame)
                 if self.check_uploads > 0 and not self.showing_heat:
@@ -293,6 +298,7 @@ class ViewportJob(render_final.Job):
             render_final._ok(lib, native.call(lib.ar_session_create, self.scene_h, ctypes.byref(sd),
                                               ctypes.byref(self.session)),
                              "ar_session_create", "ar_scene_last_error", self.scene_h)
+            self.timeline.mark("session_create")
             self.views = camera.ViewSync()
             self._mode_sent = None
             self._last_id = 0
