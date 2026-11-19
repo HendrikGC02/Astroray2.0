@@ -16,3 +16,4 @@ Budget: a few seconds of CI.
 Depends on: 080, 009, 086, 110, 111 (the fragile list is final only after the last Blender task).
 Size: S (about 150 lines); stop and report at 2x.
 Progress:
+- started
