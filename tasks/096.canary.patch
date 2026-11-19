@@ -1,0 +1,35 @@
+diff --git a/blender/astroray/render_final.py b/blender/astroray/render_final.py
+index 88303d7..b3947ac 100644
+--- a/blender/astroray/render_final.py
++++ b/blender/astroray/render_final.py
+@@ -341,6 +341,7 @@ class Job:
+             if prog.state in (abi.AR_STATE_CONVERGED, abi.AR_STATE_FAILED, abi.AR_STATE_CLOSED):
+                 break
+             if break_requested(engine) and not cancelled:
++                time.sleep(0.25)  # canary: a cancel that is late
+                 native.call(lib.ar_session_cancel, s)
+                 cancelled = True
+             if cancelled and prog.state in (abi.AR_STATE_PAUSED, abi.AR_STATE_TRIMMED):
+diff --git a/blender/astroray/viewport.py b/blender/astroray/viewport.py
+index 4552bd7..dc74807 100644
+--- a/blender/astroray/viewport.py
++++ b/blender/astroray/viewport.py
+@@ -198,6 +198,9 @@ class ViewportJob(render_final.Job):
+         digest = camera.view_hash(rv3d, w, h, rv3d.view_perspective == "CAMERA")
+         if self.views.update(lambda sess, v: native.call(lib.ar_session_set_view, sess, v), abi, s, f, digest, w, h):
+             self.events.append("set_view")
++            if time.monotonic() - getattr(self, "_late", 0.0) > 0.5:
++                time.sleep(0.12)  # canary: a latch that is late, for a single change but not inside an orbit
++            self._late = time.monotonic()
+             if self._st is not None:
+                 self._st["set_view"] = True
+         mode = _DISPLAY_MODES[depsgraph.scene.astroray.display_mode]
+@@ -248,7 +251,7 @@ class ViewportJob(render_final.Job):
+         if not frame.frame_id:
+             return False
+         try:
+-            self._last_id = frame.frame_id
++            pass  # canary: the last acquired id is never kept, so the newest frame is shown again and again
+             shown = self.present.wants(frame)
+             if self._st is not None:
+                 self._log_stamp(frame, shown)

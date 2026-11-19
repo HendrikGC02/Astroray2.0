@@ -14,7 +14,7 @@ A phase that fails records its error and the run goes on, so a case fails only f
 Bound of one view change (0007 d25): measured from the view_draw that latched the change (set_view) to the end of
 the view_draw that presented the first frame of a newer generation; allowed are the rest of the pass in flight
 plus one pass (2 x the pass time), the host picking the frame up at its next redraw (one redraw interval) and the
-present (that view_draw's own duration).
+present (the upload and the draw of that view_draw, not its other work).
 Ref: docs/decisions/0007-blender-integration.md d25, d27, V12; docs/decisions/0009-build-test-process.md B-17
 (target 20 ms, fails above 100 ms), B-32, B-37.
 """
@@ -235,7 +235,7 @@ class Driver:
         STATE.setdefault("changes", []).append({
             "to_screen_ms": (draw["t"] + draw["dur_s"] - sv["t"]) * 1e3, "from_change_ms": (draw["t"] + draw["dur_s"] - self.t_change) * 1e3,
             "pass_ms": max(near), "redraw_ms": float(np.median(np.diff(ts))) * 1e3 if len(ts) > 2 else 0.0,
-            "present_ms": draw["dur_s"] * 1e3})
+            "present_ms": (draw["upload_s"] + draw["draw_s"]) * 1e3})
         self.n += 1
         self.go("change" if self.n < CHANGES else "orbit_start")
         return 1.0
@@ -305,7 +305,7 @@ class TestLatency(Case):
         a, b = STATE["orbit_window"]
         draws = [d for d in STATE["stamps"]["draws"] if a <= d["t"] <= b]
         gaps = np.diff([f["t"] for f in fr]) * 1e3
-        bound = 2 * np.percentile([f["pass_ms"] for f in fr], 99) + float(np.median(np.diff([d["t"] for d in draws]))) * 1e3             + np.percentile([d["dur_s"] * 1e3 for d in draws if d["frame"]], 99)
+        bound = 2 * np.percentile([f["pass_ms"] for f in fr], 99) + float(np.median(np.diff([d["t"] for d in draws]))) * 1e3             + np.percentile([(d["upload_s"] + d["draw_s"]) * 1e3 for d in draws if d["frame"]], 99)
         print(f"RESULT latency {SCENE} orbit: {len(fr)} frames in {ORBIT_S:.0f} s, gap median {np.median(gaps):.1f} p99 "
               f"{np.percentile(gaps, 99):.1f} max {gaps.max():.1f} ms against bound {bound:.1f} ms, not presented {len(notshown)}")
         self.assertEqual(sorted(set(ids)), ids, "a frame was acquired twice or out of order")
