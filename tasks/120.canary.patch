@@ -1,5 +1,5 @@
 diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
-index 484b660..1bf2028 100644
+index 484b660..55c49dc 100644
 --- a/src/device/cuda/cuda_device.cpp
 +++ b/src/device/cuda/cuda_device.cpp
 @@ -419,7 +419,7 @@ void CudaDevice::upload(const DeviceBuffer& dst, uint64_t offset, const void* sr
@@ -7,7 +7,7 @@ index 484b660..1bf2028 100644
    Impl& s = *impl_;
    s.bind();
 -  s.invalidate_globals(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, bytes);
-+  // canary: the bound globals are written without dropping the cached table address
++  // canary: upload writes the bound globals without dropping the cached table address
    s.check(s.cu.cuMemcpyHtoDAsync_(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, src, bytes, s.stream),
            "cuMemcpyHtoDAsync");
    s.sync();
@@ -20,6 +20,15 @@ index 484b660..1bf2028 100644
      pos = Impl::kTableBytes;
    }
    std::memcpy(s.pinned + pos, src, bytes);
+@@ -469,7 +469,7 @@ void CudaDevice::copy(const DeviceBuffer& dst, uint64_t dst_offset, const Device
+   if (bytes == 0) return;
+   Impl& s = *impl_;
+   s.bind();
+-  s.invalidate_globals(reinterpret_cast<CUdeviceptr>(dst.ptr) + dst_offset, bytes);
++  // canary: copy writes the bound globals without dropping the cached table address
+   // Stream-ordered with the launches, no wait (device.h); an error surfaces at the next wait.
+   s.check(s.cu.cuMemcpyDtoDAsync_(reinterpret_cast<CUdeviceptr>(dst.ptr) + dst_offset,
+                                   reinterpret_cast<CUdeviceptr>(src.ptr) + src_offset, bytes, s.stream),
 @@ -482,7 +482,7 @@ void CudaDevice::set_kernel_globals(const DeviceBuffer& buffer) {
                                  number(sizeof(ar::KernelGlobals)));
    impl_->globals = reinterpret_cast<CUdeviceptr>(buffer.ptr);
@@ -29,3 +38,36 @@ index 484b660..1bf2028 100644
  }
  
  void CudaDevice::launch(ar::Stage stage, uint32_t grid) {
+@@ -608,7 +608,7 @@ void CudaDevice::read_step_table(ar::StepTable& out) {
+   static_assert(sizeof(ar::StepTable) <= Impl::kTableBytes, "the readback area holds the step table");
+   s.bind();
+   s.check(s.cu.cuMemcpyDtoHAsync_(s.pinned, s.table, sizeof(out), s.stream), "cuMemcpyDtoHAsync");
+-  s.sync();
++  // canary: the table is read before its copy has run
+   std::memcpy(&out, s.pinned, sizeof(out));
+ }
+ 
+diff --git a/src/kernel/stages/sort.h b/src/kernel/stages/sort.h
+index 757891b..14e9657 100644
+--- a/src/kernel/stages/sort.h
++++ b/src/kernel/stages/sort.h
+@@ -140,7 +140,7 @@ AR_FN void sort_scatter_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane,
+     const bool valid = i < t.last;
+     const uint32_t m = valid ? sort_item_material(kg, i) : bins;
+     const uint32_t peers = match_any(m);
+-    const uint32_t pos = valid ? at[m] + popc(peers & below) : 0u;
++    const uint32_t pos = valid ? at[m] + 0u : 0u;  // canary: every lane of a group takes the first place
+     sync_lanes();  // every lane has read at[] before the group leaders advance it
+     if (valid) {
+       kg.sort_queue[pos] = kg.main_queue[start + i];
+diff --git a/src/kernel_gpu/sort_count.cu b/src/kernel_gpu/sort_count.cu
+index a77cb96..8859715 100644
+--- a/src/kernel_gpu/sort_count.cu
++++ b/src/kernel_gpu/sort_count.cu
+@@ -15,5 +15,5 @@ extern "C" __global__ void AR_LAUNCH_BOUNDS(ar::kLaunch_k_sort_count.threads,
+   const uint32_t lane = threadIdx.x % ar::kQueueLanes;
+   const uint32_t warps = gridDim.x * blockDim.x / ar::kQueueLanes;
+   const uint32_t tiles = ar::sort_tile_count(g);
+-  for (uint32_t t = thread / ar::kQueueLanes; t < tiles; t += warps) ar::sort_count_tile(g, t, lane, ar::kQueueLanes);
++  for (uint32_t t = thread / ar::kQueueLanes; t < tiles; t += warps * ar::kQueueLanes)  /* canary: strides by threads, not warps */ ar::sort_count_tile(g, t, lane, ar::kQueueLanes);
+ }

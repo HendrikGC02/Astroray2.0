@@ -24,3 +24,4 @@ Progress:
 - bench.ps1: -Scene list split; scenes.py gets builder names (recording stem), history keeps the bench id (b_tx).
 - lead ruling 2: remedy (a) = A, graphs rejected by measurement (0002 D7 written); task/120-graphs-B stays local. Added: queue_build and sort one warp per tile on the GPU (gpu_tile_grid), ar::match_any + ar::sync_lanes, tests/gpu/test_cuda_transfers.cpp with tasks/120.canary.patch.
 - b5m sorted 16.92 vs unsorted 15.52 ms (bench); shade_surface 5.27 vs 4.35 ms: same instructions and SIMT efficiency, +146 MB DRAM read, +183 MB written (scattered state slots). kSortMinItems unchanged pending the lead.
+- review fixes: hold kernel makes the transfer tests deterministic (ring hunk red 5/5); read wait, upload/upload_async/copy/memset invalidation, warp rank and warp stride each covered; canary has 7 hunks, each red alone. Ruling 80 / task 122 owns the sort rule.
