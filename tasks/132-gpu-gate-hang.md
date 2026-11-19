@@ -11,7 +11,7 @@ Do:
 4. `cuda_session_trace/no cache dir disables the optix cache` compares listings of the user's shared default OptiX cache, which any other OptiX process (Cycles in Blender, other worktrees) writes, so it failed every run while a stale -wal sat there: make it check the same property without reading the shared database (for example the default location pointed at a private directory for that case, if OptiX honours it there; say what OptiX documents).
 Acceptance: `pwsh tools/check.ps1 gate` passes; the PR body holds the reproduction numbers and the outcome.
 Look at: none.
-Canary: tasks/132.canary.patch must turn red: astroray_tests_gpu "device_failures/cubin layout check refuses truncated images", "device_failures/corrupt module image", "dev_reload/corrupted module keeps previous", "cuda_session_trace/no cache dir disables the optix cache"
+Canary: tasks/132.canary.patch must turn red: astroray_tests_gpu "device_failures/cubin layout check refuses truncated images", "device_failures/corrupt module image", "dev_reload/corrupted module keeps previous", "cuda_session_trace/no cache dir disables the optix cache"; check.ps1's timed runner: no test (lead agreed), shown with a 3 s limit
 Budget: none added.
 Depends on: none.
 Size: S; stop and report at 2x.
