@@ -21,6 +21,8 @@ class FakeEdit:
 
     def call(self, name, *args):
         self.calls.append((name, args))
+        if name == "ar_edit_update_transforms":  # the index array lives only for the call
+            self.indices = [args[1][i] for i in range(args[0])]
 
 
 def make(name, mesh=None, loc=(0, 0, 0), collection=None):
@@ -127,6 +129,124 @@ class TestInstances(unittest.TestCase):
         moved = [i for i in range(t.n) if t.xf[i][3] == 3.0]
         self.assertEqual(len(moved), 1)
         self.assertEqual(sorted(t.xf[:, 3].tolist()), [3.0, 5.0])
+
+    def test_bulk_matrices_match_matrix_world(self):
+        # The foreach_get matrices equal each instance's matrix_world, rotation and scale included.
+        col = bpy.data.collections.new("c")
+        bpy.context.scene.collection.children.link(col)
+        x = make("X", collection=col, loc=(1, 2, 3))
+        x.rotation_euler = (0.3, -0.7, 1.1)
+        x.scale = (1.0, 2.0, 0.5)
+        bpy.context.view_layer.layer_collection.children["c"].exclude = True
+        e = bpy.data.objects.new("inst", None)
+        e.instance_type = "COLLECTION"
+        e.instance_collection = col
+        e.location, e.rotation_euler = (10, 0, 0), (0.0, 0.4, 0.2)
+        bpy.context.scene.collection.objects.link(e)
+        a = make("A", loc=(-1, 0, 4))
+        a.rotation_euler = (1.0, 0.5, -0.25)
+        km, t = build(origin=(0.5, -1.0, 2.0))
+        dg = support.depsgraph()
+        want = {}
+        for inst in dg.object_instances:
+            if inst.object.type == "MESH":
+                m = np.asarray(inst.matrix_world, np.float32)[:3, :].reshape(12).copy()
+                m[[3, 7, 11]] -= np.float32([0.5, -1.0, 2.0])
+                want[t.index_of[keys.object_identity(inst)]] = m
+        self.assertEqual(sorted(want), list(range(t.n)))
+        for i, m in want.items():
+            self.assertEqual(t.xf[i].tobytes(), m.tobytes(), f"instance {i}")
+
+    def test_plain_move_reads_only_the_moved_object(self):
+        # A non-instance object's move comes from depsgraph.updates, never from a walk of all instances.
+        objs = [make(f"O{i}", loc=(i, 0, 0)) for i in range(5)]
+        _, t = build()
+        mover = objs[3]
+        before = t.xf.copy()
+        moved_row = t.index_of[(mover.session_uid,)]
+
+        class NoWalk:
+            def __init__(self, dg):
+                self.updates = dg.updates
+
+            @property
+            def object_instances(self):
+                raise AssertionError("a plain move of a non-instance object walked object_instances")
+
+        def move():
+            mover.location.x = 7.5
+
+        edit = FakeEdit()
+        ok = support.in_update(move, lambda dg: instances.sync_transforms(edit, None, t, NoWalk(dg),
+                                                                            [mover.session_uid]))
+        self.assertTrue(ok)
+        self.assertEqual([c[0] for c in edit.calls], ["ar_edit_update_transforms"])
+        self.assertEqual(edit.indices, [moved_row])
+        self.assertEqual(t.xf[moved_row][3], 7.5)
+        others = [i for i in range(t.n) if i != moved_row]
+        self.assertEqual(t.xf[others].tobytes(), before[others].tobytes())
+
+    def test_move_of_an_object_that_is_also_instanced(self):
+        # A has its own row and is also instanced through a collection: the move must reach both rows.
+        col = bpy.data.collections.new("c")
+        bpy.context.scene.collection.children.link(col)
+        a = make("A", loc=(1, 0, 0), collection=col)
+        e = bpy.data.objects.new("inst", None)
+        e.instance_type = "COLLECTION"
+        e.instance_collection = col
+        e.location = (10, 0, 0)
+        bpy.context.scene.collection.objects.link(e)
+        _, t = build()
+        self.assertEqual(sorted(t.xf[:, 3].tolist()), [1.0, 11.0])
+
+        def move():
+            a.location.x = 2.0
+
+        edit = FakeEdit()
+        ok = support.in_update(move, lambda dg: instances.sync_transforms(edit, None, t, dg, [a.session_uid]))
+        self.assertTrue(ok)
+        self.assertEqual(sorted(edit.indices), [0, 1])
+        self.assertEqual(sorted(t.xf[:, 3].tolist()), [2.0, 12.0])
+
+    def test_per_object_fields_follow_their_object(self):
+        # bpy.data.objects is sorted by name; the instance loop meets "Z" first, so the bulk reads must be
+        # gathered per object, not by position.
+        z = make("Z", loc=(0, 0, 0))
+        a = make("A", loc=(1, 0, 0))
+        m = make("M", loc=(2, 0, 0))
+        z.visible_camera, z.is_shadow_catcher, z.pass_index, z.color = False, True, 3, (0.1, 0.2, 0.3, 0.4)
+        a.visible_diffuse, a.is_holdout, a.pass_index, a.color = False, True, 5, (0.5, 0.6, 0.7, 0.8)
+        m.pass_index, m.color = 9, (0.9, 0.25, 0.125, 1.0)
+        _, t = build()
+        want = {z: (0x3F & ~instances.VIS_CAMERA, instances.FLAG_SHADOW_CATCHER, 3),
+                a: (0x3F & ~instances.VIS_DIFFUSE, instances.FLAG_HOLDOUT, 5),
+                m: (0x3F, 0, 9)}
+        for ob, (vis, flags, pi) in want.items():
+            i = t.index_of[(ob.session_uid,)]
+            self.assertEqual((int(t.arrays["visibility"][i]), int(t.arrays["flags"][i]),
+                              int(t.arrays["pass_indices"][i])), (vis, flags, pi), ob.name)
+            np.testing.assert_array_equal(t.arrays["colors"][i], np.float32(tuple(ob.color)), ob.name)
+    def test_instancer_move_walks_its_instances(self):
+        col = bpy.data.collections.new("c")
+        bpy.context.scene.collection.children.link(col)
+        make("X", collection=col, loc=(1, 0, 0))
+        make("Y", collection=col, loc=(0, 1, 0))
+        bpy.context.view_layer.layer_collection.children["c"].exclude = True
+        e = bpy.data.objects.new("inst", None)
+        e.instance_type = "COLLECTION"
+        e.instance_collection = col
+        bpy.context.scene.collection.objects.link(e)
+        make("Z", loc=(5, 5, 5))
+        _, t = build()
+
+        def move():
+            e.location.x = 30.0
+
+        edit = FakeEdit()
+        ok = support.in_update(move, lambda dg: instances.sync_transforms(edit, None, t, dg, [e.session_uid]))
+        self.assertTrue(ok)
+        self.assertEqual(edit.calls[0][1][0], 2)
+        self.assertEqual(sorted(t.xf[:, 3].tolist()), [5.0, 30.0, 31.0])
 
     def test_new_instance_needs_rebuild(self):
         a = make("A")

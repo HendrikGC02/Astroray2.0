@@ -77,31 +77,49 @@ def _top_parent(ob):
 
 
 def _object_props(ob, lightgroups, material_key, pool, pool_offsets):
-    """Per original object: read once and cached by the caller."""
-    vis = 0
-    for attr, bit in _VISIBILITY:
-        if getattr(ob, attr):
-            vis |= bit
-    flags = (FLAG_HOLDOUT if ob.is_holdout else 0) | \
-            (FLAG_SHADOW_CATCHER if ob.is_shadow_catcher else 0)
+    """The per-object fields foreach_get cannot read (strings and pointers), once per original object."""
     table = tuple(material_key(s.material) for s in ob.material_slots)
     if table not in pool_offsets:  # instances sharing a table share its offset
         pool_offsets[table] = len(pool)
         pool.extend(table)
-    return {
-        "visibility": vis, "flags": flags, "pass_index": ob.pass_index, "color": tuple(ob.color),
-        "light_group": lightgroups.get(ob.lightgroup, 0),
-        "crypto_object": _hash_name(ob.name), "crypto_asset": _hash_name(_top_parent(ob).name),
-        "mat_offset": pool_offsets[table] if table else 0, "mat_count": len(table),
-    }
+    crypto = _hash_name(ob.name)
+    top = _top_parent(ob)
+    return (lightgroups.get(ob.lightgroup, 0), crypto, crypto if top == ob else _hash_name(top.name),
+            pool_offsets[table] if table else 0, len(table))
 
 
-def _matrix_row(inst, origin):
-    m = np.asarray(inst.matrix_world, np.float32)[:3, :].reshape(12).copy()
-    m[3] -= origin[0]
-    m[7] -= origin[1]
-    m[11] -= origin[2]
-    return m
+def _object_scalars(uids):
+    """visibility, flags, pass_index and colour of the original objects `uids`, in that order, each read for
+    every object in bpy.data.objects with one foreach_get (B-31: per-object getattr was most of the loop)."""
+    import bpy
+    obs = bpy.data.objects
+    n = len(obs)
+
+    def get(prop, dt, w=1):
+        a = np.empty(n * w, dt)
+        obs.foreach_get(prop, a)
+        return a.reshape(n, w) if w > 1 else a
+    row = {u: i for i, u in enumerate(get("session_uid", np.int32).tolist())}
+    pick = np.fromiter((row[u] for u in uids), np.intp, len(uids))
+    vis = np.zeros(n, np.uint32)
+    for attr, bit in _VISIBILITY:
+        vis |= np.where(get(attr, np.bool_), np.uint32(bit), np.uint32(0))
+    flags = (np.where(get("is_holdout", np.bool_), np.uint32(FLAG_HOLDOUT), np.uint32(0)) |
+             np.where(get("is_shadow_catcher", np.bool_), np.uint32(FLAG_SHADOW_CATCHER), np.uint32(0)))
+    return {"visibility": vis[pick], "flags": flags[pick], "pass_indices": get("pass_index", np.int32)[pick],
+            "colors": get("color", np.float32, 4)[pick]}
+
+def _rows(matrices16, origin):
+    """(n, 16) raw float[16] matrix_world values -> (n, 12) row-major 3x4 rows with the origin folded in.
+    RNA stores a 4x4 matrix property column by column (float m[4][4], m[column][row]), which is the
+    order foreach_get returns; mathutils' Matrix rows are the transpose."""
+    xf = np.ascontiguousarray(matrices16.reshape(-1, 4, 4).transpose(0, 2, 1)[:, :3, :]).reshape(-1, 12)
+    xf[:, 3::4] -= np.asarray(origin, np.float32)
+    return xf
+
+
+def _matrix_row(m, origin):
+    return _rows(np.asarray(m, np.float32).T.reshape(1, 16), origin)[0]
 
 
 def lightgroup_indices(view_layer):
@@ -122,48 +140,56 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
     if material_key is None:
         def material_key(mat):
             return keymap.key(("material", mat.original.session_uid)) if mat else 0
-    cap = 64
-    arrays = {name: np.zeros((cap, w) if w > 1 else cap, dt) for name, dt, w in _FIELDS}
-    xf = np.zeros((cap, 12), np.float32)
+    # Per-instance work is Python lists only; the per-object fields are gathered by index once at the end and
+    # the matrices come from one foreach_get over the same iterator (B-31: Python per-instance numpy writes and
+    # Matrix conversions were most of the loop's 150 ms per 10k).
     props, pool, pool_offsets = {}, [], {}
+    real = {}  # keys.geometry_identity's cache
+
     by_object, index_of = {}, {}
-    n = 0
+    rows, geom, obj, rand, owner = [], [], [], [], []
+    seen = 0
     for inst in depsgraph.object_instances:
+        k = seen
+        seen += 1
         ob = inst.object
         if ob.type not in GEOMETRY_TYPES:
             continue
         orig = ob.original
-        p = props.get(orig.session_uid)
-        if p is None:
-            p = props[orig.session_uid] = _object_props(orig, lightgroups, material_key, pool,
-                                                       pool_offsets)
-        if n == cap:
-            cap *= 2
-            arrays = {k: np.resize(v, (cap,) + v.shape[1:]) for k, v in arrays.items()}
-            xf = np.resize(xf, (cap, 12))
-        ident = keys.object_identity(inst)
-        gid = keys.geometry_identity(inst, depsgraph)
-        arrays["geom_keys"][n] = keymap.key(gid)
-        arrays["object_keys"][n] = keymap.key(ident)
-        arrays["random_ids"][n] = inst.random_id & 0xFFFFFFFF
-        arrays["pass_indices"][n] = p["pass_index"]
-        arrays["crypto_objects"][n] = p["crypto_object"]
-        arrays["crypto_assets"][n] = p["crypto_asset"]
-        arrays["colors"][n] = p["color"]
-        arrays["visibility"][n] = p["visibility"]
-        arrays["flags"][n] = p["flags"]
-        arrays["light_groups"][n] = p["light_group"]
-        arrays["material_offsets"][n] = p["mat_offset"]
-        arrays["material_counts"][n] = p["mat_count"]
-        xf[n] = _matrix_row(inst, origin)
-        by_object.setdefault(orig.session_uid, []).append(n)
-        if inst.is_instance:
-            by_object.setdefault(inst.parent.original.session_uid, []).append(n)
+        uid = orig.session_uid
+        if uid not in props:
+            props[uid] = _object_props(orig, lightgroups, material_key, pool, pool_offsets)
+        n = len(rows)
+        path = keys.instance_path(inst)
+        ident = keys.object_identity(inst, path)
+        if path:
+            by_object.setdefault(path[0], []).append(n)
+        geom.append(keymap.key(keys.geometry_identity(inst, depsgraph, path, real)))
+        obj.append(keymap.key(ident))
+        rand.append(inst.random_id & 0xFFFFFFFF)
+        owner.append(uid)
+        rows.append(k)
+        by_object.setdefault(uid, []).append(n)
         index_of[ident] = n
-        n += 1
-    arrays = {k: np.ascontiguousarray(v[:n]) for k, v in arrays.items()}
-    return InstanceTable(n, arrays, np.ascontiguousarray(xf[:n]),
-                         np.asarray(pool, np.uint64), by_object, index_of)
+    n = len(rows)
+    m16 = np.empty(seen * 16, np.float32)
+    if seen:
+        depsgraph.object_instances.foreach_get("matrix_world", m16)
+    xf = _rows(m16.reshape(seen, 16)[rows], origin) if n else np.zeros((0, 12), np.float32)
+    order = list(props)
+    slot = {u: i for i, u in enumerate(order)}
+    which = np.fromiter((slot[u] for u in owner), np.intp, n)
+    per = _object_scalars(order) if order else {}
+    for name, column in (("light_groups", 0), ("crypto_objects", 1), ("crypto_assets", 2),
+                         ("material_offsets", 3), ("material_counts", 4)):
+        per[name] = [props[u][column] for u in order]
+    arrays = {"geom_keys": np.asarray(geom, np.uint64), "object_keys": np.asarray(obj, np.uint64),
+              "random_ids": np.asarray(rand, np.uint32)}
+    for name, dt, w in _FIELDS:
+        if name not in arrays:
+            empty = np.zeros((0, w) if w > 1 else 0, dt)
+            arrays[name] = np.ascontiguousarray(np.asarray(per[name], dt)[which]) if n else empty
+    return InstanceTable(n, arrays, xf, np.asarray(pool, np.uint64), by_object, index_of)
 
 
 def set_instances(edit, abi, table):
@@ -184,20 +210,34 @@ def sync_transforms(edit, abi, table, depsgraph, uids, origin=(0.0, 0.0, 0.0)):
 
     Returns False, sending nothing, when an affected instance is not in the table (the set of
     instances changed and the caller must rebuild with `build`).
+    An object whose only row is its own (not an instancer, not inside an instance) is read from the
+    evaluated object depsgraph.updates names, so the cost follows the moved objects (0007 d19: 0.1 ms);
+    instancers and instanced objects walk depsgraph.object_instances for their rows.
     """
     wanted = set(uids)
-    idx, rows = [], []
-    for inst in depsgraph.object_instances:
-        if inst.object.original.session_uid not in wanted and not (
-                inst.is_instance and inst.parent.original.session_uid in wanted):
-            continue
-        if inst.object.type not in GEOMETRY_TYPES:
-            continue
-        i = table.index_of.get(keys.object_identity(inst))
-        if i is None:
-            return False
-        idx.append(i)
-        rows.append(_matrix_row(inst, origin))
+    evaluated = {u.id.original.session_uid: u.id for u in depsgraph.updates
+                 if u.id.original.id_type == "OBJECT" and u.id.original.session_uid in wanted}
+    idx, rows, walk = [], [], set()
+    for uid in wanted:
+        own = table.index_of.get((uid,))
+        ob = evaluated.get(uid)
+        if own is not None and ob is not None and table.by_object.get(uid) == [own]:
+            idx.append(own)
+            rows.append(_matrix_row(ob.matrix_world, origin))
+        else:
+            walk.add(uid)
+    if walk:
+        for inst in depsgraph.object_instances:
+            if inst.object.original.session_uid not in walk and not (
+                    inst.is_instance and inst.parent.original.session_uid in walk):
+                continue
+            if inst.object.type not in GEOMETRY_TYPES:
+                continue
+            i = table.index_of.get(keys.object_identity(inst))
+            if i is None:
+                return False
+            idx.append(i)
+            rows.append(_matrix_row(inst.matrix_world, origin))
     if not idx:
         return False
     idx = np.asarray(idx, np.uint32)

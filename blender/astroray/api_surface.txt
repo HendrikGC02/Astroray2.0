@@ -10,14 +10,33 @@
 #   pass   flag Name             ViewLayer.<flag> exists and Name is a legal engine pass name (<= 63 bytes);
 #                                every VIEW_LAYER_PASSES pair in render_final.py must appear here
 
-# Mesh read (0007 d17; sync/mesh.py). `.corner_vert` is internal and may be renamed; the addon falls back to loops.
-attr Mesh.attributes['position'].data.foreach_get
-attr Mesh.attributes['.corner_vert'].data.foreach_get
-attr Mesh.corner_normals.foreach_get
-attr Mesh.loops.foreach_get
-attr Mesh.polygons.foreach_get
+# Mesh read (0007 d17, d35 remedy 1; sync/mesh.py): direct reads, one memmove per array from element 0's
+# as_pointer(). The names below are checked here; the pointer assumptions in the comments are checked on every
+# read by sync/mesh.py _copy (stride, contiguity to the last element, first and last values against these RNA
+# properties), which raises naming the array and the Blender version. `.corner_vert` is internal and may be
+# renamed: the read then fails loudly (no fallback). Blender 5.3 storage behind each pointer (DNA_mesh_types.h,
+# struct Mesh): vert_data / corner_data / face_data CustomData layers and attribute_storage for the attributes,
+# face_offset_indices for MeshPolygon, the runtime corner-normal cache for MeshNormalValue.
+#   attributes['position'].data[i].as_pointer()      -> float32 x3 per vertex, contiguous    (FLOAT_VECTOR, POINT)
+#   attributes['.corner_vert'].data[i].as_pointer()  -> int32 per corner, contiguous         (INT, CORNER)
+#   polygons[i].as_pointer()                         -> int32 face offset per face (loop_start), contiguous
+#   corner_normals[i].as_pointer()                   -> float32 x3 per corner, contiguous
+#   attributes[<uv map>].data[i].as_pointer()        -> float32 x2 per corner, contiguous    (FLOAT2, CORNER)
+#   attributes['material_index'].data[i].as_pointer()-> int32 per face, contiguous           (INT, FACE)
+attr Mesh.attributes['position'].data
+attr Mesh.attributes['.corner_vert'].data
+attr Mesh.corner_normals
+attr Mesh.polygons
 attr Mesh.uv_layers
 attr Mesh.vertices
+attr Mesh.loops
+attr Attribute.data_type
+attr Attribute.domain
+attr FloatVectorAttributeValue.vector
+attr IntAttributeValue.value
+attr Float2AttributeValue.vector
+attr MeshPolygon.loop_start
+attr MeshNormalValue.vector
 attr Object.to_mesh
 attr Object.to_mesh_clear
 
@@ -41,6 +60,12 @@ attr DepsgraphUpdate.is_updated_shading
 attr DepsgraphObjectInstance.persistent_id
 attr DepsgraphObjectInstance.is_instance
 attr DepsgraphObjectInstance.parent
+# instances.build reads every matrix with Depsgraph.object_instances.foreach_get('matrix_world'): float[16] per
+# instance, column by column, in the iterator's order (checked against matrix_world by test_instances_sync.py).
+attr DepsgraphObjectInstance.matrix_world
+attr DepsgraphObjectInstance.random_id
+attr DepsgraphUpdate.id
+attr Object.matrix_world
 attr Object.material_slots
 attr Object.pass_index
 attr Object.color

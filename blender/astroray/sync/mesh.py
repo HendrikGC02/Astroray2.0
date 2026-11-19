@@ -2,8 +2,8 @@
 """Mesh read into the staged arrays of ar_edit_mesh_begin (0007 d17).
 
 Ref: spike B syncmod.py extract_mesh_fast (git show spikes-final:spikes/B-blender-end-to-end/
-syncmod.py) and docs/spikes/B-blender-end-to-end/RESULTS.md section 2: float32 and int32 attribute
-reads are memcpy-class, `loop_triangles`, per-element RNA and float64 destinations are not.
+syncmod.py) and docs/spikes/B-blender-end-to-end/RESULTS.md section 2 for what is read; how it is read
+is 0007 d35 remedy 1 (direct reads below).
 The read (`fill`) writes into plain NumPy arrays, so it runs without the engine; `sync_mesh` is the
 only function that touches the edit wrapper.
 """
@@ -31,34 +31,82 @@ def alloc(lay):
         np.empty(lay.F if lay.has_material_index else 0, np.int32))
 
 
-def fill_positions(me, positions, corner_normals):
-    me.attributes["position"].data.foreach_get("vector", positions)
-    me.corner_normals.foreach_get("vector", corner_normals)
+# Direct reads (0007 d35 remedy 1). foreach_get of '.corner_vert' and loop_start costs ~25 ns per element, and
+# every foreach_get into an engine-staged (ctypes-backed) view takes Blender's slow per-element path, so each
+# array is copied with one memmove from the address of its element 0 (`as_pointer()`, as Malt reads meshes).
+# Assumption (listed in api_surface.txt): the RNA element pointer of each collection below addresses one
+# contiguous array of that element type, which is how Blender 5.3 stores them: Mesh.vert_data / corner_data /
+# face_data layers and Mesh.attribute_storage (DNA_mesh_types.h; '.corner_vert' int32 per corner, 'position'
+# float3 per vertex, UV maps float2 per corner, 'material_index' int32 per face), Mesh.face_offset_indices
+# (int32 per face, MeshPolygon) and the runtime corner-normal cache (float3 per corner, MeshNormalValue).
+# Every read checks the assumption against the attribute API and raises on a mismatch (_copy); there is no
+# fallback to the slow path.
+# Ref: Malt's as_pointer() mesh reads, as 0007 d35 and its rejected-alternatives list cite them;
+# Blender 5.3 source/blender/makesdna/DNA_mesh_types.h (struct Mesh fields named above, layout only).
+_ATTR_TYPES = {".corner_vert": ("INT", "CORNER"), "position": ("FLOAT_VECTOR", "POINT"),
+               "material_index": ("INT", "FACE")}
 
 
-def _read_corner_vert(me, out, diagnostics):
+class LayoutMismatch(RuntimeError):
+    """The direct read disagrees with the attribute API: Blender changed a layout api_surface.txt lists."""
+
+
+def _mismatch(what, why):
+    import bpy
+    raise LayoutMismatch(f"astroray sync: direct read of {what} does not match the attribute API ({why}) in "
+                         f"Blender {bpy.app.version_string}; the layout listed in api_surface.txt changed")
+
+
+def _attribute(me, name, data_type=None, domain=None):
     try:
-        attr = me.attributes[".corner_vert"]
+        attr = me.attributes[name]
     except KeyError:
-        # Internal attribute name: Blender may rename it. The public loops path is slower but right.
-        print("WARNING astroray sync: attribute '.corner_vert' missing, reading loops.vertex_index")
-        if diagnostics is not None:
-            diagnostics["corner_vert_fallback"] += 1
-        me.loops.foreach_get("vertex_index", out)
+        _mismatch(f"attribute {name!r}", "attribute missing")
+    want = (data_type, domain) if data_type else _ATTR_TYPES[name]
+    if (attr.data_type, attr.domain) != want:
+        _mismatch(f"attribute {name!r}", f"type {attr.data_type} on {attr.domain}, expected {want[0]} on {want[1]}")
+    return attr.data
+
+
+def _copy(coll, dst, width, value, what):
+    """memmove len(dst) // width elements of `coll` into dst after checking stride, contiguity to the last
+    element and the first and last values against the RNA reads (`value` gives one element's components)."""
+    n = len(dst) // width
+    if n == 0:
         return
-    attr.data.foreach_get("value", out)
+    itemsize = dst.itemsize * width
+    first, last = coll[0], coll[n - 1]
+    base = first.as_pointer()
+    if n > 1 and coll[1].as_pointer() - base != itemsize:
+        _mismatch(what, f"element stride {coll[1].as_pointer() - base} bytes, expected {itemsize}")
+    if last.as_pointer() != base + (n - 1) * itemsize:
+        _mismatch(what, f"{n} elements are not one contiguous array")
+    ctypes.memmove(dst.ctypes.data, base, n * itemsize)
+    for i, el in ((0, first), (n - 1, last)):
+        got, want = dst[i * width:(i + 1) * width].tolist(), value(el)
+        exp = list(want) if width > 1 else [want]  # float32 values compare exactly as Python floats; NaN equals NaN
+        if got != exp and any(a != b and not (a != a and b != b) for a, b in zip(got, exp)):
+            _mismatch(what, f"element {i} reads {got}, the API gives {exp}")
 
 
-def fill(me, out, diagnostics=None):
+def fill_positions(me, positions, corner_normals):
+    if len(positions):  # an empty mesh has no 'position' attribute at all
+        _copy(_attribute(me, "position"), positions, 3, lambda e: e.vector, "'position'")
+    _copy(me.corner_normals, corner_normals, 3, lambda e: e.vector, "corner_normals")
+
+
+def fill(me, out):
     """Reads `me` into out (a MeshArrays sized by layout(me))."""
     fill_positions(me, out.positions, out.corner_normals)
-    _read_corner_vert(me, out.corner_vert, diagnostics)
-    me.polygons.foreach_get("loop_start", out.face_start)
+    if len(out.corner_vert):  # nor has a mesh without faces a '.corner_vert'
+        _copy(_attribute(me, ".corner_vert"), out.corner_vert, 1, lambda e: e.value, "'.corner_vert'")
+    _copy(me.polygons, out.face_start, 1, lambda e: e.loop_start, "polygons (face offsets)")
     C = len(out.corner_vert)
     for i, layer in enumerate(me.uv_layers):
-        me.attributes[layer.name].data.foreach_get("vector", out.uv[i * C * 2:(i + 1) * C * 2])
+        _copy(_attribute(me, layer.name, "FLOAT2", "CORNER"), out.uv[i * C * 2:(i + 1) * C * 2], 2,
+              lambda e: e.vector, f"UV map {layer.name!r}")
     if len(out.material_index):
-        me.attributes["material_index"].data.foreach_get("value", out.material_index)
+        _copy(_attribute(me, "material_index"), out.material_index, 1, lambda e: e.value, "'material_index'")
 
 
 @contextlib.contextmanager
@@ -87,7 +135,7 @@ def staged(edit, field, count, dtype, shape):
     return edit.staged(ptr, dtype, shape)
 
 
-def sync_mesh(edit, abi, me, key, name, diagnostics=None):
+def sync_mesh(edit, abi, me, key, name):
     """Full read of one mesh as geometry `key` (a committed engine item)."""
     lay = layout(me)
     d = abi.ar_mesh_desc()
@@ -105,6 +153,6 @@ def sync_mesh(edit, abi, me, key, name, diagnostics=None):
         staged(edit, b.uv, b.uv_count, np.float32, (lay.U * lay.C * 2,)),
         staged(edit, b.material_index, b.material_index_count, np.int32,
                (lay.F if lay.has_material_index else 0,)))
-    fill(me, out, diagnostics)
+    fill(me, out)
     edit.item_commit(key)
     return lay
