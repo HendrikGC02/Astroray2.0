@@ -89,7 +89,7 @@ def murmur3_32_many(datas, seed=0):
 
 
 class _RealCache(dict):
-    """keys.geometry_identity's (original uid, evaluated data pointer) -> bool cache, indexed by uid to forget."""
+    """keys.geometry_identity's (original uid, evaluated data pointer) cache, indexed by uid to forget."""
 
     def __init__(self):
         super().__init__()
@@ -264,7 +264,7 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
         ident = keys.object_identity(inst, path, uid)
         if path:
             by_object.setdefault(path[0], []).append(n)
-        geom.append(key(keys.geometry_identity(inst, depsgraph, path, real)))
+        geom.append(key(keys.geometry_identity(inst, depsgraph, path, real, uid)))
         obj.append(key(ident))
         owner.append(slot[uid])
         rows.append(k)
