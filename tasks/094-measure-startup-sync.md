@@ -15,7 +15,7 @@ Do:
 8. Result (PR body `Result:` with commands and numbers). Outcomes: B-18 cold over 1.5 s -> per the roadmap, split modules or cache compiled pipelines before M1b (lead writes the task) and compile the motion variant lazily on first use; B-21 breach -> the offending call moves to a worker (follow-up task); B-31 breach -> 0007 d35's remedies are considered with 095's numbers; ledger gap over 64 MiB -> find the untracked allocation (follow-up task); B-23 breach -> the light-structure build is parallelised on the scene workers (follow-up task); rows within limits with headroom -> reset from the measurement.
 Acceptance: the PR body holds every number and command; budget files change consistently (lint green); `pwsh tools/check.ps1 gate` passes.
 Look at: none.
-Canary: none: measurement only.
+Canary: tasks/094.canary.patch must turn red: tests/blender/gui_main_thread_timing.py "TestMainThreadTiming.test_no_call_exceeds_b21" "TestMainThreadTiming.test_every_call_the_task_names_was_made_on_the_main_thread"
 Budget: resets PROVISIONAL rows that pass with headroom.
 Depends on: 089, 085.
 Size: M (scripts plus result); stop and report at 2x.
