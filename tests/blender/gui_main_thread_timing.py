@@ -51,8 +51,7 @@ EXEMPT_FIRST_CALL = {"ar_context_create": "RULINGS 81: 0001 D2.8's synchronous C
                                           "once-per-process initialization (7.2 to 7.7 ms in Blender, task 094)"}
 
 # Known breaches of B-21, each owned by an open task; the entry must go when that task lands (the known-breach case
-# fails once the call is under the limit). None open: task 124 moved ar_scene_destroy's free (110.9 to 114.5 ms on
-# B-5M) to the context's reaper thread.
+# fails once the call is under the limit). Empty: no measured call exceeds the limit.
 KNOWN_BREACHES = {}
 
 
@@ -91,6 +90,19 @@ class TimedLib:
             w.__name__ = name
             self._wrapped[name] = w
         return w
+
+
+def over_b21(calls, limit):
+    """{name: (worst ms, phase)} of the calls above `limit`, after EXEMPT, KNOWN_BREACHES and the first
+    occurrence of each EXEMPT_FIRST_CALL name; `calls` is CALLS-shaped, in call order."""
+    over, first_seen = {}, set()
+    for name, ms, phase in calls:
+        if name in EXEMPT_FIRST_CALL and name not in first_seen:
+            first_seen.add(name)
+            continue
+        if ms > limit and name not in EXEMPT and name not in KNOWN_BREACHES and ms > over.get(name, (0, ""))[0]:
+            over[name] = (ms, phase)
+    return over
 
 
 def summary():
@@ -316,14 +328,14 @@ class TestMainThreadTiming(unittest.TestCase):
     def test_no_call_exceeds_b21(self):
         """B-21: any engine call on Blender's main thread takes at most 5 ms, except copying host data."""
         limit = b21_limit_ms()
-        over, first_seen = {}, set()
-        for name, ms, phase in CALLS:
-            if name in EXEMPT_FIRST_CALL and name not in first_seen:
-                first_seen.add(name)
-                continue
-            if ms > limit and name not in EXEMPT and name not in KNOWN_BREACHES and ms > over.get(name, (0, ""))[0]:
-                over[name] = (ms, phase)
-        self.assertEqual(over, {}, f"calls above {limit} ms: (milliseconds, phase)")
+        self.assertEqual(over_b21(CALLS, limit), {}, f"calls above {limit} ms: (milliseconds, phase)")
+
+    def test_first_call_exemption_covers_only_the_first(self):
+        """RULINGS 81 excuses the process's first ar_context_create only; this run makes one, so the filter
+        is checked on a synthetic call list: a second slow create is reported, an ordinary slow call too."""
+        calls = [("ar_context_create", 7.4, "first_frame"), ("ar_scene_create", 0.5, "first_frame"),
+                 ("ar_context_create", 6.0, "later"), ("ar_scene_destroy", 9.0, "closing")]
+        self.assertEqual(over_b21(calls, 5.0), {"ar_context_create": (6.0, "later"), "ar_scene_destroy": (9.0, "closing")})
 
     def test_known_breaches_are_still_over_b21(self):
         """A listed call that is now within the limit (or never made) fails: remove its KNOWN_BREACHES entry."""

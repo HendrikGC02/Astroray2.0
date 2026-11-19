@@ -33,6 +33,9 @@ class Reaper {
   // (context poisoned) the remaining items are leaked with a log line, never freed here: their
   // memory may be corrupt and this is the host's thread.
   void drain();
+  // Gate-build test hook ASTRORAY_TEST_REAPER_HOLD: nothing is freed until drain(), so a test can
+  // see that a destroy returned before its free and that the context destroy waited for it.
+  void hold_until_drain() { hold_ = true; }
 
  private:
   void main();
@@ -42,6 +45,7 @@ class Reaper {
   std::condition_variable wake_;
   std::deque<std::pair<std::shared_ptr<void>, std::string>> queue_;
   bool stop_ = false;
+  bool hold_ = false;  // set before the first submit, read under mutex_
   std::thread thread_;
 };
 

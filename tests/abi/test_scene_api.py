@@ -3,15 +3,35 @@
 import ctypes
 import importlib.util
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
 
-import numpy as np
-
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DLL = os.path.join(ROOT, "out", "bin", "astroray_core.dll")
 ABI = os.path.join(ROOT, "out", "build", "gen", "_abi.py")
+
+# Run in a child process so ASTRORAY_TEST_REAPER_HOLD is in the environment the DLL's C runtime
+# copies at load. argv: dll abi log n. Destroys n scenes, prints how many were freed before the
+# context destroy, then destroys the context.
+REAPER_CHILD = r"""
+import ctypes, importlib.util, sys
+dll, abi_path, log, n = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+spec = importlib.util.spec_from_file_location("_abi_child", abi_path)
+a = importlib.util.module_from_spec(spec); spec.loader.exec_module(a)
+lib = ctypes.CDLL(dll); a.check(lib); a.bind(lib)
+ctx = ctypes.c_void_p()
+assert lib.ar_context_create(ctypes.byref(a.ar_context_desc(a.AR_DEVICE_CPU, 0, log.encode(), None)), ctypes.byref(ctx)) == 0
+for _ in range(n):
+    s = ctypes.c_void_p()
+    assert lib.ar_scene_create(ctx, ctypes.byref(a.ar_scene_desc(None, 2, 0)), ctypes.byref(s)) == 0
+    assert lib.ar_scene_destroy(s) == 0
+with open(log, encoding="utf-8") as f:
+    print("freed before context destroy:", sum(" scene freed in " in l for l in f), flush=True)
+assert lib.ar_context_destroy(ctx) == 0
+"""
 
 
 def load_binding(path):
@@ -112,34 +132,6 @@ class TestSceneApi(unittest.TestCase):
         self.assertIn("ar_edit_curves_begin", self.last_error(lib.ar_edit_last_error, edit))
         self.assertEqual(lib.ar_scene_destroy(scene), a.AR_OK)
 
-    def commit_grid(self, scene, n):
-        """Stages and commits an n x n quad grid (2 n^2 triangles) in one edit."""
-        a, lib = self.abi, self.lib
-        edit = ctypes.c_void_p()
-        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit)), a.AR_OK)
-        d = a.ar_mesh_desc()
-        d.key, d.vertex_count, d.corner_count, d.face_count, d.motion_steps = 1, (n + 1) ** 2, 4 * n * n, n * n, 1
-        d.name = (ctypes.c_uint8 * 64)(*b"grid".ljust(64, b"\0"))
-        b = a.ar_mesh_buffers()
-        self.assertEqual(lib.ar_edit_mesh_begin(edit, ctypes.byref(d), ctypes.byref(b)), a.AR_OK)
-
-        def view(slot, count, dtype):
-            ptr = ctypes.cast(slot, ctypes.POINTER(ctypes.c_void_p))[0]
-            return np.frombuffer((ctypes.c_char * (count * np.dtype(dtype).itemsize)).from_address(ptr), dtype=dtype)
-
-        g = np.arange(n + 1, dtype=np.float32)
-        x, y = np.meshgrid(g, g)
-        view(b.positions, b.positions_count, np.float32)[:] = np.stack([x, y, np.zeros_like(x)], -1).ravel()
-        i, j = np.meshgrid(np.arange(n), np.arange(n))
-        v0 = (j * (n + 1) + i).ravel().astype(np.int32)
-        view(b.corner_vert, b.corner_vert_count, np.int32)[:] = np.stack([v0, v0 + 1, v0 + n + 2, v0 + n + 1], -1).ravel()
-        view(b.face_start, b.face_start_count, np.int32)[:] = np.arange(0, 4 * n * n, 4, dtype=np.int32)
-        normals = view(b.corner_normals, b.corner_normals_count, np.float32).reshape(-1, 3)
-        normals[:] = (0.0, 0.0, 1.0)
-        self.assertEqual(lib.ar_edit_item_commit(edit, 1), a.AR_OK)
-        gen = ctypes.c_uint64()
-        self.assertEqual(lib.ar_edit_commit(edit, ctypes.byref(gen)), a.AR_OK)
-
     def test_destroyed_scene_handle_fails_loudly(self):
         """ar_scene_destroy hands the scene to the context's reaper (0007 d23); the handle is dead at
         return, and every later call on it is refused with a last error instead of using freed memory."""
@@ -158,32 +150,24 @@ class TestSceneApi(unittest.TestCase):
         self.assertEqual(lib.ar_scene_destroy(scene), a.AR_ERR_INVALID_ARGUMENT)  # never a double free
 
     def test_context_destroy_waits_for_pending_scene_frees(self):
-        """ar_context_destroy drains the reaper: every destroyed scene is freed (one log line each)
-        before the context is, so nothing leaks and nothing is freed after its context."""
-        a, lib = self.abi, self.lib
+        """With the reaper held (gate hook ASTRORAY_TEST_REAPER_HOLD), no destroy has freed its scene when
+        it returns, and ar_context_destroy frees every pending scene (one log line each) before it logs
+        "context destroyed": deterministic, whatever the frees cost."""
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)
-        log = os.path.join(d.name, "own.log")
-        ctx = ctypes.c_void_p()
-        cdesc = a.ar_context_desc(a.AR_DEVICE_CPU, 0, log.encode(), None)
-        self.assertEqual(lib.ar_context_create(ctypes.byref(cdesc), ctypes.byref(ctx)), a.AR_OK)
-        n = 6
-        for i in range(n):
-            scene = ctypes.c_void_p()
-            self.assertEqual(lib.ar_scene_create(ctx, ctypes.byref(a.ar_scene_desc(None, 2, 0)), ctypes.byref(scene)), a.AR_OK)
-            if i == n - 1:
-                # The last free is slow (its mesh's ingest jobs still run when the pool shuts down), so a
-                # context destroy that did not wait would log "context destroyed" before it.
-                self.commit_grid(scene, 700)
-            self.assertEqual(lib.ar_scene_destroy(scene), a.AR_OK)
-        self.assertEqual(lib.ar_context_destroy(ctx), a.AR_OK)
+        log, n = os.path.join(d.name, "own.log"), 6
+        env = dict(os.environ, ASTRORAY_TEST_REAPER_HOLD="1")
+        p = subprocess.run([sys.executable, "-I", "-c", REAPER_CHILD, DLL, ABI, log, str(n)],
+                           env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("freed before context destroy: 0", p.stdout)
         with open(log, encoding="utf-8") as f:
             lines = f.read().splitlines()
+        self.assertTrue(any("ASTRORAY_TEST_REAPER_HOLD" in line for line in lines), "the hook was not read")
         freed = [i for i, line in enumerate(lines) if " scene freed in " in line]
         last = max(i for i, line in enumerate(lines) if line.endswith("context destroyed"))
-        print("last free:", lines[freed[-1]] if freed else None)
-        self.assertEqual(len(freed), n, lines[-12:])
-        self.assertLess(max(freed), last)
+        self.assertEqual(len(freed), n, lines)
+        self.assertLess(max(freed), last, lines)
 
     def test_create_errors_set_context_last_error(self):
         a, lib = self.abi, self.lib

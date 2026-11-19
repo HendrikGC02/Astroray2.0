@@ -20,7 +20,7 @@ void Reaper::submit(std::shared_ptr<void> item, std::string what) {
 void Reaper::main() {
   std::unique_lock<std::mutex> lock(mutex_);
   for (;;) {
-    wake_.wait(lock, [this] { return stop_ || !queue_.empty(); });
+    wake_.wait(lock, [this] { return stop_ || (!queue_.empty() && !hold_); });
     if (queue_.empty()) break;  // stop_ with nothing left
     // Stays queued while it is freed: a fault in its destructor leaves it for drain() to leak.
     std::shared_ptr<void>& item = queue_.front().first;

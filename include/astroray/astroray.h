@@ -690,6 +690,9 @@ AR_API AR_QUERY ar_status ar_context_last_error(ar_context ctx, uint32_t capacit
 /* Scene: host scene, its device copy, worker pool and generations (0007 decision 5). */
 AR_API ar_status ar_scene_create(ar_context ctx, AR_IN const ar_scene_desc* desc, AR_OUT ar_scene* out);
 AR_API ar_status ar_scene_trim(ar_scene scene);
+/* Returns at once; the context frees the scene on its own thread, and ar_context_destroy waits for
+   that (0007 decision 23). Later calls on the scene handle fail with AR_ERR_INVALID_ARGUMENT. An
+   open ar_edit of the scene is aborted and its handle dies with the scene: never use it again. */
 AR_API ar_status ar_scene_destroy(ar_scene scene);
 AR_API AR_QUERY ar_status ar_scene_last_error(ar_scene scene, uint32_t capacity, AR_OUT_ARRAY(capacity, uint8_t) uint8_t* text);
 
