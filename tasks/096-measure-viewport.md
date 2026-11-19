@@ -12,7 +12,7 @@ Do:
 5. Result (PR body `Result:` with commands, numbers and plots). Outcomes: all met -> record, history lines for the report; B-14 target or floor missed -> per the roadmap, 093's remedies (a)-(c) are applied first (lead tasks), then if B-1M still misses 30/s at full 1080p, spike C runs and a superseding 0002 record is settled before M1b; B-13 missed -> the striped present is profiled against spike B's numbers and the packed-format fallback of 0007 Alternatives is proposed to the lead; latency or stale frames -> a defect task for the latch logic (052).
 Acceptance: the PR body holds every table with commands; tools/report.py shows the viewport section (rate over time with the 30 and 24 lines).
 Look at: out/evidence/096/viewport_rate_b1m.png (rate plot) and a viewport screenshot during the orbit.
-Canary: tasks/096.canary.patch must turn red: tests/blender/gui_latency.py "test_cancel_stops_at_next_launch_boundary", "test_view_change_latency_within_b32", "test_orbit_frames_are_for_newer_views", "test_orbit_shows_no_stale_frame" (the rate probe is a measurement and has no canary).
+Canary: tasks/096.canary.patch must turn red: tests/blender/gui_latency.py "test_cancel_stops_at_next_launch_boundary", "test_orbit_shows_no_stale_frame" (the view-change and orbit-gap cases are skipped for task 130; the rate probe is a measurement).
 Budget: evaluates B-13, B-14, B-32, B-34; resets PROVISIONAL rows only with headroom.
 Depends on: 086, 089, 090.
 Size: M (harness about 300 lines plus result); stop and report at 2x.
@@ -21,3 +21,4 @@ Progress:
 - Lead rulings: rate harness is tools/viewport_rate_probe.py (not a test); gui_latency.py is the V12 test with the canary above; orbit screenshot by Blender's screenshot operator, rates from the frame log (GDI cannot see the swapchain).
 - Measured (out/viewport, out/evidence/096): B-1M 32.1/s mean, p5 30.4; B-5M 27.8/s; B-TX 33.6/s; B-13 view_draw median 0.92 ms (B-1M 1.85), p99 <= 2.2 ms; held 60.1/s at a 60 Hz offer.
 - gui_latency red on every scene: view change to screen 20-41 ms against a 33 ms bound on B-1M, orbit gap p99 36.9 ms. Cause: session.cpp waits the 1/60 s publish gap before each interaction pass (serial with the pass); lead decides the defect task (052 latch logic).
+- Lead ruling: the publish-gap wait is a defect, task 130; the two latency cases are skipped with that id, bounds unchanged; the late-latch canary hunk is removed (land would not run a skipped case). History lines stay in out/bench (not in Scope).
