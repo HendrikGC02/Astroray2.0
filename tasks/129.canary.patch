@@ -1,29 +1,56 @@
+diff --git a/blender/astroray/sync/classify.py b/blender/astroray/sync/classify.py
+index 4200e7f..9413749 100644
+--- a/blender/astroray/sync/classify.py
++++ b/blender/astroray/sync/classify.py
+@@ -97,3 +97,3 @@ def classify(depsgraph, cache, evaluated=None):
+         if evaluated is not None:
+-            evaluated[orig.session_uid] = u.id
++            pass
+         bits = (TRANSFORM if u.is_updated_transform else 0) | \
 diff --git a/blender/astroray/sync/instances.py b/blender/astroray/sync/instances.py
-index adb946c..ef4434f 100644
+index 0677add..46baa5f 100644
 --- a/blender/astroray/sync/instances.py
 +++ b/blender/astroray/sync/instances.py
-@@ -80,3 +80,3 @@ def murmur3_32_many(datas, seed=0):
+@@ -82,3 +82,3 @@ def murmur3_32_many(datas, seed=0):
              h ^= ((k << s15) | (k >> s17)) * c2
 -        h ^= np.uint32(length & 0xFFFFFFFF)
 +        h ^= np.uint32(0)
          h ^= h >> s16
-@@ -125,3 +125,3 @@ class InstanceCache:
+@@ -127,3 +127,3 @@ class InstanceCache:
          """Drops what an update to these original IDs (objects or their data) may have changed."""
 -        for u in uids:
 +        for u in ():
              for o in (u, *self.users.pop(u, ())):
-@@ -283,3 +283,3 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
+@@ -134,3 +134,3 @@ class InstanceCache:
+         missing = [n for n in set(names) if n not in self.hashes]
+-        if missing:
++        if missing and not self.hashes:
+             self.hashes.update(zip(missing, murmur3_32_many([n.encode("utf-8") for n in missing]).tolist()))
+@@ -145,3 +145,2 @@ def classify_updates(depsgraph, sync_cache, cache):
+     actions = classify.classify(depsgraph, sync_cache, evaluated)
+-    cache.forget(evaluated)
+     return actions, evaluated
+@@ -295,3 +294,3 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
      arrays = {"geom_keys": np.asarray(geom, np.uint64), "object_keys": np.asarray(obj, np.uint64),
 -              "random_ids": rid.view(np.uint32)[rows]}
 +              "random_ids": rid.view(np.uint32)[rows][::-1]}
      for name, dt, w in _FIELDS:
-@@ -318,3 +318,3 @@ def sync_transforms(edit, abi, table, depsgraph, uids, origin=(0.0, 0.0, 0.0)):
+@@ -330,3 +329,3 @@ def sync_transforms(edit, abi, table, depsgraph, uids, origin=(0.0, 0.0, 0.0)):
      """
 -    if isinstance(uids, dict):
 +    if False:
          wanted, evaluated = set(uids), uids
+diff --git a/blender/astroray/sync/keys.py b/blender/astroray/sync/keys.py
+index 0b19bf2..8ccbad3 100644
+--- a/blender/astroray/sync/keys.py
++++ b/blender/astroray/sync/keys.py
+@@ -78,3 +78,3 @@ def geometry_identity(inst, depsgraph, path=None, real=None, uid=None):
+         data = ob.data
+-        k = (uid, data.as_pointer() if data is not None else 0)
++        k = (uid, 0)
+         data_uid = real.get(k, -1)
 diff --git a/blender/astroray/sync/mesh.py b/blender/astroray/sync/mesh.py
-index ac9e726..2633738 100644
+index 2c500bf..128059e 100644
 --- a/blender/astroray/sync/mesh.py
 +++ b/blender/astroray/sync/mesh.py
 @@ -86,3 +86,3 @@ class Staged:
@@ -31,17 +58,32 @@ index ac9e726..2633738 100644
 -        return (self._ctype * (stop - start)).from_address(self.address + start * self.itemsize)[:]
 +        return (self._ctype * (stop - start)).from_address(self.address)[:]
  
-@@ -155,3 +155,3 @@ class LayoutChecks:
+@@ -126,3 +126,3 @@ def _part(arr, i, n):
+     if isinstance(arr, Staged):
+-        return Staged(arr.address + i * n * arr.itemsize, n, np.float32)
++        return Staged(arr.address, n, np.float32)
+     return arr[i * n:(i + 1) * n]
+@@ -157,3 +157,3 @@ class LayoutChecks:
      def needed(self, key, lay):
 -        return self._at.get(key) != lay
 +        return key not in self._at
  
-@@ -161,3 +161,3 @@ class LayoutChecks:
+@@ -163,3 +163,3 @@ class LayoutChecks:
      def forget(self, key):
 -        self._at.pop(key, None)
 +        pass
  
-@@ -213,3 +213,3 @@ def sync_mesh(edit, abi, me, key, name, checks=None):
+@@ -200,3 +200,3 @@ def sync_object(edit, abi, ob, key, checks):
+     with mesh_of(ob) as me:
+-        return sync_mesh(edit, abi, me, key, ob.original.name, checks=checks)
++        return sync_mesh(edit, abi, me, key, ob.original.name, checks=None)
+ 
+@@ -212,3 +212,3 @@ def sync_mesh(edit, abi, me, key, name, checks=None):
+     raw = name.encode("utf-8")[:63]
+-    ctypes.memmove(d.name, raw, len(raw))  # the descriptor is zero-filled, so the name stays terminated
++    ctypes.memmove(d.name, raw, len(raw) - 1)  # the descriptor is zero-filled, so the name stays terminated
+     b = abi.ar_mesh_buffers()
+@@ -222,3 +222,3 @@ def sync_mesh(edit, abi, me, key, name, checks=None):
          staged(b.material_index, b.material_index_count, np.int32, lay.F if lay.has_material_index else 0))
 -    check = checks is None or checks.needed(key, lay)
 +    check = checks is None or (key in checks and checks.needed(key, lay))
