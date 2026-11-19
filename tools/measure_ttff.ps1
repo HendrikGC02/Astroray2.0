@@ -19,8 +19,15 @@ param(
   [int]$Runs = 3,
   [double]$Hold = 12,
   [switch]$Rebuild,
-  [string]$Crop = '960x540',   # the centre crop of the viewport region the poller captures (WxH)
-  [ValidateSet('screen', 'gpu', 'none')][string]$Source = 'screen',   # screen = the external poller (0007 d35); gpu = in-process framebuffer read; none = no V7a, only V7b and M-8
+  # V7a detection (ruling 83): read = a small framebuffer patch read in the POST_PIXEL handler; event = the first redraw
+  # at or after the engine's own first displayable frame; both = both, and the table shows their agreement; none = no V7a.
+  # auto = both for Astroray, event for Cycles (a read there hung Blender in 095; see -Read to try it again).
+  [ValidateSet('auto', 'read', 'event', 'both', 'none')][string]$Source = 'auto',
+  [ValidateSet('patch', 'post_view', 'timer')][string]$Read = 'patch',   # where the patch is read (tools/ttff_probe.py)
+  [int]$Cell = 3,                       # the patch is 32 x 18 cells of Cell pixels
+  [string]$Fmt = 'UBYTE',               # read_color data_format
+  [int]$Chans = 3,
+  [int]$TimeoutS = 900,
   [switch]$Shot,       # also keep Blender's own screenshot of its viewport area per switch (out/ttff/*_blender<n>.png)
   [switch]$Summarise   # only re-read out/ttff/*.json and print the tables
 )
@@ -61,10 +68,10 @@ function Invoke-Run([string]$name, [string]$eng, [int]$k) {
   Remove-Item "$result*" -ErrorAction SilentlyContinue
   $log = Join-Path $out "${name}_${eng}_r$k.log"
   $logArgs = if ($eng -eq 'cycles') { @('--log', 'cycles', '--log-level', '4') } else { @() }
-  $args_ = @('--scene', $name, '--engine', $eng, '--blend', $blend, '--out', $result, '--hold', "$Hold", '--crop', $Crop, '--source', $Source) +
+  $args_ = @('--scene', $name, '--engine', $eng, '--blend', $blend, '--out', $result, '--hold', "$Hold", '--source', $(if ($Source -eq 'auto') { if ($eng -eq 'astroray') { 'both' } else { 'event' } } else { $Source }), '--read', $Read, '--cell', "$Cell", '--fmt', $Fmt, '--chans', "$Chans") +
     $(if ($eng -eq 'astroray' -and $name -eq 'b5m') { @('--m8') } else { @() }) + $(if ($Shot) { @('--shot') } else { @() })
   $before = Get-Busy
-  $r = Invoke-ArBlender -Gui -Script (Join-Path $root 'tools/ttff_probe.py') -BlenderArgs $logArgs -Args $args_ -TimeoutS 900
+  $r = Invoke-ArBlender -Gui -Script (Join-Path $root 'tools/ttff_probe.py') -BlenderArgs $logArgs -Args $args_ -TimeoutS $TimeoutS
   $timedOut = $r.ExitCode -eq -1
   $after = Get-Busy
   foreach ($f in @($r.Log, "$($r.Log).err")) { if (Test-Path $f) { Copy-Item $f ($log + $(if ($f.EndsWith('.err')) { '.err' } else { '' })) -Force } }
