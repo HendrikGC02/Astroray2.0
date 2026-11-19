@@ -1,5 +1,5 @@
 diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
-index 8b63dad..0521004 100644
+index 8b63dad..a803f53 100644
 --- a/src/device/cuda/cuda_device.cpp
 +++ b/src/device/cuda/cuda_device.cpp
 @@ -610,17 +610,18 @@ ModuleReload CudaDevice::poll_module_reload() {
@@ -19,8 +19,8 @@ index 8b63dad..0521004 100644
        continue;
      }
 -    if (w.failed && now == w.failed_stamp) continue;  // already reported; wait for the next edit
-+    // canary: a failed file is tried again at the next steps (bounded: the driver stalls on endless bad loads)
-+    if (w.failed && now == w.failed_stamp && s.load_attempts >= 3) continue;
++    // canary: a failed file is tried again once more (bounded: the driver stalls on repeated bad loads)
++    if (w.failed && now == w.failed_stamp && s.load_attempts >= 2) continue;
      ++s.load_attempts;
      try {
        if (now == missing) throw DeviceError("kernel module file is missing from " + s.dev_dir);
