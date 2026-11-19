@@ -25,30 +25,16 @@ param(
   [int]$RegionX = 0, [int]$RegionY = 0, [int]$RegionW = 0, [int]$RegionH = 0,
   [int]$CropW = 960, [int]$CropH = 540,
   [double]$MaxSeconds = 120,
-  [switch]$NoCover,      # do not put the tiny cover window over the client corner (see class Cover)
   [string]$DumpPng = ''   # debugging: the last crop is saved here
 )
 $ErrorActionPreference = 'Stop'
-Add-Type -ReferencedAssemblies 'System.Drawing', 'System.Drawing.Common', 'System.Drawing.Primitives', 'System.Diagnostics.Process', 'System.ComponentModel.Primitives', 'System.Runtime.InteropServices', 'System.Collections', 'System.Threading.Thread', 'System.Windows.Forms' -TypeDefinition @'
+Add-Type -ReferencedAssemblies 'System.Drawing', 'System.Drawing.Common', 'System.Drawing.Primitives', 'System.Diagnostics.Process', 'System.ComponentModel.Primitives', 'System.Runtime.InteropServices', 'System.Collections', 'System.Threading.Thread' -TypeDefinition @'
 using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Windows.Forms;
-
-// A 4 x 4 px, almost transparent, click-through topmost window in the corner of Blender's client area. An app window
-// whose swapchain matches it exactly is promoted to a hardware overlay plane (Direct Flip / MPO) and then never reaches
-// the compositor, so Windows.Graphics.Capture sees only its background; any window above it forces composition.
-public class Cover : Form {
-  protected override CreateParams CreateParams { get { var cp = base.CreateParams; cp.ExStyle |= 0x80000 | 0x20 | 0x8 | 0x80; return cp; } }
-  protected override bool ShowWithoutActivation { get { return true; } }
-  public Cover(int x, int y) {
-    FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; StartPosition = FormStartPosition.Manual;
-    Location = new System.Drawing.Point(x, y); Size = new System.Drawing.Size(4, 4); Opacity = 0.01; TopMost = true;
-  }
-}
 
 public static class TtffCapture {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
@@ -104,7 +90,7 @@ public static class TtffCapture {
   public const int GX = 32, GY = 18;
 
   public static int Run(int pid, string binPath, int rx, int ry, int rw, int rh, int cw, int ch,
-                        string stopFile, double maxSeconds, string dumpPng, bool cover, out double epoch0, out double elapsed,
+                        string stopFile, double maxSeconds, string dumpPng, out double epoch0, out double elapsed,
                         out int csx, out int csy, out int cwin, out int chwin, out int cropx, out int cropy, out int pw, out int ph,
                         out int newFrames, out int frameW, out int frameH) {
     newFrames = 0; Timeouts = 0;
@@ -131,12 +117,6 @@ public static class TtffCapture {
     pw -= pw % GX; ph -= ph % GY;   // whole blocks
     int bw = pw / GX, bh = ph / GY;
 
-    if (cover) {
-      int cvx = csx + 2, cvy = csy + 2;
-      var t0 = new System.Threading.Thread(() => Application.Run(new Cover(cvx, cvy)));
-      t0.SetApartmentState(System.Threading.ApartmentState.STA); t0.IsBackground = true; t0.Start();
-      System.Threading.Thread.Sleep(500);
-    }
     IntPtr dev, ctx; int level;
     Check(D3D11CreateDevice(IntPtr.Zero, 1, IntPtr.Zero, 0x20, IntPtr.Zero, 0, 7, out dev, out level, out ctx), "D3D11CreateDevice");   // hardware, BGRA support
     IntPtr dxgi = Query(dev, new Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c"));   // IDXGIDevice
@@ -235,7 +215,7 @@ $bin = "$OutPrefix.bin"
 [int]$sx = 0; [int]$sy = 0; [int]$cw = 0; [int]$chh = 0; [int]$px = 0; [int]$py = 0; [int]$pw = 0; [int]$ph = 0; [int]$nf = 0; [int]$fw = 0; [int]$fh = 0
 Set-Content -Path "$OutPrefix.ready" -Value $ProcessId
 $n = [TtffCapture]::Run($ProcessId, $bin, $RegionX, $RegionY, $RegionW, $RegionH, $CropW, $CropH, $StopFile,
-  $MaxSeconds, $DumpPng, (-not $NoCover), [ref]$e0, [ref]$el, [ref]$sx, [ref]$sy, [ref]$cw, [ref]$chh, [ref]$px, [ref]$py, [ref]$pw, [ref]$ph, [ref]$nf, [ref]$fw, [ref]$fh)
+  $MaxSeconds, $DumpPng, [ref]$e0, [ref]$el, [ref]$sx, [ref]$sy, [ref]$cw, [ref]$chh, [ref]$px, [ref]$py, [ref]$pw, [ref]$ph, [ref]$nf, [ref]$fw, [ref]$fh)
 $meta = [ordered]@{
   pid = $ProcessId; method = 'Windows.Graphics.Capture (window)'
   epoch0 = $e0; seconds = $el; captures = $n; new_frames = $nf; rate_hz = [math]::Round($n / $el, 1); new_frame_hz = [math]::Round($nf / $el, 1)

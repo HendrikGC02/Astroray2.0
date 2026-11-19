@@ -13,8 +13,6 @@
 # medians, history lines in out/bench/history-ttff-<yyyyMMdd>.jsonl (the lead commits them to bench/history/),
 # and `<python> tools/report.py` plots them. Per run it records how busy the machine was (other build or
 # render processes) because other agents share it.
-# Invoke-ArBlender cannot pass Blender options before the script, so the launcher below repeats its profile
-# setup with the log options added.
 param(
   [string[]]$Scene = @('b1m', 'b5m', 's3_textured'),
   [string[]]$Engine = @('cycles', 'astroray'),
@@ -61,37 +59,15 @@ function Invoke-Run([string]$name, [string]$eng, [int]$k) {
   $blend = Join-Path $out "$name.blend"
   $result = Join-Path $out "${name}_${eng}_r$k.json"
   Remove-Item "$result*" -ErrorAction SilentlyContinue
-  $exe = Join-Path (Get-ArBlenderRoot) 'blender.exe'
-  $runId = (Get-Date -Format 'yyyyMMdd-HHmmss') + "-$PID"
-  $profileDir = Join-Path $root "out/blender_home/$runId"
-  foreach ($d in 'config', 'scripts', 'extensions', 'datafiles') { New-Item -ItemType Directory -Force (Join-Path $profileDir $d) | Out-Null }
   $log = Join-Path $out "${name}_${eng}_r$k.log"
-  $null = Enter-ArMachineLock
-  $saved = @{}
-  try {
-    foreach ($v in @{ BLENDER_USER_CONFIG = 'config'; BLENDER_USER_SCRIPTS = 'scripts'; BLENDER_USER_EXTENSIONS = 'extensions'; BLENDER_USER_DATAFILES = 'datafiles' }.GetEnumerator()) {
-      $saved[$v.Key] = [Environment]::GetEnvironmentVariable($v.Key)
-      [Environment]::SetEnvironmentVariable($v.Key, (Join-Path $profileDir $v.Value))
-    }
-    # A fresh profile opens the splash; seed a userpref that hides it (as Invoke-ArBlender -Gui does).
-    $seed = Start-ArProcess -Name 'blender-seed' -File $exe -LogPath (Join-Path $profileDir 'seed.log') -ArgList @(
-      '--background', '--factory-startup', '--python-expr',
-      'import bpy; bpy.context.preferences.view.show_splash = False; bpy.ops.wm.save_userpref()')
-    if (-not $seed.WaitForExit(120000)) { Stop-ArProcess -Id $seed.Id; throw 'seeding the Blender profile timed out' }
-    $seed.WaitForExit()
-    $logArgs = if ($eng -eq 'cycles') { @('--log', 'cycles', '--log-level', '4') } else { @() }
-    $argv = $logArgs + @('--python-exit-code', '1', '--python', (Join-Path $root 'tools/ttff_probe.py'), '--',
-      '--scene', $name, '--engine', $eng, '--blend', $blend, '--out', $result, '--hold', "$Hold", '--crop', $Crop, '--source', $Source) +
-      $(if ($eng -eq 'astroray' -and $name -eq 'b5m') { @('--m8') } else { @() }) + $(if ($Shot) { @('--shot') } else { @() })
-    $before = Get-Busy
-    $p = Start-ArProcess -Name 'blender' -File $exe -ArgList $argv -LogPath $log
-    $timedOut = -not $p.WaitForExit(900000)
-    if ($timedOut) { Stop-ArProcess -Id $p.Id } else { $p.WaitForExit() }
-    $after = Get-Busy
-  } finally {
-    foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key]) }
-    Exit-ArMachineLock
-  }
+  $logArgs = if ($eng -eq 'cycles') { @('--log', 'cycles', '--log-level', '4') } else { @() }
+  $args_ = @('--scene', $name, '--engine', $eng, '--blend', $blend, '--out', $result, '--hold', "$Hold", '--crop', $Crop, '--source', $Source) +
+    $(if ($eng -eq 'astroray' -and $name -eq 'b5m') { @('--m8') } else { @() }) + $(if ($Shot) { @('--shot') } else { @() })
+  $before = Get-Busy
+  $r = Invoke-ArBlender -Gui -Script (Join-Path $root 'tools/ttff_probe.py') -BlenderArgs $logArgs -Args $args_ -TimeoutS 900
+  $timedOut = $r.ExitCode -eq -1
+  $after = Get-Busy
+  foreach ($f in @($r.Log, "$($r.Log).err")) { if (Test-Path $f) { Copy-Item $f ($log + $(if ($f.EndsWith('.err')) { '.err' } else { '' })) -Force } }
   if (-not (Test-Path $result)) { Write-Host "FAIL ${name} ${eng} r${k}: no result (timeout=$timedOut); see $log"; return $null }
   $o = Get-Content $result -Raw | ConvertFrom-Json
   $o | Add-Member -NotePropertyName busy_before -NotePropertyValue $before -Force
