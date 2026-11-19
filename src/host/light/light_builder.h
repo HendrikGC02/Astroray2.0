@@ -11,6 +11,7 @@
 // intern/cycles/scene/shader.cpp Shader::estimate_emission (EMISSION_SAMPLING_AUTO, Apache-2.0).
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -69,11 +70,22 @@ struct LightTable {
 // CMF sum normalised to integrate to 1 (a 1 nm rectangle rule on the 471 table samples).
 double display_energy(const std::vector<EmissionTerm>& terms, const ar::ObserverView& obs);
 
+// Runs body(first, last) over chunks covering [0, count), possibly on several threads, and returns
+// when all have run (Scene::lights passes the scene workers' WorkerPool::parallel_for).
+using ChunkRunner = std::function<void(uint32_t count, const std::function<void(uint32_t first, uint32_t last)>& body)>;
+
+// True when two lights are triangles with byte-identical estimate terms, so their display energy
+// and emitter peak are the same numbers: the triangles of one material compute them once.
+bool same_terms(const LightInput& a, const LightInput& b);
+
 // The table over `lights` in order. A light whose importance is 0 gets pmf 0 and no bin; with no
 // positive importance the table has no bins and sample() finds no light. `ledger` may be null.
 // Throws std::runtime_error when two triangle records name the same instance and triangle.
+// With `run` the per-light importances are computed in its chunks; every sum, check and the alias
+// table stay serial in light order, so the table is bit-identical to the serial build (`run` empty).
 std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput>& lights, const ar::SceneSphere& scene,
-                                                    const ar::ObserverView& obs, std::shared_ptr<Ledger> ledger);
+                                                    const ar::ObserverView& obs, std::shared_ptr<Ledger> ledger,
+                                                    const ChunkRunner& run = {});
 
 // Triangle sidedness from AR_EMISSION_SAMPLING_*: 0 = not a light, else kLightTwoSided,
 // kLightBackFace or neither (FRONT), as LightRecord flags with kLightLit set. AUTO follows Cycles:

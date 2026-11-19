@@ -54,16 +54,37 @@ double display_energy(const std::vector<EmissionTerm>& terms, const ar::Observer
   return e;
 }
 
+bool same_terms(const LightInput& a, const LightInput& b) {
+  // EmissionTerm is 28 bytes without padding (SpectrumRef 24 + float), so memcmp compares values.
+  static_assert(sizeof(EmissionTerm) == sizeof(ar::SpectrumRef) + sizeof(float), "EmissionTerm has padding");
+  return !a.terms.empty() && a.terms.size() == b.terms.size() &&
+         std::memcmp(a.terms.data(), b.terms.data(), a.terms.size() * sizeof(EmissionTerm)) == 0;
+}
+
 std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput>& in, const ar::SceneSphere& scene,
-                                                    const ar::ObserverView& obs, std::shared_ptr<Ledger> ledger) {
+                                                    const ar::ObserverView& obs, std::shared_ptr<Ledger> ledger,
+                                                    const ChunkRunner& run) {
   auto t = std::make_shared<LightTable>();
   t->scene = scene;
+  // Per light, independently of every other: the display energy (once per run of identical terms,
+  // the same function of the same input) times light_power's geometric factor (1, pi A,
+  // 4 pi^2 R^2) (D9, D10).
+  std::vector<double> imps(in.size());
+  const auto importance = [&](uint32_t first, uint32_t last) {
+    double energy = 0.0;
+    for (uint32_t i = first; i < last; ++i) {
+      const LightInput& li = in[i];
+      if (i == first || !same_terms(in[i - 1], li))
+        energy = li.terms.empty() ? display_energy({{li.record.emission, li.record.strength}}, obs) : display_energy(li.terms, obs);
+      imps[i] = energy * double(ar::light_power(li.record, scene, ar::Real(1)));
+    }
+  };
+  if (run) run(uint32_t(in.size()), importance);
+  else importance(0, uint32_t(in.size()));
   double sum = 0.0;
-  for (const LightInput& li : in) {
-    const double energy = li.terms.empty() ? display_energy({{li.record.emission, li.record.strength}}, obs)
-                                           : display_energy(li.terms, obs);
-    // light_power's geometric factor (1, pi A, 4 pi^2 R^2) times the weighted energy (D9, D10).
-    const double imp = energy * double(ar::light_power(li.record, scene, ar::Real(1)));
+  for (size_t i = 0; i < in.size(); ++i) {
+    const LightInput& li = in[i];
+    const double imp = imps[i];
     if (!std::isfinite(imp) || imp < 0.0) throw std::runtime_error("light importance is not finite and non-negative");
     if (li.record.type == uint8_t(ar::LightType::WORLD_CONST)) {
       if (t->world_light != ar::kNoLight) throw std::runtime_error("light table: more than one world light");

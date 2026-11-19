@@ -2,6 +2,9 @@
 #include "host/scene/generation.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <exception>
 #include <stdexcept>
 #include <utility>
 
@@ -9,7 +12,7 @@
 
 namespace astroray::host {
 
-WorkerPool::WorkerPool(ContextState& ctx, unsigned workers) {
+WorkerPool::WorkerPool(ContextState& ctx, unsigned workers) : ctx_(ctx) {
   if (workers == 0) throw std::invalid_argument("worker pool: zero workers");
   try {
     for (unsigned i = 0; i < workers; ++i) threads_.push_back(start_engine_thread(ctx, [this] { main(); }));
@@ -55,6 +58,63 @@ void WorkerPool::main() {
       // Jobs report their own failures; an escape must not end the worker.
     }
   }
+}
+
+void WorkerPool::parallel_for(uint32_t count, uint32_t chunk, const Body& body) {
+  if (chunk == 0) throw std::invalid_argument("parallel_for: chunk size zero");
+  if (count == 0) return;
+  // Shared with the helper jobs, which may run after this call returned; a chunk index is claimed
+  // before body is touched, so a late helper only sees next >= chunks and leaves.
+  struct Loop {
+    const Body* body = nullptr;
+    uint32_t count = 0, chunk = 0, chunks = 0;
+    std::atomic<uint32_t> next{0};
+    std::mutex mutex;
+    std::condition_variable done_cv;
+    uint32_t done = 0;
+    std::exception_ptr error;
+  };
+  auto loop = std::make_shared<Loop>();
+  loop->body = &body;
+  loop->count = count;
+  loop->chunk = chunk;
+  loop->chunks = uint32_t((uint64_t(count) + chunk - 1) / chunk);
+  const auto run = [](Loop& l) {
+    for (;;) {
+      const uint32_t c = l.next.fetch_add(1);
+      if (c >= l.chunks) return;
+      const uint32_t first = c * l.chunk;
+      const uint32_t last = uint32_t(std::min<uint64_t>(uint64_t(first) + l.chunk, l.count));
+      std::exception_ptr err;
+      try {
+        (*l.body)(first, last);
+      } catch (...) {
+        err = std::current_exception();
+      }
+      std::lock_guard<std::mutex> lock(l.mutex);
+      if (err && !l.error) l.error = err;
+      ++l.done;
+      l.done_cv.notify_all();
+    }
+  };
+  // Waits until `claimed` chunks have finished. The wake-up slice only bounds how long a faulted
+  // worker can go unnoticed.
+  const auto wait_done = [&](uint32_t claimed) {
+    std::unique_lock<std::mutex> lock(loop->mutex);
+    while (!loop->done_cv.wait_for(lock, std::chrono::milliseconds(20), [&] { return loop->done >= claimed; }))
+      if (ctx_.poisoned.load(std::memory_order_acquire)) throw std::runtime_error(ctx_.poison_message);
+  };
+  const unsigned helpers = std::min<unsigned>(workers(), loop->chunks - 1);
+  try {
+    for (unsigned i = 0; i < helpers; ++i) submit([loop, run] { run(*loop); });
+  } catch (...) {
+    // Close the loop so no queued helper can reach body after we return, finish what was claimed.
+    wait_done(std::min(loop->next.exchange(loop->chunks), loop->chunks));
+    throw;
+  }
+  run(*loop);
+  wait_done(loop->chunks);
+  if (loop->error) std::rethrow_exception(loop->error);
 }
 
 void GenerationTracker::job_started(Pending& p) {

@@ -37,9 +37,20 @@ class WorkerPool {
   WorkerPool& operator=(const WorkerPool&) = delete;
   void submit(std::function<void()> job);
   unsigned workers() const { return static_cast<unsigned>(threads_.size()); }
+  // Runs body(first, last) over [0, count) in chunks on the calling thread and on the workers;
+  // returns when every chunk has run and rethrows the first exception a body threw. The caller
+  // claims chunks too and waits only for chunks a worker has already claimed, so it may hold
+  // locks that queued jobs wait for: a helper still queued at the end finds no chunk and never
+  // touches body. Bodies must not take scene locks. Throws std::runtime_error on a poisoned
+  // context instead of waiting for a faulted worker; a healthy worker can then still be inside a
+  // chunk, so the caller must not reuse the pool or the arrays the body writes.
+  // Ref: pbrt-v4 src/pbrt/util/parallel.h ParallelFor (Apache-2.0), a shared atomic chunk cursor.
+  using Body = std::function<void(uint32_t first, uint32_t last)>;
+  void parallel_for(uint32_t count, uint32_t chunk, const Body& body);
 
  private:
   void main();
+  ContextState& ctx_;
   std::mutex mutex_;
   std::condition_variable wake_;
   std::deque<std::function<void()>> queue_;
