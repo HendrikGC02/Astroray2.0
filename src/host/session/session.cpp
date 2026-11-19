@@ -931,6 +931,17 @@ void Session::render_loop() {
         continue;
       }
       const bool resolved = resolve(lr.epoch, lr.generation);
+      if (scheduler_->epoch_pending.load(std::memory_order_acquire)) {
+        // The resolve waited for the device to finish the pass, which on the GPU is most of the pass
+        // after its last launch boundary. An epoch-starting change that became due meanwhile
+        // interrupts here as at any boundary (0007 d25): the pass counts as interrupted, the epoch
+        // reset clears what it resolved, and no frame of the superseded view is presented, so the
+        // new view's first frame does not wait out the publish gap behind it.
+        expect_epoch_ = true;
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++stats_.passes_interrupted;
+        continue;
+      }
       const std::chrono::duration<float, std::milli> took = std::chrono::steady_clock::now() - pass_start;
       batching_.note_pass(double(took.count()) * 1e-3);
       uint64_t free_bytes = 0, total_bytes = 0;
