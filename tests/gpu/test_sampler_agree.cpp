@@ -270,7 +270,7 @@ TEST_CASE("cuda_device/reserve rule refusal") {
     CHECK(e.available() <= total);
     CHECK(e.available() > 0);
     char want[160];
-    std::snprintf(want, sizeof want, "needs 1024.00 GiB for geometry, %.2f GiB free (reserve 1.50 GiB)",
+    std::snprintf(want, sizeof want, "needs 1024.00 GiB for geometry, %.2f GiB free (reserve 2.00 GiB)",
                   static_cast<double>(e.available()) / static_cast<double>(kGiB));
     CHECK(std::string(e.what()) == want);
   }
