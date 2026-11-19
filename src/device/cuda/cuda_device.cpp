@@ -478,9 +478,12 @@ void CudaDevice::memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value,
   Impl& s = *impl_;
   s.bind();
   s.invalidate_globals(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, bytes);
+  // Stream-ordered with the launches and copies, no wait: the value travels in the call, so no host
+  // memory must outlive it, and every host read of device memory waits on this stream first
+  // (download, read_step_table). The two memsets of each pass start had waited for nothing.
+  // Ref: CUDA C++ Programming Guide, asynchronous concurrent execution (streams).
   s.check(s.cu.cuMemsetD8Async_(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, value, bytes, s.stream),
           "cuMemsetD8Async");
-  s.sync();
 }
 
 void CudaDevice::copy(const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src, uint64_t src_offset,

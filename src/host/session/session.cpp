@@ -571,6 +571,7 @@ void Session::release() {
   // The ring stays until the session is destroyed: a frame the host acquired remains readable
   // after CLOSED and is released then (display_release), so no thread reads freed memory.
   film_.reset();
+  invalid_host_ = std::vector<uint32_t>();
   film_settings_.reset();
   tables_.reset();  // the pin: the set's copies go when no session holds them (RULINGS 70)
   session_tables_ = SessionTables{};
@@ -771,8 +772,7 @@ void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
   bind_globals();
   device_.launch(KernelId::FILM_RESOLVE, active_->count());
   device_.synchronize();
-  std::vector<uint32_t> invalid;
-  invalid_.report(film_host_view(&invalid), report_, generation);
+  invalid_.report(film_host_view(&invalid_host_), report_, generation);
   ++pass_index_;
   ++passes_in_epoch_;
   std::lock_guard<std::mutex> lock(mutex_);
@@ -906,7 +906,8 @@ void Session::render_loop() {
       need_pass = !converged_locked();
     }
     if (need_pass) {
-      bind_globals();
+      // build_active bound this pass's globals and the scheduler's config just above; nothing
+      // they read has changed since.
       const auto pass_start = std::chrono::steady_clock::now();
       const PassStatus st = scheduler_->run_pass(PassWork{pass_camera_samples(), 0});
       if (st == PassStatus::CANCELLED) {

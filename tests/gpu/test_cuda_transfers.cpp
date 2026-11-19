@@ -4,12 +4,13 @@
 // stream to consume the staged bytes; read_step_table must wait for its own copy before it reads
 // the pinned area; and the step-table address read_step_table caches must follow the KernelGlobals
 // through a rebind and through every way the host writes the bound globals (upload, upload_async,
-// memset, copy). The timing cases hold the stream with tests/gpu/kernels/hold.cu, so the copies
+// memset, copy); memset enqueues without a wait, like copy. The timing cases hold the stream with tests/gpu/kernels/hold.cu, so the copies
 // queued behind it certainly have not run when the host moves on: a missing wait shows every time.
 // Ref: docs/decisions/0002-kernel-architecture.md D7 (step 2, remedy (a)); CUDA Driver API
 // (cuMemcpyHtoDAsync and cuMemcpyDtoHAsync touch page-locked host memory when the copy runs).
 #include <doctest.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -112,6 +113,28 @@ TEST_CASE("cuda_transfers/step table read waits for its copy") {
   next.refill_count = 33;
   dev->upload_async(t.tables, 0, &next, sizeof next);
   CHECK(t.read() == 33u);
+}
+
+TEST_CASE("cuda_transfers/memset is stream-ordered without a wait") {
+  Ledger ledger;
+  std::unique_ptr<ModuleDevice> dev = make_cuda_device(ledger, 0);
+  constexpr uint64_t kBytes = 4096;
+  DeviceBuffer dst = dev->allocate(LedgerCategory::TABLES, kBytes, kOwner);
+  dev->memset(dst, 0, 0x11, kBytes);
+  dev->synchronize();
+  // Behind the 50 ms hold: a memset that waited would return after it.
+  hold_stream(*dev);
+  const auto t0 = std::chrono::steady_clock::now();
+  dev->memset(dst, 1024, 0x5a, 2048);
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  CHECK(ms < double(kHoldNs) * 1e-6 / 2);
+  // The download is ordered behind the hold and the memset.
+  std::vector<uint8_t> got(kBytes);
+  dev->download(got.data(), dst, 0, kBytes);
+  uint32_t wrong = 0;
+  for (uint64_t i = 0; i < kBytes; ++i) wrong += got[i] != (i >= 1024 && i < 3072 ? 0x5a : 0x11);
+  CHECK(wrong == 0u);
+  dev->free(dst);
 }
 
 TEST_CASE("cuda_transfers/step table follows the kernel globals") {

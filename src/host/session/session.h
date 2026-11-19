@@ -259,6 +259,10 @@ class Session {
   std::string observer_hash_;      // hex, written with film_ under render_mutex_
   std::atomic<uint64_t> render_size_{0};  // width << 32 | height, written at apply_view
   InvalidSampleReporter invalid_;
+  // The invalid-sample plane read back after every resolve on CUDA, kept between passes: a fresh
+  // 8 MiB vector per pass (1080p) cost its allocation, zero fill and free on the host with the GPU
+  // idle, about 0.75 of the 1.75 ms between passes (nsys and host timestamps, B-1M).
+  std::vector<uint32_t> invalid_host_;
   DeviceBuffer globals_buf_;  // KernelGlobals, then FilmData, then DisplayTarget
   DeviceBuffer present_buf_;
   // Per session, in the ledger: the active-pixel list, the CameraView of the latched view and the
