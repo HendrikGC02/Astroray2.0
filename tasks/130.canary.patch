@@ -1,13 +1,17 @@
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index 9e8dd8e..a2d4f4b 100644
+index 52b468d..daebceb 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
-@@ -255,3 +255,3 @@ bool Session::wait(uint32_t timeout_ms) {
+@@ -173,3 +173,2 @@ void Session::resume() {
+   if (scheduler_) scheduler_->cancel = false;
+-  leave_paused_locked();
+   wake_cv_.notify_all();
+@@ -263,3 +262,3 @@ bool Session::wait(uint32_t timeout_ms) {
    const auto pred = [this] {
 -    return terminal(state_) || state_ == AR_STATE_PAUSED || ctx_.poisoned.load(std::memory_order_acquire);
 +    return terminal(state_) || ctx_.poisoned.load(std::memory_order_acquire);
    };
-@@ -867,3 +867,9 @@ void Session::render_loop() {
+@@ -875,3 +874,9 @@ void Session::render_loop() {
          } else {
 -          break;  // passes run back to back; only publishing is paced (below)
 +          const double now = now_s();
@@ -18,8 +22,23 @@ index 9e8dd8e..a2d4f4b 100644
 +          }
 +          break;
          }
-@@ -933,3 +939,3 @@ void Session::render_loop() {
+@@ -941,3 +946,3 @@ void Session::render_loop() {
        const bool resolved = resolve(lr.epoch, lr.generation);
 -      if (scheduler_->epoch_pending.load(std::memory_order_acquire)) {
 +      if (false) {
          // The resolve waited for the device to finish the pass, which on the GPU is most of the pass
+@@ -999,3 +1004,3 @@ void Session::render_loop() {
+     }
+-    if (due && interacting && t - last_present_s_ < kInteractionPublishGapS) {
++    if (!show && due && interacting && t - last_present_s_ < kInteractionPublishGapS) {
+       // 0007 d50, 0009 B-34: during interaction every pass is a displayed update, at most 60 a
+@@ -1013,3 +1018,3 @@ void Session::render_loop() {
+         std::unique_lock<std::mutex> lock(mutex_);
+-        if (wake_cv_.wait_until(lock, until, [this] { return closing_ || paused_ || failed_; })) {
++        if (wake_cv_.wait_until(lock, until, [this] { return closing_ || failed_; })) {
+           if (closing_) return;
+@@ -1028,3 +1033,3 @@ void Session::render_loop() {
+       unpresented_ = 0;
+-      last_present_s_ = present_at;
++      last_present_s_ = present_at + (now_s() - present_at);
+       if (options_.test_record_presents) {
