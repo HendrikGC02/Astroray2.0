@@ -234,6 +234,24 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
   launched_.clear();
   for (;;) {
     if (at_boundary(&status)) return status;
+    // Dev kernel reload (0002 D14, D15): a rebuilt module is swapped here, before the step's first launch.
+    // A swap ends the pass like an epoch change, so nothing mixes two images; a failed load keeps the
+    // previous image and leaves one warning entry per module until a good file loads.
+    {
+      const ModuleReload r = device_.poll_module_reload();
+      if (config.report) {
+        const double none[2] = {0.0, 0.0};
+        // One entry per module (its subject), so a later good file removes it whatever the error text was.
+        for (const auto& f : r.failed) {
+          config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, f.subject);
+          config.report->raise(AR_REPORT_KERNEL_MODULE_FALLBACK, f.subject,
+                               f.module + ": " + f.error + "; previous image runs", 1, none, 0);
+        }
+        for (const auto& m : r.swapped) config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, m.subject);
+        for (const auto& m : r.recovered) config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, m.subject);
+      }
+      if (!r.swapped.empty()) return PassStatus::EPOCH_PENDING;
+    }
     const std::vector<uint32_t> prev_launched = std::move(launched_);
     launched_.clear();
     // 1. Partition both pools up to their high-water marks.

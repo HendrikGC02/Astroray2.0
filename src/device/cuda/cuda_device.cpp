@@ -12,6 +12,7 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
@@ -182,6 +183,19 @@ struct CudaDevice::Impl {
 
   std::mutex mutex;  // guards the module and function tables
   std::unordered_map<std::string, CUmodule> modules;  // embedded or dev-directory, by name
+  // Development reload (0002 D14): the directory as it was at creation, and per loaded module the stamp of
+  // the file that was loaded and the stamp of the last changed file that failed to load.
+  struct Watch {
+    ModuleStamp loaded;
+    std::string unreadable;    // the filesystem's message when the file exists but cannot be read; empty: absent
+    bool has_pending = false;  // a stamp that differs from `loaded`, seen at the previous poll
+    ModuleStamp pending;
+    bool failed = false;       // the file at `failed_stamp` could not be loaded
+    ModuleStamp failed_stamp;
+  };
+  std::atomic<uint64_t> load_attempts{0};
+  std::string dev_dir;
+  std::unordered_map<std::string, Watch> watched;
   std::vector<CUmodule> file_modules;                 // test modules, by handle
   std::unordered_map<std::string, CUfunction> functions;
   std::unordered_map<std::string, uint32_t> block_threads;  // checked block size, by kernel name
@@ -192,6 +206,7 @@ struct CudaDevice::Impl {
   // the context, stream and event acquired so far.
   void init(uint32_t index) {
     hooks = read_test_hooks();
+    dev_dir = dev_kernel_dir();
     fault_pending = hooks.gpu_fault;
     check(cu.cuInit_(0), "cuInit");
     int driver = 0;
@@ -307,7 +322,13 @@ struct CudaDevice::Impl {
     auto f = functions.find(key);
     if (f != functions.end()) return f->second;
     auto m = modules.find(module);
-    if (m == modules.end()) m = modules.emplace(module, load_image(module, load_module_image(module, hooks.corrupt_cubin))).first;
+    if (m == modules.end()) {
+      Watch w;
+      if (!dev_dir.empty() && !module_file_stamp(module, dev_dir, &w.loaded))
+        throw DeviceError("kernel module file for " + module + " is missing from " + dev_dir);
+      m = modules.emplace(module, load_image(module, load_module_image(module, hooks.corrupt_cubin, dev_dir))).first;
+      if (!dev_dir.empty()) watched[module] = w;  // stat before the read: a later edit differs from it
+    }
     CUfunction func = nullptr;
     check(cu.cuModuleGetFunction_(&func, m->second, fn.c_str()), "cuModuleGetFunction", fn.c_str());
     functions.emplace(key, func);
@@ -562,6 +583,85 @@ void CudaDevice::synchronize() { impl_->sync(); }
 std::string CudaDevice::untested_architecture() const {
   // 0001 D3.3: sm_120 is the only tested hardware; this build has no PTX JIT path to time.
   return impl_->arch == "sm_120" ? std::string() : impl_->arch;
+}
+
+// The report subject of a module: its place in the fixed module tables (stages, then scheduler and film
+// kernels), so one KERNEL_MODULE_FALLBACK entry belongs to one module (0002 D8, D15).
+static uint64_t module_subject(const std::string& name) {
+  for (uint32_t i = 0; i < ar::kStageCount; ++i)
+    if (name == kStageNames[i]) return 1u + i;
+  for (uint32_t i = 0; i < kKernelIdCount; ++i)
+    if (name == kKernelNames[i]) return 1000u + i;
+  throw std::logic_error("CudaDevice: module " + name + " is in neither module table");
+}
+
+uint64_t CudaDevice::module_load_attempts() const { return impl_->load_attempts.load(); }
+
+ModuleReload CudaDevice::poll_module_reload() {
+  Impl& s = *impl_;
+  ModuleReload out;
+  if (s.dev_dir.empty()) return out;
+  s.bind();
+  std::lock_guard<std::mutex> lock(s.mutex);
+  // A missing file has this stamp, so it goes through the same two-poll settling as an edit.
+  const ModuleStamp missing{~0ull, 0};
+  for (auto& kv : s.watched) {
+    const std::string& name = kv.first;
+    Impl::Watch& w = kv.second;
+    ModuleStamp now;
+    if (!module_file_stamp(name, s.dev_dir, &now, &w.unreadable)) now = missing;
+    if (now == w.loaded) {  // the file matches the running image again
+      w.has_pending = false;
+      if (w.failed) out.recovered.push_back({name, module_subject(name), {}});
+      w.failed = false;
+      continue;
+    }
+    // A rebuild writes the file in place, in pieces: load only a stamp seen at two consecutive polls.
+    if (!w.has_pending || w.pending != now) {
+      w.has_pending = true;
+      w.pending = now;
+      continue;
+    }
+    if (w.failed && now == w.failed_stamp) continue;  // already reported; wait for the next edit
+    ++s.load_attempts;
+    try {
+      if (now == missing)
+        throw DeviceError(w.unreadable.empty() ? "kernel module file is missing from " + s.dev_dir
+                                               : "kernel module file cannot be read: " + w.unreadable);
+      const ModuleImage image = load_module_image(name, s.hooks.corrupt_cubin, s.dev_dir);
+      // The loader's own result, short: the report detail holds 128 bytes.
+      CUmodule fresh = nullptr;
+      const CUresult lr = s.cu.cuModuleLoadData_(&fresh, image.bytes.data());
+      if (lr != CUDA_SUCCESS) {
+        if (cuda_result_is_sticky(static_cast<int>(lr))) s.fail(lr, "cuModuleLoadData", name.c_str());
+        const char* text = nullptr;
+        s.cu.cuGetErrorName_(lr, &text);
+        throw DeviceError(std::string("cuModuleLoadData ") + (text ? text : "failed"));
+      }
+      s.sync();  // nothing launched from the old image is still running
+      s.check(s.cu.cuModuleUnload_(s.modules[name]), "cuModuleUnload", name.c_str());
+      s.modules[name] = fresh;
+      const std::string prefix = name + "/";
+      for (auto f = s.functions.begin(); f != s.functions.end();) {
+        if (f->first.compare(0, prefix.size(), prefix) == 0) {
+          s.block_threads.erase(f->first.substr(prefix.size()));
+          f = s.functions.erase(f);
+        } else {
+          ++f;
+        }
+      }
+      w.loaded = now;
+      w.has_pending = false;
+      w.failed = false;
+      out.swapped.push_back({name, module_subject(name), {}});
+    } catch (const DeviceError& e) {
+      if (e.sticky()) throw;
+      w.failed = true;
+      w.failed_stamp = now;
+      out.failed.push_back({name, module_subject(name), e.what()});
+    }
+  }
+  return out;
 }
 
 uint32_t CudaDevice::load_module_file(const std::string& path) {

@@ -27,6 +27,22 @@ struct ModuleImage {
 // copy of a cubin; OptiX PTX is never damaged. The caller decides, so no environment is read here.
 ModuleImage load_module_image(const std::string& name, bool corrupt = false);
 
+// The directory loose modules come from: ASTRORAY_KERNEL_DIR in a dev build, empty otherwise. A device reads
+// it once at creation and passes it to every later call, so a later change of the variable moves nothing.
+std::string dev_kernel_dir();
+// As above, reading `dir` (empty: the embedded copy) instead of the environment.
+ModuleImage load_module_image(const std::string& name, bool corrupt, const std::string& dir);
+// Size and last write time of the loose file of module `name` in `dir`; false when there is none.
+struct ModuleStamp {
+  uint64_t size = 0;
+  int64_t mtime = 0;
+  bool operator==(const ModuleStamp& o) const { return size == o.size && mtime == o.mtime; }
+  bool operator!=(const ModuleStamp& o) const { return !(*this == o); }
+};
+// `error`, when given, stays empty for a file that is genuinely absent and otherwise holds the filesystem's
+// message (a rebuild holding the file, a permission error).
+bool module_file_stamp(const std::string& name, const std::string& dir, ModuleStamp* out, std::string* error = nullptr);
+
 // Test modules only (never embedded): reads the file at `path`. Throws DeviceError when
 // it cannot be read.
 ModuleImage load_module_image_file(const std::string& path);

@@ -35,6 +35,9 @@ class Report {
   void on_generation_active(uint64_t generation, const std::vector<uint64_t>& subjects, bool reset);
   // The film was reset: drop FILM entries.
   void on_film_reset();
+  // Drops every entry of `code` and `subject` whatever its detail: a condition that cleared (a dev
+  // kernel module that loads again, 0002 D15). Returns how many were dropped.
+  uint32_t remove(uint32_t code, uint64_t subject);
 
   // Orders the table by level (descending), code, subject, detail and stores it.
   void snapshot();

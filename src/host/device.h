@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "host/ledger.h"
 #include "kernel/kernel_globals.h"
@@ -69,6 +70,19 @@ class DeviceAllocationRefused : public AllocationRefused {
 
  private:
   std::string text_;
+};
+
+// What a development build's step-boundary check found (0002 D14, D15): modules whose file changed and now
+// run the new image (`swapped`), modules whose changed file failed to load so the previous image keeps
+// running (`failed`, once per changed file), and modules whose failing file is gone again because the file
+// matches the running image (`recovered`). `subject` is the module's fixed id for report entries.
+struct ModuleReload {
+  struct Entry {
+    std::string module;
+    uint64_t subject = 0;
+    std::string error;  // `failed` only
+  };
+  std::vector<Entry> swapped, recovered, failed;
 };
 
 class Device {
@@ -144,6 +158,12 @@ class Device {
   // The GPU architecture ("sm_86") when the device runs code the runtime tests do not cover (0002 D15,
   // 0001 D3.3: only sm_120 is tested), else empty. The session raises UNTESTED_DEVICE once from it.
   virtual std::string untested_architecture() const { return {}; }
+  // Called by the scheduler at each step boundary, before the step's first launch. A test may call it while
+  // the render thread is paused, but whoever receives `swapped` must start a new epoch: passes already in
+  // the film were rendered by the old image. Swaps in the stage modules rebuilt in the development kernel
+  // directory; nothing to do on a device without loose modules (CPU stages are rebuilt and restarted,
+  // 0002 D14).
+  virtual ModuleReload poll_module_reload() { return {}; }
 
  protected:
   // The device's reserve rule (0007 d14, R19; the CUDA side is 028): true when `need`

@@ -343,6 +343,7 @@ SessionProgress Session::progress() const {
   }
   p.failed_generation = std::max(p.failed_generation, upload_failed_.load(std::memory_order_acquire));
   p.samples_per_pixel = uint32_t(stats_.samples_done);
+  p.film_epoch = published_film_epoch_;
   p.last_pass_ms = last_pass_ms_;
   p.state = state_;
   if (p.state != AR_STATE_CLOSED && ctx_.poisoned.load(std::memory_order_acquire)) p.state = AR_STATE_FAILED;
@@ -602,6 +603,7 @@ void Session::begin_epoch() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     stats_.samples_done = 0;
+    published_film_epoch_ = latch_.epoch();
   }
   pass_index_ = 0;
   passes_in_epoch_ = 0;

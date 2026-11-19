@@ -89,6 +89,10 @@ struct SessionProgress {
   uint64_t pending_generation = 0;
   uint64_t failed_generation = 0;
   uint64_t epoch = 0;
+  // The epoch the film is accumulating, published with the reset of samples_per_pixel: `epoch` moves at
+  // the latch, this one only when the film has been cleared, so (film_epoch == epoch, samples_per_pixel)
+  // counts passes of the current epoch alone.
+  uint64_t film_epoch = 0;
   // Session-owned, so they need no scene and stay valid after CLOSED.
   uint32_t samples_per_pixel = 0;  // in the current epoch
   float last_pass_ms = 0.0f;       // the last resolved pass: scheduler run plus resolve
@@ -267,6 +271,7 @@ class Session {
   FilterSettings filter_uploaded_{};
   TestHooks hooks_;  // read once in the constructor
   uint64_t film_epoch_ = 0;
+  uint64_t published_film_epoch_ = 0;  // guarded by mutex_
   uint64_t passes_in_epoch_ = 0;
   uint32_t pass_index_ = 0;
   uint64_t resolves_ = 0;           // resolve calls over the session (the stale-resolve test hook)
