@@ -17,3 +17,4 @@ Budget: evaluates B-13, B-14, B-32, B-34; resets PROVISIONAL rows only with head
 Depends on: 086, 089, 090.
 Size: M (harness about 300 lines plus result); stop and report at 2x.
 Progress:
+- 096 started on task/096-measure-viewport.
