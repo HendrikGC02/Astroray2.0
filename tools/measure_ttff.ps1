@@ -1,0 +1,250 @@
+# SPDX-License-Identifier: Apache-2.0
+# tools/measure_ttff.ps1 [-Scene b1m,b5m,s3_textured] [-Engine cycles,astroray] [-Runs 3] [-Hold 12] [-Rebuild] [-Shot] [-Summarise]
+# Time to first frame against Cycles (0007 d35: V7a the gate, V7b the phases) and the first M-8 numbers
+# (0005 Risks, 0009 B-24) on S1 = b1m, S2 = b5m (300 materials) and S3 = s3_textured. For every scene and
+# engine it starts -Runs fresh windowed Blender processes (tools/ttff_probe.py), each under the machine
+# lock; one process switches the viewport to Rendered, back to Solid and to Rendered again (the first and the
+# second switch) while tools/ttff_poller.ps1 watches the viewport region. Cycles runs with its log on
+# (--log cycles --log-level 4), from which V7b is read: the first `Rendered N samples` line minus (the
+# `Total time spent synchronizing data: T` line minus T). Astroray's V7b is its first-frame mark minus its
+# first ar_scene_edit_begin mark (blender/astroray render_final.Timeline).
+# The .blend of each scene is written once into out/ttff/ (scenes/<name>/build.py, scenes/lib/blend_writer.py).
+# Output: out/ttff/<scene>_<engine>_r<k>.json per run, out/ttff/summary.json, the per-run table and the
+# medians, history lines in out/bench/history-ttff-<yyyyMMdd>.jsonl (the lead commits them to bench/history/),
+# and `<python> tools/report.py` plots them. Per run it records how busy the machine was (other build or
+# render processes) because other agents share it.
+# Invoke-ArBlender cannot pass Blender options before the script, so the launcher below repeats its profile
+# setup with the log options added.
+param(
+  [string[]]$Scene = @('b1m', 'b5m', 's3_textured'),
+  [string[]]$Engine = @('cycles', 'astroray'),
+  [int]$Runs = 3,
+  [double]$Hold = 12,
+  [switch]$Rebuild,
+  [string]$Crop = '960x540',   # the centre crop of the viewport region the poller captures (WxH)
+  [ValidateSet('screen', 'gpu', 'none')][string]$Source = 'screen',   # screen = the external poller (0007 d35); gpu = in-process framebuffer read; none = no V7a, only V7b and M-8
+  [switch]$Shot,       # also keep Blender's own screenshot of its viewport area per switch (out/ttff/*_blender<n>.png)
+  [switch]$Summarise   # only re-read out/ttff/*.json and print the tables
+)
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+Set-Location $root
+. (Join-Path $PSScriptRoot 'lib/lock.ps1')
+. (Join-Path $PSScriptRoot 'lib/proc.ps1')
+. (Join-Path $PSScriptRoot 'lib/python.ps1')
+. (Join-Path $PSScriptRoot 'lib/blender.ps1')
+$out = Join-Path $root 'out/ttff'
+New-Item -ItemType Directory -Force $out | Out-Null
+$bench = @{ b1m = 'b1m'; b5m = 'b5m'; s3_textured = 'b_tx' }   # scene builder -> bench id (bench/scenes.toml)
+
+function Build-Blend([string]$name) {
+  $blend = Join-Path $out "$name.blend"
+  if ((Test-Path $blend) -and -not $Rebuild) { return $blend }
+  $py = Get-ArPython
+  & $py -I (Join-Path $root "scenes/$name/build.py") --out (Join-Path $out "$name.arrec") --blend $blend
+  if ($LASTEXITCODE -ne 0) { throw "scene builder $name failed" }
+  $null = Invoke-ArBlender -Script (Join-Path $root 'scenes/lib/blend_writer.py') -TimeoutS 900 `
+    -Args @('--no-extension', "$blend.json", $blend)
+  if ($LASTEXITCODE -ne 0) { throw "blend_writer for $name failed" }
+  return $blend
+}
+
+function Get-Busy {
+  # What else is running that would disturb a timing: build tools, engine and Blender processes, and CPU load.
+  $names = 'cl', 'link', 'nvcc', 'ninja', 'cmake', 'ctest', 'astroray_cli', 'astroray_tests_cpu', 'astroray_tests_gpu', 'blender'
+  $others = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $names -contains $_.Name } | ForEach-Object { $_.Name })
+  $cpu = (Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'").PercentProcessorTime
+  return @{ cpu_percent = [int]$cpu; processes = ($others -join ',') }
+}
+
+function Invoke-Run([string]$name, [string]$eng, [int]$k) {
+  $blend = Join-Path $out "$name.blend"
+  $result = Join-Path $out "${name}_${eng}_r$k.json"
+  Remove-Item "$result*" -ErrorAction SilentlyContinue
+  $exe = Join-Path (Get-ArBlenderRoot) 'blender.exe'
+  $runId = (Get-Date -Format 'yyyyMMdd-HHmmss') + "-$PID"
+  $profileDir = Join-Path $root "out/blender_home/$runId"
+  foreach ($d in 'config', 'scripts', 'extensions', 'datafiles') { New-Item -ItemType Directory -Force (Join-Path $profileDir $d) | Out-Null }
+  $log = Join-Path $out "${name}_${eng}_r$k.log"
+  $null = Enter-ArMachineLock
+  $saved = @{}
+  try {
+    foreach ($v in @{ BLENDER_USER_CONFIG = 'config'; BLENDER_USER_SCRIPTS = 'scripts'; BLENDER_USER_EXTENSIONS = 'extensions'; BLENDER_USER_DATAFILES = 'datafiles' }.GetEnumerator()) {
+      $saved[$v.Key] = [Environment]::GetEnvironmentVariable($v.Key)
+      [Environment]::SetEnvironmentVariable($v.Key, (Join-Path $profileDir $v.Value))
+    }
+    # A fresh profile opens the splash; seed a userpref that hides it (as Invoke-ArBlender -Gui does).
+    $seed = Start-ArProcess -Name 'blender-seed' -File $exe -LogPath (Join-Path $profileDir 'seed.log') -ArgList @(
+      '--background', '--factory-startup', '--python-expr',
+      'import bpy; bpy.context.preferences.view.show_splash = False; bpy.ops.wm.save_userpref()')
+    if (-not $seed.WaitForExit(120000)) { Stop-ArProcess -Id $seed.Id; throw 'seeding the Blender profile timed out' }
+    $seed.WaitForExit()
+    $logArgs = if ($eng -eq 'cycles') { @('--log', 'cycles', '--log-level', '4') } else { @() }
+    $argv = $logArgs + @('--python-exit-code', '1', '--python', (Join-Path $root 'tools/ttff_probe.py'), '--',
+      '--scene', $name, '--engine', $eng, '--blend', $blend, '--out', $result, '--hold', "$Hold", '--crop', $Crop, '--source', $Source) +
+      $(if ($eng -eq 'astroray' -and $name -eq 'b5m') { @('--m8') } else { @() }) + $(if ($Shot) { @('--shot') } else { @() })
+    $before = Get-Busy
+    $p = Start-ArProcess -Name 'blender' -File $exe -ArgList $argv -LogPath $log
+    $timedOut = -not $p.WaitForExit(900000)
+    if ($timedOut) { Stop-ArProcess -Id $p.Id } else { $p.WaitForExit() }
+    $after = Get-Busy
+  } finally {
+    foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key]) }
+    Exit-ArMachineLock
+  }
+  if (-not (Test-Path $result)) { Write-Host "FAIL ${name} ${eng} r${k}: no result (timeout=$timedOut); see $log"; return $null }
+  $o = Get-Content $result -Raw | ConvertFrom-Json
+  $o | Add-Member -NotePropertyName busy_before -NotePropertyValue $before -Force
+  $o | Add-Member -NotePropertyName busy_after -NotePropertyValue $after -Force
+  $o | Add-Member -NotePropertyName log -NotePropertyValue $log -Force
+  return $o
+}
+
+# Cycles V7b from the log: per switch (segments start at TTFF_SWITCH n).
+function Read-CyclesV7b([string]$log) {
+  $res = @{}
+  $cur = 0; $sync = $null; $T = $null; $first = $null
+  foreach ($f in @("$log.err", $log)) {
+    if (-not (Test-Path $f)) { continue }
+    foreach ($ln in [IO.File]::ReadLines($f)) {
+      if ($ln -match 'TTFF_SWITCH (\d)') { $cur = [int]$Matches[1]; $sync = $null; $first = $null; continue }
+      if ($cur -eq 0) { continue }
+      $ts = $null
+      if ($ln -match '^\s*(\d+):(\d+\.\d+)') { $ts = [int]$Matches[1] * 60 + [double]$Matches[2] }
+      if ($null -eq $ts) { continue }
+      if ($null -eq $sync -and $ln -match 'Total time spent synchronizing data:\s*([0-9.]+)') { $sync = $ts; $T = [double]$Matches[1] }
+      elseif ($null -ne $sync -and $null -eq $first -and $ln -match 'Rendered \d+ samples') {
+        $first = $ts
+        $res[$cur] = @{ v7b_ms = ($first - ($sync - $T)) * 1000.0; sync_ms = $T * 1000.0; sync_to_first_ms = ($first - $sync) * 1000.0 }
+      }
+    }
+    if ($res.Count -gt 0) { break }
+  }
+  return $res
+}
+
+function Median([double[]]$v) {
+  if ($v.Count -eq 0) { return $null }
+  $s = $v | Sort-Object; $n = $s.Count
+  if ($n % 2) { return [double]$s[($n - 1) / 2] } else { return ([double]$s[$n / 2 - 1] + [double]$s[$n / 2]) / 2 }
+}
+
+$rows = @()   # one per run and switch
+$m8 = @()
+if (-not $Summarise) {
+  foreach ($name in $Scene) { $null = Build-Blend $name }
+  for ($k = 1; $k -le $Runs; $k++) {
+    foreach ($name in $Scene) {
+      foreach ($eng in $Engine) {
+        $o = Invoke-Run $name $eng $k
+        if ($null -eq $o) { continue }
+        $c = if ($eng -eq 'cycles') { Read-CyclesV7b $o.log } else { @{} }
+        foreach ($sw in @($o.switches)) {
+          $row = [ordered]@{ scene = $name; engine = $eng; run = $k; switch = [int]$sw.n; v7a_ms = $null; v7b_ms = $null
+            first_change_ms = $null; error = $sw.error; rate_hz = $o.capture.rate_hz
+            cpu_before = $o.busy_before.cpu_percent; others_before = $o.busy_before.processes; others_after = $o.busy_after.processes }
+          if ($null -ne $sw.first_frame_s) { $row.v7a_ms = [double]$sw.first_frame_s * 1000.0 }
+          if ($null -ne $sw.first_change_s) { $row.first_change_ms = [double]$sw.first_change_s * 1000.0 }
+          if ($eng -eq 'cycles' -and $c.ContainsKey([int]$sw.n)) { $row.v7b_ms = $c[[int]$sw.n].v7b_ms }
+          if ($eng -eq 'astroray') {
+            $job = @($o.jobs)[[int]$sw.n - 1]
+            if ($job) {
+              $mk = $job.marks
+              if ($mk.first_frame -and $mk.edit_begin) { $row.v7b_ms = ($mk.first_frame - $mk.edit_begin) * 1000.0 }
+              $row.phases = [ordered]@{
+                switch_to_view_update_ms = if ($mk.view_update) { ($mk.view_update - $sw.t_on) * 1000.0 } else { $null }
+                view_update_to_edit_begin_ms = if ($mk.edit_begin) { ($mk.edit_begin - $mk.view_update) * 1000.0 } else { $null }
+                settings_world_ms = $job.phase_s.settings_world * 1000.0; scan_ms = $job.phase_s.scan * 1000.0
+                images_ms = $job.phase_s.images * 1000.0; materials_ms = $job.phase_s.materials * 1000.0
+                lights_ms = $job.phase_s.lights * 1000.0; meshes_ms = $job.phase_s.meshes * 1000.0
+                instances_ms = $job.phase_s.instances * 1000.0
+                main_thread_sync_ms = if ($mk.edit_commit) { ($mk.edit_commit - $mk.edit_begin) * 1000.0 } else { $null }
+                commit_to_session_start_ms = if ($mk.session_start) { ($mk.session_start - $mk.edit_commit) * 1000.0 } else { $null }
+                session_start_to_rendering_ms = if ($mk.rendering) { ($mk.rendering - $mk.session_start) * 1000.0 } else { $null }
+                rendering_to_first_frame_ms = if ($mk.first_frame -and $mk.rendering) { ($mk.first_frame - $mk.rendering) * 1000.0 } else { $null }
+                first_frame_after_switch_ms = if ($mk.first_frame) { ($mk.first_frame - $sw.t_on) * 1000.0 } else { $null }
+              }
+              $row.materials = @($job.materials)
+            }
+          }
+          $rows += [pscustomobject]$row
+        }
+        if ($o.m8) { $m8 += [pscustomobject]@{ run = $k; m8 = $o.m8 } }
+        Write-Host ("run {0} {1} {2}: V7a {3}" -f $k, $name, $eng, (($rows | Where-Object { $_.scene -eq $name -and $_.engine -eq $eng -and $_.run -eq $k } | ForEach-Object { '{0:N0} ms' -f $_.v7a_ms }) -join ' / '))
+      }
+    }
+  }
+  $rows | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $out 'rows.json')
+  $rows = @(Get-Content (Join-Path $out 'rows.json') -Raw | ConvertFrom-Json)
+  $m8 | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $out 'm8.json')
+} else {
+  $rows = @(Get-Content (Join-Path $out 'rows.json') -Raw | ConvertFrom-Json)
+  $m8 = @(Get-Content (Join-Path $out 'm8.json') -Raw | ConvertFrom-Json)
+}
+
+'--- per run (V7a = screen-poller first frame after the switch, V7b = log phases; ms) ---'
+$rows | Sort-Object scene, engine, switch, run | Format-Table scene, engine, switch, run,
+  @{ n = 'V7a'; e = { if ($null -ne $_.v7a_ms) { '{0:N0}' -f $_.v7a_ms } else { '-' } } },
+  @{ n = 'V7b'; e = { if ($null -ne $_.v7b_ms) { '{0:N0}' -f $_.v7b_ms } else { '-' } } },
+  @{ n = 'chg'; e = { if ($null -ne $_.first_change_ms) { '{0:N0}' -f $_.first_change_ms } else { '-' } } },
+  rate_hz, cpu_before, others_before, others_after -AutoSize | Out-String -Width 200
+
+'--- medians and ratios to Cycles (gate: <= 1.5x, goal 1.0x) ---'
+$hist = @()
+$date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+$sha = (git rev-parse --short HEAD).Trim()
+$gpu = (& nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>$null) -split ','
+$driver = if ($gpu.Count -ge 2) { $gpu[1].Trim() } else { 'unknown' }
+foreach ($name in $Scene) {
+  foreach ($sw in 1, 2) {
+    $cyc = @($rows | Where-Object { $_.scene -eq $name -and $_.engine -eq 'cycles' -and $_.switch -eq $sw -and $null -ne $_.v7a_ms } | ForEach-Object { $_.v7a_ms })
+    $ar = @($rows | Where-Object { $_.scene -eq $name -and $_.engine -eq 'astroray' -and $_.switch -eq $sw -and $null -ne $_.v7a_ms } | ForEach-Object { $_.v7a_ms })
+    $mc = Median $cyc; $ma = Median $ar
+    $ratio = if ($mc -and $ma) { $ma / $mc } else { $null }
+    '{0,-12} switch {1}: cycles {2,7:N0} ms (n={3}, {4:N0}..{5:N0})  astroray {6,7:N0} ms (n={7}, {8:N0}..{9:N0})  ratio {10}' -f `
+      $name, $sw, $mc, $cyc.Count, ($cyc | Measure-Object -Minimum).Minimum, ($cyc | Measure-Object -Maximum).Maximum, $ma, $ar.Count,
+      ($ar | Measure-Object -Minimum).Minimum, ($ar | Measure-Object -Maximum).Maximum, $(if ($ratio) { '{0:N2}x' -f $ratio } else { 'n/a' })
+    foreach ($e in 'cycles', 'astroray') {
+      foreach ($metric in 'v7a', 'v7b') {
+        $v = @($rows | Where-Object { $_.scene -eq $name -and $_.engine -eq $e -and $_.switch -eq $sw -and $null -ne $_."${metric}_ms" } | ForEach-Object { $_."${metric}_ms" })
+        if ($v.Count -eq 0) { continue }
+        $mn = ($v | Measure-Object -Minimum).Minimum; $mx = ($v | Measure-Object -Maximum).Maximum
+        $hist += ([ordered]@{ sha = $sha; machine = $env:COMPUTERNAME; driver = $driver; cuda = 'cuda'; scene = $bench[$name]
+          metric = "first_frame.$metric.$e.switch$sw"; value = [math]::Round((Median $v), 1); unit = 'ms'; n = $v.Count
+          spread = [math]::Round($mx - $mn, 1); date = $date } | ConvertTo-Json -Compress)
+      }
+    }
+  }
+}
+if ($hist.Count -gt 0) {
+  $hp = Join-Path $root ('out/bench/history-ttff-' + (Get-Date -Format 'yyyyMMdd') + '.jsonl')
+  New-Item -ItemType Directory -Force (Split-Path $hp) | Out-Null
+  Set-Content -Path $hp -Value $hist
+  "history lines: $hp ($($hist.Count))"
+}
+
+'--- Astroray phases, median over runs (ms; switch 1 / switch 2) ---'
+foreach ($name in $Scene) {
+  $a = @($rows | Where-Object { $_.scene -eq $name -and $_.engine -eq 'astroray' -and $_.phases })
+  if ($a.Count -eq 0) { continue }
+  foreach ($key in $a[0].phases.PSObject.Properties.Name) {
+    $m = foreach ($sw in 1, 2) { $v = @($a | Where-Object { $_.switch -eq $sw -and $null -ne $_.phases.$key } | ForEach-Object { $_.phases.$key }); if ($v.Count) { '{0,8:N1}' -f (Median $v) } else { '       -' } }
+    '{0,-12} {1,-32} {2}' -f $name, $key, ($m -join ' /')
+  }
+}
+
+'--- M-8 (S2 b5m): translation per material, first switch ---'
+$s2 = @($rows | Where-Object { $_.scene -eq 'b5m' -and $_.engine -eq 'astroray' -and $_.switch -eq 1 -and $_.materials })
+foreach ($r in $s2) {
+  $mats = @($r.materials)
+  $inl = $mats | ForEach-Object { $_[0] * 1000 }; $walk = $mats | ForEach-Object { $_[1] * 1000 }; $send = $mats | ForEach-Object { $_[2] * 1000 }
+  $tot = for ($i = 0; $i -lt $mats.Count; $i++) { $inl[$i] + $walk[$i] + $send[$i] }
+  $nodes = $mats | ForEach-Object { $_[3] }
+  'run {0}: {1} materials; per material median ms: inline {2:N3} walk {3:N3} serialise+send {4:N3} total {5:N3}; sum {6:N1} ms; ops/material median {7}; per 100 ops {8:N3} ms' -f `
+    $r.run, $mats.Count, (Median $inl), (Median $walk), (Median $send), (Median $tot), ($tot | Measure-Object -Sum).Sum, (Median $nodes),
+    ((Median $tot) / (Median $nodes) * 100)
+}
+foreach ($m in $m8) {
+  'run {0}: resend of {1} materials: send {2:N1} ms, commit {3:N1} ms, commit return to active generation {4:N1} ms (reached={5})' -f `
+    $m.run, $m.m8.materials, ($m.m8.send_s * 1000), ($m.m8.commit_s * 1000), ($m.m8.active_after_commit_s * 1000), $m.m8.reached
+}

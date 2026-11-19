@@ -20,6 +20,7 @@ No bpy import and no module state: `op_id` (the generated `_ops.OP_ID`) and the 
 the caller, so the module runs over stubs.
 """
 import ctypes
+import time
 
 from ..sync import keys
 
@@ -70,6 +71,7 @@ class GraphEmitter:
         self.i32 = []
         self.strings = []
         self.emission_sampling = "AUTO"  # materials only
+        self.inline_s = 0.0  # seconds spent in inline_shader_nodes() (M-8 measurement, task 095)
 
     def add(self, op, f32=(), i32=(), string=None):
         """Appends one op node and returns its index."""
@@ -336,7 +338,9 @@ def translate_material(material, keymap, op_id):
     """The SURFACE graph of one evaluated material, as a GraphEmitter."""
     em = GraphEmitter(op_id)
     # The tree dies with the InlineShaderNodes object that owns it: keep `inlined` alive.
+    t0 = time.perf_counter()
     inlined = material.inline_shader_nodes() if material.use_nodes else None
+    em.inline_s = time.perf_counter() - t0
     tree = inlined.node_tree if inlined else None
     if tree is None:
         em.unsupported("Material without nodes")
