@@ -178,9 +178,9 @@ provisional = false
 
 [[budget]]
 id = "B-29"
-text = "set from the first measurement"
+text = "≤ 2.4% more time per 1080p sample with the statistics on than off (b1m; 126 measured +1.83%, 13.43 vs 13.18 ms median, x 1.3)"
 tier = "`full`"
-provisional = true
+provisional = false
 
 [[budget]]
 id = "B-30"
