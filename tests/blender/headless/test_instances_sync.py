@@ -21,6 +21,8 @@ class FakeEdit:
 
     def call(self, name, *args):
         self.calls.append((name, args))
+        if name == "ar_edit_update_transforms":  # the index array lives only for the call
+            self.indices = [args[1][i] for i in range(args[0])]
 
 
 def make(name, mesh=None, loc=(0, 0, 0), collection=None):
@@ -127,6 +129,84 @@ class TestInstances(unittest.TestCase):
         moved = [i for i in range(t.n) if t.xf[i][3] == 3.0]
         self.assertEqual(len(moved), 1)
         self.assertEqual(sorted(t.xf[:, 3].tolist()), [3.0, 5.0])
+
+    def test_bulk_matrices_match_matrix_world(self):
+        """The foreach_get matrices equal each instance's matrix_world, rotation and scale included."""
+        col = bpy.data.collections.new("c")
+        bpy.context.scene.collection.children.link(col)
+        x = make("X", collection=col, loc=(1, 2, 3))
+        x.rotation_euler = (0.3, -0.7, 1.1)
+        x.scale = (1.0, 2.0, 0.5)
+        bpy.context.view_layer.layer_collection.children["c"].exclude = True
+        e = bpy.data.objects.new("inst", None)
+        e.instance_type = "COLLECTION"
+        e.instance_collection = col
+        e.location, e.rotation_euler = (10, 0, 0), (0.0, 0.4, 0.2)
+        bpy.context.scene.collection.objects.link(e)
+        a = make("A", loc=(-1, 0, 4))
+        a.rotation_euler = (1.0, 0.5, -0.25)
+        km, t = build(origin=(0.5, -1.0, 2.0))
+        dg = support.depsgraph()
+        want = {}
+        for inst in dg.object_instances:
+            if inst.object.type == "MESH":
+                m = np.asarray(inst.matrix_world, np.float32)[:3, :].reshape(12).copy()
+                m[[3, 7, 11]] -= np.float32([0.5, -1.0, 2.0])
+                want[t.index_of[keys.object_identity(inst)]] = m
+        self.assertEqual(sorted(want), list(range(t.n)))
+        for i, m in want.items():
+            self.assertEqual(t.xf[i].tobytes(), m.tobytes(), f"instance {i}")
+
+    def test_plain_move_reads_only_the_moved_object(self):
+        """A non-instance object's move comes from depsgraph.updates, never from a walk of all instances."""
+        objs = [make(f"O{i}", loc=(i, 0, 0)) for i in range(5)]
+        _, t = build()
+        mover = objs[3]
+        before = t.xf.copy()
+        moved_row = t.index_of[(mover.session_uid,)]
+
+        class NoWalk:
+            def __init__(self, dg):
+                self.updates = dg.updates
+
+            @property
+            def object_instances(self):
+                raise AssertionError("a plain move of a non-instance object walked object_instances")
+
+        def move():
+            mover.location.x = 7.5
+
+        edit = FakeEdit()
+        ok = support.in_update(move, lambda dg: instances.sync_transforms(edit, None, t, NoWalk(dg),
+                                                                            [mover.session_uid]))
+        self.assertTrue(ok)
+        self.assertEqual([c[0] for c in edit.calls], ["ar_edit_update_transforms"])
+        self.assertEqual(edit.indices, [moved_row])
+        self.assertEqual(t.xf[moved_row][3], 7.5)
+        others = [i for i in range(t.n) if i != moved_row]
+        self.assertEqual(t.xf[others].tobytes(), before[others].tobytes())
+
+    def test_instancer_move_walks_its_instances(self):
+        col = bpy.data.collections.new("c")
+        bpy.context.scene.collection.children.link(col)
+        make("X", collection=col, loc=(1, 0, 0))
+        make("Y", collection=col, loc=(0, 1, 0))
+        bpy.context.view_layer.layer_collection.children["c"].exclude = True
+        e = bpy.data.objects.new("inst", None)
+        e.instance_type = "COLLECTION"
+        e.instance_collection = col
+        bpy.context.scene.collection.objects.link(e)
+        make("Z", loc=(5, 5, 5))
+        _, t = build()
+
+        def move():
+            e.location.x = 30.0
+
+        edit = FakeEdit()
+        ok = support.in_update(move, lambda dg: instances.sync_transforms(edit, None, t, dg, [e.session_uid]))
+        self.assertTrue(ok)
+        self.assertEqual(edit.calls[0][1][0], 2)
+        self.assertEqual(sorted(t.xf[:, 3].tolist()), [5.0, 30.0, 31.0])
 
     def test_new_instance_needs_rebuild(self):
         a = make("A")

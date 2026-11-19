@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Mesh read and topology-cache decisions (0007 d17, d22; V6 is M3)."""
 import os
+import re
 import sys
 import time
 import unittest
@@ -31,10 +32,10 @@ def cube():
     return make("cube", v, f)
 
 
-def read(me, diagnostics=None):
+def read(me):
     lay = mesh.layout(me)
     out = mesh.alloc(lay)
-    mesh.fill(me, out, diagnostics)
+    mesh.fill(me, out)
     return lay, out
 
 
@@ -108,15 +109,12 @@ class TestMesh(unittest.TestCase):
         self.assertTrue(lay.has_material_index)
         np.testing.assert_array_equal(out.material_index, [0, 1, 2, 0, 1, 2])
 
-    def test_corner_vert_fallback_warns_and_counts(self):
+    def test_missing_corner_vert_raises_with_version(self):
+        # 0007 d17 as amended by d35: no slow-path fallback, the read fails naming the Blender version.
         me = cube().data
-        diag = Counter()
-        want = read(me)[1].corner_vert.copy()
-        lay = mesh.layout(me)
-        out = mesh.alloc(lay)
-        mesh.fill(NoCornerVert(me), out, diag)
-        self.assertEqual(diag["corner_vert_fallback"], 1)
-        np.testing.assert_array_equal(out.corner_vert, want)
+        out = mesh.alloc(mesh.layout(me))
+        with self.assertRaisesRegex(mesh.LayoutMismatch, r"'\.corner_vert'.*attribute missing.*" + re.escape(bpy.app.version_string)):
+            mesh.fill(NoCornerVert(me), out)
 
     def test_curve_goes_through_to_mesh(self):
         cu = bpy.data.curves.new("c", "CURVE")

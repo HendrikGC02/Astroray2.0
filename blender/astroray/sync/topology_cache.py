@@ -80,7 +80,7 @@ def read_geometry(edit, abi, cache, key, me, name, mode, diagnostics=None):
             diagnostics["topology_cache_mismatch"] += 1
         mode = FULL
     if mode == FULL:
-        mesh_mod.sync_mesh(edit, abi, me, key, name, diagnostics)
+        mesh_mod.sync_mesh(edit, abi, me, key, name)
         cache.counts[key] = counts
         return FULL
     b = abi.ar_positions_buffers()
