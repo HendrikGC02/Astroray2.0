@@ -11,7 +11,7 @@ Do:
 4. Re-measure 094's variants (1 lamp, 10k lamps, b1m emissive): build ms, first pass ms, steady pass ms; PR body Result: with commands.
 Acceptance: `pwsh tools/check.ps1 gate` passes; B-23 met on both variants or the remainder reported with numbers.
 Look at: none.
-Canary: tasks/125.canary.patch must turn red: astroray_tests_cpu "light_sampler/parallel build is bit-identical to the serial build" "light_sampler/worker pool parallel_for covers every index once and rethrows"
+Canary: tasks/125.canary.patch must turn red: astroray_tests_cpu "light_sampler/parallel build is bit-identical to the serial build" "light_sampler/worker pool parallel_for covers every index once and rethrows" "light_sampler/worker pool parallel_for throws on a poisoned context" "light_sampler/worker pool parallel_for runs while every worker is blocked"
 Budget: no gate time added.
 Depends on: 094.
 Size: M (about 250 lines); stop and report at 2x.
@@ -21,3 +21,4 @@ Progress:
 - Lead ruling: the builder lives in src/host/light/; generation.h/.cpp join Scope for a caller-participating WorkerPool::parallel_for.
 - Fix: energy and peak reused for consecutive byte-identical terms, per-light loops on the scene workers, sums and maxima serial; INFO line "light table: ... built in X ms".
 - Re-measured (3 workers): b1m emissive build 195 ms, 10k lamps 33 ms, 1 lamp 0.1 ms. First pass after the build 26 ms (was 105-150 ms), steady pass 15.3 ms (unchanged).
+- Review: tests for blocked workers and a poisoned context, a closed loop on a submit failure, the poison caveat documented; canary 4 hunks, each red alone.
