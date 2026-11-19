@@ -1,5 +1,5 @@
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index 9ba95ed..961b70b 100644
+index 9e8dd8e..a2d4f4b 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
 @@ -255,3 +255,3 @@ bool Session::wait(uint32_t timeout_ms) {

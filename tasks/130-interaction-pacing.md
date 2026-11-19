@@ -11,9 +11,11 @@ Do:
 4. Re-measure with 096's harness (tools/viewport_rate_probe.py via its runner): B-14 on b1m, b5m, b_tx, a1; V12 latencies; V23 schedule unchanged.
 Acceptance: `pwsh tools/check.ps1 gate` passes; gui_latency.py passes on a1_furnace, b1m and b5m; the PR body holds before/after tables with commands.
 Look at: none.
-Canary: tasks/130.canary.patch must turn red: astroray_tests_cpu "batching/session passes run back to back during interaction", astroray_tests_cpu "session/wait wakes on pause", tests/blender/gui_latency.py "TestLatency.test_view_change_latency_within_b32"
+Canary: tasks/130.canary.patch must turn red: astroray_tests_cpu "batching/session passes run back to back during interaction", astroray_tests_cpu "batching/session a view change during the resolve presents no frame of the old view", astroray_tests_cpu "session/wait wakes on pause", tests/blender/gui_latency.py "TestLatency.test_view_change_latency_within_b32", tests/blender/gui_latency.py "TestLatency.test_orbit_frames_are_for_newer_views"
 Budget: none added.
 Depends on: 096.
 Size: S (about 150 lines); stop and report at 2x.
 Progress:
 - started: branch task/130-interaction-pacing from b1b3b03 (096 on main); plan approved by the lead: publish-side cap, a waiting frame still presents, wait returns on PAUSED.
+- lead ruling 82: V12's frame per pass yields to B-34's 60/s cap; orbit-gap bound = max(2 x pass p99, 1/60 s) + redraw + present (gui_latency orbit case). Lead approved: a due epoch change interrupts at the resolve's return (0007 d25), tested.
+- done: passes back to back, frame waits out the gap (measured from present start); wait wakes on PAUSED; CLI and replay loops fail on PAUSED. Canary: 3 hunks, each red alone (CPU cases; a1 view case hunk 3, a1 orbit case hunk 2).
