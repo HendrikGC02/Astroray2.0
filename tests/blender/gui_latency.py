@@ -49,6 +49,7 @@ CANCEL_AFTER_S = 1.0
 CANCEL_LIMIT_MS = 100.0   # 0009 B-17: fails above 100 ms (target 20 ms)
 CHANGES, ORBIT_S, DEG = 8, 3.0, 0.4
 PUBLISH_GAP_MS = 1000.0 / 60.0  # 0009 B-34: at most 60 frames/s during interaction (ruling 82)
+HOST_TIMER_MS = 1.0  # ruling 82: the publish wait wakes up to one tick late; Blender requests a 1 ms timer
 T0 = time.monotonic()
 STATE = {"errors": {}}
 EVIDENCE = os.path.join(ROOT, "out", "evidence", "096")
@@ -301,14 +302,14 @@ class TestLatency(Case):
         one view change (the 99th percentile of the gaps against 2 passes + a redraw + a present, each at its
         own 99th percentile; the frame's epoch is not on the frame, ruling 69, so no per-frame epoch is asserted).
         Ruling 82: where 2 passes are shorter than B-34's 1/60 s publish gap, the cap wins over V12's frame per
-        pass, so the pass term is max(2 x pass p99, 1/60 s)."""
+        pass, so the pass term is max(2 x pass p99, 1/60 s), and the publish wait adds up to one host timer tick."""
         fr = self.orbit_frames()
         ids = [f["id"] for f in fr]
         notshown = [f["id"] for f in fr if not f["presented"]]
         a, b = STATE["orbit_window"]
         draws = [d for d in STATE["stamps"]["draws"] if a <= d["t"] <= b]
         gaps = np.diff([f["t"] for f in fr]) * 1e3
-        bound = max(2 * np.percentile([f["pass_ms"] for f in fr], 99), PUBLISH_GAP_MS) + float(np.median(np.diff([d["t"] for d in draws]))) * 1e3             + np.percentile([(d["upload_s"] + d["draw_s"]) * 1e3 for d in draws if d["frame"]], 99)
+        bound = max(2 * np.percentile([f["pass_ms"] for f in fr], 99), PUBLISH_GAP_MS) + HOST_TIMER_MS + float(np.median(np.diff([d["t"] for d in draws]))) * 1e3             + np.percentile([(d["upload_s"] + d["draw_s"]) * 1e3 for d in draws if d["frame"]], 99)
         print(f"RESULT latency {SCENE} orbit: {len(fr)} frames in {ORBIT_S:.0f} s, gap median {np.median(gaps):.1f} p99 "
               f"{np.percentile(gaps, 99):.1f} max {gaps.max():.1f} ms against bound {bound:.1f} ms, not presented {len(notshown)}")
         self.assertEqual(sorted(set(ids)), ids, "a frame was acquired twice or out of order")
