@@ -71,6 +71,24 @@ std::vector<char> read_bytes(const fs::path& p) {
   return std::vector<char>(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
 }
 
+// fs::rename that waits out a transient hold on either file: Windows refuses a rename while another
+// process (a virus scanner on the file just written) has it open without FILE_SHARE_DELETE. The engine
+// itself reads modules with FILE_SHARE_DELETE, so it is never that holder. Bounded: after 2 s the
+// filesystem_error propagates and the case fails loudly.
+void rename_retry(const fs::path& from, const fs::path& to) {
+  for (int attempt = 0;; ++attempt) {
+    try {
+      fs::rename(from, to);
+      return;
+    } catch (const fs::filesystem_error& e) {
+      const int code = e.code().value();
+      const bool transient = code == ERROR_ACCESS_DENIED || code == ERROR_SHARING_VIOLATION;
+      if (!transient || attempt >= 100) throw;
+      Sleep(20);
+    }
+  }
+}
+
 // Replaces `p` in one step (write beside it, then rename over it), so a poll between two steps of the
 // write never sees half a module: that would be a second, unrelated swap.
 void write_bytes(const fs::path& p, const char* data, size_t n) {
@@ -79,7 +97,7 @@ void write_bytes(const fs::path& p, const char* data, size_t n) {
     std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
     f.write(data, static_cast<std::streamsize>(n));
   }
-  fs::rename(tmp, p);
+  rename_retry(tmp, p);
 }
 
 // Writes part of a module in place, as a rebuild does: the file is visible half-written between two calls.
@@ -358,11 +376,11 @@ TEST_CASE("dev_reload/corrupted module keeps previous") {
   // it returns equal to the running image the scheduler removes it, with no swap and no new epoch.
   s.resume();
   const uint64_t epoch2 = s.progress().epoch;
-  fs::rename(module, module.string() + ".away");
+  rename_retry(module, module.string() + ".away");
   REQUIRE(r.wait_entries(1));
   const std::vector<ar_report_entry> gone = r.fallback_entries();
   CHECK(std::string(reinterpret_cast<const char*>(gone[0].detail)).find("missing") != std::string::npos);
-  fs::rename(module.string() + ".away", module);
+  rename_retry(module.string() + ".away", module);
   CHECK(r.wait_entries(0));
   CHECK(s.progress().epoch == epoch2);
   CHECK(s.progress().state != AR_STATE_FAILED);

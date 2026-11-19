@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "device/cuda/module_loader.h"
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -15,12 +19,29 @@
 namespace astroray::host {
 namespace {
 
+// Opened with every share flag, delete included: a dev rebuild replaces or renames the module while the
+// engine may be reading it, and a handle without FILE_SHARE_DELETE (what std::ifstream opens) would make
+// that replacement fail with a sharing violation.
 ModuleImage read_file(const std::filesystem::path& path) {
-  std::ifstream f(path, std::ios::binary);
-  if (!f) throw DeviceError("cannot read kernel module file " + path.string());
+  const HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) throw DeviceError("cannot read kernel module file " + path.string());
   ModuleImage image;
-  image.bytes.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-  if (f.bad() || image.bytes.empty())
+  LARGE_INTEGER size{};
+  bool ok = GetFileSizeEx(h, &size) != 0;
+  if (ok) {
+    image.bytes.resize(static_cast<size_t>(size.QuadPart));
+    size_t done = 0;
+    while (ok && done < image.bytes.size()) {
+      DWORD got = 0;
+      const DWORD want = static_cast<DWORD>(std::min<size_t>(image.bytes.size() - done, 1u << 24));
+      ok = ReadFile(h, image.bytes.data() + done, want, &got, nullptr) != 0 && got != 0;
+      done += got;
+    }
+    ok = ok && done == image.bytes.size();
+  }
+  CloseHandle(h);
+  if (!ok || image.bytes.empty())
     throw DeviceError("kernel module file " + path.string() + " is empty or unreadable");
   image.origin = path.string();
   return image;
