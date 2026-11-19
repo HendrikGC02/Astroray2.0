@@ -228,6 +228,13 @@ try {
   } elseif ($Tier -eq 'full') {
     $r = Step 'gate' { & pwsh -NoProfile -File tools/check.ps1 gate @dargs }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'gate failed (out/check/gate.log)' }
+    # API surface inside Blender, where the bundled openvdb exists (0007 d46); ci checks the rest on the wheel.
+    $r = Step 'blender api_surface' {
+      $b = Invoke-ArBlender -Script 'tools/api_surface.py' -TimeoutS 120 6>$null
+      foreach ($f in $b.Log, "$($b.Log).err") { if (Test-Path $f) { Get-Content $f } }
+      $global:LASTEXITCODE = $b.ExitCode }
+    $r.Out | Where-Object { $_ -match '^(api_surface:|MISSING|UNCHECKED)' } | ForEach-Object { Write-Host $_ }
+    if ($r.Code -ne 0) { Fail 'blender api_surface failed (out/check/full.log)' }
     # Image sync and node values through Blender, full only (about 40 s does not fit B-09).
     # Not $t: Step's own stopwatch of that name is visible inside the block (dynamic scope).
     foreach ($bt in 'test_images', 'test_node_values') {
@@ -331,6 +338,11 @@ try {
         & $py -I tests/blender/headless/run_all.py
       }
       if ($r.Code -ne 0) { Show-Tail $r 10; Fail 'headless sync tests failed (out/check/ci.log)' }
+      # API surface (0007 d46): every bpy name the addon reads exists in the pinned wheel; the bundled openvdb
+      # is not in the wheel and is checked inside Blender by the full tier.
+      $r = Step 'api surface' { & $py -I tools/api_surface.py }
+      Write-Host ($r.Out | Where-Object { $_ -match '^api_surface:' })
+      if ($r.Code -ne 0) { Show-Tail $r 10; Fail 'api surface failed (out/check/ci.log)' }
       # build.ps1 sets the MSVC environment only in its own process, so read the compiler version
       # CMake recorded when it configured; it is the exact cl that built the tests.
       $cm = Get-ChildItem out/build/CMakeFiles -Recurse -Filter CMakeCXXCompiler.cmake | Select-Object -First 1

@@ -1,0 +1,113 @@
+# Every bpy name the addon depends on, one per line, checked by tools/api_surface.py against the pinned
+# bpy 5.3.x wheel in hosted CI and inside Blender locally (0007 d46). A line is `kind spec`.
+# Add a line when the addon starts reading a new Blender name; the check fails by naming the line that vanished.
+#   attr   Struct.name           RNA property or function of bpy.types.Struct (bl_rna), no instance needed
+#   attr   Mesh.a['k'].b         walked on a generated Mesh / Material / World / Image (the paths 0007 d17 reads)
+#   attr   bpy.data.x            walked from the live module (`bpy`, `gpu`)
+#   call   Struct.name           RNA function of bpy.types.Struct
+#   call   gpu.types.Name        dotted module callable, imported and getattr'd
+#   module openvdb member        the bundled module imports and a grid class has `member`
+#   pass   flag Name             ViewLayer.<flag> exists and Name is a legal engine pass name (<= 63 bytes);
+#                                every VIEW_LAYER_PASSES pair in render_final.py must appear here
+
+# Mesh read (0007 d17; sync/mesh.py). `.corner_vert` is internal and may be renamed; the addon falls back to loops.
+attr Mesh.attributes['position'].data.foreach_get
+attr Mesh.attributes['.corner_vert'].data.foreach_get
+attr Mesh.corner_normals.foreach_get
+attr Mesh.loops.foreach_get
+attr Mesh.polygons.foreach_get
+attr Mesh.uv_layers
+attr Mesh.vertices
+attr Object.to_mesh
+attr Object.to_mesh_clear
+
+# Topology cache (0007 d22): Window.modal_operators may disappear, the addon then reads in full.
+attr Window.modal_operators
+attr Operator.bl_idname
+attr Object.modifiers
+attr Modifier.type
+
+# Depsgraph classification and instances (0007 d16, d18, d19, d20; sync/classify.py, keys.py, instances.py).
+attr ID.session_uid
+attr ID.original
+attr ID.id_type
+attr ID.evaluated_get
+attr Depsgraph.updates
+attr Depsgraph.object_instances
+attr Depsgraph.id_type_updated
+attr DepsgraphUpdate.is_updated_transform
+attr DepsgraphUpdate.is_updated_geometry
+attr DepsgraphUpdate.is_updated_shading
+attr DepsgraphObjectInstance.persistent_id
+attr DepsgraphObjectInstance.is_instance
+attr DepsgraphObjectInstance.parent
+attr Object.material_slots
+attr Object.pass_index
+attr Object.color
+attr Object.lightgroup
+
+# Materials and node trees (0005 item 29, 0007 d8; materials/translate.py).
+attr Material.inline_shader_nodes
+attr Material.node_tree
+attr Material.use_nodes
+attr World.inline_shader_nodes
+attr World.use_nodes
+attr NodeTree.nodes
+attr ShaderNodeOutputMaterial.is_active_output
+attr ShaderNodeOutputMaterial.target
+attr ShaderNodeUVMap.uv_map
+attr ShaderNodeGroup.node_tree
+attr ShaderNodeTexImage.image
+
+# Images and colour management (0007 d21; sync/images.py, settings.py). interop ids are new in 5.x.
+attr Image.colorspace_settings.interop_id
+attr Image.alpha_mode
+attr ColorManagedInputColorspaceSettings.interop_id
+attr bpy.data.colorspace.working_space_interop_id
+
+# Camera and view (0007 d19, d49; sync/camera.py).
+attr Object.calc_matrix_camera
+attr RegionView3D.view_matrix
+attr RegionView3D.window_matrix
+attr RegionView3D.view_perspective
+attr SpaceView3D.use_local_camera
+
+# Render result, progress and passes (0007 d27, 0008 d10; render_final.py).
+call RenderEngine.begin_result
+call RenderEngine.end_result
+call RenderEngine.update_result
+call RenderEngine.update_progress
+call RenderEngine.update_stats
+call RenderEngine.test_break
+call RenderEngine.tag_redraw
+call RenderEngine.report
+call RenderEngine.register_pass
+attr RenderResult.layers
+attr RenderLayer.passes
+attr RenderPass.rect
+pass use_pass_z Depth
+pass use_pass_position Position
+pass use_pass_normal Normal
+pass use_pass_uv UV
+pass use_pass_object_index IndexOB
+pass use_pass_material_index IndexMA
+pass use_pass_mist Mist
+pass use_pass_vector Vector
+
+# Viewport presentation (0007 d29-d32; present.py, heatmap_draw.py, viewport.py).
+call RenderEngine.bind_display_space_shader
+call RenderEngine.unbind_display_space_shader
+call gpu.types.GPUStorageBuf
+call gpu.types.GPUTexture
+call gpu.types.GPUShaderCreateInfo
+call gpu.types.Buffer
+call gpu.shader.create_from_info
+call gpu.compute.dispatch
+call gpu.state.blend_set
+call bpy.types.SpaceView3D.draw_handler_add
+call bpy.types.SpaceView3D.draw_handler_remove
+call bpy.app.timers.register
+
+# Bundled OpenVDB module (0007 d47): bounding box and voxel copy.
+module openvdb evalActiveVoxelBoundingBox
+module openvdb copyToArray
