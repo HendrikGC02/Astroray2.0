@@ -131,7 +131,7 @@ class TestInstances(unittest.TestCase):
         self.assertEqual(sorted(t.xf[:, 3].tolist()), [3.0, 5.0])
 
     def test_bulk_matrices_match_matrix_world(self):
-        """The foreach_get matrices equal each instance's matrix_world, rotation and scale included."""
+        # The foreach_get matrices equal each instance's matrix_world, rotation and scale included.
         col = bpy.data.collections.new("c")
         bpy.context.scene.collection.children.link(col)
         x = make("X", collection=col, loc=(1, 2, 3))
@@ -158,7 +158,7 @@ class TestInstances(unittest.TestCase):
             self.assertEqual(t.xf[i].tobytes(), m.tobytes(), f"instance {i}")
 
     def test_plain_move_reads_only_the_moved_object(self):
-        """A non-instance object's move comes from depsgraph.updates, never from a walk of all instances."""
+        # A non-instance object's move comes from depsgraph.updates, never from a walk of all instances.
         objs = [make(f"O{i}", loc=(i, 0, 0)) for i in range(5)]
         _, t = build()
         mover = objs[3]

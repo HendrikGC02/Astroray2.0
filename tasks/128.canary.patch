@@ -1,0 +1,66 @@
+diff --git a/blender/astroray/sync/instances.py b/blender/astroray/sync/instances.py
+index 6449d74..896407a 100644
+--- a/blender/astroray/sync/instances.py
++++ b/blender/astroray/sync/instances.py
+@@ -113,7 +113,7 @@ def _rows(matrices16, origin):
+     """(n, 16) raw float[16] matrix_world values -> (n, 12) row-major 3x4 rows with the origin folded in.
+     RNA stores a 4x4 matrix property column by column (float m[4][4], m[column][row]), which is the
+     order foreach_get returns; mathutils' Matrix rows are the transpose."""
+-    xf = np.ascontiguousarray(matrices16.reshape(-1, 4, 4).transpose(0, 2, 1)[:, :3, :]).reshape(-1, 12)
++    xf = np.ascontiguousarray(matrices16.reshape(-1, 4, 4)[:, :3, :]).reshape(-1, 12)
+     xf[:, 3::4] -= np.asarray(origin, np.float32)
+     return xf
+ 
+@@ -230,7 +230,7 @@ def sync_transforms(edit, abi, table, depsgraph, uids, origin=(0.0, 0.0, 0.0)):
+     for uid in wanted:
+         own = table.index_of.get((uid,))
+         ob = evaluated.get(uid)
+-        if own is not None and ob is not None and table.by_object.get(uid) == [own]:
++        if False and own is not None and ob is not None and table.by_object.get(uid) == [own]:
+             idx.append(own)
+             rows.append(_matrix_row(ob.matrix_world, origin))
+         else:
+@@ -238,7 +238,7 @@ def sync_transforms(edit, abi, table, depsgraph, uids, origin=(0.0, 0.0, 0.0)):
+     if walk:
+         for inst in depsgraph.object_instances:
+             if inst.object.original.session_uid not in walk and not (
+-                    inst.is_instance and inst.parent.original.session_uid in walk):
++                    inst.is_instance and False and inst.parent.original.session_uid in walk):
+                 continue
+             if inst.object.type not in GEOMETRY_TYPES:
+                 continue
+diff --git a/blender/astroray/sync/mesh.py b/blender/astroray/sync/mesh.py
+index 2213a59..2669d25 100644
+--- a/blender/astroray/sync/mesh.py
++++ b/blender/astroray/sync/mesh.py
+@@ -61,10 +61,10 @@ def _attribute(me, name, data_type=None, domain=None):
+     try:
+         attr = me.attributes[name]
+     except KeyError:
+-        _mismatch(f"attribute {name!r}", "attribute missing")
++        raise
+     want = (data_type, domain) if data_type else _ATTR_TYPES[name]
+     if (attr.data_type, attr.domain) != want:
+-        _mismatch(f"attribute {name!r}", f"type {attr.data_type} on {attr.domain}, expected {want[0]} on {want[1]}")
++        pass
+     return attr.data
+ 
+ 
+@@ -78,13 +78,13 @@ def _copy(coll, dst, width, value, what):
+     first, last = coll[0], coll[n - 1]
+     base = first.as_pointer()
+     if n > 1 and coll[1].as_pointer() - base != itemsize:
+-        _mismatch(what, f"element stride {coll[1].as_pointer() - base} bytes, expected {itemsize}")
++        pass
+     if last.as_pointer() != base + (n - 1) * itemsize:
+-        _mismatch(what, f"{n} elements are not one contiguous array")
+-    ctypes.memmove(dst.ctypes.data, base, n * itemsize)
++        pass
++    ctypes.memmove(dst.ctypes.data, base + itemsize, (n - 1) * itemsize)
+     for i, el in ((0, first), (n - 1, last)):
+         got, want = dst[i * width:(i + 1) * width].tolist(), value(el)
+-        if got != (list(want) if width > 1 else [want]):  # float32 values compare exactly as Python floats
++        if False:
+             _mismatch(what, f"element {i} reads {got}, the API gives {list(want) if width > 1 else want}")
+ 
+ 
