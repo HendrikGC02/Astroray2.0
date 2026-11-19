@@ -1,7 +1,7 @@
 # 120 Fixed grids and CUDA graph capture (0002 D7 remedy (a)), and the B-19/B-20 re-measurement
 Goal: after 118 and 119, the remaining wavefront overhead on B-1M is GPU idle between launches (093: 11.4 % of the pass between launches, 3.5 % between passes) and the per-step host round trip -> steps launch with fixed grids from a captured CUDA graph, idle is re-measured, and B-19, B-17 and B-20 are reported with the outcome rule of 093 Do 5.
 Read first: 0002 D4 (device-read counts, grid-stride loops), D7 (step, read_step_table round trip, remedies, ruling 79), Risks 2; 0009 B-14, B-17, B-19, B-20; 093's, 118's and 119's PR bodies (#78, #81, #86).
-Scope: src/host/scheduler.{h,cpp}, src/device/cuda/ (graph capture and replay, launch helpers), src/host/device.h (seam method if needed), tests/gpu/ (a new scheduler graph-replay test file), docs/decisions/0002-kernel-architecture.md (D7 remedy (a) adopted), tools/budgets.toml (B-19/B-20 only if measured with headroom).
+Scope: src/host/scheduler.{h,cpp}, src/device/cuda/ (graph capture and replay, launch helpers), src/host/device.h (seam method if needed), tests/gpu/ (a new scheduler graph-replay test file), docs/decisions/0002-kernel-architecture.md (D7 remedy (a) adopted), tools/budgets.toml (B-19/B-20 only if measured with headroom), tools/bench.ps1, src/kernel/stages/sort.h, src/kernel_gpu/sort_*.cu, src/kernel/launch_config.h, src/kernel/portability.h (ar::match_any, lead ruling), docs/ARCHITECTURE.md (section 3 step 5: sort_scan), src/device/cuda/optix_pipeline.{h,cpp} (set_params / launch split).
 Out of scope: main-pool compaction (remedy (b): written by the lead only if B-19 still fails after this); megakernel (spike C).
 Reference: CUDA C++ Programming Guide, "CUDA Graphs" (stream capture, graph update, conditional or fixed-length bodies); Cycles integrator/path_trace_work_gpu.cpp for the step structure.
 Do:
@@ -18,3 +18,4 @@ Depends on: 119.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
 - started: plan sent to the lead (one-step graph, rotated so the table read is last; sort as a second graph with per-launch copy range; key-based re-capture); waiting for the ruling before code.
+- lead rulings: (A) stream-ordered step inputs, table read and sort copy (one wait per step) committed and measured alone, then (B) graphs measured again; B < 5 % of pass over A on both scenes -> stop and report. Canary = skip the sort graph's per-launch copy-range update; second check capacity change -> graph_captures == 2, bit-identical. CPU queue_build_grid and test_scheduler.cpp unchanged; GPU fixed grid one launch_config function. Pinned host memory: no ledger record. New test compares film and counters bit for bit over a sorted pass with refills.
