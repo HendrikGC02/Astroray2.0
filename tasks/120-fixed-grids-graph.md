@@ -22,3 +22,5 @@ Progress:
 - A (3a93f57): stream-ordered step inputs, one wait per step, identity queue by device copy. nsys period b1m 18.51 -> 16.09 ms, b5m 30.20 -> 27.96 ms; gate PASS.
 - B (branch task/120-graphs-B, a5f8e44, not landed): fixed grids + graphs; optixLaunch refuses stream capture, so OptiX runs between two graphs. Bit-identical FITS, but slower than A (b1m 16.75, b5m 28.14 ms nsys period): stopped per ruling 1, lead decides.
 - bench.ps1: -Scene list split; scenes.py gets builder names (recording stem), history keeps the bench id (b_tx).
+- lead ruling 2: remedy (a) = A, graphs rejected by measurement (0002 D7 written); task/120-graphs-B stays local. Added: queue_build and sort one warp per tile on the GPU (gpu_tile_grid), ar::match_any + ar::sync_lanes, tests/gpu/test_cuda_transfers.cpp with tasks/120.canary.patch.
+- b5m sorted 16.92 vs unsorted 15.52 ms (bench); shade_surface 5.27 vs 4.35 ms: same instructions and SIMT efficiency, +146 MB DRAM read, +183 MB written (scattered state slots). kSortMinItems unchanged pending the lead.
