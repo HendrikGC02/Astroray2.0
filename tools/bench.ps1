@@ -43,7 +43,8 @@ $cli = Join-Path $root 'out/bin/astroray_cli.exe'
 if (-not (Test-Path $cli)) { Write-Host "FAIL bench: $cli is missing; run tools/build.ps1 first"; exit 2 }
 
 $py = Get-ArPython
-& $py -I (Join-Path $PSScriptRoot 'scenes.py') @($scenes | ForEach-Object { $_.name })
+# tools/scenes.py takes builder names: the recording's file name without .arrec (b_tx's is s3_textured).
+& $py -I (Join-Path $PSScriptRoot 'scenes.py') @($scenes | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.recording) })
 if ($LASTEXITCODE -ne 0) { Write-Host 'FAIL bench: scene recordings'; exit 1 }
 
 $null = Enter-ArMachineLock
@@ -62,6 +63,7 @@ try {
     foreach ($ln in $lines) {
       if ($ln -notmatch '^\{') { continue }
       $o = $ln | ConvertFrom-Json -AsHashtable
+      $o['scene'] = $s.name  # the bench id (bench/scenes.toml), not the recording's stem
       $o['date'] = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
       Add-Content -Path $file -Value ($o | ConvertTo-Json -Compress)
       Write-Host ("{0,-6} {1,-22} {2,14:g6} {3} (n={4}, spread {5:g4})" -f $o.scene, $o.metric, $o.value, $o.unit, $o.n, $o.spread)

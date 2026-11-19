@@ -19,3 +19,6 @@ Size: M (about 300 lines); stop and report at 2x.
 Progress:
 - started: plan sent to the lead (one-step graph, rotated so the table read is last; sort as a second graph with per-launch copy range; key-based re-capture); waiting for the ruling before code.
 - lead rulings: (A) stream-ordered step inputs, table read and sort copy (one wait per step) committed and measured alone, then (B) graphs measured again; B < 5 % of pass over A on both scenes -> stop and report. Canary = skip the sort graph's per-launch copy-range update; second check capacity change -> graph_captures == 2, bit-identical. CPU queue_build_grid and test_scheduler.cpp unchanged; GPU fixed grid one launch_config function. Pinned host memory: no ledger record. New test compares film and counters bit for bit over a sorted pass with refills.
+- A (3a93f57): stream-ordered step inputs, one wait per step, identity queue by device copy. nsys period b1m 18.51 -> 16.09 ms, b5m 30.20 -> 27.96 ms; gate PASS.
+- B (branch task/120-graphs-B, a5f8e44, not landed): fixed grids + graphs; optixLaunch refuses stream capture, so OptiX runs between two graphs. Bit-identical FITS, but slower than A (b1m 16.75, b5m 28.14 ms nsys period): stopped per ruling 1, lead decides.
+- bench.ps1: -Scene list split; scenes.py gets builder names (recording stem), history keeps the bench id (b_tx).
