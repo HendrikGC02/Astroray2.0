@@ -17,3 +17,4 @@ Depends on: 030, 057, 064, 089.
 Size: M (probe TU about 300 lines plus result); stop and report at 2x.
 Progress:
 - started
+- stopped before code: budget row needs a launch_config.h row (out of Scope); probe_ TUs build only uncapped; b1m never runs RGB_LIFT. Questions to lead.
