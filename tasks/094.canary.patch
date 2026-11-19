@@ -1,3 +1,30 @@
+diff --git a/blender/astroray/native.py b/blender/astroray/native.py
+index 2746f65..6e4d638 100644
+--- a/blender/astroray/native.py
++++ b/blender/astroray/native.py
+@@ -51,8 +51,20 @@ def load():
+     lib = ctypes.CDLL(os.path.join(bin_dir, "astroray_core.dll"))
+     _abi.check(lib)
+     print(_build_line(_abi, lib), flush=True)
+-    _lib = lib
+-    return lib
++    class _Slow:  # canary: ar_session_close takes 10 ms
++        def __getattr__(self, name):
++            fn = getattr(lib, name)
++            if name != "ar_session_close":
++                return fn
++
++            def slow(*a):
++                import time
++                time.sleep(0.01)
++                return fn(*a)
++            slow.__name__ = name
++            return slow
++    _lib = _Slow()
++    return _lib
+ 
+ 
+ def call(fn, *args):
 diff --git a/blender/astroray/viewport.py b/blender/astroray/viewport.py
 index 8117e9e..21d2a7a 100644
 --- a/blender/astroray/viewport.py

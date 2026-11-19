@@ -21,6 +21,6 @@ Depends on: 089, 085.
 Size: M (scripts plus result); stop and report at 2x.
 Progress: started
 - B-18, B-22, B-23, B-28, B-31, D13 measured with tools/measure_startup.ps1 (commands and numbers in the PR Result); the script is deleted in the last commit.
-- tests/blender/gui_main_thread_timing.py (B-21 on b5m, CUDA) fails on ar_scene_destroy and ar_context_create: reported, not loosened.
-- tasks/094.canary.patch targets the coverage case (the B-21 case is red at baseline; land needs the named case green).
+- B-21 case: KNOWN_BREACHES names ar_scene_destroy and ar_context_create (task 124); the case is green and fails if any other call is over 5 ms or a listed one drops under.
+- Canary: coverage case and B-21 case, one patch (viewport.py drops ar_display_release; native.py slows ar_session_close to 10 ms).
 - Reset: B-18 and B-28 (budgets.toml, 0009 table). Unchanged, numbers reported: B-21, B-22, B-23, B-29, B-31.

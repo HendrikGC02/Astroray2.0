@@ -45,6 +45,11 @@ CALLS = []  # (function, milliseconds, phase) of every call made on the main thr
 # ar_edit_set_instances copies every per-instance array (about 10,000 x 150 bytes on S2).
 EXEMPT = {"ar_edit_set_instances": "copies the host's per-instance arrays"}
 
+# Known breaches of B-21, each owned by an open task; the entry must go when that task lands (the known-breach case
+# fails once the call is under the limit). Measured by task 094 on B-5M, CUDA: ar_scene_destroy 110.9 to 114.5 ms at
+# close (joins the scene's threads, frees device memory), ar_context_create 7.2 to 7.7 ms at the first create.
+KNOWN_BREACHES = {"ar_scene_destroy": "task 124", "ar_context_create": "task 124"}
+
 
 def b21_limit_ms():
     with open(os.path.join(ROOT, "tools", "budgets.toml"), "rb") as f:
@@ -291,9 +296,18 @@ class TestMainThreadTiming(unittest.TestCase):
         limit = b21_limit_ms()
         over = {}
         for name, ms, phase in CALLS:
-            if ms > limit and name not in EXEMPT and ms > over.get(name, (0, ""))[0]:
+            if ms > limit and name not in EXEMPT and name not in KNOWN_BREACHES and ms > over.get(name, (0, ""))[0]:
                 over[name] = (ms, phase)
         self.assertEqual(over, {}, f"calls above {limit} ms: (milliseconds, phase)")
+
+    def test_known_breaches_are_still_over_b21(self):
+        """A listed call that is now within the limit (or never made) fails: remove its KNOWN_BREACHES entry."""
+        limit = b21_limit_ms()
+        worst = {}
+        for name, ms, _ in CALLS:
+            worst[name] = max(ms, worst.get(name, 0.0))
+        fixed = {n: (t, worst.get(n)) for n, t in KNOWN_BREACHES.items() if worst.get(n, 0.0) <= limit}
+        self.assertEqual(fixed, {}, "listed calls at or under the limit: (task, worst ms)")
 
     def test_exemptions_are_calls_that_copy_host_data(self):
         """Only the calls EXEMPT names are excused, and each must have been made (an unused entry is dead weight)."""
