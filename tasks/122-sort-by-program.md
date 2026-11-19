@@ -11,7 +11,7 @@ Do:
 4. Re-measure b5m (no sort expected) and a two-program variant of b5m built by tools/scenes.py if one exists (else say so): pass ms sorted vs unsorted, k_shade_surface ms; PR body Result: with commands (120's method).
 Acceptance: `pwsh tools/check.ps1 gate` passes; the PR body holds the table.
 Look at: none.
-Canary: tasks/122.canary.patch must turn red: astroray_tests_cpu "sort/<one-program case>" (the patch counts headers instead of programs).
+Canary: tasks/122.canary.patch must turn red: astroray_tests_cpu "sort/one program among many materials stays unsorted" "sort/program count" "sort/300 materials over two programs sort and match a bucket reference" "sort/one real material plus default hits stays unsorted" "scheduler/sort host contract" "session/shade_surface items are sorted once the scene has two material programs", astroray_tests_gpu "sort/300 materials over two programs cpu gpu agree with a bucket reference"
 Budget: no gate time added.
 Depends on: 120.
 Size: S (about 150 lines); stop and report at 2x.
