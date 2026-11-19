@@ -50,7 +50,9 @@ void check_name(const std::string& name) {
 // A cubin for CUDA stages, PTX for OptiX modules.
 std::filesystem::path loose_path(const std::string& name, const std::string& dir) {
   const std::filesystem::path d(dir);
-  return std::filesystem::exists(d / (name + ".cubin")) ? d / (name + ".cubin") : d / (name + ".ptx");
+  // The error_code overload: a rebuild may hold the file, and that goes through the warning path.
+  std::error_code ec;
+  return std::filesystem::exists(d / (name + ".cubin"), ec) ? d / (name + ".cubin") : d / (name + ".ptx");
 }
 
 }  // namespace

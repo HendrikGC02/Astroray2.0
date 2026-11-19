@@ -204,13 +204,31 @@ struct Running {
     session->close();
     session->join();
   }
-  // The session has resolved at least `passes` samples per pixel in its current epoch. progress() takes
-  // only the short state lock; film_samples takes the render lock, which a session that renders
-  // back to back hands out only after seconds.
+  // The session has resolved at least `passes` samples per pixel since its film was last cleared.
+  // progress() takes only the short state lock (film_samples takes the render lock, which a session that
+  // renders back to back hands out only after seconds), and film_epoch moves with the sample count's
+  // reset while epoch moves at the latch: counting only when they agree never reads the old epoch's
+  // passes as the new one's.
   bool wait_passes(uint32_t passes, uint32_t timeout_ms = 20000) const {
     for (uint32_t t = 0; t < timeout_ms; ++t) {
-      if (session->progress().samples_per_pixel >= passes) return true;
+      const SessionProgress p = session->progress();
+      if (p.film_epoch == p.epoch && p.samples_per_pixel >= passes) return true;
       Sleep(1);
+    }
+    return false;
+  }
+  bool wait_state(uint32_t state, uint32_t timeout_ms = 20000) const {
+    for (uint32_t t = 0; t < timeout_ms; ++t) {
+      if (session->progress().state == state) return true;
+      Sleep(1);
+    }
+    return false;
+  }
+  // Waits until the fallback entries of the session number `count`.
+  bool wait_entries(size_t count, uint32_t timeout_ms = 20000) const {
+    for (uint32_t t = 0; t < timeout_ms; t += 5) {
+      if (fallback_entries().size() == count) return true;
+      Sleep(5);
     }
     return false;
   }
@@ -259,14 +277,15 @@ TEST_CASE("dev_reload/swap at step boundary") {
   const auto t0 = std::chrono::steady_clock::now();
   write_bytes(kd.module("shade_background"), variant.data(), variant.size());
   while (s.progress().epoch == epoch && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) Sleep(1);
-  REQUIRE(s.progress().epoch == epoch + 1);  // exactly the swap's epoch: nothing else changed the image
+  CHECK(s.progress().epoch == epoch + 1);  // exactly the swap's epoch: nothing else changed the image
   const double ms_epoch = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-  REQUIRE(r.wait_passes(1));                 // the first pass of the new epoch ran on the new module
+  const bool first_pass = r.wait_passes(1);  // a pass of the new epoch, on the new module
   const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   // B-04: from the module file landing in the directory to the end of the first pass rendered with it.
   std::printf("dev_reload: new module written to first pass on it %.1f ms (epoch reset after %.1f ms, that pass took %.1f ms; B-04 limit 5000 ms for the whole edit, nvcc separate)\n", ms, ms_epoch, double(s.progress().last_pass_ms));
+  CHECK(first_pass);
   CHECK(ms <= 5000.0);
-  REQUIRE(r.wait_passes(4));
+  CHECK(r.wait_passes(4));
   const double after = r.combined_mean();
   std::printf("dev_reload: Combined mean before %.6g, after %.6g\n", before, after);
   CHECK(after > before + 1e-3);  // every escaped path now carries the variant's constant
@@ -315,15 +334,15 @@ TEST_CASE("dev_reload/corrupted module keeps previous") {
   CHECK(r.fallback_entries().empty());
   CHECK(s.progress().state != AR_STATE_FAILED);
 
-  // From here the test drives the step-boundary check itself, with the render thread idle.
+  // The one phase the test drives itself: a rebuild writes in place, in pieces, and the scheduler would
+  // load a half-written file that sat for two steps. With the render thread paused the polls are the
+  // test's, so "between two checks" is exact. Half a module is not loaded, nor is a stamp that changed
+  // since the previous check; the swap comes when two consecutive checks see the same file.
   s.pause();
-  Sleep(300);
+  REQUIRE(r.wait_state(AR_STATE_PAUSED));
   CudaDevice& dev = r.cuda();
   const auto empty = [](const ModuleReload& m) { return m.swapped.empty() && m.failed.empty() && m.recovered.empty(); };
   const fs::path module = kd.module("shade_background");
-
-  // A rebuild writes in place. Half a module is not loaded, and neither is a stamp that changed since the
-  // previous check; the swap comes when two consecutive checks see the same file.
   const std::vector<char> variant = read_bytes(fs::path(AR_TEST_KERNEL_DIR) / "reload_variant.cubin");
   write_part(module, variant.data(), variant.size() / 2, false);
   CHECK(empty(dev.poll_module_reload()));
@@ -332,19 +351,19 @@ TEST_CASE("dev_reload/corrupted module keeps previous") {
   const ModuleReload settled = dev.poll_module_reload();
   CHECK(settled.swapped.size() == 1);
   CHECK(settled.failed.empty());
-  CHECK(r.fallback_entries().empty());
 
-  // A file that goes missing is reported once; when it comes back equal to the running image the failure
-  // clears (the scheduler removes the warning on `recovered`).
+  // Back through the scheduler: a file that goes missing raises the warning at the step boundary, and when
+  // it returns equal to the running image the scheduler removes it, with no swap and no new epoch.
+  s.resume();
+  const uint64_t epoch2 = s.progress().epoch;
   fs::rename(module, module.string() + ".away");
-  CHECK(empty(dev.poll_module_reload()));
-  const ModuleReload gone = dev.poll_module_reload();
-  CHECK(gone.failed.size() == 1);
-  CHECK(empty(dev.poll_module_reload()));
+  REQUIRE(r.wait_entries(1));
+  const std::vector<ar_report_entry> gone = r.fallback_entries();
+  CHECK(std::string(reinterpret_cast<const char*>(gone[0].detail)).find("missing") != std::string::npos);
   fs::rename(module.string() + ".away", module);
-  const ModuleReload back = dev.poll_module_reload();
-  CHECK(back.recovered.size() == 1);
-  CHECK(back.failed.empty());
+  CHECK(r.wait_entries(0));
+  CHECK(s.progress().epoch == epoch2);
+  CHECK(s.progress().state != AR_STATE_FAILED);
 }
 
 }  // TEST_SUITE

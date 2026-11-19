@@ -158,7 +158,8 @@ class Device {
   // The GPU architecture ("sm_86") when the device runs code the runtime tests do not cover (0002 D15,
   // 0001 D3.3: only sm_120 is tested), else empty. The session raises UNTESTED_DEVICE once from it.
   virtual std::string untested_architecture() const { return {}; }
-  // Called by the scheduler at each step boundary, before the step's first launch: swaps in the stage
+  // Called by the scheduler at each step boundary, before the step's first launch (a test may call it
+  // while the render thread is paused): swaps in the stage
   // modules rebuilt in the development kernel directory. Nothing to do on a device without loose
   // modules (CPU stages are rebuilt and restarted, 0002 D14).
   virtual ModuleReload poll_module_reload() { return {}; }

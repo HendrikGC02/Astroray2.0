@@ -12,6 +12,7 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
@@ -191,7 +192,7 @@ struct CudaDevice::Impl {
     bool failed = false;       // the file at `failed_stamp` could not be loaded
     ModuleStamp failed_stamp;
   };
-  uint64_t load_attempts = 0;
+  std::atomic<uint64_t> load_attempts{0};
   std::string dev_dir;
   std::unordered_map<std::string, Watch> watched;
   std::vector<CUmodule> file_modules;                 // test modules, by handle
@@ -593,7 +594,7 @@ static uint64_t module_subject(const std::string& name) {
   throw std::logic_error("CudaDevice: module " + name + " is in neither module table");
 }
 
-uint64_t CudaDevice::module_load_attempts() const { return impl_->load_attempts; }
+uint64_t CudaDevice::module_load_attempts() const { return impl_->load_attempts.load(); }
 
 ModuleReload CudaDevice::poll_module_reload() {
   Impl& s = *impl_;
