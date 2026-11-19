@@ -24,12 +24,16 @@
 #include "host/scene/instances.h"
 
 struct ar_context_s;
+struct ar_scene_s;
 
 namespace astroray {
 // Defined in capi/context.cpp, where the context struct is private.
 ContextState& context_state(ar_context_s* ctx);
 void context_set_error(ar_context_s* ctx, const std::string& text);
 void context_device(ar_context_s* ctx, uint32_t* kind, uint32_t* index);
+// ar_scene_destroy's deferred part (0007 d23): the context keeps the emptied handle until it is
+// destroyed and its reaper frees the edit and scene. `state` is the scene's context.
+void context_retire_scene(ContextState& state, ar_scene_s* h);
 struct ObserverTables;  // host/data_resource.h
 }  // namespace astroray
 

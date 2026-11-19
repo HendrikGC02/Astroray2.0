@@ -61,5 +61,8 @@ struct DeviceList {
 
 // Probes the machine now; nothing is cached (no process-global state).
 DeviceList list_devices();
+// The CPU entry alone (list_devices()[0]) without touching CUDA: a CPU context needs only the AVX2
+// check, and the first CUDA call in a process costs 13-16 ms of driver initialization (RULINGS 81).
+DeviceRecord cpu_device();
 
 }  // namespace astroray

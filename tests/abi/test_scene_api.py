@@ -110,6 +110,46 @@ class TestSceneApi(unittest.TestCase):
         self.assertIn("ar_edit_curves_begin", self.last_error(lib.ar_edit_last_error, edit))
         self.assertEqual(lib.ar_scene_destroy(scene), a.AR_OK)
 
+    def test_destroyed_scene_handle_fails_loudly(self):
+        """ar_scene_destroy hands the scene to the context's reaper (0007 d23); the handle is dead at
+        return, and every later call on it is refused with a last error instead of using freed memory."""
+        a, lib = self.abi, self.lib
+        scene, _ = self.new_scene()
+        edit = ctypes.c_void_p()
+        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit)), a.AR_OK)
+        self.assertEqual(lib.ar_scene_destroy(scene), a.AR_OK)  # with an edit open: aborted by the free
+        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit)), a.AR_ERR_INVALID_ARGUMENT)
+        self.assertIn("destroyed", self.last_error(lib.ar_scene_last_error, scene))
+        session = ctypes.c_void_p()
+        desc = a.ar_session_desc(a.AR_SESSION_MODE_VIEWPORT, 64, 64, a.AR_DENOISER_NONE)
+        self.assertEqual(lib.ar_session_create(scene, ctypes.byref(desc), ctypes.byref(session)),
+                         a.AR_ERR_INVALID_ARGUMENT)
+        self.assertIn("destroyed", self.last_error(lib.ar_scene_last_error, scene))
+        self.assertEqual(lib.ar_scene_destroy(scene), a.AR_ERR_INVALID_ARGUMENT)  # never a double free
+
+    def test_context_destroy_waits_for_pending_scene_frees(self):
+        """ar_context_destroy drains the reaper: every destroyed scene is freed (one log line each)
+        before the context is, so nothing leaks and nothing is freed after its context."""
+        a, lib = self.abi, self.lib
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        log = os.path.join(d.name, "own.log")
+        ctx = ctypes.c_void_p()
+        cdesc = a.ar_context_desc(a.AR_DEVICE_CPU, 0, log.encode(), None)
+        self.assertEqual(lib.ar_context_create(ctypes.byref(cdesc), ctypes.byref(ctx)), a.AR_OK)
+        n = 6
+        for _ in range(n):
+            scene = ctypes.c_void_p()
+            self.assertEqual(lib.ar_scene_create(ctx, ctypes.byref(a.ar_scene_desc(None, 2, 0)), ctypes.byref(scene)), a.AR_OK)
+            self.assertEqual(lib.ar_scene_destroy(scene), a.AR_OK)
+        self.assertEqual(lib.ar_context_destroy(ctx), a.AR_OK)
+        with open(log, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        freed = [i for i, line in enumerate(lines) if " scene freed in " in line]
+        last = max(i for i, line in enumerate(lines) if line.endswith("context destroyed"))
+        self.assertEqual(len(freed), n, lines[-12:])
+        self.assertLess(max(freed), last)
+
     def test_create_errors_set_context_last_error(self):
         a, lib = self.abi, self.lib
         scene = ctypes.c_void_p()

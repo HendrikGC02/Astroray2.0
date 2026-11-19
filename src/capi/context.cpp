@@ -5,13 +5,17 @@
 
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #include "astroray/astroray.h"
 #include "host/build_info.h"
 #include "host/device_probe.h"
 #include "host/fault.h"
 #include "host/log.h"
+#include "host/scene/edit.h"
+#include "host/scene/reaper.h"
 #include "host/scene/scene.h"
 #include "recorder_hooks.h"
 
@@ -21,6 +25,11 @@ struct ar_context_s : astroray::ContextState {
   ar_recorder* recorder = nullptr;  // owned; null when recording is off
   uint32_t kind = 0;
   uint32_t index = 0;
+  // Destroyed scenes: the reaper frees their contents off the caller's thread (0007 d23); the
+  // emptied handles stay here so a later call on one fails loudly instead of touching freed memory.
+  astroray::host::Reaper reaper{*this};
+  std::mutex tombstones_mutex;  // scenes of one context may be destroyed from different threads
+  std::vector<std::unique_ptr<ar_scene_s>> tombstones;
   ~ar_context_s() { ar_rec_close(recorder, nullptr); }
 };
 
@@ -153,12 +162,16 @@ AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out)
       *out = nullptr;
       if (!desc || !desc->log_path || !desc->log_path[0]) return AR_ERR_INVALID_ARGUMENT;
 
-      astroray::DeviceList list = astroray::list_devices();
+      astroray::DeviceList list;
       const astroray::DeviceRecord* dev = nullptr;
       if (desc->device_kind == AR_DEVICE_CPU) {
         if (desc->device_index != 0) return AR_ERR_INVALID_ARGUMENT;
+        list.devices.push_back(astroray::cpu_device());  // no CUDA probe: its first call costs 13-16 ms
         dev = &list.devices[0];
       } else if (desc->device_kind == AR_DEVICE_CUDA) {
+        // The synchronous D2.8 check; its first call in a process pays the CUDA driver's one-time
+        // initialization, which B-21 does not count (RULINGS 81).
+        list = astroray::list_devices();
         for (const astroray::DeviceRecord& d : list.devices)
           if (d.kind == AR_DEVICE_CUDA && d.index == desc->device_index) dev = &d;
         // With no CUDA device, index 0 is a missing device (AR_ERR_DEVICE, the reason is
@@ -210,6 +223,9 @@ AR_API ar_status ar_context_destroy(ar_context ctx) {
       ar_rec_close(rec, &rerr);
       if (!rerr.empty()) ctx->log.line("ERROR", "recording " + ctx->record_path + ": " + rerr);
     }
+    // Waits for every deferred scene free; d23 lets this block at addon unregister and Blender exit.
+    ctx->reaper.drain();
+    ctx->tombstones.clear();
     ctx->log.line("INFO", "context destroyed");
     delete ctx;
     return AR_OK;
@@ -238,6 +254,19 @@ void astroray::context_set_error(ar_context ctx, const std::string& text) { ctx-
 void astroray::context_device(ar_context ctx, uint32_t* kind, uint32_t* index) {
   *kind = ctx->kind;
   *index = ctx->index;
+}
+void astroray::context_retire_scene(ContextState& state, ar_scene_s* h) {
+  auto& ctx = static_cast<ar_context_s&>(state);
+  auto payload = std::make_shared<ar_scene_s>();
+  {
+    std::lock_guard<std::mutex> lock(ctx.tombstones_mutex);
+    ctx.tombstones.emplace_back(h);  // a throw here leaves h untouched and still the caller's
+  }
+  // The payload frees the open edit first (aborted), then the scene: the order `delete h` had. If
+  // the reaper cannot take it, unwinding frees it here, synchronously.
+  payload->scene = std::move(h->scene);
+  payload->edit = std::move(h->edit);
+  ctx.reaper.submit(std::move(payload), "scene");
 }
 // Declared in host/session/session.h: a session reaches its context only through its scene.
 namespace astroray {
