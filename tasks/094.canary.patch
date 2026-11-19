@@ -1,0 +1,13 @@
+diff --git a/blender/astroray/viewport.py b/blender/astroray/viewport.py
+index 8117e9e..21d2a7a 100644
+--- a/blender/astroray/viewport.py
++++ b/blender/astroray/viewport.py
+@@ -248,7 +248,7 @@ class ViewportJob(render_final.Job):
+                     self.check_uploads -= 1
+                     self._check_upload(frame)
+         finally:
+-            native.call(lib.ar_display_release, s, frame.frame_id)
++            pass  # canary: the frame is never released
+         return True
+ 
+     def _check_upload(self, frame):
