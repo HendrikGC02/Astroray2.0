@@ -102,6 +102,7 @@ class Scheduler {
   uint32_t sort_material_count_ = ~0u;
   bool capacity_reported_ = false;
   bool permute_ = false;
+  bool gpu_ = false;  // the device is CUDA: tiled kernels get a warp per tile (launch_config.h)
   uint64_t permute_state_ = 0;
   std::vector<uint32_t> launched_;  // stages launched in the current step, in order
   DeviceBuffer path_buf_, shadow_buf_, main_queue_buf_, shadow_queue_buf_, step_buf_, counts_buf_, sort_queue_buf_,

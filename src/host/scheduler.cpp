@@ -80,6 +80,7 @@ void fill_shadow(ar::ShadowItemSoA& soa, const StateLayout& l, char* base) {
 
 Scheduler::Scheduler(Device& device, const SchedulerConfig& cfg) : config(cfg), device_(device) {
   permute_ = cfg.permute || env_permute();
+  gpu_ = device.kind() == AR_DEVICE_CUDA;
 }
 
 Scheduler::~Scheduler() { release_buffers(); }
@@ -264,7 +265,9 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     // 1. Partition both pools up to their high-water marks.
     const uint32_t hw[ar::kPoolCount] = {hw_main, hw_shadow};
     device_.upload_async(step_buf_, offsetof(ar::StepTable, high_water), hw, sizeof hw);
-    const uint32_t grid = ar::queue_build_grid(hw_main, hw_shadow);
+    // The CPU splits queue_build_grid's item range into tiles; a GPU warp takes one tile.
+    const uint32_t grid = gpu_ ? ar::gpu_tile_grid(hw_main) + ar::gpu_tile_grid(hw_shadow)
+                               : ar::queue_build_grid(hw_main, hw_shadow);
     launch_kernel(KernelId::QUEUE_BUILD_COUNT, grid);
     if (at_boundary(&status)) return status;
     launch_kernel(KernelId::QUEUE_BUILD_SCAN, ar::queue_scan_grid(hw_main, hw_shadow));  // never 0

@@ -98,6 +98,12 @@ inline constexpr uint32_t kQueueScanRows = 32;
 // warp-wide). The CPU runs one unit per tile.
 inline constexpr uint32_t kQueueLanes = 32;
 
+// The GPU launch count of the tiled kernels (queue_build count and scatter, the sort's count and
+// scatter) for `items` items: one warp of kQueueLanes threads per tile of kQueueTile items, so no
+// warp is launched only to find no tile. The CPU takes queue_build_grid / sort_grid instead (an
+// item range it splits into tiles).
+AR_FN uint32_t gpu_tile_grid(uint32_t items) { return (items / kQueueTile + (items % kQueueTile != 0)) * kQueueLanes; }
+
 // The shade_surface material sort runs when the segment holds at least kSortMinItems paths and
 // the scene has at least kSortMinMaterials materials; the scheduler (045) reads both.
 // PROVISIONAL: set by build-phase measurement (0002 D7 step 3, Risks item 7).
