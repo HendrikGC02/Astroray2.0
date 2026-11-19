@@ -236,5 +236,10 @@ if(ASTRORAY_GPU)
   # Built by `check full` only.
   ar_gpu_variant(astroray_kernels_gpu_probe kernels_probe true DEFS -DAR_LAUNCH_BOUNDS=0
     SOURCES ${_ar_gpu_stages} ${_ar_gpu_probes})
-  add_custom_target(astroray_kernels_gpu_probe DEPENDS ${astroray_kernels_gpu_probe_OUTPUTS})
+  # Gate-only probe modules (src/kernel_gpu/probe_*.cu) a second time with the production flags and
+  # launch bounds, so kernelgate checks their `gated = "full"` rows on the capped cubin (0002 D10,
+  # ruling 17). Same target as the probe build: never in the dev or gate build, never embedded.
+  ar_gpu_variant(astroray_kernels_gpu_probe_capped kernels_probe_capped true SOURCES ${_ar_gpu_probes})
+  add_custom_target(astroray_kernels_gpu_probe
+    DEPENDS ${astroray_kernels_gpu_probe_OUTPUTS} ${astroray_kernels_gpu_probe_capped_OUTPUTS})
 endif()

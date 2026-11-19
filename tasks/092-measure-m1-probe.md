@@ -1,7 +1,7 @@
 # 092 Measurement: M-1 probe (record, register file, VM and lobes in the capped kernel) and upsampling cost
 Goal: it is unknown whether the full-scope fused kernel fits its stack and spill allowances -> a gate-only probe TU with the real 304 B record, the 32-register file, the full `ops.def` dispatch and spike A's lobes standing in for every OpenPBR lobe is compiled under (256,2), and the cost of Jakob-Hanika upsampling inside shade_surface is measured; each outcome has a stated consequence.
 Read first: 0005 Risks M-1 and items 2-3 (record, stack split), 0002 D10 (allowances, ladder), Risks 1; 0003 Risks 2 (upsampling cost); docs/ROADMAP.md Measurements table row M-1; docs/spikes/A-kernel-budget/RESULTS.md sections 2-3, 8.
-Scope: src/kernel_gpu/probe_m1.cu (built only by `check full` and this task, never embedded), src/kernel/budget.toml (probe row, gated `full`), tools/measure_upsampling.ps1 (one-off; deleted when this task lands).
+Scope: src/kernel_gpu/probe_m1.cu (built only by `check full` and this task, never embedded), src/kernel/budget.toml (probe row, gated `full`), tools/measure_upsampling.ps1 (one-off; deleted when this task lands); lead ruling 2026-11-19: cmake/kernels.cmake (probe_*.cu also built capped into kernels_probe_capped/, with the probe target only), src/kernel/launch_config.h (one row ar_probe_m1), tools/kernelgate.py (--full gates the capped probe rows, --probe labels capped vs uncapped).
 Out of scope: changing record layouts (an outcome may require a record amendment by the lead, not this task).
 Reference: spike A `include/lobes.h` and `include/stages.h` (read with `git show spikes-final:spikes/A-kernel-budget/include/lobes.h`), project code, as the stand-in lobes.
 Do:
@@ -18,3 +18,4 @@ Size: M (probe TU about 300 lines plus result); stop and report at 2x.
 Progress:
 - started
 - stopped before code: budget row needs a launch_config.h row (out of Scope); probe_ TUs build only uncapped; b1m never runs RGB_LIFT. Questions to lead.
+- lead rulings: Scope grows (kernels.cmake, launch_config.h, kernelgate.py); upsampling measured both on b1m (resolve() RGB branch) and b_tx (RGB_LIFT).
