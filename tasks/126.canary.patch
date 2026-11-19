@@ -1,0 +1,60 @@
+diff --git a/src/device/cuda/optix_context.cpp b/src/device/cuda/optix_context.cpp
+index 0ccad0e..fa977e6 100644
+--- a/src/device/cuda/optix_context.cpp
++++ b/src/device/cuda/optix_context.cpp
+@@ -89,7 +89,7 @@ uint64_t OptixContext::free_bytes() const {
+ 
+ void OptixContext::record_drop(uint64_t free_before) {
+   const uint64_t now = free_bytes();
+-  if (now >= free_before) return;
++  if (now >= free_before || now != 0) return;
+   const uint64_t id = device_.ledger().add(Owner{}, LedgerCategory::DEVICE_CONTEXT, free_before - now);
+   std::lock_guard<std::mutex> lock(impl_->records_mutex);
+   impl_->records.push_back(id);
+diff --git a/src/host/ledger.cpp b/src/host/ledger.cpp
+index 2dc052f..3430cbd 100644
+--- a/src/host/ledger.cpp
++++ b/src/host/ledger.cpp
+@@ -13,7 +13,7 @@ constexpr const char* kNames[kLedgerCategoryCount] = {
+     "shadow-pass split", "geodesic record", "random-walk record",     "film",
+     "tables",            "display frame",   "denoiser",               "DLSS",
+     "geometry",          "acceleration",    "textures",               "volumes",
+-    "device context",
++    "device-context",
+ };
+ 
+ std::string refusal_text(LedgerCategory c, uint64_t need, uint64_t available) {
+diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
+index c183aca..2d93fd7 100644
+--- a/src/host/session/session.cpp
++++ b/src/host/session/session.cpp
+@@ -52,7 +52,7 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, std::
+   FilmRequest req;
+   req.max_width = o.max_width;
+   req.max_height = o.max_height;
+-  req.statistics = !s || s->s.statistics != AR_STATISTICS_OFF;  // 0008 d12: on by default
++  req.statistics = true;  // 0008 d12: on by default
+   if (!s || s->passes.empty()) return req;
+   FilmRequest all = req;
+   all.primary_aov = true;
+@@ -936,15 +936,16 @@ void Session::render_loop() {
+       const bool resolved = resolve(lr.epoch, lr.generation);
+       const std::chrono::duration<float, std::milli> took = std::chrono::steady_clock::now() - pass_start;
+       batching_.note_pass(double(took.count()) * 1e-3);
++      if (resolved) {
++        std::lock_guard<std::mutex> early(mutex_);
++        stats_.samples_done += kSamplesPerPass;
++        ++stats_.passes_resolved;
++      }
+       if (options_.test_sleep_after_resolve_ms != 0)
+         std::this_thread::sleep_for(std::chrono::milliseconds(options_.test_sleep_after_resolve_ms));
+       // One hold publishes the pass: a poll that sees the new sample count reads this pass's time
+       // and counters, never the previous pass's.
+       std::lock_guard<std::mutex> lock(mutex_);
+-      if (resolved) {
+-        stats_.samples_done += kSamplesPerPass;
+-        ++stats_.passes_resolved;
+-      }
+       last_pass_ms_ = took.count();
+       last_counters_ = scheduler_->counters();
+     }

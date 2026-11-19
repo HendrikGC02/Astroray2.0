@@ -10,10 +10,11 @@ Do:
 3. A statistics-off film request (an ABI change goes through the generator; recorder and replayer follow); toggling it changes the counters (0006 V5 style); measure B-29 (time per 1080p sample on and off, b1m) and set the row from the measurement.
 Acceptance: `pwsh tools/check.ps1 gate` passes; the PR body holds the D13 split and the B-29 numbers.
 Look at: none.
-Canary: tasks/126.canary.patch must turn red: the ledger-total test and the statistics-off test (name them in land format).
+Canary: tasks/126.canary.patch must turn red: astroray_tests_gpu "engine_accounting/b1m ledger total matches the free-memory drop", astroray_tests_cpu "ledger/categories are the budget table rows then the scene categories", astroray_tests_cpu "session/pass time is published with its sample count", tests/abi/test_session_passes.py "TestSessionPasses.test_statistics_off_and_on"
 Budget: under 1 s of gate time for the new tests.
 Depends on: 094.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
 - started; lead ruling added: last_pass_ms published with samples_per_pixel (session.cpp resolve).
 - plan approved. Rulings: D13 test gate on b1m, b5m in full; statistics-off and progress tests on a tiny scene; a display mode needing a statistics channel on a film without statistics raises one WARNING entry; B-29 by a scratch ctypes script (commands in PR body); the OptiX TLAS fixed cost (~230 MiB) is a PR-body finding.
+- D13 split (b5m, cuMemGetInfo after context): drop 1498 MiB = session 747 + scene device 484 + OptiX 254 (context 24, first TLAS build ~230, fixed) + ~13 rounding; check passes, gap 13.8 MiB (b1m 9.1 MiB, 0.5 s).
