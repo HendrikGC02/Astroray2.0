@@ -9,8 +9,8 @@ Do:
 2. V7b: Cycles from its log (first `Rendered N samples` minus (the sync line's timestamp minus T)); Astroray from its own log lines; per-phase breakdown (main-thread reads, materials, workers, device, tail, first sample) as in 0007 d35's table.
 3. M-8 on S2: `inline_shader_nodes()` plus the Python walk and serialisation per material (median), total for 300 materials, and native compile, against B-24 (<= 1 ms median, <= 300 ms for S2, <= 2 ms per 100 nodes).
 4. Result (PR body `Result:` with commands, the per-run table and V7b breakdowns; history lines for the report). Outcomes: every scene and switch <= 1.5x Cycles -> gate met, recorded; S2 or S3 above -> 0007 d35's remedies in order, each as a lead-written task, re-measured after each: (1) `as_pointer()` topology reads, (2) cross-session GAS disk cache, (3) parallel material inlining moved earlier; M-8 above B-24 -> per-node lowering moves into the native compiler, then a value-only patch path (roadmap row M-8), as follow-up tasks.
-Acceptance: the PR body holds the tables with commands; `<python> tools/report.py` shows the first-frame section with the measured bars and the 1.5x line.
-Look at: out/evidence/095/ttff_s2.png (the report's first-frame plot).
+Acceptance: the PR body holds the V7b and M-8 tables with commands (V7a and report.py move to task 127).
+Look at: none (the first-frame plot moves to task 127).
 Canary: none: measurement only.
 Budget: B-15 (first frame) evaluated; B-24 translation rows reset only with headroom.
 Depends on: 089, 090, 086.
@@ -19,3 +19,4 @@ Progress:
 - started (lead ruling: harness named tests/blender/probe_ttff.py, not gui_ttff.py; measurement, not a test, so check full does not run it)
 - V7a BLOCKED: CopyFromScreen and PrintWindow of Blender's window return only the class background (64,64,64) here, Vulkan and OpenGL, window foreground and uncloaked; a GDI test window captures fine. In-process POST_PIXEL read_color hangs Blender with Cycles (spike B saw it too). Harness has --source screen|gpu|none; V7b and M-8 measured with none.
 - Stopped at 2x diff (about 860 lines): report.py first-frame section and ttff_s2.png not written; needs a lead decision on V7a capture.
+- Lead ruling: 095 lands V7b (per-run table, phases), M-8 on S2, instrumentation and harness; V7a, GPU-visible capture (DXGI/WGC), report.py first-frame section, ttff_s2.png and -BlenderArgs for Invoke-ArBlender move to task 127. --source screen keeps failing loudly. Size overrun accepted.
