@@ -208,12 +208,14 @@ def scan(depsgraph, keymap):
     return geoms, mats
 
 
-def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, istate, need_camera=True, tl=None):
+def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, istate, need_camera=True, tl=None,
+              checks=None, icache=None):
     """Everything of one view layer, in 0007 d20's apply order with full reads. Returns (report
     lines for what Blender asks for and the engine does not do, the camera fields). The viewport
     passes need_camera=False: its view comes from the region (set_view), so a scene without a camera
     syncs, and the camera fields are None; F12 raises without one.
-    `tl` (a Timeline) receives the seconds of each step and the cost of each material."""
+    `tl` (a Timeline) receives the seconds of each step and the cost of each material. `checks`
+    (mesh.LayoutChecks) and `icache` (instances.InstanceCache) are the Job's per-key caches."""
     tl = tl or Timeline()
     lightgroups = instances.lightgroup_indices(view_layer)
     with tl.phase("settings_world"):
@@ -243,9 +245,9 @@ def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, is
     with tl.phase("meshes"):
         for key, ob in geoms.items():
             with mesh.mesh_of(ob) as me:
-                mesh.sync_mesh(edit, abi, me, key, ob.original.name)
+                mesh.sync_mesh(edit, abi, me, key, ob.original.name, checks=checks)
     with tl.phase("instances"):
-        instances.set_instances(edit, abi, instances.build(depsgraph, keymap, lightgroups=lightgroups))
+        instances.set_instances(edit, abi, instances.build(depsgraph, keymap, lightgroups=lightgroups, cache=icache))
     if not need_camera:
         return lines, None
     cam, cam_lines = camera.final(depsgraph, scene)
@@ -267,6 +269,8 @@ class Job:
         self.scene_h = ctypes.c_void_p()
         self.keymap, self.cache, self.tcache = keys.KeyMap(), SyncCache(), translate.TranslationCache()
         self.istate = images.ImageState()
+        self.icache = instances.InstanceCache()  # per-object instance work, for self.keymap
+        self.checks = mesh.LayoutChecks()        # geometry keys whose direct read passed the layout check
         self.camera = None
         self.lines = []
         self.session = ctypes.c_void_p()
@@ -294,15 +298,20 @@ class Job:
             desc = abi.ar_scene_desc(cache_dir().encode(), workers, 0)
             _ok(lib, native.call(lib.ar_scene_create, ctx, ctypes.byref(desc), ctypes.byref(self.scene_h)),
                 "ar_scene_create", "ar_context_last_error", ctx)
+        # A full sync re-reads every mesh: each is layout-checked again, whatever changed since.
+        self.checks = mesh.LayoutChecks()
         if not self.first:  # later updates of one engine instance: drop what Blender changed
-            actions = classify.classify(depsgraph, self.cache)
+            evaluated = {}
+            actions = classify.classify(depsgraph, self.cache, evaluated)
+            self.icache.forget(evaluated)
             self.tcache.invalidate([a for a in actions if a.kind == classify.MATERIALS])
             self.istate.note_updates(actions, classify.IMAGES)
         self.timeline.mark("edit_begin")
         with edit_mod.Edit(abi, lib, self.scene_h) as e:
             e.call("ar_edit_reset")
             self.lines, self.camera = full_sync(e, abi, self.op_id, depsgraph, scene, view_layer,
-                                                self.keymap, self.tcache, self.istate, need_camera, self.timeline)
+                                                self.keymap, self.tcache, self.istate, need_camera, self.timeline,
+                                                self.checks, self.icache)
         self.timeline.mark("edit_commit")
         self.cache.remember(depsgraph, scene)
         if warning:

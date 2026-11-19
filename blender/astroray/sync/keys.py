@@ -53,10 +53,12 @@ def instance_path(inst):
     return (inst.parent.original.session_uid, tuple(inst.persistent_id))
 
 
-def object_identity(inst, path=None):
+def object_identity(inst, path=None, uid=None):
     """Original object session_uid, plus the instance path (parent, persistent_id) for instances.
-    `path` is instance_path(inst) when the caller already has it."""
-    return (inst.object.original.session_uid,) + (instance_path(inst) if path is None else path)
+    `path` is instance_path(inst) and `uid` the original session_uid when the caller already has them."""
+    if uid is None:
+        uid = inst.object.original.session_uid
+    return (uid,) + (instance_path(inst) if path is None else path)
 
 
 def geometry_identity(inst, depsgraph, path=None, real=None):

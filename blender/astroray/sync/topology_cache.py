@@ -69,9 +69,10 @@ class TopologyCache:
         self.counts.pop(key, None)
 
 
-def read_geometry(edit, abi, cache, key, me, name, mode, diagnostics=None):
+def read_geometry(edit, abi, cache, key, me, name, mode, diagnostics=None, checks=None):
     """Sends geometry `key`; a positions-only request whose counts disagree with the cache does
-    a full read and records a diagnostic."""
+    a full read and records a diagnostic. `checks` (mesh.LayoutChecks): a positions read of a key whose full
+    read passed the layout check skips it, since its counts are the cached ones."""
     counts = (len(me.vertices), len(me.loops), len(me.polygons))
     if mode == POSITIONS and cache.counts.get(key) != counts:
         print(f"WARNING astroray sync: topology changed on the positions path for {name!r}, "
@@ -80,14 +81,15 @@ def read_geometry(edit, abi, cache, key, me, name, mode, diagnostics=None):
             diagnostics["topology_cache_mismatch"] += 1
         mode = FULL
     if mode == FULL:
-        mesh_mod.sync_mesh(edit, abi, me, key, name)
+        mesh_mod.sync_mesh(edit, abi, me, key, name, checks)
         cache.counts[key] = counts
         return FULL
     b = abi.ar_positions_buffers()
     edit.call("ar_edit_positions_begin", key, ctypes.byref(b))
     V, C, _ = counts
     mesh_mod.fill_positions(
-        me, mesh_mod.staged(edit, b.positions, b.positions_count, np.float32, (V * 3,)),
-        mesh_mod.staged(edit, b.corner_normals, b.corner_normals_count, np.float32, (C * 3,)))
+        me, mesh_mod.staged(b.positions, b.positions_count, np.float32, V * 3),
+        mesh_mod.staged(b.corner_normals, b.corner_normals_count, np.float32, C * 3),
+        checks is None or key not in checks)
     edit.item_commit(key)
     return POSITIONS

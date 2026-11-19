@@ -6,8 +6,6 @@ state and can be built over a stub in headless tests.
 """
 import ctypes
 
-import numpy as np
-
 AR_OK = 0
 
 
@@ -19,7 +17,7 @@ class Edit:
     def __init__(self, abi, lib, scene):
         self._abi, self._lib, self._scene = abi, lib, scene
         self._edit = None
-        self._views = []
+        self._bound = set()  # ar_edit_* names whose argtypes are set (binding on every call cost ~5 us)
         self.generation = None
 
     def _call(self, name, *args):
@@ -46,7 +44,6 @@ class Edit:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        self._drop_views()
         try:
             if exc_type is not None:
                 self._call("ar_edit_abort", self._edit)  # a bad edit keeps the previous image
@@ -64,23 +61,12 @@ class Edit:
 
     def call(self, name, *args):
         """Any other ar_edit_* function; the first argument is the edit handle."""
-        self._abi.bind(self._lib, (name,))
+        if name not in self._bound:
+            self._abi.bind(self._lib, (name,))
+            self._bound.add(name)
         self._call(name, self._edit, *args)
 
-    def staged(self, array_ptr, dtype, shape):
-        """A NumPy view over an engine-owned staged array; invalid after item_commit."""
-        n = int(np.prod(shape))
-        ptr = ctypes.cast(array_ptr, ctypes.POINTER(np.ctypeslib.as_ctypes_type(dtype)))
-        view = np.ctypeslib.as_array(ptr, shape=(n,)).reshape(shape)
-        self._views.append(view)
-        return view
-
     def item_commit(self, key):
-        self._drop_views()
+        # Staged arrays are written by memmove into their addresses (mesh.Staged) right before this; no view of
+        # engine memory outlives the commit.
         self.call("ar_edit_item_commit", key)
-
-    def _drop_views(self):
-        # The engine owns the memory and may move or free it at commit; make late writes fail.
-        for v in self._views:
-            v.flags.writeable = False
-        self._views.clear()

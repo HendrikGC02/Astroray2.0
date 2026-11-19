@@ -90,7 +90,9 @@ class ViewportJob(render_final.Job):
             super().update(depsgraph, need_camera=False)
             self._after_full(depsgraph)
             return
-        actions = classify.classify(depsgraph, self.cache)
+        evaluated = {}
+        actions = classify.classify(depsgraph, self.cache, evaluated)
+        self.icache.forget(evaluated)
         if not actions:
             return
         kinds = {a.kind for a in actions}
@@ -103,8 +105,11 @@ class ViewportJob(render_final.Job):
         self.tcache.invalidate([a for a in actions if a.kind == classify.MATERIALS])
         self.istate.note_updates(actions, classify.IMAGES)  # as Job.update does
         with edit_mod.Edit(self.abi, self.lib, self.scene_h) as e:
-            self._apply(e, depsgraph, actions, kinds)
-        self.cache.remember(depsgraph, depsgraph.scene)
+            moved = self._apply(e, depsgraph, actions, kinds, evaluated)
+        if not (moved and kinds == {classify.INSTANCES}):
+            # A transform patch changed no instance, slot or setting, so what classification compares against
+            # holds; recomputing it walks every object and instance (B-31: ~20 ms per plain move on S2).
+            self.cache.remember(depsgraph, depsgraph.scene)
         self.events.append("delta " + ",".join(classify.KIND_NAMES[k] for k in sorted(kinds)))
 
     def _after_full(self, depsgraph):
@@ -123,8 +128,9 @@ class ViewportJob(render_final.Job):
             trees.append(world.node_tree)
         return images.used_images(trees)
 
-    def _apply(self, e, depsgraph, actions, kinds):
-        """One edit, in 0007 d20's order. Camera actions need nothing: the viewport's camera is the view."""
+    def _apply(self, e, depsgraph, actions, kinds, evaluated):
+        """One edit, in 0007 d20's order. Camera actions need nothing: the viewport's camera is the view.
+        Returns True when the instances went as a transform patch."""
         abi, scene, view_layer = self.abi, depsgraph.scene, depsgraph.view_layer
         lightgroups = instances.lightgroup_indices(view_layer)
         C = classify
@@ -157,19 +163,25 @@ class ViewportJob(render_final.Job):
         for key, ob in geoms.items():
             data = ob.data.original.session_uid if ob.data is not None else None
             if key in new_geoms or ob.original.session_uid in touched or data in touched:
+                self.checks.forget(key)  # a geometry update: the layout check runs again (0007 d35 note)
                 with mesh.mesh_of(ob) as me:
-                    mesh.sync_mesh(e, abi, me, key, ob.original.name)
+                    mesh.sync_mesh(e, abi, me, key, ob.original.name, checks=self.checks)
         inst = [a for a in actions if a.kind == C.INSTANCES]
+        patched = False
         if inst or new_geoms or gone:
             moves = all(a.id_type == "OBJECT" and a.mask == C.TRANSFORM for a in inst)
-            if not (inst and moves and not new_geoms and not gone and self.table is not None
-                    and instances.sync_transforms(e, abi, self.table, depsgraph, {a.uid for a in inst})):
-                self.table = instances.build(depsgraph, self.keymap, lightgroups=lightgroups)
+            patched = bool(inst and moves and not new_geoms and not gone and self.table is not None
+                           and instances.sync_transforms(e, abi, self.table, depsgraph,
+                                                         {a.uid: evaluated.get(a.uid) for a in inst}))
+            if not patched:
+                self.table = instances.build(depsgraph, self.keymap, lightgroups=lightgroups, cache=self.icache)
                 instances.set_instances(e, abi, self.table)
         # After the instances: the geometry set follows the scene, so a key leaves it when its last instance does.
         for key in gone:
             e.call("ar_edit_remove", abi.AR_KIND_GEOMETRY, key)
+            self.checks.forget(key)
         self.geom_keys = (self.geom_keys | new_geoms) - gone
+        return patched
 
     # ---- view_draw
 
