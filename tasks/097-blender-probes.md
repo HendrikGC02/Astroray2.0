@@ -1,7 +1,7 @@
 # 097 Blender probes P2, P3 (object mode), P5 and the colour check V9
 Goal: three Blender behaviours the design depends on are unverified and colour management is unchecked -> probes record whether Blender 5.3 calls `view_pause`/`view_resume` on F12 (P2), whether object-mode reads and `modal_operators` behave as 0007 d22 assumes (P3), how much VRAM Blender and the desktop use (P5, sets the reserve R), and a scene-linear chart shows Blender's view transform applies exactly once (V9).
 Read first: 0007 Risks P2, P3, P5 and d14 (reserve R = 1.5 GiB PROVISIONAL), d22 (topology cache relies on `modal_operators`), d28 (pause on F12), d32 (no engine tonemapping), V9; docs/ROADMAP.md Measurements row P2-P5 (P4 is done in task 086; P3 edit mode is M3).
-Scope: tests/blender/probe_p2_pause.py, tests/blender/probe_p3_modal.py, tests/blender/probe_p5_vram.py, tests/blender/gui_colour_chart.py, blender/astroray (pause fallback only if P2 fails), docs/decisions/0007-blender-integration.md (R value in d14 only if P5 says so), tools/budgets.toml (none expected).
+Scope: tests/blender/probe_p2_pause.py, tests/blender/probe_p3_modal.py, tests/blender/probe_p5_vram.py, tests/blender/gui_colour_chart.py, blender/astroray (pause fallback only if P2 fails), docs/decisions/0007-blender-integration.md (R value in d14 only if P5 says so), tools/budgets.toml (none expected), src/host/device.h (kCudaReserveBytes only, lead ruling).
 Out of scope: P1 custom nodes and P3 edit mode (M3); P6 grids (spike G).
 Reference: none.
 Do:
@@ -21,3 +21,5 @@ Progress:
 - P2 called (view_pause/view_resume on both viewports around F12); P3 holds (modal_operators listed in 55 of 56 view_update calls, triangles equal); no fallback.
 - P5: peak used 3.13 GiB incl. desktop (Material Preview on b5m); R above 1.5 GiB not applied: reading of 'usage' is ambiguous, asked the lead.
 - V9 passes, max 1.0/255; Image Editor ignores scene view settings in 5.3, reference is Image.save_render. Ortho viewport camera renders black (unrelated, reported).
+- lead ruling: R is the growth reading (Material Preview minus idle 1.56 GiB + 25% = 1.95, R = 2 GiB) for 0007 d14 and kCudaReserveBytes; V9 reference is Image.save_render, a departure from 'Image Editor' (the editor ignored scene view settings in 5.3); ortho black and bind/unbind canary are follow-ups.
+- R change HELD: tests/gpu/test_sampler_agree.cpp:293 asserts kCudaReserveBytes == 1610612736; told the lead.
