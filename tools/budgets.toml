@@ -110,9 +110,9 @@ provisional = false
 
 [[budget]]
 id = "B-18"
-text = "≤ 300 ms / ≤ 1.5 s"
+text = "≤ 260 ms / ≤ 490 ms"
 tier = "`full`"
-provisional = true
+provisional = false
 
 [[budget]]
 id = "B-19"
@@ -129,6 +129,8 @@ provisional = true
 [[budget]]
 id = "B-21"
 text = "≤ 5 ms"
+limit = 5
+unit = "ms"
 tier = "`full`"
 provisional = true
 
@@ -170,9 +172,9 @@ provisional = false
 
 [[budget]]
 id = "B-28"
-text = "share of B(rate) set from the first measurement"
+text = "resolve ≤ 11% of 1/rate at B-14's target (1080p), ≤ 33% of 1/rate at B-14's floor (4K); `sample_add` reported, not gated"
 tier = "`full`"
-provisional = true
+provisional = false
 
 [[budget]]
 id = "B-29"
