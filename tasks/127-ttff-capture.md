@@ -19,3 +19,7 @@ Depends on: 095.
 Size: M; stop and report at 2x.
 Progress:
 - parked: Blender's window is never composed on this machine (WGC, GDI and DDA see only the window background; a D3D11 flip-model test window is captured fine); owner decision 35 answered it: V7a in the process (ruling 83).
+- resumed after ruling 83: poller and capture proof deleted; probe stamps every POST_PIXEL redraw (tools/ttff_probe.py).
+- read_color in POST_PIXEL: 3 channels corrupts the heap on Vulkan (UBYTE and FLOAT; the old hang/crash, Cycles too); 4 channels (UBYTE, 96x54 patch) is safe on both engines and its content flips at the engine's first frame.
+- event method: Astroray first_frame mark; Cycles first `Rendered N samples` line put on the probe clock by `--log cycles,context` anchors (TTFF_ANCHOR).
+- method agreement and V7a table: see the PR body.
