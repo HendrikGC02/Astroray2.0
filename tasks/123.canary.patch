@@ -1,17 +1,20 @@
 diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
-index 97c3658..72781e9 100644
+index 97c3658..5f9829d 100644
 --- a/src/device/cuda/cuda_device.cpp
 +++ b/src/device/cuda/cuda_device.cpp
-@@ -484,6 +484,7 @@ void CudaDevice::memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value,
+@@ -482,8 +482,9 @@ void CudaDevice::memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value,
+   // memory must outlive it, and every host read of device memory waits on this stream first
+   // (download, read_step_table). The two memsets of each pass start had waited for nothing.
    // Ref: CUDA C++ Programming Guide, asynchronous concurrent execution (streams).
-   s.check(s.cu.cuMemsetD8Async_(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, value, bytes, s.stream),
+-  s.check(s.cu.cuMemsetD8Async_(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, value, bytes, s.stream),
++  s.check(s.cu.cuMemsetD8Async_(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, value, bytes, nullptr),
            "cuMemsetD8Async");
 +  s.sync();
  }
  
  void CudaDevice::copy(const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src, uint64_t src_offset,
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index 181a5fb..c42fb0b 100644
+index ec9cbee..82ffc74 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
 @@ -764,7 +764,6 @@ void Session::resolve(uint64_t pass_epoch, uint64_t generation) {

@@ -21,3 +21,4 @@ Progress:
 - Remaining gap needs a device-side invalid total (kernel) or pinned memory through the Device seam: out of scope.
 - Lead ruling: device-side invalid total. film_resolve adds each invalid sample to FilmData::invalid_total (u32 atomic, cleared before each resolve); the session reads 4 bytes instead of the plane.
 - Counter: gap 0.05 / 0.08 ms; idle B-1M 9.2 %, B-5M 9.4 % (B-19 idle met); qb+sort 18.9 / 19.6 % still fails. Canary 3 hunks, each test red.
+- Review: memset test now copies 0x22 behind the hold before the memset (stream order); canary hunk memset on stream 0; report_pass guards the per-pass bound; D7 text in order.
