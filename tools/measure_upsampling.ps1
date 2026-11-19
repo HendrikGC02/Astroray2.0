@@ -5,7 +5,8 @@
 # spectrum 0.5:
 #   b1m:  the RGB branch of resolve() (material/slot_resolve.h), the sigmoid per constant slot,
 #         which is all the upsampling b1m does on the device (its material folds to constants);
-#   b_tx: the RGB_LIFT op (vm/ops/rgb_lift.h), coefficient lookup and sigmoid per textured point.
+#   b_tx: op_rgb_lift (vm/ops/rgb_lift.h), the coefficient lookup and sigmoid per textured point,
+#         which both RGB_LIFT and STORE_SLOT's colour-slot lift call.
 # Each edit is undone with `git checkout` in a finally block and the tree rebuilt, so nothing stays.
 # Usage: pwsh tools/measure_upsampling.ps1 [-Passes 64] [-Warmup 8] [-Repeats 3]
 param([int]$Passes = 64, [int]$Warmup = 8, [int]$Repeats = 3)
@@ -55,8 +56,9 @@ $cases = @(
   @{ Scene = 'b1m'; Rec = 'b1m.arrec'; File = 'src/kernel/material/slot_resolve.h'
      Old = '    s = upsampled_eval(u, lam);'; New = '    s = spec_fill(Real(0.5)); u.scale = Real(0); if (u.scale != Real(0)) s = upsampled_eval(u, lam);' },
   @{ Scene = 'b_tx'; Rec = 's3_textured.arrec'; File = 'src/kernel/vm/ops/rgb_lift.h'
-     Old = 'const Spec s = op_rgb_lift(*vm.tables, vm.r + vm.b, SpectrumSemantic(vm.c), vm.ctx->lambda_t);'
-     New = 'const Spec s = spec_fill(Real(0.5));' })
+     Old = '  uint32_t flags = 0;'; New = "  (void)t; (void)rgb; (void)sem; (void)lam;`n  return spec_fill(Real(0.5));`n#if 0`n  uint32_t flags = 0;"
+     Old2 = '  return illuminant(*t.rgb2spec, t.observer, c, lam, &flags);'
+     New2 = "  return illuminant(*t.rgb2spec, t.observer, c, lam, &flags);`n#endif" })
 
 Write-Host 'baseline build'
 Build
@@ -67,6 +69,7 @@ foreach ($c in $cases) {
   Write-Host "constant-spectrum build: $($c.File)"
   try {
     Edit-Source $c.File $c.Old $c.New
+    if ($c.Old2) { Edit-Source $c.File $c.Old2 $c.New2 }
     Build
     $res[$c.Scene] = Bench $c.Rec
   } finally {
