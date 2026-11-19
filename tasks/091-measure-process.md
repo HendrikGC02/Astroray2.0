@@ -19,3 +19,4 @@ Budget: resets PROVISIONAL process rows.
 Depends on: 030, 010, 084.
 Size: S (scripts plus a result table); stop and report at 2x.
 Progress: startedMeasured (clean build 43.5 s, nvcc+cicc peak 508 MB at depth 8, configure 7.1-7.4 s, Blender 1.19-1.29 s, fast 6.2-8.5 s, gate 120.5-146.9 s, kernel part 15.5-16.7 s, ci 241-345 s, locks proven). B-07 and B-12 fast reset; B-09 kernel part blocked on check.ps1 constant, B-10 blocked by failing full, B-11 kept (no bpy suite yet); Catch2 skipped (no temporary deps entry).
+Measured and recorded (see PR Result): B-07, B-11 (7.5 min) and B-12 fast reset; B-09 kernel part stays 120 s, B-10 left to task 131; Catch2 skipped: needs a pinned deps.toml entry.
