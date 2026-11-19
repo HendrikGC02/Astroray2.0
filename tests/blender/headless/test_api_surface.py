@@ -4,9 +4,12 @@ import contextlib
 import importlib.util
 import io
 import os
+import sys
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import support  # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 
 spec = importlib.util.spec_from_file_location("api_surface", os.path.join(ROOT, "tools", "api_surface.py"))
@@ -48,4 +51,4 @@ class TestApiSurface(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    support.main()
