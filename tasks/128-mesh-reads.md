@@ -11,7 +11,7 @@ Do:
 4. Re-measure B-31 (S1, S2 cold and warm, 094's method) and V7b (095's harness): before/after tables; PR body Result: with commands.
 Acceptance: `pwsh tools/check.ps1 gate` passes; the headless suite passes under the bpy wheel (check ci); the PR body holds the tables.
 Look at: none.
-Canary: tasks/128.canary.patch must turn red: tests/blender/headless/test_mesh_direct.py "TestDirectEqualsApi.test_golden_triangulation_faces" "TestDirectEqualsApi.test_b1m" "TestDirectEqualsApi.test_positions_path" "TestLayoutCheck.test_good_layout_copies" "TestLayoutCheck.test_stride" "TestLayoutCheck.test_not_contiguous" "TestLayoutCheck.test_value" "TestLayoutCheck.test_attribute_type" tests/blender/headless/test_mesh_sync.py "TestMesh.test_missing_corner_vert_raises_with_version" tests/blender/headless/test_instances_sync.py "TestInstances.test_bulk_matrices_match_matrix_world" "TestInstances.test_plain_move_reads_only_the_moved_object" "TestInstances.test_instancer_move_walks_its_instances"
+Canary: tasks/128.canary.patch must turn red: tests/blender/headless/test_mesh_direct.py "TestDirectEqualsApi.test_golden_triangulation_faces" "TestDirectEqualsApi.test_b1m" "TestDirectEqualsApi.test_positions_path" "TestDirectEqualsApi.test_empty_and_vertex_only_meshes" "TestLayoutCheck.test_good_layout_copies" "TestLayoutCheck.test_stride" "TestLayoutCheck.test_not_contiguous" "TestLayoutCheck.test_value" "TestLayoutCheck.test_attribute_type" tests/blender/headless/test_mesh_sync.py "TestMesh.test_missing_corner_vert_raises_with_version" tests/blender/headless/test_instances_sync.py "TestInstances.test_bulk_matrices_match_matrix_world" "TestInstances.test_plain_move_reads_only_the_moved_object" "TestInstances.test_instancer_move_walks_its_instances" "TestInstances.test_move_of_an_object_that_is_also_instanced" "TestInstances.test_per_object_fields_follow_their_object"
 Budget: none added to the gate.
 Depends on: 094, 095.
 Size: M (about 300 lines); stop and report at 2x.
@@ -19,3 +19,4 @@ Progress:
 - started
 - lead ruling: element-pointer reads + memmove, no struct offsets; layout check per read (stride, contiguity, first/last values); d17's '.corner_vert' -> loops fallback replaced by the loud error (d17 joins Scope)
 - done: B-31 S2 full read 69.4 -> 15.2 ms/1M warm (cold 194 -> 102), plain move 9.0 -> 0.17 ms, instance loop 146 -> 83 ms/10k (still over 30); positions-only 2.75 -> 6.4 ms/1M into numpy (the per-read check); V7b S2 4.1/3.2 s -> 1.6/1.5 s (0.96x/0.87x Cycles), S1 3.0x/4.1x -> 1.8x/1.9x
+- review fixes: identities defined once in keys.py; tests for an instanced moved object, per-object gather, empty and vertex-only meshes (an empty mesh has no 'position': the read now skips empty arrays)
