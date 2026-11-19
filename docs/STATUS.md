@@ -4,15 +4,12 @@ Overwritten by the lead only. Live facts (branches, PRs, last gate) come from
 `tools/status.ps1` once it exists, never from this page.
 
 ## Phase
-Build phase. The owner signed off the planning records (O30) and asked for
-speed (O31): several implementers at once, review for kernel, physics, ABI and
-process diffs.
+Build phase. Records signed off (O30); speed asked for (O31): several implementers at once, review for
+kernel, physics, ABI and process diffs.
 
 ## Current milestone
-M1a "First pixels" (`docs/ROADMAP.md`): textured, lamp-lit meshes render
-progressively in the Blender 5.3 viewport and F12 on CUDA and CPU through the
-final C ABI, with every gate live from the first task. Open task files and
-their order: `tasks/README.md`.
+M1a "First pixels" (`docs/ROADMAP.md`): textured, lamp-lit meshes render progressively in the Blender 5.3
+viewport and F12 on CUDA and CPU through the final C ABI, every gate live. Open tasks: `tasks/README.md`.
 
 ## Open owner questions
 During M1a: deleting superseded records (0009 q4); exact JPEG decode parity with Blender (libjpeg-turbo) or ruling
@@ -32,6 +29,8 @@ None. Unowned follow-ups (a task that touches the area takes them):
   negative radiance before conversion (047).
 - Addon: translate.py copies RecordSlot ids, SEM_REFLECTANCE and TEX bits from C headers, guarded by a drift test;
   opsgen/abigen should export them (083). CMake's astroray_extension target is not in ALL (084). The build record prints `cuda=none` on CUDA runs (106).
+  An orthographic camera gives an all-black Rendered viewport (perspective is right); removing present.py's
+  bind/unbind_display_space_shader leaves V9 green: find where the view transform is applied (097).
 - Tests: check 14 passes a constant hero only via a NaN chi2 exception and misses a hero fixed in generate_camera;
   per-pixel analytic z 5.50 misses 1 % albedo errors on A1/a4_sphere (energy tests catch them) (078). Flaky once:
   `cpu_device/parallel_for rethrows`, `wavelengths/stratified lane positions`. Fault tests leave temp dirs.

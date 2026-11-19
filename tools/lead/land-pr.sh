@@ -11,7 +11,7 @@ wt=$(git worktree list --porcelain | awk -v b="refs/heads/task/$n-" '/^worktree 
 br=$(git worktree list --porcelain | awk -v b="refs/heads/task/$n-" '/^branch /{if (index($2,b)==1) {sub("refs/heads/","",$2); print $2}}' | head -1)
 [ -z "$wt" ] && { echo "no worktree for task $n"; exit 1; }
 for attempt in 1 2 3; do
-  (cd "$wt" && timeout 1500 pwsh -NoProfile -File /c/Astroray2.0/tools/land.ps1 prepare $n 2>&1 | tail -3) | tee /tmp/prep_$n.txt
+  (cd "$wt" && timeout 4800 pwsh -NoProfile -File /c/Astroray2.0/tools/land.ps1 prepare $n 2>&1 | tee /tmp/prepfull_$n.txt | tail -3) | tee /tmp/prep_$n.txt
   if ! grep -q "^PASS prepare" /tmp/prep_$n.txt; then
     # A failed prepare leaves its "(land)" commit (the task-file deletion) on the branch; undo it so the
     # implementer and the next attempt see the task file.
