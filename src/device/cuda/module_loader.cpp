@@ -165,7 +165,7 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
   if (p == nullptr || size < kEhdr) return "shorter than an ELF-64 header";
   if (p[0] != 0x7f || p[1] != 'E' || p[2] != 'L' || p[3] != 'F') return "no ELF magic";
   if (p[4] != 2 || p[5] != 1) return "not ELF-64 little-endian";
-  if (rd(p, 52, 2) < kEhdr) return "ELF header size below 64";
+  if (rd(p, 52, 2) != kEhdr) return "ELF header size not 64";
   const uint64_t phoff = rd(p, 32, 8), shoff = rd(p, 40, 8);
   const uint64_t phentsize = rd(p, 54, 2), phnum = rd(p, 56, 2);
   const uint64_t shentsize = rd(p, 58, 2), shnum = rd(p, 60, 2), shstrndx = rd(p, 62, 2);
@@ -193,15 +193,19 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
     if (type != 0 && type != 8 && !inside(rd(p, at + 24, 8), rd(p, at + 32, 8), size))
       return "section " + std::to_string(i) + " past the end";
   }
-  // Every section name starts inside the name table and ends with a NUL inside it.
+  // The name table is read whatever its type, so its bounds are checked here even when the loop
+  // above skipped it (a SHT_NULL entry); every section name starts inside it and ends with a NUL
+  // inside it. No pointer into the table is formed before its bounds hold.
   const size_t str_at = static_cast<size_t>(shoff + shstrndx * shentsize);
   const uint64_t str_off = rd(p, str_at + 24, 8), str_size = rd(p, str_at + 32, 8);
   if (rd(p, str_at + 4, 4) == 8) return "section name table has no file contents";
+  if (!inside(str_off, str_size, size)) return "section name table past the end";
+  const uint8_t* table = p + static_cast<size_t>(str_off);
+  const uint8_t* table_end = table + static_cast<size_t>(str_size);
   for (uint64_t i = 0; i < shnum; ++i) {
     const uint64_t name = rd(p, static_cast<size_t>(shoff + i * shentsize), 4);
     if (name >= str_size) return "section " + std::to_string(i) + " name outside the name table";
-    const uint8_t* s = p + str_off + name;
-    if (std::find(s, p + str_off + str_size, uint8_t{0}) == p + str_off + str_size)
+    if (std::find(table + static_cast<size_t>(name), table_end, uint8_t{0}) == table_end)
       return "section " + std::to_string(i) + " name not terminated";
   }
   return std::string();

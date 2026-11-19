@@ -250,61 +250,101 @@ TEST_CASE("device_failures/corrupt module image") {
 
 TEST_CASE("device_failures/cubin layout check refuses truncated images") {
   // The check before every cuModuleLoadData, on a real embedded cubin cut and edited in the ways a
-  // half-written or damaged file is. Offsets are the gABI ELF-64 layout (ch. 4): e_shoff at 40,
-  // e_phoff at 32, e_shentsize 58, e_shnum 60; sh_type at 4, sh_size at 32; p_filesz at 32.
+  // half-written or damaged file is. Offsets are the gABI ELF-64 layout (ch. 4): e_phoff at 32,
+  // e_shoff 40, e_ehsize 52, e_phentsize 54, e_phnum 56, e_shentsize 58, e_shnum 60, e_shstrndx 62;
+  // sh_name at 0, sh_type 4, sh_offset 24, sh_size 32; p_offset at 8, p_filesz 32.
   const ModuleImage clean = load_module_image("generate_camera");
   const std::vector<uint8_t>& b = clean.bytes;
   REQUIRE(b.size() > 256);
-  const auto defect = [](const std::vector<uint8_t>& v, size_t n) { return cubin_layout_defect(v.data(), n); };
-  const auto u64 = [&](size_t at) { uint64_t v = 0; std::memcpy(&v, b.data() + at, 8); return v; };
-  const auto u16 = [&](size_t at) { uint16_t v = 0; std::memcpy(&v, b.data() + at, 2); return uint64_t(v); };
-  CHECK(defect(b, b.size()) == "");
-  CHECK(cubin_layout_defect(nullptr, 0) == "shorter than an ELF-64 header");
-  // The header cut.
-  CHECK(defect(b, 63) == "shorter than an ELF-64 header");
-  // The program header table cut: the file ends one byte before the table does (checked first).
-  const uint64_t phoff = u64(32), phnum = u16(56);
+  // Every image is checked inside a zero-padded copy, so a broken check that reads past `n` reads
+  // zeros of this buffer and fails the case instead of crashing it.
+  const auto defect = [](const std::vector<uint8_t>& v, size_t n) {
+    std::vector<uint8_t> padded = v;
+    padded.resize(v.size() + 65536, 0);
+    return cubin_layout_defect(padded.data(), n);
+  };
+  const auto whole = [&](const std::vector<uint8_t>& v) { return defect(v, v.size()); };
+  const auto get = [](const std::vector<uint8_t>& v, size_t at, int bytes) {
+    uint64_t x = 0;
+    std::memcpy(&x, v.data() + at, size_t(bytes));
+    return x;
+  };
+  const auto put = [](std::vector<uint8_t>& v, size_t at, int bytes, uint64_t x) { std::memcpy(v.data() + at, &x, size_t(bytes)); };
+  const auto edited = [&](size_t at, int bytes, uint64_t x) {
+    std::vector<uint8_t> v = b;
+    put(v, at, bytes, x);
+    return v;
+  };
+  const size_t n = b.size();
+  const uint64_t phoff = get(b, 32, 8), phnum = get(b, 56, 2);
+  const uint64_t shoff = get(b, 40, 8), shent = get(b, 58, 2), shnum = get(b, 60, 2), shstrndx = get(b, 62, 2);
   REQUIRE(phnum > 0);
-  CHECK(defect(b, size_t(phoff + phnum * 56 - 1)) == "program header table past the end");
-  // The section header table cut, on a copy without program headers (which nvcc places after the
-  // section table, so they would be reported first).
-  const uint64_t shoff = u64(40), shent = u16(58), shnum = u16(60);
   REQUIRE(shnum > 2);
-  {
-    std::vector<uint8_t> v = b;
-    v[56] = 0;
-    v[57] = 0;
-    CHECK(defect(v, size_t(shoff + shnum * shent - 1)) == "section header table past the end");
-  }
-  // A section running past the end: the first section with file contents claims one byte too many.
-  size_t k = 1;
-  while (k < shnum) {
-    uint32_t type = 0;
-    std::memcpy(&type, b.data() + shoff + k * shent + 4, 4);
-    if (type != 0 && type != 8) break;
-    ++k;
-  }
+  REQUIRE(shstrndx > 0);
+  REQUIRE(shstrndx < shnum);
+  const auto sh = [&](uint64_t i) { return size_t(shoff + i * shent); };
+  const uint64_t str_off = get(b, sh(shstrndx) + 24, 8), str_size = get(b, sh(shstrndx) + 32, 8);
+  REQUIRE(str_size > 1);
+  REQUIRE(b[size_t(str_off + str_size - 1)] == 0);
+
+  CHECK(whole(b) == "");
+  CHECK(cubin_layout_defect(nullptr, 0) == "shorter than an ELF-64 header");
+  // Cuts: the header, the program header table (checked first), and the section header table on a
+  // copy without program headers (nvcc places them after the section table).
+  CHECK(defect(b, 63) == "shorter than an ELF-64 header");
+  CHECK(defect(b, size_t(phoff + phnum * 56 - 1)) == "program header table past the end");
+  CHECK(defect(edited(56, 2, 0), size_t(shoff + shnum * shent - 1)) == "section header table past the end");
+  // Header fields.
+  CHECK(whole(edited(52, 2, 63)) == "ELF header size not 64");
+  CHECK(whole(edited(52, 2, 65)) == "ELF header size not 64");
+  CHECK(whole(edited(54, 2, 55)) == "program header entry below 56 bytes");
+  CHECK(whole(edited(58, 2, 63)) == "section header entry below 64 bytes");
+  CHECK(whole(edited(60, 2, 0)) == "extended ELF numbering");  // e_shnum 0 with e_shoff set
+  CHECK(whole(edited(62, 2, 0xffff)) == "extended ELF numbering");  // SHN_XINDEX
+  CHECK(whole(edited(62, 2, shnum)) == "section name table index out of range");
+  CHECK(whole(edited(62, 2, 0)) == "section name table index out of range");
+  // A section with file contents (not the name table) running past the end, by one byte and by an
+  // offset near 2^64 whose end wraps around to a small number.
+  uint64_t k = 1;
+  while (k < shnum && (k == shstrndx || get(b, sh(k) + 4, 4) == 0 || get(b, sh(k) + 4, 4) == 8)) ++k;
   REQUIRE(k < shnum);
+  const std::string past_k = "section " + std::to_string(k) + " past the end";
+  CHECK(whole(edited(sh(k) + 32, 8, uint64_t(n) - get(b, sh(k) + 24, 8) + 1)) == past_k);
   {
-    std::vector<uint8_t> v = b;
-    const size_t at = size_t(shoff + k * shent);
-    const uint64_t over = uint64_t(v.size()) - u64(at + 24) + 1;
-    std::memcpy(v.data() + at + 32, &over, 8);
-    CHECK(defect(v, v.size()) == "section " + std::to_string(k) + " past the end");
+    std::vector<uint8_t> v = edited(sh(k) + 24, 8, ~uint64_t(0) - 7);  // 2^64 - 8
+    put(v, sh(k) + 32, 8, 16);
+    CHECK(whole(v) == past_k);
   }
-  // A segment running past the end.
+  // A segment running past the end, by one byte and by a size whose end wraps around.
+  const uint64_t p_off = get(b, size_t(phoff) + 8, 8);
+  CHECK(whole(edited(size_t(phoff) + 32, 8, uint64_t(n) - p_off + 1)) == "segment 0 past the end");
+  CHECK(whole(edited(size_t(phoff) + 32, 8, (~uint64_t(0) - p_off) + 9)) == "segment 0 past the end");
+  // The name table: as a string table its bounds are the section loop's; typed SHT_NULL it is
+  // skipped there and must still be bounded before any name is read.
+  const std::string past_str = "section " + std::to_string(shstrndx) + " past the end";
+  CHECK(whole(edited(sh(shstrndx) + 24, 8, n)) == past_str);
+  CHECK(whole(edited(sh(shstrndx) + 32, 8, n - str_off + 1)) == past_str);
   {
-    std::vector<uint8_t> v = b;
-    const size_t at = size_t(u64(32));
-    const uint64_t over = uint64_t(v.size()) - u64(at + 8) + 1;
-    std::memcpy(v.data() + at + 32, &over, 8);
-    CHECK(defect(v, v.size()) == "segment 0 past the end");
+    std::vector<uint8_t> v = edited(sh(shstrndx) + 4, 4, 0);
+    CHECK(whole(v) == "");  // in bounds, the type alone is no defect
+    put(v, sh(shstrndx) + 32, 8, n - str_off + 1);
+    CHECK(whole(v) == "section name table past the end");
+    std::vector<uint8_t> w = edited(sh(shstrndx) + 4, 4, 0);
+    put(w, sh(shstrndx) + 24, 8, n);
+    CHECK(whole(w) == "section name table past the end");
+  }
+  CHECK(whole(edited(sh(shstrndx) + 4, 4, 8)) == "section name table has no file contents");
+  // Names: one starting past the table, one whose NUL is gone.
+  CHECK(whole(edited(sh(0), 4, str_size)) == "section 0 name outside the name table");
+  {
+    std::vector<uint8_t> v = edited(sh(0), 4, str_size - 1);
+    v[size_t(str_off + str_size - 1)] = 'x';
+    CHECK(whole(v) == "section 0 name not terminated");
   }
   // The half file dev_reload writes, and the injected damage, are both refused.
-  CHECK(defect(b, b.size() / 2) != "");
-  CHECK(cubin_layout_defect(load_module_image("generate_camera", true).bytes.data(), b.size()) == "no ELF magic");
+  CHECK(defect(b, n / 2) != "");
+  CHECK(cubin_layout_defect(load_module_image("generate_camera", true).bytes.data(), n) == "no ELF magic");
 }
-
 TEST_CASE("device_failures/old driver refused") {
   {
     Hook h("DRIVER_VERSION", "12080");  // CUDA 12.8: below R590's 13.1
