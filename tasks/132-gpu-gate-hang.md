@@ -1,0 +1,17 @@
+# 132 astroray_tests_gpu --tier=gate hung once after "agree cancel (ii)"
+Goal: during 131's first `check full`, the gate's `gpu gate tests` step hung for 28 minutes at 0 % CPU and 0 % GPU (11 threads) right after printing "agree cancel (ii) nofma vs cpu float ... pass", i.e. inside agree/fma detector's second run_gpu (the production agree_pure module, ar_agree_cancel); the same step had passed 20 minutes earlier and the diff under test was Python only -> reproduce, attribute and fix the hang, or show with numbers that it does not reproduce and add the instrumentation that will catch it next time.
+Read first: tests/gpu/test_agree_pure.cpp (agree/fma detector, run_gpu, prod_module, nofma_module), src/device/cuda/module_loader.cpp (read_file with full sharing since 108, load_image), src/device/cuda/cuda_device.cpp (module loading, dev kernel reload poll), 108's PR body (`gh pr view 89`: a truncated cubin once hung cuModuleLoadData in the driver), 0002 D15 (failure containment, watchdogs).
+Scope: tests/gpu/ (the agreement harness: timeouts, per-case timestamps), src/device/cuda/ (only if the cause is there), tools/check.ps1 (a per-step timeout for the GPU test executables if none exists, failing loudly with the last case printed).
+Out of scope: changing agreement thresholds or the cases themselves.
+Reference: CUDA Driver API (cuModuleLoadData, synchronisation); 0002 D15.
+Do:
+1. Reproduce: run `astroray_tests_gpu --tier=gate` in a loop (at least 100 iterations, under the machine lock, while another worktree builds, as when it hung) and `--test-case=agree/fma detector` alone 500 times; record any hang with the last case and the loaded module paths and sizes.
+2. If it reproduces, attribute it (a module file read while being written by a build in the same out/bin/kernels, a driver hang in cuModuleLoadData, a lost synchronisation) and fix the cause; if it does not, report the numbers.
+3. Either way: the GPU test steps in check.ps1 get a timeout (derived from the step's measured time with a wide factor, stated) that fails loudly naming the last case started, so a hang costs minutes, not half an hour.
+Acceptance: `pwsh tools/check.ps1 gate` passes; the PR body holds the reproduction numbers and the outcome.
+Look at: none.
+Canary: tasks/132.canary.patch must turn red: a test of the timeout (name it in land format), or "none: measurement and tooling only" with the lead's agreement if no test changes.
+Budget: none added.
+Depends on: none.
+Size: S; stop and report at 2x.
+Progress:

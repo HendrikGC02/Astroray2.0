@@ -49,7 +49,7 @@ State for the next lead. Agent ids do not carry across sessions; a task still op
 implementer on its existing branch and worktree, briefed from this section and its task file.
 - Landed overnight: 083 (#67), 075 (#68), 078 (#69), 084 (#70), 106 (#71), 110 (#72), 076 (#73), 089 (#74),
   107 (#75), 085 (#76), 090 (#77), 093 (#78), 077 (#79), 099 (#80), 118 (#81), 121 (#82), 086 (#83), 111 (#84),
-  109 (#85), 119 (#86), 097 (#87), 087 (#88), 108 (#89), 092 (#90), 120 (#91), 094 (#92), 122 (#93), 123 (#94), 095 (#95), 125 (#96), 124 (#97), 128 (#98), 126 (#99), 096 (#100), 129 (#101). Rulings 76-82 added. 120's dropped graph attempt is kept on the local branch keep/120-graphs-B.
+  109 (#85), 119 (#86), 097 (#87), 087 (#88), 108 (#89), 092 (#90), 120 (#91), 094 (#92), 122 (#93), 123 (#94), 095 (#95), 125 (#96), 124 (#97), 128 (#98), 126 (#99), 096 (#100), 129 (#101), 091 (#102), 130 (#103). Rulings 76-82 added. 120's dropped graph attempt is kept on the local branch keep/120-graphs-B.
 - In flight (branches task/NNN-*): 130 (interaction pacing), 127 (V7a capture: parked on an owner decision, see
   STATUS; branch kept in its worktree, do not land). Not started: 091 (needs a quiet machine), 100.
 - Ready next: 122 (sort by distinct programs, ruling 80) and 123 (between-pass idle); 124-126 after 094; then
@@ -88,5 +88,7 @@ implementer on its existing branch and worktree, briefed from this section and i
   process to exit, not for log text.
 - A task that adds a tools/lib switch its own canary needs (085's -Gui) cannot prepare with main's
   land.ps1; run the worktree's tools/land.ps1 prepare, then open the PR and merge with main's.
+- A stopped agent's worktree stays locked by the harness ("claude agent ... pid N"): land cleanup then fails; run
+  `git worktree remove -f -f <dir>` and `git branch -D task/NNN-*` after the merge.
 - Stale worktree directories with no git registration: .claude/worktrees/agent-a3a823bde1b1e2a0c,
   agent-a61c36ff96e523f48, agent-a631435169fa2c847 (safe to delete after a look).
