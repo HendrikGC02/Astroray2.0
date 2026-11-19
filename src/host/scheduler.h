@@ -105,7 +105,7 @@ class Scheduler {
   uint64_t permute_state_ = 0;
   std::vector<uint32_t> launched_;  // stages launched in the current step, in order
   DeviceBuffer path_buf_, shadow_buf_, main_queue_buf_, shadow_queue_buf_, step_buf_, counts_buf_, sort_queue_buf_,
-      sort_counts_buf_, kg_buf_, soa_buf_;
+      sort_counts_buf_, kg_buf_, soa_buf_, identity_buf_;
   ar::PathStateSoA path_{};
   ar::ShadowItemSoA shadow_{};
 };

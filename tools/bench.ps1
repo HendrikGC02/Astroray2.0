@@ -15,6 +15,8 @@ param(
   [string]$Device = 'cuda'
 )
 $ErrorActionPreference = 'Stop'
+# `pwsh -File bench.ps1 -Scene b1m,b5m` binds the list as the one string "b1m,b5m": split it.
+$Scene = @($Scene | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 . (Join-Path $PSScriptRoot 'lib/lock.ps1')
