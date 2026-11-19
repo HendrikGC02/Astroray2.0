@@ -6,16 +6,21 @@
 #include <doctest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <future>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "common/stat.h"
@@ -583,6 +588,68 @@ TEST_CASE("light_sampler/worker pool parallel_for covers every index once and re
                     if (first == 500) throw std::runtime_error("chunk 50");
                   }),
                   std::runtime_error);
+}
+
+TEST_CASE("light_sampler/worker pool parallel_for runs while every worker is blocked") {
+  // Scene::lights calls parallel_for under locks that queued jobs may wait for: with every worker
+  // stuck behind such a lock, the caller alone must finish the loop. Bounded: the loop runs on its
+  // own thread and the lock is released after the check either way.
+  astroray::ContextState ctx;
+  WorkerPool pool(ctx, 3);
+  std::mutex held;
+  std::unique_lock<std::mutex> hold(held);
+  for (unsigned i = 0; i < pool.workers(); ++i) pool.submit([&] { std::lock_guard<std::mutex> l(held); });
+  std::vector<int> hits(5000, 0);
+  const WorkerPool::Body body = [&](uint32_t first, uint32_t last) {
+    for (uint32_t i = first; i < last; ++i) ++hits[i];
+  };
+  auto done = std::async(std::launch::async, [&] { pool.parallel_for(uint32_t(hits.size()), 50, body); });
+  const bool finished = done.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+  hold.unlock();
+  done.get();
+  CHECK(finished);
+  CHECK(std::count(hits.begin(), hits.end(), 1) == int(hits.size()));
+  pool.shutdown();  // the blocked jobs use locals of this scope
+}
+
+TEST_CASE("light_sampler/worker pool parallel_for throws on a poisoned context") {
+  // A worker's chunk never finishes (as after a fault): on a poisoned context the caller throws
+  // instead of waiting for it. Bounded as above; the gate opens after the check either way.
+  astroray::ContextState ctx;
+  WorkerPool pool(ctx, 2);
+  ctx.poison_message = "test poison";
+  ctx.poisoned.store(true, std::memory_order_release);
+  std::mutex m;
+  std::condition_variable cv;
+  bool worker_in = false, open = false;
+  std::thread::id loop_id;
+  const WorkerPool::Body body = [&](uint32_t, uint32_t) {
+    std::unique_lock<std::mutex> l(m);
+    if (std::this_thread::get_id() == loop_id) {
+      cv.wait_for(l, std::chrono::seconds(10), [&] { return worker_in; });  // let a worker claim one
+    } else {
+      worker_in = true;
+      cv.notify_all();
+      cv.wait(l, [&] { return open; });
+    }
+  };
+  auto done = std::async(std::launch::async, [&] {
+    {
+      std::lock_guard<std::mutex> l(m);
+      loop_id = std::this_thread::get_id();
+    }
+    pool.parallel_for(64, 1, body);
+  });
+  const bool finished = done.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+  {
+    std::lock_guard<std::mutex> l(m);
+    open = true;
+  }
+  cv.notify_all();
+  CHECK(finished);
+  CHECK_THROWS_AS(done.get(), std::runtime_error);
+  CHECK(worker_in);
+  pool.shutdown();  // a worker may still be inside body, which uses locals of this scope
 }
 
 }  // TEST_SUITE("fast")

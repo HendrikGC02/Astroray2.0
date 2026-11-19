@@ -93,16 +93,27 @@ void WorkerPool::parallel_for(uint32_t count, uint32_t chunk, const Body& body) 
       }
       std::lock_guard<std::mutex> lock(l.mutex);
       if (err && !l.error) l.error = err;
-      if (++l.done == l.chunks) l.done_cv.notify_all();
+      ++l.done;
+      l.done_cv.notify_all();
     }
   };
+  // Waits until `claimed` chunks have finished. The wake-up slice only bounds how long a faulted
+  // worker can go unnoticed.
+  const auto wait_done = [&](uint32_t claimed) {
+    std::unique_lock<std::mutex> lock(loop->mutex);
+    while (!loop->done_cv.wait_for(lock, std::chrono::milliseconds(20), [&] { return loop->done >= claimed; }))
+      if (ctx_.poisoned.load(std::memory_order_acquire)) throw std::runtime_error(ctx_.poison_message);
+  };
   const unsigned helpers = std::min<unsigned>(workers(), loop->chunks - 1);
-  for (unsigned i = 0; i < helpers; ++i) submit([loop, run] { run(*loop); });
+  try {
+    for (unsigned i = 0; i < helpers; ++i) submit([loop, run] { run(*loop); });
+  } catch (...) {
+    // Close the loop so no queued helper can reach body after we return, finish what was claimed.
+    wait_done(std::min(loop->next.exchange(loop->chunks), loop->chunks));
+    throw;
+  }
   run(*loop);
-  std::unique_lock<std::mutex> lock(loop->mutex);
-  // The wake-up slice only bounds how long a faulted worker can go unnoticed.
-  while (!loop->done_cv.wait_for(lock, std::chrono::milliseconds(20), [&] { return loop->done == loop->chunks; }))
-    if (ctx_.poisoned.load(std::memory_order_acquire)) throw std::runtime_error(ctx_.poison_message);
+  wait_done(loop->chunks);
   if (loop->error) std::rethrow_exception(loop->error);
 }
 
