@@ -18,5 +18,5 @@ Size: S; stop and report at 2x.
 Progress:
 - started: branch task/132-gpu-gate-hang from origin/main 4c3f048.
 - reproduced: gate x36 (CPU gate tests alongside), hang at run 36 in dev_reload/corrupted module keeps previous (half cubin into cuModuleLoadData); fma detector alone x500, no hang. The original "after agree cancel (ii)" was stdout buffering: report() was the last fflush.
-- fix: ELF-64 layout check before every cuModuleLoadData (gABI ch. 4); dev_reload and device_failures assert the new detail; per-case flushed start lines; check.ps1 GPU steps time-limited (gate 150 s, full 60 s, 10x measured).
+- fix: ELF-64 layout check before every cuModuleLoadData (gABI ch. 4); dev_reload and device_failures assert the new detail; per-case flushed start lines; check.ps1 GPU steps time-limited (gate 270 s, full 60 s, 10x measured).
 - Do 4: the default-cache case points OPTIX_CACHE_PATH at a private directory and requires OptiX to report it. After the fix: gate x100, no hang (12.6-24.1 s).

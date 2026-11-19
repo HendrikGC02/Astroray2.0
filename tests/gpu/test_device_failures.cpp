@@ -295,6 +295,8 @@ TEST_CASE("device_failures/cubin layout check refuses truncated images") {
   CHECK(defect(b, size_t(phoff + phnum * 56 - 1)) == "program header table past the end");
   CHECK(defect(edited(56, 2, 0), size_t(shoff + shnum * shent - 1)) == "section header table past the end");
   // Header fields.
+  CHECK(whole(edited(4, 1, 1)) == "not ELF-64 little-endian");  // ELFCLASS32
+  CHECK(whole(edited(5, 1, 2)) == "not ELF-64 little-endian");  // ELFDATA2MSB
   CHECK(whole(edited(52, 2, 63)) == "ELF header size not 64");
   CHECK(whole(edited(52, 2, 65)) == "ELF header size not 64");
   CHECK(whole(edited(54, 2, 55)) == "program header entry below 56 bytes");

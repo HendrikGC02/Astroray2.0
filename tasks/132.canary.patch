@@ -13,7 +13,7 @@ index 8e5e1f9..9e8f4b3 100644
 +      if (!defect.empty()) throw DeviceError(cubin_layout_message(std::string(), defect));
        // The loader's own result, short: the report detail holds 128 bytes.
 diff --git a/src/device/cuda/module_loader.cpp b/src/device/cuda/module_loader.cpp
-index 214c7d8..4c1d2b0 100644
+index 214c7d8..a5f28b2 100644
 --- a/src/device/cuda/module_loader.cpp
 +++ b/src/device/cuda/module_loader.cpp
 @@ -154,3 +154,3 @@ uint64_t rd(const uint8_t* p, size_t at, int bytes) {
@@ -21,21 +21,25 @@ index 214c7d8..4c1d2b0 100644
 -bool inside(uint64_t off, uint64_t len, size_t size) { return off <= size && len <= size - off; }
 +bool inside(uint64_t off, uint64_t len, size_t size) { return off + len <= size; }
  
-@@ -180,3 +180,3 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
+@@ -166,3 +166,2 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
+   if (p[0] != 0x7f || p[1] != 'E' || p[2] != 'L' || p[3] != 'F') return "no ELF magic";
+-  if (p[4] != 2 || p[5] != 1) return "not ELF-64 little-endian";
+   if (rd(p, 52, 2) != kEhdr) return "ELF header size not 64";
+@@ -180,3 +179,3 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
        const size_t at = static_cast<size_t>(phoff + i * phentsize);
 -      if (!inside(rd(p, at + 8, 8), rd(p, at + 32, 8), size)) return "segment " + std::to_string(i) + " past the end";
 +      if (!inside(rd(p, at + 8, 8), 0, size)) return "segment " + std::to_string(i) + " past the end";
      }
-@@ -188,3 +188,2 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
+@@ -188,3 +187,2 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
    if (!inside(shoff, shnum * shentsize, size)) return "section header table past the end";
 -  if (shstrndx == 0 || shstrndx >= shnum) return "section name table index out of range";
    for (uint64_t i = 0; i < shnum; ++i) {
-@@ -192,3 +191,3 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
+@@ -192,3 +190,3 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
      const uint64_t type = rd(p, at + 4, 4);
 -    if (type != 0 && type != 8 && !inside(rd(p, at + 24, 8), rd(p, at + 32, 8), size))
 +    if (type != 0 && type != 8 && !inside(rd(p, at + 24, 8), 0, size))
        return "section " + std::to_string(i) + " past the end";
-@@ -201,3 +200,2 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
+@@ -201,3 +199,2 @@ std::string cubin_layout_defect(const uint8_t* p, size_t size) {
    if (rd(p, str_at + 4, 4) == 8) return "section name table has no file contents";
 -  if (!inside(str_off, str_size, size)) return "section name table past the end";
    const uint8_t* table = p + static_cast<size_t>(str_off);
