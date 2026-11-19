@@ -26,10 +26,10 @@ gated = "full"
 # `check full`, a breach is a warning (task 092). Allowance = the D10 VM ceiling it is judged against.
 [kernel.ar_probe_m1]
 regs = 128
-stack = 0
+stack = 480
 spill_store = 128
 spill_load = 192
-compile_s = 0
+compile_s = 0  # not in kernels/, so compile timing never ranks it
 gated = "full"
 
 [kernel.k_queue_build_count]

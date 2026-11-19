@@ -53,7 +53,7 @@ if ($LASTEXITCODE -ne 0) { throw 'scene recordings' }
 
 $cases = @(
   @{ Scene = 'b1m'; Rec = 'b1m.arrec'; File = 'src/kernel/material/slot_resolve.h'
-     Old = '    s = upsampled_eval(u, lam);'; New = '    s = spec_fill(Real(0.5)); (void)u;' },
+     Old = '    s = upsampled_eval(u, lam);'; New = '    s = spec_fill(Real(0.5)); u.scale = Real(0); if (u.scale != Real(0)) s = upsampled_eval(u, lam);' },
   @{ Scene = 'b_tx'; Rec = 's3_textured.arrec'; File = 'src/kernel/vm/ops/rgb_lift.h'
      Old = 'const Spec s = op_rgb_lift(*vm.tables, vm.r + vm.b, SpectrumSemantic(vm.c), vm.ctx->lambda_t);'
      New = 'const Spec s = spec_fill(Real(0.5));' })
