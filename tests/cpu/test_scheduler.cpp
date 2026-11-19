@@ -234,6 +234,7 @@ TEST_CASE("scheduler/production CPU stages are registered") {
   CHECK(dev.kernel_fn(KernelId::QUEUE_BUILD_SCAN) == &cpu_queue_build_scan);
   CHECK(dev.kernel_fn(KernelId::QUEUE_BUILD_SCATTER) == &cpu_queue_build_scatter);
   CHECK(dev.kernel_fn(KernelId::SORT_COUNT) == &cpu_sort_count);
+  CHECK(dev.kernel_fn(KernelId::SORT_SCAN) == &cpu_sort_scan);
   CHECK(dev.kernel_fn(KernelId::SORT_SCATTER) == &cpu_sort_scatter);
   // And only those: nothing else is bound, and a second registration is refused.
   CHECK(dev.stage_fn(Stage::SHADE_SURFACE) == nullptr);

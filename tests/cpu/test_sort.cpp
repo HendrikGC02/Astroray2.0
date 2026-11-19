@@ -90,6 +90,7 @@ struct Rig {
     kg.path = &path, kg.shadow = &shadow, kg.step_table = &table, kg.scene = &scene;
     kg.main_queue = queue.data(), kg.sort_queue = sorted.data(), kg.sort_counts = counts.data();
     dev.register_kernel(KernelId::SORT_COUNT, &cpu_sort_count);
+    dev.register_kernel(KernelId::SORT_SCAN, &cpu_sort_scan);
     dev.register_kernel(KernelId::SORT_SCATTER, &cpu_sort_scatter);
     kg_buf = dev.allocate(LedgerCategory::TABLES, sizeof kg, {1, 1});
     dev.upload(kg_buf, 0, &kg, sizeof kg);
@@ -100,6 +101,7 @@ struct Rig {
   void run() {
     const uint32_t grid = ar::sort_grid(count);
     dev.launch(KernelId::SORT_COUNT, grid);
+    dev.launch(KernelId::SORT_SCAN, ar::sort_scan_grid(count));
     dev.launch(KernelId::SORT_SCATTER, grid);
   }
 
@@ -118,6 +120,70 @@ std::vector<uint32_t> expected_order(const Rig& r) {
   std::stable_sort(v.begin(), v.end(), [&](uint32_t a, uint32_t b) { return r.material_of(a) < r.material_of(b); });
   return v;
 }
+
+// A scene with kWideHeaders materials, all of them hit: one mesh whose triangle t has slot
+// t % kWideSlots; instance 0's slice maps slot s to header s % kWideHeaders, instance 1 has no
+// slice (the default material, id kWideHeaders). Used with a segment of over a million items,
+// so the scan spans many scan tiles and every material run crosses tile boundaries.
+constexpr uint32_t kWideHeaders = 300;
+constexpr uint32_t kWideSlots = 512;
+constexpr uint32_t kWideTriangles = 1024;
+
+struct WideRig {
+  ContextState ctx;
+  Ledger ledger;
+  ThreadPool pool;
+  CpuDevice dev;
+  std::vector<int32_t> tri_slot;
+  ar::DeviceMeshView mesh{};
+  std::vector<ar::DeviceInstanceRecord> instances{2};
+  std::vector<uint32_t> slots;
+  std::vector<ar::MaterialHeader> headers = std::vector<ar::MaterialHeader>(kWideHeaders, ar::MaterialHeader{0, 0, 0, 0});
+  ar::SceneData scene{};
+  std::vector<uint32_t> hit_inst, hit_prim, queue, sorted, counts;
+  ar::StepTable table{};
+  ar::PathStateSoA path{};
+  ar::ShadowItemSoA shadow{};
+  ar::KernelGlobals kg{};
+  DeviceBuffer kg_buf;
+  uint32_t count;
+
+  WideRig(uint32_t segment_count, uint64_t seed) : pool(ctx, 8), dev(ledger, pool), count(segment_count) {
+    for (uint32_t t = 0; t < kWideTriangles; ++t) tri_slot.push_back(int32_t(t % kWideSlots));
+    for (uint32_t s = 0; s < kWideSlots; ++s) slots.push_back(s % kWideHeaders);
+    mesh.tri_material = uint64_t(reinterpret_cast<uintptr_t>(tri_slot.data())), mesh.triangle_count = kWideTriangles;
+    for (auto& r : instances) r = {}, r.light_index = ar::kNoLightIndex;
+    instances[0].material_count = kWideSlots;
+    scene.instances = instances.data(), scene.instance_count = 2;
+    scene.meshes = &mesh, scene.mesh_count = 1;
+    scene.material_slots = slots.data(), scene.material_headers = headers.data();
+    scene.material_header_count = kWideHeaders;
+    Rng rng{seed};
+    hit_inst.resize(count), hit_prim.resize(count);
+    for (uint32_t i = 0; i < count; ++i) hit_inst[i] = rng.next() % 8 == 0 ? 1u : 0u, hit_prim[i] = rng.next() % kWideTriangles;
+    queue.assign(kSegmentStart + count, kSentinel);
+    for (uint32_t i = 0; i < count; ++i) queue[kSegmentStart + i] = i;
+    for (uint32_t i = count; i > 1; --i) std::swap(queue[kSegmentStart + i - 1], queue[kSegmentStart + rng.next() % i]);
+    sorted.assign(count + 1, kSentinel);
+    counts.assign(size_t(2) * ar::queue_tiles(count) * (kWideHeaders + 1), 0);
+    table.stage[uint32_t(Stage::SHADE_SURFACE)].start = kSegmentStart;
+    table.stage[uint32_t(Stage::SHADE_SURFACE)].count = count;
+    path.hit_inst = hit_inst.data(), path.hit_prim = hit_prim.data();
+    kg.path = &path, kg.shadow = &shadow, kg.step_table = &table, kg.scene = &scene;
+    kg.main_queue = queue.data(), kg.sort_queue = sorted.data(), kg.sort_counts = counts.data();
+    dev.register_kernel(KernelId::SORT_COUNT, &cpu_sort_count);
+    dev.register_kernel(KernelId::SORT_SCAN, &cpu_sort_scan);
+    dev.register_kernel(KernelId::SORT_SCATTER, &cpu_sort_scatter);
+    kg_buf = dev.allocate(LedgerCategory::TABLES, sizeof kg, {1, 1});
+    dev.upload(kg_buf, 0, &kg, sizeof kg);
+    dev.set_kernel_globals(kg_buf);
+  }
+  ~WideRig() { dev.free(kg_buf); }
+
+  uint32_t material_of(uint32_t slot) const {
+    return hit_inst[slot] == 1 ? kWideHeaders : slots[uint32_t(tri_slot[hit_prim[slot]])];
+  }
+};
 
 }  // namespace
 
@@ -147,6 +213,32 @@ TEST_CASE("sort/single tile and exact tile boundary") {
     const std::vector<uint32_t> want = expected_order(r);
     for (uint32_t i = 0; i < n; ++i) CHECK(r.sorted[i] == want[i]);
   }
+}
+
+TEST_CASE("sort/300 materials and a million items match a bucket reference") {
+  // 1,000,003 items: 977 tiles (the last partial), 31 scan tiles; 301 bins. The reference
+  // appends each segment item to its material's bucket in segment order and concatenates the
+  // buckets: the stable counting sort's definition, computed without tiles or the scan.
+  const uint32_t n = 1000003;
+  WideRig r(n, 61);
+  const uint32_t grid = ar::sort_grid(n);
+  r.dev.launch(KernelId::SORT_COUNT, grid);
+  r.dev.launch(KernelId::SORT_SCAN, ar::sort_scan_grid(n));
+  r.dev.launch(KernelId::SORT_SCATTER, grid);
+  std::vector<std::vector<uint32_t>> bucket(kWideHeaders + 1);
+  for (uint32_t i = 0; i < n; ++i) {
+    const uint32_t slot = r.queue[kSegmentStart + i];
+    bucket[r.material_of(slot)].push_back(slot);
+  }
+  uint32_t at = 0, wrong = 0, empty = 0;
+  for (const std::vector<uint32_t>& b : bucket) {
+    empty += b.empty();
+    for (uint32_t s : b) wrong += r.sorted[at++] != s;
+  }
+  CHECK(at == n);
+  CHECK(wrong == 0);
+  CHECK(empty == 0);                   // every material and the default bin occur
+  CHECK(r.sorted[n] == kSentinel);     // nothing written past the segment
 }
 
 TEST_CASE("sort/no material tables keeps the segment order") {

@@ -90,7 +90,7 @@ struct KernelGlobals {
   uint32_t* queue_counts;
 
   // The material sort (stages/sort.h): the sorted copy of the SHADE_SURFACE segment and the
-  // per-tile histograms and offset scratch. Written only by sort_count and sort_scatter.
+  // per-tile histograms and offset scratch. Written only by sort_count, sort_scan and sort_scatter.
   uint32_t* sort_queue;
   uint32_t* sort_counts;
 

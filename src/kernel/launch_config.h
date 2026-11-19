@@ -54,6 +54,7 @@ struct LaunchRow {
   X(k_queue_build_scan, 256, 0, 0, OTHER) \
   X(k_queue_build_scatter, 256, 0, 0, OTHER) \
   X(k_sort_count, 256, 0, 0, OTHER) \
+  X(k_sort_scan, 256, 0, 0, OTHER) \
   X(k_sort_scatter, 256, 0, 0, OTHER) \
   X(k_route_hit, 256, 0, 0, OTHER) \
   X(k_film_resolve, 256, 1, 0, OTHER) \
