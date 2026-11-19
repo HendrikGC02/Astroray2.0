@@ -11,7 +11,7 @@ Do:
 4. Remove the two entries from KNOWN_BREACHES; gui_main_thread_timing.py passes with B-21 unchanged.
 Acceptance: `pwsh tools/check.ps1 gate` passes; `Invoke-ArBlender -Gui -Script tests/blender/gui_main_thread_timing.py` passes with no known breaches; the PR body holds the before and after call times.
 Look at: none.
-Canary: tasks/124.canary.patch must turn red: tests/abi/test_scene_api.py "TestSceneApi.test_destroyed_scene_handle_fails_loudly", tests/abi/test_scene_api.py "TestSceneApi.test_context_destroy_waits_for_pending_scene_frees", tests/blender/gui_main_thread_timing.py "TestMainThreadTiming.test_no_call_exceeds_b21"
+Canary: tasks/124.canary.patch must turn red: tests/abi/test_scene_api.py "TestSceneApi.test_destroyed_scene_handle_fails_loudly", tests/abi/test_scene_api.py "TestSceneApi.test_context_destroy_waits_for_pending_scene_frees", tests/blender/gui_main_thread_timing.py "TestMainThreadTiming.test_no_call_exceeds_b21", tests/blender/gui_main_thread_timing.py "TestMainThreadTiming.test_exemptions_are_calls_that_copy_host_data", tests/blender/gui_main_thread_timing.py "TestMainThreadTiming.test_first_call_exemption_covers_only_the_first"
 Budget: none added.
 Depends on: 094.
 Size: M (about 250 lines); stop and report at 2x.
@@ -21,4 +21,5 @@ Progress:
 - Per-context reaper thread (src/host/scene/reaper.*) frees destroyed scenes FIFO; the handle becomes a tombstone (AR_ERR_INVALID_ARGUMENT, "destroyed") until ar_context_destroy, which drains first. No new status code (lead).
 - RULINGS 81 (lead): D2.8's synchronous CUDA check stays; B-21 does not count the once-per-process driver init. CPU contexts skip the CUDA probe; the GUI test exempts only the first ar_context_create (EXEMPT_FIRST_CALL).
 - GUI test (lead, option A): step_closing waits for the "scene freed" log line before shutdown, so ar_context_destroy is not timed against a pending free.
+- Review fixes: gate hook ASTRORAY_TEST_REAPER_HOLD (read at context create) holds frees until the context destroy, so the drain test is deterministic; the first-call filter is a function the GUI test checks on a synthetic list.
 - cache_dir = extension_path_user(__package__, create=True) (0007 d45): OptiX module 85.1-90.7 ms on the first Blender start, 0.9 ms on the second.
