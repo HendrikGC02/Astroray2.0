@@ -1,7 +1,7 @@
 # 130 Interaction pass pacing: the publish gap is waited before each pass (V12 latency, B-14 headroom)
 Goal: 096 found session.cpp sleeps kInteractionPublishGapS (1/60 s) before each interaction pass, so an interaction cycle is about 16.7 ms of waiting plus the pass: B-1M holds 32/s only thanks to that serial wait's arithmetic, A1 (6.3 ms pass) gets 40/s instead of the B-34 cap of 60, and tests/blender/gui_latency.py's view-change latency and orbit-gap cases are red on every scene (b1m 19.9-39.4 ms against a ~33 ms bound); F12 returns 180-430 ms after the engine pauses because ar_session_wait does not wake on PAUSED (100 ms timeout) -> pace publishing, not rendering: passes run back to back and the publish gap only delays presenting a finished frame; ar_session_wait wakes on PAUSED.
 Read first: 0007 d49-d50 (interaction, progressive batching, owner decision 22, ruling 30), d12 (epochs, latch), V12, V23; 0009 B-14, B-32, B-34, B-37; 096's PR body (rates, latencies, the cause); src/host/session/session.cpp (interaction loop around the publish-gap wait), src/host/session/batching.{h,cpp}; tests/blender/gui_latency.py (the two cases skipped with this task's id).
-Scope: src/host/session/session.{h,cpp}, src/host/session/batching.{h,cpp}, src/capi/session_api.cpp (ar_session_wait wake-up), tests/cpu/ (batching and pacing tests), tests/blender/gui_latency.py (remove the skips; bounds unchanged), docs/decisions/0007-blender-integration.md (d50 wording only if the pacing statement changes).
+Scope: src/host/session/session.{h,cpp}, src/host/session/batching.{h,cpp}, src/capi/session_api.cpp (ar_session_wait wake-up), tests/cpu/ (batching and pacing tests), tests/blender/gui_latency.py (remove the skips; bounds unchanged), docs/decisions/0007-blender-integration.md (d50 wording only if the pacing statement changes); cli/render.cpp and tests/abi/replay_driver.cpp (their ar_session_wait loops handle PAUSED; lead ruling 2026-11-19).
 Out of scope: the display ring's synchronous download (0007 d29's pinned slots and copy stream); the resolution controller.
 Reference: 0007 d50 and ruling 30 as written; Cycles' viewport pacing is not a target.
 Do:
@@ -16,3 +16,4 @@ Budget: none added.
 Depends on: 096.
 Size: S (about 150 lines); stop and report at 2x.
 Progress:
+- started: branch task/130-interaction-pacing from b1b3b03 (096 on main); plan approved by the lead: publish-side cap, a waiting frame still presents, wait returns on PAUSED.
