@@ -1,7 +1,7 @@
 # 111 Viewport edit matrix (0007 V4 GUI part) and viewport record/replay (0001 V11)
 Goal: viewport sync is checked by one edit only and no viewport session has been replayed -> every 0007 V4 edit class is scripted in a GUI Blender with its expected action class, call counts and a changed frame, and a recorded viewport sync replays bit-identically through the CLI.
 Read first: 0007 V4 (GUI part), d20 (classification), d25 (generations); 0001 V11; blender/astroray/viewport.py; tests/blender/gui_present.py (085).
-Scope: tests/blender/gui_edits.py, tests/blender/gui_record_replay.py, blender/astroray/viewport.py (frame log fields only). Lead ruling: blender/astroray/render_final.py (scan() keeps an evaluated original, not the freed instance copy) and blender/astroray/properties.py (update callbacks tag the scene, so addon settings reach view_update) join Scope.
+Scope: tests/blender/gui_edits.py, tests/blender/gui_record_replay.py, blender/astroray/viewport.py (frame log fields only). Lead ruling: blender/astroray/render_final.py (scan() keeps an evaluated original, not the freed instance copy) and blender/astroray/properties.py (update callbacks tag the scene, so addon settings reach view_update) join Scope. Lead ruling: tests/blender/headless/ joins Scope (the properties are registered for the headless tests that run sync code).
 Out of scope: fixing sync defects found here beyond one-line fixes (report them; the lead writes tasks); batching (086).
 Reference: none.
 Do:
@@ -19,3 +19,4 @@ Progress:
 - started (implementer)
 - gui_edits (19 classes, 6 cases) and gui_record_replay (2 cases) pass; canary 8 hunks each red alone and together. Outside Scope, flagged for lead: render_final.scan (dead temp object for dupli geometry), properties.py update callbacks (scene.astroray raised no depsgraph update).
 - Over-sends reported to the lead (exact counts kept in EDITS, each row commented): material/node-group/image edits re-read the user's mesh (Blender's extra tag); add/delete/exclude/include/collection-instance/settings edits re-send the lamp (ours: _object_kinds returns LIGHTS for any LIGHT update); settings edits re-send the whole instance table (cause not isolated); world/light node trees classed MATERIALS (ours); first move after a full sync re-sends the instance table (ours: _after_full leaves table None).
+- Headless suite (ci): classify.settings_signature reads scene.astroray, which the bpy-wheel tests never registered; support.acquire_properties/release_properties (counted) now register it for test_classify and test_lights_sync. display_mode is excluded from the signature (086 applies it at draw time).

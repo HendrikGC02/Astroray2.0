@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Lamp and settings sync (0007 d37, 0003 d11, d15; task 082)."""
 import ctypes
-import importlib.util
 import math
 import os
 import sys
@@ -15,17 +14,6 @@ import support  # noqa: E402
 
 support.load_sync()
 from ar_sync import keys, lights, settings  # noqa: E402
-
-
-def _load_properties():
-    path = os.path.join(support.ROOT, "blender", "astroray", "properties.py")
-    spec = importlib.util.spec_from_file_location("ar_properties", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-PROPS = _load_properties()
 
 
 class _Xform(ctypes.Structure):
@@ -168,11 +156,11 @@ class FakeColorspace:
 class TestSettings(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        PROPS.register()
+        support.acquire_properties()
 
     @classmethod
     def tearDownClass(cls):
-        PROPS.unregister()
+        support.release_properties()
 
     def setUp(self):
         self.scene = support.reset_scene()

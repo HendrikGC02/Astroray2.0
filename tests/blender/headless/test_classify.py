@@ -15,6 +15,14 @@ from ar_sync import cache as cache_mod  # noqa: E402
 from ar_sync import classify as C  # noqa: E402
 
 
+def setUpModule():
+    support.acquire_properties()  # classify's settings signature reads scene.astroray
+
+
+def tearDownModule():
+    support.release_properties()
+
+
 def quad(name):
     me = bpy.data.meshes.new(name)
     me.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])

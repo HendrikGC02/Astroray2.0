@@ -45,6 +45,10 @@ _GEOMETRY_OBJECTS = frozenset(("MESH", "CURVE", "SURFACE", "META", "FONT", "CURV
                                "VOLUME"))
 
 
+# Not read by settings.build: the viewport applies the display mode itself at draw time (0007 d40).
+_NOT_SETTINGS = ("rna_type", "display_mode")
+
+
 def settings_signature(scene):
     """What the engine reads from render settings and from scene.astroray; selection and frame number are
     excluded. Every astroray property counts: settings.build reads them, and a viewport has no other way
@@ -52,7 +56,7 @@ def settings_signature(scene):
     r, a = scene.render, scene.astroray
     return (r.resolution_x, r.resolution_y, r.resolution_percentage, r.pixel_aspect_x,
             r.pixel_aspect_y, r.use_border, r.film_transparent,
-            tuple(getattr(a, p.identifier) for p in a.bl_rna.properties if p.identifier != "rna_type"))
+            tuple(getattr(a, p.identifier) for p in a.bl_rna.properties if p.identifier not in _NOT_SETTINGS))
 
 
 def slot_signature(ob):

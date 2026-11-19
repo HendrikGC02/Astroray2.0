@@ -20,6 +20,30 @@ def load_sync():
     return mod
 
 
+_props = {"module": None, "users": 0}
+
+
+def acquire_properties():
+    """Registers scene.astroray, as the addon does before any sync code runs (classify reads it). Counted, so
+    a module and a class that both need it compose: the last release unregisters. The file is loaded bare,
+    as the addon's __init__ needs the engine DLL."""
+    if _props["module"] is None:
+        path = os.path.join(ROOT, "blender", "astroray", "properties.py")
+        spec = importlib.util.spec_from_file_location("ar_properties", path)
+        _props["module"] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_props["module"])
+    if _props["users"] == 0:
+        _props["module"].register()
+    _props["users"] += 1
+    return _props["module"]
+
+
+def release_properties():
+    _props["users"] -= 1
+    if _props["users"] == 0:
+        _props["module"].unregister()
+
+
 def reset_scene():
     import bpy
 
