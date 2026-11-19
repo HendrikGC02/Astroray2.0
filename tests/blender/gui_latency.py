@@ -107,14 +107,26 @@ class Driver:
         stop_at = time.monotonic() + CANCEL_AFTER_S
         original = self.rf.break_requested
 
+        def passes_done():
+            held = self.rf._contexts.get("CUDA")
+            job = next((j for j in (held.jobs if held else ()) if j.session.value), None)
+            if job is None:
+                return 0
+            prog = job.abi.ar_progress()
+            job.lib.ar_session_get_progress(job.session, ctypes.byref(prog))
+            return prog.samples_per_pixel
+
         def escape(engine):
-            if time.monotonic() > stop_at and "t_break" not in rec:
+            # After the first pass: the launch boundary is what is under test, not the scene upload and
+            # acceleration structure build before it (reported as rec["first_pass_s"]).
+            if time.monotonic() > stop_at and "t_break" not in rec and passes_done() >= 1:
                 rec["t_break"] = time.monotonic()
+                rec["first_pass_s"] = rec["t_break"] - t_start
             return "t_break" in rec
         done = threading.Event()
 
         def poll():
-            while not done.is_set() and time.monotonic() < stop_at + 20.0:
+            while not done.is_set() and time.monotonic() < stop_at + 60.0:
                 held = self.rf._contexts.get("CUDA")
                 job = next((j for j in (held.jobs if held else ()) if j.session.value), None) if "t_break" in rec else None
                 if job is not None:
@@ -126,6 +138,7 @@ class Driver:
                         rec["abi"] = {k: getattr(job.abi, k) for k in ("AR_STATE_PAUSED", "AR_STATE_TRIMMED")}
                         return
                 time.sleep(0.0002)
+        t_start = time.monotonic()
         thread = threading.Thread(target=poll, daemon=True)
         self.rf.break_requested = escape
         thread.start()
@@ -262,7 +275,7 @@ class TestLatency(Case):
         self.assertIn("t_stop", rec, "the session never left RENDERING after the break")
         ms, loop_ms = (rec["t_stop"] - rec["t_break"]) * 1e3, (rec["t_return"] - rec["t_break"]) * 1e3
         print(f"RESULT latency {SCENE} cancel: engine PAUSED {ms:.1f} ms after the break (state {rec['state']}), "
-              f"F12 returned {loop_ms:.0f} ms after it; B-17 target 20 ms, limit {CANCEL_LIMIT_MS:.0f} ms")
+              f"F12 returned {loop_ms:.0f} ms after it, break after {rec['first_pass_s']:.1f} s; B-17 target 20 ms, limit {CANCEL_LIMIT_MS:.0f} ms")
         self.assertIn(rec["state"], tuple(rec["abi"].values()), "a cancel ends PAUSED or TRIMMED")
         self.assertLessEqual(ms, CANCEL_LIMIT_MS)
 
