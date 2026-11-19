@@ -11,9 +11,11 @@ Do:
 4. B-10: three full runs' durations (excluding lock waits); reset the row only with >= 30 % headroom, else report.
 Acceptance: `pwsh tools/check.ps1 full` passes; `pwsh tools/check.ps1 gate` passes; the headless suite passes on the bpy wheel.
 Look at: none.
-Canary: tasks/131.canary.patch must turn red: the regression test (name it in land format).
+Canary: tasks/131.canary.patch must turn red: tests/blender/headless/test_render_final_dirs.py "TestUserDirs.test_cache_dir_follows_the_replaced_log_path"
 Budget: none added.
 Depends on: 129.
 Size: S (fix plus test); stop and report at 2x.
 Progress:
 - started
+- bisect (test_images via Invoke-ArBlender, own builds): 6c2276c OK; c50168f (124), 924e170, 81553dd (128), ff16141 (129), main FAILED errors=4, all `ValueError: The "package" does not name an extension` from render_final.cache_dir (124); GENERATION_REJECTED not reproduced.
+- fix: cache_dir() is _log_path()'s directory (same path in production), so test_images' _log_path stand-in covers it; headless test_render_final_dirs; canary red alone.

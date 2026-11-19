@@ -1,0 +1,9 @@
+diff --git a/blender/astroray/render_final.py b/blender/astroray/render_final.py
+index e65df27..13972b5 100644
+--- a/blender/astroray/render_final.py
++++ b/blender/astroray/render_final.py
+@@ -111,3 +111,3 @@ def cache_dir():
+     extension redirects both by replacing _log_path (extension_path_user raises for a non-extension package)."""
+-    return os.path.dirname(_log_path())
++    return _user_dir()
+ 
