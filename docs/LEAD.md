@@ -49,12 +49,10 @@ State for the next lead. Agent ids do not carry across sessions; a task still op
 implementer on its existing branch and worktree, briefed from this section and its task file.
 - Landed overnight: 083 (#67), 075 (#68), 078 (#69), 084 (#70), 106 (#71), 110 (#72), 076 (#73), 089 (#74),
   107 (#75), 085 (#76), 090 (#77), 093 (#78), 077 (#79), 099 (#80), 118 (#81), 121 (#82), 086 (#83), 111 (#84),
-  109 (#85), 119 (#86), 097 (#87), 087 (#88), 108 (#89), 092 (#90), 120 (#91), 094 (#92), 122 (#93), 123 (#94), 095 (#95), 125 (#96), 124 (#97), 128 (#98), 126 (#99), 096 (#100), 129 (#101), 091 (#102), 130 (#103). Rulings 76-82 added. 120's dropped graph attempt is kept on the local branch keep/120-graphs-B.
-- In flight (branches task/NNN-*): 130 (interaction pacing), 127 (V7a capture: parked on an owner decision, see
-  STATUS; branch kept in its worktree, do not land). Not started: 091 (needs a quiet machine), 100.
-- Ready next: 122 (sort by distinct programs, ruling 80) and 123 (between-pass idle); 124-126 after 094; then
-  re-measure B-19 on b1m/b5m and decide remedy (b) and spike C (093 Do 5). 096 after 123 (B-14 depends on it);
-  091 last among measurements (it times tiers, needs a quiet machine); 100 closes M1a.
+  109 (#85), 119 (#86), 097 (#87), 087 (#88), 108 (#89), 092 (#90), 120 (#91), 094 (#92), 122 (#93), 123 (#94), 095 (#95), 125 (#96), 124 (#97), 128 (#98), 126 (#99), 096 (#100), 129 (#101), 091 (#102), 130 (#103). Rulings 76-83 added. 120's dropped graph attempt is kept on the local branch keep/120-graphs-B.
+- In flight (branches task/NNN-*): 131 (check full red at test_images: cause c50168f, render_final.cache_dir;
+  fix and B-10), 132 (GPU gate hang), 127 (V7a in the process, owner decision 35 / ruling 83; continues on its
+  branch). Not started: 100 (M1a close; needs 127 and the B-31/B-19/B-20 decisions).
 - Wavefront after 120: B-1M 14.7 ms, B-5M 16.9 ms per 1080p pass (from 17.0 / 28.8); B-19 still fails (idle
   ~18-20 %, ~1.7 ms of it between passes); B-17 passes; B-20 2.00x / 1.63x Cycles. CUDA graphs measured and
   dropped (OptiX refuses stream capture); the material sort is a net loss on single-program scenes (ruling 80).

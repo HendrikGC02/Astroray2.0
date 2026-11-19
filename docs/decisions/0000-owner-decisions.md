@@ -61,3 +61,7 @@ Decisions made by the owner. Later records build on these; they change only if t
 32. **Open-weight worker (0009 q3):** yes. OpenCode's DeepSeek flash model may do mechanical edits through one wrapper that returns a diff and a transcript.
 33. **Subagent cache:** subagents keep the one-hour prompt cache (`subagentPromptCacheTtl`), overriding 0009 Appendix A.
 34. **Repository:** public on the owner's GitHub from the start of the build phase (O6).
+
+## 2026-11-19, M1a
+
+35. **V7a inside the process.** V7a (0007 d35, the first-frame gate) is measured inside Blender's process instead of by screen capture, which cannot see Blender's window on the build machine; ruling 83 defines it. The 1.5x gate (decision 23) is unchanged.

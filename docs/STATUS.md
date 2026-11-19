@@ -9,9 +9,7 @@ phase (O30): several implementers at once, review for kernel, physics, ABI and p
 
 ## Open owner questions
 During M1a: deleting superseded records (0009 q4); exact JPEG decode parity with Blender (libjpeg-turbo) or ruling
-78's 2-code bound; V7a (0007 d35) cannot be captured here: Blender's window is never composed (GDI, WGC and
-Desktop Duplication see only its background; a D3D11 test window is captured), so either the owner sets NVIDIA's "Vulkan/OpenGL
-present method" to the DXGI-layered option, or rules an in-process V7a definition (task 127 parked). Answered: O32, 0002 q1. Later ones: ROADMAP "Open items".
+78's 2-code bound. Answered: O35 (V7a in the process, ruling 83), O32, 0002 q1. Later ones: ROADMAP "Open items".
 
 ## Red items
 None. Unowned follow-ups (a task that touches the area takes them):
