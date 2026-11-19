@@ -769,7 +769,7 @@ void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
   device_.launch(KernelId::FILM_RESOLVE, active_->count());
   uint32_t pass_invalid = 0;
   device_.download(&pass_invalid, globals_buf_, kInvalidTotalAt, sizeof pass_invalid);
-  invalid_.report_pass(pass_invalid, report_, generation);
+  invalid_.report_pass(pass_invalid, uint64_t(active_->count()) * (kSamplesPerPass + 1), report_, generation);
   ++pass_index_;
   ++passes_in_epoch_;
   std::lock_guard<std::mutex> lock(mutex_);

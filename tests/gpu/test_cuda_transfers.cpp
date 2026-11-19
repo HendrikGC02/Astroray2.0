@@ -122,18 +122,25 @@ TEST_CASE("cuda_transfers/memset is stream-ordered without a wait") {
   DeviceBuffer dst = dev->allocate(LedgerCategory::TABLES, kBytes, kOwner);
   dev->memset(dst, 0, 0x11, kBytes);
   dev->synchronize();
-  // Behind the 50 ms hold: a memset that waited would return after it.
+  DeviceBuffer other = dev->allocate(LedgerCategory::TABLES, kBytes, kOwner);
+  dev->memset(other, 0, 0x22, kBytes);
+  dev->synchronize();
+  // Behind the 50 ms hold, a copy of 0x22 into the range, then the memset: a memset that waited
+  // would return after the hold, and one issued off the device's stream would run before the copy
+  // and leave 0x22.
   hold_stream(*dev);
+  dev->copy(dst, 1024, other, 0, 2048);
   const auto t0 = std::chrono::steady_clock::now();
   dev->memset(dst, 1024, 0x5a, 2048);
   const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   CHECK(ms < double(kHoldNs) * 1e-6 / 2);
-  // The download is ordered behind the hold and the memset.
+  // The download is ordered behind the hold, the copy and the memset.
   std::vector<uint8_t> got(kBytes);
   dev->download(got.data(), dst, 0, kBytes);
   uint32_t wrong = 0;
   for (uint64_t i = 0; i < kBytes; ++i) wrong += got[i] != (i >= 1024 && i < 3072 ? 0x5a : 0x11);
   CHECK(wrong == 0u);
+  dev->free(other);
   dev->free(dst);
 }
 
