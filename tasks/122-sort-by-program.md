@@ -19,3 +19,6 @@ Progress:
 - started; stopped before code: the per-scene program count needed files outside Scope.
 - lead ruling: program = CONSTANT_SURFACE as one, else program_offset (no bytecode dedup, default excluded); count from a per-scene table at upload; Scope widened as above.
 - sort_wanted counts surface programs (sort_program_count at upload, MaterialArrays -> SceneTableSet -> SchedulerConfig); CPU, GPU and session tests green.
+- lead ruling: tests/cpu/test_session.cpp joins Scope (fixture: material 1 gets its own program; case renamed).
+- measured (nsys period / shade_surface): b5m 16.12 / 4.36 ms unsorted vs 17.62 / 5.29 forced; b5m_two_programs 16.56 / 4.65 sorted vs 15.77 / 4.13 unsorted.
+- canary: 5 hunks, each red alone.
