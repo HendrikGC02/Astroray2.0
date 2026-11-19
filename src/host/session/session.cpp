@@ -153,6 +153,7 @@ void Session::start() {
   paused_ = false;
   idle_ = false;
   if (scheduler_) scheduler_->cancel = false;
+  leave_paused_locked();
   wake_cv_.notify_all();
 }
 
@@ -170,7 +171,14 @@ void Session::resume() {
   paused_ = false;
   idle_ = false;
   if (scheduler_) scheduler_->cancel = false;
+  leave_paused_locked();
   wake_cv_.notify_all();
+}
+
+void Session::leave_paused_locked() {
+  // wait() returns on PAUSED, and the render thread leaves it only at its loop top: the caller's
+  // next wait() must not see the PAUSED this call just ended (as wake() does for CONVERGED).
+  if (state_ == AR_STATE_PAUSED && started_ && !failed_) set_state_locked(AR_STATE_RENDERING);
 }
 
 void Session::cancel() {
@@ -936,7 +944,9 @@ void Session::render_loop() {
         // after its last launch boundary. An epoch-starting change that became due meanwhile
         // interrupts here as at any boundary (0007 d25): the pass counts as interrupted, the epoch
         // reset clears what it resolved, and no frame of the superseded view is presented, so the
-        // new view's first frame does not wait out the publish gap behind it.
+        // new view's first frame does not wait out the publish gap behind it. A change that becomes
+        // due after this check (during the present decision or the publish wait) is latched after
+        // this pass's frame, as for a pass that completed before it.
         expect_epoch_ = true;
         std::lock_guard<std::mutex> lock(mutex_);
         ++stats_.passes_interrupted;
@@ -965,10 +975,12 @@ void Session::render_loop() {
     // does a display-mode change and a latch with no pass to follow it.
     bool show = lr.changed && !need_pass;
     uint32_t target = 1;
-    bool interacting = false;
+    const double t = now_s();
+    const bool interacting = batching_.interacting(t);
+    // A frame that is due: presented now, or (during interaction, below) after the publish gap.
+    bool due = show;
     if (need_pass) {
       ++unpresented_;
-      const double t = now_s();
       bool done;
       uint64_t samples;
       {
@@ -982,28 +994,30 @@ void Session::render_loop() {
       const bool gap_ok = t - last_present_s_ >= batching_.publish_gap_s(t);
       const bool first = passes_in_epoch_ == 1;
       target = batching_.passes_per_update(t, samples);
-      interacting = batching_.interacting(t);
+      due = done || mode_change || first || unpresented_ >= target;
       show = done || mode_change || (gap_ok && (first || unpresented_ >= target));
-      if (!show && interacting && (first || unpresented_ >= target)) {
-        // 0007 d50, 0009 B-34: during interaction every pass is a displayed update, at most 60 a
-        // second. The cap holds back the finished frame, never the pass: the frame waits out the rest
-        // of the gap and then presents, so a cycle is max(gap, pass + present), not gap + pass. A view
-        // set meanwhile is latched at the next pass start, after this frame (one frame per completed
-        // pass, 0009 B-32). The render lock is free while waiting, so readbacks are not held up.
-        using clock = std::chrono::steady_clock;
-        const clock::time_point due(std::chrono::duration_cast<clock::duration>(
-            std::chrono::duration<double>(last_present_s_ + kInteractionPublishGapS)));
-        render.unlock();
-        {
-          std::unique_lock<std::mutex> lock(mutex_);
-          if (wake_cv_.wait_until(lock, due, [this] { return closing_ || paused_ || failed_; })) {
-            if (closing_) return;
-            continue;  // paused or failed: the loop top parks; the frame is not shown
-          }
+    }
+    if (due && interacting && t - last_present_s_ < kInteractionPublishGapS) {
+      // 0007 d50, 0009 B-34: during interaction every pass is a displayed update, at most 60 a
+      // second, whatever made the frame due (a converged pass, a display-mode change, a latch with no
+      // pass included). The cap holds back the finished frame, never the pass: the frame waits out
+      // the rest of the gap and then presents, so a cycle is max(gap, pass + present), not
+      // gap + pass. A view set meanwhile is latched at the next pass start, after this frame (one
+      // frame per completed pass, 0009 B-32). The render lock is free while waiting, so readbacks
+      // are not held up.
+      using clock = std::chrono::steady_clock;
+      const clock::time_point until(std::chrono::duration_cast<clock::duration>(
+          std::chrono::duration<double>(last_present_s_ + kInteractionPublishGapS)));
+      render.unlock();
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (wake_cv_.wait_until(lock, until, [this] { return closing_ || paused_ || failed_; })) {
+          if (closing_) return;
+          continue;  // paused or failed: the loop top parks; the frame is not shown
         }
-        render.lock();
-        show = true;
       }
+      render.lock();
+      show = true;
     }
     if (show) {
       // The gap runs from the start of one present to the start of the next: present() itself (the

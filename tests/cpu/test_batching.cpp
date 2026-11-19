@@ -286,32 +286,133 @@ TEST_CASE("batching/session passes run back to back during interaction") {
 }
 
 namespace {
-// The CPU device with its resolve gated: launch `hold_at` of FILM_RESOLVE waits until released.
+// The CPU device with its resolve gated (launch `hold_at` of FILM_RESOLVE waits until released) and
+// its present slowed by g_present_ms, as a 1080p present and ring download are on the GPU.
 LaunchControl g_resolve;
-struct GatedResolveDevice : CpuDevice {
+uint32_t g_present_ms = 0;
+struct GatedDevice : CpuDevice {
   using CpuDevice::CpuDevice;
   using CpuDevice::launch;
   void launch(KernelId kernel, uint32_t count) override {
     if (kernel == KernelId::FILM_RESOLVE) g_resolve.on_launch();
+    if (kernel == KernelId::FILM_PRESENT)
+      for (const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(g_present_ms);
+           std::chrono::steady_clock::now() < until;) {}
     CpuDevice::launch(kernel, count);
   }
 };
 struct GatedRig {
   Ledger ledger;
   ThreadPool pool;
-  GatedResolveDevice dev;
+  GatedDevice dev;
   std::unique_ptr<Session> s;  // last: destroyed first
-  GatedRig(ContextState& ctx, Scene& scene) : pool(ctx, 2), dev(ledger, pool) {
+  // `work` 0: no camera work, so every epoch converges after its first pass (done every pass).
+  GatedRig(ContextState& ctx, Scene& scene, uint64_t work = 1024) : pool(ctx, 2), dev(ledger, pool) {
     dev.register_production_stages();
     dev.register_kernel(KernelId::GENERATE_CAMERA, &gen_terminate);
     SessionOptions o;
     o.max_width = o.max_height = 8;
-    o.test_camera_samples_per_pass = 1024;
+    o.test_camera_samples_per_pass = work;
     o.test_record_presents = true;
     s = std::make_unique<Session>(scene, dev, o);
   }
 };
+
+#ifdef _WIN32
+// Blender asks Windows for a 1 ms timer, which the session's publish wait inherits inside Blender;
+// a test process gets the 15.6 ms default unless it asks too, and every capped wait would then
+// round up to a tick. Scoped to the cases that time the cap (winmm, test side only).
+extern "C" __declspec(dllimport) unsigned __stdcall timeBeginPeriod(unsigned);
+extern "C" __declspec(dllimport) unsigned __stdcall timeEndPeriod(unsigned);
+#pragma comment(lib, "winmm.lib")
+struct MsTimer {
+  MsTimer() { timeBeginPeriod(1); }
+  ~MsTimer() { timeEndPeriod(1); }
+};
+#else
+struct MsTimer {};
+#endif
+
+// The clock Session::now_s and the present record use.
+double steady_s() {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// A view that differs from every earlier one: the camera moves by `i`.
+ar_view_desc moved_view(uint32_t i) {
+  ar_view_desc v = view_of(4, 4);
+  v.camera.cam_to_world.m[3] = float(i) * 1e-3f;
+  return v;
+}
 }  // namespace
+
+TEST_CASE("batching/session the publish cap holds every due frame during interaction") {
+  const MsTimer timer;
+  // An orbit (a view about every millisecond) where every epoch converges after its first, empty
+  // pass, so every frame is due as converged: the cap still holds each one (0009 B-34), so no two
+  // frames are closer than 1/60 s. The present takes 6 ms; the gap runs from present start to
+  // present start, so the mean interval stays under gap + present (what a gap counted from the end
+  // of the present gives at least). The rest above the gap is the timer's wake-up.
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  g_launch.reset();
+  g_resolve.reset();
+  constexpr uint32_t kPresentMs = 6;
+  g_present_ms = kPresentMs;
+  GatedRig r(ctx, scene, 0);
+  r.s->set_view(moved_view(0));
+  r.s->start();
+  const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
+  for (uint32_t i = 1; std::chrono::steady_clock::now() < end; ++i) {
+    r.s->set_view(moved_view(i));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  const auto log = r.s->present_log();
+  r.s->close();
+  g_present_ms = 0;
+  size_t n = 0;
+  double first_t = 0.0, last_t = 0.0;
+  for (size_t i = 1; i < log.size(); ++i) {
+    if (!log[i].interacting) continue;
+    CHECK(log[i].t_s - log[i - 1].t_s >= 1.0 / 60.0 - kEps);
+    if (n++ == 0) first_t = log[i - 1].t_s;
+    last_t = log[i].t_s;
+  }
+  REQUIRE(n >= 10);
+  CHECK((last_t - first_t) / double(n) < kInteractionPublishGapS + kPresentMs * 1e-3);
+}
+
+TEST_CASE("batching/session a cancel during the publish wait parks at once") {
+  const MsTimer timer;
+  // 2 ms passes under a 1/60 s cap: the render thread spends most of each cycle holding a finished
+  // frame. A cancel issued then ends the hold instead of waiting out the gap (0007 d27).
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  g_launch.reset();
+  g_resolve.reset();
+  g_launch.sleep_ms = 2;
+  GatedRig r(ctx, scene);
+  r.s->set_view(moved_view(0));
+  r.s->start();
+  for (uint32_t i = 1; i < 6; ++i) r.s->set_view(moved_view(i));  // keep the session interacting
+  REQUIRE(until([&] { return r.s->present_log().size() >= 3; }));
+  // Just after a present: the next 2 ms pass runs, then its frame holds for the rest of the gap.
+  const size_t seen = r.s->present_log().size();
+  REQUIRE(until([&] { return r.s->present_log().size() > seen; }));
+  const double presented = r.s->present_log().back().t_s;
+  while (steady_s() < presented + 0.006) {}
+  const double cancelled = steady_s();
+  r.s->cancel();
+  CHECK(r.s->wait(1000));
+  const double parked = steady_s();
+  const uint32_t st = r.s->progress().state;
+  r.s->close();
+  CHECK(st == AR_STATE_PAUSED);
+  INFO("cancel at +" << (cancelled - presented) * 1e3 << " ms, parked at +" << (parked - presented) * 1e3 << " ms");
+  // The hold had until presented + 1/60 s to run; ended by the cancel, it is over well before.
+  CHECK(parked < presented + 1.0 / 60.0 - 0.004);
+  CHECK(parked - cancelled < 0.004);
+}
 
 TEST_CASE("batching/session a view change during the resolve presents no frame of the old view") {
   // On the GPU the resolve waits out most of the pass after its last launch boundary. A view set

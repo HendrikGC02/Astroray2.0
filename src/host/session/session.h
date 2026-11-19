@@ -232,6 +232,7 @@ class Session {
   void raise_interrupt_if_due();
   void fail(const std::string& why, const DeviceError* device_error = nullptr);
   void set_state_locked(uint32_t state);
+  void leave_paused_locked();  // start()/resume(): PAUSED becomes RENDERING at once
   FitsProvenance fits_provenance_locked() const;
 
   Scene& scene_;  // not touched once scene_detached_ is set
