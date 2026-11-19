@@ -28,7 +28,9 @@ None. Unowned follow-ups (a task that touches the area takes them):
   bind/unbind_display_space_shader leaves V9 green: find where the view transform is applied (097).
 - Tests: check 14 passes a constant hero only via a NaN chi2 exception and misses a hero fixed in generate_camera;
   per-pixel analytic z 5.50 misses 1 % albedo errors on A1/a4_sphere (energy tests catch them) (078). Flaky once: `cpu_device/parallel_for
-  rethrows`, `wavelengths/stratified lane positions`. Fault tests leave temp dirs.
+  rethrows`, `wavelengths/stratified lane positions`, `mesh/remove erases the record` (160 bytes left, under load). Fault tests
+  leave temp dirs. Engine minidumps land as `.<pid>.0.dmp` in the current directory (132). check full's `waited`
+  omits Blender lock waits (131); `build.ps1 -Target a,b` via `pwsh -File` is one target (132).
 - To settle (076, 107): Russian roulette starts at depth >= max(2, min_bounces) (0004 D2), so min = max bounces does
   not disable it, unlike kernel_globals.h, ar.py and the addon text (check Cycles, fix kernel or text); AUTO emission
   needs an estimate > 0.5 (067; confirm vs Cycles); NaN material inputs render black with no INVALID_SAMPLE (report it).
