@@ -1,0 +1,6 @@
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'ar_probe_x' for 'sm_120'
+ptxas info    : Function properties for ar_probe_x
+    480 bytes stack frame, 130 bytes spill stores, 376 bytes spill loads
+ptxas info    : Used 128 registers, used 0 barriers, 480 bytes cumulative stack size
+ptxas info    : Compile time = 0.000 ms

@@ -1,0 +1,4 @@
+fail
+queue_build_count: spill stores 4 B > allowance 0 B
+full
+warn=WARNING (probe, capped) ar_probe_x: spill loads 376 B > allowance 192 B

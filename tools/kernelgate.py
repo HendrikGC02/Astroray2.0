@@ -256,6 +256,10 @@ def split_probe(fails, lines, probe_cubins):
     return [f for f in fails if not ours(f)], [f for f in fails if ours(f)], [ln for ln in lines if ours(ln)]
 
 
+def probe_warnings(warns):
+    return ["WARNING (probe, capped) " + w for w in warns]
+
+
 def resources(args):
     build = os.path.join(ROOT, args.build_dir)
     launch = parse_launch_rows(open(os.path.join(ROOT, LAUNCH_CONFIG), encoding="utf-8").read())
@@ -278,8 +282,8 @@ def resources(args):
     fails, warns, _ = split_probe(fails, lines, probe_cubins)
     for ln in lines:
         print(ln)
-    for w in warns:
-        print("WARNING (probe, capped) " + w)
+    for w in probe_warnings(warns):
+        print(w)
     for f in fails:
         print("FAIL " + f)
     # Never a silent skip: the gate always says how many rows it left to `check full`.
@@ -381,8 +385,8 @@ def probe(args):
     _, warns, lines = split_probe(fails, lines, probe_cubins)
     for ln in lines:
         print(f"capped {ln.split(' | ')[0]}")
-    for w in warns:
-        print("WARNING (probe, capped) " + w)
+    for w in probe_warnings(warns):
+        print(w)
     return 0
 
 
@@ -398,12 +402,18 @@ def self_test():
                   for f in sorted(os.listdir(d)) if f.endswith(".resusage.txt")}
         bp = os.path.join(d, "base_budget.toml")  # the rows at the merge base, when the case needs growth
         base = parse_budget(read("base_budget.toml")) if os.path.exists(bp) else {}
-        fails, _, deferred = evaluate(launch, budget, base, cubins, lambda s: False, {}, want[2:3] == ["full"])
+        fails, lines, deferred = evaluate(launch, budget, base, cubins, lambda s: False, {}, want[2:3] == ["full"])
+        # Stems named probe_* stand for kernels_probe_capped/ cubins: their breaches are warnings.
+        probes = {k: v for k, v in cubins.items() if k.startswith("probe_")}
+        fails, warns, _ = split_probe(fails, lines, probes)
         got = "fail" if fails else "pass"
         if want[1].startswith("deferred="):
             ok = got == want[0] and len(deferred) == int(want[1][9:])
         else:
             ok = got == want[0] and (not want[1] or any(want[1] in f for f in fails))
+        # Optional fourth line "warn=<text>": a probe warning line must contain it.
+        if len(want) > 3 and want[3].startswith("warn="):
+            ok = ok and any(want[3][5:] in w for w in probe_warnings(warns))
         bad += not ok
         print(f"case {case}: expect {want[0]}, got {got}" + (f" ({fails[0]})" if fails else "") + (": ok" if ok else ": MISMATCH"))
     print(f"self-test: {'FAILED' if bad else 'ok'}")
