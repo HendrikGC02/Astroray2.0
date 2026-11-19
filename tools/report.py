@@ -11,7 +11,9 @@ import html
 import json
 import os
 import re
+import struct
 import sys
+import zlib
 
 import numpy as np
 
@@ -121,7 +123,24 @@ def section(title, body):
     return f"<section><h2>{html.escape(title)}</h2>\n{body}\n</section>"
 
 
-def build_html(history, checks, budgets):
+# 0009 B-14: the viewport's rate target and floor, drawn on every rate plot.
+VIEWPORT_LINES = [("30/s target (B-1M)", 30.0), ("24/s floor", 24.0)]
+
+
+def viewport_series(root):
+    """Presented updates per second over the orbit, per scene, from the runs of tools/measure_viewport.ps1
+    (out/viewport/rate_<scene>.json: a 0.5 s sliding window, one point every 0.25 s)."""
+    s = {}
+    for p in sorted(glob.glob(os.path.join(root, "out", "viewport", "rate_*.json"))):
+        with open(p, encoding="utf-8-sig") as f:
+            run = json.load(f)
+        pts = (run.get("stats") or {}).get("series")
+        if pts:
+            s[run["scene"]] = [tuple(x) for x in pts]
+    return s
+
+
+def build_html(history, checks, budgets, viewport=None):
     parts = []
     ts = tier_series(history, checks)
     if ts:
@@ -140,6 +159,10 @@ def build_html(history, checks, budgets):
     else:
         parts.append(section("Build times per edit class", "<p>no data yet</p>"))
     for title, prefix in PLACEHOLDERS:
+        if prefix == "viewport" and viewport:
+            parts.append(section(title, svg_plot("Presented updates per second during the orbit", viewport,
+                                                 VIEWPORT_LINES, "updates/s")))
+            continue
         rows = {}
         for h in history:
             if h["metric"].startswith(prefix):
@@ -155,6 +178,75 @@ def write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
+
+
+# 3x5 digits, five rows of three bits each, for the axis numbers of the PNG plot (no font is available).
+_DIGITS = {"0": "111101101101111", "1": "010110010010111", "2": "111001111100111", "3": "111001111001111",
+           "4": "101101111001001", "5": "111100111001111", "6": "111100111101111", "7": "111001001001001",
+           "8": "111101111101111", "9": "111101111001111"}
+
+
+def write_png(path, rgb):
+    """An 8-bit RGB PNG from a (h, w, 3) uint8 array."""
+    h, w, _ = rgb.shape
+    raw = b"".join(b"\x00" + rgb[y].tobytes() for y in range(h))
+
+    def chunk(tag, data):
+        c = struct.pack(">I", len(data)) + tag + data
+        return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def plot_png(path, series, hlines, ymax=80.0, width=960, height=420):
+    """The rate plot as a raster, y in updates/s, x in seconds of the orbit; one colour per series (in the
+    order of the dict, the colours of COLORS), the hlines dashed red, a grid every 10/s and every second."""
+    l, r, t, b = 52, 12, 12, 30
+    img = np.full((height, width, 3), 255, np.uint8)
+    xmax = max((p[0] for s in series.values() for p in s), default=1.0)
+
+    def px(x):
+        return int(l + x / xmax * (width - l - r))
+
+    def py(y):
+        return int(height - b - min(y, ymax) / ymax * (height - t - b))
+
+    def rgb(hexcolor):
+        return [int(hexcolor[i:i + 2], 16) for i in (1, 3, 5)]
+
+    def text(s, x, y, scale=2):
+        for ch in s:
+            bits = _DIGITS.get(ch)
+            if bits:
+                for i, bit in enumerate(bits):
+                    if bit == "1":
+                        img[y + (i // 3) * scale:y + (i // 3 + 1) * scale, x + (i % 3) * scale:x + (i % 3 + 1) * scale] = 0
+            x += 4 * scale
+
+    for v in range(0, int(ymax) + 1, 10):
+        img[py(v), l:width - r] = 225
+        text(str(v), 4, py(v) - 5)
+    for sec in range(0, int(xmax) + 1):
+        img[t:height - b, px(sec)] = 225
+        text(str(sec), px(sec) - 3, height - b + 8)
+    img[t:height - b, l] = 100
+    img[height - b, l:width - r] = 100
+    for _, y in hlines:
+        for x in range(l, width - r):
+            if (x // 6) % 2 == 0:
+                img[py(y), x] = rgb("#d62728")
+    for i, s in enumerate(series.values()):
+        c = rgb(COLORS[i % len(COLORS)])
+        for (x0, y0), (x1, y1) in zip(s, s[1:]):
+            n = max(abs(px(x1) - px(x0)), abs(py(y1) - py(y0)), 1)
+            for k in range(n + 1):
+                xx, yy = px(x0 + (x1 - x0) * k / n), py(y0 + (y1 - y0) * k / n)
+                img[yy - 1:yy + 2, xx - 1:xx + 2] = c
+        img[t + 4 + 10 * i:t + 12 + 10 * i, width - r - 30:width - r - 6] = c  # legend swatch, in series order
+    write_png(path, img)
 
 
 def selftest():
@@ -180,8 +272,17 @@ def selftest():
 def main():
     if "--selftest" in sys.argv[1:]:
         return selftest()
+    if "--viewport-png" in sys.argv[1:]:
+        series = viewport_series(ROOT)
+        if not series.get("b1m"):
+            print("no out/viewport/rate_b1m.json; run tools/measure_viewport.ps1")
+            return 1
+        png = os.path.join(ROOT, "out", "evidence", "096", "viewport_rate_b1m.png")
+        plot_png(png, {"b1m": series["b1m"]}, VIEWPORT_LINES)
+        print(f"wrote {png}")
+        return 0
     out = os.path.join(ROOT, "out", "report", "index.html")
-    write(out, build_html(load_history(ROOT), load_checks(ROOT), load_budgets(ROOT)))
+    write(out, build_html(load_history(ROOT), load_checks(ROOT), load_budgets(ROOT), viewport_series(ROOT)))
     print(f"wrote {out}")
     return 0
 

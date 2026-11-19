@@ -15,6 +15,7 @@ Cycles intern/cycles/blender/session.cpp, BlenderSession::view_update and ::view
 The poll period is 0009 B-37's 50 ms.
 """
 import ctypes
+import os
 import sys
 import time
 import weakref
@@ -64,6 +65,10 @@ class ViewportJob(render_final.Job):
         self._reported, self._revision = set(), None
         self._polling = False
         self.t_first_frame = None  # monotonic time of the first upload
+        # ASTRORAY_FRAME_LOG=1 (a measurement switch, 0009 B-13/B-14/B-32/B-34): one record per view_draw and per
+        # acquired frame, stamped with the monotonic clock. None when off, so the draw path pays nothing.
+        self.stamps = {"draws": [], "frames": []} if os.environ.get("ASTRORAY_FRAME_LOG") == "1" else None
+        self._st = None
 
     # ---- view_update
 
@@ -172,10 +177,16 @@ class ViewportJob(render_final.Job):
         self._engine = weakref.ref(engine)
         if self.failure or self.first:
             return
+        if self.stamps is not None:
+            self._st = {"t": time.monotonic(), "upload_s": 0.0, "draw_s": 0.0, "set_view": False, "frame": False}
         try:
             self._draw(engine, context, depsgraph)
         except Exception as e:
             self._fail(engine, e)
+        if self._st is not None:
+            self._st["dur_s"] = time.monotonic() - self._st["t"]
+            self.stamps["draws"].append(self._st)
+            self._st = None
 
     def _draw(self, engine, context, depsgraph):
         lib, abi = self.lib, self.abi
@@ -187,6 +198,8 @@ class ViewportJob(render_final.Job):
         digest = camera.view_hash(rv3d, w, h, rv3d.view_perspective == "CAMERA")
         if self.views.update(lambda sess, v: native.call(lib.ar_session_set_view, sess, v), abi, s, f, digest, w, h):
             self.events.append("set_view")
+            if self._st is not None:
+                self._st["set_view"] = True
         mode = _DISPLAY_MODES[depsgraph.scene.astroray.display_mode]
         if mode != self._mode_sent:
             native.call(lib.ar_session_set_display_mode, s, mode)
@@ -209,7 +222,10 @@ class ViewportJob(render_final.Job):
             self.heat.show(region, w, h)  # drawn by the POST_PIXEL handler, outside the view transform (0007 d40)
         else:
             self.heat.hide()
+            t_draw = time.monotonic()
             self.present.draw(engine, depsgraph.scene, w, h)
+            if self._st is not None:
+                self._st["draw_s"] = time.monotonic() - t_draw
         busy = prog.state in (abi.AR_STATE_INITIALIZING, abi.AR_STATE_RENDERING)
         if busy or got:
             engine.tag_redraw()
@@ -234,6 +250,8 @@ class ViewportJob(render_final.Job):
         try:
             self._last_id = frame.frame_id
             shown = self.present.wants(frame)
+            if self._st is not None:
+                self._log_stamp(frame, shown)
             if self.acquired is not None:
                 self.acquired.append({"id": frame.frame_id, "generation": frame.generation, "presented": shown})
             if shown:
@@ -242,7 +260,10 @@ class ViewportJob(render_final.Job):
                     self.present.generation = frame.generation  # one "generation on screen" for both routes
                     self.showing_heat = True
                 else:
+                    t_up = time.monotonic()
                     self.present.upload(frame)
+                    if self._st is not None:
+                        self._st["upload_s"] = time.monotonic() - t_up
                     self.showing_heat = False
                 if self.t_first_frame is None:
                     self.t_first_frame = time.monotonic()
@@ -263,6 +284,17 @@ class ViewportJob(render_final.Job):
         self.upload_checks.append({"max_diff": float(np.abs(tex - host).max()), "size": (frame.width, frame.height),
                                    "stripes": len(self.present._shown.stripes),
                                    "colour_spread": float((host[:, :, :3].max(axis=2) - host[:, :, :3].min(axis=2)).max())})
+
+    def _log_stamp(self, frame, shown):
+        """The frame log of ASTRORAY_FRAME_LOG: generation, the epoch's pass count (samples per pixel) and the
+        time, read at acquire so the pass count is that of the frame's publish to within one pass."""
+        prog = self.abi.ar_progress()
+        native.call(self.lib.ar_session_get_progress, self.session, ctypes.byref(prog))
+        self._st["frame"] = True
+        self.stamps["frames"].append({"t": time.monotonic(), "id": frame.frame_id, "generation": frame.generation,
+                                      "presented": bool(shown), "spp": prog.samples_per_pixel, "epoch": prog.epoch,
+                                      "pass_ms": prog.last_pass_ms, "state": prog.state,
+                                      "size": (frame.width, frame.height)})
 
     def _spp(self):
         """Samples per pixel of the epoch as of now (test log). ar_display_frame carries no sample count, so this is read when the frame is acquired, a moment after it was published."""
