@@ -332,6 +332,22 @@ TEST_CASE("session/cancel stops at the next launch") {
   CHECK(st.frames_published == 0);
 }
 
+TEST_CASE("session/wait wakes on pause") {
+  // 0007 d27: F12 loops on wait; a cancel ends in PAUSED, which must end the wait (0009 B-37) rather
+  // than its timeout. Launch 1 is held so the cancel lands while a pass is in flight.
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  g_gates[0].reset();
+  g_gates[0].hold_at = 1;
+  Rig r(ctx, scene, 4, 16, &gen_terminate<0>);
+  r.s->start();
+  REQUIRE(until([&] { return g_gates[0].count() >= 1; }));
+  r.s->cancel();
+  g_gates[0].release();
+  CHECK(r.s->wait(5000));
+  CHECK(state(*r.s) == AR_STATE_PAUSED);
+}
+
 }  // TEST_SUITE
 
 TEST_SUITE("gate") {

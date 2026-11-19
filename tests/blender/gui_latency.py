@@ -279,7 +279,6 @@ class TestLatency(Case):
         self.assertIn(rec["state"], tuple(rec["abi"].values()), "a cancel ends PAUSED or TRIMMED")
         self.assertLessEqual(ms, CANCEL_LIMIT_MS)
 
-    @unittest.skip("task 130: kInteractionPublishGapS is waited before each interaction pass")
     def test_view_change_latency_within_b32(self):
         """0007 d25 / B-32: a view change reaches the screen (the first frame of a newer epoch, with a pass of it
         resolved) within the rest of the pass in flight + one pass + present, in every one of the single changes."""
@@ -295,7 +294,6 @@ class TestLatency(Case):
         for c, b in zip(ch, bound):
             self.assertLessEqual(c["to_screen_ms"], b)
 
-    @unittest.skip("task 130: kInteractionPublishGapS is waited before each interaction pass")
     def test_orbit_frames_are_for_newer_views(self):
         """B-32: during the orbit a new frame follows every completed pass: every frame the host acquires is a
         new one (its id above the last), is shown, and the gaps between shown frames stay within the bound of

@@ -5,10 +5,12 @@
 // intern/cycles/integrator/render_scheduler.cpp for the schedule values and the rounding.
 #include <doctest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "device/cpu/cpu_device.h"
 #include "host/scene/scene.h"
@@ -244,6 +246,43 @@ TEST_CASE("batching/session one pass per update during interaction") {
     CHECK(log[i].passes_resolved - log[i - 1].passes_resolved == 1);
     CHECK(log[i].t_s - log[i - 1].t_s >= 1.0 / 60.0 - kEps);
   }
+}
+
+TEST_CASE("batching/session passes run back to back during interaction") {
+  // A continuous orbit (a view every few ms) over 20 ms passes, longer than the 1/60 s gap: the cap
+  // never binds, so a pass starts as soon as the previous frame is out and frames come about one
+  // pass apart. Waiting out the gap before each pass instead makes every interval at least
+  // gap + pass. Each frame is one pass of a newer view: the views set during a pass are latched
+  // at the next pass start, and the frame still follows its own pass (0009 B-32).
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  g_launch.reset();
+  constexpr uint32_t kSlowPassMs = 20;
+  g_launch.sleep_ms = kSlowPassMs;
+  Rig r(ctx, scene);
+  r.s->set_view(view_of(4, 4));
+  r.s->start();
+  const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
+  for (uint32_t i = 1; std::chrono::steady_clock::now() < end; ++i) {
+    // The camera moves on every call, so no pass's views can add up to the view already latched.
+    ar_view_desc v = view_of(4, 4);
+    v.camera.cam_to_world.m[3] = float(i) * 1e-3f;
+    r.s->set_view(v);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  const auto log = r.s->present_log();
+  r.s->close();
+  std::vector<double> gaps;
+  for (size_t i = 1; i < log.size(); ++i) {
+    if (!log[i].interacting) continue;
+    gaps.push_back(log[i].t_s - log[i - 1].t_s);
+    CHECK(log[i].passes_resolved - log[i - 1].passes_resolved == 1);
+    CHECK(log[i].epoch > log[i - 1].epoch);
+    CHECK(gaps.back() >= 1.0 / 60.0 - kEps);
+  }
+  REQUIRE(gaps.size() >= 6);
+  std::sort(gaps.begin(), gaps.end());
+  CHECK(gaps[gaps.size() / 2] < kSlowPassMs * 1e-3 + kInteractionPublishGapS);
 }
 
 TEST_CASE("batching/session passes follow the schedule after interaction") {

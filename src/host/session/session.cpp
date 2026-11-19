@@ -250,7 +250,11 @@ void Session::on_thread_exit() {
 bool Session::wait(uint32_t timeout_ms) {
   const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   std::unique_lock<std::mutex> lock(mutex_);
-  const auto pred = [this] { return terminal(state_) || ctx_.poisoned.load(std::memory_order_acquire); };
+  // PAUSED ends a wait too: a cancel ends there (0007 d27), and F12 must not sit out the timeout
+  // after the engine stopped (0009 B-37).
+  const auto pred = [this] {
+    return terminal(state_) || state_ == AR_STATE_PAUSED || ctx_.poisoned.load(std::memory_order_acquire);
+  };
   // In slices: a poisoned context is a flag, not a notification.
   for (;;) {
     const auto now = std::chrono::steady_clock::now();
@@ -861,16 +865,7 @@ void Session::render_loop() {
         } else if (idle_) {
           if (state_ != AR_STATE_CONVERGED) set_state_locked(AR_STATE_CONVERGED);
         } else {
-          // 0007 d50: during interaction each displayed update is one pass at most 60 times a
-          // second, so the next pass waits until the last frame is a publish gap old. A new view
-          // wakes the wait and is latched when it ends.
-          const double now = now_s();
-          const double wait = last_present_s_ + kInteractionPublishGapS - now;
-          if (wait > 0.0 && batching_.interacting(now)) {
-            wake_cv_.wait_for(lock, std::chrono::duration<double>(wait));
-            continue;
-          }
-          break;
+          break;  // passes run back to back; only publishing is paced (below)
         }
         wake_cv_.wait(lock);
       }
@@ -978,6 +973,26 @@ void Session::render_loop() {
       target = batching_.passes_per_update(t, samples);
       interacting = batching_.interacting(t);
       show = done || mode_change || (gap_ok && (first || unpresented_ >= target));
+      if (!show && interacting && (first || unpresented_ >= target)) {
+        // 0007 d50, 0009 B-34: during interaction every pass is a displayed update, at most 60 a
+        // second. The cap holds back the finished frame, never the pass: the frame waits out the rest
+        // of the gap and then presents, so a cycle is max(gap, pass + present), not gap + pass. A view
+        // set meanwhile is latched at the next pass start, after this frame (one frame per completed
+        // pass, 0009 B-32). The render lock is free while waiting, so readbacks are not held up.
+        using clock = std::chrono::steady_clock;
+        const clock::time_point due(std::chrono::duration_cast<clock::duration>(
+            std::chrono::duration<double>(last_present_s_ + kInteractionPublishGapS)));
+        render.unlock();
+        {
+          std::unique_lock<std::mutex> lock(mutex_);
+          if (wake_cv_.wait_until(lock, due, [this] { return closing_ || paused_ || failed_; })) {
+            if (closing_) return;
+            continue;  // paused or failed: the loop top parks; the frame is not shown
+          }
+        }
+        render.lock();
+        show = true;
+      }
     }
     if (show) {
       present(lr.generation);

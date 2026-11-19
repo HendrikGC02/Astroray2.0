@@ -202,7 +202,7 @@ AR_API ar_status ar_session_set_display_mode(ar_session h, uint32_t mode) {
   });
 }
 
-// The named wait (0001 D2.6): returns AR_OK when the session reached CONVERGED, CLOSED or FAILED
+// The named wait (0001 D2.6): returns AR_OK when the session reached PAUSED, CONVERGED, CLOSED or FAILED
 // or the timeout passed; the caller reads the state with ar_session_get_progress (0007 d27).
 AR_API ar_status ar_session_wait(ar_session h, uint32_t timeout_ms) {
   AR_RECORD(ar_session_wait, ar_rec_of(h), h, timeout_ms);
