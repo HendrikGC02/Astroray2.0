@@ -410,9 +410,11 @@ void surface_terminate(const ar::KernelGlobals& kg, const ar::StepEntry& step, u
     ar::ps_next_stage(kg, kg.main_queue[step.start + i]) = static_cast<uint8_t>(ar::Stage::TERMINATED);
 }
 
-// A quad instanced once with `materials` emission materials in its slot pool. Material 0's graph
-// folds to constants (CONSTANT_SURFACE); material 1 emits the shading position, a per-point input,
-// so it compiles a program of its own: `materials` materials run `materials` surface programs.
+// A quad instanced once with `materials` emission materials in its slot pool. Material 0 emits the
+// shading position, a per-point input, so it compiles a program of its own; material 1's graph
+// folds to constants (CONSTANT_SURFACE): `materials` materials run `materials` surface programs.
+// The default material (constant, last in the header table) must not count: with one material it
+// would make a second program.
 void commit_quad(Scene& scene, uint32_t materials) {
   scene.meshes = std::make_shared<MeshStore>();
   scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
@@ -433,8 +435,8 @@ void commit_quad(Scene& scene, uint32_t materials) {
       std::vector<ar_graph_node> nodes(3);
       std::vector<ar_graph_link> links{{0, 0, 2, 0}, {1, 0, 2, 1}};
       std::vector<float> f{1.0f, 0.5f, 0.25f, 1.0f + float(m)};
-      if (m == 0) nodes[0].op = uint32_t(ar::Op::CONST_F32X3), nodes[0].f32_count = 3;
-      else nodes[0].op = uint32_t(ar::Op::LOAD_CTX_P);
+      if (m == 0) nodes[0].op = uint32_t(ar::Op::LOAD_CTX_P);
+      else nodes[0].op = uint32_t(ar::Op::CONST_F32X3), nodes[0].f32_count = 3;
       nodes[1].op = uint32_t(ar::Op::CONST_F32), nodes[1].f32_first = 3, nodes[1].f32_count = 1;
       nodes[2].op = uint32_t(ar::Op::EMIT_LE);
       ar_graph_desc d = {};

@@ -22,10 +22,11 @@
 // materials (sort_program_count); the default material does not count, so a scene with one
 // program plus default-material hits stays unsorted. Sorting buys SIMT coherence only between
 // different programs: materials that share a program and differ in constants gain none and lose
-// path-state locality (RULINGS 80). Cycles sorts shade_surface by shader id
-// (intersect_closest.h, integrator_path_next_sorted with key `shader`) on every launch
-// (path_trace_work_gpu.cpp, kernel_uses_sorting); a Cycles shader is its own SVM program, so its
-// key separates programs, which here is the program a header points to, not the header.
+// path-state locality (RULINGS 80). This departs from Cycles, which sorts shade_surface by
+// shader id (intersect_closest.h passes `shader` as the key of integrator_path_next_sorted,
+// state_flow.h INTEGRATOR_SORT_KEY) whenever that kernel runs (path_trace_work_gpu.cpp,
+// kernel_uses_sorting): a Cycles shader corresponds to a material header here, so Cycles would
+// sort B-5M's 300 shaders. Task 120 measured that sort slower on B-5M, hence the program count.
 // Host contract: after queue_build has finished, launch count and scatter with `sort_grid(count)`
 // on the CPU (an item range) or gpu_tile_grid(count) on the GPU (queue_build.h, a warp per tile)
 // and, between them, scan with `sort_scan_grid(count)`; reallocate sort_counts whenever
@@ -33,8 +34,8 @@
 // counters (the histogram rows, then one scratch row per scatter tile) and kg.sort_queue
 // `count` indices.
 // Ref: Cycles device/gpu/parallel_sorted_index.h (Apache-2.0) as the pattern; Cycles
-// integrator/path_trace_work_gpu.cpp and kernel/integrator/intersect_closest.h (Apache-2.0) for
-// the shader-id key; RULINGS 80 for the program rule; Merrill and
+// integrator/path_trace_work_gpu.cpp, kernel/integrator/intersect_closest.h and state_flow.h
+// (Apache-2.0) for the shader-id key; RULINGS 80 for the program rule; Merrill and
 // Garland 2016, NVR-2016-002, sections 4-5, through queue_build.h's scan;
 // docs/decisions/0002-kernel-architecture.md D6, D7 step 3, D8; 0007 d10 (slot lookup).
 #pragma once
