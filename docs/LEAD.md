@@ -48,34 +48,44 @@ directly, or personal names, emails and paths in commits, PRs or external reques
 State for the next lead. Agent ids do not carry across sessions; a task still open goes to a new
 implementer on its existing branch and worktree, briefed from this section and its task file.
 - Landed overnight: 083 (#67), 075 (#68), 078 (#69), 084 (#70), 106 (#71), 110 (#72), 076 (#73), 089 (#74),
-  107 (#75), 085 (#76), 090 (#77), 093 (#78), 077 (#79). Rulings 76-79 added. Tasks 118-120 written from 093.
-- In flight (branches task/NNN-*): 086 (V10 overlay transfer and Cycles rounding source being settled),
-  099 (device failures; scope widened by lead rulings 1-6 in its task file), 118 (partition scan, Opus).
-- Ready next: 119 after 118, 120 after 119; 087 after 111; 111 (needs 107, 110, 085: ready); 092, 094, 095,
-  096, 097 (measurements, ready once their deps land: check Depends on); 108 and 109 after 099.
-- 093 result: B-19 fails (partition 61 % / 73.5 % with sort), B-17 passes, B-20 fails (5.5x / 6.4x Cycles);
-  remedies reordered by measured cost (ruling 79). B-14 needs 118-120 first.
-- Gate is ~150-165 s of B-09's 180 s: new gate work must find time (STATUS Budget headroom).
-- Owner questions raised: exact JPEG parity (ruling 78); 0007 V10 wording if 086 cannot source Blender's
-  overlay transfer. The file out/tmp/blend_cornell_area.png under the C: drive root is a stray file from 090 that a safety check kept the
-  lead from deleting (drive root): the owner removes it.
+  107 (#75), 085 (#76), 090 (#77), 093 (#78), 077 (#79), 099 (#80), 118 (#81), 121 (#82), 086 (#83), 111 (#84),
+  109 (#85), 119 (#86), 097 (#87), 087 (#88), 108 (#89), 092 (#90). Rulings 76-80 added. 120 was landing at handover.
+- In flight (branches task/NNN-*): 094 (start-up and sync measurement), 095 (first frame; harness named
+  tests/blender/probe_ttff.py by ruling so check full does not run it).
+- Ready next: 122 (sort by distinct programs, ruling 80) and 123 (between-pass idle), both after 120; then
+  re-measure B-19 on b1m/b5m and decide remedy (b) and spike C (093 Do 5). 096 after 123 (B-14 depends on it);
+  091 last among measurements (it times tiers, needs a quiet machine); 100 closes M1a.
+- Wavefront after 120: B-1M 14.7 ms, B-5M 16.9 ms per 1080p pass (from 17.0 / 28.8); B-19 still fails (idle
+  ~18-20 %, ~1.7 ms of it between passes); B-17 passes; B-20 2.00x / 1.63x Cycles. CUDA graphs measured and
+  dropped (OptiX refuses stream capture); the material sort is a net loss on single-program scenes (ruling 80).
+- M-1 probe (092): stack 480 B fits; spills 130/376 B over 128/192 -> D10 ladder, first M1b task (STATUS).
+- R = 2 GiB (097, P5 growth reading) in 0007 d14 and kCudaReserveBytes.
+- Owner questions raised: exact JPEG parity (ruling 78). The file out/tmp/blend_cornell_area.png under the C: drive
+  root is a stray file from 090 that a safety check kept the lead from deleting (drive root): the owner removes it.
 - After M1a (task 100): the owner agreed to a Fable planning session for M1b, an Opus review of
   that plan, and a fresh coordinator session.
 - Landing notes learned the hard way: a Canary line names C++ cases after the executable
   (`astroray_tests_cpu "suite/case"`) and Python cases after the file; land.ps1 cleanup fails with
-  "Permission denied" if any shell's cwd is inside the worktree (remove the directory afterwards);
-  a lead commit on local main rides into a landing's squash only if the task branch was rebased on
+  "Permission denied" if any shell's cwd is inside the worktree or the implementer agent still runs (stop it, remove
+  the directory); a lead commit on local main rides into a landing's squash only if the task branch was rebased on
   it; after each merge, `git rebase origin/main` on main (never reset away a local-only commit) and
   push main when it still carries lead commits.
 - land.ps1 runs Canary commands verbatim (every required argument, e.g. `--device cpu`), and it does not
   rebuild out/scenes: after main changes the ABI, a branch's recordings are stale and analytic/integrator
   canaries fail "without the patch". Rerun `tools/scenes.py` in the worktree (through tools/lib/python.ps1)
   and land again. Keep every shell's cwd out of a worktree that is about to land.
+- The Canary line must read `tasks/NNN.canary.patch must turn red: ...`; land runs every `*.py` token on it as a
+  test, even in prose. Windowed-Blender canaries make prepare take about an hour (land-pr.sh allows 80 min).
 - Any change under tests/ (including a re-blessed tests/budgets/counters.toml) needs a canary patch.
 - If hosted `ci` never starts for a landing PR ("ci is not success" with no run listed), close and reopen
-  the PR to fire pull_request again, wait for it, then `tools/land.ps1 merge NNN`.
+  the PR to fire pull_request again, wait for it, then `tools/land.ps1 merge NNN`. Hosted ci also runs the
+  headless sync suite against the bpy wheel, which the local gate does not.
 - A prepare that passes and then fails (ci red, refused merge) leaves a "(land)" commit on the branch that
   deletes the task file; `git revert` it in the worktree before the implementer continues or you re-land.
+- Start landings only with run_in_background, never `( ... &)` from a foreground shell: that does start, Git Bash's
+  ps does not show the pwsh, and two prepares in one worktree race on the canary patch (tree left dirty). Check
+  Win32_Process for land.ps1 before relaunching. Chain landings by waiting for the previous land_with_body/land-pr
+  process to exit, not for log text.
 - A task that adds a tools/lib switch its own canary needs (085's -Gui) cannot prepare with main's
   land.ps1; run the worktree's tools/land.ps1 prepare, then open the PR and merge with main's.
 - Stale worktree directories with no git registration: .claude/worktrees/agent-a3a823bde1b1e2a0c,

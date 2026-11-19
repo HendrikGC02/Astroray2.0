@@ -1,7 +1,6 @@
 # Status
 
-Overwritten by the lead only. Live facts (branches, PRs, last gate) come from
-`tools/status.ps1` once it exists, never from this page.
+Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `tools/status.ps1`, never from here.
 
 ## Phase
 Build phase. Records signed off (O30); speed asked for (O31): several implementers at once, review for
@@ -42,8 +41,10 @@ None. Unowned follow-ups (a task that touches the area takes them):
   move after a full sync sends set_instances; film_exposure has no visible effect in the viewport (086/111).
 - M1b: Mix/Add Shader needs 058's compiler to accept one value feeding two EMIT_LE; textured Roughness and Specular
   IOR Level need a colour-to-float op (Cycles: luminance); 083 Do 7 (auto-converted Emission flag, per-term RGB for
-  AUTO); a spectral AR_SPECTRUM_BLACKBODY lamp option (082 folds temperature to RGB as Cycles does).
+  AUTO); a spectral AR_SPECTRUM_BLACKBODY lamp option (082 folds temperature to RGB as Cycles does). First
+  M1b task: M-1 probe spills 130/376 B over 128/192 (stack 480 B fits; 304 B record + 128 B registers stand), D10
+  ladder steps 1-3 on the probe (092). Material/World.use_nodes are deprecated in 5.3 (087).
 
 ## Budget headroom
-Landing gates ~115-125 s of B-09's 180 s after 121 overlapped the CPU and GPU halves (tripwire ~18 s, Blender smoke
-~20 s). `check fast` 5-7 s warm; it can exceed B-08 under load or after a rebuild. Spikes: docs/spikes/*/RESULTS.md.
+Landing gates ~130-165 s of B-09's 180 s (tripwire ~18 s, Blender smoke ~20 s); `check full` ~13-15 min. `check fast`
+5-7 s warm; it exceeds B-08 under load or after a rebuild. Spikes: docs/spikes/*/RESULTS.md.
