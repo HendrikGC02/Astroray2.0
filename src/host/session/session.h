@@ -99,6 +99,10 @@ struct SessionProgress {
   // Session-owned, so they need no scene and stay valid after CLOSED.
   uint32_t samples_per_pixel = 0;  // in the current epoch
   float last_pass_ms = 0.0f;       // the last resolved pass: scheduler run plus resolve
+  // Device::memory_info as the render thread read it when it published the last pass (0 before the
+  // first pass and on the CPU device), so a progress poll never calls into the device.
+  uint64_t device_free_bytes = 0;
+  uint64_t device_total_bytes = 0;
 };
 
 // What a film read runs against, under the render lock: the device and film of the session
@@ -305,6 +309,7 @@ class Session {
   ReportTable detached_scene_report_;  // the scene's report as of detach
   ReportTable report_snap_;            // the latest merged snapshot
   float last_pass_ms_ = 0.0f;
+  uint64_t device_free_bytes_ = 0, device_total_bytes_ = 0;  // published with last_pass_ms_
   PassCounters last_counters_;
   SessionProgress detached_progress_;  // what progress() reports once the scene is detached
   std::atomic<uint64_t> listener_{0};  // the scene activation listener id, 0 once removed

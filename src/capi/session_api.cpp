@@ -221,9 +221,11 @@ AR_API ar_status ar_session_wait(ar_session h, uint32_t timeout_ms) {
 
 // Progress is read after CLOSED too: everything below is the session's own or cached at detach.
 // ledger_bytes sums the session's own ledger and its scene's device ledger, so their total is what
-// this render holds on the device and 0002 D13's check compares it with the drop in free bytes. The
-// CPU device has no device memory, so device_free_bytes and device_total_bytes stay 0 there; CUDA
-// sessions fill them from cuMemGetInfo (0007 d14).
+// this render holds on the device and 0002 D13's check compares it with the drop in free bytes. The two
+// ledgers are read under their own locks one after the other, so an allocation between the reads can
+// show in one ledger's sum and not yet in the other's. device_free_bytes and device_total_bytes are
+// cuMemGetInfo's as the render thread published them with the last pass (0007 d14); this call makes no
+// device call. They stay 0 on the CPU device, which has no device memory.
 AR_API ar_status ar_session_get_progress(ar_session h, ar_progress* progress) {
   if (!h || !h->session) return AR_ERR_INVALID_ARGUMENT;
   if (!progress) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_get_progress output is null");
@@ -244,7 +246,8 @@ AR_API ar_status ar_session_get_progress(ar_session h, ar_progress* progress) {
       progress->ledger_bytes[i] = (h->device ? h->device->ledger().category_total(c) : 0) +
                                   (h->scene_ledger ? h->scene_ledger->category_total(c) : 0);
     }
-    if (h->device) h->device->memory_info(&progress->device_free_bytes, &progress->device_total_bytes);
+    progress->device_free_bytes = p.device_free_bytes;
+    progress->device_total_bytes = p.device_total_bytes;
     return AR_OK;
   } catch (const std::exception& e) {
     return fail(h, AR_ERR_INTERNAL, e.what());

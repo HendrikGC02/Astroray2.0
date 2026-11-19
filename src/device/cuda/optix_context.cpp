@@ -40,6 +40,8 @@ struct OptixContext::Impl {
   LogSink sink;
   std::mutex records_mutex;
   std::vector<uint64_t> records;  // DEVICE_CONTEXT ledger records, released with the context
+  bool instance_build_claimed = false;  // under records_mutex
+  uint32_t instance_build_charges = 0;  // under records_mutex
 };
 
 OptixContext::OptixContext(Device& device, uint32_t device_index)
@@ -85,6 +87,19 @@ uint64_t OptixContext::free_bytes() const {
   uint64_t free = 0, total = 0;
   if (!device_.memory_info(&free, &total)) throw DeviceError("OptixContext: the device reports no memory (dead device)");
   return free;
+}
+
+bool OptixContext::claim_first_instance_build() {
+  std::lock_guard<std::mutex> lock(impl_->records_mutex);
+  if (impl_->instance_build_claimed) return false;
+  impl_->instance_build_claimed = true;
+  ++impl_->instance_build_charges;
+  return true;
+}
+
+uint32_t OptixContext::instance_build_charges() const {
+  std::lock_guard<std::mutex> lock(impl_->records_mutex);
+  return impl_->instance_build_charges;
 }
 
 void OptixContext::record_drop(uint64_t free_before) {

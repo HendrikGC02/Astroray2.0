@@ -349,6 +349,8 @@ SessionProgress Session::progress() const {
   p.samples_per_pixel = uint32_t(stats_.samples_done);
   p.film_epoch = published_film_epoch_;
   p.last_pass_ms = last_pass_ms_;
+  p.device_free_bytes = device_free_bytes_;
+  p.device_total_bytes = device_total_bytes_;
   p.state = state_;
   if (p.state != AR_STATE_CLOSED && ctx_.poisoned.load(std::memory_order_acquire)) p.state = AR_STATE_FAILED;
   return p;
@@ -936,6 +938,8 @@ void Session::render_loop() {
       const bool resolved = resolve(lr.epoch, lr.generation);
       const std::chrono::duration<float, std::milli> took = std::chrono::steady_clock::now() - pass_start;
       batching_.note_pass(double(took.count()) * 1e-3);
+      uint64_t free_bytes = 0, total_bytes = 0;
+      device_.memory_info(&free_bytes, &total_bytes);  // the render thread is the device's only caller here
       if (options_.test_sleep_after_resolve_ms != 0)
         std::this_thread::sleep_for(std::chrono::milliseconds(options_.test_sleep_after_resolve_ms));
       // One hold publishes the pass: a poll that sees the new sample count reads this pass's time
@@ -946,6 +950,8 @@ void Session::render_loop() {
         ++stats_.passes_resolved;
       }
       last_pass_ms_ = took.count();
+      device_free_bytes_ = free_bytes;
+      device_total_bytes_ = total_bytes;
       last_counters_ = scheduler_->counters();
     }
     // 0007 d50: during interaction every pass is a displayed update; afterwards several passes

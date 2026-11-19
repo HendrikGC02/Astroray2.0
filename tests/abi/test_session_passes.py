@@ -190,6 +190,16 @@ class TestSessionPasses(unittest.TestCase):
         self.commit_settings([], statistics=a.AR_STATISTICS_OFF + 1, expect=a.AR_ERR_INVALID_ARGUMENT)
         print(f"statistics off: {len(off)} passes; on: {len(on)} passes (AR Bounces at {index})")
 
+    def test_statistics_pass_requested_while_off(self):
+        # A statistics pass named while the statistics are off is a pass this film does not produce
+        # (ruling 74): one PASS_UNSUPPORTED entry, never a silent omission.
+        a = self.abi
+        gen = self.commit_settings([b"AR Bounces"], statistics=a.AR_STATISTICS_OFF)
+        session = self.start_session()
+        self.settle(session, gen)
+        self.assertNotIn("AR Bounces", self.passes(session))
+        self.assertEqual(self.pass_unsupported(session), [(b"AR Bounces", a.AR_LEVEL_WARNING, 0, 1)])
+
     def test_stale_index_after_a_rebuild_is_refused(self):
         # With the AOVs, IndexMA sits where AR Invalid sits without them; both are one-component
         # means, so only the revision check tells a stale index from a valid one.

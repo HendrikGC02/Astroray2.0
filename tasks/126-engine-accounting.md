@@ -21,3 +21,4 @@ Progress:
 - B-29 (b1m 1080p, 280 passes each, alternating rounds): on 13.425 ms, off 13.184 ms median, +1.83%; row set to <= 2.4% (x 1.3).
 - Lead ruling: scene_accel_gpu and scene_upload ledger checks compare total() - DEVICE_CONTEXT exactly, assert DEVICE_CONTEXT > 0 while the OptiX context lives and 0 after the builder goes.
 - check fast PASS 9.2 s, check gate PASS 136.2 s; canary 5 hunks each red alone; b5m full case gap 13.8 MiB.
+- Review rulings: module overhead measured 0 MiB, no record (D13 note, comment); device free/total published by the render thread with each pass; TLAS drop charged once per OptiX context; statistics pass requested while off tested.
