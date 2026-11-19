@@ -27,12 +27,6 @@ _FIELDS = (  # name, dtype, width
     ("crypto_assets", np.uint32, 1), ("colors", np.float32, 4), ("visibility", np.uint32, 1),
     ("flags", np.uint32, 1), ("light_groups", np.uint8, 1), ("material_offsets", np.uint32, 1),
     ("material_counts", np.uint32, 1))
-# Array field -> the _object_props entry it repeats per instance.
-_PER_OBJECT_FIELD = {"pass_indices": "pass_index", "crypto_objects": "crypto_object",
-                     "crypto_assets": "crypto_asset", "colors": "color", "visibility": "visibility",
-                     "flags": "flags", "light_groups": "light_group", "material_offsets": "mat_offset",
-                     "material_counts": "mat_count"}
-_PER_OBJECT = tuple(_PER_OBJECT_FIELD.values())
 
 
 def murmur3_32(data, seed=0):
@@ -83,24 +77,37 @@ def _top_parent(ob):
 
 
 def _object_props(ob, lightgroups, material_key, pool, pool_offsets):
-    """Per original object: read once and cached by the caller."""
-    vis = 0
-    for attr, bit in _VISIBILITY:
-        if getattr(ob, attr):
-            vis |= bit
-    flags = (FLAG_HOLDOUT if ob.is_holdout else 0) | \
-            (FLAG_SHADOW_CATCHER if ob.is_shadow_catcher else 0)
+    """The per-object fields foreach_get cannot read (strings and pointers), once per original object."""
     table = tuple(material_key(s.material) for s in ob.material_slots)
     if table not in pool_offsets:  # instances sharing a table share its offset
         pool_offsets[table] = len(pool)
         pool.extend(table)
-    return {
-        "visibility": vis, "flags": flags, "pass_index": ob.pass_index, "color": tuple(ob.color),
-        "light_group": lightgroups.get(ob.lightgroup, 0),
-        "crypto_object": _hash_name(ob.name), "crypto_asset": _hash_name(_top_parent(ob).name),
-        "mat_offset": pool_offsets[table] if table else 0, "mat_count": len(table),
-    }
+    crypto = _hash_name(ob.name)
+    top = _top_parent(ob)
+    return (lightgroups.get(ob.lightgroup, 0), crypto, crypto if top == ob else _hash_name(top.name),
+            pool_offsets[table] if table else 0, len(table))
 
+
+def _object_scalars(uids):
+    """visibility, flags, pass_index and colour of the original objects `uids`, in that order, each read for
+    every object in bpy.data.objects with one foreach_get (B-31: per-object getattr was most of the loop)."""
+    import bpy
+    obs = bpy.data.objects
+    n = len(obs)
+
+    def get(prop, dt, w=1):
+        a = np.empty(n * w, dt)
+        obs.foreach_get(prop, a)
+        return a.reshape(n, w) if w > 1 else a
+    row = {u: i for i, u in enumerate(get("session_uid", np.int32).tolist())}
+    pick = np.fromiter((row[u] for u in uids), np.intp, len(uids))
+    vis = np.zeros(n, np.uint32)
+    for attr, bit in _VISIBILITY:
+        vis |= np.where(get(attr, np.bool_), np.uint32(bit), np.uint32(0))
+    flags = (np.where(get("is_holdout", np.bool_), np.uint32(FLAG_HOLDOUT), np.uint32(0)) |
+             np.where(get("is_shadow_catcher", np.bool_), np.uint32(FLAG_SHADOW_CATCHER), np.uint32(0)))
+    return {"visibility": vis[pick], "flags": flags[pick], "pass_indices": get("pass_index", np.int32)[pick],
+            "colors": get("color", np.float32, 4)[pick]}
 
 def _rows(matrices16, origin):
     """(n, 16) raw float[16] matrix_world values -> (n, 12) row-major 3x4 rows with the origin folded in.
@@ -181,13 +188,16 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
     order = list(props)
     slot = {u: i for i, u in enumerate(order)}
     which = np.fromiter((slot[u] for u in owner), np.intp, n)
-    per = {f: [props[u][f] for u in order] for f in _PER_OBJECT}
+    per = _object_scalars(order) if order else {}
+    for name, column in (("light_groups", 0), ("crypto_objects", 1), ("crypto_assets", 2),
+                         ("material_offsets", 3), ("material_counts", 4)):
+        per[name] = [props[u][column] for u in order]
     arrays = {"geom_keys": np.asarray(geom, np.uint64), "object_keys": np.asarray(obj, np.uint64),
               "random_ids": np.asarray(rand, np.uint32)}
     for name, dt, w in _FIELDS:
         if name not in arrays:
-            vals = np.asarray(per[_PER_OBJECT_FIELD[name]], dt).reshape((len(order), w) if w > 1 else len(order))
-            arrays[name] = np.ascontiguousarray(vals[which]) if n else np.zeros((0, w) if w > 1 else 0, dt)
+            empty = np.zeros((0, w) if w > 1 else 0, dt)
+            arrays[name] = np.ascontiguousarray(np.asarray(per[name], dt)[which]) if n else empty
     return InstanceTable(n, arrays, xf, np.asarray(pool, np.uint64), by_object, index_of)
 
 
