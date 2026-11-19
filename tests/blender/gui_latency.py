@@ -48,6 +48,8 @@ WATCHDOG_S = 270.0
 CANCEL_AFTER_S = 1.0
 CANCEL_LIMIT_MS = 100.0   # 0009 B-17: fails above 100 ms (target 20 ms)
 CHANGES, ORBIT_S, DEG = 8, 3.0, 0.4
+PUBLISH_GAP_MS = 1000.0 / 60.0  # 0009 B-34: at most 60 frames/s during interaction (ruling 82)
+HOST_TIMER_MS = 1.0  # ruling 82: the publish wait wakes up to one tick late; Blender requests a 1 ms timer
 T0 = time.monotonic()
 STATE = {"errors": {}}
 EVIDENCE = os.path.join(ROOT, "out", "evidence", "096")
@@ -279,7 +281,6 @@ class TestLatency(Case):
         self.assertIn(rec["state"], tuple(rec["abi"].values()), "a cancel ends PAUSED or TRIMMED")
         self.assertLessEqual(ms, CANCEL_LIMIT_MS)
 
-    @unittest.skip("task 130: kInteractionPublishGapS is waited before each interaction pass")
     def test_view_change_latency_within_b32(self):
         """0007 d25 / B-32: a view change reaches the screen (the first frame of a newer epoch, with a pass of it
         resolved) within the rest of the pass in flight + one pass + present, in every one of the single changes."""
@@ -295,19 +296,21 @@ class TestLatency(Case):
         for c, b in zip(ch, bound):
             self.assertLessEqual(c["to_screen_ms"], b)
 
-    @unittest.skip("task 130: kInteractionPublishGapS is waited before each interaction pass")
     def test_orbit_frames_are_for_newer_views(self):
         """B-32: during the orbit a new frame follows every completed pass: every frame the host acquires is a
         new one (its id above the last), is shown, and the gaps between shown frames stay within the bound of
-        one view change (the 99th percentile of the gaps against 2 passes + a redraw + a present, each at its
-        own 99th percentile; the frame's epoch is not on the frame, ruling 69, so no per-frame epoch is asserted)."""
+        one view change (the 99th percentile of the gaps against 2 passes + a redraw interval + a present, each
+        at its own 99th percentile, the terms of the gap's structural maximum; the frame's epoch is not on the
+        frame, ruling 69, so no per-frame epoch is asserted).
+        Ruling 82: where 2 passes are shorter than B-34's 1/60 s publish gap, the cap wins over V12's frame per
+        pass, so the pass term is max(2 x pass p99, 1/60 s), and the publish wait adds up to one host timer tick."""
         fr = self.orbit_frames()
         ids = [f["id"] for f in fr]
         notshown = [f["id"] for f in fr if not f["presented"]]
         a, b = STATE["orbit_window"]
         draws = [d for d in STATE["stamps"]["draws"] if a <= d["t"] <= b]
         gaps = np.diff([f["t"] for f in fr]) * 1e3
-        bound = 2 * np.percentile([f["pass_ms"] for f in fr], 99) + float(np.median(np.diff([d["t"] for d in draws]))) * 1e3             + np.percentile([(d["upload_s"] + d["draw_s"]) * 1e3 for d in draws if d["frame"]], 99)
+        bound = max(2 * np.percentile([f["pass_ms"] for f in fr], 99), PUBLISH_GAP_MS) + HOST_TIMER_MS + float(np.percentile(np.diff([d["t"] for d in draws]), 99)) * 1e3             + np.percentile([(d["upload_s"] + d["draw_s"]) * 1e3 for d in draws if d["frame"]], 99)
         print(f"RESULT latency {SCENE} orbit: {len(fr)} frames in {ORBIT_S:.0f} s, gap median {np.median(gaps):.1f} p99 "
               f"{np.percentile(gaps, 99):.1f} max {gaps.max():.1f} ms against bound {bound:.1f} ms, not presented {len(notshown)}")
         self.assertEqual(sorted(set(ids)), ids, "a frame was acquired twice or out of order")

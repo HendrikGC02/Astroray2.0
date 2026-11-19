@@ -332,6 +332,42 @@ TEST_CASE("session/cancel stops at the next launch") {
   CHECK(st.frames_published == 0);
 }
 
+TEST_CASE("session/wait wakes on pause") {
+  // 0007 d27: F12 loops on wait; a cancel ends in PAUSED, which must end the wait (0009 B-37) rather
+  // than its timeout. Launch 1 is held so the cancel lands while a pass is in flight.
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  g_gates[0].reset();
+  g_gates[0].hold_at = 1;
+  Rig r(ctx, scene, 4, 16, &gen_terminate<0>);
+  r.s->start();
+  REQUIRE(until([&] { return g_gates[0].count() >= 1; }));
+  r.s->cancel();
+  g_gates[0].release();
+  CHECK(r.s->wait(5000));
+  CHECK(state(*r.s) == AR_STATE_PAUSED);
+}
+
+TEST_CASE("session/resume leaves PAUSED before wait can see it") {
+  // wait() returns on PAUSED, so resume() itself ends PAUSED: a wait right after it must not return
+  // for the pause just lifted (the render thread leaves PAUSED only at its loop top). Twenty rounds,
+  // each read straight after resume().
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  g_gates[0].reset();
+  Rig r(ctx, scene, 4, 16, &gen_terminate<0>);
+  r.s->start();
+  for (int round = 0; round < 20; ++round) {
+    r.s->pause();
+    REQUIRE(until([&] { return state(*r.s) == AR_STATE_PAUSED; }));
+    r.s->resume();
+    const uint32_t after = state(*r.s);
+    CHECK(after != AR_STATE_PAUSED);
+  }
+  CHECK_FALSE(r.s->wait(5));  // rendering with no sample limit: only the timeout ends this wait
+  CHECK(state(*r.s) == AR_STATE_RENDERING);
+}
+
 }  // TEST_SUITE
 
 TEST_SUITE("gate") {

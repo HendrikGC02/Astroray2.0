@@ -91,7 +91,9 @@ int ledger_check(const char* rec, const char* log, uint32_t width, uint32_t heig
     const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(120);
     for (;;) {
       ar_session_wait(s, 100);
-      if (ar_session_get_progress(s, &p) != AR_OK || p.state == AR_STATE_FAILED) {
+      // ar_session_wait returns at once on PAUSED and nothing resumes a session the recording
+      // paused, so PAUSED fails here instead of spinning until the timeout.
+      if (ar_session_get_progress(s, &p) != AR_OK || p.state == AR_STATE_FAILED || p.state == AR_STATE_PAUSED) {
         fprintf(stderr, "session failed (state %u)\n", p.state);
         rc = 5;
         break;

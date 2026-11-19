@@ -141,7 +141,7 @@ class Session {
   // Non-blocking: cancels; the render thread frees the session's device memory and the state
   // becomes CLOSED.
   void close();
-  // Blocks until the state is CONVERGED, CLOSED or FAILED, the context is poisoned, or
+  // Blocks until the state is PAUSED, CONVERGED, CLOSED or FAILED, the context is poisoned, or
   // `timeout_ms` passes; returns whether one of those was reached.
   bool wait(uint32_t timeout_ms);
   // Blocks until the render thread has exited (after close()).
@@ -232,6 +232,7 @@ class Session {
   void raise_interrupt_if_due();
   void fail(const std::string& why, const DeviceError* device_error = nullptr);
   void set_state_locked(uint32_t state);
+  void leave_paused_locked();  // start()/resume(): PAUSED becomes RENDERING at once
   FitsProvenance fits_provenance_locked() const;
 
   Scene& scene_;  // not touched once scene_detached_ is set

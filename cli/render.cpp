@@ -197,7 +197,10 @@ int run_sessions(Replayed& r, uint32_t timeout_ms) {
     for (;;) {
       ar_session_wait(s, 100);
       if (ar_session_get_progress(s, &p) != AR_OK) { printf("session %zu: progress failed\n", i); return kExitFailure; }
-      if (p.state == AR_STATE_FAILED || p.state == AR_STATE_CLOSED || p.state == AR_STATE_TRIMMED) {
+      // ar_session_wait returns at once on PAUSED, and nothing here resumes a session the recording
+      // paused, so it would never converge: fail now rather than spin until the timeout.
+      if (p.state == AR_STATE_FAILED || p.state == AR_STATE_CLOSED || p.state == AR_STATE_TRIMMED ||
+          p.state == AR_STATE_PAUSED) {
         uint8_t msg[256] = {};
         ar_session_last_error(s, sizeof msg, msg);
         printf("session %zu ended in state %u: %s\n", i, p.state, text(msg, sizeof msg).c_str());
