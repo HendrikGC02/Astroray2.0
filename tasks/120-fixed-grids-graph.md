@@ -17,3 +17,4 @@ Budget: no gate time added.
 Depends on: 119.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
+- started: plan sent to the lead (one-step graph, rotated so the table read is last; sort as a second graph with per-launch copy range; key-based re-capture); waiting for the ruling before code.
