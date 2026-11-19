@@ -1,0 +1,26 @@
+diff --git a/src/host/light/light_builder.cpp b/src/host/light/light_builder.cpp
+index 7e35a3c..41a3cdd 100644
+--- a/src/host/light/light_builder.cpp
++++ b/src/host/light/light_builder.cpp
+@@ -74,7 +74,7 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
+     double energy = 0.0;
+     for (uint32_t i = first; i < last; ++i) {
+       const LightInput& li = in[i];
+-      if (i == first || !same_terms(in[i - 1], li))
++      if (i == first)
+         energy = li.terms.empty() ? display_energy({{li.record.emission, li.record.strength}}, obs) : display_energy(li.terms, obs);
+       imps[i] = energy * double(ar::light_power(li.record, scene, ar::Real(1)));
+     }
+diff --git a/src/host/scene/generation.cpp b/src/host/scene/generation.cpp
+index 9821375..d3b38f3 100644
+--- a/src/host/scene/generation.cpp
++++ b/src/host/scene/generation.cpp
+@@ -92,7 +92,7 @@ void WorkerPool::parallel_for(uint32_t count, uint32_t chunk, const Body& body)
+         err = std::current_exception();
+       }
+       std::lock_guard<std::mutex> lock(l.mutex);
+-      if (err && !l.error) l.error = err;
++      (void)err;
+       if (++l.done == l.chunks) l.done_cv.notify_all();
+     }
+   };
