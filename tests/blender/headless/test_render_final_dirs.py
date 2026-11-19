@@ -37,4 +37,4 @@ class TestUserDirs(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    support.main()
