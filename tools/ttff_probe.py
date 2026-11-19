@@ -31,8 +31,10 @@ import numpy as np
 import bpy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(os.path.dirname(HERE))
-sys.path.insert(0, HERE)
+ROOT = os.path.dirname(HERE)
+# A measurement, not a test (it lives in tools/ so check full does not run it); it reuses the smoke
+# harness's extension install and argument helpers.
+sys.path.insert(0, os.path.join(ROOT, 'tests', 'blender'))
 import smoke_a1  # noqa: E402  (the zip install and the argument helpers)
 
 MODULE = smoke_a1.MODULE
@@ -318,9 +320,9 @@ class Driver:
         out["jobs"] = [self.job_record(j) for j in self.jobs]
         out["m8"] = self.m8_result
         json.dump(out, open(self.out, "w"), indent=1)
-        print(f"probe_ttff: wrote {self.out}", flush=True)
+        print(f"ttff_probe: wrote {self.out}", flush=True)
         for sw in out.get("switches", []):
-            print("probe_ttff: switch", sw.get("n"), "first frame", sw.get("first_frame_s"), sw.get("error", ""), flush=True)
+            print("ttff_probe: switch", sw.get("n"), "first frame", sw.get("first_frame_s"), sw.get("error", ""), flush=True)
         finish(1 if out["errors"] or any("error" in s for s in out.get("switches", [])) else 0)
 
     @staticmethod

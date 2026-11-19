@@ -2,7 +2,7 @@
 # tools/measure_ttff.ps1 [-Scene b1m,b5m,s3_textured] [-Engine cycles,astroray] [-Runs 3] [-Hold 12] [-Rebuild] [-Shot] [-Summarise]
 # Time to first frame against Cycles (0007 d35: V7a the gate, V7b the phases) and the first M-8 numbers
 # (0005 Risks, 0009 B-24) on S1 = b1m, S2 = b5m (300 materials) and S3 = s3_textured. For every scene and
-# engine it starts -Runs fresh windowed Blender processes (tests/blender/probe_ttff.py), each under the machine
+# engine it starts -Runs fresh windowed Blender processes (tools/ttff_probe.py), each under the machine
 # lock; one process switches the viewport to Rendered, back to Solid and to Rendered again (the first and the
 # second switch) while tools/ttff_poller.ps1 watches the viewport region. Cycles runs with its log on
 # (--log cycles --log-level 4), from which V7b is read: the first `Rendered N samples` line minus (the
@@ -80,7 +80,7 @@ function Invoke-Run([string]$name, [string]$eng, [int]$k) {
     if (-not $seed.WaitForExit(120000)) { Stop-ArProcess -Id $seed.Id; throw 'seeding the Blender profile timed out' }
     $seed.WaitForExit()
     $logArgs = if ($eng -eq 'cycles') { @('--log', 'cycles', '--log-level', '4') } else { @() }
-    $argv = $logArgs + @('--python-exit-code', '1', '--python', (Join-Path $root 'tests/blender/probe_ttff.py'), '--',
+    $argv = $logArgs + @('--python-exit-code', '1', '--python', (Join-Path $root 'tools/ttff_probe.py'), '--',
       '--scene', $name, '--engine', $eng, '--blend', $blend, '--out', $result, '--hold', "$Hold", '--crop', $Crop, '--source', $Source) +
       $(if ($eng -eq 'astroray' -and $name -eq 'b5m') { @('--m8') } else { @() }) + $(if ($Shot) { @('--shot') } else { @() })
     $before = Get-Busy

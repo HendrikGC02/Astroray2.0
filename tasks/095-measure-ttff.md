@@ -1,7 +1,7 @@
 # 095 Measurement: time to first frame vs Cycles (V7a gate, V7b phases) and M-8 translation time
 Goal: the first-frame gate is unmeasured with materials, textures and lights -> a screen-capture harness measures user-perceived first frame (V7a) for Cycles and Astroray on S1, S2 (300 materials) and S3, first and second switch, a log-based phase breakdown (V7b) explains gaps, and S2 gives the first M-8 translation numbers, with the remedies of 0007 d35 applied in order on failure.
 Read first: 0007 d35 (V7a gate <= 1.5x Cycles, goal 1.0x; V7b definition; remedies in order), V7a, V7b; 0005 Risks M-8 and 0009 B-24 (translation rows); docs/ROADMAP.md Measurements row "First frame"; docs/spikes/B-blender-end-to-end/RESULTS.md section 3 and its CopyFromScreen method.
-Scope: tests/blender/probe_ttff.py (renamed from gui_ttff.py by lead ruling), tools/ttff_poller.ps1 (screen capture of the viewport region at >= 100 Hz, own PID only), tools/measure_ttff.ps1, blender/astroray (log lines: first `ar_scene_edit_begin`, first frame presented; translation timing per material), tools/report.py (first-frame section fed from history lines).
+Scope: tools/ttff_probe.py (renamed from gui_ttff.py by lead ruling), tools/ttff_poller.ps1 (screen capture of the viewport region at >= 100 Hz, own PID only), tools/measure_ttff.ps1, blender/astroray (log lines: first `ar_scene_edit_begin`, first frame presented; translation timing per material), tools/report.py (first-frame section fed from history lines).
 Out of scope: implementing remedies (follow-up tasks); Classroom (M3).
 Reference: spike B `gui_screenshot.py`, `gui_cycles_viewport.py` and `parse_cycview.py` (read with `git show spikes-final:spikes/B-blender-end-to-end/<file>`) for the poller and Cycles log parsing.
 Do:
@@ -16,7 +16,8 @@ Budget: B-15 (first frame) evaluated; B-24 translation rows reset only with head
 Depends on: 089, 090, 086.
 Size: M (harness about 300 lines plus result); stop and report at 2x.
 Progress:
-- started (lead ruling: harness named tests/blender/probe_ttff.py, not gui_ttff.py; measurement, not a test, so check full does not run it)
+- started (lead ruling: harness named tools/ttff_probe.py, not gui_ttff.py; measurement, not a test, so check full does not run it)
 - V7a BLOCKED: CopyFromScreen and PrintWindow of Blender's window return only the class background (64,64,64) here, Vulkan and OpenGL, window foreground and uncloaked; a GDI test window captures fine. In-process POST_PIXEL read_color hangs Blender with Cycles (spike B saw it too). Harness has --source screen|gpu|none; V7b and M-8 measured with none.
 - Stopped at 2x diff (about 860 lines): report.py first-frame section and ttff_s2.png not written; needs a lead decision on V7a capture.
 - Lead ruling: 095 lands V7b (per-run table, phases), M-8 on S2, instrumentation and harness; V7a, GPU-visible capture (DXGI/WGC), report.py first-frame section, ttff_s2.png and -BlenderArgs for Invoke-ArBlender move to task 127. --source screen keeps failing loudly. Size overrun accepted.
+- lead: the harness moved to tools/ttff_probe.py: it is a measurement, and land requires a canary for any change under tests/.
