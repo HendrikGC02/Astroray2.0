@@ -260,6 +260,17 @@ def probe_warnings(warns):
     return ["WARNING (probe, capped) " + w for w in warns]
 
 
+def gate_cubins(launch, budget, base, cubins, probe_cubins, is_stage, declared, full, extra_fails=()):
+    """The one evaluation sequence of resources(), probe() and the self-test: evaluate() over the
+    production cubins plus the capped probe cubins, then the probe kernels' breaches split off as
+    warnings. Returns (failures, probe warnings, lines, probe lines, deferred)."""
+    every = dict(cubins)
+    every.update(probe_cubins)
+    fails, lines, deferred = evaluate(launch, budget, base, every, is_stage, declared, full)
+    fails, warns, plines = split_probe(fails + list(extra_fails), lines, probe_cubins)
+    return fails, warns, lines, plines, deferred
+
+
 def resources(args):
     build = os.path.join(ROOT, args.build_dir)
     launch = parse_launch_rows(open(os.path.join(ROOT, LAUNCH_CONFIG), encoding="utf-8").read())
@@ -271,15 +282,13 @@ def resources(args):
             probe_cubins = read_cubins(build, PROBE_CAPPED_DIR)
         else:
             print(f"kernelgate: {PROBE_CAPPED_DIR} not built yet; the probe rows are measured by --probe")
-        cubins.update(probe_cubins)
 
     def is_stage(stem):
         return not stem.startswith(("test_", "probe_")) and os.path.exists(os.path.join(ROOT, "src/kernel_gpu", stem + ".cu"))
 
-    fails, lines, deferred = evaluate(launch, budget, base_budget(args.base), cubins, is_stage,
-                                      parse_declared(args.declared), args.full)
-    fails += check_ptx(os.path.join(build, "optix"), launch, budget)
-    fails, warns, _ = split_probe(fails, lines, probe_cubins)
+    fails, warns, lines, _, deferred = gate_cubins(launch, budget, base_budget(args.base), cubins, probe_cubins, is_stage,
+                                                   parse_declared(args.declared), args.full,
+                                                   check_ptx(os.path.join(build, "optix"), launch, budget))
     for ln in lines:
         print(ln)
     for w in probe_warnings(warns):
@@ -288,7 +297,7 @@ def resources(args):
         print("FAIL " + f)
     # Never a silent skip: the gate always says how many rows it left to `check full`.
     print(f"kernelgate: {len(deferred)} row(s) gated full deferred to check full" + (f": {', '.join(deferred)}" if deferred else ""))
-    print(f"kernelgate: {len(cubins)} cubins, {len(fails)} failures")
+    print(f"kernelgate: {len(cubins) + len(probe_cubins)} cubins, {len(fails)} failures")
     return 1 if fails else 0
 
 
@@ -381,8 +390,7 @@ def probe(args):
     probe_cubins = read_cubins(build, PROBE_CAPPED_DIR)
     launch = parse_launch_rows(open(os.path.join(ROOT, LAUNCH_CONFIG), encoding="utf-8").read())
     budget = parse_budget(open(os.path.join(ROOT, BUDGET), encoding="utf-8").read())
-    fails, lines, _ = evaluate(launch, budget, {}, probe_cubins, lambda s: False, {}, True)
-    _, warns, lines = split_probe(fails, lines, probe_cubins)
+    _, warns, _, lines, _ = gate_cubins(launch, budget, {}, {}, probe_cubins, lambda s: False, {}, True)
     for ln in lines:
         print(f"capped {ln.split(' | ')[0]}")
     for w in probe_warnings(warns):
@@ -398,14 +406,18 @@ def self_test():
         read = lambda f: open(os.path.join(d, f), encoding="utf-8").read()
         want = read("expect.txt").split("\n")
         launch, budget = parse_launch_rows(read("launch_config.h")), parse_budget(read("budget.toml"))
-        cubins = {f[:-len(".resusage.txt")]: (read(f), read(f.replace(".resusage.", ".ptxas.")))
-                  for f in sorted(os.listdir(d)) if f.endswith(".resusage.txt")}
+        def case_cubins(sub):
+            p = os.path.join(d, sub)
+            if not os.path.isdir(p):
+                return {}
+            return {f[:-len(".resusage.txt")]: (read(os.path.join(sub, f)), read(os.path.join(sub, f.replace(".resusage.", ".ptxas."))))
+                    for f in sorted(os.listdir(p)) if f.endswith(".resusage.txt")}
+        # The case's own directory stands for kernels/, its kernels_probe_capped/ for the probe build.
+        cubins, probe_cubins = case_cubins("."), case_cubins(PROBE_CAPPED_DIR)
         bp = os.path.join(d, "base_budget.toml")  # the rows at the merge base, when the case needs growth
         base = parse_budget(read("base_budget.toml")) if os.path.exists(bp) else {}
-        fails, lines, deferred = evaluate(launch, budget, base, cubins, lambda s: False, {}, want[2:3] == ["full"])
-        # Stems named probe_* stand for kernels_probe_capped/ cubins: their breaches are warnings.
-        probes = {k: v for k, v in cubins.items() if k.startswith("probe_")}
-        fails, warns, _ = split_probe(fails, lines, probes)
+        fails, warns, _, _, deferred = gate_cubins(launch, budget, base, cubins, probe_cubins, lambda s: False, {},
+                                                  want[2:3] == ["full"])
         got = "fail" if fails else "pass"
         if want[1].startswith("deferred="):
             ok = got == want[0] and len(deferred) == int(want[1][9:])

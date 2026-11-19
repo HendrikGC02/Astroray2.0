@@ -21,8 +21,8 @@ namespace probe_m1 {
 // Opcodes ops.def does not define yet, numbered up to the ~100 of 0005 Risks M-1. Each is a
 // distinct body of one of the shapes the table's rows have (f32, f32x3 and spectrum arithmetic,
 // a transcendental, an immediate operand); they stand for future ops' size, not for any node.
-inline constexpr uint32_t kTargetOps = 100;
-static_assert(uint32_t(Op::COUNT_) <= 16, "ops.def grew: renumber the placeholder cases");
+// The placeholder cases below are opcodes 16-99, so they start where ops.def ends.
+static_assert(uint32_t(Op::COUNT_) == 16, "ops.def changed: renumber the placeholder cases");
 
 template <uint32_t K>
 AR_FN void placeholder_op(VmState& vm) {
@@ -89,7 +89,6 @@ AR_FN VmStatus run_entry_100(const uint32_t* prog, uint32_t offset, VmRegs* regs
   }
   return vm.status;
 }
-static_assert(kTargetOps == 100, "the placeholder cases above run to opcode 99");
 
 // ---- spike A's lobes (include/lobes.h), on OpenPBRParams ------------------------------------------
 // Physical exactness is not their purpose (spike A's own words): operation count and live state are.
