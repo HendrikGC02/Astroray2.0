@@ -11,7 +11,7 @@ Do:
 4. Re-measure with 096's harness (tools/viewport_rate_probe.py via its runner): B-14 on b1m, b5m, b_tx, a1; V12 latencies; V23 schedule unchanged.
 Acceptance: `pwsh tools/check.ps1 gate` passes; gui_latency.py passes on a1_furnace, b1m and b5m; the PR body holds before/after tables with commands.
 Look at: none.
-Canary: tasks/130.canary.patch must turn red: the pacing test and tests/blender/gui_latency.py's view-change case (name them in land format).
+Canary: tasks/130.canary.patch must turn red: astroray_tests_cpu "batching/session passes run back to back during interaction", astroray_tests_cpu "session/wait wakes on pause", tests/blender/gui_latency.py "TestLatency.test_view_change_latency_within_b32"
 Budget: none added.
 Depends on: 096.
 Size: S (about 150 lines); stop and report at 2x.

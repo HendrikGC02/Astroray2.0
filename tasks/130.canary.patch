@@ -1,0 +1,20 @@
+diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
+index 5fa86da..d6cee00 100644
+--- a/src/host/session/session.cpp
++++ b/src/host/session/session.cpp
+@@ -255,3 +255,3 @@ bool Session::wait(uint32_t timeout_ms) {
+   const auto pred = [this] {
+-    return terminal(state_) || state_ == AR_STATE_PAUSED || ctx_.poisoned.load(std::memory_order_acquire);
++    return terminal(state_) || ctx_.poisoned.load(std::memory_order_acquire);
+   };
+@@ -867,3 +867,9 @@ void Session::render_loop() {
+         } else {
+-          break;  // passes run back to back; only publishing is paced (below)
++          const double now = now_s();
++          const double wait = last_present_s_ + kInteractionPublishGapS - now;
++          if (wait > 0.0 && batching_.interacting(now)) {
++            wake_cv_.wait_for(lock, std::chrono::duration<double>(wait));
++            continue;
++          }
++          break;
+         }
