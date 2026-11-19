@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <functional>
 #include <stdexcept>
 
 #include "host/data_resource.h"
@@ -16,6 +18,7 @@
 #include "host/scene/scene_tables.h"
 #include "host/session/test_hooks.h"
 #include "host/thread.h"
+#include "host/thread_pool.h"
 
 namespace astroray::host {
 
@@ -211,6 +214,9 @@ std::shared_ptr<const LightTable> Scene::lights() {
   SceneLights in = gather_scene_lights(state_.instances.get(), *meshes, *mats, world.get(), false);
   with_lamps(&in);
   if (state_.lights && in.key == state_.light_key) return state_.lights;
+  // B-23 is measured from this line: the rebuild alone, not the key check above.
+  using Clock = std::chrono::steady_clock;
+  const Clock::time_point t_start = Clock::now();
   in = gather_scene_lights(state_.instances.get(), *meshes, *mats, world.get(), true);
   with_lamps(&in);
   const uint32_t lamp_first = uint32_t(in.lights.size());
@@ -223,16 +229,39 @@ std::shared_ptr<const LightTable> Scene::lights() {
   // 0003 d10: s = 2^k puts the largest emitter peak in [1, 2); it multiplies every emitter's strength
   // (record and estimate terms alike, so the importances and pmf do not move) and the film resolve
   // divides it out again. The key covers every emitter, so s changes only with a rebuild.
-  std::vector<double> peaks;
-  for (const LightInput& li : in.lights) peaks.push_back(emitter_peak(li, obs));
+  // Per-light work runs on this thread and the scene workers (0007 d23); the bodies read only `in`
+  // and `obs` and write their own indices, and the maximum stays in radiance_scale, serial.
+  const ChunkRunner run = [this](uint32_t count, const std::function<void(uint32_t, uint32_t)>& body) {
+    pool_->parallel_for(count, kDefaultChunk, body);  // 0002 D4 chunk size
+  };
+  const Clock::time_point t_gathered = Clock::now();
+  std::vector<double> peaks(in.lights.size());
+  run(uint32_t(in.lights.size()), [&](uint32_t first, uint32_t last) {
+    for (uint32_t i = first; i < last; ++i)
+      peaks[i] = (i != first && same_terms(in.lights[i - 1], in.lights[i])) ? peaks[i - 1] : emitter_peak(in.lights[i], obs);
+  });
   const double s = host::radiance_scale(peaks);
   for (LightInput& li : in.lights) {
     li.record.strength = float(double(li.record.strength) * s);
     for (EmissionTerm& t : li.terms) t.strength = float(double(t.strength) * s);
   }
+  const Clock::time_point t_scaled = Clock::now();
   // One immutable snapshot: the lights, s, and the lamps' instance records agree by construction.
   // The table is ours and unpublished until the assignment below, so the cast is safe.
-  auto table = std::const_pointer_cast<LightTable>(build_light_table(in.lights, in.scene, obs, meshes->shared_ledger()));
+  auto table = std::const_pointer_cast<LightTable>(build_light_table(in.lights, in.scene, obs, meshes->shared_ledger(), run));
+  {
+    const auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+    const Clock::time_point t_end = Clock::now();
+    size_t triangles = 0;
+    for (const ar::LightRecord& r : table->lights) triangles += r.type == uint8_t(ar::LightType::TRIANGLE);
+    char line[240];
+    std::snprintf(line, sizeof line,
+                  "light table: %zu lights (%zu emissive triangles) built in %.1f ms (gather %.1f, peaks and scale %.1f, "
+                  "importance and alias %.1f) on %u threads",
+                  table->lights.size(), triangles, ms(t_start, t_end), ms(t_start, t_gathered), ms(t_gathered, t_scaled),
+                  ms(t_scaled, t_end), pool_->workers() + 1);
+    ctx_.log.line("INFO", line);
+  }
   table->radiance_scale = s;
   table->lamp_first = lamp_first;
   for (size_t i = 0; i < lamps.size(); ++i) {
