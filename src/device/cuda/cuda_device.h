@@ -32,6 +32,9 @@ class CudaDevice final : public ModuleDevice {
   ~CudaDevice() override;
 
   void upload(const DeviceBuffer& dst, uint64_t offset, const void* src, uint64_t bytes) override;
+  // Stages `src` in the device's pinned ring and enqueues the copy; when the ring is full it
+  // waits once first. Throws std::invalid_argument above the ring's size.
+  void upload_async(const DeviceBuffer& dst, uint64_t offset, const void* src, uint64_t bytes) override;
   void download(void* dst, const DeviceBuffer& src, uint64_t offset, uint64_t bytes) override;
   void memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value, uint64_t bytes) override;
   void copy(const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src, uint64_t src_offset,

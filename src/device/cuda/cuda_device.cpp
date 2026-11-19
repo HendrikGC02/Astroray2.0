@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <mutex>
 #include <stdexcept>
@@ -78,7 +79,7 @@ uint32_t blocks_for(uint32_t items, uint32_t threads) {
   X(cuInit) X(cuDriverGetVersion) X(cuDeviceGet) X(cuDeviceGetAttribute) X(cuDevicePrimaryCtxRetain)                          \
   X(cuDevicePrimaryCtxRelease) X(cuCtxSetCurrent) X(cuCtxSynchronize) X(cuModuleLoadData)               \
   X(cuModuleUnload) X(cuModuleGetFunction) X(cuFuncGetAttribute) X(cuLaunchKernel) X(cuMemAlloc) X(cuMemFree)                 \
-  X(cuMemGetInfo) X(cuMemcpyHtoDAsync) X(cuMemcpyDtoHAsync) X(cuMemcpyDtoDAsync) X(cuMemsetD8Async) X(cuStreamCreate)        \
+  X(cuMemAllocHost) X(cuMemFreeHost) X(cuMemGetInfo) X(cuMemcpyHtoDAsync) X(cuMemcpyDtoHAsync) X(cuMemcpyDtoDAsync) X(cuMemsetD8Async) X(cuStreamCreate)        \
   X(cuStreamDestroy) X(cuEventCreate) X(cuEventRecord) X(cuEventSynchronize) X(cuEventDestroy)          \
   X(cuGetErrorName) X(cuGetErrorString)
 
@@ -179,6 +180,16 @@ struct CudaDevice::Impl {
   DeviceBuffer globals_buffer;  // the same allocation, as the traversal launch takes it
   std::unique_ptr<TraversalPipeline> traversal;  // INTERSECT_CLOSEST and INTERSECT_SHADOW
   uint64_t traversable = 0;
+  // Pinned host memory for the per-step transfers (0002 D7 step 2): the step-table readback at
+  // [0, kTableBytes), then a ring that upload_async stages into. Every wait (sync) proves the
+  // stream has consumed the ring, so it starts over there.
+  static constexpr uint64_t kTableBytes = 256;
+  static constexpr uint64_t kPinnedBytes = 4096;
+  uint8_t* pinned = nullptr;
+  uint64_t ring_head = kTableBytes;
+  // The step-table address the bound KernelGlobals holds, read once and kept until the globals
+  // are rebound or written (invalidate_globals).
+  CUdeviceptr table = 0;
 
   std::mutex mutex;  // guards the module and function tables
   std::unordered_map<std::string, CUmodule> modules;  // embedded or dev-directory, by name
@@ -221,6 +232,16 @@ struct CudaDevice::Impl {
     check(cu.cuCtxSynchronize_(), "cuCtxSynchronize");
     check(cu.cuStreamCreate_(&stream, CU_STREAM_NON_BLOCKING), "cuStreamCreate");
     check(cu.cuEventCreate_(&done, CU_EVENT_DISABLE_TIMING), "cuEventCreate");
+    // 4 KiB of page-locked host memory. Not a ledger record: the ledger accounts device memory
+    // (0007 d14), and this is host memory.
+    void* host = nullptr;
+    check(cu.cuMemAllocHost_(&host, kPinnedBytes), "cuMemAllocHost");
+    pinned = static_cast<uint8_t*>(host);
+  }
+
+  // Drops the cached step-table address when [p, p + bytes) touches the bound KernelGlobals.
+  void invalidate_globals(CUdeviceptr p, uint64_t bytes) {
+    if (globals && p < globals + sizeof(ar::KernelGlobals) && globals < p + bytes) table = 0;
   }
 
   ~Impl() {
@@ -233,6 +254,7 @@ struct CudaDevice::Impl {
     traversal.reset();  // waits for its launches; the owner detaches it first, while the scene lives
     if (stream) note(cu.cuEventRecord_(done, stream), "cuEventRecord");
     if (done) note(cu.cuEventSynchronize_(done), "cuEventSynchronize");
+    if (pinned) note(cu.cuMemFreeHost_(pinned), "cuMemFreeHost");
     for (auto& m : modules) note(cu.cuModuleUnload_(m.second), "cuModuleUnload");
     for (CUmodule m : file_modules) note(cu.cuModuleUnload_(m), "cuModuleUnload");
     if (done) note(cu.cuEventDestroy_(done), "cuEventDestroy");
@@ -278,6 +300,7 @@ struct CudaDevice::Impl {
     bind();
     check(cu.cuEventRecord_(done, stream), "cuEventRecord", kernel);
     check(cu.cuEventSynchronize_(done), "cuEventSynchronize", kernel);
+    ring_head = kTableBytes;  // the stream has consumed every staged upload
   }
 
   void require_globals() const {
@@ -396,9 +419,31 @@ void CudaDevice::upload(const DeviceBuffer& dst, uint64_t offset, const void* sr
   if (bytes == 0) return;
   Impl& s = *impl_;
   s.bind();
+  s.invalidate_globals(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, bytes);
   s.check(s.cu.cuMemcpyHtoDAsync_(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, src, bytes, s.stream),
           "cuMemcpyHtoDAsync");
   s.sync();
+}
+
+void CudaDevice::upload_async(const DeviceBuffer& dst, uint64_t offset, const void* src, uint64_t bytes) {
+  check_range(dst, offset, bytes);
+  if (bytes == 0) return;
+  Impl& s = *impl_;
+  constexpr uint64_t ring = Impl::kPinnedBytes - Impl::kTableBytes;
+  if (bytes > ring)
+    throw std::invalid_argument("CudaDevice::upload_async: " + number(bytes) + " bytes exceed the " + number(ring) +
+                                "-byte pinned ring (use upload)");
+  s.bind();
+  uint64_t pos = (s.ring_head + 15u) / 16u * 16u;
+  if (pos + bytes > Impl::kPinnedBytes) {
+    s.sync();  // the ring is full: wait once, it starts over
+    pos = Impl::kTableBytes;
+  }
+  std::memcpy(s.pinned + pos, src, bytes);
+  s.ring_head = pos + bytes;
+  const CUdeviceptr d = reinterpret_cast<CUdeviceptr>(dst.ptr) + offset;
+  s.invalidate_globals(d, bytes);
+  s.check(s.cu.cuMemcpyHtoDAsync_(d, s.pinned + pos, bytes, s.stream), "cuMemcpyHtoDAsync");
 }
 
 void CudaDevice::download(void* dst, const DeviceBuffer& src, uint64_t offset, uint64_t bytes) {
@@ -411,6 +456,7 @@ void CudaDevice::memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value,
   if (bytes == 0) return;
   Impl& s = *impl_;
   s.bind();
+  s.invalidate_globals(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, bytes);
   s.check(s.cu.cuMemsetD8Async_(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, value, bytes, s.stream),
           "cuMemsetD8Async");
   s.sync();
@@ -423,10 +469,11 @@ void CudaDevice::copy(const DeviceBuffer& dst, uint64_t dst_offset, const Device
   if (bytes == 0) return;
   Impl& s = *impl_;
   s.bind();
+  s.invalidate_globals(reinterpret_cast<CUdeviceptr>(dst.ptr) + dst_offset, bytes);
+  // Stream-ordered with the launches, no wait (device.h); an error surfaces at the next wait.
   s.check(s.cu.cuMemcpyDtoDAsync_(reinterpret_cast<CUdeviceptr>(dst.ptr) + dst_offset,
                                   reinterpret_cast<CUdeviceptr>(src.ptr) + src_offset, bytes, s.stream),
           "cuMemcpyDtoDAsync");
-  s.sync();
 }
 
 void CudaDevice::set_kernel_globals(const DeviceBuffer& buffer) {
@@ -435,6 +482,7 @@ void CudaDevice::set_kernel_globals(const DeviceBuffer& buffer) {
                                 number(sizeof(ar::KernelGlobals)));
   impl_->globals = reinterpret_cast<CUdeviceptr>(buffer.ptr);
   impl_->globals_buffer = buffer;
+  impl_->table = 0;
 }
 
 void CudaDevice::launch(ar::Stage stage, uint32_t grid) {
@@ -551,10 +599,17 @@ void CudaDevice::launch(KernelId kernel, uint32_t count) {
 void CudaDevice::read_step_table(ar::StepTable& out) {
   Impl& s = *impl_;
   s.require_globals();
-  CUdeviceptr table = 0;
-  s.copy_from(&table, s.globals + offsetof(ar::KernelGlobals, step_table), sizeof(table));
-  if (!table) throw std::logic_error("CudaDevice: the bound KernelGlobals has no step table");
-  s.copy_from(&out, table, sizeof(out));
+  if (!s.table) {
+    CUdeviceptr table = 0;
+    s.copy_from(&table, s.globals + offsetof(ar::KernelGlobals, step_table), sizeof(table));
+    if (!table) throw std::logic_error("CudaDevice: the bound KernelGlobals has no step table");
+    s.table = table;
+  }
+  static_assert(sizeof(ar::StepTable) <= Impl::kTableBytes, "the readback area holds the step table");
+  s.bind();
+  s.check(s.cu.cuMemcpyDtoHAsync_(s.pinned, s.table, sizeof(out), s.stream), "cuMemcpyDtoHAsync");
+  s.sync();
+  std::memcpy(&out, s.pinned, sizeof(out));
 }
 
 void CudaDevice::synchronize() { impl_->sync(); }

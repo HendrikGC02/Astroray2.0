@@ -117,6 +117,13 @@ class Device {
   }
 
   virtual void upload(const DeviceBuffer& dst, uint64_t offset, const void* src, uint64_t bytes) = 0;
+  // upload without the host wait: the bytes are staged at the call, so `src` may be reused at
+  // once, and the copy is ordered with launches on the device's stream; an error surfaces at the
+  // next wait (read_step_table, synchronize). For the scheduler's small per-step inputs (high-water
+  // marks, refill entries), so a step waits once, on its step-table read (0002 D7 step 2).
+  virtual void upload_async(const DeviceBuffer& dst, uint64_t offset, const void* src, uint64_t bytes) {
+    upload(dst, offset, src, bytes);
+  }
   virtual void download(void* dst, const DeviceBuffer& src, uint64_t offset, uint64_t bytes) = 0;
   virtual void memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value, uint64_t bytes) = 0;
   // Device-to-device copy of `bytes` from src+src_offset to dst+dst_offset (ordered with
@@ -136,7 +143,7 @@ class Device {
   // the KernelGlobals pointer and reads its item count from there; `count` only sizes a GPU
   // grid (0002 D4, D8).
   virtual void launch(KernelId kernel, uint32_t count) = 0;
-  // Copies the device's step table (0002 D7 step 2).
+  // Copies the device's step table (0002 D7 step 2): one copy and one wait.
   virtual void read_step_table(ar::StepTable& out) = 0;
   // Returns when every launched kernel has finished.
   virtual void synchronize() = 0;
