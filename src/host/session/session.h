@@ -64,6 +64,9 @@ struct SessionOptions {
   uint64_t test_stale_resolve_at_pass = 0;
   // Test hook, false in production: keep one PresentRecord per published frame (present_log).
   bool test_record_presents = false;
+  // Test hook, zero in production: the render thread sleeps this long after each resolve and before
+  // the pass is published, so a poll can look for a sample count that arrives without its pass time.
+  uint32_t test_sleep_after_resolve_ms = 0;
 };
 
 // One published frame as the render thread saw it: when (the steady clock the batching uses), how
@@ -217,7 +220,8 @@ class Session {
   void update_camera_and_filter(uint64_t generation);
   void build_active();
   uint64_t pass_camera_samples() const;
-  void resolve(uint64_t pass_epoch, uint64_t generation);
+  // False when the pass was dropped as stale; the caller publishes a resolved pass.
+  bool resolve(uint64_t pass_epoch, uint64_t generation);
   void present(uint64_t generation);
   static double now_s();  // seconds on steady_clock, the one clock batching_ sees
   void wake();
@@ -244,6 +248,7 @@ class Session {
   WavelengthTable wavelengths_;
   std::unique_ptr<Film> film_;
   std::shared_ptr<const StoredSettings> film_settings_;  // the settings film_ was last checked against
+  bool stats_display_warned_ = false;  // the bounce display met a film without statistics (render thread)
   // The scene table set the session renders, pinned until the next set (RULINGS 70). It holds the
   // light table of its snapshot (null for a scene without material and mesh stores), and
   // inv_radiance_scale = 1 / s follows it: after a failed upload the session keeps its previous
@@ -330,5 +335,8 @@ struct ar_session_s {
   // another (ruling 75).
   std::atomic<uint64_t> pass_revision{0};
   std::shared_ptr<astroray::host::Device> device;
+  // The scene's device ledger (null on the CPU device), held so progress still reads it after the
+  // scene is destroyed (its records are gone then).
+  std::shared_ptr<astroray::host::Ledger> scene_ledger;
   std::unique_ptr<astroray::host::Session> session;
 };

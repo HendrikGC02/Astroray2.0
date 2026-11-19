@@ -216,6 +216,7 @@ ar_status Edit::commit(uint64_t* generation) {
     if (!kv.second.committed) return bad("invalid argument: staged item for key " + std::to_string(kv.first) + " was not committed");
   if (settings_ && settings_->s.pixel_filter > AR_FILTER_BLACKMAN_HARRIS) return bad("invalid argument: pixel_filter out of range");
   if (settings_ && settings_->s.sampler_mode > AR_SAMPLER_INDEPENDENT) return bad("invalid argument: sampler_mode out of range");
+  if (settings_ && settings_->s.statistics > AR_STATISTICS_OFF) return bad("invalid argument: statistics out of range");
   if (camera_ && camera_->c.type > AR_CAMERA_PANO) return bad("invalid argument: camera type out of range");
 
   queue_instance_check(*this);

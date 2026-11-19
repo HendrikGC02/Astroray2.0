@@ -29,7 +29,8 @@ void apply_known(std::set<std::pair<uint32_t, uint64_t>>& known, const Pending& 
 }
 
 Scene::Scene(ContextState& ctx, SceneConfig config)
-    : ctx_(ctx), generations_(ctx, report_), device_of_(std::move(config.device_of)), accel_of_(std::move(config.accel_of)),
+    : ctx_(ctx), generations_(ctx, report_), device_of_(std::move(config.device_of)),
+      device_ledger_(std::move(config.device_ledger)), accel_of_(std::move(config.accel_of)),
       tables_(std::make_unique<SceneTableCache>()) {
   unsigned workers = config.workers;
   if (workers == 0) workers = std::max(1u, std::min(8u, std::thread::hardware_concurrency() / 2));

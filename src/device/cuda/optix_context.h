@@ -41,7 +41,17 @@ class OptixContext {
   // Waits for the OptiX stream; throws DeviceError on a CUDA error.
   void sync() const;
 
+  // Device memory OptiX takes for itself, outside any allocation of ours: the context, and a fixed
+  // ~230 MiB inside the first instance-AS build (measured on b1m and b5m alike, 126). free_bytes()
+  // is the device's free memory now; record_drop(before) charges the drop since `before` to the
+  // device's ledger as DEVICE_CONTEXT until this context is destroyed (0002 D13: the ledger total
+  // must match the drop in free bytes). Another thread's allocation inside the window is charged
+  // here as well, so the category can over-report, never under-report.
+  uint64_t free_bytes() const;
+  void record_drop(uint64_t free_before);
+
  private:
+  void release_records() noexcept;
   struct Impl;
   Device& device_;
   uint32_t index_;

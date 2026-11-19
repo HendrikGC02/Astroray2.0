@@ -78,6 +78,9 @@ class CudaDevice final : public ModuleDevice {
   // loaded module; a changed file is loaded and replaces the module, a file that fails to load leaves the
   // previous one running. Empty everywhere else. Throws DeviceError after a sticky error.
   ModuleReload poll_module_reload() override;
+  // cuMemGetInfo of the primary context; false (both 0) once the device is dead. Throws DeviceError
+  // when the call itself fails.
+  bool memory_info(uint64_t* free_bytes, uint64_t* total_bytes) override;
   // How many times poll_module_reload tried to load a changed module file, good or bad (tests: a bad file
   // is tried once, not at every step).
   uint64_t module_load_attempts() const;

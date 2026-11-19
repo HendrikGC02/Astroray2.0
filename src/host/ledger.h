@@ -17,7 +17,9 @@
 namespace astroray::host {
 
 // Every row of 0007 d14's budget table, then the scene categories that table excludes
-// (its `tables` row is the one category both lists share).
+// (its `tables` row is the one category both lists share), then DEVICE_CONTEXT: device memory
+// the driver or OptiX takes outside any allocation of ours, recorded as the drop in free bytes
+// around the call that takes it (0002 D13's check compares the ledger total with that drop).
 enum class LedgerCategory : uint8_t {
   MAIN_PATH_POOL,
   SHADOW_POOL,
@@ -35,8 +37,9 @@ enum class LedgerCategory : uint8_t {
   ACCELERATION,
   TEXTURES,
   VOLUMES,
+  DEVICE_CONTEXT,
 };
-inline constexpr uint32_t kLedgerCategoryCount = static_cast<uint32_t>(LedgerCategory::VOLUMES) + 1u;
+inline constexpr uint32_t kLedgerCategoryCount = static_cast<uint32_t>(LedgerCategory::DEVICE_CONTEXT) + 1u;
 
 // The name used in messages. Throws std::invalid_argument for a value outside the enum.
 const char* ledger_category_name(LedgerCategory c);

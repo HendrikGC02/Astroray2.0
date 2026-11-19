@@ -10,10 +10,12 @@
 #include <optix_function_table_definition.h>
 #include <optix_stubs.h>
 
+#include <cstdio>
 #include <filesystem>
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace astroray::host {
 namespace {
@@ -36,6 +38,8 @@ struct OptixContext::Impl {
   OptixDeviceContext ctx = nullptr;
   cudaStream_t stream = nullptr;
   LogSink sink;
+  std::mutex records_mutex;
+  std::vector<uint64_t> records;  // DEVICE_CONTEXT ledger records, released with the context
 };
 
 OptixContext::OptixContext(Device& device, uint32_t device_index)
@@ -50,20 +54,52 @@ OptixContext::OptixContext(Device& device, uint32_t device_index)
     options.logCallbackFunction = &log_callback;
     options.logCallbackData = &impl_->sink;
     options.logCallbackLevel = 3;
+    const uint64_t before = free_bytes();
     // A null CUcontext means the current one, which is the primary context CudaDevice retained.
     check(optixDeviceContextCreate(nullptr, &options, &impl_->ctx), "optixDeviceContextCreate");
     if (cudaStreamCreateWithFlags(&impl_->stream, cudaStreamNonBlocking) != cudaSuccess)
       throw DeviceError("GPU device unavailable: OptiX cudaStreamCreate failed");
+    record_drop(before);  // 24 MiB on the RTX 5070 Ti (126)
   } catch (...) {
+    release_records();
+    if (impl_->stream) cudaStreamDestroy(impl_->stream);
     if (impl_->ctx) optixDeviceContextDestroy(impl_->ctx);
     throw;
   }
+}
+
+void OptixContext::release_records() noexcept {
+  // Teardown cannot throw; a failure is printed, never dropped (as CudaDevice teardown does).
+  std::lock_guard<std::mutex> lock(impl_->records_mutex);
+  for (uint64_t id : impl_->records) {
+    try {
+      device_.ledger().remove(id);
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "astroray: releasing an OptiX device-context ledger record failed: %s\n", e.what());
+    }
+  }
+  impl_->records.clear();
+}
+
+uint64_t OptixContext::free_bytes() const {
+  uint64_t free = 0, total = 0;
+  if (!device_.memory_info(&free, &total)) throw DeviceError("OptixContext: the device reports no memory (dead device)");
+  return free;
+}
+
+void OptixContext::record_drop(uint64_t free_before) {
+  const uint64_t now = free_bytes();
+  if (now >= free_before) return;
+  const uint64_t id = device_.ledger().add(Owner{}, LedgerCategory::DEVICE_CONTEXT, free_before - now);
+  std::lock_guard<std::mutex> lock(impl_->records_mutex);
+  impl_->records.push_back(id);
 }
 
 OptixContext::~OptixContext() {
   if (cudaSetDevice(static_cast<int>(index_)) == cudaSuccess && impl_->stream) cudaStreamSynchronize(impl_->stream);
   if (impl_->ctx) optixDeviceContextDestroy(impl_->ctx);
   if (impl_->stream) cudaStreamDestroy(impl_->stream);
+  release_records();
 }
 
 void OptixContext::bind() const {

@@ -87,16 +87,18 @@ TEST_CASE("ledger/invalid use throws") {
 }
 
 TEST_CASE("ledger/categories are the budget table rows then the scene categories") {
-  // 0007 d14 budget table row names in table order, then the scene categories.
+  // 0007 d14 budget table row names in table order, then the scene categories, then the device
+  // context (driver and OptiX memory outside our allocations).
   const char* want[] = {"main path pool", "shadow pool", "queue and sort indices", "shadow hit records",
                         "shadow-pass split", "geodesic record", "random-walk record", "film", "tables",
-                        "display frame", "denoiser", "DLSS", "geometry", "acceleration", "textures", "volumes"};
-  REQUIRE(kLedgerCategoryCount == 16);
+                        "display frame", "denoiser", "DLSS", "geometry", "acceleration", "textures", "volumes",
+                        "device context"};
+  REQUIRE(kLedgerCategoryCount == 17);
   for (uint32_t i = 0; i < kLedgerCategoryCount; ++i) {
     INFO("category " << i);
     CHECK(std::strcmp(ledger_category_name(static_cast<LedgerCategory>(i)), want[i]) == 0);
   }
-  CHECK_THROWS_AS(ledger_category_name(static_cast<LedgerCategory>(16)), std::invalid_argument);
+  CHECK_THROWS_AS(ledger_category_name(static_cast<LedgerCategory>(17)), std::invalid_argument);
 }
 
 TEST_CASE("ledger/refused allocation text") {

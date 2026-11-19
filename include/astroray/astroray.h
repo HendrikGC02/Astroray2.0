@@ -197,6 +197,8 @@ typedef struct ar_edit_s* ar_edit;
 #define AR_FILTER_BLACKMAN_HARRIS 2
 #define AR_SAMPLER_SOBOL 0
 #define AR_SAMPLER_INDEPENDENT 1
+#define AR_STATISTICS_ON 0
+#define AR_STATISTICS_OFF 1
 #define AR_CRYPTO_OBJECT 0x1
 #define AR_CRYPTO_MATERIAL 0x2
 #define AR_CRYPTO_ASSET 0x4
@@ -295,7 +297,9 @@ typedef struct ar_session_desc {
     uint32_t denoiser;
 } ar_session_desc;
 
-/* ledger_bytes is indexed in the order of the host ledger's categories (0007 decision 14). */
+/* ledger_bytes is indexed in the order of the host ledger's categories (0007 decision 14), the session's
+   ledger and its scene's device ledger summed; device_free_bytes and device_total_bytes are cuMemGetInfo's
+   (0 on the CPU device). */
 typedef struct ar_progress {
     uint32_t state;
     uint32_t samples_per_pixel;
@@ -307,7 +311,7 @@ typedef struct ar_progress {
     uint32_t pad0;
     uint64_t device_free_bytes;
     uint64_t device_total_bytes;
-    uint64_t ledger_bytes[16];
+    uint64_t ledger_bytes[17];
 } ar_progress;
 
 /* A response channel: a tabulated curve (nm, value), piecewise linear (0008 decision 7). */
@@ -367,6 +371,7 @@ typedef struct ar_settings {
     uint32_t denoise_start_sample;
     uint32_t allow_spill;
     uint32_t sampler_mode;
+    uint32_t statistics;
 } ar_settings;
 
 /* Geometry, images, volumes. */
