@@ -124,6 +124,27 @@ AR_FN uint32_t popc(uint32_t x) {
 #endif
 }
 
+// The lanes of the warp holding the same value as this lane, one bit per lane: the ranks of a
+// stable scatter with many bins, where a ballot per bin costs more than it saves. The CPU is one
+// lane. Ref: CUDA C++ Programming Guide, warp match functions (__match_any_sync, sm_70 and later).
+AR_FN uint32_t match_any(uint32_t v) {
+#if AR_CUDA_BUILD
+  return __match_any_sync(0xffffffffu, v);
+#else
+  (void)v;
+  return 1u;
+#endif
+}
+
+// A barrier with memory ordering among the lanes of a warp, for lanes that read what other lanes
+// of the same warp wrote; nothing on the CPU (one lane). Ref: CUDA C++ Programming Guide, __syncwarp
+// (the other *_sync intrinsics converge lanes but promise no memory ordering).
+AR_FN void sync_lanes() {
+#if AR_CUDA_BUILD
+  __syncwarp();
+#endif
+}
+
 AR_FN uint32_t lane_id() {
 #if AR_CUDA_BUILD
   uint32_t id;
