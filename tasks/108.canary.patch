@@ -1,9 +1,9 @@
 diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
-index 8b63dad..a803f53 100644
+index c98bb79..575582c 100644
 --- a/src/device/cuda/cuda_device.cpp
 +++ b/src/device/cuda/cuda_device.cpp
-@@ -610,17 +610,18 @@ ModuleReload CudaDevice::poll_module_reload() {
-     if (!module_file_stamp(name, s.dev_dir, &now)) now = missing;
+@@ -612,17 +612,18 @@ ModuleReload CudaDevice::poll_module_reload() {
+     if (!module_file_stamp(name, s.dev_dir, &now, &w.unreadable)) now = missing;
      if (now == w.loaded) {  // the file matches the running image again
        w.has_pending = false;
 -      if (w.failed) out.recovered.push_back({name, module_subject(name), {}});
@@ -23,8 +23,8 @@ index 8b63dad..a803f53 100644
 +    if (w.failed && now == w.failed_stamp && s.load_attempts >= 2) continue;
      ++s.load_attempts;
      try {
-       if (now == missing) throw DeviceError("kernel module file is missing from " + s.dev_dir);
-@@ -635,8 +636,8 @@ ModuleReload CudaDevice::poll_module_reload() {
+       if (now == missing)
+@@ -639,8 +640,8 @@ ModuleReload CudaDevice::poll_module_reload() {
          throw DeviceError(std::string("cuModuleLoadData ") + (text ? text : "failed"));
        }
        s.sync();  // nothing launched from the old image is still running
@@ -36,7 +36,7 @@ index 8b63dad..a803f53 100644
        for (auto f = s.functions.begin(); f != s.functions.end();) {
          if (f->first.compare(0, prefix.size(), prefix) == 0) {
 diff --git a/src/host/scheduler.cpp b/src/host/scheduler.cpp
-index c5e09c6..aa923f0 100644
+index 47b203d..1333ce1 100644
 --- a/src/host/scheduler.cpp
 +++ b/src/host/scheduler.cpp
 @@ -247,10 +247,11 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
