@@ -12,7 +12,7 @@
 #   sync     B-31: S1 (b1m) and S2 (b5m) in Blender: full mesh read, positions only, instance loop, plain move.
 # Ref: docs/decisions/0009-build-test-process.md B-18, B-22, B-23, B-28, B-29, B-31; 0007 V3.
 param(
-  [Parameter(Mandatory)][ValidateSet('startup', 'motion', 'edit', 'lights', 'nsys', 'sync')][string]$Step,
+  [Parameter(Mandatory)][ValidateSet('startup', 'motion', 'edit', 'lights', 'nsys', 'sync', 'trace', 'ledger')][string]$Step,
   [int]$Runs = 10
 )
 $ErrorActionPreference = 'Stop'
@@ -183,10 +183,13 @@ def edit():
                 s.world((0.5 + 0.01 * (i % 40), 0.5, 0.5), 1.0)
             t0, t1 = s.commit()
         te, pe = s.spin(lambda p: p.epoch != e0, "the epoch change")
+        tr, pr = s.spin(lambda p: p.epoch == pe.epoch and p.samples_per_pixel == 0, "the film reset")
         tf, pf = s.spin(lambda p: p.epoch == pe.epoch and p.samples_per_pixel >= 1, "the first pass of the epoch")
+        time.sleep(0.003)
+        last_pass = s.progress().last_pass_ms  # set just after the sample count moves, so read again
         rows.append({"kind": kind, "busy": busy, "call_ms": (t1 - t0) * 1e3, "to_epoch_ms": (te - t0) * 1e3,
-                     "to_first_pass_done_ms": (tf - t0) * 1e3, "last_pass_ms": pf.last_pass_ms,
-                     "start_est_ms": (tf - t0) * 1e3 - pf.last_pass_ms})
+                     "to_reset_ms": (tr - t0) * 1e3, "to_first_pass_done_ms": (tf - t0) * 1e3, "last_pass_ms": last_pass,
+                     "start_est_ms": (tf - t0) * 1e3 - last_pass})
         if not busy:
             s.spin(lambda p: p.state == a.AR_STATE_CONVERGED and p.epoch == pe.epoch, "convergence")
             time.sleep(0.05)
@@ -207,17 +210,24 @@ def edit():
     print("RESULT " + json.dumps(rows), flush=True)
     os._exit(0)
 
-
-def b1m_scene(s, emissive):
+def b1m_scene(s):
+    """B-1M (scenes/b1m/build.py) with the surface graph kept under a key, so an edit can make it emissive."""
     sys.path.insert(0, os.path.join(root, "scenes", "b1m"))
     import build as b1m
+    a = s.abi
     mesh = s.key()
     pos, cv, fs, nrm, uv = b1m.grid()
     s.mesh(mesh, pos, cv, fs, nrm, uv, "S1_mesh")
-    if emissive:
-        mat = s.material({"base_color": (0.8, 0.4, 0.2), "specular_roughness": 0.5}, emission=((1.0, 0.9, 0.8), 2.0))
-    else:
-        mat = s.material({"base_color": (0.8, 0.4, 0.2), "specular_roughness": 0.5})
+    s.mat_graph = s.key()
+    g = s.graph()
+    g.store("base_color", (0.8, 0.4, 0.2))
+    g.store("specular_roughness", 0.5)
+    s.set_graph(s.mat_graph, g)
+    m = a.ar_material_desc()
+    m.surface_graph = s.mat_graph
+    m.emission_sampling = a.AR_EMISSION_SAMPLING_AUTO
+    mat = s.key()
+    s._call(s.lib.ar_edit_set_material(s.edit_h, mat, ctypes.byref(m)), "ar_edit_set_material")
     s.instances([{"geom": mesh, "materials": [mat]}])
     b1m.sun_lamp(s, (0.0, 0.0, 0.0), b1m.LAMP_DISTANCE, b1m.LAMP_SIZE, b1m.SUN_STRENGTH, b1m.SUN_EULER)
     s.world((0.3, 0.35, 0.4), 1.0)
@@ -226,36 +236,122 @@ def b1m_scene(s, emissive):
 
 
 def lights():
+    """B-23: an edit on a settled session, commit call -> accumulation reset. `lamps N` adds N point lamps (N = 1
+    is the baseline), `emit` makes B-1M's one material emissive (1 M emissive triangles), `emit0` only changes its
+    base colour (the baseline). The mesh, instances and acceleration structure are unchanged by each edit."""
+    import re
     kind = extra[0]
+    n = int(extra[1]) if len(extra) > 1 else 0
     s = Sc(cache_dir, logp)
     a = s.abi
-    if kind == "b1m":
-        b1m_scene(s, False)
-    elif kind == "b1m_emissive":
-        b1m_scene(s, True)
-    else:
-        n = int(extra[1])
+    if kind == "lamps":
         plane_scene(s, 1920, 1080, 1)
+    else:
+        b1m_scene(s)
+    s.commit()
+    s.session(1920, 1080)
+    s._call(s.lib.ar_session_start(s.session_h), "ar_session_start")
+    s.spin(lambda p: p.state == a.AR_STATE_CONVERGED and p.samples_per_pixel >= 1, "the first epoch")
+    time.sleep(0.3)
+    p0 = s.progress()
+    s.new_edit()
+    t_build0 = pc()
+    if kind == "lamps":
         rng = np.random.default_rng(5)
         for i in range(n):
             x, y = rng.uniform(-3.5, 3.5, 2)
             s.light("point", xf=ar.translation((x, y, 1.0)), power=0.5, size=(0.02, 0.0))
-    t_built = pc()
-    tc0, tc1 = s.commit()
-    s.session(1920, 1080)
-    s._call(s.lib.ar_session_start(s.session_h), "ar_session_start")
-    tf, p = s.spin(lambda p: p.state == a.AR_STATE_CONVERGED and p.samples_per_pixel >= 1 and p.active_generation >= 1, "the first pass")
-    pr = s.progress()
-    out = {"kind": kind, "lamps": int(extra[1]) if len(extra) > 1 else None,
-           "build_ms": (t_built - s.t_scene) * 1e3, "commit_call_ms": (tc1 - tc0) * 1e3,
-           "commit_to_first_pass_ms": (tf - tc0) * 1e3, "first_pass_ms": p.last_pass_ms,
-           "device_free": pr.device_free_bytes, "device_total": pr.device_total_bytes,
-           "ledger": [int(x) for x in pr.ledger_bytes]}
+    else:
+        g = s.graph()
+        g.store("base_color", (0.8, 0.4, 0.2) if kind == "emit" else (0.2, 0.4, 0.8))
+        g.store("specular_roughness", 0.5)
+        if kind == "emit":
+            g.emission((1.0, 0.9, 0.8), 2.0)
+        s.set_graph(s.mat_graph, g)
+    build_ms = (pc() - t_build0) * 1e3
+    t0, t1 = s.commit()
+    te, pe = s.spin(lambda p: p.epoch != p0.epoch, "the epoch change", 120.0)
+    tr, pr = s.spin(lambda p: p.epoch == pe.epoch and p.samples_per_pixel == 0, "the film reset", 120.0)
+    tf, pf = s.spin(lambda p: p.epoch == pe.epoch and p.samples_per_pixel >= 1, "the first pass", 120.0)
+    time.sleep(0.003)
+    last_pass = s.progress().last_pass_ms
+    accel = None
+    for ln in log_lines(logp):
+        m = re.search(r"traversal structures of generation (\d+): (\d+) built, (\d+) reused, ([0-9.]+) ms", ln)
+        if m:
+            accel = (int(m.group(1)), int(m.group(2)), int(m.group(3)), float(m.group(4)))
+    out = {"kind": kind, "n": n, "python_build_ms": build_ms, "commit_call_ms": (t1 - t0) * 1e3,
+           "to_epoch_ms": (te - t0) * 1e3, "to_reset_ms": (tr - t0) * 1e3, "to_first_pass_ms": (tf - t0) * 1e3,
+           "pass_ms": last_pass, "last_accel_log": accel}
     print("RESULT " + json.dumps(out), flush=True)
     os._exit(0)
 
 
-{"startup": startup, "edit": edit, "lights": lights}[mode]()
+
+def trace():
+    s = Sc(cache_dir, logp)
+    a = s.abi
+    W, H = 1920, 1080
+    plane_scene(s, W, H, 2)
+    s.commit()
+    s.session(W, H)
+    s._call(s.lib.ar_session_start(s.session_h), "ar_session_start")
+    s.spin(lambda p: p.state == a.AR_STATE_CONVERGED and p.samples_per_pixel >= 2, "the first epoch")
+    time.sleep(0.3)
+    s.new_edit()
+    s.world((0.7, 0.5, 0.5), 1.0)
+    t0 = pc()
+    s.commit()
+    last = None
+    rows = []
+    while pc() - t0 < 0.06:
+        p = s.progress()
+        row = (p.state, p.epoch, p.samples_per_pixel, p.active_generation, p.pending_generation)
+        if row != last:
+            rows.append("T %.3f ms state %d epoch %d spp %d active %d pending %d" % ((pc() - t0) * 1e3, *row))
+            last = row
+    print("RESULT " + json.dumps(rows), flush=True)
+    os._exit(0)
+
+
+def nv_free_mib():
+    import subprocess
+    out = subprocess.check_output(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"], text=True)
+    return int(out.split()[0])
+
+
+def ledger():
+    """0002 D13: B-5M through the ABI on CUDA; the drop in the device's free memory (the driver's cuMemGetInfo, read through
+    nvidia-smi from outside the process, before any context exists and after the first pass) against the ledger total."""
+    import importlib
+    sys.path.insert(0, os.path.join(root, "scenes", "b5m"))
+    b5m = importlib.import_module("build")
+    free0 = [nv_free_mib() for _ in range(3)]
+
+    class Sc2(Sc):
+        def finish(self):
+            a = self.abi
+            free_ctx = nv_free_mib()  # the context and the scene thread exist; no scene data yet
+            self.commit()
+            w, h = self.size
+            self.session(w, h)
+            self._call(self.lib.ar_session_start(self.session_h), "ar_session_start")
+            _, p = self.spin(lambda p: p.state == a.AR_STATE_CONVERGED and p.samples_per_pixel >= 1, "the first epoch", 300.0)
+            time.sleep(1.5)
+            p = self.progress()
+            free1 = [nv_free_mib() for _ in range(3)]
+            led = [int(x) for x in p.ledger_bytes]
+            out = {"free_before_mib": free0, "free_with_context_mib": free_ctx, "free_after_mib": free1,
+                   "drop_mib": min(free0) - max(free1), "ledger_bytes": led, "ledger_total_mib": sum(led) / 2 ** 20,
+                   "engine_device_free_mib": p.device_free_bytes / 2 ** 20, "engine_device_total_mib": p.device_total_bytes / 2 ** 20}
+            print("RESULT " + json.dumps(out), flush=True)
+            os._exit(0)
+
+    ar.Scene = lambda path, description=None, **kw: Sc2(cache_dir, logp)
+    b5m.build(os.path.join(tempfile.gettempdir(), "m094_b5m.arrec"))
+
+
+{"startup": startup, "edit": edit, "lights": lights, "trace": trace, "ledger": ledger}[mode]()
 '@
 # The Blender script of step sync (B-31): the addon's own sync functions timed on S1 and S2.
 $syncScript = @'
@@ -378,7 +474,8 @@ function Show-Stats([string]$name, [double[]]$v) {
   $s = $v | Sort-Object
   $n = $s.Count
   $med = if ($n % 2) { $s[[int](($n - 1) / 2)] } else { ($s[$n / 2 - 1] + $s[$n / 2]) / 2 }
-  Write-Host ("{0,-34} n={1} min {2,9:N2} median {3,9:N2} max {4,9:N2}" -f $name, $n, $s[0], $med, $s[-1])
+  $p90 = $s[[math]::Min($n - 1, [int][math]::Ceiling(0.9 * $n) - 1)]
+  Write-Host ("{0,-34} n={1} min {2,9:N2} median {3,9:N2} p90 {4,9:N2} max {5,9:N2}" -f $name, $n, $s[0], $med, $p90, $s[-1])
 }
 
 $null = Enter-ArMachineLock
@@ -434,6 +531,15 @@ try {
       Show-Stats 'cold motion module+pipeline' @($rows | ForEach-Object { $_.mm + $_.mp })
       Show-Stats 'warm base module+pipeline' @($rows | ForEach-Object { $_.wm + $_.wp })
     }
+    'ledger' {
+      $r = Invoke-Child ledger (Join-Path $work 'warm/optix') (Join-Path $work 'warm/cuda') @() 'ledger'
+      Write-Host ("free before {0} MiB; with context {1}; after {2} MiB; drop {3} MiB; ledger total {4:N1} MiB; difference {5:N1} MiB" -f ($r.free_before_mib -join '/'), $r.free_with_context_mib, ($r.free_after_mib -join '/'), $r.drop_mib, $r.ledger_total_mib, ($r.drop_mib - $r.ledger_total_mib))
+      Write-Host ("ledger categories (MiB): {0}" -f (($r.ledger_bytes | ForEach-Object { [math]::Round($_ / 1MB, 1) }) -join ' '))
+      Write-Host ("engine's own view: device free {0:N0} of {1:N0} MiB" -f $r.engine_device_free_mib, $r.engine_device_total_mib)
+    }
+    'trace' {
+      $r = Invoke-Child trace (Join-Path $work "edit/optix") $null @() "trace"; $r | ForEach-Object { Write-Host $_ }
+    }
     'edit' {
       $r = Invoke-Child edit (Join-Path $work 'edit/optix') $null @('30') 'edit'
       foreach ($busy in $false, $true) {
@@ -442,6 +548,7 @@ try {
           Write-Host "--- $k, busy=$busy"
           Show-Stats 'commit/set call' @($sel | ForEach-Object { $_.call_ms })
           Show-Stats 'call start -> epoch change' @($sel | ForEach-Object { $_.to_epoch_ms })
+          Show-Stats 'call start -> film reset (spp 0)' @($sel | ForEach-Object { $_.to_reset_ms })
           Show-Stats 'call start -> first pass done' @($sel | ForEach-Object { $_.to_first_pass_done_ms })
           Show-Stats 'last pass' @($sel | ForEach-Object { $_.last_pass_ms })
           Show-Stats 'call start -> new pass start (est)' @($sel | ForEach-Object { $_.start_est_ms })
@@ -449,13 +556,18 @@ try {
       }
     }
     'lights' {
-      $rows = @()
-      foreach ($spec in @(@('plane', '1'), @('plane', '10000'), @('b1m', ''), @('b1m_emissive', ''))) {
+      $all = @{}
+      foreach ($spec in @(@('lamps', '1'), @('lamps', '10000'), @('emit0', ''), @('emit', ''))) {
+        $key = ($spec -join ' ').Trim()
+        $all[$key] = @()
         for ($i = 0; $i -lt 5; $i++) {
           $ex = if ($spec[1]) { @($spec[0], $spec[1]) } else { @($spec[0]) }
           $r = Invoke-Child lights (Join-Path $work 'warm/optix') (Join-Path $work 'warm/cuda') $ex "lights$i"
-          Write-Host ("{0} lamps {1} run {2}: build {3:N1} commit call {4:N1} commit->first pass {5:N1} ms (pass {6:N1}); ledger sum {7:N1} MiB" -f $r.kind, $spec[1], $i, $r.build_ms, $r.commit_call_ms, $r.commit_to_first_pass_ms, $r.first_pass_ms, (($r.ledger | Measure-Object -Sum).Sum / 1MB))
+          $all[$key] += $r
+          Write-Host ("{0} run {1}: python build {2:N1} commit call {3:N2} -> epoch {4:N1} reset {5:N1} first pass {6:N1} ms (pass {7:N1}); accel log {8}" -f $key, $i, $r.python_build_ms, $r.commit_call_ms, $r.to_epoch_ms, $r.to_reset_ms, $r.to_first_pass_ms, $r.pass_ms, ($r.last_accel_log -join ','))
         }
+        Show-Stats "$key commit -> epoch change" @($all[$key] | ForEach-Object { $_.to_epoch_ms })
+        Show-Stats "$key commit -> film reset" @($all[$key] | ForEach-Object { $_.to_reset_ms })
       }
     }
     'nsys' {

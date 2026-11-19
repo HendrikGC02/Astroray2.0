@@ -129,6 +129,8 @@ provisional = true
 [[budget]]
 id = "B-21"
 text = "≤ 5 ms"
+limit = 5
+unit = "ms"
 tier = "`full`"
 provisional = true
 
