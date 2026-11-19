@@ -19,3 +19,5 @@ Progress:
 - started
 - stopped before code: budget row needs a launch_config.h row (out of Scope); probe_ TUs build only uncapped; b1m never runs RGB_LIFT. Questions to lead.
 - lead rulings: Scope grows (kernels.cmake, launch_config.h, kernelgate.py); upsampling measured both on b1m (resolve() RGB branch) and b_tx (RGB_LIFT).
+- probe capped (256,2): 128 regs, 480 B stack, 130/376 B spills; uncapped 160 regs, 384 B stack. Stack within 512, spills over 128/192: D10 ladder (lead).
+- upsampling (tools/measure_upsampling.ps1): b1m resolve() RGB branch 8.4% of kernel time (5.7% per closest ray); b_tx op_rgb_lift 0.5%. Both below 20%: record and close.
