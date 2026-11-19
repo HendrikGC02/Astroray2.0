@@ -54,6 +54,7 @@ struct TraversalPipeline::Impl {
   Variant plain, motion;
   bool has_motion = false;
   DeviceBuffer params;
+  ar::OptixLaunchParams current{};  // what `params` holds; zero until set_params
 
   Impl(OptixContext& c, Device& d, void* s, Owner o) : ctx(c), device(d), stream(static_cast<cudaStream_t>(s)), owner(o) {}
 
@@ -157,13 +158,18 @@ struct TraversalPipeline::Impl {
     v.times.pipeline_ms = ms_since(t0);
   }
 
-  void launch(const Variant& v, uint32_t raygen, uint64_t traversable, const DeviceBuffer& kg, uint32_t width) {
-    if (width == 0) throw std::invalid_argument("TraversalPipeline launch: width is 0");
+  void set_params(uint64_t traversable, const DeviceBuffer& kg) {
     if (traversable == 0) throw std::invalid_argument("TraversalPipeline launch: no traversable (build the TLAS first)");
-    ctx.bind();
     const ar::OptixLaunchParams p{traversable, reinterpret_cast<uint64_t>(kg.ptr)};
-    const cudaError_t e = cudaMemcpyAsync(params.ptr, &p, sizeof p, cudaMemcpyHostToDevice, stream);
-    if (e != cudaSuccess) throw DeviceError(std::string("GPU device unavailable: cudaMemcpyAsync (OptiX params): ") + cudaGetErrorString(e));
+    if (p.traversable == current.traversable && p.kernel_globals == current.kernel_globals) return;
+    device.upload(params, 0, &p, sizeof p);  // in stream order, after every launch that read the old values
+    current = p;
+  }
+
+  void launch(const Variant& v, uint32_t raygen, uint32_t width) {
+    if (width == 0) throw std::invalid_argument("TraversalPipeline launch: width is 0");
+    if (current.traversable == 0) throw std::logic_error("TraversalPipeline launch: no launch parameters (set_params)");
+    ctx.bind();
     const CUdeviceptr base = reinterpret_cast<CUdeviceptr>(v.sbt.ptr);
     OptixShaderBindingTable sbt = {};
     sbt.raygenRecord = base + raygen * kRecordBytes;
@@ -173,7 +179,7 @@ struct TraversalPipeline::Impl {
     sbt.hitgroupRecordBase = base + kHitFirst * kRecordBytes;
     sbt.hitgroupRecordStrideInBytes = kRecordBytes;
     sbt.hitgroupRecordCount = kSbtHitGroups;
-    ctx.check(optixLaunch(v.pipeline, stream, reinterpret_cast<CUdeviceptr>(params.ptr), sizeof p, &sbt, width, 1, 1),
+    ctx.check(optixLaunch(v.pipeline, stream, reinterpret_cast<CUdeviceptr>(params.ptr), sizeof(ar::OptixLaunchParams), &sbt, width, 1, 1),
               "optixLaunch");
   }
 };
@@ -233,11 +239,16 @@ bool TraversalPipeline::has_motion_variant() const { return impl_->has_motion; }
 TraversalPipeline::Times TraversalPipeline::times() const { return impl_->plain.times; }
 TraversalPipeline::Times TraversalPipeline::motion_times() const { return impl_->motion.times; }
 
+void TraversalPipeline::set_params(uint64_t traversable, const DeviceBuffer& kg) { impl_->set_params(traversable, kg); }
+void TraversalPipeline::launch_closest(uint32_t width) { impl_->launch(impl_->plain, 0, width); }
+void TraversalPipeline::launch_shadow(uint32_t width) { impl_->launch(impl_->plain, 1, width); }
 void TraversalPipeline::launch_closest(uint64_t traversable, const DeviceBuffer& kg, uint32_t width) {
-  impl_->launch(impl_->plain, 0, traversable, kg, width);
+  set_params(traversable, kg);
+  launch_closest(width);
 }
 void TraversalPipeline::launch_shadow(uint64_t traversable, const DeviceBuffer& kg, uint32_t width) {
-  impl_->launch(impl_->plain, 1, traversable, kg, width);
+  set_params(traversable, kg);
+  launch_shadow(width);
 }
 
 }  // namespace astroray::host

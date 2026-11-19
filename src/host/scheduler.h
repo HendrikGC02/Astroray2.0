@@ -55,6 +55,7 @@ struct SchedulerConfig {
   uint64_t capacity_override = 0;            // tests: force the pool capacity (still bounded by the work)
   uint64_t shadow_capacity_override = 0;     // tests: force the shadow pool below its default 2 x capacity
   bool permute = false;                      // AR_DEBUG_PERMUTE, see Scheduler constructor
+  bool direct_launch = false;                // AR_DEBUG_DIRECT_LAUNCH: no graphs, see Scheduler constructor
   Report* report = nullptr;                  // POOL_CAPACITY goes here, once per scheduler
   Owner owner{};
 };
@@ -64,7 +65,10 @@ enum class PassStatus : uint8_t { COMPLETE, CANCELLED, EPOCH_PENDING };
 class Scheduler {
  public:
   // permute defaults to the environment variable AR_DEBUG_PERMUTE (any value but "0"), read
-  // here and only in builds with AR_GATE_HOOKS; config.permute turns it on in any build.
+  // here and only in builds with AR_GATE_HOOKS; config.permute turns it on in any build. On a
+  // device with graphs, steps replay a captured CUDA graph (0002 D7 remedy (a)) unless permute
+  // is on (it reorders queues between launches) or direct launches are asked for:
+  // config.direct_launch, or AR_DEBUG_DIRECT_LAUNCH read like AR_DEBUG_PERMUTE.
   Scheduler(Device& device, const SchedulerConfig& config);
   ~Scheduler();
   Scheduler(const Scheduler&) = delete;
@@ -91,6 +95,42 @@ class Scheduler {
   bool at_boundary(PassStatus* status);
   void launch_stage(ar::Stage stage, const ar::StepTable& table);
   void launch_kernel(KernelId kernel, uint32_t count);
+  // One step's D7 steps 3-5, decided from its table: sort, the two generate entries, the stages.
+  struct StepPlan {
+    bool sort = false;
+    uint32_t sort_start = 0, sort_count = 0;
+    ar::StepEntry camera{}, light{};  // count 0: no launch
+    std::vector<uint32_t> stages;     // non-empty, in Stage order
+    uint32_t counts[ar::kStageCount] = {};
+  };
+  // The step inputs a graph replay copies on the device: the two generate entries for the
+  // TERMINATED slot and the high-water marks.
+  struct StepInputs {
+    ar::StepEntry camera;
+    ar::StepEntry light;
+    uint32_t high_water[ar::kPoolCount];
+  };
+  // What the step and sort graphs depend on (ensure_graphs).
+  struct GraphKey {
+    const void* kg = nullptr;
+    const void* step = nullptr;
+    const void* inputs = nullptr;
+    const void* main_queue = nullptr;
+    const void* sort_queue = nullptr;
+    uint64_t capacity = 0, shadow_capacity = 0;
+    bool light = false;
+    bool operator==(const GraphKey& o) const {
+      return kg == o.kg && step == o.step && inputs == o.inputs && main_queue == o.main_queue &&
+             sort_queue == o.sort_queue && capacity == o.capacity && shadow_capacity == o.shadow_capacity &&
+             light == o.light;
+    }
+  };
+  bool run_plan(const StepPlan& plan, const ar::StepTable& table, PassStatus* status);
+  void ensure_graphs(uint64_t capacity, uint64_t shadow_capacity, bool light);
+  void free_graphs();
+  void issue_graph_step(const StepPlan& plan, const uint32_t high_water[ar::kPoolCount]);
+  void count_stage(ar::Stage stage, uint32_t count);
+  void derive_counters();
   void permute_range(bool shadow_pool, uint32_t start, uint32_t count);
 
   Device& device_;
@@ -102,10 +142,13 @@ class Scheduler {
   uint32_t sort_material_count_ = ~0u;
   bool capacity_reported_ = false;
   bool permute_ = false;
+  bool direct_ = false;
+  uint32_t refill_graph_ = 0, step_graph_ = 0, sort_graph_ = 0;  // device graph handles, 0 for none
+  GraphKey graph_key_{};
   uint64_t permute_state_ = 0;
   std::vector<uint32_t> launched_;  // stages launched in the current step, in order
   DeviceBuffer path_buf_, shadow_buf_, main_queue_buf_, shadow_queue_buf_, step_buf_, counts_buf_, sort_queue_buf_,
-      sort_counts_buf_, kg_buf_, soa_buf_, identity_buf_;
+      sort_counts_buf_, kg_buf_, soa_buf_, identity_buf_, inputs_buf_;
   ar::PathStateSoA path_{};
   ar::ShadowItemSoA shadow_{};
 };

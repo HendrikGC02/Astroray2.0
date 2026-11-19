@@ -8,6 +8,7 @@
 // device interface), D8 (per-pass kernels), D13 (accounting); 0007 d14 (ledger).
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <new>
 #include <stdexcept>
@@ -145,6 +146,36 @@ class Device {
   virtual void launch(KernelId kernel, uint32_t count) = 0;
   // Copies the device's step table (0002 D7 step 2): one copy and one wait.
   virtual void read_step_table(ar::StepTable& out) = 0;
+  // The step-table read in two halves, so a graph can hold the copy (0002 D7 remedy (a)): enqueue
+  // copies the table to host memory in stream order without waiting, finish waits and returns it.
+  virtual void enqueue_step_table_read() {}
+  virtual void finish_step_table_read(ar::StepTable& out) { read_step_table(out); }
+
+  // CUDA graphs (0002 D7 remedy (a)). capture_graph records the launches, copies and step-table
+  // reads `record` issues on this device into one graph; launch_graph replays it in stream order.
+  // A graph holds buffer addresses, grid sizes and the traversal pipeline, never step-table
+  // contents (kernels read their counts on the device, D4), so its owner re-captures when those
+  // change. graph_valid is false for a freed graph and for every graph the device dropped (a
+  // traversal pipeline attached or detached). A device without graphs (the CPU) is launched
+  // directly; the defaults throw std::logic_error.
+  virtual bool supports_graphs() const { return false; }
+  virtual uint32_t capture_graph(const std::function<void()>& /*record*/) {
+    throw std::logic_error("this device has no graphs");
+  }
+  virtual bool graph_valid(uint32_t /*graph*/) const { return false; }
+  virtual void launch_graph(uint32_t /*graph*/) { throw std::logic_error("this device has no graphs"); }
+  virtual void free_graph(uint32_t /*graph*/) {}
+  // Sets the range of the graph's one device-to-device copy (recorded from copy()) for its next
+  // launches. Throws std::logic_error when the graph has no such copy or more than one.
+  virtual void set_graph_copy(uint32_t /*graph*/, const DeviceBuffer& /*dst*/, uint64_t /*dst_offset*/,
+                              const DeviceBuffer& /*src*/, uint64_t /*src_offset*/, uint64_t /*bytes*/) {
+    throw std::logic_error("this device has no graphs");
+  }
+  // False for a stage this device has no route for (launch would throw); a graph holds only the
+  // routed stages, and the scheduler launches any other non-empty stage directly so it fails as
+  // before.
+  virtual bool stage_routed(ar::Stage /*stage*/) const { return true; }
+
   // Returns when every launched kernel has finished.
   virtual void synchronize() = 0;
   virtual uint32_t kind() const = 0;  // AR_DEVICE_CPU or AR_DEVICE_CUDA

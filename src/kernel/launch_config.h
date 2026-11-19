@@ -95,6 +95,34 @@ inline constexpr uint32_t kQueueScanRows = 32;
 // warp-wide). The CPU runs one unit per tile.
 inline constexpr uint32_t kQueueLanes = 32;
 
+// GPU fixed grids (0002 D7 remedy (a), D4): the launch count of a step kernel replayed from a
+// CUDA graph, sized from the pool capacities and never from the step table, because kernels read
+// their counts on the device and stride over them. A per-item kernel gets one thread per slot of
+// its pool; a tiled kernel (queue_build count and scatter, the sort's count and scatter) one warp
+// of kQueueLanes threads per tile of kQueueTile slots; a look-back scan one warp per scan tile of
+// kQueueScanRows tiles. The CPU never takes these: its launch count is the item range it splits.
+enum class FixedGrid : uint8_t { MAIN_ITEMS, SHADOW_ITEMS, QUEUE_TILES, QUEUE_SCAN, SORT_TILES, SORT_SCAN };
+
+AR_FN uint32_t fixed_grid(FixedGrid kind, uint32_t capacity, uint32_t shadow_capacity) {
+  const uint32_t main_tiles = (capacity + kQueueTile - 1u) / kQueueTile;
+  const uint32_t all_tiles = main_tiles + (shadow_capacity + kQueueTile - 1u) / kQueueTile;
+  switch (kind) {
+    case FixedGrid::MAIN_ITEMS:
+      return capacity;
+    case FixedGrid::SHADOW_ITEMS:
+      return shadow_capacity;
+    case FixedGrid::QUEUE_TILES:
+      return all_tiles * kQueueLanes;
+    case FixedGrid::QUEUE_SCAN:
+      return ((all_tiles + kQueueScanRows - 1u) / kQueueScanRows) * kQueueLanes;
+    case FixedGrid::SORT_TILES:
+      return main_tiles * kQueueLanes;
+    case FixedGrid::SORT_SCAN:
+      return ((main_tiles + kQueueScanRows - 1u) / kQueueScanRows) * kQueueLanes;
+  }
+  return 0u;
+}
+
 // The shade_surface material sort runs when the segment holds at least kSortMinItems paths and
 // the scene has at least kSortMinMaterials materials; the scheduler (045) reads both.
 // PROVISIONAL: set by build-phase measurement (0002 D7 step 3, Risks item 7).

@@ -81,7 +81,9 @@ uint32_t blocks_for(uint32_t items, uint32_t threads) {
   X(cuModuleUnload) X(cuModuleGetFunction) X(cuFuncGetAttribute) X(cuLaunchKernel) X(cuMemAlloc) X(cuMemFree)                 \
   X(cuMemAllocHost) X(cuMemFreeHost) X(cuMemGetInfo) X(cuMemcpyHtoDAsync) X(cuMemcpyDtoHAsync) X(cuMemcpyDtoDAsync) X(cuMemsetD8Async) X(cuStreamCreate)        \
   X(cuStreamDestroy) X(cuEventCreate) X(cuEventRecord) X(cuEventSynchronize) X(cuEventDestroy)          \
-  X(cuGetErrorName) X(cuGetErrorString)
+  X(cuGetErrorName) X(cuGetErrorString) X(cuStreamBeginCapture) X(cuStreamEndCapture) X(cuGraphInstantiateWithFlags)  \
+  X(cuGraphLaunch) X(cuGraphExecDestroy) X(cuGraphDestroy) X(cuGraphGetNodes) X(cuGraphNodeGetType)                  \
+  X(cuGraphMemcpyNodeGetParams) X(cuGraphExecMemcpyNodeSetParams)
 
 struct Driver {
 #define AR_CU_MEMBER(n) decltype(&n) n##_ = nullptr;
@@ -175,6 +177,18 @@ struct CudaDevice::Impl {
   std::string longest_launch_name;
   uint64_t timed_launches = 0;
   bool dead = false;
+  // CUDA graphs (0002 D7 remedy (a)), by handle; handles are never reused, so a stale one is invalid.
+  struct Graph {
+    CUgraph graph = nullptr;
+    CUgraphExec exec = nullptr;
+    CUgraphNode copy = nullptr;  // the one device-to-device copy, when copies == 1
+    uint32_t copies = 0;
+    DeviceBuffer globals;  // the KernelGlobals the graph's launches pass, for the traversal parameters
+  };
+  std::unordered_map<uint32_t, Graph> graphs;
+  uint32_t next_graph = 1;
+  uint64_t graphs_captured = 0;
+  bool capturing = false;  // the stream is being captured: nothing may wait
   std::string dead_message;  // the sticky error's message, thrown again by every later call
   CUdeviceptr globals = 0;
   DeviceBuffer globals_buffer;  // the same allocation, as the traversal launch takes it
@@ -252,6 +266,7 @@ struct CudaDevice::Impl {
     if (!ctx) return;
     note(cu.cuCtxSetCurrent_(ctx), "cuCtxSetCurrent");
     traversal.reset();  // waits for its launches; the owner detaches it first, while the scene lives
+    drop_graphs();
     if (stream) note(cu.cuEventRecord_(done, stream), "cuEventRecord");
     if (done) note(cu.cuEventSynchronize_(done), "cuEventSynchronize");
     if (pinned) note(cu.cuMemFreeHost_(pinned), "cuMemFreeHost");
@@ -354,14 +369,14 @@ struct CudaDevice::Impl {
     const auto t0 = std::chrono::steady_clock::now();
     check(cu.cuLaunchKernel_(f, blocks, 1, 1, threads, 1, 1, 0, stream, params, nullptr), "cuLaunchKernel", name);
 #ifndef NDEBUG
-    sync(name);  // a debug build waits after every launch so an error names its kernel (D15)
+    if (!capturing) sync(name);  // a debug build waits after every launch so an error names its kernel (D15)
 #endif
     note_launch(name, t0);
   }
 
   // With ASTRORAY_TEST_LAUNCH_TIMING: waits for the launch that began at `t0` and keeps the longest.
   void note_launch(const char* name, std::chrono::steady_clock::time_point t0) {
-    if (!hooks.launch_timing) return;
+    if (!hooks.launch_timing || capturing) return;
     sync(name);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     ++timed_launches;
@@ -393,6 +408,34 @@ struct CudaDevice::Impl {
     check(cu.cuLaunchKernel_(f, 1, 1, 1, 1, 1, 1, 0, stream, params, nullptr), "cuLaunchKernel", "ar_test_fault");
     sync("ar_test_fault");  // throws the sticky DeviceError; the device is dead for the process
     throw DeviceError("test hook ASTRORAY_TEST_GPU_FAULT: ar_test_fault did not fault");
+  }
+
+  // The step-table address of the bound KernelGlobals, read once (one wait) and cached.
+  CUdeviceptr ensure_table() {
+    if (table) return table;
+    if (capturing) throw std::logic_error("CudaDevice: the step-table address is unknown during a graph capture");
+    CUdeviceptr t = 0;
+    copy_from(&t, globals + offsetof(ar::KernelGlobals, step_table), sizeof(t));
+    if (!t) throw std::logic_error("CudaDevice: the bound KernelGlobals has no step table");
+    table = t;
+    return t;
+  }
+
+  void destroy_graph(Graph& g) {
+    if (g.exec) note(cu.cuGraphExecDestroy_(g.exec), "cuGraphExecDestroy");
+    if (g.graph) note(cu.cuGraphDestroy_(g.graph), "cuGraphDestroy");
+    g = Graph();
+  }
+  // Every graph holds the traversal pipeline's SBT and program handles: they go with it.
+  void drop_graphs() {
+    for (auto& g : graphs) destroy_graph(g.second);
+    graphs.clear();
+  }
+
+  Graph& graph_of(uint32_t id) {
+    auto it = graphs.find(id);
+    if (it == graphs.end()) throw std::logic_error("CudaDevice: graph " + number(id) + " is not valid (freed or dropped)");
+    return it->second;
   }
 
   void copy_from(void* dst, CUdeviceptr src, uint64_t bytes) {
@@ -504,12 +547,14 @@ void CudaDevice::launch(ar::Stage stage, uint32_t grid) {
     // The raygen strides over the step table's count like a kernel; `grid` only sizes the launch.
     const uint32_t width = grid == 0 ? 1u : grid;
     const auto t0 = std::chrono::steady_clock::now();
+    // During a capture the parameters were set before it began, so this uploads nothing.
+    s.traversal->set_params(s.traversable, s.globals_buffer);
     if (stage == ar::Stage::INTERSECT_CLOSEST)
-      s.traversal->launch_closest(s.traversable, s.globals_buffer, width);
+      s.traversal->launch_closest(width);
     else
-      s.traversal->launch_shadow(s.traversable, s.globals_buffer, width);
+      s.traversal->launch_shadow(width);
 #ifndef NDEBUG
-    s.sync(name.c_str());  // as Impl::launch: an error names its stage (D15)
+    if (!s.capturing) s.sync(name.c_str());  // as Impl::launch: an error names its stage (D15)
 #endif
     s.note_launch(name.c_str(), t0);
     return;
@@ -535,6 +580,7 @@ TraversalPipeline::Times CudaDevice::attach_traversal(AccelBuilder& scene_accel,
   if (!optix) throw std::invalid_argument("CudaDevice: the scene's acceleration builder is not OptiX (a CPU scene?)");
   if (s.traversal) throw std::logic_error("CudaDevice: a traversal pipeline is already attached");
   s.bind();
+  s.drop_graphs();
   s.traversal = std::make_unique<TraversalPipeline>(optix->optix_context(), *this, s.stream, owner);
   return s.traversal->times();
 }
@@ -553,6 +599,7 @@ void CudaDevice::detach_traversal() {
     failed = std::current_exception();
   }
   s.traversal.reset();
+  s.drop_graphs();
   if (failed) std::rethrow_exception(failed);
 }
 
@@ -597,20 +644,138 @@ void CudaDevice::launch(KernelId kernel, uint32_t count) {
 }
 
 void CudaDevice::read_step_table(ar::StepTable& out) {
+  enqueue_step_table_read();
+  finish_step_table_read(out);
+}
+
+void CudaDevice::enqueue_step_table_read() {
   Impl& s = *impl_;
   s.require_globals();
-  if (!s.table) {
-    CUdeviceptr table = 0;
-    s.copy_from(&table, s.globals + offsetof(ar::KernelGlobals, step_table), sizeof(table));
-    if (!table) throw std::logic_error("CudaDevice: the bound KernelGlobals has no step table");
-    s.table = table;
-  }
+  const CUdeviceptr table = s.ensure_table();
   static_assert(sizeof(ar::StepTable) <= Impl::kTableBytes, "the readback area holds the step table");
   s.bind();
-  s.check(s.cu.cuMemcpyDtoHAsync_(s.pinned, s.table, sizeof(out), s.stream), "cuMemcpyDtoHAsync");
+  s.check(s.cu.cuMemcpyDtoHAsync_(s.pinned, table, sizeof(ar::StepTable), s.stream), "cuMemcpyDtoHAsync");
+}
+
+void CudaDevice::finish_step_table_read(ar::StepTable& out) {
+  Impl& s = *impl_;
   s.sync();
   std::memcpy(&out, s.pinned, sizeof(out));
 }
+
+bool CudaDevice::supports_graphs() const {
+  // ASTRORAY_TEST_LAUNCH_TIMING waits for and times every launch (B-17), which a graph cannot.
+  return !impl_->hooks.launch_timing;
+}
+
+uint32_t CudaDevice::capture_graph(const std::function<void()>& record) {
+  Impl& s = *impl_;
+  if (!supports_graphs()) throw std::logic_error("CudaDevice: graphs are off while every launch is timed");
+  if (s.capturing) throw std::logic_error("CudaDevice: a graph capture is already running");
+  s.require_globals();
+  s.inject_fault_once();
+  s.bind();
+  // Everything that waits happens before the capture: the step-table address and the traversal
+  // parameters, which the recorded launches then read from device memory at every replay.
+  s.ensure_table();
+  if (s.traversal && s.traversable) s.traversal->set_params(s.traversable, s.globals_buffer);
+  // Ref: CUDA C++ Programming Guide, "CUDA Graphs", stream capture (global mode: any call that
+  // would wait fails the capture).
+  s.check(s.cu.cuStreamBeginCapture_(s.stream, CU_STREAM_CAPTURE_MODE_GLOBAL), "cuStreamBeginCapture");
+  s.capturing = true;
+  try {
+    record();
+  } catch (...) {
+    s.capturing = false;
+    CUgraph partial = nullptr;
+    Impl::note(s.cu.cuStreamEndCapture_(s.stream, &partial), "cuStreamEndCapture");
+    if (partial) Impl::note(s.cu.cuGraphDestroy_(partial), "cuGraphDestroy");
+    throw;
+  }
+  s.capturing = false;
+  Impl::Graph g;
+  s.check(s.cu.cuStreamEndCapture_(s.stream, &g.graph), "cuStreamEndCapture");
+  g.globals = s.globals_buffer;
+  try {
+    s.check(s.cu.cuGraphInstantiateWithFlags_(&g.exec, g.graph, 0), "cuGraphInstantiateWithFlags");
+    size_t n = 0;
+    s.check(s.cu.cuGraphGetNodes_(g.graph, nullptr, &n), "cuGraphGetNodes");
+    std::vector<CUgraphNode> nodes(n);
+    s.check(s.cu.cuGraphGetNodes_(g.graph, nodes.data(), &n), "cuGraphGetNodes");
+    for (CUgraphNode node : nodes) {
+      CUgraphNodeType type{};
+      s.check(s.cu.cuGraphNodeGetType_(node, &type), "cuGraphNodeGetType");
+      if (type != CU_GRAPH_NODE_TYPE_MEMCPY) continue;
+      CUDA_MEMCPY3D p{};
+      s.check(s.cu.cuGraphMemcpyNodeGetParams_(node, &p), "cuGraphMemcpyNodeGetParams");
+      if (p.dstMemoryType == CU_MEMORYTYPE_HOST) continue;  // the step-table read
+      ++g.copies;
+      g.copy = node;
+    }
+  } catch (...) {
+    s.destroy_graph(g);
+    throw;
+  }
+  const uint32_t id = s.next_graph++;
+  s.graphs.emplace(id, g);
+  ++s.graphs_captured;
+  return id;
+}
+
+bool CudaDevice::graph_valid(uint32_t graph) const { return impl_->graphs.count(graph) != 0; }
+
+void CudaDevice::launch_graph(uint32_t graph) {
+  Impl& s = *impl_;
+  Impl::Graph& g = s.graph_of(graph);
+  s.bind();
+  if (s.traversal && s.traversable) s.traversal->set_params(s.traversable, g.globals);
+  s.check(s.cu.cuGraphLaunch_(g.exec, s.stream), "cuGraphLaunch");
+#ifndef NDEBUG
+  s.sync("graph");  // as Impl::launch (D15)
+#endif
+}
+
+void CudaDevice::free_graph(uint32_t graph) {
+  auto it = impl_->graphs.find(graph);
+  if (it == impl_->graphs.end()) return;
+  impl_->destroy_graph(it->second);
+  impl_->graphs.erase(it);
+}
+
+void CudaDevice::set_graph_copy(uint32_t graph, const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src,
+                                uint64_t src_offset, uint64_t bytes) {
+  Impl& s = *impl_;
+  Impl::Graph& g = s.graph_of(graph);
+  if (g.copies != 1)
+    throw std::logic_error("CudaDevice: graph " + number(graph) + " holds " + number(g.copies) +
+                           " device copies, set_graph_copy needs exactly one");
+  check_range(dst, dst_offset, bytes);
+  check_range(src, src_offset, bytes);
+  if (bytes == 0) throw std::invalid_argument("CudaDevice: a graph copy of zero bytes");  // CUDA refuses it
+  s.bind();
+  // Ref: CUDA Driver API, cuGraphExecMemcpyNodeSetParams (1-D operands in the same context).
+  CUDA_MEMCPY3D p{};
+  p.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+  p.srcDevice = reinterpret_cast<CUdeviceptr>(src.ptr) + src_offset;
+  p.dstMemoryType = CU_MEMORYTYPE_DEVICE;
+  p.dstDevice = reinterpret_cast<CUdeviceptr>(dst.ptr) + dst_offset;
+  p.WidthInBytes = bytes;
+  p.Height = 1;
+  p.Depth = 1;
+  s.check(s.cu.cuGraphExecMemcpyNodeSetParams_(g.exec, g.copy, &p, s.ctx), "cuGraphExecMemcpyNodeSetParams");
+}
+
+bool CudaDevice::stage_routed(ar::Stage stage) const {
+  const uint32_t i = static_cast<uint32_t>(stage);
+  if (i >= ar::kStageCount || stage == ar::Stage::TERMINATED || stage == ar::Stage::SHADOW_TERMINATED ||
+      stage == ar::Stage::INTERSECT_SUBSURFACE)
+    return false;
+  if (stage == ar::Stage::INTERSECT_CLOSEST || stage == ar::Stage::INTERSECT_SHADOW)
+    return impl_->traversal != nullptr && impl_->traversable != 0;
+  return launch_row(std::string("k_") + kStageNames[i]) != nullptr;
+}
+
+uint64_t CudaDevice::graphs_captured() const { return impl_->graphs_captured; }
 
 void CudaDevice::synchronize() { impl_->sync(); }
 

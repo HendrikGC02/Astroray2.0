@@ -41,10 +41,16 @@ class TraversalPipeline {
   Times times() const;
   Times motion_times() const;  // zero until create_motion_variant
 
-  // Asynchronous on the pipeline's stream. `kernel_globals` is the device
-  // buffer of the session's KernelGlobals; the raygen reads its segment from the step table and
-  // strides over it with `width` threads. The launch parameters are copied in stream order, so
-  // back-to-back launches are safe.
+  // The launch parameters: the traversable and the device buffer of the session's KernelGlobals.
+  // Uploaded in stream order (one wait) only when they differ from the last values, so a launch
+  // recorded in a CUDA graph reads them from device memory at replay and needs no host copy.
+  void set_params(uint64_t traversable, const DeviceBuffer& kernel_globals);
+  // Asynchronous on the pipeline's stream, with the parameters of the last set_params (throws
+  // std::logic_error before the first). The raygen reads its segment from the step table and
+  // strides over it with `width` threads.
+  void launch_closest(uint32_t width);
+  void launch_shadow(uint32_t width);
+  // set_params, then the launch.
   void launch_closest(uint64_t traversable, const DeviceBuffer& kernel_globals, uint32_t width);
   void launch_shadow(uint64_t traversable, const DeviceBuffer& kernel_globals, uint32_t width);
 

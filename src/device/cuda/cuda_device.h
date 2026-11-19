@@ -70,6 +70,27 @@ class CudaDevice final : public ModuleDevice {
   // (scene_view.h), set before every pass that launches them.
   void set_traversable(uint64_t handle);
   void read_step_table(ar::StepTable& out) override;
+  // The table goes to pinned host memory; enqueue may run inside a graph capture once the table's
+  // address is known (capture_graph reads it first).
+  void enqueue_step_table_read() override;
+  void finish_step_table_read(ar::StepTable& out) override;
+  // Graphs (0002 D7 remedy (a)): stream capture of `record`, instantiated once, replayed with
+  // cuGraphLaunch. Off under ASTRORAY_TEST_LAUNCH_TIMING (each launch is waited for and timed).
+  // Attaching or detaching the traversal pipeline drops every graph (they hold its SBT). Before a
+  // capture and before every replay the traversal parameters are brought up to date outside the
+  // graph (TraversalPipeline::set_params).
+  bool supports_graphs() const override;
+  uint32_t capture_graph(const std::function<void()>& record) override;
+  bool graph_valid(uint32_t graph) const override;
+  void launch_graph(uint32_t graph) override;
+  void free_graph(uint32_t graph) override;
+  void set_graph_copy(uint32_t graph, const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src,
+                      uint64_t src_offset, uint64_t bytes) override;
+  // INTERSECT_CLOSEST and INTERSECT_SHADOW with a pipeline and traversable, and every stage with a
+  // k_ row in launch_config.h.
+  bool stage_routed(ar::Stage stage) const override;
+  // Graphs captured over the device's life (tests).
+  uint64_t graphs_captured() const;
   void synchronize() override;
   uint32_t kind() const override { return AR_DEVICE_CUDA; }
   std::string untested_architecture() const override;
