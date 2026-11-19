@@ -82,10 +82,10 @@ def _copy(coll, dst, width, value, what):
     if last.as_pointer() != base + (n - 1) * itemsize:
         _mismatch(what, f"{n} elements are not one contiguous array")
     ctypes.memmove(dst.ctypes.data, base, n * itemsize)
-    rows = dst.reshape(n, width)
     for i, el in ((0, first), (n - 1, last)):
-        if not np.array_equal(rows[i], np.asarray(value(el), dst.dtype).reshape(width)):
-            _mismatch(what, f"element {i} reads {rows[i].tolist()}, the API gives {value(el)}")
+        got, want = dst[i * width:(i + 1) * width].tolist(), value(el)
+        if got != (list(want) if width > 1 else [want]):  # float32 values compare exactly as Python floats
+            _mismatch(what, f"element {i} reads {got}, the API gives {list(want) if width > 1 else want}")
 
 
 def fill_positions(me, positions, corner_normals):

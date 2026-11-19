@@ -1,7 +1,7 @@
 # 128 Main-thread mesh and instance sync on S2 (0007 d35 remedy 1, B-31)
 Goal: 095's V7b puts Astroray at 2.4x / 1.8x Cycles on S2 (first / second switch) and 3.0x on S1, with main-thread mesh reads 65-70 % of S2's first frame (2.7 s cold, 1.8 s warm); 094's B-31 breaches agree (S2 full read 180 ms cold per 1M triangles against 65, instance loop 140-151 ms per 10k against 30, a plain move 8.2 ms against 0.1 because sync_transforms walks all 10,001 instances) -> apply d35's first remedy, `as_pointer()` topology reads, and fix the instance loop and the plain-move path, then re-measure B-31 and V7b.
 Read first: 0007 d35 (remedies in order; `as_pointer()` is version-fragile), d17 and d22 (topology cache, reads, modal fast path), d46 (API-surface check: a DNA read is a fragile point to list), d23 (main thread); 0009 B-31; 094's and 095's PR bodies (B-31 table, V7b phase breakdown); blender/astroray/sync/ (mesh, instances, topology_cache), tools/api_surface.py and blender/astroray/api_surface.txt.
-Scope: blender/astroray/sync/ (mesh reads, instance build, sync_transforms), blender/astroray/api_surface.txt (the DNA layout and attribute names the direct read depends on), tests/blender/headless/ (equivalence tests: direct reads byte-identical to the attribute-API reads on the golden meshes), tests/blender/ (a GUI or headless timing case if needed), docs/decisions/0007-blender-integration.md (d35 note with the measured result).
+Scope: blender/astroray/sync/ (mesh reads, instance build, sync_transforms), blender/astroray/api_surface.txt (the DNA layout and attribute names the direct read depends on), tests/blender/headless/ (equivalence tests: direct reads byte-identical to the attribute-API reads on the golden meshes), tests/blender/ (a GUI or headless timing case if needed), docs/decisions/0007-blender-integration.md (d35 note with the measured result; d17's '.corner_vert' fallback sentence, lead ruling: the fallback is replaced by the same loud error).
 Out of scope: the GAS disk cache (d35 remedy 2) and parallel material inlining (remedy 3), unless V7a after this task still fails (the lead writes them); native-side changes.
 Reference: Blender 5.3 source (Apache-2.0 / GPL headers read for layout only; cite the struct and field names); Malt's as_pointer() reads as d35 cites; 0007 d17.
 Do:
@@ -17,3 +17,4 @@ Depends on: 094, 095.
 Size: M (about 300 lines); stop and report at 2x.
 Progress:
 - started
+- lead ruling: element-pointer reads + memmove, no struct offsets; layout check per read (stride, contiguity, first/last values); d17's '.corner_vert' -> loops fallback replaced by the loud error (d17 joins Scope)
