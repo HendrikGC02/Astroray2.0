@@ -106,8 +106,10 @@ def _log_path():
 
 def cache_dir():
     """The OptiX disk cache directory (0007 d45): the extension's user directory, so a second Blender
-    start reuses the compiled modules instead of paying the cold compile (0009 B-18 warm, not cold)."""
-    return _user_dir()
+    start reuses the compiled modules instead of paying the cold compile (0009 B-18 warm, not cold).
+    Named through the context log's directory, so a harness that loads this module outside an installed
+    extension redirects both by replacing _log_path (extension_path_user raises for a non-extension package)."""
+    return os.path.dirname(_log_path())
 
 
 def _ok(lib, status, what, last_error=None, handle=None):
