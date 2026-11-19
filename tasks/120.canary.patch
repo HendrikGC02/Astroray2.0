@@ -1,0 +1,31 @@
+diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
+index 484b660..1bf2028 100644
+--- a/src/device/cuda/cuda_device.cpp
++++ b/src/device/cuda/cuda_device.cpp
+@@ -419,7 +419,7 @@ void CudaDevice::upload(const DeviceBuffer& dst, uint64_t offset, const void* sr
+   if (bytes == 0) return;
+   Impl& s = *impl_;
+   s.bind();
+-  s.invalidate_globals(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, bytes);
++  // canary: the bound globals are written without dropping the cached table address
+   s.check(s.cu.cuMemcpyHtoDAsync_(reinterpret_cast<CUdeviceptr>(dst.ptr) + offset, src, bytes, s.stream),
+           "cuMemcpyHtoDAsync");
+   s.sync();
+@@ -436,7 +436,7 @@ void CudaDevice::upload_async(const DeviceBuffer& dst, uint64_t offset, const vo
+   s.bind();
+   uint64_t pos = (s.ring_head + 15u) / 16u * 16u;
+   if (pos + bytes > Impl::kPinnedBytes) {
+-    s.sync();  // the ring is full: wait once, it starts over
++    // canary: the ring starts over without waiting for the stream
+     pos = Impl::kTableBytes;
+   }
+   std::memcpy(s.pinned + pos, src, bytes);
+@@ -482,7 +482,7 @@ void CudaDevice::set_kernel_globals(const DeviceBuffer& buffer) {
+                                 number(sizeof(ar::KernelGlobals)));
+   impl_->globals = reinterpret_cast<CUdeviceptr>(buffer.ptr);
+   impl_->globals_buffer = buffer;
+-  impl_->table = 0;
++  // canary: a rebind keeps the cached table address
+ }
+ 
+ void CudaDevice::launch(ar::Stage stage, uint32_t grid) {
