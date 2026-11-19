@@ -17,3 +17,5 @@ Depends on: 080, 009, 086, 110, 111 (the fragile list is final only after the la
 Size: S (about 150 lines); stop and report at 2x.
 Progress:
 - started
+- 84 entries (kinds attr/call/module/pass); the pip wheel has no openvdb module, so the 2 module lines print UNCHECKED under CI and are checked in Blender (check.ps1 full step 'blender api_surface'); test_listed_surface_is_present also runs the whole list in the headless suite.
+- Canary: tasks/087.canary.patch (missing.append(kind)) turns test_missing_attribute_named and test_missing_indexed_path_named red.
