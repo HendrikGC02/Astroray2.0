@@ -56,6 +56,13 @@ void InvalidSampleReporter::report(const ar::FilmData& f, Report& report, uint64
   reported_ = total;
 }
 
+void InvalidSampleReporter::report_pass(uint64_t pass_invalid, Report& report, uint64_t generation) {
+  if (pass_invalid == 0) return;
+  const double value[2] = {0, 0};
+  report.raise(AR_REPORT_INVALID_SAMPLE, 0, "", pass_invalid, value, generation);
+  reported_ += pass_invalid;
+}
+
 void InvalidSampleReporter::on_film_reset(Report& report) {
   reported_ = 0;
   report.on_film_reset();

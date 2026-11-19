@@ -85,7 +85,7 @@ struct GpuRig {
   uint32_t module;
   Tables tables;
   std::unique_ptr<Film> film;
-  DeviceBuffer knot_nm, knot_value, channels, edges, cdf, film_data, kg_buf, list_buf;
+  DeviceBuffer knot_nm, knot_value, channels, edges, cdf, film_data, kg_buf, list_buf, invalid_total;
   ar::FilmData host_data;
   ar::KernelGlobals kg{};
 
@@ -105,6 +105,8 @@ struct GpuRig {
     host_data.response.channels = static_cast<const ar::ResponseChannel*>(channels.ptr);
     host_data.wavelengths = {static_cast<const float*>(edges.ptr), static_cast<const float*>(cdf.ptr),
                              tables.wavelengths.bins()};
+    invalid_total = put(*dev, std::vector<uint32_t>{0u});
+    host_data.invalid_total = static_cast<uint32_t*>(invalid_total.ptr);
     film_data = put(*dev, std::vector<ar::FilmData>{host_data});
     // The pass's active-pixel list: the identity until a test gives another (set_list).
     std::vector<uint32_t> identity(size_t(req.max_width) * req.max_height);
@@ -119,7 +121,8 @@ struct GpuRig {
   }
   ~GpuRig() {
     dev->synchronize();
-    for (DeviceBuffer* b : {&knot_nm, &knot_value, &channels, &edges, &cdf, &film_data, &kg_buf, &list_buf}) dev->free(*b);
+    for (DeviceBuffer* b : {&knot_nm, &knot_value, &channels, &edges, &cdf, &film_data, &kg_buf, &list_buf, &invalid_total})
+      dev->free(*b);
     film.reset();
     CHECK(ledger.total() == 0);
   }
@@ -239,6 +242,78 @@ TEST_CASE("film_resolve/gpu matches cpu") {
   // Slots and the splat plane are clean for the next pass.
   for (float v : gpu.read<float>(gpu.host_data.slot_L, uint64_t(slots) * 4)) CHECK(v == 0.0f);
   for (float v : gpu.read<float>(gpu.host_data.splat, uint64_t(3) * pixels)) CHECK(v == 0.0f);
+}
+
+TEST_CASE("film_resolve/invalid total equals the plane's sum") {
+  // The session reads FilmData::invalid_total for INVALID_SAMPLE instead of summing the plane, so on
+  // both devices the counter must equal the plane's sum, bad camera samples (NaN, negative) and bad
+  // splats alike. Two passes without clearing it: the counter keeps adding, as the plane does.
+  FilmRequest req;
+  req.max_width = 16, req.max_height = 8;
+  req.slot_capacity = 16 * 8 * 2;
+  req.light_pass = true;
+  const uint32_t pixels = 16 * 8, k = 2, slots = pixels * k;
+
+  Ledger cpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  Tables tables(true);
+  Film cf(cpu, FilmLayout::build(req), Owner{1, 1});
+  ar::FilmData& cd = cf.data();
+  cd.response = response_view(tables.response);
+  cd.wavelengths = {tables.wavelengths.edges.data(), tables.wavelengths.cdf.data(), tables.wavelengths.bins()};
+  uint32_t cpu_total = 0;
+  cd.invalid_total = &cpu_total;
+  ar::KernelGlobals ckg{};
+  ckg.film = &cd;
+  ckg.session.seed = 7u;
+  std::vector<uint32_t> clist(pixels);
+  for (uint32_t i = 0; i < pixels; ++i) clist[i] = i;
+  ckg.active_pixels = clist.data();
+
+  GpuRig gpu(req, true);
+  SplitMix rng{123};
+  uint32_t injected = 0;
+  for (int pass = 0; pass < 2; ++pass) {
+    std::vector<float> lanes = flat_lanes(slots, 1.0f);
+    for (uint32_t s = 0; s < slots; ++s) {
+      const double r = rng.next();
+      if (r < 0.2) lanes[size_t(s) * 4 + 1] = r < 0.1 ? kNaN : -1.0f;
+      injected += r < 0.2;
+    }
+    std::vector<float> splat(size_t(3) * pixels, 0.25f);
+    for (uint32_t p = 0; p < pixels; ++p) {
+      if (rng.next() < 0.1) {
+        splat[p] = kNaN;
+        ++injected;
+      }
+    }
+    const std::vector<uint32_t> flags(slots, 0u);
+    gpu.set_slots(lanes, flags);
+    gpu.set_splat(splat);
+    gpu.resolve(k);
+    std::memcpy(cd.slot_L, lanes.data(), lanes.size() * sizeof(float));
+    std::memcpy(cd.slot_flags, flags.data(), flags.size() * sizeof(uint32_t));
+    std::memcpy(cd.splat, splat.data(), splat.size() * sizeof(float));
+    ckg.session.samples_per_pass = k;
+    cpu_film_resolve(ckg, 0, pixels);
+    ckg.session.samples_done += k;
+    ckg.session.pass_index += 1;
+  }
+  const auto plane = gpu.read<uint32_t>(gpu.host_data.invalid, pixels);
+  uint32_t gpu_total = 0;
+  gpu.dev->download(&gpu_total, gpu.invalid_total, 0, sizeof gpu_total);
+  uint64_t gpu_sum = 0, cpu_sum = 0;
+  for (uint32_t p = 0; p < pixels; ++p) {
+    gpu_sum += plane[p];
+    cpu_sum += cd.invalid[p];
+  }
+  REQUIRE(injected > 0);
+  CHECK(gpu_sum == injected);
+  CHECK(cpu_sum == injected);
+  CHECK(gpu_total == gpu_sum);
+  CHECK(cpu_total == cpu_sum);
 }
 
 TEST_CASE("film_resolve_gpu/active list order") {

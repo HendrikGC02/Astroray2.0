@@ -26,7 +26,9 @@ namespace {
 constexpr uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) / a * a; }
 constexpr uint64_t kFilmDataAt = align_up(sizeof(ar::KernelGlobals), 256);
 constexpr uint64_t kDisplayAt = kFilmDataAt + align_up(sizeof(ar::FilmData), 256);
-constexpr uint64_t kGlobalsBytes = kDisplayAt + sizeof(ar::DisplayTarget);
+// FilmData::invalid_total: one u32, cleared before each resolve and read after it.
+constexpr uint64_t kInvalidTotalAt = align_up(kDisplayAt + sizeof(ar::DisplayTarget), 16);
+constexpr uint64_t kGlobalsBytes = kInvalidTotalAt + sizeof(uint32_t);
 // One pass is one sample per active pixel (0004 D25); the adaptive tail is not built.
 constexpr uint32_t kSamplesPerPass = 1;
 // The ABI's sampler mode is the kernel's value (ruling 60): bind_globals passes the latched settings'
@@ -571,7 +573,6 @@ void Session::release() {
   // The ring stays until the session is destroyed: a frame the host acquired remains readable
   // after CLOSED and is released then (display_release), so no thread reads freed memory.
   film_.reset();
-  invalid_host_ = std::vector<uint32_t>();
   film_settings_.reset();
   tables_.reset();  // the pin: the set's copies go when no session holds them (RULINGS 70)
   session_tables_ = SessionTables{};
@@ -662,7 +663,9 @@ void Session::bind_globals() {
     if (!missing.empty()) throw std::logic_error("kernel globals: " + missing.front() + " is null");
   }
   device_.upload(globals_buf_, 0, &kg, sizeof kg);
-  device_.upload(globals_buf_, kFilmDataAt, &f, sizeof f);
+  ar::FilmData fd = f;
+  fd.invalid_total = reinterpret_cast<uint32_t*>(base + kInvalidTotalAt);
+  device_.upload(globals_buf_, kFilmDataAt, &fd, sizeof fd);
   device_.set_kernel_globals(globals_buf_);
 #ifdef ASTRORAY_GPU
   // The pinned snapshot's TLAS: SceneData::accel holds its handle as an integer (scene_view.h).
@@ -748,18 +751,6 @@ bool Session::latch_tables() {
   return tables_ != before;
 }
 
-ar::FilmData Session::film_host_view(std::vector<uint32_t>* invalid) const {
-  // The invalid-sample plane, read where the host can: in place on the CPU device, by download on
-  // CUDA, rows of the render rectangle only.
-  ar::FilmData f = film_->data();
-  if (device_.kind() == AR_DEVICE_CPU) return f;
-  invalid->resize(uint64_t(f.width) * f.rect_height);
-  const uint64_t at = uint64_t(reinterpret_cast<const char*>(f.invalid) - static_cast<const char*>(film_->buffer().ptr));
-  device_.download(invalid->data(), film_->buffer(), at, invalid->size() * 4);
-  f.invalid = invalid->data();
-  return f;
-}
-
 void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
   ++resolves_;
   if (options_.test_stale_resolve_at_pass != 0 && resolves_ == options_.test_stale_resolve_at_pass) --pass_epoch;
@@ -770,9 +761,15 @@ void Session::resolve(uint64_t pass_epoch, uint64_t generation) {
     return;
   }
   bind_globals();
+  // The resolve counts the pass's invalid samples into FilmData::invalid_total as well as the
+  // plane, so the INVALID_SAMPLE entry needs 4 bytes, not the plane (8 MiB at 1080p, whose download
+  // and host sum had left the GPU idle about 0.9 ms per pass). The clear and the read are ordered
+  // with the launch on the device's stream; the read is the pass's one wait for its resolve.
+  device_.memset(globals_buf_, kInvalidTotalAt, 0, sizeof(uint32_t));
   device_.launch(KernelId::FILM_RESOLVE, active_->count());
-  device_.synchronize();
-  invalid_.report(film_host_view(&invalid_host_), report_, generation);
+  uint32_t pass_invalid = 0;
+  device_.download(&pass_invalid, globals_buf_, kInvalidTotalAt, sizeof pass_invalid);
+  invalid_.report_pass(pass_invalid, report_, generation);
   ++pass_index_;
   ++passes_in_epoch_;
   std::lock_guard<std::mutex> lock(mutex_);

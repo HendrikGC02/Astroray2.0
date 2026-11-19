@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // film_resolve: one thread per active pixel folds the pass's slots and splat entry into the
 // fp64 moments with plain read-add-write (one writer per pixel, no atomics), then clears them.
+// The one atomic is the pass's invalid total (FilmData::invalid_total): an integer add, so its
+// value does not depend on the order in which threads reach it.
 //   per valid sample m of pixel j: x_c = convert(...) / s;  S1 += x;  S2 += x^2;
 //   S1A += x when the sample index n + m is even;  n += 1
 // Invalidity is value-based (0008 d6; no flag bit): a sample with a NaN, Inf or negative lane is
@@ -48,6 +50,12 @@ AR_FN void film_moment_add(const FilmData& f, uint32_t plane, uint32_t pixel, do
   if (f.s1a != nullptr && even) f.s1a[at] += v;
 }
 
+// Counts one invalid sample of `pixel` in its plane and in the pass total (0008 d6).
+AR_FN void film_count_invalid(const FilmData& f, uint32_t pixel) {
+  f.invalid[pixel] += 1u;
+  if (f.invalid_total != nullptr) atomic_add(f.invalid_total, 1u);
+}
+
 AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
   const FilmData& f = *kg.film;
   // pixel_id(x, y, width) is the plane index, so one value serves as key and address.
@@ -63,7 +71,7 @@ AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
     f.slot_flags[slot] = 0u;
 
     if (!film_sample_valid(L)) {
-      f.invalid[pixel] += 1u;
+      film_count_invalid(f, pixel);
       continue;
     }
     const uint32_t index = n0 + m;
@@ -104,7 +112,7 @@ AR_FN void film_resolve_pixel(const KernelGlobals& kg, uint32_t j) {
       film_moment_add(f, f.moment[0].offset + 1u, pixel, double(g), even);
       film_moment_add(f, f.moment[0].offset + 2u, pixel, double(b), even);
     } else {
-      f.invalid[pixel] += 1u;
+      film_count_invalid(f, pixel);
     }
   }
 }

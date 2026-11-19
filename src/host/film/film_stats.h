@@ -35,10 +35,12 @@ uint64_t film_invalid_total(const ar::FilmData& f);
 // One INVALID_SAMPLE entry per film. report() raises only what is new since the last call, so
 // the entry's count equals the samples not written; on_film_reset() clears the entry and the
 // bookkeeping together, with the film's clear. A total below what was already reported means the
-// film was cleared without on_film_reset(): report() throws std::logic_error.
+// film was cleared without on_film_reset(): report() throws std::logic_error. report_pass() takes
+// the invalid samples one resolve counted (FilmData::invalid_total) instead of summing the plane.
 class InvalidSampleReporter {
  public:
   void report(const ar::FilmData& f, Report& report, uint64_t generation);
+  void report_pass(uint64_t pass_invalid, Report& report, uint64_t generation);
   void on_film_reset(Report& report);
 
  private:
