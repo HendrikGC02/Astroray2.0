@@ -60,9 +60,9 @@ provisional = true
 
 [[budget]]
 id = "B-10"
-text = "≤ 20 min"
+text = "≤ 12 min"
 tier = "every run"
-provisional = true
+provisional = false
 
 [[budget]]
 id = "B-11"
