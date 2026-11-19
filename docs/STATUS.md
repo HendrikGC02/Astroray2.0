@@ -35,7 +35,7 @@ None. Unowned follow-ups (a task that touches the area takes them):
   not disable it, unlike kernel_globals.h, ar.py and the addon text (check Cycles, fix kernel or text); AUTO emission
   needs an estimate > 0.5 (067; confirm vs Cycles); NaN material inputs render black with no INVALID_SAMPLE (report it).
 - B-31 after 129 still misses on S2: instance loop 39.8 / 88.5 ms per 10k warm / cold (limit 30), cold full read
-  100 ms per 1M (first touch), cold plain move 0.110 ms; S2's first frame is 0.84x / 0.72x Cycles (V7b). Milestone close.
+  100 ms per 1M (first touch), cold plain move 0.110 ms; S2's first frame is 0.84x / 0.72x Cycles (V7b); V7a met (127, worst S1 1.17x). Milestone close.
 - Viewport sync (111): material/node-group/image edits resend the object's mesh (Blender's extra geometry tag), any
   LIGHT update resends lights, settings edits resend lights and instances; film_exposure has no viewport effect.
 - M1b: Mix/Add Shader needs 058's compiler to accept one value feeding two EMIT_LE; textured Roughness and Specular
