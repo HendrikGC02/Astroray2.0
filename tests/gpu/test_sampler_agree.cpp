@@ -5,7 +5,7 @@
 // Expected values are typed from the setups below or from the Python model of 0003 d23
 // (fnv constants, as in tests/cpu/test_sampler.cpp), never read back from the code.
 // Ref: docs/decisions/0003-spectral-model-and-path-state.md d23; 0002 D4, D14, D15;
-// 0007 d14 (reserve rule, R = 1.5 GiB); 0009 d11, d17(i).
+// 0007 d14 (reserve rule, R = 2 GiB); 0009 d11, d17(i).
 #include <doctest.h>
 
 #include <cstdint>
@@ -289,8 +289,8 @@ TEST_CASE("cuda_device/reserve rule refusal") {
 }
 
 TEST_CASE("cuda_device/reserve rule decision") {
-  // R is the record's 1.5 GiB (0007 d14), exactly.
-  CHECK(kCudaReserveBytes == 1610612736ull);
+  // R is the record's measured 2 GiB (0007 d14, P5), exactly.
+  CHECK(kCudaReserveBytes == 2147483648ull);
   const uint64_t R = kCudaReserveBytes;
   const uint64_t free10 = 10 * kGiB;  // free - R = 8.5 GiB
   const uint64_t edge = free10 - R;

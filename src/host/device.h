@@ -194,8 +194,9 @@ class ModuleDevice : public Device {
 };
 
 // R of 0007 d14: bytes that must stay free after any allocation, for Blender and the
-// desktop. PROVISIONAL (0007 d14: measured by P5 with Blender open).
-inline constexpr uint64_t kCudaReserveBytes = 3ull << 29;  // 1.5 GiB
+// desktop: the headroom Blender can still grow into (P5: Material Preview on B-5M used 1.56 GiB more than
+// idle, plus 25% = 1.95 GiB, rounded up; 0007 d14).
+inline constexpr uint64_t kCudaReserveBytes = 2147483648ull;  // 2 GiB
 
 // The reserve rule of 0007 d14 as a pure function: an allocation of `need` bytes proceeds
 // only if need + reserve <= free, free being what cuMemGetInfo reports at that moment.

@@ -10,8 +10,10 @@ sampled once a second:
   idle:     Blender open on its startup scene, Solid viewport
   solid:    the b5m scene (10,000 instances, 2,000 meshes) loaded, Solid viewport
   material: the same, Material Preview (EEVEE), sampled for 40 s while its shaders compile and draw
-R = the largest used value of the three states, plus 25% margin; it is compared with 0007 d14's 1.5 GiB.
-Ref: docs/decisions/0007-blender-integration.md d14 (reserve rule, R = 1.5 GiB PROVISIONAL) and Risks P5;
+The recorded outcome: R (0007 d14) is the growth Blender can still take after our allocation, so the lead's
+reading is (material - idle) + 25%, rounded up to 2 GiB; the script also prints the largest total + 25%.
+The printed 'within/ABOVE' compares that total with 1.5 GiB and is kept for the record.
+Ref: docs/decisions/0007-blender-integration.md d14 (reserve rule) and Risks P5;
 CUDA driver API cuMemGetInfo_v2 (cuda.h).
 """
 import ctypes
