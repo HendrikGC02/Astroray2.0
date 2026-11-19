@@ -35,7 +35,7 @@ function Build-Blend([string]$name) {
   if ((Test-Path $blend) -and -not $Rebuild) { return $blend }
   $py = Get-ArPython
   $extra = if ($name -eq 'a1_furnace') { @('--sampler', 'sobol') } else { @() }   # a .blend cannot carry another sampler
-  & $py -I (Join-Path $root "scenes/$name/build.py") --out (Join-Path $out "$name.arrec") --blend $blend @extra
+  & $py -I (Join-Path $root "scenes/$name/build.py") --out (Join-Path $out "$name.arrec") --blend $blend @extra | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "scene builder $name failed" }
   $null = Invoke-ArBlender -Script (Join-Path $root 'scenes/lib/blend_writer.py') -TimeoutS 900 -Args @('--no-extension', "$blend.json", $blend)
   if ($LASTEXITCODE -ne 0) { throw "blend_writer for $name failed" }

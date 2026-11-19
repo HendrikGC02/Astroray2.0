@@ -72,8 +72,8 @@ def analyse(st, t_a, t_b, t_view):
     for d in dt:
         cur = cur + d if d > 1.0 / FLOOR_HZ else 0.0
         longest = max(longest, cur)
-    out["longest_below_floor_s"] = longest
-    out["floor_breach"] = out["longest_below_floor_s"] > FLOOR_S
+    out["longest_below_floor_s"] = float(longest)
+    out["floor_breach"] = bool(out["longest_below_floor_s"] > FLOOR_S)
     grid = np.arange(t_a + FLOOR_S, t_b, 0.01)
     counts = np.array([np.count_nonzero((t > g - FLOOR_S) & (t <= g)) for g in grid])
     out["min_frames_in_half_second"] = int(counts.min()) if len(counts) else None
@@ -261,7 +261,13 @@ class Driver:
             if "error" in out["stats"]:
                 out["errors"].append(out["stats"]["error"])
         os.makedirs(os.path.dirname(os.path.abspath(self.out)), exist_ok=True)
-        json.dump(out, open(self.out, "w"), indent=1)
+        try:
+            text = json.dumps(out, indent=1)
+        except TypeError:  # never a half-written result and a hung process
+            print(traceback.format_exc(), flush=True)
+            finish(1)
+        with open(self.out, "w") as f:
+            f.write(text)
         s = out.get("stats", {})
         print(f"RESULT viewport {self.scene_name}: region {self.region}, rate mean {s.get('rate_mean')}, median {s.get('rate_median')}, "
               f"p5 {s.get('rate_p5')}, longest below floor {s.get('longest_below_floor_s')} s; present {s.get('present')}", flush=True)
