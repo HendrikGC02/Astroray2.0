@@ -59,18 +59,18 @@ The spine fixes the frame: CMake + Ninja + MSVC, one build tree; CUDA + OptiX on
 
 | id | budget | limit | serves | tier | basis |
 |---|---|---|---|---|---|
-| B-01 | clean build, `dev`, all targets, no cache | ≤ 5 min | here | `full` | owner; MEASURED 11.3 s for 34 device TUs at -j8 (spike A §4); product scale PROVISIONAL |
+| B-01 | clean build, `dev`, all targets, no cache | ≤ 5 min | here | `full` | owner; MEASURED 11.3 s for 34 device TUs at -j8 (spike A §4); product scale PROVISIONAL; MEASURED 43.5 s clean `dev` all targets at -j8 on main 1585e60 (091) |
 | B-02 | incremental build after editing any one file, incl. a kernel header | ≤ 30 s | here | report | owner; MEASURED header touching all 34 TUs 11.2 s, one stage file 3.7 s |
 | B-03 | host `.cpp` edit, rebuild + relink | ≤ 5 s | here | report | MEASURED 0.70 s cl + link |
 | B-04 | dev kernel edit, one stage file, to running engine (nvcc rebuild + module swap) | ≤ 5 s | decision 5 | `full` | MEASURED 1.3-2.5 s nvcc per TU, module load 1.6 ms, about 1.1 s edit-to-launch per kernel (0005 Alternatives); a measured breach is the only reason to reopen runtime compilation (ruling 16) |
 | B-05 | compile time per device TU, serial nvcc | ≤ 3.0 s | 0002 D10 | `gate` (≤ 3 changed TUs), `full` (all) | spine; MEASURED 1.3-2.5 s; method decision 18 |
 | B-06 | per-kernel registers, stack, spills, launch-bounds check, growth | 0002 D10 | 0002 | `gate` (capped build), `full` (uncapped warning) | not a time budget; listed because the gate runs it (ruling 17) |
-| B-07 | configure from scratch, no network | ≤ 10 s | here | `full` | PROVISIONAL |
+| B-07 | configure from scratch, no network | ≤ 10 s | here | `full` | MEASURED 7.38, 7.19, 7.12, 7.08 s over four clean configures (task 091); 10 s is 1.35 x the maximum |
 | B-08 | `check fast` wall time | ≤ 10 s | here | every run | owner; MEASURED CPU TU 0.65 s, 0.35 µs per BSDF eval (spike A §7) |
-| B-09 | `check gate` wall time incl. incremental build; of which the kernel part (device builds, agreement suites, compile timing) | ≤ 3 min; ≤ 120 s | here, 0002 D10 | every run | owner; kernel part PROVISIONAL (about 20 s for a one-stage edit) |
-| B-10 | `check full` | ≤ 20 min | here | every run | PROVISIONAL |
-| B-11 | hosted `check ci` | ≤ 15 min | here | every run | PROVISIONAL (runner: 4 vCPU, 16 GB, research 08 §10; unmeasured) |
-| B-12 | one test: `fast` / `gate` | ≤ 0.5 s / ≤ 20 s | here | every run | PROVISIONAL |
+| B-09 | `check gate` wall time incl. incremental build; of which the kernel part (device builds, agreement suites, compile timing) | ≤ 3 min; ≤ 120 s | here, 0002 D10 | every run | owner; kernel part PROVISIONAL (about 20 s for a one-stage edit; MEASURED 15.5-15.6 s with no edit, 16.7 s after touching one stage, task 091; limit reset pending the `$kernelBudget` constant in tools/check.ps1) |
+| B-10 | `check full` | ≤ 20 min | here | every run | PROVISIONAL (task 091: `full` stops at its first failing step today, so no complete run exists to measure) |
+| B-11 | hosted `check ci` | ≤ 15 min | here | every run | PROVISIONAL (runner: 4 vCPU, 16 GB, research 08 §10; MEASURED 241-345 s job time over the last five `ci` runs on image windows-2025-vs2026 with `cl` 19.51.36260.0, task 091; the `bpy` wheel suite is not in `ci` yet, so the limit is kept) |
+| B-12 | one test: `fast` / `gate` | ≤ 0.41 s / ≤ 20 s | here | every run | `fast` part MEASURED: slowest test 0.304-0.315 s over 9 runs, 1.3 x 0.315 s (task 091); `gate` part PROVISIONAL (slowest CPU gate test 4.46 s; GPU per-test times not measured) |
 | B-13 | present: `view_draw` at 1080p / 4K; held update rate at a 60 Hz producer, 1080p, 1440p and 4K | ≤ 2 ms / ≤ 8 ms (p99 ≤ 3 ms / ≤ 15 ms); ≥ 58/s | 0007 D29-D33 (method V8) | `full` | MEASURED spike B §1: 0.8 ms 1080p, 7.4 ms striped RGBA16F 4K, paced; synthetic producer 0.74 ms per 1080p update, Python overhead 0.014-0.03 ms per present (0001 D6) |
 | B-14 | viewport update rate on bench scenes (ruling 30) | target ≥ 30/s at full 1080p on B-1M; floor: never < 24/s for > 0.5 s; 60/s is a later goal, reported, not gated | 0007 D34, D50 | `full` | owner #9, #21; PROVISIONAL (no product-scope kernel throughput yet) |
 | B-15 | first frame vs Cycles viewport | 0007 D35 | 0007 | `full` | ruling 21: the number is stated only in 0007; spike B §3 (0001 D6): 1.42 s against Cycles' 1.28 s F12 and 0.97 s viewport, mesh and instance sync only |
@@ -263,7 +263,7 @@ When each item lands is `docs/ROADMAP.md`'s business (ruling G1).
 - B-14, B-15 and B-20 depend on kernel throughput and shader sync not yet measured (spike B §4 caveat); they may force acceleration-structure caching (0007 D35 remedies).
 - B-17..B-37 were collected from 0002-0005, 0007 and 0008 when rulings G2 and 29 moved every time budget here; all are PROVISIONAL, none has been measured on product code, B-28 to B-30 have no number yet, and B-34's schedule values were copied from Cycles' `render_scheduler.cpp` (task 086).
 - Where astropy is installed is open: ruling 32 allows no separate virtual environment, and Blender's bundled Python does not carry it (decision 2).
-- The hosted runner's toolset, 14 GB disk and 4 vCPU are unmeasured against `ci` with the `bpy` wheel suite (B-11).
+- The hosted runner (task 091): `ci` ran 241-345 s on windows-2025-vs2026 with `cl` 19.51.36260.0 (the pinned local toolset is 14.44); its 14 GB disk and 4 vCPU are unmeasured against `ci` with the `bpy` wheel suite (B-11).
 - Blender start-up time per process inside the 3-minute gate is unmeasured. If it is large, the gate smoke reuses one Blender process for all its checks.
 - The no-FMA build differs from the shipped binary; 17(iii) covers the shipped one statistically against double only.
 - Mitsuba's Windows wheel Python version and pbrt-v4's source build on this machine are unverified (research 09 spikes 7, 11). Without two witnesses, O scenes are self-consistency checks only.
