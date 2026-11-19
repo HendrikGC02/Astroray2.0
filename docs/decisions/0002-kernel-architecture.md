@@ -78,9 +78,10 @@ A pass ends when the work counter is exhausted and every segment except the two 
   | fixed grids + graphs (dropped) | 16.02 / 16.75 ms | 21.2 % | 27.61 / 28.14 ms | 12.1 % |
   | transfers + warp-per-tile `queue_build` | 14.82 / 15.92 ms | 21.8 % | 26.59 / 27.18 ms | 11.5 % |
   | the same + warp-per-tile sort | 14.73 / 15.60 ms | 19.8 % | 16.92 / 17.51 ms | 17.7 % |
-  | pass boundary (task 123) | 13.85 / 14.67 ms | 13.6 % | 16.10 / 16.53 ms | 11.7 % |
+  | pass boundary: memsets, one bind (task 123) | 13.85 / 14.67 ms | 13.6 % | 16.10 / 16.53 ms | 11.7 % |
+  | the same + device invalid total (task 123) | 13.23 / 13.76 ms | 9.2 % | 15.49 / 15.95 ms | 9.4 % |
 
-  Pass boundary (task 123, same method plus host timestamps): the 1.75 ms between `film_resolve` and the next pass was the session's read of the invalid-sample plane (0008 d6) for the report: a fresh 8 MiB host vector per pass (allocation, zero fill, free, about 0.75 ms), the pageable download (0.6 ms) and the host sum (0.3 ms). The vector is now kept between passes, the pass-start memsets no longer wait and the globals are bound once per pass: 0.80 ms remain, the download and the sum. Removing them needs a device-side invalid total (a counter written by `film_resolve`) or pinned host memory through the Device seam.
+  Pass boundary (task 123, same method plus host timestamps): the 1.75 ms between `film_resolve` and the next pass was the session's read of the invalid-sample plane (0008 d6) for the INVALID_SAMPLE entry: a fresh 8 MiB host vector per pass (allocation, zero fill, free, about 0.75 ms), the pageable download (0.6 ms) and the host sum (0.3 ms). Now the pass-start memsets do not wait, the globals are bound once per pass, and `film_resolve` adds each invalid sample to one u32 counter (`FilmData::invalid_total`, an integer atomic, cleared before each resolve) besides the plane, so the host reads 4 bytes behind the resolve's one wait. The entry is raised at the same point as before. The gap is 0.05 ms (B-1M) and 0.08 ms (B-5M); `film_resolve` is unchanged at 2.6-2.8 ms. B-19's idle row is now met on both scenes; partition plus sort (18.9 % and 19.6 %) is not.
 
   B-19 still fails: B-1M idle 19.8 % and partition 16.7 %; B-5M idle 17.7 % and partition plus sort 17.7 %. The largest single idle is between passes (about 1.7 ms from `film_resolve` to the next pass's first kernel, host work in the session).
 - (b) Compact the main pool when live paths drop below a quarter of its high-water mark (Cycles `compact_main_paths`).

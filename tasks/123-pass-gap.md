@@ -20,3 +20,4 @@ Progress:
 - Kept the vector between passes, dropped the second bind_globals, CUDA memset stream-ordered (test + canary): gap 0.80 ms; idle B-1M 20.0 -> 13.6 %, B-5M 17.3 -> 11.7 %.
 - Remaining gap needs a device-side invalid total (kernel) or pinned memory through the Device seam: out of scope.
 - Lead ruling: device-side invalid total. film_resolve adds each invalid sample to FilmData::invalid_total (u32 atomic, cleared before each resolve); the session reads 4 bytes instead of the plane.
+- Counter: gap 0.05 / 0.08 ms; idle B-1M 9.2 %, B-5M 9.4 % (B-19 idle met); qb+sort 18.9 / 19.6 % still fails. Canary 3 hunks, each test red.
