@@ -152,6 +152,8 @@ def check(lines, addon_passes=None):
 
 
 def main(argv):
+    if "--" in argv:  # inside Blender: arguments follow `--`
+        argv = argv[argv.index("--"):]
     path = argv[1] if len(argv) > 1 else LIST
     with open(path, encoding="utf-8") as f:
         lines = f.read().splitlines()
