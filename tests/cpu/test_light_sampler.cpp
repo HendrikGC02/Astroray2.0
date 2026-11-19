@@ -5,13 +5,16 @@
 // (pdf 1 / (4 pi)); 0004 D9 (estimate 0 gives pmf 0); 0005 item 40 (magenta and one entry).
 #include <doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -20,6 +23,7 @@
 #include "host/light/light_builder.h"
 #include "host/material/material_store.h"
 #include "host/scene/edit.h"
+#include "host/scene/generation.h"
 #include "host/scene/instances.h"
 #include "host/scene/mesh.h"
 #include "light/light_sampler.h"
@@ -512,6 +516,73 @@ TEST_CASE("light_sampler/scene table rebuilds only for emissive changes") {
   CHECK(fx.scene.light_rebuilds() == 4);
   REQUIRE(t->lights.size() == 2);
   CHECK((t->lights[0].flags & ar::kLightBackFace) != 0);
+}
+
+TEST_CASE("light_sampler/parallel build is bit-identical to the serial build") {
+  // Lamps, the world and 12,000 triangles in runs of 1-300 sharing one of three term sets (the
+  // shape of a multi-material mesh), so chunk edges of 97 fall inside and between runs.
+  std::vector<LightInput> in = mixed(10);
+  const std::vector<std::vector<EmissionTerm>> sets = {
+      {{white(), 2.0f}},
+      {{ar::make_const_ref(ar::SpectrumSemantic::ILLUMINANT, Real(0.5)), 3.0f}},
+      {{white(), 1.0f}, {ar::make_const_ref(ar::SpectrumSemantic::ILLUMINANT, Real(0.25)), 5.0f}}};
+  std::mt19937 rng(125);
+  std::uniform_int_distribution<int> run(1, 300);
+  std::uniform_real_distribution<double> u(0.1, 2.0);
+  for (uint32_t t = 0, s = 0; t < 12000; ++s) {
+    for (int k = run(rng); k > 0 && t < 12000; --k, ++t) {
+      const Real3 p = r3(u(rng), u(rng), u(rng));
+      LightInput li;
+      li.record = ar::light_make_triangle(p, p + r3(u(rng), 0, 0), p + r3(0, u(rng), 0), 2, t, ar::kLightEmissionProgram, Real(0), white());
+      li.terms = sets[s % sets.size()];
+      in.push_back(li);
+    }
+  }
+  const ar::SceneSphere sphere{r3(5, 5, 5), Real(10)};
+  const auto serial = build_light_table(in, sphere, observer(), nullptr);
+  astroray::ContextState ctx;
+  WorkerPool pool(ctx, 4);
+  uint32_t chunks = 0;
+  const ChunkRunner par = [&](uint32_t count, const std::function<void(uint32_t, uint32_t)>& body) {
+    chunks = (count + 96) / 97;
+    pool.parallel_for(count, 97, body);
+  };
+  const auto parallel = build_light_table(in, sphere, observer(), nullptr, par);
+  REQUIRE(chunks > 100);
+  const auto same = [](const auto& a, const auto& b) {
+    return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(a[0])) == 0);
+  };
+  CHECK(same(serial->lights, parallel->lights));
+  CHECK(same(serial->importance, parallel->importance));
+  CHECK(same(serial->bins, parallel->bins));
+  CHECK(same(serial->bin_light, parallel->bin_light));
+  CHECK(same(serial->pmf, parallel->pmf));
+  CHECK(same(serial->light_index, parallel->light_index));
+  CHECK(serial->world_light == parallel->world_light);
+  // Both equal the per-light formula with no reuse across lights: energy times light_power.
+  int differ = 0;
+  for (size_t i = 0; i < in.size(); ++i) {
+    const LightInput& li = in[i];
+    const double e = li.terms.empty() ? display_energy({{li.record.emission, li.record.strength}}, observer())
+                                      : display_energy(li.terms, observer());
+    const double imp = e * double(ar::light_power(li.record, sphere, Real(1)));
+    differ += std::memcmp(&imp, &serial->importance[i], sizeof imp) != 0;
+  }
+  CHECK(differ == 0);
+}
+
+TEST_CASE("light_sampler/worker pool parallel_for covers every index once and rethrows") {
+  astroray::ContextState ctx;
+  WorkerPool pool(ctx, 3);
+  std::vector<int> hits(10007, 0);
+  pool.parallel_for(uint32_t(hits.size()), 64, [&](uint32_t first, uint32_t last) {
+    for (uint32_t i = first; i < last; ++i) ++hits[i];
+  });
+  CHECK(std::count(hits.begin(), hits.end(), 1) == int(hits.size()));
+  CHECK_THROWS_AS(pool.parallel_for(1000, 10, [](uint32_t first, uint32_t) {
+                    if (first == 500) throw std::runtime_error("chunk 50");
+                  }),
+                  std::runtime_error);
 }
 
 }  // TEST_SUITE("fast")
