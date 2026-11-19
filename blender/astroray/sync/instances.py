@@ -11,7 +11,7 @@ import ctypes
 
 import numpy as np
 
-from . import keys
+from . import classify, keys
 
 # include/astroray/astroray.h
 VIS_CAMERA, VIS_DIFFUSE, VIS_GLOSSY, VIS_TRANSMISSION, VIS_SHADOW, VIS_VOLUME = 1, 2, 4, 8, 16, 32
@@ -30,7 +30,8 @@ _FIELDS = (  # name, dtype, width
 
 
 def murmur3_32(data, seed=0):
-    """MurmurHash3_x86_32 (Appleby, public domain); cryptomatte ids per 0008 decision 11."""
+    """MurmurHash3_x86_32; cryptomatte ids per 0008 decision 11.
+    Ref: Austin Appleby, MurmurHash3_x86_32 in SMHasher src/MurmurHash3.cpp (public domain)."""
     c1, c2, mask = 0xCC9E2D51, 0x1B873593, 0xFFFFFFFF
     h = seed
     n = len(data) & ~3
@@ -56,7 +57,8 @@ def murmur3_32(data, seed=0):
 
 def murmur3_32_many(datas, seed=0):
     """murmur3_32 of every bytes object in `datas` as a uint32 array, vectorised over equal lengths: the same
-    MurmurHash3_x86_32 steps on uint32 lanes (B-31: the scalar hash of S2's 7,042 names took 15 ms)."""
+    MurmurHash3_x86_32 steps on uint32 lanes (B-31: the scalar hash of S2's 7,042 names took 15 ms).
+    Ref: Austin Appleby, MurmurHash3_x86_32 in SMHasher src/MurmurHash3.cpp (public domain)."""
     out = np.empty(len(datas), np.uint32)
     by_len = {}
     for i, d in enumerate(datas):
@@ -133,6 +135,16 @@ class InstanceCache:
         if missing:
             self.hashes.update(zip(missing, murmur3_32_many([n.encode("utf-8") for n in missing]).tolist()))
         return [self.hashes[n] for n in names]
+
+
+def classify_updates(depsgraph, sync_cache, cache):
+    """classify.classify's actions for one batch of depsgraph updates and the evaluated IDs its walk met
+    (original session_uid -> ID); every updated ID is forgotten from `cache` (an InstanceCache) first, so no
+    later build reuses per-object work an update may have changed."""
+    evaluated = {}
+    actions = classify.classify(depsgraph, sync_cache, evaluated)
+    cache.forget(evaluated)
+    return actions, evaluated
 
 
 class InstanceTable:

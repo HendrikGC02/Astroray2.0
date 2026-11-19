@@ -90,9 +90,7 @@ class ViewportJob(render_final.Job):
             super().update(depsgraph, need_camera=False)
             self._after_full(depsgraph)
             return
-        evaluated = {}
-        actions = classify.classify(depsgraph, self.cache, evaluated)
-        self.icache.forget(evaluated)
+        actions, evaluated = instances.classify_updates(depsgraph, self.cache, self.icache)
         if not actions:
             return
         kinds = {a.kind for a in actions}
@@ -163,9 +161,7 @@ class ViewportJob(render_final.Job):
         for key, ob in geoms.items():
             data = ob.data.original.session_uid if ob.data is not None else None
             if key in new_geoms or ob.original.session_uid in touched or data in touched:
-                self.checks.forget(key)  # a geometry update: the layout check runs again (0007 d35 note)
-                with mesh.mesh_of(ob) as me:
-                    mesh.sync_mesh(e, abi, me, key, ob.original.name, checks=self.checks)
+                mesh.sync_object(e, abi, ob, key, self.checks)
         inst = [a for a in actions if a.kind == C.INSTANCES]
         patched = False
         if inst or new_geoms or gone:

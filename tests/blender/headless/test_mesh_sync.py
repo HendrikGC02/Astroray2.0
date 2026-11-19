@@ -7,6 +7,7 @@ import sys
 import time
 import unittest
 from collections import Counter
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -232,6 +233,7 @@ class StagingEdit:
     def call(self, name, *args):
         if name == "ar_edit_mesh_begin":
             d, b = args[0]._obj, args[1]._obj
+            self.name = bytes(d.name)
             V, C, F, U = d.vertex_count, d.corner_count, d.face_count, d.uv_layer_count
             for arr, n, dt in (("positions", V * 3, np.float32), ("corner_vert", C, np.int32),
                                ("face_start", F, np.int32), ("corner_normals", C * 3, np.float32),
@@ -274,8 +276,10 @@ class BrokenPolygons:
 
 
 class TestLayoutChecks(unittest.TestCase):
-    """The layout check runs on the first read of a key, again after a geometry update (forget) or a changed
-    Layout, and is skipped for an unchanged key (0007 d35 note)."""
+    """The layout check guards the layout, not values: it runs on the first read of a key, again when a full read
+    finds changed counts or the key left the scene, and is skipped for a key read again at unchanged counts,
+    positions-only updates included (0007 d35 note, lead ruling in task 129). Reads go through
+    mesh.sync_object, the step the viewport and F12 take."""
 
     def setUp(self):
         support.reset_scene()
@@ -285,29 +289,37 @@ class TestLayoutChecks(unittest.TestCase):
 
     def sync(self, me, key):
         edit = StagingEdit()
-        mesh.sync_mesh(edit, StagingAbi, me, key, "cube", checks=self.checks)
+        ob = SimpleNamespace(type="MESH", data=me, original=SimpleNamespace(name="cube"))
+        mesh.sync_object(edit, StagingAbi, ob, key, self.checks)
         return edit
 
     def test_staged_read_matches_the_numpy_read(self):
+        self.me.uv_layers.new(name="Second")
+        self.me.attributes["Second"].data.foreach_set("vector", np.arange(48, dtype=np.float32) + 0.5)
+        self.me.polygons.foreach_set("material_index", [0, 1, 2, 0, 1, 2])
         edit = self.sync(self.me, 3)
         _, want = read(self.me)
+        self.assertEqual(len(want.uv), 2 * 24 * 2)
         for name in StagingAbi._ARRAYS:
             self.assertEqual(edit.arrays[name].tobytes(), getattr(want, name).tobytes(), name)
         self.assertEqual(edit.commits, [3])
+        self.assertEqual(edit.name, b"cube".ljust(64, b"\0"))
 
-    def test_unchanged_key_skips_the_check(self):
+    def test_unchanged_counts_skip_the_check(self):
         self.sync(self.me, 3)
-        edit = self.sync(BrokenPolygons(self.me), 3)  # checked once at this Layout: no second check
+        self.me.vertices[0].co = (0.25, 0.5, -1.0)  # a geometry update with unchanged counts keeps the check
+        edit = self.sync(BrokenPolygons(self.me), 3)
         np.testing.assert_array_equal(edit.arrays["face_start"], np.arange(0, 24, 4))
+        self.assertEqual(edit.arrays["positions"][:3].tolist(), [0.25, 0.5, -1.0])
 
     def test_new_key_is_checked(self):
         self.sync(self.me, 3)
         with self.assertRaisesRegex(mesh.LayoutMismatch, r"polygons \(face offsets\)"):
             self.sync(BrokenPolygons(self.me), 4)
 
-    def test_geometry_update_rechecks(self):
+    def test_key_that_left_rechecks(self):
         self.sync(self.me, 3)
-        self.checks.forget(3)  # what the viewport does on a geometry update of the key
+        self.checks.forget(3)  # what the viewport does when the key leaves the scene
         with self.assertRaisesRegex(mesh.LayoutMismatch, r"polygons \(face offsets\)"):
             self.sync(BrokenPolygons(self.me), 3)
 

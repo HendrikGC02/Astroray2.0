@@ -145,10 +145,12 @@ def fill(me, out, check=True):
 
 class LayoutChecks:
     """Geometry keys whose direct read passed the layout check, with the Layout it was checked at (caller-owned,
-    one per engine scene, like the KeyMap). A read skips the stride, contiguity and value checks only for a key
-    already checked at an equal Layout; the attribute type and domain lookup runs on every read. The caller
-    forgets a key on any geometry update to it, so a changed mesh is checked again (0007 d35 note)."""
-
+    one per engine scene, like the KeyMap). The check guards the layout (counts, stride, contiguity), not values:
+    a read skips the stride, contiguity and value checks for a key already checked at an equal Layout, so a
+    positions-only update or a full read with unchanged counts keeps the key's check, and a full read with changed
+    counts (a topology change) checks again; the attribute type and domain lookup runs on every read (0007 d35
+    note, lead ruling in task 129). The caller forgets a key that leaves the scene.
+    """
     def __init__(self):
         self._at = {}
 
@@ -190,6 +192,13 @@ def staged(field, count, dtype, n):
     if n != count:
         raise RuntimeError(f"astroray sync: engine staged {count} elements, host expects {n}")
     return Staged(ctypes.cast(field, _VOID_PP)[0] if count else 0, count, dtype)
+
+
+def sync_object(edit, abi, ob, key, checks):
+    """Full read of evaluated object `ob`'s mesh as geometry `key`, the one step the viewport and F12 take for a
+    new or updated geometry; `checks` decides whether the layout check runs (LayoutChecks)."""
+    with mesh_of(ob) as me:
+        return sync_mesh(edit, abi, me, key, ob.original.name, checks=checks)
 
 
 def sync_mesh(edit, abi, me, key, name, checks=None):

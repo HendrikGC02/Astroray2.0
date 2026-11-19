@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import support  # noqa: E402
 
 support.load_sync()
-from ar_sync import instances, keys  # noqa: E402
+from ar_sync import cache as cache_mod, instances, keys  # noqa: E402
 
 
 class FakeEdit:
@@ -322,18 +322,19 @@ class TestInstanceCache(unittest.TestCase):
         make("B", a.data)
         self.build()
 
-        def swap():
-            a.data.materials[0] = m2
-        self.cache.forget(updated(swap))
+        a.data.materials[0] = m2
+        self.cache.forget({a.data.session_uid})  # only the mesh: both objects cached with it are dropped
         t = self.build()
         self.assertEqual(t.material_keys.tolist(), [self.km.key(("material", m2.session_uid))])
         self.assert_fresh(t)
 
     def test_modifier_added_splits_geometry(self):
+        # Not forgotten on purpose: the real-data answer is keyed by the evaluated data pointer too, which a
+        # modifier (or a geometry-nodes instance reusing one temporary object) changes.
         a = make("A")
         make("B", a.data)
         self.build()
-        self.cache.forget(updated(lambda: a.modifiers.new("w", "WAVE")))
+        a.modifiers.new("w", "WAVE")
         t = self.build()
         self.assertNotEqual(t.arrays["geom_keys"][0], t.arrays["geom_keys"][1])
         self.assert_fresh(t)
@@ -362,6 +363,37 @@ class TestInstanceCache(unittest.TestCase):
                 for i in dg.object_instances if i.object.type == "MESH"}
         self.assertEqual(sorted(want), list(range(t.n)))
         self.assertEqual([int(t.arrays["random_ids"][i]) for i in range(t.n)], [want[i] for i in range(t.n)])
+
+
+class TestClassifyUpdates(unittest.TestCase):
+    """The step the viewport and F12 take per batch: classify, then forget every ID its walk met."""
+
+    @classmethod
+    def setUpClass(cls):
+        support.acquire_properties()  # classify's settings signature reads scene.astroray
+
+    @classmethod
+    def tearDownClass(cls):
+        support.release_properties()
+
+    def test_forgets_what_the_batch_names(self):
+        support.reset_scene()
+        m1, m2 = bpy.data.materials.new("m1"), bpy.data.materials.new("m2")
+        a = make("A")
+        a.data.materials.append(m1)
+        a.material_slots[0].link = "OBJECT"
+        a.material_slots[0].material = m1
+        km, icache, sc = keys.KeyMap(), instances.InstanceCache(), cache_mod.SyncCache()
+        instances.build(support.depsgraph(), km, cache=icache)
+        sc.remember(support.depsgraph(), bpy.context.scene)
+
+        def swap():
+            a.material_slots[0].material = m2
+        actions, evaluated = support.in_update(swap, lambda dg: instances.classify_updates(dg, sc, icache))
+        self.assertIn(a.session_uid, evaluated)
+        self.assertTrue(actions)
+        t = instances.build(support.depsgraph(), km, cache=icache)
+        self.assertEqual(t.material_keys.tolist(), [km.key(("material", m2.session_uid))])
 
 
 class TestPlainMoveFromClassify(unittest.TestCase):

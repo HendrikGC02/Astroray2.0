@@ -244,8 +244,7 @@ def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, is
         lines.extend(lights.sync(edit, abi, depsgraph, keymap, lightgroups=lightgroups))
     with tl.phase("meshes"):
         for key, ob in geoms.items():
-            with mesh.mesh_of(ob) as me:
-                mesh.sync_mesh(edit, abi, me, key, ob.original.name, checks=checks)
+            mesh.sync_object(edit, abi, ob, key, checks)
     with tl.phase("instances"):
         instances.set_instances(edit, abi, instances.build(depsgraph, keymap, lightgroups=lightgroups, cache=icache))
     if not need_camera:
@@ -298,12 +297,8 @@ class Job:
             desc = abi.ar_scene_desc(cache_dir().encode(), workers, 0)
             _ok(lib, native.call(lib.ar_scene_create, ctx, ctypes.byref(desc), ctypes.byref(self.scene_h)),
                 "ar_scene_create", "ar_context_last_error", ctx)
-        # A full sync re-reads every mesh: each is layout-checked again, whatever changed since.
-        self.checks = mesh.LayoutChecks()
         if not self.first:  # later updates of one engine instance: drop what Blender changed
-            evaluated = {}
-            actions = classify.classify(depsgraph, self.cache, evaluated)
-            self.icache.forget(evaluated)
+            actions, _ = instances.classify_updates(depsgraph, self.cache, self.icache)
             self.tcache.invalidate([a for a in actions if a.kind == classify.MATERIALS])
             self.istate.note_updates(actions, classify.IMAGES)
         self.timeline.mark("edit_begin")
