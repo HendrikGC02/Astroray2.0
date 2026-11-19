@@ -16,3 +16,4 @@ Budget: none added.
 Depends on: none.
 Size: S; stop and report at 2x.
 Progress:
+- started: branch task/132-gpu-gate-hang from origin/main 4c3f048.
