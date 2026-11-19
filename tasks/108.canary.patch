@@ -1,8 +1,8 @@
 diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
-index 8153290..c8d0e43 100644
+index 8b63dad..0521004 100644
 --- a/src/device/cuda/cuda_device.cpp
 +++ b/src/device/cuda/cuda_device.cpp
-@@ -609,17 +609,18 @@ ModuleReload CudaDevice::poll_module_reload() {
+@@ -610,17 +610,18 @@ ModuleReload CudaDevice::poll_module_reload() {
      if (!module_file_stamp(name, s.dev_dir, &now)) now = missing;
      if (now == w.loaded) {  // the file matches the running image again
        w.has_pending = false;
@@ -24,7 +24,7 @@ index 8153290..c8d0e43 100644
      ++s.load_attempts;
      try {
        if (now == missing) throw DeviceError("kernel module file is missing from " + s.dev_dir);
-@@ -634,8 +635,8 @@ ModuleReload CudaDevice::poll_module_reload() {
+@@ -635,8 +636,8 @@ ModuleReload CudaDevice::poll_module_reload() {
          throw DeviceError(std::string("cuModuleLoadData ") + (text ? text : "failed"));
        }
        s.sync();  // nothing launched from the old image is still running
@@ -36,7 +36,7 @@ index 8153290..c8d0e43 100644
        for (auto f = s.functions.begin(); f != s.functions.end();) {
          if (f->first.compare(0, prefix.size(), prefix) == 0) {
 diff --git a/src/host/scheduler.cpp b/src/host/scheduler.cpp
-index c5e09c6..0642aa8 100644
+index c5e09c6..aa923f0 100644
 --- a/src/host/scheduler.cpp
 +++ b/src/host/scheduler.cpp
 @@ -247,10 +247,11 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
@@ -44,8 +44,9 @@ index c5e09c6..0642aa8 100644
                                 f.module + ": " + f.error + "; previous image runs", 1, none, 0);
          }
 -        for (const auto& m : r.swapped) config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, m.subject);
+-        for (const auto& m : r.recovered) config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, m.subject);
 +        // canary: the warning outlives a good load
-         for (const auto& m : r.recovered) config.report->remove(AR_REPORT_KERNEL_MODULE_FALLBACK, m.subject);
++        // canary: a recovered file leaves its warning
        }
 -      if (!r.swapped.empty()) return PassStatus::EPOCH_PENDING;
 +      // canary: a swap no longer ends the epoch
@@ -53,3 +54,15 @@ index c5e09c6..0642aa8 100644
      }
      const std::vector<uint32_t> prev_launched = std::move(launched_);
      launched_.clear();
+diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
+index 5518a2a..e225191 100644
+--- a/src/host/session/session.cpp
++++ b/src/host/session/session.cpp
+@@ -610,6 +610,7 @@ void Session::begin_epoch() {
+   unpresented_ = 0;
+   batching_.begin_epoch();
+   film_epoch_ = latch_.epoch();
++  for (auto t0 = std::chrono::steady_clock::now(); std::chrono::steady_clock::now() - t0 < std::chrono::seconds(6);) {}  // canary: the first pass of every epoch is slow
+ }
+ 
+ void Session::apply_view() {
