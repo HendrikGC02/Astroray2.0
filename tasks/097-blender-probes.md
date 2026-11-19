@@ -12,7 +12,7 @@ Do:
 5. Result (PR body `Result:` with each probe's command and outcome).
 Acceptance: each probe script runs through `Invoke-ArBlender -Gui` and prints its outcome; V9 passes; any fallback implemented has its test passing.
 Look at: out/evidence/097/colour_chart.png.
-Canary: tasks/097.canary.patch must turn red: astroray_tests_gpu "cuda_device/reserve rule decision", tests/blender/gui_colour_chart.py "TestColourChart.test_standard" "TestColourChart.test_agx" "TestColourChart.test_exposure_plus1" "TestColourChart.test_gamma" "TestColourChart.test_look" (the patch sets kCudaReserveBytes back to 1.5 GiB and scales red and green in present.py's unpack shader).
+Canary: tasks/097.canary.patch must turn red: astroray_tests_gpu "cuda_device/reserve rule decision", tests/blender/gui_colour_chart.py "TestColourChart.test_standard" "TestColourChart.test_agx" "TestColourChart.test_exposure_plus1" "TestColourChart.test_gamma" "TestColourChart.test_look" (the patch sets kCudaReserveBytes back to 1.5 GiB and scales red and green in the present module's unpack shader).
 Budget: none.
 Depends on: 086, 089.
 Size: M (probe scripts plus possible fallbacks); stop and report at 2x.
