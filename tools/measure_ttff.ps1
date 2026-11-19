@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# tools/measure_ttff.ps1 [-Scene b1m,b5m,s3_textured] [-Engine cycles,astroray] [-Runs 3] [-Hold 12] [-Rebuild] [-Only]
+# tools/measure_ttff.ps1 [-Scene b1m,b5m,s3_textured] [-Engine cycles,astroray] [-Runs 3] [-Hold 12] [-Rebuild] [-Shot] [-Summarise]
 # Time to first frame against Cycles (0007 d35: V7a the gate, V7b the phases) and the first M-8 numbers
 # (0005 Risks, 0009 B-24) on S1 = b1m, S2 = b5m (300 materials) and S3 = s3_textured. For every scene and
 # engine it starts -Runs fresh windowed Blender processes (tests/blender/probe_ttff.py), each under the machine
@@ -21,6 +21,9 @@ param(
   [int]$Runs = 3,
   [double]$Hold = 12,
   [switch]$Rebuild,
+  [string]$Crop = '960x540',   # the centre crop of the viewport region the poller captures (WxH)
+  [ValidateSet('screen', 'gpu', 'none')][string]$Source = 'screen',   # screen = the external poller (0007 d35); gpu = in-process framebuffer read; none = no V7a, only V7b and M-8
+  [switch]$Shot,       # also keep Blender's own screenshot of its viewport area per switch (out/ttff/*_blender<n>.png)
   [switch]$Summarise   # only re-read out/ttff/*.json and print the tables
 )
 $ErrorActionPreference = 'Stop'
@@ -78,8 +81,8 @@ function Invoke-Run([string]$name, [string]$eng, [int]$k) {
     $seed.WaitForExit()
     $logArgs = if ($eng -eq 'cycles') { @('--log', 'cycles', '--log-level', '4') } else { @() }
     $argv = $logArgs + @('--python-exit-code', '1', '--python', (Join-Path $root 'tests/blender/probe_ttff.py'), '--',
-      '--scene', $name, '--engine', $eng, '--blend', $blend, '--out', $result, '--hold', "$Hold") +
-      $(if ($eng -eq 'astroray' -and $name -eq 'b5m') { @('--m8') } else { @() })
+      '--scene', $name, '--engine', $eng, '--blend', $blend, '--out', $result, '--hold', "$Hold", '--crop', $Crop, '--source', $Source) +
+      $(if ($eng -eq 'astroray' -and $name -eq 'b5m') { @('--m8') } else { @() }) + $(if ($Shot) { @('--shot') } else { @() })
     $before = Get-Busy
     $p = Start-ArProcess -Name 'blender' -File $exe -ArgList $argv -LogPath $log
     $timedOut = -not $p.WaitForExit(900000)
@@ -172,6 +175,7 @@ if (-not $Summarise) {
     }
   }
   $rows | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $out 'rows.json')
+  $rows = @(Get-Content (Join-Path $out 'rows.json') -Raw | ConvertFrom-Json)
   $m8 | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $out 'm8.json')
 } else {
   $rows = @(Get-Content (Join-Path $out 'rows.json') -Raw | ConvertFrom-Json)
@@ -180,7 +184,7 @@ if (-not $Summarise) {
 
 '--- per run (V7a = screen-poller first frame after the switch, V7b = log phases; ms) ---'
 $rows | Sort-Object scene, engine, switch, run | Format-Table scene, engine, switch, run,
-  @{ n = 'V7a'; e = { if ($null -ne $_.v7a_ms) { '{0:N0}' -f $_.v7a_ms } else { 'FAIL' } } },
+  @{ n = 'V7a'; e = { if ($null -ne $_.v7a_ms) { '{0:N0}' -f $_.v7a_ms } else { '-' } } },
   @{ n = 'V7b'; e = { if ($null -ne $_.v7b_ms) { '{0:N0}' -f $_.v7b_ms } else { '-' } } },
   @{ n = 'chg'; e = { if ($null -ne $_.first_change_ms) { '{0:N0}' -f $_.first_change_ms } else { '-' } } },
   rate_hz, cpu_before, others_before, others_after -AutoSize | Out-String -Width 200

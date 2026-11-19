@@ -17,6 +17,7 @@ param(
   [int]$RegionX = 0, [int]$RegionY = 0, [int]$RegionW = 0, [int]$RegionH = 0,
   [int]$CropW = 960, [int]$CropH = 540,
   [double]$MaxSeconds = 120,
+  [switch]$PrintWindow,   # capture with PrintWindow(PW_RENDERFULLCONTENT) of the whole window instead of CopyFromScreen
   [string]$DumpPng = ''   # debugging: the last crop is saved here, only when every check found Blender's own window
 )
 $ErrorActionPreference = 'Stop'
@@ -36,6 +37,16 @@ public static class TtffCapture {
   [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int value, int size);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  public static string WindowState = "";
+  public static string State(IntPtr h) {
+    int cloaked; DwmGetWindowAttribute(h, 14, out cloaked, 4);
+    return "visible=" + IsWindowVisible(h) + " iconic=" + IsIconic(h) + " cloaked=" + cloaked + " foreground=" + (GetForegroundWindow() == h);
+  }
+  [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
   [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
   [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
@@ -56,7 +67,7 @@ public static class TtffCapture {
   }
   // Returns the capture count; fills elapsed seconds.
   public static int Run(int pid, string binPath, int rx, int ry, int rw, int rh, int cw, int ch,
-                        string stopFile, double maxSeconds, string dumpPng, out double epoch0, out double elapsed,
+                        string stopFile, double maxSeconds, string dumpPng, bool printWindow, out double epoch0, out double elapsed,
                         out int sx, out int sy, out int cwin, out int chwin, out int px, out int py, out int pw, out int ph, out int foreign) {
     foreign = 0;
     SetProcessDPIAware();
@@ -68,6 +79,7 @@ public static class TtffCapture {
     SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040);   // topmost, no move, no size, show
     SetForegroundWindow(h);
     System.Threading.Thread.Sleep(300);
+    WindowState = State(h);
     Client(h, out sx, out sy, out cwin, out chwin);
     if (rw <= 0) { rx = 0; ry = 0; rw = cwin; rh = chwin; }
     pw = Math.Min(cw, rw); ph = Math.Min(ch, rh);
@@ -77,6 +89,8 @@ public static class TtffCapture {
     var bmp = new Bitmap(pw, ph, PixelFormat.Format32bppArgb);
     var g = Graphics.FromImage(bmp);
     var size = new Size(pw, ph);
+    var full = new Bitmap(cwin, chwin, PixelFormat.Format32bppArgb);
+    var gw = Graphics.FromImage(full);
     var buf = new byte[pw * ph * 4];
     var sums = new long[GX * GY * 3];
     var rec = new byte[8 + GX * GY * 3];
@@ -85,7 +99,14 @@ public static class TtffCapture {
     int n = 0;
     using (var fs = new FileStream(binPath, FileMode.Create, FileAccess.Write, FileShare.Read, 1 << 20)) {
       while (sw.Elapsed.TotalSeconds < maxSeconds) {
-        g.CopyFromScreen(px, py, 0, 0, size, CopyPixelOperation.SourceCopy);
+        if (printWindow) {
+          IntPtr hdc = gw.GetHdc();
+          PrintWindow(h, hdc, 2);
+          gw.ReleaseHdc(hdc);
+          g.DrawImage(full, new Rectangle(0, 0, pw, ph), new Rectangle(px - sx, py - sy, pw, ph), GraphicsUnit.Pixel);
+        } else {
+          g.CopyFromScreen(px, py, 0, 0, size, CopyPixelOperation.SourceCopy);
+        }
         double t = epoch0 + sw.Elapsed.TotalSeconds;
         var bd = bmp.LockBits(new Rectangle(0, 0, pw, ph), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
         Marshal.Copy(bd.Scan0, buf, 0, buf.Length);
@@ -123,11 +144,12 @@ $bin = "$OutPrefix.bin"
 $ready = "$OutPrefix.ready"
 Set-Content -Path $ready -Value $ProcessId
 $n = [TtffCapture]::Run($ProcessId, $bin, $RegionX, $RegionY, $RegionW, $RegionH, $CropW, $CropH, $StopFile,
-  $MaxSeconds, $DumpPng, [ref]$e0, [ref]$el, [ref]$sx, [ref]$sy, [ref]$cw, [ref]$chh, [ref]$px, [ref]$py, [ref]$pw, [ref]$ph, [ref]$foreign)
+  $MaxSeconds, $DumpPng, [bool]$PrintWindow, [ref]$e0, [ref]$el, [ref]$sx, [ref]$sy, [ref]$cw, [ref]$chh, [ref]$px, [ref]$py, [ref]$pw, [ref]$ph, [ref]$foreign)
 $meta = [ordered]@{
   pid = $ProcessId; epoch0 = $e0; seconds = $el; captures = $n; rate_hz = [math]::Round($n / $el, 1)
   grid = @(32, 18); client_origin = @($sx, $sy); client_size = @($cw, $chh)
   capture_rect = @($px, $py, $pw, $ph); foreign_checks = $foreign; record_bytes = 8 + 32 * 18 * 3
 }
 $meta | ConvertTo-Json -Compress | Set-Content -Path "$OutPrefix.json"
+Write-Host "ttff_poller: window $([TtffCapture]::WindowState)"
 Write-Host "ttff_poller: $n captures in $([math]::Round($el, 2)) s ($($meta.rate_hz) Hz)"

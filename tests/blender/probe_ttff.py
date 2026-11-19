@@ -62,12 +62,12 @@ def load_capture(prefix):
     return meta, raw["t"], raw["g"].astype(np.float32) / 255.0
 
 
-def detect(t, g, t_switch, hold):
+def detect(t, g, t_switch, hold, min_pre=5, min_post=20):
     """The first capture after t_switch that is within 35 % of the baseline-to-settled distance of the settled
     image, and whose successor is too. Returns a dict of seconds after the switch and the distances."""
     dist = lambda a, b: float(np.abs(a - b).mean())
     pre, post = (t >= t_switch - 0.6) & (t < t_switch), (t >= t_switch) & (t <= t_switch + hold)
-    if pre.sum() < 5 or post.sum() < 20:
+    if pre.sum() < min_pre or post.sum() < min_post:
         return {"error": f"too few captures (pre {int(pre.sum())}, post {int(post.sum())})"}
     base = g[pre].mean(axis=0)
     idx = np.nonzero(post)[0]
@@ -101,6 +101,9 @@ class Driver:
         self.rf = None
         self.n = 0
         self.m8_result = None
+        self.shot = False
+        self.src = arg("--source", "screen")
+        self.gpu_t, self.gpu_g = [], []
 
     def go(self, name):
         self.step, self.t_step = name, time.monotonic()
@@ -143,8 +146,31 @@ class Driver:
         space.shading.type = "SOLID"
         space.region_3d.view_perspective = "CAMERA"
         area.tag_redraw()
-        self.go("start_poller")
+        self.go({"gpu": "start_gpu", "none": "baseline"}.get(self.src, "start_poller"))
+        if self.src == "none":
+            STATE["region"] = [region.x, win.height - region.y - region.height, region.width, region.height]
         return 1.0
+
+    def step_start_gpu(self):
+        """The in-process source: the same block means, read from the region's framebuffer in a POST_PIXEL
+        draw handler after the engine drew, timed when it draws (so the next redraw is the resolution)."""
+        win, area, region = self.area()
+        STATE["region"] = [region.x, win.height - region.y - region.height, region.width, region.height]
+        STATE["window"] = [win.width, win.height]
+        bpy.types.SpaceView3D.draw_handler_add(self.draw_cb, (), "WINDOW", "POST_PIXEL")
+        area.tag_redraw()
+        self.go("baseline")
+        return 0.1
+
+    def draw_cb(self):
+        import gpu
+        region = bpy.context.region
+        cw, ch = min(GX * 15, region.width) // GX * GX, min(GY * 15, region.height) // GY * GY
+        x0, y0 = (region.width - cw) // 2, (region.height - ch) // 2
+        buf = gpu.state.active_framebuffer_get().read_color(x0, y0, cw, ch, 3, 0, "FLOAT")
+        a = np.array(buf, dtype=np.float32).reshape(ch, cw, 3)[::-1]   # first row at the top, as the poller
+        self.gpu_t.append(time.time())
+        self.gpu_g.append(a.reshape(GY, ch // GY, GX, cw // GX, 3).mean(axis=(1, 3)))
 
     def step_start_poller(self):
         win, area, region = self.area()
@@ -158,7 +184,8 @@ class Driver:
              "-ProcessId", str(os.getpid()), "-OutPrefix", self.prefix, "-StopFile", self.stop_file,
              "-RegionX", str(STATE["region"][0]), "-RegionY", str(STATE["region"][1]),
              "-RegionW", str(STATE["region"][2]), "-RegionH", str(STATE["region"][3]),
-             "-MaxSeconds", str(WATCHDOG_S), "-DumpPng", self.prefix + ".png"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+             "-MaxSeconds", str(WATCHDOG_S), "-DumpPng", self.prefix + ".png",
+             "-CropW", arg("--crop", "960x540").split("x")[0], "-CropH", arg("--crop", "960x540").split("x")[1]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         self.go("poller_ready")
         return 0.2
 
@@ -177,6 +204,7 @@ class Driver:
 
     def switch_on(self):
         self.n += 1
+        self.shot = False
         _, area, _ = self.area()
         STATE["switches"].append({"n": self.n, "t_on": time.time()})
         log_marker(f"TTFF_SWITCH {self.n}")
@@ -186,6 +214,11 @@ class Driver:
         return 0.1
 
     def step_hold(self):
+        if "--shot" in smoke_a1.ARGS and not self.shot and self.waited(self.hold - 1.5):
+            self.shot = True  # Blender's own view of its area, to compare with what the poller sees
+            win, area, region = self.area()
+            with bpy.context.temp_override(window=win, area=area, region=region):
+                bpy.ops.screen.screenshot_area(filepath=self.prefix + f"_blender{self.n}.png")
         if not self.waited(self.hold):
             return 0.1
         _, area, _ = self.area()
@@ -253,11 +286,21 @@ class Driver:
                 "reached": bool(prog.active_generation >= gen)}
 
     def end(self):
-        open(self.stop_file, "w").close()
+        if self.src == "screen":
+            open(self.stop_file, "w").close()
         out = {"scene": self.scene_name, "engine": self.engine, "errors": STATE["errors"],
                "region": STATE.get("region"), "window": STATE.get("window"), "hold_s": self.hold}
         try:
-            if self.poller is not None:
+            if self.src == "none":  # the switches and the engine's own marks only: no V7a
+                out["switches"] = [dict(sw, note="V7a not measured: no capture source") for sw in STATE["switches"]]
+            elif self.src == "gpu":
+                t, g = np.array(self.gpu_t), np.array(self.gpu_g)
+                out["capture"] = {"source": "gpu", "captures": int(len(t)), "seconds": float(t[-1] - t[0]) if len(t) else 0.0}
+                for sw in STATE["switches"]:
+                    r = detect(t, g, sw["t_on"], sw["t_off"] - sw["t_on"], min_pre=3, min_post=5)
+                    r.update(sw)
+                    out.setdefault("switches", []).append(r)
+            elif self.poller is not None:
                 text = self.poller.communicate(timeout=60)[0]
                 out["poller"] = (text or "").strip()
                 meta, t, g = load_capture(self.prefix)
