@@ -55,6 +55,9 @@ void cuda_init(astroray::host::SceneConfig& cfg, uint32_t index, std::shared_ptr
 #endif
 }
 
+// The last error of a destroyed scene handle, which the context keeps until it is destroyed.
+const char* const kDestroyed = "invalid argument: the scene handle was destroyed (ar_scene_destroy)";
+
 ar_status fail_ctx(ar_context ctx, ar_status st, const std::string& why) {
   try {
     astroray::context_set_error(ctx, why);
@@ -172,12 +175,17 @@ AR_API ar_status ar_scene_destroy(ar_scene h) {
   AR_RECORD_BODY({
   if (!h) return AR_ERR_INVALID_ARGUMENT;
   try {
+    if (!h->scene) return fail(h, AR_ERR_INVALID_ARGUMENT, kDestroyed);
     // A session that is not CLOSED still holds the scene (its activation listener); destroying the
     // scene under it is a host error (0007 d5, d23: close, wait for CLOSED, then destroy).
-    if (h->scene && h->scene->generations().listener_count() != 0)
+    if (h->scene->generations().listener_count() != 0)
       return fail(h, AR_ERR_INVALID_ARGUMENT, "ar_scene_destroy: a session of this scene is not CLOSED; close it and wait for CLOSED first");
-    delete h;  // the open edit first (aborted), then the scene (joins its threads)
+    // Freeing joins the scene's threads and frees device and host memory (~110 ms on B-5M), so the
+    // context's reaper does it and this returns within 0009 B-21 (0007 d23). The handle is dead now.
+    astroray::context_retire_scene(h->scene->ctx(), h);
     return AR_OK;
+  } catch (const std::exception& e) {
+    return fail(h, AR_ERR_INTERNAL, e.what());
   } catch (...) {
     return AR_ERR_INTERNAL;
   }
@@ -198,6 +206,7 @@ AR_API ar_status ar_scene_edit_begin(ar_scene h, ar_edit* out) {
   try {
     if (!out) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_scene_edit_begin output is null");
     *out = nullptr;
+    if (!h->scene) return fail(h, AR_ERR_INVALID_ARGUMENT, kDestroyed);
     std::unique_ptr<Edit> e = h->scene->begin_edit();
     if (!e) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: the scene already has an open edit");
     h->edit = std::make_unique<ar_edit_s>();

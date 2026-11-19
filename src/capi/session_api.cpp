@@ -105,8 +105,10 @@ extern "C" {
 AR_API ar_status ar_session_create(ar_scene scene, const ar_session_desc* desc, ar_session* out) {
   AR_RECORD(ar_session_create, ar_rec_of(scene), scene, desc, out);
   AR_RECORD_BODY({
-  if (!scene || !scene->scene) return AR_ERR_INVALID_ARGUMENT;
+  if (!scene) return AR_ERR_INVALID_ARGUMENT;
   try {
+    if (!scene->scene)  // destroyed: the context keeps the emptied handle (ar_scene_destroy)
+      return fail(scene, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_create on a destroyed scene handle");
     astroray::ContextState& ctx = scene->scene->ctx();
     if (ctx.poisoned.load(std::memory_order_acquire))
       return fail(scene, AR_ERR_INTERNAL, "session create: the context is poisoned by an engine thread fault");

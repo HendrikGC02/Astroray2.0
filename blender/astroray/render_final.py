@@ -95,10 +95,19 @@ def device_of(scene):
     return name
 
 
-def _log_path():
+def _user_dir():
     import bpy
-    return os.path.join(bpy.utils.extension_path_user(__package__, path="", create=True),
-                        "astroray_context.log")
+    return bpy.utils.extension_path_user(__package__, path="", create=True)
+
+
+def _log_path():
+    return os.path.join(_user_dir(), "astroray_context.log")
+
+
+def cache_dir():
+    """The OptiX disk cache directory (0007 d45): the extension's user directory, so a second Blender
+    start reuses the compiled modules instead of paying the cold compile (0009 B-18 warm, not cold)."""
+    return _user_dir()
 
 
 def _ok(lib, status, what, last_error=None, handle=None):
@@ -282,8 +291,9 @@ class Job:
         self.size, self.samples, self.layer = render_size(scene), scene.astroray.samples, view_layer.name
         if not self.scene_h.value:
             workers = max(1, min(8, (os.cpu_count() or 2) // 2))
-            _ok(lib, native.call(lib.ar_scene_create, ctx, ctypes.byref(abi.ar_scene_desc(None, workers, 0)),
-                                 ctypes.byref(self.scene_h)), "ar_scene_create", "ar_context_last_error", ctx)
+            desc = abi.ar_scene_desc(cache_dir().encode(), workers, 0)
+            _ok(lib, native.call(lib.ar_scene_create, ctx, ctypes.byref(desc), ctypes.byref(self.scene_h)),
+                "ar_scene_create", "ar_context_last_error", ctx)
         if not self.first:  # later updates of one engine instance: drop what Blender changed
             actions = classify.classify(depsgraph, self.cache)
             self.tcache.invalidate([a for a in actions if a.kind == classify.MATERIALS])

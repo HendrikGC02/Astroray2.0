@@ -28,10 +28,14 @@ DeviceStatus cuda_device_status(int driver_version, int cc_major, int cc_minor) 
   return {AR_OK, ""};
 }
 
+DeviceRecord cpu_device() {
+  bool avx2 = IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE) != 0;
+  return {AR_DEVICE_CPU, 0, cpu_device_status(avx2), "CPU", 0, 0};
+}
+
 DeviceList list_devices() {
   DeviceList list;
-  bool avx2 = IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE) != 0;
-  list.devices.push_back({AR_DEVICE_CPU, 0, cpu_device_status(avx2), "CPU", 0, 0});
+  list.devices.push_back(cpu_device());
 #ifdef ASTRORAY_GPU
   CudaProbe p = probe_cuda();
   uint32_t i = 0;

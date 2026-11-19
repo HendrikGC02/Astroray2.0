@@ -5,13 +5,17 @@
 
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #include "astroray/astroray.h"
 #include "host/build_info.h"
 #include "host/device_probe.h"
 #include "host/fault.h"
 #include "host/log.h"
+#include "host/scene/edit.h"
+#include "host/scene/reaper.h"
 #include "host/scene/scene.h"
 #include "recorder_hooks.h"
 
@@ -21,6 +25,11 @@ struct ar_context_s : astroray::ContextState {
   ar_recorder* recorder = nullptr;  // owned; null when recording is off
   uint32_t kind = 0;
   uint32_t index = 0;
+  // Destroyed scenes: the reaper frees their contents off the caller's thread (0007 d23); the
+  // emptied handles stay here so a later call on one fails loudly instead of touching freed memory.
+  astroray::host::Reaper reaper{*this};
+  std::mutex tombstones_mutex;  // scenes of one context may be destroyed from different threads
+  std::vector<std::unique_ptr<ar_scene_s>> tombstones;
   ~ar_context_s() { ar_rec_close(recorder, nullptr); }
 };
 
@@ -94,6 +103,31 @@ bool refuse_if_poisoned(ar_context ctx) {
   return true;
 }
 
+// Gate-build hook ASTRORAY_TEST_REAPER_HOLD=1: the context's reaper frees nothing until the context
+// is destroyed (tests/abi/test_scene_api.py). Read once at create, like the session hooks; any other
+// non-empty value refuses the context with a log line. Release builds never look at the variable.
+bool apply_reaper_hold_hook(ar_context_s& ctx) {
+#ifdef AR_GATE_HOOKS
+  char* env = nullptr;
+  size_t len = 0;
+  std::string v;
+  if (_dupenv_s(&env, &len, "ASTRORAY_TEST_REAPER_HOLD") == 0 && env) {
+    v = env;
+    free(env);
+  }
+  if (v.empty() || v == "0") return true;
+  if (v != "1") {
+    ctx.log.line("ERROR", "test hook ASTRORAY_TEST_REAPER_HOLD must be 1, got '" + v + "'");
+    return false;
+  }
+  ctx.reaper.hold_until_drain();
+  ctx.log.line("INFO", "test hook ASTRORAY_TEST_REAPER_HOLD: scene frees wait for the context destroy");
+#else
+  (void)ctx;
+#endif
+  return true;
+}
+
 }  // namespace
 
 // Every exported body runs inside this: a poisoned context refuses the call, and a
@@ -153,12 +187,16 @@ AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out)
       *out = nullptr;
       if (!desc || !desc->log_path || !desc->log_path[0]) return AR_ERR_INVALID_ARGUMENT;
 
-      astroray::DeviceList list = astroray::list_devices();
+      astroray::DeviceList list;
       const astroray::DeviceRecord* dev = nullptr;
       if (desc->device_kind == AR_DEVICE_CPU) {
         if (desc->device_index != 0) return AR_ERR_INVALID_ARGUMENT;
+        list.devices.push_back(astroray::cpu_device());  // no CUDA probe: its first call costs 13-16 ms
         dev = &list.devices[0];
       } else if (desc->device_kind == AR_DEVICE_CUDA) {
+        // The synchronous D2.8 check; its first call in a process pays the CUDA driver's one-time
+        // initialization, which B-21 does not count (RULINGS 81).
+        list = astroray::list_devices();
         for (const astroray::DeviceRecord& d : list.devices)
           if (d.kind == AR_DEVICE_CUDA && d.index == desc->device_index) dev = &d;
         // With no CUDA device, index 0 is a missing device (AR_ERR_DEVICE, the reason is
@@ -177,6 +215,7 @@ AR_API ar_status ar_context_create(const ar_context_desc* desc, ar_context* out)
         ctx->log.line("ERROR", rec.err);
         return AR_ERR_INVALID_ARGUMENT;
       }
+      if (!apply_reaper_hold_hook(*ctx)) return AR_ERR_INVALID_ARGUMENT;
       ctx->kind = dev->kind;
       ctx->index = dev->index;
       ctx->record_path = rec.path;
@@ -210,6 +249,9 @@ AR_API ar_status ar_context_destroy(ar_context ctx) {
       ar_rec_close(rec, &rerr);
       if (!rerr.empty()) ctx->log.line("ERROR", "recording " + ctx->record_path + ": " + rerr);
     }
+    // Waits for every deferred scene free; d23 lets this block at addon unregister and Blender exit.
+    ctx->reaper.drain();
+    ctx->tombstones.clear();
     ctx->log.line("INFO", "context destroyed");
     delete ctx;
     return AR_OK;
@@ -238,6 +280,25 @@ void astroray::context_set_error(ar_context ctx, const std::string& text) { ctx-
 void astroray::context_device(ar_context ctx, uint32_t* kind, uint32_t* index) {
   *kind = ctx->kind;
   *index = ctx->index;
+}
+void astroray::context_retire_scene(ContextState& state, ar_scene_s* h) {
+  auto& ctx = static_cast<ar_context_s&>(state);
+  auto payload = std::make_shared<ar_scene_s>();
+  {
+    std::lock_guard<std::mutex> lock(ctx.tombstones_mutex);
+    ctx.tombstones.emplace_back(h);  // a throw here leaves h untouched and still the caller's
+  }
+  // The payload frees the open edit first (aborted), then the scene: the order `delete h` had.
+  payload->scene = std::move(h->scene);
+  payload->edit = std::move(h->edit);
+  try {
+    ctx.reaper.submit(std::move(payload), "scene");
+  } catch (const std::exception& e) {
+    // The handle is already dead, so the destroy still succeeds; the refused item (submit's by-value
+    // argument) was freed on this thread while the throw unwound.
+    ctx.log.line("ERROR", std::string("reaper unavailable (") + e.what() +
+                              "); the scene was freed on the calling thread");
+  }
 }
 // Declared in host/session/session.h: a session reaches its context only through its scene.
 namespace astroray {

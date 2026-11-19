@@ -7,7 +7,8 @@ thread is timed: the first scene and session create, the first full sync of S2 (
 materials), a move, a material edit, a lamp edit, a vertex edit, a view change, display acquire and release on every
 draw, session close and destroy. The timer-driven sequence ends the process itself; exit code 1 on any failed case.
 A call from another thread is not counted. The limit is B-21's, read from tools/budgets.toml; only the calls that copy
-data the host supplied are exempt (EXEMPT), each with the reason it is a copy.
+data the host supplied are exempt (EXEMPT), each with the reason it is a copy, and the process's first
+ar_context_create (EXEMPT_FIRST_CALL, RULINGS 81).
 Ref: docs/decisions/0007-blender-integration.md V22, d23; docs/decisions/0009-build-test-process.md B-21;
 tests/blender/gui_edits.py (the driving pattern).
 """
@@ -45,10 +46,13 @@ CALLS = []  # (function, milliseconds, phase) of every call made on the main thr
 # ar_edit_set_instances copies every per-instance array (about 10,000 x 150 bytes on S2).
 EXEMPT = {"ar_edit_set_instances": "copies the host's per-instance arrays"}
 
+# Calls whose first occurrence in the process is excused; every later one is held to the limit.
+EXEMPT_FIRST_CALL = {"ar_context_create": "RULINGS 81: 0001 D2.8's synchronous CUDA check pays the driver's "
+                                          "once-per-process initialization (7.2 to 7.7 ms in Blender, task 094)"}
+
 # Known breaches of B-21, each owned by an open task; the entry must go when that task lands (the known-breach case
-# fails once the call is under the limit). Measured by task 094 on B-5M, CUDA: ar_scene_destroy 110.9 to 114.5 ms at
-# close (joins the scene's threads, frees device memory), ar_context_create 7.2 to 7.7 ms at the first create.
-KNOWN_BREACHES = {"ar_scene_destroy": "task 124", "ar_context_create": "task 124"}
+# fails once the call is under the limit). Empty: no measured call exceeds the limit.
+KNOWN_BREACHES = {}
 
 
 def b21_limit_ms():
@@ -86,6 +90,19 @@ class TimedLib:
             w.__name__ = name
             self._wrapped[name] = w
         return w
+
+
+def over_b21(calls, limit):
+    """{name: (worst ms, phase)} of the calls above `limit`, after EXEMPT, KNOWN_BREACHES and the first
+    occurrence of each EXEMPT_FIRST_CALL name; `calls` is CALLS-shaped, in call order."""
+    over, first_seen = {}, set()
+    for name, ms, phase in calls:
+        if name in EXEMPT_FIRST_CALL and name not in first_seen:
+            first_seen.add(name)
+            continue
+        if ms > limit and name not in EXEMPT and name not in KNOWN_BREACHES and ms > over.get(name, (0, ""))[0]:
+            over[name] = (ms, phase)
+    return over
 
 
 def summary():
@@ -238,9 +255,18 @@ class Driver:
         """Switching to solid shading drops the engine instance: ar_session_close from __del__, the reaper timer
         then destroys the session and the scene."""
         self.go("closing")
+        self.freed_before = self.scenes_freed()
         win, area, region = self.find_area()
         area.spaces.active.shading.type = "SOLID"
         return 0.2
+
+    def scenes_freed(self):
+        """The context log's count of scenes the engine's reaper has freed (ar_scene_destroy defers the free)."""
+        path = self.rf._log_path()
+        if not os.path.exists(path):
+            return 0
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return sum(" scene freed in " in line for line in f)
 
     def step_closing(self):
         held = self.rf._contexts.get("CUDA")
@@ -248,6 +274,12 @@ class Driver:
             if self.timed_out(30.0):
                 raise RuntimeError("the viewport job was not torn down")
             return 0.2
+        # end() destroys the context, which waits for pending scene frees; 0007 d23 lets that block at
+        # Blender exit, but timing it against an unfinished free would make the case a race, so wait here.
+        if self.scenes_freed() <= self.freed_before:
+            if self.timed_out(30.0):
+                raise RuntimeError("the destroyed scene was never freed (no 'scene freed' line in the context log)")
+            return 0.1
         return self.end()
 
     def end(self):
@@ -269,7 +301,9 @@ def report():
         ms = [m for m, _ in rows]
         worst = max(rows)
         print(f"RESULT main-thread call {name}: n={len(ms)} median {statistics.median(ms):.3f} ms max {worst[0]:.3f} ms "
-              f"(in {worst[1]}){' EXEMPT: ' + EXEMPT[name] if name in EXEMPT else ''}{' OVER' if worst[0] > limit and name not in EXEMPT else ''}",
+              f"(in {worst[1]}){' EXEMPT: ' + EXEMPT[name] if name in EXEMPT else ''}"
+              f"{' FIRST CALL EXEMPT: ' + EXEMPT_FIRST_CALL[name] if name in EXEMPT_FIRST_CALL else ''}"
+              f"{' OVER' if worst[0] > limit and name not in EXEMPT and name not in EXEMPT_FIRST_CALL else ''}",
               flush=True)
     print(f"RESULT B-21 limit {limit} ms; first frame at {STATE.get('first_frame_s')} s; run {STATE['seconds']} s", flush=True)
 
@@ -294,11 +328,14 @@ class TestMainThreadTiming(unittest.TestCase):
     def test_no_call_exceeds_b21(self):
         """B-21: any engine call on Blender's main thread takes at most 5 ms, except copying host data."""
         limit = b21_limit_ms()
-        over = {}
-        for name, ms, phase in CALLS:
-            if ms > limit and name not in EXEMPT and name not in KNOWN_BREACHES and ms > over.get(name, (0, ""))[0]:
-                over[name] = (ms, phase)
-        self.assertEqual(over, {}, f"calls above {limit} ms: (milliseconds, phase)")
+        self.assertEqual(over_b21(CALLS, limit), {}, f"calls above {limit} ms: (milliseconds, phase)")
+
+    def test_first_call_exemption_covers_only_the_first(self):
+        """RULINGS 81 excuses the process's first ar_context_create only; this run makes one, so the filter
+        is checked on a synthetic call list: a second slow create is reported, an ordinary slow call too."""
+        calls = [("ar_context_create", 7.4, "first_frame"), ("ar_scene_create", 0.5, "first_frame"),
+                 ("ar_context_create", 6.0, "later"), ("ar_scene_destroy", 9.0, "closing")]
+        self.assertEqual(over_b21(calls, 5.0), {"ar_context_create": (6.0, "later"), "ar_scene_destroy": (9.0, "closing")})
 
     def test_known_breaches_are_still_over_b21(self):
         """A listed call that is now within the limit (or never made) fails: remove its KNOWN_BREACHES entry."""
@@ -312,7 +349,7 @@ class TestMainThreadTiming(unittest.TestCase):
     def test_exemptions_are_calls_that_copy_host_data(self):
         """Only the calls EXEMPT names are excused, and each must have been made (an unused entry is dead weight)."""
         seen = {name for name, _, _ in CALLS}
-        self.assertEqual(sorted(set(EXEMPT) - seen), [])
+        self.assertEqual(sorted((set(EXEMPT) | set(EXEMPT_FIRST_CALL)) - seen), [])
 
 
 def run_cases():
