@@ -11,9 +11,11 @@
 #                                every VIEW_LAYER_PASSES pair in render_final.py must appear here
 
 # Mesh read (0007 d17, d35 remedy 1; sync/mesh.py): direct reads, one memmove per array from element 0's
-# as_pointer(). The names below are checked here; the pointer assumptions in the comments are checked on every
-# read by sync/mesh.py _copy (stride, contiguity to the last element, first and last values against these RNA
-# properties), which raises naming the array and the Blender version. `.corner_vert` is internal and may be
+# as_pointer(). The names below are checked here; the pointer assumptions in the comments are checked by
+# sync/mesh.py _copy (stride, contiguity to the last element, first and last values against these RNA properties)
+# on the first read of each geometry key and again after a geometry update of the key or a changed layout
+# (mesh.LayoutChecks; the attribute type and domain lookup runs on every read); a mismatch raises naming the array
+# and the Blender version. `.corner_vert` is internal and may be
 # renamed: the read then fails loudly (no fallback). Blender 5.3 storage behind each pointer (DNA_mesh_types.h,
 # struct Mesh): vert_data / corner_data / face_data CustomData layers and attribute_storage for the attributes,
 # face_offset_indices for MeshPolygon, the runtime corner-normal cache for MeshNormalValue.
