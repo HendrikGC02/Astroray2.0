@@ -9,6 +9,7 @@ function Invoke-ArBlender {
   param(
     [Parameter(Mandatory)][string]$Script,
     [string[]]$Args = @(),
+    [string[]]$BlenderArgs = @(),   # Blender options placed before --python (e.g. --log cycles --log-level 4)
     [int]$TimeoutS = 300,
     [switch]$Gui   # a windowed Blender (no --background); the script drives everything and must exit on its own
   )
@@ -33,7 +34,7 @@ function Invoke-ArBlender {
       $saved[$k] = [Environment]::GetEnvironmentVariable($k)
       [Environment]::SetEnvironmentVariable($k, (Join-Path $profileDir $vars[$k]))
     }
-    $argv = @('--python-exit-code', '1', '--python', $scriptPath, '--') + $Args
+    $argv = $BlenderArgs + @('--python-exit-code', '1', '--python', $scriptPath, '--') + $Args
     if (-not $Gui) { $argv = @('--background', '--factory-startup') + $argv }
     else {
       # A fresh profile opens the Quick Setup popup over the window. --factory-startup ignores saved
