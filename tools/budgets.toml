@@ -42,7 +42,7 @@ provisional = false
 id = "B-07"
 text = "≤ 10 s"
 tier = "`full`"
-provisional = true
+provisional = false
 
 [[budget]]
 id = "B-08"
@@ -66,17 +66,17 @@ provisional = true
 
 [[budget]]
 id = "B-11"
-text = "≤ 15 min"
+text = "≤ 7.5 min"
 tier = "every run"
-provisional = true
+provisional = false
 
 [[budget]]
 id = "B-12"
-text = "≤ 0.5 s / ≤ 20 s"
-limit = 0.5
+text = "≤ 0.41 s / ≤ 20 s"
+limit = 0.41
 unit = "s"
 tier = "every run"
-provisional = true
+provisional = false
 
 [[budget]]
 id = "B-13"
