@@ -75,6 +75,24 @@ try {
   $exe = Join-Path $root 'out/bin/astroray_tests_cpu.exe'
   $gpuExe = Join-Path $root 'out/bin/astroray_tests_gpu.exe'
   $dargs = if ($Declared) { @('--declared', $Declared) } else { @() }
+  # A GPU test executable under a time limit: past it the process (by its own PID, 0009 d8) is
+  # stopped and the step fails naming the last case the executable started (its "case start"
+  # lines), so a hang costs minutes. Output goes through a file so the tail survives the stop.
+  # Text, not a function: grouped steps run in jobs, which rebuild it from $vars.
+  $timedText = @'
+param([string]$file, [string]$arg, [int]$limitS, [string]$capture)
+$p = Start-Process -FilePath $file -ArgumentList $arg -NoNewWindow -PassThru -RedirectStandardOutput $capture -RedirectStandardError "$capture.err"
+$null = $p.Handle
+$done = $p.WaitForExit($limitS * 1000)
+if (-not $done) { Stop-Process -Id $p.Id -Force; $null = $p.WaitForExit(30000) }
+Get-Content $capture
+Get-Content "$capture.err"
+if ($done) { $global:LASTEXITCODE = $p.ExitCode; return }
+$last = Select-String -Path $capture -Pattern '^case start ' | Select-Object -Last 1
+"FAIL timeout: $(Split-Path -Leaf $file) $arg stopped after $limitS s; last case started: $(if ($last) { $last.Line } else { 'none' })"
+$global:LASTEXITCODE = 1
+'@
+  $runTimed = [scriptblock]::Create($timedText)
 
   # Group: steps with the same Group, adjacent in this table, run concurrently (CPU device against GPU
   # device; see Invoke-GateGroup). 'aov agreement', 'integrator cuda' (tripwire) and 'material compile'
@@ -132,7 +150,10 @@ try {
     @{ Name = 'integrator cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Run = {
         & $py -I tools/integrator_checks.py --gate --device cuda } },
     @{ Name = 'cpu gate tests'; Group = 'g3'; Tag = 'cpu'; Lock = $true; Identity = $exe; Run = { & $exe --tier=gate } },
-    @{ Name = 'gpu gate tests'; Group = 'g3'; Tag = 'local'; Lock = $true; Identity = $gpuExe; Run = { & $gpuExe --tier=gate } },
+    # Time limit 270 s: after 132's fix the tier took 12.6-24.1 s over 100 runs under the machine lock;
+    # 10x the slowest run, rounded up to a multiple of 30 s.
+    @{ Name = 'gpu gate tests'; Group = 'g3'; Tag = 'local'; Lock = $true; Identity = $gpuExe;
+       Run = { & $runTimed $gpuExe '--tier=gate' 270 (Join-Path $root 'out/check/gpu-gate-tests.out') } },
     # B-24 compile row (0009 d13, 0005 V7): the test prints the median compile time of a fixed
     # 100-node graph; the limit is the "ms per 100 nodes" figure of the row in budgets.toml.
     @{ Name = 'material compile'; Tag = 'cpu'; Lock = $true; Identity = $exe; Echo = '^B-24 compile:';
@@ -186,11 +207,12 @@ try {
         $ErrorActionPreference = 'Stop'
         Set-Location $v.root
         $py = $v.py; $dargs = $v.dargs; $exe = $v.exe; $gpuExe = $v.gpuExe; $root = $v.root; $isCi = $v.isCi
+        $runTimed = [scriptblock]::Create($v.timedText)
         $t = [Diagnostics.Stopwatch]::StartNew()
         $global:LASTEXITCODE = 0
         $out = & ([scriptblock]::Create($body)) 2>&1 | ForEach-Object { "$_" }
         [pscustomobject]@{ Code = $LASTEXITCODE; Out = @($out); Seconds = $t.Elapsed.TotalSeconds } }
-      $vars = @{ root = "$root"; py = $py; dargs = $dargs; exe = $exe; gpuExe = $gpuExe; isCi = $isCi }
+      $vars = @{ root = "$root"; py = $py; dargs = $dargs; exe = $exe; gpuExe = $gpuExe; isCi = $isCi; timedText = $timedText }
       $jobs = @($members | ForEach-Object { Start-Job -ScriptBlock $pre -ArgumentList $_.Run.ToString(), $vars })
       $null = $jobs | Wait-Job
       $res = @(for ($i = 0; $i -lt $members.Count; $i++) {
@@ -267,7 +289,9 @@ try {
       Fail ('kernelgate full: ' + ($r.Out | Where-Object { $_ -like 'FAIL*' } | Select-Object -First 1))
     }
     # The GPU suite's full tier (0009 B-17 launch duration, 099): a whole tier, a few seconds today.
-    $r = Step 'gpu full tests' { & $gpuExe --tier=full }
+    # Time limit 60 s: after 132's fix the tier took 3.1 s (one run); 10x the slowest run, rounded up to a
+    # multiple of 30 s, as for the gate tier.
+    $r = Step 'gpu full tests' { & $runTimed $gpuExe '--tier=full' 60 (Join-Path $root 'out/check/gpu-full-tests.out') }
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'gpu full tests failed (out/check/full.log)' }
     $r = Step 'probe registers' { & $py -I tools/kernelgate.py --probe }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'probe registers failed' }

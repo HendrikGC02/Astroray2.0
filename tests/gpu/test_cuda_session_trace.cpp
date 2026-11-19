@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <map>
@@ -371,6 +372,29 @@ TEST_CASE("cuda_session_trace/cache dir receives the optix cache") {
 }
 
 TEST_CASE("cuda_session_trace/no cache dir disables the optix cache") {
+  // The user's default cache (%LOCALAPPDATA%\NVIDIA\OptixCache) is shared with every OptiX process on
+  // the machine, Cycles and other worktrees included, so its listing can change under this case. The
+  // header documents OPTIX_CACHE_PATH as overriding the cache location ahead of the API (optix_host.h,
+  // optixDeviceContextSetCacheLocation), so for this case the default location is a private directory,
+  // and the probe proves the override took effect before anything is compared.
+  // Ref: OptiX 9.1 optix_host.h, optixDeviceContextSetCacheLocation and optixDeviceContextSetCacheEnabled.
+  const std::filesystem::path private_dir = fresh_dir("astroray_cuda_session_cache_default");
+  std::filesystem::create_directories(private_dir);
+  struct CachePath {
+    std::string old;
+    bool had = false;
+    explicit CachePath(const std::string& dir) {
+      char* v = nullptr;
+      size_t n = 0;
+      if (_dupenv_s(&v, &n, "OPTIX_CACHE_PATH") == 0 && v != nullptr) {
+        old = v;
+        had = true;
+      }
+      std::free(v);
+      REQUIRE(_putenv_s("OPTIX_CACHE_PATH", dir.c_str()) == 0);
+    }
+    ~CachePath() { _putenv_s("OPTIX_CACHE_PATH", had ? old.c_str() : ""); }
+  } cache_path(private_dir.string());
   // The location OptiX would use by default, read from a context that compiles nothing, and listed
   // before the scene's context exists. An open context holds the database open (its -shm and -wal
   // files appear), so the contents are compared while the pipeline is built and after it is gone.
@@ -379,6 +403,9 @@ TEST_CASE("cuda_session_trace/no cache dir disables the optix cache") {
     Rig probe(true, "", false);
     where = probe.optix().cache_location();
   }
+  std::error_code eq_ec;
+  REQUIRE_MESSAGE(std::filesystem::equivalent(where, private_dir, eq_ec), "OptiX ignored OPTIX_CACHE_PATH: location '"
+                                                                          << where << "', expected " << private_dir.string());
   const auto before = listing(where);
   {
     Rig gpu(true, "", false);
