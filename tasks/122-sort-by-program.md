@@ -22,3 +22,4 @@ Progress:
 - lead ruling: tests/cpu/test_session.cpp joins Scope (fixture: material 1 gets its own program; case renamed).
 - measured (nsys period / shade_surface): b5m 16.12 / 4.36 ms unsorted vs 17.62 / 5.29 forced; b5m_two_programs 16.56 / 4.65 sorted vs 15.77 / 4.13 unsorted.
 - canary: 5 hunks, each red alone.
+- review: session fixture swapped (material 0 programmed) so counting the default material reddens it; canary hunk 1 is that miscount; rebased on 5093b5c.

@@ -1,11 +1,11 @@
 diff --git a/src/host/material/material_store.cpp b/src/host/material/material_store.cpp
-index 4a084cb..da3a0c4 100644
+index 4a084cb..f7ee164 100644
 --- a/src/host/material/material_store.cpp
 +++ b/src/host/material/material_store.cpp
 @@ -308,3 +308,3 @@ void MaterialStore::rebuild_locked() {
    a->pass_index.push_back(0u);
 -  a->program_count = ar::sort_program_count(a->headers.data(), uint32_t(a->keys.size()));
-+  a->program_count = 0;  // canary: not counted
++  a->program_count = ar::sort_program_count(a->headers.data(), uint32_t(a->headers.size()));  // canary: counts the default material
    const uint64_t bytes = a->bytes();
 diff --git a/src/host/scheduler.cpp b/src/host/scheduler.cpp
 index 63b43a5..f8213d3 100644
@@ -26,15 +26,15 @@ index ae44138..f1ca646 100644
 +  // canary: the program count is not handed to the scheduler
  }
 diff --git a/src/kernel/stages/sort.h b/src/kernel/stages/sort.h
-index 0df3010..f69a865 100644
+index 2212b9d..72b4fba 100644
 --- a/src/kernel/stages/sort.h
 +++ b/src/kernel/stages/sort.h
-@@ -82,3 +82,3 @@ AR_FN uint32_t sort_program_count(const MaterialHeader* headers, uint32_t n) {
+@@ -83,3 +83,3 @@ AR_FN uint32_t sort_program_count(const MaterialHeader* headers, uint32_t n) {
    }
 -  return programs + (constant ? 1u : 0u);
 +  return n + 0u * (programs + (constant ? 1u : 0u));  // canary: counts headers instead of programs
  }
-@@ -88,3 +88,3 @@ AR_FN uint32_t sort_program_count(const MaterialHeader* headers, uint32_t n) {
+@@ -89,3 +89,3 @@ AR_FN uint32_t sort_program_count(const MaterialHeader* headers, uint32_t n) {
  AR_FN bool sort_wanted(uint32_t segment_count, uint32_t program_count) {
 -  return segment_count >= kSortMinItems && program_count >= kSortMinMaterials;
 +  return segment_count >= kSortMinItems && program_count > kSortMinMaterials;
