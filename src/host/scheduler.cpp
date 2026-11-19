@@ -80,13 +80,14 @@ void fill_shadow(ar::ShadowItemSoA& soa, const StateLayout& l, char* base) {
 
 Scheduler::Scheduler(Device& device, const SchedulerConfig& cfg) : config(cfg), device_(device) {
   permute_ = cfg.permute || env_permute();
+  gpu_ = device.kind() == AR_DEVICE_CUDA;
 }
 
 Scheduler::~Scheduler() { release_buffers(); }
 
 void Scheduler::release_buffers() {
   for (DeviceBuffer* b : {&path_buf_, &shadow_buf_, &main_queue_buf_, &shadow_queue_buf_, &step_buf_, &counts_buf_,
-                          &sort_queue_buf_, &sort_counts_buf_, &kg_buf_, &soa_buf_})
+                          &sort_queue_buf_, &sort_counts_buf_, &kg_buf_, &soa_buf_, &identity_buf_})
     device_.free(*b);
   capacity_ = 0;
   shadow_capacity_ = 0;
@@ -104,6 +105,15 @@ void Scheduler::ensure_buffers(uint64_t cap, uint64_t shadow_cap) {
     path_buf_ = device_.allocate(LedgerCategory::MAIN_PATH_POOL, pl.total_bytes, o);
     shadow_buf_ = device_.allocate(LedgerCategory::SHADOW_POOL, sl.total_bytes, o);
     main_queue_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, cap * 4, o);
+    // The identity main_queue every pass starts from, uploaded once per allocation: a device copy
+    // per pass instead of a host upload of cap x 4 bytes (8 MiB at 2^21), which left the GPU idle
+    // for about 1.5 ms at every pass start (nsys, B-1M at 1080p).
+    identity_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, cap * 4, o);
+    {
+      std::vector<uint32_t> identity(cap);
+      for (uint32_t i = 0; i < cap; ++i) identity[i] = i;
+      device_.upload(identity_buf_, 0, identity.data(), cap * 4);
+    }
     shadow_queue_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, shadow_cap * 4, o);
     const uint64_t tiles = ar::queue_tiles(uint32_t(cap)) + ar::queue_tiles(uint32_t(shadow_cap));
     counts_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, tiles * ar::kQueueBins * 4, o);
@@ -218,9 +228,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
   // every shadow slot is SHADOW_TERMINATED and the shadow high-water is the whole capacity: a
   // zero shadow high-water would starve every producer and livelock the pass (step_table.h).
   {
-    std::vector<uint32_t> identity(cap);
-    for (uint32_t i = 0; i < cap; ++i) identity[i] = i;
-    device_.upload(main_queue_buf_, 0, identity.data(), cap * 4);
+    device_.copy(main_queue_buf_, 0, identity_buf_, 0, cap * 4);
     const uint64_t at = uint64_t(reinterpret_cast<const char*>(shadow_.next_stage) -
                                  reinterpret_cast<const char*>(shadow_buf_.ptr));
     device_.memset(shadow_buf_, at, static_cast<uint8_t>(Stage::SHADOW_TERMINATED), shadow_cap);
@@ -256,8 +264,10 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     launched_.clear();
     // 1. Partition both pools up to their high-water marks.
     const uint32_t hw[ar::kPoolCount] = {hw_main, hw_shadow};
-    device_.upload(step_buf_, offsetof(ar::StepTable, high_water), hw, sizeof hw);
-    const uint32_t grid = ar::queue_build_grid(hw_main, hw_shadow);
+    device_.upload_async(step_buf_, offsetof(ar::StepTable, high_water), hw, sizeof hw);
+    // The CPU splits queue_build_grid's item range into tiles; a GPU warp takes one tile.
+    const uint32_t grid = gpu_ ? ar::gpu_tile_grid(hw_main) + ar::gpu_tile_grid(hw_shadow)
+                               : ar::queue_build_grid(hw_main, hw_shadow);
     launch_kernel(KernelId::QUEUE_BUILD_COUNT, grid);
     if (at_boundary(&status)) return status;
     launch_kernel(KernelId::QUEUE_BUILD_SCAN, ar::queue_scan_grid(hw_main, hw_shadow));  // never 0
@@ -289,7 +299,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     const uint32_t ss = static_cast<uint32_t>(Stage::SHADE_SURFACE);
     if (ar::sort_wanted(t.stage[ss].count, config.material_header_count)) {
       const uint32_t n = t.stage[ss].count;
-      const uint32_t sort_launch = ar::sort_grid(n);
+      const uint32_t sort_launch = gpu_ ? ar::gpu_tile_grid(n) : ar::sort_grid(n);
       if (at_boundary(&status)) return status;
       launch_kernel(KernelId::SORT_COUNT, sort_launch);
       if (at_boundary(&status)) return status;
@@ -319,7 +329,8 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
         if (count == 0) return true;
         if (at_boundary(&status)) return false;
         const ar::StepEntry e{first + slot_offset, count, work_first};
-        device_.upload(step_buf_, offsetof(ar::StepTable, stage) + kTerm * sizeof(ar::StepEntry), &e, sizeof e);
+        device_.upload_async(step_buf_, offsetof(ar::StepTable, stage) + kTerm * sizeof(ar::StepEntry), &e,
+                             sizeof e);
         permute_range(false, e.start, count);
         launch_kernel(kernel, count);
         return true;

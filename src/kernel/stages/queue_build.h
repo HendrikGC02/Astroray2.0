@@ -18,9 +18,10 @@
 // queue_build_*.cpp runs one unit (ar::ballot of one lane) per tile, and the scan tiles in order,
 // where every predecessor has published its inclusive prefix and the look-back stops at the
 // first. Counts are integers, so the CPU and GPU tables are bit-identical.
-// Host contract: pass `queue_build_grid(...)` as the launch count of count and scatter and
-// `queue_scan_grid(...)` as that of scan (on the CPU it is the item range the chunks split, on
-// the GPU only a grid size; 0002 D4: the device reads its work from the table).
+// Host contract: launch count and scatter with `queue_build_grid(...)` on the CPU (the item range
+// its chunks split into tiles) or the sum of gpu_tile_grid over the two high-water marks on the GPU
+// (a grid size: one warp per tile), and scan with `queue_scan_grid(...)` on both (0002 D4: the
+// device reads its work from the table).
 // Ref: Merrill and Garland 2016, "Single-pass Parallel Prefix Scan with Decoupled Look-back"
 // (NVIDIA NVR-2016-002), sections 4-5 (tile status: flag and value in one word, aggregate then
 // inclusive prefix, look-back until the first inclusive prefix); Blelloch 1990, "Prefix Sums and
@@ -49,6 +50,11 @@ inline constexpr uint32_t kInvalidBin = kStageCount;
 AR_FN uint32_t queue_tiles(uint32_t high_water) {
   return high_water / kQueueTile + (high_water % kQueueTile != 0 ? 1u : 0u);
 }
+
+// The GPU launch count of the tiled kernels (queue_build count and scatter, the sort's count and
+// scatter) for `items` items: one warp of kQueueLanes threads per tile, so no warp is launched only
+// to find no tile. The CPU takes queue_build_grid / sort_grid instead (an item range).
+AR_FN uint32_t gpu_tile_grid(uint32_t items) { return queue_tiles(items) * kQueueLanes; }
 
 AR_FN uint32_t queue_tile_count(const KernelGlobals& kg) {
   return queue_tiles(kg.step_table->high_water[static_cast<uint32_t>(Pool::MAIN)]) +
