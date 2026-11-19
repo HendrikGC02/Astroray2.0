@@ -12,7 +12,7 @@ Do:
 5. Result (PR body `Result:` with each probe's command and outcome).
 Acceptance: each probe script runs through `Invoke-ArBlender -Gui` and prints its outcome; V9 passes; any fallback implemented has its test passing.
 Look at: out/evidence/097/colour_chart.png.
-Canary: astroray_tests_gpu "cuda_device/reserve rule decision" (the patch sets kCudaReserveBytes back to 1.5 GiB); lead ruling: gui_colour_chart.py is a new test, so tasks/097.canary.patch (scales red and green in present.py's unpack shader) turns every V9 case red. P2 and P3 passed, no fallback; probe_p5_vram.py is a recording (no pass/fail); probe_p2_pause.py and probe_p3_modal.py assert Blender's behaviour, which no addon change can break, so they have no canary.
+Canary: tasks/097.canary.patch must turn red: astroray_tests_gpu "cuda_device/reserve rule decision", tests/blender/gui_colour_chart.py "TestColourChart.test_standard" "TestColourChart.test_agx" "TestColourChart.test_exposure_plus1" "TestColourChart.test_gamma" "TestColourChart.test_look" (the patch sets kCudaReserveBytes back to 1.5 GiB and scales red and green in present.py's unpack shader). probe_p5_vram.py records; probe_p2_pause.py and probe_p3_modal.py assert Blender's behaviour, which no addon change can break, so they have no canary.
 Budget: none.
 Depends on: 086, 089.
 Size: M (probe scripts plus possible fallbacks); stop and report at 2x.
