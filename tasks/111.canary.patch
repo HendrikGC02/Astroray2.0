@@ -38,14 +38,14 @@ index 3d6d572..2ffba5a 100644
              world_sync.sync(e, abi, world.evaluated_get(depsgraph) if world else None, self.keymap, self.op_id)
          geoms, mats = render_final.scan(depsgraph, self.keymap)
 diff --git a/blender/astroray/sync/classify.py b/blender/astroray/sync/classify.py
-index ee94b6e..e39feb6 100644
+index 22e80e2..e564d5d 100644
 --- a/blender/astroray/sync/classify.py
 +++ b/blender/astroray/sync/classify.py
-@@ -52,7 +52,7 @@ def settings_signature(scene):
+@@ -56,7 +56,7 @@ def settings_signature(scene):
      r, a = scene.render, scene.astroray
      return (r.resolution_x, r.resolution_y, r.resolution_percentage, r.pixel_aspect_x,
              r.pixel_aspect_y, r.use_border, r.film_transparent,
--            tuple(getattr(a, p.identifier) for p in a.bl_rna.properties if p.identifier != "rna_type"))
+-            tuple(getattr(a, p.identifier) for p in a.bl_rna.properties if p.identifier not in _NOT_SETTINGS))
 +            ())
  
  
