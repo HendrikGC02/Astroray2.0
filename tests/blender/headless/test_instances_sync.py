@@ -186,6 +186,46 @@ class TestInstances(unittest.TestCase):
         others = [i for i in range(t.n) if i != moved_row]
         self.assertEqual(t.xf[others].tobytes(), before[others].tobytes())
 
+    def test_move_of_an_object_that_is_also_instanced(self):
+        # A has its own row and is also instanced through a collection: the move must reach both rows.
+        col = bpy.data.collections.new("c")
+        bpy.context.scene.collection.children.link(col)
+        a = make("A", loc=(1, 0, 0), collection=col)
+        e = bpy.data.objects.new("inst", None)
+        e.instance_type = "COLLECTION"
+        e.instance_collection = col
+        e.location = (10, 0, 0)
+        bpy.context.scene.collection.objects.link(e)
+        _, t = build()
+        self.assertEqual(sorted(t.xf[:, 3].tolist()), [1.0, 11.0])
+
+        def move():
+            a.location.x = 2.0
+
+        edit = FakeEdit()
+        ok = support.in_update(move, lambda dg: instances.sync_transforms(edit, None, t, dg, [a.session_uid]))
+        self.assertTrue(ok)
+        self.assertEqual(sorted(edit.indices), [0, 1])
+        self.assertEqual(sorted(t.xf[:, 3].tolist()), [2.0, 12.0])
+
+    def test_per_object_fields_follow_their_object(self):
+        # bpy.data.objects is sorted by name; the instance loop meets "Z" first, so the bulk reads must be
+        # gathered per object, not by position.
+        z = make("Z", loc=(0, 0, 0))
+        a = make("A", loc=(1, 0, 0))
+        m = make("M", loc=(2, 0, 0))
+        z.visible_camera, z.is_shadow_catcher, z.pass_index, z.color = False, True, 3, (0.1, 0.2, 0.3, 0.4)
+        a.visible_diffuse, a.is_holdout, a.pass_index, a.color = False, True, 5, (0.5, 0.6, 0.7, 0.8)
+        m.pass_index, m.color = 9, (0.9, 0.25, 0.125, 1.0)
+        _, t = build()
+        want = {z: (0x3F & ~instances.VIS_CAMERA, instances.FLAG_SHADOW_CATCHER, 3),
+                a: (0x3F & ~instances.VIS_DIFFUSE, instances.FLAG_HOLDOUT, 5),
+                m: (0x3F, 0, 9)}
+        for ob, (vis, flags, pi) in want.items():
+            i = t.index_of[(ob.session_uid,)]
+            self.assertEqual((int(t.arrays["visibility"][i]), int(t.arrays["flags"][i]),
+                              int(t.arrays["pass_indices"][i])), (vis, flags, pi), ob.name)
+            np.testing.assert_array_equal(t.arrays["colors"][i], np.float32(tuple(ob.color)), ob.name)
     def test_instancer_move_walks_its_instances(self):
         col = bpy.data.collections.new("c")
         bpy.context.scene.collection.children.link(col)

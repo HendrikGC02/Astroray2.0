@@ -44,7 +44,7 @@ def is_real_object_data(inst, depsgraph):
     return data.as_pointer() == orig_data.evaluated_get(depsgraph).as_pointer()
 
 
-def _instance_path(inst):
+def instance_path(inst):
     """(parent original uid, persistent_id): persistent_id is relative to the parent, so two
     instancers of one collection give the same ids and only the parent tells them apart.
     Ref: Cycles ObjectKey(parent, persistent_id, ...) in intern/cycles/blender/object.cpp."""
@@ -53,15 +53,27 @@ def _instance_path(inst):
     return (inst.parent.original.session_uid, tuple(inst.persistent_id))
 
 
-def object_identity(inst):
-    """Original object session_uid, plus the instance path (parent, persistent_id) for instances."""
-    return (inst.object.original.session_uid,) + _instance_path(inst)
+def object_identity(inst, path=None):
+    """Original object session_uid, plus the instance path (parent, persistent_id) for instances.
+    `path` is instance_path(inst) when the caller already has it."""
+    return (inst.object.original.session_uid,) + (instance_path(inst) if path is None else path)
 
 
-def geometry_identity(inst, depsgraph):
-    """None for objects without data; else a tuple that is equal exactly when the geometry is."""
-    if inst.object.original.data is None:
+def geometry_identity(inst, depsgraph, path=None, real=None):
+    """None for objects without data; else a tuple that is equal exactly when the geometry is.
+    `real`, if given, caches is_real_object_data per (original uid, evaluated data pointer): the answer
+    depends only on those, and geometry-nodes instances reuse one temporary object for different data."""
+    orig = inst.object.original
+    if orig.data is None:
         return None
-    if is_real_object_data(inst, depsgraph):
-        return ("data", inst.object.original.data.session_uid)
-    return ("object", inst.object.original.session_uid) + _instance_path(inst)
+    if real is None:
+        is_real = is_real_object_data(inst, depsgraph)
+    else:
+        data = inst.object.data
+        k = (orig.session_uid, data.as_pointer() if data is not None else 0)
+        is_real = real.get(k)
+        if is_real is None:
+            is_real = real[k] = is_real_object_data(inst, depsgraph)
+    if is_real:
+        return ("data", orig.data.session_uid)
+    return ("object", orig.session_uid) + (instance_path(inst) if path is None else path)

@@ -30,8 +30,10 @@ def api_read(me):
     out = {"positions": np.empty(V * 3, np.float32), "corner_vert": np.empty(C, np.int32),
            "face_start": np.empty(F, np.int32), "corner_normals": np.empty(C * 3, np.float32),
            "uv": np.empty(len(me.uv_layers) * C * 2, np.float32)}
-    me.attributes["position"].data.foreach_get("vector", out["positions"])
-    me.attributes[".corner_vert"].data.foreach_get("value", out["corner_vert"])
+    if V:  # an empty mesh has neither attribute, a mesh without faces no '.corner_vert'
+        me.attributes["position"].data.foreach_get("vector", out["positions"])
+    if C:
+        me.attributes[".corner_vert"].data.foreach_get("value", out["corner_vert"])
     loops = np.empty(C, np.int32)
     me.loops.foreach_get("vertex_index", loops)
     assert np.array_equal(loops, out["corner_vert"])
@@ -113,6 +115,12 @@ class TestDirectEqualsApi(unittest.TestCase):
         lay = self.assert_same(b1m_mesh())
         self.assertGreater(lay.C - 2 * lay.F, 990_000)
 
+    def test_empty_and_vertex_only_meshes(self):
+        empty = bpy.data.meshes.new("empty")
+        self.assertEqual(tuple(self.assert_same(empty))[:3], (0, 0, 0))
+        points = bpy.data.meshes.new("points")
+        points.from_pydata([(0, 0, 0), (1, 2, 3), (4, 5, 6)], [], [])
+        self.assertEqual(tuple(self.assert_same(points))[:3], (3, 0, 0))
     def test_positions_path(self):
         me, _ = golden_mesh()
         want = api_read(me)

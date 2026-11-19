@@ -144,9 +144,8 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
     # the matrices come from one foreach_get over the same iterator (B-31: Python per-instance numpy writes and
     # Matrix conversions were most of the loop's 150 ms per 10k).
     props, pool, pool_offsets = {}, [], {}
-    # (original uid, evaluated data pointer) -> geometry identity when that data is the shared evaluated copy, or
-    # None; keyed by the data, as geometry-nodes instances reuse one temporary object for different data.
-    real = {}
+    real = {}  # keys.geometry_identity's cache
+
     by_object, index_of = {}, {}
     rows, geom, obj, rand, owner = [], [], [], [], []
     seen = 0
@@ -160,20 +159,12 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
         uid = orig.session_uid
         if uid not in props:
             props[uid] = _object_props(orig, lightgroups, material_key, pool, pool_offsets)
-        data = ob.data
-        ptr = (uid, data.as_pointer() if data is not None else 0)
-        if ptr not in real:
-            real[ptr] = (("data", orig.data.session_uid) if orig.data is not None
-                         and keys.is_real_object_data(inst, depsgraph) else None)
         n = len(rows)
-        if inst.is_instance:
-            path = (inst.parent.original.session_uid, tuple(inst.persistent_id))
-            ident = (uid,) + path
+        path = keys.instance_path(inst)
+        ident = keys.object_identity(inst, path)
+        if path:
             by_object.setdefault(path[0], []).append(n)
-        else:
-            path, ident = (), (uid,)
-        gid = real[ptr] or (None if orig.data is None else ("object", uid) + path)
-        geom.append(keymap.key(gid))
+        geom.append(keymap.key(keys.geometry_identity(inst, depsgraph, path, real)))
         obj.append(keymap.key(ident))
         rand.append(inst.random_id & 0xFFFFFFFF)
         owner.append(uid)

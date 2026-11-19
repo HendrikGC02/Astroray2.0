@@ -90,14 +90,16 @@ def _copy(coll, dst, width, value, what):
 
 
 def fill_positions(me, positions, corner_normals):
-    _copy(_attribute(me, "position"), positions, 3, lambda e: e.vector, "'position'")
+    if len(positions):  # an empty mesh has no 'position' attribute at all
+        _copy(_attribute(me, "position"), positions, 3, lambda e: e.vector, "'position'")
     _copy(me.corner_normals, corner_normals, 3, lambda e: e.vector, "corner_normals")
 
 
 def fill(me, out):
     """Reads `me` into out (a MeshArrays sized by layout(me))."""
     fill_positions(me, out.positions, out.corner_normals)
-    _copy(_attribute(me, ".corner_vert"), out.corner_vert, 1, lambda e: e.value, "'.corner_vert'")
+    if len(out.corner_vert):  # nor has a mesh without faces a '.corner_vert'
+        _copy(_attribute(me, ".corner_vert"), out.corner_vert, 1, lambda e: e.value, "'.corner_vert'")
     _copy(me.polygons, out.face_start, 1, lambda e: e.loop_start, "polygons (face offsets)")
     C = len(out.corner_vert)
     for i, layer in enumerate(me.uv_layers):
