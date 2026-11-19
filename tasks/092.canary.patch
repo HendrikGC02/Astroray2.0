@@ -1,5 +1,5 @@
 diff --git a/tools/kernelgate.py b/tools/kernelgate.py
-index ce3eb73..960c458 100644
+index 79707d9..61e1f96 100644
 --- a/tools/kernelgate.py
 +++ b/tools/kernelgate.py
 @@ -253,7 +253,7 @@ def split_probe(fails, lines, probe_cubins):
@@ -11,3 +11,12 @@ index ce3eb73..960c458 100644
  
  
  def probe_warnings(warns):
+@@ -267,7 +267,7 @@ def gate_cubins(launch, budget, base, cubins, probe_cubins, is_stage, declared,
+     every = dict(cubins)
+     every.update(probe_cubins)
+     fails, lines, deferred = evaluate(launch, budget, base, every, is_stage, declared, full)
+-    fails, warns, plines = split_probe(fails + list(extra_fails), lines, probe_cubins)
++    fails, warns, plines = split_probe(fails + list(extra_fails), lines, every)  # canary: split over all cubins
+     return fails, warns, lines, plines, deferred
+ 
+ 

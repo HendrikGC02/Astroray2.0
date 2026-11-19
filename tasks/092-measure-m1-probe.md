@@ -11,7 +11,7 @@ Do:
 4. Result (PR body `Result:` with commands and numbers). On each outcome: stack within 512 B and spills within allowance -> M-1 probe passes, record noted in STATUS for ratification in M1b; stack over -> propose fp16 record scalars (-48 B) to the lead as a 0005 amendment before M1b; spills over -> start 0002 D10's ladder (attribute by stubbing, then local fixes, then the cap A/B) as follow-up tasks the lead writes; upsampling share above 20% of kernel time -> report to the lead with the profile (0003 Risk 2), otherwise record and close.
 Acceptance: the PR body holds the probe's ptxas line, cuobjdump line, the two kernel times and the outcome chosen; `pwsh tools/check.ps1 full` builds the probe and prints its registers as a warning only.
 Look at: none.
-Canary: tasks/092.canary.patch must turn red: `tools/kernelgate.py --self-test` (case probe_breach_warns: the patch keeps a capped probe breach as a failure and prints no probe warning).
+Canary: tasks/092.canary.patch must turn red: `tools/kernelgate.py --self-test` (case probe_breach_warns; each hunk alone turns it red: split_probe keeps a probe breach as a failure with no warning; gate_cubins splits over every cubin, so a production breach becomes a warning).
 Budget: adds a `full`-only TU.
 Depends on: 030, 057, 064, 089.
 Size: M (probe TU about 300 lines plus result); stop and report at 2x.
