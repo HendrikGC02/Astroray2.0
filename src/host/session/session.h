@@ -214,7 +214,6 @@ class Session {
   void bind_globals();
   // Pins the set of the scene's current snapshot; true when the pinned set changed.
   bool latch_tables();
-  ar::FilmData film_host_view(std::vector<uint32_t>* invalid) const;
   void update_camera_and_filter(uint64_t generation);
   void build_active();
   uint64_t pass_camera_samples() const;
@@ -259,7 +258,7 @@ class Session {
   std::string observer_hash_;      // hex, written with film_ under render_mutex_
   std::atomic<uint64_t> render_size_{0};  // width << 32 | height, written at apply_view
   InvalidSampleReporter invalid_;
-  DeviceBuffer globals_buf_;  // KernelGlobals, then FilmData, then DisplayTarget
+  DeviceBuffer globals_buf_;  // KernelGlobals, then FilmData, then DisplayTarget, then the invalid total
   DeviceBuffer present_buf_;
   // Per session, in the ledger: the active-pixel list, the CameraView of the latched view and the
   // pixel-filter table of the scene's settings. Camera and filter exist once a view and the

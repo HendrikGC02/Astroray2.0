@@ -36,6 +36,7 @@ class CudaDevice final : public ModuleDevice {
   // waits once first. Throws std::invalid_argument above the ring's size.
   void upload_async(const DeviceBuffer& dst, uint64_t offset, const void* src, uint64_t bytes) override;
   void download(void* dst, const DeviceBuffer& src, uint64_t offset, uint64_t bytes) override;
+  // Enqueued on the device's stream without a host wait; an error surfaces at the next wait.
   void memset(const DeviceBuffer& dst, uint64_t offset, uint8_t value, uint64_t bytes) override;
   void copy(const DeviceBuffer& dst, uint64_t dst_offset, const DeviceBuffer& src, uint64_t src_offset,
             uint64_t bytes) override;

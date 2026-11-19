@@ -73,6 +73,10 @@ struct FilmData {
   WavelengthTableView wavelengths;
   double film_exposure;
   double inv_radiance_scale;  // 1 / s of 0003 d10
+  // One counter outside the film: the resolve adds every invalid sample it counts in `invalid`
+  // here too, so the host reads 4 bytes for the INVALID_SAMPLE entry instead of the whole plane.
+  // The session clears it before each resolve; null when nobody reads a total.
+  uint32_t* invalid_total;
 };
 
 // Slot lanes: fp32 atomic add, since several contributions to one sample can be live at once

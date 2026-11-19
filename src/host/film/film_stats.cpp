@@ -56,6 +56,18 @@ void InvalidSampleReporter::report(const ar::FilmData& f, Report& report, uint64
   reported_ = total;
 }
 
+void InvalidSampleReporter::report_pass(uint64_t pass_invalid, uint64_t max_per_pass, Report& report,
+                                        uint64_t generation) {
+  if (pass_invalid > max_per_pass)
+    throw std::logic_error("film: one resolve counted " + std::to_string(pass_invalid) +
+                           " invalid samples, more than its " + std::to_string(max_per_pass) +
+                           " slots and splats; the counter was not cleared before the resolve");
+  if (pass_invalid == 0) return;
+  const double value[2] = {0, 0};
+  report.raise(AR_REPORT_INVALID_SAMPLE, 0, "", pass_invalid, value, generation);
+  reported_ += pass_invalid;
+}
+
 void InvalidSampleReporter::on_film_reset(Report& report) {
   reported_ = 0;
   report.on_film_reset();
