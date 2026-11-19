@@ -21,3 +21,4 @@ Progress:
 - fix: cache_dir() is _log_path()'s directory (same path in production), so test_images' _log_path stand-in covers it; headless test_render_final_dirs; canary red alone.
 - full: run 2 PASS 705.2 s, run 3 PASS 1891.7 s (about 198 s and 1395 s of Blender machine-lock waits that check.ps1 does not count, so about 505 s and 497 s of work); run 1 stopped by a hung astroray_tests_gpu (gate); runs 4 and 5 stopped by test_cuda_session_trace "no cache dir" failing on a stale OptiX cache WAL. B-10 not reset: only two clean runs.
 - the GENERATION_REJECTED 'sphere 0' line is smoke_a1's test_error_entry_fails_render output (an intentional NaN vertex), not a failure.
+- after 132 (rebased on ef31f7b): full run 6 PASS 912.2 s, waited 41.4 s, about 357 s Blender lock waits, about 514 s net; B-10 reset to 12 min (1.3 x 514 s = 668 s, rounded up to a whole minute).
