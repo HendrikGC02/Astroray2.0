@@ -1,0 +1,13 @@
+diff --git a/tools/kernelgate.py b/tools/kernelgate.py
+index ce3eb73..960c458 100644
+--- a/tools/kernelgate.py
++++ b/tools/kernelgate.py
+@@ -253,7 +253,7 @@ def split_probe(fails, lines, probe_cubins):
+     """Failures of the capped probe kernels become warnings: a probe measures, it never gates."""
+     names = {n for res, _ in probe_cubins.values() for n in parse_res_usage(res)}
+     ours = lambda t: t.split(":", 1)[0].split(" ", 1)[0] in names
+-    return [f for f in fails if not ours(f)], [f for f in fails if ours(f)], [ln for ln in lines if ours(ln)]
++    return fails, [], [ln for ln in lines if ours(ln)]  # canary: a probe breach is a failure, no warning
+ 
+ 
+ def probe_warnings(warns):
