@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <limits>
 #include <stdexcept>
 
@@ -145,7 +146,16 @@ Results run_gpu(host::ModuleDevice& dev, const std::string& module_path, const c
   host::DeviceBuffer b_out = dev.allocate(LedgerCategory::TABLES, out_bytes, Owner{});
   dev.upload(b_in, 0, in.v.data(), in_bytes);
   dev.memset(b_out, 0, 0xFF, out_bytes);  // an unwritten output is a NaN, which compare() reports
+  // The module and its size before the load, and a line between load and launch, flushed: a run
+  // that stops here then shows whether it stopped in the driver's module load or in the launch
+  // and wait, and which file the load read.
+  std::error_code ec;
+  const uintmax_t module_bytes = std::filesystem::file_size(module_path, ec);
+  std::printf("agree load %s (%lld bytes)\n", module_path.c_str(), ec ? -1ll : static_cast<long long>(module_bytes));
+  std::fflush(stdout);
   const uint32_t module = dev.load_module_file(module_path);
+  std::printf("agree launch %s\n", kernel);
+  std::fflush(stdout);
   uint64_t in_p = reinterpret_cast<uint64_t>(b_in.ptr), out_p = reinterpret_cast<uint64_t>(b_out.ptr);
   uint32_t n = in.n;
   std::vector<void*> args = {&in_p, &out_p, &n};

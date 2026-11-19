@@ -9,9 +9,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -24,12 +26,27 @@ namespace {
 // Case name and error text of every test case that left a latent error, for main to print.
 std::vector<std::string> g_latent_errors;
 
+// Every case announces its start, flushed, with the wall clock and the time since the run began:
+// a hung run then names its case in the output, and the wall clock lines it up with what else
+// the machine was doing (check.ps1's step timeout prints the last of these lines).
 struct LatentErrorListener : doctest::IReporter {
   explicit LatentErrorListener(const doctest::ContextOptions&) {}
   void report_query(const doctest::QueryData&) override {}
   void test_run_start() override {}
   void test_run_end(const doctest::TestRunStats&) override {}
-  void test_case_start(const doctest::TestCaseData& tc) override { current_ = tc.m_name; }
+  void test_case_start(const doctest::TestCaseData& tc) override {
+    current_ = tc.m_name;
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm local{};
+    localtime_s(&local, &t);
+    const long long ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+    const double since = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count();
+    std::printf("case start %02d:%02d:%02d.%03lld +%.3f s '%s'\n", local.tm_hour, local.tm_min, local.tm_sec, ms, since,
+                tc.m_name);
+    std::fflush(stdout);
+  }
   void test_case_reenter(const doctest::TestCaseData&) override {}
   void test_case_end(const doctest::CurrentTestCaseStats&) override {
     const std::string e = astroray::host::cuda_latent_error();
@@ -44,6 +61,7 @@ struct LatentErrorListener : doctest::IReporter {
 
  private:
   std::string current_;
+  std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
 };
 REGISTER_LISTENER("latent_cuda_error", 1, LatentErrorListener);
 

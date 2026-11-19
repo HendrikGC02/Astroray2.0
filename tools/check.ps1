@@ -75,6 +75,24 @@ try {
   $exe = Join-Path $root 'out/bin/astroray_tests_cpu.exe'
   $gpuExe = Join-Path $root 'out/bin/astroray_tests_gpu.exe'
   $dargs = if ($Declared) { @('--declared', $Declared) } else { @() }
+  # A GPU test executable under a time limit: past it the process (by its own PID, 0009 d8) is
+  # stopped and the step fails naming the last case the executable started (its "case start"
+  # lines), so a hang costs minutes. Output goes through a file so the tail survives the stop.
+  # Text, not a function: grouped steps run in jobs, which rebuild it from $vars.
+  $timedText = @'
+param([string]$file, [string]$arg, [int]$limitS, [string]$capture)
+$p = Start-Process -FilePath $file -ArgumentList $arg -NoNewWindow -PassThru -RedirectStandardOutput $capture -RedirectStandardError "$capture.err"
+$null = $p.Handle
+$done = $p.WaitForExit($limitS * 1000)
+if (-not $done) { Stop-Process -Id $p.Id -Force; $null = $p.WaitForExit(30000) }
+Get-Content $capture
+Get-Content "$capture.err"
+if ($done) { $global:LASTEXITCODE = $p.ExitCode; return }
+$last = Select-String -Path $capture -Pattern '^case start ' | Select-Object -Last 1
+"FAIL timeout: $(Split-Path -Leaf $file) $arg stopped after $limitS s; last case started: $(if ($last) { $last.Line } else { 'none' })"
+$global:LASTEXITCODE = 1
+'@
+  $runTimed = [scriptblock]::Create($timedText)
 
   # Group: steps with the same Group, adjacent in this table, run concurrently (CPU device against GPU
   # device; see Invoke-GateGroup). 'aov agreement', 'integrator cuda' (tripwire) and 'material compile'
@@ -186,11 +204,12 @@ try {
         $ErrorActionPreference = 'Stop'
         Set-Location $v.root
         $py = $v.py; $dargs = $v.dargs; $exe = $v.exe; $gpuExe = $v.gpuExe; $root = $v.root; $isCi = $v.isCi
+        $runTimed = [scriptblock]::Create($v.timedText)
         $t = [Diagnostics.Stopwatch]::StartNew()
         $global:LASTEXITCODE = 0
         $out = & ([scriptblock]::Create($body)) 2>&1 | ForEach-Object { "$_" }
         [pscustomobject]@{ Code = $LASTEXITCODE; Out = @($out); Seconds = $t.Elapsed.TotalSeconds } }
-      $vars = @{ root = "$root"; py = $py; dargs = $dargs; exe = $exe; gpuExe = $gpuExe; isCi = $isCi }
+      $vars = @{ root = "$root"; py = $py; dargs = $dargs; exe = $exe; gpuExe = $gpuExe; isCi = $isCi; timedText = $timedText }
       $jobs = @($members | ForEach-Object { Start-Job -ScriptBlock $pre -ArgumentList $_.Run.ToString(), $vars })
       $null = $jobs | Wait-Job
       $res = @(for ($i = 0; $i -lt $members.Count; $i++) {
