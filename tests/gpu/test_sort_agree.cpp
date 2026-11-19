@@ -90,8 +90,9 @@ DeviceBuffer put(Device& dev, LedgerCategory cat, const std::vector<T>& v) {
   return b;
 }
 
-// Uploads the input to `dev`, runs both sort kernels and reads the sorted segment back.
-std::vector<uint32_t> run_sort(Device& dev, const Input& in) {
+// Uploads the input to `dev`, runs the sort kernels and reads the sorted segment back. Count and
+// scatter get `grid` (the CPU's item range, or the GPU's grid size).
+std::vector<uint32_t> run_sort(Device& dev, const Input& in, uint32_t grid) {
   const uint32_t tiles = ar::queue_tiles(in.count);
   DeviceBuffer inst = put(dev, LedgerCategory::TABLES, in.instances);
   DeviceBuffer slots = put(dev, LedgerCategory::TABLES, in.slots);
@@ -137,7 +138,6 @@ std::vector<uint32_t> run_sort(Device& dev, const Input& in) {
   DeviceBuffer kg_buf = put(dev, LedgerCategory::TABLES, std::vector<ar::KernelGlobals>{kg});
   dev.set_kernel_globals(kg_buf);
 
-  const uint32_t grid = ar::sort_grid(in.count);
   dev.launch(KernelId::SORT_COUNT, grid);
   dev.launch(KernelId::SORT_SCAN, ar::sort_scan_grid(in.count));
   dev.launch(KernelId::SORT_SCATTER, grid);
@@ -176,8 +176,8 @@ TEST_CASE("sort/cpu gpu agree") {
   uint64_t diff = 0;
   for (uint32_t n : {300000u, 777u}) {
     const Input in = make_input(n, 50 + n);
-    const std::vector<uint32_t> g = run_sort(*gpu, in);
-    const std::vector<uint32_t> c = run_sort(cpu, in);
+    const std::vector<uint32_t> g = run_sort(*gpu, in, ar::gpu_tile_grid(n));  // as the scheduler launches it
+    const std::vector<uint32_t> c = run_sort(cpu, in, ar::sort_grid(n));
     REQUIRE(g.size() == c.size());
     for (size_t i = 0; i < g.size(); ++i) diff += g[i] != c[i];
   }
@@ -209,8 +209,8 @@ TEST_CASE("sort/300 materials cpu gpu agree with a bucket reference") {
   uint32_t empty = 0;
   for (const std::vector<uint32_t>& b : bucket) empty += b.empty(), want.insert(want.end(), b.begin(), b.end());
   CHECK(empty == 0);
-  const std::vector<uint32_t> g = run_sort(*gpu, in);
-  const std::vector<uint32_t> c = run_sort(cpu, in);
+  const std::vector<uint32_t> g = run_sort(*gpu, in, ar::gpu_tile_grid(in.count));
+  const std::vector<uint32_t> c = run_sort(cpu, in, ar::sort_grid(in.count));
   REQUIRE(g.size() == want.size());
   REQUIRE(c.size() == want.size());
   uint64_t gpu_wrong = 0, cpu_wrong = 0;
@@ -219,6 +219,30 @@ TEST_CASE("sort/300 materials cpu gpu agree with a bucket reference") {
               static_cast<unsigned long long>(cpu_wrong));
   CHECK(gpu_wrong == 0);
   CHECK(cpu_wrong == 0);
+  CHECK(gpu_ledger.total() == 0);
+  CHECK(cpu_ledger.total() == 0);
+}
+
+TEST_CASE("sort/a warp strides over several tiles") {
+  // One block of 8 warps for 293 tiles: each warp sorts its tile, then strides by the warp count to
+  // the next, so a warp handles about 37 tiles. The result must equal the CPU's.
+  Ledger gpu_ledger, cpu_ledger;
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  ContextState ctx;
+  ThreadPool pool(ctx, 8);
+  CpuDevice cpu(cpu_ledger, pool);
+  cpu.register_kernel(KernelId::SORT_COUNT, &cpu_sort_count);
+  cpu.register_kernel(KernelId::SORT_SCAN, &cpu_sort_scan);
+  cpu.register_kernel(KernelId::SORT_SCATTER, &cpu_sort_scatter);
+  constexpr uint32_t n = 300000u;
+  REQUIRE(ar::queue_tiles(n) > ar::kLaunch_k_sort_count.threads / ar::kQueueLanes);
+  const Input in = make_input(n, 913, 300, 64, true);
+  const std::vector<uint32_t> g = run_sort(*gpu, in, 1u);  // one block
+  const std::vector<uint32_t> c = run_sort(cpu, in, ar::sort_grid(n));
+  REQUIRE(g.size() == c.size());
+  uint64_t diff = 0;
+  for (size_t i = 0; i < g.size(); ++i) diff += g[i] != c[i];
+  CHECK(diff == 0);
   CHECK(gpu_ledger.total() == 0);
   CHECK(cpu_ledger.total() == 0);
 }

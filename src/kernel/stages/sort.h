@@ -21,7 +21,7 @@
 // kSortMinMaterials is compared with material_header_count (real materials); the default-material
 // bin does not count, so a scene with one material plus default-material hits stays unsorted.
 // Host contract: after queue_build has finished, launch count and scatter with `sort_grid(count)`
-// on the CPU (an item range) or gpu_tile_grid(count) on the GPU (launch_config.h, a warp per tile)
+// on the CPU (an item range) or gpu_tile_grid(count) on the GPU (queue_build.h, a warp per tile)
 // and, between them, scan with `sort_scan_grid(count)`; reallocate sort_counts whenever
 // material_header_count changes. kg.sort_counts holds 2 * queue_tiles(count) * sort_bins(kg)
 // counters (the histogram rows, then one scratch row per scatter tile) and kg.sort_queue
