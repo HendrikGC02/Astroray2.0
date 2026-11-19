@@ -18,3 +18,4 @@ Size: M (about 300 lines); stop and report at 2x.
 Progress:
 - started
 - lead ruling: element-pointer reads + memmove, no struct offsets; layout check per read (stride, contiguity, first/last values); d17's '.corner_vert' -> loops fallback replaced by the loud error (d17 joins Scope)
+- done: B-31 S2 full read 69.4 -> 15.2 ms/1M warm (cold 194 -> 102), plain move 9.0 -> 0.17 ms, instance loop 146 -> 83 ms/10k (still over 30); positions-only 2.75 -> 6.4 ms/1M into numpy (the per-read check); V7b S2 4.1/3.2 s -> 1.6/1.5 s (0.96x/0.87x Cycles), S1 3.0x/4.1x -> 1.8x/1.9x
