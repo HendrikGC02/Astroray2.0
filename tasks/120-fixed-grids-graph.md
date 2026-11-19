@@ -12,7 +12,7 @@ Do:
 5. From 119 (B-5M, 1080p, 64 passes): sorted 29.0 ms per pass vs unsorted (kSortMinItems = 0xFFFFFFFF) 17.9 ms, and k_shade_surface itself is slower sorted (5.30 vs 4.33 ms per pass); sort count and scatter run one tile per thread (~1,000 threads). With fixed grids in place, give sort count/scatter one warp per tile, re-measure sorted vs unsorted on b5m and find why shading is slower sorted (nsys/ncu: coherence, occupancy, launch sizes); report both and propose kSortMinItems (or a materials-count rule, Cycles' integrator/path_trace_work_gpu.cpp) from the measurement; the lead rules before it changes. docs/ARCHITECTURE.md section 3 step 5 names sort_count/sort_scatter only: add sort_scan (it joins Scope, as do src/kernel/stages/sort.h, src/kernel_gpu/sort_*.cu and src/kernel/launch_config.h for the warp-per-tile change).
 Acceptance: `pwsh tools/check.ps1 gate` passes; the PR body holds the before/after table and the outcome.
 Look at: out/evidence/120/timeline_b1m.png.
-Canary: tasks/120.canary.patch must turn red: astroray_tests_gpu with the new graph-replay case (the patch replays a stale graph after a step-table change).
+Canary: tasks/120.canary.patch must turn red: astroray_tests_gpu "cuda_transfers/async uploads survive a ring wrap" "cuda_transfers/step table follows the kernel globals" "cuda_transfers/step table read waits for its copy" "sort/300 materials cpu gpu agree with a bucket reference" "sort/a warp strides over several tiles".
 Budget: no gate time added.
 Depends on: 119.
 Size: M (about 300 lines); stop and report at 2x.
