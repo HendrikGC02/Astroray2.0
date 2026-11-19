@@ -1,27 +1,33 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Time to first frame, one process (task 095, 0007 d35 V7a): a .blend opened in a windowed Blender, Rendered
-shading switched on from a timer callback, off, and on again, with the external screen poller
-(tools/ttff_poller.ps1) timing the first frame that shows engine pixels. A measurement, not a test, so it is
-named probe_*.py and `check full` does not run it.
+"""Time to first frame, one process (0007 d35 V7a as ruling 83 defines it): a .blend opened in a windowed Blender,
+Rendered shading switched on from a timer callback, off, and on again. A POST_PIXEL draw handler on the 3D
+viewport region timestamps every redraw (the resolution of V7a is one redraw) and, where asked, reads a small
+patch of the region's framebuffer after the engine drew. A measurement, not a test, so it is named probe_*.py
+and `check full` does not run it.
 
-Run through tools/measure_ttff.ps1 (the machine lock, the poller and the Cycles log are its business):
+Run through tools/measure_ttff.ps1 (the machine lock and the Cycles log are its business):
   -- --scene <name> --engine astroray|cycles --blend <file> --out <result.json> [--hold <s>] [--m8]
+     [--source read|event|both|none] [--read patch|post_view|timer] [--cell <px>]
 The first switch is the first time the file is shown rendered; the second follows a switch back to Solid.
-The poller records block means of the centre of the viewport region with wall-clock times; this script
-finds, per switch, the first capture that is close to the settled image at the end of the hold (a blank or
-the solid view is far from it) and stays close for the next capture, and writes the times and, for
-Astroray, the job's marks and phase seconds (blender/astroray render_final.Timeline).
+Two ways to find the first redraw that shows engine pixels, per switch:
+  read: the patch is read in the handler; the first redraw whose patch is within 35 % of the baseline-to-settled
+    distance of the settled image, with a successor that is too, d35's rule (detect below).
+  event: the first redraw at or after the engine's own first displayable frame. Astroray: the present's
+    first_frame mark (render_final.Timeline, uploaded inside the engine's draw, so the same redraw's handler
+    comes after it). Cycles has no such mark in Python: its first `Rendered N samples` log line is placed on
+    this clock by tools/measure_ttff.ps1 and matched against the `redraws` list written here.
+Writes the times and, for Astroray, the job's marks and phase seconds (blender/astroray render_final.Timeline).
 --m8 (Astroray): after the second hold, every material of the scene is sent again with a changed constant in
 one edit, and the time from the commit's return to its generation becoming active is the native compile
 and upload of all of them (an upper bound: it includes the wait for the next pass boundary).
 Ref: docs/decisions/0007-blender-integration.md d35; 0005 Risks M-8; docs/spikes/B-blender-end-to-end
-gui_cycles_viewport.py (the switch from a timer callback).
+gui_cycles_viewport.py (the switch from a timer callback); ruling 83;
+bpy.types.SpaceView3D.draw_handler_add; gpu.state.active_framebuffer_get; GPUFrameBuffer.read_color.
 """
 import importlib
 import json
 import os
 import statistics
-import subprocess
 import sys
 import time
 import traceback
@@ -42,7 +48,7 @@ arg = smoke_a1.arg
 T0 = time.monotonic()
 WATCHDOG_S = 540.0
 STATE = {"errors": [], "switches": []}
-GX, GY = 32, 18
+GX, GY = 32, 18   # the patch is GX x GY cells of `--cell` pixels, block-averaged
 
 
 def finish(code):
@@ -57,21 +63,16 @@ def log_marker(text):
     print(text, flush=True)
 
 
-def load_capture(prefix):
-    with open(prefix + ".json", encoding="utf-8") as f:
-        meta = json.load(f)
-    raw = np.fromfile(prefix + ".bin", dtype=np.dtype([("t", "<f8"), ("g", "u1", (GY, GX, 3))]))
-    return meta, raw["t"], raw["g"].astype(np.float32) / 255.0
-
-
-def detect(t, g, t_switch, hold, min_pre=5, min_post=20):
-    """The first capture after t_switch that is within 35 % of the baseline-to-settled distance of the settled
-    image, and whose successor is too. Returns a dict of seconds after the switch and the distances."""
+def detect(t, g, t_switch, hold, min_pre=1, min_post=5):
+    """The first read after t_switch that is within 35 % of the baseline-to-settled distance of the settled
+    image, and whose successor is too. The baseline is the last reads before the switch (a still Solid view is
+    not redrawn, so there may be none within a fixed window). Returns seconds after the switch and the distances."""
     dist = lambda a, b: float(np.abs(a - b).mean())
-    pre, post = (t >= t_switch - 0.6) & (t < t_switch), (t >= t_switch) & (t <= t_switch + hold)
-    if pre.sum() < min_pre or post.sum() < min_post:
-        return {"error": f"too few captures (pre {int(pre.sum())}, post {int(post.sum())})"}
-    base = g[pre].mean(axis=0)
+    before = np.nonzero(t < t_switch)[0][-3:]
+    post = (t >= t_switch) & (t <= t_switch + hold)
+    if len(before) < min_pre or post.sum() < min_post:
+        return {"error": f"too few reads (before {len(before)}, after {int(post.sum())})"}
+    base = g[before].mean(axis=0)
     idx = np.nonzero(post)[0]
     settled = g[idx[-5:]].mean(axis=0)
     d0 = dist(base, settled)
@@ -96,16 +97,36 @@ class Driver:
     def __init__(self, engine, scene_name, out, hold, m8):
         self.engine, self.scene_name, self.out, self.hold, self.m8 = engine, scene_name, out, hold, m8
         self.step, self.t_step = "setup", time.monotonic()
-        self.poller = None
         self.prefix = os.path.splitext(out)[0] + ".cap"
-        self.stop_file = self.prefix + ".stop"
         self.jobs = []
         self.rf = None
         self.n = 0
         self.m8_result = None
         self.shot = False
-        self.src = arg("--source", "screen")
-        self.gpu_t, self.gpu_g = [], []
+        self.src = arg("--source", "both")
+        if self.src not in ("read", "event", "both", "none"):
+            raise SystemExit("--source read|event|both|none")
+        self.read_mode = arg("--read", "patch")
+        if self.read_mode not in ("patch", "post_view", "timer"):
+            raise SystemExit("--read patch|post_view|timer")
+        self.cell = int(arg("--cell", "3"))
+        self.fmt = arg("--fmt", "UBYTE")        # read_color's data_format: FLOAT is 4 bytes a channel, UBYTE 1
+        self.chans = int(arg("--chans", "4"))
+        if self.chans != 4:   # a 3-channel read_color corrupts the heap on Vulkan (127): Blender dies or hangs
+            raise SystemExit("--chans must be 4 (3-channel read_color corrupts the heap, see the task 127 PR)")
+        self.redraw_t = []              # one epoch stamp per redraw of the region, taken first thing in the handler
+        self.read_t, self.read_g = [], []   # the same stamps for the redraws whose patch was read, and the patches
+        self.reads_done = 0
+
+    @staticmethod
+    def anchor():
+        """With `--log context` Blender logs this access of bpy.context.area, with its own clock, at the line
+        number printed here: a pair (log time, epoch time) that measure_ttff.ps1 uses to put Cycles' log lines
+        on this probe's clock. Called a few times per run; the log parser takes the median offset."""
+        ln = sys._getframe().f_lineno + 2
+        t = time.time()
+        bpy.context.area
+        log_marker(f"TTFF_ANCHOR {ln} {t!r}")
 
     def go(self, name):
         self.step, self.t_step = name, time.monotonic()
@@ -148,60 +169,61 @@ class Driver:
         space.shading.type = "SOLID"
         space.region_3d.view_perspective = "CAMERA"
         area.tag_redraw()
-        self.go({"gpu": "start_gpu", "none": "baseline"}.get(self.src, "start_poller"))
-        if self.src == "none":
-            STATE["region"] = [region.x, win.height - region.y - region.height, region.width, region.height]
+        self.go("baseline" if self.src == "none" else "start_draw")
+        STATE["region"] = [region.x, win.height - region.y - region.height, region.width, region.height]
         return 1.0
 
-    def step_start_gpu(self):
-        """The in-process source: the same block means, read from the region's framebuffer in a POST_PIXEL
-        draw handler after the engine drew, timed when it draws (so the next redraw is the resolution)."""
+    def step_start_draw(self):
         win, area, region = self.area()
-        STATE["region"] = [region.x, win.height - region.y - region.height, region.width, region.height]
         STATE["window"] = [win.width, win.height]
-        bpy.types.SpaceView3D.draw_handler_add(self.draw_cb, (), "WINDOW", "POST_PIXEL")
+        kind = "POST_VIEW" if self.read_mode == "post_view" else "POST_PIXEL"
+        bpy.types.SpaceView3D.draw_handler_add(self.draw_cb, (), "WINDOW", kind)
+        if self.read_mode == "timer":   # the read happens off the draw, from a timer
+            bpy.app.timers.register(self.timer_read, first_interval=0.02)
         area.tag_redraw()
         self.go("baseline")
         return 0.1
 
     def draw_cb(self):
+        """Every redraw is stamped. Reading the patch here is the whole cost of the `read` method, so the stamp
+        comes first and the redraw is not delayed by anything but the read itself."""
+        t = time.time()
+        self.redraw_t.append(t)
+        if self.src in ("read", "both") and self.read_mode != "timer":
+            self.read_patch(t)
+        # The next redraw must come: a still region is not redrawn, and an engine's frame arrives between redraws.
+        # (The engines tag their own redraws; this keeps the stamp series dense enough to be the resolution.)
+
+    def read_patch(self, t):
         import gpu
         region = bpy.context.region
-        cw, ch = min(GX * 15, region.width) // GX * GX, min(GY * 15, region.height) // GY * GY
+        if region is None:
+            raise RuntimeError("no region in context: the read must run inside the draw handler")
+        c = self.cell
+        cw, ch = min(GX * c, region.width) // GX * GX, min(GY * c, region.height) // GY * GY
         x0, y0 = (region.width - cw) // 2, (region.height - ch) // 2
-        buf = gpu.state.active_framebuffer_get().read_color(x0, y0, cw, ch, 3, 0, "FLOAT")
-        a = np.array(buf, dtype=np.float32).reshape(ch, cw, 3)[::-1]   # first row at the top, as the poller
-        self.gpu_t.append(time.time())
-        self.gpu_g.append(a.reshape(GY, ch // GY, GX, cw // GX, 3).mean(axis=(1, 3)))
+        buf = gpu.state.active_framebuffer_get().read_color(x0, y0, cw, ch, self.chans, 0, self.fmt)
+        a = np.array(buf, dtype=np.float32).reshape(ch, cw, self.chans)[::-1, :, :3]   # first row at the top
+        if self.fmt == "UBYTE":
+            a = a / 255.0
+        self.read_t.append(t)
+        self.read_g.append(a.reshape(GY, ch // GY, GX, cw // GX, 3).mean(axis=(1, 3)))
 
-    def step_start_poller(self):
-        win, area, region = self.area()
-        STATE["region"] = [region.x, win.height - region.y - region.height, region.width, region.height]
-        STATE["window"] = [win.width, win.height]
-        for p in (self.prefix + ".ready", self.prefix + ".bin", self.prefix + ".json", self.stop_file):
-            if os.path.exists(p):
-                os.remove(p)
-        self.poller = subprocess.Popen(
-            ["pwsh", "-NoProfile", "-File", os.path.join(ROOT, "tools", "ttff_poller.ps1"),
-             "-ProcessId", str(os.getpid()), "-OutPrefix", self.prefix, "-StopFile", self.stop_file,
-             "-RegionX", str(STATE["region"][0]), "-RegionY", str(STATE["region"][1]),
-             "-RegionW", str(STATE["region"][2]), "-RegionH", str(STATE["region"][3]),
-             "-MaxSeconds", str(WATCHDOG_S), "-DumpPng", self.prefix + ".png",
-             "-CropW", arg("--crop", "960x540").split("x")[0], "-CropH", arg("--crop", "960x540").split("x")[1]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        self.go("poller_ready")
-        return 0.2
-
-    def step_poller_ready(self):
-        if os.path.exists(self.prefix + ".ready"):
-            self.go("baseline")
-            return 0.1
-        if self.poller.poll() is not None or self.waited(30):
-            raise RuntimeError("the poller did not start: " + (self.poller.communicate()[0] if self.poller.poll() is not None else "timeout"))
-        return 0.2
+    def timer_read(self):
+        try:
+            self.read_patch(time.time())
+        except Exception:
+            STATE["errors"].append(traceback.format_exc())
+            return None
+        return 0.02
 
     def step_baseline(self):
+        if self.waited(1.0) and not self.waited(1.2):
+            _, area, _ = self.area()
+            area.tag_redraw()   # one redraw of the Solid view late in the baseline, so the reads have a "before"
         if not self.waited(2.0):
             return 0.05
+        self.anchor()
         return self.switch_on()
 
     def switch_on(self):
@@ -217,7 +239,7 @@ class Driver:
 
     def step_hold(self):
         if "--shot" in smoke_a1.ARGS and not self.shot and self.waited(self.hold - 1.5):
-            self.shot = True  # Blender's own view of its area, to compare with what the poller sees
+            self.shot = True  # Blender's own view of its area, to look at beside the read patches
             win, area, region = self.area()
             with bpy.context.temp_override(window=win, area=area, region=region):
                 bpy.ops.screen.screenshot_area(filepath=self.prefix + f"_blender{self.n}.png")
@@ -226,6 +248,7 @@ class Driver:
         _, area, _ = self.area()
         STATE["switches"][-1]["t_off"] = time.time()
         log_marker(f"TTFF_OFF {self.n}")
+        self.anchor()
         area.spaces.active.shading.type = "SOLID"
         area.tag_redraw()
         self.go("after_off")
@@ -288,33 +311,39 @@ class Driver:
                 "reached": bool(prog.active_generation >= gen)}
 
     def end(self):
-        if self.src == "screen":
-            open(self.stop_file, "w").close()
         out = {"scene": self.scene_name, "engine": self.engine, "errors": STATE["errors"],
-               "region": STATE.get("region"), "window": STATE.get("window"), "hold_s": self.hold}
+               "region": STATE.get("region"), "window": STATE.get("window"), "hold_s": self.hold,
+               "source": self.src, "read_mode": self.read_mode, "cell": self.cell, "fmt": self.fmt, "chans": self.chans}
         try:
-            if self.src == "none":  # the switches and the engine's own marks only: no V7a
-                out["switches"] = [dict(sw, note="V7a not measured: no capture source") for sw in STATE["switches"]]
-            elif self.src == "gpu":
-                t, g = np.array(self.gpu_t), np.array(self.gpu_g)
-                out["capture"] = {"source": "gpu", "captures": int(len(t)), "seconds": float(t[-1] - t[0]) if len(t) else 0.0}
-                for sw in STATE["switches"]:
-                    r = detect(t, g, sw["t_on"], sw["t_off"] - sw["t_on"], min_pre=3, min_post=5)
-                    r.update(sw)
-                    out.setdefault("switches", []).append(r)
-            elif self.poller is not None:
-                text = self.poller.communicate(timeout=60)[0]
-                out["poller"] = (text or "").strip()
-                meta, t, g = load_capture(self.prefix)
-                out["capture"] = meta
-                if meta.get("foreign_checks"):
-                    out["errors"].append(f"{meta['foreign_checks']} checks found another window over the capture area")
-                if meta["rate_hz"] < 30:
-                    out["errors"].append(f"the poller ran at {meta['rate_hz']} Hz")
-                for sw in STATE["switches"]:
+            self.watch_jobs()
+            rt = np.array(self.redraw_t)
+            out["capture"] = {"redraws": int(len(rt)), "seconds": float(rt[-1] - rt[0]) if len(rt) else 0.0,
+                              "reads": int(len(self.read_t))}
+            t, g = np.array(self.read_t), np.array(self.read_g)
+            out["read_stats"] = [[float(a), float(b.mean()), float(b.max())] for a, b in zip(t, g)] if len(t) else []
+            out["switches"] = []
+            for i, sw in enumerate(STATE["switches"]):
+                sw = dict(sw)
+                span = (rt >= sw["t_on"] - 0.05) & (rt <= sw["t_off"])
+                sw["redraws"] = [float(x - sw["t_on"]) for x in rt[span]]   # seconds after the switch
+                if self.src == "none":
+                    sw["note"] = "V7a not measured"
+                if self.src in ("read", "both"):
                     r = detect(t, g, sw["t_on"], sw["t_off"] - sw["t_on"])
-                    r.update(sw)
-                    out.setdefault("switches", []).append(r)
+                    sw["read"] = r
+                    sw["read_s"] = r.get("first_frame_s")
+                    sw["first_change_s"] = r.get("first_change_s")
+                if self.engine == "astroray" and self.src in ("event", "both"):
+                    marks = self.jobs[i].timeline.marks if i < len(self.jobs) else {}
+                    ff = marks.get("first_frame")
+                    after = rt[rt >= ff] if ff else rt[:0]
+                    sw["engine_first_frame_s"] = float(ff - sw["t_on"]) if ff else None
+                    sw["event_s"] = float(after[0] - sw["t_on"]) if len(after) else None
+                    if sw["event_s"] is None:
+                        sw["error"] = "no redraw at or after the engine's first frame"
+                if self.src in ("read",) and sw.get("read_s") is None:
+                    sw["error"] = "read: " + str(sw["read"].get("error", "no detection"))
+                out["switches"].append(sw)
         except Exception:
             out["errors"].append(traceback.format_exc())
         out["jobs"] = [self.job_record(j) for j in self.jobs]
@@ -322,7 +351,7 @@ class Driver:
         json.dump(out, open(self.out, "w"), indent=1)
         print(f"ttff_probe: wrote {self.out}", flush=True)
         for sw in out.get("switches", []):
-            print("ttff_probe: switch", sw.get("n"), "first frame", sw.get("first_frame_s"), sw.get("error", ""), flush=True)
+            print("ttff_probe: switch", sw.get("n"), "read", sw.get("read_s"), "event", sw.get("event_s"), sw.get("error", ""), flush=True)
         finish(1 if out["errors"] or any("error" in s for s in out.get("switches", [])) else 0)
 
     @staticmethod
