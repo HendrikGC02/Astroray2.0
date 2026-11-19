@@ -19,3 +19,4 @@ Progress:
 - started
 - 84 entries (kinds attr/call/module/pass); the pip wheel has no openvdb module, so the 2 module lines print UNCHECKED under CI and are checked in Blender (check.ps1 full step 'blender api_surface'); test_listed_surface_is_present also runs the whole list in the headless suite.
 - Canary: tasks/087.canary.patch (missing.append(kind)) turns test_missing_attribute_named and test_missing_indexed_path_named red.
+- lead ruling: accepted: the pip wheel has no openvdb, so its two lines are UNCHECKED under ci and checked inside Blender by the full tier; a failed import inside Blender is MISSING.
