@@ -150,7 +150,10 @@ $global:LASTEXITCODE = 1
     @{ Name = 'integrator cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Run = {
         & $py -I tools/integrator_checks.py --gate --device cuda } },
     @{ Name = 'cpu gate tests'; Group = 'g3'; Tag = 'cpu'; Lock = $true; Identity = $exe; Run = { & $exe --tier=gate } },
-    @{ Name = 'gpu gate tests'; Group = 'g3'; Tag = 'local'; Lock = $true; Identity = $gpuExe; Run = { & $gpuExe --tier=gate } },
+    # Time limit 150 s: 132 measured the tier at 12.7-14.1 s over 35 runs with the CPU gate tests
+    # alongside (as in group g3); 10x the slowest, rounded up to 30 s.
+    @{ Name = 'gpu gate tests'; Group = 'g3'; Tag = 'local'; Lock = $true; Identity = $gpuExe;
+       Run = { & $runTimed $gpuExe '--tier=gate' 150 (Join-Path $root 'out/check/gpu-gate-tests.out') } },
     # B-24 compile row (0009 d13, 0005 V7): the test prints the median compile time of a fixed
     # 100-node graph; the limit is the "ms per 100 nodes" figure of the row in budgets.toml.
     @{ Name = 'material compile'; Tag = 'cpu'; Lock = $true; Identity = $exe; Echo = '^B-24 compile:';
@@ -286,7 +289,8 @@ $global:LASTEXITCODE = 1
       Fail ('kernelgate full: ' + ($r.Out | Where-Object { $_ -like 'FAIL*' } | Select-Object -First 1))
     }
     # The GPU suite's full tier (0009 B-17 launch duration, 099): a whole tier, a few seconds today.
-    $r = Step 'gpu full tests' { & $gpuExe --tier=full }
+    # Time limit 60 s: 132 measured the tier at 3.1 s; 10x, rounded up to a multiple of 30 s.
+    $r = Step 'gpu full tests' { & $runTimed $gpuExe '--tier=full' 60 (Join-Path $root 'out/check/gpu-full-tests.out') }
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'gpu full tests failed (out/check/full.log)' }
     $r = Step 'probe registers' { & $py -I tools/kernelgate.py --probe }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'probe registers failed' }

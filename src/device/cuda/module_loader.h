@@ -7,6 +7,7 @@
 // D15 (loader failure rows); 0009 decision 5 (loose kernels in dev builds only);
 // 0001 D8.4 (RCDATA).
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -46,5 +47,18 @@ bool module_file_stamp(const std::string& name, const std::string& dir, ModuleSt
 // Test modules only (never embedded): reads the file at `path`. Throws DeviceError when
 // it cannot be read.
 ModuleImage load_module_image_file(const std::string& path);
+
+// cuModuleLoadData takes no length: the driver parses whatever ELF headers it finds and reads where
+// they point, so a truncated cubin makes it read past the buffer (it has hung there). Every image
+// handed to it is a cubin (kernels.cmake builds -cubin; OptiX PTX goes to optixModuleCreate with its
+// size), so before every call the image's layout is checked: an ELF-64 little-endian header, the
+// program and section header tables, every section and segment with file contents, and the section
+// name table all inside the bytes. Bounds and layout only, never contents. Returns the first defect,
+// or an empty string for a well-formed layout.
+// Ref: System V ABI, Generic ABI, chapter 4 "Object Files" (ELF Header, Sections, Program Header),
+// ELF-64 structure layouts.
+std::string cubin_layout_defect(const uint8_t* data, size_t size);
+// The DeviceError text for a refused image: "module image truncated or invalid: <name> (<defect>)".
+std::string cubin_layout_message(const std::string& name, const std::string& defect);
 
 }  // namespace astroray::host

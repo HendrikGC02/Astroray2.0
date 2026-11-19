@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -325,6 +326,12 @@ struct CudaDevice::Impl {
   // A module load has no ledger record: loads measured 0 MiB of free memory at cuMemGetInfo's
   // resolution (126, every stage module on b5m), as did kernel launches.
   CUmodule load_image(const std::string& label, const ModuleImage& image) {
+    // The driver reads where the image's headers point and takes no length: a truncated or damaged
+    // layout is refused here, as the same D15 row, before the driver sees it.
+    const std::string defect = cubin_layout_defect(image.bytes.data(), image.bytes.size());
+    if (!defect.empty())
+      throw DeviceError("GPU device unavailable: no usable module image for " + arch + ": " + label + ": " +
+                        cubin_layout_message(image.origin, defect));
     CUmodule m = nullptr;
     const CUresult r = cu.cuModuleLoadData_(&m, image.bytes.data());
     // 0002 D15 "No module image for this GPU": a missing or damaged image makes the device unavailable
@@ -689,6 +696,10 @@ ModuleReload CudaDevice::poll_module_reload() {
         throw DeviceError(w.unreadable.empty() ? "kernel module file is missing from " + s.dev_dir
                                                : "kernel module file cannot be read: " + w.unreadable);
       const ModuleImage image = load_module_image(name, s.hooks.corrupt_cubin, s.dev_dir);
+      // A file caught mid-write that sat still for two polls, or cut short: refused before the driver,
+      // which reads where the headers point. The file name only: the report detail holds 128 bytes.
+      const std::string defect = cubin_layout_defect(image.bytes.data(), image.bytes.size());
+      if (!defect.empty()) throw DeviceError(cubin_layout_message(std::filesystem::path(image.origin).filename().string(), defect));
       // The loader's own result, short: the report detail holds 128 bytes.
       CUmodule fresh = nullptr;
       const CUresult lr = s.cu.cuModuleLoadData_(&fresh, image.bytes.data());

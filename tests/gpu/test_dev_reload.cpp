@@ -331,7 +331,8 @@ TEST_CASE("dev_reload/corrupted module keeps previous") {
   REQUIRE(e.size() == 1);
   const std::string detail = reinterpret_cast<const char*>(e[0].detail);
   CHECK(detail.find("shade_background") != std::string::npos);
-  CHECK(detail.find("CUDA_ERROR") != std::string::npos);  // the loader's own error
+  // Refused by the layout check, naming the file, before cuModuleLoadData could read past its end.
+  CHECK(detail.find("module image truncated or invalid: shade_background.cubin (") != std::string::npos);
   CHECK(e[0].level == AR_LEVEL_WARNING);
   // It keeps rendering on the old image: same epoch, passes still accumulate, no storm of repeats.
   const uint32_t n = s.progress().samples_per_pixel;

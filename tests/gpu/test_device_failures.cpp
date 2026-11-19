@@ -241,7 +241,68 @@ TEST_CASE("device_failures/corrupt module image") {
   } catch (const DeviceError& e) {
     CHECK(e.status() == AR_ERR_DEVICE);
     CHECK(has(e.what(), "GPU device unavailable"));
+    // Refused by the layout check before the driver sees it, naming the damaged image (the first
+    // module the pass loads, whichever that is).
+    CHECK_MESSAGE(has(e.what(), "module image truncated or invalid: embedded K_"), std::string(e.what()));
+    CHECK_MESSAGE(has(e.what(), " (damaged by ASTRORAY_TEST_CORRUPT_CUBIN) (no ELF magic)"), std::string(e.what()));
   }
+}
+
+TEST_CASE("device_failures/cubin layout check refuses truncated images") {
+  // The check before every cuModuleLoadData, on a real embedded cubin cut and edited in the ways a
+  // half-written or damaged file is. Offsets are the gABI ELF-64 layout (ch. 4): e_shoff at 40,
+  // e_phoff at 32, e_shentsize 58, e_shnum 60; sh_type at 4, sh_size at 32; p_filesz at 32.
+  const ModuleImage clean = load_module_image("generate_camera");
+  const std::vector<uint8_t>& b = clean.bytes;
+  REQUIRE(b.size() > 256);
+  const auto defect = [](const std::vector<uint8_t>& v, size_t n) { return cubin_layout_defect(v.data(), n); };
+  const auto u64 = [&](size_t at) { uint64_t v = 0; std::memcpy(&v, b.data() + at, 8); return v; };
+  const auto u16 = [&](size_t at) { uint16_t v = 0; std::memcpy(&v, b.data() + at, 2); return uint64_t(v); };
+  CHECK(defect(b, b.size()) == "");
+  CHECK(cubin_layout_defect(nullptr, 0) == "shorter than an ELF-64 header");
+  // The header cut.
+  CHECK(defect(b, 63) == "shorter than an ELF-64 header");
+  // The program header table cut: the file ends one byte before the table does (checked first).
+  const uint64_t phoff = u64(32), phnum = u16(56);
+  REQUIRE(phnum > 0);
+  CHECK(defect(b, size_t(phoff + phnum * 56 - 1)) == "program header table past the end");
+  // The section header table cut, on a copy without program headers (which nvcc places after the
+  // section table, so they would be reported first).
+  const uint64_t shoff = u64(40), shent = u16(58), shnum = u16(60);
+  REQUIRE(shnum > 2);
+  {
+    std::vector<uint8_t> v = b;
+    v[56] = 0;
+    v[57] = 0;
+    CHECK(defect(v, size_t(shoff + shnum * shent - 1)) == "section header table past the end");
+  }
+  // A section running past the end: the first section with file contents claims one byte too many.
+  size_t k = 1;
+  while (k < shnum) {
+    uint32_t type = 0;
+    std::memcpy(&type, b.data() + shoff + k * shent + 4, 4);
+    if (type != 0 && type != 8) break;
+    ++k;
+  }
+  REQUIRE(k < shnum);
+  {
+    std::vector<uint8_t> v = b;
+    const size_t at = size_t(shoff + k * shent);
+    const uint64_t over = uint64_t(v.size()) - u64(at + 24) + 1;
+    std::memcpy(v.data() + at + 32, &over, 8);
+    CHECK(defect(v, v.size()) == "section " + std::to_string(k) + " past the end");
+  }
+  // A segment running past the end.
+  {
+    std::vector<uint8_t> v = b;
+    const size_t at = size_t(u64(32));
+    const uint64_t over = uint64_t(v.size()) - u64(at + 8) + 1;
+    std::memcpy(v.data() + at + 32, &over, 8);
+    CHECK(defect(v, v.size()) == "segment 0 past the end");
+  }
+  // The half file dev_reload writes, and the injected damage, are both refused.
+  CHECK(defect(b, b.size() / 2) != "");
+  CHECK(cubin_layout_defect(load_module_image("generate_camera", true).bytes.data(), b.size()) == "no ELF magic");
 }
 
 TEST_CASE("device_failures/old driver refused") {
