@@ -11,7 +11,7 @@ Do:
 4. CLI: when the bench times out or the session pauses, print the context's committed, pending and active generation and the session state, and exit non-zero.
 Acceptance: `pwsh tools/check.ps1 gate` passes; 5 consecutive B-5M benches complete, with activation times pasted; B-19 and B-14 on B-5M measured once after the fix, with 123's method (paste the rows; compare with 134's B-1M rows).
 Look at: none.
-Canary: tasks/136.canary.patch must turn red: the new test (name it in land format).
+Canary: tasks/136.canary.patch must turn red: astroray_tests_cpu "scene/generation 1 of a 2001-geometry scene activates" (rename to the case you write; keep this format).
 Budget: under 2 s of gate time for the new test.
 Depends on: 134.
 Size: S-M (about 150 lines); stop and report at 2x, or after Do 2 if the cause lies outside Scope.
