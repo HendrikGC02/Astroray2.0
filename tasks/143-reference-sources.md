@@ -17,3 +17,4 @@ Budget: gate +0 s (lint only; the fetch runs in no tier); disk: the four snapsho
 Depends on: none.
 Size: S-M (about 150 lines of PowerShell and Python, three cases); stop and report at 2x.
 Progress:
+- 143 implemented: fetch.ps1 refs, refs.toml (Cycles tag v5.3.0 exists), lint section refs +3 cases, 0009 d6 sentence, canary patch.
