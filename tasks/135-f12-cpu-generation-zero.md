@@ -11,10 +11,13 @@ Do:
 4. Tests: the headless F12 CPU test on the textured scene asserts a non-black image and `active_generation >= committed`; the session test covers the latch rule on CPU without Blender.
 Acceptance: `pwsh tools/check.ps1 gate` passes; the new tests pass; B-TX through `<python> tools/gallery.py --milestone M1a --scene b_tx` on 100's branch (or the same F12 call) gives a CPU image whose mean is within 10 % of the CUDA image's; paste both means.
 Look at: none (100 shows the image).
-Canary: tasks/135.canary.patch must turn red: the new headless and session tests (name them in land format).
+Canary: tasks/135.canary.patch must turn red: astroray_tests_cpu "session/final session waits for the generation committed before start", astroray_tests_cpu "session/final session fails loudly when its start generation is dropped", python -I tests/blender/headless/test_render_final_cpu.py TestF12Cpu.test_textured_scene_renders_the_committed_generation.
 Budget: under 2 s of gate time for the new tests.
 Depends on: none.
 Size: S-M (about 120 lines); stop and report at 2x, or after Do 2 if the fix needs an ABI change.
 Progress:
 - Do 1 (320x180, 8 spp, F12 via the installed addon): CPU first wait sees CONVERGED, spp 1, active 0, pending 1, epoch 1 at t=0.009 s, mean 0; CUDA sees INITIALIZING then active 1 at 0.22 s, CONVERGED 8 spp, mean 0.3225.
 - Do 2 mechanism: render() starts the session right after the commit; the CPU session's first latch (before generation 1's image jobs finish) pins generation 0, which has no tables, so pass_camera_samples is 0 and converged_locked's "no work" rule idles it CONVERGED after one empty pass; F12's loop exits on that first CONVERGED. Activation later wakes the session, but nobody waits. CUDA allocates long enough that generation 1 is active at its first latch. Breaks 0007 d25 (the final session renders the generation committed before it started) and rule 5 (black frame, no entry). Not an activation failure: failed_generation 0.
+- Do 3: a FINAL session records the scene's pending generation at start() and latches nothing until it is active or dropped (session.cpp/.h); the tracker now notifies listeners on a drop too, so the waiting session wakes and converges with GENERATION_REJECTED (generation.cpp/.h); render_final raises if the session converged below update()'s generation. Viewport sessions unchanged (they are woken by activation and keep drawing). No ABI change.
+- Do 4: session tests (activate and drop) 0.14 s + 0.11 s; headless F12 CPU test 0.6 s (2048^2 noise PNG). Canary (the wait branch removed) turns all three red; dropping only the tracker notify hangs the drop test (wait 5 s fails).
+- Acceptance: s3_textured F12 320x180 8 spp: CPU mean 0.32251, CUDA mean 0.32251 (both active 1). Diff 312 lines (tests 270), over 2x Size.
