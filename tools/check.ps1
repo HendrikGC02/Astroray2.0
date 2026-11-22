@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # tools/check.ps1 fast|gate|full|ci [-Declared "name:regs=+0,stack=+16;..."]
-# fast: the 10 s loop (0009 d10): lint, incremental CPU test build, deterministic tests.
+# fast: the 10 s loop (0009 d10): lint, incremental CPU test build (outside the timed window), deterministic tests.
 # No machine lock (d8); the tree lock on out/build is held while the tests run (build.ps1 takes
 # it for the build itself). Limits come from tools/budgets.toml: B-08 (tier), B-12 (one test).
 # Output: at most 20 lines, last line "PASS fast <s> s (budget 10 s, waited <w> s)" or "FAIL fast ...";
@@ -313,7 +313,10 @@ $global:LASTEXITCODE = 1
     }
     $r = Step 'build' { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_tests_cpu -Preset $(if ($isCi) { 'cpu' } else { 'dev' }) -NoMachineLock -Jobs 4 }
     $bj = Join-Path $root 'out/check/build.json'
-    if (Test-Path $bj) { $w = [double](Get-Content $bj -Raw | ConvertFrom-Json).waited; $waited += $w; Add-ArExcluded $w }
+    if (Test-Path $bj) { $waited += [double](Get-Content $bj -Raw | ConvertFrom-Json).waited }
+    # B-08 times lint and tests. The build step (its lock wait included) leaves the tier clock: a rebuild
+    # after a header edit or a rebase is not this change's test time; build time has rows B-02 and B-03.
+    Add-ArExcluded ([double]$script:ArSteps[-1].seconds)
     if ($r.Code -ne 0) {
       Show-Tail $r 5
       Fail 'build failed (out/check/build.log)'

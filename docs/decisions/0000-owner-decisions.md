@@ -65,3 +65,12 @@ Decisions made by the owner. Later records build on these; they change only if t
 ## 2026-11-19, M1a
 
 35. **V7a inside the process.** V7a (0007 d35, the first-frame gate) is measured inside Blender's process instead of by screen capture, which cannot see Blender's window on the build machine; ruling 83 defines it. The 1.5x gate (decision 23) is unchanged.
+
+## 2026-11-23, after M1a
+
+36. **Process changes by the planning session (confirm at next owner check).** The owner's instruction for the M1b planning session, as relayed by the lead: "It will also apply any changes to agents, hooks, connectors, and any tooling etc. that will improve how development is conducted and allow it to be sped up. All agents including you are allowed and encouraged to also use the deepseek models from opencode to offload some usage". Applied under it, each reversible by the owner, evidence in `docs/retro/M1a-retrospective.md`:
+    - B-08 times lint and tests; the build step is outside the timed window (retrospective R1: 60+ false failures). The 10 s limit is unchanged. 0009 d10 and the B-08 row carry it.
+    - Implementers are limited per lane, not globally: any number of CPU-only tasks the lead can rule for, one GPU lane, one Blender lane (R17; replaces 0009 d27's "at most two", already lifted by decision 31).
+    - The reviewer also reads the canary patch and main sources and gives PASS, PASS WITH FIXES or FAIL (R9). The implementer file carries the brief boilerplate (R4).
+    - The open-weight worker of decision 32 is `tools/lead/deepseek.sh` (opencode, DeepSeek); repository text only.
+    Not applied, waiting for the owner's own word: any change to `.claude/settings.json` (hooks, permission allow or deny lists), CLAUDE.md's rules, and the lint caps of 0009 d31. The proposal is on branch `process/guards`.
