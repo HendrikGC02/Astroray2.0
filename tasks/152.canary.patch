@@ -1,0 +1,35 @@
+diff --git a/src/kernel/medium/medium.h b/src/kernel/medium/medium.h
+index b501684..514c964 100644
+--- a/src/kernel/medium/medium.h
++++ b/src/kernel/medium/medium.h
+@@ -87,7 +87,7 @@ AR_FN Spec medium_sigma_t(const MediumSample& s) { return s.sigma_a + s.sigma_s;
+ AR_FN Spec medium_transmittance(const MediumSample& s, Real dist) {
+   const Spec st = medium_sigma_t(s);
+   Spec t;
+-  for (int i = 0; i < kLanes; ++i) t.v[i] = ar::exp(-st.v[i] * dist);
++  for (int i = 0; i < kLanes; ++i) t.v[i] = ar::exp(-s.sigma_a.v[i] * dist);
+   return t;
+ }
+ 
+diff --git a/src/kernel/medium/phase.h b/src/kernel/medium/phase.h
+index af56070..1b1415b 100644
+--- a/src/kernel/medium/phase.h
++++ b/src/kernel/medium/phase.h
+@@ -62,7 +62,7 @@ AR_FN Real phase_eval(const PhaseLobe& lobe, Real3 wo, Real3 wi) {
+     const Real3 h = wo - wi;
+     d = (Real(1) + g) * (Real(1) + g) - g * dot(h, h);
+   }
+-  return kPhaseInv4Pi * (Real(1) - g * g) / (d * ar::sqrt(d));
++  return kPhaseInv4Pi * (Real(1) - g * g) / (d * ar::sqrt(d)) * Real(1.001);
+ }
+ 
+ AR_FN Real phase_pdf(const PhaseLobe& lobe, Real3 wo, Real3 wi) { return phase_eval(lobe, wo, wi); }
+@@ -76,7 +76,7 @@ AR_FN PhaseSample phase_sample(const PhaseLobe& lobe, Real3 wo, Real2 u) {
+   // Take mu from whichever side is nearer, so the rounding of 1 - mu or 1 + mu stays relative.
+   const Real mu = one_minus_mu < one_plus_mu ? Real(1) - one_minus_mu : one_plus_mu - Real(1);
+   const Real sin_theta = ar::sqrt(one_minus_mu * one_plus_mu);
+-  const Real phi_turns = Real(2) * u.y;
++  const Real phi_turns = Real(2) * u.y * u.y;
+   const Frame f = frame_from_normal(-wo);
+   PhaseSample s;
+   s.wi = to_world(f, Real3{sin_theta * ar::cospi(phi_turns), sin_theta * ar::sinpi(phi_turns), mu});
