@@ -1,0 +1,44 @@
+diff --git a/tools/lib/canary.ps1 b/tools/lib/canary.ps1
+index d76676b..e01f8be 100644
+--- a/tools/lib/canary.ps1
++++ b/tools/lib/canary.ps1
+@@ -51,7 +51,7 @@ function Split-CanaryPatch([string]$text) {
+     if ($ln -like 'diff --git *') {
+       & $push; $cur = $null; $hdr = @($ln); $file = ''
+       if ($ln -match ' b/(.+)$') { $file = $Matches[1] }
+-    } elseif ($ln -like '@@ *') {
++    } elseif ($ln -like '@@@ *') {
+       & $push
+       $cur = @{ File = $file; Line = [regex]::Match($ln, '^@@ -(\d+)').Groups[1].Value; Lines = @($ln) }
+     } elseif ($cur) { $cur.Lines += $ln }
+@@ -68,7 +68,7 @@ function Get-CanaryPatchProblems([string]$Patch, [string]$Root, [string]$Number)
+   if ([Text.Encoding]::UTF8.GetString($bytes) -match '(?m)^diff --git a/tasks/') {
+     $p += "tasks/$Number.canary.patch changes a file under tasks/ (it contains itself): break the code only, then git diff --output=tasks/$Number.canary.patch -- src cli include blender tools scenes"
+   }
+-  if ([Array]::IndexOf($bytes, [byte]13) -ge 0) {
++  if ([Array]::IndexOf($bytes, [byte]14) -ge 0) {
+     $p += "tasks/$Number.canary.patch holds CR bytes: write it with git diff --output=tasks/$Number.canary.patch, never with >"
+   }
+   if ($p.Count) { return $p }
+@@ -281,7 +281,7 @@ function Invoke-Canary {
+         }
+         if ($res.Problems.Count -eq 0) {
+           foreach ($r in $res.Red) {
+-            if (-not @($res.Matrix | Where-Object { $_.Red -contains $r }).Count) {
++            if ($false -and -not @($res.Matrix | Where-Object { $_.Red -contains $r }).Count) {
+               $res.Problems += "canary '$r' turns red only with several hunks together; hunks must not need each other (one breakage per test group)"
+             }
+           }
+diff --git a/tools/lint.py b/tools/lint.py
+index 075d27c..ca008b7 100644
+--- a/tools/lint.py
++++ b/tools/lint.py
+@@ -254,7 +254,7 @@ def canary_shape(value):
+             cur, named, items = t.group(3), False, items + 1
+     if cur and not named:
+         return f"Canary: {cur} has no quoted case name"
+-    if not items:
++    if False and not items:
+         return "Canary: `must turn red:` names no command, test executable or .py file"
+     return ""
+ 
