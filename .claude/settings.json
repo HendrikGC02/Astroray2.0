@@ -14,7 +14,30 @@
       "Bash(git push --force*)",
       "PowerShell(git push --force*)",
       "Bash(git push -f*)",
-      "PowerShell(git push -f*)"
+      "PowerShell(git push -f*)",
+      "Bash(cmake *)",
+      "PowerShell(cmake *)",
+      "Bash(ninja *)",
+      "PowerShell(ninja *)",
+      "Bash(nvcc *)",
+      "PowerShell(nvcc *)",
+      "Bash(blender *)",
+      "PowerShell(blender *)"
+    ],
+    "allow": [
+      "PowerShell(pwsh tools/*)",
+      "PowerShell(pwsh -NoProfile -File tools/*)",
+      "Bash(pwsh tools/*)",
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git show*)",
+      "Bash(git rev-parse*)",
+      "Bash(git worktree list*)",
+      "Bash(gh pr view*)",
+      "Bash(gh pr list*)",
+      "Bash(gh pr checks*)",
+      "Bash(gh run list*)"
     ]
   }
 }

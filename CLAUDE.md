@@ -19,9 +19,11 @@ commands and paste the last lines. A failed budget, size or lint check is yours
 to fix, never to raise.
 
 ## Rules
-1. Your task is `tasks/NNN-*.md`. Change only files in its Scope. If the task
-   has two readings or a simpler design exists, say so before coding. Report
-   unrelated problems; do not fix them.
+1. Your task is `tasks/NNN-*.md`. Change only files in its Scope, plus what
+   its change forces: its own budget and counter rows, registration lists, and
+   existing tests it breaks; name each in your report. If the task has two
+   readings or a simpler design exists, say so before coding. Report unrelated
+   problems; do not fix them.
 2. In a worktree, first check `git rev-parse --show-toplevel` is that worktree.
    Commit work in progress after each acceptance step. Never `git stash`.
 3. Physics, sampling, numerics: implement from the source the task names and
