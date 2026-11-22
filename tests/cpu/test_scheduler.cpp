@@ -294,8 +294,8 @@ TEST_CASE("scheduler/shadow range under a starved shadow pool") {
   check_shadow_range(5000, 3000, 1u << 10, 64);
 }
 
-// Two runs of one stub workload: the marks falling to the step table's live_end (task 134) and the
-// marks only growing (keep_high_water, RULINGS 84 as 133 built it). Same slots in the same order, so
+// Two runs of one stub workload: the marks falling to the step table's live_end (RULINGS 85) and the
+// marks only growing (keep_high_water, RULINGS 84 alone). Same slots in the same order, so
 // outcomes, deliveries and every counter agree; the lowered run partitions fewer items.
 void check_live_range(uint32_t cameras, uint32_t lights, uint64_t capacity, uint64_t shadow_capacity) {
   Rig lowered(cameras, lights, capacity);
@@ -310,6 +310,9 @@ void check_live_range(uint32_t cameras, uint32_t lights, uint64_t capacity, uint
   const PassCounters& b = kept.sched->counters();
   CHECK(std::memcmp(&a, &b, sizeof a) == 0);
   CHECK(lowered.sched->partitioned_items() < kept.sched->partitioned_items());
+  // Per pool: the main mark falls too. Every path ends, so its tiles go dead while shadow items still
+  // run, and the lowered main range is smaller (the shadow pool alone cannot satisfy this).
+  CHECK(lowered.sched->partitioned_main_items() < kept.sched->partitioned_main_items());
   // The pass drains, so the last partition finds nothing live: the lowered shadow mark ends at 0.
   CHECK(lowered.sched->shadow_high_water() == 0);
   CHECK(kept.sched->shadow_high_water() > 0);

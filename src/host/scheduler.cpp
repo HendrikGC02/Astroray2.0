@@ -244,6 +244,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
   uint32_t hw_shadow = full_range ? uint32_t(shadow_cap) : 0u;
   shadow_high_water_ = hw_shadow;
   partitioned_items_ = 0;
+  partitioned_main_items_ = 0;
   uint32_t hw_main = 0;
   uint64_t next_work = 0;
   device_.memset(step_buf_, 0, 0, sizeof(ar::StepTable));
@@ -280,6 +281,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
                   "high_water, shadow_capacity and live_end go up in one upload");
     device_.upload_async(step_buf_, offsetof(ar::StepTable, high_water), hw, sizeof hw);
     partitioned_items_ += uint64_t(hw_main) + hw_shadow;
+    partitioned_main_items_ += hw_main;
     // The CPU splits queue_build_grid's item range into tiles; a GPU warp takes one tile.
     const uint32_t grid = gpu_ ? ar::gpu_tile_grid(hw_main) + ar::gpu_tile_grid(hw_shadow)
                                : ar::queue_build_grid(hw_main, hw_shadow);

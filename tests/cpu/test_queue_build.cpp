@@ -665,7 +665,7 @@ TEST_CASE("queue_build/shadow range grows by its fresh slots") {
 }
 
 TEST_CASE("queue_build/live_end is the end of the last tile with a live slot") {
-  // Task 134: per pool, the end of the last kQueueTile tile below the mark holding a slot that is not
+  // RULINGS 85: per pool, the end of the last kQueueTile tile below the mark holding a slot that is not
   // the pool's TERMINATED value (the largest such slot + 1 rounded up to its tile's end, the last tile
   // ending at the mark), computed here the slow way, on random pools whose tail from a cut on is
   // terminated. 40 tiles per pool make 80 histogram rows, three scan tiles of 32 with the pool

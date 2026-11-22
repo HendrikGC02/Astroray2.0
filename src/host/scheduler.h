@@ -15,7 +15,7 @@
 //    table's live_end (every slot above it is terminated, step_table.h) plus the slots the step
 //    takes beyond it: the shadow reservation or the refill. The free list, and so every slot
 //    assignment, is the same as with marks that only grow; queue entries at or above the lowered
-//    mark already read as the identity, so the fresh-entry contract holds (task 134).
+//    mark already read as the identity, so the fresh-entry contract holds (RULINGS 85).
 //  - Refill: the free-slot list is the main TERMINATED segment followed by those fresh
 //    entries. Before each generate launch the host rewrites the device's
 //    stage[TERMINATED] entry to describe that launch only: start = its first free-slot entry
@@ -27,7 +27,7 @@
 //  - A GPU generate launch must not start before the stage[TERMINATED] entry upload has
 //    completed on the same stream (both are enqueued in order on the device's one stream).
 //  - After sort, the sorted indices replace the SHADE_SURFACE segment of main_queue.
-// Ref: docs/decisions/0002-kernel-architecture.md D5-D8, D12; RULINGS 84 (amended by task 134); Cycles
+// Ref: docs/decisions/0002-kernel-architecture.md D5-D8, D12; RULINGS 84, 85; Cycles
 // integrator/path_trace_work_gpu.cpp (Apache-2.0) for the refill rule.
 #pragma once
 #include <atomic>
@@ -65,7 +65,7 @@ struct SchedulerConfig {
   // Tests: partition the whole shadow pool every step, as before RULINGS 84 (the free list is then
   // the same slots in the same order, so results are identical); AR_DEBUG_SHADOW_FULL_RANGE.
   bool shadow_full_range = false;
-  // Tests: the high-water marks only grow, as under RULINGS 84 before task 134, instead of falling
+  // Tests: the high-water marks only grow (RULINGS 84 without 85's lowering) instead of falling
   // to the step table's live_end (the free list is the same slots in the same order either way, so
   // results are identical); AR_DEBUG_KEEP_HIGH_WATER. shadow_full_range implies it for the shadow pool.
   bool keep_high_water = false;
@@ -102,8 +102,9 @@ class Scheduler {
   uint64_t capacity() const { return capacity_; }
   // The shadow pool's high-water mark at the end of the last pass (tests).
   uint32_t shadow_high_water() const { return shadow_high_water_; }
-  // Items partitioned in the last pass, both pools' ranges summed over its steps (tests).
+  // Items partitioned in the last pass, both pools' ranges summed over its steps, and the main pool's (tests).
   uint64_t partitioned_items() const { return partitioned_items_; }
+  uint64_t partitioned_main_items() const { return partitioned_main_items_; }
 
  private:
   void ensure_buffers(uint64_t capacity, uint64_t shadow_capacity);
@@ -126,6 +127,7 @@ class Scheduler {
   bool keep_high_water_ = false;
   uint32_t shadow_high_water_ = 0;
   uint64_t partitioned_items_ = 0;
+  uint64_t partitioned_main_items_ = 0;
   bool gpu_ = false;  // the device is CUDA: tiled kernels get a warp per tile (gpu_tile_grid, queue_build.h)
   uint64_t permute_state_ = 0;
   std::vector<uint32_t> launched_;  // stages launched in the current step, in order

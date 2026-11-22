@@ -28,7 +28,7 @@
 //    live_end[p] on are live_end[p], live_end[p] + 1, ...: the free list is the same slots in the
 //    same order whether the high-water mark is high_water[p] or live_end[p], and the host may lower
 //    the mark to live_end[p] (plus the fresh slots the step takes) for the next partition
-//    (RULINGS 84 as amended by task 134).
+//    (RULINGS 85).
 //  - stage[s].start indexes the queue array of the stage's pool (main_queue for main-pool
 //    stages, shadow_queue for INTERSECT_SHADOW, SHADE_SHADOW and SHADOW_TERMINATED).
 //  - stage[s].count is the launch count: the segment length, except for a shadow producer
@@ -48,8 +48,8 @@
 //    in no segment; the host must fail the render when it is not zero (no silent fallback).
 // Ref: docs/decisions/0002-kernel-architecture.md D5 (deterministic, atomic-free shadow
 // slot assignment), D6 (partition, step table), D7 step 2 (read back under 256 B);
-// docs/decisions/RULINGS.md 84 (the shadow free list's fresh tail; task 134's amendment: the mark
-// may fall to the largest live slot + 1);
+// docs/decisions/RULINGS.md 84 (the shadow free list's fresh tail), 85 (the mark
+// falls to the end of the last tile holding a live slot);
 // docs/decisions/0003-spectral-model-and-path-state.md d19-d20.
 #pragma once
 #include <cstdint>
