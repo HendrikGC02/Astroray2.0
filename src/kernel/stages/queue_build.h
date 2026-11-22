@@ -211,18 +211,32 @@ AR_FN void scan_rows_tile(uint32_t* counts, uint32_t rows, uint32_t bins, uint32
 AR_FN void queue_scan_tile(const KernelGlobals& kg, uint32_t u, uint32_t lane, uint32_t lanes) {
   uint32_t* counts = kg.queue_counts;
   const uint32_t tiles = queue_tile_count(kg);
-  constexpr uint32_t kDeadMain = static_cast<uint32_t>(Stage::TERMINATED);
-  constexpr uint32_t kDeadShadow = static_cast<uint32_t>(Stage::SHADOW_TERMINATED);
-  for (uint32_t b = lane; b < kQueueBins; b += lanes) {
-    if (b != kDeadMain && b != kDeadShadow) continue;
-    const Pool pool = b == kDeadMain ? Pool::MAIN : Pool::SHADOW;
+  {
+    // The units take the scan tile's rows a round at a time; per pool and round the unit with the last
+    // row holding a live slot keeps that tile's end.
+    uint32_t end[kPoolCount] = {0u, 0u};
     const uint32_t first = u * kQueueScanRows;
-    for (uint32_t r = first + kQueueScanRows < tiles ? first + kQueueScanRows : tiles; r-- > first;) {
-      const QueueTile t = queue_tile(kg, r);
-      if (t.pool != pool || counts[uint64_t(r) * kQueueBins + b] == t.last - t.first) continue;
-      atomic_max(const_cast<uint32_t*>(&kg.step_table->live_end[static_cast<uint32_t>(pool)]), t.last);
-      break;
+    const uint32_t last = first + kQueueScanRows < tiles ? first + kQueueScanRows : tiles;
+    for (uint32_t base = first; base < last; base += lanes) {
+      const uint32_t r = base + lane;
+      bool live = false;
+      uint32_t tile_end = 0;
+      Pool pool = Pool::MAIN;
+      if (r < last) {
+        const QueueTile t = queue_tile(kg, r);
+        const uint32_t dead = static_cast<uint32_t>(t.pool == Pool::MAIN ? Stage::TERMINATED : Stage::SHADOW_TERMINATED);
+        live = counts[uint64_t(r) * kQueueBins + dead] != t.last - t.first;
+        tile_end = t.last;
+        pool = t.pool;
+      }
+      for (uint32_t p = 0; p < kPoolCount; ++p) {
+        const uint32_t votes = ballot(live && static_cast<uint32_t>(pool) == p);
+        if ((votes >> lane) == 1u) end[p] = tile_end;  // this unit holds the round's last live row
+      }
     }
+    // end[p] sits with the unit that held the pool's last live row; the max collects it in any unit.
+    for (uint32_t p = 0; p < kPoolCount; ++p)
+      if (end[p] != 0) atomic_max(const_cast<uint32_t*>(&kg.step_table->live_end[p]), end[p]);
   }
   scan_rows_tile(counts, tiles, kQueueBins, u, lane, lanes);
   if (u + 1u != queue_scan_tiles(tiles) || lane != 0) return;
