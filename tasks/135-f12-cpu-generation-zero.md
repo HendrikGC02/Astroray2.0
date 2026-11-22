@@ -1,0 +1,18 @@
+# 135 F12 on CPU renders generation 0 for the textured scene (black frame, no report entry)
+Goal: task 100's gallery found that F12 through the addon on CPU renders B-TX (S3, textured) black: the final session reaches CONVERGED at 1 spp with `active_generation 0` and `pending_generation 1`, image mean 0, and no report entry. CUDA F12 on the same .blend renders correctly (`active_generation 1`, mean 0.32), and `astroray_cli render` of the same recording on CPU is correct (mean 0.28-0.37). A final render that never shows the committed scene, silently, breaks M1a's "textured meshes in F12 on CUDA and CPU" and CLAUDE.md rule 5 -> find why the CPU final session latches and converges before generation 1 activates, fix it at the cause, and add a test that turns red on it.
+Read first: 0007 d9, d11-d14, d25 (generations, latch, retirement); RULINGS 69, 70 (generation numbers of latched views; device uploads and their failure); 0001 D2 (session and progress API); blender/astroray/render_final.py; src/host/session/latch.{h,cpp}, src/host/scene/generation.{h,cpp}; task 110's image ingest (src/host files that build image arrays at activation); 100's debug notes (branch task/100-m1a-gallery-report, tasks/100-m1a-gallery-report.md Progress).
+Scope: blender/astroray/render_final.py and the src/host/session/ and src/host/scene/ files the cause lies in (name each in the PR); tests/blender/headless (an F12 CPU test on a textured scene) and tests/cpu (a session test: a final session never converges on a generation older than the one committed before it started, or it fails loudly); include/astroray.h only if the fix needs an ABI change (stop and ask first).
+Out of scope: the gallery and report (task 100); viewport sessions unless the same cause reaches them (then say so and fix both only if the fix is one change).
+Reference: 0007 d9 and d25 as written; ruling 70.
+Do:
+1. Reproduce at small size (100 used 320x180, 8 spp, `<python> tools/gallery.py --milestone M1a --scene b_tx` on its branch, or the headless addon F12 path directly) and log, per call, the context's committed, pending and active generation and the session's latched generation, on CPU and CUDA.
+2. State the mechanism (for example: the F12 path starts the session before the commit activates and convergence is judged on the empty generation; or activation of image arrays fails on CPU with no entry). Say which record line it breaks.
+3. Fix at the cause. If activation failed, it must raise its entry (ruling 70) and F12 must report the failure in Blender, never deliver a black frame as success. If it is a latch order, the final session renders the generation committed before it started (0007 d25).
+4. Tests: the headless F12 CPU test on the textured scene asserts a non-black image and `active_generation >= committed`; the session test covers the latch rule on CPU without Blender.
+Acceptance: `pwsh tools/check.ps1 gate` passes; the new tests pass; B-TX through `<python> tools/gallery.py --milestone M1a --scene b_tx` on 100's branch (or the same F12 call) gives a CPU image whose mean is within 10 % of the CUDA image's; paste both means.
+Look at: none (100 shows the image).
+Canary: tasks/135.canary.patch must turn red: the new headless and session tests (name them in land format).
+Budget: under 2 s of gate time for the new tests.
+Depends on: none.
+Size: S-M (about 120 lines); stop and report at 2x, or after Do 2 if the fix needs an ABI change.
+Progress:
