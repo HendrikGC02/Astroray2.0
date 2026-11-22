@@ -18,3 +18,4 @@ Budget: gate +0 s (lint under 0.5 s on `fast`); no kernel or compile effect.
 Depends on: none.
 Size: M (about 500 lines moved, about 100 lines of lint and cases, about 25 edited lines); stop and report at 2x of the written and edited lines, moved lines excluded.
 Progress:
+- Files: docs/decisions/0001-0009 (tails out, pointer, stale fixes), docs/history/ (9 new + 2 git mv), docs/ARCHITECTURE.md, tools/lint.py, tests/cpu/lint_cases/citations/{clean,unresolved}, tools/README.md, tasks/155.canary.patch. SKILL.md left to task 138 (open, in its Scope).
