@@ -17,3 +17,4 @@ Budget: gate +0 s expected (a fix removes work); kernels: ar_probe_m1 spills to 
 Depends on: none.
 Size: S-M (about 100 lines of source, a measurement table); stop and report at 2x, after step 3's table, or when the cause lies only in probe-only code.
 Progress:
+- Started: branch task/144-m1-probe-spills. Files expected to change: src/kernel/budget.toml (ar_probe_m1 row comment, only on step 5); a step-2 fix, if any, in src/kernel/vm/interp.h, vm/ops/*.h, stages/shade_common.h or material/lobes/*.h. Step-1 stubs in probe_m1.cu are temporary, never committed.
