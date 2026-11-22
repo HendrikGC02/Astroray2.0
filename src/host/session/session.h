@@ -154,7 +154,8 @@ class Session {
   // throws SessionUnsupported for a mode other than Beauty, Sample count and Bounce count.
   void set_view(const ar_view_desc& view);
   void set_display_mode(uint32_t mode);
-  // A scene generation became active: wakes an idle session and raises the interrupt when due.
+  // A scene generation became active or was dropped: wakes an idle session (or a final session
+  // waiting for its start generation) and raises the interrupt when due.
   // Registered as the scene's activation listener until CLOSED is published; after CLOSED the
   // session never touches the scene again, so the scene may be destroyed first (0007 d5).
   void scene_generation_activated();
@@ -217,6 +218,8 @@ class Session {
   void begin_epoch();
   void apply_view();
   bool converged_locked() const;
+  // A final session whose start generation is neither active nor dropped yet (0007 d25).
+  bool awaiting_start_generation_locked();
   uint32_t sample_limit() const;
   void bind_globals();
   // Pins the set of the scene's current snapshot; true when the pinned set changed.
@@ -298,6 +301,9 @@ class Session {
   bool started_ = false;
   bool paused_ = false;
   bool idle_ = false;
+  // FINAL: the scene's last committed generation when start() ran, 0 once it resolved. The session
+  // latches nothing before it resolves, so it never converges on an older scene (0007 d25).
+  uint64_t start_generation_ = 0;
   bool closing_ = false;
   bool exited_ = false;
   bool failed_ = false;

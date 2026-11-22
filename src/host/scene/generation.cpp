@@ -123,12 +123,12 @@ void GenerationTracker::job_started(Pending& p) {
 }
 
 // Notifies the listeners when it goes out of scope, after the tracker lock (declared after it) is
-// released, and also when the pump threw after an activation, so no wake-up is lost.
+// released, and also when the pump threw after an outcome, so no wake-up is lost.
 struct GenerationTracker::NotifyGuard {
   GenerationTracker& t;
-  bool activated = false;
+  bool resolved = false;
   ~NotifyGuard() {
-    if (activated) t.notify_listeners();
+    if (resolved) t.notify_listeners();
   }
 };
 
@@ -141,7 +141,7 @@ void GenerationTracker::job_done(const std::shared_ptr<Pending>& p, uint64_t key
     p->failed_key = key;
     p->failed_detail = fail;
   }
-  pump_locked(notify.activated);
+  pump_locked(notify.resolved);
 }
 
 uint64_t GenerationTracker::commit(const std::shared_ptr<Pending>& p, const std::function<void()>& on_commit) {
@@ -151,7 +151,7 @@ uint64_t GenerationTracker::commit(const std::shared_ptr<Pending>& p, const std:
   p->number = next_++;
   p->committed = true;
   queue_.push_back(p);
-  pump_locked(notify.activated);
+  pump_locked(notify.resolved);
   return p->number;
 }
 
@@ -160,10 +160,10 @@ void GenerationTracker::abort(const std::shared_ptr<Pending>& p) {
   std::lock_guard<std::mutex> lock(mutex_);
   p->aborted = true;
   aborted_.push_back(p);
-  pump_locked(notify.activated);
+  pump_locked(notify.resolved);
 }
 
-void GenerationTracker::pump_locked(bool& activated) {
+void GenerationTracker::pump_locked(bool& resolved) {
   // Waiters must wake even if a callback throws.
   struct Wake {
     std::condition_variable& cv;
@@ -188,13 +188,15 @@ void GenerationTracker::pump_locked(bool& activated) {
       if (drop_hook_) drop_hook_(queue_);
       ctx_.log.line("ERROR", "generation " + std::to_string(p->number) + " rejected: key " +
                                  std::to_string(p->failed_key) + ": " + p->failed_detail);
+      // A final session waits for its start generation to activate or drop (0007 d25).
+      resolved = true;
     } else {
       // Replaced subjects lose their old entries first, so entries the callbacks raise for the
       // activating generation (a material's NODE_UNSUPPORTED) survive, under a reset too.
       report_.on_generation_active(p->number, p->subjects, p->reset);
       for (auto& f : p->on_active) f();
       active_ = p->number;
-      activated = true;
+      resolved = true;
     }
   }
 }

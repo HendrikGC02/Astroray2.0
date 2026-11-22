@@ -278,6 +278,7 @@ class Job:
         self.first = True
         # Everything render() needs from Blender, read by update() (0007 d23: render() reads no scene).
         self.size, self.samples, self.layer = None, None, None
+        self.generation = None  # what update() committed: the render must show at least this (0007 d25)
         self._context = None
         self.timeline = Timeline()
 
@@ -309,6 +310,7 @@ class Job:
             self.lines, self.camera = full_sync(e, abi, self.op_id, depsgraph, scene, view_layer,
                                                 self.keymap, self.tcache, self.istate, need_camera, self.timeline,
                                                 self.checks, self.icache)
+        self.generation = e.generation
         self.timeline.mark("edit_commit")
         self.cache.remember(depsgraph, scene)
         if warning:
@@ -367,6 +369,10 @@ class Job:
         revision = self._report(engine, reported, None)
         if prog.state == abi.AR_STATE_FAILED:
             _ok(lib, 1, "the session (state FAILED)", "ar_session_last_error", s)
+        if prog.state == abi.AR_STATE_CONVERGED and prog.active_generation < self.generation:
+            # Rule 5: an image of an older scene than update() committed is a failure, never a result.
+            raise RenderFailed(f"astroray: the render converged on generation {prog.active_generation}, but update() "
+                               f"committed {self.generation} (failed generation {prog.failed_generation})")
         self._copy_combined(engine, result, w, h, final=True)
 
     def _report(self, engine, reported, revision):
