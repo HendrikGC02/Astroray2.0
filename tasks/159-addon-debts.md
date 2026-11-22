@@ -17,3 +17,8 @@ Budget: +1 s of gate at most (stop and ask above); kernel: none (host-only chang
 Depends on: none.
 Size: S (about 80 lines without tests); stop and report at 2x.
 Progress:
+- Item 2 fixed: session.cpp sets film_exposure in update_camera_and_filter (every commit starts an epoch, so no sample mixes); case "session passes/film exposure scales the display channel" sits in the gate suite (the file's), not fast.
+- Item 3 fixed: Blender 5.3 keeps use_nodes True and a node_tree on new materials, worlds and lights (set False is ignored); three reads and two api_surface.txt lines dropped; test_materials.py gained the bare-material case (outside Scope, named in the report).
+- Item 1 left: the viewport does report (WARNING "CAMERA_UNSUPPORTED: invalid camera descriptor: no camera paths are launched", the ortho projection is rejected before the ORTHO check); black frame is M4. gui_ortho.py asserts it; no camera.py change, no test_camera_sync.py.
+- Item 4: not added to ALL; CMake comment names the smoke step.
+- Canary: exposure case and test_materials bare-material case (camera line dropped from the Canary line).
