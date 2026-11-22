@@ -33,9 +33,8 @@ value stated.
 
 Do not comment on style, naming, formatting or taste. Do not suggest features.
 Say nothing about a problem you cannot point to in the diff. Files outside the
-task's Scope are a finding under 1, except the task's own budget rows,
-registration lists and existing tests that its change forces. Wrong or stale
-record text and wording are notes, never must-fix.
+task's Scope are a finding under 1. Wrong or stale record text and wording are
+notes, never must-fix.
 
 Output: must-fix findings as a numbered list, then notes (optional), then one
 line saying what you checked, then exactly one final line:

@@ -14,15 +14,15 @@ result; stop at the first line that starts with `REFUSE` or `FAIL` and report it
    `origin/main`, runs the canary patch (every item must turn red), writes
    `out/land/NNN/task.md` and `out/land/NNN/diff.patch`, commits the task-file
    deletion, pushes, runs the gate and posts `astroray/gate` on the pushed sha.
-   Until `check gate` exists (task 030) the gate is `check fast` and its
-   description starts with `fast-only`.
 2. If it prints `no PR yet`, open one: `gh pr create --base main --fill`, and name
    the incident for any new rule, agent, skill or script in the PR body (0009 d31).
-3. Review (owner decision O31): kernel, physics, sampling, ABI and process diffs
-   need the reviewer. Spawn the `reviewer` agent with only the two paths
-   `out/land/NNN/task.md` and `out/land/NNN/diff.patch`. Its last line is
-   `VERDICT: PASS` or `VERDICT: FAIL`; on FAIL send the findings back to the
-   implementer, do not merge. For any other diff skip the reviewer.
+3. Review (owner decision O31): kernel, physics, sampling, ABI, concurrency and
+   process diffs, and any diff that edits a record, need the reviewer. Spawn the
+   `reviewer` agent on `out/land/NNN/` (`task.md`, `diff.patch`, `canary.patch`
+   when present). Its last line is `VERDICT: PASS`, `PASS WITH FIXES` or `FAIL`.
+   FAIL: findings back to the implementer, do not merge, review again. PASS WITH
+   FIXES: the implementer fixes, you read the fix diff, then go on. For any other
+   diff skip the reviewer.
 4. If the task has `Look at:` other than `none`, open every evidence PNG with
    Read and write what you saw in a PR comment starting with `evidence:`.
 5. Comment on the PR as the lead, one line each, with the gated sha from

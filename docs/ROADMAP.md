@@ -9,15 +9,15 @@ Milestones are decided only here (G1). This page says **when**; what and how bel
 3. **Order.** A vertical slice through the real architecture first, then one stage family per milestone, each built on landed, gated code. Every unproven number is measured in the milestone that first depends on it, with a pass line and a fallback (see Measurements). Each PROVISIONAL budget is reset from measurement in the milestone that first measures it, not at release.
 4. **Scenes.** Exit criteria use only scene-builder scenes (`scenes/`, 0009) and manifest assets. Scenes the owner models (research 16 "Gaps") are gallery additions when they exist; agents build a simplified scene-builder version of each gap scene a milestone shows, so no milestone waits on the owner.
 5. **Features land on.** Every user-facing feature lands either on by default (Blender's default where a Cycles setting matches) or with a written default, its reason and the condition or owner decision for turning it on (example: DLSS stays off until spike F part B passes, 0008 V12). Either way a test shows that toggling it changes the image or the counters (0006 V5 style). A feature that cannot pass that test has not landed. v1 ended with landed features switched off.
-6. **Size** counts task files (0009 d28): S under 10, M 10-25, L 25-50. No calendar dates.
+6. **Size** counts task files (0009 d28): S under 10, M 10-25, L 25-50. No calendar dates. The figures in the overview and in each milestone's "Size and risk" are the pre-build estimates; M1a needed 135 task files against 25 (5.4x: 4.4x in decomposition, then 22% added by measurements and gaps). Until a milestone has its own plan, read its size as the estimate times 4.4 to 5.4, built in slices of 15-30 tasks with a review between slices, a fifth of each slice held for follow-ups, and at most two remedy tasks per budget row before the owner decides (`docs/retro/M1a-retrospective.md` R8, R13). Each milestone gets a planning session that writes its plan and only its first batch of task files (M1b: `docs/PLAN-M1b.md`).
 
 ## Overview
 
 | M | Name | The owner sees | Size | Main risk |
 |---|---|---|---|---|
 | — | Before M1a | spike F part A and spike G reports; owner answers | S (~4) | DLSS unavailable; grid route fails |
-| M1a | First pixels | textured, lamp-lit meshes in the viewport on CUDA and CPU; heat maps | 111 task files (`tasks/`; see note) | wavefront overhead; first frame with materials |
-| M1b | First light | HDRI world, metal, alpha foliage, a grating card, a test medium, final OIDN | M (~22) | register growth as the must-exist set fills in |
+| M1a | First pixels | textured, lamp-lit meshes in the viewport on CUDA and CPU; heat maps | 135 task files landed (25 estimated, 111 at sign-off); built, close waits on the owner (B-19 idle, B-20, B-31) | wavefront overhead; first frame with materials |
+| M1b | First light | HDRI world, metal, alpha foliage, a grating card, a test medium, final OIDN | 110-135 planned in five slices (~22 estimated; `docs/PLAN-M1b.md`) | register growth as the must-exist set fills in |
 | M2 | Lobes, shadows and media | every OpenPBR lobe, transparent shadows, homogeneous media, the viewport controller and denoiser | M (~25) | shade-kernel spills at full lobe scope |
 | M3 | Nodes and textures | procedural and colour nodes, filtered textures, Classroom's materials with coverage | M (~24) | node lowering and corpus translation time |
 | M4 | Lights, sky, spectra and cameras | all lamp types, sky and sun, spectral lamps and metals, light tree, every camera model | L (~32) | light-tree quality and build time |
@@ -78,7 +78,7 @@ Spike F part A (0008 V12; CHECKPOINT-1 requires it before sign-off) and spike G 
 
 **Measurements inside.** OIDN on sm_120 (0008 Risk 3); guide register cost (Risk 2); B-14 and V7a with environment sampling and tree traversal on; the hero-lane variance over the test slab.
 
-**Depends on.** M1a, spike C settled if it ran. **Size and risk.** M, about 22. Main risk: tracking, traversal and guides together push `shade_surface` over its allowances; the 0002 D10 ladder applies before M2 starts.
+**Depends on.** M1a, spike C settled if it ran (it did not run: B-14 passes on B-1M). **Size and risk.** Estimated M, about 22; planned at 110-135 task files in five slices: tooling and debts, materials, world with lights, guides and denoise, media core, close (`docs/PLAN-M1b.md`). Main risk: tracking, traversal and guides together push `shade_surface` over its allowances; the 0002 D10 ladder applies before M2 starts. The plan orders every edit of `shade_surface` in one queue and gates each on the kernel's budget row, so the risk shows at the edit that causes it, not at the close. Added to M1b from M1a's retrospective: the canary and landing tools, a performance regression check (`check perf`), an F12 gate on both devices, and gate-time headroom under B-09.
 
 ## M2 — Lobes, shadows and media
 
@@ -228,7 +228,7 @@ Spike F part A (0008 V12; CHECKPOINT-1 requires it before sign-off) and spike G 
 
 | Id | Question | Where | Pass | On a negative result |
 |---|---|---|---|---|
-| Wavefront overhead | GPU idle and partition share of a 1080p 1 spp pass (0002 D7) | M1a | B-19, B-17, B-14 on B-1M | 0002 D7 remedy (a), then (b), (c), before M1a closes; if B-14 still fails on B-1M, run spike C (megakernel viewport prototype) and settle a superseding 0002 record before M1b starts. Spike C does not run otherwise |
+| Wavefront overhead | GPU idle and partition share of a 1080p 1 spp pass (0002 D7) | M1a | B-19, B-17, B-14 on B-1M | 0002 D7 remedy (a), then (b), (c), before M1a closes; if B-14 still fails on B-1M, run spike C (megakernel viewport prototype) and settle a superseding 0002 record before M1b starts. Spike C does not run otherwise. Result (rulings 79, 80, 84, 85): remedies taken in the order of measured cost, (c), the sort scan, (a) as stream-ordered transfers, (b) measured and not built; B-14 and B-17 met, partition 9.4 % met on B-1M, idle 11.0 % against 10 % open for the owner, B-5M unmeasured until task 136; spike C not run. Re-measured at M1b's close and after every landing that touches the scheduler (`check perf`) |
 | First frame | V7a/V7b with materials, textures and lights (0007 d35) | M1a, every close | ≤ 1.5x Cycles | 0007 d35 remedies in order (`as_pointer()` topology reads, GAS disk cache, earlier parallel inlining) before more sync cost is added |
 | OptiX cold compile | B-18 cold, incl. the motion pipeline variant | M1a | B-18 | split modules or cache compiled pipelines before M1b; motion variant compiled lazily on first use |
 | M-1 | Record, register file, VM, all lobes in the capped fused kernel (0005) | probe M1a; ratified M1b, M2 | 0002 D10 allowances | M1a probe: a gate-only TU with the real record, register file and `ops.def` dispatch, spike A's lobes standing in. Stack fails: fp16 record scalars (−48 B). Spills fail: 0002 D10 ladder |

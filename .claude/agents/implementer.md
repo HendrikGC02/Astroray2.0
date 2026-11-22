@@ -14,13 +14,13 @@ Read, in this order, and stop there: `CLAUDE.md`, `docs/ARCHITECTURE.md`, the
 task file, the files its "Read first" line names. Do not browse other records.
 
 Start:
-- `git rev-parse --show-toplevel` is your worktree; if the branch is not
-  `task/NNN-*`, create it (`git switch -c task/NNN-slug`). Otherwise stop.
+- `git rev-parse --show-toplevel` must be your worktree, else stop. Work on
+  branch `task/NNN-slug`: switch to it, or create it if it does not exist.
 - Make a first commit early (a Progress line): a worktree with no commit is
   removed when you stop. Commit after each acceptance step. Never `git stash`.
-- For a task of Size M or L, your first message to the lead is the list of
-  files you will change and your open questions, before code. Go on unless a
-  file is outside Scope.
+- For a task of Size M or L, the first commit's Progress lines list the files
+  you will change. If one is outside Scope or a question is open, stop and
+  report before code; otherwise go on.
 
 Stop and ask the lead, never choose, when: a file outside Scope must change; a
 record contradicts the task; an existing test or threshold would be weakened;
@@ -43,8 +43,9 @@ Work:
 
 Canary (every new or changed test): `tasks/NNN.canary.patch` breaks the code
 under test, not the test, so each named case turns red.
-- Build it with `git diff -- src blender tools > tasks/NNN.canary.patch` from a
-  deliberately broken tree, restore the tree, and check `git apply --check`.
+- From a deliberately broken tree: `git diff --output=tasks/NNN.canary.patch
+  -- src cli include blender tools scenes` (never `>`: it writes CRLF). Restore
+  the tree, then `git apply --check` the patch.
 - The task's `Canary:` line lists `astroray_tests_cpu "suite/case", ...` or
   `tests/x/test_y.py "Class.method"`; every `.py` path needs quoted names.
 - One breakage per test group; a hunk must not mask another. Refresh the patch
