@@ -20,5 +20,5 @@ Size: M (about 500 lines moved, about 100 lines of lint and cases, about 25 edit
 Progress:
 - Files: docs/decisions/0001-0009 (tails out, pointer, stale fixes), docs/history/ (9 new + 2 git mv), docs/ARCHITECTURE.md, tools/lint.py, tests/cpu/lint_cases/citations/{clean,unresolved}, tools/README.md, tasks/155.canary.patch. SKILL.md left to task 138 (open, in its Scope).
 - Move: script check, removed = history body, joined text equal: 54 53 50 50 54 57 49 56 50 (473 lines); PLANNING_PLAN, CHECKPOINT-1 git mv (spike F part A ran, ruling 64; sign-off O30).
-- Stale: 25 CLAUDE.md rule-number citations replaced by rule names (7 more than listed: bare "(rule 7/8)" in 0001, 0002, 0006); 0009 d27 reviewer cell, open-weight worker sentence; d28 lists the 13 FIELDS.
+- Stale: 23 CLAUDE.md rule-number sites replaced by rule names (8 beyond the list: bare "(rule 7/8)" in 0001 x4, 0002 x3, 0006 x1); 0009 d27 reviewer cell, open-weight worker sentence; d28 lists the 13 FIELDS.
 - Lint citations: 453 ruling, 111 bare R, 139 owner, 349 B-row, 2 CLAUDE.md rule, 1180 record-decision citations, 0 unresolved, so the decision rule ships. docs/STATUS.md excluded (B-38 of open task 140): lead to confirm.
