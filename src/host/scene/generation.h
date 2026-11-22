@@ -109,9 +109,9 @@ class GenerationTracker {
   // Blocks until every committed generation has been activated or dropped.
   void wait_idle();
 
-  // Activation listeners: each runs after one or more generations became active, on the thread
-  // that activated them and outside the tracker lock, so it may read active(). Sessions use this
-  // to wake and to interrupt a presented pass (0007 d25). Once remove_listener returns the
+  // Outcome listeners: each runs after one or more generations became active or were dropped, on
+  // the thread that resolved them and outside the tracker lock, so it may read active() and
+  // failed(). Sessions use this to wake and to interrupt a presented pass (0007 d25). Once remove_listener returns the
   // listener never runs again (a call in flight finishes first), so its owner can be destroyed.
   using Listener = std::function<void()>;
   uint64_t add_listener(Listener listener);
@@ -121,8 +121,8 @@ class GenerationTracker {
 
  private:
   struct NotifyGuard;
-  // Sets `activated` as soon as a generation became active.
-  void pump_locked(bool& activated);
+  // Sets `resolved` as soon as a generation became active or was dropped.
+  void pump_locked(bool& resolved);
   // Listeners must not throw; one that does is logged and the others still run.
   void notify_listeners() noexcept;
   mutable std::mutex listeners_mutex_;  // held while listeners run; never taken under mutex_

@@ -152,6 +152,9 @@ void Session::start() {
   started_ = true;
   paused_ = false;
   idle_ = false;
+  // 0007 d25: F12 commits and starts at once, and a first latch before that commit's jobs finish would
+  // render the previous (often empty) generation, converge on it and end the render.
+  if (options_.mode == AR_SESSION_MODE_FINAL) start_generation_ = scene_.generations().pending();
   if (scheduler_) scheduler_->cancel = false;
   leave_paused_locked();
   wake_cv_.notify_all();
@@ -614,6 +617,15 @@ bool Session::converged_locked() const {
   return limit > 0 && stats_.samples_done >= limit;
 }
 
+bool Session::awaiting_start_generation_locked() {
+  if (start_generation_ == 0) return false;
+  // Commits resolve in order, so the start generation has resolved once it is active or rejected.
+  const GenerationTracker& g = scene_.generations();
+  if (g.active() < start_generation_ && g.failed() < start_generation_) return true;
+  start_generation_ = 0;
+  return false;
+}
+
 void Session::begin_epoch() {
   // 0004 D25 and 0007 d25: film (per-sample buffer, splat and direct channels included), statistics
   // and sample indices restart; FILM report entries go with the film.
@@ -870,6 +882,9 @@ void Session::render_loop() {
           // INITIALIZING until started.
         } else if (paused_) {
           if (state_ != AR_STATE_PAUSED) set_state_locked(AR_STATE_PAUSED);
+        } else if (awaiting_start_generation_locked()) {
+          // Woken by the scene's listener when the generation activates or is dropped; a drop has
+          // raised GENERATION_REJECTED, so the render that follows fails loudly.
         } else if (idle_) {
           if (state_ != AR_STATE_CONVERGED) set_state_locked(AR_STATE_CONVERGED);
         } else {

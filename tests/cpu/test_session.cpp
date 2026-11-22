@@ -16,6 +16,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 
 #include "device/cpu/cpu_device.h"
@@ -85,10 +86,13 @@ struct Rig {
   ThreadPool pool;
   CpuDevice dev;
   std::unique_ptr<Session> s;  // last: destroyed first
-  Rig(ContextState& ctx, Scene& scene, uint32_t size, uint64_t work, CpuKernelFn gen) : pool(ctx, 2), dev(ledger, pool) {
+  Rig(ContextState& ctx, Scene& scene, uint32_t size, uint64_t work, CpuKernelFn gen,
+      uint32_t mode = AR_SESSION_MODE_VIEWPORT)
+      : pool(ctx, 2), dev(ledger, pool) {
     dev.register_production_stages();
     if (gen) dev.register_kernel(KernelId::GENERATE_CAMERA, gen);
     SessionOptions o;
+    o.mode = mode;
     o.max_width = o.max_height = size;
     o.test_camera_samples_per_pass = work;
     s = std::make_unique<Session>(scene, dev, o);
@@ -118,6 +122,48 @@ ar_view_desc view_of(uint32_t w, uint32_t h) {
 }
 
 uint32_t state(const Session& s) { return s.progress().state; }
+
+// A scene worker job that waits until the test opens it, so its generation stays pending.
+struct JobGate {
+  std::mutex m;
+  std::condition_variable cv;
+  bool open = false;
+  void pass() {
+    std::unique_lock<std::mutex> lock(m);
+    cv.wait(lock, [&] { return open; });
+  }
+  void release() {
+    {
+      std::lock_guard<std::mutex> lock(m);
+      open = true;
+    }
+    cv.notify_all();
+  }
+};
+
+// Commits generation 1 with one item whose job waits at `gate` and then fails if `fail`; then starts
+// a FINAL session with production passes (no work, as F12 on a scene whose tables are not active yet)
+// and returns the generation. A session that latched at once would converge on generation 0.
+uint64_t commit_held_then_start(Scene& scene, Session& s, const std::shared_ptr<JobGate>& gate, bool fail) {
+  auto item = std::make_shared<EditItem>();
+  item->key = 99;
+  item->needs_device = false;
+  item->job = [gate, fail] {
+    gate->pass();
+    if (fail) throw std::runtime_error("held item fails");
+  };
+  uint64_t g = 0;
+  {
+    auto e = scene.begin_edit();
+    REQUIRE(e);
+    REQUIRE(e->stage(item) == AR_OK);
+    REQUIRE(e->item_commit(99) == AR_OK);
+    REQUIRE(e->commit(&g) == AR_OK);
+  }
+  REQUIRE(scene.generations().active() < g);
+  s.start();
+  return g;
+}
 
 }  // namespace
 
@@ -226,6 +272,56 @@ TEST_CASE("session/commit wakes a converged session") {
   CHECK(r.s->progress().active_generation == g);
   CHECK(r.s->latch().epoch() == 2);
   CHECK(r.s->stats().frames_published == 2);
+}
+
+TEST_CASE("session/final session waits for the generation committed before start") {
+  // 0007 d25: F12 commits and starts at once; the final session renders that commit, never the
+  // generation before it, however late the commit's jobs finish.
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  auto gate = std::make_shared<JobGate>();
+  Rig r(ctx, scene, 4, 0, nullptr, AR_SESSION_MODE_FINAL);
+  struct Opener {
+    std::shared_ptr<JobGate> g;
+    ~Opener() { g->release(); }  // before the rig and the scene: the worker job ends on any exit
+  } opener{gate};
+  const uint64_t g = commit_held_then_start(scene, *r.s, gate, false);
+  // A session that latched generation 0 would converge within one empty pass (well under 1 ms).
+  CHECK_FALSE(r.s->wait(100));
+  CHECK(state(*r.s) != AR_STATE_CONVERGED);
+  CHECK(r.s->stats().passes_resolved == 0);
+  gate->release();
+  REQUIRE(r.s->wait(20000));
+  CHECK(state(*r.s) == AR_STATE_CONVERGED);
+  CHECK(r.s->progress().active_generation >= g);
+  CHECK(r.s->latch().epoch() == 1);
+}
+
+TEST_CASE("session/final session fails loudly when its start generation is dropped") {
+  // The commit's job fails: the generation is dropped, the tracker's listener wakes the waiting session,
+  // and it converges on the previous generation with GENERATION_REJECTED in its report (an F12 error).
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{1, {}});
+  auto gate = std::make_shared<JobGate>();
+  Rig r(ctx, scene, 4, 0, nullptr, AR_SESSION_MODE_FINAL);
+  struct Opener {
+    std::shared_ptr<JobGate> g;
+    ~Opener() { g->release(); }
+  } opener{gate};
+  const uint64_t g = commit_held_then_start(scene, *r.s, gate, true);
+  CHECK_FALSE(r.s->wait(100));
+  gate->release();
+  REQUIRE(r.s->wait(5000));
+  CHECK(state(*r.s) == AR_STATE_CONVERGED);
+  CHECK(r.s->progress().failed_generation == g);
+  const ar_report_info info = r.s->report_snapshot();
+  bool rejected = false;
+  for (uint32_t i = 0; i < info.entry_count; ++i) {
+    ar_report_entry e{};
+    r.s->report_entry(i, &e);
+    rejected = rejected || (e.code == AR_REPORT_GENERATION_REJECTED && e.level == AR_LEVEL_ERROR);
+  }
+  CHECK(rejected);
 }
 
 TEST_CASE("session/stale epoch resolve is dropped") {
