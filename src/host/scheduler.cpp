@@ -82,6 +82,7 @@ void fill_shadow(ar::ShadowItemSoA& soa, const StateLayout& l, char* base) {
 Scheduler::Scheduler(Device& device, const SchedulerConfig& cfg) : config(cfg), device_(device) {
   permute_ = cfg.permute || env_flag("AR_DEBUG_PERMUTE");
   shadow_full_range_ = env_flag("AR_DEBUG_SHADOW_FULL_RANGE");
+  keep_high_water_ = env_flag("AR_DEBUG_KEEP_HIGH_WATER");
   gpu_ = device.kind() == AR_DEVICE_CUDA;
 }
 
@@ -238,8 +239,11 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
                                  reinterpret_cast<const char*>(shadow_buf_.ptr));
     device_.memset(shadow_buf_, at, static_cast<uint8_t>(Stage::SHADOW_TERMINATED), shadow_cap);
   }
-  uint32_t hw_shadow = (shadow_full_range_ || config.shadow_full_range) ? uint32_t(shadow_cap) : 0u;
+  const bool full_range = shadow_full_range_ || config.shadow_full_range;
+  const bool keep = keep_high_water_ || config.keep_high_water;
+  uint32_t hw_shadow = full_range ? uint32_t(shadow_cap) : 0u;
   shadow_high_water_ = hw_shadow;
+  partitioned_items_ = 0;
   uint32_t hw_main = 0;
   uint64_t next_work = 0;
   device_.memset(step_buf_, 0, 0, sizeof(ar::StepTable));
@@ -269,11 +273,13 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     const std::vector<uint32_t> prev_launched = std::move(launched_);
     launched_.clear();
     // 1. Partition both pools up to their high-water marks.
-    // high_water[MAIN], high_water[SHADOW], shadow_capacity: adjacent fields, one upload.
-    const uint32_t hw[ar::kPoolCount + 1] = {hw_main, hw_shadow, uint32_t(shadow_cap)};
-    static_assert(offsetof(ar::StepTable, shadow_capacity) == offsetof(ar::StepTable, high_water) + 8,
-                  "high_water and shadow_capacity go up in one upload");
+    // high_water[MAIN], high_water[SHADOW], shadow_capacity and live_end cleared: adjacent fields, one upload.
+    const uint32_t hw[2 * ar::kPoolCount + 1] = {hw_main, hw_shadow, uint32_t(shadow_cap), 0u, 0u};
+    static_assert(offsetof(ar::StepTable, shadow_capacity) == offsetof(ar::StepTable, high_water) + 8 &&
+                      offsetof(ar::StepTable, live_end) == offsetof(ar::StepTable, high_water) + 12,
+                  "high_water, shadow_capacity and live_end go up in one upload");
     device_.upload_async(step_buf_, offsetof(ar::StepTable, high_water), hw, sizeof hw);
+    partitioned_items_ += uint64_t(hw_main) + hw_shadow;
     // The CPU splits queue_build_grid's item range into tiles; a GPU warp takes one tile.
     const uint32_t grid = gpu_ ? ar::gpu_tile_grid(hw_main) + ar::gpu_tile_grid(hw_shadow)
                                : ar::queue_build_grid(hw_main, hw_shadow);
@@ -299,11 +305,23 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     }
     const uint32_t active_main = hw_main - t.refill_count;
     const uint32_t active_shadow = hw_shadow - t.stage[kShadowTerm].count;
-    // The producers launched below write into the fresh slots this table reserved, so the next
-    // partition covers them (step_table.h); the reservation never passes the capacity.
-    if (uint64_t(hw_shadow) + t.shadow_fresh > shadow_cap)
-      throw std::logic_error("Scheduler: the shadow reservation passes the shadow capacity");
-    hw_shadow += t.shadow_fresh;
+    // The next partition's marks start from live_end: every slot above it is terminated, and the
+    // free list from there on reads live_end, live_end + 1, ... (step_table.h), so the slots handed
+    // out are the same as with the mark kept. live_end never exceeds the mark it was counted under.
+    if (t.live_end[0] > hw_main || t.live_end[1] > hw_shadow)
+      throw std::logic_error("Scheduler: queue_build reported a live slot above the high-water mark");
+    const uint32_t low_main = keep ? hw_main : t.live_end[0];
+    const uint32_t low_shadow = keep || full_range ? hw_shadow : t.live_end[1];
+    // The producers launched below write into the reserved slots: the free slots below low_shadow
+    // first, then low_shadow, low_shadow + 1, ...; the next partition covers them. With the mark kept
+    // this adds shadow_fresh; the reservation never passes the capacity.
+    {
+      const uint32_t free_below = t.stage[kShadowTerm].count - (hw_shadow - low_shadow);
+      const uint32_t beyond = t.shadow_reserved > free_below ? t.shadow_reserved - free_below : 0u;
+      if (uint64_t(low_shadow) + beyond > shadow_cap)
+        throw std::logic_error("Scheduler: the shadow reservation passes the shadow capacity");
+      hw_shadow = low_shadow + beyond;
+    }
     shadow_high_water_ = hw_shadow;
     counters_.active_path_steps += active_main;
     counters_.peak_active_paths = std::max<uint64_t>(counters_.peak_active_paths, active_main);
@@ -352,13 +370,17 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
       };
       if (!refill(KernelId::GENERATE_CAMERA, 0, nc, uint32_t(next_work))) return status;
       if (!refill(KernelId::GENERATE_LIGHT, nc, nl, uint32_t(next_work + nc - work.camera_samples))) return status;
-      hw_main += n > t.refill_count ? uint32_t(n - t.refill_count) : 0u;
+      // The refill took the free slots below low_main first, then low_main, low_main + 1, ...
+      const uint32_t free_below = t.refill_count - (hw_main - low_main);
+      hw_main = low_main + (n > free_below ? uint32_t(n - free_below) : 0u);
       next_work += n;
       counters_.refills += 1;
       counters_.camera_paths += nc;
       counters_.light_paths += nl;
       counters_.state_bytes_moved += n * ar::path_state_bytes(features_);
       progress = true;
+    } else {
+      hw_main = low_main;
     }
 
     // 5. Every stage with a non-zero launch count, once, in Stage order.

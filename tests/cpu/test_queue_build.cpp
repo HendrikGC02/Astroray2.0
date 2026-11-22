@@ -106,6 +106,7 @@ struct Rig {
     table.high_water[0] = hw_main;
     table.high_water[1] = hw_shadow;
     table.shadow_capacity = shadow_capacity;
+    table.live_end[0] = table.live_end[1] = 0;  // the host clears them with the marks
     const uint32_t grid = ar::queue_build_grid(hw_main, hw_shadow);
     dev.launch(KernelId::QUEUE_BUILD_COUNT, grid);
     dev.launch(KernelId::QUEUE_BUILD_SCAN, ar::queue_scan_grid(hw_main, hw_shadow));
@@ -661,6 +662,42 @@ TEST_CASE("queue_build/shadow range grows by its fresh slots") {
   CHECK(fresh_steps >= 2);      // the mark grew over more than one step
   CHECK(held_back_steps >= 1);  // and the pool ran out, so producers were held back
   CHECK(hw == kShadow);
+}
+
+TEST_CASE("queue_build/live_end is one past the last live slot") {
+  // Task 134: per pool, one past the largest slot below the mark that is not the pool's TERMINATED
+  // value (invalid values count as live), computed here the slow way, on random pools whose tail
+  // from a cut on is terminated, with cuts and marks on and beside tile boundaries; then the queue
+  // entries from live_end up to the mark are live_end, live_end + 1, ... (the fresh-entry contract
+  // a lowered mark relies on). Sixteen workers run tiles in any order: the max does not care.
+  constexpr uint32_t kN = 5000;
+  const uint8_t dead[2] = {U8(Stage::TERMINATED), U8(Stage::SHADOW_TERMINATED)};
+  const uint32_t cuts[] = {0, 1, 1023, 1024, 1025, 2048, 4097, 4999, 5000};
+  uint32_t lowered = 0;
+  for (uint32_t cut : cuts) {
+    std::vector<uint8_t> pools[2] = {random_pool(kN, Pool::MAIN, 11 + cut), random_pool(kN, Pool::SHADOW, 12 + cut)};
+    for (int p = 0; p < 2; ++p) {
+      std::fill(pools[p].begin() + cut, pools[p].end(), dead[p]);
+      if (cut > 0) pools[p][cut - 1] = p == 0 ? 99 : U8(Stage::INTERSECT_SHADOW);  // the last live slot: invalid / live
+    }
+    Rig r(pools[0], pools[1], 16);
+    for (uint32_t mark : {kN, cut, cut + 1 < kN ? cut + 1 : kN, cut > 1 ? cut - 1 : 0u, 1024u}) {
+      INFO("cut " << cut << " mark " << mark);
+      r.build(mark, mark, kN);
+      for (int p = 0; p < 2; ++p) {
+        uint32_t want = 0;
+        for (uint32_t i = 0; i < mark; ++i)
+          if (r.next[p][i] != dead[p]) want = i + 1;
+        CHECK(r.table.live_end[p] == want);
+        lowered += want < mark;
+      }
+      // Shadow queue from live_end to the mark: the identity (no invalid shadow values here).
+      bool identity = true;
+      for (uint32_t j = r.table.live_end[1]; j < mark; ++j) identity = identity && r.queue[1][j] == j;
+      CHECK(identity);
+    }
+  }
+  CHECK(lowered > 20);
 }
 
 }  // TEST_SUITE

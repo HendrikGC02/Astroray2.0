@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // queue_build: one stable partition of both pools by next_stage, as three kernels (0002 D6).
 //   count:   per tile of kQueueTile items, a histogram of next_stage (bin kStageCount counts
-//            values that are no Stage of the pool: invalid items, in no segment);
+//            values that are no Stage of the pool: invalid items, in no segment), and per pool
+//            the end of its last item that is not TERMINATED (StepTable::live_end);
 //   scan:    a single-pass scan with decoupled look-back over the histogram rows (0002 D7
 //            remedy (c)): scan tile u, kQueueScanRows consecutive rows, sums its rows per bin,
 //            publishes that aggregate, looks back over its predecessors' published values for
@@ -113,22 +114,38 @@ AR_FN uint32_t queue_item_bin(const QueueTile& t, const uint8_t* next, uint32_t 
   return i < t.last ? queue_bin(t.pool, next[i]) : kQueueBins;
 }
 
+// The index of the highest set bit of a non-zero vote: the bits below it smeared down, counted.
+AR_FN uint32_t queue_highest_lane(uint32_t votes) {
+  for (uint32_t s = 1; s < 32; s <<= 1) votes |= votes >> s;
+  return popc(votes) - 1u;
+}
+
 // Kernel 1 for tile g (g < queue_tile_count), by `lanes` units of which this is `lane`: the
 // tile's histogram. The units take consecutive items, and every unit counts every bin from the
-// votes, so all of them hold the whole histogram; unit b % lanes writes bin b.
+// votes, so all of them hold the whole histogram; unit b % lanes writes bin b. Unit 0 also raises
+// the pool's StepTable::live_end to one past the tile's last item that is not TERMINATED
+// (step_table.h); an integer max, so the result is the same in any tile order.
 AR_FN void queue_count_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane, uint32_t lanes) {
   const QueueTile t = queue_tile(kg, g);
   const uint8_t* next = queue_next_stage(kg, t.pool);
   uint32_t* row = kg.queue_counts + uint64_t(g) * kQueueBins;
   AR_ASSERT(next != nullptr);
+  const uint32_t dead = static_cast<uint32_t>(t.pool == Pool::MAIN ? Stage::TERMINATED : Stage::SHADOW_TERMINATED);
   uint32_t hist[kQueueBins];
   for (uint32_t b = 0; b < kQueueBins; ++b) hist[b] = 0;
+  uint32_t live_end = 0;
   for (uint32_t base = t.first; base < t.last; base += lanes) {
     const uint32_t bin = queue_item_bin(t, next, base + lane);
     for (uint32_t b = 0; b < kQueueBins; ++b) hist[b] += popc(ballot(bin == b));
+    const uint32_t live = ballot(bin != kQueueBins && bin != dead);
+    if (live != 0) live_end = base + queue_highest_lane(live) + 1u;
   }
   for (uint32_t b = 0; b < kQueueBins; ++b)
     if (b % lanes == lane) row[b] = hist[b];
+  if (lane == 0 && live_end != 0) {
+    StepTable& table = *const_cast<StepTable*>(kg.step_table);
+    atomic_max(&table.live_end[static_cast<uint32_t>(t.pool)], live_end);
+  }
 }
 
 // Tile status of the look-back, one 32-bit word per scan tile and bin: the last histogram row
