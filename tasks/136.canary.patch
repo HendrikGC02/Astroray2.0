@@ -1,0 +1,16 @@
+diff --git a/src/host/ledger.cpp b/src/host/ledger.cpp
+index 5cd9300..823feed 100644
+--- a/src/host/ledger.cpp
++++ b/src/host/ledger.cpp
+@@ -83,7 +83,10 @@ uint64_t Ledger::session_total(uint64_t session) const {
+ uint64_t Ledger::category_total(LedgerCategory category) const {
+   ledger_category_name(category);
+   std::lock_guard<std::mutex> lock(mutex_);
+-  return category_bytes_[static_cast<uint32_t>(category)];
++  uint64_t sum = 0;
++  for (const auto& kv : live_)
++    if (kv.second.category == category) sum += kv.second.bytes;
++  return sum;
+ }
+ 
+ std::vector<LedgerRecord> Ledger::records() const {
