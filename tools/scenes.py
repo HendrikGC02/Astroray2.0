@@ -5,13 +5,20 @@ Usage: <python> -I tools/scenes.py [--force] [name ...]
 A default run skips scenes whose meta.toml has build.on_demand = true and prints one line naming them;
 naming a scene builds it.
 A recording is rebuilt only when the hash of its sources changed: the scene's own files, the
-shared scenes/lib code, and the generated binding and slot table it is written against. Recordings
-are never committed. Each scene's meta.toml is validated first; any failure exits non-zero.
+shared scenes/lib code, the generated binding and slot table it is written against, and the core's
+recorder (generated recorder and replayer sources, arrec.py, src/capi/*.cpp), since those write the bytes.
+Recordings are never committed. Each scene's meta.toml is validated first; any failure exits non-zero.
+A recording and its sidecars are a function of that hash alone (the header's build record names the commit
+that recorded it; nothing reads it, the replayer checks only the ABI hash), so a machine-wide cache keyed by
+name and hash (ASTRORAY_SCENES_CACHE, default %LOCALAPPDATA%/astroray2/scenes-cache; none when neither is
+set) lets a fresh worktree copy what another tree already built instead of rebuilding it.
 Ref: docs/decisions/0009-build-test-process.md d19, d20.
 """
 import argparse
+import glob
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -21,7 +28,38 @@ SCENES = os.path.join(ROOT, "scenes")
 OUT = os.path.join(ROOT, "out", "scenes")
 GEN = os.path.join(ROOT, "out", "build", "gen")
 SHARED = [os.path.join(GEN, "_abi.py"), os.path.join(GEN, "_ops.py"),
-          os.path.join(ROOT, "src", "kernel", "vm", "ops", "store_slot.h")]
+          os.path.join(ROOT, "src", "kernel", "vm", "ops", "store_slot.h"),
+          *(os.path.join(GEN, f) for f in ("recorder.cpp", "recorder_hooks.h", "replayer.cpp", "arrec.py"))]
+CAPI = os.path.join(ROOT, "src", "capi")
+
+
+def cache_dir():
+    """The shared recording cache, or None when this machine names no place for one."""
+    d = os.environ.get("ASTRORAY_SCENES_CACHE")
+    if not d and os.environ.get("LOCALAPPDATA"):
+        d = os.path.join(os.environ["LOCALAPPDATA"], "astroray2", "scenes-cache")
+    return d
+
+
+def store_in_cache(entry, rec):
+    """Copies the recording and every file the builder wrote beside it (rec.*, except the stamp) into a
+    temporary folder and renames it into place, so a reader never sees half an entry; `.done` is its mark."""
+    for old in glob.glob(glob.escape(entry) + ".tmp*"):  # left by a killed run
+        if time.time() - os.path.getmtime(old) > 3600:
+            shutil.rmtree(old, ignore_errors=True)
+    tmp = f"{entry}.tmp{os.getpid()}"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp)
+    base = os.path.basename(rec)
+    for f in os.listdir(os.path.dirname(rec)):
+        if (f == base or f.startswith(base + ".")) and not f.endswith(".src"):
+            shutil.copyfile(os.path.join(os.path.dirname(rec), f), os.path.join(tmp, f))
+    open(os.path.join(tmp, ".done"), "w").close()
+    try:
+        os.rename(tmp, entry)
+    except OSError:  # another tree stored the same entry first; its copy is identical by construction
+        shutil.rmtree(tmp, ignore_errors=True)
+
 
 sys.path.insert(0, os.path.join(SCENES, "lib"))
 import meta  # noqa: E402
@@ -35,7 +73,7 @@ def scene_names():
 def source_hash(name, sources=()):
     """SHA-256 over the file names and bytes of everything the recording is a function of: the
     scene's folder, scenes/lib, and the folders its meta.toml lists under build.sources."""
-    files = list(SHARED)
+    files = list(SHARED) + sorted(os.path.join(CAPI, f) for f in os.listdir(CAPI) if f.endswith(".cpp"))
     for d in (os.path.join(SCENES, name), os.path.join(SCENES, "lib"), *(os.path.join(ROOT, x) for x in sources)):
         files += sorted(os.path.join(d, f) for f in os.listdir(d) if f.endswith((".py", ".toml")))
     h = hashlib.sha256()
@@ -76,7 +114,8 @@ def main():
         return 2
     os.makedirs(OUT, exist_ok=True)
     t0 = time.perf_counter()
-    built = current = 0
+    built = current = cached = 0
+    cache = cache_dir()
     for name in names:
         try:
             m = meta.load(os.path.join(SCENES, name, "meta.toml"))
@@ -92,6 +131,16 @@ def main():
                     current += 1
                     print(f"scene {name}: up to date" + _counts(rec))
                     continue
+        hit = os.path.join(cache, f"{name}-{digest[:32]}") if cache else None
+        if hit and not args.force and os.path.exists(os.path.join(hit, ".done")):
+            for f in os.listdir(hit):
+                if f != ".done":
+                    shutil.copyfile(os.path.join(hit, f), os.path.join(OUT, f))
+            with open(stamp, "w", encoding="ascii") as f:
+                f.write(digest + "\n")
+            cached += 1
+            print(f"scene {name}: from cache" + _counts(rec))
+            continue
         t1 = time.perf_counter()
         r = subprocess.run([sys.executable, "-I", os.path.join(SCENES, name, "build.py"), "--out", rec],
                            capture_output=True, text=True, timeout=300)
@@ -104,9 +153,11 @@ def main():
             f.write(digest + "\n")
         with open(rec + ".counts", "w", encoding="ascii") as f:  # a builder's own size line, kept for up-to-date runs
             f.write("".join(ln[len("counts:"):].strip() for ln in r.stdout.splitlines() if ln.startswith("counts:")))
+        if hit:
+            store_in_cache(hit, rec)
         built += 1
         print(f"scene {name}: built {os.path.getsize(rec)} bytes in {time.perf_counter() - t1:.2f} s" + _counts(rec))
-    print(f"scenes: {built} built, {current} up to date, {time.perf_counter() - t0:.2f} s")
+    print(f"scenes: {built} built, {cached} from cache, {current} up to date, {time.perf_counter() - t0:.2f} s")
     return 0
 
 
