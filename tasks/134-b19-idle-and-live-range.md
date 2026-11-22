@@ -16,3 +16,4 @@ Budget: under 1 s of gate time for the new tests; budget.toml rows for any new k
 Depends on: 133.
 Size: M (about 250 lines); stop and report at 2x, after Do 1 if the regression is outside Scope, or after Do 2 if no option can meet the row.
 Progress:
+- 2026-11-23: started; branch task/134-b19-idle-and-live-range on 13edb94.
