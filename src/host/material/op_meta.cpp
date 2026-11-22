@@ -16,8 +16,8 @@ constexpr const char* rule_or_null(const char* s) { return is_none(s) ? nullptr 
 
 // Same rows as the enum, in the same order.
 constexpr OpMeta kMeta[] = {
-#define AR_OP(NAME, ARITY, OPERANDS, RESULT, COST, RULE, VOL, TEST) \
-  {ar::Op::NAME, #NAME, ARITY, OPERANDS, RESULT, CostClass::COST, rule_or_null(#RULE), VOL, TEST},
+#define AR_OP(NAME, ARITY, OPERANDS, RESULT, COST, RULE, VOL, TEST, FOLD) \
+  {ar::Op::NAME, #NAME, ARITY, OPERANDS, RESULT, CostClass::COST, rule_or_null(#RULE), VOL, TEST, FOLD},
 #include "../../kernel/vm/ops.def"
 #undef AR_OP
 };

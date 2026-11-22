@@ -3,7 +3,8 @@
 
   opsgen.py [--root DIR] [--out DIR]   write _ops.py and coverage.csv
   opsgen.py --self-test                prove a volume-reachable row without an
-                                       interval rule is refused
+                                       interval rule, and an ineligible foldable
+                                       row, are refused
 
 Ref: docs/decisions/0005-material-model.md items 30, 40; 0006 D7.
 """
@@ -52,14 +53,14 @@ def parse_table(text):
         if not line.endswith(")"):
             raise OpsError(f"ops.def:{no}: row must be one line ending in ')'")
         a = split_args(line[len("AR_OP("):-1])
-        if len(a) != 8:
-            raise OpsError(f"ops.def:{no}: expected 8 fields, got {len(a)}")
-        name, arity, operands, result, cost, rule, vol, test = a
-        if vol not in ("true", "false") or test not in ("true", "false"):
+        if len(a) != 9:
+            raise OpsError(f"ops.def:{no}: expected 9 fields, got {len(a)}")
+        name, arity, operands, result, cost, rule, vol, test, fold = a
+        if any(x not in ("true", "false") for x in (vol, test, fold)):
             raise OpsError(f"ops.def:{no}: {name}: flags must be true or false")
         r = dict(name=name, arity=int(arity), operands=operands.strip('"'),
                  result=result.strip('"'), cost=cost, rule=rule,
-                 volume=vol == "true", test_only=test == "true", line=no)
+                 volume=vol == "true", test_only=test == "true", foldable=fold == "true", line=no)
         if r["result"] not in TYPES:
             raise OpsError(f"ops.def:{no}: {name}: unknown result type {r['result']!r}")
         for tok in r["operands"].split("+") if r["operands"] else ():
@@ -67,6 +68,15 @@ def parse_table(text):
                 raise OpsError(f"ops.def:{no}: {name}: unknown operand token {tok!r}")
         if cost not in COSTS:
             raise OpsError(f"ops.def:{no}: {name}: unknown cost class {cost}")
+        if r["foldable"]:
+            # ops.def header: foldable needs a value result, no test hook, and operands the fold test can rebuild.
+            toks = r["operands"].split("+") if r["operands"] else []
+            why = ("an empty or spec result type" if r["result"] not in ("f32", "f32x3")
+                   else "test_only" if r["test_only"]
+                   else f"operand token(s) other than reg and imm: {r['operands']!r}"
+                   if any(t not in ("reg", "imm") for t in toks) else "")
+            if why:
+                raise OpsError(f"ops.def:{no}: {name}: foldable is not allowed with {why}")
         rows.append(r)
     names = [r["name"] for r in rows]
     if len(set(names)) != len(names):
@@ -118,7 +128,8 @@ def emit_ops_py(rows):
          "OPS = ["]
     for i, r in enumerate(rows):
         L.append(f"    dict(name={r['name']!r}, id={i}, arity={r['arity']}, operands={r['operands']!r}, "
-                 f"result={r['result']!r}, volume_reachable={r['volume']}, test_only={r['test_only']}),")
+                 f"result={r['result']!r}, volume_reachable={r['volume']}, test_only={r['test_only']}, "
+                 f"foldable={r['foldable']}),")
     L += ["]", "OP_ID = {o['name']: o['id'] for o in OPS}", ""]
     return "\n".join(L)
 
@@ -133,14 +144,32 @@ def write_if_changed(path, text):
 
 
 def self_test():
-    bad = 'AR_OP(BAD, 0, "", "f32", CHEAP, NONE_SURFACE_ONLY, true, false)\n'
-    try:
-        parse_table(bad)
-    except OpsError as e:
-        print(f"opsgen self-test: refused as expected: {e}")
-        return 0
-    print("opsgen self-test FAILED: a volume-reachable row without an interval rule was accepted")
-    return 1
+    """Each seeded bad row must be refused, with the message naming the row."""
+    cases = [
+        ("a volume-reachable row without an interval rule",
+         'AR_OP(BAD, 0, "", "f32", CHEAP, NONE_SURFACE_ONLY, true, false, false)', "interval rule"),
+        ("a foldable row with a lift operand",
+         'AR_OP(BAD, 1, "reg+lift", "f32", CHEAP, NONE_SURFACE_ONLY, false, false, true)', "BAD: foldable"),
+        ("a foldable row with an empty result",
+         'AR_OP(BAD, 1, "reg", "", CHEAP, NONE_SURFACE_ONLY, false, false, true)', "BAD: foldable"),
+        ("a foldable test_only row",
+         'AR_OP(BAD, 0, "reg", "f32", CHEAP, NONE_SURFACE_ONLY, false, true, true)', "BAD: foldable"),
+        ("an eight-field row",
+         'AR_OP(BAD, 0, "reg", "f32", CHEAP, NONE_SURFACE_ONLY, false, false)', "expected 9 fields"),
+    ]
+    bad = 0
+    for what, row, needle in cases:
+        try:
+            parse_table(row)
+        except OpsError as e:
+            if needle in str(e):
+                print(f"opsgen self-test: refused {what}: {e}")
+                continue
+            print(f"opsgen self-test FAILED: {what} was refused with the wrong message: {e}")
+        else:
+            print(f"opsgen self-test FAILED: {what} was accepted")
+        bad += 1
+    return 1 if bad else 0
 
 
 def main():

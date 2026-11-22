@@ -34,6 +34,10 @@ struct Graph {
   std::vector<int32_t> i32;
 };
 
+// Parameter pool counts (false: a graph may not hold the op) and input socket types per op: the
+// one table the parser and the tests build graphs from.
+bool op_param_counts(ar::Op op, uint32_t* nf, uint32_t* ni);
+VType op_input_type(ar::Op op, int socket);
 int op_input_count(ar::Op op);
 VType op_result_type(ar::Op op);
 

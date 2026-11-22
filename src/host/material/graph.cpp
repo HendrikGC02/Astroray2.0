@@ -13,9 +13,11 @@ using ar::Op;
 
 std::string at(size_t i, const char* what) { return "graph node " + std::to_string(i) + ": " + what; }
 
+}  // namespace
+
 // Fixed parameter counts per op: f32 pool count, i32 pool count. False for ops a graph may not
 // hold (END, JMP, UNSUPPORTED and the test hooks are the compiler's, never the addon's).
-bool param_counts(Op op, uint32_t* nf, uint32_t* ni) {
+bool op_param_counts(Op op, uint32_t* nf, uint32_t* ni) {
   *nf = *ni = 0;
   switch (op) {
     case Op::CONST_F32: *nf = 1; return true;
@@ -34,7 +36,7 @@ bool param_counts(Op op, uint32_t* nf, uint32_t* ni) {
   }
 }
 
-VType input_type(Op op, int i) {
+VType op_input_type(Op op, int i) {
   switch (op) {
     case Op::MUL_F32: return VType::F32;
     case Op::MUL_F32X3:
@@ -46,6 +48,8 @@ VType input_type(Op op, int i) {
     default: return VType::NONE;
   }
 }
+
+namespace {
 
 // What a STORE_SLOT of this slot accepts: its natural form (one f32 for scalars and IOR, RGB for
 // colours, f32x3 for frames) or an already lifted spectrum for the nine spectral slots. A scalar
@@ -110,7 +114,7 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
     if (n.op >= uint32_t(Op::COUNT_)) return *err = at(i, "unknown op"), false;
     o.op = Op(n.op);
     uint32_t nf, ni;
-    if (!param_counts(o.op, &nf, &ni)) return *err = at(i, "op is not allowed in a graph"), false;
+    if (!op_param_counts(o.op, &nf, &ni)) return *err = at(i, "op is not allowed in a graph"), false;
     if (n.f32_count != nf || n.i32_count != ni) return *err = at(i, "wrong parameter count for its op"), false;
     if (uint64_t(n.f32_first) + nf > d.f32_count || uint64_t(n.i32_first) + ni > d.i32_count)
       return *err = at(i, "parameter range outside its pool"), false;
@@ -142,7 +146,7 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
         return *err = at(l.to_node, "specular_ior takes a scalar, not a colour (0005 item 10)"), false;
       if (!store_accepts(slot, from.out))
         return *err = at(l.to_node, "type error: this value cannot be stored in that slot"), false;
-    } else if (from.out != input_type(to.op, int(l.to_socket))) {
+    } else if (from.out != op_input_type(to.op, int(l.to_socket))) {
       return *err = at(l.to_node, "type error: input socket wants another type"), false;
     }
     to.input[l.to_socket] = int(l.from_node);

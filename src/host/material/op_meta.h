@@ -21,6 +21,7 @@ struct OpMeta {
   const char* interval_rule;  // function name, or nullptr for NONE_SURFACE_ONLY
   bool volume_reachable;
   bool test_only;
+  bool foldable;  // ops.def header: constant inputs fold at compile time
 };
 
 // One entry per opcode, indexed by the opcode value.
