@@ -103,7 +103,7 @@ $global:LASTEXITCODE = 1
     @{ Name = 'build dev'; Tag = 'local'; Run = { & pwsh -NoProfile -Command "& tools/build.ps1 -Target all,astroray_kernels_gpu_nofma; exit `$LASTEXITCODE" } },
     # 0008 V9 compile part (050): the negative-compile cases are outside ALL, so only this step runs them.
     @{ Name = 'negative compile'; Tag = 'cpu'; Run = { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_negative_compile -Preset $(if ($isCi) { 'cpu' } else { 'dev' }) -NoMachineLock } },
-    # 137: the tools' own CPU tests (tests/tools/fast_*.ps1); no tier ran them before.
+    # The tools' own CPU tests (tests/tools/fast_*.ps1): without a step here no tier would run them.
     @{ Name = 'tools tests'; Tag = 'cpu'; Run = { & pwsh -NoProfile -File tests/tools/run_fast.ps1 } },
     @{ Name = 'kernelgate self-test'; Tag = 'cpu'; Run = { & $py -I tools/kernelgate.py --self-test } },
     @{ Name = 'kernelgate'; Tag = 'local'; Lock = $true; Echo = '^kernelgate: \d+ row'; Run = { & $py -I tools/kernelgate.py @dargs } },

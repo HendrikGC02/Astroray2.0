@@ -79,36 +79,60 @@ function Get-CanaryPatchProblems([string]$Patch, [string]$Root, [string]$Number)
 
 function New-CanaryResult($label, $ran, $failed, $err = '') { [pscustomobject]@{ Label = $label; Ran = $ran; Failed = $failed; Error = $err } }
 
-# Outcome of one case in verbosity-2 unittest output: `test_x (mod.Class.test_x) ... ok|FAIL|ERROR`.
+# Outcome of one case in verbosity-2 unittest output. The header line `test_x (mod.Class.test_x)` carries the
+# name; its outcome `... ok|FAIL|ERROR` is on the same line, or, after a docstring line or text the test
+# printed, on a later line before the next test header.
 function Get-UnittestOutcome([string]$text, [string]$name) {
-  $ran = $false; $failed = $false
+  $ran = $false; $failed = $false; $pending = $false
   foreach ($ln in ($text -split "`r?`n")) {
-    if ($ln.Contains($name) -and $ln -match '\.\.\. (ok|FAIL|ERROR)\s*$') {
-      $ran = $true
+    if ($ln -match '^\w+ \([\w.]+\)') { $pending = $ln.Contains($name) }
+    if ($pending -and $ln -match '\.\.\. (ok|FAIL|ERROR)\s*$') {
+      $ran = $true; $pending = $false
       if ($Matches[1] -ne 'ok') { $failed = $true }
     }
   }
   return [pscustomobject]@{ Ran = $ran; Failed = $failed }
 }
 
+# The error for a Blender exit code, or '': --python-exit-code 1 is how a failing test script exits, -1 is
+# this tool's timeout, any other code is a crash.
+function Get-BlenderExitError([int]$code) {
+  if ($code -eq -1) { return 'Blender timed out' }
+  if ($code -ne 0 -and $code -ne 1) { return "Blender exited $code (crash?)" }
+  return ''
+}
+
+# Results of one file group from its output; a non-empty $err marks every case of the group errored.
+function Get-CanaryGroupResults($group, [string]$txt, [string]$err) {
+  return @($group | ForEach-Object {
+    if ($err) { New-CanaryResult $_.Name $false $false $err }
+    else { $o = Get-UnittestOutcome $txt $_.Name; New-CanaryResult $_.Name $o.Ran $o.Failed }
+  })
+}
+
+# Whether a passed baseline recorded earlier still holds: only a clean tree at the same tree hash and the
+# same items. A dirty tree's HEAD hash says nothing about the files that ran.
+function Test-CanaryBaselineRecord($prior, [string]$tree, [string]$key, [bool]$clean) {
+  return [bool]($clean -and $prior -and $prior.tree -eq $tree -and $prior.key -eq $key)
+}
+
 # Items of one tests/abi or tests/blender file (not gui_*) run in one start; each case is read from its line.
 function Invoke-CanaryFileGroup($group, [string]$rel, [string]$Root) {
   $kargs = @($group | ForEach-Object { '-k'; $_.Name })
+  $err = ''
   if ($rel -like 'tests/abi/*') {
     $out = & (Get-ArPython) -I -m unittest discover -s (Split-Path $rel) -p (Split-Path $rel -Leaf) -v @kargs 2>&1 | ForEach-Object { "$_" }
     $txt = $out -join "`n"
     Write-CanaryLog $out
-    if ($txt -match '_FailedTest|ModuleNotFoundError|ImportError|SyntaxError') { return @($group | ForEach-Object { New-CanaryResult $_.Name $false $false 'test module failed to import' }) }
+    if ($txt -match '_FailedTest|ModuleNotFoundError|ImportError|SyntaxError') { $err = 'test module failed to import' }
   } else {
     $r = Invoke-ArBlender -Script $rel -Args $kargs 6>$null
-    if ($r.ExitCode -eq -1) { return @($group | ForEach-Object { New-CanaryResult $_.Name $false $false 'Blender timed out' }) }
     $txt = ''
     foreach ($f in $r.Log, "$($r.Log).err") { if (Test-Path $f) { $txt += (Get-Content $f -Raw) } }
     Write-CanaryLog $txt
-    # --python-exit-code 1 is how a failing test script exits; any other code is a crash.
-    if ($r.ExitCode -ne 0 -and $r.ExitCode -ne 1) { return @($group | ForEach-Object { New-CanaryResult $_.Name $false $false "Blender exited $($r.ExitCode) (crash?)" }) }
+    $err = Get-BlenderExitError $r.ExitCode
   }
-  return @($group | ForEach-Object { $o = Get-UnittestOutcome $txt $_.Name; New-CanaryResult $_.Name $o.Ran $o.Failed })
+  return Get-CanaryGroupResults $group $txt $err
 }
 
 function Invoke-CanaryItem($it, [string]$Root) {
@@ -144,11 +168,11 @@ function Invoke-CanaryItem($it, [string]$Root) {
     if (-not (Get-Command Invoke-ArBlender).Parameters.ContainsKey('Gui')) { return New-CanaryResult $it.Name $false $false "$rel needs Invoke-ArBlender -Gui (task 085)" }
     # Those scripts read a single -k: one windowed start per case.
     $r = Invoke-ArBlender -Script $rel -Args @('-k', $it.Name) -Gui 6>$null
-    if ($r.ExitCode -eq -1) { return New-CanaryResult $it.Name $false $false 'Blender timed out' }
     $log = ''
     foreach ($f in $r.Log, "$($r.Log).err") { if (Test-Path $f) { $log += Get-Content $f -Raw } }
     Write-CanaryLog $log
-    if ($r.ExitCode -ne 0 -and $r.ExitCode -ne 1) { return New-CanaryResult $it.Name $false $false "Blender exited $($r.ExitCode) (crash?)" }
+    $be = Get-BlenderExitError $r.ExitCode
+    if ($be) { return New-CanaryResult $it.Name $false $false $be }
     return New-CanaryResult $it.Name $log.Contains($it.Name) ($r.ExitCode -ne 0)
   }
   if ($rel -like 'tests/abi/*' -or $rel -like 'tests/blender/*') { return (Invoke-CanaryFileGroup @($it) $rel $Root)[0] }
@@ -235,7 +259,7 @@ function Invoke-Canary {
     # Baseline: every item must run and pass without the patch, or "red" means nothing.
     Invoke-CanaryBuild $targets $cpuOnly $Root
     if ($NoBaseline) { $res.Lines += 'baseline: skipped on request (-NoBaseline)' }
-    elseif ($prior -and $prior.tree -eq $tree -and $prior.key -eq $key) { $res.Lines += "baseline: skipped, tree $($tree.Substring(0, 8)) passed at $($prior.time)" }
+    elseif (Test-CanaryBaselineRecord $prior $tree $key $clean) { $res.Lines += "baseline: skipped, tree $($tree.Substring(0, 8)) passed at $($prior.time)" }
     else {
       $b = & $eval (Invoke-CanaryItems $items $Root) 'base'
       $res.Problems += $b.Problems
@@ -277,6 +301,7 @@ function Invoke-Canary {
             & git -C $Root apply -R $hp 2>&1 | ForEach-Object { Write-CanaryLog "$_" }
             if ($LASTEXITCODE -ne 0) { $res.Dirty = $true } else { $applied = $null }
           }
+          if ($res.Dirty) { break }
           if ($e) { $res.Problems += $e.Problems; $res.Matrix += [pscustomobject]@{ Where = $hunks[$h].Where; Red = $e.Red; Green = $e.Green } }
         }
         if ($res.Problems.Count -eq 0) {
