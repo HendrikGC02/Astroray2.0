@@ -26,7 +26,7 @@ them. Milestone is where the item must be settled at the latest.
 | Addon | `film_exposure` has no viewport effect | 111 | M1b | slice B |
 | Addon | `Material.use_nodes` and `World.use_nodes` are deprecated in 5.3 | 087 | M1b | slice A lowerings |
 | Addon | Mix Shader, Add Shader lowering; colour-to-float for textured Roughness and Specular; 083 Do 7 | 058, 083 | M1b | slice A lowerings (Add: M2) |
-| Addon | B-31 instance loop 39.8 / 88.5 ms per 10k against 30 | 129 | owner | |
+| Addon | B-31 instance loop 39.8 / 88.5 ms per 10k against 30 | 129 | M1b | 161 |
 | Lights | Spectral blackbody lamp (lamps render BLACKBODY as RGB today) | 068 | M1b | slice B |
 | Tests | Check 14's constant-hero exception | 078 | M2 | |
 | Tests | Flaky once: `cpu_device/parallel_for rethrows`, `wavelengths/stratified lane positions`, `mesh/remove erases the record`, Blender smoke `test_cancel_returns_partial_result` | several | M1b | the task that sees one again files it |

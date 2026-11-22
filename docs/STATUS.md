@@ -4,8 +4,8 @@ Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `t
 
 ## Current milestone
 M1b "First light" (docs/PLAN-M1b.md: slices, lanes, the `shade_surface` spine, gate ledger). First batch
-tasks/136-160, order and lanes in tasks/README.md; runbook and handover in docs/LEAD.md; items without a task in
-docs/BACKLOG.md. Next: dispatch the first batch and write the B-31 task into slice 0.
+tasks/136-161, order and lanes in tasks/README.md; runbook and handover in docs/LEAD.md; items without a task in
+docs/BACKLOG.md. Dispatched: 157, 137, 146, 152, 144, 136, 159, 155. B-31 is task 161.
 M1a "First pixels" closed (owner decision 37): textured, lamp-lit meshes render progressively in the Blender 5.3
 viewport and F12 on CUDA and CPU through the final C ABI; gallery and report from `tools/gallery.py --milestone
 M1a` and `tools/report.py`. Accepted at the close: B-19 idle 11.0 % (10 % stays the target), B-20 2.00x / 1.63x
@@ -27,7 +27,7 @@ scope clause).
 ## Red items
 - B-5M bench hangs before its first pass on most runs since 1a7e364 (task 136); it blocks the B-5M rows of B-14
   and B-19 and task 140.
-- B-19 idle, B-20, B-31 accepted at the M1a close (decision 37); B-31's task is not written yet. M-1 probe spills 130/376 B against 128/192: task 144 (0002 D10 ladder).
+- B-19 idle, B-20, B-31 accepted at the M1a close (decision 37); B-31 is task 161 (blender lane, after 159). M-1 probe spills 130/376 B against 128/192: task 144 (0002 D10 ladder).
 - No regression check on performance and no F12 gate on CUDA until tasks 140, 160 and 139 land.
 
 ## Budget headroom
