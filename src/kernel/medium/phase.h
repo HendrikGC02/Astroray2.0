@@ -16,7 +16,9 @@
 // eval uses the first form for g >= 0 and the second for g < 0: both are sums of non-negative
 // terms, so d > 0 with no cancellation at the peak, where float mu would lose the digits that set
 // p. g is clamped to [-kHgMaxAbsG, kHgMaxAbsG]: the 1941 formula holds on the open interval
-// (-1, 1) and d reaches 0 at |g| = 1. The margin 1e-3 is our choice, not taken from a reference.
+// (-1, 1) and d reaches 0 at |g| = 1. The bound is Cycles' (|g| <= 1 - 1e-3, "to avoid delta
+// function"); pbrt-v4 clamps tighter, to [-0.99, 0.99]. Clamping to the edge follows 0006 D4 and
+// 0003 D8; the report of a clamped anisotropy belongs to the lowering that produces g.
 //
 // Sampling (exact, so p / pdf = 1; 0006 D12). The CDF of mu with u in [0, 1) is
 //   P(mu) = (1 - g^2) / (2 g) [d^(-1/2) - 1 / (1 + g)],
@@ -27,9 +29,18 @@
 // where the factor g cancels by algebra: g = 0 gives mu = 2u - 1 (isotropic) without a branch, and
 // both forms are products of positive terms for |g| < 1, so sin^2 theta = (1 - mu)(1 + mu) >= 0.
 // The azimuth about -wo is 2 pi u.y. The derivation was checked against the 1941 formula with an
-// independent float64 NumPy integration of 2 pi p(mu) d mu; it was not cross-checked against
-// pbrt-v4 or Cycles.
-// Ref: Henyey and Greenstein 1941; docs/decisions/0006-volumes-and-astrophysics.md D12, V7.
+// independent float64 NumPy integration of 2 pi p(mu) d mu.
+// Cross-check: Cycles samples with c = 1 - 2 rand.x, then
+//   k = (1 - sqr(g)) / (1 - g * c);   cos_theta = (1 + sqr(g) - sqr(k)) / (2 * g);
+// with 1 - g c = 1 - g + 2 g rand.x = t and k = d^(1/2), the same mu(u) as above, and its cos_theta
+// is dot(-wi_cycles, wo_cycles) = our mu (Cycles' wi points to the viewer, our wo). pbrt-v4 uses
+// cos = -1/(2g) (1 + g^2 - ((1 - g^2) / (1 + g - 2 g u))^2) about wo, which is -mu at u -> 1 - u.
+// Both branch to isotropic below |g| = 1e-3 and lose digits near the peak; the forms above do not.
+// Ref: Henyey and Greenstein 1941; docs/decisions/0006-volumes-and-astrophysics.md D12, V7;
+// cycles-ed69ef2c6bd3 src/kernel/closure/volume_henyey_greenstein.h (setup clamp) and
+// src/kernel/closure/volume_util.h (phase_henyey_greenstein, _sample); pbrt-v4-092b23a47ad4
+// src/pbrt/util/scattering.h (HenyeyGreenstein) and src/pbrt/util/sampling.cpp
+// (SampleHenyeyGreenstein). All Apache-2.0, read, not copied.
 #pragma once
 #include <cstdint>
 
@@ -41,7 +52,8 @@
 
 AR_NS_BEGIN
 
-inline constexpr Real kHgMaxAbsG = Real(0.999);
+// Ref: cycles-ed69ef2c6bd3 src/kernel/closure/volume_henyey_greenstein.h, setup: 1 - 1e-3.
+inline constexpr Real kHgMaxAbsG = Real(1) - Real(1e-3);
 inline constexpr Real kPhaseInv4Pi = Real(0.25 / kPiDouble);
 
 struct PhaseSample {
