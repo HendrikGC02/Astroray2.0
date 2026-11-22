@@ -80,7 +80,7 @@ Number labels: MEASURED (spike or source measurement cited), SOURCE (a constant 
   - **Model.** Blender's Single Scattering (Nishita et al. 1993) and Multiple Scattering sky types, enumerated from RNA at implementation. Ported from Cycles `intern/sky/source/sky_single_scattering.cpp` (Apache-2.0) and `sky_multiple_scattering.cpp` (MIT), with shader-side evaluation and the sun-disc limb profile from `kernel/svm/sky.h` (Apache-2.0). `sky_nishita.h` and `sky_math.h` (GPL-2.0-or-later) are neither read nor copied (`v1-lessons/blender-integration.md`, `research/lights.md`). Preetham and Hosek-Wilkie are not designed here; selecting them shows a visible error.
   - **Spectral evaluation.** On each world edit the host precomputes, in double, a sky radiance table over view direction relative to the sun × the source's own wavelength samples (table size PROVISIONAL), keeping the source's absolute units; the `SKY` op interpolates it at the transport wavelengths and clamps outside its range with a report entry (0003, ranges). If a source turns out to compute only XYZ or RGB, that type is upsampled as an illuminant (0003) and reported `approximated`. No fitted exposure constant (v1); Blender's strength and sun-intensity inputs multiply the result, under 0003 decision 11's unit anchor (ruling 35).
   - **Sun-disc split.** When the disc is enabled and the compiler's sky-split output (0005 item 43) proves that the world output radiance is G·Sky(ω) + R(ω), with G a direction-independent spectrum after constant folding (the chain from the `SKY` op to the output contains only ops linear in that input with constant factors: Background strength, Multiply, Add, Mix with a constant factor), the disc becomes a distant-light leaf: irradiance G·E_disc independent of disc size, the source's limb profile applied identically in NEE and in BSDF-hit evaluation, camera-visible (v1). The `SKY` op then evaluates without the disc, and the importance table excludes it, so sky and sun are two lights with separate pdfs (v1 measured a 1.3% low bias from a profile used only in NEE).
-  - Otherwise the disc stays in the world program and is sampled only through the table, and a visible warning names the node that broke linearity, which the same compiler output reports (CLAUDE.md rule 7).
+  - Otherwise the disc stays in the world program and is sampled only through the table, and a visible warning names the node that broke linearity, which the same compiler output reports (the fail-loudly rule of CLAUDE.md).
 
 ### C. Sampler use
 
@@ -159,7 +159,7 @@ Number labels: MEASURED (spike or source measurement cited), SOURCE (a constant 
 
 ### H. Later features and film inputs
 
-- **D26. No hooks for later reuse or guiding.** ReSTIR-class reuse (Bitterli et al. 2020; Lin et al. 2022) and path guiding (Müller, Gross, Novák 2017) are not designed here. No state, dimension, runtime flag or branch is reserved for them (CLAUDE.md rule 2; G4). What they would need and already exists for other reasons: light samples deterministic in (ctx, u2) (D7), the D10 importance as a target function, `pdf` on every lobe, and 0008's guide buffers.
+- **D26. No hooks for later reuse or guiding.** ReSTIR-class reuse (Bitterli et al. 2020; Lin et al. 2022) and path guiding (Müller, Gross, Novák 2017) are not designed here. No state, dimension, runtime flag or branch is reserved for them (the scope rule of CLAUDE.md; G4). What they would need and already exists for other reasons: light samples deterministic in (ctx, u2) (D7), the D10 importance as a target function, `pdf` on every lobe, and 0008's guide buffers.
 - **D27. Film inputs owed to 0008.**
   - Light groups: every contribution carries the u8 group id of its emitter (lamp, emissive mesh, world): shadow items the id of the sampled light, emission hits and lamp crossings the id of the emitter hit, connections the id of the emitting light. Enabled group planes receive it beside the sample slot.
   - Light-path passes: when enabled, each contribution carries its category, fixed at the first scattering vertex and split direct/indirect by bounce count (0008). The per-category weights are 0008's conditional state.
@@ -193,7 +193,7 @@ Number labels: MEASURED (spike or source measurement cited), SOURCE (a constant 
 - **Blue-noise sample ordering** (Cycles `kernel/sample/pattern.h`, after Ahmed and Wonka 2020: Morton-ordered Owen scrambling). Some of its modes need the sample count up front, and its benefit under OIDN in the viewport is unmeasured. The sampler is 0003's; adopting it would be a 0003 change backed by research 04 S6.
 - **Adaptive metrics:** luminance-only (v1 blue floor) and Cycles' summed form (colour-blind by construction) are both rejected.
 - **Default clamping (Cycles' practice):** it caps real focused energy (v1 capped a caustic focus) and contradicts "physically correct always".
-- **Reserved hooks for ReSTIR and guiding:** rejected under CLAUDE.md rule 2 and G4 (D26).
+- **Reserved hooks for ReSTIR and guiding:** rejected under the scope rule of CLAUDE.md and G4 (D26).
 
 ## Consequences
 
@@ -245,7 +245,7 @@ Milestones are assigned only in `docs/ROADMAP.md` (G1).
 | D28 | Σ sample counts = launched camera samples; Σ termination counts = sample count; closed box, Russian roulette off: bounces = n·max_depth | Exact |
 | Viewport | 1080p reference scenes on the 5070 Ti | Light-pass share as set; statistics overhead within 0009 B-29 |
 
-Every rendered check is also looked at as an image (CLAUDE.md rule 4). All checks run on demand in 0009's tiers; nothing is scheduled (G3).
+Every rendered check is also looked at as an image (the look-at-renders rule of CLAUDE.md). All checks run on demand in 0009's tiers; nothing is scheduled (G3).
 
 ## Risks and open items
 
@@ -284,53 +284,4 @@ Every rendered check is also looked at as an image (CLAUDE.md rule 4). All check
 - **Cycles (Apache-2.0 unless noted; per-file licence check):** `kernel/light/tree.h`, `scene/light_tree.cpp`, `kernel/light/area.h`, `kernel/light/background.h`, `kernel/integrator/shade_light.h`, `shade_surface.h`, `intersect_closest.h`, `kernel/sample/mis.h` (BSD-3), `kernel/sample/pattern.h`, `kernel/film/adaptive_sampling.h`, `kernel/svm/sky.h`, `intern/sky/source/sky_single_scattering.cpp`, `sky_multiple_scattering.cpp` (MIT); not `sky_nishita.h`, `sky_math.h` (GPL).
 - **Other references:** Mitsuba 3 (BSD-3): `src/integrators/ptracer.cpp`, `path.cpp`. Falcor `Source/Modules/ReSTIRPathTracing` (BSD-3); OpenPGL (Apache-2.0, CPU-only v0.8).
 
-## Review and resolution
-
-History of the independent review; the Decision section and the Reconciliation section below supersede it where they differ.
-
-1. BLOCKER, per-path accumulator vs 0002/0008: ACCEPTED. Shadow items are self-contained; contributions go to a per-sample buffer resolved at pass end (D4, D5), `L` leaves the path state, the "no atomics" and bit-reproducibility claims are corrected; the 0003/0008 conflict is listed. The `shadow_pending` alternative is rejected in Alternatives.
-2. BLOCKER, sky owned by no record: ACCEPTED. D12 owns it: Single and Multiple Scattering from the Apache-2.0 and MIT files, spectral table, disc split only for a proven linear chain, otherwise a warning and table sampling.
-3. BLOCKER, dimension map vs 0003 #24 and alpha-card reuse: ACCEPTED. D14/D15 now consume 0003's map and pcg4d; the block index is an event index that opacity pass-throughs advance; a stacked-alpha test is added.
-4. MAJOR, film-response importance starves UV lights: ACCEPTED. Excitation spectra join the weighting, a radiometric ε floor guarantees pmf > 0 (D10, D20), light-path wavelengths follow 0003 #21, and a UV-on-brightener test is added.
-5. MAJOR, D19 underspecified: ACCEPTED. One delta predicate, reconnection after mixed vertices, ray-type-dependent materials excluded from casters, segment-symmetry rules for visibility, holdout, shadow catchers and linking, and the requested test scenes plus a prism hue gate against an independent oracle.
-6. MAJOR, incomplete coverage list: ACCEPTED. L δ+ D D+ E and the window-glass dependence are reported (D24), with a window benchmark that sets the light-pass share.
-7. MAJOR, neighbour conflicts: ACCEPTED, item by item. Splats now hit one pixel chosen by filter weight, although the current 0008 #4 already adopts footprint splatting, so the fix is kept for pixel independence and fewer atomics. The 0006 power heuristic is listed as a conflict. The built light pass moves to "before first release" with its interfaces in M1. Lamp crossings are one per step, with no cap, and costed (D8). Light paths use 0002's kernels and light extension variants (D21). The 0008 inputs are now provided (D27).
-8. MINOR, silent caps: ACCEPTED. The lamp cap and its SOURCE label are gone (D8); statistics use 0008's u32 counters and nothing saturates (D28).
-9. MINOR, exposure and |A−B|: ACCEPTED. The metric uses pre-exposure values, so display edits never stale it, and the Cycles form |I − A| with A = 2·S1A/n (D16), with a test against Cycles' formula.
-10. MINOR, adaptive tail starvation: ACCEPTED. The tail rule gives k samples per active pixel per pass within the buffer size, and a measurement is added (D16).
-11. MINOR, numbers with no source: ACCEPTED. Each number now has a derivation (P floor, reset, light-build budget), a source (1024 map) or a named measurement (25% share). The 24 B figure is removed because 0008 owns storage, and statistics defaults follow 0003/0008.
-12. MINOR, hooks with no user: ACCEPTED. The `sample_direct` flag, reserved dimension and vertex record are removed (D26).
-13. MINOR, mis-citations: ACCEPTED. Blue noise is now cited as Ahmed and Wonka 2020 / Cycles `pattern.h` and dropped from this record. NEE plus BSDF is described as multi-sample MIS with one sample per strategy (D1).
-
-## Reconciliation (rulings applied)
-
-- G1: "What lands when" replaced by the must-exist-first and can-wait lists; milestone wording removed from D10, D12, D26, Alternatives, Risks and Assumptions.
-- G2: restated content removed and cited: per-sample buffer and sizes (0008, 0007), report schema (0001), mask bits and kernel list (0002), dimension slot numbers and enums (0003), edit classes (0007), time budgets (0009).
-- G3: no scheduled checks in this record; Verification states that all checks run on demand.
-- G4: no reserved hooks remain; every must-exist item names the layout or signature it protects.
-- Ruling 1: D5 reduced to the accumulation contract on 0008's per-sample buffer; `L` stays out of the path state.
-- Ruling 2: D23 one-pixel stochastic splat replaced by 0008's footprint splatting; the splat-pixel uniform removed from D15.
-- Ruling 3: D13-D15 cite 0003 as sampler owner; DLSS mode uses 0003's independent mode.
-- Ruling 4: random hero lane per path applied to light paths (D22) and volume distance MIS (D1).
-- Ruling 5: D1 states the balance r_u/r_l form for media, including 0006's distance-strategy combination; the 0006 conflict is removed.
-- Ruling 6: `MAX_BOUNCE`, `terminate_secondaries`, `generate_light`, `shade_light_path`, `ShadeKind` used.
-- Ruling 7: light-path wavelengths from the sensor table, recomputed from the key (D20-D22); the fluorescent-receiver consequence is listed in Risks.
-- Ruling 8: light paths carry the 20 B medium stack (D21).
-- Ruling 9: path-state byte accounting removed; field needs listed for 0003.
-- Ruling 14: light-pass launches stay inside 0009's launch-duration budget (D20).
-- Ruling 18: curved segments disarm the camera-side partition and light paths entering the region terminate (D19), consistent with geodesic segments through the ordinary intersect kernel.
-- Ruling 19: per-sample buffer memory cited to 0007's budget table.
-- Ruling 21: light-structure build counted toward 0007's first-frame gate (D25).
-- Ruling 24: D22 says lane 0 continues after `terminate_secondaries`; no record text says the hero lane continues.
-- Ruling 26: D14 cites 0003's stored `event_index`.
-- Ruling 29: time budgets cited by id (D20 B-17, D25 B-22/B-23, Verification B-22/B-29); the requirement for 0009 rows removed from Risks.
-- Ruling 35: the Blender-watt, sky and IES unit scale cited to 0003 decision 11 (D6, D12, Assumptions).
-- Ruling 37: `sample_id` names the sample slot (D4, D5); D25 uses 0007's generation and epoch.
-- Ruling 44: D19 excludes wavelength-rewriting receivers from the light pass (ownership, light-path side, camera arming); the fluorescent-receiver risk removed; Verification D19 tests it.
-- Ruling 45: light and shadow linking removed (D7 `light_set`, D10 per-set trees, D19 linking symmetry, D29 reason, must-exist, Consequences, Verification, Assumptions).
-- Ruling 48: point lamps and spotlights cast caustics through the light pass; the D24 gaps are reported as a warning (owner decision 25); the owner question removed.
-- Ruling 49: Review section headed as history; D1's curved-segment NEE text now cites 0006 D28; settled requirements and the spectral-MIS risk corrected.
-- Ruling 29 (second pass): the light-pass share is 0009 B-36 (D20, Verification D24 window); the floor clamp is the derived full wave, not 2^15.
-- Ruling 44 (second pass): inelastic medium events join wavelength-rewriting surfaces in D19 (ownership, light-path end, camera arming) and D21; D23 states that connections pass 0006 D28's gate.
-- Ruling 48 (second pass): every camera type implements `We`/`PDF_We`/`sample_wi` (D23), so D24 no longer drops orthographic and panoramic cameras (owner decision 25); Risk and Verification D23 follow.
-- Ruling 49 (second pass): the first light-path vertex is x₁ (v1 means the old project); D4's pass category is read from 0003's side buffer; D5's slot flags match 0008 decision 3; D12 and D19 cite 0005 item 43's sky-split output and `READS_RAY_TYPE`; the requirement removed from Risks.
+History: docs/history/0004-review-and-reconciliation.md (review and reconciliation of this record; the Decision section above is current).

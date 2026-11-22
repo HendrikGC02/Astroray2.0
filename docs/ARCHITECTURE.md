@@ -176,7 +176,7 @@ Include rule: CUDA and OptiX headers only in `src/device/` and `src/kernel_gpu/`
 From `CLAUDE.md`, the records and the rulings. The checks that enforce them are in 0009.
 
 1. **Physics is the reference.** Correct means physics, analytic results and the OpenPBR specification; references come only from analytic results or independent spectral oracles, never from self-generated golden images or Cycles pixels (O1, 0009 d16, R61).
-2. **Cite before implementing.** Every non-trivial physics, sampling or numerical method comes from a published source with a licence-compatible reference, named in the code (`CLAUDE.md` rule 5). Items listed in R63 are decided in the task that builds them, from a published source, and written back into the owning record in the same change.
+2. **Cite before implementing.** Every non-trivial physics, sampling or numerical method comes from a published source with a licence-compatible reference, named in the code (the cite-the-source rule of `CLAUDE.md`). Items listed in R63 are decided in the task that builds them, from a published source, and written back into the owning record in the same change.
 3. **One source.** A formula, material, sampler or lobe exists once and compiles for both targets; never hand-port, never add a second implementation or a second compile path (O2, 0002 D4, R16).
 4. **Kernel dialect.** No virtuals, exceptions, recursion, heap, STL, function pointers, `__noinline__`, `-rdc`, fast-math or mutable globals in kernel code; structs over the size limit go by reference; no template variant matrices, only the scalar type and `ShadeKind` (0002 D1, D8, D14).
 5. **Kernel budgets.** Spills and stack in the capped build stay within `budget.toml`; a breach follows 0002 D10's ladder in order; splits and fusions need the A/B evidence of 0002 D9. Every task touching a shade kernel declares its expected delta.
@@ -184,15 +184,15 @@ From `CLAUDE.md`, the records and the rulings. The checks that enforce them are 
 7. **Accumulation.** The path state carries no radiance; every contribution goes through `sample_add` or the splat plane; moments are written only by the resolve (R1, R2).
 8. **Randomness and lanes.** Random numbers come only from 0003's sampler; no seed is special; surface decisions use permutation-invariant lane reductions, hero-sampled decisions use the hero lane, and lane 0 survives termination (0003 d5-d6, d23; R3, R4, R24). The balance heuristic in r_u/r_l form is the only MIS form (R5).
 9. **One owner per fact.** Numbers, names and layouts are stated once in the owning record (G2, R29); changing a layout amends 0003, a kernel list 0002, a report code 0001's table, a budget 0009's table. Records change only by a superseding record.
-10. **Fail loudly.** Unsupported input raises a visible error or report entry: magenta plus an entry for nodes, a dropped generation for bad edits; no silent fallback, no silent clamp, no feature that lands switched off (`CLAUDE.md` rule 7, O25-O26).
-11. **No process-global mutable state** in the engine, no callbacks across the ABI, no Python threads in the addon, no Blender call off the main thread (`CLAUDE.md` rule 8, 0001 D2.4, 0007 d23, d26).
+10. **Fail loudly.** Unsupported input raises a visible error or report entry: magenta plus an entry for nodes, a dropped generation for bad edits; no silent fallback, no silent clamp, no feature that lands switched off (the fail-loudly rule of `CLAUDE.md`, O25-O26).
+11. **No process-global mutable state** in the engine, no callbacks across the ABI, no Python threads in the addon, no Blender call off the main thread (the fail-loudly rule of `CLAUDE.md`, 0001 D2.4, 0007 d23, d26).
 12. **The ABI is generated.** Change `astroray.h` within its grammar; `_abi.py`, layouts, recorder and replayer are generated, never edited (0001 D2.7, D2.10).
 13. **Every device allocation goes through the ledger** and obeys the reserve rule (0007 d14).
 14. **Science data is never denoised, clamped or exposure-scaled**; a biased control with a science output refuses the render (0008 d6, d17; 0004 D17).
 15. **Dependencies and data** come only from 0001's closed list and data policy; NVIDIA headers and binaries never enter the repository (0001 D7-D9).
-16. **Budgets are requirements.** A change that breaks a B-row, a kernel limit or a lint cap is not finished; budgets fail at their limit, with no warning band (`CLAUDE.md` rule 9, 0009 d13).
-17. **Evidence, not claims.** "Done" means built, checked, with the output shown; every new or changed test has a canary; no skip without an open task; look at rendered images as well as numbers (`CLAUDE.md` rule 4, 0009 d15, d26, d28).
-18. **Surgical, minimal changes** within the task's scope; no speculative hooks (G4, `CLAUDE.md` rules 2-3). Nothing runs on a timer (G3); rules are enforced by scripts, not hooks (0009 d31).
+16. **Budgets are requirements.** A change that breaks a B-row, a kernel limit or a lint cap is not finished; budgets fail at their limit, with no warning band (the Commands section of `CLAUDE.md`, 0009 d13).
+17. **Evidence, not claims.** "Done" means built, checked, with the output shown; every new or changed test has a canary; no skip without an open task; look at rendered images as well as numbers (the Commands section and the canary and look-at-renders rules of `CLAUDE.md`, 0009 d15, d26, d28).
+18. **Surgical, minimal changes** within the task's scope; no speculative hooks (G4, the scope rule of `CLAUDE.md`). Nothing runs on a timer (G3); rules are enforced by scripts, not hooks (0009 d31).
 19. **v1 is reached only through `docs/v1-lessons/`** (`CLAUDE.md`, 0009 d30).
 
 ## 13. Open before and during the build

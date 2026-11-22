@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Repository lint: licences, NVIDIA material, ASCII scripts, process caps, skips, task files, build flags.
+"""Repository lint: licences, NVIDIA material, ASCII scripts, process caps, skips, task files, build flags, doc citations.
 
 Run: <python> -I tools/lint.py [--self-test] [--section name]
 Ref: docs/decisions/0009-build-test-process.md d10, d28, d31; 0001 D7.1 and V4.
@@ -724,6 +724,110 @@ def assets(c):
             c.find(p, 1, "assets", f"image {w}x{h}, cap {IMAGE_MAX_PX} px")
 
 
+# ---- citations section: retrospective R12 (g), ruling 86 ---------------------------
+CIT_RULINGS = "docs/decisions/RULINGS.md"
+CIT_OWNER = "docs/decisions/0000-owner-decisions.md"
+CIT_0009 = "docs/decisions/0009-build-test-process.md"
+# A list continues only with short numbers, so "ruling 5, 0004 D1" does not read 0004 as a ruling.
+_CONT = r"(?:\s*(?:-|–|,|and|or)\s*R?\d{1,3}(?!\.?\d))*"
+CIT_RULING_RE = re.compile(r"\b[Rr]ulings? (\d{1,3}(?!\.?\d)" + _CONT + ")")
+CIT_R_RE = re.compile(r"\bR(\d{1,2})(?:-R(\d{1,2}))?\b")
+CIT_OWNER_RE = re.compile(r"\b[Oo]wner decisions? (\d{1,3}(?!\.?\d)" + _CONT + ")")
+CIT_O_RE = re.compile(r"\bO(\d{1,3})(?:-O(\d{1,3}))?\b")
+CIT_B_RE = re.compile(r"\bB-(\d\d)\b")
+CIT_RULE_RE = re.compile(r"\bCLAUDE\.md`? rules? (\d+)(?:\s*-\s*(\d+))?")
+_DEC = r"(?:[dD]|decisions? |items? )"
+CIT_DEC_RE = re.compile(rf"\b(000[1-9]) ({_DEC}\d+[a-z]?(?:(?:-|–|, | and )(?:{_DEC}\d+[a-z]?|\d{{1,2}}[a-z]?(?!\.?\d)))*)")
+
+
+def _numbered(c, path, head_re, item_re):
+    """Item ids of the numbered lines under the first heading matching head_re, up to the next heading of that
+    level; head_re None scans the whole file."""
+    out, inside, level = set(), head_re is None, None
+    for ln in c.lines(path):
+        h = head_re and re.match(r"^(#+) ", ln)
+        if h and inside and len(h.group(1)) <= level:
+            break
+        if h and re.match(head_re, ln):
+            inside, level = True, len(h.group(1))
+            continue
+        m = inside and re.match(item_re, ln)
+        if m:
+            out.add(m.group(1))
+    return out
+
+
+def _range_ids(body):
+    """Every number a citation list names: "64-85" expands, "16 and 17" lists."""
+    out = []
+    for part in re.split(r"\s*(?:,|and|or)\s*", body):
+        ends = [int(x) for x in re.findall(r"\d+", part)]
+        if len(ends) == 2 and ends[0] <= ends[1]:
+            out += list(range(ends[0], ends[1] + 1))
+        else:
+            out += ends
+    return out
+
+
+def citations(c):
+    """Ref: retrospective R12 (g): every ruling, owner decision, budget row, record decision and CLAUDE.md rule
+    cited in docs/*.md and docs/decisions/*.md exists, and 0009 d28 names every task-file field."""
+    if CIT_RULINGS not in c.files:
+        return  # not a records tree
+    # STATUS.md is excluded like tasks/: the lead overwrites it, and it proposes rows that open tasks create.
+    docs = [p for p in c.files if p.endswith(".md") and re.match(r"^docs/(decisions/)?[^/]+$", p)
+            and p != "docs/STATUS.md"]
+    rulings = {int(x) for x in _numbered(c, CIT_RULINGS, None, r"^(\d+)\. ")}
+    owner = {int(x) for x in _numbered(c, CIT_OWNER, None, r"^(\d+)\. ")} if CIT_OWNER in c.files else set()
+    brows = {m.group(1) for ln in (c.lines(CIT_0009) if CIT_0009 in c.files else [])
+             for m in [re.match(r"\| B-(\d\d) \|", ln)] if m}
+    rules = {int(x) for x in _numbered(c, "CLAUDE.md", r"^## Rules", r"^(\d+)\. ")} if "CLAUDE.md" in c.files else set()
+    dec = {}
+    for p in c.files:
+        m = re.match(r"^docs/decisions/(000[1-9])-[^/]+\.md$", p)
+        if m:
+            s = dec.setdefault(m.group(1), set())
+            s |= _numbered(c, p, r"^## Decision\s*$", r"^\s*(\d+[a-z]?)\. ")
+            s |= _numbered(c, p, r"^## Decision\s*$", r"^(?:### |- \*\*|\*\*)D(\d+[a-z]?)\.")
+    for p in docs:
+        bare_r = p == "docs/ARCHITECTURE.md" or p.startswith("docs/decisions/")
+        for n, ln in enumerate(c.lines(p), 1):
+            for m in CIT_RULING_RE.finditer(ln):
+                for x in _range_ids(m.group(1)):
+                    if x not in rulings:
+                        c.find(p, n, "citations", f"ruling {x} is not in RULINGS.md")
+            if bare_r:
+                for m in CIT_R_RE.finditer(ln):
+                    for x in _range_ids("-".join(g for g in m.groups() if g)):
+                        if x not in rulings:
+                            c.find(p, n, "citations", f"R{x} is not in RULINGS.md")
+            for m in list(CIT_OWNER_RE.finditer(ln)) + list(CIT_O_RE.finditer(ln)):
+                for x in _range_ids("-".join(g for g in m.groups() if g)):
+                    if x not in owner:
+                        c.find(p, n, "citations", f"owner decision {x} is not in 0000-owner-decisions.md")
+            for m in CIT_B_RE.finditer(ln):
+                if m.group(1) not in brows:
+                    c.find(p, n, "citations", f"B-{m.group(1)} is not a row of the 0009 d13 table")
+            for m in CIT_RULE_RE.finditer(ln):
+                for x in _range_ids("-".join(g for g in m.groups() if g)):
+                    if x not in rules:
+                        c.find(p, n, "citations", f"CLAUDE.md has no rule {x}")
+            for m in CIT_DEC_RE.finditer(ln):
+                for x in re.findall(r"\d+[a-z]?", m.group(2)):
+                    if x not in dec.get(m.group(1), set()):
+                        c.find(p, n, "citations", f"record {m.group(1)} has no decision {x}")
+    d28 = []
+    if CIT_0009 in c.files:
+        L = c.lines(CIT_0009)
+        i = next((k for k, ln in enumerate(L) if ln.startswith("28. ")), None)
+        if i is not None:
+            j = next((k for k in range(i + 1, len(L)) if re.match(r"^(\d+\. |#)", L[k])), len(L))
+            d28 = [ln.strip() for ln in L[i:j]]
+    for fld in FIELDS:
+        if not any(ln.startswith(fld) for ln in d28):
+            c.find(CIT_0009, 1, "citations", f"0009 d28's template lacks the task-file field {fld}")
+
+
 SECTIONS = {
     "spdx": spdx,
     "nvidia": nvidia,
@@ -739,6 +843,7 @@ SECTIONS = {
     "assets": assets,
     "data": data,
     "flags": flags,
+    "citations": citations,
 }
 
 def run(root, files, sections):

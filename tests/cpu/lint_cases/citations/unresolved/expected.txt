@@ -1,0 +1,11 @@
+docs/ARCHITECTURE.md:4: [citations] ruling 9 is not in RULINGS.md
+docs/ARCHITECTURE.md:5: [citations] R8 is not in RULINGS.md
+docs/ARCHITECTURE.md:6: [citations] owner decision 7 is not in 0000-owner-decisions.md
+docs/ARCHITECTURE.md:7: [citations] B-03 is not a row of the 0009 d13 table
+docs/ARCHITECTURE.md:8: [citations] CLAUDE.md has no rule 4
+docs/ARCHITECTURE.md:9: [citations] record 0001 has no decision 3
+docs/ARCHITECTURE.md:10: [citations] ruling 5 is not in RULINGS.md
+docs/ARCHITECTURE.md:11: [citations] CLAUDE.md has no rule 4
+docs/ARCHITECTURE.md:12: [citations] record 0001 has no decision 7
+docs/ARCHITECTURE.md:13: [citations] owner decision 9 is not in 0000-owner-decisions.md
+docs/decisions/0009-build-test-process.md:1: [citations] 0009 d28's template lacks the task-file field Depends on:
