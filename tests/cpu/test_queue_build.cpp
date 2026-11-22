@@ -566,6 +566,17 @@ TEST_CASE("queue_build/shadow reservation takes fresh slots after the free segme
     CHECK(t.stage[S(Stage::SHADE_VOLUME)].count == 4);
     CHECK(t.shadow_fresh == 17);
   }
+  {  // k = 2 across the boundary: surface 3 x 1 takes queue entries 8-10, so light path 12 x 2 starts
+     // at entry 11 with 19 free (2 in the segment, 17 fresh): floor(19 / 2) = 9 launch, its slots
+     // straddle the segment's end, and the one slot left goes to volume 10 x 1 at entry 29.
+    const ar::StepTable t = fill(30, 3, 12, 10);
+    CHECK(t.stage[S(Stage::SHADE_SURFACE)].count == 3);
+    CHECK(t.stage[S(Stage::SHADE_LIGHT_PATH)].count == 9);
+    CHECK(t.stage[S(Stage::SHADE_LIGHT_PATH)].shadow_base == 11);
+    CHECK(t.stage[S(Stage::SHADE_VOLUME)].count == 1);
+    CHECK(t.stage[S(Stage::SHADE_VOLUME)].shadow_base == 29);
+    CHECK(t.shadow_fresh == 17);
+  }
   {  // No capacity above the high-water mark (or none given): the segment alone, as in 0002 D5.
     for (uint32_t capacity : {0u, 13u, 10u}) {
       const ar::StepTable t = fill(capacity, 12, 0, 0);
