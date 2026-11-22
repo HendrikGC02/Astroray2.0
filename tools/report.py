@@ -316,7 +316,7 @@ def gallery_sections(gallery):
         return (f"|GPU - CPU| / mean, black 0 %, yellow 100 %: median {g['median_rel']:.1%}, 95th {g['p95_rel']:.1%}, "
                 f"GPU/CPU mean {g['mean_gpu_over_cpu']:.4f} (informational)")
 
-    scenes = sorted({n[:-4] for n in gallery if n.endswith("_cpu") and "_heat_" not in n})
+    scenes = sorted({n.rsplit("_", 1)[0] for n in gallery if n.endswith(("_cpu", "_cuda", "_diff")) and "_heat_" not in n})
     rows = [f'<tr><th colspan="3">{html.escape(sc)}</th></tr><tr>{cell(sc + "_cpu", dev_caption)}'
             f'{cell(sc + "_cuda", dev_caption)}{cell(sc + "_diff", diff_caption)}</tr>' for sc in scenes]
     heat = []

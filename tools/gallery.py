@@ -330,6 +330,11 @@ def worker_heat(job):
     bpy.ops.wm.open_mainfile(filepath=job["blend"], load_ui=False)
     scene, e, dev = bpy.context.scene, job["entry"], job["device"]
     build = build_id(module)
+    for kind in ("samples", "bounces"):
+        stem = f"{e['name']}_heat_{kind}_{dev.lower()}"
+        for old in (stem + ".png", stem + ".json", os.path.join("thumbs", stem + ".png")):
+            if os.path.exists(os.path.join(job["out"], old)):   # a stale file of an earlier run must not pass
+                os.remove(os.path.join(job["out"], old))
     scene.render.engine = "ASTRORAY"
     scene.astroray.device = dev
     scene.astroray.viewport_samples = 64
@@ -389,10 +394,10 @@ def worker_heat(job):
             x0, y0, rw, rh = region.x - area.x, region.y - area.y, region.width, region.height
             rgb = rgb[ah - (y0 + rh):ah - y0, x0:x0 + rw]
             # Only the camera frame carries the heat map: crop to it (its corners in region pixels, y up).
-            from bpy_extras.view3d_utils import location_to_region_2d
+            from bpy_extras.view3d_utils import location_3d_to_region_2d
             cam = scene.camera
             rv3d = area.spaces.active.region_3d
-            pts = [location_to_region_2d(region, rv3d, cam.matrix_world @ v) for v in cam.data.view_frame(scene=scene)]
+            pts = [location_3d_to_region_2d(region, rv3d, cam.matrix_world @ v) for v in cam.data.view_frame(scene=scene)]
             if any(p is None for p in pts):
                 raise RuntimeError("the camera frame is not inside the viewport region")
             fx0, fx1 = int(round(min(p.x for p in pts))), int(round(max(p.x for p in pts)))
