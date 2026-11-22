@@ -17,3 +17,5 @@ Budget: gate +0 s expected (lint adds well under 0.5 s to `fast`; the edited ker
 Depends on: none.
 Size: M (about 200 lines of lint and cases, 35 one-line edits elsewhere); stop and report at 2x or when the edits pass 40.
 Progress:
+- Pre-flight (main 2f8514b+): task-number comments 23, stale Ref 2, empty catch (...) 11 listed spots (task text says 10, lists 11); no new hits; 36 edits.
+- Files: tools/lint.py, tools/README.md, tests/cpu/lint_cases/hygiene/*, tasks/142.canary.patch, plus the listed spots.
