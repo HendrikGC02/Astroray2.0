@@ -243,6 +243,9 @@ def canary_shape(value):
         if t.group(1) is not None:
             if cur and not named:
                 return f"Canary: {cur} has no quoted case name"
+            # land runs the command through an outer `pwsh -Command`, which expands $ in double quotes first.
+            if re.match(r"pwsh\b.*-Command\b", t.group(1)) and re.search(r'"[^"]*\$[^"]*"', t.group(1)):
+                return "Canary: a `pwsh -Command` item has a $ inside double quotes; use single quotes"
             cur, items = None, items + 1
         elif t.group(2) is not None:
             if cur is None:
