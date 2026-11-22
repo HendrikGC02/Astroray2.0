@@ -16,8 +16,19 @@
 //    the segment, which ends at high_water[SHADOW] when invalid_items is 0. A table whose
 //    shadow_capacity is not above high_water[SHADOW] has no fresh slots.
 //  - shadow_fresh (output) is the number of fresh shadow slots this step reserved, the slots
-//    [high_water[SHADOW], high_water[SHADOW] + shadow_fresh); the host adds it to the shadow
-//    high-water mark before the next partition.
+//    [high_water[SHADOW], high_water[SHADOW] + shadow_fresh); shadow_reserved (output) is the
+//    number of free-list entries the producers reserved, segment and fresh slots together.
+//  - live_end[p] (output; the host writes 0 there with the marks) is the end of the pool's last
+//    queue_build tile (kQueueTile slots, the last one ending at high_water[p]) that holds a slot
+//    whose next_stage is not the pool's TERMINATED value, 0 when there is none: the largest such
+//    slot + 1, rounded up to its tile's end. queue_build_scan raises it with an integer atomic max,
+//    so the value does not depend on the order of the scan tiles. Every slot in
+//    [live_end[p], high_water[p]) is terminated, and the pool's TERMINATED segment lists them last
+//    and in index order (when invalid_items is 0), so its entries from position
+//    live_end[p] on are live_end[p], live_end[p] + 1, ...: the free list is the same slots in the
+//    same order whether the high-water mark is high_water[p] or live_end[p], and the host may lower
+//    the mark to live_end[p] (plus the fresh slots the step takes) for the next partition
+//    (RULINGS 85).
 //  - stage[s].start indexes the queue array of the stage's pool (main_queue for main-pool
 //    stages, shadow_queue for INTERSECT_SHADOW, SHADE_SHADOW and SHADOW_TERMINATED).
 //  - stage[s].count is the launch count: the segment length, except for a shadow producer
@@ -37,7 +48,8 @@
 //    in no segment; the host must fail the render when it is not zero (no silent fallback).
 // Ref: docs/decisions/0002-kernel-architecture.md D5 (deterministic, atomic-free shadow
 // slot assignment), D6 (partition, step table), D7 step 2 (read back under 256 B);
-// docs/decisions/RULINGS.md 84 (the shadow free list's fresh tail);
+// docs/decisions/RULINGS.md 84 (the shadow free list's fresh tail), 85 (the mark
+// falls to the end of the last tile holding a live slot);
 // docs/decisions/0003-spectral-model-and-path-state.md d19-d20.
 #pragma once
 #include <cstdint>
@@ -74,15 +86,17 @@ struct StepEntry {
 };
 
 // Filled on the device by queue_build and read back by the host: one entry per Stage
-// value plus the refill count of D7 step 4. 204 B, under the 256 B of D7 step 2. high_water and
-// shadow_capacity are adjacent: the host writes them in one upload.
+// value plus the refill count of D7 step 4. 216 B, under the 256 B of D7 step 2. high_water,
+// shadow_capacity and live_end are adjacent: the host writes them in one upload.
 struct StepTable {
   StepEntry stage[kStageCount];
   uint32_t refill_count;
   uint32_t high_water[kPoolCount];
   uint32_t shadow_capacity;
+  uint32_t live_end[kPoolCount];
   uint32_t invalid_items;
   uint32_t shadow_fresh;
+  uint32_t shadow_reserved;
 };
 static_assert(sizeof(StepTable) < 256, "the step table is read back in one under-256-B copy");
 
@@ -134,6 +148,7 @@ AR_FN void step_table_finish(StepTable& t, KFn shadow_k) {
   // The segment's slots go first, so the reservation reaches into the fresh tail only past them.
   const uint32_t reserved = free_slots - free_left;
   t.shadow_fresh = reserved > terminated ? reserved - terminated : 0u;
+  t.shadow_reserved = reserved;
   t.refill_count = t.stage[static_cast<uint32_t>(Stage::TERMINATED)].count;
 }
 

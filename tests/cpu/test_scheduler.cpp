@@ -252,9 +252,12 @@ TEST_SUITE("gate") {
 
 // Two runs of one stub workload, one with the shadow pool partitioned up to its high-water mark
 // (RULINGS 84) and one over its whole capacity as before; shadow_capacity 0 keeps the default 2x.
+// The ranged mark is kept growing here (keep_high_water) so its end value is the pass's peak; the
+// mark that falls to live_end is compared with it in check_live_range.
 void check_shadow_range(uint32_t cameras, uint32_t lights, uint64_t capacity, uint64_t shadow_capacity) {
   Rig ranged(cameras, lights, capacity);
   Rig full(cameras, lights, capacity);
+  ranged.sched->config.keep_high_water = true;
   ranged.sched->config.shadow_capacity_override = full.sched->config.shadow_capacity_override = shadow_capacity;
   full.sched->config.shadow_full_range = true;
   REQUIRE(ranged.run() == PassStatus::COMPLETE);
@@ -280,6 +283,7 @@ TEST_CASE("scheduler/shadow range matches the full shadow range") {
   // one or two steps, so the ranged mark stops below the capacity.
   check_shadow_range(5000, 3000, 1u << 10, 0);
   Rig r(5000, 3000, 1u << 10);
+  r.sched->config.keep_high_water = true;  // the peak, not the drained pass's lowered mark
   REQUIRE(r.run() == PassStatus::COMPLETE);
   CHECK(r.sched->shadow_high_water() < 2048);
 }
@@ -288,6 +292,40 @@ TEST_CASE("scheduler/shadow range under a starved shadow pool") {
   // 64 shadow slots for a 1024-path pool: producers are held back (floor(free_left / k)) once the
   // fresh slots run out, and nothing is dropped.
   check_shadow_range(5000, 3000, 1u << 10, 64);
+}
+
+// Two runs of one stub workload: the marks falling to the step table's live_end (RULINGS 85) and the
+// marks only growing (keep_high_water, RULINGS 84 alone). Same slots in the same order, so
+// outcomes, deliveries and every counter agree; the lowered run partitions fewer items.
+void check_live_range(uint32_t cameras, uint32_t lights, uint64_t capacity, uint64_t shadow_capacity) {
+  Rig lowered(cameras, lights, capacity);
+  Rig kept(cameras, lights, capacity);
+  lowered.sched->config.shadow_capacity_override = kept.sched->config.shadow_capacity_override = shadow_capacity;
+  kept.sched->config.keep_high_water = true;
+  REQUIRE(lowered.run() == PassStatus::COMPLETE);
+  REQUIRE(kept.run() == PassStatus::COMPLETE);
+  CHECK(lowered.res.outcome == kept.res.outcome);
+  CHECK(lowered.res.shadow_delivered == kept.res.shadow_delivered);
+  const PassCounters& a = lowered.sched->counters();
+  const PassCounters& b = kept.sched->counters();
+  CHECK(std::memcmp(&a, &b, sizeof a) == 0);
+  CHECK(lowered.sched->partitioned_items() < kept.sched->partitioned_items());
+  // Per pool: the main mark falls too. Every path ends, so its tiles go dead while shadow items still
+  // run, and the lowered main range is smaller (the shadow pool alone cannot satisfy this).
+  CHECK(lowered.sched->partitioned_main_items() < kept.sched->partitioned_main_items());
+  // The pass drains, so the last partition finds nothing live: the lowered shadow mark ends at 0.
+  CHECK(lowered.sched->shadow_high_water() == 0);
+  CHECK(kept.sched->shadow_high_water() > 0);
+  check_all(lowered);
+}
+
+TEST_CASE("scheduler/live range matches kept high-water marks") {
+  // A 1024-path pool refilled many times from 8000 samples (the refill takes the free slots below
+  // the lowered main mark, then fresh ones), with the default and a starved shadow pool.
+  check_live_range(5000, 3000, 1u << 10, 0);
+  check_live_range(5000, 3000, 1u << 10, 64);
+  // One refill fills the pool, as at 1080p 1 spp on the GPU (capacity = the pass's work).
+  check_live_range(3000, 0, 0, 0);
 }
 
 }  // TEST_SUITE
