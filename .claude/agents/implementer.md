@@ -29,7 +29,7 @@ diff reaches twice the task's Size.
 
 Work:
 - Physics, sampling, numerics: from the task's Reference, `Ref:` in the code.
-  Never invent an algorithm or a constant; cite the file you read, not memory.
+  Never invent an algorithm or a constant; cite the file under third_party/_cache/refs you read (`fetch.ps1 refs` first), not memory.
 - Builds, GPU runs and Blender go through `tools/` (they hold the machine lock
   and read the environment themselves). No direct cmake, ninja, nvcc, blender.
   Run a test executable only as an acceptance line writes it, CPU ones only.

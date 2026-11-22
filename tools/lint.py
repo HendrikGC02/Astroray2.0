@@ -828,6 +828,51 @@ def citations(c):
             c.find(CIT_0009, 1, "citations", f"0009 d28's template lacks the task-file field {fld}")
 
 
+REFS_FIELDS = ["name", "url", "commit", "sha256", "spdx", "purpose"]
+REFS_MENTION_RE = re.compile(r"refs\.toml|_cache[\\/]+refs|DEPS_CACHE.*refs")
+
+
+def refs(c):
+    """Ref: 0009 d6: reference sources are pinned and never compiled, linked or listed as dependencies."""
+    import tomllib
+    toml_path = "third_party/refs.toml"
+    if toml_path not in c.files:
+        return
+    try:
+        with open(os.path.join(c.root, toml_path), "rb") as f:
+            entries = tomllib.load(f).get("ref", [])
+    except (OSError, ValueError) as e:
+        c.find(toml_path, 1, "refs", f"cannot parse: {e}")
+        return
+    dep_names = set()
+    if "third_party/deps.toml" in c.files:
+        with open(os.path.join(c.root, "third_party/deps.toml"), "rb") as f:
+            dep_names = {d.get("name") for d in tomllib.load(f).get("dep", [])}
+    seen = set()
+    for r in entries:
+        name = r.get("name", "?")
+        for k in REFS_FIELDS:
+            if not isinstance(r.get(k), str) or not r[k].strip():
+                c.find(toml_path, 1, "refs", f"{name}: missing field {k}")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(r.get("commit", ""))):
+            c.find(toml_path, 1, "refs", f"{name}: commit is not 40 lowercase hex digits")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(r.get("sha256", ""))):
+            c.find(toml_path, 1, "refs", f"{name}: sha256 is not 64 lowercase hex digits")
+        if name in seen:
+            c.find(toml_path, 1, "refs", f"{name}: duplicate name")
+        seen.add(name)
+        if name in dep_names:
+            c.find(toml_path, 1, "refs", f"{name}: also a name in deps.toml (references are not dependencies)")
+    for p in c.files:
+        base = os.path.basename(p)
+        build = base == "CMakeLists.txt" or base.endswith(".cmake")
+        if not (build or (base.endswith(".ps1") and p != "tools/fetch.ps1")):
+            continue
+        for i, ln in enumerate(c.lines(p), 1):
+            if REFS_MENTION_RE.search(ln):
+                c.find(p, i, "refs", "names the reference cache or refs.toml (references are never compiled or linked)")
+
+
 SECTIONS = {
     "spdx": spdx,
     "nvidia": nvidia,
@@ -844,6 +889,7 @@ SECTIONS = {
     "data": data,
     "flags": flags,
     "citations": citations,
+    "refs": refs,
 }
 
 def run(root, files, sections):

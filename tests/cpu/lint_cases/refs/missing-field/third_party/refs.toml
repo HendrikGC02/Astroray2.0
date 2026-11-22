@@ -1,0 +1,6 @@
+[[ref]]
+name = "pbrt-v4"
+url = "https://example.invalid/pbrt.zip"
+commit = "b0bdf461ba5d"
+sha256 = "092b23a47ad4675ec514a77db7f3d7f791e7c5f46577eda7424027d203319a24"
+purpose = "reference"

@@ -1,0 +1,2 @@
+third_party/refs.toml:1: [refs] pbrt-v4: commit is not 40 lowercase hex digits
+third_party/refs.toml:1: [refs] pbrt-v4: missing field spdx
