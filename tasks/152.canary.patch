@@ -12,10 +12,10 @@ index b501684..514c964 100644
  }
  
 diff --git a/src/kernel/medium/phase.h b/src/kernel/medium/phase.h
-index af56070..1b1415b 100644
+index 6397df2..255023f 100644
 --- a/src/kernel/medium/phase.h
 +++ b/src/kernel/medium/phase.h
-@@ -62,7 +62,7 @@ AR_FN Real phase_eval(const PhaseLobe& lobe, Real3 wo, Real3 wi) {
+@@ -74,7 +74,7 @@ AR_FN Real phase_eval(const PhaseLobe& lobe, Real3 wo, Real3 wi) {
      const Real3 h = wo - wi;
      d = (Real(1) + g) * (Real(1) + g) - g * dot(h, h);
    }
@@ -24,7 +24,7 @@ index af56070..1b1415b 100644
  }
  
  AR_FN Real phase_pdf(const PhaseLobe& lobe, Real3 wo, Real3 wi) { return phase_eval(lobe, wo, wi); }
-@@ -76,7 +76,7 @@ AR_FN PhaseSample phase_sample(const PhaseLobe& lobe, Real3 wo, Real2 u) {
+@@ -88,7 +88,7 @@ AR_FN PhaseSample phase_sample(const PhaseLobe& lobe, Real3 wo, Real2 u) {
    // Take mu from whichever side is nearer, so the rounding of 1 - mu or 1 + mu stays relative.
    const Real mu = one_minus_mu < one_plus_mu ? Real(1) - one_minus_mu : one_plus_mu - Real(1);
    const Real sin_theta = ar::sqrt(one_minus_mu * one_plus_mu);

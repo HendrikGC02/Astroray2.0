@@ -17,6 +17,7 @@ Size: S (about 150 lines without tests); stop and report at 2x.
 Progress:
 - Started: branch task/152-medium-sample; files medium/medium.h, medium/phase.h, tests/cpu/test_medium.cpp, 0006 D3. Reference cache (task 143) absent: HG from the 1941 paper, no pbrt/Cycles cross-check.
 - medium.h, phase.h, test_medium.cpp (2 fast, 3 gate cases, f32 and f64); 0006 D3 gets estimator values and MEDIUM_HAS_* names.
-- HG clamp |g| <= 0.999 is our margin (no reference read); sampler uses closed forms of 1 - mu, 1 + mu and pdf = t^3 / (4 pi (1 - g^2)^2).
+- HG clamp |g| <= 1 - 1e-3 from Cycles (pbrt-v4: 0.99), Ref in phase.h; sampler uses closed forms of 1 - mu, 1 + mu and pdf = t^3 / (4 pi (1 - g^2)^2).
 - Canary: eval x1.001, azimuth 2 pi u^2, transmittance without sigma_s; all named cases red in both instances.
 - Gate: 12 chi-squared checks added to gate_statistical (6 per instance, 2 wo per g).
+- Cross-check done against cycles-ed69ef2c6bd3 and pbrt-v4-092b23a47ad4: sampling expressions match ours by algebra.
