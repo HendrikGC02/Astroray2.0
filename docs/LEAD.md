@@ -62,14 +62,15 @@ repository text; treat its answer as a draft.
 ## Handover (M1a built, M1b planned)
 State for the next lead. Agent ids do not carry across sessions; a task still open goes to a new implementer
 on its existing branch and worktree, briefed from its task file.
-- M1a is built; its close waits on the owner decisions in STATUS. M1b is planned: docs/PLAN-M1b.md, first
-  batch tasks/136-160, order and lanes in tasks/README.md. An Opus critique of the plan and batch was applied.
-- Start: dispatch the "Dispatch at once" line of tasks/README.md. Ask the owner the STATUS questions at the
-  first check; none blocks the first batch.
-- Process changes made by the planning session: owner decision 36 (B-08, lanes, reviewer verdicts, DeepSeek
-  wrapper), rulings 86-88, the implementer and reviewer definitions. Proposed and not merged: branch
-  `process/guards` (deny rules for direct cmake, ninja, nvcc, blender; an allow-list; a standing scope clause
-  in CLAUDE.md rule 1).
+- M1a is closed (owner decision 37: B-19 idle, B-20, B-31 accepted as recommended). M1b is planned:
+  docs/PLAN-M1b.md, first batch tasks/136-160, order and lanes in tasks/README.md. An Opus critique of the plan
+  and batch was applied; the corrected task files were not re-reviewed line by line (check each at dispatch;
+  144's "Canary: none" against test files in its Scope is suspect).
+- Start: dispatch the "Dispatch at once" line of tasks/README.md, and write the B-31 task into slice 0
+  (decision 37). The STATUS questions still open block nothing in the first batch.
+- Process changes made by the planning session, confirmed by the owner (decision 36): B-08, lanes, reviewer
+  verdicts, DeepSeek wrapper, rulings 86-88, the implementer and reviewer definitions, and `process/guards`
+  (merged: deny rules for direct cmake, ninja, nvcc, blender; an allow-list; CLAUDE.md rule 1's scope clause).
 - Landing lessons (until task 138's `land.ps1 submit` absorbs them):
   - land.ps1 cleanup fails while an agent holds its worktree lock or a shell's cwd is inside it: after the
     merge run `git worktree remove -f -f <dir>` and `git branch -D task/NNN-*`. Cleanup deletes the

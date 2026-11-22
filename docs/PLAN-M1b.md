@@ -124,6 +124,9 @@ M1b scope (slice D).
 No task in slices 0, A, B or C depends on these decisions, so M1b starts without them. Each has a default
 that holds until the owner answers, and a place where the answer lands.
 
+Answered (owner decisions 36, 37): B-19, B-20, B-31 and starting M1b as recommended (M1a closed); decision 36
+confirmed; `process/guards` merged. The B-31 task is still to be written in slice 0. The other rows stay open.
+
 | Decision | Default until answered | If the owner says "fix it" | Recommendation |
 |---|---|---|---|
 | B-19 GPU idle 11.0 % against 10 % on B-1M | row stays red in STATUS; M1a stays "built, not closed" | one remedy task in the gpu lane after 140, at most two (section 1), then back to the owner | Accept at M1a's close as measured and keep the 10 % limit as the target for slice D's re-measurement: the cause is the step-table round trip, B-14 (what the user sees) is met, and M1b changes the step count anyway |
