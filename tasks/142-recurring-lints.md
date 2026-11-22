@@ -19,3 +19,4 @@ Size: M (about 200 lines of lint and cases, 35 one-line edits elsewhere); stop a
 Progress:
 - Pre-flight (main 2f8514b+): task-number comments 23, stale Ref 2, empty catch (...) 11 listed spots (task text says 10, lists 11); no new hits; 36 edits.
 - Files: tools/lint.py, tools/README.md, tests/cpu/lint_cases/hygiene/*, tasks/142.canary.patch, plus the listed spots.
+- Done: lint hygiene + 5 cases (self-test 56), 36 edits, canary patch; fast PASS 7.5 s; gate PASS 140.4 s (first cold run 182.1 s over B-09, rerun warm). Borderline empty catch kept with a comment: src/host/scene/mesh.cpp TopoGate::resolve (a throwing callback is dropped).
