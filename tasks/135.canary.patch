@@ -1,0 +1,14 @@
+diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
+index bc54aed..daccaeb 100644
+--- a/src/host/session/session.cpp
++++ b/src/host/session/session.cpp
+@@ -882,9 +882,6 @@ void Session::render_loop() {
+           // INITIALIZING until started.
+         } else if (paused_) {
+           if (state_ != AR_STATE_PAUSED) set_state_locked(AR_STATE_PAUSED);
+-        } else if (awaiting_start_generation_locked()) {
+-          // Woken by the scene's listener when the generation activates or is dropped; a drop has
+-          // raised GENERATION_REJECTED, so the render that follows fails loudly.
+         } else if (idle_) {
+           if (state_ != AR_STATE_CONVERGED) set_state_locked(AR_STATE_CONVERGED);
+         } else {
