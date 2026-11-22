@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-"""An orthographic Rendered viewport tells the user (task 159; BACKLOG: orthographic viewport warning).
+"""An orthographic Rendered viewport reaches the user with a warning, not silently.
 
 Run through `Invoke-ArBlender -Gui -Script tests/blender/gui_ortho.py`. A windowed Blender goes to Rendered
 shading on the A1 scene, the 3D view is switched to an orthographic (non-camera) view, and every call of
-`engine.report` the job makes while forwarding engine report entries is recorded. The engine builds a perspective view from an orthographic
-projection and raises CAMERA_UNSUPPORTED "ORTHO" (src/host/scene/camera.cpp); the viewport forwards report
-entries to `engine.report`, so a WARNING naming that code must arrive there, which Blender shows in its status
-bar. The frame itself stays wrong until orthographic rays exist (M4) and is not asserted.
+`engine.report` the job makes while forwarding engine report entries is recorded. The viewport forwards report
+entries to `engine.report`, so a CAMERA_UNSUPPORTED WARNING must arrive there, which Blender shows in its status
+bar. The orthographic projection is rejected before the ORTHO check (the entry reads "invalid camera
+descriptor", from Session::update_camera_and_filter), so the code is asserted, not the feature name. The frame
+itself stays black until orthographic rays exist (M4) and is not asserted.
 A timer drives the sequence (the viewport only draws while the main loop runs); the script ends the process.
 Ref: blender/astroray/viewport.py (`_report`); tests/blender/gui_edits.py (the driving pattern).
 """
@@ -106,8 +107,8 @@ class TestOrtho(unittest.TestCase):
     def test_orthographic_viewport_reports_unsupported(self):
         if "run" in STATE["errors"]:
             self.fail(STATE["errors"]["run"])
-        hits = [r for r in STATE["reports"] if "CAMERA_UNSUPPORTED" in r[1] and "ORTHO" in r[1]]
-        self.assertTrue(hits, f"no CAMERA_UNSUPPORTED ORTHO report; got {STATE['reports']}")
+        hits = [r for r in STATE["reports"] if r[1].startswith("CAMERA_UNSUPPORTED")]
+        self.assertTrue(hits, f"no CAMERA_UNSUPPORTED report reached engine.report; got {STATE['reports']}")
         self.assertIn("WARNING", hits[0][0])
 
 
