@@ -50,7 +50,16 @@ TEST_CASE("opsdef/foldable flag is parsed") {
     INFO(m.name);
     CHECK(m.foldable == (want.count(m.name) == 1));
   }
-  // opsgen.py refuses a foldable row with a reg+lift operand list and one with an empty result.
+}
+
+}  // TEST_SUITE
+
+TEST_SUITE("gate") {
+
+// Starting pwsh and Python costs about 0.8 s, over the fast tier's per-test limit (B-12), so the
+// opsgen self-test runs here. It must refuse a foldable row with a reg+lift operand list and one
+// with an empty result.
+TEST_CASE("opsdef/foldable self-test refuses ineligible rows") {
   std::string here = __FILE__;  // <root>/tests/cpu/test_opsdef.cpp
   const std::filesystem::path root = std::filesystem::path(here).parent_path().parent_path().parent_path();
   const std::string cmd = "pwsh -NoProfile -Command \". '" + (root / "tools/lib/python.ps1").generic_string() +

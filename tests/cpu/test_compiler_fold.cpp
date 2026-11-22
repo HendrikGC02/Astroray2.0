@@ -138,10 +138,12 @@ TEST_CASE("compiler_fold/folded equals interpreted per foldable op") {
     const int imms = immediates_of(m, &why);
     REQUIRE_MESSAGE(imms >= 0, m.name << " is foldable but " << why << ": extend compiler_fold/folded equals interpreted");
     const bool vec3 = std::strcmp(m.result_type, "f32x3") == 0;
-    REQUIRE_MESSAGE(vec3 || std::strcmp(m.result_type, "f32") == 0, m.name << " is foldable with result type " << m.result_type);
+    const bool scalar = std::strcmp(m.result_type, "f32") == 0;
+    REQUIRE_MESSAGE((vec3 || scalar), m.name << " is foldable with result type " << m.result_type);
     uint32_t nf = 0, ni = 0;
     REQUIRE_MESSAGE(op_param_counts(m.op, &nf, &ni), m.name << " is foldable but a graph cannot hold it");
-    REQUIRE_MESSAGE(ni == 0 && int(nf) == imms, m.name << ": the f32 parameters must be the immediates, no i32 ones");
+    const bool matches = ni == 0 && int(nf) == imms;
+    REQUIRE_MESSAGE(matches, m.name << ": the f32 parameters must be the immediates, no i32 ones");
     const ar::RecordSlot slot = vec3 ? ar::RecordSlot::geometry_tangent : ar::RecordSlot::base_metalness;
     uint32_t bad = 0;
     for (uint32_t i = 0; i < kN; ++i) {
@@ -153,7 +155,8 @@ TEST_CASE("compiler_fold/folded equals interpreted per foldable op") {
       std::vector<int> leaf;
       for (int s = 0; s < m.arity; ++s) {
         const VType t = op_input_type(m.op, s);
-        REQUIRE_MESSAGE((t == VType::F32 || t == VType::F32X3), m.name << ": input " << s << " is neither f32 nor f32x3");
+        const bool typed = t == VType::F32 || t == VType::F32X3;
+        REQUIRE_MESSAGE(typed, m.name << ": input " << s << " is neither f32 nor f32x3");
         if (t == VType::F32) {
           leaf.push_back(g.add(Op::CONST_F32, {input(i, off)}));
           code.push_back(word(Op::CONST_F32, src[s]));
@@ -184,7 +187,8 @@ TEST_CASE("compiler_fold/folded equals interpreted per foldable op") {
       ar::ShadeContext ctx = {};
       ar::OpenPBRParams rec = {};
       ar::Spec le = {};
-      const ar::SceneTables tables = {};
+      ar::SceneTables tables = {};
+      tables.rgb2spec = &table();  // STORE_SLOT requires it even for a scalar slot
       REQUIRE(ar::run_entry(code.data(), 4, &regs, ctx, tables, &rec, &le) == ar::VmStatus::OK);
       if (vec3) {
         const float want[3] = {float(rec.geometry_tangent.x), float(rec.geometry_tangent.y), float(rec.geometry_tangent.z)};
