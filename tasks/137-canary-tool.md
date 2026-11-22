@@ -23,3 +23,6 @@ Depends on: none.
 Size: M (about 450 lines without tests); stop and report at 2x.
 Progress:
 - Files: tools/lib/canary.ps1, tools/canary.ps1, tools/land.ps1, tools/lint.py (taskfile), tools/check.ps1, tools/README.md, tests/tools/fast_canary.ps1, run_fast.ps1, land_fixture/make_fixture.ps1, run_cases.ps1, lint cases (taskfile +2, ten Canary: none), land SKILL.md, implementer.md; all in Scope.
+- Done: lib/canary.ps1 (Invoke-Canary, hunk matrix, baseline record), tools/canary.ps1, land uses the lib and copies canary.patch, lint taskfile Canary shape, fixtures f/g, tools tests (gate) and tools fixtures (full).
+- Canary line: the lint item now uses single quotes; in double quotes the runner's outer pwsh expanded $LASTEXITCODE and the item never failed.
+- Verified: check fast, check gate (tools tests 0.6 s), run_cases a-g, lint self-test, canary.ps1 137 PASS (4 hunks).
