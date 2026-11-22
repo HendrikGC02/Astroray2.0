@@ -16,3 +16,4 @@ Budget: none on tiers.
 Depends on: 077, 078, 087, 090, 091, 092, 093, 094, 095, 096, 097, 098, 099, 107, 108, 109, 111, 120, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135 (`check full` runs what they add).
 Size: M (about 300 lines Python); stop and report at 2x.
 Progress:
+- 100: started (branch task/100-m1a-gallery-report).
