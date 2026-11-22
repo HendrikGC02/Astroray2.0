@@ -7,9 +7,12 @@
 // non-empty.
 //
 // Contracts with the kernels (all on one page so 054 and the stages find them):
-//  - high_water[SHADOW] is the shadow capacity, every shadow slot starts SHADOW_TERMINATED;
-//    high_water[MAIN] is one past the largest main slot in use. main_queue starts as the
-//    identity, so the entries past the partition are the fresh slots.
+//  - Each pool is partitioned up to its high-water mark, one past its largest slot used this
+//    pass; both start at 0. main_queue and shadow_queue start as the identity, so the entries
+//    past the partition are the fresh slots; every shadow slot starts SHADOW_TERMINATED.
+//  - Shadow free list (RULINGS 84): the SHADOW_TERMINATED segment, then the fresh entries; the
+//    host adds the step table's shadow_fresh to high_water[SHADOW] after each step-table read,
+//    so it never passes the shadow capacity (step_table.h).
 //  - Refill: the free-slot list is the main TERMINATED segment followed by those fresh
 //    entries. Before each generate launch the host rewrites the device's
 //    stage[TERMINATED] entry to describe that launch only: start = its first free-slot entry
@@ -21,7 +24,7 @@
 //  - A GPU generate launch must not start before the stage[TERMINATED] entry upload has
 //    completed on the same stream (both are enqueued in order on the device's one stream).
 //  - After sort, the sorted indices replace the SHADE_SURFACE segment of main_queue.
-// Ref: docs/decisions/0002-kernel-architecture.md D5-D8, D12; Cycles
+// Ref: docs/decisions/0002-kernel-architecture.md D5-D8, D12; RULINGS 84; Cycles
 // integrator/path_trace_work_gpu.cpp (Apache-2.0) for the refill rule.
 #pragma once
 #include <atomic>
@@ -56,6 +59,9 @@ struct SchedulerConfig {
   uint64_t capacity_override = 0;            // tests: force the pool capacity (still bounded by the work)
   uint64_t shadow_capacity_override = 0;     // tests: force the shadow pool below its default 2 x capacity
   bool permute = false;                      // AR_DEBUG_PERMUTE, see Scheduler constructor
+  // Tests: partition the whole shadow pool every step, as before RULINGS 84 (the free list is then
+  // the same slots in the same order, so results are identical); AR_DEBUG_SHADOW_FULL_RANGE.
+  bool shadow_full_range = false;
   Report* report = nullptr;                  // POOL_CAPACITY goes here, once per scheduler
   Owner owner{};
 };
@@ -65,7 +71,9 @@ enum class PassStatus : uint8_t { COMPLETE, CANCELLED, EPOCH_PENDING };
 class Scheduler {
  public:
   // permute defaults to the environment variable AR_DEBUG_PERMUTE (any value but "0"), read
-  // here and only in builds with AR_GATE_HOOKS; config.permute turns it on in any build.
+  // here and only in builds with AR_GATE_HOOKS; config.permute turns it on in any build. The
+  // same holds for AR_DEBUG_SHADOW_FULL_RANGE, except that config.shadow_full_range is read at
+  // each pass start, so a test can switch it between passes.
   Scheduler(Device& device, const SchedulerConfig& config);
   ~Scheduler();
   Scheduler(const Scheduler&) = delete;
@@ -85,6 +93,8 @@ class Scheduler {
   const PassCounters& counters() const { return counters_; }
   const ar::KernelGlobals& globals() const { return kg_; }
   uint64_t capacity() const { return capacity_; }
+  // The shadow pool's high-water mark at the end of the last pass (tests).
+  uint32_t shadow_high_water() const { return shadow_high_water_; }
 
  private:
   void ensure_buffers(uint64_t capacity, uint64_t shadow_capacity);
@@ -103,6 +113,8 @@ class Scheduler {
   uint32_t sort_material_count_ = ~0u;
   bool capacity_reported_ = false;
   bool permute_ = false;
+  bool shadow_full_range_ = false;
+  uint32_t shadow_high_water_ = 0;
   bool gpu_ = false;  // the device is CUDA: tiled kernels get a warp per tile (gpu_tile_grid, queue_build.h)
   uint64_t permute_state_ = 0;
   std::vector<uint32_t> launched_;  // stages launched in the current step, in order

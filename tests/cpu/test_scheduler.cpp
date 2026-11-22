@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -243,6 +244,50 @@ TEST_CASE("scheduler/production CPU stages are registered") {
   CHECK(dev.stage_fn(Stage::SHADE_SURFACE) == nullptr);
   CHECK(dev.kernel_fn(KernelId::GENERATE_CAMERA) == nullptr);
   CHECK_THROWS_AS(dev.register_stage(Stage::INTERSECT_CLOSEST, &stub::intersect_closest), std::logic_error);
+}
+
+}  // TEST_SUITE
+
+TEST_SUITE("gate") {
+
+// Two runs of one stub workload, one with the shadow pool partitioned up to its high-water mark
+// (RULINGS 84) and one over its whole capacity as before; shadow_capacity 0 keeps the default 2x.
+void check_shadow_range(uint32_t cameras, uint32_t lights, uint64_t capacity, uint64_t shadow_capacity) {
+  Rig ranged(cameras, lights, capacity);
+  Rig full(cameras, lights, capacity);
+  ranged.sched->config.shadow_capacity_override = full.sched->config.shadow_capacity_override = shadow_capacity;
+  full.sched->config.shadow_full_range = true;
+  REQUIRE(ranged.run() == PassStatus::COMPLETE);
+  REQUIRE(full.run() == PassStatus::COMPLETE);
+  const uint64_t shadow_cap = shadow_capacity ? shadow_capacity : 2 * ranged.sched->capacity();
+  // The full range starts at the capacity and never moves; the ranged mark grew from 0 and stayed
+  // inside the pool.
+  CHECK(full.sched->shadow_high_water() == shadow_cap);
+  CHECK(ranged.sched->shadow_high_water() > 0);
+  CHECK(ranged.sched->shadow_high_water() <= shadow_cap);
+  // The free list is the same slots in the same order either way, so everything agrees, counter
+  // for counter.
+  CHECK(ranged.res.outcome == full.res.outcome);
+  CHECK(ranged.res.shadow_delivered == full.res.shadow_delivered);
+  const PassCounters& a = ranged.sched->counters();
+  const PassCounters& b = full.sched->counters();
+  CHECK(std::memcmp(&a, &b, sizeof a) == 0);
+  check_all(ranged);
+}
+
+TEST_CASE("scheduler/shadow range matches the full shadow range") {
+  // A pool far below the work, the default shadow pool (2 x 1024): the stub's shadow items live
+  // one or two steps, so the ranged mark stops below the capacity.
+  check_shadow_range(5000, 3000, 1u << 10, 0);
+  Rig r(5000, 3000, 1u << 10);
+  REQUIRE(r.run() == PassStatus::COMPLETE);
+  CHECK(r.sched->shadow_high_water() < 2048);
+}
+
+TEST_CASE("scheduler/shadow range under a starved shadow pool") {
+  // 64 shadow slots for a 1024-path pool: producers are held back (floor(free_left / k)) once the
+  // fresh slots run out, and nothing is dropped.
+  check_shadow_range(5000, 3000, 1u << 10, 64);
 }
 
 }  // TEST_SUITE
