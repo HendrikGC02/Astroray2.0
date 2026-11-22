@@ -3,7 +3,7 @@
 
 Run through `Invoke-ArBlender -Gui -Script tests/blender/gui_ortho.py`. A windowed Blender goes to Rendered
 shading on the A1 scene, the 3D view is switched to an orthographic (non-camera) view, and every call of
-`engine.report` the addon makes is recorded. The engine builds a perspective view from an orthographic
+`engine.report` the job makes while forwarding engine report entries is recorded. The engine builds a perspective view from an orthographic
 projection and raises CAMERA_UNSUPPORTED "ORTHO" (src/host/scene/camera.cpp); the viewport forwards report
 entries to `engine.report`, so a WARNING naming that code must arrive there, which Blender shows in its status
 bar. The frame itself stays wrong until orthographic rays exist (M4) and is not asserted.
@@ -73,13 +73,20 @@ class Driver:
             return run_cases()
 
     def step_setup(self):
-        engine_cls = importlib.import_module(MODULE + ".engine").AstrorayRenderEngine
-        orig = bpy.types.RenderEngine.report
+        rf = importlib.import_module(MODULE + ".render_final")
+        orig = rf.Job._report
 
-        def recorded(engine, kinds, message):
-            STATE["reports"].append((sorted(kinds), message))
-            return orig(engine, kinds, message)
-        engine_cls.report = recorded
+        class Recorder:
+            """The engine as the job sees it, every report kept before Blender gets it."""
+
+            def __init__(self, engine):
+                self.engine = engine
+
+            def report(self, kinds, message):
+                STATE["reports"].append((sorted(kinds), message))
+                return self.engine.report(kinds, message)
+
+        rf.Job._report = lambda job, engine, reported, revision: orig(job, Recorder(engine), reported, revision)
         space = self.find_area().spaces.active
         space.shading.type = "RENDERED"
         space.overlay.show_overlays = False
