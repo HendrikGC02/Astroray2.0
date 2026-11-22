@@ -1,3 +1,18 @@
+diff --git a/blender/astroray/render_final.py b/blender/astroray/render_final.py
+index fbb7200..7cbe548 100644
+--- a/blender/astroray/render_final.py
++++ b/blender/astroray/render_final.py
+@@ -369,10 +369,6 @@ class Job:
+         revision = self._report(engine, reported, None)
+         if prog.state == abi.AR_STATE_FAILED:
+             _ok(lib, 1, "the session (state FAILED)", "ar_session_last_error", s)
+-        if prog.state == abi.AR_STATE_CONVERGED and prog.active_generation < self.generation:
+-            # Rule 5: an image of an older scene than update() committed is a failure, never a result.
+-            raise RenderFailed(f"astroray: the render converged on generation {prog.active_generation}, but update() "
+-                               f"committed {self.generation} (failed generation {prog.failed_generation})")
+         self._copy_combined(engine, result, w, h, final=True)
+ 
+     def _report(self, engine, reported, revision):
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
 index bc54aed..daccaeb 100644
 --- a/src/host/session/session.cpp

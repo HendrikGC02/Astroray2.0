@@ -168,5 +168,39 @@ class TestF12Cpu(unittest.TestCase):
         self.assertGreater(mean, 0.1, f"black frame (mean {mean}); reports {engine.reports}")
 
 
+class StaleSession:
+    """The ar_session_* calls Job._wait makes, for a session that converged on generation 0 with no report
+    entry: what a final session that latched before update()'s commit activated would show."""
+
+    def __init__(self, abi):
+        self.abi = abi
+
+    def ar_session_wait(self, session, timeout_ms):
+        return 0
+
+    def ar_session_get_progress(self, session, out):
+        prog = out._obj
+        prog.state, prog.active_generation, prog.pending_generation, prog.samples_per_pixel = \
+            self.abi.AR_STATE_CONVERGED, 0, 1, 1
+        return 0
+
+    def ar_session_report_info(self, session, out):
+        out._obj.entry_count, out._obj.revision = 0, 1
+        return 0
+
+
+class TestStaleGeneration(unittest.TestCase):
+    def test_converging_below_the_committed_generation_fails_the_render(self):
+        # Rule 5: the image of an older scene than update() committed is never delivered as a result.
+        rf, _ = load_addon()
+        abi = sys.modules[_PKG + "._abi"]
+        job = rf.Job.__new__(rf.Job)
+        job.lib, job.abi, job.session, job.generation = StaleSession(abi), abi, ctypes.c_void_p(1), 1
+        engine = Engine()
+        with mock.patch.object(rf.Job, "_copy_combined", lambda *a, **k: None):
+            with self.assertRaisesRegex(rf.RenderFailed, "converged on generation 0, but update\\(\\) committed 1"):
+                job._wait(engine, None, SIZE, SIZE, SPP)
+
+
 if __name__ == "__main__":
     support.main()
