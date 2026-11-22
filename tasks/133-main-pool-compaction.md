@@ -17,3 +17,8 @@ Depends on: 123.
 Size: M (about 250 lines); stop and report at 2x, or after Do 1 if compaction cannot meet the row.
 Progress:
 - started on task/133-main-pool-compaction; Do 1 (measurement gate) first.
+- Do 1 measured (nsys, 123's method, 1080p 1 spp, 64 after 8, build 79e0213 plus an uncommitted per-step trace): at 1080p the main pool's capacity equals the pass's work (2,073,600 < 2^21), so one refill at step 2 fills it, hw_main stays 2,073,600 and a TERMINATED main slot stays dead for the rest of the pass.
+- Every queue_build step costs the same whatever is live (count 40-45, scan 8, scatter 81-87 us); step 1 (shadow pool only, 4,147,200 items) costs 98 us, so the main pool's whole share is 32-36 us per step, 0.61 ms (B-1M) / 0.69 ms (B-5M) per pass.
+- Items scanned per pass: main dead 25.8 / 26.8 %, shadow dead 65.2 / 66.5 %, live 9.0 / 6.7 % (B-1M / B-5M). The shadow pool is partitioned over its whole 2x capacity every step.
+- Most main-pool compaction could save (free, range = live every step): 0.49 / 0.58 ms; Cycles' quarter rule 0.47 / 0.53 ms; the row needs 1.23 / 1.25 ms. queue_build 17.3 -> 14.6 % (B-1M), 17.4 -> 14.1 % (B-5M) at best; even a main range of zero leaves 13.9 / 13.5 %.
+- Stopped after Do 1 as the task says: main-pool compaction cannot bring the row under 10 %; nothing built. Shrinking the shadow pool's partition range to its live items would save about 1.7 ms (proportional estimate) and is outside this task's Scope (step_table.h free-list contract, 0002 D5/D6).
