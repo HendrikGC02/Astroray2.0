@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // queue_build: one stable partition of both pools by next_stage, as three kernels (0002 D6).
 //   count:   per tile of kQueueTile items, a histogram of next_stage (bin kStageCount counts
-//            values that are no Stage of the pool: invalid items, in no segment), and per pool
-//            the end of its last item that is not TERMINATED (StepTable::live_end);
+//            values that are no Stage of the pool: invalid items, in no segment);
 //   scan:    a single-pass scan with decoupled look-back over the histogram rows (0002 D7
 //            remedy (c)): scan tile u, kQueueScanRows consecutive rows, sums its rows per bin,
 //            publishes that aggregate, looks back over its predecessors' published values for
 //            its exclusive prefix and rewrites its rows as inclusive per-tile offsets; the last
 //            scan tile totals the segments into the step table and finishes it (sched/step_table.h);
 //   scatter: each tile writes its items' pool-local indices into their segments in item-index
-//            order, so a segment is sorted by index and the partition is stable.
+//            order, so a segment is sorted by index and the partition is stable; the one item of a pool's
+//            TERMINATED segment that starts its run of entries equal to their positions writes the pool's
+//            StepTable::live_end.
 // Both pools are partitioned up to StepTable::high_water. Tiles are numbered main pool first,
 // then shadow pool; tile g owns histogram row g of KernelGlobals::queue_counts. A tile bins the
 // other pool's stages as invalid, so one scan over all rows gives every column its pool's
@@ -114,46 +115,22 @@ AR_FN uint32_t queue_item_bin(const QueueTile& t, const uint8_t* next, uint32_t 
   return i < t.last ? queue_bin(t.pool, next[i]) : kQueueBins;
 }
 
-// The index of the highest set bit of a non-zero vote: the bits below it smeared down, counted.
-AR_FN uint32_t queue_highest_lane(uint32_t votes) {
-  for (uint32_t s = 1; s < 32; s <<= 1) votes |= votes >> s;
-  return popc(votes) - 1u;
-}
-
 // Kernel 1 for tile g (g < queue_tile_count), by `lanes` units of which this is `lane`: the
 // tile's histogram. The units take consecutive items, and every unit counts every bin from the
-// votes, so all of them hold the whole histogram; unit b % lanes writes bin b. Unit 0 also raises
-// the pool's StepTable::live_end to one past the tile's last item that is not TERMINATED
-// (step_table.h); an integer max, so the result is the same in any tile order.
+// votes, so all of them hold the whole histogram; unit b % lanes writes bin b.
 AR_FN void queue_count_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane, uint32_t lanes) {
   const QueueTile t = queue_tile(kg, g);
   const uint8_t* next = queue_next_stage(kg, t.pool);
   uint32_t* row = kg.queue_counts + uint64_t(g) * kQueueBins;
   AR_ASSERT(next != nullptr);
-  const uint32_t dead = static_cast<uint32_t>(t.pool == Pool::MAIN ? Stage::TERMINATED : Stage::SHADOW_TERMINATED);
   uint32_t hist[kQueueBins];
   for (uint32_t b = 0; b < kQueueBins; ++b) hist[b] = 0;
-  // The last round with a live item and its live votes; the highest lane is found once, after the loop.
-  uint32_t live_votes = 0, live_base = 0;
   for (uint32_t base = t.first; base < t.last; base += lanes) {
     const uint32_t bin = queue_item_bin(t, next, base + lane);
-    uint32_t dead_votes = 0;
-    for (uint32_t b = 0; b < kQueueBins; ++b) {
-      const uint32_t votes = ballot(bin == b);
-      hist[b] += popc(votes);
-      if (b == dead) dead_votes = votes;
-    }
-    // The units holding an item: all of them, except past the tile's end in its last round.
-    const uint32_t left = t.last - base;
-    const uint32_t present = left >= lanes ? (lanes == 32u ? ~0u : (1u << lanes) - 1u) : (1u << left) - 1u;
-    if ((present & ~dead_votes) != 0) live_votes = present & ~dead_votes, live_base = base;
+    for (uint32_t b = 0; b < kQueueBins; ++b) hist[b] += popc(ballot(bin == b));
   }
   for (uint32_t b = 0; b < kQueueBins; ++b)
     if (b % lanes == lane) row[b] = hist[b];
-  if (lane == 0 && live_votes != 0) {
-    StepTable& table = *const_cast<StepTable*>(kg.step_table);
-    atomic_max(&table.live_end[static_cast<uint32_t>(t.pool)], live_base + queue_highest_lane(live_votes) + 1u);
-  }
 }
 
 // Tile status of the look-back, one 32-bit word per scan tile and bin: the last histogram row
@@ -255,12 +232,20 @@ AR_FN void queue_scan_tile(const KernelGlobals& kg, uint32_t u, uint32_t lane, u
 // exclusive offsets, the previous row's inclusive ones, place every item, so a shadow producer's
 // held-back items are in the queue too. Within a round of `lanes` items an item goes after the
 // items of its bin in lower units, so the order stays the item order.
+// live_end (step_table.h): the pool's TERMINATED segment starts at position L, the number of items
+// in the pool's other segments, and lists the terminated slots in index order, so an entry holds
+// its own position p exactly when every live item lies below slot p. The first such entry is the
+// one whose slot is 0 or follows a live slot (at slot L every slot below is live); its item, the only
+// one, stores itself as live_end.
+// With no such entry the last slot below the mark is live and live_end keeps the mark the host
+// wrote. One writer, so no atomic and the same value on both targets.
 AR_FN void queue_scatter_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane, uint32_t lanes) {
   const QueueTile t = queue_tile(kg, g);
   const uint8_t* next = queue_next_stage(kg, t.pool);
   uint32_t* queue = const_cast<uint32_t*>(t.pool == Pool::MAIN ? kg.main_queue : kg.shadow_queue);
   const uint32_t* prev = kg.queue_counts + (uint64_t(g) - 1u) * kQueueBins;
   AR_ASSERT(next != nullptr && queue != nullptr);
+  const uint32_t dead = static_cast<uint32_t>(t.pool == Pool::MAIN ? Stage::TERMINATED : Stage::SHADOW_TERMINATED);
   uint32_t at[kStageCount];
   for (uint32_t b = 0; b < kStageCount; ++b)
     at[b] = kg.step_table->stage[b].start + (g == 0 ? 0u : prev[b] & kScanValueMask);
@@ -268,10 +253,19 @@ AR_FN void queue_scatter_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane
   for (uint32_t base = t.first; base < t.last; base += lanes) {
     const uint32_t i = base + lane;
     const uint32_t bin = queue_item_bin(t, next, i);
+    // The TERMINATED segment's next entry before this round (constant indices keep at[] in registers).
+    const uint32_t at_dead = t.pool == Pool::MAIN ? at[static_cast<uint32_t>(Stage::TERMINATED)]
+                                                  : at[static_cast<uint32_t>(Stage::SHADOW_TERMINATED)];
     for (uint32_t b = 0; b < kStageCount; ++b) {
       const uint32_t votes = ballot(bin == b);
       if (bin == b) queue[at[b] + popc(votes & below)] = i;
       at[b] += popc(votes);
+    }
+    const uint32_t dead_votes = ballot(bin == dead);
+    if (bin == dead && at_dead + popc(dead_votes & below) == i &&
+        (i == 0 || queue_bin(t.pool, next[i - 1u]) != dead)) {
+      StepTable& table = *const_cast<StepTable*>(kg.step_table);
+      table.live_end[static_cast<uint32_t>(t.pool)] = i;
     }
   }
 }

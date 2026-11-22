@@ -106,7 +106,8 @@ struct Rig {
     table.high_water[0] = hw_main;
     table.high_water[1] = hw_shadow;
     table.shadow_capacity = shadow_capacity;
-    table.live_end[0] = table.live_end[1] = 0;  // the host clears them with the marks
+    table.live_end[0] = hw_main;  // the host presets them to the marks
+    table.live_end[1] = hw_shadow;
     const uint32_t grid = ar::queue_build_grid(hw_main, hw_shadow);
     dev.launch(KernelId::QUEUE_BUILD_COUNT, grid);
     dev.launch(KernelId::QUEUE_BUILD_SCAN, ar::queue_scan_grid(hw_main, hw_shadow));
@@ -666,10 +667,10 @@ TEST_CASE("queue_build/shadow range grows by its fresh slots") {
 
 TEST_CASE("queue_build/live_end is one past the last live slot") {
   // Task 134: per pool, one past the largest slot below the mark that is not the pool's TERMINATED
-  // value (invalid values count as live), computed here the slow way, on random pools whose tail
+  // value, computed here the slow way, on random pools whose tail
   // from a cut on is terminated, with cuts and marks on and beside tile boundaries; then the queue
   // entries from live_end up to the mark are live_end, live_end + 1, ... (the fresh-entry contract
-  // a lowered mark relies on). Sixteen workers run tiles in any order: the max does not care.
+  // a lowered mark relies on). Sixteen workers run the tiles in any order.
   constexpr uint32_t kN = 5000;
   const uint8_t dead[2] = {U8(Stage::TERMINATED), U8(Stage::SHADOW_TERMINATED)};
   const uint32_t cuts[] = {0, 1, 1023, 1024, 1025, 2048, 4097, 4999, 5000};
@@ -678,7 +679,7 @@ TEST_CASE("queue_build/live_end is one past the last live slot") {
     std::vector<uint8_t> pools[2] = {random_pool(kN, Pool::MAIN, 11 + cut), random_pool(kN, Pool::SHADOW, 12 + cut)};
     for (int p = 0; p < 2; ++p) {
       std::fill(pools[p].begin() + cut, pools[p].end(), dead[p]);
-      if (cut > 0) pools[p][cut - 1] = p == 0 ? 99 : U8(Stage::INTERSECT_SHADOW);  // the last live slot: invalid / live
+      if (cut > 0) pools[p][cut - 1] = p == 0 ? U8(Stage::SHADE_SURFACE) : U8(Stage::INTERSECT_SHADOW);  // the last live slot
     }
     Rig r(pools[0], pools[1], 16);
     for (uint32_t mark : {kN, cut, cut + 1 < kN ? cut + 1 : kN, cut > 1 ? cut - 1 : 0u, 1024u}) {
@@ -691,10 +692,12 @@ TEST_CASE("queue_build/live_end is one past the last live slot") {
         CHECK(r.table.live_end[p] == want);
         lowered += want < mark;
       }
-      // Shadow queue from live_end to the mark: the identity (no invalid shadow values here).
-      bool identity = true;
-      for (uint32_t j = r.table.live_end[1]; j < mark; ++j) identity = identity && r.queue[1][j] == j;
-      CHECK(identity);
+      // Both queues from live_end to the mark: the identity.
+      for (int p = 0; p < 2; ++p) {
+        bool identity = true;
+        for (uint32_t j = r.table.live_end[p]; j < mark; ++j) identity = identity && r.queue[p][j] == j;
+        CHECK(identity);
+      }
     }
   }
   CHECK(lowered > 20);
