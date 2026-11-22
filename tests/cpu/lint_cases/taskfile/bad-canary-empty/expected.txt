@@ -1,0 +1,1 @@
+tasks/007-a.md:10: [taskfile] Canary: `must turn red:` names no command, test executable or .py file

@@ -103,6 +103,8 @@ $global:LASTEXITCODE = 1
     @{ Name = 'build dev'; Tag = 'local'; Run = { & pwsh -NoProfile -Command "& tools/build.ps1 -Target all,astroray_kernels_gpu_nofma; exit `$LASTEXITCODE" } },
     # 0008 V9 compile part (050): the negative-compile cases are outside ALL, so only this step runs them.
     @{ Name = 'negative compile'; Tag = 'cpu'; Run = { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_negative_compile -Preset $(if ($isCi) { 'cpu' } else { 'dev' }) -NoMachineLock } },
+    # 137: the tools' own CPU tests (tests/tools/fast_*.ps1); no tier ran them before.
+    @{ Name = 'tools tests'; Tag = 'cpu'; Run = { & pwsh -NoProfile -File tests/tools/run_fast.ps1 } },
     @{ Name = 'kernelgate self-test'; Tag = 'cpu'; Run = { & $py -I tools/kernelgate.py --self-test } },
     @{ Name = 'kernelgate'; Tag = 'local'; Lock = $true; Echo = '^kernelgate: \d+ row'; Run = { & $py -I tools/kernelgate.py @dargs } },
     @{ Name = 'compile timing'; Tag = 'local'; Lock = $true; Run = { & $py -I tools/kernelgate.py --time } },
@@ -250,6 +252,9 @@ $global:LASTEXITCODE = 1
   } elseif ($Tier -eq 'full') {
     $r = Step 'gate' { & pwsh -NoProfile -File tools/check.ps1 gate @dargs }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'gate failed (out/check/gate.log)' }
+    # Land fixture cases a-g (canary refusals, hunk matrix): minutes, so full only.
+    $r = Step 'tools fixtures' { & pwsh -NoProfile -File tests/tools/land_fixture/run_cases.ps1 }
+    if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'tools fixtures failed (out/check/full.log)' }
     # API surface inside Blender, where the bundled openvdb exists (0007 d46); ci checks the rest on the wheel.
     $r = Step 'blender api_surface' {
       $b = Invoke-ArBlender -Script 'tools/api_surface.py' -TimeoutS 120 6>$null

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # tools/land.ps1 prepare|merge NNN [-DryRun]   (lead only)
 # Ref: docs/decisions/0009-build-test-process.md d25 (gate status), d26 (landing), d28 (task and canary format).
-# prepare (in the task worktree): branch and tree checks, rebase on origin/main, canary verification,
-#   reviewer inputs in out/land/NNN/, deletion commit, push, gate, status `astroray/gate`.
+# prepare (in the task worktree): branch and tree checks, rebase on origin/main, canary verification
+#   (lib/canary.ps1, as tools/canary.ps1), reviewer inputs in out/land/NNN/ (task.md, diff.patch, canary.patch), deletion commit, push, gate, status `astroray/gate`.
 # merge: PR head == gated sha, `ci` and `astroray/gate` success, lead comment `REVIEW PASS <sha>`
 #   (or `REVIEW SKIP <sha> (O31)` for a diff that is not kernel, physics, sampling, ABI or process),
 #   an `evidence:` comment when the task has `Look at:`; squash, confirm on origin/main, clean up.
@@ -14,9 +14,7 @@ param(
   [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'lib/lock.ps1')
-. (Join-Path $PSScriptRoot 'lib/python.ps1')
-. (Join-Path $PSScriptRoot 'lib/blender.ps1')
+. (Join-Path $PSScriptRoot 'lib/canary.ps1')
 $root = (Resolve-Path ((& git rev-parse --show-toplevel).Trim())).Path
 Set-Location $root
 
@@ -30,92 +28,6 @@ function GhX {
   $o = & gh @args 2>&1 | ForEach-Object { "$_" }
   if ($LASTEXITCODE -ne 0) { throw "gh $($args -join ' ') failed: $($o -join ' ')" }
   return ($o -join "`n")
-}
-
-# Items of a Canary: line (0009 d28; task 010 step 3). Returns objects {Kind exe|py|cmd; Target; Name}.
-function Get-CanaryItems([string]$line) {
-  $m = [regex]::Match($line, 'must turn red:(.*)$')
-  if (-not $m.Success) { return @() }
-  $items = @()
-  $cur = $null
-  # Alternatives in order: backticked command, quoted name, ignorable parenthesised text, bare word.
-  $re = '`([^`]*)`|"([^"]*)"|\((?:[^()]|\([^()]*\))*\)|([^\s,;]+)'
-  $flush = {
-    if ($cur -and -not $cur.Used) { $script:__u = [pscustomobject]@{ Kind = $cur.Kind; Target = $cur.Target; Name = '' } } else { $script:__u = $null }
-  }
-  foreach ($t in [regex]::Matches($m.Groups[1].Value, $re)) {
-    if ($t.Groups[1].Success) {
-      & $flush; if ($script:__u) { $items += $script:__u }; $cur = $null
-      $items += [pscustomobject]@{ Kind = 'cmd'; Target = $t.Groups[1].Value.Trim(); Name = '' }
-    } elseif ($t.Groups[2].Success) {
-      if (-not $cur) { throw "canary name '$($t.Groups[2].Value)' follows no test executable or file" }
-      $items += [pscustomobject]@{ Kind = $cur.Kind; Target = $cur.Target; Name = $t.Groups[2].Value }
-      $cur.Used = $true
-    } elseif ($t.Groups[3].Success) {
-      $w = $t.Groups[3].Value
-      $kind = if ($w -match '^astroray_\w+$') { 'exe' } elseif ($w -match '^[\w./\\-]+\.py$') { 'py' } else { $null }
-      if ($kind) {
-        & $flush; if ($script:__u) { $items += $script:__u }
-        $cur = @{ Kind = $kind; Target = $w; Used = $false }
-      }
-    }
-  }
-  & $flush; if ($script:__u) { $items += $script:__u }
-  return $items
-}
-
-function Invoke-CanaryItem($it) {
-  # Returns {Label; Ran; Failed; Error}. Ran: the named test exists and ran. Failed: a real test failure.
-  # Error: the item could not be judged (missing script, crash, timeout); it is never counted as red.
-  function New-CanaryResult($label, $ran, $failed, $err = '') { [pscustomobject]@{ Label = $label; Ran = $ran; Failed = $failed; Error = $err } }
-  if ($it.Kind -eq 'cmd') {
-    $tok = @($it.Target -split '\s+')
-    foreach ($t in $tok) {
-      if ($t -match '\.(py|ps1)$' -and -not (Test-Path (Join-Path $root $t))) { return New-CanaryResult $it.Target $false $false "script '$t' does not exist" }
-    }
-    if ($tok[0] -notmatch '\.py$' -and -not (Get-Command $tok[0] -ErrorAction SilentlyContinue)) { return New-CanaryResult $it.Target $false $false "command '$($tok[0])' not found" }
-    if ($tok[0] -match '\.py$') { & (Get-ArPython) -I @tok 2>&1 | Out-Null }
-    else { & pwsh -NoProfile -Command $it.Target 2>&1 | Out-Null }
-    return New-CanaryResult $it.Target $true ($LASTEXITCODE -ne 0)
-  }
-  if ($it.Kind -eq 'exe') {
-    # The .cmd fallback lets the land fixture stand in for a test binary.
-    $p = Join-Path $root "out/bin/$($it.Target).exe"
-    if (-not (Test-Path $p)) { $p = Join-Path $root "out/bin/$($it.Target).cmd" }
-    if (-not (Test-Path $p)) { return New-CanaryResult $it.Name $false $false "missing out/bin/$($it.Target).exe after the build" }
-    $out = & $p --tier=all ('-tc=' + ($it.Name -replace ',', '\,')) 2>&1 | ForEach-Object { "$_" }
-    $code = $LASTEXITCODE
-    $txt = $out -join "`n"
-    $m = [regex]::Match($txt, 'test cases:\s*(\d+)\s*\|\s*(\d+) passed\s*\|\s*(\d+) failed')
-    if (-not $m.Success) { return New-CanaryResult $it.Name $false $false "$($it.Target) printed no doctest summary (crash?)" }
-    $nFail = [int]$m.Groups[3].Value
-    if ($code -ne 0 -and $nFail -eq 0) { return New-CanaryResult $it.Name $true $false "$($it.Target) exited $code with no failed case" }
-    return New-CanaryResult $it.Name ([int]$m.Groups[1].Value -gt 0) ($nFail -gt 0)
-  }
-  $rel = $it.Target -replace '\\', '/'
-  if ($rel -like 'tests/abi/*') {
-    $out = & (Get-ArPython) -I -m unittest discover -s (Split-Path $rel) -p (Split-Path $rel -Leaf) -k $it.Name 2>&1 | ForEach-Object { "$_" }
-    $code = $LASTEXITCODE
-    $txt = $out -join "`n"
-    if ($txt -match '_FailedTest|ModuleNotFoundError|ImportError|SyntaxError') { return New-CanaryResult $it.Name $false $false 'test module failed to import' }
-    $m = [regex]::Match($txt, 'Ran (\d+) test')
-    return New-CanaryResult $it.Name ($m.Success -and [int]$m.Groups[1].Value -gt 0) ($code -ne 0)
-  }
-  if ($rel -like 'tests/blender/*') {
-    $bargs = @{ Script = $rel; Args = @('-k', $it.Name) }
-    if ((Split-Path $rel -Leaf) -like 'gui_*') {
-      if (-not (Get-Command Invoke-ArBlender).Parameters.ContainsKey('Gui')) { return New-CanaryResult $it.Name $false $false "$rel needs Invoke-ArBlender -Gui (task 085)" }
-      $bargs.Gui = $true
-    }
-    $r = Invoke-ArBlender @bargs
-    if ($r.ExitCode -eq -1) { return New-CanaryResult $it.Name $false $false 'Blender timed out' }
-    $log = ''
-    foreach ($f in $r.Log, "$($r.Log).err") { if (Test-Path $f) { $log += Get-Content $f -Raw } }
-    # --python-exit-code 1 is how a failing test script exits; any other code is a crash.
-    if ($r.ExitCode -ne 0 -and $r.ExitCode -ne 1) { return New-CanaryResult $it.Name $false $false "Blender exited $($r.ExitCode) (crash?)" }
-    return New-CanaryResult $it.Name $log.Contains($it.Name) ($r.ExitCode -ne 0)
-  }
-  return New-CanaryResult $it.Name $false $false "no runner for canary test file '$rel' (tests/abi and tests/blender only)"
 }
 
 function Get-TaskField([string]$text, [string]$field) {
@@ -156,56 +68,12 @@ function Invoke-Prepare {
   if ((Test-Path $patch) -and $canaryLine -notmatch 'must turn red:') { Refuse 'canary patch present but the Canary: line names no tests' }
 
   if (Test-Path $patch) {
-    $items = @(Get-CanaryItems $canaryLine)
-    if ($items.Count -eq 0) { Refuse 'canary names no test' }
-    $unnamed = @($items | Where-Object { $_.Kind -ne 'cmd' -and -not $_.Name })
-    if ($unnamed.Count -gt 0) { Refuse "canary names no test: $($unnamed[0].Target)" }
-    & git apply --check $patch 2>&1 | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) { Refuse "tasks/$Number.canary.patch does not apply" }
-    $cpuOnly = @($items | Where-Object { $_.Kind -ne 'exe' -or $_.Target -ne 'astroray_tests_cpu' }).Count -eq 0
-    $targets = if (@($items | Where-Object { $_.Kind -ne 'exe' }).Count) { @('all') } else { @($items.Target | Sort-Object -Unique) }
-    $problems = @()
-    $applied = $false
-    function Build-Canary {
-      foreach ($t in $targets) {
-        $b = @('-NoProfile', '-File', (Join-Path $root 'tools/build.ps1'), '-Target', $t)
-        if ($cpuOnly) { $b += '-NoMachineLock' }
-        & pwsh @b 2>&1 | Select-Object -Last 3 | ForEach-Object { Write-Host $_ }
-        if ($LASTEXITCODE -ne 0) { throw "canary build of '$t' failed" }
-      }
-    }
-    try {
-      if (-not $cpuOnly) { $null = Enter-ArMachineLock }
-      # Baseline: every item must run and pass without the patch, or "red" means nothing.
-      Build-Canary
-      foreach ($it in $items) {
-        $r = Invoke-CanaryItem $it
-        if ($r.Error) { $problems += "canary item errored: $($r.Label): $($r.Error)" }
-        elseif (-not $r.Ran) { $problems += "canary names no test: $($r.Label)" }
-        elseif ($r.Failed) { $problems += "canary item fails without the patch: $($r.Label)" }
-      }
-      if ($problems.Count -eq 0) {
-        $null = GitX apply $patch
-        $applied = $true
-        Build-Canary
-        foreach ($it in $items) {
-          $r = Invoke-CanaryItem $it
-          if ($r.Error) { $problems += "canary item errored: $($r.Label): $($r.Error)" }
-          elseif (-not $r.Ran) { $problems += "canary names no test: $($r.Label)" }
-          elseif (-not $r.Failed) { $problems += "canary inert: $($r.Label) still passes" }
-          else { Write-Host "red: $($r.Label)" }
-        }
-      }
-    } finally {
-      Exit-ArMachineLock
-      if ($applied) {
-        & git apply -R $patch 2>&1 | ForEach-Object { Write-Host $_ }
-        if ($LASTEXITCODE -ne 0) { Write-Host 'FAIL land: git apply -R of the canary patch failed; the tree is dirty'; exit 1 }
-      }
-    }
-    if ((GitX status --porcelain)) { Refuse 'tree not clean after the canary check' }
-    if ($problems.Count) {
-      $problems | ForEach-Object { Write-Host "REFUSE land: $_" }
+    # The canary run is lib/canary.ps1's, the one tools/canary.ps1 gives implementers.
+    $cr = Invoke-Canary -Number $Number -Root $root
+    $cr.Lines | ForEach-Object { Write-Host $_ }
+    if ($cr.Dirty) { Write-Host 'FAIL land: git apply -R of the canary patch failed; the tree is dirty'; exit 1 }
+    if ($cr.Problems.Count) {
+      $cr.Problems | ForEach-Object { Write-Host "REFUSE land: $_" }
       exit 1
     }
   } else {
@@ -221,7 +89,9 @@ function Invoke-Prepare {
   New-Item -ItemType Directory -Force $dir | Out-Null
   Copy-Item $taskFile[0].FullName (Join-Path $dir 'task.md') -Force
   $null = GitX diff origin/main HEAD "--output=$(Join-Path $dir 'diff.patch')"
-  Write-Host "reviewer inputs: out/land/$Number/task.md, out/land/$Number/diff.patch"
+  $ri = "out/land/$Number/task.md, out/land/$Number/diff.patch"
+  if (Test-Path $patch) { Copy-Item $patch (Join-Path $dir 'canary.patch') -Force; $ri += ", out/land/$Number/canary.patch" }
+  Write-Host "reviewer inputs: $ri"
   if ($DryRun) {
     Write-Host "DRYRUN would: commit deletion of tasks/$Number*, push $branch, run check gate, post astroray/gate"
     Write-Host "PASS prepare $Number (dry run: canary accepted)"
