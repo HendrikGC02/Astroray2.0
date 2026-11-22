@@ -834,10 +834,21 @@ REFS_MENTION_RE = re.compile(r"refs\.toml|_cache[\\/]+refs|DEPS_CACHE.*refs")
 
 def refs(c):
     """Ref: 0009 d6: reference sources are pinned and never compiled, linked or listed as dependencies."""
-    import tomllib
     toml_path = "third_party/refs.toml"
-    if toml_path not in c.files:
-        return
+    if toml_path in c.files:
+        refs_manifest(c, toml_path)
+    for p in c.files:
+        base = os.path.basename(p)
+        build = base == "CMakeLists.txt" or base.endswith(".cmake")
+        if not (build or (base.endswith(".ps1") and p != "tools/fetch.ps1")):
+            continue
+        for i, ln in enumerate(c.lines(p), 1):
+            if REFS_MENTION_RE.search(ln):
+                c.find(p, i, "refs", "names the reference cache or refs.toml (references are never compiled or linked)")
+
+
+def refs_manifest(c, toml_path):
+    import tomllib
     try:
         with open(os.path.join(c.root, toml_path), "rb") as f:
             entries = tomllib.load(f).get("ref", [])
@@ -863,14 +874,6 @@ def refs(c):
         seen.add(name)
         if name in dep_names:
             c.find(toml_path, 1, "refs", f"{name}: also a name in deps.toml (references are not dependencies)")
-    for p in c.files:
-        base = os.path.basename(p)
-        build = base == "CMakeLists.txt" or base.endswith(".cmake")
-        if not (build or (base.endswith(".ps1") and p != "tools/fetch.ps1")):
-            continue
-        for i, ln in enumerate(c.lines(p), 1):
-            if REFS_MENTION_RE.search(ln):
-                c.find(p, i, "refs", "names the reference cache or refs.toml (references are never compiled or linked)")
 
 
 SECTIONS = {

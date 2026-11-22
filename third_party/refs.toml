@@ -16,9 +16,11 @@ name = "cycles"
 url = "https://github.com/blender/cycles/archive/b3f6262640f1a2f2d10b55b6ffccbf310ce0f981.zip"
 commit = "b3f6262640f1a2f2d10b55b6ffccbf310ce0f981"  # tag v5.3.0 of the standalone repository
 sha256 = "ed69ef2c6bd3d76662dd3e6434c93374d1d39f76ffd3c1b897c6b1dd50f1babe"
-# Mixed per-file licences (0001 D7): Apache-2.0 repository with BSD-3-Clause, MIT and Zlib files
-# and one GPL-2.0-or-later file; the GPL file is read for reference only.
-spdx = "Apache-2.0 AND BSD-3-Clause AND MIT AND Zlib AND GPL-2.0-or-later"
+# Mixed per-file licences (0001 D7); the expression is the four licences listed in
+# src/doc/license/SPDX-license-identifiers.txt. Three files carry GPL-2.0-or-later SPDX headers
+# (src/cmake/dependency_targets.cmake, tools/sync_blender_commits.py, tools/update_lib_submodules.py):
+# read for reference only. third_party/cuew and third_party/hipew carry a modified Apache 2.0.
+spdx = "Apache-2.0 AND BSD-3-Clause AND MIT AND Zlib"
 purpose = "Cycles 5.3 (Blender intern/cycles): the behaviour Blender users compare against"
 
 [[ref]]

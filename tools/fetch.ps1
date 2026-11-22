@@ -117,6 +117,11 @@ if ($Verb -eq 'refs') {
     Write-Host "PASS refs ($got downloaded, $cached cached)"
     exit 0
   } catch {
+    # No partial state on any failure path: the next run starts clean.
+    if ($base -and (Test-Path -LiteralPath $base)) {
+      foreach ($leftover in (Get-ChildItem -LiteralPath $base -Filter '*.download.zip' -Force)) { Remove-Item -Force $leftover.FullName }
+      foreach ($leftover in (Get-ChildItem -LiteralPath $base -Filter '*.extracting' -Force)) { Remove-Tree $leftover.FullName }
+    }
     FailR $_.Exception.Message
   }
 }
