@@ -133,18 +133,26 @@ AR_FN void queue_count_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane, 
   const uint32_t dead = static_cast<uint32_t>(t.pool == Pool::MAIN ? Stage::TERMINATED : Stage::SHADOW_TERMINATED);
   uint32_t hist[kQueueBins];
   for (uint32_t b = 0; b < kQueueBins; ++b) hist[b] = 0;
-  uint32_t live_end = 0;
+  // The last round with a live item and its live votes; the highest lane is found once, after the loop.
+  uint32_t live_votes = 0, live_base = 0;
   for (uint32_t base = t.first; base < t.last; base += lanes) {
     const uint32_t bin = queue_item_bin(t, next, base + lane);
-    for (uint32_t b = 0; b < kQueueBins; ++b) hist[b] += popc(ballot(bin == b));
-    const uint32_t live = ballot(bin != kQueueBins && bin != dead);
-    if (live != 0) live_end = base + queue_highest_lane(live) + 1u;
+    uint32_t dead_votes = 0;
+    for (uint32_t b = 0; b < kQueueBins; ++b) {
+      const uint32_t votes = ballot(bin == b);
+      hist[b] += popc(votes);
+      if (b == dead) dead_votes = votes;
+    }
+    // The units holding an item: all of them, except past the tile's end in its last round.
+    const uint32_t left = t.last - base;
+    const uint32_t present = left >= lanes ? (lanes == 32u ? ~0u : (1u << lanes) - 1u) : (1u << left) - 1u;
+    if ((present & ~dead_votes) != 0) live_votes = present & ~dead_votes, live_base = base;
   }
   for (uint32_t b = 0; b < kQueueBins; ++b)
     if (b % lanes == lane) row[b] = hist[b];
-  if (lane == 0 && live_end != 0) {
+  if (lane == 0 && live_votes != 0) {
     StepTable& table = *const_cast<StepTable*>(kg.step_table);
-    atomic_max(&table.live_end[static_cast<uint32_t>(t.pool)], live_end);
+    atomic_max(&table.live_end[static_cast<uint32_t>(t.pool)], live_base + queue_highest_lane(live_votes) + 1u);
   }
 }
 
