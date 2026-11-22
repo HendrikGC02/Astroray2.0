@@ -12,7 +12,7 @@ Do:
 5. Within the allowances after step 1-2: keep the fixes, leave the allowances 128 / 192 in budget.toml, update the row's comment to say M-1's spills are ratified (gated stays "full": RULINGS 17 keeps the probe in `check full`), and state k_shade_surface's row delta (its regs 128, stack 384, spills 0 / 0 must not grow; compile_s stays under RULINGS 72's 5.0 s).
 Acceptance: the decision table, written in the PR body before the last build: spills within 128 / 192 after step 1-2 -> done (step 5); over after step 2 -> the step-3 table and stop. The metric is kernelgate's ar_probe_m1 row inside `pwsh tools/check.ps1 full`; paste its last lines and the k_shade_surface row from `pwsh tools/check.ps1 gate`; `pwsh tools/check.ps1 fast` passes. The capture holds the machine lock with no other GPU process and appends no bench history (kernel build only).
 Look at: none.
-Canary: none (no test changes).
+Canary: none while no test is added or changed (step 1's stubs are never committed; a fix that keeps behaviour needs no test). A kept fix that changes behaviour adds its test in tests/cpu (Scope), writes tasks/144.canary.patch and replaces this line with `tasks/144.canary.patch must turn red: astroray_tests_cpu "<suite/case>"` naming each new or changed case; land refuses a test change without the patch.
 Budget: gate +0 s expected (a fix removes work); kernels: ar_probe_m1 spills to at most 128 / 192 and stack at most 512; k_shade_surface regs 128, stack 384, spills 0 / 0 unchanged (state the delta as the numbers before and after); compile time within ruling 72's 5.0 s.
 Depends on: none.
 Size: S-M (about 100 lines of source, a measurement table); stop and report at 2x, after step 3's table, or when the cause lies only in probe-only code.
