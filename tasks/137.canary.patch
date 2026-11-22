@@ -1,5 +1,5 @@
 diff --git a/tools/lib/canary.ps1 b/tools/lib/canary.ps1
-index d76676b..e01f8be 100644
+index a5b3d22..6a4d715 100644
 --- a/tools/lib/canary.ps1
 +++ b/tools/lib/canary.ps1
 @@ -51,7 +51,7 @@ function Split-CanaryPatch([string]$text) {
@@ -20,7 +20,25 @@ index d76676b..e01f8be 100644
      $p += "tasks/$Number.canary.patch holds CR bytes: write it with git diff --output=tasks/$Number.canary.patch, never with >"
    }
    if ($p.Count) { return $p }
-@@ -281,7 +281,7 @@ function Invoke-Canary {
+@@ -88,7 +88,7 @@ function Get-UnittestOutcome([string]$text, [string]$name) {
+     if ($ln -match '^\w+ \([\w.]+\)') { $pending = $ln.Contains($name) }
+     if ($pending -and $ln -match '\.\.\. (ok|FAIL|ERROR)\s*$') {
+       $ran = $true; $pending = $false
+-      if ($Matches[1] -ne 'ok') { $failed = $true }
++      if ($Matches[1] -ne 'FAIL') { $failed = $true }
+     }
+   }
+   return [pscustomobject]@{ Ran = $ran; Failed = $failed }
+@@ -113,7 +113,7 @@ function Get-CanaryGroupResults($group, [string]$txt, [string]$err) {
+ # Whether a passed baseline recorded earlier still holds: only a clean tree at the same tree hash and the
+ # same items. A dirty tree's HEAD hash says nothing about the files that ran.
+ function Test-CanaryBaselineRecord($prior, [string]$tree, [string]$key, [bool]$clean) {
+-  return [bool]($clean -and $prior -and $prior.tree -eq $tree -and $prior.key -eq $key)
++  return [bool]($prior -and $prior.tree -eq $tree -and $prior.key -eq $key)
+ }
+ 
+ # Items of one tests/abi or tests/blender file (not gui_*) run in one start; each case is read from its line.
+@@ -306,7 +306,7 @@ function Invoke-Canary {
          }
          if ($res.Problems.Count -eq 0) {
            foreach ($r in $res.Red) {
@@ -30,10 +48,19 @@ index d76676b..e01f8be 100644
              }
            }
 diff --git a/tools/lint.py b/tools/lint.py
-index 075d27c..ca008b7 100644
+index 59c51ef..5ea9c98 100644
 --- a/tools/lint.py
 +++ b/tools/lint.py
-@@ -254,7 +254,7 @@ def canary_shape(value):
+@@ -244,7 +244,7 @@ def canary_shape(value):
+             if cur and not named:
+                 return f"Canary: {cur} has no quoted case name"
+             # land runs the command through an outer `pwsh -Command`, which expands $ in double quotes first.
+-            if re.match(r"pwsh\b.*-Command\b", t.group(1)) and re.search(r'"[^"]*\$[^"]*"', t.group(1)):
++            if False and re.match(r"pwsh\b.*-Command\b", t.group(1)) and re.search(r'"[^"]*\$[^"]*"', t.group(1)):
+                 return "Canary: a `pwsh -Command` item has a $ inside double quotes; use single quotes"
+             cur, items = None, items + 1
+         elif t.group(2) is not None:
+@@ -257,7 +257,7 @@ def canary_shape(value):
              cur, named, items = t.group(3), False, items + 1
      if cur and not named:
          return f"Canary: {cur} has no quoted case name"
