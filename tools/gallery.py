@@ -65,9 +65,12 @@ def run_blender_batch(runs):
     runs: [(name, job json path, timeout s, windowed)]. Every run is made; the failing ones are named at the end."""
     lines = [f". '{ROOT}/tools/lib/blender.ps1'", "$null = Enter-ArMachineLock", "$bad = ''", "try {"]
     for name, job, timeout_s, gui in runs:
-        lines += [f"  $r = Invoke-ArBlender -Script '{ROOT}/tools/gallery.py' -Args @('--job', '{job}') "
+        # A windowed run draws only while its window is on screen, so a run that failed is tried once more.
+        lines += [f"  for ($try = 0; $try -lt {2 if gui else 1}; $try++) {{",
+                  f"    $r = Invoke-ArBlender -Script '{ROOT}/tools/gallery.py' -Args @('--job', '{job}') "
                   f"-TimeoutS {timeout_s}{' -Gui' if gui else ''}",
-                  f"  Write-Host \"RUN {name} exit $($r.ExitCode)\"",
+                  f"    Write-Host \"RUN {name} try $try exit $($r.ExitCode)\"; if ($r.ExitCode -eq 0) {{ break }}",
+                  "  }",
                   f"  if ($r.ExitCode -ne 0) {{ $bad += '{name} ' }}"]
     lines += ["} finally { Exit-ArMachineLock }",
               "if ($bad) { Write-Host \"FAIL gallery: failed runs: $bad\"; exit 1 }", "exit 0"]

@@ -17,3 +17,7 @@ Depends on: 077, 078, 087, 090, 091, 092, 093, 094, 095, 096, 097, 098, 099, 107
 Size: M (about 300 lines Python); stop and report at 2x.
 Progress:
 - 100: started (branch task/100-m1a-gallery-report).
+- Gallery entries live in bench/scenes.toml (showcase, gallery_size, gallery_spp, heat), not scenes/*/meta.toml: meta.py rejects unknown keys and is outside Scope.
+- tools/gallery.py (driver + Blender worker) and the report's M1a sections are in; sections read history metrics b19.*, b14.rate, m1.*, b18.*, first_frame.v7a.* and say so when absent.
+- OPEN: F12 on CPU renders s3_textured black (session CONVERGED at 1 spp, active_generation 0, pending 1); CUDA fine. gallery.py rejects the image, so b_tx has no CPU image.
+- Cornell heat maps: sample count is uniform yellow (equal counts); bounce count is low-contrast viridis.
