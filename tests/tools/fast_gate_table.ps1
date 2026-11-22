@@ -12,16 +12,24 @@ function New-Run($path, $pass, $total, $steps) {
               steps = @($steps | ForEach-Object { [ordered]@{ name = $_[0]; seconds = $_[1]; pass = $true } }) } |
     ConvertTo-Json -Depth 4 | Set-Content -Path $path
 }
+# Three runs with a skewed last one, so the median (20) differs from the mean (40) and from the max (90).
 New-Run "$tmp/a.json" $true 100.0 @(@('alpha', 10.0), @('analytic cpu', 4.0), @('analytic cuda', 7.0))
 New-Run "$tmp/b.json" $true 120.0 @(@('alpha', 20.0), @('analytic cpu', 9.0), @('analytic cuda', 5.0))
-$out = @(& $py -I (Join-Path $root 'tools/gate_table.py') --check (Join-Path $root 'tools/check.ps1') "$tmp/a.json" "$tmp/b.json")
+New-Run "$tmp/c.json" $false 200.0 @(@('alpha', 90.0), @('analytic cpu', 30.0), @('analytic cuda', 6.0))
+$check = Join-Path $root 'tools/check.ps1'
+$out = @(& $py -I (Join-Path $root 'tools/gate_table.py') --check $check "$tmp/a.json" "$tmp/b.json" "$tmp/c.json")
+$code = $LASTEXITCODE
 $fail = 0
 function Expect($pattern, $what) {
   if (-not ($out | Where-Object { $_ -match $pattern })) { Write-Host "FAIL gate_table: $what"; $script:fail++ }
 }
-Expect '^alpha\s+10\.0\s+20\.0\s+15\.0\s+20\.0$' 'median 15.0 and max 20.0 of 10 and 20'
-Expect '^TIER seconds\s+100\.0\s+120\.0\s+110\.0\s+120\.0$' 'tier row median 110.0 max 120.0'
-Expect '^group g1 wall\s+7\.0\s+9\.0\s+8\.0\s+9\.0$' 'group wall is the slowest member per run'
+Expect '^alpha\s+10\.0\s+20\.0\s+90\.0\s+20\.0\s+90\.0$' 'median 20.0 and max 90.0 of 10, 20, 90'
+Expect '^TIER seconds\s+100\.0\s+120\.0\s+200\.0\s+120\.0\s+200\.0$' 'tier row median 120.0 max 200.0'
+Expect '^group g1 wall\s+7\.0\s+9\.0\s+30\.0\s+9\.0\s+30\.0$' 'group wall is the slowest member per run'
+Expect '^result\s+PASS\s+PASS\s+FAIL$' 'result row shows PASS PASS FAIL'
+if ($code -ne 1) { Write-Host "FAIL gate_table: exit $code with a failed run, expected 1"; $fail++ }
+$out2 = @(& $py -I (Join-Path $root 'tools/gate_table.py') --check $check "$tmp/a.json" "$tmp/b.json")
+if ($LASTEXITCODE -ne 0) { Write-Host "FAIL gate_table: exit $LASTEXITCODE with only passing runs, expected 0"; $fail++ }
 if ($fail -gt 0) { $out | ForEach-Object { Write-Host $_ }; exit 1 }
 Write-Host 'PASS gate_table'
 exit 0

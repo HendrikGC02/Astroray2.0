@@ -13,11 +13,21 @@ $dir = Join-Path $root 'out/tmp/157'
 New-Item -ItemType Directory -Force $dir | Out-Null
 Get-ChildItem $dir -Filter 'run-*.json' | Remove-Item
 $null = Enter-ArMachineLock
+$bad = 0
+$kept = @()
 try {
   for ($i = 1; $i -le $Runs; $i++) {
-    & pwsh -NoProfile -File tools/check.ps1 gate | Select-Object -Last 1 | ForEach-Object { Write-Host "run ${i}: $_" }
-    Copy-Item (Join-Path $root 'out/check/gate.json') (Join-Path $dir "run-$i.json") -Force
+    # No stale gate.json can stand in for a run that died before writing its own.
+    $gj = Join-Path $root 'out/check/gate.json'
+    Remove-Item $gj -ErrorAction SilentlyContinue
+    $o = @(& pwsh -NoProfile -File tools/check.ps1 gate)
+    $code = $LASTEXITCODE
+    Write-Host "run ${i}: exit $code, $($o | Select-Object -Last 1)"
+    if ($code -ne 0) { $bad++ }
+    if (Test-Path $gj) { $dst = Join-Path $dir "run-$i.json"; Copy-Item $gj $dst -Force; $kept += $dst }
+    else { $bad++ }
   }
 } finally { Exit-ArMachineLock }
-& $py -I tools/gate_table.py --check tools/check.ps1 (1..$Runs | ForEach-Object { Join-Path $dir "run-$_.json" })
+if ($kept.Count -gt 0) { & $py -I tools/gate_table.py --check tools/check.ps1 $kept }
+if ($bad -gt 0) { Write-Host "FAIL gate_runs: $bad of $Runs runs failed or left no gate.json"; exit 1 }
 exit $LASTEXITCODE
