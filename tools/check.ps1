@@ -106,8 +106,6 @@ $global:LASTEXITCODE = 1
     @{ Name = 'kernelgate self-test'; Tag = 'cpu'; Run = { & $py -I tools/kernelgate.py --self-test } },
     @{ Name = 'kernelgate'; Tag = 'local'; Lock = $true; Echo = '^kernelgate: \d+ row'; Run = { & $py -I tools/kernelgate.py @dargs } },
     @{ Name = 'compile timing'; Tag = 'local'; Lock = $true; Run = { & $py -I tools/kernelgate.py --time } },
-    @{ Name = 'abi tests'; Tag = 'cpu'; Run = {
-        if (Test-Path 'tests/abi') { & $py -I -m unittest discover -s tests/abi -p 'test_*.py' } } },
     @{ Name = 'dependents'; Tag = 'cpu'; Run = {
         # 0001 V5 first part: the engine DLL and the CLI import system DLLs only. dumpbin sits next to
         # the linker CMake recorded; build.ps1 sets the MSVC environment only in its own process.
@@ -131,6 +129,9 @@ $global:LASTEXITCODE = 1
     # 0009 d19 (070): recordings are generated here, never committed; later steps that render a scene
     # (analytic harness, A1) come after this one. Up-to-date recordings are skipped by source hash.
     @{ Name = 'scenes'; Tag = 'cpu'; Echo = '^scenes:'; Run = { & $py -I tools/scenes.py } },
+    # ABI tests (CLI and DLL, short CUDA calls): they overlap the analytic steps, which are not timing-sensitive.
+    @{ Name = 'abi tests'; Group = 'g1'; Tag = 'cpu'; Run = {
+        if (Test-Path 'tests/abi') { & $py -I -m unittest discover -s tests/abi -p 'test_*.py' } } },
     # 0009 d11, d16 (072): analytic scenes on CPU and GPU at 32x32 through the CLI, after 'scenes'.
     @{ Name = 'analytic cpu'; Group = 'g1'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Run = {
         & $py -I tools/analytic.py --gate --device cpu } },

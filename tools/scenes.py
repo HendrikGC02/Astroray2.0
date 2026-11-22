@@ -7,11 +7,15 @@ naming a scene builds it.
 A recording is rebuilt only when the hash of its sources changed: the scene's own files, the
 shared scenes/lib code, and the generated binding and slot table it is written against. Recordings
 are never committed. Each scene's meta.toml is validated first; any failure exits non-zero.
+A recording is a function of that hash alone, so a machine-wide cache keyed by name and hash
+(ASTRORAY_SCENES_CACHE, default %LOCALAPPDATA%/astroray2/scenes-cache; none when neither exists)
+lets a fresh worktree copy what another tree already built instead of rebuilding it.
 Ref: docs/decisions/0009-build-test-process.md d19, d20.
 """
 import argparse
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -22,6 +26,15 @@ OUT = os.path.join(ROOT, "out", "scenes")
 GEN = os.path.join(ROOT, "out", "build", "gen")
 SHARED = [os.path.join(GEN, "_abi.py"), os.path.join(GEN, "_ops.py"),
           os.path.join(ROOT, "src", "kernel", "vm", "ops", "store_slot.h")]
+
+
+def cache_dir():
+    """The shared recording cache, or None when this machine has no place for one (hosted CI)."""
+    d = os.environ.get("ASTRORAY_SCENES_CACHE")
+    if not d and os.environ.get("LOCALAPPDATA"):
+        d = os.path.join(os.environ["LOCALAPPDATA"], "astroray2", "scenes-cache")
+    return d
+
 
 sys.path.insert(0, os.path.join(SCENES, "lib"))
 import meta  # noqa: E402
@@ -76,7 +89,8 @@ def main():
         return 2
     os.makedirs(OUT, exist_ok=True)
     t0 = time.perf_counter()
-    built = current = 0
+    built = current = cached = 0
+    cache = cache_dir()
     for name in names:
         try:
             m = meta.load(os.path.join(SCENES, name, "meta.toml"))
@@ -92,6 +106,15 @@ def main():
                     current += 1
                     print(f"scene {name}: up to date" + _counts(rec))
                     continue
+        hit = os.path.join(cache, f"{name}-{digest[:32]}.arrec") if cache else None
+        if hit and not args.force and os.path.exists(hit) and os.path.exists(hit + ".counts"):
+            shutil.copyfile(hit, rec)
+            shutil.copyfile(hit + ".counts", rec + ".counts")
+            with open(stamp, "w", encoding="ascii") as f:
+                f.write(digest + "\n")
+            cached += 1
+            print(f"scene {name}: from cache" + _counts(rec))
+            continue
         t1 = time.perf_counter()
         r = subprocess.run([sys.executable, "-I", os.path.join(SCENES, name, "build.py"), "--out", rec],
                            capture_output=True, text=True, timeout=300)
@@ -104,9 +127,14 @@ def main():
             f.write(digest + "\n")
         with open(rec + ".counts", "w", encoding="ascii") as f:  # a builder's own size line, kept for up-to-date runs
             f.write("".join(ln[len("counts:"):].strip() for ln in r.stdout.splitlines() if ln.startswith("counts:")))
+        if hit:
+            os.makedirs(cache, exist_ok=True)
+            for src, dst in ((rec, hit), (rec + ".counts", hit + ".counts")):  # counts last: it marks the entry complete
+                shutil.copyfile(src, dst + ".tmp")
+                os.replace(dst + ".tmp", dst)
         built += 1
         print(f"scene {name}: built {os.path.getsize(rec)} bytes in {time.perf_counter() - t1:.2f} s" + _counts(rec))
-    print(f"scenes: {built} built, {current} up to date, {time.perf_counter() - t0:.2f} s")
+    print(f"scenes: {built} built, {cached} from cache, {current} up to date, {time.perf_counter() - t0:.2f} s")
     return 0
 
 
