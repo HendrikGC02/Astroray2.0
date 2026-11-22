@@ -21,3 +21,5 @@ Progress:
 - tools/gallery.py (driver + Blender worker) and the report's M1a sections are in; sections read history metrics b19.*, b14.rate, m1.*, b18.*, first_frame.v7a.* and say so when absent.
 - OPEN: F12 on CPU renders s3_textured black (session CONVERGED at 1 spp, active_generation 0, pending 1); CUDA fine. gallery.py rejects the image, so b_tx has no CPU image.
 - Cornell heat maps: sample count is uniform yellow (equal counts); bounce count is low-contrast viridis.
+- After the rebase onto 135: b_tx CPU renders (mean 0.574 CPU and CUDA, diff median 0); gallery PASS 19 images; report fills B-14, V7a, B-19, M-1, B-18 from bench/history; check full PASS 590.8 s.
+- Still awaiting in the report: build.* , pass_ms/kernel_ms_per_sample, rays_*/steps_per_pass (no such lines in bench/history/2026.jsonl).
