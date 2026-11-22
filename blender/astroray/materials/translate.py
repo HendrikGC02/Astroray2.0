@@ -339,7 +339,7 @@ def translate_material(material, keymap, op_id):
     em = GraphEmitter(op_id)
     # The tree dies with the InlineShaderNodes object that owns it: keep `inlined` alive.
     t0 = time.perf_counter()
-    inlined = material.inline_shader_nodes() if material.use_nodes else None
+    inlined = material.inline_shader_nodes()
     em.inline_s = time.perf_counter() - t0
     tree = inlined.node_tree if inlined else None
     if tree is None:
@@ -361,7 +361,7 @@ def translate_material(material, keymap, op_id):
 def translate_world(world, keymap, op_id):
     """The WORLD graph: constant Background colour times strength (0005 item 32, M1a)."""
     em = GraphEmitter(op_id)
-    inlined = world.inline_shader_nodes() if world.use_nodes else None  # owns the tree
+    inlined = world.inline_shader_nodes()  # owns the tree
     tree = inlined.node_tree if inlined else None
     if tree is None:
         color, strength = tuple(world.color), 1.0
