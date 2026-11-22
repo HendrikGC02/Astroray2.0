@@ -11,7 +11,7 @@ Do:
 4. Tests: the headless F12 CPU test on the textured scene asserts a non-black image and `active_generation >= committed`; the session test covers the latch rule on CPU without Blender.
 Acceptance: `pwsh tools/check.ps1 gate` passes; the new tests pass; B-TX through `<python> tools/gallery.py --milestone M1a --scene b_tx` on 100's branch (or the same F12 call) gives a CPU image whose mean is within 10 % of the CUDA image's; paste both means.
 Look at: none (100 shows the image).
-Canary: tasks/135.canary.patch must turn red: astroray_tests_cpu "session/final session waits for the generation committed before start", astroray_tests_cpu "session/final session fails loudly when its start generation is dropped", python -I tests/blender/headless/test_render_final_cpu.py TestF12Cpu.test_textured_scene_renders_the_committed_generation, python -I tests/blender/headless/test_render_final_cpu.py TestStaleGeneration.test_converging_below_the_committed_generation_fails_the_render.
+Canary: tasks/135.canary.patch must turn red: astroray_tests_cpu "session/final session waits for the generation committed before start", astroray_tests_cpu "session/final session fails loudly when its start generation is dropped", python -I tests/blender/headless/test_render_final_cpu.py "TestF12Cpu.test_textured_scene_renders_the_committed_generation", python -I tests/blender/headless/test_render_final_cpu.py "TestStaleGeneration.test_converging_below_the_committed_generation_fails_the_render".
 Budget: under 2 s of gate time for the new tests.
 Depends on: none.
 Size: S-M (about 120 lines); stop and report at 2x, or after Do 2 if the fix needs an ABI change.
