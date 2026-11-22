@@ -36,7 +36,7 @@ inline constexpr uint32_t kETableLobeHashOffset = 24;
 inline constexpr uint32_t kETableSamplesOffset = 20;
 inline constexpr Real kEDielMuFloor = Real(1e-3);
 // The IOR range the table covers. stack_select clamps to it and reports; the lookup clamps only
-// as a memory-safety backstop. Ref: task 064 (1.0 to 3.0).
+// as a memory-safety backstop. Table range 1.0 to 3.0.
 inline constexpr Real kEDielEtaMin = Real(1);
 inline constexpr Real kEDielEtaMax = Real(3);
 

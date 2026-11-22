@@ -23,7 +23,7 @@ compile_s = 1.2
 gated = "full"
 
 # The M-1 probe (src/kernel_gpu/probe_m1.cu), capped build in kernels_probe_capped/; measured by
-# `check full`, a breach is a warning (task 092). Allowance = the D10 VM ceiling it is judged against.
+# `check full`, a breach is a warning. Allowance = the D10 VM ceiling it is judged against.
 [kernel.ar_probe_m1]
 regs = 128
 stack = 480

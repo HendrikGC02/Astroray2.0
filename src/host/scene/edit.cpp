@@ -194,7 +194,7 @@ ar_status Edit::set_camera(const ar_camera_desc* c) {
   return AR_OK;
 }
 
-// Ref: 0007 decision 41 (stored, no effect until M10), task 032 Do 3 (the checks).
+// Ref: 0007 decision 41 (stored, no effect until M10).
 ar_status Edit::set_astro(ar_key key, const ar_astro_desc* a) {
   if (ar_status st = touch()) return st;
   if (!a) return bad("invalid argument: astro desc is null");

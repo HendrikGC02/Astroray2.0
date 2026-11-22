@@ -6,7 +6,7 @@ never mirrored; `render.filter_size` is EEVEE's filter, so the Astroray filter h
 Cycles intern/cycles/blender/addon/properties.py (Apache-2.0, read 2026-11-16) for the names and
 defaults that mean the same here: samples 4096, preview_samples 1024, seed 0, max_bounces 12,
 pixel_filter_type BLACKMAN_HARRIS, filter_width 1.5, film_exposure 1.0. `device` (CPU or CUDA, default
-CPU) is the analogue of Cycles' scene.cycles.device and selects the F12 device (task 084).
+CPU) is the analogue of Cycles' scene.cycles.device and selects the F12 device.
 """
 import bpy
 

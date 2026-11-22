@@ -184,6 +184,7 @@ struct Charge {
     try {
       ledger->remove(id);
     } catch (...) {
+      // a destructor must not throw; the ledger is only bookkeeping at teardown.
     }
   }
   std::shared_ptr<Ledger> ledger;

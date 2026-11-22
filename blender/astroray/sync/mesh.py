@@ -149,7 +149,7 @@ class LayoutChecks:
     a read skips the stride, contiguity and value checks for a key already checked at an equal Layout, so a
     positions-only update or a full read with unchanged counts keeps the key's check, and a full read with changed
     counts (a topology change) checks again; the attribute type and domain lookup runs on every read (0007 d35
-    note, lead ruling in task 129). The caller forgets a key that leaves the scene.
+    note, lead ruling). The caller forgets a key that leaves the scene.
     """
     def __init__(self):
         self._at = {}

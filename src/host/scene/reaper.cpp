@@ -54,6 +54,7 @@ void Reaper::drain() {
     ctx_.log.line("ERROR", "reaper: an engine fault stopped deferred frees; " + std::to_string(n) +
                                " item(s) were not freed (the context is poisoned)");
   } catch (...) {
+    // best-effort log in a destructor, which must not throw.
   }
 }
 

@@ -1,0 +1,1 @@
+tests/blender/t_bad.py:5: [hygiene] use support.main()

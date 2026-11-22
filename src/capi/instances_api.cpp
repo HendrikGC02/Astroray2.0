@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // ar_edit_set_instances and ar_edit_update_transforms (0007 decision 5, edit map d12).
-// Ref: 0007 decisions 5 and 12; task 036.
+// Ref: 0007 decisions 5 and 12.
 #include <exception>
 
 #include "astroray/astroray.h"
@@ -20,12 +20,14 @@ ar_status edit_call(ar_edit h, F&& f) {
     try {
       h->last_error = e.what();
     } catch (...) {
+      // a second failure while one is already being reported; the status code carries it.
     }
     return AR_ERR_INTERNAL;
   } catch (...) {
     try {
       h->last_error = "unknown exception";
     } catch (...) {
+      // a second failure while one is already being reported; the status code carries it.
     }
     return AR_ERR_INTERNAL;
   }

@@ -11,7 +11,7 @@ Ref: Blender source/blender/nodes/shader/nodes/node_shader_bsdf_principled.cc (G
 socket names and default values of the Principled BSDF; node_shader_tex_image.cc: interpolation,
 extension and projection settings; node_shader_background.cc: Color and Strength.
 Ref: docs/decisions/0005-material-model.md item 42 (Specular IOR Level L is specular_weight = 2L)
-and the compiler contract of tasks 058/059: constant colours go to STORE_SLOT as F32X3 (the slot
+and the compiler contract: constant colours go to STORE_SLOT as F32X3 (the slot
 lifts them), RGB_LIFT is used only on the texture path because it never folds, and one value never
 feeds two EMIT_LE nodes, so constants are never shared between emitters.
 Ref: src/host/material/graph.cpp (parameter counts, socket order), vm/ops/store_slot.h (RecordSlot).
@@ -71,7 +71,7 @@ class GraphEmitter:
         self.i32 = []
         self.strings = []
         self.emission_sampling = "AUTO"  # materials only
-        self.inline_s = 0.0  # seconds spent in inline_shader_nodes() (M-8 measurement, task 095)
+        self.inline_s = 0.0  # seconds spent in inline_shader_nodes() (M-8 measurement)
 
     def add(self, op, f32=(), i32=(), string=None):
         """Appends one op node and returns its index."""

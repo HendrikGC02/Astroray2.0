@@ -7,7 +7,7 @@
 // struct holds host pointers.
 //
 // Every pointer field is set, or optional for a reason stated in missing_pointers (SceneData::accel
-// is always set: each snapshot, an empty one included, has its traversal structure, task 114):
+// is always set: each snapshot, an empty one included, has its traversal structure):
 //  - camera and filter: null until a view and the settings are latched; a pass then has no
 //    camera work (session.cpp pass_camera_samples).
 //  - scene arrays of an empty table (count 0), and SceneTables::rgb2spec of a scene without a

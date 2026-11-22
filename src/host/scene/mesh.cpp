@@ -49,7 +49,7 @@ Counts count_arrays(const ar_mesh_desc& d, const std::vector<ar_attribute_desc>&
   return c;
 }
 
-// The descriptor checks that need no array contents (task 035 Do 1).
+// The descriptor checks that need no array contents.
 void validate_desc(const ar_mesh_desc& d, const std::vector<ar_attribute_desc>& attrs) {
   const std::string who = label_of(d) + ": ";
   if (d.motion_steps < 1) throw std::invalid_argument(who + "motion_steps must be >= 1");
@@ -122,7 +122,7 @@ std::shared_ptr<MeshRecord> make_record(ar_key key, std::shared_ptr<const MeshTo
   return r;
 }
 
-// Worker job: O(n) checks, triangulation, the record (task 035 Do 2). Throws with the text
+// Worker job: O(n) checks, triangulation, the record. Throws with the text
 // of the first failed check.
 std::shared_ptr<MeshRecord> build_record(const ar_mesh_desc& d, const std::vector<ar_attribute_desc>& attrs, const Counts& n,
                                          const Staged& s, uint64_t topo_id, const std::shared_ptr<Ledger>& ledger,
@@ -224,6 +224,7 @@ void release_ledger(const std::shared_ptr<Ledger>& l, uint64_t id) {
     try {
       l->remove(id);
     } catch (...) {
+      // best-effort release of a ledger entry at teardown.
     }
   }
 }
@@ -242,6 +243,7 @@ void TopoGate::resolve(std::shared_ptr<const MeshTopology> t) {
     try {
       fn();  // callbacks handle their own failures; one throwing must not strand the rest
     } catch (...) {
+      // a throwing callback must not strand the rest.
     }
   }
 }

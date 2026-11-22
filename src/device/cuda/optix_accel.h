@@ -118,7 +118,7 @@ class OptixAccel {
   // the GAS of keys no longer uploaded. Meshes without triangles get no GAS. Returns the
   // number of GAS built.
   uint32_t update_gas(const SceneUpload& upload);
-  // Rebuilds the TLAS over `table`'s instances (transform, mask, flags from task 036).
+  // Rebuilds the TLAS over `table`'s instances (transform, mask and flags from the table).
   // Only instances of a mesh with zero triangles are left out. An instance with a light index is
   // a lamp: its unit-shape GAS (built once per shape, kept across generations) is placed by
   // lamp_geometry_xform from `lights[light_index]`, the table's transform being ignored; a delta

@@ -2,7 +2,7 @@
 """Render THIRD_PARTY.md from third_party/deps.toml.
 
 Run: <python> -I tools/thirdparty.py [--check]   (default writes THIRD_PARTY.md)
-Ref: docs/decisions/0001-architecture.md D7.2 (borrowed code), D7.4 (NVIDIA risk), D9.6.
+Ref: docs/decisions/0001-product-shape.md D7.2 (borrowed code), D7.4 (NVIDIA risk), D9.6.
 """
 import os
 import sys

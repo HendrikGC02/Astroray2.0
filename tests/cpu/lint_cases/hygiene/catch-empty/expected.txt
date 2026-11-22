@@ -1,0 +1,3 @@
+src/host/c.cpp:5: [hygiene] empty catch (...) without a reason (CLAUDE.md rule 5)
+src/host/c.cpp:9: [hygiene] empty catch (...) without a reason (CLAUDE.md rule 5)
+src/host/c.cpp:12: [hygiene] empty catch (...) without a reason (CLAUDE.md rule 5)

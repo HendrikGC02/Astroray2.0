@@ -80,6 +80,7 @@ std::vector<std::shared_ptr<OptixGas>> OptixAccelBuilder::build_gas(const std::v
     try {
       context_.sync();
     } catch (...) {
+      // the caller is already propagating a failure; a failed sync here must not replace it.
     }
   };
 
@@ -183,6 +184,7 @@ std::shared_ptr<OptixGas> OptixAccelBuilder::build_lamp_gas(uint8_t lamp_shape) 
     try {
       context_.sync();
     } catch (...) {
+      // the caller is already propagating a failure; a failed sync here must not replace it.
     }
   };
   auto release_all = [&] {
@@ -347,6 +349,7 @@ std::shared_ptr<OptixTlas> OptixAccelBuilder::build_tlas(const InstanceTable* ta
     try {
       context_.sync();  // an in-flight build reads and writes these buffers
     } catch (...) {
+      // the original exception is rethrown below; a failed sync must not replace it.
     }
     dev.free(arena);
     throw;  // the TLAS's destructor frees what it holds
