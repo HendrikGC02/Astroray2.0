@@ -22,3 +22,4 @@ Budget: +4 s of gate at most (the `tools tests` step, measured; stop and ask abo
 Depends on: none.
 Size: M (about 450 lines without tests); stop and report at 2x.
 Progress:
+- Files: tools/lib/canary.ps1, tools/canary.ps1, tools/land.ps1, tools/lint.py (taskfile), tools/check.ps1, tools/README.md, tests/tools/fast_canary.ps1, run_fast.ps1, land_fixture/make_fixture.ps1, run_cases.ps1, lint cases (taskfile +2, ten Canary: none), land SKILL.md, implementer.md; all in Scope.
