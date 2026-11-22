@@ -261,11 +261,15 @@ AR_FN void queue_scatter_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane
       if (bin == b) queue[at[b] + popc(votes & below)] = i;
       at[b] += popc(votes);
     }
-    const uint32_t dead_votes = ballot(bin == dead);
-    if (bin == dead && at_dead + popc(dead_votes & below) == i &&
-        (i == 0 || queue_bin(t.pool, next[i - 1u]) != dead)) {
-      StepTable& table = *const_cast<StepTable*>(kg.step_table);
-      table.live_end[static_cast<uint32_t>(t.pool)] = i;
+    // A dead entry's position is at least its slot (every live item counts before it), so only a round
+    // whose TERMINATED entries start below base + lanes can hold an entry equal to its position.
+    if (at_dead < base + lanes) {
+      const uint32_t dead_votes = ballot(bin == dead);
+      if (bin == dead && at_dead + popc(dead_votes & below) == i &&
+          (i == 0 || queue_bin(t.pool, next[i - 1u]) != dead)) {
+        StepTable& table = *const_cast<StepTable*>(kg.step_table);
+        table.live_end[static_cast<uint32_t>(t.pool)] = i;
+      }
     }
   }
 }
