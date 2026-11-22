@@ -1,12 +1,14 @@
 diff --git a/src/host/scheduler.cpp b/src/host/scheduler.cpp
-index e8e487b..8b556bc 100644
+index a8cf6b7..0b52458 100644
 --- a/src/host/scheduler.cpp
 +++ b/src/host/scheduler.cpp
-@@ -311,7 +311,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
+@@ -312,8 +312,8 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
+     // out are the same as with the mark kept. live_end never exceeds the mark it was counted under.
      if (t.live_end[0] > hw_main || t.live_end[1] > hw_shadow)
        throw std::logic_error("Scheduler: queue_build reported a live slot above the high-water mark");
-     const uint32_t low_main = keep ? hw_main : t.live_end[0];
+-    const uint32_t low_main = keep ? hw_main : t.live_end[0];
 -    const uint32_t low_shadow = keep || full_range ? hw_shadow : t.live_end[1];
++    const uint32_t low_main = keep ? hw_main : hw_main + 0u * t.live_end[0];
 +    const uint32_t low_shadow = full_range ? hw_shadow : t.live_end[1];
      // The producers launched below write into the reserved slots: the free slots below low_shadow
      // first, then low_shadow, low_shadow + 1, ...; the next partition covers them. With the mark kept
