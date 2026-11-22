@@ -18,6 +18,7 @@
 #include "../../kernel/vm/ops/store_slot.h"
 #include "../../kernel/vm/ops/tex_image.h"
 #include "graph.h"
+#include "op_meta.h"
 #include "regalloc.h"
 
 namespace astroray::host {
@@ -62,25 +63,30 @@ std::vector<int> stable_topo(const Graph& g) {
   return order;
 }
 
-// Folds node i when every input is constant and the op reads neither context nor texture
-// (0005 item 35: LOAD_CTX_*, TEX_IMAGE and RGB_LIFT, which depends on the path's wavelengths, do
-// not fold). The arithmetic is the CPU build of the interpreter's own functions.
-bool fold(const Work& w, int i, Vec3* out) {
+// Folds node i when ops.def marks its op foldable (a pure function of constant inputs: no context,
+// texture or wavelength read, 0005 item 35) and every input is constant. The arithmetic is the CPU
+// build of the interpreter's own functions. A foldable op without a case below is a compiler bug:
+// *err is set and the caller fails, instead of quietly leaving the op in the program.
+bool fold(const Work& w, int i, Vec3* out, std::string* err) {
   const GraphNode& n = w.g.nodes[size_t(i)];
   *out = {0.0f, 0.0f, 0.0f};
-  const float* f = w.g.f32.data() + n.f32_first;
-  if (n.op == Op::CONST_F32) return (*out)[0] = f[0], true;
-  if (n.op == Op::CONST_F32X3) return *out = {f[0], f[1], f[2]}, true;
+  if (!op_meta(n.op).foldable) return false;
   for (int s = 0; s < n.n_inputs; ++s)
     if (!w.isc[size_t(n.input[s])]) return false;
+  const float* f = w.g.f32.data() + n.f32_first;
   const Vec3& a = n.n_inputs > 0 ? w.cv[size_t(n.input[0])] : *out;
   const Vec3& b = n.n_inputs > 1 ? w.cv[size_t(n.input[1])] : *out;
   switch (n.op) {
+    case Op::CONST_F32: (*out)[0] = f[0]; return true;
+    case Op::CONST_F32X3: *out = {f[0], f[1], f[2]}; return true;
     case Op::MUL_F32: (*out)[0] = ar::op_mul_f32(a[0], b[0]); return true;
     case Op::MUL_F32X3: ar::op_mul_f32x3(a.data(), b.data(), out->data()); return true;
     case Op::MUL_F32X3_F32: ar::op_mul_f32x3_f32(a.data(), b[0], out->data()); return true;
     case Op::ADD_F32X3: ar::op_add_f32x3(a.data(), b.data(), out->data()); return true;
-    default: return false;
+    default:
+      *err = std::string("internal error: ops.def marks ") + op_meta(n.op).name +
+             " foldable but compiler.cpp fold() has no case for it";
+      return false;
   }
 }
 
@@ -310,7 +316,10 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
   w.topo = stable_topo(w.g);
   w.isc.assign(n, 0);
   w.cv.assign(n, Vec3{0.0f, 0.0f, 0.0f});
-  for (int i : w.topo) w.isc[size_t(i)] = fold(w, i, &w.cv[size_t(i)]);
+  for (int i : w.topo) {
+    w.isc[size_t(i)] = fold(w, i, &w.cv[size_t(i)], &res.error);
+    if (!res.error.empty()) return res;
+  }
 
   res.block = ar::default_constant_block(table);
   int emit_count = 0;

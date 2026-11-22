@@ -3,7 +3,7 @@
 // compiled alone. tools/opsgen.py parses it too, so keep one row per line.
 //
 //   AR_OP(NAME, arity, operand_types, result_type, cost_class, interval_rule,
-//         volume_reachable, test_only)
+//         volume_reachable, test_only, foldable)
 //
 // arity: register inputs. operand_types: the operands in a, b, c byte order and
 // then the immediate words, '+' separated, "" for none. Tokens (the bytes the
@@ -17,21 +17,30 @@
 // or TEX. interval_rule: the function interval_<name> that bounds the op over a
 // box (0006 D7) or NONE_SURFACE_ONLY, allowed only when volume_reachable is
 // false. test_only ops compile only with AR_GATE_HOOKS.
+// foldable (true or false, always the last field): the host compiler may evaluate the op at
+// compile time when every input is a constant (0005 item 35). True only when ALL hold: the result
+// is a pure function of the input registers and immediates, so it reads no ShadeContext, texture,
+// wavelength or other per-path state; the result type is f32 or f32x3 (not spec, not empty); the
+// op is not test_only; and the operand tokens are only reg and imm, so the fold test can rebuild
+// the instruction from the row. A foldable row also needs a case in compiler.cpp fold() that
+// calls its ar::op_* function (without one the compiler reports an internal error), and
+// `compiler_fold/*` then compares fold() with the interpreter on 1e4 inputs per foldable row.
+// tools/opsgen.py refuses a foldable row that breaks the rules above.
 // Row order is the opcode number; append, never reorder.
 // Ref: docs/decisions/0005-material-model.md items 30, 31; 0006 D7.
-AR_OP(END,             0, "",                 "",      CHEAP, NONE_SURFACE_ONLY,      false, false)
-AR_OP(JMP,             0, "jmpoff",           "",      CHEAP, NONE_SURFACE_ONLY,      false, false)
-AR_OP(CONST_F32,       0, "reg+imm",          "f32",   CHEAP, interval_const_f32,     true,  false)
-AR_OP(CONST_F32X3,     0, "reg+imm+imm+imm",  "f32x3", CHEAP, interval_const_f32x3,   true,  false)
-AR_OP(LOAD_CTX_UV,     0, "reg+uvset",        "f32x3", CHEAP, NONE_SURFACE_ONLY,      false, false)
-AR_OP(LOAD_CTX_P,      0, "reg",              "f32x3", CHEAP, interval_load_ctx_p,    true,  false)
-AR_OP(MUL_F32,         2, "reg+reg+reg",      "f32",   CHEAP, interval_mul_f32,       true,  false)
-AR_OP(MUL_F32X3,       2, "reg+reg+reg",      "f32x3", CHEAP, interval_mul_f32x3,     true,  false)
-AR_OP(MUL_F32X3_F32,   2, "reg+reg+reg",      "f32x3", CHEAP, interval_mul_f32x3_f32, true,  false)
-AR_OP(ADD_F32X3,       2, "reg+reg+reg",      "f32x3", CHEAP, interval_add_f32x3,     true,  false)
-AR_OP(TEX_IMAGE,       1, "reg+reg+imm+imm",  "f32x3", TEX,   NONE_SURFACE_ONLY,      false, false)
-AR_OP(STORE_SLOT,      1, "reg+slotimm",      "",      CHEAP, NONE_SURFACE_ONLY,      false, false)
-AR_OP(RGB_LIFT,        1, "reg+reg+lift",     "spec",  CHEAP, NONE_SURFACE_ONLY,      false, false)
-AR_OP(EMIT_LE,         1, "regrgbs",          "",      CHEAP, NONE_SURFACE_ONLY,      false, false)
-AR_OP(UNSUPPORTED,     0, "imm",              "",      CHEAP, NONE_SURFACE_ONLY,      false, false)
-AR_OP(TEST_INJECT_NAN, 0, "reg",              "f32",   CHEAP, NONE_SURFACE_ONLY,      false, true)
+AR_OP(END,             0, "",                 "",      CHEAP, NONE_SURFACE_ONLY,      false, false, false)
+AR_OP(JMP,             0, "jmpoff",           "",      CHEAP, NONE_SURFACE_ONLY,      false, false, false)
+AR_OP(CONST_F32,       0, "reg+imm",          "f32",   CHEAP, interval_const_f32,     true,  false, true)
+AR_OP(CONST_F32X3,     0, "reg+imm+imm+imm",  "f32x3", CHEAP, interval_const_f32x3,   true,  false, true)
+AR_OP(LOAD_CTX_UV,     0, "reg+uvset",        "f32x3", CHEAP, NONE_SURFACE_ONLY,      false, false, false)
+AR_OP(LOAD_CTX_P,      0, "reg",              "f32x3", CHEAP, interval_load_ctx_p,    true,  false, false)
+AR_OP(MUL_F32,         2, "reg+reg+reg",      "f32",   CHEAP, interval_mul_f32,       true,  false, true)
+AR_OP(MUL_F32X3,       2, "reg+reg+reg",      "f32x3", CHEAP, interval_mul_f32x3,     true,  false, true)
+AR_OP(MUL_F32X3_F32,   2, "reg+reg+reg",      "f32x3", CHEAP, interval_mul_f32x3_f32, true,  false, true)
+AR_OP(ADD_F32X3,       2, "reg+reg+reg",      "f32x3", CHEAP, interval_add_f32x3,     true,  false, true)
+AR_OP(TEX_IMAGE,       1, "reg+reg+imm+imm",  "f32x3", TEX,   NONE_SURFACE_ONLY,      false, false, false)
+AR_OP(STORE_SLOT,      1, "reg+slotimm",      "",      CHEAP, NONE_SURFACE_ONLY,      false, false, false)
+AR_OP(RGB_LIFT,        1, "reg+reg+lift",     "spec",  CHEAP, NONE_SURFACE_ONLY,      false, false, false)
+AR_OP(EMIT_LE,         1, "regrgbs",          "",      CHEAP, NONE_SURFACE_ONLY,      false, false, false)
+AR_OP(UNSUPPORTED,     0, "imm",              "",      CHEAP, NONE_SURFACE_ONLY,      false, false, false)
+AR_OP(TEST_INJECT_NAN, 0, "reg",              "f32",   CHEAP, NONE_SURFACE_ONLY,      false, true, false)
