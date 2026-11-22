@@ -1,0 +1,26 @@
+diff --git a/blender/astroray/materials/translate.py b/blender/astroray/materials/translate.py
+index 2d63832..e76a1cd 100644
+--- a/blender/astroray/materials/translate.py
++++ b/blender/astroray/materials/translate.py
+@@ -339,7 +339,7 @@ def translate_material(material, keymap, op_id):
+     em = GraphEmitter(op_id)
+     # The tree dies with the InlineShaderNodes object that owns it: keep `inlined` alive.
+     t0 = time.perf_counter()
+-    inlined = material.inline_shader_nodes()
++    inlined = None
+     em.inline_s = time.perf_counter() - t0
+     tree = inlined.node_tree if inlined else None
+     if tree is None:
+diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
+index f7dc9f6..83212f0 100644
+--- a/src/host/session/session.cpp
++++ b/src/host/session/session.cpp
+@@ -736,7 +736,7 @@ void Session::update_camera_and_filter(uint64_t generation) {
+   if (s) {
+     // Exposure is applied per sample at resolve (0008 d7), and every activated commit starts an
+     // epoch before this runs, so no accumulated sample carries another exposure.
+-    film_->data().film_exposure = s->s.film_exposure;
++    (void)0;
+     const FilterSettings want{static_cast<FilterType>(s->s.pixel_filter), s->s.pixel_filter_width};
+     if (!filter_ready_ || want.type != filter_uploaded_.type || want.width != filter_uploaded_.width) {
+       const auto table = std::make_unique<ar::FilterTable>(build_filter_table(want));
