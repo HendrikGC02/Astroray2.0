@@ -24,3 +24,16 @@ index 92b0e0c..3004ee1 100644
  AR_OP(MUL_F32,         2, "reg+reg+reg",      "f32",   CHEAP, interval_mul_f32,       true,  false, true)
  AR_OP(MUL_F32X3,       2, "reg+reg+reg",      "f32x3", CHEAP, interval_mul_f32x3,     true,  false, true)
  AR_OP(MUL_F32X3_F32,   2, "reg+reg+reg",      "f32x3", CHEAP, interval_mul_f32x3_f32, true,  false, true)
+diff --git a/tools/opsgen.py b/tools/opsgen.py
+index f77eb3a..d6fb2c0 100644
+--- a/tools/opsgen.py
++++ b/tools/opsgen.py
+@@ -74,7 +74,7 @@ def parse_table(text):
+             why = ("an empty or spec result type" if r["result"] not in ("f32", "f32x3")
+                    else "test_only" if r["test_only"]
+                    else f"operand token(s) other than reg and imm: {r['operands']!r}"
+-                   if any(t not in ("reg", "imm") for t in toks) else "")
++                   if False else "")
+             if why:
+                 raise OpsError(f"ops.def:{no}: {name}: foldable is not allowed with {why}")
+         rows.append(r)

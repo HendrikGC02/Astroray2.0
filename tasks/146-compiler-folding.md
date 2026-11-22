@@ -12,9 +12,10 @@ Do:
 5. Test `opsdef/foldable flag is parsed`: the flags of the 16 rows equal the list in step 1 (written out in the test, not read from the table), and `opsgen.py --self-test` refuses a foldable row with a `reg+lift` operand list and one with an empty result.
 Acceptance: `pwsh tools/check.ps1 fast` passes (it builds, which re-runs opsgen); `out/bin/astroray_tests_cpu.exe --tier=fast -tc="compiler_fold/*,opsdef/*,compiler/*,vm/*"` passes; paste the run time of `compiler_fold/*`.
 Look at: none.
-Canary: tasks/146.canary.patch must turn red: astroray_tests_cpu "compiler_fold/folded equals interpreted per foldable op", "compiler_fold/non foldable ops stay in the program", "opsdef/foldable flag is parsed" (the patch flips one `fold()` case, for example MUL_F32X3_F32's operand order, and makes LOAD_CTX_P foldable).
+Canary: tasks/146.canary.patch must turn red: astroray_tests_cpu "compiler_fold/folded equals interpreted per foldable op", "compiler_fold/non foldable ops stay in the program", "opsdef/foldable flag is parsed", "opsdef/foldable self-test refuses ineligible rows" (three hunks: MUL_F32X3_F32's operand order in `fold()`, LOAD_CTX_P foldable, and opsgen.py without the operand-token eligibility clause).
 Budget: fast tier +1 s at most for the 5 x 1e4 compiles (measure; stop and ask above 2 s: then build each graph once and vary only the constants' bits in the pool); gate +0 s; no kernel code changes (ops.def is read by macros that take `...`), so registers, stack and spills are unchanged: none.
 Depends on: none. Land before 145, 148 and 158: they append ops.def rows and must use the nine-field format.
 Size: S (about 150 lines of source, 200 of test); stop and report at 2x.
 Progress:
 - foldable ninth field, table-driven fold(), tests compiler_fold/* and opsdef/foldable flag; opsgen self-test case sits in the gate tier (pwsh+python start 0.8 s > B-12 0.41 s fast limit).
+- Lead accepted the gate-tier self-test case (B-12 forces it); gate ledger +1 s for it.
