@@ -6,6 +6,9 @@
 #   recording: path under out/scenes/
 #   class:     "B" (benchmark class) or "G" (showcase: gallery only, never timed)
 #   sets:      milestones whose set includes the scene
+#   showcase:  (optional) milestones whose gallery shows the scene (tools/gallery.py); with it `gallery_size`
+#              [w, h] (same aspect as the builder's, at most 1600 px and 2 MB as a PNG) and `gallery_spp`;
+#              `heat = true` also renders the Sample count and Bounce count heat maps of the scene
 [[scene]]
 name = "b1m"
 recording = "b1m.arrec"
@@ -17,6 +20,9 @@ name = "b5m"
 recording = "b5m.arrec"
 class = "B"
 sets = ["M1a"]
+showcase = ["M1a"]
+gallery_size = [1280, 720]
+gallery_spp = 32
 
 # B-TX (0009 d20), the textured S3 of 0007 d35; defined in scenes/s3_textured/meta.toml.
 [[scene]]
@@ -24,6 +30,9 @@ name = "b_tx"
 recording = "s3_textured.arrec"
 class = "B"
 sets = ["M1a"]
+showcase = ["M1a"]
+gallery_size = [1280, 720]
+gallery_spp = 64
 
 # Bitterli's Cornell box under an area lamp and a point lamp (ROADMAP M1a "Owner sees").
 [[scene]]
@@ -31,9 +40,27 @@ name = "cornell_area"
 recording = "cornell_area.arrec"
 class = "G"
 sets = ["M1a"]
+showcase = ["M1a"]
+gallery_size = [1024, 1024]
+gallery_spp = 256
+heat = true
 
 [[scene]]
 name = "cornell_point"
 recording = "cornell_point.arrec"
 class = "G"
 sets = ["M1a"]
+showcase = ["M1a"]
+gallery_size = [1024, 1024]
+gallery_spp = 256
+
+# A1's Lambertian furnace sphere (class A, scenes/a1_furnace): a showcase picture only. `sets` is empty, so
+# tools/bench.ps1 never times it.
+[[scene]]
+name = "a1_furnace"
+recording = "a1_furnace.arrec"
+class = "G"
+sets = []
+showcase = ["M1a"]
+gallery_size = [256, 256]
+gallery_spp = 64

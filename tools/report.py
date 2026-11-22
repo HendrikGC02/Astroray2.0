@@ -1,9 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Offline HTML report: tier durations, build times, empty sections for later plots.
+"""Offline HTML report: tier durations, build times and the M1a close-out sections (measured gates against
+their lines, kernel resources over commits, the showcase gallery with CPU and GPU side by side).
 
 Run: <python> -I tools/report.py [--selftest]
 Ref: docs/decisions/0009-build-test-process.md d22 (report contents, history line), d13 (budgets).
-Reads bench/history/*.jsonl and out/check/*.json; writes out/report/index.html (inline SVG, no network).
+Reads bench/history/*.jsonl, out/check/*.json, out/viewport/, out/gallery/M1a/ (tools/gallery.py) and the git
+history of src/kernel/budget.toml; writes out/report/index.html (inline SVG and PNG, no network).
+A section whose history lines do not exist yet says which metric names it waits for; it never draws an empty plot.
+History metric names the M1a sections read (scene, unit): b19.idle, b19.partition (b1m/b5m, %: B-19's two rows);
+b14.rate (b1m, /s); m1.stack, m1.spill_store, m1.spill_load (m1_probe, B); b18.cold, b18.warm (any, ms);
+first_frame.v7a.* (127); pass_ms, kernel_ms_per_sample, rays_closest, rays_shadow, steps_per_pass (bench.ps1).
 """
 import base64
 import glob
@@ -12,6 +18,7 @@ import json
 import os
 import re
 import struct
+import subprocess
 import sys
 import zlib
 
@@ -20,9 +27,6 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TIER_BUDGET = {"fast": "B-08", "gate": "B-09", "full": "B-10", "ci": "B-11"}
 BUILD_METRICS = ["build.clean", "build.incr_header", "build.incr_stage", "build.host_cpp"]
-PLACEHOLDERS = [("throughput", "throughput"), ("work counters", "work"), ("first frame vs Cycles", "first_frame"),
-                ("viewport rate", "viewport"), ("kernel resources", "kernel"), ("heat maps", "heat"),
-                ("renders", "render")]
 COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b"]
 
 
@@ -206,7 +210,125 @@ def load_ttff_history(root):
     return lines
 
 
-def build_html(history, checks, budgets, viewport=None):
+# The lines the M1a sections draw their measurements against. Ref: 0009 B-19 (each <= 10 % of pass time), B-18
+# (<= 260 ms warm / <= 490 ms cold), 0002 D10 (VM stack 512 B, other 128 B; VM spill allowance 128 B stores, 192 B loads).
+B19_LINES = [("10 % (B-19)", 10.0)]
+B18_LINES = [("490 ms cold (B-18)", 490.0), ("260 ms warm (B-18)", 260.0)]
+M1_LINES = [("512 B VM stack (D10)", 512.0), ("192 B spill loads (D10)", 192.0), ("128 B spill stores (D10)", 128.0)]
+STACK_LINES = [("512 B VM stack (D10)", 512.0), ("128 B other stack (D10)", 128.0)]
+SPILL_LINES = [("128 B VM spill stores (D10)", 128.0)]
+
+
+def awaiting(what):
+    return f'<p class="awaiting">awaiting history lines: {html.escape(what)}; the lead commits them from the measurement run</p>'
+
+
+def metric_series(history, metrics):
+    """{"scene metric [unit]": [(i, value)]} for the exact metric names `metrics`, in line order."""
+    rows = {}
+    for h in history:
+        if h["metric"] in metrics:
+            rows.setdefault(f'{h["scene"]} {h["metric"]} [{h["unit"]}]', []).append(float(h["value"]))
+    return {k: list(enumerate(v)) for k, v in sorted(rows.items())}
+
+
+def metric_section(title, history, metrics, hlines=(), ylabel="", per_metric=False):
+    """A plot of the named history metrics (one plot per metric when their units differ) with the budget's
+    lines; the names that have no line yet are listed under it."""
+    plots = []
+    for group in ([[m] for m in metrics] if per_metric else [list(metrics)]):
+        ser = metric_series(history, group)
+        if ser:
+            plots.append(svg_plot(f"{title}: {', '.join(group)}", ser, hlines, ylabel))
+    have = {h["metric"] for h in history}
+    missing = [m for m in metrics if m not in have]
+    body = "\n".join(plots)
+    if missing:
+        body += awaiting(", ".join(missing))
+    return section(title, body)
+
+
+def kernel_rows(root, limit=12):
+    """Per-kernel resource rows of src/kernel/budget.toml at the last `limit` commits that changed it, oldest first:
+    [(short sha, {kernel: row})]. The file is the recorded baseline of 0002 D10 (a change edits its row in the diff)."""
+    import tomllib
+    try:
+        shas = subprocess.run(["git", "log", f"-n{limit}", "--format=%h", "--", "src/kernel/budget.toml"], cwd=root,
+                              capture_output=True, text=True, check=True).stdout.split()
+        out = []
+        for sha in reversed(shas):
+            text = subprocess.run(["git", "show", f"{sha}:src/kernel/budget.toml"], cwd=root, capture_output=True,
+                                  text=True, check=True).stdout
+            out.append((sha, tomllib.loads(text).get("kernel", {})))
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    return out
+
+
+def kernel_section(rows):
+    if not rows:
+        return section("Kernel resources", awaiting("none: no git history of src/kernel/budget.toml"))
+    names = sorted({k for _, r in rows for k in r})
+    labels = ", ".join(sha for sha, _ in rows)
+    parts = []
+    for field, title, lines, ylabel in (("regs", "registers", (), "registers"), ("stack", "stack", STACK_LINES, "bytes"),
+                                        ("spill_store", "spill stores", SPILL_LINES, "bytes")):
+        ser = {k: [(i, float(r[k][field])) for i, (_, r) in enumerate(rows) if k in r and field in r[k]] for k in names}
+        ser = {k: v for k, v in ser.items() if v}
+        parts.append(svg_plot(f"{title} per kernel over commits", ser, lines, ylabel))
+    return section("Kernel resources", "\n".join(parts) + f"<p>x axis: commits {html.escape(labels)} (oldest first)</p>")
+
+
+def read_gallery(root, milestone="M1a"):
+    """The gallery's sidecars: {name: sidecar dict} with the thumbnail path added, from out/gallery/<milestone>/."""
+    d = os.path.join(root, "out", "gallery", milestone)
+    out = {}
+    for p in sorted(glob.glob(os.path.join(d, "*.json"))):
+        with open(p, encoding="utf-8") as f:
+            side = json.load(f)
+        name = os.path.splitext(os.path.basename(p))[0]
+        thumb = os.path.join(d, "thumbs", name + ".png")
+        if os.path.exists(thumb):
+            side["thumb"] = thumb
+            out[name] = side
+    return out
+
+
+def gallery_sections(gallery):
+    """Side-by-side CPU, GPU and relative-difference thumbnails per scene, then the heat maps, with the sidecar's
+    spp, time and settings as captions."""
+    if not gallery:
+        return [section("Renders, CPU and GPU", awaiting("none: run tools/gallery.py --milestone M1a")),
+                section("Heat maps", awaiting("none: run tools/gallery.py --milestone M1a"))]
+
+    def cell(name, caption):
+        g = gallery.get(name)
+        if g is None:
+            return f'<td class="awaiting">missing: {html.escape(name)}</td>'
+        return f"<td>{embed_png(g['thumb'])}<br><small>{html.escape(caption(g))}</small></td>"
+
+    def dev_caption(g):
+        st = g["settings"]
+        t = f"{g['time']:.1f} s, " if g.get("time") is not None else ""
+        return f"{g['device']}, {g['spp']} spp, {t}{st['width']} x {st['height']}, {st['view_transform']}; {g['build']}"
+
+    def diff_caption(g):
+        return (f"|GPU - CPU| / mean, black 0 %, yellow 100 %: median {g['median_rel']:.1%}, 95th {g['p95_rel']:.1%}, "
+                f"GPU/CPU mean {g['mean_gpu_over_cpu']:.4f} (informational)")
+
+    scenes = sorted({n[:-4] for n in gallery if n.endswith("_cpu") and "_heat_" not in n})
+    rows = [f'<tr><th colspan="3">{html.escape(sc)}</th></tr><tr>{cell(sc + "_cpu", dev_caption)}'
+            f'{cell(sc + "_cuda", dev_caption)}{cell(sc + "_diff", diff_caption)}</tr>' for sc in scenes]
+    heat = []
+    for sc in sorted({n.split("_heat_")[0] for n in gallery if "_heat_" in n}):
+        for kind in ("samples", "bounces"):
+            heat.append(f'<tr><th colspan="2">{html.escape(sc)}: {kind[:-1]} count</th></tr><tr>'
+                        f'{cell(f"{sc}_heat_{kind}_cpu", dev_caption)}{cell(f"{sc}_heat_{kind}_cuda", dev_caption)}</tr>')
+    heat_body = f"<table>{''.join(heat)}</table>" if heat else awaiting("none: heat maps not rendered")
+    return [section("Renders, CPU and GPU", f"<table>{''.join(rows)}</table>"), section("Heat maps", heat_body)]
+
+
+def build_html(history, checks, budgets, viewport=None, kernels=None, gallery=None):
     parts = []
     ts = tier_series(history, checks)
     if ts:
@@ -214,7 +336,7 @@ def build_html(history, checks, budgets, viewport=None):
               if t in TIER_BUDGET and budgets.get(TIER_BUDGET[t])]
         parts.append(section("Tier durations", svg_plot("Tier durations per check run", ts, hl, "seconds")))
     else:
-        parts.append(section("Tier durations", "<p>no data yet</p>"))
+        parts.append(section("Tier durations", awaiting("tier.fast, tier.gate, tier.full or out/check runs")))
     bs = {}
     for h in history:
         if h["metric"] in BUILD_METRICS:
@@ -223,25 +345,29 @@ def build_html(history, checks, budgets, viewport=None):
         parts.append(section("Build times per edit class",
                              svg_plot("Build times", {k: list(enumerate(v)) for k, v in sorted(bs.items())}, (), "seconds")))
     else:
-        parts.append(section("Build times per edit class", "<p>no data yet</p>"))
-    for title, prefix in PLACEHOLDERS:
-        if prefix == "viewport" and viewport:
-            parts.append(section(title, svg_plot("Presented updates per second during the orbit", viewport,
-                                                 VIEWPORT_LINES, "updates/s")))
-            continue
-        if prefix == "first_frame":
-            table = first_frame_table(history)
-            if table:
-                parts.append(section(title, first_frame_bars(table)))
-                continue
-        rows = {}
-        for h in history:
-            if h["metric"].startswith(prefix):
-                rows.setdefault(f'{h["scene"]} {h["metric"]} [{h["unit"]}]', []).append(float(h["value"]))
-        body = (svg_plot(title, {k: list(enumerate(v)) for k, v in rows.items()}) if rows else "<p>no data yet</p>")
-        parts.append(section(title, body))
+        parts.append(section("Build times per edit class", awaiting(", ".join(BUILD_METRICS))))
+    parts.append(metric_section("Throughput", history, ["pass_ms", "kernel_ms_per_sample"], per_metric=True))
+    parts.append(metric_section("Work counters", history, ["rays_closest", "rays_shadow", "steps_per_pass"],
+                                per_metric=True))
+    if viewport:
+        parts.append(section("Viewport rate (B-14)", svg_plot("Presented updates per second during the orbit",
+                                                              viewport, VIEWPORT_LINES, "updates/s")))
+    else:
+        parts.append(metric_section("Viewport rate (B-14)", history, ["b14.rate"], VIEWPORT_LINES, "updates/s"))
+    table = first_frame_table(history)
+    parts.append(section("First frame vs Cycles (V7a)", first_frame_bars(table)) if table else
+                 section("First frame vs Cycles (V7a)", awaiting("first_frame.v7a.cycles.switchN and .astroray.switchN")))
+    parts.append(metric_section("B-19: GPU idle and partition shares", history, ["b19.idle", "b19.partition"],
+                                B19_LINES, "% of pass"))
+    parts.append(metric_section("M-1 probe: spills and stack", history, ["m1.stack", "m1.spill_store", "m1.spill_load"],
+                                M1_LINES, "bytes"))
+    parts.append(metric_section("OptiX cold compile (B-18)", history, ["b18.cold", "b18.warm"], B18_LINES, "ms"))
+    parts.append(kernel_section(kernels if kernels is not None else []))
+    parts += gallery_sections(gallery)
     return ("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Astroray 2.0 report</title>"
-            "<style>body{font-family:sans-serif;margin:1em 2em}section{margin-bottom:1.5em}</style></head><body>\n"
+            "<style>body{font-family:sans-serif;margin:1em 2em}section{margin-bottom:1.5em}"
+            "img{max-width:100%}td{vertical-align:top;padding:2px}th{text-align:left;padding-top:10px}"
+            ".awaiting{color:#a60}</style></head><body>\n"
             "<h1>Astroray 2.0 report</h1>\n" + "\n".join(parts) + "\n</body></html>\n")
 
 
@@ -365,7 +491,7 @@ def selftest():
             "n": 1, "spread": 0, "date": "2026-01-01T00:00:00Z"}
     hist = [dict(line, metric=m, value=v) for m, v in
             [("tier.fast", 4.0), ("tier.fast", 5.0), ("tier.gate", 100.0), ("tier.gate", 90.0),
-             ("build.clean", 60.0), ("build.clean", 61.0), ("build.incr_header", 9.0), ("throughput.mpaths", 3.0)]]
+             ("build.clean", 60.0), ("build.clean", 61.0), ("build.incr_header", 9.0), ("pass_ms", 3.0)]]
     ff = [dict(line, scene="b5m", unit="ms", metric=f"first_frame.v7a.{e}.switch{s}", value=v)
           for s, e, v in ((1, "cycles", 400.0), (1, "astroray", 500.0), (2, "cycles", 300.0), (2, "astroray", 600.0))]
     text = build_html(hist, [], {"B-08": 10.0, "B-09": 180.0})
@@ -380,9 +506,32 @@ def selftest():
     if got != want:
         print(f"selftest FAIL: {got} polylines, expected {want}")
         return 1
-    if text.count("no data yet") != len(PLACEHOLDERS) - 1:
-        print("selftest FAIL: placeholder count")
+    n = text.count('class="awaiting"')
+    if n != 10:  # throughput, work, B-14, V7a, B-19, M-1, B-18, kernels, renders, heat maps
+        print(f"selftest FAIL: {n} awaiting notes, expected 10")
         return 1
+    b19 = [dict(line, scene="b1m", unit="%", metric=m, value=v) for m, v in (("b19.idle", 9.0), ("b19.partition", 18.0))]
+    with_b19 = build_html(hist + b19, [], {"B-08": 10.0, "B-09": 180.0})
+    if with_b19.count("<polyline") != want + 2 or "10 % (B-19)" not in with_b19 or with_b19.count('class="awaiting"') != 9:
+        print("selftest FAIL: B-19 section (two series, the 10 % line, one awaiting note fewer)")
+        return 1
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        g = os.path.join(d, "out", "gallery", "M1a")
+        os.makedirs(os.path.join(g, "thumbs"))
+        px = np.full((4, 4, 3), 200, np.uint8)
+        for name, extra in (("s_cpu", {"device": "CPU"}), ("s_cuda", {"device": "CUDA"}),
+                            ("s_diff", {"median_rel": 0.1, "p95_rel": 0.4, "mean_gpu_over_cpu": 1.0}),
+                            ("s_heat_samples_cpu", {"device": "CPU"}), ("s_heat_samples_cuda", {"device": "CUDA"})):
+            write_png(os.path.join(g, "thumbs", name + ".png"), px)
+            with open(os.path.join(g, name + ".json"), "w") as f:
+                json.dump(dict(extra, spp=8, time=1.5, build="b",
+                               settings={"width": 4, "height": 4, "view_transform": "AgX"}), f)
+        gal = build_html(hist, [], {"B-08": 10.0, "B-09": 180.0}, gallery=read_gallery(d))
+        # s: three images; heat maps: samples on both devices, bounces missing on both
+        if gal.count("<img") != 5 or gal.count("missing: s_heat_bounces") != 2:
+            print(f"selftest FAIL: gallery cells ({gal.count('<img')} images)")
+            return 1
     print("selftest ok")
     return 0
 
@@ -410,7 +559,7 @@ def main():
         return 0
     out = os.path.join(ROOT, "out", "report", "index.html")
     write(out, build_html(load_history(ROOT) + load_ttff_history(ROOT), load_checks(ROOT), load_budgets(ROOT),
-                          viewport_series(ROOT)))
+                          viewport_series(ROOT), kernel_rows(ROOT), read_gallery(ROOT)))
     print(f"wrote {out}")
     return 0
 
