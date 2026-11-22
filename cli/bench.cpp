@@ -31,6 +31,30 @@ std::string stem(const std::string& path) {
   return path.substr(b, d == std::string::npos || d < b ? std::string::npos : d - b);
 }
 
+const char* state_name(uint32_t state) {
+  switch (state) {
+    case AR_STATE_INITIALIZING: return "INITIALIZING";
+    case AR_STATE_RENDERING: return "RENDERING";
+    case AR_STATE_PAUSED: return "PAUSED";
+    case AR_STATE_CONVERGED: return "CONVERGED";
+    case AR_STATE_TRIMMED: return "TRIMMED";
+    case AR_STATE_CLOSED: return "CLOSED";
+    case AR_STATE_FAILED: return "FAILED";
+    default: return "unknown";
+  }
+}
+
+// What a failed bench prints about its session: the state and the generation counters, so a scene
+// whose generation never activates is told apart from one that renders slowly.
+void print_session_state(const char* why, const ar_progress& p) {
+  printf("bench: %s: state %s, generation pending %llu, active %llu, failed %llu, %u spp\n", why,
+         state_name(p.state), static_cast<unsigned long long>(p.pending_generation),
+         static_cast<unsigned long long>(p.active_generation), static_cast<unsigned long long>(p.failed_generation),
+         p.samples_per_pixel);
+  if (p.active_generation < p.pending_generation && p.failed_generation != p.pending_generation)
+    printf("bench: generation %llu has not activated\n", static_cast<unsigned long long>(p.pending_generation));
+}
+
 struct Line {
   std::string sha, machine, driver, cuda, scene;
   void emit(const char* metric, double value, const char* unit, size_t n, double spread) const {

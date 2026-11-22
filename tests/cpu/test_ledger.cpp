@@ -6,6 +6,7 @@
 // "needs X GiB for <category>, Y available").
 #include <doctest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
@@ -126,6 +127,31 @@ TEST_CASE("ledger/concurrent adds and removes balance") {
   CHECK(l.total() == 1000);
   CHECK(l.records().size() == 1);
   l.remove(keep);
+}
+
+TEST_CASE("ledger/a progress poll does not scan the live records") {
+  // A host that spins on ar_session_get_progress reads every category each call. A scan of the
+  // live records under the lock starved the scene's uploading workers: B-5M's 12,000 geometry
+  // buffers took minutes to upload. The numbers are typed from the sequence below.
+  Ledger l;
+  std::vector<uint64_t> ids;
+  for (int i = 0; i < 100000; ++i) ids.push_back(l.add({1, 0}, i % 2 ? LedgerCategory::GEOMETRY : LedgerCategory::TABLES, 16));
+  const auto t0 = std::chrono::steady_clock::now();
+  uint64_t seen = 0;
+  for (int poll = 0; poll < 2000; ++poll)
+    for (uint32_t c = 0; c < kLedgerCategoryCount; ++c) seen += l.category_total(static_cast<LedgerCategory>(c));
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  CHECK(seen == 2000ull * 100000 * 16);
+  // A scan costs seconds here (3.4e9 record visits); the kept totals cost a fraction of a millisecond.
+  CHECK(ms < 250.0);
+  CHECK(l.category_total(LedgerCategory::GEOMETRY) == 50000 * 16);
+  CHECK(l.category_total(LedgerCategory::TABLES) == 50000 * 16);
+  CHECK(l.total() == 100000 * 16);
+  for (size_t i = 0; i < ids.size(); i += 2) l.remove(ids[i]);  // the TABLES records
+  CHECK(l.category_total(LedgerCategory::TABLES) == 0);
+  CHECK(l.category_total(LedgerCategory::GEOMETRY) == 50000 * 16);
+  CHECK(l.total() == 50000 * 16);
+  CHECK(l.total() == l.scene_total(1));
 }
 
 }  // TEST_SUITE
