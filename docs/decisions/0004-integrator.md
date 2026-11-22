@@ -80,7 +80,7 @@ Number labels: MEASURED (spike or source measurement cited), SOURCE (a constant 
   - **Model.** Blender's Single Scattering (Nishita et al. 1993) and Multiple Scattering sky types, enumerated from RNA at implementation. Ported from Cycles `intern/sky/source/sky_single_scattering.cpp` (Apache-2.0) and `sky_multiple_scattering.cpp` (MIT), with shader-side evaluation and the sun-disc limb profile from `kernel/svm/sky.h` (Apache-2.0). `sky_nishita.h` and `sky_math.h` (GPL-2.0-or-later) are neither read nor copied (`v1-lessons/blender-integration.md`, `research/lights.md`). Preetham and Hosek-Wilkie are not designed here; selecting them shows a visible error.
   - **Spectral evaluation.** On each world edit the host precomputes, in double, a sky radiance table over view direction relative to the sun × the source's own wavelength samples (table size PROVISIONAL), keeping the source's absolute units; the `SKY` op interpolates it at the transport wavelengths and clamps outside its range with a report entry (0003, ranges). If a source turns out to compute only XYZ or RGB, that type is upsampled as an illuminant (0003) and reported `approximated`. No fitted exposure constant (v1); Blender's strength and sun-intensity inputs multiply the result, under 0003 decision 11's unit anchor (ruling 35).
   - **Sun-disc split.** When the disc is enabled and the compiler's sky-split output (0005 item 43) proves that the world output radiance is G·Sky(ω) + R(ω), with G a direction-independent spectrum after constant folding (the chain from the `SKY` op to the output contains only ops linear in that input with constant factors: Background strength, Multiply, Add, Mix with a constant factor), the disc becomes a distant-light leaf: irradiance G·E_disc independent of disc size, the source's limb profile applied identically in NEE and in BSDF-hit evaluation, camera-visible (v1). The `SKY` op then evaluates without the disc, and the importance table excludes it, so sky and sun are two lights with separate pdfs (v1 measured a 1.3% low bias from a profile used only in NEE).
-  - Otherwise the disc stays in the world program and is sampled only through the table, and a visible warning names the node that broke linearity, which the same compiler output reports (CLAUDE.md rule 7).
+  - Otherwise the disc stays in the world program and is sampled only through the table, and a visible warning names the node that broke linearity, which the same compiler output reports (the fail-loudly rule of CLAUDE.md).
 
 ### C. Sampler use
 
@@ -159,7 +159,7 @@ Number labels: MEASURED (spike or source measurement cited), SOURCE (a constant 
 
 ### H. Later features and film inputs
 
-- **D26. No hooks for later reuse or guiding.** ReSTIR-class reuse (Bitterli et al. 2020; Lin et al. 2022) and path guiding (Müller, Gross, Novák 2017) are not designed here. No state, dimension, runtime flag or branch is reserved for them (CLAUDE.md rule 2; G4). What they would need and already exists for other reasons: light samples deterministic in (ctx, u2) (D7), the D10 importance as a target function, `pdf` on every lobe, and 0008's guide buffers.
+- **D26. No hooks for later reuse or guiding.** ReSTIR-class reuse (Bitterli et al. 2020; Lin et al. 2022) and path guiding (Müller, Gross, Novák 2017) are not designed here. No state, dimension, runtime flag or branch is reserved for them (the scope rule of CLAUDE.md; G4). What they would need and already exists for other reasons: light samples deterministic in (ctx, u2) (D7), the D10 importance as a target function, `pdf` on every lobe, and 0008's guide buffers.
 - **D27. Film inputs owed to 0008.**
   - Light groups: every contribution carries the u8 group id of its emitter (lamp, emissive mesh, world): shadow items the id of the sampled light, emission hits and lamp crossings the id of the emitter hit, connections the id of the emitting light. Enabled group planes receive it beside the sample slot.
   - Light-path passes: when enabled, each contribution carries its category, fixed at the first scattering vertex and split direct/indirect by bounce count (0008). The per-category weights are 0008's conditional state.
@@ -193,7 +193,7 @@ Number labels: MEASURED (spike or source measurement cited), SOURCE (a constant 
 - **Blue-noise sample ordering** (Cycles `kernel/sample/pattern.h`, after Ahmed and Wonka 2020: Morton-ordered Owen scrambling). Some of its modes need the sample count up front, and its benefit under OIDN in the viewport is unmeasured. The sampler is 0003's; adopting it would be a 0003 change backed by research 04 S6.
 - **Adaptive metrics:** luminance-only (v1 blue floor) and Cycles' summed form (colour-blind by construction) are both rejected.
 - **Default clamping (Cycles' practice):** it caps real focused energy (v1 capped a caustic focus) and contradicts "physically correct always".
-- **Reserved hooks for ReSTIR and guiding:** rejected under CLAUDE.md rule 2 and G4 (D26).
+- **Reserved hooks for ReSTIR and guiding:** rejected under the scope rule of CLAUDE.md and G4 (D26).
 
 ## Consequences
 
@@ -245,7 +245,7 @@ Milestones are assigned only in `docs/ROADMAP.md` (G1).
 | D28 | Σ sample counts = launched camera samples; Σ termination counts = sample count; closed box, Russian roulette off: bounces = n·max_depth | Exact |
 | Viewport | 1080p reference scenes on the 5070 Ti | Light-pass share as set; statistics overhead within 0009 B-29 |
 
-Every rendered check is also looked at as an image (CLAUDE.md rule 4). All checks run on demand in 0009's tiers; nothing is scheduled (G3).
+Every rendered check is also looked at as an image (the look-at-renders rule of CLAUDE.md). All checks run on demand in 0009's tiers; nothing is scheduled (G3).
 
 ## Risks and open items
 

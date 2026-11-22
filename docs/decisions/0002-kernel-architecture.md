@@ -4,7 +4,7 @@ Status: proposed (2026-11-14), revised after independent review (2026-11-14), re
 
 ## Context
 
-Astroray 2.0 needs one kernel source that runs on the RTX 5070 Ti (sm_120) and on the CPU (owner decision 2). The viewport has to hold 30 updates/s at full resolution and never fall below 24, with 60 a later goal and first frame comparable to Cycles (decisions 9, 10, 21, 23). The first release covers the full feature breadth (decision 7), including gratings and the light-tracing pass they need, designed in from the start (decision 17). Builds and tests have hard budgets (CLAUDE.md rule 9) and failures must be loud (rule 7). Most code will be written by Sonnet-class agents from small task specs, so the structure must make the cheap thing the right thing and must catch drift mechanically.
+Astroray 2.0 needs one kernel source that runs on the RTX 5070 Ti (sm_120) and on the CPU (owner decision 2). The viewport has to hold 30 updates/s at full resolution and never fall below 24, with 60 a later goal and first frame comparable to Cycles (decisions 9, 10, 21, 23). The first release covers the full feature breadth (decision 7), including gratings and the light-tracing pass they need, designed in from the start (decision 17). Builds and tests have hard budgets (the Commands section of CLAUDE.md) and failures must be loud (its fail-loudly rule). Most code will be written by Sonnet-class agents from small task specs, so the structure must make the cheap thing the right thing and must catch drift mechanically.
 
 v1 failed exactly here. Its fused shade kernel had 128 template variants, ran at 221-254 registers with 2.5-8.7 KB of stack, and one translation unit took about 1,800 s of a 1,870 s build (`v1-lessons/research/gpu-build.md`, `v1-lessons/toolchain-and-build.md`). The spine (`SPINE.md` §2) settles the language (restricted C++), the width (4 wavelengths), the fused surface kernel under `__launch_bounds__`, the per-kernel budgets and one GPU compiler (nvcc, ruling 16). Spike A measured these on a kernel with the right shape but less than full scope. This record turns them into rules an implementer can follow without guessing, and adds what the spine leaves open: queue and scheduling mechanics, the complete kernel and OptiX program list, the instance visibility mask, memory layout mechanics, how the gate measures budgets, FMA and determinism policy, device failures, and what happens when the kernel grows.
 
@@ -22,7 +22,7 @@ Evidence: spike A (`spikes/A-kernel-budget/RESULTS.md`) for registers, spills, c
 
 **D1. Language and allowed constructs.** Kernel code is C++17 in freestanding headers under `src/kernel/`, compiled by nvcc for the GPU (ruling 16) and MSVC `cl` for the CPU.
 - *Allowed:* free functions; POD structs with member functions; `constexpr`, `if constexpr`, `static_assert`; enums; fixed-size arrays; references; `<cstdint>`, `<cfloat>`. Function templates may take only two parameters: the scalar type (`Real`/`float`/`double`) and the one kernel-identity parameter of D8. The spectral width is 0003 decision 1's constant `kLanes = 4`, not a template parameter.
-- *Forbidden:* virtual functions, RTTI, exceptions, `new`/`delete`/`malloc`, recursion, function pointers, STL containers and algorithms, direct `<cmath>` calls (use D2's wrappers), `__noinline__`, `-rdc`, inline PTX or asm outside the portability header, `long double`, thread-local storage, mutable globals (rule 8), `printf` outside debug builds, unsuffixed floating literals in float code, host-only headers. `__noinline__` is banned because spike A measured -37% at N=4 with up to 1.4 KB of stack.
+- *Forbidden:* virtual functions, RTTI, exceptions, `new`/`delete`/`malloc`, recursion, function pointers, STL containers and algorithms, direct `<cmath>` calls (use D2's wrappers), `__noinline__`, `-rdc`, inline PTX or asm outside the portability header, `long double`, thread-local storage, mutable globals (the fail-loudly rule of CLAUDE.md), `printf` outside debug builds, unsuffixed floating literals in float code, host-only headers. `__noinline__` is banned because spike A measured -37% at N=4 with up to 1.4 KB of stack.
 - *Passing:* everything is force-inlined. Structs larger than 32 B go by `const&`. Results return by value as small structs, never through scalar out-pointers (v1: address-taken out-parameters cost about 4%).
 - *Enforcement:* CPU kernel TUs build with `/EHs-c- /GR- /W4 /WX`. Every GPU kernel except `advance_geodesic_f64` (D8) builds with `-Xptxas --warn-on-double-precision-use`, warnings as errors. A lint script owned by 0009 checks banned tokens and the include allow-list.
 
@@ -243,7 +243,7 @@ Light trees and alias tables (0004), sky tables (0004 D12), majorant grids (0006
 - Development builds may load modules from `ASTRORAY_KERNEL_DIR` (0009 decision 5); a changed module is swapped at the next step boundary and accumulation resets. Release builds never load loose modules.
 - NVRTC is not used; it returns only if the measured edit loop exceeds 5 s (ruling 16). The CPU target has no hot reload; it rebuilds within 0009 B-08 (spike A).
 
-**D15. Device failure contract (rule 7).** Every CUDA and OptiX call is checked. Every failure reaches the C ABI as an `ar_status` and an entry in 0001's per-render report with the text below, and the addon shows it as a Blender report. The engine never switches device on its own.
+**D15. Device failure contract (the fail-loudly rule of CLAUDE.md).** Every CUDA and OptiX call is checked. Every failure reaches the C ABI as an `ar_status` and an entry in 0001's per-render report with the text below, and the addon shows it as a Blender report. The engine never switches device on its own.
 
 | Case | Detected at | Effect |
 |---|---|---|
@@ -287,7 +287,7 @@ Debug builds wait after every launch so an error names its stage.
 - **Hardware texture filtering.** A second, lower-precision filter the CPU cannot reproduce.
 - **NVRTC dev loop** (spine §2 before ruling 16). Saves about 1 s per edit at the cost of a second compile path and an identity test.
 - **CUDA runtime launches (`<<<>>>`).** Embedded module images need the driver API anyway; one launch path.
-- **Silent CPU fallback on device failure.** Violates rule 7.
+- **Silent CPU fallback on device failure.** Violates the fail-loudly rule of CLAUDE.md.
 
 ## Consequences
 

@@ -1,6 +1,6 @@
 # 0007 — Blender integration: scene sync, scene representation, presentation and user interface
 
-Status: proposed (2026-11-14), revised after independent review (same day; see "Review and resolution"), reconciled with RULINGS.md (same day; see "Reconciliation")
+Status: proposed (2026-11-14), revised after independent review (same day), reconciled with RULINGS.md (same day); both histories are in `docs/history/0007-review-and-reconciliation.md`
 
 ## Context
 

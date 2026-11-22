@@ -55,7 +55,7 @@ The spine fixes the frame: CMake + Ninja + MSVC, one build tree; CUDA + OptiX on
 
 ### Budgets (`tools/budgets.toml` is the machine copy, with the same ids)
 
-13. Every budget fails at its limit. There is no warning band (CLAUDE.md rule 9: a change that breaks a budget is not finished). Tier times exclude lock wait. PROVISIONAL limits are reset once from the first measurement on product code, with headroom, and from then on fail like the rest. This table is the only statement of every time budget in the project (ruling G2). The record named in "serves" owns the design the budget constrains and, where given, the measurement method; it cites the id and restates no number. Two rows point elsewhere because a ruling put the number there: kernel resources (0002 D10, ruling 17) and the first-frame gate (0007 D35, ruling 21). B-26 to B-37 collect the rows other records reported as moved here (ruling 29); B-28 to B-30 have no number on record yet and get one from their first measurement, like every PROVISIONAL row. Columns: tier that fails it; basis.
+13. Every budget fails at its limit. There is no warning band (the Commands section of CLAUDE.md: a failed budget check is the change's to fix, never to raise). Tier times exclude lock wait. PROVISIONAL limits are reset once from the first measurement on product code, with headroom, and from then on fail like the rest. This table is the only statement of every time budget in the project (ruling G2). The record named in "serves" owns the design the budget constrains and, where given, the measurement method; it cites the id and restates no number. Two rows point elsewhere because a ruling put the number there: kernel resources (0002 D10, ruling 17) and the first-frame gate (0007 D35, ruling 21). B-26 to B-37 collect the rows other records reported as moved here (ruling 29); B-28 to B-30 have no number on record yet and get one from their first measurement, like every PROVISIONAL row. Columns: tier that fails it; basis.
 
 | id | budget | limit | serves | tier | basis |
 |---|---|---|---|---|---|
@@ -160,19 +160,24 @@ The spine fixes the frame: CMake + Ninja + MSVC, one build tree; CUDA + OptiX on
 |---|---|---|---|
 | lead | main session, opus | all | ADRs, tasks, STATUS, landing, looking at renders, root cause of gate failures |
 | `implementer` | sonnet / medium (high for kernel or physics tasks, per invocation) | default, `isolation: worktree`, `maxTurns` set | one task file, its canary patch |
-| `reviewer` | opus / medium (high for kernel or physics diffs) | Read, Grep, Glob only (harness-enforced read-only; `land` runs the checks and supplies `out/land/NNN/`) | finds only: acceptance unmet, CLAUDE.md rule broken, a test that would pass on broken code (names the breakage), algorithm without `Ref:`; no style; last line `VERDICT: PASS|FAIL` |
+| `reviewer` | opus / medium (high for kernel or physics diffs) | Read, Grep, Glob only (harness-enforced read-only; `land` runs the checks and supplies `out/land/NNN/`) | reads `out/land/NNN/task.md`, `diff.patch` and `canary.patch` when present, and main sources; finds only: acceptance unmet, CLAUDE.md rule broken, a test that would pass on broken code (names the breakage), algorithm without `Ref:`, a code defect (race, lifetime, NaN path, silent drop); no style; last line `VERDICT: PASS`, `PASS WITH FIXES` or `FAIL` (owner decision 36) |
 | `digest` | haiku / medium, `omitClaudeMd: true` | Read, Grep, Glob | cited digests ≤ 60 lines; prompt < 100K tokens (5x price above, research 13 §B) |
 
-   Implementers are limited per lane (owner decisions 31 and 36, replacing "at most two at once"): any number of CPU-only tasks the lead can rule for, one GPU lane and one Blender lane, since the machine lock serialises those. The reviewer also reads `out/land/NNN/canary.patch` and may read main sources; its last line is `VERDICT: PASS`, `PASS WITH FIXES` or `FAIL` (decision 36). Dependent work stays on one implementer; fan out only for independent tasks (research 13 §B). One hidden skill, `land` (`disable-model-invocation: true`), scripts the prepare → review → look → merge sequence. Whether an open-weight worker exists is owner question 3; if kept, it does only mechanical edits through one wrapper that returns a diff and transcript.
+   Implementers are limited per lane (owner decisions 31 and 36, replacing "at most two at once"): any number of CPU-only tasks the lead can rule for, one GPU lane and one Blender lane, since the machine lock serialises those. Dependent work stays on one implementer; fan out only for independent tasks (research 13 §B). One hidden skill, `land` (`disable-model-invocation: true`), scripts the prepare → review → look → merge sequence. The open-weight worker (owner decisions 32 and 36) is `tools/lead/deepseek.sh`; it does only mechanical edits on repository text and returns a diff and transcript.
 28. **Task spec** (`tasks/NNN-slug.md`, ≤ 60 lines, written by the lead, deleted by `land`; open questions must be empty before dispatch):
    ```
    # NNN Title
    Goal: before -> after, two sentences.
-   Scope: files or directories that may change. Out of scope: what a reader might assume is included.
+   Read first: the records, rulings and files the implementer reads before coding.
+   Scope: files or directories that may change.
+   Out of scope: what a reader might assume is included.
    Reference: paper, section/equation, reference file path, licence (required for physics, sampling, numerics).
-   Acceptance: `tools/check.ps1 fast` passes; `<exact command>` prints <value or threshold>; Look at: out/evidence/NNN/<name>.png
+   Do: numbered steps.
+   Acceptance: `tools/check.ps1 fast` passes; `<exact command>` prints <value or threshold>.
+   Look at: out/evidence/NNN/<name>.png, or none.
    Canary: tasks/NNN.canary.patch (implementer writes it) must turn red: <test case names>.
    Budget: expected effect on build/test time and register delta ("none", or "full" to require a full run).
+   Depends on: tasks that must land first, or none.
    Size: expected diff; stop and report at 2x.
    Progress: (implementer appends at most 10 lines; WIP commit after each acceptance step)
    ```

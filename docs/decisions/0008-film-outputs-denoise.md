@@ -246,7 +246,7 @@ Milestones are `docs/ROADMAP.md`'s (ruling G1).
 
 ## Sources
 
-- Owner and lead: `docs/decisions/0000-owner-decisions.md`; `docs/decisions/SPINE.md`; `docs/decisions/RULINGS.md`; `docs/CHECKPOINT-1.md`.
+- Owner and lead: `docs/decisions/0000-owner-decisions.md`; `docs/decisions/SPINE.md`; `docs/decisions/RULINGS.md`; `docs/history/CHECKPOINT-1.md`.
 - Research: `docs/research/10-denoise-upscale.md` (DLSS-RR CUDA API, licence, Blender PRs #153077 (comment 49: DOF guide), #164002, #165500 and #151133, OIDN); `02-viewport-presentation.md`; `09-test-validation.md` (moments, analytic scenes S1, S5 and S10, agreement ladder); `17-materials-and-custom-types.md` section 7 (sensors and instruments); `04-integrator-architecture.md` (state estimate, adaptive sampling, progressive reset); `05-spectral-and-materials.md` A4 (units, observer, white points); `06-astrophysics-core.md` F10 and R8 (FITS, photon counts); `07-blender-feature-surface.md` F6 (passes, Cryptomatte stamp layout); `11-licensing.md`.
 - Records: 0001 (D9 OIDN build, per-render report), 0002 (stage table, front-load rule, fallback ladder, probe build, end-of-pass drain, D12), 0003 (decisions 2, 5, 10, 22, accumulation requirement, path-state layout, independent sampler mode), 0004 (D16, D19, D20, D25), 0007 (decisions 14, 33, 34, 35, 40, probe P4), 0009 (budget table, tiers).
 - v1 lessons: `docs/v1-lessons/feature-inventory.md` (passes and outputs); `research/blender.md` (pass classification, Cryptomatte, motion vectors); `research/survey.md` (cube sizes, light groups); `research/testing.md` and `research/misc.md`.
