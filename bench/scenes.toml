@@ -41,7 +41,7 @@ recording = "cornell_area.arrec"
 class = "G"
 sets = ["M1a"]
 showcase = ["M1a"]
-gallery_size = [1024, 1024]
+gallery_size = [800, 800]
 gallery_spp = 256
 heat = true
 
@@ -51,7 +51,7 @@ recording = "cornell_point.arrec"
 class = "G"
 sets = ["M1a"]
 showcase = ["M1a"]
-gallery_size = [1024, 1024]
+gallery_size = [800, 800]
 gallery_spp = 256
 
 # A1's Lambertian furnace sphere (class A, scenes/a1_furnace): a showcase picture only. `sets` is empty, so

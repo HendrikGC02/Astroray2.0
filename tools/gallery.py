@@ -59,12 +59,22 @@ def png_size(path):
 
 # ------------------------------------------------------------------------------------------------ driver
 
-def run_blender(script_args, timeout_s, gui):
-    """One Blender start through Invoke-ArBlender; returns its exit code (-1 on timeout)."""
-    ps = (f". '{ROOT}/tools/lib/blender.ps1'; "
-          f"$r = Invoke-ArBlender -Script '{ROOT}/tools/gallery.py' -Args @({','.join(repr(a) for a in script_args)}) "
-          f"-TimeoutS {timeout_s}{' -Gui' if gui else ''}; exit $r.ExitCode")
-    return subprocess.run(["pwsh", "-NoProfile", "-Command", ps], cwd=ROOT).returncode
+def run_blender_batch(runs):
+    """Every Blender start of the gallery under one hold of the machine lock (the nested Invoke-ArBlender calls see
+    ASTRORAY_LOCK_PID and do not wait again; with one lock per start each would queue behind other agents' runs).
+    runs: [(name, job json path, timeout s, windowed)]. Every run is made; the failing ones are named at the end."""
+    lines = [f". '{ROOT}/tools/lib/blender.ps1'", "$null = Enter-ArMachineLock", "$bad = ''", "try {"]
+    for name, job, timeout_s, gui in runs:
+        lines += [f"  $r = Invoke-ArBlender -Script '{ROOT}/tools/gallery.py' -Args @('--job', '{job}') "
+                  f"-TimeoutS {timeout_s}{' -Gui' if gui else ''}",
+                  f"  Write-Host \"RUN {name} exit $($r.ExitCode)\"",
+                  f"  if ($r.ExitCode -ne 0) {{ $bad += '{name} ' }}"]
+    lines += ["} finally { Exit-ArMachineLock }",
+              "if ($bad) { Write-Host \"FAIL gallery: failed runs: $bad\"; exit 1 }", "exit 0"]
+    script = os.path.join(os.path.dirname(runs[0][1]), "gallery_runs.ps1")
+    with open(script, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return subprocess.run(["pwsh", "-NoProfile", "-File", script], cwd=ROOT).returncode
 
 
 def build_description(entry, work):
@@ -98,35 +108,35 @@ def driver(a):
     out = out_dir(milestone)
     work = os.path.join(out, "work")
     os.makedirs(work, exist_ok=True)
-    produced = []
-    for e in entries:
-        blend = build_description(e, work)
-        job = {"mode": "f12", "entry": e, "blend": blend, "desc": blend + ".json", "out": out, "devices": list(DEVICES)}
-        jp = os.path.join(work, f"{e['name']}_f12.json")
+    produced, runs = [], []
+
+    def job_file(name, job):
+        jp = os.path.join(work, name + ".json")
         with open(jp, "w") as f:
             json.dump(job, f)
-        t0 = time.perf_counter()
-        code = run_blender(["--job", jp], 3600, gui=False)
-        print(f"gallery: {e['name']} f12 exit {code} in {time.perf_counter() - t0:.0f} s", flush=True)
-        if code != 0:
-            raise SystemExit(f"FAIL gallery: {e['name']} render failed (exit {code}; -1 is the timeout)")
+        return jp
+
+    for e in entries:
+        blend = build_description(e, work)
+        if a.no_f12:
+            continue
+        job = {"mode": "f12", "entry": e, "blend": blend, "desc": blend + ".json", "out": out, "devices": list(DEVICES)}
+        runs.append((f"{e['name']}_f12", job_file(f"{e['name']}_f12", job), 5400, False))
         produced += expected_files(e, DEVICES)
     if not a.no_heat:
         for e in (e for e in entries if e.get("heat")):
             blend = os.path.join(work, os.path.splitext(e["recording"])[0] + ".blend")
             for dev in DEVICES:
                 job = {"mode": "heat", "entry": e, "blend": blend, "desc": blend + ".json", "out": out, "device": dev}
-                jp = os.path.join(work, f"{e['name']}_heat_{dev.lower()}.json")
-                with open(jp, "w") as f:
-                    json.dump(job, f)
-                code = run_blender(["--job", jp], 1200, gui=True)
-                print(f"gallery: {e['name']} heat {dev} exit {code}", flush=True)
-                if code != 0:
-                    raise SystemExit(f"FAIL gallery: {e['name']} heat maps on {dev} failed (exit {code})")
+                name = f"{e['name']}_heat_{dev.lower()}"
+                runs.append((name, job_file(name, job), 1500, True))
                 for kind in ("samples", "bounces"):
                     produced += [f"{e['name']}_heat_{kind}_{dev.lower()}.png", f"{e['name']}_heat_{kind}_{dev.lower()}.json"]
+    t0 = time.perf_counter()
+    code = run_blender_batch(runs)
+    print(f"gallery: {len(runs)} Blender runs, exit {code}, {time.perf_counter() - t0:.0f} s (lock wait included)", flush=True)
     print(f"gallery: images in {out}")
-    bad = []
+    bad = ["a Blender run failed (its log is above; exit -1 is the timeout)"] if code != 0 else []
     for name in produced:
         p = os.path.join(out, name)
         if not os.path.exists(p):
@@ -165,8 +175,8 @@ def settings_of(scene, desc):
             "display_device": scene.display_settings.display_device}
 
 
-def load_u8(path):
-    """A PNG's bytes as (h, w, 3) uint8, top row first: Non-Color so Blender converts nothing."""
+def load_raw(path):
+    """A file's stored values as (h, w, 4) float32, top row first: Non-Color so Blender converts nothing."""
     import bpy
     import numpy as np
     img = bpy.data.images.load(path)
@@ -175,7 +185,13 @@ def load_u8(path):
     px = np.empty(w * h * 4, np.float32)
     img.pixels.foreach_get(px)
     bpy.data.images.remove(img)
-    return np.rint(px.reshape(h, w, 4)[::-1, :, :3] * 255.0).astype(np.uint8)
+    return px.reshape(h, w, 4)[::-1]
+
+
+def load_u8(path):
+    """A PNG's bytes as (h, w, 3) uint8, top row first."""
+    import numpy as np
+    return np.rint(load_raw(path)[..., :3] * 255.0).astype(np.uint8)
 
 
 def thumbnail(rgb, px=THUMB_PX):
@@ -236,22 +252,38 @@ def worker_f12(job):
     build = build_id("bl_ext.user_default.astroray")
     out = job["out"]
     os.makedirs(os.path.join(out, "thumbs"), exist_ok=True)
-    linear = {}
-    for dev in job["devices"]:
+    linear, failures = {}, []
+    for stem in [f"{e['name']}_{d.lower()}" for d in job["devices"]] + [f"{e['name']}_diff"]:
+        for old in (os.path.join(out, stem + ext) for ext in (".png", ".json")), (os.path.join(out, "thumbs", stem + ".png"),):
+            for p in old:   # a stale file of an earlier run must not pass for this run's result
+                if os.path.exists(p):
+                    os.remove(p)
+
+    def render_device(dev):
         scene.astroray.device = dev
         t0 = time.perf_counter()
         bpy.ops.render.render(write_still=False)
         secs = time.perf_counter() - t0
         res = bpy.data.images["Render Result"]
-        rw, rh = res.size
-        px = np.empty(rw * rh * 4, np.float32)
-        res.pixels.foreach_get(px)
-        linear[dev] = px.reshape(rh, rw, 4)[::-1]
         name = f"{e['name']}_{dev.lower()}"
         path = os.path.join(out, name + ".png")
         res.save_render(path)
+        # The scene-linear values for the difference map: a float EXR is saved without the view transform (the
+        # Render Result image itself exposes no pixels in a background session).
+        im.file_format, im.color_depth = "OPEN_EXR", "32"
+        exr = os.path.join(out, "work", name + ".exr")
+        res.save_render(exr)
+        im.file_format, im.color_depth = "PNG", "8"
+        lin = load_raw(exr)
+        os.remove(exr)
         rgb = load_u8(path)
-        mean = check_image(rgb, name + ".png")
+        rh, rw = rgb.shape[:2]
+        try:
+            mean = check_image(rgb, name + ".png")
+        except RuntimeError:
+            os.replace(path, os.path.join(out, "work", name + "_rejected.png"))   # kept as evidence, not as a gallery image
+            raise
+        linear[dev] = lin   # a rejected image takes no part in the difference map
         report.write_png(os.path.join(out, "thumbs", name + ".png"), thumbnail(rgb))
         write_sidecar(os.path.join(out, name + ".json"), {
             "scene": e["name"], "device": dev, "spp": e["gallery_spp"], "time": secs, "time_unit": "s",
@@ -259,7 +291,14 @@ def worker_f12(job):
             "settings": settings_of(scene, job["desc"]), "build": build, "file": name + ".png",
             "bytes": os.path.getsize(path), "mean_of_white": mean})
         print(f"gallery: {name} {rw} x {rh} {e['gallery_spp']} spp in {secs:.1f} s, mean {mean:.3f}", flush=True)
-    if len(job["devices"]) == 2:
+
+    for dev in job["devices"]:
+        try:
+            render_device(dev)
+        except RuntimeError as err:   # the other device still renders; the run fails at the end
+            failures.append(str(err))
+            print(f"gallery: FAIL {err}", flush=True)
+    if len(linear) == 2:
         cpu, gpu = linear["CPU"], linear["CUDA"]
         if not (np.isfinite(cpu).all() and np.isfinite(gpu).all()):
             raise RuntimeError(f"{e['name']}: a render has non-finite pixels")
@@ -271,6 +310,8 @@ def worker_f12(job):
                                                            note="informational; agreement is gated by 0009 d17"))
         print(f"gallery: {name} median {stats['median_rel']:.3f} p95 {stats['p95_rel']:.3f} "
               f"gpu/cpu mean {stats['mean_gpu_over_cpu']:.4f}", flush=True)
+    if failures:
+        raise RuntimeError("; ".join(failures))
 
 
 def worker_heat(job):
@@ -279,9 +320,9 @@ def worker_heat(job):
     import importlib
     import report
     sys.path.insert(0, os.path.join(ROOT, "tests", "blender"))
+    import smoke_a1   # first: it puts scenes/lib on the path for blend_writer
     import blend_writer
     import gui_present
-    import smoke_a1
     module = "bl_ext.user_default.astroray"
     smoke_a1.install_and_enable()
     rf = importlib.import_module(module + ".render_final")
@@ -347,6 +388,16 @@ def worker_heat(job):
             ah = area.height
             x0, y0, rw, rh = region.x - area.x, region.y - area.y, region.width, region.height
             rgb = rgb[ah - (y0 + rh):ah - y0, x0:x0 + rw]
+            # Only the camera frame carries the heat map: crop to it (its corners in region pixels, y up).
+            from bpy_extras.view3d_utils import location_to_region_2d
+            cam = scene.camera
+            rv3d = area.spaces.active.region_3d
+            pts = [location_to_region_2d(region, rv3d, cam.matrix_world @ v) for v in cam.data.view_frame(scene=scene)]
+            if any(p is None for p in pts):
+                raise RuntimeError("the camera frame is not inside the viewport region")
+            fx0, fx1 = int(round(min(p.x for p in pts))), int(round(max(p.x for p in pts)))
+            fy0, fy1 = int(round(min(p.y for p in pts))), int(round(max(p.y for p in pts)))
+            rgb = rgb[max(0, rh - fy1):min(rh, rh - fy0), max(0, fx0):min(rw, fx1)]
             step = max(1, -(-rgb.shape[1] // MAX_PX))
             rgb = rgb[::step, ::step]   # nearest: a heat map's pixels are values, never blended
             name = f"{e['name']}_heat_{kind}_{dev.lower()}"
@@ -373,6 +424,7 @@ def worker_heat(job):
                 if hasattr(space, n):
                     setattr(space, n, False)
             space.region_3d.view_perspective = "CAMERA"
+            space.region_3d.view_camera_zoom = 28   # the camera frame fills the region's height (zoom 0 shows it half as large)
             self.go("job")
             return 0.5
 
@@ -439,9 +491,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--milestone", required=True)
     ap.add_argument("--scene", action="append", help="only this showcase scene (repeatable)")
+    ap.add_argument("--no-f12", action="store_true", help="only the heat-map runs (a re-run of those)")
     ap.add_argument("--no-heat", action="store_true", help="skip the windowed heat-map runs")
     return driver(ap.parse_args(argv))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    if code is not None:   # a worker returns None: Blender must stay in its main loop for the timers (heat runs)
+        sys.exit(code)
