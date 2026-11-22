@@ -16,3 +16,4 @@ Budget: under 1 s of gate time for the new tests; budget.toml rows for any new k
 Depends on: 123.
 Size: M (about 250 lines); stop and report at 2x, or after Do 1 if compaction cannot meet the row.
 Progress:
+- started on task/133-main-pool-compaction; Do 1 (measurement gate) first.
