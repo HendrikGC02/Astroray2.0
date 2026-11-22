@@ -15,3 +15,4 @@ Budget: +2 s of gate at most (3 chi-squared checks counted against gate_statisti
 Depends on: none (the VM volume entry follows task 147 and is a separate task).
 Size: S (about 150 lines without tests); stop and report at 2x.
 Progress:
+- Started: branch task/152-medium-sample; files medium/medium.h, medium/phase.h, tests/cpu/test_medium.cpp, 0006 D3. Reference cache (task 143) absent: HG from the 1941 paper, no pbrt/Cycles cross-check.
