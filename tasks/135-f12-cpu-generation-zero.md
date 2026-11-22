@@ -16,3 +16,5 @@ Budget: under 2 s of gate time for the new tests.
 Depends on: none.
 Size: S-M (about 120 lines); stop and report at 2x, or after Do 2 if the fix needs an ABI change.
 Progress:
+- Do 1 (320x180, 8 spp, F12 via the installed addon): CPU first wait sees CONVERGED, spp 1, active 0, pending 1, epoch 1 at t=0.009 s, mean 0; CUDA sees INITIALIZING then active 1 at 0.22 s, CONVERGED 8 spp, mean 0.3225.
+- Do 2 mechanism: render() starts the session right after the commit; the CPU session's first latch (before generation 1's image jobs finish) pins generation 0, which has no tables, so pass_camera_samples is 0 and converged_locked's "no work" rule idles it CONVERGED after one empty pass; F12's loop exits on that first CONVERGED. Activation later wakes the session, but nobody waits. CUDA allocates long enough that generation 1 is active at its first latch. Breaks 0007 d25 (the final session renders the generation committed before it started) and rule 5 (black frame, no entry). Not an activation failure: failed_generation 0.
