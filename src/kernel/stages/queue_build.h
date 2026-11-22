@@ -250,27 +250,31 @@ AR_FN void queue_scatter_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane
   for (uint32_t b = 0; b < kStageCount; ++b)
     at[b] = kg.step_table->stage[b].start + (g == 0 ? 0u : prev[b] & kScanValueMask);
   const uint32_t below = (1u << lane) - 1u;  // the units before this one in its round
+  // The tile's first TERMINATED position (constant indices keep at[] in registers).
+  uint32_t at_dead = t.pool == Pool::MAIN ? at[static_cast<uint32_t>(Stage::TERMINATED)]
+                                          : at[static_cast<uint32_t>(Stage::SHADOW_TERMINATED)];
   for (uint32_t base = t.first; base < t.last; base += lanes) {
     const uint32_t i = base + lane;
     const uint32_t bin = queue_item_bin(t, next, i);
-    // The TERMINATED segment's next entry before this round (constant indices keep at[] in registers).
-    const uint32_t at_dead = t.pool == Pool::MAIN ? at[static_cast<uint32_t>(Stage::TERMINATED)]
-                                                  : at[static_cast<uint32_t>(Stage::SHADOW_TERMINATED)];
     for (uint32_t b = 0; b < kStageCount; ++b) {
       const uint32_t votes = ballot(bin == b);
       if (bin == b) queue[at[b] + popc(votes & below)] = i;
       at[b] += popc(votes);
     }
-    // A dead entry's position is at least its slot (every live item counts before it), so only a round
-    // whose TERMINATED entries start below base + lanes can hold an entry equal to its position.
-    if (at_dead < base + lanes) {
-      const uint32_t dead_votes = ballot(bin == dead);
-      if (bin == dead && at_dead + popc(dead_votes & below) == i &&
-          (i == 0 || queue_bin(t.pool, next[i - 1u]) != dead)) {
-        StepTable& table = *const_cast<StepTable*>(kg.step_table);
-        table.live_end[static_cast<uint32_t>(t.pool)] = i;
-      }
+  }
+  // A dead entry's position is at least its slot (every live item counts before it), so an entry
+  // equal to its position can lie in this tile only if its TERMINATED entries start below its end.
+  // Such tiles (the one holding live_end and the dead tail above it) read their items once more.
+  if (at_dead >= t.last) return;
+  for (uint32_t base = t.first; base < t.last; base += lanes) {
+    const uint32_t i = base + lane;
+    const uint32_t bin = queue_item_bin(t, next, i);
+    const uint32_t dead_votes = ballot(bin == dead);
+    if (bin == dead && at_dead + popc(dead_votes & below) == i && (i == 0 || queue_bin(t.pool, next[i - 1u]) != dead)) {
+      StepTable& table = *const_cast<StepTable*>(kg.step_table);
+      table.live_end[static_cast<uint32_t>(t.pool)] = i;
     }
+    at_dead += popc(dead_votes);
   }
 }
 
