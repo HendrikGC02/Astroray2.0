@@ -1,0 +1,26 @@
+diff --git a/src/host/scheduler.cpp b/src/host/scheduler.cpp
+index e8e487b..8b556bc 100644
+--- a/src/host/scheduler.cpp
++++ b/src/host/scheduler.cpp
+@@ -311,7 +311,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
+     if (t.live_end[0] > hw_main || t.live_end[1] > hw_shadow)
+       throw std::logic_error("Scheduler: queue_build reported a live slot above the high-water mark");
+     const uint32_t low_main = keep ? hw_main : t.live_end[0];
+-    const uint32_t low_shadow = keep || full_range ? hw_shadow : t.live_end[1];
++    const uint32_t low_shadow = full_range ? hw_shadow : t.live_end[1];
+     // The producers launched below write into the reserved slots: the free slots below low_shadow
+     // first, then low_shadow, low_shadow + 1, ...; the next partition covers them. With the mark kept
+     // this adds shadow_fresh; the reservation never passes the capacity.
+diff --git a/src/kernel/stages/queue_build.h b/src/kernel/stages/queue_build.h
+index 56e0f6f..6e01a36 100644
+--- a/src/kernel/stages/queue_build.h
++++ b/src/kernel/stages/queue_build.h
+@@ -231,7 +231,7 @@ AR_FN void queue_scan_tile(const KernelGlobals& kg, uint32_t u, uint32_t lane, u
+       }
+       for (uint32_t p = 0; p < kPoolCount; ++p) {
+         const uint32_t votes = ballot(live && static_cast<uint32_t>(pool) == p);
+-        if ((votes >> lane) == 1u) end[p] = tile_end;  // this unit holds the round's last live row
++        if ((votes >> lane) == 1u) end[p] = tile_end - 1u;  // this unit holds the round's last live row
+       }
+     }
+     // end[p] sits with the unit that held the pool's last live row; the max collects it in any unit.

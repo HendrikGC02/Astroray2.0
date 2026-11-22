@@ -11,9 +11,13 @@ Do:
 4. Re-measure B-19 both rows and B-17 on B-1M and B-5M; table 123 -> 133 -> after. Both rows met -> record in 0002 D7 and reset B-19 from measurement if PROVISIONAL; still failing -> record what remains and why (owner decision at the M1a close).
 Acceptance: `pwsh tools/check.ps1 gate` passes; the PR body holds the idle bisect table, the step table of Do 2, and the before -> after B-19 and B-17 tables with commands.
 Look at: none.
-Canary: tasks/134.canary.patch must turn red: the new range or idle tests (name them in land format).
+Canary: tasks/134.canary.patch must turn red: astroray_tests_cpu "queue_build/live_end is the end of the last tile with a live slot", astroray_tests_cpu "scheduler/live range matches kept high-water marks", astroray_tests_cpu "scheduler/shadow range matches the full shadow range", astroray_tests_cpu "scheduler/shadow range under a starved shadow pool".
 Budget: under 1 s of gate time for the new tests; budget.toml rows for any new kernel.
 Depends on: 133.
 Size: M (about 250 lines); stop and report at 2x, after Do 1 if the regression is outside Scope, or after Do 2 if no option can meet the row.
 Progress:
 - 2026-11-23: started; branch task/134-b19-idle-and-live-range on 13edb94.
+- Do 1: no regressing commit (8af25af, 81553dd, 1a7e364, 8b86bfd, 13edb94 within run-to-run noise of 0.3 ms); idle share rose because 133 shortened the pass.
+- Do 2: shadow largest live + 1 falls fast, main stays near 1.6-1.85 M; model (i) 0.50 ms, (ii) 0.12, (iii) 0.71 (new kernel, out of Scope).
+- Do 3: (i)+(ii) built; live_end tile-granular from queue_build_scan (exact per-slot variants broke count/scatter register budgets).
+- Do 4: B-1M queue_build 12.0 -> 9.4 %, idle 11.0 %; B-5M not measured (bench hangs before the first pass, at main too).
