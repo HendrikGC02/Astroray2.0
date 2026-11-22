@@ -25,3 +25,5 @@ Progress:
 - 2b: abi tests joined g1 beside analytic cpu/cuda (their 24.9 s wall hides its 11.5 s); smoke, aov, integrator cuda, material compile stay alone.
 - 2c not applicable without racing build dev (cpu steps read out/bin); 2d not applicable (land prepare does not run fast).
 - after (5 runs, out/scenes emptied first): 122.5 112.4 114.8 112.2 112.3 s, max 122.5 <= 135; timing steps unchanged (integrator cuda 18.3, compile timing 0.8, material compile 0.0).
+- review fixes: cache key now also hashes the recorder sources (recorder.cpp, recorder_hooks.h, replayer.cpp, arrec.py, src/capi/*.cpp); abi tests ungrouped again (5 ms wall checks, no margin beside analytic cpu), so 2b gained nothing; gate_runs fails a run on non-zero exit or missing gate.json.
+- final (abi tests ungrouped, cache primed, out/scenes emptied): 132.7 123.1 125.3 123.0 122.9 s, max 132.7 <= 135; run 1 is the cold one (smoke 19.4, gpu gate tests 15.1).
