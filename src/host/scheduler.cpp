@@ -81,7 +81,7 @@ void fill_shadow(ar::ShadowItemSoA& soa, const StateLayout& l, char* base) {
 
 Scheduler::Scheduler(Device& device, const SchedulerConfig& cfg) : config(cfg), device_(device) {
   permute_ = cfg.permute || env_flag("AR_DEBUG_PERMUTE");
-  shadow_full_range_ = cfg.shadow_full_range || env_flag("AR_DEBUG_SHADOW_FULL_RANGE");
+  shadow_full_range_ = env_flag("AR_DEBUG_SHADOW_FULL_RANGE");
   gpu_ = device.kind() == AR_DEVICE_CUDA;
 }
 
@@ -238,7 +238,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
                                  reinterpret_cast<const char*>(shadow_buf_.ptr));
     device_.memset(shadow_buf_, at, static_cast<uint8_t>(Stage::SHADOW_TERMINATED), shadow_cap);
   }
-  uint32_t hw_shadow = shadow_full_range_ ? uint32_t(shadow_cap) : 0u;
+  uint32_t hw_shadow = (shadow_full_range_ || config.shadow_full_range) ? uint32_t(shadow_cap) : 0u;
   shadow_high_water_ = hw_shadow;
   uint32_t hw_main = 0;
   uint64_t next_work = 0;

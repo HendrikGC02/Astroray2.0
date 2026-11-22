@@ -72,7 +72,8 @@ class Scheduler {
  public:
   // permute defaults to the environment variable AR_DEBUG_PERMUTE (any value but "0"), read
   // here and only in builds with AR_GATE_HOOKS; config.permute turns it on in any build. The
-  // same holds for shadow_full_range and AR_DEBUG_SHADOW_FULL_RANGE.
+  // same holds for AR_DEBUG_SHADOW_FULL_RANGE, except that config.shadow_full_range is read at
+  // each pass start, so a test can switch it between passes.
   Scheduler(Device& device, const SchedulerConfig& config);
   ~Scheduler();
   Scheduler(const Scheduler&) = delete;

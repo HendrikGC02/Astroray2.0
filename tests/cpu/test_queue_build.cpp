@@ -96,11 +96,16 @@ struct Rig {
   }
   ~Rig() { dev.free(kg_buf); }
 
-  // One queue_build over the first hw_main / hw_shadow items of the pools.
-  void build(uint32_t hw_main, uint32_t hw_shadow) {
+  // One queue_build over the first hw_main / hw_shadow items of the pools. A non-zero
+  // shadow_capacity lays the shadow queue out as the scheduler does (the identity, so the entries
+  // past the partition are the fresh slots; RULINGS 84) and lets the reservation take them.
+  void build(uint32_t hw_main, uint32_t hw_shadow, uint32_t shadow_capacity = 0) {
     for (int p = 0; p < 2; ++p) std::fill(queue[p].begin(), queue[p].end(), kSentinel);
+    if (shadow_capacity != 0)
+      for (uint32_t j = 0; j < queue[1].size(); ++j) queue[1][j] = j;
     table.high_water[0] = hw_main;
     table.high_water[1] = hw_shadow;
+    table.shadow_capacity = shadow_capacity;
     const uint32_t grid = ar::queue_build_grid(hw_main, hw_shadow);
     dev.launch(KernelId::QUEUE_BUILD_COUNT, grid);
     dev.launch(KernelId::QUEUE_BUILD_SCAN, ar::queue_scan_grid(hw_main, hw_shadow));
@@ -512,6 +517,139 @@ TEST_CASE("queue_build/shadow shortage drops nothing") {
     }
   }
   CHECK(std::all_of(launched.begin(), launched.end(), [](uint32_t n) { return n == 1; }));
+}
+
+}  // TEST_SUITE
+
+
+TEST_SUITE("gate") {
+
+TEST_CASE("queue_build/shadow reservation takes fresh slots after the free segment") {
+  // RULINGS 84: the free list is the SHADOW_TERMINATED segment, then the fresh slots
+  // [high_water, capacity). INTERSECT_SHADOW 6, SHADE_SHADOW 2 and 5 free slots partitioned
+  // (high-water 13), capacity 30: 5 + 17 free in all.
+  const auto fill = [](uint32_t capacity, uint32_t surface, uint32_t light_path, uint32_t volume) {
+    ar::StepTable t{};
+    t.stage[S(Stage::INTERSECT_SHADOW)].count = 6;
+    t.stage[S(Stage::SHADE_SHADOW)].count = 2;
+    t.stage[S(Stage::SHADOW_TERMINATED)].count = 5;
+    t.stage[S(Stage::SHADE_SURFACE)].count = surface;
+    t.stage[S(Stage::SHADE_LIGHT_PATH)].count = light_path;
+    t.stage[S(Stage::SHADE_VOLUME)].count = volume;
+    t.high_water[1] = 13;
+    t.shadow_capacity = capacity;
+    ar::step_table_finish(t, [](Stage s) -> uint32_t {
+      return s == Stage::SHADE_LIGHT_PATH ? 2u : (s == Stage::SHADE_SURFACE || s == Stage::SHADE_VOLUME) ? 1u : 0u;
+    });
+    return t;
+  };
+  {  // Within the segment: no fresh slot.
+    const ar::StepTable t = fill(30, 4, 0, 0);
+    CHECK(t.stage[S(Stage::SHADE_SURFACE)].count == 4);
+    CHECK(t.stage[S(Stage::SHADE_SURFACE)].shadow_base == 8);
+    CHECK(t.shadow_fresh == 0);
+  }
+  {  // Surface 12 x 1 takes the 5 free and 7 fresh; light path 3 x 2 takes 6 more fresh (base 20);
+     // volume 20 x 1 finds 4 left and launches 4: the pool is full, fresh = 17 = 30 - 13.
+    const ar::StepTable t = fill(30, 12, 3, 20);
+    CHECK(t.stage[S(Stage::SHADE_SURFACE)].count == 12);
+    CHECK(t.stage[S(Stage::SHADE_SURFACE)].shadow_base == 8);
+    CHECK(t.stage[S(Stage::SHADE_LIGHT_PATH)].count == 3);
+    CHECK(t.stage[S(Stage::SHADE_LIGHT_PATH)].shadow_base == 20);
+    CHECK(t.stage[S(Stage::SHADE_VOLUME)].count == 4);
+    CHECK(t.stage[S(Stage::SHADE_VOLUME)].shadow_base == 26);
+    CHECK(t.shadow_fresh == 17);
+  }
+  {  // Light path 9 x 2 needs 18 of the 22 free and launches whole; 4 are left for volume 10 x 1.
+    const ar::StepTable t = fill(30, 0, 9, 10);
+    CHECK(t.stage[S(Stage::SHADE_LIGHT_PATH)].count == 9);
+    CHECK(t.stage[S(Stage::SHADE_VOLUME)].count == 4);
+    CHECK(t.shadow_fresh == 17);
+  }
+  {  // No capacity above the high-water mark (or none given): the segment alone, as in 0002 D5.
+    for (uint32_t capacity : {0u, 13u, 10u}) {
+      const ar::StepTable t = fill(capacity, 12, 0, 0);
+      CHECK(t.stage[S(Stage::SHADE_SURFACE)].count == 5);
+      CHECK(t.shadow_fresh == 0);
+    }
+  }
+}
+
+TEST_CASE("queue_build/shadow range grows by its fresh slots") {
+  // The scheduler's shadow loop by hand over queue_build (RULINGS 84): 400 paths start at
+  // INTERSECT_CLOSEST and 60 more of them move to SHADE_SURFACE (k = 1) before every step, in index
+  // order; the shadow pool has 100 slots and its high-water mark starts at 0. Path p emits a shadow item unless p % 3 == 0; INTERSECT_SHADOW sends an item to SHADE_SHADOW
+  // when its slot is even, else frees it; SHADE_SHADOW frees it. Every step: every live item is in
+  // exactly one shadow segment, no live slot is at or above the mark, the reserved slots are the
+  // free list (the free slots below the mark, then the mark, mark + 1, ...), the launch is
+  // min(waiting, free below + capacity - mark), and the mark grows by the fresh slots, never past 100.
+  constexpr uint32_t kMain = 400, kShadow = 100;
+  Rig r(std::vector<uint8_t>(kMain, U8(Stage::INTERSECT_CLOSEST)), std::vector<uint8_t>(kShadow, U8(Stage::SHADOW_TERMINATED)));
+  std::vector<uint32_t> launched(kMain, 0);
+  uint32_t hw = 0, next_lowest = 0, released = 0, steps = 0, held_back_steps = 0, fresh_steps = 0;
+  const uint8_t kTerm = U8(Stage::SHADOW_TERMINATED);
+  bool live_left = false;
+  while (next_lowest < kMain || live_left) {
+    REQUIRE(++steps <= 100);
+    for (const uint32_t end = std::min(kMain, released + 60); released < end; ++released)
+      r.next[0][released] = U8(Stage::SHADE_SURFACE);
+    r.build(kMain, hw, kShadow);
+    REQUIRE(r.table.invalid_items == 0);
+    // The partition: live items below the mark, each exactly once.
+    std::vector<uint32_t> seen(kShadow, 0);
+    for (Stage st : {Stage::INTERSECT_SHADOW, Stage::SHADE_SHADOW}) {
+      const ar::StepEntry e = r.table.stage[S(st)];
+      for (uint32_t j = 0; j < e.count; ++j) {
+        const uint32_t slot = r.queue[1][e.start + j];
+        REQUIRE(slot < hw);
+        CHECK(r.next[1][slot] == U8(st));
+        ++seen[slot];
+      }
+    }
+    uint32_t free_below = 0;
+    std::vector<uint32_t> free_list;
+    for (uint32_t slot = 0; slot < kShadow; ++slot) {
+      const bool live = r.next[1][slot] != kTerm;
+      CHECK(seen[slot] == (live ? 1u : 0u));
+      if (live) CHECK(slot < hw);
+      if (!live && slot < hw) ++free_below, free_list.push_back(slot);
+    }
+    for (uint32_t slot = hw; slot < kShadow; ++slot) free_list.push_back(slot);
+    const ar::StepEntry surface = r.table.stage[S(Stage::SHADE_SURFACE)];
+    const uint32_t waiting = released - next_lowest;
+    CHECK(surface.count == std::min(waiting, free_below + (kShadow - hw)));
+    held_back_steps += surface.count < waiting;
+    // Stages in Stage order: INTERSECT_SHADOW, then SHADE_SHADOW, then the producer.
+    const ar::StepEntry inter = r.table.stage[S(Stage::INTERSECT_SHADOW)];
+    const ar::StepEntry shade = r.table.stage[S(Stage::SHADE_SHADOW)];
+    std::vector<uint32_t> shaded(r.queue[1].begin() + shade.start, r.queue[1].begin() + shade.start + shade.count);
+    for (uint32_t j = 0; j < inter.count; ++j) {
+      const uint32_t slot = r.queue[1][inter.start + j];
+      r.next[1][slot] = slot % 2 == 0 ? U8(Stage::SHADE_SHADOW) : kTerm;
+    }
+    for (uint32_t slot : shaded) r.next[1][slot] = kTerm;
+    for (uint32_t i = 0; i < surface.count; ++i) {
+      const uint32_t path = r.queue[0][surface.start + i];
+      CHECK(path == next_lowest + i);
+      ++launched[path];
+      const uint32_t slot = r.queue[1][surface.shadow_base + i];
+      REQUIRE(i < free_list.size());
+      CHECK(slot == free_list[i]);  // the free slots below the mark first, then fresh, in index order
+      if (path % 3 != 0) r.next[1][slot] = U8(Stage::INTERSECT_SHADOW);
+      r.next[0][path] = U8(Stage::TERMINATED);
+    }
+    next_lowest += surface.count;
+    const uint32_t want_fresh = surface.count > free_below ? surface.count - free_below : 0;
+    CHECK(r.table.shadow_fresh == want_fresh);
+    fresh_steps += want_fresh > 0;
+    hw += r.table.shadow_fresh;
+    REQUIRE(hw <= kShadow);
+    live_left = std::any_of(r.next[1].begin(), r.next[1].end(), [&](uint8_t v) { return v != kTerm; });
+  }
+  CHECK(std::all_of(launched.begin(), launched.end(), [](uint32_t n) { return n == 1; }));
+  CHECK(fresh_steps >= 2);      // the mark grew over more than one step
+  CHECK(held_back_steps >= 1);  // and the pool ran out, so producers were held back
+  CHECK(hw == kShadow);
 }
 
 }  // TEST_SUITE
