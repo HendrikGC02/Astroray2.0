@@ -224,7 +224,8 @@ void release_ledger(const std::shared_ptr<Ledger>& l, uint64_t id) {
     try {
       l->remove(id);
     } catch (...) {
-      // best-effort release of a ledger entry at teardown.
+      // callers run in destructors, which must not throw. remove() throws only for a non-live id (a
+      // double free or wrong id), a ledger bug that this drop hides.
     }
   }
 }

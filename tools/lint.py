@@ -944,8 +944,8 @@ def _comment_lines(p, text):
         except (SyntaxError, tokenize.TokenError):
             for k, ln in enumerate(L, 1):
                 yield k, ln
-    elif p.endswith((".toml", ".cmake", ".def")):
-        mark = ";" if p.endswith(".def") else "#"
+    elif p.endswith((".toml", ".cmake")):
+        mark = "#"
         for k, ln in enumerate(L, 1):
             if mark in ln:
                 yield k, ln[ln.index(mark):]

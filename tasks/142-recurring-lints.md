@@ -20,3 +20,6 @@ Progress:
 - Pre-flight (main 2f8514b+): task-number comments 23, stale Ref 2, empty catch (...) 11 listed spots (task text says 10, lists 11); no new hits; 36 edits.
 - Files: tools/lint.py, tools/README.md, tests/cpu/lint_cases/hygiene/*, tasks/142.canary.patch, plus the listed spots.
 - Done: lint hygiene + 5 cases (self-test 56), 36 edits, canary patch; fast PASS 7.5 s; gate PASS 140.4 s (first cold run 182.1 s over B-09, rerun warm). Borderline empty catch kept with a comment: src/host/scene/mesh.cpp TopoGate::resolve (a throwing callback is dropped).
+- Review fixes: .def comments now scanned as C (case src/x.def); embree_scene.cpp:187 and mesh.cpp:227 comments corrected; tables.h Ref: data/MANIFEST.toml restored.
+- Hidden-error cases (report, not fixed): Ledger::remove non-live id (double free or wrong id) swallowed in embree_scene.cpp ~Charge and mesh.cpp release_ledger; TopoGate::resolve drops a throwing callback.
+- Forced edit to an existing test: tests/cpu/lint_cases/kernel/banned-tokens/expected.txt (+1 hygiene line for its empty catch).
