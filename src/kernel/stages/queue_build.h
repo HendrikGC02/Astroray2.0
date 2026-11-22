@@ -8,9 +8,7 @@
 //            its exclusive prefix and rewrites its rows as inclusive per-tile offsets; the last
 //            scan tile totals the segments into the step table and finishes it (sched/step_table.h);
 //   scatter: each tile writes its items' pool-local indices into their segments in item-index
-//            order, so a segment is sorted by index and the partition is stable; the one item of a pool's
-//            TERMINATED segment that starts its run of entries equal to their positions writes the pool's
-//            StepTable::live_end.
+//            order, so a segment is sorted by index and the partition is stable.
 // Both pools are partitioned up to StepTable::high_water. Tiles are numbered main pool first,
 // then shadow pool; tile g owns histogram row g of KernelGlobals::queue_counts. A tile bins the
 // other pool's stages as invalid, so one scan over all rows gives every column its pool's
@@ -207,9 +205,25 @@ AR_FN void scan_rows_tile(uint32_t* counts, uint32_t rows, uint32_t bins, uint32
 // Kernel 2 for scan tile u, by `lanes` units as in scan_rows_tile, over queue_counts. The last
 // scan tile's lane 0 waits for every bin's total and finishes the step table with the
 // producers' k from launch_config.h; high_water is left as the host wrote it.
+// Before its rows become offsets, the unit holding a pool's TERMINATED column raises the pool's
+// StepTable::live_end to the end of the scan tile's last tile of that pool with fewer TERMINATED
+// items than items, an integer max over the scan tiles (step_table.h).
 AR_FN void queue_scan_tile(const KernelGlobals& kg, uint32_t u, uint32_t lane, uint32_t lanes) {
   uint32_t* counts = kg.queue_counts;
   const uint32_t tiles = queue_tile_count(kg);
+  constexpr uint32_t kDeadMain = static_cast<uint32_t>(Stage::TERMINATED);
+  constexpr uint32_t kDeadShadow = static_cast<uint32_t>(Stage::SHADOW_TERMINATED);
+  for (uint32_t b = lane; b < kQueueBins; b += lanes) {
+    if (b != kDeadMain && b != kDeadShadow) continue;
+    const Pool pool = b == kDeadMain ? Pool::MAIN : Pool::SHADOW;
+    const uint32_t first = u * kQueueScanRows;
+    for (uint32_t r = first + kQueueScanRows < tiles ? first + kQueueScanRows : tiles; r-- > first;) {
+      const QueueTile t = queue_tile(kg, r);
+      if (t.pool != pool || counts[uint64_t(r) * kQueueBins + b] == t.last - t.first) continue;
+      atomic_max(const_cast<uint32_t*>(&kg.step_table->live_end[static_cast<uint32_t>(pool)]), t.last);
+      break;
+    }
+  }
   scan_rows_tile(counts, tiles, kQueueBins, u, lane, lanes);
   if (u + 1u != queue_scan_tiles(tiles) || lane != 0) return;
   StepTable& table = *const_cast<StepTable*>(kg.step_table);
@@ -232,27 +246,16 @@ AR_FN void queue_scan_tile(const KernelGlobals& kg, uint32_t u, uint32_t lane, u
 // exclusive offsets, the previous row's inclusive ones, place every item, so a shadow producer's
 // held-back items are in the queue too. Within a round of `lanes` items an item goes after the
 // items of its bin in lower units, so the order stays the item order.
-// live_end (step_table.h): the pool's TERMINATED segment starts at position L, the number of items
-// in the pool's other segments, and lists the terminated slots in index order, so an entry holds
-// its own position p exactly when every live item lies below slot p. The first such entry is the
-// one whose slot is 0 or follows a live slot (at slot L every slot below is live); its item, the only
-// one, stores itself as live_end.
-// With no such entry the last slot below the mark is live and live_end keeps the mark the host
-// wrote. One writer, so no atomic and the same value on both targets.
 AR_FN void queue_scatter_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane, uint32_t lanes) {
   const QueueTile t = queue_tile(kg, g);
   const uint8_t* next = queue_next_stage(kg, t.pool);
   uint32_t* queue = const_cast<uint32_t*>(t.pool == Pool::MAIN ? kg.main_queue : kg.shadow_queue);
   const uint32_t* prev = kg.queue_counts + (uint64_t(g) - 1u) * kQueueBins;
   AR_ASSERT(next != nullptr && queue != nullptr);
-  const uint32_t dead = static_cast<uint32_t>(t.pool == Pool::MAIN ? Stage::TERMINATED : Stage::SHADOW_TERMINATED);
   uint32_t at[kStageCount];
   for (uint32_t b = 0; b < kStageCount; ++b)
     at[b] = kg.step_table->stage[b].start + (g == 0 ? 0u : prev[b] & kScanValueMask);
   const uint32_t below = (1u << lane) - 1u;  // the units before this one in its round
-  // The tile's first TERMINATED position (constant indices keep at[] in registers).
-  uint32_t at_dead = t.pool == Pool::MAIN ? at[static_cast<uint32_t>(Stage::TERMINATED)]
-                                          : at[static_cast<uint32_t>(Stage::SHADOW_TERMINATED)];
   for (uint32_t base = t.first; base < t.last; base += lanes) {
     const uint32_t i = base + lane;
     const uint32_t bin = queue_item_bin(t, next, i);
@@ -261,20 +264,6 @@ AR_FN void queue_scatter_tile(const KernelGlobals& kg, uint32_t g, uint32_t lane
       if (bin == b) queue[at[b] + popc(votes & below)] = i;
       at[b] += popc(votes);
     }
-  }
-  // A dead entry's position is at least its slot (every live item counts before it), so an entry
-  // equal to its position can lie in this tile only if its TERMINATED entries start below its end.
-  // Such tiles (the one holding live_end and the dead tail above it) read their items once more.
-  if (at_dead >= t.last) return;
-  for (uint32_t base = t.first; base < t.last; base += lanes) {
-    const uint32_t i = base + lane;
-    const uint32_t bin = queue_item_bin(t, next, i);
-    const uint32_t dead_votes = ballot(bin == dead);
-    if (bin == dead && at_dead + popc(dead_votes & below) == i && (i == 0 || queue_bin(t.pool, next[i - 1u]) != dead)) {
-      StepTable& table = *const_cast<StepTable*>(kg.step_table);
-      table.live_end[static_cast<uint32_t>(t.pool)] = i;
-    }
-    at_dead += popc(dead_votes);
   }
 }
 

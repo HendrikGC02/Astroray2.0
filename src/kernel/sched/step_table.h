@@ -18,11 +18,13 @@
 //  - shadow_fresh (output) is the number of fresh shadow slots this step reserved, the slots
 //    [high_water[SHADOW], high_water[SHADOW] + shadow_fresh); shadow_reserved (output) is the
 //    number of free-list entries the producers reserved, segment and fresh slots together.
-//  - live_end[p] (output; the host writes high_water[p] there with the marks) is one past the
-//    largest slot below high_water[p] whose next_stage is not the pool's TERMINATED value, 0 when
-//    there is none; queue_build_scatter writes it from its one item that finds it (queue_build.h),
-//    and leaves the mark when the last slot is live. Every slot in [live_end[p], high_water[p]) is terminated, and the pool's
-//    TERMINATED segment lists them last and in index order, so its entries from position
+//  - live_end[p] (output; the host writes 0 there with the marks) is the end of the pool's last
+//    queue_build tile (kQueueTile slots, the last one ending at high_water[p]) that holds a slot
+//    whose next_stage is not the pool's TERMINATED value, 0 when there is none: the largest such
+//    slot + 1, rounded up to its tile's end. queue_build_scan raises it with an integer atomic max,
+//    so the value does not depend on the order of the scan tiles. Every slot in
+//    [live_end[p], high_water[p]) is terminated, and the pool's TERMINATED segment lists them last
+//    and in index order (when invalid_items is 0), so its entries from position
 //    live_end[p] on are live_end[p], live_end[p] + 1, ...: the free list is the same slots in the
 //    same order whether the high-water mark is high_water[p] or live_end[p], and the host may lower
 //    the mark to live_end[p] (plus the fresh slots the step takes) for the next partition

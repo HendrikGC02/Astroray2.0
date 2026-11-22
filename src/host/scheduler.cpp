@@ -273,9 +273,8 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     const std::vector<uint32_t> prev_launched = std::move(launched_);
     launched_.clear();
     // 1. Partition both pools up to their high-water marks.
-    // high_water[MAIN], high_water[SHADOW], shadow_capacity, and live_end preset to the marks (the
-    // value when the last slot is live, step_table.h): adjacent fields, one upload.
-    const uint32_t hw[2 * ar::kPoolCount + 1] = {hw_main, hw_shadow, uint32_t(shadow_cap), hw_main, hw_shadow};
+    // high_water[MAIN], high_water[SHADOW], shadow_capacity and live_end cleared: adjacent fields, one upload.
+    const uint32_t hw[2 * ar::kPoolCount + 1] = {hw_main, hw_shadow, uint32_t(shadow_cap), 0u, 0u};
     static_assert(offsetof(ar::StepTable, shadow_capacity) == offsetof(ar::StepTable, high_water) + 8 &&
                       offsetof(ar::StepTable, live_end) == offsetof(ar::StepTable, high_water) + 12,
                   "high_water, shadow_capacity and live_end go up in one upload");
