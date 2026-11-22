@@ -92,6 +92,11 @@ class Ledger {
  private:
   mutable std::mutex mutex_;
   std::unordered_map<uint64_t, LedgerRecord> live_;
+  // Kept in step with live_ so the progress poll (category_total, 17 reads per call, in a tight loop
+  // in a host that spins) is O(1) and never holds the lock against an uploading worker for the time
+  // of a scan over every record.
+  uint64_t category_bytes_[kLedgerCategoryCount] = {};
+  uint64_t total_bytes_ = 0;
   uint64_t next_id_ = 1;
 };
 

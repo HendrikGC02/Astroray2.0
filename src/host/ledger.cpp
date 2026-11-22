@@ -44,20 +44,24 @@ uint64_t Ledger::add(Owner owner, LedgerCategory category, uint64_t bytes) {
   std::lock_guard<std::mutex> lock(mutex_);
   const uint64_t id = next_id_++;
   live_.emplace(id, LedgerRecord{owner, category, bytes});
+  category_bytes_[static_cast<uint32_t>(category)] += bytes;
+  total_bytes_ += bytes;
   return id;
 }
 
 void Ledger::remove(uint64_t id) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (live_.erase(id) == 0)
+  const auto it = live_.find(id);
+  if (it == live_.end())
     throw std::invalid_argument("ledger: free of allocation " + std::to_string(id) + " that is not live");
+  category_bytes_[static_cast<uint32_t>(it->second.category)] -= it->second.bytes;
+  total_bytes_ -= it->second.bytes;
+  live_.erase(it);
 }
 
 uint64_t Ledger::total() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  uint64_t sum = 0;
-  for (const auto& kv : live_) sum += kv.second.bytes;
-  return sum;
+  return total_bytes_;
 }
 
 uint64_t Ledger::scene_total(uint64_t scene) const {
@@ -77,11 +81,9 @@ uint64_t Ledger::session_total(uint64_t session) const {
 }
 
 uint64_t Ledger::category_total(LedgerCategory category) const {
+  ledger_category_name(category);
   std::lock_guard<std::mutex> lock(mutex_);
-  uint64_t sum = 0;
-  for (const auto& kv : live_)
-    if (kv.second.category == category) sum += kv.second.bytes;
-  return sum;
+  return category_bytes_[static_cast<uint32_t>(category)];
 }
 
 std::vector<LedgerRecord> Ledger::records() const {
