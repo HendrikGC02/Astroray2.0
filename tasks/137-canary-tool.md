@@ -17,7 +17,7 @@ Do:
 10. tools/README.md, the land skill (step 1 names canary.ps1 and out/land/NNN/canary.patch), implementer.md (drop "when that script exists").
 Acceptance: `pwsh tools/check.ps1 fast` passes; `pwsh tools/check.ps1 gate` passes with a `tools tests` step line; `pwsh -NoProfile -File tests/tools/run_fast.ps1` prints PASS for fast_canary; `pwsh -NoProfile -File tests/tools/land_fixture/run_cases.ps1` ends `PASS run_cases` for cases a-g; `<python> -I tools/lint.py --self-test` passes with the new taskfile cases; `pwsh tools/canary.ps1 137` prints `PASS canary 137` with one matrix row per hunk.
 Look at: none.
-Canary: tasks/137.canary.patch must turn red: `pwsh -NoProfile -File tests/tools/fast_canary.ps1`, `pwsh -NoProfile -Command ". tools/lib/python.ps1; & (Get-ArPython) -I tools/lint.py --self-test; exit $LASTEXITCODE"`, `pwsh -NoProfile -File tests/tools/land_fixture/run_cases.ps1`.
+Canary: tasks/137.canary.patch must turn red: `pwsh -NoProfile -File tests/tools/fast_canary.ps1`, `pwsh -NoProfile -Command '. tools/lib/python.ps1; & (Get-ArPython) -I tools/lint.py --self-test; exit $LASTEXITCODE'`, `pwsh -NoProfile -File tests/tools/land_fixture/run_cases.ps1`.
 Budget: +4 s of gate at most (the `tools tests` step, measured; stop and ask above); kernel registers, stack, spills: none (no kernel code); compile time: none (no C++).
 Depends on: none.
 Size: M (about 450 lines without tests); stop and report at 2x.
