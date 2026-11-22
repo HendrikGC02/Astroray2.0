@@ -40,15 +40,16 @@ uint64_t splitmix(uint64_t& x) {
   return z ^ (z >> 31);
 }
 
-bool env_permute() {
+bool env_flag(const char* name) {
 #ifdef AR_GATE_HOOKS
   char* v = nullptr;
   size_t n = 0;
-  if (_dupenv_s(&v, &n, "AR_DEBUG_PERMUTE") != 0 || v == nullptr) return false;
+  if (_dupenv_s(&v, &n, name) != 0 || v == nullptr) return false;
   const bool on = std::string(v) != "0" && !std::string(v).empty();
   std::free(v);
   return on;
 #else
+  (void)name;
   return false;
 #endif
 }
@@ -79,7 +80,8 @@ void fill_shadow(ar::ShadowItemSoA& soa, const StateLayout& l, char* base) {
 }  // namespace
 
 Scheduler::Scheduler(Device& device, const SchedulerConfig& cfg) : config(cfg), device_(device) {
-  permute_ = cfg.permute || env_permute();
+  permute_ = cfg.permute || env_flag("AR_DEBUG_PERMUTE");
+  shadow_full_range_ = cfg.shadow_full_range || env_flag("AR_DEBUG_SHADOW_FULL_RANGE");
   gpu_ = device.kind() == AR_DEVICE_CUDA;
 }
 
@@ -105,14 +107,15 @@ void Scheduler::ensure_buffers(uint64_t cap, uint64_t shadow_cap) {
     path_buf_ = device_.allocate(LedgerCategory::MAIN_PATH_POOL, pl.total_bytes, o);
     shadow_buf_ = device_.allocate(LedgerCategory::SHADOW_POOL, sl.total_bytes, o);
     main_queue_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, cap * 4, o);
-    // The identity main_queue every pass starts from, uploaded once per allocation: a device copy
-    // per pass instead of a host upload of cap x 4 bytes (8 MiB at 2^21), which left the GPU idle
-    // for about 1.5 ms at every pass start (nsys, B-1M at 1080p).
-    identity_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, cap * 4, o);
+    // The identity both queues start every pass from (main and shadow), uploaded once per
+    // allocation: a device copy per pass instead of a host upload of cap x 4 bytes (8 MiB at
+    // 2^21), which left the GPU idle for about 1.5 ms at every pass start (nsys, B-1M at 1080p).
+    const uint64_t identity_n = std::max(cap, shadow_cap);
+    identity_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, identity_n * 4, o);
     {
-      std::vector<uint32_t> identity(cap);
-      for (uint32_t i = 0; i < cap; ++i) identity[i] = i;
-      device_.upload(identity_buf_, 0, identity.data(), cap * 4);
+      std::vector<uint32_t> identity(identity_n);
+      for (uint32_t i = 0; i < identity_n; ++i) identity[i] = i;
+      device_.upload(identity_buf_, 0, identity.data(), identity_n * 4);
     }
     shadow_queue_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, shadow_cap * 4, o);
     const uint64_t tiles = ar::queue_tiles(uint32_t(cap)) + ar::queue_tiles(uint32_t(shadow_cap));
@@ -224,16 +227,19 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
   device_.upload(kg_buf_, 0, &kg_, sizeof kg_);
   device_.set_kernel_globals(kg_buf_);
 
-  // Pass start: main_queue is the identity (its tail past the partition is the fresh slots),
-  // every shadow slot is SHADOW_TERMINATED and the shadow high-water is the whole capacity: a
-  // zero shadow high-water would starve every producer and livelock the pass (step_table.h).
+  // Pass start: both queues are the identity (their tails past the partition are the fresh
+  // slots) and every shadow slot is SHADOW_TERMINATED. Both high-water marks start at 0 and grow
+  // by the fresh slots each step takes (RULINGS 84); the full-range test mode starts the shadow
+  // mark at the capacity, where no slot is fresh.
   {
     device_.copy(main_queue_buf_, 0, identity_buf_, 0, cap * 4);
+    device_.copy(shadow_queue_buf_, 0, identity_buf_, 0, shadow_cap * 4);
     const uint64_t at = uint64_t(reinterpret_cast<const char*>(shadow_.next_stage) -
                                  reinterpret_cast<const char*>(shadow_buf_.ptr));
     device_.memset(shadow_buf_, at, static_cast<uint8_t>(Stage::SHADOW_TERMINATED), shadow_cap);
   }
-  const uint32_t hw_shadow = uint32_t(shadow_cap);
+  uint32_t hw_shadow = shadow_full_range_ ? uint32_t(shadow_cap) : 0u;
+  shadow_high_water_ = hw_shadow;
   uint32_t hw_main = 0;
   uint64_t next_work = 0;
   device_.memset(step_buf_, 0, 0, sizeof(ar::StepTable));
@@ -263,7 +269,10 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     const std::vector<uint32_t> prev_launched = std::move(launched_);
     launched_.clear();
     // 1. Partition both pools up to their high-water marks.
-    const uint32_t hw[ar::kPoolCount] = {hw_main, hw_shadow};
+    // high_water[MAIN], high_water[SHADOW], shadow_capacity: adjacent fields, one upload.
+    const uint32_t hw[ar::kPoolCount + 1] = {hw_main, hw_shadow, uint32_t(shadow_cap)};
+    static_assert(offsetof(ar::StepTable, shadow_capacity) == offsetof(ar::StepTable, high_water) + 8,
+                  "high_water and shadow_capacity go up in one upload");
     device_.upload_async(step_buf_, offsetof(ar::StepTable, high_water), hw, sizeof hw);
     // The CPU splits queue_build_grid's item range into tiles; a GPU warp takes one tile.
     const uint32_t grid = gpu_ ? ar::gpu_tile_grid(hw_main) + ar::gpu_tile_grid(hw_shadow)
@@ -290,6 +299,12 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     }
     const uint32_t active_main = hw_main - t.refill_count;
     const uint32_t active_shadow = hw_shadow - t.stage[kShadowTerm].count;
+    // The producers launched below write into the fresh slots this table reserved, so the next
+    // partition covers them (step_table.h); the reservation never passes the capacity.
+    if (uint64_t(hw_shadow) + t.shadow_fresh > shadow_cap)
+      throw std::logic_error("Scheduler: the shadow reservation passes the shadow capacity");
+    hw_shadow += t.shadow_fresh;
+    shadow_high_water_ = hw_shadow;
     counters_.active_path_steps += active_main;
     counters_.peak_active_paths = std::max<uint64_t>(counters_.peak_active_paths, active_main);
     if (next_work == total && active_main == 0 && active_shadow == 0) break;  // the pass has drained

@@ -8,9 +8,16 @@
 // Contract of the fields:
 //  - high_water[p] is an input, written by the host before queue_build: the largest slot
 //    index used this pass plus one (items [0, high_water) are partitioned). queue_build
-//    never changes it. Slots at or above it belong to no segment. The shadow high-water is
-//    the shadow capacity with every slot SHADOW_TERMINATED: with 0 the free list is empty,
-//    every producer starves and the pass livelocks (the scheduler, 045, sets both).
+//    never changes it. Slots at or above it belong to no segment.
+//  - shadow_capacity is an input written with high_water: the shadow pool's slot count. Free
+//    shadow slots are the SHADOW_TERMINATED segment in index order followed by the fresh slots
+//    [high_water[SHADOW], shadow_capacity) in index order (RULINGS 84), so the host keeps
+//    shadow_queue[j] = j for every j at or above high_water[SHADOW]: the fresh entries follow
+//    the segment, which ends at high_water[SHADOW] when invalid_items is 0. A table whose
+//    shadow_capacity is not above high_water[SHADOW] has no fresh slots.
+//  - shadow_fresh (output) is the number of fresh shadow slots this step reserved, the slots
+//    [high_water[SHADOW], high_water[SHADOW] + shadow_fresh); the host adds it to the shadow
+//    high-water mark before the next partition.
 //  - stage[s].start indexes the queue array of the stage's pool (main_queue for main-pool
 //    stages, shadow_queue for INTERSECT_SHADOW, SHADE_SHADOW and SHADOW_TERMINATED).
 //  - stage[s].count is the launch count: the segment length, except for a shadow producer
@@ -30,6 +37,7 @@
 //    in no segment; the host must fail the render when it is not zero (no silent fallback).
 // Ref: docs/decisions/0002-kernel-architecture.md D5 (deterministic, atomic-free shadow
 // slot assignment), D6 (partition, step table), D7 step 2 (read back under 256 B);
+// docs/decisions/RULINGS.md 84 (the shadow free list's fresh tail);
 // docs/decisions/0003-spectral-model-and-path-state.md d19-d20.
 #pragma once
 #include <cstdint>
@@ -66,12 +74,15 @@ struct StepEntry {
 };
 
 // Filled on the device by queue_build and read back by the host: one entry per Stage
-// value plus the refill count of D7 step 4. 196 B, under the 256 B of D7 step 2.
+// value plus the refill count of D7 step 4. 204 B, under the 256 B of D7 step 2. high_water and
+// shadow_capacity are adjacent: the host writes them in one upload.
 struct StepTable {
   StepEntry stage[kStageCount];
   uint32_t refill_count;
   uint32_t high_water[kPoolCount];
+  uint32_t shadow_capacity;
   uint32_t invalid_items;
+  uint32_t shadow_fresh;
 };
 static_assert(sizeof(StepTable) < 256, "the step table is read back in one under-256-B copy");
 
@@ -84,9 +95,10 @@ struct StageShadowItems {
 
 // Completes a step table whose stage[s].count holds the segment length of every stage
 // (and nothing else is touched): segment starts per pool in Stage order, the shadow-slot
-// reservation, and the refill count. `shadow_k(stage)` is the producer's k (0 = not a
-// producer). Free shadow slots are the SHADOW_TERMINATED segment in index order; the
-// producers, in Stage order, receive consecutive ranges of it (0002 D5). A producer whose
+// reservation, the fresh-slot count and the refill count. `shadow_k(stage)` is the producer's
+// k (0 = not a producer). Free shadow slots are the SHADOW_TERMINATED segment in index order,
+// then the fresh slots up to shadow_capacity (RULINGS 84); the producers, in Stage order,
+// receive consecutive ranges of that list (0002 D5). A producer whose
 // segment needs more slots than are left launches floor(free_left / k) items. A producer
 // with an empty segment still gets shadow_base = the next unreserved free slot, so the
 // table has one definition.
@@ -101,7 +113,10 @@ AR_FN void step_table_finish(StepTable& t, KFn shadow_k) {
     t.stage[s].shadow_base = 0;
     next += t.stage[s].count;
   }
-  const uint32_t free_slots = t.stage[static_cast<uint32_t>(Stage::SHADOW_TERMINATED)].count;
+  const uint32_t terminated = t.stage[static_cast<uint32_t>(Stage::SHADOW_TERMINATED)].count;
+  const uint32_t hw_shadow = t.high_water[static_cast<uint32_t>(Pool::SHADOW)];
+  const uint32_t fresh = t.shadow_capacity > hw_shadow ? t.shadow_capacity - hw_shadow : 0u;
+  const uint32_t free_slots = terminated + fresh;
   uint32_t free_left = free_slots;
   uint32_t base = t.stage[static_cast<uint32_t>(Stage::SHADOW_TERMINATED)].start;
   for (uint32_t s = 0; s < kStageCount; ++s) {
@@ -116,6 +131,9 @@ AR_FN void step_table_finish(StepTable& t, KFn shadow_k) {
     base += launch * k;
     free_left -= launch * k;
   }
+  // The segment's slots go first, so the reservation reaches into the fresh tail only past them.
+  const uint32_t reserved = free_slots - free_left;
+  t.shadow_fresh = reserved > terminated ? reserved - terminated : 0u;
   t.refill_count = t.stage[static_cast<uint32_t>(Stage::TERMINATED)].count;
 }
 
