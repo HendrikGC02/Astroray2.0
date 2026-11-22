@@ -20,3 +20,8 @@ Budget: gate -28.5 s or more (163.5 s to 135 s or less); +1 s for the new test i
 Depends on: none. First in the tools lane with 137; whichever lands second rebases its `$gateSteps` edit.
 Size: M (about 250 lines without tests); stop and report at 2x or when the decision table says stop.
 Progress:
+- before (fresh worktree, 5 runs): 157.2 128.8 122.9 129.8 123.5 s; run 1 cold (scenes 17 s, smoke 23.6 s), steady 123-130 s.
+- 2a: gen hash was stable between runs (scenes 0.3 s); cause of 14 s is a fresh tree: out/scenes empty. Fix: machine-wide recording cache keyed by hash (scenes.py).
+- 2b: abi tests joined g1 beside analytic cpu/cuda (their 24.9 s wall hides its 11.5 s); smoke, aov, integrator cuda, material compile stay alone.
+- 2c not applicable without racing build dev (cpu steps read out/bin); 2d not applicable (land prepare does not run fast).
+- after (5 runs, out/scenes emptied first): 122.5 112.4 114.8 112.2 112.3 s, max 122.5 <= 135; timing steps unchanged (integrator cuda 18.3, compile timing 0.8, material compile 0.0).
