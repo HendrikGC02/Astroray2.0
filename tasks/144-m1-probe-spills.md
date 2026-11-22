@@ -18,3 +18,4 @@ Depends on: none.
 Size: S-M (about 100 lines of source, a measurement table); stop and report at 2x, after step 3's table, or when the cause lies only in probe-only code.
 Progress:
 - Started: branch task/144-m1-probe-spills. Files expected to change: src/kernel/budget.toml (ar_probe_m1 row comment, only on step 5); a step-2 fix, if any, in src/kernel/vm/interp.h, vm/ops/*.h, stages/shade_common.h or material/lobes/*.h. Step-1 stubs in probe_m1.cu are temporary, never committed.
+- Step 1 baseline (3 runs, build + kernelgate --probe): ar_probe_m1 capped regs 128, stack 480, spills 130 / 376 B, uncapped 160 regs; reproduces PR 90.
