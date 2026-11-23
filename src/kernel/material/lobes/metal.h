@@ -13,7 +13,8 @@
 //   <multiply name="metal_reflectivity"> in1 = base_color, in2 = base_weight
 //   <generalized_schlick_bsdf name="metal_bsdf"> weight = specular_weight,
 //     color0 = metal_reflectivity, color82 = specular_color, roughness = main_roughness
-// The spec applies no clamp to F_82. Microfacet parts (D, G1, G2, VNDF, alpha =
+// The spec text applies no clamp to F_82; fresnel_f82 saturates each lane to [0, 1] as
+// openpbr-bsdf does (reasons there). Microfacet parts (D, G1, G2, VNDF, alpha =
 // roughness^2, the reflection pdf) are ggx.h's, so there is one GGX (Walter 2007, Heitz
 // 2014, Heitz 2018). Spectral semantics: every term per transport wavelength (0005 item 7).
 // Cross-check: Adobe openpbr-bsdf (Apache-2.0).

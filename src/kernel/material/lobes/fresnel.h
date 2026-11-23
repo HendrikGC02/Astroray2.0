@@ -69,10 +69,16 @@ AR_FN Spec fresnel_dielectric_weighted(Real cos_i, const Spec& ior, Real weight)
 //   F_Schlick(mu) = F_0 + (1 - F_0) (1 - mu)^5
 //   F_82(mu) = F_Schlick(mu) - mu (1 - mu)^6 / (mu_bar (1 - mu_bar)^6) (F_Schlick(mu_bar) - F(mu_bar))
 //   "where mu_bar = 1/7", F(mu_bar) = specular_color * F_Schlick(mu_bar).
-// The spec applies no clamp to F_82; open_pbr_surface.mtlx (lines 411-418) only wires
-// color0 / color82 into MaterialX's generalized_schlick_bsdf and does not restate the
-// expression. cos_i is clamped to [0, 1] (task contract: the lobe passes dot(wo, m) > 0).
-// tint = 1 removes the correction term and leaves plain Schlick (index.html line 562).
+// open_pbr_surface.mtlx (lines 411-418) only wires color0 / color82 into MaterialX's
+// generalized_schlick_bsdf and does not restate the expression. cos_i is clamped to [0, 1]
+// (the lobe passes dot(wo, m) > 0). tint = 1 removes the correction term and leaves plain
+// Schlick (index.html line 562).
+// Clamp: the spec text does not clamp F_82, yet it leaves [0, 1] for dark, untinted inputs:
+// at F_0 = 0, tint = 0 the closed form is (1 - mu)^5 [1 - (49/6) mu (1 - mu)], negative on
+// (1/7, 6/7) (-0.03255 at mu = 0.5), which would make a negative BRDF. Each lane is saturated
+// to [0, 1] as the cross-check reference does.
+// Ref: third_party/_cache/refs/openpbr-bsdf-68a35118774d/impl/openpbr_lobe_utils.h lines 260-270,
+// openpbr_metal_schlick_with_f82_tint (return saturate(f_theta)).
 inline constexpr Real kF82MuBar = Real(1) / Real(7);  // index.html line 554
 AR_FN Real fresnel_schlick(Real f0, Real cos_i) {
   const Real c = Real(1) - min(max(cos_i, Real(0)), Real(1));
@@ -90,7 +96,8 @@ AR_FN Spec fresnel_f82(const Spec& f0, const Spec& tint, Real cos_i) {
   Spec f;
   for (int i = 0; i < kLanes; ++i) {
     const Real s_bar = fresnel_schlick(f0.v[i], kF82MuBar);
-    f.v[i] = fresnel_schlick(f0.v[i], mu) - w * (s_bar - tint.v[i] * s_bar);
+    const Real f82 = fresnel_schlick(f0.v[i], mu) - w * (s_bar - tint.v[i] * s_bar);
+    f.v[i] = min(max(f82, Real(0)), Real(1));
   }
   return f;
 }

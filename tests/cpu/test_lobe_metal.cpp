@@ -232,6 +232,24 @@ TEST_SUITE("fast") {
       CHECK(hi.v[l] == at1.v[l]);
       CHECK(lo.v[l] == lo0.v[l]);
     }
+    // Dark, untinted input: the raw F_82 at F0 = 0, tint = 0 is (1 - mu)^5 (1 - (49/6) mu (1 - mu)),
+    // -0.0325520833 at mu = 0.5; each lane is saturated to [0, 1] (openpbr-bsdf), so F = 0 there.
+    const Spec zero = ar::spec_fill(Real(0));
+    CHECK(ar::fresnel_f82(zero, zero, Real(0.5)).v[0] == Real(0));
+    for (int k = 0; k <= 100; ++k) {
+      const Spec f = ar::fresnel_f82(ar::spec_fill(Real(0.02)), zero, Real(k / 100.0));
+      CHECK(f.v[0] >= Real(0));
+      CHECK(f.v[0] <= Real(1));
+    }
+    // The lobe's value on such a lane is 0, never negative: wo.m = 0.5 with m the normal.
+    MetalParams dark = make_params(0.5);
+    dark.base_color.v[0] = Real(0);
+    dark.specular_color.v[0] = Real(0);
+    const LobeEval de = ar::metal_eval(dark, dir_from(0.5, 0.0), dir_from(0.5, kPi), TransportMode::Radiance);
+    CHECK(de.pdf > Real(0));
+    CHECK(de.f.v[0] >= Real(0));
+    CHECK(de.f.v[0] == Real(0));
+    CHECK(de.f.v[1] > Real(0));
     // The lobe's F: specular_weight * F_82 with F0 = base_weight * base_color.
     const Spec fm = ar::metal_fresnel(make_params(0.5, 1.0, 0.7), Real(0.5));
     for (int l = 0; l < 4; ++l) CHECK(rel_close(double(fm.v[l]), 0.7 * pins[1].f[l], kPinTol));
