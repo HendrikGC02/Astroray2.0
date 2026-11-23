@@ -121,8 +121,7 @@ class InstanceCache:
     def __init__(self):
         self.hashes = {}         # object name -> murmur3_32
         self.tids = {}           # original object session_uid -> material table id (one dict per field of the
-        self.lights = {}         # object record: light group name, cryptomatte object id and asset id; build()
-        self.crypto = {}         # gathers a column with one C-level map over the rows' uids)
+        self.crypto = {}         # object record: cryptomatte object id and asset id; build() gathers a column
         self.assets = {}
         self.users = {}          # original data session_uid -> {object session_uids cached with that data}
         self.real = _RealCache()
@@ -130,7 +129,6 @@ class InstanceCache:
                                  # row (not an instance), or () for a type build() skips
         self.table_ids = {}      # material table (tuple of ar_keys) -> small id; a pure function, never forgotten
         self.table_list = []
-        self.light_names = None  # the view layer's light group names at the last build()
 
     def table_id(self, table):
         i = self.table_ids.get(table)
@@ -139,9 +137,9 @@ class InstanceCache:
             self.table_list.append(table)
         return i
 
-    def remember(self, uid, data_uid, table, light_group, crypto, asset):
+    def remember(self, uid, data_uid, table, crypto, asset):
         self.tids[uid] = self.table_id(table)
-        self.lights[uid], self.crypto[uid], self.assets[uid] = light_group, crypto, asset
+        self.crypto[uid], self.assets[uid] = crypto, asset
         if data_uid is not None:
             self.users.setdefault(data_uid, set()).add(uid)
 
@@ -149,7 +147,7 @@ class InstanceCache:
         """Drops what an update to these original IDs (objects or their data) may have changed."""
         for u in uids:
             for o in (u, *self.users.pop(u, ())):
-                for d in (self.tids, self.lights, self.crypto, self.assets, self.plain):
+                for d in (self.tids, self.crypto, self.assets, self.plain):
                     d.pop(o, None)
                 self.real.forget(o)
 
@@ -189,14 +187,14 @@ def _top_parent(ob):
 
 
 def _remember_objects(fresh, material_key, cache):
-    """Records for the original objects `fresh` (uid -> object) the cache has none for: material table, light
-    group name, cryptomatte object id (the name hash) and asset id (the top parent's name hash, or PARENTED)."""
+    """Records for the original objects `fresh` (uid -> object) the cache has none for: material table,
+    cryptomatte object id (the name hash) and asset id (the top parent's name hash, or PARENTED)."""
     uids, obs = list(fresh), list(fresh.values())
     hashes = cache.hash_names([ob.name for ob in obs])
     for uid, ob, h in zip(uids, obs, hashes):
         data = ob.data
         table = tuple(material_key(s.material) for s in ob.material_slots)
-        cache.remember(uid, data.session_uid if data is not None else None, table, ob.lightgroup, h,
+        cache.remember(uid, data.session_uid if data is not None else None, table, h,
                        h if ob.parent is None else cache.PARENTED)
 
 
@@ -257,12 +255,6 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
     """
     lightgroups = lightgroups or {}
     cache = InstanceCache() if cache is None else cache
-    if cache.light_names != tuple(lightgroups):
-        # Renaming a light group rewrites every object's group name without naming any object in an update, so
-        # the records (which hold the name) and the own-row entries that rely on them are all dropped.
-        for d in (cache.tids, cache.lights, cache.crypto, cache.assets, cache.plain):
-            d.clear()
-        cache.light_names = tuple(lightgroups)
     if material_key is None:
         def material_key(mat):
             return keymap.key(("material", mat.original.session_uid)) if mat else 0
@@ -333,11 +325,11 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
     pool, per = [], {}
     if n:
         uids = np.asarray(owner, np.int32)
+        import bpy
         per, pick = _object_scalars(uids)
         tid, crypto = list(map(records.__getitem__, owner)), list(map(cache.crypto.__getitem__, owner))
         asset = list(map(cache.assets.__getitem__, owner))
         if cache.PARENTED in asset:  # the asset id follows the top parent's name, which can change unnamed
-            import bpy
             at = [i for i, a in enumerate(asset) if a == cache.PARENTED]
             tops = cache.hash_names([_top_parent(bpy.data.objects[int(pick[i])]).name for i in at])
             for i, h in zip(at, tops):
@@ -348,8 +340,9 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
             lut[:, t] = (len(pool) if table else 0, len(table))
             pool.extend(table)
         tid = np.asarray(tid, np.intp)
-        lights = list(map(cache.lights.__getitem__, owner)) if lightgroups else None
-        per.update({"light_groups": np.asarray([lightgroups.get(g, 0) for g in lights], np.uint8) if lights
+        # Not cached: renaming a light group rewrites every object's name on every view layer and tags no object.
+        names = [ob.lightgroup for ob in bpy.data.objects] if lightgroups else None
+        per.update({"light_groups": np.asarray([lightgroups.get(names[i], 0) for i in pick], np.uint8) if names
                     else np.zeros(n, np.uint8),
                     "crypto_objects": np.asarray(crypto, np.uint32), "crypto_assets": np.asarray(asset, np.uint32),
                     "material_offsets": lut[0][tid], "material_counts": lut[1][tid]})

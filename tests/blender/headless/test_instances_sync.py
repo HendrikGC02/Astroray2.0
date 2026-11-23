@@ -285,9 +285,9 @@ class TestInstanceCache(unittest.TestCase):
     def build(self):
         return instances.build(support.depsgraph(), self.km, cache=self.cache)
 
-    def assert_fresh(self, t):
+    def assert_fresh(self, t, layer=None):
         fresh = instances.build(support.depsgraph(), self.km,
-                                lightgroups=instances.lightgroup_indices(bpy.context.view_layer))
+                                lightgroups=instances.lightgroup_indices(layer or bpy.context.view_layer))
         self.assertEqual(t.n, fresh.n)
         for name, arr in fresh.arrays.items():
             self.assertEqual(t.arrays[name].tobytes(), arr.tobytes(), name)
@@ -343,6 +343,22 @@ class TestInstanceCache(unittest.TestCase):
         t = self.build_with_lightgroups()
         self.assertEqual(int(t.arrays["light_groups"][0]), 1)
         self.assert_fresh(t)
+
+    def test_light_group_rename_on_another_layer(self):
+        # Both layers have "g1"; the rename on L1 rewrites the object's name and names nothing the cache holds.
+        scene = bpy.context.scene
+        l1, l2 = scene.view_layers[0], scene.view_layers.new("L2")
+        for layer in (l1, l2):
+            layer.lightgroups.add(name="g1")
+        a = make("A")
+        a.lightgroup = "g1"
+        build = lambda: instances.build(support.depsgraph(), self.km, cache=self.cache,
+                                        lightgroups=instances.lightgroup_indices(l2))
+        build()
+        self.cache.forget(updated(lambda: setattr(l1.lightgroups[0], "name", "g2")))
+        t = build()
+        self.assertEqual(int(t.arrays["light_groups"][0]), 0)  # "g2" is not one of L2's groups
+        self.assert_fresh(t, l2)
 
     def test_asset_id_follows_parent_rename(self):
         # The child is not named by the parent's update, so its asset id cannot come from the cache.
