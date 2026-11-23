@@ -1,0 +1,1 @@
+{"sha": "cccc", "machine": "m-a", "driver": "unknown", "cuda": "cuda", "scene": "b1m", "metric": "pass_ms", "value": 14.0, "unit": "ms", "n": 63, "spread": 0.1, "date": "2026-11-20T00:00:00Z"}

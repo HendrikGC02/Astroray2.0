@@ -1,0 +1,2 @@
+{"sha": "aaaa", "machine": "m-a", "driver": "unknown", "cuda": "cuda", "scene": "b1m", "metric": "pass_ms", "value": 10.0, "unit": "ms", "n": 63, "spread": 0.1, "date": "2026-11-01T00:00:00Z"}
+{"sha": "zzzz", "machine": "m-b", "driver": "unknown", "cuda": "cuda", "scene": "b1m", "metric": "pass_ms", "value": 20.0, "unit": "ms", "n": 63, "spread": 0.1, "date": "2026-11-10T00:00:00Z"}
