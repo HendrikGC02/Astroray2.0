@@ -1,42 +1,40 @@
 diff --git a/blender/astroray/sync/instances.py b/blender/astroray/sync/instances.py
-index bd2c622..5d78958 100644
+index bb1e5b8..051da1a 100644
 --- a/blender/astroray/sync/instances.py
 +++ b/blender/astroray/sync/instances.py
-@@ -149,7 +149,7 @@ class InstanceCache:
+@@ -147,7 +147,7 @@ class InstanceCache:
          """Drops what an update to these original IDs (objects or their data) may have changed."""
          for u in uids:
              for o in (u, *self.users.pop(u, ())):
--                for d in (self.tids, self.lights, self.crypto, self.assets, self.plain):
-+                for d in (self.lights, self.crypto, self.assets):
+-                for d in (self.tids, self.crypto, self.assets, self.plain):
++                for d in (self.crypto, self.assets):
                      d.pop(o, None)
                  self.real.forget(o)
  
-@@ -196,8 +196,8 @@ def _remember_objects(fresh, material_key, cache):
-     for uid, ob, h in zip(uids, obs, hashes):
+@@ -195,7 +195,7 @@ def _remember_objects(fresh, material_key, cache):
          data = ob.data
          table = tuple(material_key(s.material) for s in ob.material_slots)
--        cache.remember(uid, data.session_uid if data is not None else None, table, ob.lightgroup, h,
+         cache.remember(uid, data.session_uid if data is not None else None, table, h,
 -                       h if ob.parent is None else cache.PARENTED)
-+        cache.remember(uid, data.session_uid if data is not None else None, table, "", h,
 +                       h)
  
  
  def _object_scalars(uids):
-@@ -257,7 +257,7 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
-     """
-     lightgroups = lightgroups or {}
-     cache = InstanceCache() if cache is None else cache
--    if cache.light_names != tuple(lightgroups):
-+    if False:
-         # Renaming a light group rewrites every object's group name without naming any object in an update, so
-         # the records (which hold the name) and the own-row entries that rely on them are all dropped.
-         for d in (cache.tids, cache.lights, cache.crypto, cache.assets, cache.plain):
-@@ -339,7 +339,7 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
+@@ -331,7 +331,7 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
+         asset = list(map(cache.assets.__getitem__, owner))
          if cache.PARENTED in asset:  # the asset id follows the top parent's name, which can change unnamed
-             import bpy
              at = [i for i, a in enumerate(asset) if a == cache.PARENTED]
 -            tops = cache.hash_names([_top_parent(bpy.data.objects[int(pick[i])]).name for i in at])
 +            tops = cache.hash_names([bpy.data.objects[int(pick[i])].parent.name for i in at])
              for i, h in zip(at, tops):
                  asset[i] = h
          lut = np.zeros((2, len(cache.table_list)), np.uint32)  # offset and count of each table id
+@@ -341,7 +341,7 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
+             pool.extend(table)
+         tid = np.asarray(tid, np.intp)
+         # Not cached: renaming a light group rewrites every object's name on every view layer and tags no object.
+-        names = [ob.lightgroup for ob in bpy.data.objects] if lightgroups else None
++        names = cache.__dict__.setdefault("names", [ob.lightgroup for ob in bpy.data.objects]) if lightgroups else None
+         per.update({"light_groups": np.asarray([lightgroups.get(names[i], 0) for i in pick], np.uint8) if names
+                     else np.zeros(n, np.uint8),
+                     "crypto_objects": np.asarray(crypto, np.uint32), "crypto_assets": np.asarray(asset, np.uint32),
