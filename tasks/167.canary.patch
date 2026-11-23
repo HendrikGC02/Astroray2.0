@@ -1,0 +1,52 @@
+diff --git a/blender/astroray/sync/images.py b/blender/astroray/sync/images.py
+index 9c50a01..5d08d77 100644
+--- a/blender/astroray/sync/images.py
++++ b/blender/astroray/sync/images.py
+@@ -117,7 +117,7 @@ def _send_pixels(edit, abi, image, key, d, line):
+     # One copy into the staged address; no view of engine memory outlives the commit.
+     staged = (ctypes.c_float * n).from_address(ctypes.cast(buffers.pixels[0], ctypes.c_void_p).value)
+     view = np.frombuffer(staged, np.float32)
+-    image.pixels.foreach_get(view)
++    view.fill(0)
+     del view, staged
+     edit.item_commit(key)
+     return line
+diff --git a/src/host/image/decode.cpp b/src/host/image/decode.cpp
+index fd47a7e..095bf08 100644
+--- a/src/host/image/decode.cpp
++++ b/src/host/image/decode.cpp
+@@ -104,7 +104,7 @@ bool find_bad_texel(const uint8_t* texels, ar::TexFormat format, uint32_t channe
+       std::memcpy(&v, texels + i * 4, 4);
+     }
+     // !(|v| <= limit) is also true for a NaN; an Inf is above the limit.
+-    if (!(std::fabs(v) <= kMaxTexelMagnitude)) {
++    if (!std::isfinite(v)) {
+       out->index = i / channels, out->channel = uint32_t(i % channels), out->value = v;
+       return true;
+     }
+diff --git a/src/host/image/decode_exr.cpp b/src/host/image/decode_exr.cpp
+index 217a4aa..98b3c6e 100644
+--- a/src/host/image/decode_exr.cpp
++++ b/src/host/image/decode_exr.cpp
+@@ -129,7 +129,7 @@ bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, s
+   out->texels.assign(size_t(total), 0);
+   // Copies planar pixel `src_index` of every kept channel from `planes` to texel (x, top row).
+   const auto put = [&](unsigned char* const* planes, size_t src_index, int x, int top) {
+-    const int y = h - 1 - top;  // bottom-up, Blender's order
++    const int y = top;
+     for (uint32_t k = 0; k < channels; ++k)
+       std::memcpy(out->texels.data() + ((size_t(y) * size_t(w) + size_t(x)) * channels + k) * size_t(comp),
+                   planes[kept[k]] + src_index * size_t(comp), size_t(comp));
+diff --git a/src/host/image/image_store.cpp b/src/host/image/image_store.cpp
+index 93a8a1a..2fd5ca8 100644
+--- a/src/host/image/image_store.cpp
++++ b/src/host/image/image_store.cpp
+@@ -222,7 +222,7 @@ ImageResult ImageStore::ingest_pixels(const ar_image_desc& d, const float* rgba)
+   im->texels.resize(n * 4 * sizeof(float));
+   if (enc == ar::TexEncoding::SRGB) {
+     float* out = reinterpret_cast<float*>(im->texels.data());
+-    for (size_t i = 0; i < n * 4; ++i) out[i] = i % 4 == 3 ? rgba[i] : ar::srgb_to_linear(rgba[i]);
++    for (size_t i = 0; i < n * 4; ++i) out[i] = ar::srgb_to_linear(rgba[i]);
+   } else {
+     std::memcpy(im->texels.data(), rgba, im->texels.size());
+   }
