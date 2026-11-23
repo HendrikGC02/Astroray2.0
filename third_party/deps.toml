@@ -27,6 +27,16 @@ purpose = "8-bit PNG, JPEG, TGA and BMP decoding in one host TU, third_party/stb
 record = "0001 D9.1, R20; 0007 d13"
 
 [[dep]]
+name = "tinyexr"
+version = "1.0.12"
+url = "https://raw.githubusercontent.com/syoyo/tinyexr/735ff73ce5959cf005eb99ce517c9bcecab89dfb/tinyexr.h"
+sha256 = "e3eb50490af81dc3f5f067cf7f62955894d5db8f88a091c19bc4eef8e468095f"
+spdx = "BSD-3-Clause AND MIT"
+kind = "vendored"
+purpose = "EXR reading only (half and float, no writer in the engine) in one host TU, third_party/tinyexr/tinyexr.h; syoyo/tinyexr commit 735ff73ce5959cf005eb99ce517c9bcecab89dfb; bundled zlib-compatible miniz 11.0.2 (MIT) deps/miniz/miniz.c sha256 44d54a3caedf3eae0adc6b6e5a5024c5ba6543abc81d20e741d0353b801e57d3 and miniz.h sha256 295d1a0041aea09609598c0f1f35c1977ca05ad662acbadcfdaac44c140af37b; LICENSE is the BSD-3 text of the tinyexr.h header, LICENSE.miniz is miniz's"
+record = "0001 D9.1, R34, R54; 0007 d13"
+
+[[dep]]
 name = "embree"
 version = "4.4.1"
 url = "https://github.com/HendrikGC02/Astroray2.0/releases/download/deps-embree-4.4.1/embree-4.4.1-astroray-win64-mt.zip"
