@@ -18,3 +18,4 @@ Budget: +8 s of gate at most (the gate is at 163.5 s of 180 s: stop and ask abov
 Depends on: 157.
 Size: S (about 120 lines); stop and report at 2x.
 Progress:
+- files: tests/blender/smoke_a1.py, tools/check.ps1 (comment), tasks/139.canary.patch
