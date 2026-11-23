@@ -11,6 +11,19 @@ index f8097c9..3f6ffbf 100644
    if (medium_priority > 255u) add_entry(m, AR_REPORT_NODE_APPROXIMATED, "medium_priority clamped to 255");
  }
  
+diff --git a/src/host/material/material_store.cpp b/src/host/material/material_store.cpp
+index 157507f..4a084cb 100644
+--- a/src/host/material/material_store.cpp
++++ b/src/host/material/material_store.cpp
+@@ -35,7 +35,7 @@ MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d
+                          d.surface_graph == 0 ? std::string("no surface graph")
+                                               : "surface graph " + std::to_string(d.surface_graph) + " is not set");
+   else
+-    m = compile_material(g->desc(), t, means, slots, d.medium_priority);
++    m = compile_material(g->desc(), t, means, slots);
+   // Volume and displacement programs are later milestones: reported, the surface still renders.
+   if (d.volume_graph != 0) m.entries.push_back({AR_REPORT_NODE_UNSUPPORTED, "volume graph"});
+   if (d.displacement_graph != 0) m.entries.push_back({AR_REPORT_NODE_UNSUPPORTED, "displacement graph"});
 diff --git a/src/kernel/medium/medium_stack.h b/src/kernel/medium/medium_stack.h
 index 5b370d0..e139d37 100644
 --- a/src/kernel/medium/medium_stack.h

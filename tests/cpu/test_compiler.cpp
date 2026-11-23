@@ -15,7 +15,10 @@
 
 #include "../../src/host/data_resource.h"
 #include "../../src/host/material/compiler.h"
+#include "../../src/host/ledger.h"
+#include "../../src/host/material/material_store.h"
 #include "../../src/host/material/regalloc.h"
+#include "host/scene/edit.h"
 #include "material/constant_block.h"
 #include "vm/interp.h"
 
@@ -431,6 +434,31 @@ TEST_CASE("compiler/interior fields stored") {
   CHECK(t.entries[0].code == AR_REPORT_NODE_APPROXIMATED);
   CHECK(t.entries[0].detail.find("specular_ior") != std::string::npos);
   CHECK(t.entries[1].detail.find("medium_priority") != std::string::npos);
+}
+
+TEST_CASE("compiler/store passes medium_priority to the block") {
+  using namespace astroray::host;
+  const ar_key G = 10, A = 20;
+  astroray::ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  auto store = std::make_shared<MaterialStore>(std::make_shared<Ledger>());
+  GB g;
+  g.store(g.add(Op::CONST_F32, {0.5f}), ar::RecordSlot::specular_roughness);
+  auto e = scene.begin_edit();
+  REQUIRE(e);
+  const ar_graph_desc dg = g.desc();
+  ar_material_desc ma = {};
+  ma.surface_graph = G;
+  ma.medium_priority = 7;
+  REQUIRE(store->set_graph(*e, G, &dg) == AR_OK);
+  REQUIRE(store->set_material(*e, A, &ma) == AR_OK);
+  uint64_t gen = 0;
+  REQUIRE(e->commit(&gen) == AR_OK);
+  store->end_edit();
+  scene.generations().wait_idle();
+  const auto arrays = store->arrays();
+  REQUIRE(arrays->keys.size() == 1);
+  CHECK(arrays->constants[0].medium_priority == 7);
 }
 
 }  // TEST_SUITE

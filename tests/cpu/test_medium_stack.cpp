@@ -77,6 +77,19 @@ TEST_CASE("medium_stack/remove of an absent id is refused") {
   CHECK(S{}.is_true(2, 4, false));
 }
 
+TEST_CASE("medium_stack/leaving checks the most recent entry of a duplicated id") {
+  // Id 1 (priority 2) is entered twice with an id 2 (priority 2) between: the most recent id-1
+  // entry is the highest (latest of the ties), the older one is not.
+  S s;
+  s.push(1, 2);
+  s.push(2, 2);
+  s.push(1, 2);
+  CHECK(s.is_true(1, 2, false));
+  s.remove(1);  // takes the later id-1 entry; id 2 is now the highest
+  CHECK_FALSE(s.is_true(1, 2, false));
+  CHECK(s.is_true(2, 2, false));
+}
+
 TEST_CASE("medium_stack/overflow leaves stack unchanged") {
   S s;
   for (uint32_t i = 1; i <= 4; ++i) CHECK(s.push(i, i));

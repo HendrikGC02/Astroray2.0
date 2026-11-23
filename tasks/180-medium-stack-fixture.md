@@ -10,7 +10,7 @@ Do:
 3. Tests, fast: push, remove and the depth flag round trip; fifth push is overflow and the stack is unchanged; priorities (high-priority inner in a low-priority outer is true, the reverse false), ties by most recent, enter and exit true and false, IOR ratio cases (air to glass 1.5, glass 1.5 to water 1.33 nested, glass to air on exit); the compiler stores priority and IOR and reports a textured IOR once; the same in the f64 build.
 Acceptance: `pwsh tools/check.ps1 fast` passes; `out/bin/astroray_tests_cpu.exe --tier=fast -tc="medium_stack/*,compiler/*,material_layout/*"` (paste the last lines).
 Look at: none.
-Canary: tasks/180.canary.patch must turn red: astroray_tests_cpu "medium_stack/overflow leaves stack unchanged", "medium_stack/priority and ties", "medium_stack/ior ratio cases", "medium_stack/remove of an absent id is refused", "compiler/interior fields stored".
+Canary: tasks/180.canary.patch must turn red: astroray_tests_cpu "medium_stack/overflow leaves stack unchanged", "medium_stack/priority and ties", "medium_stack/ior ratio cases", "medium_stack/remove of an absent id is refused", "compiler/interior fields stored", "compiler/store passes medium_priority to the block".
 Budget: gate +0.5 s at most (stop and ask above); kernel rows: none (no stage includes medium_stack.h; k_shade_surface unchanged).
 Depends on: 158 (compiler.cpp edit order: 158, 165, 164, 179, 168, 180). Off slice C's critical path: 183 uses one medium id from route_hit (lead ruling); the stack functions are for next batch's false interfaces.
 Size: M (about 250 source lines without tests); stop and report at 2x.
@@ -19,3 +19,4 @@ Progress:
 - OPEN (record silent, needs lead): remove of an id not on the stack returns ok=false, stack unchanged; a back face not on the stack reports interface_is_true = true. Callers must decide (warn or end path).
 - Textured specular_ior is untestable through compile_material (no run-time F32 op in M1a); set_medium_fields is tested directly with runtime_slots set.
 - 180: lead ruling on absent-id remove pinned (medium_stack/remove of an absent id is refused), 0006 C.16 text and canary hunks added.
+- 180: review fixes: compiler/store passes medium_priority to the block (+ canary hunk), duplicate-id leaving case.
