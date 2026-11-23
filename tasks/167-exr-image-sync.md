@@ -16,3 +16,4 @@ Budget: gate +2 s at most (the ingest cases are fast tier and the render case is
 Depends on: 150.
 Size: M (about 350 lines without tests); stop and report at 2x. Split point: engine (steps 1-2) first, addon (step 3) second.
 Progress:
+- Files I will change: src/capi/scene_api.cpp, src/capi/unimplemented.cpp, src/host/image/{image_store,decode,decode_exr}.{h,cpp}, src/host/material/material_store.{h,cpp} (forced: a begin wrapper beside set_image), include/astroray/astroray.h (comment), blender/astroray/sync/images.py, api_surface.txt, tests (cpu image_ingest, abi recorder, blender test_images and headless/test_images_pixels, data/images generate.py), docs 0007 d13 and d21, tasks/167.canary.patch.
