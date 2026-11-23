@@ -92,7 +92,7 @@ def compare(measured, history, limit):
         base = baseline(history, mach, scene)
         if base is None:
             out.append(f"PASS {scene}: no baseline: lead commits the printed line")
-            out.append(json.dumps(m))
+            out.append(json.dumps(m, separators=(",", ":")))
             continue
         ratio = m["value"] / base["value"]
         verdict, note = decide(ratio, limit)
