@@ -20,3 +20,4 @@ Size: M (about 300 lines without tests, 108 data rows excluded); stop and report
 Progress:
 - opsgen emits RECORD_SLOT, TEX_MODE, SEMANTIC from the three headers; PLANNED (AO, Bevel approximated); translate reads _ops; drift test deleted; test_opsgen, test_node_coverage, canary added. fast, gate pass; full passes through headless/test_node_coverage and fails only at gui_colour_chart (task 162).
 - Lead rulings: Do 3 by absence accepted (only both-dicts refused); PLANNED = AO and Bevel per 0005 item 41; full acceptance met with the pre-existing gui_colour_chart failure (task 162).
+- Hosted ci fix: test_render_final_dirs loaded the addon without the staged _ops (translate now imports it); both render_final headless tests stage _abi/_ops from out/build/gen via support.stage_addon, which raises when missing. check ci, fast, canary, gate pass locally.
