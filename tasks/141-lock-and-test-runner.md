@@ -28,4 +28,5 @@ Progress:
 - Lead rulings applied: fast_lock scaled (TIMEOUT_S=1.5, MESSAGE_S=0.5, hold 3 s, ready-file handshake, holders in parallel): 1.7-2.2 s, with fast_testrun 0.5 s inside +3 s; waiting lines: three ticks, then every 300 s.
 - Unittest outcome parser (moved from canary.ps1) missed a bare `ok` line after printed output (test_node_values); fixed in testrun.ps1, case added to fast_testrun.
 - Review fixes: ruling, timeout counts the holder's hold from owner.json started, else the waiter's own wait; fast_lock adds unknown-holder (stale pid record) and tree-lock cases, 2.0 -> 2.3-2.5 s; owner record parse and failed removal loud; canary 141 PASS (4 hunks); check fast PASS 6.7 s; gate PASS 137.4 s (waited 478.5 s).
+- Second review: unknown case runs five 0.2 s ticks to a 1 s limit (three lines, wait >= 1 s pins the waiter's clock), tree holder released after its waiter speaks; canary 141 PASS (5 hunks); fast_lock 2.2-2.4 s; check fast PASS 7.2 s.
 - Acceptance: check fast PASS 7.2 s; check gate PASS 176.0 s (waited 15.0 s); run_fast PASS all four; test.ps1 cpu exe, abi and blender cases PASS; canary 141 PASS (matrix 1+1).
