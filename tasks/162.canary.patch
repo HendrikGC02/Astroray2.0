@@ -1,0 +1,12 @@
+diff --git a/tests/blender/gui_colour_chart.py b/tests/blender/gui_colour_chart.py
+index 79c22d2..1100d05 100644
+--- a/tests/blender/gui_colour_chart.py
++++ b/tests/blender/gui_colour_chart.py
+@@ -201,6 +201,7 @@ class Driver(gui_present.Driver):
+         The new outliner is the left or upper `factor` share of the area and the 3D area keeps the rest, a
+         factor above 0.5 flips the sides, and layout reads lag the call, so each step splits at most in half
+         and the caller waits a tick before looking again."""
++        return False
+         region = next(r for r in area.regions if r.type == "WINDOW")
+         for direction, want, size in (("VERTICAL", REGION[0], region.width), ("HORIZONTAL", REGION[1], region.height)):
+             if size < want - REGION_SLACK:

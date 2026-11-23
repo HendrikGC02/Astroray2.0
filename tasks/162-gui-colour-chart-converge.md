@@ -11,9 +11,10 @@ Do:
 4. Run `pwsh tools/check.ps1 full` to the end: every gui_ script, gui_ortho included if task 159 has landed.
 Acceptance: `pwsh tools/check.ps1 fast` passes; `pwsh tools/check.ps1 full` passes (paste its last lines); the mechanism and the first bad commit in the PR body.
 Look at: the colour chart screenshot the script writes (out/ path it prints): the 12 patches visible and converged; read their means with numpy against the script's reference.
-Canary: tasks/162.canary.patch must turn red: tests/blender/gui_colour_chart.py "TestColourChart.test_standard" (or the case(s) that turn red on the cause, one quoted "Class.method" each, keeping this format; add the headless case if step 3 writes one).
+Canary: tasks/162.canary.patch (the split is skipped, the region stays the window's) must turn red: tests/blender/gui_colour_chart.py "TestColourChart.test_standard", "TestColourChart.test_agx", "TestColourChart.test_exposure_plus1", "TestColourChart.test_gamma", "TestColourChart.test_look", "TestColourChart.test_the_chart_is_sensitive_to_the_transform"
 Budget: gate +0 s (full tier only); kernel: none expected (state it if session code changes); compile: one host TU at most.
 Depends on: none; blender lane, before 161 (a red `check full` blocks the every-10-landings full run).
 Size: S (a fix of under 100 lines expected); stop and report at 2x, or after step 2 if the cause lies outside Scope.
 Progress:
 162: reproduced on main 1a85b5c and on 097's merge b191316 (no code regression): viewport is rendering, not stalled; 340-420 ms per pass at 2100x1221 CPU, 128 spp needs 44-55 s against the 40 s step limit. Stopped for a ruling.
+162: lead ruling (b): gui_colour_chart.py fixes its region at 800x600 by area splits; converges in 9.1 s of 40 (4.4x margin), thresholds, 128 spp and STEP_TIMEOUT_S unchanged. Canary: skip the split, all 6 cases red at 'never converged'.
