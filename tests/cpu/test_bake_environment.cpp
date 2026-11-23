@@ -10,10 +10,8 @@
 // the same sum by at most (e_s + 8) u, because every term is positive: the product s c costs
 // 2 u (c = (x + y) + z in float) + u, the two compensated sums u each, the weight total 3 u and
 // the division u; the compensation's own second-order error 2 n u^2 with n = 471 is below 1e-11
-// and is not counted. The analytic callable below has e_s = 8 u: 1 + q^2 with q = (lambda - 595) /
-// 235 (the difference is exact, the division u, q q 3 u, the sum 2.5 u at most since q^2 <= 1:
-// 3 u), (1.5 + z) (1 + 0.5 x x) (u, then u + u/3 + u, product 4 u in all) and the product of the
-// two u. The host side is double throughout and takes the direction the kernel computes (the
+// and is not counted. The analytic callable (common/analytic_world.h) has e_s = 8 u, counted
+// there. The host side is double throughout and takes the direction the kernel computes (the
 // mapping's own accuracy is test_env_table's), so no term of the direction enters. A plain float
 // sum would add up to (118 + 3) u here; the tolerance does not allow for it, which is the point of
 // the compensation. The constant world has e_s = u (the float strength product; the spectrum is
@@ -31,6 +29,7 @@
 #include <string>
 #include <vector>
 
+#include "common/analytic_world.h"
 #include "device/cpu/cpu_device.h"
 #include "host/data_resource.h"
 #include "host/light/env_bake.h"
@@ -52,7 +51,7 @@ namespace {
 
 constexpr double kU = 1.0 / 16777216.0;  // float unit roundoff 2^-24
 constexpr double kReductionUnits = 8.0;  // bake_environment.h: the sums, the weights and the division
-constexpr double kAnalyticUnits = 8.0;   // e_s of analytic_radiance, counted in the header comment
+constexpr double kAnalyticUnits = ar::kAnalyticWorldUnits;  // e_s, counted in common/analytic_world.h
 constexpr uint32_t kN = 64;              // tests use 64; production uses kEnvBakeSize
 
 const ar::ObserverView& observer() {
@@ -64,39 +63,6 @@ const ar::ObserverView& observer() {
     return ar::ObserverView{&t.cmf[0][0], t.d65};
   }();
   return v;
-}
-
-// A smooth positive function of direction and wavelength, written once for float and double.
-template <class T>
-T analytic_radiance(T x, T y, T z, T lambda) {
-  (void)y;
-  const T q = (lambda - T(595)) / T(235);
-  const T spectral = T(1) + q * q;
-  const T directional = (T(1.5) + z) * (T(1) + T(0.5) * x * x);
-  return spectral * directional;
-}
-
-struct AnalyticWorld {
-  ar::Spec operator()(const Real3& d, const ar::Lambda& lam) const {
-    ar::Spec s;
-    for (int k = 0; k < ar::kLanes; ++k) s.v[k] = analytic_radiance<Real>(d.x, d.y, d.z, lam.nm[k]);
-    return s;
-  }
-};
-
-// Exact double evaluation of the same sum at the cell's centre direction.
-double host_cell(uint32_t n, uint32_t cell) {
-  const uint32_t iv = cell / n, iu = cell % n;
-  const Real3 d = ar::equal_area_square_to_sphere(
-      ar::Real2{(Real(iu) + Real(0.5)) / Real(n), (Real(iv) + Real(0.5)) / Real(n)});
-  const ar::ObserverView& obs = observer();
-  double num = 0.0, weights = 0.0;
-  for (int j = 0; j < ar::kObsSamples; ++j) {
-    const double c = double(obs.cmf[j]) + double(obs.cmf[ar::kObsSamples + j]) + double(obs.cmf[2 * ar::kObsSamples + j]);
-    num += analytic_radiance<double>(double(d.x), double(d.y), double(d.z), double(ar::kObsLambdaMin + j)) * c;
-    weights += c;
-  }
-  return num / weights;
 }
 
 ar::SpectrumRef world_colour() {
@@ -225,8 +191,8 @@ TEST_CASE("bake_environment/analytic against host") {
   const double tol = (kAnalyticUnits + kReductionUnits) * kU;
   double worst = 0.0;
   for (uint32_t cell = 0; cell < kN * kN; ++cell) {
-    const double got = double(ar::bake_environment_cell(AnalyticWorld{}, obs, kN, cell));
-    const double want = host_cell(kN, cell);
+    const double got = double(ar::bake_environment_cell(ar::AnalyticWorld{}, obs, kN, cell));
+    const double want = ar::analytic_cell_reference(obs, kN, cell);
     REQUIRE(want > 0.0);
     worst = std::max(worst, std::fabs(got - want) / want);
   }
@@ -234,7 +200,7 @@ TEST_CASE("bake_environment/analytic against host") {
               kAnalyticUnits + kReductionUnits);
   CHECK(worst <= tol);
   // The function has a spread the bound does not hide behind: the grid is not constant.
-  CHECK(host_cell(kN, 0) != doctest::Approx(host_cell(kN, kN * kN / 2 + 5)).epsilon(0.01));
+  CHECK(ar::analytic_cell_reference(obs, kN, 0) != doctest::Approx(ar::analytic_cell_reference(obs, kN, kN * kN / 2 + 5)).epsilon(0.01));
 }
 
 TEST_CASE("bake_environment/constant world uniform") {

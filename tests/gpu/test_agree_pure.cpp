@@ -24,8 +24,11 @@
 
 #include "agree.h"
 #include "color/rgb2spec.h"
+#include "common/analytic_world.h"
+#include "host/data_resource.h"
 #include "host/device.h"
 #include "spectral/planck.h"
+#include "stages/bake_environment.h"
 
 using namespace astroray;
 using namespace astroray::agree;
@@ -542,6 +545,56 @@ TEST_CASE("agree/fma detector") {
   CHECK(!power.pass);
   CHECK(prod.max > 100.0 * NOFMA_VS_CPU_FLOAT.eval_max);
   CHECK(prod.fraction_above(NOFMA_VS_CPU_FLOAT.eval_max) > 0.1);
+}
+
+TEST_CASE("agree/bake environment cpu vs cuda") {
+  // bake_environment_cell (0004 D11) on the analytic world of common/analytic_world.h, one input
+  // per cell of a 64 x 64 grid: the no-FMA module against the same header on the CPU in float
+  // (step ii) and against the host's exact double evaluation of the same sum at the cell centres
+  // (analytic_cell_reference). The second comparison is what notices a cell read at its corner or
+  // a transposed index, which both float builds would share. The CPU float cells against the
+  // double ones are held to the derived (e_s + 8) u in tests/cpu/test_bake_environment.cpp; here
+  // the 0002 D12 limit applies because the two GPU and CPU mappings may differ by an ulp of
+  // cospi and sinpi, which moves a cell by at most 2.7 times that.
+  constexpr uint32_t n = 64;
+  astroray::ObserverTables obs_tables;
+  astroray::DataBlob blob;
+  REQUIRE(astroray::find_data("spectral/observer.bin", &blob));
+  const std::string err = astroray::parse_observer(blob.data, blob.size, &obs_tables);
+  REQUIRE_MESSAGE(err.empty(), err);
+  const ar::ObserverView obs{&obs_tables.cmf[0][0], obs_tables.d65};
+
+  Inputs in;
+  in.n = n * n;
+  in.stride = 1;
+  in.v.resize(in.n);
+  for (uint32_t i = 0; i < in.n; ++i) in.v[i] = float(i);
+  Results cpu, ref;
+  cpu.n = ref.n = in.n;
+  cpu.stride = ref.stride = 1;
+  cpu.v.resize(in.n);
+  ref.v.resize(in.n);
+  for (uint32_t i = 0; i < in.n; ++i) {
+    cpu.v[i] = double(ar::bake_environment_cell(ar::AnalyticWorld{}, obs, n, i));
+    ref.v[i] = ar::analytic_cell_reference(obs, n, i);
+  }
+
+  Ledger ledger;
+  auto dev = host::make_cuda_device(ledger, 0);
+  DeviceBuffer cmf = dev->allocate(LedgerCategory::TABLES, sizeof obs_tables.cmf, Owner{});
+  dev->upload(cmf, 0, &obs_tables.cmf[0][0], sizeof obs_tables.cmf);
+  uint64_t cmf_p = reinterpret_cast<uint64_t>(cmf.ptr);
+  uint32_t grid_n = n;
+  const Results gpu = run_gpu(*dev, nofma_module("agree_pure"), "ar_agree_bake", in, 1, {&cmf_p, &grid_n});
+  dev->free(cmf);
+
+  const Verdict vs_cpu = report("bake_environment", "(ii) nofma vs cpu float", compare(gpu, cpu, Metric::REL_L2), Cls::EVAL,
+                                NOFMA_VS_CPU_FLOAT);
+  CHECK_MESSAGE(vs_cpu.pass, vs_cpu.why);
+  const Verdict vs_host = report("bake_environment", "(ii) nofma vs host double", compare(gpu, ref, Metric::REL_L2),
+                                 Cls::EVAL, NOFMA_VS_CPU_FLOAT);
+  CHECK_MESSAGE(vs_host.pass, vs_host.why);
+  CHECK(ledger.total() == 0);
 }
 
 }  // TEST_SUITE
