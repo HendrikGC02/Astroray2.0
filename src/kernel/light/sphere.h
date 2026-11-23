@@ -116,6 +116,7 @@ AR_FN LightBounds sphere_bounds(const LightRecord& r) {
   LightBounds b;
   b.bbox.lo = c - e;
   b.bbox.hi = c + e;
+  b.w = light_isotropic_axis();
   b.theta_o = kLightPi;  // the normals cover the whole sphere
   b.theta_e = kLightPi / Real(2);
   b.two_sided = false;

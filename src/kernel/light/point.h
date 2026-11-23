@@ -47,6 +47,7 @@ AR_FN Real point_power(const LightRecord& r) { return Real(r.strength); }
 AR_FN LightBounds point_bounds(const LightRecord& r) {
   LightBounds b;
   b.bbox.lo = b.bbox.hi = light_position(r);
+  b.w = light_isotropic_axis();
   b.theta_o = kLightPi;
   b.theta_e = kLightPi / Real(2);
   b.two_sided = false;

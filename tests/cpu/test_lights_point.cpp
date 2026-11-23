@@ -228,6 +228,8 @@ TEST_SUITE("fast") {
     CHECK(rel_close(double(b.theta_o), kPi, kPinTol));
     CHECK(rel_close(double(b.theta_e), kPi / 2, kPinTol));
     CHECK_FALSE(b.two_sided);
+    // Isotropic (theta_o = pi): any axis, but a unit one.
+    CHECK(rel_close(double(b.w.x) * b.w.x + double(b.w.y) * b.w.y + double(b.w.z) * b.w.z, 1.0, kPinTol));
   }
 
   AR_RT_CASE("lights_point/sphere pinned samples") {
@@ -428,6 +430,8 @@ TEST_SUITE("fast") {
     CHECK(rel_close(double(b.theta_o), kPi, kPinTol));
     CHECK(rel_close(double(b.theta_e), kPi / 2, kPinTol));
     CHECK_FALSE(b.two_sided);
+    // Isotropic (theta_o = pi): any axis, but a unit one.
+    CHECK(rel_close(double(b.w.x) * b.w.x + double(b.w.y) * b.w.y + double(b.w.z) * b.w.z, 1.0, kPinTol));
   }
 
   AR_RT_CASE("lights_point/boundary uniforms") {

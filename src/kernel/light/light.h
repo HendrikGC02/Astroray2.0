@@ -105,15 +105,23 @@ struct Bounds3 {
   Real3 lo, hi;
 };
 
-// Light-tree bounds (Conty Estevez and Kulla 2018): theta_o is the half-angle of the normal
-// cone, theta_e the emission spread around it.
+// Light-tree bounds (Conty Estevez and Kulla 2018): w is the unit axis of the normal cone, theta_o
+// its half-angle, theta_e the emission spread around it. w matters only when theta_o < pi; an
+// isotropic light (theta_o = pi) sets an arbitrary unit w, as Cycles does (scene/light_tree.cpp:
+// a point light's "measure.bcone.axis" is its transform's -Z with "theta_o = M_PI_F").
 struct LightBounds {
   Bounds3 bbox;
+  Real3 w;
   Real theta_o, theta_e;
   bool two_sided;
 };
 
 inline constexpr Real kLightPi = Real(3.14159265358979323846);
+
+// The cone axis of a light whose normals cover every direction (theta_o = pi): any unit vector
+// works; Cycles takes (0, 0, 1) for the background ("Set an arbitrary direction for the background
+// light.", scene/light_tree.cpp).
+AR_FN Real3 light_isotropic_axis() { return Real3{Real(0), Real(0), Real(1)}; }
 // pbrt-v4 FloatOneMinusEpsilon / DoubleOneMinusEpsilon (util/float.h): the largest Real below 1.
 inline constexpr Real kLightOneMinusEpsilon =
     sizeof(Real) == 4 ? Real(float(0x1.fffffep-1)) : Real(double(0x1.fffffffffffffp-1));
@@ -398,12 +406,17 @@ AR_FN LightBounds light_bounds(const LightRecord& r) {
     case LightType::AREA_RECT: return rect_bounds(r);
     case LightType::AREA_DISK: return disk_bounds(r);
     case LightType::TRIANGLE: return tri_bounds(r);
-    case LightType::WORLD_CONST: break;  // infinite: no bounds (light_is_infinite); the tree is M4
+    case LightType::WORLD_CONST: break;
   }
+  // Infinite: no box (light_is_infinite), and the cone of Cycles' background light
+  // (scene/light_tree.cpp: "Set an arbitrary direction for the background light." axis (0, 0, 1),
+  // "theta_o = M_PI_F", "theta_e = 0").
   AR_ASSERT(light_is_infinite(r));
   LightBounds b;
   b.bbox.lo = b.bbox.hi = Real3{Real(0), Real(0), Real(0)};
-  b.theta_o = b.theta_e = Real(0);
+  b.w = light_isotropic_axis();
+  b.theta_o = kLightPi;
+  b.theta_e = Real(0);
   b.two_sided = false;
   return b;
 }
