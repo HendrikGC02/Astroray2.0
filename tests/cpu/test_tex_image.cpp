@@ -248,6 +248,17 @@ TEST_CASE("tex_image/half and float texels") {
       for (int k = 0; k < 3; ++k)
         want[k] = 0.5 * 0.75 * im.at(1, 2, k) + 0.5 * 0.75 * im.at(2, 2, k) + 0.5 * 0.25 * im.at(1, 3, k) + 0.5 * 0.25 * im.at(2, 3, k);
       CHECK(near_rel(sample(im.tables, 0.5f, 0.6875f, kLinear), want, 1e-6));
+      // Unequal weights, so swapping tx with 1 - tx (or ty) or a texel with its neighbour shows.
+      // u = 0.5625: x - 0.5 = 1.75, texels 1 and 2 with weights 1/4 and 3/4; v = 0.4375: y - 0.5 =
+      // 1.25, texels 1 and 2 with weights 3/4 and 1/4.
+      for (int k = 0; k < 3; ++k)
+        want[k] = 0.25 * 0.75 * im.at(1, 1, k) + 0.75 * 0.75 * im.at(2, 1, k) + 0.25 * 0.25 * im.at(1, 2, k) + 0.75 * 0.25 * im.at(2, 2, k);
+      CHECK(near_rel(sample(im.tables, 0.5625f, 0.4375f, kLinear), want, 1e-6));
+      // u = 0.4375: x - 0.5 = 1.25, weights 3/4 and 1/4; v = 0.8125: y - 0.5 = 2.75, texels 2 and
+      // 3 with weights 1/4 and 3/4.
+      for (int k = 0; k < 3; ++k)
+        want[k] = 0.75 * 0.25 * im.at(1, 2, k) + 0.25 * 0.25 * im.at(2, 2, k) + 0.75 * 0.75 * im.at(1, 3, k) + 0.25 * 0.75 * im.at(2, 3, k);
+      CHECK(near_rel(sample(im.tables, 0.4375f, 0.8125f, kLinear), want, 1e-6));
       // Repeat and Extend at u = -0.25 and 1.25 (the same wrap rules as the 8-bit images).
       const float v = 0.625f;
       double w[3];

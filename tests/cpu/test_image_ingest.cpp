@@ -493,7 +493,8 @@ TEST_CASE("image_ingest/exr half stored as half") {
     std::vector<int> map;  // pattern channel of each stored channel (R, G, B, A -> 0..3; Y -> 0)
   };
   for (const Case& cs : {Case{"pattern_4x3_half_rgba.exr", {0, 1, 2, 3}}, Case{"pattern_4x3_half_zip.exr", {0, 1, 2}},
-                         Case{"pattern_4x3_half_tiled.exr", {0, 1, 2}}, Case{"pattern_4x3_half_y.exr", {0}}}) {
+                         Case{"pattern_4x3_half_tiled.exr", {0, 1, 2}}, Case{"pattern_4x3_half_y.exr", {0}},
+                         Case{"pattern_4x3_half_ya.exr", {0, 0, 0, 3}}}) {  // Y+A keeps alpha: grey,grey,grey,alpha
     INFO(cs.file);
     const DecodedImage d = decode_ok(read_file(cs.file));
     REQUIRE(d.width == W);
@@ -544,6 +545,7 @@ TEST_CASE("image_ingest/exr unreadable cases") {
   };
   const Case cases[] = {{"bad_uint_channel.exr", "channel R is UINT"},
                         {"bad_no_green.exr", "missing channel G"},
+                        {"bad_luma_chroma.exr", "luminance-chroma layout"},
                         {"bad_nan_half.exr", "NaN or Inf in channel G at texel (2, 1)"},
                         {"bad_inf_float.exr", "NaN or Inf in channel B at texel (3, 2)"},
                         {"bad_deep.exr", "deep EXR"},

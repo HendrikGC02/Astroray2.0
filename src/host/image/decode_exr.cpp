@@ -76,12 +76,18 @@ bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, s
   if (ParseEXRHeaderFromMemory(&hd, &version, bytes, size_t(count), &err) != TINYEXR_SUCCESS)
     return *error = "EXR header: " + take_message(err, "unreadable header"), false;
 
-  // R, G, B (and A) or Y by name; every other channel (Z, layers, ...) is ignored.
+  // R, G, B (and A) or Y (and A) by name; every other channel (Z, layers, ...) is ignored. A
+  // luminance-chroma file (Y with RY and BY) would need a conversion this decoder does not do, so
+  // it is refused rather than read as grey.
   int idx[5] = {-1, -1, -1, -1, -1};  // R, G, B, A, Y
   static const char* const names[5] = {"R", "G", "B", "A", "Y"};
-  for (int c = 0; c < hd.num_channels; ++c)
+  bool chroma = false;
+  for (int c = 0; c < hd.num_channels; ++c) {
     for (int k = 0; k < 5; ++k)
       if (std::strcmp(hd.channels[c].name, names[k]) == 0) idx[k] = c;
+    chroma = chroma || std::strcmp(hd.channels[c].name, "RY") == 0 || std::strcmp(hd.channels[c].name, "BY") == 0;
+  }
+  if (chroma) return *error = "EXR uses the luminance-chroma layout (RY, BY), which is not supported", false;
   const bool rgb = idx[0] >= 0 || idx[1] >= 0 || idx[2] >= 0;
   std::vector<int> kept;  // channel indices in output order
   if (rgb) {
@@ -92,12 +98,16 @@ bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, s
     kept = {idx[0], idx[1], idx[2]};
     if (idx[3] >= 0) kept.push_back(idx[3]);
   } else if (idx[4] >= 0) {
-    kept = {idx[4]};
+    // Grey becomes grey,grey,grey (and alpha), the layout RGBA files and grey+alpha 8-bit images use.
+    if (idx[3] >= 0)
+      kept = {idx[4], idx[4], idx[4], idx[3]};
+    else
+      kept = {idx[4]};
   } else {
     return *error = "EXR has no R, G, B or Y channel", false;
   }
   bool any_float = false;
-  for (int c : kept) {
+  for (int c : kept) {  // a repeated Y is checked more than once, harmlessly
     const EXRChannelInfo& ci = hd.channels[c];
     if (ci.pixel_type == TINYEXR_PIXELTYPE_UINT) return *error = std::string("EXR channel ") + ci.name + " is UINT, which is not an image value", false;
     if (ci.x_sampling != 1 || ci.y_sampling != 1) return *error = std::string("EXR channel ") + ci.name + " is subsampled", false;
@@ -169,8 +179,7 @@ bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, s
           bad = half_not_finite(b);
         }
         if (bad) {
-          static const char* const ch[4] = {"R", "G", "B", "A"};
-          const char* name = channels == 1 ? "Y" : ch[k];
+          const char* name = hd.channels[kept[k]].name;
           *error = "EXR has a NaN or Inf in channel " + std::string(name) + " at texel (" + std::to_string(x) + ", " + std::to_string(y) +
                    "), y from the bottom";
           *out = DecodedImage{};
