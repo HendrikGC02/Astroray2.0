@@ -8,6 +8,7 @@ table pool); scene-origin translation folded into every transform per 0003 decis
 `set_instances` and `sync_transforms` touch the edit wrapper.
 """
 import ctypes
+from operator import itemgetter
 
 import numpy as np
 
@@ -109,17 +110,36 @@ class _RealCache(dict):
 class InstanceCache:
     """Per-object work build() would otherwise repeat on every rebuild (caller-owned, one per KeyMap, 0007 d19:
     per-object properties read once and cached). Name hashes are keyed by the name itself, a pure function, so a
-    rename needs nothing; the material table and the real-data answer are keyed by original session_uid and
-    dropped by forget() for every ID a depsgraph update names (the object, its data, or both)."""
+    rename needs nothing; everything else is keyed by original session_uid and dropped by forget() for every ID a
+    depsgraph update names (the object, its data, or both): the object record (material table, light group,
+    cryptomatte ids), the real-data answer and the keys of the object's own row. A cryptomatte asset id follows
+    the top parent's name, which an update to the child does not name, so a parented object's asset id is not
+    kept (record asset -1) and build() reads it again."""
+
+    PARENTED = -1
 
     def __init__(self):
         self.hashes = {}         # object name -> murmur3_32
-        self.objects = {}        # original object session_uid -> material table
+        self.tids = {}           # original object session_uid -> material table id (one dict per field of the
+        self.crypto = {}         # object record: cryptomatte object id and asset id; build() gathers a column
+        self.assets = {}
         self.users = {}          # original data session_uid -> {object session_uids cached with that data}
         self.real = _RealCache()
+        self.plain = {}          # original object session_uid -> (geometry key, object key, identity) of its own
+                                 # row (not an instance), or () for a type build() skips
+        self.table_ids = {}      # material table (tuple of ar_keys) -> small id; a pure function, never forgotten
+        self.table_list = []
 
-    def remember(self, uid, data_uid, table):
-        self.objects[uid] = table
+    def table_id(self, table):
+        i = self.table_ids.get(table)
+        if i is None:
+            i = self.table_ids[table] = len(self.table_list)
+            self.table_list.append(table)
+        return i
+
+    def remember(self, uid, data_uid, table, crypto, asset):
+        self.tids[uid] = self.table_id(table)
+        self.crypto[uid], self.assets[uid] = crypto, asset
         if data_uid is not None:
             self.users.setdefault(data_uid, set()).add(uid)
 
@@ -127,7 +147,8 @@ class InstanceCache:
         """Drops what an update to these original IDs (objects or their data) may have changed."""
         for u in uids:
             for o in (u, *self.users.pop(u, ())):
-                self.objects.pop(o, None)
+                for d in (self.tids, self.crypto, self.assets, self.plain):
+                    d.pop(o, None)
                 self.real.forget(o)
 
     def hash_names(self, names):
@@ -165,34 +186,22 @@ def _top_parent(ob):
     return ob
 
 
-def _object_fields(obs, tables, lightgroups, cache):
-    """The per-object fields foreach_get cannot read (strings and pointers) of the original objects `obs`:
-    light group, cryptomatte object and asset ids, material-table offset and count, as columns."""
-    pool, pool_offsets, offsets = [], {}, []
-    for table in tables:
-        if table not in pool_offsets:  # instances sharing a table share its offset
-            pool_offsets[table] = len(pool)
-            pool.extend(table)
-        offsets.append(pool_offsets[table] if table else 0)
-    tops = [_top_parent(ob) for ob in obs]
-    names = [ob.name for ob in obs]
-    hashes = cache.hash_names(names + [t.name for ob, t in zip(obs, tops) if t != ob])
-    crypto = hashes[:len(obs)]
-    assets, j = [], len(obs)
-    for c, ob, t in zip(crypto, obs, tops):
-        if t == ob:
-            assets.append(c)
-        else:
-            assets.append(hashes[j])
-            j += 1
-    return pool, {"light_groups": [lightgroups.get(ob.lightgroup, 0) for ob in obs], "crypto_objects": crypto,
-                  "crypto_assets": assets, "material_offsets": offsets,
-                  "material_counts": [len(t) for t in tables]}
+def _remember_objects(fresh, material_key, cache):
+    """Records for the original objects `fresh` (uid -> object) the cache has none for: material table,
+    cryptomatte object id (the name hash) and asset id (the top parent's name hash, or PARENTED)."""
+    uids, obs = list(fresh), list(fresh.values())
+    hashes = cache.hash_names([ob.name for ob in obs])
+    for uid, ob, h in zip(uids, obs, hashes):
+        data = ob.data
+        table = tuple(material_key(s.material) for s in ob.material_slots)
+        cache.remember(uid, data.session_uid if data is not None else None, table, h,
+                       h if ob.parent is None else cache.PARENTED)
 
 
 def _object_scalars(uids):
     """visibility, flags, pass_index and colour of the original objects `uids`, in that order, each read for
-    every object in bpy.data.objects with one foreach_get (B-31: per-object getattr was most of the loop)."""
+    every object in bpy.data.objects with one foreach_get (B-31: per-object getattr was most of the loop). `uids`
+    is an int32 array; also the row of each in bpy.data.objects."""
     import bpy
     obs = bpy.data.objects
     n = len(obs)
@@ -201,15 +210,18 @@ def _object_scalars(uids):
         a = np.empty(n * w, dt)
         obs.foreach_get(prop, a)
         return a.reshape(n, w) if w > 1 else a
-    row = {u: i for i, u in enumerate(get("session_uid", np.int32).tolist())}
-    pick = np.fromiter((row[u] for u in uids), np.intp, len(uids))
+    su = get("session_uid", np.int32)
+    order = np.argsort(su)
+    pick = order[np.minimum(np.searchsorted(su[order], uids), n - 1)]
+    if (su[pick] != uids).any():
+        raise RuntimeError("astroray sync: an instanced object is not in bpy.data.objects")
     vis = np.zeros(n, np.uint32)
     for attr, bit in _VISIBILITY:
         vis |= np.where(get(attr, np.bool_), np.uint32(bit), np.uint32(0))
     flags = (np.where(get("is_holdout", np.bool_), np.uint32(FLAG_HOLDOUT), np.uint32(0)) |
              np.where(get("is_shadow_catcher", np.bool_), np.uint32(FLAG_SHADOW_CATCHER), np.uint32(0)))
-    return {"visibility": vis[pick], "flags": flags[pick], "pass_indices": get("pass_index", np.int32)[pick],
-            "colors": get("color", np.float32, 4)[pick]}
+    return ({"visibility": vis[pick], "flags": flags[pick], "pass_indices": get("pass_index", np.int32)[pick],
+             "colors": get("color", np.float32, 4)[pick]}, pick)
 
 def _rows(matrices16, origin):
     """(n, 16) raw float[16] matrix_world values -> (n, 12) row-major 3x4 rows with the origin folded in.
@@ -246,58 +258,97 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
     if material_key is None:
         def material_key(mat):
             return keymap.key(("material", mat.original.session_uid)) if mat else 0
-    # Per-instance work is Python lists only; the per-object fields are gathered by index once at the end and
+    # Per-instance work is Python lists only; the per-object fields are gathered by uid once at the end and
     # the matrices and random ids come from one foreach_get each over the same iterator (B-31: Python
-    # per-instance numpy writes and Matrix conversions were most of the loop's 150 ms per 10k).
-    tables, real, key = cache.objects, cache.real, keymap.key
-    slot, obs, uids = {}, [], []  # original uid -> index into obs, the original objects in first-met order
-
-    by_object, index_of = {}, {}
-    rows, geom, obj, owner = [], [], [], []
-    seen = 0
-    for inst in depsgraph.object_instances:
-        k = seen
-        seen += 1
+    # per-instance numpy writes and Matrix conversions were most of the loop's 150 ms per 10k). An object's own
+    # row is a cache hit after its first build; only instance rows (path non-empty) and new objects do the
+    # identity work.
+    real, key, plain, records = cache.real, keymap.key, cache.plain, cache.tids
+    fresh = {}      # original uid -> object, those without a record
+    new_plain = {}  # original uid -> entry for the plain cache, set once their records exist
+    ents, owner, rids, in_path = [], [], [], []  # per kept instance: (geometry key, object key, identity), uid, random id
+    skipped = []  # indices of the iterator's instances that are not geometry
+    k = -1
+    for k, inst in enumerate(depsgraph.object_instances):
         ob = inst.object
-        if ob.type not in GEOMETRY_TYPES:
-            continue
         orig = ob.original
         uid = orig.session_uid
-        if uid not in slot:
-            slot[uid] = len(obs)
-            obs.append(orig)
-            uids.append(uid)
-            if uid not in tables:
-                data = orig.data
-                cache.remember(uid, data.session_uid if data is not None else None,
-                               tuple(material_key(s.material) for s in orig.material_slots))
-        n = len(rows)
+        if not inst.is_instance:
+            hit = plain.get(uid)
+            if hit is not None:
+                if hit:
+                    ents.append(hit)
+                    owner.append(uid)
+                    rids.append(inst.random_id)
+                else:
+                    skipped.append(k)
+                continue
+        if ob.type not in GEOMETRY_TYPES:
+            if not inst.is_instance:
+                new_plain[uid] = ()
+            skipped.append(k)
+            continue
         path = keys.instance_path(inst)
         ident = keys.object_identity(inst, path, uid)
+        ent = (key(keys.geometry_identity(inst, depsgraph, path, real, uid)), key(ident), ident)
         if path:
-            by_object.setdefault(path[0], []).append(n)
-        geom.append(key(keys.geometry_identity(inst, depsgraph, path, real, uid)))
-        obj.append(key(ident))
-        owner.append(slot[uid])
-        rows.append(k)
-        by_object.setdefault(uid, []).append(n)
-        index_of[ident] = n
-    n = len(rows)
-    m16, rid = np.empty(seen * 16, np.float32), np.empty(seen, np.int32)
+            in_path.append((len(ents), path[0]))
+        else:
+            new_plain[uid] = ent
+        if uid not in records:
+            fresh[uid] = orig
+        ents.append(ent)
+        owner.append(uid)
+        rids.append(inst.random_id)
+    seen, n = k + 1, len(ents)
+    rows = np.delete(np.arange(seen), skipped) if skipped else slice(None)
+    if fresh:
+        _remember_objects(fresh, material_key, cache)
+    plain.update(new_plain)
+    m16 = np.empty(seen * 16, np.float32)
     if seen:
         depsgraph.object_instances.foreach_get("matrix_world", m16)
-        depsgraph.object_instances.foreach_get("random_id", rid)
     xf = _rows(m16.reshape(seen, 16)[rows], origin) if n else np.zeros((0, 12), np.float32)
-    which = np.asarray(owner, np.intp)
-    per = _object_scalars(uids) if obs else {}
-    pool, fields = _object_fields(obs, [tables[u] for u in uids], lightgroups, cache)
-    per.update(fields)
-    arrays = {"geom_keys": np.asarray(geom, np.uint64), "object_keys": np.asarray(obj, np.uint64),
-              "random_ids": rid.view(np.uint32)[rows]}
+    index_of = dict(zip(map(itemgetter(2), ents), range(n)))
+    by_object = {u: [i] for i, u in enumerate(owner)}
+    if len(by_object) != n:  # an object with several rows
+        by_object = {}
+        for i, u in enumerate(owner):
+            by_object.setdefault(u, []).append(i)
+    for i, parent in in_path:  # a row is also found through its instancer
+        by_object.setdefault(parent, []).append(i)
+    for parent in {p for _, p in in_path}:
+        by_object[parent].sort()
+    arrays = {"geom_keys": np.asarray(list(map(itemgetter(0), ents)), np.uint64),
+              "object_keys": np.asarray(list(map(itemgetter(1), ents)), np.uint64),
+              "random_ids": np.asarray(rids, np.int32).view(np.uint32)}
+    pool, per = [], {}
+    if n:
+        uids = np.asarray(owner, np.int32)
+        import bpy
+        per, pick = _object_scalars(uids)
+        tid, crypto = list(map(records.__getitem__, owner)), list(map(cache.crypto.__getitem__, owner))
+        asset = list(map(cache.assets.__getitem__, owner))
+        if cache.PARENTED in asset:  # the asset id follows the top parent's name, which can change unnamed
+            at = [i for i, a in enumerate(asset) if a == cache.PARENTED]
+            tops = cache.hash_names([_top_parent(bpy.data.objects[int(pick[i])]).name for i in at])
+            for i, h in zip(at, tops):
+                asset[i] = h
+        lut = np.zeros((2, len(cache.table_list)), np.uint32)  # offset and count of each table id
+        for t in dict.fromkeys(tid):  # pool in first-met order; instances sharing a table share its offset
+            table = cache.table_list[t]
+            lut[:, t] = (len(pool) if table else 0, len(table))
+            pool.extend(table)
+        tid = np.asarray(tid, np.intp)
+        # Not cached: renaming a light group rewrites every object's name on every view layer and tags no object.
+        names = [ob.lightgroup for ob in bpy.data.objects] if lightgroups else None
+        per.update({"light_groups": np.asarray([lightgroups.get(names[i], 0) for i in pick], np.uint8) if names
+                    else np.zeros(n, np.uint8),
+                    "crypto_objects": np.asarray(crypto, np.uint32), "crypto_assets": np.asarray(asset, np.uint32),
+                    "material_offsets": lut[0][tid], "material_counts": lut[1][tid]})
     for name, dt, w in _FIELDS:
         if name not in arrays:
-            empty = np.zeros((0, w) if w > 1 else 0, dt)
-            arrays[name] = np.ascontiguousarray(np.asarray(per[name], dt)[which]) if n else empty
+            arrays[name] = np.ascontiguousarray(per[name], dt) if n else np.zeros((0, w) if w > 1 else 0, dt)
     return InstanceTable(n, arrays, xf, np.asarray(pool, np.uint64), by_object, index_of)
 
 

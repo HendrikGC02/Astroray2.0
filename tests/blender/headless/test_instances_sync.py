@@ -285,12 +285,95 @@ class TestInstanceCache(unittest.TestCase):
     def build(self):
         return instances.build(support.depsgraph(), self.km, cache=self.cache)
 
-    def assert_fresh(self, t):
-        fresh = instances.build(support.depsgraph(), self.km)
+    def assert_fresh(self, t, layer=None):
+        fresh = instances.build(support.depsgraph(), self.km,
+                                lightgroups=instances.lightgroup_indices(layer or bpy.context.view_layer))
         self.assertEqual(t.n, fresh.n)
         for name, arr in fresh.arrays.items():
             self.assertEqual(t.arrays[name].tobytes(), arr.tobytes(), name)
         self.assertEqual(t.material_keys.tolist(), fresh.material_keys.tolist())
+        self.assertEqual(t.by_object, fresh.by_object)
+        self.assertEqual(t.index_of, fresh.index_of)
+
+    def build_with_lightgroups(self):
+        return instances.build(support.depsgraph(), self.km, cache=self.cache,
+                               lightgroups=instances.lightgroup_indices(bpy.context.view_layer))
+
+    def test_rebuild_from_the_cache_equals_a_fresh_build(self):
+        # Every kind of row on the second build, where own rows and object records come from the cache: a shared
+        # mesh, a parented object, an object that is also instanced, a collection instance, an empty (skipped).
+        bpy.context.view_layer.lightgroups.add(name="lg")
+        a = make("A")
+        b = make("B", a.data, loc=(1, 0, 0))
+        c = make("C", loc=(2, 0, 0))
+        c.parent = a
+        c.lightgroup = "lg"
+        col = bpy.data.collections.new("col")
+        bpy.context.scene.collection.children.link(col)
+        make("D", collection=col, loc=(0, 3, 0))
+        for loc in ((10, 0, 0), (20, 0, 0)):
+            e = bpy.data.objects.new("E", None)
+            e.instance_type, e.instance_collection, e.location = "COLLECTION", col, loc
+            bpy.context.scene.collection.objects.link(e)
+        self.build_with_lightgroups()
+        t = self.build_with_lightgroups()
+        self.assertEqual(t.n, 6)
+        self.assertEqual(int(t.arrays["light_groups"][t.index_of[(c.session_uid,)]]), 1)
+        self.assert_fresh(t)
+        self.assertEqual((b.name, c.name), ("B", "C"))
+
+    def test_light_group_follows_object(self):
+        bpy.context.view_layer.lightgroups.add(name="g1")
+        bpy.context.view_layer.lightgroups.add(name="g2")
+        a = make("A")
+        a.lightgroup = "g1"
+        self.build_with_lightgroups()
+        self.cache.forget(updated(lambda: setattr(a, "lightgroup", "g2")))
+        t = self.build_with_lightgroups()
+        self.assertEqual(int(t.arrays["light_groups"][0]), 2)
+
+    def test_light_group_rename_keeps_objects_in_their_group(self):
+        # Renaming a group rewrites every object's group name and names no object in the update.
+        bpy.context.view_layer.lightgroups.add(name="g1")
+        a = make("A")
+        a.lightgroup = "g1"
+        self.build_with_lightgroups()
+        self.cache.forget(updated(lambda: setattr(bpy.context.view_layer.lightgroups[0], "name", "g2")))
+        self.assertEqual(a.lightgroup, "g2")
+        t = self.build_with_lightgroups()
+        self.assertEqual(int(t.arrays["light_groups"][0]), 1)
+        self.assert_fresh(t)
+
+    def test_light_group_rename_on_another_layer(self):
+        # Both layers have "g1"; the rename on L1 rewrites the object's name and names nothing the cache holds.
+        scene = bpy.context.scene
+        l1, l2 = scene.view_layers[0], scene.view_layers.new("L2")
+        for layer in (l1, l2):
+            layer.lightgroups.add(name="g1")
+        a = make("A")
+        a.lightgroup = "g1"
+        build = lambda: instances.build(support.depsgraph(), self.km, cache=self.cache,
+                                        lightgroups=instances.lightgroup_indices(l2))
+        build()
+        self.cache.forget(updated(lambda: setattr(l1.lightgroups[0], "name", "g2")))
+        t = build()
+        self.assertEqual(int(t.arrays["light_groups"][0]), 0)  # "g2" is not one of L2's groups
+        self.assert_fresh(t, l2)
+
+    def test_asset_id_follows_parent_rename(self):
+        # The child is not named by the parent's update, so its asset id cannot come from the cache.
+        a = make("A")
+        b = make("B", loc=(1, 0, 0))
+        c = make("C", loc=(2, 0, 0))
+        b.parent = a
+        c.parent = b  # two levels: the asset id is the top parent's name, not the direct parent's
+        self.build()
+        self.cache.forget(updated(lambda: setattr(a, "name", "Renamed")))
+        t = self.build()
+        i = t.index_of[(c.session_uid,)]
+        self.assertEqual(int(t.arrays["crypto_assets"][i]), instances.murmur3_32(b"Renamed"))
+        self.assertEqual(int(t.arrays["crypto_objects"][i]), instances.murmur3_32(b"C"))
+        self.assert_fresh(t)
 
     def test_rename(self):
         a = make("A")
@@ -329,12 +412,13 @@ class TestInstanceCache(unittest.TestCase):
         self.assert_fresh(t)
 
     def test_modifier_added_splits_geometry(self):
-        # Not forgotten on purpose: the real-data answer is keyed by the evaluated data pointer too, which a
-        # modifier (or a geometry-nodes instance reusing one temporary object) changes.
+        # The edit is forgotten as classify_updates does for the object the depsgraph names; B, which shares the
+        # data but was not updated, keeps its entries, and the real-data answer is keyed by the evaluated data
+        # pointer too, which the modifier changes.
         a = make("A")
         make("B", a.data)
         self.build()
-        a.modifiers.new("w", "WAVE")
+        self.cache.forget(updated(lambda: a.modifiers.new("w", "WAVE")))
         t = self.build()
         self.assertNotEqual(t.arrays["geom_keys"][0], t.arrays["geom_keys"][1])
         self.assert_fresh(t)
