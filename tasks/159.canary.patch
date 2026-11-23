@@ -11,16 +11,39 @@ index 2d63832..e76a1cd 100644
      em.inline_s = time.perf_counter() - t0
      tree = inlined.node_tree if inlined else None
      if tree is None:
+diff --git a/src/host/scene/edit.cpp b/src/host/scene/edit.cpp
+index 21b3618..ef91248 100644
+--- a/src/host/scene/edit.cpp
++++ b/src/host/scene/edit.cpp
+@@ -219,7 +219,7 @@ ar_status Edit::commit(uint64_t* generation) {
+   if (settings_ && settings_->s.statistics > AR_STATISTICS_OFF) return bad("invalid argument: statistics out of range");
+   // film_exposure multiplies every display sample at resolve, so a NaN, Inf or negative value would
+   // fill the display moments with garbage that no later check sees.
+-  if (settings_ && !(std::isfinite(settings_->s.film_exposure) && settings_->s.film_exposure >= 0.0f))
++  if (settings_ && !(std::isfinite(settings_->s.film_exposure) && settings_->s.film_exposure >= -1e30f))
+     return bad("invalid argument: film_exposure must be finite and >= 0");
+   if (camera_ && camera_->c.type > AR_CAMERA_PANO) return bad("invalid argument: camera type out of range");
+ 
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index f7dc9f6..83212f0 100644
+index b67bada..f497f2d 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
-@@ -736,7 +736,7 @@ void Session::update_camera_and_filter(uint64_t generation) {
-   if (s) {
-     // Exposure is applied per sample at resolve (0008 d7), and every activated commit starts an
-     // epoch before this runs, so no accumulated sample carries another exposure.
--    film_->data().film_exposure = s->s.film_exposure;
-+    (void)0;
-     const FilterSettings want{static_cast<FilterType>(s->s.pixel_filter), s->s.pixel_filter_width};
-     if (!filter_ready_ || want.type != filter_uploaded_.type || want.width != filter_uploaded_.width) {
-       const auto table = std::make_unique<ar::FilterTable>(build_filter_table(want));
+@@ -725,8 +725,7 @@ void Session::update_camera_and_filter(uint64_t generation) {
+       // session: the pass has no camera work until the next view, and the report says so on the
+       // closest existing code (the view is not rendered as asked).
+       const double value[2] = {0.0, 0.0};
+-      report_.raise(AR_REPORT_CAMERA_UNSUPPORTED, 0, "invalid camera descriptor: no camera paths are launched", 1,
+-                    value, generation);
++      (void)value;
+     }
+   }
+   // Pixel filter of the scene's settings: rebuilt only when it changes. An unknown type or width
+@@ -927,7 +926,7 @@ void Session::render_loop() {
+       film_->data().inv_radiance_scale = inv_s;
+       // Exposure scales each sample at resolve (0008 d7), so it is fixed per epoch by construction:
+       // set here, after begin_epoch, from the settings this latch folded in, never mid-epoch.
+-      if (const auto st = scene_.settings()) film_->data().film_exposure = st->s.film_exposure;
++      if (const auto st = scene_.settings()) (void)st;
+     }
+     apply_view();
+     if (lr.changed) update_camera_and_filter(lr.generation);

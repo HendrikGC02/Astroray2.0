@@ -12,7 +12,7 @@ Do:
 5. State for each test which tier runs it: headless test_camera_sync.py in hosted ci and `check full`; the cpu exposure case in `check fast`; gui_ortho.py in `check full`.
 Acceptance: `pwsh tools/check.ps1 fast` passes; `pwsh tools/check.ps1 gate` passes; `pwsh tools/check.ps1 full` passes (a gui_ script was added); `out/bin/astroray_tests_cpu.exe -tc="session_passes/*"` passes (name the exposure case); the PR body lists each of the four items as fixed or left in Out of scope with its evidence (paste the status-bar line or report entry for item 1).
 Look at: none.
-Canary: tasks/159.canary.patch must turn red: astroray_tests_cpu "session passes/film exposure scales the display channel", tests/blender/test_materials.py "TestMaterials.test_material_without_node_setup_lowers_the_default_principled"
+Canary: tasks/159.canary.patch must turn red: astroray_tests_cpu "session passes/film exposure scales the display channel", astroray_tests_cpu "session passes/film exposure that is not finite and >= 0 is refused", tests/blender/test_materials.py "TestMaterials.test_material_without_node_setup_lowers_the_default_principled", tests/blender/gui_ortho.py "TestOrtho.test_orthographic_viewport_reports_unsupported"
 Budget: +1 s of gate at most (stop and ask above); kernel: none (host-only change in session.cpp, the film struct is unchanged); compile time: one host TU.
 Depends on: none.
 Size: S (about 80 lines without tests); stop and report at 2x.
@@ -22,3 +22,4 @@ Progress:
 - Item 1 left: the viewport does report (WARNING "CAMERA_UNSUPPORTED: invalid camera descriptor: no camera paths are launched", the ortho projection is rejected before the ORTHO check); black frame is M4. gui_ortho.py asserts it; no camera.py change, no test_camera_sync.py.
 - Item 4: not added to ALL; CMake comment names the smoke step.
 - Canary: exposure case and test_materials bare-material case (camera line dropped from the Canary line).
+- Review fixes: film_exposure refused in Edit::commit (edit.cpp, forced file) with its own case; assignment moved into the new-epoch block; canary has four hunks (exposure, refusal, bare material, report raise for gui_ortho), each shown red alone.
