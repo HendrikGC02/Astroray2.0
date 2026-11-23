@@ -17,3 +17,4 @@ Depends on: 150.
 Size: M (about 350 lines without tests); stop and report at 2x. Split point: engine (steps 1-2) first, addon (step 3) second.
 Progress:
 - Files I will change: src/capi/scene_api.cpp, src/capi/unimplemented.cpp, src/host/image/{image_store,decode,decode_exr}.{h,cpp}, src/host/material/material_store.{h,cpp} (forced: a begin wrapper beside set_image), include/astroray/astroray.h (comment), blender/astroray/sync/images.py, api_surface.txt, tests (cpu image_ingest, abi recorder, blender test_images and headless/test_images_pixels, data/images generate.py), docs 0007 d13 and d21, tasks/167.canary.patch.
+- Done: engine PIXELS (image_begin, shared find_bad_texel limit 0x7efffff7), addon _send_pixels, tests, 0007 d13/d21, canary green. Forced extra: material_store.{h,cpp} image_begin. No cache entry for PIXELS (identity is the key). gate 144.2 s.
