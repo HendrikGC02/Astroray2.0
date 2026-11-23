@@ -1,0 +1,32 @@
+diff --git a/tools/perf_shares.py b/tools/perf_shares.py
+index a4fd9a9..4e4b29f 100644
+--- a/tools/perf_shares.py
++++ b/tools/perf_shares.py
+@@ -54,17 +54,7 @@ class SharesError(perf.PerfError):
+ 
+ def union_length(intervals):
+     """Total length covered by (start, end) intervals; overlapping and nested ones count once."""
+-    total, cur_s, cur_e = 0, None, None
+-    for s, e in sorted(intervals):
+-        if cur_e is None or s > cur_e:
+-            if cur_e is not None:
+-                total += cur_e - cur_s
+-            cur_s, cur_e = s, e
+-        elif e > cur_e:
+-            cur_e = e
+-    if cur_e is not None:
+-        total += cur_e - cur_s
+-    return total
++    return sum(e - s for s, e in intervals)
+ 
+ 
+ def load_kernels(path):
+@@ -96,7 +86,7 @@ def shares(kernels, burn_in=BURN_IN):
+     periods, idles, pqs = [], [], []
+     for a, b in zip(marks, marks[1:]):
+         inside = [(max(s, a), min(e, b)) for s, e, _ in kernels if a <= s < b]
+-        pq = sum(min(e, b) - s for s, e, n in kernels if a <= s < b and n in PARTITION_SORT)
++        pq = sum(min(e, b) - s for s, e, n in kernels if a <= s < b and (n in PARTITION_SORT or n.startswith("k_copy")))
+         periods.append(b - a)
+         idles.append((b - a) - union_length(inside))
+         pqs.append(pq)
