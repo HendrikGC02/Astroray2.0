@@ -6,6 +6,7 @@
 // "needs X GiB for <category>, Y available").
 #include <doctest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -138,11 +139,14 @@ TEST_CASE("ledger/a progress poll does not scan the live records") {
   std::vector<uint64_t> ids;
   for (int i = 0; i < 100000; ++i) ids.push_back(l.add({1, 0}, i % 2 ? LedgerCategory::GEOMETRY : LedgerCategory::TABLES, 16));
   const auto t0 = std::chrono::steady_clock::now();
-  uint64_t seen = 0;
-  for (int poll = 0; poll < 2000; ++poll)
+  uint64_t seen = 0, seen_total = 0;
+  for (int poll = 0; poll < 2000; ++poll) {
     for (uint32_t c = 0; c < kLedgerCategoryCount; ++c) seen += l.category_total(static_cast<LedgerCategory>(c));
+    seen_total += l.total();
+  }
   const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   CHECK(seen == 2000ull * 100000 * 16);
+  CHECK(seen_total == 2000ull * 100000 * 16);
   // A scan costs seconds here (3.4e9 record visits); the kept totals cost a fraction of a millisecond.
   CHECK(ms < 250.0);
   CHECK(l.category_total(LedgerCategory::GEOMETRY) == 50000 * 16);
@@ -162,33 +166,38 @@ TEST_SUITE("gate") {
 
 TEST_CASE("ledger/a poll does not wait for the ledger lock") {
   // The progress poll spins in the host while workers add and remove records; a poll that takes the
-  // lock waits behind every critical section, and an unfair mutex hands it back to the spinner. A
-  // thread that holds the lock for a long time (records() copies 2 M records inside it) makes any
-  // locked read slow, while a lock-free read is unaffected. The time of all the polls together is
-  // bounded, since the unfair mutex lets later polls slip in once the first has waited.
+  // lock waits for whoever holds it. One thread holds it for a long time (records() copies 2 M
+  // records inside it, over 50 ms) in a loop, and the main thread polls for 400 ms, several holder
+  // cycles, so a locked read cannot slip between them every time. A lock-free read never waits, so
+  // the worst single poll stays at scheduling noise.
   Ledger l;
   for (int i = 0; i < 2000000; ++i) l.add({1, 0}, LedgerCategory::GEOMETRY, 16);
   std::atomic<bool> stop{false}, holding{false};
+  std::atomic<uint64_t> cycles{0};
   std::thread holder([&] {
     while (!stop.load(std::memory_order_relaxed)) {
       holding.store(true, std::memory_order_relaxed);
-      const size_t n = l.records().size();
-      if (n == 0) break;
+      if (l.records().size() == 0) break;
+      cycles.fetch_add(1, std::memory_order_relaxed);
     }
   });
   while (!holding.load(std::memory_order_relaxed)) std::this_thread::yield();
-  double total_us = 0;
-  uint64_t seen = 0;
-  for (int i = 0; i < 40; ++i) {
-    const auto t0 = std::chrono::steady_clock::now();
+  using Clock = std::chrono::steady_clock;
+  double worst_us = 0;
+  uint64_t polls = 0, seen = 0;
+  const auto end = Clock::now() + std::chrono::milliseconds(400);
+  while (Clock::now() < end) {
+    const auto t0 = Clock::now();
     seen += l.category_total(LedgerCategory::GEOMETRY) + l.total();
-    total_us += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+    worst_us = std::max(worst_us, std::chrono::duration<double, std::micro>(Clock::now() - t0).count());
+    ++polls;
   }
   stop.store(true);
   holder.join();
-  CHECK(seen == 40ull * 2 * 2000000 * 16);
-  // A locked read waits for a 2 M-record copy (tens of milliseconds); 40 lock-free ones take microseconds.
-  CHECK(total_us < 20000.0);
+  CHECK(cycles.load() >= 3);  // the polls spanned several holds
+  CHECK(seen == polls * 2 * 2000000 * 16);
+  // A locked read waits out part of a hold (tens of milliseconds); a lock-free one takes microseconds.
+  CHECK(worst_us < 15000.0);
 }
 
 }  // TEST_SUITE
