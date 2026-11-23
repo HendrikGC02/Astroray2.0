@@ -264,7 +264,7 @@ $global:LASTEXITCODE = 1
     if ($r.Code -ne 0) { Fail 'blender api_surface failed (out/check/full.log)' }
     # Image sync and node values through Blender, full only (about 40 s does not fit B-09).
     # Not $t: Step's own stopwatch of that name is visible inside the block (dynamic scope).
-    foreach ($bt in 'test_images', 'test_node_values') {
+    foreach ($bt in 'test_images', 'test_node_values', 'headless/test_node_coverage') {
       $r = Step "blender $bt" {
         $b = Invoke-ArBlender -Script "tests/blender/$bt.py" -TimeoutS 400 6>$null
         foreach ($f in $b.Log, "$($b.Log).err") { if (Test-Path $f) { Get-Content $f } }

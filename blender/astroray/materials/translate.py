@@ -17,23 +17,23 @@ feeds two EMIT_LE nodes, so constants are never shared between emitters.
 Ref: src/host/material/graph.cpp (parameter counts, socket order), vm/ops/store_slot.h (RecordSlot).
 
 No bpy import and no module state: `op_id` (the generated `_ops.OP_ID`) and the key map come from
-the caller, so the module runs over stubs.
+the caller; the generated `_ops` is the package's staged module, which tests register as
+`ar_addon._ops`.
 """
 import ctypes
 import time
 
+from .. import _ops  # staged by the build, never committed
 from ..sync import keys
 
 # Graph targets, report codes and emission sampling come from the generated binding (`abi`,
-# passed in by the callers). These engine constants have no generated export, so they are copied
-# here and a test (test_engine_constants_match_the_headers) parses the headers and pins them.
-# vm/ops/store_slot.h RecordSlot ids: scalars 0-23 in AR_RECORD_SCALARS order, then the spectral
-# slots in AR_RECORD_SPECTRAL order.
-SLOT_SPECULAR_WEIGHT, SLOT_SPECULAR_ROUGHNESS, SLOT_BASE_COLOR = 3, 4, 24
-# kernel/material/spectrum_ref.h SpectrumSemantic
-SEM_REFLECTANCE = 0
-# vm/ops/tex_image.h mode bits
-TEX_LINEAR, TEX_EXTEND = 1, 2
+# passed in by the callers). Record-slot ids, TEX_IMAGE mode bits and spectrum semantics come from
+# the generated `_ops` (tools/opsgen.py parses them out of the kernel headers), never copied here.
+SLOT_SPECULAR_WEIGHT = _ops.RECORD_SLOT["specular_weight"]
+SLOT_SPECULAR_ROUGHNESS = _ops.RECORD_SLOT["specular_roughness"]
+SLOT_BASE_COLOR = _ops.RECORD_SLOT["base_color"]
+SEM_REFLECTANCE = _ops.SEMANTIC["REFLECTANCE"]
+TEX_LINEAR, TEX_EXTEND = _ops.TEX_MODE["LINEAR"], _ops.TEX_MODE["EXTEND"]
 # Blender's Cycles property group `material.cycles.emission_sampling` items; the ABI has
 # AR_EMISSION_SAMPLING_<name> for each (a test checks the binding). Another value is reported.
 EMISSION_SAMPLING_NAMES = ("NONE", "AUTO", "FRONT", "BACK", "FRONT_BACK")

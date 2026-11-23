@@ -45,12 +45,14 @@ if "ar_addon" not in sys.modules:
     _pkg = types.ModuleType("ar_addon")
     _pkg.__path__ = [ADDON]
     sys.modules["ar_addon"] = _pkg
+# The build stages the generated _ops at the package root; translate reads its ids from there.
+OPS = _load("ar_ops", os.path.join(GEN, "_ops.py"))
+sys.modules.setdefault("ar_addon._ops", OPS)
 translate = importlib.import_module("ar_addon.materials.translate")
 world_sync = importlib.import_module("ar_addon.sync.world")
 from ar_addon.sync import camera, classify, edit as edit_mod, images, instances, keys, mesh, settings  # noqa: E402
 
 ABI = _load("ar_abi", os.path.join(GEN, "_abi.py"))
-OPS = _load("ar_ops", os.path.join(GEN, "_ops.py"))
 PROPS = _load("ar_properties", os.path.join(ADDON, "properties.py"))
 OP = OPS.OP_ID
 N = 16  # pixels and texels per side
