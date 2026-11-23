@@ -1,5 +1,5 @@
 diff --git a/src/host/light/env_bake.cpp b/src/host/light/env_bake.cpp
-index fb6951b..d0bfecc 100644
+index 43b82c1..e7c7507 100644
 --- a/src/host/light/env_bake.cpp
 +++ b/src/host/light/env_bake.cpp
 @@ -27,7 +27,7 @@ void put(std::vector<uint8_t>& k, const T& v) {
@@ -9,10 +9,10 @@ index fb6951b..d0bfecc 100644
 -    if (std::isfinite(v) && v >= 0.0f) continue;
 +    if (v == v) continue;
      const uint32_t iv = uint32_t(i / n), iu = uint32_t(i % n);
-     const ar::Real3 d = ar::equal_area_square_to_sphere(
-         ar::Real2{(ar::Real(iu) + ar::Real(0.5)) / ar::Real(n), (ar::Real(iv) + ar::Real(0.5)) / ar::Real(n)});
-@@ -53,7 +53,7 @@ BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_bu
-   if (n == 0) throw std::invalid_argument("bake_environment: n is 0");
+     const ar::Real3 d = ar::bake_environment_direction(n, uint32_t(i));
+     char text[256];
+@@ -54,7 +54,7 @@ BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_bu
+     throw std::invalid_argument("bake_environment: the radiance scale is not finite and positive");
    if (uint64_t(n) * n > std::numeric_limits<uint32_t>::max())
      throw std::invalid_argument("bake_environment: n = " + std::to_string(n) + " has more than 2^32 cells");
 -  if (valid_ && n == n_ && key == key_) return result_;
@@ -20,31 +20,46 @@ index fb6951b..d0bfecc 100644
  
    const uint64_t cells = uint64_t(n) * n;
    DeviceBuffer grid_buf = device.allocate(LedgerCategory::TABLES, cells * sizeof(float), owner_);
-@@ -84,12 +84,12 @@ BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_bu
+@@ -72,7 +72,7 @@ BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_bu
+   } catch (...) {
+     device.free(grid_buf);
+     try {
+-      device.upload(kg_buffer, offset, &none, sizeof none);
++      device.upload(kg_buffer, offset, &none, 0);
+     } catch (...) {  // the original error is the one to report
+     }
+     throw;
+@@ -85,16 +85,16 @@ BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_bu
    BakedEnvironment out;
-   double sum = 0.0;
-   for (float v : grid) out.max = std::max(out.max, double(v)), sum += double(v);
--  if (out.max > 0.0) {
-+  if (out.max >= 0.0) {
-     out.mean = sum / double(cells);
+   double sum = 0.0, peak = 0.0;
+   for (float v : grid) peak = std::max(peak, double(v)), sum += double(v);
+-  if (peak > 0.0) {
++  if (peak >= 0.0) {
      // A density: dividing by the maximum leaves the table's shape and keeps a uniform world's
-     // integral and compensated residuals clear of FLT_MIN, which a world at 1e-30 would not.
+     // integral and compensated residuals clear of FLT_MIN, which a world below it would not.
      std::vector<double> normalised(cells);
--    for (size_t i = 0; i < normalised.size(); ++i) normalised[i] = double(grid[i]) / out.max;
+-    for (size_t i = 0; i < normalised.size(); ++i) normalised[i] = double(grid[i]) / peak;
 +    for (size_t i = 0; i < normalised.size(); ++i) normalised[i] = double(grid[i]);
      out.table = std::make_shared<const EnvTable>(build_env_table(normalised, n));
+     // The grid carries the light table's radiance scale (a power of 2, so this is exact); the
+     // table does not, which is why a change of s alone needs no new bake.
+-    out.max = peak / radiance_scale;
+-    out.mean = sum / double(cells) / radiance_scale;
++    out.max = peak;
++    out.mean = out.max;
    }
    valid_ = true;
+   key_ = key;
 diff --git a/src/kernel/stages/bake_environment.h b/src/kernel/stages/bake_environment.h
-index 9ff294b..c928a6e 100644
+index 96d2752..82791dc 100644
 --- a/src/kernel/stages/bake_environment.h
 +++ b/src/kernel/stages/bake_environment.h
-@@ -60,7 +60,7 @@ template <class WorldFn>
- AR_FN Real bake_environment_cell(const WorldFn& world, const ObserverView& obs, uint32_t n, uint32_t cell) {
+@@ -60,7 +60,7 @@ struct NeumaierSum {
+ // ((iu + 0.5) / n, (iv + 0.5) / n). The one place it is computed; the host names a bad cell by it.
+ AR_FN Real3 bake_environment_direction(uint32_t n, uint32_t cell) {
    const uint32_t iv = cell / n, iu = cell - iv * n;
-   const Real3 dir = equal_area_square_to_sphere(
--      Real2{(Real(iu) + Real(0.5)) / Real(n), (Real(iv) + Real(0.5)) / Real(n)});
-+      Real2{Real(iu) / Real(n), Real(iv) / Real(n)});
-   NeumaierSum weighted, total;
-   for (int i = 0; i < kObsSamples; i += kLanes) {
-     Lambda lam;
+-  return equal_area_square_to_sphere(Real2{(Real(iu) + Real(0.5)) / Real(n), (Real(iv) + Real(0.5)) / Real(n)});
++  return equal_area_square_to_sphere(Real2{Real(iu) / Real(n), Real(iv) / Real(n)});
+ }
+ 
+ // The cell's value for a world given as `world(direction, lambdas) -> Spec`: radiance per
