@@ -1,29 +1,65 @@
-diff --git a/src/host/light/light_tree.cpp b/src/host/light/light_tree.cpp
-index f650914..c8ca940 100644
---- a/src/host/light/light_tree.cpp
-+++ b/src/host/light/light_tree.cpp
-@@ -104,7 +104,7 @@ struct Builder {
-       for (int k = 0; k < 3; ++k) m.lo[k] = l.lo[k], m.hi[k] = l.hi[k], m.cone.axis[k] = l.w[k];
-       m.cone.theta_o = l.theta_o;
-       m.cone.theta_e = l.theta_e;
--      m.energy = l.energy;
-+      m.energy = l.energy > 0.0 ? l.energy : 1.0;
-       store(node, m, distant, ar::kLightTreeLeaf, {0u, 0u}, i);
-       return m;
-     }
-@@ -170,7 +170,6 @@ LightTree build_light_tree(const std::vector<LightTreeLight>& lights) {
-     bool finite = std::isfinite(l.theta_o) && std::isfinite(l.theta_e);
-     for (int k = 0; k < 3; ++k) finite = finite && std::isfinite(l.lo[k]) && std::isfinite(l.hi[k]) && std::isfinite(l.w[k]);
-     if (!finite) throw std::runtime_error("light tree: light " + std::to_string(i) + " has non-finite bounds");
--    if (!(l.energy > 0.0)) continue;  // no leaf: pmf 0 (D9)
-     total += l.energy;
-     for (int k = 0; k < 3; ++k) b.centre[3 * i + k] = 0.5 * (l.lo[k] + l.hi[k]);
-     (l.infinite ? distant : local).push_back(i);
+diff --git a/src/host/light/light_tree.h b/src/host/light/light_tree.h
+index b9ca6c7..186c50b 100644
+--- a/src/host/light/light_tree.h
++++ b/src/host/light/light_tree.h
+@@ -53,7 +53,7 @@ LightTree build_light_tree(const std::vector<LightTreeLight>& lights);
+ // included); the background "get_average_radiance() * M_PI_F" (pi L = importance / (4 pi R^2),
+ // read at distance 1 by the distant node). The alias table and D10's floor keep the power.
+ inline double light_tree_energy(const ar::LightRecord& r, double importance, const ar::SceneSphere& scene) {
+-  if (importance == 0.0) return 0.0;  // no leaf, whatever the factor
++  if (importance == 0.0) return 1.0;  // no leaf, whatever the factor
+   const double pi = 3.14159265358979323846;
+   switch (ar::LightType(r.type)) {
+     case ar::LightType::POINT:
+diff --git a/src/kernel/light/area_rect.h b/src/kernel/light/area_rect.h
+index a2f7c79..fde1deb 100644
+--- a/src/kernel/light/area_rect.h
++++ b/src/kernel/light/area_rect.h
+@@ -220,7 +220,7 @@ AR_FN LightBounds rect_bounds(const LightRecord& r) {
+                      ar::min(ar::min(a.z, b.z), ar::min(c.z, d.z))};
+   lb.bbox.hi = Real3{ar::max(ar::max(a.x, b.x), ar::max(c.x, d.x)), ar::max(ar::max(a.y, b.y), ar::max(c.y, d.y)),
+                      ar::max(ar::max(a.z, b.z), ar::max(c.z, d.z))};
+-  lb.w = normalize(g.n);  // the front; the record's rotation is unit only to 1e-3 (area_problem)
++  lb.w = -normalize(g.n);  // the front; the record's rotation is unit only to 1e-3 (area_problem)
+   lb.theta_o = Real(0);  // a flat lamp has one normal
+   lb.theta_e = kLightPi / Real(2);
+   lb.two_sided = false;
+diff --git a/src/kernel/light/light.h b/src/kernel/light/light.h
+index 2ebd2d5..5cd65d2 100644
+--- a/src/kernel/light/light.h
++++ b/src/kernel/light/light.h
+@@ -121,7 +121,7 @@ inline constexpr Real kLightPi = Real(3.14159265358979323846);
+ // The cone axis of a light whose normals cover every direction (theta_o = pi): any unit vector
+ // works; Cycles takes (0, 0, 1) for the background ("Set an arbitrary direction for the background
+ // light.", scene/light_tree.cpp).
+-AR_FN Real3 light_isotropic_axis() { return Real3{Real(0), Real(0), Real(1)}; }
++AR_FN Real3 light_isotropic_axis() { return Real3{Real(0), Real(0), Real(2)}; }
+ // pbrt-v4 FloatOneMinusEpsilon / DoubleOneMinusEpsilon (util/float.h): the largest Real below 1.
+ inline constexpr Real kLightOneMinusEpsilon =
+     sizeof(Real) == 4 ? Real(float(0x1.fffffep-1)) : Real(double(0x1.fffffffffffffp-1));
 diff --git a/src/kernel/light/light_tree.h b/src/kernel/light/light_tree.h
-index 0f747ae..770dd8a 100644
+index e155df7..498b30d 100644
 --- a/src/kernel/light/light_tree.h
 +++ b/src/kernel/light/light_tree.h
-@@ -218,7 +218,7 @@ AR_FN SampledLight light_tree_sample(const LightTreeView& v, Real3 p, Real3 n, R
+@@ -112,7 +112,7 @@ AR_FN LightTreeImportance light_tree_cone_importance(Real3 n, Real3 to_c, Real c
+   const Real cos_i = dot(to_c, n);
+   const Real sin_i = light_tree_sin_from_cos(cos_i);
+   // cos(max(theta_i - theta_u, 0)) and cos(min(theta_i + theta_u, pi)), clamped at 0.
+-  const Real cos_min_inc = cos_i >= cos_u ? Real(1) : cos_i * cos_u + sin_i * sin_u;
++  const Real cos_min_inc = cos_i >= cos_u ? Real(1) : cos_i * cos_u - sin_i * sin_u;
+   if (cos_min_inc < Real(0)) return out;  // wholly behind the surface
+   const Real cos_max_inc = ar::max(cos_i * cos_u - sin_i * sin_u, Real(0));
+   Real cos_t, sin_t;
+@@ -129,7 +129,7 @@ AR_FN LightTreeImportance light_tree_cone_importance(Real3 n, Real3 to_c, Real c
+   Real cos_min_out;
+   if (cos_t >= cos_u || cos_t_minus_u >= cos_o) {
+     cos_min_out = Real(1);
+-  } else if (theta_o + theta_e >= kLightPi || cos_t_minus_u > ar::cos(theta_o + theta_e)) {
++  } else if (theta_o + theta_e > kLightPi || cos_t_minus_u > ar::cos(theta_o + theta_e)) {
+     // >= where Cycles has >: a two-sided emitter (theta_o 0, theta_e pi) seen from straight behind
+     // has cos_t_minus_u = -1 = cos(pi) once cos_u rounds to 1, and > would call it invisible.
+     cos_min_out = cos_t_minus_u * cos_o + light_tree_sin_from_cos(cos_t_minus_u) * sin_o;
+@@ -221,7 +221,7 @@ AR_FN SampledLight light_tree_sample(const LightTreeView& v, Real3 p, Real3 n, R
      const Real w_right = Real(1) - left;
      bool right = false;
      if (w_right > Real(0)) {
@@ -32,7 +68,7 @@ index 0f747ae..770dd8a 100644
        if (r <= thresh) {
          right = true;
          r = r / thresh;
-@@ -227,7 +227,7 @@ AR_FN SampledLight light_tree_sample(const LightTreeView& v, Real3 p, Real3 n, R
+@@ -230,7 +230,7 @@ AR_FN SampledLight light_tree_sample(const LightTreeView& v, Real3 p, Real3 n, R
        }
        r = ar::min(ar::max(r, Real(0)), Real(1));
      }
@@ -41,7 +77,7 @@ index 0f747ae..770dd8a 100644
      idx = node.child[right ? 1 : 0];
    }
    AR_ASSERT(false);  // deeper than the bit trail: the builder refuses such a tree
-@@ -249,7 +249,7 @@ AR_FN Real light_tree_pmf(const LightTreeView& v, Real3 p, Real3 n, uint32_t lig
+@@ -252,7 +252,7 @@ AR_FN Real light_tree_pmf(const LightTreeView& v, Real3 p, Real3 n, uint32_t lig
      if (!light_tree_left_probability(v, node, p, n, &left)) return Real(0);
      const bool right = (trail & 1u) != 0u;
      trail >>= 1;
