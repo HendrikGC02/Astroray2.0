@@ -547,7 +547,7 @@ TEST_CASE("agree/fma detector") {
   CHECK(prod.fraction_above(NOFMA_VS_CPU_FLOAT.eval_max) > 0.1);
 }
 
-TEST_CASE("agree/bake environment cpu vs cuda") {
+TEST_CASE("agree/bake environment analytic nofma") {
   // bake_environment_cell (0004 D11) on the analytic world of common/analytic_world.h, one input
   // per cell of a 64 x 64 grid: the no-FMA module against the same header on the CPU in float
   // (step ii) and against the host's exact double evaluation of the same sum at the cell centres
