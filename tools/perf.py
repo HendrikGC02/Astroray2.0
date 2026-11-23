@@ -60,10 +60,10 @@ def budget_limit(path):
     return float(rows[BUDGET_ID]["limit"])
 
 
-def baseline(history, machine, scene):
+def baseline(history, scene):
     found = None
     for o in history:  # file order, then line order: the last match is the newest
-        if o.get("machine") == machine and o.get("scene") == scene and o.get("metric") == METRIC:
+        if o.get("scene") == scene and o.get("metric") == METRIC:
             found = o
     return found
 
@@ -89,7 +89,8 @@ def compare(measured, history, limit):
             continue
         seen = True
         scene, mach = m["scene"], m["machine"]
-        base = baseline(history, mach, scene)
+        # Another machine's timings say nothing about this one.
+        base = baseline([o for o in history if o.get("machine") == mach], scene)
         if base is None:
             out.append(f"PASS {scene}: no baseline: lead commits the printed line")
             out.append(json.dumps(m, separators=(",", ":")))
