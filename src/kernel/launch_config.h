@@ -68,7 +68,8 @@ struct LaunchRow {
   X(k_shade_background, 256, 0, 0, VM) \
   X(k_shade_surface, 256, 2, 1, VM) \
   X(k_shade_shadow, 256, 0, 0, VM) \
-  X(k_shade_light, 256, 0, 0, VM)
+  X(k_shade_light, 256, 0, 0, VM) \
+  X(k_bake_environment, 256, 0, 0, VM)
 
 // The OptiX programs of optix_traverse.cu, named as their PTX entries (tools/kernelgate.py matches
 // them). No constants are generated: the names contain a double underscore, reserved in C++.

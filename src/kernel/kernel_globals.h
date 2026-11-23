@@ -67,6 +67,13 @@ struct EDielTable;        // material/lobes/tables.h
 struct CameraView;   // camera/camera.h
 struct FilterTable;  // film/filter.h
 
+// bake_environment's output: the n x n grid it fills, one float per cell, index iv n + iu
+// (stages/bake_environment.h). Written by the host baker just before the launch (host/light/env_bake.h).
+struct EnvBake {
+  float* grid;
+  uint32_t n;
+};
+
 struct KernelGlobals {
   const PathStateSoA* path;
   const ShadowItemSoA* shadow;
@@ -120,6 +127,8 @@ struct KernelGlobals {
   // length in words. Last members so the offsets the CUDA device reads stay put.
   const uint32_t* light_index;
   uint32_t light_index_words;
+  // Last member so the offsets the CUDA device reads stay put; the baker writes it in place.
+  EnvBake env_bake = {};
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is
