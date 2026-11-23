@@ -21,10 +21,10 @@ index 085d1fb..d219f53 100644
        std::memcpy(out->texels.data() + ((size_t(y) * size_t(w) + size_t(x)) * channels + k) * size_t(comp),
                    planes[kept[k]] + src_index * size_t(comp), size_t(comp));
 diff --git a/src/kernel/scene/texture_view.h b/src/kernel/scene/texture_view.h
-index 3becbd2..ecc6ae1 100644
+index 3becbd2..6b0e6fc 100644
 --- a/src/kernel/scene/texture_view.h
 +++ b/src/kernel/scene/texture_view.h
-@@ -52,13 +52,16 @@ AR_FN const uint8_t* image_texel(const DeviceImageView& v, uint32_t x, uint32_t
+@@ -52,6 +52,9 @@ AR_FN const uint8_t* image_texel(const DeviceImageView& v, uint32_t x, uint32_t
  // Ref: IEEE 754-2008 section 3.6 (binary16: 1 sign, 5 exponent bits with bias 15, 10 fraction
  // bits); the branchless widening of Giesen, "Fast half float conversions" (2012).
  AR_FN float half_to_float(uint16_t h) {
@@ -34,11 +34,16 @@ index 3becbd2..ecc6ae1 100644
    uint32_t o = (uint32_t(h) & 0x7fffu) << 13;  // exponent and fraction in float position
    const uint32_t e = o & 0x0f800000u;
    o += 0x38000000u;                             // rebias 15 -> 127
-   o += e == 0x0f800000u ? 0x38000000u : 0u;     // Inf and NaN: exponent 31 must land on 255
-   // Zero and subnormals: o + one exponent step is 2^-14 * (1 + frac * 2^-10); taking 2^-14 away
-   // leaves frac * 2^-24 exactly (both operands and the result are normal floats).
--  const float sub = bit_cast<float>(o + 0x00800000u) - bit_cast<float>(0x38800000u);
-+  const float sub = bit_cast<float>(o + 0x00800000u) - bit_cast<float>(0x38000000u);
-   return bit_cast<float>((e == 0u ? bit_cast<uint32_t>(sub) : o) | ((uint32_t(h) & 0x8000u) << 16));
- }
- 
+diff --git a/src/kernel/vm/ops/tex_image.h b/src/kernel/vm/ops/tex_image.h
+index be114d3..d33e8a2 100644
+--- a/src/kernel/vm/ops/tex_image.h
++++ b/src/kernel/vm/ops/tex_image.h
+@@ -58,7 +58,7 @@ AR_FN void tex_closest(const DeviceImageView& im, const float* srgb_decode, floa
+   ix = tex_wrap(ix, int(im.width), extend);
+   iy = tex_wrap(iy, int(im.height), extend);
+   const uint8_t* p = image_texel(im, uint32_t(ix), uint32_t(iy));
+-  if (im.format == uint32_t(TexFormat::U8) && im.encoding == uint32_t(TexEncoding::SRGB)) {
++  if (im.encoding == uint32_t(TexEncoding::SRGB)) {
+     for (uint32_t k = 0; k < 3u; ++k) out[k] = load_ro(srgb_decode + load_ro(p + (im.channels == 1u ? 0u : k)));
+     return;
+   }
