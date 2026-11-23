@@ -54,6 +54,15 @@ function Step([string]$name, [scriptblock]$body) {
   Add-Content -Path $log -Value $out
   return [pscustomobject]@{ Code = $code; Out = @($out) }
 }
+# A Blender start inside the tier: its machine-lock wait (0 s when nested under the tier's own hold) is not
+# work (0009 d8), so it joins `waited` and leaves the tier clock. Prints the Blender log for the step.
+function Invoke-TierBlender([string]$Script, [string[]]$BArgs = @(), [int]$TimeoutS = 300, [switch]$Gui) {
+  $b = Invoke-ArBlender -Script $Script -Args $BArgs -TimeoutS $TimeoutS -Gui:$Gui 6>$null
+  $script:waited += $b.Waited
+  Add-ArExcluded $b.Waited
+  foreach ($f in $b.Log, "$($b.Log).err") { if (Test-Path $f) { Get-Content $f } }
+  $global:LASTEXITCODE = $b.ExitCode
+}
 function Show-Tail($r, [int]$n = 8) {
   ($r.Out | Select-Object -Last $n) | ForEach-Object { Write-Host $_ }
 }
@@ -174,9 +183,7 @@ $global:LASTEXITCODE = 1
     # renders A1's .blend through F12 on the CPU device and checks it against A1's truth and the builder's
     # recording (exporter equivalence). The smoke builds the zip itself; Invoke-ArBlender's own output goes to the log.
     @{ Name = 'blender smoke'; Tag = 'local'; Echo = '^(RESULT smoke|Ran |OK$|FAILED)'; Run = {
-        $r = Invoke-ArBlender -Script 'tests/blender/smoke_a1.py' -Args @('--with-materials') -TimeoutS 400 6>$null
-        foreach ($f in $r.Log, "$($r.Log).err") { if (Test-Path $f) { Get-Content $f } }
-        $global:LASTEXITCODE = $r.ExitCode } }
+        Invoke-TierBlender 'tests/blender/smoke_a1.py' @('--with-materials') 400 } }
   )
   # Judge one finished step: its failure names itself, then Identity and Check/Echo as before.
   function Complete-GateStep($s, $r) {
@@ -260,10 +267,7 @@ $global:LASTEXITCODE = 1
     # sync and node values (about 40 s does not fit B-09), and every windowed gui_* script, which drives itself by
     # timers and ends the process. Not $t: Step's own stopwatch of that name is visible inside the block.
     foreach ($su in (Get-ArFullBlenderSuites)) {
-      $r = Step "blender $($su.Name)" {
-        $b = Invoke-ArBlender -Gui:([bool]$su.Gui) -Script $su.Script -TimeoutS $su.TimeoutS 6>$null
-        foreach ($f in $b.Log, "$($b.Log).err") { if (Test-Path $f) { Get-Content $f } }
-        $global:LASTEXITCODE = $b.ExitCode }
+      $r = Step "blender $($su.Name)" { Invoke-TierBlender $su.Script @() $su.TimeoutS -Gui:([bool]$su.Gui) }
       $r.Out | Where-Object { $_ -match $su.Echo } | ForEach-Object { Write-Host $_ }
       if ($r.Code -ne 0) { Fail "blender $($su.Name) failed (out/check/full.log)" }
     }

@@ -3,7 +3,7 @@
 # Ref: docs/decisions/0009-build-test-process.md d26 step 3, d28 (task and canary format).
 # Get-CanaryItems below is the real parse of the `Canary:` line; tools/lint.py taskfile() only checks its shape
 # and must stay in step with it.
-. (Join-Path $PSScriptRoot 'blender.ps1')
+. (Join-Path $PSScriptRoot 'testrun.ps1')
 
 $script:CanaryLogPath = $null
 $script:CanaryScenesSeconds = 0.0   # time spent in tools/scenes.py after builds; land reports it as its own phase
@@ -80,35 +80,11 @@ function Get-CanaryPatchProblems([string]$Patch, [string]$Root, [string]$Number)
 
 function New-CanaryResult($label, $ran, $failed, $err = '') { [pscustomobject]@{ Label = $label; Ran = $ran; Failed = $failed; Error = $err } }
 
-# Outcome of one case in verbosity-2 unittest output. The header line `test_x (mod.Class.test_x)` carries the
-# name; its outcome `... ok|FAIL|ERROR` is on the same line, or, after a docstring line or text the test
-# printed, on a later line before the next test header.
-function Get-UnittestOutcome([string]$text, [string]$name) {
-  $ran = $false; $failed = $false; $pending = $false
-  foreach ($ln in ($text -split "`r?`n")) {
-    if ($ln -match '^\w+ \([\w.]+\)') { $pending = $ln.Contains($name) }
-    if ($pending -and $ln -match '\.\.\. (ok|FAIL|ERROR)\s*$') {
-      $ran = $true; $pending = $false
-      if ($Matches[1] -ne 'ok') { $failed = $true }
-    }
-  }
-  return [pscustomobject]@{ Ran = $ran; Failed = $failed }
-}
-
-# The error for a Blender exit code, or '': --python-exit-code 1 is how a failing test script exits, -1 is
-# this tool's timeout, any other code is a crash.
-function Get-BlenderExitError([int]$code) {
-  if ($code -eq -1) { return 'Blender timed out' }
-  if ($code -ne 0 -and $code -ne 1) { return "Blender exited $code (crash?)" }
-  return ''
-}
+function ConvertTo-CanaryResult($r) { New-CanaryResult $r.Case $r.Ran $r.Failed $r.Error }
 
 # Results of one file group from its output; a non-empty $err marks every case of the group errored.
 function Get-CanaryGroupResults($group, [string]$txt, [string]$err) {
-  return @($group | ForEach-Object {
-    if ($err) { New-CanaryResult $_.Name $false $false $err }
-    else { $o = Get-UnittestOutcome $txt $_.Name; New-CanaryResult $_.Name $o.Ran $o.Failed }
-  })
+  return @(Get-ArCaseResults @($group | ForEach-Object { $_.Name }) $txt $err | ForEach-Object { ConvertTo-CanaryResult $_ })
 }
 
 # Whether a passed baseline recorded earlier still holds: only a clean tree at the same tree hash and the
@@ -117,23 +93,14 @@ function Test-CanaryBaselineRecord($prior, [string]$tree, [string]$key, [bool]$c
   return [bool]($clean -and $prior -and $prior.tree -eq $tree -and $prior.key -eq $key)
 }
 
-# Items of one tests/abi or tests/blender file (not gui_*) run in one start; each case is read from its line.
+# Items of one tests/abi or tests/blender file run through lib/testrun.ps1 (one start for a non-gui file);
+# each case is read from its line.
 function Invoke-CanaryFileGroup($group, [string]$rel, [string]$Root) {
-  $kargs = @($group | ForEach-Object { '-k'; $_.Name })
-  $err = ''
-  if ($rel -like 'tests/abi/*') {
-    $out = & (Get-ArPython) -I -m unittest discover -s (Split-Path $rel) -p (Split-Path $rel -Leaf) -v @kargs 2>&1 | ForEach-Object { "$_" }
-    $txt = $out -join "`n"
-    Write-CanaryLog $out
-    if ($txt -match '_FailedTest|ModuleNotFoundError|ImportError|SyntaxError') { $err = 'test module failed to import' }
-  } else {
-    $r = Invoke-ArBlender -Script $rel -Args $kargs 6>$null
-    $txt = ''
-    foreach ($f in $r.Log, "$($r.Log).err") { if (Test-Path $f) { $txt += (Get-Content $f -Raw) } }
-    Write-CanaryLog $txt
-    $err = Get-BlenderExitError $r.ExitCode
-  }
-  return Get-CanaryGroupResults $group $txt $err
+  $kind = if ($rel -like 'tests/abi/*') { 'py' } else { 'blender' }
+  $res = @(Invoke-ArTestCase -Kind $kind -Target $rel -Case @($group | ForEach-Object { $_.Name }) -Root $Root)
+  # A shared start logs its output once.
+  foreach ($o in @($res | ForEach-Object { $_.Output } | Select-Object -Unique)) { Write-CanaryLog $o }
+  return @($res | ForEach-Object { ConvertTo-CanaryResult $_ })
 }
 
 function Invoke-CanaryItem($it, [string]$Root) {
@@ -150,32 +117,11 @@ function Invoke-CanaryItem($it, [string]$Root) {
     return New-CanaryResult $it.Target $true ($LASTEXITCODE -ne 0)
   }
   if ($it.Kind -eq 'exe') {
-    # The .cmd fallback lets the land fixture stand in for a test binary.
-    $p = Join-Path $Root "out/bin/$($it.Target).exe"
-    if (-not (Test-Path $p)) { $p = Join-Path $Root "out/bin/$($it.Target).cmd" }
-    if (-not (Test-Path $p)) { return New-CanaryResult $it.Name $false $false "missing out/bin/$($it.Target).exe after the build" }
-    $out = & $p --tier=all ('-tc=' + ($it.Name -replace ',', '\,')) 2>&1 | ForEach-Object { "$_" }
-    $code = $LASTEXITCODE
-    Write-CanaryLog $out
-    $txt = $out -join "`n"
-    $m = [regex]::Match($txt, 'test cases:\s*(\d+)\s*\|\s*(\d+) passed\s*\|\s*(\d+) failed')
-    if (-not $m.Success) { return New-CanaryResult $it.Name $false $false "$($it.Target) printed no doctest summary (crash?)" }
-    $nFail = [int]$m.Groups[3].Value
-    if ($code -ne 0 -and $nFail -eq 0) { return New-CanaryResult $it.Name $true $false "$($it.Target) exited $code with no failed case" }
-    return New-CanaryResult $it.Name ([int]$m.Groups[1].Value -gt 0) ($nFail -gt 0)
+    $r = @(Invoke-ArTestCase -Kind exe -Target $it.Target -Case $it.Name -Root $Root)[0]
+    Write-CanaryLog $r.Output
+    return ConvertTo-CanaryResult $r
   }
   $rel = $it.Target -replace '\\', '/'
-  if ($rel -like 'tests/blender/*' -and (Split-Path $rel -Leaf) -like 'gui_*') {
-    if (-not (Get-Command Invoke-ArBlender).Parameters.ContainsKey('Gui')) { return New-CanaryResult $it.Name $false $false "$rel needs Invoke-ArBlender -Gui (task 085)" }
-    # Those scripts read a single -k: one windowed start per case.
-    $r = Invoke-ArBlender -Script $rel -Args @('-k', $it.Name) -Gui 6>$null
-    $log = ''
-    foreach ($f in $r.Log, "$($r.Log).err") { if (Test-Path $f) { $log += Get-Content $f -Raw } }
-    Write-CanaryLog $log
-    $be = Get-BlenderExitError $r.ExitCode
-    if ($be) { return New-CanaryResult $it.Name $false $false $be }
-    return New-CanaryResult $it.Name $log.Contains($it.Name) ($r.ExitCode -ne 0)
-  }
   if ($rel -like 'tests/abi/*' -or $rel -like 'tests/blender/*') { return (Invoke-CanaryFileGroup @($it) $rel $Root)[0] }
   return New-CanaryResult $it.Name $false $false "no runner for canary test file '$rel' (tests/abi and tests/blender only)"
 }
