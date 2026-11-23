@@ -21,3 +21,4 @@ Budget: +3 s of gate at most (fast_lock and fast_testrun in 137's `tools tests` 
 Depends on: 137.
 Size: M (about 350 lines without tests); stop and report at 2x.
 Progress:
+- Files: tools/lib/lock.ps1, tools/lib/testrun.ps1 (new), tools/test.ps1 (new), tools/lib/canary.ps1, tools/check.ps1, tests/tools/fast_lock.ps1 and fast_testrun.ps1 (new), .claude/agents/implementer.md line 35, tools/README.md; tools/lib/blender.ps1 unchanged (pre-flight: no lost wait).
