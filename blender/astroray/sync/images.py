@@ -6,14 +6,15 @@ MEMORY for packed files; PIXELS for generated or dirty images; colour space by
 `colorspace_settings.interop_id`; the engine's cache key carries a reload counter);
 docs/decisions/0007-appendix-abi.md (ar_image_desc, AR_COLOR_INTEROP_*). Blender behaviour from its
 Python API: Image.filepath_from_user(), Image.packed_file.data, Image.is_dirty, Image.alpha_mode.
-Generated, half and float images wait for PIXELS support in the engine (M1b), UDIM and mips for M3.
+Generated and edited images go as PIXELS through ar_edit_image_begin (0007 d21); UDIM and mips wait for M3.
 
 An image is keyed by sync.keys.image_key, the same key translate.py gives a TEX_IMAGE node.
 Run images after the world and before materials (0007 d20): a TEX_IMAGE names its image only by that key.
 Every constant sent to the engine is read from the generated binding `abi`, never copied.
 """
 import ctypes
-import re
+
+import numpy as np
 
 from . import keys
 from .edit import EditError
@@ -96,10 +97,30 @@ def _desc(abi, key, image, reload_count):
     return d, iid
 
 
-def _status_of(error):
-    """The ar_status inside an EditError's text ('<function> returned status N...')."""
-    m = re.search(r"returned status (\d+)", str(error))
-    return int(m.group(1)) if m else None
+def _send_pixels(edit, abi, image, key, d, line):
+    """A generated or edited image: Image.pixels (float RGBA, rows bottom-up) copied once into the buffer
+    ar_edit_image_begin stages. A byte image's pixels are the encoded values of its colour space, so its
+    interop id goes as is and the engine applies the transfer; a float image's are linear values (the
+    engine reads half and float images as linear, 0005 item 34), so an sRGB id goes as linear Rec.709."""
+    w, h = image.size
+    n = w * h * 4
+    if n == 0 or len(image.pixels) != n:
+        return f"image '{image.name}': has no readable pixels ({w} x {h}, {len(image.pixels)} values) and renders magenta"
+    if image.is_float and d.color_interop == abi.AR_COLOR_INTEROP_SRGB_REC709:
+        d.color_interop = abi.AR_COLOR_INTEROP_LIN_REC709
+    d.source = abi.AR_IMAGE_SOURCE_PIXELS
+    d.width, d.height = w, h
+    buffers = abi.ar_image_buffers()
+    edit.call("ar_edit_image_begin", ctypes.byref(d), ctypes.byref(buffers))
+    if buffers.pixels_count != n:
+        raise EditError(f"ar_edit_image_begin staged {buffers.pixels_count} floats for a {w} x {h} image")
+    # One copy into the staged address; no view of engine memory outlives the commit.
+    staged = (ctypes.c_float * n).from_address(ctypes.cast(buffers.pixels[0], ctypes.c_void_p).value)
+    view = np.frombuffer(staged, np.float32)
+    image.pixels.foreach_get(view)
+    del view, staged
+    edit.item_commit(key)
+    return line
 
 
 def sync_image(edit, abi, keymap, image, state):
@@ -115,16 +136,7 @@ def sync_image(edit, abi, keymap, image, state):
     if iid not in INTEROP:
         line = f"image '{image.name}': colour space interop id '{iid}' is not supported and renders magenta"
     if src == "PIXELS":
-        # The engine refuses PIXELS until M1b; the refusal is expected and reported, so the edit goes on.
-        d.source = abi.AR_IMAGE_SOURCE_PIXELS
-        d.width, d.height = image.size
-        try:
-            edit.call("ar_edit_set_image", ctypes.byref(d))
-        except EditError as e:
-            if _status_of(e) != abi.AR_ERR_UNSUPPORTED:
-                raise
-        what = "generated images" if image.source == "GENERATED" else "unsaved image edits"
-        return f"image '{image.name}': {what} land in M1b (it renders magenta)"
+        return _send_pixels(edit, abi, image, key, d, line)
     if src == "MEMORY":
         data = image.packed_file.data
         d.source = abi.AR_IMAGE_SOURCE_MEMORY
