@@ -44,6 +44,13 @@ MODULE = smoke_a1.MODULE
 ARGS = smoke_a1.ARGS
 WATCHDOG_S = 240.0
 STEP_TIMEOUT_S = 40.0
+# The viewport region the chart renders at. The window gives the 3D area whatever the desktop allows
+# (2100x1221 on the development machine), and 128 CPU samples of that took 44 s or more against
+# STEP_TIMEOUT_S, so the script fixes the region. 800x600 is the chart's own 4:3: camera view fits the
+# frame to it, a patch is about 75 px square and the sampled middle (INNER) about 37 px square, 1400 pixels
+# for the flatness check, at a fifth of the pixels (about 9 s to converge).
+REGION = (800, 600)
+REGION_SLACK = 24      # px: area borders and split rounding
 TOLERANCE = 2          # 0007 V9, in 8-bit codes
 UNIFORM = 2            # a patch window must be this flat (max - min per channel, codes)
 COLS, ROWS = 4, 3
@@ -188,16 +195,51 @@ class Driver(gui_present.Driver):
         job.lib.ar_session_get_progress(job.session, ctypes.byref(prog))
         return prog.state == job.abi.AR_STATE_CONVERGED
 
+    def split_once(self, win, area):
+        """One split toward REGION; True while the area is still larger than REGION in either direction.
+
+        The new outliner is the left or upper `factor` share of the area and the 3D area keeps the rest, a
+        factor above 0.5 flips the sides, and layout reads lag the call, so each step splits at most in half
+        and the caller waits a tick before looking again."""
+        region = next(r for r in area.regions if r.type == "WINDOW")
+        for direction, want, size in (("VERTICAL", REGION[0], region.width), ("HORIZONTAL", REGION[1], region.height)):
+            if size < want - REGION_SLACK:
+                raise RuntimeError(f"the 3D area is only {size} px, below the chart region {want}")
+            if size > want + REGION_SLACK:
+                keep = area.as_pointer()
+                with bpy.context.temp_override(window=win, area=area, region=region):
+                    bpy.ops.screen.area_split(direction=direction, factor=min(0.5, 1.0 - want / size))
+                for a in win.screen.areas:
+                    if a.as_pointer() != keep and a.type == "VIEW_3D":
+                        a.type = "OUTLINER"  # only one rendered viewport may exist
+                return True
+        return False
+
+    def step_split(self):
+        win, area, region = self.find_area()
+        if self.timed_out(30.0):
+            raise RuntimeError(f"the 3D region is {region.width}x{region.height}, not {REGION}")
+        if self.split_once(win, area):
+            return 0.5
+        self.go("setup2")
+        return 0.1
+
     def step_setup(self):
+        win, area, region = self.find_area()
+        space = area.spaces.active
+        for name in ("show_region_header", "show_region_toolbar", "show_region_ui", "show_region_tool_header",
+                     "show_region_hud"):
+            if hasattr(space, name):
+                setattr(space, name, False)
+        self.go("split")
+        return 0.5  # the hidden regions give their space back on the next redraw
+
+    def step_setup2(self):
         win, area, region = self.find_area()
         space = area.spaces.active
         space.shading.type = "RENDERED"
         space.overlay.show_overlays = False
         space.show_gizmo = False
-        for name in ("show_region_header", "show_region_toolbar", "show_region_ui", "show_region_tool_header",
-                     "show_region_hud"):
-            if hasattr(space, name):
-                setattr(space, name, False)
         space.region_3d.view_perspective = "CAMERA"
         chart_image()
         self.go("first_frame")
@@ -232,6 +274,10 @@ class Driver(gui_present.Driver):
             self.settle = 0
             return 0.2
         self.settle += 1
+        if self.settle == 1:
+            reg = next(iter(self.areas().values()))[2]
+            print(f"RESULT chart case {self.case}: converged after {time.monotonic() - self.step_t0:.1f} s of {STEP_TIMEOUT_S:.0f}, "
+                  f"region {reg.width}x{reg.height}", flush=True)
         if self.settle < 4:  # a few quiet, converged ticks: the last frame is on screen
             return 0.25
         self.shoot()
