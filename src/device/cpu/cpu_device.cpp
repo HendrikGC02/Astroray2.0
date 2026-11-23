@@ -10,6 +10,7 @@
 
 #include "kernel/film/present.h"
 #include "kernel/film/resolve.h"
+#include "kernel/stages/bake_environment.h"
 #include "kernel/stages/film_build_active.h"
 #include "kernel/stages/generate_camera.h"
 #include "kernel/stages/queue_build.h"
@@ -71,6 +72,8 @@ void CpuDevice::register_scheduler_kernels() {
   register_kernel(KernelId::FILM_HEATMAP, &cpu_film_heatmap);
   // Every pass starts by writing the active-pixel list the resolve and present kernels read.
   register_kernel(KernelId::FILM_BUILD_ACTIVE, &cpu_film_build_active);
+  // The environment table's grid (0004 D11); launched by host/light/env_bake.cpp when the world changes.
+  register_kernel(KernelId::BAKE_ENVIRONMENT, &cpu_bake_environment);
 }
 
 void CpuDevice::register_intersect_stages() {

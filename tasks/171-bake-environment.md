@@ -16,3 +16,4 @@ Budget: gate +2 s at most (stop and ask above); `k_bake_environment` is a new ro
 Depends on: 153. kernel_globals.h sweep order in tasks/README.md.
 Size: M (about 250 lines without tests); stop and report at 2x.
 Progress:
+- Files: src/kernel/stages/bake_environment.h, src/kernel_cpu/bake_environment.cpp, src/kernel_gpu/bake_environment.cu, src/kernel/launch_config.h, src/kernel/kernel_globals.h, src/device/cpu/cpu_device.cpp, src/host/light/env_bake.{h,cpp}, src/kernel/budget.toml, tests/cpu/test_bake_environment.cpp, tests/gpu/test_agree_pure.cpp, tests/gpu/kernels/agree_pure.cu, tests/gpu/test_bake_environment_agree.cpp, docs/decisions/0004-integrator.md, tasks/171.canary.patch; all in Scope.
