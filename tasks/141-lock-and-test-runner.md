@@ -22,3 +22,9 @@ Depends on: 137.
 Size: M (about 350 lines without tests); stop and report at 2x.
 Progress:
 - Files: tools/lib/lock.ps1, tools/lib/testrun.ps1 (new), tools/test.ps1 (new), tools/lib/canary.ps1, tools/check.ps1, tests/tools/fast_lock.ps1 and fast_testrun.ps1 (new), .claude/agents/implementer.md line 35, tools/README.md; tools/lib/blender.ps1 unchanged (pre-flight: no lost wait).
+- Pre-flight: no Blender wait inside a tier (gate/full hold the lock at entry; check full's gate child inherits ASTRORAY_LOCK_PID), so the B-10 sentence is wrong; uncounted waits are in callers outside a tier: Invoke-Canary and gallery.py (`$null = Enter-ArMachineLock`), measure_ttff.ps1 (`$null = Invoke-ArBlender`). check.ps1 now adds each Invoke-ArBlender Waited anyway (Invoke-TierBlender).
+- Timeout read as the holder's hold (owner.json started), not the waiter's wait; with no live owner record the waiter's own wait is the clock. Message: `FAIL lock: waited N s for <tool> (pid P), holding H s since T, over the L s limit (ASTRORAY_LOCK_TIMEOUT_S); owner file <path>`.
+- Lock timeout: build.ps1 and check.ps1 exit 1 with pwsh's uncaught-error box around the FAIL lock line (measured); bench.ps1 the same (top-level, by reading); land.ps1 has no lock of its own: Invoke-Canary turns it into a canary problem, check gate's exit 1 posts failure.
+- fast_lock takes 3.8-5.0 s (case 1 alone needs the 3 s limit plus two pwsh starts): over the task's "under 3 s" and, with fast_testrun 0.5 s, over the +3 s gate allowance. Not loosened; lead to decide.
+- Unittest outcome parser (moved from canary.ps1) missed a bare `ok` line after printed output (test_node_values); fixed in testrun.ps1, case added to fast_testrun.
+- Acceptance: check fast PASS 7.2 s; check gate PASS 176.0 s (waited 15.0 s); run_fast PASS all four; test.ps1 cpu exe, abi and blender cases PASS; canary 141 PASS (matrix 1+1).
