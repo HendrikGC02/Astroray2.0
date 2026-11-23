@@ -24,6 +24,7 @@ TYPES = ("", "f32", "f32x3", "spec")
 # Operand tokens: the bytes the interpreter reads (ops.def header).
 OPERANDS = ("reg", "imm", "uvset", "lift", "regrgbs", "slotimm", "jmpoff")
 OPS_DEF = "src/kernel/vm/ops.def"
+INTERVAL_H = "src/kernel/vm/interval.h"
 LOWERING = "blender/astroray/materials/lowering_table.py"
 NODE_LIST = "tests/data/shader_node_types_5_3.txt"
 STORE_SLOT_H = "src/kernel/vm/ops/store_slot.h"
@@ -49,8 +50,9 @@ def split_args(s):
     return out
 
 
-def parse_table(text):
-    """Rows of ops.def as dicts, in order. Raises OpsError on any bad row."""
+def parse_table(text, interval_h=None):
+    """Rows of ops.def as dicts, in order. Raises OpsError on any bad row. With interval_h (the text of
+    interval.h) every named interval rule must be defined there (0006 D7)."""
     rows = []
     for no, line in enumerate(text.splitlines(), 1):
         line = line.split("//")[0].strip()
@@ -97,6 +99,9 @@ def parse_table(text):
         elif not re.fullmatch(r"interval_[a-z0-9_]+", r["rule"]):
             raise OpsError(f"ops.def:{r['line']}: {r['name']}: interval rule {r['rule']!r} is neither "
                            f"interval_<name> nor {NONE_RULE}")
+        elif interval_h is not None and not re.search(
+                r"AR_FN\s+Interval3?\s+" + r["rule"] + r"\(", _strip_comments(interval_h)):
+            raise OpsError(f"ops.def:{r['line']}: {r['name']}: {r['rule']} is not defined in interval.h")
     return rows
 
 
@@ -251,6 +256,9 @@ def self_test():
         ("an eight-field row",
          'AR_OP(BAD, 0, "reg", "f32", CHEAP, NONE_SURFACE_ONLY, false, false)', "expected 9 fields"),
     ]
+    cases.append(("a row naming an interval rule interval.h does not define",
+                  'AR_OP(BAD, 0, "", "f32", CHEAP, interval_missing, true, false, false)',
+                  "BAD: interval_missing is not defined in interval.h"))
     good_sem = "enum class SpectrumSemantic : uint8_t { REFLECTANCE = 0, UNBOUNDED, IOR };"
     good_ss = ("#define AR_RECORD_SCALARS(X) X(a) X(b)\n#define AR_RECORD_SPECTRAL(X) X(c, C, IOR)\n"
                "#define AR_RECORD_FRAMES(X) X(d)\n")
@@ -272,7 +280,7 @@ def self_test():
     bad = 0
     for what, row, needle in cases:
         try:
-            parse_table(row) if isinstance(row, str) else row()
+            parse_table(row, "AR_FN Interval interval_other(") if isinstance(row, str) else row()
         except OpsError as e:
             if needle in str(e):
                 print(f"opsgen self-test: refused {what}: {e}")
@@ -295,7 +303,7 @@ def main():
     out = a.out or os.path.join(a.root, "out", "build", "gen")
     rd = lambda p: open(os.path.join(a.root, p), encoding="utf-8").read()
     try:
-        rows = parse_table(rd(OPS_DEF))
+        rows = parse_table(rd(OPS_DEF), rd(INTERVAL_H))
         nodes = [ln.strip() for ln in rd(NODE_LIST).splitlines() if ln.strip()]
         low = rd(LOWERING)
         csv = coverage(rows, read_lowering(low), nodes, read_lowering(low, "PLANNED"))
