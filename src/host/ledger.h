@@ -6,7 +6,9 @@
 // Ref: docs/decisions/0007-blender-integration.md d14 (ledger, budget table, "fail"
 // message "needs X GiB for <category>, Y available"); 0002 D13, D15 (allocation row).
 #pragma once
+#include <atomic>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
@@ -88,10 +90,20 @@ class Ledger {
   uint64_t session_total(uint64_t session) const;
   uint64_t category_total(LedgerCategory category) const;
   std::vector<LedgerRecord> records() const;  // live records, in no particular order
+  // Calls `visit` on the first live record while holding the ledger lock; does nothing when there is
+  // none. Lets a test hold the lock for as long as it needs; `visit` must not call the ledger.
+  void visit_first_record_locked(const std::function<void(const LedgerRecord&)>& visit) const;
 
  private:
   mutable std::mutex mutex_;
   std::unordered_map<uint64_t, LedgerRecord> live_;
+  // Kept in step with live_ so the progress poll (category_total, 17 reads per call, in a tight loop
+  // in a host that spins) is O(1) and never holds the lock against an uploading worker for the time
+  // of a scan over every record.
+  // Atomic so a poll takes no lock at all: a spinning reader that re-takes even a short critical
+  // section starves the writer on an unfair mutex. Written only under mutex_.
+  std::atomic<uint64_t> category_bytes_[kLedgerCategoryCount] = {};
+  std::atomic<uint64_t> total_bytes_{0};
   uint64_t next_id_ = 1;
 };
 
