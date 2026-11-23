@@ -184,6 +184,8 @@ struct Charge {
     try {
       ledger->remove(id);
     } catch (...) {
+      // a destructor must not throw. remove() throws only for a non-live id (a double free or wrong id),
+      // a ledger bug that this drop hides.
     }
   }
   std::shared_ptr<Ledger> ledger;

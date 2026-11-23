@@ -66,7 +66,7 @@ AR_FN EonParams stack_eon_params(const OpenPBRParams& p) {
 // here and the same value feeds the table and the lobe, so a stack with an index outside the
 // range stays energy-conserving (a table clamped alone would leave the lobe reflecting more or
 // less than the layer takes from the base). A clamp sets eta_clamped; the host turns it into the
-// SPECTRUM_OUT_OF_RANGE report (src/host/report_codes.def). Ref: 0005 item 6; task 064 ruling.
+// SPECTRUM_OUT_OF_RANGE report (src/host/report_codes.def). Ref: 0005 item 6.
 AR_FN StackSelect stack_select(const EDielTable& tab, const OpenPBRParams& p, Real mu_o) {
   const Real alpha = p.specular_roughness * p.specular_roughness;
   const Real r = e_roughness_axis(alpha, alpha);

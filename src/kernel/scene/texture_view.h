@@ -2,7 +2,7 @@
 // The kernel-visible 8-bit image table: one view per image, texel bytes as stored with their
 // encoding tag, so the filter (061) interpolates in the stored encoding and decodes afterwards.
 // The host fills it from the image store (host arrays in the ledger textures category); the
-// CUDA upload is task 102. One definition for the host, the CPU stages and the CUDA stages.
+// CUDA upload is a later step. One definition for the host, the CPU stages and the CUDA stages.
 // Ref: docs/decisions/0005-material-model.md item 34; 0007 d13.
 #pragma once
 #include <cstdint>

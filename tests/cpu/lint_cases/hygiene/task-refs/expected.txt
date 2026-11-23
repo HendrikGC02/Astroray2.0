@@ -1,0 +1,7 @@
+blender/b.py:4: [hygiene] ticket history in a comment (CLAUDE.md rule 8)
+blender/b.py:6: [hygiene] ticket history in a comment (CLAUDE.md rule 8)
+src/host/a.cpp:2: [hygiene] ticket history in a comment (CLAUDE.md rule 8)
+src/host/a.cpp:3: [hygiene] ticket history in a comment (CLAUDE.md rule 8)
+src/host/a.cpp:5: [hygiene] ticket history in a comment (CLAUDE.md rule 8)
+src/x.toml:2: [hygiene] ticket history in a comment (CLAUDE.md rule 8)
+src/x.def:1: [hygiene] ticket history in a comment (CLAUDE.md rule 8)

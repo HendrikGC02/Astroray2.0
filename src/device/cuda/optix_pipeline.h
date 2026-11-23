@@ -35,7 +35,7 @@ class TraversalPipeline {
   TraversalPipeline(const TraversalPipeline&) = delete;
   TraversalPipeline& operator=(const TraversalPipeline&) = delete;
 
-  // Compiles the motion variant (usesMotionBlur) once; called only by the measurement of task 094.
+  // Compiles the motion variant (usesMotionBlur) once; called only by the motion-blur measurement.
   void create_motion_variant();
   bool has_motion_variant() const;
   Times times() const;

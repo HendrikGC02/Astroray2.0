@@ -4,7 +4,7 @@
 // gate's B-16 check compares against tests/budgets/counters.toml (filled by 076).
 // lamp_crossings and shadow_rays_emitted are filled by later stages through counter slots in
 // KernelGlobals; until a stage does, they stay 0.
-// Ref: docs/decisions/0009-process-and-quality.md d18 (work counters, B-16);
+// Ref: docs/decisions/0009-build-test-process.md d18 (work counters, B-16);
 // 0004 D29 (per-pass counters); 0002 D7, D13 (state sizes).
 #pragma once
 #include <cstdint>

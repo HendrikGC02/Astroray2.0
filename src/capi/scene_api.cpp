@@ -74,6 +74,7 @@ ar_status fail(H* h, ar_status st, const std::string& why) {
   try {
     h->last_error = why;
   } catch (...) {
+    // out of memory while storing the text; the status code still reports the failure.
   }
   return st;
 }

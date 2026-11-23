@@ -15,7 +15,7 @@
 // Apache-2.0), which offsets by a per-hit floating-point error bound. It needs an error
 // bound carried from every hit (the barycentric interpolation of each triangle) through
 // the hit record, and the OptiX and Embree hits would each have to produce one.
-// Ref: docs/decisions/0002-kernel-architecture.md D16, task 038.
+// Ref: docs/decisions/0002-kernel-architecture.md D16.
 #pragma once
 #include <cstdint>
 
@@ -81,7 +81,7 @@ AR_FN ShadowSegment shadow_segment_between(Real3 o, Real3 e, Real3 fallback_dir)
 
 // Shading point `p` (normal `ng`) to a point `q` on an emitting triangle (normal `nq`): both
 // ends are offset toward each other and tmax is the distance between the offset points.
-// Ref: task 038 Do 2.
+// Ref: docs/decisions/0002-kernel-architecture.md D16.
 AR_FN ShadowSegment shadow_segment(Real3 p, Real3 ng, Real3 q, Real3 nq) {
   return shadow_segment_between(offset_ray_origin(p, ng, q - p), offset_ray_origin(q, nq, p - q), ng);
 }

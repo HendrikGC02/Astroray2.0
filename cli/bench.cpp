@@ -106,7 +106,7 @@ int bench_cmd(int argc, char** argv) {
   const double median = ms[ms.size() / 2], spread = ms.back() - ms.front();
   l.emit("pass_ms", median, "ms", ms.size(), spread);
   // A pass is one sample for every pixel, so the samples in a pass are the film's pixels. The time is the
-  // pass wall time, host work included, until task 093's kernel timers exist. Ref: Ruling 71.
+  // pass wall time, host work included, until kernel timers exist. Ref: Ruling 71.
   ar_pass_info pi{};
   if (ar_session_pass_info(s, 0, &pi) != AR_OK || pi.width == 0 || pi.height == 0) {
     printf("bench: the film size is unreadable\n");

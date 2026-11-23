@@ -497,6 +497,7 @@ void Session::fail(const std::string& why, const DeviceError* device_error) {
   try {
     ctx_.log.line("ERROR", "session failed: " + why);
   } catch (...) {
+    // best-effort log; the state and failure_ already hold the failure.
   }
 }
 

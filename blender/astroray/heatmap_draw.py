@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Heat-map display modes: the engine's RGBA8 sRGB frame drawn outside the view transform.
 
-Route (probe P4, task 086): drawing in view_draw without bind_display_space_shader was tried first and
+Route (probe P4): drawing in view_draw without bind_display_space_shader was tried first and
 Blender still applied the view transform (an AgX screenshot of a uniform viridis(1.0) frame came out as a
 desaturated yellow, 99/255 off), so the frame is drawn from a SpaceView3D POST_PIXEL handler, which runs
 after the view transform.

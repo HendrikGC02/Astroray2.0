@@ -89,7 +89,7 @@ struct MeshDeclaration {
 };
 
 // Checks a positions-only update's staged counts against its base topology; throws
-// std::runtime_error naming the mesh. Ref: task 035 Do 3.
+// std::runtime_error naming the mesh.
 void check_position_counts(const MeshTopology& base, uint64_t positions, uint64_t corner_normals);
 
 // The active mesh records of one scene, the pending declarations and the ledger that

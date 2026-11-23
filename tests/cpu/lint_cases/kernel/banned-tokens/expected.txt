@@ -10,3 +10,4 @@ src/kernel/b.h:8: [kernel] banned in kernel code (heap allocation): delete
 src/kernel/b.h:8: [kernel] banned in kernel code (heap allocation): new
 src/kernel/b.h:9: [kernel] banned in kernel code (heap allocation): free
 src/kernel/b.h:9: [kernel] banned in kernel code (heap allocation): malloc
+src/kernel/b.h:7: [hygiene] empty catch (...) without a reason (CLAUDE.md rule 5)

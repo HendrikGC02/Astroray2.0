@@ -3,7 +3,7 @@
 // start, one thread per listed pixel. In M1a the list holds every pixel of the render
 // sub-rectangle in row order (film_active_pixel); adaptive compaction (M4) changes only this
 // kernel. generate_camera and every later stage read the list and never write it (the resolve
-// reads it from task 101 on). The count u is film_build_active_count: the host launches that many
+// reads it too). The count u is film_build_active_count: the host launches that many
 // items.
 // Ref: docs/decisions/0008-film-outputs-denoise.md d3 (slot assignment, active-pixel list);
 // 0002-kernel-architecture.md D8; 0003 d23 (the key reads the list).

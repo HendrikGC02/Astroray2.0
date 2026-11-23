@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Repository lint: licences, NVIDIA material, ASCII scripts, process caps, skips, task files, build flags, doc citations.
+"""Repository lint: licences, NVIDIA material, ASCII scripts, process caps, skips, task files, build flags, doc citations, recurring review defects.
 
 Run: <python> -I tools/lint.py [--self-test] [--section name]
 Ref: docs/decisions/0009-build-test-process.md d10, d28, d31; 0001 D7.1 and V4.
@@ -917,6 +917,109 @@ def refs_manifest(c, toml_path):
             c.find(toml_path, 1, "refs", f"{name}: also a name in deps.toml (references are not dependencies)")
 
 
+HYG_TASK_RE = re.compile(r"\b[Tt]asks?[ /]+\d{3}\b")
+HYG_EXT = (".cpp", ".h", ".hpp", ".cu", ".cuh", ".py", ".cmake", ".def", ".toml")
+HYG_REF_SKIP = ("third_party/", "docs/v1-lessons/")
+HYG_REF_EXT = (".cpp", ".h", ".hpp", ".cu", ".cuh", ".py", ".ps1", ".cmake", ".def", ".toml", ".md")
+HYG_CATCH_RE = re.compile(r"\bcatch\s*\(\s*\.\.\.\s*\)\s*\{")
+HYG_TOKEN_RE = re.compile(r"[A-Za-z0-9_.*<>/+-]+")
+
+
+def _comment_lines(p, text):
+    """Yield (line number, comment text) for the comments and docstrings of one file."""
+    L = text.splitlines()
+    if p.endswith(".py"):
+        import ast
+        import io
+        import tokenize
+        try:
+            for t in tokenize.generate_tokens(io.StringIO(text).readline):
+                if t.type == tokenize.COMMENT:
+                    yield t.start[0], t.string
+            for node in ast.walk(ast.parse(text)):
+                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) \
+                        and isinstance(node.value.value, str):
+                    for k in range(node.lineno, node.end_lineno + 1):
+                        yield k, L[k - 1]
+        except (SyntaxError, tokenize.TokenError):
+            for k, ln in enumerate(L, 1):
+                yield k, ln
+    elif p.endswith((".toml", ".cmake")):
+        mark = "#"
+        for k, ln in enumerate(L, 1):
+            if mark in ln:
+                yield k, ln[ln.index(mark):]
+    else:
+        blank = blank_comments(text).splitlines()
+        for k, ln in enumerate(L, 1):
+            b = blank[k - 1] if k <= len(blank) else ""
+            cm = "".join(ch if (i >= len(b) or b[i] == " ") and ch != " " else " " for i, ch in enumerate(ln))
+            if cm.strip():
+                yield k, cm
+
+
+def _ref_tokens(ln, ext_names):
+    """Repository-path-like tokens after `Ref:`, except those that follow the name of an external reference
+    (third_party/refs.toml, optionally with a commit suffix): they are paths inside that tree."""
+    i = ln.index("Ref:")
+    prev = ""
+    for m in HYG_TOKEN_RE.finditer(ln[i + 4:]):
+        t = re.sub(r":\d+$", "", m.group(0).strip(".,;:"))
+        if "/" in t and not any(re.fullmatch(re.escape(n) + r"(-[0-9a-f]+)?", prev) for n in ext_names):
+            yield t
+        prev = m.group(0)
+
+
+def hygiene(c):
+    """Ref: CLAUDE.md rules 3, 5, 8; retrospective 6.3 and R16: the four defect classes that recur in review."""
+    ext_names = []
+    if "third_party/refs.toml" in c.files:
+        ext_names = [m.group(1) for ln in c.lines("third_party/refs.toml")
+                     for m in [re.match(r'name\s*=\s*"([^"]+)"', ln)] if m]
+    fileset = set(c.files)
+    dirs = {f.split("/")[0] for f in c.files if "/" in f}
+    src_dirs = {f.split("/")[1] for f in c.files if f.startswith("src/") and f.count("/") > 1}
+    for p in c.files:
+        text = None
+        if p.startswith("tests/blender/") and p.endswith(".py") and p != "tests/blender/headless/support.py":
+            for n, ln in enumerate(c.lines(p), 1):
+                if "unittest.main(" in ln:
+                    c.find(p, n, "hygiene", "use support.main()")
+        top = p.split("/")[0]
+        if top in ("src", "blender", "cli", "include") and p.endswith(HYG_EXT):
+            text = open(os.path.join(c.root, p), encoding="utf-8", errors="replace").read()
+            for n, cm in _comment_lines(p, text):
+                if HYG_TASK_RE.search(cm):
+                    c.find(p, n, "hygiene", "ticket history in a comment (CLAUDE.md rule 8)")
+        if p.endswith(HYG_REF_EXT) and not p.startswith(HYG_REF_SKIP):
+            for n, ln in enumerate(c.lines(p), 1):
+                if "Ref:" not in ln:
+                    continue
+                for t in _ref_tokens(ln, ext_names):
+                    parts = t.split("/")
+                    if parts[0] not in dirs or "_cache" in t or "*" in t or "<" in t:
+                        continue
+                    if parts[0] == "src" and (len(parts) < 2 or parts[1] not in src_dirs):
+                        continue
+                    if not (t.endswith("/") or "." in parts[-1]):
+                        continue
+                    ok = any(f.startswith(t) for f in c.files) if t.endswith("/") else t in fileset
+                    if not ok:
+                        c.find(p, n, "hygiene", f"Ref: names {t}, which is not in the repository")
+        if top in ("src", "cli", "include") and p.endswith((".cpp", ".h", ".hpp", ".cu", ".cuh")):
+            if text is None:
+                text = open(os.path.join(c.root, p), encoding="utf-8", errors="replace").read()
+            code = blank_comments(text)
+            for m in HYG_CATCH_RE.finditer(code):
+                depth, j = 1, m.end()
+                while j < len(code) and depth:
+                    depth += (code[j] == "{") - (code[j] == "}")
+                    j += 1
+                if not text[m.end():j - 1].strip():
+                    c.find(p, text.count("\n", 0, m.start()) + 1, "hygiene",
+                           "empty catch (...) without a reason (CLAUDE.md rule 5)")
+
+
 SECTIONS = {
     "spdx": spdx,
     "nvidia": nvidia,
@@ -934,6 +1037,7 @@ SECTIONS = {
     "flags": flags,
     "citations": citations,
     "refs": refs,
+    "hygiene": hygiene,
 }
 
 def run(root, files, sections):

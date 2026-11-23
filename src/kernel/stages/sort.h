@@ -26,7 +26,7 @@
 // shader id (intersect_closest.h passes `shader` as the key of integrator_path_next_sorted,
 // state_flow.h INTEGRATOR_SORT_KEY) whenever that kernel runs (path_trace_work_gpu.cpp,
 // kernel_uses_sorting): a Cycles shader corresponds to a material header here, so Cycles would
-// sort B-5M's 300 shaders. Task 120 measured that sort slower on B-5M, hence the program count.
+// sort B-5M's 300 shaders. A measurement found that sort slower on B-5M, hence the program count.
 // Host contract: after queue_build has finished, launch count and scatter with `sort_grid(count)`
 // on the CPU (an item range) or gpu_tile_grid(count) on the GPU (queue_build.h, a warp per tile)
 // and, between them, scan with `sort_scan_grid(count)`; reallocate sort_counts whenever
