@@ -57,9 +57,11 @@ function Wait-Ready([string]$tag) {
   $sw = [Diagnostics.Stopwatch]::StartNew()
   while (-not (Test-Path $f)) { if ($sw.Elapsed.TotalSeconds -gt 15) { throw "holder $tag not ready in 15 s" }; Start-Sleep -Milliseconds 10 }
 }
+# A child on a VT console renders its uncaught error with ANSI colour codes, around the wrap gutter too, so
+# the codes go before any line is joined or matched.
 function Read-Out([string]$name) {
   $o = @(foreach ($s in 'out', 'err') { $p = Join-Path $tmp "$name.$s"; if (Test-Path $p) { Get-Content $p } })
-  return $o
+  return @($o | ForEach-Object { $_ -replace '\x1b\[[0-9;?]*[A-Za-z]', '' })
 }
 
 try {
