@@ -958,16 +958,24 @@ def _comment_lines(p, text):
                 yield k, cm
 
 
-def _ref_tokens(ln):
+def _ref_tokens(ln, ext_names):
+    """Repository-path-like tokens after `Ref:`, except those that follow the name of an external reference
+    (third_party/refs.toml, optionally with a commit suffix): they are paths inside that tree."""
     i = ln.index("Ref:")
+    prev = ""
     for m in HYG_TOKEN_RE.finditer(ln[i + 4:]):
         t = re.sub(r":\d+$", "", m.group(0).strip(".,;:"))
-        if "/" in t:
+        if "/" in t and not any(re.fullmatch(re.escape(n) + r"(-[0-9a-f]+)?", prev) for n in ext_names):
             yield t
+        prev = m.group(0)
 
 
 def hygiene(c):
     """Ref: CLAUDE.md rules 3, 5, 8; retrospective 6.3 and R16: the four defect classes that recur in review."""
+    ext_names = []
+    if "third_party/refs.toml" in c.files:
+        ext_names = [m.group(1) for ln in c.lines("third_party/refs.toml")
+                     for m in [re.match(r'name\s*=\s*"([^"]+)"', ln)] if m]
     fileset = set(c.files)
     dirs = {f.split("/")[0] for f in c.files if "/" in f}
     src_dirs = {f.split("/")[1] for f in c.files if f.startswith("src/") and f.count("/") > 1}
@@ -987,7 +995,7 @@ def hygiene(c):
             for n, ln in enumerate(c.lines(p), 1):
                 if "Ref:" not in ln:
                     continue
-                for t in _ref_tokens(ln):
+                for t in _ref_tokens(ln, ext_names):
                     parts = t.split("/")
                     if parts[0] not in dirs or "_cache" in t or "*" in t or "<" in t:
                         continue
