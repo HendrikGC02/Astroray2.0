@@ -38,10 +38,17 @@ function Enter-ArMachineLock { $w = & $script:OrigEnterLock; $script:LandTimes['
 $script:UndoTo = $null      # the sha before this script's "(land)" commit; set while that commit may be undone
 $script:LandSha = $null     # that commit
 $script:LandBranch = $null
+$script:OriginLand = $null  # a (land) commit a re-prepare dropped locally that origin still carries
 $script:TaskTitle = ''
 $script:TaskLook = ''
 
 function Undo-LandCommit {
+  # This attempt's own commit first, then a dropped earlier one origin may still carry.
+  Undo-OwnLandCommit
+  Restore-OriginLand
+}
+
+function Undo-OwnLandCommit {
   # Before the push the commit is only local: reset. Once origin has it, a reset would need a force push, so the
   # commit is reverted and the revert pushed plainly; local and origin both carry the task file again.
   if (-not $script:UndoTo) { return }
@@ -55,10 +62,43 @@ function Undo-LandCommit {
     return
   }
   & git revert --no-edit $script:LandSha 2>&1 | Out-Null
-  if ($LASTEXITCODE -ne 0) { Write-Host "WARN land: could not revert the pushed (land) commit $($script:LandSha); run git revert --no-edit $($script:LandSha); git push"; return }
+  if ($LASTEXITCODE -ne 0) {
+    & git revert --abort 2>&1 | Out-Null
+    Write-Host "WARN land: could not revert the pushed (land) commit $($script:LandSha); run git revert --no-edit $($script:LandSha); git push"
+    return
+  }
   & git push -q origin "HEAD:refs/heads/$($script:LandBranch)" 2>&1 | Out-Null
   if ($LASTEXITCODE -eq 0) { Write-Host 'undid (land) commit (reverted and pushed)' }
   else { Write-Host "WARN land: reverted the (land) commit locally but the push failed; run git push origin HEAD:$($script:LandBranch)" }
+}
+
+function Restore-OriginLand {
+  # A re-prepare dropped an earlier (land) commit locally and this attempt failed before pushing its own: origin's
+  # branch still ends in that commit, without the task file. Never a force push: when the commit is in HEAD it is
+  # reverted there and pushed; otherwise a revert of it is made on top of origin's tip (plumbing, the work tree is
+  # not touched) and pushed, which is a fast-forward of origin. HEAD itself cannot fast-forward origin then.
+  if (-not $script:OriginLand) { return }
+  $c1 = $script:OriginLand; $script:OriginLand = $null; $b = $script:LandBranch
+  $fix = "git push origin `$(git commit-tree $c1~1^{tree} -p $c1 -m 'Revert (land)'):refs/heads/$b"
+  $remote = @(& git ls-remote origin "refs/heads/$b" 2>$null)
+  if ($LASTEXITCODE -ne 0) { Write-Host "LEFTOVER: origin $b may still carry the (land) commit $c1; fix: if origin/$b is $c1, $fix"; return }
+  $tip = if ($remote.Count) { "$($remote[0])".Split("`t")[0] } else { '' }
+  if ($tip -ne $c1) { return }   # origin moved on (or the branch is gone): it no longer ends in the dropped commit
+  & git merge-base --is-ancestor $c1 HEAD 2>&1 | Out-Null
+  if ($LASTEXITCODE -eq 0) {
+    & git revert --no-edit $c1 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+      & git push -q origin "HEAD:refs/heads/$b" 2>&1 | Out-Null
+      if ($LASTEXITCODE -eq 0) { Write-Host "undid (land) commit $($c1.Substring(0, 9)) on origin (reverted and pushed)"; return }
+    } else { & git revert --abort 2>&1 | Out-Null }
+  }
+  $new = "$(& git commit-tree "$c1~1^{tree}" -p $c1 -m "Revert the (land) commit $c1 (land.ps1 failed after a re-prepare)" 2>$null)".Trim()
+  if ($LASTEXITCODE -eq 0 -and $new) {
+    & git push -q origin "${new}:refs/heads/$b" 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { Write-Host "undid (land) commit $($c1.Substring(0, 9)) on origin (a revert on top of it pushed)"; return }
+    $fix = "git push origin ${new}:refs/heads/$b"
+  }
+  Write-Host "LEFTOVER: origin $b still carries the (land) commit $c1; fix: $fix"
 }
 function Refuse([string]$why) { Undo-LandCommit; Write-Host "REFUSE land: $why"; exit 1 }
 function Fail([string]$why) { Write-Host "FAIL land: $why"; Undo-LandCommit; exit 1 }
@@ -97,9 +137,14 @@ function Invoke-Prepare {
   # A re-prepare (main moved after a first prepare) first drops this script's own
   # task-file deletion commit, so the canary and the task file are back for the checks.
   $headMsg = (GitX log -1 --format=%s)
-  if ($headMsg -match ' \(land\)$' -and -not (Test-Path (Join-Path $root "tasks/$Number.canary.patch")) -and -not @(Get-ChildItem (Join-Path $root 'tasks') -Filter "$Number-*.md").Count) {
+  if ($headMsg -match ' \(land\)$' -and -not (Test-Path (Join-Path $root "tasks/$Number.canary.patch")) -and -not @(Get-ChildItem (Join-Path $root 'tasks') -Filter "$Number-*.md" -ErrorAction SilentlyContinue).Count) {
     Write-Host "re-prepare: dropping previous land commit '$headMsg'"
+    $dropped = (GitX rev-parse HEAD)
     $null = GitX reset -q --hard HEAD~1
+    # That commit is not this attempt's to undo, but origin may end in it until this attempt pushes its own.
+    $script:UndoTo = $null; $script:LandSha = $null; $script:LandBranch = $branch
+    $rem = @(& git ls-remote origin "refs/heads/$branch" 2>$null)
+    if ($LASTEXITCODE -ne 0 -or ($rem.Count -and "$($rem[0])".Split("`t")[0] -eq $dropped)) { $script:OriginLand = $dropped }
   }
   Measure-LandPhase 'rebase_s' {
     & git rebase origin/main 2>&1 | ForEach-Object { Write-Host $_ }
@@ -197,6 +242,7 @@ function Invoke-Prepare {
   $sha = (GitX rev-parse HEAD)
   $script:LandSha = $sha
   $null = GitX push --force-with-lease -u origin HEAD
+  $script:OriginLand = $null   # the push replaced a dropped (land) commit on origin
   $out = @()
   Measure-LandPhase 'gate_s' { $script:gateOut = & pwsh -NoProfile -File (Join-Path $root 'tools/check.ps1') gate 2>&1 | ForEach-Object { "$_" } }
   $out = @($script:gateOut)

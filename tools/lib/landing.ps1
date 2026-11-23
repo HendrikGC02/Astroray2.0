@@ -50,7 +50,8 @@ function Remove-LandingStaleMarker([string]$File, [string]$StaleText) {
   $now = ''
   try { $now = [IO.File]::ReadAllText($grab) } catch { }
   if ($now -eq $StaleText) { Remove-Item -LiteralPath $grab -Force -ErrorAction SilentlyContinue; return }
-  try { [IO.File]::Move($grab, $File) } catch { Remove-Item -LiteralPath $grab -Force -ErrorAction SilentlyContinue }
+  # It may be another process's live marker: never delete it here.
+  try { [IO.File]::Move($grab, $File) } catch { Write-Host "WARN land: could not put back the running-land marker; it is left as $grab (delete it once no land.ps1 runs)" }
 }
 
 function Enter-LandRunning([string]$Root, [int]$YoungS = 5) {
