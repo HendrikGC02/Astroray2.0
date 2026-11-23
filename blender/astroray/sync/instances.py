@@ -8,6 +8,7 @@ table pool); scene-origin translation folded into every transform per 0003 decis
 `set_instances` and `sync_transforms` touch the edit wrapper.
 """
 import ctypes
+from operator import itemgetter
 
 import numpy as np
 
@@ -119,7 +120,10 @@ class InstanceCache:
 
     def __init__(self):
         self.hashes = {}         # object name -> murmur3_32
-        self.objects = {}        # original object session_uid -> (table id, light group name, crypto id, asset id)
+        self.tids = {}           # original object session_uid -> material table id (one dict per field of the
+        self.lights = {}         # object record: light group name, cryptomatte object id and asset id; build()
+        self.crypto = {}         # gathers a column with one C-level map over the rows' uids)
+        self.assets = {}
         self.users = {}          # original data session_uid -> {object session_uids cached with that data}
         self.real = _RealCache()
         self.plain = {}          # original object session_uid -> (geometry key, object key, identity) of its own
@@ -134,8 +138,9 @@ class InstanceCache:
             self.table_list.append(table)
         return i
 
-    def remember(self, uid, data_uid, record):
-        self.objects[uid] = record
+    def remember(self, uid, data_uid, table, light_group, crypto, asset):
+        self.tids[uid] = self.table_id(table)
+        self.lights[uid], self.crypto[uid], self.assets[uid] = light_group, crypto, asset
         if data_uid is not None:
             self.users.setdefault(data_uid, set()).add(uid)
 
@@ -143,8 +148,8 @@ class InstanceCache:
         """Drops what an update to these original IDs (objects or their data) may have changed."""
         for u in uids:
             for o in (u, *self.users.pop(u, ())):
-                self.objects.pop(o, None)
-                self.plain.pop(o, None)
+                for d in (self.tids, self.lights, self.crypto, self.assets, self.plain):
+                    d.pop(o, None)
                 self.real.forget(o)
 
     def hash_names(self, names):
@@ -190,14 +195,14 @@ def _remember_objects(fresh, material_key, cache):
     for uid, ob, h in zip(uids, obs, hashes):
         data = ob.data
         table = tuple(material_key(s.material) for s in ob.material_slots)
-        cache.remember(uid, data.session_uid if data is not None else None,
-                       (cache.table_id(table), ob.lightgroup, h, h if ob.parent is None else cache.PARENTED))
+        cache.remember(uid, data.session_uid if data is not None else None, table, ob.lightgroup, h,
+                       h if ob.parent is None else cache.PARENTED)
 
 
 def _object_scalars(uids):
     """visibility, flags, pass_index and colour of the original objects `uids`, in that order, each read for
-    every object in bpy.data.objects with one foreach_get (B-31: per-object getattr was most of the loop). Also
-    the row of each uid in bpy.data.objects."""
+    every object in bpy.data.objects with one foreach_get (B-31: per-object getattr was most of the loop). `uids`
+    is an int32 array; also the row of each in bpy.data.objects."""
     import bpy
     obs = bpy.data.objects
     n = len(obs)
@@ -206,15 +211,18 @@ def _object_scalars(uids):
         a = np.empty(n * w, dt)
         obs.foreach_get(prop, a)
         return a.reshape(n, w) if w > 1 else a
-    row = {u: i for i, u in enumerate(get("session_uid", np.int32).tolist())}
-    pick = np.fromiter((row[u] for u in uids), np.intp, len(uids))
+    su = get("session_uid", np.int32)
+    order = np.argsort(su)
+    pick = order[np.minimum(np.searchsorted(su[order], uids), n - 1)]
+    if (su[pick] != uids).any():
+        raise RuntimeError("astroray sync: an instanced object is not in bpy.data.objects")
     vis = np.zeros(n, np.uint32)
     for attr, bit in _VISIBILITY:
         vis |= np.where(get(attr, np.bool_), np.uint32(bit), np.uint32(0))
     flags = (np.where(get("is_holdout", np.bool_), np.uint32(FLAG_HOLDOUT), np.uint32(0)) |
              np.where(get("is_shadow_catcher", np.bool_), np.uint32(FLAG_SHADOW_CATCHER), np.uint32(0)))
     return ({"visibility": vis[pick], "flags": flags[pick], "pass_indices": get("pass_index", np.int32)[pick],
-             "colors": get("color", np.float32, 4)[pick]}, row)
+             "colors": get("color", np.float32, 4)[pick]}, pick)
 
 def _rows(matrices16, origin):
     """(n, 16) raw float[16] matrix_world values -> (n, 12) row-major 3x4 rows with the origin folded in.
@@ -256,14 +264,13 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
     # per-instance numpy writes and Matrix conversions were most of the loop's 150 ms per 10k). An object's own
     # row is a cache hit after its first build; only instance rows (path non-empty) and new objects do the
     # identity work.
-    real, key, plain, records = cache.real, keymap.key, cache.plain, cache.objects
+    real, key, plain, records = cache.real, keymap.key, cache.plain, cache.tids
     fresh = {}      # original uid -> object, those without a record
     new_plain = {}  # original uid -> entry for the plain cache, set once their records exist
-    ents, rows, owner, in_path = [], [], [], []  # per kept instance: (geometry key, object key, identity), index, uid
-    seen = 0
-    for inst in depsgraph.object_instances:
-        k = seen
-        seen += 1
+    ents, owner, rids, in_path = [], [], [], []  # per kept instance: (geometry key, object key, identity), uid, random id
+    skipped = []  # indices of the iterator's instances that are not geometry
+    k = -1
+    for k, inst in enumerate(depsgraph.object_instances):
         ob = inst.object
         orig = ob.original
         uid = orig.session_uid
@@ -272,63 +279,71 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
             if hit is not None:
                 if hit:
                     ents.append(hit)
-                    rows.append(k)
                     owner.append(uid)
+                    rids.append(inst.random_id)
+                else:
+                    skipped.append(k)
                 continue
         if ob.type not in GEOMETRY_TYPES:
             if not inst.is_instance:
                 new_plain[uid] = ()
+            skipped.append(k)
             continue
         path = keys.instance_path(inst)
         ident = keys.object_identity(inst, path, uid)
         ent = (key(keys.geometry_identity(inst, depsgraph, path, real, uid)), key(ident), ident)
         if path:
-            in_path.append((len(rows), path[0]))
+            in_path.append((len(ents), path[0]))
         else:
             new_plain[uid] = ent
         if uid not in records:
             fresh[uid] = orig
         ents.append(ent)
-        rows.append(k)
         owner.append(uid)
-    n = len(rows)
+        rids.append(inst.random_id)
+    seen, n = k + 1, len(ents)
+    rows = np.delete(np.arange(seen), skipped) if skipped else slice(None)
     if fresh:
         _remember_objects(fresh, material_key, cache)
     plain.update(new_plain)
-    m16, rid = np.empty(seen * 16, np.float32), np.empty(seen, np.int32)
+    m16 = np.empty(seen * 16, np.float32)
     if seen:
         depsgraph.object_instances.foreach_get("matrix_world", m16)
-        depsgraph.object_instances.foreach_get("random_id", rid)
     xf = _rows(m16.reshape(seen, 16)[rows], origin) if n else np.zeros((0, 12), np.float32)
-    by_object, index_of = {}, dict(zip((e[2] for e in ents), range(n)))
-    last = dict(zip(owner, range(n)))
-    if len(last) == n:  # every object has one row
-        by_object = {u: [i] for u, i in last.items()}
-    else:
+    index_of = dict(zip(map(itemgetter(2), ents), range(n)))
+    by_object = {u: [i] for i, u in enumerate(owner)}
+    if len(by_object) != n:  # an object with several rows
+        by_object = {}
         for i, u in enumerate(owner):
             by_object.setdefault(u, []).append(i)
     for i, parent in in_path:  # a row is also found through its instancer
         by_object.setdefault(parent, []).append(i)
     for parent in {p for _, p in in_path}:
         by_object[parent].sort()
-    arrays = {"geom_keys": np.asarray([e[0] for e in ents], np.uint64),
-              "object_keys": np.asarray([e[1] for e in ents], np.uint64), "random_ids": rid.view(np.uint32)[rows]}
+    arrays = {"geom_keys": np.asarray(list(map(itemgetter(0), ents)), np.uint64),
+              "object_keys": np.asarray(list(map(itemgetter(1), ents)), np.uint64),
+              "random_ids": np.asarray(rids, np.int32).view(np.uint32)}
     pool, per = [], {}
     if n:
-        per, row_of = _object_scalars(owner)
-        tid, lgname, crypto, asset = (list(c) for c in zip(*[records[u] for u in owner]))
+        uids = np.asarray(owner, np.int32)
+        per, pick = _object_scalars(uids)
+        tid, crypto = list(map(records.__getitem__, owner)), list(map(cache.crypto.__getitem__, owner))
+        asset = list(map(cache.assets.__getitem__, owner))
         if cache.PARENTED in asset:  # the asset id follows the top parent's name, which can change unnamed
             import bpy
-            todo = {u: bpy.data.objects[row_of[u]] for u, a in zip(owner, asset) if a == cache.PARENTED}
-            top_of = dict(zip(todo, cache.hash_names([_top_parent(ob).name for ob in todo.values()])))
-            asset = [top_of[u] if a == cache.PARENTED else a for u, a in zip(owner, asset)]
+            at = [i for i, a in enumerate(asset) if a == cache.PARENTED]
+            tops = cache.hash_names([_top_parent(bpy.data.objects[int(pick[i])]).name for i in at])
+            for i, h in zip(at, tops):
+                asset[i] = h
         lut = np.zeros((2, len(cache.table_list)), np.uint32)  # offset and count of each table id
         for t in dict.fromkeys(tid):  # pool in first-met order; instances sharing a table share its offset
             table = cache.table_list[t]
             lut[:, t] = (len(pool) if table else 0, len(table))
             pool.extend(table)
         tid = np.asarray(tid, np.intp)
-        per.update({"light_groups": np.asarray([lightgroups.get(g, 0) for g in lgname], np.uint8),
+        lights = list(map(cache.lights.__getitem__, owner)) if lightgroups else None
+        per.update({"light_groups": np.asarray([lightgroups.get(g, 0) for g in lights], np.uint8) if lights
+                    else np.zeros(n, np.uint8),
                     "crypto_objects": np.asarray(crypto, np.uint32), "crypto_assets": np.asarray(asset, np.uint32),
                     "material_offsets": lut[0][tid], "material_counts": lut[1][tid]})
     for name, dt, w in _FIELDS:

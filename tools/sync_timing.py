@@ -206,8 +206,7 @@ def profile_split(instances, keys, dg, km, lg, icache):
         if inst.object.type in geometry:
             o = inst.object.original
             obs[o.session_uid] = o
-    uids, objs = list(obs), list(obs.values())
-    tables = [icache.objects[u] for u in uids]
+    uids = np.asarray(list(obs), np.int32)
     m16, rid = np.empty(n * 16, np.float32), np.empty(n, np.int32)
 
     def fg():
@@ -217,7 +216,6 @@ def profile_split(instances, keys, dg, km, lg, icache):
              ("+ instance_path, object_identity", l3), ("+ geometry_identity", l4), ("+ keymap.key x2 (loop total)", l5),
              ("after: foreach_get matrix, random_id", fg),
              ("after: _object_scalars", lambda: instances._object_scalars(uids)),
-             ("after: _object_fields", lambda: instances._object_fields(objs, tables, lg, icache)),
              ("whole build", lambda: instances.build(dg, km, lightgroups=lg, cache=icache))]
     out = ["split of a warm build, median of 10, ms per 10k instances (cumulative for the loop lines):"]
     for name, fn in steps:
