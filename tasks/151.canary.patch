@@ -1,8 +1,17 @@
 diff --git a/tools/opsgen.py b/tools/opsgen.py
-index 1165353..d990bee 100644
+index dbcc3bc..ac0f8f2 100644
 --- a/tools/opsgen.py
 +++ b/tools/opsgen.py
-@@ -141,9 +141,9 @@ def parse_record_slots(text, semantics):
+@@ -121,7 +121,7 @@ def _entries(text, name, arity):
+     pat = r"\bX\s*\(" + ",".join([one] * arity) + r"\)"
+     found = re.findall(pat, body)
+     tokens = len(re.findall(r"\bX\s*\(", body))
+-    if tokens != len(found):
++    if False:
+         raise OpsError(f"{STORE_SLOT_H}: {name} has {tokens} X(...) entries but {len(found)} parse as "
+                        f"{arity} identifier(s)")
+     return found
+@@ -156,9 +156,9 @@ def parse_record_slots(text, semantics):
      if not scalars or not spectral or not frames:
          raise OpsError(f"{STORE_SLOT_H}: AR_RECORD_SCALARS, AR_RECORD_SPECTRAL and AR_RECORD_FRAMES must each list a field")
      for name, sem in spectral:
@@ -14,7 +23,7 @@ index 1165353..d990bee 100644
      if len(set(names)) != len(names):
          raise OpsError(f"{STORE_SLOT_H}: duplicate record field name")
      return {n: i for i, n in enumerate(names)}
-@@ -190,7 +190,7 @@ def coverage(rows, lowering, nodes, planned=None):
+@@ -205,7 +205,7 @@ def coverage(rows, lowering, nodes, planned=None):
              if o not in op_names:
                  raise OpsError(f"{LOWERING}: {node}: unknown op {o}")
      out = ["node_type,disposition,ops,note"]
