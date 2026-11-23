@@ -1,7 +1,16 @@
 diff --git a/src/host/light/env_bake.cpp b/src/host/light/env_bake.cpp
-index fb6951b..24cc345 100644
+index fb6951b..d0bfecc 100644
 --- a/src/host/light/env_bake.cpp
 +++ b/src/host/light/env_bake.cpp
+@@ -27,7 +27,7 @@ void put(std::vector<uint8_t>& k, const T& v) {
+ void refuse_bad_cells(const std::vector<float>& grid, uint32_t n) {
+   for (size_t i = 0; i < grid.size(); ++i) {
+     const float v = grid[i];
+-    if (std::isfinite(v) && v >= 0.0f) continue;
++    if (v == v) continue;
+     const uint32_t iv = uint32_t(i / n), iu = uint32_t(i % n);
+     const ar::Real3 d = ar::equal_area_square_to_sphere(
+         ar::Real2{(ar::Real(iu) + ar::Real(0.5)) / ar::Real(n), (ar::Real(iv) + ar::Real(0.5)) / ar::Real(n)});
 @@ -53,7 +53,7 @@ BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_bu
    if (n == 0) throw std::invalid_argument("bake_environment: n is 0");
    if (uint64_t(n) * n > std::numeric_limits<uint32_t>::max())
@@ -11,7 +20,13 @@ index fb6951b..24cc345 100644
  
    const uint64_t cells = uint64_t(n) * n;
    DeviceBuffer grid_buf = device.allocate(LedgerCategory::TABLES, cells * sizeof(float), owner_);
-@@ -89,7 +89,7 @@ BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_bu
+@@ -84,12 +84,12 @@ BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_bu
+   BakedEnvironment out;
+   double sum = 0.0;
+   for (float v : grid) out.max = std::max(out.max, double(v)), sum += double(v);
+-  if (out.max > 0.0) {
++  if (out.max >= 0.0) {
+     out.mean = sum / double(cells);
      // A density: dividing by the maximum leaves the table's shape and keeps a uniform world's
      // integral and compensated residuals clear of FLT_MIN, which a world at 1e-30 would not.
      std::vector<double> normalised(cells);
