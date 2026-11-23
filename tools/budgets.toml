@@ -119,6 +119,8 @@ id = "B-19"
 text = "each ≤ 10% of pass time"
 tier = "`full`"
 provisional = true
+# Task 160, `tools/perf.ps1 -Shares`: relative tolerance per scene.metric, 3 x the spread of 5 captures (0009 d13).
+shares_tolerance = { "b1m.idle_share" = 0.239, "b1m.pq_share" = 0.040, "b5m.idle_share" = 0.401, "b5m.pq_share" = 0.056 }
 
 [[budget]]
 id = "B-20"

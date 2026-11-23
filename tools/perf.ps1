@@ -10,13 +10,21 @@
 # -MeasureTolerance runs the bench -Runs times back to back and prints the spreads that set B-38.
 # It is not a `check` tier: tiers write the 20-line summary and out/check/<tier>.json that report.py reads and
 # budget B-08..B-10 time; perf is one more caller of bench.ps1. Ref: 0009 d13 (B-38), d18.
+# -Shares replaces the pass-time check by the share check of tools/perf_shares.py: under the same lock hold,
+# per scene one `nsys profile --trace=cuda --sample=none --cpuctxsw=none` capture of the bench (64 passes after
+# 8 burn-in), `nsys export --type sqlite`, and the GPU idle share and the queue_build plus sort share of the
+# pass (B-19), each against the last bench/history line of this machine within B-19's measured tolerance
+# (tools/budgets.toml). -Shares -Record appends the lines of a PASS; -Shares -MeasureTolerance -Runs 5 prints the
+# spreads that set the tolerance. A capture hung for 5 minutes is killed and refused (the lock is released).
+# nsys: $env:ASTRORAY_NSYS or the newest installed one (lib/nsys.ps1). Ref: tasks/160; 0009 d13 (B-19), d18.
 # Output: at most 20 summary lines plus the nsys commands; exit 0 pass, 1 a scene failed, 2 refused or unusable.
 param(
   [string[]]$Scene = @('b1m', 'b5m'),
   [string]$Size = '1920x1080',
   [switch]$Record,
   [switch]$MeasureTolerance,
-  [int]$Runs = 5
+  [int]$Runs = 5,
+  [switch]$Shares
 )
 $ErrorActionPreference = 'Stop'
 $Scene = @($Scene | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -24,8 +32,16 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 . (Join-Path $PSScriptRoot 'lib/lock.ps1')
 . (Join-Path $PSScriptRoot 'lib/python.ps1')
+. (Join-Path $PSScriptRoot 'lib/nsys.ps1')
 $py = Get-ArPython
 $tmp = Join-Path $root 'out/tmp/140'
+if ($Shares) {
+  $tmp = Join-Path $root 'out/tmp/perf-shares'
+  try { $nsys = Get-ArNsys } catch { Write-Host "REFUSE perf: $($_.Exception.Message)"; exit 2 }
+  # bench.ps1 builds the recordings before taking its lock; the captures run under ours, so do it first.
+  & $py -I (Join-Path $PSScriptRoot 'scenes.py') @($Scene)
+  if ($LASTEXITCODE -ne 0) { Write-Host 'FAIL perf: scene recordings'; exit 1 }
+}
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
 # Inputs of the shipped binary: what a commit must not have touched since the build, and what must be clean to
@@ -90,6 +106,37 @@ try {
   $n = if ($MeasureTolerance) { $Runs } else { 1 }
   for ($r = 1; $r -le $n; $r++) {
     Assert-QuietGpu
+    if ($Shares) {
+      $exports = @()
+      foreach ($s in $Scene) {
+        Assert-QuietGpu
+        $base = Join-Path $tmp "$s-$r"
+        $rec = Join-Path $root "out/scenes/$s.arrec"
+        # 64 passes after 8 burn-in, as bench.ps1 and PR 94's captures; the burn-in is perf_shares.py's BURN_IN.
+        $cap = @('profile', '--trace=cuda', '--sample=none', '--cpuctxsw=none', '--force-overwrite=true', '-o', $base,
+          $cli, 'bench', $rec, '--size', $Size, '--passes', '64', '--warmup', '8', '--device', 'cuda')
+        Write-Host "nsys $($cap -join ' ')"
+        $proc = Start-Process -FilePath $nsys -ArgumentList ($cap | ForEach-Object { '"' + $_ + '"' }) -NoNewWindow -PassThru `
+          -RedirectStandardOutput "$base.capture.log" -RedirectStandardError "$base.capture.err"
+        if (-not $proc.WaitForExit(300000)) {
+          & taskkill /F /T /PID $proc.Id 2>&1 | Out-Null
+          Write-Host "REFUSE perf: nsys capture of $s ran over 300 s and was killed (a hung bench?); log $base.capture.log"; exit 2
+        }
+        if ($proc.ExitCode -ne 0 -or -not (Test-Path "$base.nsys-rep")) {
+          Get-Content "$base.capture.log", "$base.capture.err" -ErrorAction SilentlyContinue | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
+          Write-Host "FAIL perf: nsys capture of $s exited $($proc.ExitCode)"; exit 1
+        }
+        Write-Host "nsys export --type sqlite $base.nsys-rep"
+        $exp = & $nsys export --type sqlite --force-overwrite=true -o "$base.sqlite" "$base.nsys-rep" 2>&1 | ForEach-Object { "$_" }
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$base.sqlite")) { $exp | Select-Object -Last 4 | ForEach-Object { Write-Host $_ }; Write-Host "FAIL perf: nsys export of $s"; exit 1 }
+        $exports += "$s=$base.sqlite"
+      }
+      $out = Join-Path $tmp "shares-$r.jsonl"
+      & $py -I (Join-Path $PSScriptRoot 'perf_shares.py') lines @exports --sha $binSha --machine $machine --out $out
+      if ($LASTEXITCODE -ne 0) { Write-Host "FAIL perf: perf_shares.py exited $LASTEXITCODE"; exit 2 }
+      $newLines += , @(Get-Content $out)
+      continue
+    }
     $before = @{}
     $dir = Join-Path $root 'out/bench'
     if (Test-Path $dir) { Get-ChildItem $dir -Filter 'history-*.jsonl' | ForEach-Object { $before[$_.FullName] = @(Get-Content $_.FullName).Count } }
@@ -114,6 +161,20 @@ for ($r = 0; $r -lt $newLines.Count; $r++) {
   [IO.File]::WriteAllText($f, ((@($newLines[$r]) -join "`n") + "`n"))
   $files += $f
 }
+if ($Shares) {
+  $psh = Join-Path $PSScriptRoot 'perf_shares.py'
+  if ($MeasureTolerance) {
+    & $py -I $psh spread @files
+    Write-Host ("wall {0:N1} s for {1} captures per scene" -f $wall, $newLines.Count)
+    exit $LASTEXITCODE
+  }
+  $recArgs = @()
+  if ($Record) { $recArgs = @('--record', (Join-Path $root "bench/history/$([DateTime]::UtcNow.Year).jsonl")) }
+  & $py -I $psh compare $files[0] @recArgs
+  $code = $LASTEXITCODE
+  Write-Host ("perf shares wall {0:N1} s" -f $wall)
+  exit $code
+}
 if ($MeasureTolerance) {
   & $py -I (Join-Path $PSScriptRoot 'perf.py') spread @files
   Write-Host ("wall {0:N1} s for {1} runs" -f $wall, $newLines.Count)
@@ -127,5 +188,5 @@ if ($Record) { $rec = @('--record', (Join-Path $root "bench/history/$([DateTime]
 & $py -I (Join-Path $PSScriptRoot 'perf.py') compare $files[0] @rec
 $code = $LASTEXITCODE
 Write-Host ("perf wall {0:N1} s{1}" -f $wall, $(if ($wall -gt 60) { ' (ABOVE 60 s: stop and ask the lead)' } else { '' }))
-Write-Host 'shares (not checked here; pass_ms alone misses a longer idle share): nsys profile --trace=cuda --sample=none --cpuctxsw=none -o out/tmp/perf out/bin/astroray_cli.exe bench out/scenes/b1m.arrec --size 1920x1080; nsys export --type sqlite out/tmp/perf.nsys-rep'
+Write-Host 'shares are not checked here (pass_ms alone misses a longer idle share): run tools/perf.ps1 -Shares'
 exit $code

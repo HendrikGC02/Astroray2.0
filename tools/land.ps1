@@ -231,6 +231,9 @@ function Invoke-Prepare {
   $needPerf = @($names | Where-Object { $_ -match '^(src/kernel/|src/kernel_gpu/|src/device/|src/host/scheduler|src/host/session/|src/host/scene/)' }).Count -gt 0
   if ($needPerf -and $DryRun) { Write-Host 'DRYRUN would run perf (the diff touches kernel, device, scheduler, session or scene code)' }
   elseif (-not $needPerf) { Write-Host 'perf: not needed (no kernel, device, scheduler, session or scene path in the diff)' }
+  # B-19's idle and partition-plus-sort shares (tools/perf.ps1 -Shares): the paths that decide them.
+  $needShares = @($names | Where-Object { $_ -match '^(src/host/scheduler|src/kernel/stages/queue_build\.h|src/kernel/stages/sort\.h|src/kernel/sched/|src/device/cuda/)' }).Count -gt 0
+  if ($needShares -and $DryRun) { Write-Host 'DRYRUN would run perf -Shares (the diff touches the scheduler, queue_build, sort or CUDA device code)' }
   if ($DryRun) {
     Write-Host "DRYRUN would: commit deletion of tasks/$Number*, push $branch, run check gate, post astroray/gate"
     Write-Host "PASS prepare $Number (dry run: canary accepted)"
@@ -263,6 +266,19 @@ function Invoke-Prepare {
       $state = 'failure'
       $waited = if ($desc -match 'waited [\d.]+ s') { " ($($Matches[0]))" } else { '' }
       $desc = "perf failed: $($perfOut | Where-Object { $_ -match '^(FAIL|REFUSE|perf)' } | Select-Object -First 1)"
+      if ($desc.Length -gt 100) { $desc = $desc.Substring(0, 100) }
+      $desc += $waited
+    }
+  }
+  if ($state -eq 'success' -and $needShares) {
+    # B-19's shares: only a diff that can move the idle or the partition share pays two captures (task 160).
+    Measure-LandPhase 'perf_shares_s' { $script:shOut = @(& pwsh -NoProfile -File (Join-Path $root 'tools/perf.ps1') -Shares 2>&1 | ForEach-Object { "$_" }); $script:shCode = $LASTEXITCODE }
+    $shOut = @($script:shOut); $shCode = $script:shCode
+    $shOut | ForEach-Object { Write-Host $_ }
+    if ($shCode -ne 0) {
+      $state = 'failure'
+      $waited = if ($desc -match 'waited [\d.]+ s') { " ($($Matches[0]))" } else { '' }
+      $desc = "perf shares failed: $($shOut | Where-Object { $_ -match '^(FAIL|REFUSE|perf)' } | Select-Object -First 1)"
       if ($desc.Length -gt 100) { $desc = $desc.Substring(0, 100) }
       $desc += $waited
     }
@@ -412,7 +428,7 @@ function Complete-Submit([int]$attempts) {
   else { Write-Host "gate $('{0:N1}' -f $gate) s (no earlier landing line)" }
   try {
     $rec = [ordered]@{ task = [int]$Number; sha = $script:MergeSha; date = (Get-Date -Format 's'); verdict = $Verdict; attempts = $attempts }
-    foreach ($k in 'rebase_s', 'scenes_s', 'canary_s', 'blender_suites_s', 'gate_s', 'ci_wait_s', 'merge_s', 'lock_wait_s', 'perf_s') { if ($times.Contains($k)) { $rec[$k] = [math]::Round($times[$k], 1) } }
+    foreach ($k in 'rebase_s', 'scenes_s', 'canary_s', 'blender_suites_s', 'gate_s', 'ci_wait_s', 'merge_s', 'lock_wait_s', 'perf_s', 'perf_shares_s') { if ($times.Contains($k)) { $rec[$k] = [math]::Round($times[$k], 1) } }
     Add-LandingHistory $mainCheckout $rec
   } catch { Write-Host "WARN land: history line not written: $($_.Exception.Message)" }
   try {
