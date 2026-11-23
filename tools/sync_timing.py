@@ -292,7 +292,7 @@ def report(d, history, profile):
         out = os.path.join(ROOT, "out", "bench", f"history-{now[:10].replace('-', '')}.jsonl")
         os.makedirs(os.path.dirname(out), exist_ok=True)
         sha = git("rev-parse", "HEAD")
-        with open(out, "a") as f:
+        with open(out, "a", newline="\n") as f:
             for s, metric, v, u, n, spread in hist:
                 f.write(json.dumps({"sha": sha, "machine": last["machine"], "driver": last["driver"],
                                     "cuda": last["cuda"], "scene": s, "metric": metric, "value": round(v, 4),
