@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Runs `land.ps1 prepare 999` on fixture cases a-j, asserts each outcome and exits non-zero on any mismatch
 # (tasks 010, 138). Expected, with -DryRun: a refused "canary inert", c refused "missing canary patch", e refused
-# (its command names a missing script), b and d accepted, f accepted with a WARN on its inert hunk, g refused (its
+# (its command names a missing script), b and d accepted (d, whose canary built `all`, rebuilt `all` after it), f accepted with a WARN on its inert hunk, g refused (its
 # case turns red only with both hunks). i refused while a live land.ps1 is registered for the same repository, j refused
 # while a process has out/bin/astroray_core.dll loaded. h runs without -DryRun against a failing gate stub: exit 1,
-# the "(land)" commit undone, the task file back, the tree clean. A `gh` stub (fixture bin/) keeps h off GitHub.
+# the pushed "(land)" commit undone by a pushed revert: the task file back locally and on origin, the tree clean. A `gh` stub (fixture bin/) keeps h off GitHub.
 param([string]$Base = (Join-Path ([IO.Path]::GetTempPath()) 'astroray_land_fixture'))
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
@@ -13,7 +13,7 @@ $expect = [ordered]@{
   a = @{ Exit = 1; Match = 'REFUSE land: canary inert: fixture/new case still passes' }
   b = @{ Exit = 0; Match = 'PASS prepare 999' }
   c = @{ Exit = 1; Match = 'REFUSE land: missing canary patch' }
-  d = @{ Exit = 0; Match = 'PASS prepare 999' }
+  d = @{ Exit = 0; Match = 'PASS prepare 999'; Also = '^PASS build all ' }
   e = @{ Exit = 1; Match = "REFUSE land: canary item errored: .*script 'tools/no_such_script.ps1' does not exist" }
   f = @{ Exit = 0; Match = 'PASS prepare 999'; Also = 'WARN canary: inert hunk src/code.txt:' }
   g = @{ Exit = 1; Match = "REFUSE land: canary 'fixture/new case' turns red only with several hunks together" }
@@ -61,6 +61,10 @@ foreach ($c in $expect.Keys) {
       $subject = (& git -C $work log -1 --format=%s)
       if ($subject -match '\(land\)$') { $extra += "a '(land)' commit is left on the branch: $subject" }
       if (-not (Test-Path (Join-Path $work 'tasks/999-fixture.md'))) { $extra += 'the task file is gone' }
+      & git -C (Join-Path (Join-Path $Base $c) 'origin.git') cat-file -e 'task/999-fixture:tasks/999-fixture.md' 2>$null
+      if ($LASTEXITCODE -ne 0) { $extra += 'origin task/999-fixture has no task file' }
+      & git -C (Join-Path (Join-Path $Base $c) 'origin.git') merge-base --is-ancestor $(& git -C $work rev-parse HEAD) task/999-fixture 2>$null
+      if ($LASTEXITCODE -ne 0) { $extra += 'origin task/999-fixture does not carry the local head' }
       if (& git -C $work status --porcelain) { $extra += 'the tree is not clean' }
     }
   } finally {

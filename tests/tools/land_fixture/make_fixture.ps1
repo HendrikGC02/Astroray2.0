@@ -48,7 +48,7 @@ $codeLines = @('GOOD') + @(2..11 | ForEach-Object { "filler $_" }) + @($(if ($Ca
 Put 'src/code.txt' (($codeLines -join "`n") + "`n")
 Put 'src/other.txt' "x`n"
 Put 'tests/cpu/test_base.cpp' "TEST_CASE(`"base/other`") {}`n"
-Put 'tools/build.ps1' "# stand-in for the real build: nothing to build in the fixture`nparam([string[]]`$Target)`nWrite-Host 'PASS build 0.0 s (fixture)'`n"
+Put 'tools/build.ps1' "# stand-in for the real build: nothing to build in the fixture; names the target so run_cases sees what land rebuilt`nparam([string[]]`$Target)`nWrite-Host `"PASS build `$Target 0.0 s (fixture)`"`n"
 Put 'tools/check.ps1' "# stand-in gate: fails, so land.ps1 must undo its own commit`nWrite-Host 'FAIL gate stub (fixture)'`nexit 1`n"
 Put 'tools/fixture_selftest.ps1' "if ((Get-Content src/code.txt -Raw) -match 'GOOD') { exit 0 } else { exit 1 }`n"
 Put 'tools/fixture_tests.ps1' @'

@@ -252,7 +252,7 @@ $global:LASTEXITCODE = 1
   } elseif ($Tier -eq 'full') {
     $r = Step 'gate' { & pwsh -NoProfile -File tools/check.ps1 gate @dargs }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'gate failed (out/check/gate.log)' }
-    # Land fixture cases a-g (canary refusals, hunk matrix): minutes, so full only.
+    # Land fixture cases a-j (canary refusals, hunk matrix, undo, busy refusals): minutes, so full only.
     $r = Step 'tools fixtures' { & pwsh -NoProfile -File tests/tools/land_fixture/run_cases.ps1 }
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'tools fixtures failed (out/check/full.log)' }
     # The Blender suites (lib/blender.ps1 Get-ArFullBlenderSuites, the list `land prepare` shares): the API
@@ -261,7 +261,7 @@ $global:LASTEXITCODE = 1
     # timers and ends the process. Not $t: Step's own stopwatch of that name is visible inside the block.
     foreach ($su in (Get-ArFullBlenderSuites)) {
       $r = Step "blender $($su.Name)" {
-        $b = Invoke-ArBlender -Gui:([bool]$su.Gui)-Script $su.Script -TimeoutS $su.TimeoutS 6>$null
+        $b = Invoke-ArBlender -Gui:([bool]$su.Gui) -Script $su.Script -TimeoutS $su.TimeoutS 6>$null
         foreach ($f in $b.Log, "$($b.Log).err") { if (Test-Path $f) { Get-Content $f } }
         $global:LASTEXITCODE = $b.ExitCode }
       $r.Out | Where-Object { $_ -match $su.Echo } | ForEach-Object { Write-Host $_ }

@@ -41,8 +41,20 @@ function Test-LandingMarkerLive($m) {
   return [bool]($cim -and $cim.CommandLine -match 'land\.ps1')
 }
 
-function Enter-LandRunning([string]$Root) {
-  # Claims the marker for this process. Returns $null when claimed, else `pid N, started T` of the live owner.
+function Remove-LandingStaleMarker([string]$File, [string]$StaleText) {
+  # Two land.ps1 starting together can both read the same stale marker; a plain delete by the slower one would
+  # remove the marker the faster one has just claimed. The rename is atomic, so only one process takes the file,
+  # and it is deleted only while it still holds the stale text read before; anything else is put back.
+  $grab = "$File.stale.$PID.$([guid]::NewGuid().ToString('N'))"
+  try { [IO.File]::Move($File, $grab) } catch { return }
+  $now = ''
+  try { $now = [IO.File]::ReadAllText($grab) } catch { }
+  if ($now -eq $StaleText) { Remove-Item -LiteralPath $grab -Force -ErrorAction SilentlyContinue; return }
+  try { [IO.File]::Move($grab, $File) } catch { Remove-Item -LiteralPath $grab -Force -ErrorAction SilentlyContinue }
+}
+
+function Enter-LandRunning([string]$Root, [int]$YoungS = 5) {
+  # Claims the marker for this process. Returns $null when claimed, else a description of the live owner.
   $f = Get-LandingMarker $Root
   $me = @{ pid = $PID; start = (Get-Process -Id $PID).StartTime.ToString('o') } | ConvertTo-Json -Compress
   for ($try = 0; $try -lt 3; $try++) {
@@ -52,10 +64,17 @@ function Enter-LandRunning([string]$Root) {
       $script:LandMarker = $f
       return $null
     } catch [System.IO.IOException] {
-      $m = $null
-      try { $m = Get-Content $f -Raw -ErrorAction Stop | ConvertFrom-Json } catch { }
-      if ($m -and (Test-LandingMarkerLive $m)) { return "pid $($m.pid), started $(([datetime]$m.start).ToString('yyyy-MM-dd HH:mm:ss'))" }
-      Remove-Item $f -Force -ErrorAction SilentlyContinue   # stale: its process is gone
+      $text = $null; $m = $null
+      try { $text = [IO.File]::ReadAllText($f) } catch { continue }   # gone or locked since: try again
+      try { $m = $text | ConvertFrom-Json -ErrorAction Stop } catch { }
+      if (-not $m) {
+        # Empty or half written: the owner may be between CreateNew and its write. Young means live.
+        $fi = Get-Item -LiteralPath $f -ErrorAction SilentlyContinue
+        if (-not $fi) { continue }
+        $age = ((Get-Date).ToUniversalTime() - $fi.LastWriteTimeUtc).TotalSeconds
+        if ($age -lt $YoungS) { return ('pid unknown, marker written {0:N1} s ago' -f $age) }
+      } elseif (Test-LandingMarkerLive $m) { return "pid $($m.pid), started $(([datetime]$m.start).ToString('yyyy-MM-dd HH:mm:ss'))" }
+      Remove-LandingStaleMarker $f $text   # stale: its process is gone, or an empty marker left long ago
     }
   }
   return 'unknown (the marker file could not be claimed)'
@@ -90,6 +109,32 @@ function Invoke-LandingStep([scriptblock]$Body, [int]$SleepS) {
   return $false
 }
 
+function Test-LandingWorktreeRegistered([string]$Main, [string]$Wt) {
+  $want = [IO.Path]::GetFullPath($Wt).TrimEnd('\', '/')
+  foreach ($l in (& git -C $Main worktree list --porcelain)) {
+    if ($l -like 'worktree *' -and [IO.Path]::GetFullPath($l.Substring(9)).TrimEnd('\', '/') -ieq $want) { return $true }
+  }
+  return $false
+}
+
+function Remove-LandingWorktree([string]$Main, [string]$Wt, [int]$SleepS) {
+  # 'removed', 'registered' (git still lists it) or 'directory' (unregistered, the directory is left).
+  # `git worktree remove` unregisters the tree even when deleting its directory fails (a held file), and a retry
+  # then fails with "is not a working tree"; from there only the directory is deleted, and only when it lies under
+  # the repository's .claude/worktrees/ (it was found in `git worktree list` for this task by the caller).
+  $full = [IO.Path]::GetFullPath($Wt).TrimEnd('\', '/')
+  $agents = [IO.Path]::GetFullPath((Join-Path $Main '.claude/worktrees')).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+  $mayDelete = $full.StartsWith($agents, [StringComparison]::OrdinalIgnoreCase)
+  for ($i = 1; $i -le 3; $i++) {
+    if (Test-LandingWorktreeRegistered $Main $full) { $null = & git -C $Main worktree remove -f -f $full 2>&1 }
+    elseif ($mayDelete -and (Test-Path -LiteralPath $full)) { Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue }
+    $reg = Test-LandingWorktreeRegistered $Main $full
+    if (-not $reg -and -not (Test-Path -LiteralPath $full)) { return 'removed' }
+    if ($i -lt 3 -and $SleepS -gt 0) { Start-Sleep -Seconds $SleepS }
+  }
+  if ($reg) { return 'registered' } else { return 'directory' }
+}
+
 function Invoke-LandingCleanup {
   # After the squash is on origin/main. Never throws and never fails the landing: prints
   # `LEFTOVER: <what>; fix: <command>` for each step that did not work and returns their count.
@@ -106,20 +151,15 @@ function Invoke-LandingCleanup {
     }
     if ($wt) {
       $null = & git -C $Main worktree unlock $wt 2>&1   # fails when not locked; a Claude agent's lock is what matters
-      if (Invoke-LandingStep { & git -C $Main worktree remove -f -f $wt } $SleepS) { Write-Host "cleanup: worktree $wt removed" }
-      else { Add-Leftover "worktree $wt" "git worktree remove -f -f $wt" }
+      $r = Remove-LandingWorktree $Main $wt $SleepS
+      if ($r -eq 'removed') { Write-Host "cleanup: worktree $wt removed" }
+      elseif ($r -eq 'registered') { Add-Leftover "worktree $wt" "git worktree remove -f -f '$wt'" }
+      else { Add-Leftover "worktree directory $wt (unregistered; a process holds a file in it)" "close that process, then Remove-Item -LiteralPath '$wt' -Recurse -Force" }
       $null = & git -C $Main worktree prune 2>&1
     }
-    $names = @($branch)
-    if ($wt) {
-      $agent = "worktree-$(Split-Path -Leaf $wt)"
-      & git -C $Main show-ref --verify --quiet "refs/heads/$agent"
-      if ($LASTEXITCODE -eq 0) { $names += $agent }
-    }
-    foreach ($n in $names) {
-      if (Invoke-LandingStep { & git -C $Main branch -D $n } $SleepS) { Write-Host "cleanup: local branch $n deleted" }
-      else { Add-Leftover "local branch $n" "git branch -D $n" }
-    }
+    # Only the exact branch found for this task: never a name derived from it.
+    if (Invoke-LandingStep { & git -C $Main branch -D $branch } $SleepS) { Write-Host "cleanup: local branch $branch deleted" }
+    else { Add-Leftover "local branch $branch" "git branch -D $branch" }
   } catch { Add-Leftover "cleanup stopped: $($_.Exception.Message)" "delete $branch (remote and local) and the worktree by hand" }
   return $left.Count
 }
@@ -148,4 +188,52 @@ function Add-LandingHistory([string]$Main, $Record) {
 function Format-LandingTiming($Times, [int]$Attempts) {
   $parts = foreach ($k in $Times.Keys) { '{0} {1:N1}' -f ($k -replace '_s$', ''), $Times[$k] }
   return "timing: $($parts -join ', ') (s); retries $($Attempts - 1)"
+}
+
+# A GitHub 5xx is transient: retry with these delays (seconds) so a passing gate or a half-done landing is never
+# lost to it. fast_landing sets them to zero.
+$script:GhDelays = @(5, 15, 30)
+function GhX {
+  # Any other failure, or a 5xx that persists, throws.
+  for ($i = 0; ; $i++) {
+    $o = & gh @args 2>&1 | ForEach-Object { "$_" }
+    if ($LASTEXITCODE -eq 0) { return ($o -join "`n") }
+    $txt = $o -join ' '
+    if ($i -lt $script:GhDelays.Count -and $txt -match 'HTTP 5\d\d|Bad Gateway|Service Unavailable|Gateway Time-?out') {
+      Write-Host "gh $($args[0]) got a 5xx; retry $($i + 1) of $($script:GhDelays.Count) in $($script:GhDelays[$i]) s"
+      Start-Sleep -Seconds $script:GhDelays[$i]
+      continue
+    }
+    throw "gh $($args -join ' ') failed: $txt"
+  }
+}
+
+function Invoke-LandingPrMerge([int]$Pr, [string]$Sha) {
+  # Squash-merges PR $Pr at $Sha; returns the merge commit. A merge call is not idempotent: a 5xx can come back
+  # after GitHub merged, and its retry then fails. Before reporting a failure the PR itself is asked.
+  try { $null = GhX pr merge $Pr --squash --match-head-commit $Sha }
+  catch {
+    $err = $_.Exception.Message
+    $v = $null
+    try { $v = (GhX pr view $Pr --json 'state,mergeCommit') | ConvertFrom-Json } catch { }
+    if (-not ($v -and $v.state -eq 'MERGED' -and $v.mergeCommit.oid)) { throw $err }
+    Write-Host "gh pr merge reported a failure, but PR #$Pr is merged as $($v.mergeCommit.oid.Substring(0, 9))"
+    return $v.mergeCommit.oid
+  }
+  return ((GhX pr view $Pr --json mergeCommit) | ConvertFrom-Json).mergeCommit.oid
+}
+
+function Invoke-LandingPrCreate([string]$Branch, [string]$Title, [string]$Body) {
+  # Opens the PR for $Branch; returns its number. As with the merge, a create that failed after a 5xx may have
+  # opened the PR: the open PRs for the head are listed again before the failure is reported.
+  try {
+    $url = GhX pr create --base main --head $Branch --title $Title --body $Body
+    $n = [regex]::Match($url, '(\d+)\s*$').Groups[1].Value
+    if ($n) { return [int]$n }
+    $err = "gh pr create printed no PR number: $url"
+  } catch { $err = $_.Exception.Message }
+  $pr = @()
+  try { $pr = @((GhX pr list --head $Branch --state open --json number) | ConvertFrom-Json) } catch { }
+  if ($pr.Count -eq 1) { Write-Host "gh pr create reported a failure, but PR #$($pr[0].number) is open for $Branch"; return [int]$pr[0].number }
+  throw $err
 }

@@ -23,7 +23,8 @@ docs/PLAN-M1b.md, order in tasks/README.md, unowned items in docs/BACKLOG.md, ru
    does prepare, the PR, the verdict comment, the hosted ci wait, the merge and a best-effort cleanup, undoes
    its own commit on a failure and appends its timing to out/land/history.jsonl of the main checkout; read its
    last `REFUSE` or `FAIL` line. It refuses while another land.ps1 runs. Land the oldest green branch first. Do not commit to main while a landing runs. A task with a `Look at:` line
-   needs the lead to view the image (Read the PNG) and post a PR comment starting `evidence:` first.
+   needs the lead to view the image (Read the PNG) first and pass what was seen as `-Evidence`; submit posts the
+   `evidence:` comment.
 6. After a landing: update the gate ledger line in tasks/README.md; move notes for later tasks into their
    files; move unowned gaps into docs/BACKLOG.md. Every 10 landings, and at each slice close, run
    `pwsh tools/check.ps1 full`.

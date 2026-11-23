@@ -5,14 +5,14 @@
 #   checks, rebase on origin/main, canary verification (lib/canary.ps1, as tools/canary.ps1; every build is followed by
 #   tools/scenes.py), the Blender suites for a diff under blender/ or tests/blender/ (lib/blender.ps1, the list `check
 #   full` runs), reviewer inputs in out/land/NNN/, deletion commit, push, gate, status `astroray/gate`. A failure after
-#   the commit resets the branch to the sha before it.
+#   the commit undoes it: a reset while it is only local, a pushed revert once origin has it (never a force push).
 # merge: PR head == gated sha, `ci` and `astroray/gate` success, lead comment `REVIEW PASS <sha>`
 #   (or `REVIEW SKIP <sha> (O31)` for a diff that is not kernel, physics, sampling, ABI or process),
 #   an `evidence:` comment when the task has `Look at:`; squash, confirm on origin/main, PASS, then best-effort cleanup
 #   (lib/landing.ps1; a leftover is printed as LEFTOVER and never fails the landing).
 # submit: prepare, open or reuse the PR, post the verdict (and evidence) comments, wait for hosted `ci` on that sha,
 #   merge; main moved ("re-run prepare") repeats everything, at most 3 attempts. One timing line per landing goes to
-#   out/land/history.jsonl of the main checkout. A failed ci run is printed with its id and never rerun here.
+#   out/land/history.jsonl of the main checkout. A failed ci run is a FAIL with its URL and never rerun here.
 # -DryRun: no push, no gh call, no commit, no gate run; prints what would happen (fixture test).
 # The gate is `check gate` (task 030); its last summary line is the status description.
 param(
@@ -36,36 +36,36 @@ $script:OrigEnterLock = ${function:Enter-ArMachineLock}
 function Enter-ArMachineLock { $w = & $script:OrigEnterLock; $script:LandTimes['lock_wait_s'] += $w; return $w }
 
 $script:UndoTo = $null      # the sha before this script's "(land)" commit; set while that commit may be undone
+$script:LandSha = $null     # that commit
+$script:LandBranch = $null
 $script:TaskTitle = ''
 $script:TaskLook = ''
 
 function Undo-LandCommit {
+  # Before the push the commit is only local: reset. Once origin has it, a reset would need a force push, so the
+  # commit is reverted and the revert pushed plainly; local and origin both carry the task file again.
   if (-not $script:UndoTo) { return }
-  & git reset -q --hard $script:UndoTo 2>&1 | Out-Null
-  if ($LASTEXITCODE -eq 0) { Write-Host 'undid (land) commit' } else { Write-Host "WARN land: could not reset the branch to $($script:UndoTo); drop the (land) commit by hand" }
-  $script:UndoTo = $null
+  $to = $script:UndoTo; $script:UndoTo = $null
+  # Unknown (ls-remote failed) counts as pushed: a revert is right either way, a reset is not.
+  $remote = @(& git ls-remote origin "refs/heads/$($script:LandBranch)" 2>$null)
+  $pushed = $LASTEXITCODE -ne 0 -or ($remote.Count -and "$($remote[0])".Split("`t")[0] -eq $script:LandSha)
+  if (-not $pushed) {
+    & git reset -q --hard $to 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { Write-Host 'undid (land) commit' } else { Write-Host "WARN land: could not reset the branch to $to; drop the (land) commit by hand" }
+    return
+  }
+  & git revert --no-edit $script:LandSha 2>&1 | Out-Null
+  if ($LASTEXITCODE -ne 0) { Write-Host "WARN land: could not revert the pushed (land) commit $($script:LandSha); run git revert --no-edit $($script:LandSha); git push"; return }
+  & git push -q origin "HEAD:refs/heads/$($script:LandBranch)" 2>&1 | Out-Null
+  if ($LASTEXITCODE -eq 0) { Write-Host 'undid (land) commit (reverted and pushed)' }
+  else { Write-Host "WARN land: reverted the (land) commit locally but the push failed; run git push origin HEAD:$($script:LandBranch)" }
 }
 function Refuse([string]$why) { Undo-LandCommit; Write-Host "REFUSE land: $why"; exit 1 }
+function Fail([string]$why) { Write-Host "FAIL land: $why"; Undo-LandCommit; exit 1 }
 function GitX {
   $o = & git @args 2>&1 | ForEach-Object { "$_" }
   if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') failed: $($o -join ' ')" }
   return $o
-}
-function GhX {
-  # A GitHub 5xx is transient: retry with backoff (5, 15, 30 s) so a passing gate or a half-done landing
-  # is never lost to it. Any other failure, or a 5xx that persists, throws.
-  $delays = @(5, 15, 30)
-  for ($i = 0; ; $i++) {
-    $o = & gh @args 2>&1 | ForEach-Object { "$_" }
-    if ($LASTEXITCODE -eq 0) { return ($o -join "`n") }
-    $txt = $o -join ' '
-    if ($i -lt $delays.Count -and $txt -match 'HTTP 5\d\d|Bad Gateway|Service Unavailable|Gateway Time-?out') {
-      Write-Host "gh $($args[0]) got a 5xx; retry $($i + 1) of $($delays.Count) in $($delays[$i]) s"
-      Start-Sleep -Seconds $delays[$i]
-      continue
-    }
-    throw "gh $($args -join ' ') failed: $txt"
-  }
 }
 
 function Get-TaskField([string]$text, [string]$field) {
@@ -148,13 +148,22 @@ function Invoke-Prepare {
   }
   # The canary's last build holds a broken or patched tree and the rebase brought in every change landed since the
   # branch began; rebuild (and regenerate recordings) before the Blender suites and the gate, so those run on this
-  # tree and the gate's fast tier (B-08) times neither this tool's churn nor other tasks' changes.
-  & pwsh -NoProfile -File (Join-Path $root 'tools/build.ps1') -Target astroray_tests_cpu 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host $_ }
-  if ($LASTEXITCODE -ne 0) { Refuse 'build before the gate failed' }
+  # tree and the gate's fast tier (B-08) times neither this tool's churn nor other tasks' changes. Every target the
+  # canary built is rebuilt: a canary with a non-exe item builds `all`, shared astroray_core included, which
+  # astroray_tests_cpu does not depend on. The Blender suites load astroray_core, so a Blender diff builds `all` too.
+  $blenderDiff = @($names | Where-Object { $_ -like 'blender/*' -or $_ -like 'tests/blender/*' }).Count -gt 0
+  $rebuild = @('astroray_tests_cpu')
+  if ((Test-Path $patch) -and $cr.Targets) { $rebuild += @($cr.Targets) }
+  if ($blenderDiff) { $rebuild += 'all' }
+  if ($rebuild -contains 'all') { $rebuild = @('all') } else { $rebuild = @($rebuild | Select-Object -Unique) }
+  foreach ($t in $rebuild) {
+    & pwsh -NoProfile -File (Join-Path $root 'tools/build.ps1') -Target $t 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) { Refuse "build of '$t' before the gate failed" }
+  }
   Invoke-Scenes
 
   # A diff under blender/ or tests/blender/ runs the Blender suites `check full` runs (the gate has no Blender suite).
-  if (@($names | Where-Object { $_ -like 'blender/*' -or $_ -like 'tests/blender/*' }).Count) {
+  if ($blenderDiff) {
     Measure-LandPhase 'blender_suites_s' {
       foreach ($su in (Get-ArFullBlenderSuites -Changed $names -Root $root)) {
         $b = Invoke-ArBlender -Gui:([bool]$su.Gui) -Script (Join-Path $root $su.Script) -TimeoutS $su.TimeoutS 6>$null
@@ -182,9 +191,11 @@ function Invoke-Prepare {
   $rm = @($taskFile[0].FullName)
   if (Test-Path $patch) { $rm += $patch }
   $script:UndoTo = (GitX rev-parse HEAD)
+  $script:LandBranch = $branch
   $null = GitX rm -q -- @rm
   $null = GitX commit -q -m "$title (land)"
   $sha = (GitX rev-parse HEAD)
+  $script:LandSha = $sha
   $null = GitX push --force-with-lease -u origin HEAD
   $out = @()
   Measure-LandPhase 'gate_s' { $script:gateOut = & pwsh -NoProfile -File (Join-Path $root 'tools/check.ps1') gate 2>&1 | ForEach-Object { "$_" } }
@@ -195,22 +206,10 @@ function Invoke-Prepare {
   if ($desc -match 'waited ([\d.]+) s') { $script:LandTimes['lock_wait_s'] += [double]$Matches[1] }
   if ($desc.Length -gt 140) { $desc = $desc.Substring(0, 140) }
   Set-Content -Path (Join-Path $dir 'gate.json') -Value (@{ sha = $sha; state = $state; description = $desc } | ConvertTo-Json)
+  # GhX retries a 5xx first; a post that still fails is a failure after the commit like any other (undone).
   try { $null = GhX api "repos/{owner}/{repo}/statuses/$sha" -f "state=$state" -f 'context=astroray/gate' -f "description=$desc" }
-  catch {
-    if ($state -eq 'success') {
-      # The gate passed; do not undo the commit or lose the run for a status-post error.
-      $script:UndoTo = $null
-      Write-Host "FAIL prepare $Number sha $($sha.Substring(0, 9)): gate passed but posting astroray/gate failed after retries: $($_.Exception.Message)"
-      Write-Host "commit and push are kept; post it by hand: gh api repos/{owner}/{repo}/statuses/$sha -f state=success -f context=astroray/gate -f description='$desc'"
-      exit 1
-    }
-    throw
-  }
-  if ($state -ne 'success') {
-    Write-Host "FAIL prepare $Number sha $($sha.Substring(0, 9)) astroray/gate $state"
-    Undo-LandCommit
-    exit 1
-  }
+  catch { Fail "prepare $Number sha $($sha.Substring(0, 9)): gate $state, but posting astroray/gate failed: $($_.Exception.Message)" }
+  if ($state -ne 'success') { Fail "prepare $Number sha $($sha.Substring(0, 9)) astroray/gate $state" }
   if ($Mode -eq 'prepare') {
     $pr = GhX pr list --head $branch --state open --json number | ConvertFrom-Json
     if (-not $pr) { Write-Host "no PR yet: gh pr create --base main --head $branch --fill" }
@@ -245,9 +244,9 @@ function Wait-Ci([string]$branch, [string]$sha, [int]$pr) {
     $r = GhX run view $run --json 'status,conclusion,url' | ConvertFrom-Json
     if ($r.status -eq 'completed') {
       if ($r.conclusion -eq 'success') { Write-Host "ci: run $run success"; return }
-      Refuse "ci run $run concluded $($r.conclusion): $($r.url) (not rerun; read the log, fix, resubmit)"
+      Fail "ci run $run concluded $($r.conclusion): $($r.url) (not rerun; read the log, fix, resubmit)"
     }
-    if ((Get-Date) -gt $deadline) { Refuse "ci run $run still $($r.status) after $CiDeadlineMin min: $($r.url) (not rerun)" }
+    if ((Get-Date) -gt $deadline) { Fail "ci run $run still $($r.status) after $CiDeadlineMin min: $($r.url) (not rerun)" }
     Start-Sleep -Seconds 20
   }
 }
@@ -295,9 +294,8 @@ function Invoke-Merge {
 
   Set-Location $mainCheckout
   $script:UndoTo = $null   # from here the branch is being merged; never reset it
-  $null = GhX pr merge $n --squash --match-head-commit $sha
+  $mc = Invoke-LandingPrMerge $n $sha
   $null = GitX fetch origin
-  $mc = (GhX pr view $n --json mergeCommit | ConvertFrom-Json).mergeCommit.oid
   & git merge-base --is-ancestor $mc origin/main 2>&1 | Out-Null
   if ($LASTEXITCODE -ne 0) { Refuse "squash commit $mc is not on origin/main" }
   $script:MergeSha = $mc; $script:MergePr = $n
@@ -328,9 +326,7 @@ function Invoke-Submit {
     else {
       $t = if ($Title) { $Title } else { ($script:TaskTitle -replace "^$Number\s+", "${Number}: ") }
       $bodyText = "Task $Number. Landed through tools/land.ps1.`n`n$([char]::ConvertFromUtf32(0x1F916)) Generated with [Claude Code](https://claude.com/claude-code)"
-      $url = GhX pr create --base main --head $branch --title $t --body $bodyText
-      $n = [regex]::Match($url, '(\d+)\s*$').Groups[1].Value
-      if (-not $n) { Refuse "gh pr create printed no PR number: $url" }
+      $n = Invoke-LandingPrCreate $branch $t $bodyText
     }
     $null = GhX pr comment $n --body $(if ($Verdict -eq 'PASS') { "REVIEW PASS $sha" } else { "REVIEW SKIP $sha (O31)" })
     if ($Evidence) { $null = GhX pr comment $n --body $(if ($Evidence -match '^evidence:') { $Evidence } else { "evidence: $Evidence" }) }
@@ -344,7 +340,8 @@ function Invoke-Submit {
 function Complete-Submit([int]$attempts) {
   # After the PASS line: timing, history, the PR body table, then cleanup. None of it fails a merged landing.
   $times = $script:LandTimes
-  $prev = Get-LandingLastGate $mainCheckout
+  $prev = $null
+  try { $prev = Get-LandingLastGate $mainCheckout } catch { Write-Host "WARN land: last history line unreadable: $($_.Exception.Message)" }
   Write-Host (Format-LandingTiming $times $attempts)
   $gate = [math]::Round($times['gate_s'], 1)
   if ($prev -and $null -ne $prev.gate_s) { Write-Host ("gate {0:N1} s ({1:+0.0;-0.0;+0.0} s against task {2})" -f $gate, ($gate - [double]$prev.gate_s), $prev.task) }
