@@ -80,7 +80,7 @@ on its existing branch and worktree, briefed from its task file and the rulings 
     handshake; waiting lines throttled after 3). Needs Opus review; gate not rerun after the rework. Its env
     defaults (3600 s, 30 s, Globalstroray2, %ProgramData%stroray2) go into 0009 d8 as a lead record edit.
   - 150 half/float textures: done (gate 164.8 s, B-05 4.62-4.69 s, canary PASS); half_to_float's one exact float
-    subtraction accepted (integer-only form broke B-05). PR being opened; needs Opus review (kernel, 0007 d13
+    subtraction accepted (integer-only form broke B-05). PR #127; needs Opus review (kernel, 0007 d13
     record edit, vendored tinyexr v1.0.12).
 - Not dispatched: 161 (blender, after 162), 139 (blender), 140/160 (after 136, 138), 148, 156, 158 (spine
   queue after 147). Then the slice-0 review writes the next batch (PLAN-M1b section 2 outlines).
