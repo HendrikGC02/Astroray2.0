@@ -311,7 +311,10 @@ endif()
 
 # Installable Blender extension zip (0007 d45, 0001 D10.2): stage the addon, the
 # generated bindings and the DLL, then let Blender build the zip. Not in ALL: it
-# needs the Blender install (ASTRORAY_BLENDER). The zip name is Blender's own.
+# needs the Blender install (ASTRORAY_BLENDER), which hosted ci lacks, and every
+# `build.ps1 -Target all` (the gate's `build dev` included) would start Blender. The
+# Blender tests build it where they need it: smoke_a1.py install_and_enable runs
+# `tools/build.ps1 -Target astroray_extension`. The zip name is Blender's own.
 set(ASTRORAY_EXT_STAGE ${CMAKE_SOURCE_DIR}/out/extension/astroray)
 set(ASTRORAY_EXT_ZIP ${CMAKE_SOURCE_DIR}/out/extension/astroray-${PROJECT_VERSION}-windows_x64.zip)
 file(GLOB_RECURSE _ar_ext_src ${CMAKE_SOURCE_DIR}/blender/astroray/*)

@@ -25,7 +25,7 @@ _PLAIN_NODES = frozenset(("OUTPUT_LIGHT", "EMISSION"))
 def _has_light_graph(light):
     """True when the tree does more than the default Emission -> Light Output pair: Cycles would
     light with the emission node's colour and strength, which the ABI does not carry yet."""
-    tree = light.node_tree if light.use_nodes else None
+    tree = light.node_tree
     if tree is None:
         return False
     if any(n.type not in _PLAIN_NODES for n in tree.nodes):

@@ -14,10 +14,7 @@ import importlib
 import os
 import re
 import sys
-import warnings
 
-# The addon still reads Material.use_nodes (deprecated for 6.0); the list names it, the noise is not the signal.
-warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIST = os.path.join(ROOT, "blender", "astroray", "api_surface.txt")
@@ -33,11 +30,9 @@ def _generate(struct):
         return me, lambda: bpy.data.meshes.remove(me)
     if struct == "Material":
         m = bpy.data.materials.new("api_surface")
-        m.use_nodes = True
         return m, lambda: bpy.data.materials.remove(m)
     if struct == "World":
         w = bpy.data.worlds.new("api_surface")
-        w.use_nodes = True
         return w, lambda: bpy.data.worlds.remove(w)
     if struct == "Image":
         im = bpy.data.images.new("api_surface", 1, 1)

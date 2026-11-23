@@ -46,6 +46,7 @@ struct PassRig {
   ContextState ctx;
   Scene scene{ctx, SceneConfig{2, {}, {}}};
   uint64_t generation = 0;
+  float exposure = 1.0f;  // ar_settings.film_exposure of the next settings commit
   PassRig() {
     scene.meshes = std::make_shared<MeshStore>();
     scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
@@ -71,7 +72,7 @@ struct PassRig {
     s.max_bounces = 0;
     s.pixel_filter = AR_FILTER_BOX;
     s.pixel_filter_width = 1.0f;
-    s.film_exposure = 1.0f;
+    s.film_exposure = exposure;
     REQUIRE(e.set_settings(&s) == AR_OK);
   }
   // A material-less quad at z = -1 that fills the camera's view, with one UV layer.
@@ -307,6 +308,60 @@ TEST_CASE("session passes/an unknown pass gives one report entry per settings ch
   CHECK(r.entries == 1);
   CHECK(r.count == 2);
   CHECK(s.progress().state == AR_STATE_CONVERGED);
+}
+
+TEST_CASE("session passes/film exposure scales the display channel") {
+  // ar_settings.film_exposure reaches the film: the display channel doubles at exposure 2 while a
+  // science channel does not move (0008 d7). Every commit starts an epoch, so no sample is mixed.
+  // A counter-based sampler draws the same wavelengths in each epoch, hence the tight tolerance.
+  PassRig rig;
+  rig.build({"Combined", "Position"});
+  std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, 1);
+  SessionOptions o;
+  o.max_width = kW;
+  o.max_height = kH;
+  Session s(rig.scene, *dev, o);
+  s.set_view(view_of(kW, kH));
+  s.start();
+  settle(s, rig);
+  const auto read = [&](const char* name) {
+    const std::vector<PassDesc> passes = list_passes(s.layout());
+    const auto it = std::find_if(passes.begin(), passes.end(), [&](const PassDesc& p) { return p.name == name; });
+    REQUIRE(it != passes.end());
+    std::vector<float> out;
+    s.read_film([&](const FilmReadContext& c) {
+      FilmView view(c.device, c.film);
+      out.resize(pass_float_count(*it, AR_QUANTITY_MEAN, view.width(), view.height()));
+      read_pass(view, *it, AR_QUANTITY_MEAN, uint32_t(out.size()), out.data());
+    });
+    return out;
+  };
+  const std::vector<float> c1 = read("Combined"), p1 = read("Position");
+  rig.exposure = 2.0f;
+  rig.commit([&](Edit& e) { rig.settings(e, {"Combined", "Position"}); });
+  settle(s, rig);
+  const std::vector<float> c2 = read("Combined"), p2 = read("Position");
+  REQUIRE(c1.size() == c2.size());
+  REQUIRE(p1.size() == p2.size());
+  for (size_t i = 0; i < c1.size(); ++i) {
+    REQUIRE(c1[i] > 0.0f);
+    CHECK(std::fabs(c2[i] - 2.0f * c1[i]) <= 1e-6 * std::fabs(c2[i]));
+  }
+  for (size_t i = 0; i < p1.size(); ++i) CHECK(p2[i] == p1[i]);
+}
+
+TEST_CASE("session passes/film exposure that is not finite and >= 0 is refused") {
+  // A NaN, Inf or negative exposure would put garbage into every display moment at resolve.
+  for (const float bad : {std::nanf(""), INFINITY, -1.0f}) {
+    PassRig rig;
+    auto e = rig.scene.begin_edit();
+    REQUIRE(e);
+    rig.exposure = bad;
+    rig.settings(*e, {"Combined"});
+    uint64_t g = 0;
+    CHECK(e->commit(&g) == AR_ERR_INVALID_ARGUMENT);
+    CHECK(e->last_error().find("film_exposure") != std::string::npos);
+  }
 }
 
 }  // TEST_SUITE

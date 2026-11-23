@@ -926,6 +926,9 @@ void Session::render_loop() {
         ctx_.log.line("INFO", "session: radiance scale s = 2^" + std::to_string(1 - e));
       }
       film_->data().inv_radiance_scale = inv_s;
+      // Exposure scales each sample at resolve (0008 d7), so it is fixed per epoch by construction:
+      // set here, after begin_epoch, from the settings this latch folded in, never mid-epoch.
+      if (const auto st = scene_.settings()) film_->data().film_exposure = st->s.film_exposure;
     }
     apply_view();
     if (lr.changed) update_camera_and_filter(lr.generation);

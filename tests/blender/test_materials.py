@@ -279,6 +279,15 @@ class TestMaterials(unittest.TestCase):
         self.assertFalse(is_magenta(rgb), f"unexpected magenta {rgb}")
         self.assertEqual([e for e in entries if e[0] == AR_REPORT_NODE_UNSUPPORTED], [])
 
+    def test_material_without_node_setup_lowers_the_default_principled(self):
+        """A datablock nobody gave a node setup still carries Blender's default node tree (Blender 5.x keeps
+        use_nodes always on), so it lowers as the default Principled BSDF, not as a "no nodes" entry."""
+        mat = bpy.data.materials.new("Bare")
+        em = translate.translate_material(mat, keys.KeyMap(), OP)
+        self.assertEqual(unsupported_strings(em), [])
+        stores = [n for n in decode(em) if n["op"] == "STORE_SLOT" and n["i32"] == [translate.SLOT_SPECULAR_WEIGHT]]
+        self.assertEqual(len(stores), 1)
+
     def test_world_noise_raises_one_entry(self):
         scene, plane, mat, world = new_scene()
         t = world.node_tree

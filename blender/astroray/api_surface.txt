@@ -76,9 +76,7 @@ attr Object.lightgroup
 # Materials and node trees (0005 item 29, 0007 d8; materials/translate.py).
 attr Material.inline_shader_nodes
 attr Material.node_tree
-attr Material.use_nodes
 attr World.inline_shader_nodes
-attr World.use_nodes
 attr NodeTree.nodes
 attr ShaderNodeOutputMaterial.is_active_output
 attr ShaderNodeOutputMaterial.target
