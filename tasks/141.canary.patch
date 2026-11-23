@@ -1,5 +1,5 @@
 diff --git a/tools/lib/lock.ps1 b/tools/lib/lock.ps1
-index d561776..7d46a72 100644
+index d561776..302bc49 100644
 --- a/tools/lib/lock.ps1
 +++ b/tools/lib/lock.ps1
 @@ -75,5 +75,5 @@ function Read-ArLockOwner([string]$path) {
@@ -16,6 +16,13 @@ index d561776..7d46a72 100644
 +  if ($owner -and $owner.Alive) { return "waiting for $($owner.Tool) since $($owner.Text)" }
    return 'waiting for unknown holder (owner.json missing or its pid not running)'
  }
+@@ -117,5 +117,5 @@ function Enter-ArMachineLock {
+     # The limit is on the current holder's hold, not this caller's wait: a long queue of legitimate holders
+     # is not a hang. Without a live record, this caller's own wait is the only clock.
+-    $holdS = if ($o -and $o.Alive) { ([DateTimeOffset]::Now - $o.Started).TotalSeconds } else { $sw.Elapsed.TotalSeconds }
++    $holdS = if ($o) { ([DateTimeOffset]::Now - $o.Started).TotalSeconds } else { $sw.Elapsed.TotalSeconds }
+     if ($holdS -ge $limitS) {
+       $m.Dispose()
 @@ -170,5 +170,5 @@ function Enter-ArTreeLock {
      }
    }
