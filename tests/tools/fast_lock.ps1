@@ -50,7 +50,8 @@ try {
   Check 'timeout: the waiter never acquires' (-not $txt.Contains('ACQUIRED')) $out
   Check 'timeout: waiting message names the holder' ($txt -match "waiting for holder\.ps1 \(pid $($h1.Id)\) since \d{4}-") $out
   $m = [regex]::Match($txt, "FAIL lock: waited (\d+) s for holder\.ps1 \(pid $($h1.Id)\), holding (\d+) s since [^,]+, over the 3 s limit")
-  Check 'timeout: FAIL lock names the holder and its hold' ($m.Success -and [int]$m.Groups[2].Value -ge 3 -and [int]$m.Groups[1].Value -le 3) $out
+  # The limit is on the holder's hold, so this waiter's own wait (rounded) never exceeds it.
+  Check 'timeout: FAIL lock names the holder and its hold' ($m.Success -and [int]$m.Groups[2].Value -ge 3 -and [int]$m.Groups[1].Value -le [int]$m.Groups[2].Value + 1) $out
   Check 'timeout: FAIL lock names the owner file' (($txt -replace '[\s|]', '').Contains(((Join-Path (Join-Path $tmp 'timeout') 'owner.json') -replace '\s', ''))) $out
   Stop-Process -Id $h1.Id -Force -ErrorAction SilentlyContinue
 
