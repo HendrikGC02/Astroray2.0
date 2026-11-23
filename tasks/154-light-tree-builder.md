@@ -23,3 +23,4 @@ Progress:
 - Review fixes (lead): node energy = Cycles on-axis intensity via light_tree_energy (P/4pi point and sphere, P/pi area, L A triangle, pi L world; needs the scene sphere again); `theta_o + theta_e >= pi` for two-sided emitters seen from behind; new cases: importance pinned by hand, two-sided triangle from behind far away, world bounds and pmf; gate also checks |tree - exact| / se (6 checks of 2000); isotropic axis shared by point, sphere, world (light_isotropic_axis).
 - Canary: 8 independent hunks, 10 named cases; canary.ps1 154 PASS. Record cites no ruling number: lint refuses "ruling 90" until the lead lands it in RULINGS.md.
 - Rebased on 22c9155 (153). check fast PASS 8.5 s; check gate PASS 162.7 s.
+- Rebased on 81addca (ruling 90 on main), ruling 90 cited in the D10 sentence. check fast PASS 7.6 s; canary 154 PASS (8 hunks, 10 cases); check gate PASS 179.9 s of 180; light_tree/lights_point/lights_area gate 15 cases pass.
