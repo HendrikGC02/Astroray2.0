@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # CPU-only checks of tools/lib/landing.ps1 on a real throwaway repo: cleanup (a worktree whose out/ holds an open
 # file ends in a LEFTOVER line whose fix works once the file is closed; an unregistered leftover directory is
-# deleted; a clean worktree is removed), exact branch choice, the running-land marker, the merge and PR-create
+# deleted under .claude/worktrees/ and only reported outside it; a clean worktree is removed), exact branch choice, the running-land marker, the merge and PR-create
 # calls after a 5xx (a `gh` stub), and the history line in the main checkout. Run by tests/tools/run_fast.ps1
 # (gate step `tools tests`).
 $ErrorActionPreference = 'Stop'
@@ -28,6 +28,7 @@ try {
   & git -C (Join-Path $tmp 'origin.git') branch task/120-y main
   G worktree add -q -b task/121-z (Join-Path $wts 'task_121-z')
   G push -q origin task/121-z
+  G worktree add -q -b task/1202-o (Join-Path $tmp 'task_1202-o')
   $mainPath = Get-LandingMain $main
   Check 'main checkout is the first worktree' ((Resolve-Path $mainPath).Path -eq (Resolve-Path $main).Path)
 
@@ -62,6 +63,14 @@ try {
   Remove-Item -Recurse -Force (Join-Path $main '.git/worktrees/task_1201-q')
   $o = @(Invoke-LandingCleanup -Main $main -Task $t1201 -SleepS 0 6>&1 | ForEach-Object { "$_" })
   Check 'an unregistered leftover directory is deleted' ((-not (Test-Path (Join-Path $wts 'task_1201-q'))) -and [int]$o[-1] -eq 0)
+
+  # The same outside .claude/worktrees/: the directory is never deleted here, one LEFTOVER line gives the fix.
+  $wt1202 = Join-Path $tmp 'task_1202-o'
+  $t1202 = Find-Safe '1202'
+  Remove-Item -Recurse -Force (Join-Path $main '.git/worktrees/task_1202-o')
+  $o = @(Invoke-LandingCleanup -Main $main -Task $t1202 -SleepS 0 6>&1 | ForEach-Object { "$_" })
+  Check 'an unregistered directory outside .claude/worktrees survives' (Test-Path $wt1202)
+  Check 'one LEFTOVER line gives its Remove-Item fix' (@($o | Where-Object { $_ -match "^LEFTOVER: worktree directory .*task_1202-o.*; fix: .*Remove-Item -LiteralPath '.*task_1202-o' -Recurse -Force$" }).Count -eq 1)
 
   # A clean worktree: removed, local and remote branch deleted, nothing left over.
   $t121 = Find-Safe '121'

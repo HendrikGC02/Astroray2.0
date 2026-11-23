@@ -119,7 +119,8 @@ function Test-LandingWorktreeRegistered([string]$Main, [string]$Wt) {
 }
 
 function Remove-LandingWorktree([string]$Main, [string]$Wt, [int]$SleepS) {
-  # 'removed', 'registered' (git still lists it) or 'directory' (unregistered, the directory is left).
+  # 'removed', 'registered' (git still lists it), 'directory' (unregistered, deleting the directory failed) or
+  # 'outside' (unregistered, the directory lies outside .claude/worktrees/ and is not deleted here).
   # `git worktree remove` unregisters the tree even when deleting its directory fails (a held file), and a retry
   # then fails with "is not a working tree"; from there only the directory is deleted, and only when it lies under
   # the repository's .claude/worktrees/ (it was found in `git worktree list` for this task by the caller).
@@ -131,6 +132,7 @@ function Remove-LandingWorktree([string]$Main, [string]$Wt, [int]$SleepS) {
     elseif ($mayDelete -and (Test-Path -LiteralPath $full)) { Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue }
     $reg = Test-LandingWorktreeRegistered $Main $full
     if (-not $reg -and -not (Test-Path -LiteralPath $full)) { return 'removed' }
+    if (-not $reg -and -not $mayDelete) { return 'outside' }   # nothing left that this tool may do
     if ($i -lt 3 -and $SleepS -gt 0) { Start-Sleep -Seconds $SleepS }
   }
   if ($reg) { return 'registered' } else { return 'directory' }
@@ -155,6 +157,7 @@ function Invoke-LandingCleanup {
       $r = Remove-LandingWorktree $Main $wt $SleepS
       if ($r -eq 'removed') { Write-Host "cleanup: worktree $wt removed" }
       elseif ($r -eq 'registered') { Add-Leftover "worktree $wt" "git worktree remove -f -f '$wt'" }
+      elseif ($r -eq 'outside') { Add-Leftover "worktree directory $wt (unregistered; outside .claude/worktrees/, so not deleted here)" "check it, then Remove-Item -LiteralPath '$wt' -Recurse -Force" }
       else { Add-Leftover "worktree directory $wt (unregistered; a process holds a file in it)" "close that process, then Remove-Item -LiteralPath '$wt' -Recurse -Force" }
       $null = & git -C $Main worktree prune 2>&1
     }
