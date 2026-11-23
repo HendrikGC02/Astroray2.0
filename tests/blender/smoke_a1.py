@@ -22,6 +22,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -316,7 +317,17 @@ F12_TEX = 2048       # texels per side: the decode outlasts a CPU session's star
 F12_SPP = 64         # one device's image-mean SE is 0.00019 (0.19 % of the mean 0.100), under the 1 % allowed
 F12_POWER = 600.0    # lamp watts (Blender units), 4 m above the plane
 F12_FLOOR = 0.05     # half the mean luminance of the first good run (0.1002 on both devices)
-F12_LUMA = (0.2126, 0.7152, 0.0722)  # Rec.709 luminance of scene-linear RGB
+F12_LUMA = (0.2126, 0.7152, 0.0722)  # Rec.709 luminance of scene-linear RGB. Ref: ITU-R BT.709
+
+
+def device_kind(log):
+    """The kind of the newest context the engine created, from its log (written at ar_context_create): a
+    device that silently fell back below the Python layer would otherwise pass every case, since both
+    devices share one counter-based sampler and give the same means."""
+    kinds = re.findall(r"INFO device kind=(\w+)", open(log, encoding="utf-8", errors="replace").read())
+    if not kinds:
+        raise RuntimeError(f"{log} names no device")
+    return kinds[-1]
 
 
 def build_f12_scene(work):
@@ -391,6 +402,8 @@ class TestF12Textured(unittest.TestCase):
             scene.astroray.device = device
             s = scene.render
             s.filepath = os.path.join(work, f"f12_{device.lower()}.exr")
+            if os.path.exists(s.filepath):
+                os.remove(s.filepath)  # a stale file from an earlier run must never be read
             s.image_settings.file_format, s.image_settings.color_depth = "OPEN_EXR", "32"
             s.image_settings.exr_codec = "NONE"
             cap = Capture(rf)
@@ -401,6 +414,7 @@ class TestF12Textured(unittest.TestCase):
                 cap.restore()
                 rf.shutdown()
             seconds = time.monotonic() - t0
+            kind = device_kind(rf._log_path())
             if r != {"FINISHED"} or cap.arrays is None:
                 raise RuntimeError(f"F12 on {device} returned {r}, session read {cap.arrays is not None}")
             exr = bpy.data.images.load(s.filepath)
@@ -411,10 +425,11 @@ class TestF12Textured(unittest.TestCase):
             analytic.write_png(os.path.join(evidence, f"f12_{device.lower()}.png"), planes, 1.0)
             luma = float(np.tensordot(np.array(F12_LUMA), planes, axes=1).mean())
             cls.runs[device.lower()] = {"mean": planes, "var": cap.arrays[1].astype(np.float64).transpose(2, 0, 1),
-                                        "luma": luma, "seconds": seconds}
-            print(f"RESULT smoke f12 {device.lower()} mean {luma:.6f} floor {F12_FLOOR:.6f} time {seconds:.1f}")
+                                        "luma": luma, "seconds": seconds, "kind": kind}
+            print(f"RESULT smoke f12 {device.lower()} kind {kind} mean {luma:.6f} floor {F12_FLOOR:.6f} time {seconds:.1f}")
 
     def _floor(self, device):
+        self.assertEqual(self.runs[device]["kind"], device, f"the engine rendered on {self.runs[device]['kind']}")
         self.assertGreater(self.runs[device]["luma"], F12_FLOOR,
                            f"{device}: the frame is black or nearly so (mean luminance {self.runs[device]['luma']})")
 
