@@ -51,26 +51,32 @@ function Write-ArLockOwner([string]$path) {
   }
 }
 
+# Only our own record: a missing or unreadable file, or another pid's, is not ours to delete. A record that is
+# ours but stays behind would name this process to the next waiter, so that failure is shown.
 function Remove-ArLockOwner([string]$path) {
   if (-not $path) { return }
-  try {
-    $o = Get-Content -Raw $path -ErrorAction Stop | ConvertFrom-Json
-    if ([int]$o.pid -eq $PID) { Remove-Item -Force $path -ErrorAction Stop }
-  } catch { }
+  try { $o = Get-Content -Raw $path -ErrorAction Stop | ConvertFrom-Json; $ours = ([int]$o.pid -eq $PID) } catch { return }
+  if (-not $ours) { return }
+  try { Remove-Item -Force $path -ErrorAction Stop } catch { Write-Host "WARN lock: owner file not removed: $($_.Exception.Message)" }
 }
 
 # The recorded holder, or $null. Alive: its pid runs and that process started before the record (a reused
 # pid started later).
 function Read-ArLockOwner([string]$path) {
-  try { $o = Get-Content -Raw $path -ErrorAction Stop | ConvertFrom-Json } catch { return $null }
-  if (-not $o -or -not $o.pid -or -not $o.started) { return $null }
-  # ConvertFrom-Json turns an ISO string into a DateTime already.
-  $started = if ($o.started -is [DateTime]) { [DateTimeOffset]$o.started } else { [DateTimeOffset]::Parse("$($o.started)", [Globalization.CultureInfo]::InvariantCulture) }
-  $p = Get-Process -Id ([int]$o.pid) -ErrorAction SilentlyContinue
+  # A malformed record reads as no live owner: the wait loop must go on, never throw while it may hold the
+  # mutex.
+  try {
+    $o = Get-Content -Raw $path -ErrorAction Stop | ConvertFrom-Json
+    if (-not $o -or -not $o.pid -or -not $o.started) { return $null }
+    # ConvertFrom-Json turns an ISO string into a DateTime already.
+    $started = if ($o.started -is [DateTime]) { [DateTimeOffset]$o.started } else { [DateTimeOffset]::Parse("$($o.started)", [Globalization.CultureInfo]::InvariantCulture) }
+    $opid = [int]$o.pid
+  } catch { return $null }
+  $p = Get-Process -Id $opid -ErrorAction SilentlyContinue
   $alive = [bool]$p
   if ($p) { try { $alive = ([DateTimeOffset]$p.StartTime) -le $started.AddSeconds(1) } catch { } }
   $text = $started.ToLocalTime().ToString('yyyy-MM-ddTHH:mm:sszzz')
-  return [pscustomobject]@{ Pid = [int]$o.pid; Tool = "$($o.tool)"; Started = $started; Text = $text; Alive = $alive }
+  return [pscustomobject]@{ Pid = $opid; Tool = "$($o.tool)"; Started = $started; Text = $text; Alive = $alive }
 }
 
 function Format-ArLockWait($owner) {
