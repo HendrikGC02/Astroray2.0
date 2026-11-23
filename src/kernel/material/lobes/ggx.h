@@ -2,8 +2,8 @@
 // GGX dielectric specular reflection lobe of OpenPBR: height-correlated Smith
 // masking, visible-normal sampling, specular_weight / specular_color / specular_ior.
 // Directions are in the local shading frame (z = normal); f excludes the cosine.
-// Isotropic only (anisotropy, transmission, metal, coat and energy compensation
-// are later tasks).
+// Isotropic only (anisotropy, transmission, coat and energy compensation are later
+// tasks). The alpha-level helpers below are shared with the metal lobe (metal.h).
 //
 // Ref: GGX / Trowbridge-Reitz D and the microfacet BRDF f = F D G2 / (4 cos_o cos_i):
 // Walter et al. 2007 (EGSR), Eq. 33 and the reflection term of Eq. 21;
@@ -43,7 +43,9 @@ struct GgxParams {
 
 inline constexpr Real kGgxPi = Real(3.14159265358979323846);
 
-AR_FN Real ggx_alpha(const GgxParams& p) { return p.roughness * p.roughness; }
+// alpha = roughness^2 (OpenPBR Surface 1.1.2); shared by every GGX-based lobe.
+AR_FN Real ggx_alpha_of(Real roughness) { return roughness * roughness; }
+AR_FN Real ggx_alpha(const GgxParams& p) { return ggx_alpha_of(p.roughness); }
 
 // Heitz 2014 Eq. 72: Lambda(w) = (sqrt(1 + alpha^2 tan^2) - 1) / 2, w.z > 0. tan^2 is
 // formed from w.x, w.y rather than 1 - w.z^2, which cancels badly near the normal in float.
@@ -69,6 +71,27 @@ AR_FN Real ggx_g2(Real alpha, Real3 wo, Real3 wi) {
 }
 AR_FN Real ggx_g1(Real alpha, Real3 wo) { return Real(1) / (Real(1) + ggx_lambda(alpha, wo)); }
 
+// Reflection half vector m = (wo + wi) / |wo + wi|; false when the sum has zero length
+// (wi = -wo), which every caller treats as "no value, no density".
+AR_FN bool ggx_half_vector(Real3 wo, Real3 wi, Real3& m) {
+  const Real3 h = wo + wi;
+  const Real len = length(h);
+  if (!(len > Real(0))) return false;
+  m = h / len;
+  return true;
+}
+
+// Density per solid angle of wi = reflect(wo, m) when m is drawn by ggx_sample_vndf:
+// D_wo(m) / (4 wo.m) = G1(wo) D(m) / (4 cos_o) (Heitz 2018 Eq. 3; reflection Jacobian 1 / (4 wo.m)).
+AR_FN Real ggx_reflect_pdf(Real alpha, Real3 wo, Real3 m) {
+  return ggx_g1(alpha, wo) * ggx_d(alpha, m) / (Real(4) * wo.z);
+}
+
+// The Fresnel-free part of the microfacet reflection BRDF, D G2 / (4 cos_o cos_i) (Walter 2007 Eq. 21).
+AR_FN Real ggx_reflect_dg(Real alpha, Real3 wo, Real3 wi, Real3 m) {
+  return ggx_d(alpha, m) * ggx_g2(alpha, wo, wi) / (Real(4) * wo.z * wi.z);
+}
+
 AR_FN LobeEval ggx_zero_eval() {
   LobeEval e;
   e.f = spec_fill(Real(0));
@@ -82,25 +105,19 @@ AR_FN Real ggx_pdf(const GgxParams& p, Real3 wo, Real3 wi, TransportMode mode) {
   (void)mode;
   const Real alpha = ggx_alpha(p);
   if (lobe_is_delta(alpha, alpha) || wo.z <= Real(0) || wi.z <= Real(0)) return Real(0);
-  const Real3 h = wo + wi;
-  const Real len = length(h);
-  if (!(len > Real(0))) return Real(0);
-  const Real3 m = h / len;
-  const Real pdf = ggx_g1(alpha, wo) * ggx_d(alpha, m) / (Real(4) * wo.z);
+  Real3 m{};
+  if (!ggx_half_vector(wo, wi, m)) return Real(0);
+  const Real pdf = ggx_reflect_pdf(alpha, wo, m);
   return pdf > Real(0) ? pdf : Real(0);  // also maps NaN to "no density"
 }
 
 AR_FN LobeEval ggx_eval(const GgxParams& p, Real3 wo, Real3 wi, TransportMode mode) {
   const Real alpha = ggx_alpha(p);
   if (lobe_is_delta(alpha, alpha) || wo.z <= Real(0) || wi.z <= Real(0)) return ggx_zero_eval();
-  const Real3 h = wo + wi;
-  const Real len = length(h);
-  if (!(len > Real(0))) return ggx_zero_eval();
-  const Real3 m = h / len;
+  Real3 m{};
+  if (!ggx_half_vector(wo, wi, m)) return ggx_zero_eval();
   const Real cos_o_m = dot(wo, m);
-  const Real d = ggx_d(alpha, m);
-  const Real g2 = ggx_g2(alpha, wo, wi);
-  const Real scale = d * g2 / (Real(4) * wo.z * wi.z);
+  const Real scale = ggx_reflect_dg(alpha, wo, wi, m);
   LobeEval e;
   const Spec fr = fresnel_dielectric_weighted(cos_o_m, p.specular_ior, p.specular_weight);
   for (int i = 0; i < kLanes; ++i) e.f.v[i] = p.specular_color.v[i] * fr.v[i] * scale;
@@ -155,9 +172,8 @@ AR_FN LobeSample ggx_sample(const GgxParams& p, Real3 wo, Real2 u, TransportMode
   const Real3 wi = m * (Real(2) * cos_o_m) - wo;
   // A reflected direction below the surface is "no sample" (0005 item 8).
   if (!(m.z > Real(0)) || !(cos_o_m > Real(0)) || !(wi.z > Real(0))) return s;
-  const Real d = ggx_d(alpha, m);
-  const Real pdf = ggx_g1(alpha, wo) * d / (Real(4) * wo.z);
-  const Real scale = d * ggx_g2(alpha, wo, wi) / (Real(4) * wo.z * wi.z);
+  const Real pdf = ggx_reflect_pdf(alpha, wo, m);
+  const Real scale = ggx_reflect_dg(alpha, wo, wi, m);
   const Spec fr = fresnel_dielectric_weighted(cos_o_m, p.specular_ior, p.specular_weight);
   Spec f;
   for (int i = 0; i < kLanes; ++i) f.v[i] = p.specular_color.v[i] * fr.v[i] * scale;
