@@ -17,3 +17,6 @@ Budget: gate +3 s at most (stop and ask above); k_shade_surface: registers and s
 Depends on: 146.
 Size: L (about 600 lines with the GPU and compiler parts); stop and report at 2x. If the compiler part alone exceeds 250 lines, land steps 1-2 and 5 (kernel and VM) first and split step 3-4.
 Progress: Files: slot_resolve.h, spectrum_ref.h, ops.def, ops/blackbody.h, ops/cauchy_abbe.h, interp.h, graph.cpp, compiler.cpp, light_builder.cpp, probe_m1.cu, tests (spectrum_ref new, vm, opsdef, compiler, gpu vm_agree), 0005.
+Progress: kernel ops, resolve_slot<SEM>, compiler and graph lowering, light estimate, tests, canary, 0005 items 9-10 done; gate PASS 176.6 s, k_shade_surface 128/384/0/0, compile 4.96 s (limit 5.0).
+Progress: resolve_slot<SEM> exists because the first resolve() inlined Planck at every record slot (5.68 s); it edits shade_common.h, shade_surface.h, light_record.h (outside Scope).
+Progress: evidence out/evidence/145/blackbody_emitter.png (scene script out/tmp/145/blackbody_scene.py, not committed).
