@@ -80,3 +80,7 @@ Decisions made by the owner. Later records build on these; they change only if t
 ## 2026-11-23, M1b gate ledger
 
 38. **Gate projection counts measured seconds.** With M1b's first landings the declared ledger projected 176-186 s against the 170 s hold line of B-09's 180 s, while measured costs ran far below declared (137: 0.6 s of +4; 152: 0.4 s of +2). The owner chose the measured ledger: once a task's gate cost is measured, the projection uses that number instead of its declared one, and a landing is held only when the measured gate max would pass 170 s. If it does, named long-stable statistical cases move to `check full`, which runs every 10 landings; B-09 stays 180 s and no check is weakened.
+
+## 2026-11-23, M1b slice 0
+
+39. **The `check perf` pass-time limit is 1.03, PROVISIONAL.** Task 140 measured the B-1M and B-5M pass time in two sessions 35 minutes apart (five back-to-back runs each, nothing else on the GPU): session 1 spread 0.15 % / 0.27 %, session 2 0.96 % / 0.31 %, the b1m mean drifting +0.25 % between them, and an unchanged binary reading 1.008 against the session-1 limit 1.009. The owner set the limit (task 140's new 0009 d13 row) at three times the larger measured spread, a pass-time ratio of 1.03, still PROVISIONAL until more sessions are measured. The same answer confirmed decision 38 for the gate: when concurrent grouping is used up, named long-stable statistical cases move to `check full`, and the lead proposes the list with each case's history before any moves.

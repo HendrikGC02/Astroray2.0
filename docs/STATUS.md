@@ -5,7 +5,7 @@ Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `t
 ## Current milestone
 M1b "First light" (docs/PLAN-M1b.md: slices, lanes, the `shade_surface` spine, gate ledger). First batch
 tasks/136-161, order and lanes in tasks/README.md; runbook and handover in docs/LEAD.md; items without a task in
-docs/BACKLOG.md. Slice 0 landed: 155, 146, 157, 143, 152, 137, 144, 142, 153, 159, 149, 162, 151, 136, 154, 150, 138 (landings now `pwsh tools/land.ps1 submit`); second batch 163-183 written (ruling 91); open work and next steps in
+docs/BACKLOG.md. Slice 0 landed: 155, 146, 157, 143, 152, 137, 144, 142, 153, 159, 149, 162, 151, 136, 154, 150, 138, 141, 139 (landings now `pwsh tools/land.ps1 submit`); second batch 163-183 written (ruling 91); open work and next steps in
 docs/LEAD.md's handover. B-31 is task 161.
 M1a "First pixels" closed (owner decision 37): textured, lamp-lit meshes render progressively in the Blender 5.3
 viewport and F12 on CUDA and CPU through the final C ABI; gallery and report from `tools/gallery.py --milestone
@@ -26,7 +26,7 @@ scope clause).
 - k_shade_surface compile at ruling 72's 5.0 s limit with task 145 (4.96-5.35 s under load); quiet-window landing,
   else an owner item.
 - B-19 idle, B-20, B-31 accepted at the M1a close (decision 37); B-31 is task 161 (blender lane, after 159). M-1 probe spills 130/376 B come from spike A's stand-in lobes (ruling 89, task 144): not ratified, slice D re-measures.
-- No regression check on performance and no F12 gate on CUDA until tasks 140, 160 and 139 land.
+- No regression check on performance until task 140 lands (B-38 1.03 PROVISIONAL, owner decision 39); F12 on CUDA is gated (139).
 
 ## Budget headroom
 `check gate` quiet-machine max 132.7 s, median 123.1 s of B-09's 180 s after task 157; landings under load

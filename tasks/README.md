@@ -9,16 +9,14 @@ Size counts source lines without tests: S under 150, M 150-500, L 500-1000. Cana
 ## First batch (implementer model S = Sonnet, O = Opus; Opus review unless "skip ok"; gate = declared gate seconds)
 | Task | Lane | Model | Depends on | Gate |
 |---|---|---|---|---|
-| 139 F12 gate on CPU and CUDA | blender | S | 157 | +8 |
 | 140 check perf; 160 its idle and partition shares | gpu | S | 136, 138; 160 after 140 | +1 |
-| 141 visible lock, one-test runner | tools | O | 137 | +3 |
 | 145 SpectrumRef BLACKBODY, CAUCHY_ABBE | kernel | S | 146 | +3 |
 | 147 opacity entry, NON_OPAQUE, scalar op | kernel | O | 146 | +1 |
 | 148 Mix Shader selection, three-segment layout | kernel | O | 147 | +3 |
 | 156 alpha pass-through | kernel | O | 147, 148 | +6 |
 | 158 SpectrumRef TABLE | kernel | S | 145; after 156 | +4 |
 | 161 B-31 instance loop (owner decision 37) | blender | S | none | 0 |
-Gate ledger (owner decision 38: measured seconds replace declared ones once known; hold a landing only if the measured max would pass 170 s): quiet-machine gate after 157 max 132.7 s, median 123.1 s (5 runs). Landed: 155 (+0), 146 (+1, gate case), 157 (scenes cache), 143 (+0), 152 (+0.4), 137 (+0.6), 144 (+0), 142 (+0), 153 (+3 declared, unmeasured), 159 (+0), 149 (+3 declared, unmeasured), 162 (+0), 151 (+1 declared), 136 (+2 declared), 154 (+4 declared), 150 (+2 declared), 138 (+1 declared). Open declared: +26 s. Landing gates under load: 155 133.6 s, 146 175.5 s (implementers compiling beside it), 157 144.9 s, 143 131.7 s, 152 140.6 s, 137 134.5 s, 144 140.9 s, 153 170.9 then 165.4 s (relanded after a GitHub 502), 159 135.3 s, 149 166.9 s, 162 136.8 s, 151 134.9 s (first try 163.2 s failed on a smoke race, BACKLOG), 136 159.3 s (161 running Blender beside it), 154 165.8 s (under load; its own run beside four implementers 179.9 s), 150 159.4 s, 138 140.5 s.
+Gate ledger (owner decision 38: measured seconds replace declared ones once known; hold a landing only if the measured max would pass 170 s): quiet-machine gate after 157 max 132.7 s, median 123.1 s (5 runs). Landed: 155 (+0), 146 (+1, gate case), 157 (scenes cache), 143 (+0), 152 (+0.4), 137 (+0.6), 144 (+0), 142 (+0), 153 (+3 declared, unmeasured), 159 (+0), 149 (+3 declared, unmeasured), 162 (+0), 151 (+1 declared), 136 (+2 declared), 154 (+4 declared), 150 (+2 declared), 138 (+1 declared), 141 (+3 declared), 139 (+1 measured smoke step). Open declared: +22 s. Landing gates under load: 155 133.6 s, 146 175.5 s (implementers compiling beside it), 157 144.9 s, 143 131.7 s, 152 140.6 s, 137 134.5 s, 144 140.9 s, 153 170.9 then 165.4 s (relanded after a GitHub 502), 159 135.3 s, 149 166.9 s, 162 136.8 s, 151 134.9 s (first try 163.2 s failed on a smoke race, BACKLOG), 136 159.3 s (161 running Blender beside it), 154 165.8 s (under load; its own run beside four implementers 179.9 s), 150 159.4 s, 138 140.5 s, 141 140.4 s, 139 145.7 s.
 
 ## Second batch (slice-0 review, ruling 91): task lane model; depends on; gate
 Slice A: 163 metal in the lobe stack (spine) kernel O; 149, 158; +3. 164 compiler flags, NaN-input rule cpu S; 148, 158; +1. 165 addon lowerings I (COLOR_TO_F32 op) blender S; 145, 147, 156; +2. 166 addon lowerings II blender S; 148, 163, 165; +2. 167 EXR image sync, PIXELS, wide-texel rule blender S (Opus review); 150; +2. 168 extension mechanism (refused until routing) cpu S (Opus review); 178; +1. 169 GRATING kind and table builder cpu O; 168, 143; +3. 170 alpha-foliage scene, B-19 (measurement) gpu S; 156, 140, 160; +0.5.
