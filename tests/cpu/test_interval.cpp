@@ -65,6 +65,19 @@ bool encloses(const Interval& i, float x) {
   return x == x && i.lo <= x && x <= i.hi;
 }
 
+// The configurations where an op can really produce NaN: a NaN endpoint, 0 * inf inside a product, and
+// inf - inf inside a sum. Outside them a rule returning {NaN, NaN} is a bug, not caution.
+bool has_zero(const Interval& a) { return a.lo <= 0.f && 0.f <= a.hi; }
+bool has_inf(const Interval& a) { return std::isinf(a.lo) || std::isinf(a.hi); }
+bool is_nan_box(const Interval& a) { return a.lo != a.lo || a.hi != a.hi; }
+bool mul_defined(const Interval& x, const Interval& y) {
+  return !is_nan_box(x) && !is_nan_box(y) && !(has_zero(x) && has_inf(y)) && !(has_zero(y) && has_inf(x));
+}
+bool add_defined(const Interval& x, const Interval& y) {
+  return !is_nan_box(x) && !is_nan_box(y) && !(x.lo == -INFINITY && y.hi == INFINITY) &&
+         !(x.hi == INFINITY && y.lo == -INFINITY);
+}
+
 // Distance in representable floats; both finite.
 int64_t ulps(float a, float b) {
   auto key = [](float f) {
@@ -88,6 +101,14 @@ TEST_CASE("interval/rules enclose the op") {
     const Interval ms = ar::interval_mul_f32(s, t);
     const Interval3 mv = ar::interval_mul_f32x3(x, y), mvs = ar::interval_mul_f32x3_f32(x, s),
                     av = ar::interval_add_f32x3(x, y), p = ar::interval_load_ctx_p(x);
+    // Where the op cannot give NaN the rule must not either.
+    if (mul_defined(s, t)) CHECK_FALSE(ar::interval_is_nan(ms));
+    for (int i = 0; i < 3; ++i) {
+      if (mul_defined(x.c[i], y.c[i])) CHECK_FALSE(ar::interval_is_nan(mv.c[i]));
+      if (mul_defined(x.c[i], s)) CHECK_FALSE(ar::interval_is_nan(mvs.c[i]));
+      if (add_defined(x.c[i], y.c[i])) CHECK_FALSE(ar::interval_is_nan(av.c[i]));
+      if (!is_nan_box(x.c[i])) CHECK_FALSE(ar::interval_is_nan(p.c[i]));
+    }
     for (int k = 0; k < kPoints; ++k) {
       const float a = rng.in(s), b = rng.in(t);
       const float xa[3] = {rng.in(x.c[0]), rng.in(x.c[1]), rng.in(x.c[2])};
@@ -111,6 +132,10 @@ TEST_CASE("interval/rules enclose the op") {
     std::memcpy(&bits, &v, 4);
     const uint32_t bits3[3] = {bits, bits ^ 0x1u, bits};
     CHECK(encloses(ar::interval_const_f32(bits), ar::op_const_f32(bits)));
+    if (std::isfinite(v)) {  // a finite constant is exactly the point {v, v}
+      CHECK(ar::interval_const_f32(bits).lo == v);
+      CHECK(ar::interval_const_f32(bits).hi == v);
+    }
     for (int i = 0; i < 3; ++i) CHECK(encloses(ar::interval_const_f32x3(bits3).c[i], ar::op_const_f32(bits3[i])));
   }
 }
@@ -131,6 +156,11 @@ TEST_CASE("interval/degenerate box is a point") {
     ar::op_add_f32x3(xa, ya, o);
     const Interval3 r = ar::interval_add_f32x3(x, y);
     for (int i = 0; i < 3; ++i) CHECK(one_ulp_around(r.c[i], o[i]));
+    ar::op_mul_f32x3(xa, ya, o);
+    const Interval3 mv = ar::interval_mul_f32x3(x, y), mvs = ar::interval_mul_f32x3_f32(x, t);
+    for (int i = 0; i < 3; ++i) CHECK(one_ulp_around(mv.c[i], o[i]));
+    ar::op_mul_f32x3_f32(xa, b, o);
+    for (int i = 0; i < 3; ++i) CHECK(one_ulp_around(mvs.c[i], o[i]));
   }
 }
 
