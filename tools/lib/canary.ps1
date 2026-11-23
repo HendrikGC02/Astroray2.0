@@ -6,6 +6,7 @@
 . (Join-Path $PSScriptRoot 'blender.ps1')
 
 $script:CanaryLogPath = $null
+$script:CanaryScenesSeconds = 0.0   # time spent in tools/scenes.py after builds; land reports it as its own phase
 function Write-CanaryLog($text) { if ($script:CanaryLogPath) { Add-Content -Path $script:CanaryLogPath -Value $text } }
 
 # Items of a Canary: line. Returns objects {Kind exe|py|cmd; Target; Name}.
@@ -202,6 +203,15 @@ function Invoke-CanaryBuild($targets, [bool]$cpuOnly, [string]$Root) {
     $o = & pwsh @b 2>&1 | ForEach-Object { "$_" }
     Write-CanaryLog $o
     if ($LASTEXITCODE -ne 0) { throw "canary build of '$t' failed: $(($o | Select-Object -Last 2) -join ' ')" }
+  }
+  # A build can change what the recorder writes, and items that render read out/scenes: regenerate after every
+  # build (a warm machine-wide cache makes it cost well under a second). The fixture has no tools/scenes.py.
+  if (Test-Path (Join-Path $Root 'tools/scenes.py')) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $o = & (Get-ArPython) -I (Join-Path $Root 'tools/scenes.py') 2>&1 | ForEach-Object { "$_" }
+    $script:CanaryScenesSeconds += $sw.Elapsed.TotalSeconds
+    Write-CanaryLog $o
+    if ($LASTEXITCODE -ne 0) { throw "tools/scenes.py failed after the canary build: $(($o | Select-Object -Last 2) -join ' ')" }
   }
 }
 
