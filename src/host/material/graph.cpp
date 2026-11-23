@@ -138,8 +138,12 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
     // Constants only: a per-point temperature or n_d is M2 dispersion work and has no socket here.
     const float* pf = g->f32.data() + o.f32_first;
     auto finite_positive = [](float v) { return std::isfinite(v) && v > 0.0f; };
-    if (o.op == Op::BLACKBODY && !(finite_positive(pf[0]) && std::isfinite(pf[1]) && pf[1] >= 0.0f))
-      return *err = at(i, "BLACKBODY needs a finite positive temperature and a finite non-negative scale"), false;
+    // planck.h documents float-safe Planck only for T in [3 K, 1e9 K]; outside it the radiance underflows
+    // to 0 or the host's 1 / Y(Planck) overflows, and the kernel would return NaN or inf silently.
+    constexpr float kPlanckTMin = 3.0f, kPlanckTMax = 1.0e9f;
+    if (o.op == Op::BLACKBODY && !(finite_positive(pf[0]) && pf[0] >= kPlanckTMin && pf[0] <= kPlanckTMax &&
+                                    std::isfinite(pf[1]) && pf[1] >= 0.0f))
+      return *err = at(i, "BLACKBODY needs a temperature in [3, 1e9] K (planck.h float domain) and a finite non-negative scale"), false;
     if (o.op == Op::CAUCHY_ABBE &&
         !(finite_positive(pf[0]) && finite_positive(pf[1]) && std::isfinite(pf[2]) && pf[2] >= 0.0f))
       return *err = at(i, "CAUCHY_ABBE needs a finite positive n_d and Abbe number and a finite non-negative dispersion scale"), false;

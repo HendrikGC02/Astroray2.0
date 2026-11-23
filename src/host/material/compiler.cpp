@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 #include <set>
 
 #include "../../kernel/material/lobes/delta.h"
@@ -375,13 +376,21 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
         } catch (const std::exception& e) {
           return res.error = who + e.what(), res;
         }
+        res.block.emission_luminance = w.cv[size_t(nd.input[1])][0];
+        // The stored scale and the brightest band value must fit a float, else the kernel would
+        // emit inf or NaN (a cold T makes 1 / Y huge; a huge scale does the same).
+        const double p1 = double(pf[1]) * y_norm;
+        // Wien displacement, b = 2.897771955e6 nm K (CODATA 2018): where the band is brightest.
+        const double wien_nm =std::min(830.0, std::max(360.0, 2897771.955 / double(pf[0])));
+        const double peak = p1 * ar::planck_radiance_t<double>(wien_nm, double(pf[0])) * double(res.block.emission_luminance);
+        if (!(p1 <= double(std::numeric_limits<float>::max())) || !(peak <= double(std::numeric_limits<float>::max())))
+          return res.error = who + "the scale and 1 / Y(Planck(T)) overflow a float at this temperature", res;
         ar::SpectrumRef& r = res.block.emission_color;
         r = {};
         r.kind = uint8_t(ar::SpectrumKind::BLACKBODY);
         r.semantic = uint8_t(ar::SpectrumSemantic::ILLUMINANT);
         r.p[0] = pf[0];
         r.p[1] = float(double(pf[1]) * y_norm);
-        res.block.emission_luminance = w.cv[size_t(nd.input[1])][0];
         EmissionTerm bt;
         bt.color = r;
         bt.strength = res.block.emission_luminance;

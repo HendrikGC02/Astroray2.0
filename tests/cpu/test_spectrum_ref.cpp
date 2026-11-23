@@ -97,6 +97,27 @@ TEST_CASE("spectrum_ref/cauchy reproduces the abbe number") {
   for (int i = 0; i < ar::kLanes; ++i) CHECK(got.v[i] == want.v[i]);
 }
 
+TEST_CASE("spectrum_ref/cauchy fraunhofer lines") {
+  // n(450 nm) written out from the OpenPBR formula with the literal lines 486.1, 656.3, 587.6 nm
+  // (BK7: n_d 1.5168, V_d 64.17, scale 1), so an edit of a line in the kernel shows here.
+  const double nd = 1.5168, vd = 64.17;
+  const double B = (nd - 1.0) / (vd * (1.0 / (486.1 * 486.1) - 1.0 / (656.3 * 656.3)));
+  const double A = nd - B / (587.6 * 587.6);
+  const double want = A + B / (450.0 * 450.0);
+  CHECK(std::fabs(ar::cauchy_abbe_ior_t<double>(nd, vd, 1.0, 450.0) - want) <= 1e-12 * want);
+  CHECK(std::fabs(double(ar::cauchy_abbe_ior_t<Real>(Real(nd), Real(vd), Real(1), Real(450))) - want) <= 1e-6 * want);
+}
+
+TEST_CASE("spectrum_ref/cauchy clamps to the observer range") {
+  const double nd = 1.5168, vd = 64.17;
+  auto n = [&](double l) { return ar::cauchy_abbe_ior_t<double>(nd, vd, 1.0, l); };
+  // The bounds are 360 and 830 nm exactly: values just inside differ, just outside repeat the bound.
+  CHECK(n(360.0) != n(370.0));
+  CHECK(n(830.0) != n(820.0));
+  CHECK(n(359.0) == n(360.0));
+  CHECK(n(831.0) == n(830.0));
+}
+
 TEST_CASE("spectrum_ref/blackbody planck times scale") {
   const astroray::ObserverTables ot = load_observer();
   ar::ObserverView obs;

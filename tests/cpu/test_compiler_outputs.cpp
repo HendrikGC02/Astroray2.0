@@ -385,17 +385,51 @@ TEST_CASE("compiler/spectrum kinds accepted per semantic") {
   }
 }
 
+TEST_CASE("compiler/blackbody outside the float domain is rejected") {
+  auto rejected = [](float t, float scale, const char* what) {
+    GB g;
+    g.op2(Op::EMIT_LE, g.add(Op::BLACKBODY, {t, scale}), g.add(Op::CONST_F32, {1.0f}));
+    const MaterialOutput m = g.compile();
+    INFO(what);
+    CHECK(m.magenta);
+    REQUIRE(m.entries.size() == 1);
+    CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+    CHECK(m.entries[0].detail.find("BLACKBODY") != std::string::npos);
+  };
+  rejected(100.0f, 1.0f, "cold: 1 / Y overflows a float");
+  rejected(2.0f, 1.0f, "below planck.h's 3 K");
+  rejected(2.0e9f, 1.0f, "above planck.h's 1e9 K");
+  rejected(6500.0f, 3.4e38f, "a huge scale");
+  GB ok;  // a cool but representable temperature still compiles
+  ok.op2(Op::EMIT_LE, ok.add(Op::BLACKBODY, {1000.0f, 1.0f}), ok.add(Op::CONST_F32, {1.0f}));
+  CHECK_FALSE(ok.compile().magenta);
+}
+
+TEST_CASE("compiler/blackbody strength must be constant") {
+  // A per-point strength cannot reach the Blackbody ref. The strength socket takes a scalar and a
+  // texture is a colour, so the graph's type rule refuses it first.
+  GB g;
+  const int bb = g.add(Op::BLACKBODY, {6500.0f, 1.0f});
+  g.op2(Op::EMIT_LE, bb, tex(g));
+  const MaterialOutput m = g.compile();
+  CHECK(m.magenta);
+  REQUIRE(m.entries.size() == 1);
+  CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+  CHECK(m.entries[0].detail.find("input socket wants another type") != std::string::npos);
+}
+
 TEST_CASE("compiler_outputs/blackbody emission sampling is tested by luminance") {
-  // AUTO keeps the 0.5 threshold on the term's luminance: Y = strength for a unit-scale Blackbody.
+  // AUTO keeps the 0.5 threshold on the term's luminance: Y = scale x strength (scale 2 here, so a
+  // test that ignored the scale would read 0.3 and 0.2, both below the threshold).
   auto sided = [](float strength) {
     GB g;
-    g.op2(Op::EMIT_LE, g.add(Op::BLACKBODY, {4000.0f, 1.0f}), g.add(Op::CONST_F32, {strength}));
+    g.op2(Op::EMIT_LE, g.add(Op::BLACKBODY, {4000.0f, 2.0f}), g.add(Op::CONST_F32, {strength}));
     const MaterialOutput m = g.compile();
     REQUIRE_FALSE(m.magenta);
     return astroray::host::emission_sidedness(AR_EMISSION_SAMPLING_AUTO, m.emission_estimate);
   };
-  CHECK(sided(0.6f) == (astroray::host::kLightLit | ar::kLightTwoSided));
-  CHECK(sided(0.4f) == 0u);
+  CHECK(sided(0.3f) == (astroray::host::kLightLit | ar::kLightTwoSided));  // Y 0.6
+  CHECK(sided(0.2f) == 0u);                                                // Y 0.4
 }
 
 TEST_CASE("compiler_outputs/clamped reflectance is approximated") {
