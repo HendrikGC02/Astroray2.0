@@ -5,7 +5,7 @@ Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `t
 ## Current milestone
 M1b "First light" (docs/PLAN-M1b.md: slices, lanes, the `shade_surface` spine, gate ledger). First batch
 tasks/136-161, order and lanes in tasks/README.md; runbook and handover in docs/LEAD.md; items without a task in
-docs/BACKLOG.md. Slice 0 landed: 155, 146, 157, 143, 152, 137, 144, 142, 153, 159, 149, 162, 151, 136, 154, 150, 138, 141, 139, 140, 161 (landings now `pwsh tools/land.ps1 submit`); second batch 163-183 written (ruling 91); open work and next steps in
+docs/BACKLOG.md. Slice 0 closed (all of 136-144, 155, 157, 159-162 landed; `check full` green 659 s; landings by `pwsh tools/land.ps1 submit`). Also landed: 146, 149-154, 171. Second batch 163-183 written (ruling 91); open work and next steps in
 docs/LEAD.md's handover.
 M1a "First pixels" closed (owner decision 37): textured, lamp-lit meshes render progressively in the Blender 5.3
 viewport and F12 on CUDA and CPU through the final C ABI; gallery and report from `tools/gallery.py --milestone

@@ -61,44 +61,31 @@ handover below, then stop. Send long landing logs to a `digest` agent. `tools/le
 through opencode, owner decisions 32 and 36) may draft bench-history lines, backlog rows and digests from
 repository text; treat its answer as a draft.
 
-## Handover (M1b slice 0 in flight, 2026-11-23)
-State for the next lead. Agent ids do not carry across sessions; a task still open goes to a new implementer
-on its existing branch and worktree, briefed from its task file and the rulings below.
-- Landed in slice 0: 155, 146, 157, 143, 152, 137, 144, 142, 153, 159, 149 (ledger in tasks/README.md, owner
-  decision 38). The 10-landing `check full` is due after 162 lands (162 fixes its known red).
-- Open PRs, reviewed, ready to land with land-pr.sh: 151 (#122
-  PASS), 136 (#124 PASS), 162 (#123 SKIP, evidence posted).
-- Branches with work, not yet PRs:
-  - 154 light-tree builder: rebase on main, cite ruling 90 in its 0004 D10 sentence, open the PR, land.
-  - 145 BLACKBODY/CAUCHY_ABBE: reviewed; B-05 k_shade_surface compile 4.96-5.35 s under load against ruling
-    72's 5.0 s (quiet 4.6 s baseline). Land in a quiet window (no builds beside the gate). If it still fails,
-    owner item under ruling 72: raise the limit, the D10 split, or stub emission sites (about 8 inlined
-    Planck copies). `#pragma unroll 1` broke k_shade_background's stack row: do not retry.
-  - 147 opacity entry: after 145 lands, rebase, renumber to opcode 18, refresh canary, land.
-  - 138 land submit/undo/cleanup: PR #126, rulings applied (per-repository busy marker; clean case restored,
-    fast_landing 1.9 s, accepted); gate 134.3 s. Needs Opus review; after it lands use
-    `pwsh tools/land.ps1 submit`. Unrelated: CRLF ghost diffs on .ps1 files (`git add --renormalize`).
-  - 141 visible lock and test runner: PR #125, rulings applied (fast_lock 2.2 s scaled with a ready-file
-    handshake; waiting lines throttled after 3). Needs Opus review; gate not rerun after the rework. Its env
-    defaults (3600 s, 30 s, Globalstroray2, %ProgramData%stroray2) go into 0009 d8 as a lead record edit.
-  - 150 half/float textures: done (gate 164.8 s, B-05 4.62-4.69 s, canary PASS); half_to_float's one exact float
-    subtraction accepted (integer-only form broke B-05). PR #127; needs Opus review (kernel, 0007 d13
-    record edit, vendored tinyexr v1.0.12).
-- Not dispatched: 161 (blender, after 162), 139 (blender), 140/160 (after 136, 138), 148, 156, 158 (spine
-  queue after 147). Then the slice-0 review writes the next batch (PLAN-M1b section 2 outlines).
-- Also owed: 0009 d28 write-back of 137's canary rules (record edit, Opus review).
-- Gate under load reaches 175-179 s (compile timing re-times every TU that includes a changed header, plus
-  contention); quiet gate max 132.7 s. Land kernel-header changes when few implementers build.
-- Briefs must set ASTRORAY_DEPS_CACHE and ASTRORAY_BLENDER (User env) and say: scratch under out/tmp/NNN/,
-  never a shared scratchpad; no commit while a tools/ build runs.
-- Process changes made by the planning session, confirmed by the owner (decision 36): B-08, lanes, reviewer
-  verdicts, DeepSeek wrapper, rulings 86-88, the implementer and reviewer definitions, and `process/guards`
-  (merged: deny rules for direct cmake, ninja, nvcc, blender; an allow-list; CLAUDE.md rule 1's scope clause).
-- Landing lessons (what `land.ps1 submit` does not absorb):
-  - Start landings with run_in_background only; submit holds the machine lock for the gate and the Blender suites.
-  - A task that adds a tools/lib switch its own canary needs: prepare with the worktree's land.ps1.
-  - Auto mode refused a landing that combined REVIEW SKIP with the lead's own `evidence:` comment; run the reviewer.
-  - A GitHub 5xx while posting the gate status fails prepare after a passing gate: reland (138 retries 5xx).
-  - Hosted ci flake on one case: `gh run rerun --failed`, then `land.ps1 merge NNN`.
-- Housekeeping: docs/BACKLOG.md last row (stale worktree directories and branches). The file
-  out/tmp/blend_cornell_area.png under the drive root is a stray from task 090: the owner removes it.
+## Handover (M1b slice 0 closed, second batch written, 2026-11-23)
+State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from
+its task file. An implementer always gets a fresh worktree: to continue a branch, `git -C <old> switch --detach`, then
+brief the agent to `git switch task/NNN-*` first in its own worktree. A worktree whose agent changed nothing vanishes.
+- Landed this session (12): 162, 151, 136, 154, 150, 138, 141, 139, 140, 161, 171, 160 (ledger in tasks/README.md).
+  `check full` green at 810 s after 136 and 659 s after 161; next due after 10 more landings. Slice 0 is closed. Landings use
+  `pwsh <main>/tools/land.ps1 submit NNN PASS|SKIP -Title t [-Evidence t]`, run from the task's worktree in the background.
+- Owner decision 39: B-38 = 1.03 PROVISIONAL; decision 38 confirmed (cases move to `check full` when grouping runs out; the
+  lead proposes the list with each case's history first). Ruling 91: spine queue 158, 163, 173, 174, 175; stop on
+  spills or stack over 512 B; CPU and CUDA of a new statistical case in one concurrent group; new rows from first measurement.
+- Second batch 163-183 written (README "Second batch"; 184 dropped). 171 landed. Reviewed PASS, waiting for 158:
+  178 (PR #132), 180 (PR #130). 167 (PR #137): Opus PASS WITH FIXES, fixes in flight on its branch (tests, canary
+  hunks, the magenta early return); read the fix diff, then land with -Evidence (the lead viewed
+  out/evidence/167/generated_pixels.png: generated and packed-EXR planes identical, one hot texel in both).
+- Next to dispatch: 176 (gpu lane, free now), then 170 after 156; 165 then 166 in the blender lane after 167.
+- Branches not yet landed from the first batch: 145 (B-05 compile 4.96-5.35 s under load against ruling 72's 5.0 s: land
+  in a quiet window, no builds beside the gate; if it fails, owner item under ruling 72 with the D10 split measured), then
+  147 (rebase, renumber to opcode 18, refresh canary), then the spine 148, 156, 158 (all O, kernel lane, one at a time on
+  shade_surface.h). Most of the second batch waits on 158.
+- Review lessons this session: hosted `ci` must be green before a landing (151 and 136 were red from their first push);
+  canary patches merge adjacent breakages into one hunk; Opus reviews found real defects in 138, 141, 150, 161, 171,
+  178, 140 and the 0009 record edit. A (land) commit left by a refused merge must be reverted before reuse.
+- `check fast` B-08/B-12 fail under concurrent builds (BACKLOG row); rerun once on a quiet machine and say so.
+- Leftover worktree directories (LEFTOVER lines; a process held a file): agent-a564b0651c3231eca, agent-a78f32a32133f25b4,
+  agent-a5d451cc451a9b96e, agent-a5d5f22542d950a96, and detached old worktrees (a9e75b55, abbd2383, abec299b, ac16ade2,
+  acc6e172, aef65fb6) plus agent-aa3ef21a (merged docs branch): remove when no process holds them (BACKLOG housekeeping).
+- The branch of PR #133 (merged, deleted) once carried the PC's computer name in bench lines; cli/bench.cpp still stamps
+  COMPUTERNAME (BACKLOG row); perf.ps1 rewrites it. Never commit a bench line from bench.ps1 directly.
