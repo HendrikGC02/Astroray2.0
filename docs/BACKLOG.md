@@ -21,7 +21,6 @@ them. Milestone is where the item must be settled at the latest.
 | Kernel | Locality-preserving sort key (ruling 80), only with a measured gain | 122 | M3 | |
 | Addon | `translate.py` copies C header ids behind a drift test | 083 | M1b | 151 |
 | Addon | `astroray_extension` target is not in ALL | 084 | M1b | |
-| Addon | Orthographic camera renders black in the Rendered viewport (must warn until M4) | 097 | M1b | slice B |
 | Addon | Viewport sync resends more than it must on material, image and light edits | 111 | M2 | |
 | Addon | `film_exposure` has no viewport effect | 111 | M1b | slice B |
 | Addon | `Material.use_nodes` and `World.use_nodes` are deprecated in 5.3 | 087 | M1b | slice A lowerings |
@@ -43,3 +42,9 @@ them. Milestone is where the item must be settled at the latest.
 | Media | VM volume entry with `medium_eval`; constant-block layout for a medium (write into 0006) | 152 draft | M1b | slice C |
 | Process | Fold rulings 64-85 into the records; delete superseded records | R12 a, 0009 q4 | owner | |
 | Process | Stale directories `.claude/worktrees/agent-a934dd254fe6d8f2d`, `agent-a3a823bde1b1e2a0c`, `agent-a61c36ff96e523f48`, `agent-a631435169fa2c847`; 40 merged `worktree-agent-*` branches | handover | M1b | lead, after a look |
+| ABI, host | `Ledger::remove` throws on a non-live id (double free) and two destructors swallow it on every replace/remove (embree_scene.cpp ~Charge, mesh.cpp ~MeshTopology/~MeshRecord): report it through the context log | 142 review | M1b | |
+| Docs | 0009 d26 omits the reviewer's canary.patch input; 0009 Appendix A cites the old CLAUDE.md numbering; d13 rows B-26, B-27, B-36 cite "review item" text now in docs/history/; 0008 line 241 and ROADMAP line 37 say spike F part A must still run (it ran, owner decision 30); 0001 D7 says "one GPL file" (Cycles 5.3 has three GPL headers, none in src/) | 155, 143 reviews | M1b | |
+| Tools | `citations` lint checks only the first decision of a slash list (`0006 D37/D40`); bare `R` reads research items as rulings where they share a number | 155 review | M2 | |
+| Tools | 0009 d28 write-back: 137's refuse/warn rules, 8-hunk cap, baseline record, `$`-in-double-quotes lint | 137 | M1b | lead after 137 lands |
+| Kernel | Out-of-range HG anisotropy is clamped to 1 - 1e-3; the lowering that produces g reports it (0003 D8) | 152 review | M1b | slice C volume entry |
+| Addon | The orthographic Rendered viewport warns with the generic `CAMERA_UNSUPPORTED: invalid camera descriptor` (the projection is rejected before `make_camera_view`'s ORTHO check); the frame is black until M4 | 159 | M1b | slice B |

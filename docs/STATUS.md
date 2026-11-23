@@ -16,9 +16,6 @@ scope clause).
 ## Owner decisions still open (planning session's recommendation in brackets; docs/PLAN-M1b.md section 6)
 - Opus implements 10 of the first 25 tasks (kernel, sampling, concurrency), as in M1a; decision 31 says Sonnet
   implements. [Keep.]
-- Gate time: 163.5 s of B-09's 180 s; the batch declares +53 s and task 157 should return 28 s or more. If the
-  projection passes 170 s after regrouping: [move long-stable statistical cases to `full`, run `full` every 10
-  landings, keep 180 s].
 - `check perf` tolerances (tasks 140, 160) are set at three times the measured spread as a new PROVISIONAL row
   B-38. [Accept after reading their numbers.]
 - Earlier: fold rulings 64-85 into the records and delete superseded records (0009 q4) [yes]; exact JPEG parity
@@ -28,6 +25,7 @@ scope clause).
 - B-5M bench hangs before its first pass on most runs since 1a7e364 (task 136); it blocks the B-5M rows of B-14
   and B-19 and task 140.
 - B-19 idle, B-20, B-31 accepted at the M1a close (decision 37); B-31 is task 161 (blender lane, after 159). M-1 probe spills 130/376 B against 128/192: task 144 (0002 D10 ladder).
+- `check full` fails at gui_colour_chart ("the viewport never converged", pre-existing at 190e8ba): task 162.
 - No regression check on performance and no F12 gate on CUDA until tasks 140, 160 and 139 land.
 
 ## Budget headroom

@@ -30,11 +30,11 @@ Size counts source lines without tests: S under 150, M 150-500, L 500-1000. Cana
 | 157 gate headroom | tools | S | none | -28 or more |
 | 158 SpectrumRef TABLE | kernel | S | 145; after 156 | +4 |
 | 159 addon debts | blender | S | none | +1 |
-| 161 B-31 instance loop (owner decision 37) | blender | S | none; after 159 in the lane | 0 |
-Gate ledger: 163.5 s measured on main before the batch; declared +53 s, -28 s from 157; B-09 is 180 s. The lead updates this line after each landing and follows docs/PLAN-M1b.md "Gate seconds" when the projection passes 170 s.
+| 162 `check full` red: gui_colour_chart never converges; 161 B-31 instance loop (owner decision 37) | blender | S | none; 162 before 161 in the lane | 0, 0 |
+Gate ledger (owner decision 38: measured seconds replace declared ones once known; hold a landing only if the measured max would pass 170 s): quiet-machine gate after 157 max 132.7 s, median 123.1 s (5 runs). Landed: 155 (+0), 146 (+1, gate case), 157 (scenes cache), 143 (+0). Measured, not landed: 137 +0.6, 152 +0.4. Open declared: +50 s. Landing gates under load: 155 133.6 s, 146 175.5 s (implementers compiling beside it), 157 144.9 s, 143 131.7 s.
 
 ## Order
-Dispatch at once: 157, 137 (tools, two at a time; then 143, then 142, 138, 141); 146, 152 (cpu); 144 (kernel); 136 (gpu); 159 (blender); 155 (docs). Then as dependencies land: 147, 145, 151, 150; 149, 153, 154; 148, 156, 158; 139, 140, 160; 161 when 159 frees the blender lane.
+Dispatch at once: 157, 137 (tools, two at a time; then 143, then 142, 138, 141); 146, 152 (cpu); 144 (kernel); 136 (gpu); 159 (blender); 155 (docs). Then as dependencies land: 147, 145, 151, 150; 149, 153, 154; 148, 156, 158; 139, 140, 160; 162 then 161 in the blender lane.
 Landing order where files collide. `shade_surface.h`, `ops.def`, `src/kernel_gpu/probe_m1.cu`: 144, 146, 145, 147, 148, 156, 158; 150 after 144. `tools/check.ps1`: 157, 137, 141, 138. `tools/opsgen.py`: 146, 151. `tools/lint.py` SECTIONS and tools/README.md (25 of 30 lines; one line per task): 137, 142, 143, 155 in any order, the later one rebases.
 Lanes (docs/PLAN-M1b.md section 4): cpu = work loop and acceptance on the CPU (5-8 at once); kernel = kernel headers and VM ops, CPU work loop, one gate run before hand-off (three at once, one at a time on `shade_surface.h`); gpu = the work loop needs the GPU (one); blender (one); tools (two); docs (one).
 Next batch, written at the first slice review (outlines: docs/PLAN-M1b.md section 2): metal in the lobe stack, compiler flags (V11), addon lowerings, EXR image sync, extension mechanism and GRATING, VM volume entry with `medium_eval`, `bake_environment` and world wiring, tree traversal, guides, OIDN loading.
