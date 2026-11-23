@@ -385,6 +385,12 @@ def build_f12_scene(work):
 class TestF12Textured(unittest.TestCase):
     """The textured, lamp-lit plane through F12 on both devices; one render each, before any case."""
     runs = None
+    agree_line = None
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.agree_line:
+            print(cls.agree_line)
 
     @classmethod
     def setUpClass(cls):
@@ -449,8 +455,9 @@ class TestF12Textured(unittest.TestCase):
         (_, va), (_, vb) = (analytic.channel(w, *renders[k]) for k in ("cpu", "cuda"))
         se = math.sqrt(va.sum() + vb.sum()) / va.size
         bound = analytic.pixel_z(m, 1) * se
-        print(f"RESULT smoke f12 agree: {'ok' if passed else 'FAIL'} cpu {cmean:.6f} cuda {tmean:.6f} "
-              f"|diff| {abs(cmean - tmean):.6f} bound {bound:.6f} SE of the difference {se:.6f}")
+        # Printed by tearDownClass: output in the middle of a case's line hides its "... ok" from land's reader.
+        type(self).agree_line = (f"RESULT smoke f12 agree: {'ok' if passed else 'FAIL'} cpu {cmean:.6f} cuda {tmean:.6f} "
+                                 f"|diff| {abs(cmean - tmean):.6f} bound {bound:.6f} SE of the difference {se:.6f}")
         self.assertTrue(passed, f"{name}: {reasons}")
         self.assertLessEqual(abs(cmean - tmean), bound)
 
