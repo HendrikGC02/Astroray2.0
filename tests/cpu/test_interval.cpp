@@ -6,6 +6,7 @@
 // Ref: docs/decisions/0006-volumes-and-astrophysics.md D7; Moore, Interval Analysis (1966), section 3.
 #include <doctest.h>
 
+#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -109,6 +110,21 @@ TEST_CASE("interval/degenerate box is a point") {
       CHECK(ulps(r.c[i].lo, o[i]) <= 1);
       CHECK(ulps(r.c[i].hi, o[i]) <= 1);
     }
+  }
+}
+
+TEST_CASE("interval/ulp step matches nextafter") {
+  const float inf = INFINITY, nan = std::nanf("");
+  const float xs[] = {0.f, -0.f, FLT_MAX, -FLT_MAX, inf, -inf, nan, 1.f, -1.f, FLT_MIN, -FLT_MIN, FLT_TRUE_MIN,
+                      -FLT_TRUE_MIN};
+  auto same = [](float a, float b) {
+    if (a != a || b != b) return (a != a) && (b != b);
+    return std::memcmp(&a, &b, 4) == 0;  // bitwise, so +0 and -0 differ
+  };
+  for (float x : xs) {
+    INFO(x);
+    CHECK(same(ar::interval_step_up(x), std::nextafter(x, inf)));
+    CHECK(same(ar::interval_step_down(x), std::nextafter(x, -inf)));
   }
 }
 
