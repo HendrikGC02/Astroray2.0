@@ -113,7 +113,8 @@ def measure(blend, scene, out_path):
     k = 1e4 / table.n
     res["cells"]["instances"] = (c * k, [x * k for x in w])
     if "--profile" in sys.argv:
-        res["profile"] = profile_build(instances, dg, km, lg, icache)
+        res["profile"] = profile_split(instances, keys, dg, km, lg, icache) + profile_build(
+            instances, dg, km, lg, icache)
 
     uid = next((u for key, i in table.index_of.items() if len(key) == 1
                 for u in key if table.by_object.get(u) == [i]), None)
@@ -146,6 +147,83 @@ def measure(blend, scene, out_path):
     with open(out_path, "w") as f:
         json.dump(res, f)
     print(f"sync_timing: {scene} {len(mes)} meshes {tri_m:.2f} Mtri {table.n} instances -> {out_path}")
+
+
+def profile_split(instances, keys, dg, km, lg, icache):
+    """Where a warm build's time goes, as 129 split it: the loop's work cumulatively (each line adds one kind of
+    per-instance work to the one above), then the passes after the loop, each in ms per 10k instances."""
+    geometry = instances.GEOMETRY_TYPES
+    real, key = icache.real, km.key
+    n = sum(1 for _ in dg.object_instances)
+
+    def l0():
+        for _ in dg.object_instances:
+            pass
+
+    def l1():
+        for inst in dg.object_instances:
+            if inst.object.type not in geometry:
+                continue
+
+    def l2():
+        for inst in dg.object_instances:
+            ob = inst.object
+            if ob.type not in geometry:
+                continue
+            ob.original.session_uid
+
+    def l3():
+        for inst in dg.object_instances:
+            ob = inst.object
+            if ob.type not in geometry:
+                continue
+            uid = ob.original.session_uid
+            keys.object_identity(inst, keys.instance_path(inst), uid)
+
+    def l4():
+        for inst in dg.object_instances:
+            ob = inst.object
+            if ob.type not in geometry:
+                continue
+            uid = ob.original.session_uid
+            path = keys.instance_path(inst)
+            keys.object_identity(inst, path, uid)
+            keys.geometry_identity(inst, dg, path, real, uid)
+
+    def l5():
+        for inst in dg.object_instances:
+            ob = inst.object
+            if ob.type not in geometry:
+                continue
+            uid = ob.original.session_uid
+            path = keys.instance_path(inst)
+            ident = keys.object_identity(inst, path, uid)
+            key(keys.geometry_identity(inst, dg, path, real, uid))
+            key(ident)
+    import numpy as np
+    obs = {}
+    for inst in dg.object_instances:
+        if inst.object.type in geometry:
+            o = inst.object.original
+            obs[o.session_uid] = o
+    uids, objs = list(obs), list(obs.values())
+    tables = [icache.objects[u] for u in uids]
+    m16, rid = np.empty(n * 16, np.float32), np.empty(n, np.int32)
+
+    def fg():
+        dg.object_instances.foreach_get("matrix_world", m16)
+        dg.object_instances.foreach_get("random_id", rid)
+    steps = [("iterate only", l0), ("+ object, type", l1), ("+ original, session_uid", l2),
+             ("+ instance_path, object_identity", l3), ("+ geometry_identity", l4), ("+ keymap.key x2 (loop total)", l5),
+             ("after: foreach_get matrix, random_id", fg),
+             ("after: _object_scalars", lambda: instances._object_scalars(uids)),
+             ("after: _object_fields", lambda: instances._object_fields(objs, tables, lg, icache)),
+             ("whole build", lambda: instances.build(dg, km, lightgroups=lg, cache=icache))]
+    out = ["split of a warm build, median of 10, ms per 10k instances (cumulative for the loop lines):"]
+    for name, fn in steps:
+        v = statistics.median(timed(fn) for _ in range(WARM)) * 1e4 / n
+        out.append(f"  {name:<40} {v:7.2f}")
+    return "\n".join(out) + "\n"
 
 
 def profile_build(instances, dg, km, lg, icache):
@@ -182,13 +260,17 @@ def report(d, history, profile):
             warm = [statistics.median(r["cells"][name][1]) for r in rs]
             mc, mw = statistics.median(cold), statistics.median(warm)
             single = name == "instances" and rs[0]["instances"] < 100  # B-31's per-10k limit is S2's
+            if single:  # shown as plain ms for the one instance
+                f = rs[0]["instances"] / 1e4
+                cold, warm, mc, mw = [v * f for v in cold], [v * f for v in warm], mc * f, mw * f
             limit = None if single else lim[i]
             verdict = "n/a" if single else "/".join("PASS" if v <= limit else "MISS" for v in (mc, mw))
-            u = "ms (1 instance)" if single else unit
+            u = "ms (1 inst)" if single else unit
             rows.append(f"{s:<5} {label:<15} {u[:11]:<11} {fmt(mc):>8} {fmt(mw):>8} {'-' if single else f'{limit:g}':>6}  "
                         f"{verdict:<9}  {len(rs)} [cold {fmt(min(cold))}-{fmt(max(cold))}, warm {fmt(min(warm))}-{fmt(max(warm))}]")
-            hist += [(s, f"b31.{name}_cold", mc, unit, len(cold), max(cold) - min(cold)),
-                     (s, f"b31.{name}_warm", mw, unit, len(warm), max(warm) - min(warm))]
+            hu = "ms" if single else unit
+            hist += [(s, f"b31.{name}_cold", mc, hu, len(cold), max(cold) - min(cold)),
+                     (s, f"b31.{name}_warm", mw, hu, len(warm), max(warm) - min(warm))]
     log = os.path.join(ROOT, "out", "check", "sync_timing.log")
     os.makedirs(os.path.dirname(log), exist_ok=True)
     full = list(rows)

@@ -16,7 +16,7 @@ foreach ($s in 'b1m', 'b5m') {
   if ($Rebuild -or -not (Test-Path $blend)) {
     & $py -I (Join-Path $root "scenes/$s/build.py") --out (Join-Path $dir "$s.arrec") --blend $blend | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "scenes/$s/build.py failed" }
-    $r = Invoke-ArBlender -Script (Join-Path $root 'scenes/lib/blend_writer.py') -Args @("$blend.json", $blend) -TimeoutS 600
+    $r = Invoke-ArBlender -Script (Join-Path $root 'scenes/lib/blend_writer.py') -Args @("--no-extension", "$blend.json", $blend) -TimeoutS 600
     if ($r.ExitCode -ne 0) { throw "blend_writer for $s exited $($r.ExitCode)" }
   }
 }
