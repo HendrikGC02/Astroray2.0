@@ -5,8 +5,8 @@
 # machine-wide directory (every worktree and agent shell must see it; TEMP and the profile are per user or
 # sandbox); the tree lock's sits beside its lock file. Environment, read at each call so tests never touch
 # the real lock: ASTRORAY_LOCK_NAME (mutex), ASTRORAY_LOCK_DIR (owner file), ASTRORAY_LOCK_MESSAGE_S
-# (seconds between waiting messages), ASTRORAY_LOCK_TIMEOUT_S (longest a holder may keep the lock while
-# someone waits).
+# (seconds between wait ticks; the first three print), ASTRORAY_LOCK_TIMEOUT_S (longest a holder may keep
+# the lock while someone waits).
 $script:ArMutex = $null
 $script:ArOwnsLockPid = $false
 $script:ArOwnerPath = $null
@@ -78,6 +78,13 @@ function Format-ArLockWait($owner) {
   return 'waiting for unknown holder (owner.json missing or its pid not running)'
 }
 
+# Whether a wait tick prints: the first three ticks name the holder, then one line per 300 s keeps a long,
+# legitimate queue from filling the console.
+function Test-ArLockSay($state, [double]$elapsedS) {
+  if ($state.Said -lt 3 -or $elapsedS - $state.Last -ge 300) { $state.Said++; $state.Last = $elapsedS; return $true }
+  return $false
+}
+
 function Enter-ArMachineLock {
   # Returns seconds waited; 0 when nested under a live lock holder.
   $held = $env:ASTRORAY_LOCK_PID
@@ -88,6 +95,7 @@ function Enter-ArMachineLock {
   $ownerPath = Join-Path (Get-ArLockDir) 'owner.json'
   $sw = [Diagnostics.Stopwatch]::StartNew()
   $m = New-Object System.Threading.Mutex($false, $name)
+  $say = @{ Said = 0; Last = 0.0 }
   while ($true) {
     try {
       if ($m.WaitOne([TimeSpan]::FromSeconds($msgS))) { break }
@@ -99,7 +107,7 @@ function Enter-ArMachineLock {
       break
     }
     $o = Read-ArLockOwner $ownerPath
-    Write-Host (Format-ArLockWait $o)
+    if (Test-ArLockSay $say $sw.Elapsed.TotalSeconds) { Write-Host (Format-ArLockWait $o) }
     # The limit is on the current holder's hold, not this caller's wait: a long queue of legitimate holders
     # is not a hang. Without a live record, this caller's own wait is the only clock.
     $holdS = if ($o -and $o.Alive) { ([DateTimeOffset]::Now - $o.Started).TotalSeconds } else { $sw.Elapsed.TotalSeconds }
@@ -142,13 +150,17 @@ function Enter-ArTreeLock {
   $msgS = Get-ArLockSetting 'ASTRORAY_LOCK_MESSAGE_S' 30
   $sw = [Diagnostics.Stopwatch]::StartNew()
   $next = $msgS
+  $say = @{ Said = 0; Last = 0.0 }
   while ($true) {
     try {
       $script:ArTreeStream = [IO.File]::Open($path, 'OpenOrCreate', 'ReadWrite', 'None')
       break
     } catch [System.IO.IOException] {
       Start-Sleep -Milliseconds 200
-      if ($sw.Elapsed.TotalSeconds -ge $next) { Write-Host (Format-ArLockWait (Read-ArLockOwner $ownerPath)); $next += $msgS }
+      if ($sw.Elapsed.TotalSeconds -ge $next) {
+        $next += $msgS
+        if (Test-ArLockSay $say $sw.Elapsed.TotalSeconds) { Write-Host (Format-ArLockWait (Read-ArLockOwner $ownerPath)) }
+      }
     }
   }
   if (Write-ArLockOwner $ownerPath) { $script:ArTreeOwnerPath = $ownerPath }
