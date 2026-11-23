@@ -52,4 +52,10 @@ AR_FN uint32_t set_hero_lane(uint32_t flags, uint32_t lane) {
 
 AR_FN uint32_t medium_depth(uint32_t flags) { return (flags & MEDIUM_DEPTH_MASK) >> MEDIUM_DEPTH_SHIFT; }
 
+// Returns the flags with the medium-stack depth replaced; depth must be 0..7.
+AR_FN uint32_t set_medium_depth(uint32_t flags, uint32_t depth) {
+  AR_ASSERT(depth < 8u);
+  return (flags & ~MEDIUM_DEPTH_MASK) | ((depth << MEDIUM_DEPTH_SHIFT) & MEDIUM_DEPTH_MASK);
+}
+
 AR_NS_END
