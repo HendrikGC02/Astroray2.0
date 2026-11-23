@@ -82,6 +82,12 @@ brief the agent to `git switch task/NNN-*` first in its own worktree. A worktree
 - Review lessons this session: hosted `ci` must be green before a landing (151 and 136 were red from their first push);
   canary patches merge adjacent breakages into one hunk; Opus reviews found real defects in 138, 141, 150, 161, 171,
   178, 140 and the 0009 record edit. A (land) commit left by a refused merge must be reverted before reuse.
+- Planning still owed before M1b closes: (1) third batch at the slice review after 158 and 163 land (spine numbers known):
+  extension routing and false interfaces with a ruling extending 91's queue, grating scene and V8, 0005 V6, tree vs alias
+  row and B-23, ratio tracking and per-launch cap (V6, check 26), HDRI/S3/shader balls, final denoise and F12 passes,
+  Diagnostics panel, heat maps (docs/PLAN-M1b.md section 2 slice rows); (2) slice D's ~15 close tasks, B-20 with
+  its decision table first; (3) M2's planning session during slice D, once M-1 at M1b scope and B-20 are measured;
+  (4) the 0002 D10 ladder only if a spine landing spills or passes 512 B stack (145 compile past 5.0 s goes to the owner).
 - `check fast` B-08/B-12 fail under concurrent builds (BACKLOG row); rerun once on a quiet machine and say so.
 - Leftover worktree directories (LEFTOVER lines; a process held a file): agent-a564b0651c3231eca, agent-a78f32a32133f25b4,
   agent-a5d451cc451a9b96e, agent-a5d5f22542d950a96, and detached old worktrees (a9e75b55, abbd2383, abec299b, ac16ade2,
