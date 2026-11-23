@@ -21,3 +21,4 @@ Progress:
   perf -Shares: perf_shares.py (idle and pq share, burn-in 8, >=60 passes), lib/nsys.ps1, land hook (src/host/scheduler*, queue_build.h, sort.h, kernel/sched, device/cuda), check.ps1 self-test chain.
   B-19 tolerances PROVISIONAL from 5 captures: b1m idle 0.239 pq 0.040, b5m idle 0.401 pq 0.056 (budgets.toml, 0009 d13). First lines in bench/history/2026.jsonl.
   Measured b1m idle 11.2 pct, pq 9.45 pct (134: 11.0, 9.4). -Shares wall 21 s for two captures. check fast 8.9 s, gate 144.5 s, canary PASS (2 hunks).
+  Opus review fixes: pq kernels read from launch_config.h (queue_build rows required, sort optional), scene-match fixture, sharper synthetic export, land regex widened, canary 4 hunks.
