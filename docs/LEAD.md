@@ -19,10 +19,12 @@ docs/PLAN-M1b.md, order in tasks/README.md, unowned items in docs/BACKLOG.md, ru
    (O31, ruling 87); host-only plumbing may skip. FAIL: findings back to the implementer, then review again.
    PASS WITH FIXES: the implementer fixes, the lead reads the fix diff and continues; send it back to the
    reviewer only when the fix changes control flow in concurrency, lifetime or teardown code.
-5. Land: `tools/lead/land-pr.sh NNN PASS|SKIP "title"` until task 138 lands, then
-   `pwsh tools/land.ps1 submit NNN PASS|SKIP` (run in the background; it holds the machine lock). Land the
-   oldest green branch first. Do not commit to main while a landing runs. A task with a `Look at:` line
-   needs the lead to view the image (Read the PNG) and post a PR comment starting `evidence:` first.
+5. Land: `pwsh tools/land.ps1 submit NNN PASS|SKIP [-Evidence "what I saw"]` (run in the background). Submit
+   does prepare, the PR, the verdict comment, the hosted ci wait, the merge and a best-effort cleanup, undoes
+   its own commit on a failure and appends its timing to out/land/history.jsonl of the main checkout; read its
+   last `REFUSE` or `FAIL` line. It refuses while another land.ps1 runs. Land the oldest green branch first. Do not commit to main while a landing runs. A task with a `Look at:` line
+   needs the lead to view the image (Read the PNG) first and pass what was seen as `-Evidence`; submit posts the
+   `evidence:` comment.
 6. After a landing: update the gate ledger line in tasks/README.md; move notes for later tasks into their
    files; move unowned gaps into docs/BACKLOG.md. Every 10 landings, and at each slice close, run
    `pwsh tools/check.ps1 full`.
@@ -92,15 +94,8 @@ on its existing branch and worktree, briefed from its task file and the rulings 
 - Process changes made by the planning session, confirmed by the owner (decision 36): B-08, lanes, reviewer
   verdicts, DeepSeek wrapper, rulings 86-88, the implementer and reviewer definitions, and `process/guards`
   (merged: deny rules for direct cmake, ninja, nvcc, blender; an allow-list; CLAUDE.md rule 1's scope clause).
-- Landing lessons (until task 138's `land.ps1 submit` absorbs them):
-  - land.ps1 cleanup fails while an agent holds its worktree lock or a shell's cwd is inside it: after the
-    merge run `git worktree remove -f -f <dir>` and `git branch -D task/NNN-*`. Cleanup deletes the
-    worktree's out/: copy the PR body and evidence out first. land-pr.sh reuses an open PR, so open it with
-    the real body (and the `evidence:` comment for a `Look at:` task) before running it.
-  - A failed prepare leaves a "(land)" commit; land-pr.sh reverts it.
-  - land.ps1 does not rebuild out/scenes: after an ABI or recording change rerun `tools/scenes.py` in the
-    worktree. A leftover Blender can hold out/bin/astroray_core.dll (LNK1168): check before landing.
-  - Start landings with run_in_background only. If hosted ci never starts, close and reopen the PR.
+- Landing lessons (what `land.ps1 submit` does not absorb):
+  - Start landings with run_in_background only; submit holds the machine lock for the gate and the Blender suites.
   - A task that adds a tools/lib switch its own canary needs: prepare with the worktree's land.ps1.
   - Auto mode refused a landing that combined REVIEW SKIP with the lead's own `evidence:` comment; run the reviewer.
   - A GitHub 5xx while posting the gate status fails prepare after a passing gate: reland (138 retries 5xx).

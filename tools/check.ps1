@@ -252,36 +252,20 @@ $global:LASTEXITCODE = 1
   } elseif ($Tier -eq 'full') {
     $r = Step 'gate' { & pwsh -NoProfile -File tools/check.ps1 gate @dargs }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'gate failed (out/check/gate.log)' }
-    # Land fixture cases a-g (canary refusals, hunk matrix): minutes, so full only.
+    # Land fixture cases a-j (canary refusals, hunk matrix, undo, busy refusals): minutes, so full only.
     $r = Step 'tools fixtures' { & pwsh -NoProfile -File tests/tools/land_fixture/run_cases.ps1 }
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'tools fixtures failed (out/check/full.log)' }
-    # API surface inside Blender, where the bundled openvdb exists (0007 d46); ci checks the rest on the wheel.
-    $r = Step 'blender api_surface' {
-      $b = Invoke-ArBlender -Script 'tools/api_surface.py' -TimeoutS 120 6>$null
-      foreach ($f in $b.Log, "$($b.Log).err") { if (Test-Path $f) { Get-Content $f } }
-      $global:LASTEXITCODE = $b.ExitCode }
-    $r.Out | Where-Object { $_ -match '^(api_surface:|MISSING|UNCHECKED)' } | ForEach-Object { Write-Host $_ }
-    if ($r.Code -ne 0) { Fail 'blender api_surface failed (out/check/full.log)' }
-    # Image sync and node values through Blender, full only (about 40 s does not fit B-09).
-    # Not $t: Step's own stopwatch of that name is visible inside the block (dynamic scope).
-    foreach ($bt in 'test_images', 'test_node_values', 'headless/test_node_coverage') {
-      $r = Step "blender $bt" {
-        $b = Invoke-ArBlender -Script "tests/blender/$bt.py" -TimeoutS 400 6>$null
+    # The Blender suites (lib/blender.ps1 Get-ArFullBlenderSuites, the list `land prepare` shares): the API
+    # surface inside Blender, where the bundled openvdb exists (0007 d46; ci checks the rest on the wheel), image
+    # sync and node values (about 40 s does not fit B-09), and every windowed gui_* script, which drives itself by
+    # timers and ends the process. Not $t: Step's own stopwatch of that name is visible inside the block.
+    foreach ($su in (Get-ArFullBlenderSuites)) {
+      $r = Step "blender $($su.Name)" {
+        $b = Invoke-ArBlender -Gui:([bool]$su.Gui) -Script $su.Script -TimeoutS $su.TimeoutS 6>$null
         foreach ($f in $b.Log, "$($b.Log).err") { if (Test-Path $f) { Get-Content $f } }
         $global:LASTEXITCODE = $b.ExitCode }
-      $r.Out | Where-Object { $_ -match '^(Ran |OK$|FAILED|FAIL:|ERROR:)' } | ForEach-Object { Write-Host $_ }
-      if ($r.Code -ne 0) { Fail "blender $bt failed (out/check/full.log)" }
-    }
-    # Windowed-Blender scripts: every tests/blender/gui_*.py, one run and one line each. Each
-    # script drives itself by timers and ends the process; a non-zero exit fails the tier.
-    foreach ($gf in (Get-ChildItem 'tests/blender' -Filter 'gui_*.py' | Sort-Object Name)) {
-      $gn = $gf.BaseName
-      $r = Step "blender $gn" {
-        $b = Invoke-ArBlender -Gui -Script "tests/blender/$gn.py" -TimeoutS 400 6>$null
-        foreach ($f in $b.Log, "$($b.Log).err") { if (Test-Path $f) { Get-Content $f } }
-        $global:LASTEXITCODE = $b.ExitCode }
-      $r.Out | Where-Object { $_ -match '^(Ran |OK$|FAILED|FAIL:|ERROR:)' } | ForEach-Object { Write-Host $_ }
-      if ($r.Code -ne 0) { Fail "blender $gn failed (out/check/full.log)" }
+      $r.Out | Where-Object { $_ -match $su.Echo } | ForEach-Object { Write-Host $_ }
+      if ($r.Code -ne 0) { Fail "blender $($su.Name) failed (out/check/full.log)" }
     }
     # The probe build first, so kernelgate full reads fresh capped probe cubins (kernels_probe_capped).
     $r = Step 'build probe' { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_kernels_gpu_probe }

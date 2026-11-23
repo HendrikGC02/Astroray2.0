@@ -7,10 +7,15 @@
 #   e: real canary patch, but the backticked command names a script that does not exist
 #   f: real canary patch of two hunks, one inert (accepted with a WARN)
 #   g: two hunks that turn the named case red only together (refused)
+#   h: real canary, and a gate stub (tools/check.ps1) that fails after the "(land)" commit
+#   i: real canary; run_cases keeps a process whose command line holds land.ps1 alive (refused)
+#   j: real canary; run_cases keeps a process holding out/bin/astroray_core.dll loaded (refused)
+#   k: real canary, and a gate stub that passes (run_cases prepares twice, main moving in between)
+# <Dir>/bin/gh.cmd is a `gh` stub for the cases that get past the checks (the real one would call GitHub).
 # The build and test binary are stand-ins: tools/build.ps1 does nothing and out/bin/astroray_tests_cpu.cmd
 # "passes" a case while src/code.txt contains GOOD, so a patch that flips it turns the case red.
 param(
-  [Parameter(Mandatory)][ValidateSet('a', 'b', 'c', 'd', 'e', 'f', 'g')][string]$Case,
+  [Parameter(Mandatory)][ValidateSet('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k')][string]$Case,
   [Parameter(Mandatory)][string]$Dir
 )
 $ErrorActionPreference = 'Stop'
@@ -44,7 +49,9 @@ $codeLines = @('GOOD') + @(2..11 | ForEach-Object { "filler $_" }) + @($(if ($Ca
 Put 'src/code.txt' (($codeLines -join "`n") + "`n")
 Put 'src/other.txt' "x`n"
 Put 'tests/cpu/test_base.cpp' "TEST_CASE(`"base/other`") {}`n"
-Put 'tools/build.ps1' "# stand-in for the real build: nothing to build in the fixture`nparam([string[]]`$Target)`nWrite-Host 'PASS build 0.0 s (fixture)'`n"
+Put 'tools/build.ps1' "# stand-in for the real build: nothing to build in the fixture; names the target so run_cases sees what land rebuilt`nparam([string[]]`$Target)`nWrite-Host `"PASS build `$Target 0.0 s (fixture)`"`n"
+if ($Case -eq 'k') { Put 'tools/check.ps1' "# stand-in gate: passes`nWrite-Host 'PASS gate stub (fixture)'`nexit 0`n" }
+else { Put 'tools/check.ps1' "# stand-in gate: fails, so land.ps1 must undo its own commit`nWrite-Host 'FAIL gate stub (fixture)'`nexit 1`n" }
 Put 'tools/fixture_selftest.ps1' "if ((Get-Content src/code.txt -Raw) -match 'GOOD') { exit 0 } else { exit 1 }`n"
 Put 'tools/fixture_tests.ps1' @'
 param([Parameter(ValueFromRemainingArguments)]$a)
@@ -86,4 +93,7 @@ $bin = Join-Path $work 'out/bin'
 New-Item -ItemType Directory -Force $bin | Out-Null
 [IO.File]::WriteAllText((Join-Path $bin 'astroray_tests_cpu.cmd'),
   "@echo off`r`npwsh -NoProfile -File `"%~dp0..\..\tools\fixture_tests.ps1`" %*`r`n")
+$stub = Join-Path $Dir 'bin'
+New-Item -ItemType Directory -Force $stub | Out-Null
+[IO.File]::WriteAllText((Join-Path $stub 'gh.cmd'), "@echo off`r`necho {}`r`nexit /b 0`r`n")
 Write-Output $work

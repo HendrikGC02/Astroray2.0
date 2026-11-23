@@ -6,6 +6,7 @@
 . (Join-Path $PSScriptRoot 'blender.ps1')
 
 $script:CanaryLogPath = $null
+$script:CanaryScenesSeconds = 0.0   # time spent in tools/scenes.py after builds; land reports it as its own phase
 function Write-CanaryLog($text) { if ($script:CanaryLogPath) { Add-Content -Path $script:CanaryLogPath -Value $text } }
 
 # Items of a Canary: line. Returns objects {Kind exe|py|cmd; Target; Name}.
@@ -195,7 +196,8 @@ function Invoke-CanaryItems($items, [string]$Root) {
   return $res
 }
 
-function Invoke-CanaryBuild($targets, [bool]$cpuOnly, [string]$Root) {
+function Invoke-CanaryBuild($targets, [bool]$cpuOnly, [string]$Root, [bool]$Patched = $false) {
+  # Returns '' or, for a patched tree only, why tools/scenes.py failed. A build failure always throws.
   foreach ($t in $targets) {
     $b = @('-NoProfile', '-File', (Join-Path $Root 'tools/build.ps1'), '-Target', $t)
     if ($cpuOnly) { $b += '-NoMachineLock' }
@@ -203,6 +205,29 @@ function Invoke-CanaryBuild($targets, [bool]$cpuOnly, [string]$Root) {
     Write-CanaryLog $o
     if ($LASTEXITCODE -ne 0) { throw "canary build of '$t' failed: $(($o | Select-Object -Last 2) -join ' ')" }
   }
+  # A build can change what the recorder writes, and items that render read out/scenes: regenerate after every
+  # build (a warm machine-wide cache makes it cost well under a second). The fixture has no tools/scenes.py.
+  # On the baseline a failure is fatal; under a patch it is what the breakage did (a canary may break the recorder).
+  if (Test-Path (Join-Path $Root 'tools/scenes.py')) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $o = & (Get-ArPython) -I (Join-Path $Root 'tools/scenes.py') 2>&1 | ForEach-Object { "$_" }
+    $script:CanaryScenesSeconds += $sw.Elapsed.TotalSeconds
+    Write-CanaryLog $o
+    if ($LASTEXITCODE -ne 0) {
+      $why = "tools/scenes.py failed after the canary build: $(($o | Select-Object -Last 2) -join ' ')"
+      if (-not $Patched) { throw $why }
+      return $why
+    }
+  }
+  return ''
+}
+
+# The results of a patched build: its items run, unless tools/scenes.py failed after the build; then every item of
+# that build is recorded as run and red (the patch broke the recordings the items read), and the log says so.
+function Invoke-CanaryPatchedItems($items, [string]$scenesErr, [string]$Root) {
+  if (-not $scenesErr) { return @(Invoke-CanaryItems $items $Root) }
+  Write-CanaryLog "$scenesErr; every item of this build counts red"
+  return @($items | ForEach-Object { New-CanaryResult $(if ($_.Name) { $_.Name } else { $_.Target }) $true $true })
 }
 
 function Format-CanaryNames($labels, [int]$max = 60) {
@@ -216,7 +241,7 @@ function Format-CanaryNames($labels, [int]$max = 60) {
 # Returns {Problems; Lines (for display); Red; Matrix {Where; Red; Green}; Dirty}.
 function Invoke-Canary {
   param([Parameter(Mandatory)][string]$Number, [Parameter(Mandatory)][string]$Root, [switch]$NoBaseline, [switch]$NoMatrix)
-  $res = [pscustomobject]@{ Problems = @(); Lines = @(); Red = @(); Matrix = @(); Dirty = $false }
+  $res = [pscustomobject]@{ Problems = @(); Lines = @(); Red = @(); Matrix = @(); Dirty = $false; Targets = @() }
   $dir = Join-Path $Root 'out/canary'
   New-Item -ItemType Directory -Force $dir | Out-Null
   $script:CanaryLogPath = Join-Path $dir "$Number.log"
@@ -236,6 +261,7 @@ function Invoke-Canary {
 
   $cpuOnly = @($items | Where-Object { $_.Kind -ne 'exe' -or $_.Target -ne 'astroray_tests_cpu' }).Count -eq 0
   $targets = if (@($items | Where-Object { $_.Kind -ne 'exe' }).Count) { @('all') } else { @($items.Target | Sort-Object -Unique) }
+  $res.Targets = $targets   # land rebuilds these after the canary: the last build here may hold a patched tree
   $key = ($items | ForEach-Object { "$($_.Kind)|$($_.Target)|$($_.Name)" }) -join "`n"
   $tree = (& git -C $Root rev-parse 'HEAD^{tree}').Trim()
   $clean = -not (& git -C $Root status --porcelain)
@@ -257,7 +283,7 @@ function Invoke-Canary {
   try {
     if (-not $cpuOnly) { $null = Enter-ArMachineLock }
     # Baseline: every item must run and pass without the patch, or "red" means nothing.
-    Invoke-CanaryBuild $targets $cpuOnly $Root
+    $null = Invoke-CanaryBuild $targets $cpuOnly $Root
     if ($NoBaseline) { $res.Lines += 'baseline: skipped on request (-NoBaseline)' }
     elseif (Test-CanaryBaselineRecord $prior $tree $key $clean) { $res.Lines += "baseline: skipped, tree $($tree.Substring(0, 8)) passed at $($prior.time)" }
     else {
@@ -271,8 +297,9 @@ function Invoke-Canary {
       & git -C $Root apply $patch 2>&1 | ForEach-Object { Write-CanaryLog "$_" }
       if ($LASTEXITCODE -ne 0) { throw "git apply of tasks/$Number.canary.patch failed" }
       $applied = $patch
-      Invoke-CanaryBuild $targets $cpuOnly $Root
-      $w = & $eval (Invoke-CanaryItems $items $Root) 'whole'
+      $se = Invoke-CanaryBuild $targets $cpuOnly $Root $true
+      if ($se) { $res.Lines += "whole patch: $se; its items count red" }
+      $w = & $eval (Invoke-CanaryPatchedItems $items $se $Root) 'whole'
       $res.Problems += $w.Problems
       $res.Red = $w.Red
       & git -C $Root apply -R $patch 2>&1 | ForEach-Object { Write-CanaryLog "$_" }
@@ -294,8 +321,9 @@ function Invoke-Canary {
           if ($LASTEXITCODE -ne 0) { $res.Problems += "hunk $($hunks[$h].Where) does not apply alone (hunks must not depend on each other)"; continue }
           $applied = $hp
           try {
-            Invoke-CanaryBuild $targets $cpuOnly $Root
-            $e = & $eval (Invoke-CanaryItems $items $Root) 'hunk'
+            $se = Invoke-CanaryBuild $targets $cpuOnly $Root $true
+            if ($se) { $res.Lines += "hunk $($hunks[$h].Where): $se; its items count red" }
+            $e = & $eval (Invoke-CanaryPatchedItems $items $se $Root) 'hunk'
           } catch { $res.Problems += "hunk $($hunks[$h].Where) alone: $($_.Exception.Message) (hunks must not depend on each other)"; $e = $null }
           finally {
             & git -C $Root apply -R $hp 2>&1 | ForEach-Object { Write-CanaryLog "$_" }

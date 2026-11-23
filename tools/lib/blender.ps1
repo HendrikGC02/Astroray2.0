@@ -92,3 +92,25 @@ function Invoke-ArBlenderCommand {
     Exit-ArMachineLock
   }
 }
+
+# The Blender suites `check full` runs and `land prepare` runs a subset of for a Blender diff (one list, 0009 d26).
+# -Changed: the paths a diff lists; the headless suites always, a windowed gui_* only when the diff touches the
+# viewport code it drives or that script itself. Without -Changed: every suite.
+function Get-ArFullBlenderSuites {
+  param([string[]]$Changed = $null, [string]$Root = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)))
+  $echo = '^(Ran |OK$|FAILED|FAIL:|ERROR:)'
+  $suites = @(
+    [pscustomobject]@{ Name = 'api_surface'; Script = 'tools/api_surface.py'; Gui = $false; TimeoutS = 120; Echo = '^(api_surface:|MISSING|UNCHECKED)' }
+    [pscustomobject]@{ Name = 'test_images'; Script = 'tests/blender/test_images.py'; Gui = $false; TimeoutS = 400; Echo = $echo }
+    [pscustomobject]@{ Name = 'test_node_values'; Script = 'tests/blender/test_node_values.py'; Gui = $false; TimeoutS = 400; Echo = $echo }
+    [pscustomobject]@{ Name = 'headless/test_node_coverage'; Script = 'tests/blender/headless/test_node_coverage.py'; Gui = $false; TimeoutS = 400; Echo = $echo }
+  )
+  $viewport = $null -ne $Changed -and @($Changed | Where-Object { $_ -match '^blender/astroray/(viewport|present|engine|heatmap_draw)\.py$' }).Count -gt 0
+  foreach ($gf in (Get-ChildItem (Join-Path $Root 'tests/blender') -Filter 'gui_*.py' | Sort-Object Name)) {
+    $own = $null -ne $Changed -and $Changed -contains "tests/blender/$($gf.Name)"
+    if ($null -eq $Changed -or $viewport -or $own) {
+      $suites += [pscustomobject]@{ Name = $gf.BaseName; Script = "tests/blender/$($gf.Name)"; Gui = $true; TimeoutS = 400; Echo = $echo }
+    }
+  }
+  return $suites
+}
