@@ -217,6 +217,10 @@ ar_status Edit::commit(uint64_t* generation) {
   if (settings_ && settings_->s.pixel_filter > AR_FILTER_BLACKMAN_HARRIS) return bad("invalid argument: pixel_filter out of range");
   if (settings_ && settings_->s.sampler_mode > AR_SAMPLER_INDEPENDENT) return bad("invalid argument: sampler_mode out of range");
   if (settings_ && settings_->s.statistics > AR_STATISTICS_OFF) return bad("invalid argument: statistics out of range");
+  // film_exposure multiplies every display sample at resolve, so a NaN, Inf or negative value would
+  // fill the display moments with garbage that no later check sees.
+  if (settings_ && !(std::isfinite(settings_->s.film_exposure) && settings_->s.film_exposure >= 0.0f))
+    return bad("invalid argument: film_exposure must be finite and >= 0");
   if (camera_ && camera_->c.type > AR_CAMERA_PANO) return bad("invalid argument: camera type out of range");
 
   queue_instance_check(*this);

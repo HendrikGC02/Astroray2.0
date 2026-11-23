@@ -350,4 +350,18 @@ TEST_CASE("session passes/film exposure scales the display channel") {
   for (size_t i = 0; i < p1.size(); ++i) CHECK(p2[i] == p1[i]);
 }
 
+TEST_CASE("session passes/film exposure that is not finite and >= 0 is refused") {
+  // A NaN, Inf or negative exposure would put garbage into every display moment at resolve.
+  for (const float bad : {std::nanf(""), INFINITY, -1.0f}) {
+    PassRig rig;
+    auto e = rig.scene.begin_edit();
+    REQUIRE(e);
+    rig.exposure = bad;
+    rig.settings(*e, {"Combined"});
+    uint64_t g = 0;
+    CHECK(e->commit(&g) == AR_ERR_INVALID_ARGUMENT);
+    CHECK(e->last_error().find("film_exposure") != std::string::npos);
+  }
+}
+
 }  // TEST_SUITE

@@ -735,9 +735,6 @@ void Session::update_camera_and_filter(uint64_t generation) {
   const auto s = scene_.settings();
   filter_ready_ = filter_ready_ && s != nullptr;
   if (s) {
-    // Exposure is applied per sample at resolve (0008 d7), and every activated commit starts an
-    // epoch before this runs, so no accumulated sample carries another exposure.
-    film_->data().film_exposure = s->s.film_exposure;
     const FilterSettings want{static_cast<FilterType>(s->s.pixel_filter), s->s.pixel_filter_width};
     if (!filter_ready_ || want.type != filter_uploaded_.type || want.width != filter_uploaded_.width) {
       const auto table = std::make_unique<ar::FilterTable>(build_filter_table(want));
@@ -929,6 +926,9 @@ void Session::render_loop() {
         ctx_.log.line("INFO", "session: radiance scale s = 2^" + std::to_string(1 - e));
       }
       film_->data().inv_radiance_scale = inv_s;
+      // Exposure scales each sample at resolve (0008 d7), so it is fixed per epoch by construction:
+      // set here, after begin_epoch, from the settings this latch folded in, never mid-epoch.
+      if (const auto st = scene_.settings()) film_->data().film_exposure = st->s.film_exposure;
     }
     apply_view();
     if (lr.changed) update_camera_and_filter(lr.generation);
