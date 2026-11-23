@@ -1,5 +1,5 @@
 diff --git a/src/host/image/decode_exr.cpp b/src/host/image/decode_exr.cpp
-index 085d1fb..d219f53 100644
+index 63a2281..7602343 100644
 --- a/src/host/image/decode_exr.cpp
 +++ b/src/host/image/decode_exr.cpp
 @@ -55,7 +55,7 @@ std::string take_message(const char* err, const char* fallback) {
@@ -11,7 +11,25 @@ index 085d1fb..d219f53 100644
  bool float_not_finite(float f) {
    uint32_t b;
    std::memcpy(&b, &f, 4);
-@@ -127,7 +127,7 @@ bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, s
+@@ -87,7 +87,7 @@ bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, s
+       if (std::strcmp(hd.channels[c].name, names[k]) == 0) idx[k] = c;
+     chroma = chroma || std::strcmp(hd.channels[c].name, "RY") == 0 || std::strcmp(hd.channels[c].name, "BY") == 0;
+   }
+-  if (chroma) return *error = "EXR uses the luminance-chroma layout (RY, BY), which is not supported", false;
++  if (chroma && false) return *error = "EXR uses the luminance-chroma layout (RY, BY), which is not supported", false;
+   const bool rgb = idx[0] >= 0 || idx[1] >= 0 || idx[2] >= 0;
+   std::vector<int> kept;  // channel indices in output order
+   if (rgb) {
+@@ -100,7 +100,7 @@ bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, s
+   } else if (idx[4] >= 0) {
+     // Grey becomes grey,grey,grey (and alpha), the layout RGBA files and grey+alpha 8-bit images use.
+     if (idx[3] >= 0)
+-      kept = {idx[4], idx[4], idx[4], idx[3]};
++      kept = {idx[4], idx[4], idx[4], idx[4]};
+     else
+       kept = {idx[4]};
+   } else {
+@@ -137,7 +137,7 @@ bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, s
    out->texels.assign(size_t(total), 0);
    // Copies planar pixel `src_index` of every kept channel from `planes` to texel (x, top row).
    const auto put = [&](unsigned char* const* planes, size_t src_index, int x, int top) {
@@ -21,7 +39,7 @@ index 085d1fb..d219f53 100644
        std::memcpy(out->texels.data() + ((size_t(y) * size_t(w) + size_t(x)) * channels + k) * size_t(comp),
                    planes[kept[k]] + src_index * size_t(comp), size_t(comp));
 diff --git a/src/kernel/scene/texture_view.h b/src/kernel/scene/texture_view.h
-index 3becbd2..6b0e6fc 100644
+index 01fc485..897fd83 100644
 --- a/src/kernel/scene/texture_view.h
 +++ b/src/kernel/scene/texture_view.h
 @@ -52,6 +52,9 @@ AR_FN const uint8_t* image_texel(const DeviceImageView& v, uint32_t x, uint32_t
@@ -35,7 +53,7 @@ index 3becbd2..6b0e6fc 100644
    const uint32_t e = o & 0x0f800000u;
    o += 0x38000000u;                             // rebias 15 -> 127
 diff --git a/src/kernel/vm/ops/tex_image.h b/src/kernel/vm/ops/tex_image.h
-index be114d3..d33e8a2 100644
+index b789d04..a7d0511 100644
 --- a/src/kernel/vm/ops/tex_image.h
 +++ b/src/kernel/vm/ops/tex_image.h
 @@ -58,7 +58,7 @@ AR_FN void tex_closest(const DeviceImageView& im, const float* srgb_decode, floa
@@ -47,3 +65,12 @@ index be114d3..d33e8a2 100644
      for (uint32_t k = 0; k < 3u; ++k) out[k] = load_ro(srgb_decode + load_ro(p + (im.channels == 1u ? 0u : k)));
      return;
    }
+@@ -79,7 +79,7 @@ AR_FN void tex_linear(const DeviceImageView& im, float x, float y, bool extend,
+   if (im.format != uint32_t(TexFormat::U8)) {
+     // Half and float: the same weights and sum order, accumulated texel by texel so only one
+     // widened texel is live at a time (the shade kernel is at its register cap).
+-    const float w00 = (1.0f - ty) * (1.0f - tx), w10 = (1.0f - ty) * tx, w01 = ty * (1.0f - tx), w11 = ty * tx;
++    const float w00 = (1.0f - ty) * tx, w10 = (1.0f - ty) * (1.0f - tx), w01 = ty * (1.0f - tx), w11 = ty * tx;
+     Texel t = tex_read(im, ix, iy);
+     float acc[3] = {w00 * t.v[0], w00 * t.v[1], w00 * t.v[2]};
+     t = tex_read(im, nix, iy);
