@@ -748,7 +748,7 @@ TEST_CASE("image_ingest/pixels descriptor refusals") {
   ar_image_desc zero_w = d, zero_h = d, huge = d, file = d, big_key = d, bad_alpha = d;
   zero_w.width = 0;
   zero_h.height = 0;
-  huge.width = huge.height = 0xFFFFFFFFu;  // 2^64 floats: the product itself overflows
+  huge.width = huge.height = 0xFFFFFFFFu;  // width x height fits 64 bits, but its 16 bytes a texel do not
   file.source = AR_IMAGE_SOURCE_FILE;
   big_key.key = uint64_t(UINT32_MAX) + 1;
   bad_alpha.alpha_mode = AR_ALPHA_IGNORE + 1;

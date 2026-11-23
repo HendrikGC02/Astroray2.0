@@ -569,18 +569,26 @@ class TestRenderFinal(ImageCase):
         self.assertLess(np.abs(mean - want).max(), 0.01)
 
     def test_f12_sends_generated_and_unsaved_images(self):
-        job = self.job(samples=4)
+        job = self.job()
         gen = bpy.data.images.new("gen", N, N)
+        gen.pixels[0]
+        rgba = np.ones((N * N, 4), np.float32)
+        rgba[:, :3] = np.array([51, 153, 76], np.float32) / 255.0
+        gen.pixels.foreach_set(rgba.reshape(-1))
+        emit_texture(self.mat, gen)
         dirty = uniform_image(self._dir.name, "dirty", "PNG", (10, 20, 30))
         dirty.pixels[0] = 0.5
         self.assertTrue(dirty.is_dirty)
-        t = self.mat.node_tree
-        for im in (gen, dirty):  # unlinked texture nodes still count: the node tree names the image
-            t.nodes.new("ShaderNodeTexImage").image = im
+        # An unlinked texture node still counts: the node tree names the image.
+        self.mat.node_tree.nodes.new("ShaderNodeTexImage").image = dirty
         self.update(job)
         engine = FakeEngine()
         job.render(engine)
         self.assertEqual([r for r in engine.reports if "image" in r[1]], [])  # both reach the engine as PIXELS
+        mean = middle(engine.image())
+        want = srgb_decode(middle(pixels_of(gen)[:, :, :3]))  # the generated image's encoded pixels, decoded
+        print(f"RESULT F12 generated image mean {mean} want {want}")
+        self.assertLess(np.abs(mean - want).max(), 0.01)
 
     def test_f12_image_update_re_decodes_an_unchanged_file(self):
         """A file rewritten with the same size and mtime reaches the engine when Blender tags the Image

@@ -174,9 +174,17 @@ class TestPixels(ti.ImageCase):
 
         (payload,) = self.staged_pixels(self.record(setup))
         self.assertEqual(payload, made["want"])
-        p = np.frombuffer(payload, np.float32)
-        self.assertLessEqual(abs(float(p[0]) - 0.5), 1 / 255)  # the byte image holds the nearest code
-        self.assertLessEqual(abs(float(p[5]) - 0.123), 1 / 255)
+        # The d21 claim about Blender: a byte image's pixels are its codes times float32(1/255), the
+        # encoded values. The codes are the ones write_image (seed 31) wrote, and the two edited values.
+        rng = np.random.RandomState(31)
+        base = rng.randint(0, 256, (ti.N * ti.N, 1))
+        codes = np.clip(base + rng.randint(-8, 9, (ti.N * ti.N, 3)), 0, 255).astype(np.float32)
+        expect = np.ones((ti.N * ti.N, 4), np.float32)
+        expect[:, :3] = codes * np.float32(1.0 / 255.0)
+        expect = expect.reshape(-1)
+        expect[0] = np.float32(128) * np.float32(1.0 / 255.0)  # 0.5 -> the nearest code
+        expect[5] = np.float32(31) * np.float32(1.0 / 255.0)   # 0.123 -> 31.4
+        self.assertEqual(payload, expect.tobytes())
 
     def test_generated_float_renders_the_pattern(self):
         """The 4 x 4 pattern, one texel at 50.0, on an emission plane at Closest: every pixel is its texel

@@ -33,9 +33,9 @@ bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, s
 // The wide-texel rule: a half or float texel is refused when it is not finite or its magnitude is
 // above kMaxTexelMagnitude. The limit is the largest float for which the Linear filter and the
 // RGB lift stay finite: Linear sums four weighted texels whose float weights add to at most
-// 1 + 3u (u = 2^-24), each product and each of the three additions rounds once more, so
+// (1 + u)^3 <= 1 + 3.1u (u = 2^-24), each product and each of the three additions rounds once more, so
 // |sum| <= |t|max (1 + 8u); the lift forms scale = 2 max(r, g, b) (0005 item 10), so
-// 2 |t|max (1 + 8u) <= FLT_MAX. The largest float satisfying that is bit pattern 0x7efffff7.
+// 2 |t|max (1 + 8u) <= FLT_MAX. The largest float satisfying that conservative bound is bit pattern 0x7efffff7.
 // Nothing is clamped. Half texels are at most 65504, so for them only non-finite values are
 // refused. One definition for FILE, MEMORY and PIXELS images.
 // Ref: src/kernel/vm/ops/tex_image.h tex_linear; src/kernel/color/rgb2spec.h (scale = 2m);

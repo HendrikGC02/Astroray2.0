@@ -97,6 +97,20 @@ def _desc(abi, key, image, reload_count):
     return d, iid
 
 
+def _send_magenta(edit, abi, key, d):
+    """The stand-in for an image whose pixels cannot be read: a 1 x 1 linear (1, 0, 1, 1) PIXELS image under the
+    same key, so an image sent earlier under it is replaced and never shown."""
+    d.color_interop = abi.AR_COLOR_INTEROP_LIN_REC709
+    d.source = abi.AR_IMAGE_SOURCE_PIXELS
+    d.width = d.height = 1
+    buffers = abi.ar_image_buffers()
+    edit.call("ar_edit_image_begin", ctypes.byref(d), ctypes.byref(buffers))
+    staged = (ctypes.c_float * 4).from_address(ctypes.cast(buffers.pixels[0], ctypes.c_void_p).value)
+    staged[:] = (1.0, 0.0, 1.0, 1.0)
+    del staged
+    edit.item_commit(key)
+
+
 def _send_pixels(edit, abi, image, key, d, line):
     """A generated or edited image: Image.pixels (float RGBA, rows bottom-up) copied once into the buffer
     ar_edit_image_begin stages. A byte image's pixels are the encoded values of its colour space, so its
@@ -105,6 +119,7 @@ def _send_pixels(edit, abi, image, key, d, line):
     w, h = image.size
     n = w * h * 4
     if n == 0 or len(image.pixels) != n:
+        _send_magenta(edit, abi, key, d)
         return f"image '{image.name}': has no readable pixels ({w} x {h}, {len(image.pixels)} values) and renders magenta"
     if image.is_float and d.color_interop == abi.AR_COLOR_INTEROP_SRGB_REC709:
         d.color_interop = abi.AR_COLOR_INTEROP_LIN_REC709
