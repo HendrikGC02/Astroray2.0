@@ -31,7 +31,7 @@ Size counts source lines without tests: S under 150, M 150-500, L 500-1000. Cana
 | 158 SpectrumRef TABLE | kernel | S | 145; after 156 | +4 |
 | 159 addon debts | blender | S | none | +1 |
 | 162 `check full` red: gui_colour_chart never converges; 161 B-31 instance loop (owner decision 37) | blender | S | none; 162 before 161 in the lane | 0, 0 |
-Gate ledger (owner decision 38: measured seconds replace declared ones once known; hold a landing only if the measured max would pass 170 s): quiet-machine gate after 157 max 132.7 s, median 123.1 s (5 runs). Landed: 155 (+0), 146 (+1, gate case), 157 (scenes cache), 143 (+0), 152 (+0.4), 137 (+0.6). Open declared: +44 s. Landing gates under load: 155 133.6 s, 146 175.5 s (implementers compiling beside it), 157 144.9 s, 143 131.7 s, 152 140.6 s, 137 134.5 s.
+Gate ledger (owner decision 38: measured seconds replace declared ones once known; hold a landing only if the measured max would pass 170 s): quiet-machine gate after 157 max 132.7 s, median 123.1 s (5 runs). Landed: 155 (+0), 146 (+1, gate case), 157 (scenes cache), 143 (+0), 152 (+0.4), 137 (+0.6), 144 (+0), 142 (+0), 153 (+3 declared, unmeasured), 159 (+0), 149 (+3 declared, unmeasured). Open declared: +37 s. Landing gates under load: 155 133.6 s, 146 175.5 s (implementers compiling beside it), 157 144.9 s, 143 131.7 s, 152 140.6 s, 137 134.5 s, 144 140.9 s, 153 170.9 then 165.4 s (relanded after a GitHub 502), 159 135.3 s, 149 166.9 s.
 
 ## Order
 Dispatch at once: 157, 137 (tools, two at a time; then 143, then 142, 138, 141); 146, 152 (cpu); 144 (kernel); 136 (gpu); 159 (blender); 155 (docs). Then as dependencies land: 147, 145, 151, 150; 149, 153, 154; 148, 156, 158; 139, 140, 160; 162 then 161 in the blender lane.

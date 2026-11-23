@@ -59,15 +59,35 @@ handover below, then stop. Send long landing logs to a `digest` agent. `tools/le
 through opencode, owner decisions 32 and 36) may draft bench-history lines, backlog rows and digests from
 repository text; treat its answer as a draft.
 
-## Handover (M1a built, M1b planned)
+## Handover (M1b slice 0 in flight, 2026-11-23)
 State for the next lead. Agent ids do not carry across sessions; a task still open goes to a new implementer
-on its existing branch and worktree, briefed from its task file.
-- M1a is closed (owner decision 37: B-19 idle, B-20, B-31 accepted as recommended). M1b is planned:
-  docs/PLAN-M1b.md, first batch tasks/136-160, order and lanes in tasks/README.md. An Opus critique of the plan
-  and batch was applied; the corrected task files were not re-reviewed line by line (check each at dispatch;
-  144's "Canary: none" against test files in its Scope is suspect).
-- Start: dispatch the "Dispatch at once" line of tasks/README.md, and write the B-31 task into slice 0
-  (decision 37). The STATUS questions still open block nothing in the first batch.
+on its existing branch and worktree, briefed from its task file and the rulings below.
+- Landed in slice 0: 155, 146, 157, 143, 152, 137, 144, 142, 153, 159, 149 (ledger in tasks/README.md, owner
+  decision 38). The 10-landing `check full` is due after 162 lands (162 fixes its known red).
+- Open PRs, reviewed, ready to land with land-pr.sh: 151 (#122
+  PASS), 136 (#124 PASS), 162 (#123 SKIP, evidence posted).
+- Branches with work, not yet PRs:
+  - 154 light-tree builder: rebase on main, cite ruling 90 in its 0004 D10 sentence, open the PR, land.
+  - 145 BLACKBODY/CAUCHY_ABBE: reviewed; B-05 k_shade_surface compile 4.96-5.35 s under load against ruling
+    72's 5.0 s (quiet 4.6 s baseline). Land in a quiet window (no builds beside the gate). If it still fails,
+    owner item under ruling 72: raise the limit, the D10 split, or stub emission sites (about 8 inlined
+    Planck copies). `#pragma unroll 1` broke k_shade_background's stack row: do not retry.
+  - 147 opacity entry: after 145 lands, rebase, renumber to opcode 18, refresh canary, land.
+  - 138 land submit/undo/cleanup: rulings applied (per-repository busy marker; clean case restored, fast_landing
+    1.9 s, accepted); asked to rebase, rerun gate and open its PR; then Opus review; after it lands use
+    `pwsh tools/land.ps1 submit`. Unrelated: CRLF ghost diffs on .ps1 files (`git add --renormalize`).
+  - 141 visible lock and test runner: rulings given 2026-11-23 (fast_lock scaled to TIMEOUT_S 1.5 / MESSAGE_S
+    0.5 with a ready-file handshake; waiting lines outside the 20-line cap, repeat every 300 s after 3). Then
+    Opus review. Its env defaults (3600 s, 30 s, Globalstroray2, %ProgramData%stroray2) go into 0009 d8
+    as a lead record edit with Opus review.
+  - 150 half/float textures: in progress at handover.
+- Not dispatched: 161 (blender, after 162), 139 (blender), 140/160 (after 136, 138), 148, 156, 158 (spine
+  queue after 147). Then the slice-0 review writes the next batch (PLAN-M1b section 2 outlines).
+- Also owed: 0009 d28 write-back of 137's canary rules (record edit, Opus review).
+- Gate under load reaches 175-179 s (compile timing re-times every TU that includes a changed header, plus
+  contention); quiet gate max 132.7 s. Land kernel-header changes when few implementers build.
+- Briefs must set ASTRORAY_DEPS_CACHE and ASTRORAY_BLENDER (User env) and say: scratch under out/tmp/NNN/,
+  never a shared scratchpad; no commit while a tools/ build runs.
 - Process changes made by the planning session, confirmed by the owner (decision 36): B-08, lanes, reviewer
   verdicts, DeepSeek wrapper, rulings 86-88, the implementer and reviewer definitions, and `process/guards`
   (merged: deny rules for direct cmake, ninja, nvcc, blender; an allow-list; CLAUDE.md rule 1's scope clause).
@@ -82,5 +102,7 @@ on its existing branch and worktree, briefed from its task file.
   - Start landings with run_in_background only. If hosted ci never starts, close and reopen the PR.
   - A task that adds a tools/lib switch its own canary needs: prepare with the worktree's land.ps1.
   - Auto mode refused a landing that combined REVIEW SKIP with the lead's own `evidence:` comment; run the reviewer.
+  - A GitHub 5xx while posting the gate status fails prepare after a passing gate: reland (138 retries 5xx).
+  - Hosted ci flake on one case: `gh run rerun --failed`, then `land.ps1 merge NNN`.
 - Housekeeping: docs/BACKLOG.md last row (stale worktree directories and branches). The file
   out/tmp/blend_cornell_area.png under the drive root is a stray from task 090: the owner removes it.

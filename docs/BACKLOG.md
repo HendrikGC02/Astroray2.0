@@ -20,10 +20,7 @@ them. Milestone is where the item must be settled at the latest.
 | Kernel | Light splats must reject negative radiance | 047 | M5 | |
 | Kernel | Locality-preserving sort key (ruling 80), only with a measured gain | 122 | M3 | |
 | Addon | `translate.py` copies C header ids behind a drift test | 083 | M1b | 151 |
-| Addon | `astroray_extension` target is not in ALL | 084 | M1b | |
 | Addon | Viewport sync resends more than it must on material, image and light edits | 111 | M2 | |
-| Addon | `film_exposure` has no viewport effect | 111 | M1b | slice B |
-| Addon | `Material.use_nodes` and `World.use_nodes` are deprecated in 5.3 | 087 | M1b | slice A lowerings |
 | Addon | Mix Shader, Add Shader lowering; colour-to-float for textured Roughness and Specular; 083 Do 7 | 058, 083 | M1b | slice A lowerings (Add: M2) |
 | Addon | B-31 instance loop 39.8 / 88.5 ms per 10k against 30 | 129 | M1b | 161 |
 | Lights | Spectral blackbody lamp (lamps render BLACKBODY as RGB today) | 068 | M1b | slice B |
@@ -53,3 +50,12 @@ them. Milestone is where the item must be settled at the latest.
 | ABI, host | `bind_globals` reads bounces and seed from live settings each pass, not the latched generation's snapshot (one-pass race on a display-mode-only latch) | 159 review | M2 | |
 | Tests | Flaky once: `cuda_session_trace/no cache dir disables the optix cache` (gate, 136); one hosted-ci `cpu gate tests` case on 137's head (no C++ change; rerun green) | 136, 137 | M1b | the task that sees one again files it |
 | Tools | Hosted ci's log shows only check.ps1's 20-line summary, so a failing doctest case is not named; out/check/ci.log is not uploaded as an artifact | 137 landing | M1b | |
+| Tools | build.ps1 reconfigures only when the source list changes, not when -Preset changes (a cpu-preset build leaves the tree GPU-off; the next dev build fails 'unknown target')  | 153 | M1b | |
+| Tools | A cold or reconfigured worktree's first `check gate` exceeds B-09 (182 s in 142, 198 s in 153) because the in-gate build counts; landings are warm (prepare builds first) | 142, 153 | M1b | |
+| Kernel | build_env_table throws on a uniform grid below ~1e-22 (compensated integral denormal in float): loud, unrealistic radiance; revisit with bake_environment | 153 | M1b | slice B |
+| ABI, host | Settings (film_exposure, seed, bounces) are read live at the latch, not from the latched generation's snapshot: a commit activating at the latch can give one transient frame whose exposure does not match its tables | 159 review | M2 | |
+| Tests | B-12 (0.41 s per fast test) failed once under load on lobe_ggx/pdf integral f64 and material_layout/rgb white reflectance f64 (151's run after a canary build); rerun green. Watch for repeats | 151 | M1b | the task that sees it again files it |
+| Tools | Agents shared a session scratchpad file name (break.py): 151 ran 154's canary script against 154's worktree (154 noticed and reverted). Scratch scripts belong under the agent's own out/tmp/NNN/ (implementer.md says so); restate in briefs | 151, 154 | M1b | lead (briefs) |
+| Kernel | Cauchy dispersion runs on the unmodulated n_d and specular_weighted_eta modulates per lane afterwards; OpenPBR (index.html 823) defines n(lambda_d) as the modulated specular_ior | 145 review | M2 | M2 dispersion |
+| Kernel | emission_sidedness re-parses observer.bin on every call | 145 review | M2 | |
+| Tools | Lock timeout counts from owner.json's `started`; while holders still run the old lock.ps1 (no owner file) the waiter's own wait is the clock, so a long queue of old-code holders can trip 3600 s | 141 | M1b | |
