@@ -42,6 +42,13 @@ class TestOpsgen(unittest.TestCase):
     def test_good_fixtures_parse(self):
         sem = opsgen.parse_semantics(GOOD_SEM)
         self.assertEqual(opsgen.parse_record_slots(GOOD_SLOTS, sem), {"a": 0, "b": 1, "c": 2, "d": 3})
+        # Valid C++ spacing must not drop an entry and shift the ids after it.
+        spaced = GOOD_SLOTS.replace("X(a)", "X( a )").replace("X(c, C, IOR)", "X ( c ,C, IOR )")
+        self.assertEqual(opsgen.parse_record_slots(spaced, sem), {"a": 0, "b": 1, "c": 2, "d": 3})
+        # A macro ends at its own logical line, not at the next #define.
+        cont = ("#define AR_RECORD_SCALARS(X) X(a) \\\n  X(b)\n#define AR_RECORD_SPECTRAL(X) X(c, C, IOR)\n"
+                "#define AR_RECORD_FRAMES(X) X(d)\n")
+        self.assertEqual(opsgen.parse_record_slots(cont, sem), {"a": 0, "b": 1, "c": 2, "d": 3})
 
     def test_malformed_header_raises(self):
         sem = opsgen.parse_semantics(GOOD_SEM)
@@ -51,6 +58,9 @@ class TestOpsgen(unittest.TestCase):
             "no spectral macro": lambda: opsgen.parse_record_slots("#define AR_RECORD_SCALARS(X) X(a)\n", sem),
             "empty frames": lambda: opsgen.parse_record_slots(GOOD_SLOTS.replace("X(d)", ""), sem),
             "unknown semantic": lambda: opsgen.parse_record_slots(GOOD_SLOTS.replace("IOR", "NOPE"), sem),
+            "empty entry": lambda: opsgen.parse_record_slots(GOOD_SLOTS.replace("X(b)", "X()"), sem),
+            "malformed spectral entry": lambda: opsgen.parse_record_slots(GOOD_SLOTS.replace("X(c, C, IOR)", "X(c, C)"), sem),
+            "entry with a stray token": lambda: opsgen.parse_record_slots(GOOD_SLOTS.replace("X(b)", "X(b c)"), sem),
             "duplicate field": lambda: opsgen.parse_record_slots(GOOD_SLOTS.replace("X(d)", "X(a)"), sem),
             "no kTexExtend": lambda: opsgen.parse_tex_modes("kTexLinear = 1u;"),
             "no kTexLinear": lambda: opsgen.parse_tex_modes("kTexExtend = 2u;"),

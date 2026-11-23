@@ -105,11 +105,26 @@ def _strip_comments(text):
 
 
 def _macro_body(text, name, where):
-    """Text of `#define name(X)` up to the next #define, continuation lines included."""
-    m = re.search(r"#define\s+" + name + r"\(X\)(.*?)(?=^\s*#define|\Z)", _strip_comments(text), re.S | re.M)
+    """The logical line of `#define name(X)`: what follows on it, backslash continuations joined."""
+    flat = _strip_comments(text).replace("\\\n", " ")
+    m = re.search(r"^[ \t]*#define[ \t]+" + name + r"\(X\)([^\n]*)", flat, re.M)
     if not m:
         raise OpsError(f"{where}: no #define {name}(X)")
     return m.group(1)
+
+
+def _entries(text, name, arity):
+    """The X(...) entries of one record macro as tuples of `arity` identifiers. Every `X (` token must
+    parse, so a malformed or oddly spaced entry fails here instead of shifting the ids after it."""
+    body = _macro_body(text, name, STORE_SLOT_H)
+    one = r"\s*(\w+)\s*"
+    pat = r"\bX\s*\(" + ",".join([one] * arity) + r"\)"
+    found = re.findall(pat, body)
+    tokens = len(re.findall(r"\bX\s*\(", body))
+    if tokens != len(found):
+        raise OpsError(f"{STORE_SLOT_H}: {name} has {tokens} X(...) entries but {len(found)} parse as "
+                       f"{arity} identifier(s)")
+    return found
 
 
 def parse_semantics(text):
@@ -135,9 +150,9 @@ def parse_semantics(text):
 
 def parse_record_slots(text, semantics):
     """RecordSlot name -> id: scalars, then spectral, then frames, as store_slot.h's enum lists them."""
-    scalars = re.findall(r"X\((\w+)\)", _macro_body(text, "AR_RECORD_SCALARS", STORE_SLOT_H))
-    spectral = re.findall(r"X\((\w+)\s*,\s*\w+\s*,\s*(\w+)\)", _macro_body(text, "AR_RECORD_SPECTRAL", STORE_SLOT_H))
-    frames = re.findall(r"X\((\w+)\)", _macro_body(text, "AR_RECORD_FRAMES", STORE_SLOT_H))
+    scalars = _entries(text, "AR_RECORD_SCALARS", 1)
+    spectral = [(n, sem) for n, _, sem in _entries(text, "AR_RECORD_SPECTRAL", 3)]
+    frames = _entries(text, "AR_RECORD_FRAMES", 1)
     if not scalars or not spectral or not frames:
         raise OpsError(f"{STORE_SLOT_H}: AR_RECORD_SCALARS, AR_RECORD_SPECTRAL and AR_RECORD_FRAMES must each list a field")
     for name, sem in spectral:
@@ -245,6 +260,11 @@ def self_test():
          lambda: parse_record_slots("#define AR_RECORD_SCALARS(X) X(a)\n", {}), "AR_RECORD_SPECTRAL"),
         ("a spectral field with an unknown semantic",
          lambda: parse_record_slots(good_ss.replace("IOR", "NOPE"), parse_semantics(good_sem)), "unknown SpectrumSemantic"),
+        ("an empty X() entry",
+         lambda: parse_record_slots(good_ss.replace("X(b)", "X()"), parse_semantics(good_sem)), "entries but"),
+        ("a malformed spectral entry",
+         lambda: parse_record_slots(good_ss.replace("X(c, C, IOR)", "X(c, C)"), parse_semantics(good_sem)),
+         "entries but"),
         ("a duplicate record field",
          lambda: parse_record_slots(good_ss.replace("X(d)", "X(a)"), parse_semantics(good_sem)), "duplicate"),
         ("a tex header without kTexExtend", lambda: parse_tex_modes("kTexLinear = 1u;"), "kTexExtend"),
