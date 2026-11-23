@@ -11,7 +11,6 @@
 // Ref: R. E. Moore, Interval Analysis (1966), section 3; IEEE 754-2008 section 4.3 (rounding to nearest);
 // docs/decisions/0006-volumes-and-astrophysics.md D7.
 #pragma once
-#include <cmath>
 #include <cstdint>
 
 #include "../core/real.h"
@@ -33,10 +32,23 @@ AR_FN Interval interval_nan() {
   return Interval{n, n};
 }
 
-AR_FN Interval interval_widen(float lo, float hi) {
-  const float inf = bit_cast<float>(0x7f800000u);  // INFINITY does not compile in nvcc -Werror
-  return Interval{::nextafterf(lo, -inf), ::nextafterf(hi, inf)};
+// The next float toward +inf or -inf, as nextafterf does (which the kernel headers may not include):
+// one step in the sign-magnitude bit pattern; NaN and the infinity already reached stay put.
+AR_FN float interval_step_up(float x) {
+  if (x != x || x == bit_cast<float>(0x7f800000u)) return x;
+  if (x == 0.f) return bit_cast<float>(0x00000001u);
+  const uint32_t b = bit_cast<uint32_t>(x);
+  return bit_cast<float>(x > 0.f ? b + 1u : b - 1u);
 }
+
+AR_FN float interval_step_down(float x) {
+  if (x != x || x == bit_cast<float>(0xff800000u)) return x;
+  if (x == 0.f) return bit_cast<float>(0x80000001u);
+  const uint32_t b = bit_cast<uint32_t>(x);
+  return bit_cast<float>(x > 0.f ? b - 1u : b + 1u);
+}
+
+AR_FN Interval interval_widen(float lo, float hi) { return Interval{interval_step_down(lo), interval_step_up(hi)}; }
 
 AR_FN Interval interval_mul_scalar(const Interval& x, const Interval& y) {
   if (interval_is_nan(x) || interval_is_nan(y)) return interval_nan();
