@@ -17,3 +17,5 @@ Budget: fast tier +0.5 s at most; gate +1 s at most (stop and ask above); k_shad
 Depends on: 146 (ops.def rows follow its column format; the `foldable` field and `fold()` case).
 Size: M (about 220 lines of source, 250 of test); stop and report at 2x. If the op's GPU and probe parts exceed 120 lines, split the op into its own task first.
 Progress:
+- Files to change: src/kernel/vm/ops.def, ops/channel_f32x3.h (new), interp.h; src/host/material/graph.cpp, compiler.cpp, compiler.h; src/kernel_gpu/probe_m1.cu; src/kernel/budget.toml (if k_shade_surface moves); docs/decisions/0005-material-model.md item 32; tests/cpu/test_vm.cpp, test_opsdef.cpp, test_compiler_outputs.cpp; tests/gpu/test_vm_agree.cpp; tasks/147.canary.patch.
+- Open: tests/cpu/test_compiler_fold.cpp (outside Scope) goes red for a foldable op with an i32 parameter (it requires ni == 0 and f32 params as the immediates); stopped for the lead before code.
