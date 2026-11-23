@@ -3,7 +3,7 @@
 // the interpreter on the CPU (float) and on the GPU built without FMA contraction, on 10^5 fixed
 // host-generated inputs; every program's result (registers, Le, record fields) agrees within
 // 1e-6 relative error, and the largest error per opcode is printed. The programs cover every
-// M1a opcode; TEX_IMAGE runs without an image table (the missing-image path), and its filtering
+// opcode; TEX_IMAGE runs without an image table (the missing-image path), and its filtering
 // agreement is test_tex_image_agree.cpp.
 // Ref: docs/decisions/0005-material-model.md Verification 6; docs/decisions/0002-kernel-
 // architecture.md D12; 0009 d17.
@@ -129,6 +129,15 @@ std::vector<Named> programs() {
                                  .op(Op::STORE_SLOT, 4, 0, 0, {spec_ior})
                                  .op(Op::END)});
   p.push_back({"EMIT_LE", Prog().op(Op::EMIT_LE, 0).op(Op::EMIT_LE, 4).op(Op::END)});
+  // The two spectral sources: warm and cool Blackbody, and two glasses (the normal and a low-n one).
+  p.push_back({"BLACKBODY", Prog()
+                                .op(Op::BLACKBODY, 16, 0, 0, {fb(2700.0f), fb(1.0f)})
+                                .op(Op::BLACKBODY, 20, 0, 0, {fb(12000.0f), fb(0.5f)})
+                                .op(Op::END)});
+  p.push_back({"CAUCHY_ABBE", Prog()
+                                  .op(Op::CAUCHY_ABBE, 16, 0, 0, {fb(1.5168f), fb(64.17f), fb(1.0f)})
+                                  .op(Op::CAUCHY_ABBE, 20, 0, 0, {fb(1.33f), fb(55.0f), fb(0.7f)})
+                                  .op(Op::END)});
   return p;
 }
 
