@@ -220,6 +220,7 @@ AR_FN LightBounds rect_bounds(const LightRecord& r) {
                      ar::min(ar::min(a.z, b.z), ar::min(c.z, d.z))};
   lb.bbox.hi = Real3{ar::max(ar::max(a.x, b.x), ar::max(c.x, d.x)), ar::max(ar::max(a.y, b.y), ar::max(c.y, d.y)),
                      ar::max(ar::max(a.z, b.z), ar::max(c.z, d.z))};
+  lb.w = normalize(g.n);  // the front; the record's rotation is unit only to 1e-3 (area_problem)
   lb.theta_o = Real(0);  // a flat lamp has one normal
   lb.theta_e = kLightPi / Real(2);
   lb.two_sided = false;

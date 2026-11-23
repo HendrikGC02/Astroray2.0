@@ -210,6 +210,7 @@ AR_FN LightBounds tri_bounds(const LightRecord& r) {
   LightBounds lb;
   lb.bbox.lo = Real3{ar::min(a.x, ar::min(b.x, c.x)), ar::min(a.y, ar::min(b.y, c.y)), ar::min(a.z, ar::min(b.z, c.z))};
   lb.bbox.hi = Real3{ar::max(a.x, ar::max(b.x, c.x)), ar::max(a.y, ar::max(b.y, c.y)), ar::max(a.z, ar::max(b.z, c.z))};
+  lb.w = tri_normal(r);  // the emitting side; a two-sided triangle emits around it with theta_e = pi
   lb.theta_o = Real(0);
   lb.two_sided = tri_two_sided(r);
   lb.theta_e = lb.two_sided ? kLightPi : kLightPi / Real(2);  // D9

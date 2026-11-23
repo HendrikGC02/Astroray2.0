@@ -90,6 +90,7 @@ AR_FN LightBounds disk_bounds(const LightRecord& r) {
   LightBounds b;
   b.bbox.lo = c - e;
   b.bbox.hi = c + e;
+  b.w = normalize(n);  // the front; the record's rotation is unit only to 1e-3 (area_problem)
   b.theta_o = Real(0);
   b.theta_e = kLightPi / Real(2);
   b.two_sided = false;

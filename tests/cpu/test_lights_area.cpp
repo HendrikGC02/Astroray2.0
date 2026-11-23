@@ -565,6 +565,10 @@ TEST_SUITE("fast") {
     CHECK(close(double(rb.theta_o), 0.0, kPinTol));
     CHECK(rel_close(double(rb.theta_e), kPi / 2, kPinTol));
     CHECK_FALSE(rb.two_sided);
+    // The cone axis is the front -(X x Y) = (-0.64, 0.48, -0.6), for the rectangle and the disk.
+    CHECK(close(double(rb.w.x), -0.64, kPinTol));
+    CHECK(close(double(rb.w.y), 0.48, kPinTol));
+    CHECK(close(double(rb.w.z), -0.6, kPinTol));
     const ar::LightBounds db = ar::light_bounds(pin_disk().rec);
     CHECK(close(double(db.bbox.lo.x), 0.039531364385, kPinTol));
     CHECK(close(double(db.bbox.lo.y), 0.903414390027, kPinTol));
@@ -575,6 +579,9 @@ TEST_SUITE("fast") {
     CHECK(close(double(db.theta_o), 0.0, kPinTol));
     CHECK(rel_close(double(db.theta_e), kPi / 2, kPinTol));
     CHECK_FALSE(db.two_sided);
+    CHECK(close(double(db.w.x), -0.64, kPinTol));
+    CHECK(close(double(db.w.y), 0.48, kPinTol));
+    CHECK(close(double(db.w.z), -0.6, kPinTol));
   }
 
   AR_RT_CASE("lights_area/boundary uniforms") {
