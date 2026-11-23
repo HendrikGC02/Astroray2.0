@@ -1,7 +1,7 @@
 # Task files for M1b (first light)
 
 Scope: docs/ROADMAP.md, M1b; plan, slices and lanes: docs/PLAN-M1b.md; items without a task: docs/BACKLOG.md. One file per task, `tasks/NNN-slug.md`, <= 60 lines, fields in this order (lint section `taskfile`): Goal, Read first, Scope, Out of scope, Reference, Do, Acceptance, Look at, Canary, Budget, Depends on, Size, Progress. `land` deletes a task file when it lands. Numbers are ids, not order.
-Only the first batch is written (136-161; 161 is decision 37's B-31 task). The lead writes the next batch at each slice review, from what the slice measured, with a scope pre-flight per task: grep the call sites, registration lists, budget rows and tests the change forces, and name them in Scope.
+Written: the first batch (136-162) and the second (163-183, from the slice-0 review; rulings 91). The lead writes the next batch at each slice review, from what the slice measured, with a scope pre-flight per task: grep the call sites, registration lists, budget rows and tests the change forces, and name them in Scope.
 Scope lines name what a change forces (its budget and counter rows, registration lists, existing tests it breaks). CMake globs sources: a new file under a globbed directory edits no CMake; a new target does. Gate steps are tagged `cpu` or `local`; hosted `ci` runs the `cpu` ones.
 Measurement tasks follow docs/PLAN-M1b.md section 5: metric and command, quiet machine, a decision table written before measuring, their own bench/history line, limits changed listed for the owner. At most two remedy tasks per budget row, then the owner decides.
 Size counts source lines without tests: S under 150, M 150-500, L 500-1000. Canary line: `tasks/NNN.canary.patch must turn red: astroray_tests_cpu "suite/case", tests/x/test_y.py "Class.method"`.
@@ -9,32 +9,27 @@ Size counts source lines without tests: S under 150, M 150-500, L 500-1000. Cana
 ## First batch (implementer model S = Sonnet, O = Opus; Opus review unless "skip ok"; gate = declared gate seconds)
 | Task | Lane | Model | Depends on | Gate |
 |---|---|---|---|---|
-| 136 B-5M bench hang | gpu | S | none | +2 |
-| 137 canary tool | tools | S | none | +4 |
 | 138 land submit, undo, cleanup, history | tools | S | 137 | +1 |
 | 139 F12 gate on CPU and CUDA | blender | S | 157 | +8 |
 | 140 check perf; 160 its idle and partition shares | gpu | S | 136, 138; 160 after 140 | +1 |
 | 141 visible lock, one-test runner | tools | O | 137 | +3 |
-| 142 recurring-class lints; 143 reference sources | tools | S | none | 0 |
-| 144 M-1 probe spills (0002 D10 ladder) | kernel | O | none | 0 |
 | 145 SpectrumRef BLACKBODY, CAUCHY_ABBE | kernel | S | 146 | +3 |
-| 146 table-driven folding | cpu | S | none | 0 |
 | 147 opacity entry, NON_OPAQUE, scalar op | kernel | O | 146 | +1 |
 | 148 Mix Shader selection, three-segment layout | kernel | O | 147 | +3 |
-| 149 F82 metal lobe; 153 environment table; 154 light-tree builder | cpu | O | 143 | +3, +3, +4 |
-| 150 half and float textures | kernel | S | 144 | +2 |
-| 151 op schema and coverage matrix | cpu | S | 146 (tools/opsgen.py) | +1 |
-| 152 MediumSample, HG phase lobe | cpu | O | none | +2 |
-| 155 documentation truth | docs | O | none | 0 |
 | 156 alpha pass-through | kernel | O | 147, 148 | +6 |
-| 157 gate headroom | tools | S | none | -28 or more |
 | 158 SpectrumRef TABLE | kernel | S | 145; after 156 | +4 |
-| 159 addon debts | blender | S | none | +1 |
-| 162 `check full` red: gui_colour_chart never converges; 161 B-31 instance loop (owner decision 37) | blender | S | none; 162 before 161 in the lane | 0, 0 |
-Gate ledger (owner decision 38: measured seconds replace declared ones once known; hold a landing only if the measured max would pass 170 s): quiet-machine gate after 157 max 132.7 s, median 123.1 s (5 runs). Landed: 155 (+0), 146 (+1, gate case), 157 (scenes cache), 143 (+0), 152 (+0.4), 137 (+0.6), 144 (+0), 142 (+0), 153 (+3 declared, unmeasured), 159 (+0), 149 (+3 declared, unmeasured), 162 (+0), 151 (+1 declared), 136 (+2 declared). Open declared: +33 s. Landing gates under load: 155 133.6 s, 146 175.5 s (implementers compiling beside it), 157 144.9 s, 143 131.7 s, 152 140.6 s, 137 134.5 s, 144 140.9 s, 153 170.9 then 165.4 s (relanded after a GitHub 502), 159 135.3 s, 149 166.9 s, 162 136.8 s, 151 134.9 s (first try 163.2 s failed on a smoke race, BACKLOG), 136 159.3 s (161 running Blender beside it).
+| 161 B-31 instance loop (owner decision 37) | blender | S | none | 0 |
+Gate ledger (owner decision 38: measured seconds replace declared ones once known; hold a landing only if the measured max would pass 170 s): quiet-machine gate after 157 max 132.7 s, median 123.1 s (5 runs). Landed: 155 (+0), 146 (+1, gate case), 157 (scenes cache), 143 (+0), 152 (+0.4), 137 (+0.6), 144 (+0), 142 (+0), 153 (+3 declared, unmeasured), 159 (+0), 149 (+3 declared, unmeasured), 162 (+0), 151 (+1 declared), 136 (+2 declared), 154 (+4 declared), 150 (+2 declared). Open declared: +27 s. Landing gates under load: 155 133.6 s, 146 175.5 s (implementers compiling beside it), 157 144.9 s, 143 131.7 s, 152 140.6 s, 137 134.5 s, 144 140.9 s, 153 170.9 then 165.4 s (relanded after a GitHub 502), 159 135.3 s, 149 166.9 s, 162 136.8 s, 151 134.9 s (first try 163.2 s failed on a smoke race, BACKLOG), 136 159.3 s (161 running Blender beside it), 154 165.8 s (under load; its own run beside four implementers 179.9 s), 150 159.4 s.
+
+## Second batch (slice-0 review, ruling 91): task lane model; depends on; gate
+Slice A: 163 metal in the lobe stack (spine) kernel O; 149, 158; +3. 164 compiler flags, NaN-input rule cpu S; 148, 158; +1. 165 addon lowerings I (COLOR_TO_F32 op) blender S; 145, 147, 156; +2. 166 addon lowerings II blender S; 148, 163, 165; +2. 167 EXR image sync, PIXELS, wide-texel rule blender S (Opus review); 150; +2. 168 extension mechanism (refused until routing) cpu S (Opus review); 178; +1. 169 GRATING kind and table builder cpu O; 168, 143; +3. 170 alpha-foliage scene, B-19 (measurement) gpu S; 156, 140, 160; +0.5.
+Slice B: 171 bake_environment kernel S; 153; +2. 172 world program, Environment Texture kernel S; 150, 158; +2. 173 environment NEE and MIS, A9 (spine) kernel O; 163, 171, 172; +4. 174 first-hit guides (spine) kernel O; 163, 173; +2. 175 light tree in the kernel (spine) kernel O; 154, 174; +3. 176 OIDN backend gpu O; 140 (lane); +3. 177 spectral blackbody lamp kernel S; 145, 158; +1.
+Slice C: 178 interval-rule column cpu S; 158; +0.5. 179 medium block, volume entry, medium_eval kernel S (Opus review); 152, 178; +1. 180 medium-stack functions, CPU fixture cpu S; 158; +0.5. 181 test medium in ABI and scene builder cpu S (Opus review); 156, 179; +0.5. 182 shade_volume skeleton, medium routing kernel S; 156, 179, 181; +1. 183 hero-lane delta tracking kernel O; 182; +3.
+Declared: +38 s. Order: 171, 178, 180 now (178 and 180 land after 158); 176 after 140 then 160 in the gpu lane; after 158: 163, 177, 164; 179 and 168 after 178; 172 after 150 and 158; 169 after 168; 181, 182, 183; spine 163, 173, 174, 175; blender lane 139, 161, then 167 or 165, then 166; gpu 140, 160, 176, 170.
+Collisions (the later task rebases): `shade_surface.h` 158, 163, 173, 174, 175. `ops.def`, `probe_m1.cu`: 158, 165, 163, 178, 179, 172, 173, 174, 175. compiler.cpp and graph.cpp: 158, 165, 164, 179, 168, 180, 174. opsgen.py: 178, 168. budget.toml: 163, 171, 172, 173, 174, 175, 182, 183. launch_config.h: 171, 182. light_record.h, light.h, light_sampler.h: 158, 177, 172, 173, 175. shade_background.h: 172, 173, 174, 175. SceneData sweep (scene_tables, kg_builder, scene_view, kernel_globals and the hand-built SceneData tests): 158, 163, 171, 172, 182, 173, 175. analytic_scenes, GATE_SCENES, truths.py: 158, 177, 173, 183. translate.py, test_lowering.py: 165, 172, 166.
 
 ## Order
 Dispatch at once: 157, 137 (tools, two at a time; then 143, then 142, 138, 141); 146, 152 (cpu); 144 (kernel); 136 (gpu); 159 (blender); 155 (docs). Then as dependencies land: 147, 145, 151, 150; 149, 153, 154; 148, 156, 158; 139, 140, 160; 162 then 161 in the blender lane.
 Landing order where files collide. `shade_surface.h`, `ops.def`, `src/kernel_gpu/probe_m1.cu`: 144, 146, 145, 147, 148, 156, 158; 150 after 144. `tools/check.ps1`: 157, 137, 141, 138. `tools/opsgen.py`: 146, 151. `tools/lint.py` SECTIONS and tools/README.md (25 of 30 lines; one line per task): 137, 142, 143, 155 in any order, the later one rebases.
 Lanes (docs/PLAN-M1b.md section 4): cpu = work loop and acceptance on the CPU (5-8 at once); kernel = kernel headers and VM ops, CPU work loop, one gate run before hand-off (three at once, one at a time on `shade_surface.h`); gpu = the work loop needs the GPU (one); blender (one); tools (two); docs (one).
-Next batch, written at the first slice review (outlines: docs/PLAN-M1b.md section 2): metal in the lobe stack, compiler flags (V11), addon lowerings, EXR image sync, extension mechanism and GRATING, VM volume entry with `medium_eval`, `bake_environment` and world wiring, tree traversal, guides, OIDN loading.
+Third batch (next slice review): extension routing and false interfaces (spine), shade_light_path_ext rows, grating card and V8 on camera paths, node-value tests, tree-vs-alias D10 row and B-23, ratio tracking and the per-launch cap (V6, check 26), hero-lane variance, HDRI asset with S3 and the shader-ball row, film_prepare_denoise and the final denoise, Diagnostics panel, heat maps.
