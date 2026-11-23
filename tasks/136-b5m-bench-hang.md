@@ -21,3 +21,5 @@ Progress:
 - Tests and canary (2 hunks): ledger/a progress poll does not scan the live records; ledger/a poll does not wait for the ledger lock.
 - B-14 on b5m after the fix (viewport_rate_probe, 10 s orbit, 2560x1440 region): mean 37.5, median 36.8, p5 35.4 per s, longest below 24/s 0 s (096: 27.8 / 28.5 / 25.0).
 - One-time gate flake, first run only: cuda_session_trace/no cache dir disables the optix cache (tests/gpu/test_cuda_session_trace.cpp:420); passed on rerun.
+- Activation, 5 consecutive b5m benches (all exit 0; wall s, scene create to traversal structures done ms, GAS ms): 1.65/1032/524.6; 1.56/1012/531.6; 1.54/982/526.1; 1.51/967/511.3; 1.53/979/523.0. Before: 79 s, then 600 s timeouts.
+- B-19 b5m (nsys, 64 passes, 123's method): after run 1 period 12.831 ms idle 10.9 % queue_build 8.7 % resolve 2.61 ms; run 2 12.784 / 9.8 % / 8.7 % / 2.75; 134 main 13.12-13.48 ms / 11.2 % / 11.4 % / 3.78 ms; 134 at 133 (PR 107) 13.19-14.63 / 12.1 % / 11.8 % / 3.88 ms.
