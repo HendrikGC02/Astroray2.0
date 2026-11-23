@@ -14,6 +14,7 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -103,6 +104,28 @@ struct World {
   uint64_t put_file(ar_key key, const std::string& name, uint32_t interop) {
     return put(key, AR_IMAGE_SOURCE_FILE, data_path(name), {}, uint32_t(interop));
   }
+  // Stages a PIXELS image through image_begin, fills it and commits it in its own generation.
+  uint64_t put_pixels(ar_key key, uint32_t w, uint32_t h, const std::vector<float>& rgba, uint32_t interop) {
+    ar_image_desc d = {};
+    d.key = key;
+    d.source = AR_IMAGE_SOURCE_PIXELS;
+    d.color_interop = interop;
+    d.width = w, d.height = h;
+    auto e = scene.begin_edit();
+    REQUIRE(e);
+    ar_image_buffers b = {};
+    REQUIRE(store->image_begin(*e, &d, &b) == AR_OK);
+    REQUIRE(b.pixels_count == uint64_t(w) * h * 4);
+    REQUIRE(rgba.size() == b.pixels_count);
+    std::memcpy(*b.pixels, rgba.data(), rgba.size() * sizeof(float));
+    REQUIRE(e->item_commit(key) == AR_OK);
+    uint64_t g = 0;
+    REQUIRE(e->commit(&g) == AR_OK);
+    store->end_edit();
+    e.reset();
+    scene.generations().wait_idle();
+    return g;
+  }
   // The (code, detail) of every report entry whose subject is `key`.
   std::vector<std::pair<uint32_t, std::string>> entries(ar_key key) {
     scene.report().snapshot();
@@ -155,6 +178,32 @@ bool half_matches(const DecodedImage& d, const std::vector<int>& map) {
         same = same && b == half_bits(x, y, map[k]);
       }
   return same;
+}
+
+uint32_t bits_of(float f) {
+  uint32_t b;
+  std::memcpy(&b, &f, 4);
+  return b;
+}
+float from_bits(uint32_t b) {
+  float f;
+  std::memcpy(&f, &b, 4);
+  return f;
+}
+float next_up(float f) { return from_bits(bits_of(f) + 1); }  // positive finite f
+
+// The float texels of an image, as bit patterns.
+std::vector<uint32_t> texel_bits(const Image& im) {
+  std::vector<uint32_t> v(im.texels.size() / 4);
+  std::memcpy(v.data(), im.texels.data(), im.texels.size());
+  return v;
+}
+
+// w x h RGBA floats, texel i channel c = base[(i * 4 + c) % base.size()].
+std::vector<float> rgba_of(uint32_t w, uint32_t h, const std::vector<float>& base) {
+  std::vector<float> v(size_t(w) * h * 4);
+  for (size_t i = 0; i < v.size(); ++i) v[i] = base[i % base.size()];
+  return v;
 }
 
 double srgb_eotf(double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); }
@@ -625,6 +674,213 @@ TEST_CASE("image_ingest/half and float are linear and count their bytes") {
   check_magenta(w.store->images().find(6));
   REQUIRE(w.entries(6).size() == 1);
   CHECK(w.entries(6)[0].first == AR_REPORT_COLORSPACE_UNSUPPORTED);
+}
+
+TEST_CASE("image_ingest/pixels bit exact") {
+  World w;
+  // Above 1, below 0, tiny, subnormal and a value no 8-bit image holds; alpha varies too.
+  const std::vector<float> base = {50.0f, -0.5f, 0.25f, 1.0f, 1e-30f, 123456.789f, -3.0f, 0.5f, 0.0f, 1.4e-45f, 0.7f, 0.25f};
+  const std::vector<float> in = rgba_of(3, 2, base);
+  w.put_pixels(1, 3, 2, in, AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(2, 3, 2, in, AR_COLOR_INTEROP_DATA);
+  w.put_pixels(3, 3, 2, in, AR_COLOR_INTEROP_SRGB_REC709);
+  const auto lin = w.store->images().find(1), data = w.store->images().find(2), srgb = w.store->images().find(3);
+  REQUIRE((lin && data && srgb));
+  for (ar_key k : {ar_key(1), ar_key(2), ar_key(3)}) CHECK(w.entries(k).empty());
+  CHECK((!lin->magenta && lin->width == 3 && lin->height == 2 && lin->channels == 4));
+  CHECK(lin->format == ar::TexFormat::FLOAT);
+  CHECK(lin->encoding == ar::TexEncoding::LINEAR);
+  CHECK(data->encoding == ar::TexEncoding::DATA);
+  CHECK(srgb->encoding == ar::TexEncoding::LINEAR);  // decoded at ingest, like a float image's id
+  // Bit for bit, rows as staged (bottom-up).
+  std::vector<uint32_t> want(in.size());
+  for (size_t i = 0; i < in.size(); ++i) want[i] = bits_of(in[i]);
+  CHECK(texel_bits(*lin) == want);
+  CHECK(texel_bits(*data) == want);
+  // sRGB: the kernel's own transfer function on R, G, B, the staged alpha untouched.
+  std::vector<uint32_t> want_srgb(in.size());
+  for (size_t i = 0; i < in.size(); ++i) want_srgb[i] = bits_of(i % 4 == 3 ? in[i] : ar::srgb_to_linear(in[i]));
+  CHECK(texel_bits(*srgb) == want_srgb);
+  // 8-bit codes in Blender's pixel form (k * (1/255)) decode to the byte path's table entries.
+  std::vector<float> codes(256 * 4, 1.0f);
+  for (int k = 0; k < 256; ++k)
+    for (int c = 0; c < 3; ++c) codes[size_t(k) * 4 + size_t(c)] = float(k) * (1.0f / 255.0f);
+  w.put_pixels(4, 256, 1, codes, AR_COLOR_INTEROP_SRGB_REC709);
+  const auto dec = w.store->images().find(4);
+  REQUIRE(dec);
+  const auto arrays = w.store->images().arrays();
+  for (int k = 0; k < 256; ++k)
+    for (int c = 0; c < 3; ++c) {
+      uint32_t got;
+      std::memcpy(&got, dec->texels.data() + (size_t(k) * 4 + size_t(c)) * 4, 4);
+      REQUIRE(got == bits_of(arrays->srgb_decode[size_t(k)]));
+    }
+  // The mean is of the stored linear values, alpha ignored.
+  double m[3] = {0, 0, 0};
+  for (size_t i = 0; i < 6; ++i)
+    for (size_t c = 0; c < 3; ++c) m[c] += double(in[i * 4 + c]) / 6.0;
+  for (size_t c = 0; c < 3; ++c) CHECK(std::fabs(double(lin->mean[c]) - m[c]) <= 1e-6 * std::fabs(m[c]) + 1e-12);
+  // Four bytes a component, counted in the textures category with the other images.
+  CHECK(lin->bytes() == uint64_t(3 * 2 * 4 * 4));
+  uint64_t total = 0;
+  std::set<const Image*> distinct;
+  for (const auto& im : arrays->images)
+    if (distinct.insert(im.get()).second) total += im->bytes();
+  CHECK(w.ledger->category_total(LedgerCategory::TEXTURES) == total);
+}
+
+TEST_CASE("image_ingest/pixels descriptor refusals") {
+  World w;
+  const auto begin = [&](const ar_image_desc& d, bool expect_throw) {
+    auto e = w.scene.begin_edit();
+    REQUIRE(e);
+    ar_image_buffers b = {};
+    if (expect_throw)
+      CHECK_THROWS_AS(w.store->image_begin(*e, &d, &b), std::invalid_argument);
+    else
+      CHECK(w.store->image_begin(*e, &d, &b) != AR_OK);
+    CHECK(b.pixels == nullptr);
+    e->abort();
+    w.store->end_edit();
+  };
+  ar_image_desc d = {};
+  d.key = 1, d.source = AR_IMAGE_SOURCE_PIXELS, d.width = 2, d.height = 2;
+  ar_image_desc zero_w = d, zero_h = d, huge = d, file = d, big_key = d, bad_alpha = d;
+  zero_w.width = 0;
+  zero_h.height = 0;
+  huge.width = huge.height = 0xFFFFFFFFu;  // width x height fits 64 bits, but its 16 bytes a texel do not
+  file.source = AR_IMAGE_SOURCE_FILE;
+  big_key.key = uint64_t(UINT32_MAX) + 1;
+  bad_alpha.alpha_mode = AR_ALPHA_IGNORE + 1;
+  begin(zero_w, true);
+  begin(zero_h, true);
+  begin(huge, true);
+  begin(file, true);
+  begin(bad_alpha, true);
+  begin(big_key, false);
+}
+
+TEST_CASE("image_ingest/wide texel refused") {
+  // The limit, stated again from the arithmetic: 2 |t| (1 + 8u) <= FLT_MAX, u = 2^-24, and it is the
+  // largest float that does, so the next float is refused.
+  const double u = std::ldexp(1.0, -24), fmax = double(std::numeric_limits<float>::max());
+  const float lim = kMaxTexelMagnitude, over = next_up(lim);
+  CHECK(bits_of(lim) == 0x7efffff7u);
+  CHECK(2.0 * double(lim) * (1.0 + 8.0 * u) <= fmax);
+  CHECK(2.0 * double(over) * (1.0 + 8.0 * u) > fmax);
+
+  // The compiled Linear filter at the limit, all four texels equal, over many fractions: the sum
+  // and the lift scale 2 * max stay finite (the bound's weights, products and additions).
+  {
+    const std::vector<float> texels(2 * 2 * 3, lim);
+    ar::DeviceImageView v = {};
+    v.texels = uint64_t(uintptr_t(texels.data()));
+    v.width = v.height = 2, v.channels = 3, v.format = uint32_t(ar::TexFormat::FLOAT);
+    double worst = 0;
+    for (int i = 0; i < 20000; ++i) {
+      const float x = 0.5f + float((i * 7919) % 10007) / 10007.0f, y = 0.5f + float((i * 104729) % 10009) / 10009.0f;
+      float out[3];
+      ar::tex_linear(v, x, y, false, out);
+      for (float c : out) {
+        REQUIRE(std::isfinite(2.0f * c));
+        worst = std::max(worst, double(c));
+      }
+    }
+    CHECK(2.0 * worst <= fmax);
+  }
+
+  World w;
+  const std::vector<float> clean = rgba_of(4, 3, {0.25f, 0.5f, 1.0f, 1.0f});
+  const auto with = [&](size_t index, float value) {
+    std::vector<float> v = clean;
+    v[index] = value;
+    return v;
+  };
+  // Texel 6 of 12 (x = 2, y = 1), channel B: float index 6 * 4 + 2.
+  const size_t at = 6 * 4 + 2;
+  w.put_pixels(1, 4, 3, clean, AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(2, 4, 3, with(at, lim), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(3, 4, 3, with(at, -lim), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(4, 4, 3, with(at, over), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(5, 4, 3, with(at, -over), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(6, 4, 3, with(at, std::numeric_limits<float>::infinity()), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(7, 4, 3, with(at, std::numeric_limits<float>::quiet_NaN()), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(8, 4, 3, with(at, std::numeric_limits<float>::max()), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(9, 4, 3, with(at, 1e30f), AR_COLOR_INTEROP_SRGB_REC709);  // the transfer overflows
+  for (ar_key k : {ar_key(1), ar_key(2), ar_key(3)}) {
+    INFO("key " << k);
+    REQUIRE(w.store->images().find(k));
+    CHECK(!w.store->images().find(k)->magenta);
+    CHECK(w.entries(k).empty());
+  }
+  CHECK(texel_bits(*w.store->images().find(2))[at] == bits_of(lim));
+  CHECK(texel_bits(*w.store->images().find(3))[at] == bits_of(-lim));
+  for (ar_key k = 4; k <= 9; ++k) {
+    INFO("key " << k);
+    check_magenta(w.store->images().find(k));
+    const auto e = w.entries(k);
+    REQUIRE(e.size() == 1);
+    CHECK(e[0].first == AR_REPORT_IMAGE_UNREADABLE);
+    CHECK_MESSAGE(e[0].second.find("channel B at texel (2, 1), y from the bottom (index 6)") != std::string::npos, e[0].second);
+  }
+  CHECK(w.entries(4)[0].second.find("above the limit 1.70141092e+38") != std::string::npos);
+  CHECK(w.entries(4)[0].second.find("value 1.70141102e+38") != std::string::npos);
+  CHECK(w.entries(6)[0].second.find("NaN or Inf") != std::string::npos);
+  CHECK(w.entries(7)[0].second.find("NaN or Inf") != std::string::npos);
+
+  // The clean image beside the bad ones has no entry of its own.
+  CHECK(w.entries(1).empty());
+
+  // FILE and MEMORY images follow the same rule.
+  w.put_file(20, "ok_wide_float.exr", AR_COLOR_INTEROP_LIN_REC709);
+  w.put_memory(21, read_file("ok_wide_float.exr"), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_file(22, "bad_wide_float.exr", AR_COLOR_INTEROP_LIN_REC709);
+  w.put_memory(23, read_file("bad_wide_float.exr"), AR_COLOR_INTEROP_LIN_REC709);
+  for (ar_key k : {ar_key(20), ar_key(21)}) {
+    INFO("key " << k);
+    REQUIRE(w.store->images().find(k));
+    CHECK(!w.store->images().find(k)->magenta);
+    CHECK(w.entries(k).empty());
+  }
+  for (ar_key k : {ar_key(22), ar_key(23)}) {
+    INFO("key " << k);
+    check_magenta(w.store->images().find(k));
+    const auto e = w.entries(k);
+    REQUIRE(e.size() == 1);
+    CHECK(e[0].first == AR_REPORT_IMAGE_UNREADABLE);
+    CHECK_MESSAGE(e[0].second.find("channel B at texel (3, 2)") != std::string::npos, e[0].second);
+    CHECK_MESSAGE(e[0].second.find("above the limit") != std::string::npos, e[0].second);
+  }
+}
+
+TEST_CASE("image_ingest/blender exr equals its pixels") {
+  // Written by Blender (generate.py) with the float RGBA it reads back from the file: the MEMORY
+  // decode, and the FILE one, must hold exactly those values.
+  World w;
+  const std::vector<uint8_t> px_half = read_file("blender_half_rgba.pixels"), px_float = read_file("blender_float_rgba.pixels");
+  REQUIRE(px_half.size() == size_t(W * H * 4 * 4));
+  REQUIRE(px_float.size() == px_half.size());
+  w.put_memory(1, read_file("blender_half_rgba.exr"), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_memory(2, read_file("blender_float_rgba.exr"), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_file(3, "blender_float_rgba.exr", AR_COLOR_INTEROP_LIN_REC709);
+  const auto h = w.store->images().find(1), f = w.store->images().find(2), ff = w.store->images().find(3);
+  REQUIRE((h && f && ff));
+  for (ar_key k : {ar_key(1), ar_key(2), ar_key(3)}) CHECK(w.entries(k).empty());
+  REQUIRE(h->format == ar::TexFormat::HALF);
+  REQUIRE(h->channels == 4);
+  REQUIRE(h->texels.size() == size_t(W * H * 4 * 2));
+  bool same = true;
+  for (size_t i = 0; i < size_t(W * H * 4) && same; ++i) {
+    uint16_t b;
+    std::memcpy(&b, h->texels.data() + i * 2, 2);
+    uint32_t want;
+    std::memcpy(&want, px_half.data() + i * 4, 4);
+    same = bits_of(ar::half_to_float(b)) == want;
+  }
+  CHECK(same);
+  CHECK(f->format == ar::TexFormat::FLOAT);
+  CHECK(f->texels == px_float);
+  CHECK(ff->texels == px_float);
 }
 
 }  // TEST_SUITE

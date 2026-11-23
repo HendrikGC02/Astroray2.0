@@ -87,6 +87,11 @@ attr ShaderNodeTexImage.image
 # Images and colour management (0007 d21; sync/images.py, settings.py). interop ids are new in 5.x.
 attr Image.colorspace_settings.interop_id
 attr Image.alpha_mode
+# PIXELS images (generated, edited or float): float RGBA, rows bottom-up, one foreach_get into the staged
+# buffer. For a byte image the values are the encoded values of its colour space; a float image's are as stored.
+attr Image.pixels
+attr Image.is_float
+attr Image.size
 attr ColorManagedInputColorspaceSettings.interop_id
 attr bpy.data.colorspace.working_space_interop_id
 

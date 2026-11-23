@@ -3,6 +3,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <limits>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -199,6 +201,76 @@ ar_status ImageStore::set_image(Edit& edit, const ar_image_desc* d) {
   item->on_dropped = [self, key] { self->dropped(key); };
   if (ar_status st = edit.stage(item)) return st;
   if (ar_status st = edit.item_commit(key)) return st;
+  std::lock_guard<std::mutex> lock(mutex_);
+  assign_slot_locked(key);
+  return AR_OK;
+}
+
+ImageResult ImageStore::ingest_pixels(const ar_image_desc& d, const float* rgba) {
+  ar::TexEncoding enc = ar::TexEncoding::LINEAR;
+  if (!interop_encoding(d.color_interop, &enc)) return magenta(AR_REPORT_COLORSPACE_UNSUPPORTED, interop_name(d.color_interop));
+  const size_t n = size_t(d.width) * d.height;
+  auto im = std::make_shared<Image>();
+  im->width = d.width, im->height = d.height, im->channels = 4;
+  im->format = ar::TexFormat::FLOAT;
+  // Blender's pixels of a byte image hold the encoded values of its colour space, so an sRGB id
+  // is decoded here (before filtering, unlike the 8-bit path, which filters the codes: the
+  // staged floats are the only copy). A float image is linear already; the addon sends it with
+  // a linear id (0007 d21). Alpha is never transferred.
+  im->encoding = enc == ar::TexEncoding::SRGB ? ar::TexEncoding::LINEAR : enc;
+  im->alpha_mode = d.alpha_mode;
+  im->texels.resize(n * 4 * sizeof(float));
+  if (enc == ar::TexEncoding::SRGB) {
+    float* out = reinterpret_cast<float*>(im->texels.data());
+    for (size_t i = 0; i < n * 4; ++i) out[i] = i % 4 == 3 ? rgba[i] : ar::srgb_to_linear(rgba[i]);
+  } else {
+    std::memcpy(im->texels.data(), rgba, im->texels.size());
+  }
+  BadTexel bad;
+  if (find_bad_texel(im->texels.data(), im->format, im->channels, n, &bad))
+    return magenta(AR_REPORT_IMAGE_UNREADABLE, bad_texel_message(bad, im->width, im->channels));
+  im->mean = image_mean(*im);
+  return {std::move(im), 0, std::string()};
+}
+
+ar_status ImageStore::begin_pixels(Edit& edit, const ar_image_desc* d, ar_image_buffers* out) {
+  if (d == nullptr || out == nullptr) throw std::invalid_argument("ar_edit_image_begin desc or buffers is null");
+  if (d->source != AR_IMAGE_SOURCE_PIXELS) throw std::invalid_argument("ar_edit_image_begin source must be PIXELS");
+  if (d->key > UINT32_MAX) return edit.fail("invalid argument: image key must fit 32 bits (TEX_IMAGE immediate)");
+  if (d->alpha_mode > AR_ALPHA_IGNORE) throw std::invalid_argument("ar_edit_image_begin alpha_mode out of range");
+  if (d->width == 0 || d->height == 0) throw std::invalid_argument("ar_edit_image_begin width and height must be above 0");
+  // width x height x 4 floats must fit a size_t and a u64 byte count (width, height < 2^32).
+  const uint64_t texels = uint64_t(d->width) * d->height;
+  if (texels > UINT64_MAX / 16 || texels * 16 > std::numeric_limits<size_t>::max())
+    throw std::invalid_argument("ar_edit_image_begin width x height x 4 floats overflows");
+  const uint64_t count = texels * 4;
+  Scene& scene = edit.scene();
+  auto block = std::make_shared<Arena::Block>(scene.arena().alloc(size_t(count) * sizeof(float)));
+  float* staged = static_cast<float*>(block->ptr);
+  auto item = std::make_shared<EditItem>();
+  item->key = d->key;
+  item->kind = AR_KIND_IMAGE;
+  item->needs_device = false;
+  Scene* sc = &scene;
+  item->release = [sc, block] {
+    if (block->ptr != nullptr) sc->arena().release(*block);
+    block->ptr = nullptr;
+  };
+  auto desc = std::make_shared<ar_image_desc>(*d);
+  desc->path = nullptr, desc->bytes = nullptr, desc->byte_count = 0;
+  auto result = std::make_shared<ImageResult>();
+  std::shared_ptr<ImageStore> self = shared_from_this();
+  const ar_key key = d->key;
+  item->job = [self, desc, staged, result] { *result = self->ingest_pixels(*desc, staged); };
+  item->on_active = [self, key, result] { self->install(key, *result); };
+  item->on_dropped = [self, key] { self->dropped(key); };
+  void** slot = item->new_slot(staged);
+  if (ar_status st = edit.stage(item)) {
+    item->release();
+    return st;
+  }
+  out->pixels_count = count;
+  out->pixels = reinterpret_cast<float**>(slot);
   std::lock_guard<std::mutex> lock(mutex_);
   assign_slot_locked(key);
   return AR_OK;

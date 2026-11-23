@@ -191,6 +191,45 @@ class TestRecorder(unittest.TestCase):
         self.assertEqual(len(staged), 7)
         self.assertEqual(np.frombuffer(staged[0][3], dtype=np.float32).tolist(), QUAD.ravel().tolist())
 
+    PIXELS = np.array([[50.0, -0.5, 0.25, 1.0], [1e-30, 123456.789, -3.0, 0.5],
+                       [0.0, 1.4e-45, 0.7, 0.25], [1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+
+    def record_pixels(self, path):
+        """One 2 x 2 PIXELS image staged by ar_edit_image_begin, filled in place and committed."""
+        a, lib = self.abi, self.lib
+        desc = a.ar_context_desc(a.AR_DEVICE_CPU, 0, os.path.join(self.dir, "ctx.log").encode(), path.encode())
+        ctx = ctypes.c_void_p()
+        self.assertEqual(lib.ar_context_create(ctypes.byref(desc), ctypes.byref(ctx)), a.AR_OK)
+        scene = ctypes.c_void_p()
+        self.assertEqual(lib.ar_scene_create(ctx, ctypes.byref(a.ar_scene_desc(None, 2, 0)), ctypes.byref(scene)), a.AR_OK)
+        edit = ctypes.c_void_p()
+        self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit)), a.AR_OK)
+        d = a.ar_image_desc()
+        d.key, d.source, d.color_interop, d.width, d.height = 11, a.AR_IMAGE_SOURCE_PIXELS, a.AR_COLOR_INTEROP_LIN_REC709, 2, 2
+        b = a.ar_image_buffers()
+        self.assertEqual(lib.ar_edit_image_begin(edit, ctypes.byref(d), ctypes.byref(b)), a.AR_OK)
+        self.assertEqual(b.pixels_count, 16)
+        self.view(b.pixels, b.pixels_count, np.float32)[:] = self.PIXELS.ravel()
+        self.assertEqual(lib.ar_edit_item_commit(edit, 11), a.AR_OK)
+        gen = ctypes.c_uint64()
+        self.assertEqual(lib.ar_edit_commit(edit, ctypes.byref(gen)), a.AR_OK)
+        self.assertEqual(lib.ar_scene_destroy(scene), a.AR_OK)
+        self.assertEqual(lib.ar_context_destroy(ctx), a.AR_OK)
+
+    def test_image_begin_payload_is_captured_and_replays(self):
+        path = os.path.join(self.dir, "pixels.arrec")
+        self.record_pixels(path)
+        _, first = self.arrec.decode(path)
+        self.assertEqual([n for n, _ in first], [
+            "ar_context_create", "ar_scene_create", "ar_scene_edit_begin", "ar_edit_image_begin",
+            "ar_edit_item_commit", "ar_edit_commit", "ar_scene_destroy", "ar_context_destroy"])
+        staged = dict((f, (dt, n, data)) for f, dt, n, data in dict(first)["ar_edit_item_commit"]["staged"])
+        dt, n, data = staged["pixels"]
+        self.assertEqual((dt, n), ("float32", 16))
+        self.assertEqual(data, self.PIXELS.tobytes())  # bit for bit
+        second = self.replay_identical(path, first)
+        self.assertEqual(dict(second)["ar_edit_item_commit"]["staged"][0][3], self.PIXELS.tobytes())
+
     def open_scene(self, path):
         a, lib = self.abi, self.lib
         desc = a.ar_context_desc(a.AR_DEVICE_CPU, 0, os.path.join(self.dir, "ctx2.log").encode(), path.encode())

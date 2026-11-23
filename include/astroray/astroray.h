@@ -497,7 +497,8 @@ typedef struct ar_grid_leaf_buffers {
     AR_STAGED(voxels_count, float) float** voxels;
 } ar_grid_leaf_buffers;
 
-/* path is read for FILE; bytes for MEMORY; PIXELS go through ar_image_buffers. */
+/* path is read for FILE; bytes for MEMORY; PIXELS go through ar_edit_image_begin, which stages
+   width * height * 4 floats (RGBA, rows bottom-up) in ar_image_buffers; fill them, then ar_edit_item_commit. */
 typedef struct ar_image_desc {
     ar_key key;
     uint32_t source;
