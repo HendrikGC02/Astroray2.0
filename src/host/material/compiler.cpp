@@ -247,8 +247,9 @@ bool build_entry(const Work& w, const std::vector<char>& marked, const std::vect
 // The mean of node i's value over a surface, for the emission estimate (0005 item 43), which
 // also steers light sampling. `known` means the mean is exact for the clamped emission: a
 // non-negative constant, a texture's own mean (non-negative), MUL or ADD of known operands (exact
-// when at most one factor of a product varies) and one channel of a known colour. Everything else, including any negative
-// constant, is not known and the caller bounds it by 1, so the estimate is never wrongly zero.
+// when at most one factor of a product varies) and one channel of a known colour. Everything else,
+// including any negative constant, is not known and the caller bounds it by 1, so the estimate is
+// never wrongly zero.
 // Without an ImageMeanFn a texture is not known; every image read is added to *images.
 struct Mean {
   Vec3 v = {1.0f, 1.0f, 1.0f};
@@ -541,9 +542,11 @@ void finish(MaterialOutput* m) {
 
 // In M1a the specular lobe (which the transmission lobe shares) always counts; the coat counts
 // unless coat_weight folds to 0, where no coat lobe can be sampled. NON_OPAQUE is clear exactly
-// when geometry_opacity is the constant 1, so T folds to 0 (Cycles has_surface_transparent: only
-// a constant alpha of 1 is opaque); EXTENSION is clear because no extension kind compiles;
-// READS_RAY_TYPE is clear because no Light Path op exists.
+// when geometry_opacity is the constant 1, so T folds to 0 (0005 item 43; Cycles
+// src/scene/shader_nodes.cpp PrincipledBsdfNode::has_surface_transparent likewise calls a linked
+// Alpha transparent, though it allows a 1e-5 cutoff on a constant one that item 43 does not);
+// EXTENSION is clear because no extension kind compiles; READS_RAY_TYPE is clear because no Light
+// Path op exists.
 uint32_t material_flags(const CompileResult& r) {
   using RS = ar::RecordSlot;
   bool delta = lobe_may_be_delta(per_point(r, RS::specular_roughness), r.block.specular_roughness);
