@@ -17,3 +17,4 @@ Budget: gate +0 s (the harness runs in no tier); B-31 instance-loop cell from 39
 Depends on: none; blender lane, after 159 (one Blender task at a time).
 Size: S-M (about 150 lines of harness, 50-150 in instances.py and keys.py); stop and report at 2x or when the decision table says stop.
 Progress:
+- Files: tools/sync_timing.py, tools/sync_timing.ps1 (harness); blender/astroray/sync/instances.py, keys.py; tests/blender/headless/test_instances_sync.py; tools/README.md; bench/history/2026.jsonl; tasks/161.canary.patch.
