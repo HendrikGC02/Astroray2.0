@@ -471,9 +471,9 @@ if __name__ == "__main__":
     if "--with-materials" in ARGS:
         ok = run_materials()
     loader = unittest.defaultTestLoader
-    if "-k" in ARGS:  # land's canary runs one named case
-        pat = ARGS[ARGS.index("-k") + 1]
-        loader.testNamePatterns = [pat if "*" in pat else f"*{pat}*"]  # as unittest's own -k
+    pats = [ARGS[i + 1] for i, a in enumerate(ARGS) if a == "-k"]  # land's canary names its cases, one -k each
+    if pats:
+        loader.testNamePatterns = [p if "*" in p else f"*{p}*" for p in pats]  # as unittest's own -k
     suite = unittest.TestSuite(loader.loadTestsFromTestCase(c) for c in (TestSmoke, TestF12Textured))
     res = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
     sys.exit(0 if ok and res.wasSuccessful() else 1)

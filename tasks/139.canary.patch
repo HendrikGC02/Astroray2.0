@@ -1,7 +1,16 @@
 diff --git a/blender/astroray/render_final.py b/blender/astroray/render_final.py
-index fbb7200..08c3add 100644
+index fbb7200..de3cb72 100644
 --- a/blender/astroray/render_final.py
 +++ b/blender/astroray/render_final.py
+@@ -136,7 +136,7 @@ def context(device):
+     lib, abi = native.load(), _abi()
+     abi.bind(lib)
+     ctx = ctypes.c_void_p()
+-    desc = abi.ar_context_desc(getattr(abi, DEVICES[device]), 0, _log_path().encode(),
++    desc = abi.ar_context_desc(getattr(abi, DEVICES["CPU"]), 0, _log_path().encode(),
+                                record.encode() if record else None)
+     _ok(lib, native.call(lib.ar_context_create, ctypes.byref(desc), ctypes.byref(ctx)),
+         "ar_context_create")
 @@ -374,6 +374,8 @@ class Job:
              raise RenderFailed(f"astroray: the render converged on generation {prog.active_generation}, but update() "
                                 f"committed {self.generation} (failed generation {prog.failed_generation})")
