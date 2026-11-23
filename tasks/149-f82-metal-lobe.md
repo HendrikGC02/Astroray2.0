@@ -17,3 +17,5 @@ Depends on: 143.
 Size: M (about 250 lines without tests); stop and report at 2x.
 Progress:
 - Files: src/kernel/material/lobes/metal.h (new), lobes/fresnel.h, lobes/ggx.h (helpers only), tests/cpu/test_lobe_metal.cpp (new), cmake test-source registration if needed, tasks/149.canary.patch, tools/budgets.toml gate row if one counts checks.
+- Lead ruling: MetalParams gains `Real specular_weight` (F_metal = specular_weight * F82, OpenPBR index.html line 560); base_weight stays, metal.h forms F0 = base_weight * base_color; filling MetalParams from OpenPBRParams is the stack task's. F82 quoted from index.html 545-563 (the .mtlx only wires generalized_schlick_bsdf, lines 407-418); the spec applies no clamp.
+- Done: fresnel_f82 + fresnel_schlick, metal.h, ggx.h helpers (ggx_alpha_of, ggx_half_vector, ggx_reflect_pdf, ggx_reflect_dg), test_lobe_metal (6 fast, 4 gate cases), canary.

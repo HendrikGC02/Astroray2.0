@@ -1,0 +1,29 @@
+diff --git a/src/kernel/material/lobes/metal.h b/src/kernel/material/lobes/metal.h
+index f28329e..ef46d0e 100644
+--- a/src/kernel/material/lobes/metal.h
++++ b/src/kernel/material/lobes/metal.h
+@@ -76,7 +76,7 @@ AR_FN LobeEval metal_eval(const MetalParams& p, Real3 wo, Real3 wi, TransportMod
+   Real3 m{};
+   if (!ggx_half_vector(wo, wi, m)) return ggx_zero_eval();
+   const Real scale = ggx_reflect_dg(alpha, wo, wi, m);
+-  const Spec fr = metal_fresnel(p, dot(wo, m));
++  const Spec fr = metal_fresnel(p, wo.z);
+   LobeEval e;
+   for (int i = 0; i < kLanes; ++i) e.f.v[i] = fr.v[i] * scale;
+   e.pdf = metal_pdf(p, wo, wi, mode);
+@@ -99,13 +99,13 @@ AR_FN LobeSample metal_sample(const MetalParams& p, Real3 wo, Real2 u, Transport
+     // Mirror direction; F at the unperturbed normal.
+     s.wi = Real3{-wo.x, -wo.y, wo.z};
+     const Spec fr = metal_fresnel(p, wo.z);
+-    for (int i = 0; i < kLanes; ++i) s.f.v[i] = fr.v[i] / wo.z;
++    for (int i = 0; i < kLanes; ++i) s.f.v[i] = fr.v[i];
+     s.pdf = Real(1);
+     s.flags = LOBE_REFLECTION | LOBE_DELTA;
+     return s;
+   }
+ 
+-  const Real3 m = ggx_sample_vndf(alpha, wo, u);
++  const Real3 m = ggx_sample_vndf(alpha * Real(1.1), wo, u);
+   const Real cos_o_m = dot(wo, m);
+   const Real3 wi = m * (Real(2) * cos_o_m) - wo;
+   // A reflected direction below the surface is "no sample" (0005 item 8).
