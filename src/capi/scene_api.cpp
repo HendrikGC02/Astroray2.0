@@ -340,13 +340,13 @@ AR_API ar_status ar_edit_set_material(ar_edit h, ar_key key, const ar_material_d
   return staging_call(h, [&](Edit& e) { return h->owner->scene->materials->set_material(e, key, desc); });
   });
 }
-// FILE and MEMORY images decode on a worker at item commit; PIXELS (float data) is M1b.
+// FILE and MEMORY images decode on a worker at item commit; PIXELS go through ar_edit_image_begin.
 AR_API ar_status ar_edit_set_image(ar_edit h, const ar_image_desc* desc) {
   AR_RECORD(ar_edit_set_image, ar_rec_of(h), h, desc);
   AR_RECORD_BODY({
   if (h && h->edit && desc && desc->source == AR_IMAGE_SOURCE_PIXELS) {
     try {
-      const std::string why = "ar_edit_set_image: PIXELS images are not implemented in this build (M1b)";
+      const std::string why = "ar_edit_set_image: a PIXELS image is staged by ar_edit_image_begin, then ar_edit_item_commit";
       h->owner->scene->ctx().log.line("WARNING", why);
       return fail(h, AR_ERR_UNSUPPORTED, why);
     } catch (...) {
@@ -354,6 +354,16 @@ AR_API ar_status ar_edit_set_image(ar_edit h, const ar_image_desc* desc) {
     }
   }
   return staging_call(h, [&](Edit& e) { return h->owner->scene->materials->set_image(e, desc); });
+  });
+}
+// PIXELS images: the engine stages width x height x 4 floats for the host to fill; the decode is
+// queued by ar_edit_item_commit (0007 d21).
+AR_API ar_status ar_edit_image_begin(ar_edit h, const ar_image_desc* desc, ar_image_buffers* out) {
+  AR_RECORD(ar_edit_image_begin, ar_rec_of(h), h, desc, out);
+  AR_RECORD_BODY({
+  ar_status st = staging_call(h, [&](Edit& e) { return h->owner->scene->materials->image_begin(e, desc, out); });
+  if (st == AR_OK) AR_RECORD_POST(ar_edit_image_begin, h, desc, out);
+  return st;
   });
 }
 

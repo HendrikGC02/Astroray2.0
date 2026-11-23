@@ -9,6 +9,8 @@
 #include "host/image/decode.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 
@@ -49,14 +51,13 @@ bool decode_hdr(const uint8_t* bytes, int n, DecodedImage* out, std::string* err
   return true;
 }
 
-}  // namespace
+const uint8_t kExrMagic[4] = {0x76, 0x2f, 0x31, 0x01};
 
-bool decode_image_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, std::string* error) {
+bool decode_unchecked(const uint8_t* bytes, uint64_t count, DecodedImage* out, std::string* error) {
   *out = DecodedImage{};
   if (bytes == nullptr || count == 0) return *error = "empty image data", false;
   if (count > uint64_t(std::numeric_limits<int>::max())) return *error = "image data larger than 2 GiB", false;
   const int n = int(count);
-  static const uint8_t kExrMagic[4] = {0x76, 0x2f, 0x31, 0x01};
   if (count >= 4 && std::memcmp(bytes, kExrMagic, 4) == 0) return decode_exr_bytes(bytes, count, out, error);
   // Radiance RGBE becomes float32 as stored (stb's rgbe2float: no gamma, no scale).
   if (stbi_is_hdr_from_memory(bytes, n)) return decode_hdr(bytes, n, out, error);
@@ -85,6 +86,51 @@ bool decode_image_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out,
     }
   }
   return true;
+}
+
+}  // namespace
+
+bool find_bad_texel(const uint8_t* texels, ar::TexFormat format, uint32_t channels, uint64_t texel_count, BadTexel* out) {
+  if (format == ar::TexFormat::U8) return false;
+  const uint64_t n = texel_count * channels;
+  const bool half = format == ar::TexFormat::HALF;
+  for (uint64_t i = 0; i < n; ++i) {
+    float v;
+    if (half) {
+      uint16_t b;
+      std::memcpy(&b, texels + i * 2, 2);
+      v = ar::half_to_float(b);
+    } else {
+      std::memcpy(&v, texels + i * 4, 4);
+    }
+    // !(|v| <= limit) is also true for a NaN; an Inf is above the limit.
+    if (!(std::fabs(v) <= kMaxTexelMagnitude)) {
+      out->index = i / channels, out->channel = uint32_t(i % channels), out->value = v;
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string bad_texel_message(const BadTexel& t, uint32_t width, uint32_t channels) {
+  const char* const rgba = "RGBA";
+  const std::string channel = channels == 1 ? "Y" : std::string(1, rgba[std::min<uint32_t>(t.channel, 3)]);
+  const std::string where = " in channel " + channel + " at texel (" + std::to_string(t.index % width) + ", " +
+                            std::to_string(t.index / width) + "), y from the bottom (index " + std::to_string(t.index) + ")";
+  if (!std::isfinite(t.value)) return "NaN or Inf" + where;
+  char v[32], lim[32];
+  std::snprintf(v, sizeof v, "%.9g", double(t.value));
+  std::snprintf(lim, sizeof lim, "%.9g", double(kMaxTexelMagnitude));
+  return std::string("value ") + v + where + ", above the limit " + lim;
+}
+
+bool decode_image_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, std::string* error) {
+  if (!decode_unchecked(bytes, count, out, error)) return false;
+  BadTexel bad;
+  if (!find_bad_texel(out->texels.data(), out->format, out->channels, uint64_t(out->width) * out->height, &bad)) return true;
+  *error = bad_texel_message(bad, out->width, out->channels);
+  *out = DecodedImage{};
+  return false;
 }
 
 }  // namespace astroray::host

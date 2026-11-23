@@ -54,14 +54,6 @@ std::string take_message(const char* err, const char* fallback) {
   return s.empty() ? std::string(fallback) : s;
 }
 
-// A half or float bit pattern with an all-ones exponent is NaN or Inf.
-bool half_not_finite(uint16_t b) { return (b & 0x7c00u) == 0x7c00u; }
-bool float_not_finite(float f) {
-  uint32_t b;
-  std::memcpy(&b, &f, 4);
-  return (b & 0x7f800000u) == 0x7f800000u;
-}
-
 }  // namespace
 
 bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, std::string* error) {
@@ -162,30 +154,6 @@ bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, s
     }
     if (covered != uint64_t(w) * uint64_t(h)) return *out = DecodedImage{}, *error = "EXR tile data is incomplete", false;
   }
-  // Non-finite values are refused: they would poison the filter and the emission mean. The first
-  // one in (row, column, channel) order from the bottom-left names the texel.
-  for (int y = 0; y < h; ++y)
-    for (int x = 0; x < w; ++x)
-      for (uint32_t k = 0; k < channels; ++k) {
-        const uint8_t* p = out->texels.data() + ((size_t(y) * size_t(w) + size_t(x)) * channels + k) * size_t(comp);
-        bool bad = false;
-        if (any_float) {
-          float f;
-          std::memcpy(&f, p, 4);
-          bad = float_not_finite(f);
-        } else {
-          uint16_t b;
-          std::memcpy(&b, p, 2);
-          bad = half_not_finite(b);
-        }
-        if (bad) {
-          const char* name = hd.channels[kept[k]].name;
-          *error = "EXR has a NaN or Inf in channel " + std::string(name) + " at texel (" + std::to_string(x) + ", " + std::to_string(y) +
-                   "), y from the bottom";
-          *out = DecodedImage{};
-          return false;
-        }
-      }
   return true;
 }
 

@@ -200,6 +200,13 @@ png16 = png_bytes(3)
 write("bad_png16.png", png16[:8] + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 16, 2, 0, 0, 0)) +
       chunk(b"IDAT", zlib.compress(b"\x00" + struct.pack(">HHH", 1000, 2000, 65535), 9)) + chunk(b"IEND", b""))
 write("bad_truncated.exr", exr_bytes(RGB_H, sample_half)[:-20])
+# The wide-texel limit (src/host/image/decode.h kMaxTexelMagnitude, bit pattern 0x7efffff7) and the
+# next float above it: the limit is accepted, the next float refuses the whole image. The one wide
+# texel is B of (3, 2); every other texel is the pattern.
+WIDE_LIMIT = struct.unpack("<f", struct.pack("<I", 0x7EFFFFF7))[0]
+WIDE_NEXT = struct.unpack("<f", struct.pack("<I", 0x7EFFFFF8))[0]
+write("ok_wide_float.exr", exr_bytes(RGB_F, lambda n, x, y: WIDE_LIMIT if (n, x, y) == ("B", 3, 2) else sample_float(n, x, y)))
+write("bad_wide_float.exr", exr_bytes(RGB_F, lambda n, x, y: WIDE_NEXT if (n, x, y) == ("B", 3, 2) else sample_float(n, x, y)))
 
 import bpy  # noqa: E402  (only inside Blender)
 
@@ -215,4 +222,37 @@ scene.render.image_settings.file_format = "JPEG"
 scene.render.image_settings.color_mode = "RGB"
 scene.render.image_settings.quality = 100
 img.save_render(os.path.join(OUT, "pattern_4x3.jpg"), scene=scene)
+
+# EXRs written by Blender, each with the float32 RGBA bytes (little endian, rows bottom-up) Blender reads
+# back from the file as Image.pixels: the engine's MEMORY decode must reproduce them exactly. The source
+# holds values above 1 and below 0; the half file's are binary16 values (the pattern's, so none overflows).
+import numpy as np  # noqa: E402
+
+
+def half_value(bits):
+    return struct.unpack("<e", struct.pack("<H", bits))[0]
+
+
+def blender_exr(name, depth):
+    src = bpy.data.images.new(name + "_src", W, H, alpha=True, float_buffer=True)
+    pix = []
+    for y in range(H):
+        for x in range(W):
+            if depth == "16":
+                pix += [half_value(half_bits(x, y, c)) for c in range(3)] + [1.0]
+            else:
+                pix += [float_value(x, y, c) for c in range(3)] + [1.0]
+    src.pixels = pix
+    st = scene.render.image_settings
+    st.file_format, st.color_mode, st.color_depth, st.exr_codec = "OPEN_EXR", "RGBA", depth, "ZIP"
+    path = os.path.join(OUT, name + ".exr")
+    src.save_render(path, scene=scene)
+    back = bpy.data.images.load(path)
+    px = np.empty(W * H * 4, np.float32)
+    back.pixels.foreach_get(px)
+    write(name + ".pixels", px.astype("<f4").tobytes())
+
+
+blender_exr("blender_half_rgba", "16")
+blender_exr("blender_float_rgba", "32")
 print("GENERATED", sorted(os.listdir(OUT)))

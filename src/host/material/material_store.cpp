@@ -198,6 +198,14 @@ ar_status MaterialStore::set_image(Edit& edit, const ar_image_desc* d) {
   return AR_OK;
 }
 
+ar_status MaterialStore::image_begin(Edit& edit, const ar_image_desc* d, ar_image_buffers* out) {
+  if (d == nullptr) return edit.fail("invalid argument: ar_edit_image_begin desc is null");
+  if (ar_status st = ensure_pass(edit)) return st;
+  if (ar_status st = images_->begin_pixels(edit, d, out)) return st;
+  open_->images.insert(d->key);
+  return AR_OK;
+}
+
 bool MaterialStore::uses_changed_image(const MaterialOutput& out, const Open& o) {
   for (uint32_t k : out.images)
     if (o.reset || o.images.count(k) != 0 || o.removed_images.count(k) != 0) return true;

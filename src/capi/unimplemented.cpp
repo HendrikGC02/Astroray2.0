@@ -37,6 +37,5 @@ AR_API ar_status ar_scene_trim(ar_scene h) { return unsupported(h, "ar_scene_tri
 AR_API ar_status ar_edit_curves_begin(ar_edit h, const ar_curves_desc*, ar_curves_buffers*) { return unsupported(h, "ar_edit_curves_begin"); }
 AR_API ar_status ar_edit_points_begin(ar_edit h, const ar_points_desc*, ar_points_buffers*) { return unsupported(h, "ar_edit_points_begin"); }
 AR_API ar_status ar_edit_grid_leaves_begin(ar_edit h, const ar_grid_desc*, ar_grid_leaf_buffers*) { return unsupported(h, "ar_edit_grid_leaves_begin"); }
-AR_API ar_status ar_edit_image_begin(ar_edit h, const ar_image_desc*, ar_image_buffers*) { return unsupported(h, "ar_edit_image_begin"); }
 
 }  // extern "C"

@@ -73,9 +73,21 @@ class ImageStore : public std::enable_shared_from_this<ImageStore> {
   ImageStore& operator=(const ImageStore&) = delete;
 
   // Stages and commits one keyed item. Throws std::invalid_argument for an enum out of range or
-  // a missing path or bytes; PIXELS sources are refused by the caller (M1b). Registers the key
-  // with the edit; the caller (MaterialStore) owns the pass that activates it.
+  // a missing path or bytes; PIXELS sources are refused by the caller (they go through
+  // begin_pixels). Registers the key with the edit; the caller (MaterialStore) owns the pass
+  // that activates it.
   ar_status set_image(Edit& edit, const ar_image_desc* desc);
+
+  // PIXELS: stages width x height x 4 floats (RGBA, rows bottom-up) in the edit's arena and
+  // registers the key; ar_edit_item_commit queues the decode, like a mesh's staged arrays.
+  // Throws std::invalid_argument for a source other than PIXELS, an empty or overflowing size
+  // or an enum out of range.
+  ar_status begin_pixels(Edit& edit, const ar_image_desc* desc, ar_image_buffers* out);
+
+  // The PIXELS decode: the interop transfer, then the wide-texel rule (decode.h), exactly as the
+  // FILE and MEMORY images get them. `rgba` holds width * height * 4 floats. A refusal is the
+  // magenta image with its report entry. Never throws for bad input, only std::bad_alloc.
+  ImageResult ingest_pixels(const ar_image_desc& desc, const float* rgba);
 
   // Decode one image from its descriptor. Used by the job and directly by tests; never throws
   // for bad input, only std::bad_alloc.

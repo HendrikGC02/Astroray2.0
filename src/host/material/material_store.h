@@ -82,6 +82,8 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   // an image (or whose emission estimate read one) is recompiled when that key is set, replaced
   // or removed, so its program always holds the slot of the image active under the key.
   ar_status set_image(Edit& edit, const ar_image_desc* desc);
+  // PIXELS: stages the image's floats (ar_edit_image_begin); ar_edit_item_commit queues the decode.
+  ar_status image_begin(Edit& edit, const ar_image_desc* desc, ar_image_buffers* out);
   ImageStore& images() { return *images_; }
   // ar_edit_set_world: the world recompiles in this edit's pass, and again whenever its graph is
   // set or removed (as a material whose graph changes).
