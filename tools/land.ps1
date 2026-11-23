@@ -255,10 +255,17 @@ function Invoke-Prepare {
   $desc = ($out | Select-Object -Last 1)
   if ($state -eq 'success' -and $needPerf) {
     # Under the lock tools/perf.ps1 takes itself; a failure fails the prepare like a failed gate.
-    $perfOut = @(& pwsh -NoProfile -File (Join-Path $root 'tools/perf.ps1') 2>&1 | ForEach-Object { "$_" })
-    $perfCode = $LASTEXITCODE
+    Measure-LandPhase 'perf_s' { $script:perfOut = @(& pwsh -NoProfile -File (Join-Path $root 'tools/perf.ps1') 2>&1 | ForEach-Object { "$_" }); $script:perfCode = $LASTEXITCODE }
+    $perfOut = @($script:perfOut); $perfCode = $script:perfCode
     $perfOut | ForEach-Object { Write-Host $_ }
-    if ($perfCode -ne 0) { $state = 'failure'; $desc = "perf failed: $($perfOut | Where-Object { $_ -match '^(FAIL|REFUSE|perf)' } | Select-Object -First 1)" }
+    if ($perfCode -ne 0) {
+      # The gate's "waited N s" stays in the description: the lock-wait phase is read from it below.
+      $state = 'failure'
+      $waited = if ($desc -match 'waited [\d.]+ s') { " ($($Matches[0]))" } else { '' }
+      $desc = "perf failed: $($perfOut | Where-Object { $_ -match '^(FAIL|REFUSE|perf)' } | Select-Object -First 1)"
+      if ($desc.Length -gt 100) { $desc = $desc.Substring(0, 100) }
+      $desc += $waited
+    }
   }
   if ($desc -match 'waited ([\d.]+) s') { $script:LandTimes['lock_wait_s'] += [double]$Matches[1] }
   if ($desc.Length -gt 140) { $desc = $desc.Substring(0, 140) }
@@ -405,7 +412,7 @@ function Complete-Submit([int]$attempts) {
   else { Write-Host "gate $('{0:N1}' -f $gate) s (no earlier landing line)" }
   try {
     $rec = [ordered]@{ task = [int]$Number; sha = $script:MergeSha; date = (Get-Date -Format 's'); verdict = $Verdict; attempts = $attempts }
-    foreach ($k in 'rebase_s', 'scenes_s', 'canary_s', 'blender_suites_s', 'gate_s', 'ci_wait_s', 'merge_s', 'lock_wait_s') { $rec[$k] = [math]::Round($times[$k], 1) }
+    foreach ($k in 'rebase_s', 'scenes_s', 'canary_s', 'blender_suites_s', 'gate_s', 'ci_wait_s', 'merge_s', 'lock_wait_s', 'perf_s') { if ($times.Contains($k)) { $rec[$k] = [math]::Round($times[$k], 1) } }
     Add-LandingHistory $mainCheckout $rec
   } catch { Write-Host "WARN land: history line not written: $($_.Exception.Message)" }
   try {

@@ -1,1 +1,1 @@
-{"limit": 1.1, "fail": true, "text": ["FAIL b1m", "ratio 1.180", "profile with 123"]}
+{"limit": 1.1, "fail": true, "text": ["FAIL b1m", "ratio 1.180", "profile with 123"], "absent": []}

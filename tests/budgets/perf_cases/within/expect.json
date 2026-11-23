@@ -1,1 +1,1 @@
-{"limit": 1.1, "fail": false, "text": ["PASS b1m", "ratio 1.050"]}
+{"limit": 1.1, "fail": false, "text": ["PASS b1m", "ratio 1.050"], "absent": ["improved", "FAIL"]}
