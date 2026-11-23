@@ -16,3 +16,4 @@ Budget: +4 s of gate at most (3 comparisons counted against gate_statistical = 2
 Depends on: 143.
 Size: M (about 400 lines without tests); stop and report at 2x.
 Progress:
+- Files: src/kernel/light/{light,point,sphere,area_rect,area_disk,triangle}.h (LightBounds::w), src/kernel/light/light_tree.h, src/host/light/light_tree.{h,cpp}, tests/cpu/test_light_tree.cpp (new), tests/cpu/test_lights_{point,area}.cpp (w pins), docs/decisions/0004-integrator.md (D10 sentence), tasks/154.canary.patch. All in Scope; no open question.
