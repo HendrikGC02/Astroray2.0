@@ -24,3 +24,4 @@ Progress:
   - submit, undo, refusals, cleanup, timing, history, 5xx retry (GhX 5/15/30 s) done; fixture cases are h, i, j (137 uses f, g), not f-h.
   - Deviation: rebuild + scenes run before the Blender suites (the canary leaves broken binaries in out/bin); a status-post failure after a passing gate keeps the commit and prints the manual command.
   - Canary: tasks/138.canary.patch (cleanup LEFTOVER line; undo reset), canary.ps1 138 PASS. scenes.py warm 0.37 s. fast_landing 1.2 s in run_fast.
+  - Lead rulings: busy check is per repository (marker astroray-land.json in the common git dir, live-owner test by pid, start time, command line); fast_landing keeps the clean-worktree case, ledger +1.5 s (measured 1.9 s in run_fast, incl. pwsh start); rebuild+scenes before the Blender suites accepted.

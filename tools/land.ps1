@@ -74,7 +74,7 @@ function Get-TaskField([string]$text, [string]$field) {
 }
 
 function Assert-Idle {
-  $run = Find-LandRunning
+  $run = Enter-LandRunning $root
   if ($run) { Refuse "another land.ps1 is running ($run)" }
   $holder = Find-DllHolder $root
   if ($holder) { Refuse "out/bin/astroray_core.dll is loaded by $holder; close it (nothing is killed here)" }
@@ -389,4 +389,6 @@ try {
   Undo-LandCommit
   Write-Host "FAIL land $Mode ${Number}: $($_.Exception.Message)"
   exit 1
+} finally {
+  Exit-LandRunning
 }

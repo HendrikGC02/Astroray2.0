@@ -2,7 +2,7 @@
 # Runs `land.ps1 prepare 999` on fixture cases a-j, asserts each outcome and exits non-zero on any mismatch
 # (tasks 010, 138). Expected, with -DryRun: a refused "canary inert", c refused "missing canary patch", e refused
 # (its command names a missing script), b and d accepted, f accepted with a WARN on its inert hunk, g refused (its
-# case turns red only with both hunks). i refused while another process has land.ps1 in its command line, j refused
+# case turns red only with both hunks). i refused while a live land.ps1 is registered for the same repository, j refused
 # while a process has out/bin/astroray_core.dll loaded. h runs without -DryRun against a failing gate stub: exit 1,
 # the "(land)" commit undone, the task file back, the tree clean. A `gh` stub (fixture bin/) keeps h off GitHub.
 param([string]$Base = (Join-Path ([IO.Path]::GetTempPath()) 'astroray_land_fixture'))
@@ -33,6 +33,9 @@ foreach ($c in $expect.Keys) {
       # Not an ancestor of the land.ps1 under test, only a process that mentions it.
       $helper = Start-Process pwsh -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep 120 # land.ps1') -PassThru -WindowStyle Hidden
       Start-Sleep -Milliseconds 800
+      # A running land.ps1 registers in its repository's marker (lib/landing.ps1 Enter-LandRunning); this one does so for the helper.
+      $marker = @{ pid = $helper.Id; start = (Get-Process -Id $helper.Id).StartTime.ToString('o') } | ConvertTo-Json -Compress
+      Set-Content (Join-Path $work '.git/astroray-land.json') $marker
     }
     if ($c -eq 'j') {
       # A copy of a system DLL under the worktree's DLL name, loaded for real: the file is then held like a leftover Blender holds it.

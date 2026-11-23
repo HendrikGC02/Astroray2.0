@@ -21,6 +21,8 @@ try {
   G branch task/12-x
   G worktree add -q -b task/120-y (Join-Path $tmp 'task_120-y')
   & git -C (Join-Path $tmp 'origin.git') branch task/120-y main
+  G worktree add -q -b task/121-z (Join-Path $tmp 'task_121-z')
+  G push -q origin task/121-z
   $mainPath = Get-LandingMain $main
   Check 'main checkout is the first worktree' ((Resolve-Path $mainPath).Path -eq (Resolve-Path $main).Path)
 
@@ -41,6 +43,25 @@ try {
   & git -C $main show-ref --verify --quiet refs/heads/task/12-x
   Check 'task/12-x survives the cleanup of 120' ($LASTEXITCODE -eq 0)
   $stream.Dispose(); $stream = $null
+
+  # A clean worktree: removed, local and remote branch deleted, nothing left over.
+  $t121 = Find-LandingTask $main '121'
+  $o = @(Invoke-LandingCleanup -Main $main -Task $t121 -SleepS 0 6>&1 | ForEach-Object { "$_" })
+  Check 'a clean cleanup returns 0' ([int]$o[-1] -eq 0)
+  Check 'the worktree directory is gone' (-not (Test-Path (Join-Path $tmp 'task_121-z')))
+  & git -C $main show-ref --verify --quiet refs/heads/task/121-z
+  Check 'the local branch is deleted' ($LASTEXITCODE -ne 0)
+  Check 'the remote branch is deleted' (@(& git -C $main ls-remote --heads origin task/121-z).Count -eq 0)
+
+  # The running-land marker is per repository: claimed, reclaimed from a dead owner, released.
+  Check 'the marker is claimed' ($null -eq (Enter-LandRunning $main))
+  Check 'the marker file exists' (Test-Path $script:LandMarker)
+  Exit-LandRunning
+  $dead = @{ pid = 999999; start = (Get-Date).ToString('o') } | ConvertTo-Json -Compress
+  Set-Content (Get-LandingMarker $main) $dead
+  Check 'a dead owner is reclaimed' ($null -eq (Enter-LandRunning $main))
+  Exit-LandRunning
+  Check 'the marker is released' (-not (Test-Path (Get-LandingMarker $main)))
 
   # History: one JSON line per landing in the main checkout; the last gate_s comes back.
   Check 'no history, no previous gate' ($null -eq (Get-LandingLastGate $main))

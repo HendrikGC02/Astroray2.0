@@ -24,22 +24,45 @@ function Find-LandingTask([string]$Main, [string]$Number) {
   return $null
 }
 
-function Get-LandingAncestors {
-  $map = @{}
-  foreach ($p in (Get-CimInstance Win32_Process)) { $map[[int]$p.ProcessId] = [int]$p.ParentProcessId }
-  $ids = @(); $id = $PID
-  while ($id -and -not ($ids -contains $id)) { $ids += $id; $id = if ($map.ContainsKey($id)) { $map[$id] } else { 0 } }
-  return $ids
+function Get-LandingMarker([string]$Root) {
+  # One marker per repository (its common git dir, shared by every worktree): a land.ps1 on another repository,
+  # such as a fixture under a temp dir, is not "another land.ps1" for this one.
+  $c = (& git -C $Root rev-parse --git-common-dir).Trim()
+  if (-not [IO.Path]::IsPathRooted($c)) { $c = Join-Path $Root $c }
+  return (Join-Path $c 'astroray-land.json')
 }
 
-function Find-LandRunning {
-  # Another land.ps1 in a pwsh/powershell (command line match); this process and its ancestors are not "another".
-  $skip = Get-LandingAncestors
-  foreach ($p in (Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(pwsh|powershell)(\.exe)?$' -and $_.CommandLine -match 'land\.ps1' })) {
-    if ($skip -contains [int]$p.ProcessId) { continue }
-    return "pid $($p.ProcessId), started $($p.CreationDate.ToString('yyyy-MM-dd HH:mm:ss'))"
+function Test-LandingMarkerLive($m) {
+  if ([int]$m.pid -eq $PID) { return $false }
+
+  $p = Get-Process -Id ([int]$m.pid) -ErrorAction SilentlyContinue
+  if (-not $p -or $p.StartTime.ToUniversalTime().Ticks -ne ([datetime]$m.start).ToUniversalTime().Ticks) { return $false }
+  $cim = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$m.pid)"
+  return [bool]($cim -and $cim.CommandLine -match 'land\.ps1')
+}
+
+function Enter-LandRunning([string]$Root) {
+  # Claims the marker for this process. Returns $null when claimed, else `pid N, started T` of the live owner.
+  $f = Get-LandingMarker $Root
+  $me = @{ pid = $PID; start = (Get-Process -Id $PID).StartTime.ToString('o') } | ConvertTo-Json -Compress
+  for ($try = 0; $try -lt 3; $try++) {
+    try {
+      $fs = [IO.File]::Open($f, 'CreateNew', 'Write', 'Read')
+      $bytes = [Text.Encoding]::UTF8.GetBytes($me); $fs.Write($bytes, 0, $bytes.Length); $fs.Dispose()
+      $script:LandMarker = $f
+      return $null
+    } catch [System.IO.IOException] {
+      $m = $null
+      try { $m = Get-Content $f -Raw -ErrorAction Stop | ConvertFrom-Json } catch { }
+      if ($m -and (Test-LandingMarkerLive $m)) { return "pid $($m.pid), started $(([datetime]$m.start).ToString('yyyy-MM-dd HH:mm:ss'))" }
+      Remove-Item $f -Force -ErrorAction SilentlyContinue   # stale: its process is gone
+    }
   }
-  return $null
+  return 'unknown (the marker file could not be claimed)'
+}
+
+function Exit-LandRunning {
+  if ($script:LandMarker) { Remove-Item $script:LandMarker -Force -ErrorAction SilentlyContinue; $script:LandMarker = $null }
 }
 
 function Find-DllHolder([string]$Root) {
