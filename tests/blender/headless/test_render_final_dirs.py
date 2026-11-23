@@ -7,7 +7,6 @@ import importlib
 import os
 import sys
 import tempfile
-import types
 import unittest
 from unittest import mock
 
@@ -20,10 +19,7 @@ _PKG = "ar_rf_addon"
 def load_render_final():
     """The addon's render_final without its __init__ (which needs the engine DLL); native loads the DLL
     lazily, so importing it needs no build."""
-    if _PKG not in sys.modules:
-        pkg = types.ModuleType(_PKG)
-        pkg.__path__ = [os.path.join(support.ROOT, "blender", "astroray")]
-        sys.modules[_PKG] = pkg
+    support.stage_addon(_PKG)
     return importlib.import_module(_PKG + ".render_final")
 
 

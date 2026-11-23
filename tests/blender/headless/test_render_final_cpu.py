@@ -24,7 +24,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import support  # noqa: E402
 
 _PKG = "ar_rf_cpu_addon"
-GEN = os.path.join(support.ROOT, "out", "build", "gen")
 BIN = os.path.join(support.ROOT, "out", "bin")
 TEX = 2048   # texels per side: a decode of tens of milliseconds
 SIZE = 32    # pixels per side
@@ -33,20 +32,7 @@ SPP = 4
 
 def load_addon():
     """render_final and native of the addon without its __init__, bound to the built core."""
-    if _PKG not in sys.modules:
-        for name in ("_abi", "_ops"):
-            path = os.path.join(GEN, name + ".py")
-            if not os.path.exists(path):
-                raise RuntimeError(f"{path} is missing: run tools/build.ps1 first")
-        pkg = types.ModuleType(_PKG)
-        pkg.__path__ = [os.path.join(support.ROOT, "blender", "astroray")]
-        sys.modules[_PKG] = pkg
-        for name in ("_abi", "_ops"):
-            spec = importlib.util.spec_from_file_location(f"{_PKG}.{name}", os.path.join(GEN, name + ".py"))
-            mod = importlib.util.module_from_spec(spec)
-            sys.modules[f"{_PKG}.{name}"] = mod
-            spec.loader.exec_module(mod)
-            setattr(pkg, name, mod)
+    support.stage_addon(_PKG)
     return importlib.import_module(_PKG + ".render_final"), importlib.import_module(_PKG + ".native")
 
 

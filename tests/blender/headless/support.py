@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import sys
+import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
@@ -18,6 +19,30 @@ def load_sync():
     sys.modules["ar_sync"] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+GEN = os.path.join(ROOT, "out", "build", "gen")
+
+
+def stage_addon(name):
+    """The addon package `name` without its __init__ (which needs the engine DLL), with the build's generated
+    `_abi` and `_ops` staged in it as the extension build does. A missing generated module raises: the
+    headless tier runs after a build, and an addon without `_ops` must never import."""
+    if name not in sys.modules:
+        for mod in ("_abi", "_ops"):
+            path = os.path.join(GEN, mod + ".py")
+            if not os.path.exists(path):
+                raise RuntimeError(f"{path} is missing: run tools/build.ps1 first")
+        pkg = types.ModuleType(name)
+        pkg.__path__ = [os.path.join(ROOT, "blender", "astroray")]
+        sys.modules[name] = pkg
+        for mod in ("_abi", "_ops"):
+            spec = importlib.util.spec_from_file_location(f"{name}.{mod}", os.path.join(GEN, mod + ".py"))
+            m = importlib.util.module_from_spec(spec)
+            sys.modules[f"{name}.{mod}"] = m
+            spec.loader.exec_module(m)
+            setattr(pkg, mod, m)
+    return sys.modules[name]
 
 
 _props = {"module": None, "users": 0}
