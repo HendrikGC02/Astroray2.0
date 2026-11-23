@@ -21,7 +21,7 @@ index d38cc52..dc1dd50 100644
      edit.item_commit(key)
      return line
 diff --git a/src/capi/scene_api.cpp b/src/capi/scene_api.cpp
-index d4433c3..0e70d83 100644
+index d4433c3..5ed9f66 100644
 --- a/src/capi/scene_api.cpp
 +++ b/src/capi/scene_api.cpp
 @@ -362,7 +362,7 @@ AR_API ar_status ar_edit_image_begin(ar_edit h, const ar_image_desc* desc, ar_im
@@ -29,7 +29,7 @@ index d4433c3..0e70d83 100644
    AR_RECORD_BODY({
    ar_status st = staging_call(h, [&](Edit& e) { return h->owner->scene->materials->image_begin(e, desc, out); });
 -  if (st == AR_OK) AR_RECORD_POST(ar_edit_image_begin, h, desc, out);
-+  if (st == AR_OK) (void)0;
++  if (st == AR_OK && false) AR_RECORD_POST(ar_edit_image_begin, h, desc, out);
    return st;
    });
  }
