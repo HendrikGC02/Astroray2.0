@@ -1,0 +1,43 @@
+diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
+index f8097c9..3f6ffbf 100644
+--- a/src/host/material/compiler.cpp
++++ b/src/host/material/compiler.cpp
+@@ -503,7 +503,7 @@ void set_medium_fields(MaterialOutput* m, uint32_t medium_priority) {
+   } else {
+     b.interior_ior = b.specular_ior;
+   }
+-  b.medium_priority = uint8_t(std::min(medium_priority, 255u));
++  b.medium_priority = 0;
+   if (medium_priority > 255u) add_entry(m, AR_REPORT_NODE_APPROXIMATED, "medium_priority clamped to 255");
+ }
+ 
+diff --git a/src/kernel/medium/medium_stack.h b/src/kernel/medium/medium_stack.h
+index 5b370d0..ff60bd0 100644
+--- a/src/kernel/medium/medium_stack.h
++++ b/src/kernel/medium/medium_stack.h
+@@ -42,7 +42,7 @@ struct StackUpdate {
+ 
+ AR_FN StackUpdate stack_push(U32x4 stack, uint32_t flags, uint32_t id, uint32_t priority) {
+   const uint32_t depth = medium_depth(flags);
+-  if (depth >= MEDIUM_STACK_CAPACITY) return {stack, flags, false};
++  if (depth >= MEDIUM_STACK_CAPACITY) return {stack, flags, true};
+   stack.v[depth] = stack_entry(id, priority);
+   return {stack, set_medium_depth(flags, depth + 1u), true};
+ }
+@@ -65,7 +65,7 @@ AR_FN int stack_highest_index(U32x4 stack, uint32_t flags) {
+   uint32_t best_priority = 0;
+   for (uint32_t i = 0; i < medium_depth(flags); ++i) {
+     const uint32_t p = stack_entry_priority(stack.v[i]);
+-    if (best < 0 || p >= best_priority) best = int(i), best_priority = p;
++    if (best < 0 || p > best_priority) best = int(i), best_priority = p;
+   }
+   return best;
+ }
+@@ -97,6 +97,6 @@ AR_FN bool interface_is_true(U32x4 stack, uint32_t flags, uint32_t hit_id, uint3
+ }
+ 
+ // The eta of a true interface, from the two sides' resolved interior_ior (1 for the world).
+-AR_FN Real interface_ior_ratio(Real n_before, Real n_after) { return n_after / n_before; }
++AR_FN Real interface_ior_ratio(Real n_before, Real n_after) { return n_before / n_after; }
+ 
+ AR_NS_END

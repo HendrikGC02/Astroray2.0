@@ -15,3 +15,6 @@ Budget: gate +0.5 s at most (stop and ask above); kernel rows: none (no stage in
 Depends on: 158 (compiler.cpp edit order: 158, 165, 164, 179, 168, 180). Off slice C's critical path: 183 uses one medium id from route_hit (lead ruling); the stack functions are for next batch's false interfaces.
 Size: M (about 250 source lines without tests); stop and report at 2x.
 Progress:
+- 180: medium_stack.h (push, remove, highest, is_true with explicit `entering`, ior ratio), set_medium_depth, compiler set_medium_fields (+ priority param on compile_material), 0006 C.16 text, tests, canary: done.
+- OPEN (record silent, needs lead): remove of an id not on the stack returns ok=false, stack unchanged; a back face not on the stack reports interface_is_true = true. Callers must decide (warn or end path).
+- Textured specular_ior is untestable through compile_material (no run-time F32 op in M1a); set_medium_fields is tested directly with runtime_slots set.
