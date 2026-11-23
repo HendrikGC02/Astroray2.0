@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // The one translation unit that compiles stb_image. Only the four 8-bit loaders and Radiance HDR
 // are enabled and there is no stdio: FILE sources are read by the caller and decoded from memory,
-// so the decoder has no path handling and no global state (its failure string is thread-local).
+// so the decoder has no path handling and no state of ours (its failure string is thread-local; the
+// stb file-scope variables that linear output compiles in are never written by this decoder).
 // EXR goes to decode_exr.cpp by its magic.
 // Ref: third_party/stb_image/stb_image.h (nothings/stb, pinned in third_party/deps.toml);
 // docs/decisions/0007-blender-integration.md d13.
