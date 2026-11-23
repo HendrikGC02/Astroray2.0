@@ -73,8 +73,8 @@ on its existing branch and worktree, briefed from its task file and the rulings 
     owner item under ruling 72: raise the limit, the D10 split, or stub emission sites (about 8 inlined
     Planck copies). `#pragma unroll 1` broke k_shade_background's stack row: do not retry.
   - 147 opacity entry: after 145 lands, rebase, renumber to opcode 18, refresh canary, land.
-  - 138 land submit/undo/cleanup: rulings applied (per-repository busy marker; clean case restored, fast_landing
-    1.9 s, accepted); asked to rebase, rerun gate and open its PR; then Opus review; after it lands use
+  - 138 land submit/undo/cleanup: PR #126, rulings applied (per-repository busy marker; clean case restored,
+    fast_landing 1.9 s, accepted); gate 134.3 s. Needs Opus review; after it lands use
     `pwsh tools/land.ps1 submit`. Unrelated: CRLF ghost diffs on .ps1 files (`git add --renormalize`).
   - 141 visible lock and test runner: PR #125, rulings applied (fast_lock 2.2 s scaled with a ready-file
     handshake; waiting lines throttled after 3). Needs Opus review; gate not rerun after the rework. Its env

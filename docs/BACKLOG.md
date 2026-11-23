@@ -59,3 +59,4 @@ them. Milestone is where the item must be settled at the latest.
 | Kernel | Cauchy dispersion runs on the unmodulated n_d and specular_weighted_eta modulates per lane afterwards; OpenPBR (index.html 823) defines n(lambda_d) as the modulated specular_ior | 145 review | M2 | M2 dispersion |
 | Kernel | emission_sidedness re-parses observer.bin on every call | 145 review | M2 | |
 | Tools | Lock timeout counts from owner.json's `started`; while holders still run the old lock.ps1 (no owner file) the waiter's own wait is the clock, so a long queue of old-code holders can trip 3600 s | 141 | M1b | |
+| Tests | abi test_session_lifecycle: ar_session_destroy took 6.7 ms against 5.0 ms once under load (138's gate); rerun green. Watch for repeats | 138 | M1b | the task that sees it again files it |
