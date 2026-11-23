@@ -327,7 +327,7 @@ function Invoke-Submit {
     if ($pr.Count) { $n = $pr[0].number }
     else {
       $t = if ($Title) { $Title } else { ($script:TaskTitle -replace "^$Number\s+", "${Number}: ") }
-      $bodyText = "Task $Number. Landed through tools/land.ps1.`n`n🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+      $bodyText = "Task $Number. Landed through tools/land.ps1.`n`n$([char]::ConvertFromUtf32(0x1F916)) Generated with [Claude Code](https://claude.com/claude-code)"
       $url = GhX pr create --base main --head $branch --title $t --body $bodyText
       $n = [regex]::Match($url, '(\d+)\s*$').Groups[1].Value
       if (-not $n) { Refuse "gh pr create printed no PR number: $url" }
