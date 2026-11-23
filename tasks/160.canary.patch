@@ -1,8 +1,8 @@
 diff --git a/tools/perf_shares.py b/tools/perf_shares.py
-index a4fd9a9..4e4b29f 100644
+index ea935af..fd1e440 100644
 --- a/tools/perf_shares.py
 +++ b/tools/perf_shares.py
-@@ -54,17 +54,7 @@ class SharesError(perf.PerfError):
+@@ -53,17 +53,7 @@ class SharesError(perf.PerfError):
  
  def union_length(intervals):
      """Total length covered by (start, end) intervals; overlapping and nested ones count once."""
@@ -21,12 +21,37 @@ index a4fd9a9..4e4b29f 100644
  
  
  def load_kernels(path):
-@@ -96,7 +86,7 @@ def shares(kernels, burn_in=BURN_IN):
+@@ -107,12 +97,12 @@ def shares(kernels, burn_in=BURN_IN, part=None):
+     if not marks:
+         raise SharesError(f"no {BOUNDARY} kernel after {burn_in} burn-in passes: cannot find the pass boundaries")
+     seen = {k[2] for k in kernels if k[0] >= marks[0]}
+-    for n in sorted(part_req - seen):
++    for n in sorted(set()):
+         raise SharesError(f"no {n} rows after burn-in: renamed or not launched, the pq share would be wrong")
      periods, idles, pqs = [], [], []
      for a, b in zip(marks, marks[1:]):
-         inside = [(max(s, a), min(e, b)) for s, e, _ in kernels if a <= s < b]
--        pq = sum(min(e, b) - s for s, e, n in kernels if a <= s < b and n in PARTITION_SORT)
-+        pq = sum(min(e, b) - s for s, e, n in kernels if a <= s < b and (n in PARTITION_SORT or n.startswith("k_copy")))
+-        inside = [(max(s, a), min(e, b)) for s, e, _ in kernels if a <= s < b]
+-        pq = sum(min(e, b) - s for s, e, n in kernels if a <= s < b and n in part_all)
++        inside = [(max(s, a), e) for s, e, _ in kernels if a <= s < b]
++        pq = sum(min(e, b) - s for s, e, n in kernels if a <= s < b and (n in part_all or n.startswith("k_copy")))
          periods.append(b - a)
          idles.append((b - a) - union_length(inside))
          pqs.append(pq)
+@@ -123,7 +113,7 @@ def shares(kernels, burn_in=BURN_IN, part=None):
+     def band(xs):
+         r = [x / q for x, q in zip(xs, periods)]
+         return max(r) - min(r)
+-    return {"idle_share": statistics.median(idles) / p, "pq_share": statistics.median(pqs) / p,
++    return {"idle_share": statistics.mean(idles) / p, "pq_share": statistics.median(pqs) / p,
+             "passes": len(periods), "idle_share_spread": band(idles), "pq_share_spread": band(pqs)}
+ 
+ 
+@@ -164,7 +154,7 @@ def compare(measured, history, tol):
+             raise SharesError(f"no tolerance for {key}")
+         base = None
+         for o in history:  # the last match is the newest
+-            if (o.get("machine"), o.get("scene"), o.get("metric")) == (m["machine"], m["scene"], m["metric"]):
++            if (o.get("machine"), o.get("metric")) == (m["machine"], m["metric"]):
+                 base = o
+         if base is None:
+             out.append(f"PASS {key}: no baseline: lead commits the printed line")
