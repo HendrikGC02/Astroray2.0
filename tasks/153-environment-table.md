@@ -16,3 +16,4 @@ Budget: +3 s of gate at most (2 chi-squared checks counted against gate_statisti
 Depends on: 143.
 Size: M (about 300 lines without tests); stop and report at 2x.
 Progress:
+- Files: src/kernel/light/equal_area.h, src/kernel/light/environment_table.h, src/host/light/env_table.{h,cpp}, tests/cpu/test_env_table.cpp (all new), tasks/153.canary.patch. Host EnvTable holds plain float vectors (no kernel view type), so the f64 test copy can view them.
