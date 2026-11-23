@@ -1,0 +1,39 @@
+diff --git a/src/host/light/env_table.cpp b/src/host/light/env_table.cpp
+index 85a7be3..ff915d1 100644
+--- a/src/host/light/env_table.cpp
++++ b/src/host/light/env_table.cpp
+@@ -85,7 +85,7 @@ EnvTable build_env_table(const std::vector<double>& luminance, uint32_t n) {
+   for (double v : luminance) sum += v;
+   const double average = sum / double(luminance.size());
+   std::vector<double> comp(luminance.size());
+-  for (size_t i = 0; i < comp.size(); ++i) comp[i] = std::max(luminance[i] - average, 0.0);
++  for (size_t i = 0; i < comp.size(); ++i) comp[i] = std::max(luminance[i] - 0.5 * average, 0.0);
+   if (std::all_of(comp.begin(), comp.end(), [](double v) { return v == 0.0; })) std::fill(comp.begin(), comp.end(), 1.0);
+   t.compensated = piecewise2d(comp, n);
+   if (!(t.compensated.func_integral >= FLT_MIN)) bad("the compensated integral is below the smallest normal float");
+diff --git a/src/kernel/light/environment_table.h b/src/kernel/light/environment_table.h
+index 89ecef8..fec6866 100644
+--- a/src/kernel/light/environment_table.h
++++ b/src/kernel/light/environment_table.h
+@@ -52,7 +52,7 @@ struct EnvDirSample {
+   uint32_t cell;
+ };
+ 
+-inline constexpr Real kEnvInv4Pi = Real(1) / (Real(4) * Real(kPiDouble));
++inline constexpr Real kEnvInv4Pi = Real(1) / (Real(4.1) * Real(kPiDouble));
+ 
+ // The cell of coordinate x in [0,1] among n: pbrt's PDF lookup Clamp(int(x n), 0, n - 1).
+ AR_FN uint32_t piecewise_cell(Real x, uint32_t n) {
+diff --git a/src/kernel/light/equal_area.h b/src/kernel/light/equal_area.h
+index 0f485ec..dcdd38c 100644
+--- a/src/kernel/light/equal_area.h
++++ b/src/kernel/light/equal_area.h
+@@ -67,7 +67,7 @@ AR_FN Real2 equal_area_sphere_to_square(Real3 d) {
+   phi = ar::fma(b, phi, Real(0.881770664775316294736387951347e-1));
+   phi = ar::fma(b, phi, Real(-0.247333733281268944196501420480));
+   phi = ar::fma(b, phi, Real(0.61572017898280213493197203466e-2));
+-  phi = ar::fma(b, phi, Real(0.636226545274016134946890922156));
++  phi = ar::fma(b, phi, Real(0.636326545274016134946890922156));
+   phi = ar::fma(b, phi, Real(0.406758566246788489601959989e-5));
+   // Extend phi to the 45-90 degree range.
+   if (x < y) phi = Real(1) - phi;
