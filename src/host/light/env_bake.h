@@ -52,14 +52,14 @@ class EnvironmentBaker {
   // device-resident KernelGlobals in `kg_buffer` (the session's, with the world light and the
   // observer tables filled), binds that buffer, launches KernelId::BAKE_ENVIRONMENT over n * n
   // cells, reads the grid back and frees it, and clears the grid pointer again, also when the launch
-  // fails. `radiance_scale` is the s of the light table whose world record the KernelGlobals name
-  // (1 when the record is unscaled).
+  // fails. There is no default for `radiance_scale`: the caller passes the radiance_scale of the same
+  // latched light table whose world record is bound in `kg_buffer` (1 when that record is unscaled).
   // Throws std::invalid_argument for n = 0 or a radiance_scale that is not finite and positive and
   // std::runtime_error, naming the first cell and its
   // direction, for a cell that is not a finite non-negative radiance; the cache is unchanged then.
   // Not thread-safe: one thread per baker, like every handle.
   BakedEnvironment get(Device& device, const DeviceBuffer& kg_buffer, const std::vector<uint8_t>& key,
-                       uint32_t n = kEnvBakeSize, double radiance_scale = 1.0);
+                       double radiance_scale, uint32_t n = kEnvBakeSize);
 
   // Bakes completed so far.
   uint32_t rebuild_count() const { return rebuilds_; }

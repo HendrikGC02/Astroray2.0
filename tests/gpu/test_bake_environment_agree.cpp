@@ -103,8 +103,8 @@ Result run(Device& dev, const ar::LightRecord& world) {
     dev.free(grid);
   }
   EnvironmentBaker baker(kOwner);
-  r.baked = baker.get(dev, kg_buf, {1, 2, 3}, kN);
-  baker.get(dev, kg_buf, {1, 2, 3}, kN);
+  r.baked = baker.get(dev, kg_buf, {1, 2, 3}, 1.0, kN);
+  baker.get(dev, kg_buf, {1, 2, 3}, 1.0, kN);
   r.rebuilds_after_two = baker.rebuild_count();
   CHECK(dev.ledger().total() == baseline);
   for (DeviceBuffer* b : {&cmf, &illum, &tables_buf, &lights_buf, &kg_buf}) dev.free(*b);

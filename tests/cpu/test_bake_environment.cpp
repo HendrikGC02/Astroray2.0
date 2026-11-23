@@ -240,7 +240,7 @@ TEST_CASE("bake_environment/constant world uniform") {
   CHECK(std::fabs(double(grid[0]) - want) <= 1e-6 * want);
 
   EnvironmentBaker baker;
-  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {}, kN);
+  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {}, 1.0, kN);
   REQUIRE(b.table);
   CHECK(b.max == double(grid[0]));
   CHECK(b.mean == double(grid[0]));  // 4096 equal floats sum exactly in double
@@ -278,7 +278,7 @@ TEST_CASE("bake_environment/tiny uniform world builds") {
     }
     EnvironmentBaker baker;
     BakedEnvironment b;
-    REQUIRE_NOTHROW(b = baker.get(rig.dev, rig.kg, {}, kN));
+    REQUIRE_NOTHROW(b = baker.get(rig.dev, rig.kg, {}, 1.0, kN));
     REQUIRE(b.table);
     CHECK(b.max == double(grid[0]));
     CHECK(std::all_of(b.table->plain.func.begin(), b.table->plain.func.end(), [](float f) { return f == 1.0f; }));
@@ -291,13 +291,13 @@ TEST_CASE("bake_environment/black world gives no table") {
   Rig rig;
   EnvironmentBaker baker;
   rig.set_world(Real(0), world_colour());
-  BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, kN);
+  BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, 1.0, kN);
   CHECK(b.table == nullptr);
   CHECK(b.max == 0.0);
   CHECK(b.mean == 0.0);
   // A scene without a world is the same black one.
   rig.bind(ar::kNoLight);
-  b = baker.get(rig.dev, rig.kg, {2}, kN);
+  b = baker.get(rig.dev, rig.kg, {2}, 1.0, kN);
   CHECK(b.table == nullptr);
   CHECK(b.max == 0.0);
   CHECK(b.mean == 0.0);
@@ -311,7 +311,7 @@ TEST_CASE("bake_environment/non-finite cell is refused") {
     rig.set_world(Real(bad), world_colour());
     std::string what;
     try {
-      baker.get(rig.dev, rig.kg, {1}, kN);
+      baker.get(rig.dev, rig.kg, {1}, 1.0, kN);
     } catch (const std::runtime_error& e) {
       what = e.what();
     }
@@ -331,9 +331,9 @@ TEST_CASE("bake_environment/non-finite cell is refused") {
   // The refusals left no cache: a good world under the same key bakes.
   CHECK(baker.rebuild_count() == 0u);
   rig.set_world(Real(2), world_colour());
-  CHECK(baker.get(rig.dev, rig.kg, {1}, kN).table != nullptr);
+  CHECK(baker.get(rig.dev, rig.kg, {1}, 1.0, kN).table != nullptr);
   CHECK(baker.rebuild_count() == 1u);
-  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, 0), std::invalid_argument);
+  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, 1.0, 0), std::invalid_argument);
 }
 
 TEST_CASE("bake_environment/rebuild only on world edit") {
@@ -346,7 +346,7 @@ TEST_CASE("bake_environment/rebuild only on world edit") {
     REQUIRE(world);
     // The kernel's world light follows the scene's compiled world, as the light table will.
     rig.set_world(Real(world->strength), world->color);
-    return baker.get(rig.dev, rig.kg, EnvironmentBaker::world_key(world.get()), kN);
+    return baker.get(rig.dev, rig.kg, EnvironmentBaker::world_key(world.get()), 1.0, kN);
   };
   const auto set_world_strength = [&](float strength) {
     fx.commit([&](Edit& e) {
@@ -423,7 +423,7 @@ TEST_CASE("bake_environment/rebuild only on world edit") {
   CHECK(bake().table == second.table);
   CHECK(baker.rebuild_count() == 2u);
   // A different resolution is a different bake.
-  CHECK(baker.get(rig.dev, rig.kg, EnvironmentBaker::world_key(fx.scene.materials->world().get()), kN / 2).table->n ==
+  CHECK(baker.get(rig.dev, rig.kg, EnvironmentBaker::world_key(fx.scene.materials->world().get()), 1.0, kN / 2).table->n ==
         kN / 2);
   CHECK(baker.rebuild_count() == 3u);
 }
@@ -437,7 +437,7 @@ TEST_CASE("bake_environment/non-uniform max mean and table") {
   const double tol = (kAnalyticUnits + kReductionUnits) * kU;
   Rig rig(true);
   EnvironmentBaker baker;
-  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, kN);
+  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, 1.0, kN);
   REQUIRE(b.table != nullptr);
   std::vector<double> ref(size_t(kN) * kN);
   double max_ref = 0.0, sum_ref = 0.0;
@@ -467,7 +467,7 @@ TEST_CASE("bake_environment/failed launch restores the kernel globals") {
   EnvironmentBaker baker;
   const uint64_t baseline = rig.ledger.total();
   rig.dev.fail_launch = true;
-  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, kN), DeviceError);
+  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, 1.0, kN), DeviceError);
   rig.dev.fail_launch = false;
   ar::KernelGlobals back{};
   rig.dev.download(&back, rig.kg, 0, sizeof back);
@@ -476,7 +476,7 @@ TEST_CASE("bake_environment/failed launch restores the kernel globals") {
   CHECK(rig.ledger.total() == baseline);
   CHECK(baker.rebuild_count() == 0u);
   // The same key bakes afterwards: the failure left no cache behind.
-  CHECK(baker.get(rig.dev, rig.kg, {1}, kN).table != nullptr);
+  CHECK(baker.get(rig.dev, rig.kg, {1}, 1.0, kN).table != nullptr);
   CHECK(baker.rebuild_count() == 1u);
 }
 
@@ -542,7 +542,7 @@ TEST_CASE("bake_environment/radiance scale moves no cache") {
   EnvironmentBaker baker;
   const auto t1 = fx.scene.lights();
   bind_table(*t1);
-  const BakedEnvironment first = baker.get(rig.dev, rig.kg, key, kN, t1->radiance_scale);
+  const BakedEnvironment first = baker.get(rig.dev, rig.kg, key, t1->radiance_scale, kN);
   REQUIRE(first.table != nullptr);
   CHECK(std::fabs(first.max - want) <= 1e-6 * want);
   CHECK(std::fabs(first.mean - want) <= 1e-6 * want);
@@ -560,12 +560,12 @@ TEST_CASE("bake_environment/radiance scale moves no cache") {
   bind_table(*t2);
   // The kernel does see the new scale: its cells are s times the unscaled radiance.
   CHECK(std::fabs(double(rig.raw_grid(kN)[0]) / t2->radiance_scale - want) <= 1e-6 * want);
-  const BakedEnvironment second = baker.get(rig.dev, rig.kg, key, kN, t2->radiance_scale);
+  const BakedEnvironment second = baker.get(rig.dev, rig.kg, key, t2->radiance_scale, kN);
   CHECK(baker.rebuild_count() == 1u);
   CHECK(second.table == first.table);
   CHECK(second.max == first.max);
   CHECK(second.mean == first.mean);
-  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, key, kN, 0.0), std::invalid_argument);
+  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, key, 0.0, kN), std::invalid_argument);
 }
 
 }  // TEST_SUITE("fast")

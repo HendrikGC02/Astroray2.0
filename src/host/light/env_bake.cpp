@@ -48,7 +48,7 @@ std::vector<uint8_t> EnvironmentBaker::world_key(const WorldOutput* world) {
 }
 
 BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_buffer, const std::vector<uint8_t>& key,
-                                       uint32_t n, double radiance_scale) {
+                                       double radiance_scale, uint32_t n) {
   if (n == 0) throw std::invalid_argument("bake_environment: n is 0");
   if (!(std::isfinite(radiance_scale) && radiance_scale > 0.0))
     throw std::invalid_argument("bake_environment: the radiance scale is not finite and positive");
