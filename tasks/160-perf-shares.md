@@ -18,3 +18,6 @@ Budget: gate +1 s at most for the self-test (stop and ask above); `-Shares` is i
 Depends on: 140.
 Size: M (about 200 lines without tests); stop and report at 2x, or after Do 1 if the PR definitions are not exact enough to implement.
 Progress:
+  perf -Shares: perf_shares.py (idle and pq share, burn-in 8, >=60 passes), lib/nsys.ps1, land hook (src/host/scheduler*, queue_build.h, sort.h, kernel/sched, device/cuda), check.ps1 self-test chain.
+  B-19 tolerances PROVISIONAL from 5 captures: b1m idle 0.239 pq 0.040, b5m idle 0.401 pq 0.056 (budgets.toml, 0009 d13). First lines in bench/history/2026.jsonl.
+  Measured b1m idle 11.2 pct, pq 9.45 pct (134: 11.0, 9.4). -Shares wall 21 s for two captures. check fast 8.9 s, gate 144.5 s, canary PASS (2 hunks).
