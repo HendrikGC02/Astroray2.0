@@ -17,6 +17,7 @@
 #include "../../kernel/vm/ops/mul_f32x3_f32.h"
 #include "../../kernel/vm/ops/store_slot.h"
 #include "../../kernel/vm/ops/tex_image.h"
+#include "../spectral/blackbody.h"
 #include "graph.h"
 #include "op_meta.h"
 #include "regalloc.h"
@@ -335,7 +336,16 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
       written[slot] = 1;
       const int src = nd.input[0];
       const VType t = w.g.nodes[size_t(src)].out;
-      if (w.isc[size_t(src)]) {
+      if (w.g.nodes[size_t(src)].op == Op::CAUCHY_ABBE) {
+        // parse_graph admits this source only for specular_ior, from constant parameters: the
+        // dispersive IOR is one ref in the block, evaluated per wavelength by resolve().
+        const float* pf = w.g.f32.data() + w.g.nodes[size_t(src)].f32_first;
+        ar::SpectrumRef& r = res.block.specular_ior;
+        r = {};
+        r.kind = uint8_t(ar::SpectrumKind::CAUCHY_ABBE);
+        r.semantic = uint8_t(ar::SpectrumSemantic::IOR);
+        for (int k = 0; k < 3; ++k) r.p[k] = pf[k];
+      } else if (w.isc[size_t(src)]) {
         if (!store_const(&res.block, table, slot, t, w.cv[size_t(src)], &res.clamp_flags, &res.error)) return res;
       } else {
         if (t == VType::F32 && slot >= uint32_t(ar::RecordSlot::base_color) && slot < uint32_t(ar::RecordSlot::geometry_normal))
@@ -350,6 +360,34 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
         return res.error = "EMIT_LE strength must not be negative", res;
       // Emission estimate (0005 item 43): the input's mean (a constant exactly, an image by its
       // mean, any other per-point input by 1).
+      const GraphNode& colour_node = w.g.nodes[size_t(nd.input[0])];
+      if (colour_node.op == Op::BLACKBODY) {
+        // Analytic emission (0005 items 9, 39): one constant Blackbody feeding the material's only
+        // emission is a block ref; any other shape would need a spectrum in the program, which
+        // M1 has no slot-resolve for.
+        const std::string who = "graph node " + std::to_string(nd.input[0]) + " (BLACKBODY): ";
+        if (emit_count != 1) return res.error = who + "a Blackbody emission must be the material's only emission", res;
+        if (!w.isc[size_t(nd.input[1])]) return res.error = who + "the emission strength must be constant", res;
+        const float* pf = w.g.f32.data() + colour_node.f32_first;
+        double y_norm;
+        try {
+          y_norm = blackbody_y_normalised(double(pf[0]));
+        } catch (const std::exception& e) {
+          return res.error = who + e.what(), res;
+        }
+        ar::SpectrumRef& r = res.block.emission_color;
+        r = {};
+        r.kind = uint8_t(ar::SpectrumKind::BLACKBODY);
+        r.semantic = uint8_t(ar::SpectrumSemantic::ILLUMINANT);
+        r.p[0] = pf[0];
+        r.p[1] = float(double(pf[1]) * y_norm);
+        res.block.emission_luminance = w.cv[size_t(nd.input[1])][0];
+        EmissionTerm bt;
+        bt.color = r;
+        bt.strength = res.block.emission_luminance;
+        if (bt.strength > 0.0f && pf[1] > 0.0f) res.emission.push_back(bt);
+        continue;
+      }
       EmissionTerm term;
       const ar::SpectrumSemantic esem = ar::kSlotSemantic[int(ar::Slot::EMISSION_COLOR)];
       const Vec3 mean = estimate_input(w, nd.input[0], &mx);
@@ -517,11 +555,19 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
   MaterialOutput m;
   m.compiled = compile_surface(d, table, means, slots);
   if (!m.compiled.ok) return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, m.compiled.error);
-  // Only CONSTANT and RGB resolve in M1a (spectrum_ref.h); TABLE, BLACKBODY and CAUCHY_ABBE land in M1b.
+  // The (kind, semantic) pairs resolve() evaluates (spectrum_ref.h, 0005 item 9): CONSTANT and RGB
+  // anywhere, BLACKBODY in an ILLUMINANT slot, CAUCHY_ABBE in an IOR slot. Every other kind or
+  // pair is refused here, so it never reaches resolve().
   for (int s = 0; s < int(ar::Slot::COUNT_); ++s) {
-    const uint8_t k = ar::slot_ref(m.compiled.block, ar::Slot(s)).kind;
-    if (k != uint8_t(ar::SpectrumKind::CONSTANT) && k != uint8_t(ar::SpectrumKind::RGB))
-      return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "SpectrumRef kind " + std::to_string(k) + " lands in M1b");
+    const ar::SpectrumRef& ref = ar::slot_ref(m.compiled.block, ar::Slot(s));
+    const uint8_t k = ref.kind, sem = uint8_t(ar::kSlotSemantic[s]);
+    const bool ok = k == uint8_t(ar::SpectrumKind::CONSTANT) || k == uint8_t(ar::SpectrumKind::RGB) ||
+                    (k == uint8_t(ar::SpectrumKind::BLACKBODY) && sem == uint8_t(ar::SpectrumSemantic::ILLUMINANT)) ||
+                    (k == uint8_t(ar::SpectrumKind::CAUCHY_ABBE) && sem == uint8_t(ar::SpectrumSemantic::IOR));
+    if (!ok)
+      return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
+                              "SpectrumRef kind " + std::to_string(k) + " is not allowed in slot " + std::to_string(s) +
+                                  " (semantic " + std::to_string(sem) + ")");
   }
   finish(&m);
   if (m.compiled.clamp_flags != 0) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "RGB clamped");

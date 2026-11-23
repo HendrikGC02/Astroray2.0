@@ -16,4 +16,4 @@ Canary: tasks/145.canary.patch must turn red: astroray_tests_cpu "spectrum_ref/c
 Budget: gate +3 s at most (stop and ask above); k_shade_surface: registers and spills must stay 128 and 0 / 0, stack 384, compile_s within 5.0 s (ruling 72); state the delta; the probe's counts change with the two opcodes (state them).
 Depends on: 146.
 Size: L (about 600 lines with the GPU and compiler parts); stop and report at 2x. If the compiler part alone exceeds 250 lines, land steps 1-2 and 5 (kernel and VM) first and split step 3-4.
-Progress:
+Progress: Files: slot_resolve.h, spectrum_ref.h, ops.def, ops/blackbody.h, ops/cauchy_abbe.h, interp.h, graph.cpp, compiler.cpp, light_builder.cpp, probe_m1.cu, tests (spectrum_ref new, vm, opsdef, compiler, gpu vm_agree), 0005.

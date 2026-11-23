@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "graph.h"
 
+#include <cmath>
+
 #include "../../kernel/material/constant_block.h"
 #include "../../kernel/vm/context.h"
 #include "../../kernel/vm/ops/store_slot.h"
@@ -21,7 +23,9 @@ bool op_param_counts(Op op, uint32_t* nf, uint32_t* ni) {
   *nf = *ni = 0;
   switch (op) {
     case Op::CONST_F32: *nf = 1; return true;
-    case Op::CONST_F32X3: *nf = 3; return true;
+    case Op::CONST_F32X3:
+    case Op::CAUCHY_ABBE: *nf = 3; return true;  // CAUCHY_ABBE: n_d, V_d, dispersion scale
+    case Op::BLACKBODY: *nf = 2; return true;     // temperature in K, scale
     case Op::LOAD_CTX_UV:
     case Op::RGB_LIFT:
     case Op::STORE_SLOT: *ni = 1; return true;
@@ -99,7 +103,9 @@ VType op_result_type(Op op) {
     case Op::MUL_F32X3_F32:
     case Op::ADD_F32X3:
     case Op::TEX_IMAGE: return VType::F32X3;
-    case Op::RGB_LIFT: return VType::SPEC;
+    case Op::RGB_LIFT:
+    case Op::BLACKBODY:
+    case Op::CAUCHY_ABBE: return VType::SPEC;
     default: return VType::NONE;
   }
 }
@@ -129,6 +135,14 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
       return *err = at(i, "RGB_LIFT semantic must be REFLECTANCE, UNBOUNDED or ILLUMINANT"), false;
     if (o.op == Op::TEX_IMAGE && (uint32_t(g->i32[o.i32_first + 1]) & ~ar::kTexModeMask) != 0u)
       return *err = at(i, "TEX_IMAGE mode must be CLOSEST (0) or LINEAR (1) plus REPEAT (0) or EXTEND (2)"), false;
+    // Constants only: a per-point temperature or n_d is M2 dispersion work and has no socket here.
+    const float* pf = g->f32.data() + o.f32_first;
+    auto finite_positive = [](float v) { return std::isfinite(v) && v > 0.0f; };
+    if (o.op == Op::BLACKBODY && !(finite_positive(pf[0]) && std::isfinite(pf[1]) && pf[1] >= 0.0f))
+      return *err = at(i, "BLACKBODY needs a finite positive temperature and a finite non-negative scale"), false;
+    if (o.op == Op::CAUCHY_ABBE &&
+        !(finite_positive(pf[0]) && finite_positive(pf[1]) && std::isfinite(pf[2]) && pf[2] >= 0.0f))
+      return *err = at(i, "CAUCHY_ABBE needs a finite positive n_d and Abbe number and a finite non-negative dispersion scale"), false;
     if (o.op == Op::STORE_SLOT && uint32_t(g->i32[o.i32_first]) >= uint32_t(ar::RecordSlot::COUNT_))
       return *err = at(i, "unknown record slot"), false;
   }
@@ -140,7 +154,17 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
     if (l.from_socket != 0 || from.out == VType::NONE) return *err = at(l.from_node, "has no such output socket"), false;
     if (l.to_socket >= uint32_t(to.n_inputs)) return *err = at(l.to_node, "has no such input socket"), false;
     if (to.input[l.to_socket] >= 0) return *err = at(l.to_node, "input linked twice"), false;
-    if (to.op == Op::STORE_SLOT) {
+    // A BLACKBODY value is an emission colour and a CAUCHY_ABBE value is an IOR (0005 item 9): each
+    // has exactly one consumer shape, everything else is refused here with both nodes named.
+    const std::string sink = to.op == Op::STORE_SLOT ? " (it feeds record slot " + std::to_string(g->i32[to.i32_first]) + ")" : "";
+    if (from.op == Op::BLACKBODY && !(to.op == Op::EMIT_LE && l.to_socket == 0))
+      return *err = at(l.from_node, "BLACKBODY only feeds the colour of an emission (EMIT_LE)") + sink, false;
+    if (from.op == Op::CAUCHY_ABBE &&
+        !(to.op == Op::STORE_SLOT && uint32_t(g->i32[to.i32_first]) == uint32_t(ar::RecordSlot::specular_ior)))
+      return *err = at(l.from_node, "CAUCHY_ABBE only feeds the specular_ior slot") + sink, false;
+    if (from.op == Op::BLACKBODY || from.op == Op::CAUCHY_ABBE) {
+      // accepted above; the usual type rules do not apply to these spec values
+    } else if (to.op == Op::STORE_SLOT) {
       const uint32_t slot = uint32_t(g->i32[to.i32_first]);
       if (slot == uint32_t(ar::RecordSlot::specular_ior) && from.out != VType::F32)
         return *err = at(l.to_node, "specular_ior takes a scalar, not a colour (0005 item 10)"), false;

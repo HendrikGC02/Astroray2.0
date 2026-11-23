@@ -10,6 +10,7 @@
 #include "../../kernel/material/material_header.h"
 #include "../../kernel/material/slot_resolve.h"
 #include "host/material/material_store.h"
+#include "host/spectral/blackbody.h"
 #include "host/scene/instances.h"
 #include "host/scene/mesh.h"
 #include "host/scene/world.h"
@@ -175,7 +176,12 @@ uint32_t emission_sidedness(uint32_t sampling, const std::vector<EmissionTerm>& 
         double c;
         if (t.color.kind == uint8_t(ar::SpectrumKind::CONSTANT)) c = double(t.color.p[0]);
         else if (t.color.kind == uint8_t(ar::SpectrumKind::RGB)) c = double(t.color.p[3]) / 2.0;
-        else throw std::invalid_argument("emission estimate SpectrumRef kind " + std::to_string(t.color.kind) + " is not CONSTANT or RGB");
+        else if (t.color.kind == uint8_t(ar::SpectrumKind::BLACKBODY))
+          // The band sum of the term against ybar, which is its luminance: p[1] is the scale times
+          // 1 / Y(Planck), so Y = p[1] / blackbody_y_normalised(T) (0003 d11). Cycles' estimate for
+          // a Blackbody is not reproduced; a spectral term is tested by its luminance.
+          c = double(t.color.p[1]) / blackbody_y_normalised(double(t.color.p[0]));
+        else throw std::invalid_argument("emission estimate SpectrumRef kind " + std::to_string(t.color.kind) + " is not CONSTANT, RGB or BLACKBODY");
         m += double(t.strength) * c;
       }
       return std::fabs(m) > 0.5 ? (kLightLit | ar::kLightTwoSided) : 0;

@@ -44,3 +44,5 @@ AR_OP(RGB_LIFT,        1, "reg+reg+lift",     "spec",  CHEAP, NONE_SURFACE_ONLY,
 AR_OP(EMIT_LE,         1, "regrgbs",          "",      CHEAP, NONE_SURFACE_ONLY,      false, false, false)
 AR_OP(UNSUPPORTED,     0, "imm",              "",      CHEAP, NONE_SURFACE_ONLY,      false, false, false)
 AR_OP(TEST_INJECT_NAN, 0, "reg",              "f32",   CHEAP, NONE_SURFACE_ONLY,      false, true, false)
+AR_OP(BLACKBODY,       0, "reg+imm+imm",      "spec",  CHEAP, NONE_SURFACE_ONLY,      false, false, false)
+AR_OP(CAUCHY_ABBE,     0, "reg+imm+imm+imm",  "spec",  CHEAP, NONE_SURFACE_ONLY,      false, false, false)
