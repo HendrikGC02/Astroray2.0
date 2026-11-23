@@ -8,6 +8,7 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
@@ -89,6 +90,9 @@ class Ledger {
   uint64_t session_total(uint64_t session) const;
   uint64_t category_total(LedgerCategory category) const;
   std::vector<LedgerRecord> records() const;  // live records, in no particular order
+  // Calls `visit` on the first live record while holding the ledger lock; does nothing when there is
+  // none. Lets a test hold the lock for as long as it needs; `visit` must not call the ledger.
+  void visit_first_record_locked(const std::function<void(const LedgerRecord&)>& visit) const;
 
  private:
   mutable std::mutex mutex_;

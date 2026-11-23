@@ -9,8 +9,10 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -25,6 +27,41 @@ using namespace astroray::host;
 namespace {
 constexpr uint64_t kMiB = 1ull << 20;
 constexpr uint64_t kGiB = 1ull << 30;
+}  // namespace
+
+namespace {
+
+// Holds the ledger lock on a thread until `poll` has returned on the calling thread or ten
+// seconds pass, and reports whether `poll` came back first. A poll that takes the lock blocks
+// until the holder gives up, so it fails by that path, with no bound on how fast a poll runs
+// (a shared runner can stall one for any scheduling reason).
+template <class Poll>
+bool poll_returns_while_lock_held(Ledger& l, Poll poll) {
+  std::mutex m;
+  std::condition_variable cv;
+  bool holding = false, polled = false, gave_up = false;
+  std::thread holder([&] {
+    l.visit_first_record_locked([&](const LedgerRecord&) {
+      std::unique_lock<std::mutex> lk(m);
+      holding = true;
+      cv.notify_all();
+      gave_up = !cv.wait_for(lk, std::chrono::seconds(10), [&] { return polled; });
+    });
+  });
+  {
+    std::unique_lock<std::mutex> lk(m);
+    cv.wait(lk, [&] { return holding; });
+  }
+  poll();
+  {
+    std::lock_guard<std::mutex> lk(m);
+    polled = true;
+  }
+  cv.notify_all();
+  holder.join();
+  return !gave_up;
+}
+
 }  // namespace
 
 TEST_SUITE("fast") {
@@ -134,70 +171,44 @@ TEST_CASE("ledger/concurrent adds and removes balance") {
 TEST_CASE("ledger/a progress poll does not scan the live records") {
   // A host that spins on ar_session_get_progress reads every category each call. A scan of the
   // live records under the lock starved the scene's uploading workers: B-5M's 12,000 geometry
-  // buffers took minutes to upload. The numbers are typed from the sequence below.
+  // buffers took minutes to upload. A scan takes the lock, so a poll that returns while another
+  // thread holds it cannot be scanning. The numbers are typed from the sequence below.
   Ledger l;
   std::vector<uint64_t> ids;
-  for (int i = 0; i < 100000; ++i) ids.push_back(l.add({1, 0}, i % 2 ? LedgerCategory::GEOMETRY : LedgerCategory::TABLES, 16));
-  const auto t0 = std::chrono::steady_clock::now();
+  for (int i = 0; i < 1000; ++i) ids.push_back(l.add({1, 0}, i % 2 ? LedgerCategory::GEOMETRY : LedgerCategory::TABLES, 16));
   uint64_t seen = 0, seen_total = 0;
-  for (int poll = 0; poll < 2000; ++poll) {
+  CHECK(poll_returns_while_lock_held(l, [&] {
     for (uint32_t c = 0; c < kLedgerCategoryCount; ++c) seen += l.category_total(static_cast<LedgerCategory>(c));
     seen_total += l.total();
-  }
-  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-  CHECK(seen == 2000ull * 100000 * 16);
-  CHECK(seen_total == 2000ull * 100000 * 16);
-  // A scan costs seconds here (3.4e9 record visits); the kept totals cost a fraction of a millisecond.
-  CHECK(ms < 250.0);
-  CHECK(l.category_total(LedgerCategory::GEOMETRY) == 50000 * 16);
-  CHECK(l.category_total(LedgerCategory::TABLES) == 50000 * 16);
-  CHECK(l.total() == 100000 * 16);
+  }));
+  CHECK(seen == 1000 * 16);
+  CHECK(seen_total == 1000 * 16);
+  CHECK(l.category_total(LedgerCategory::GEOMETRY) == 500 * 16);
+  CHECK(l.category_total(LedgerCategory::TABLES) == 500 * 16);
+  CHECK(l.total() == 1000 * 16);
   for (size_t i = 0; i < ids.size(); i += 2) l.remove(ids[i]);  // the TABLES records
   CHECK(l.category_total(LedgerCategory::TABLES) == 0);
-  CHECK(l.category_total(LedgerCategory::GEOMETRY) == 50000 * 16);
-  CHECK(l.total() == 50000 * 16);
+  CHECK(l.category_total(LedgerCategory::GEOMETRY) == 500 * 16);
+  CHECK(l.total() == 500 * 16);
   CHECK(l.total() == l.scene_total(1));
 }
 
 }  // TEST_SUITE
 
-// Two million records take over the fast tier's per-test limit (B-12) to set up.
 TEST_SUITE("gate") {
 
 TEST_CASE("ledger/a poll does not wait for the ledger lock") {
   // The progress poll spins in the host while workers add and remove records; a poll that takes the
-  // lock waits for whoever holds it. One thread holds it for a long time (records() copies 2 M
-  // records inside it, over 50 ms) in a loop, and the main thread polls for 400 ms, several holder
-  // cycles, so a locked read cannot slip between them every time. A lock-free read never waits, so
-  // the worst single poll stays at scheduling noise.
+  // lock waits for whoever holds it. The holder keeps the lock until the polls have returned, so a
+  // locked read fails by the holder's timeout instead of by a measured time.
   Ledger l;
-  for (int i = 0; i < 2000000; ++i) l.add({1, 0}, LedgerCategory::GEOMETRY, 16);
-  std::atomic<bool> stop{false}, holding{false};
-  std::atomic<uint64_t> cycles{0};
-  std::thread holder([&] {
-    while (!stop.load(std::memory_order_relaxed)) {
-      holding.store(true, std::memory_order_relaxed);
-      if (l.records().size() == 0) break;
-      cycles.fetch_add(1, std::memory_order_relaxed);
-    }
-  });
-  while (!holding.load(std::memory_order_relaxed)) std::this_thread::yield();
-  using Clock = std::chrono::steady_clock;
-  double worst_us = 0;
-  uint64_t polls = 0, seen = 0;
-  const auto end = Clock::now() + std::chrono::milliseconds(400);
-  while (Clock::now() < end) {
-    const auto t0 = Clock::now();
-    seen += l.category_total(LedgerCategory::GEOMETRY) + l.total();
-    worst_us = std::max(worst_us, std::chrono::duration<double, std::micro>(Clock::now() - t0).count());
-    ++polls;
-  }
-  stop.store(true);
-  holder.join();
-  CHECK(cycles.load() >= 3);  // the polls spanned several holds
-  CHECK(seen == polls * 2 * 2000000 * 16);
-  // A locked read waits out part of a hold (tens of milliseconds); a lock-free one takes microseconds.
-  CHECK(worst_us < 50000.0);
+  for (int i = 0; i < 50000; ++i) l.add({1, 0}, LedgerCategory::GEOMETRY, 16);
+  uint64_t seen = 0, polls = 0;
+  CHECK(poll_returns_while_lock_held(l, [&] {
+    for (; polls < 100000; ++polls) seen += l.category_total(LedgerCategory::GEOMETRY) + l.total();
+  }));
+  CHECK(polls == 100000);
+  CHECK(seen == polls * 2 * 50000 * 16);
 }
 
 }  // TEST_SUITE

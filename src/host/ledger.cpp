@@ -92,4 +92,9 @@ std::vector<LedgerRecord> Ledger::records() const {
   return out;
 }
 
+void Ledger::visit_first_record_locked(const std::function<void(const LedgerRecord&)>& visit) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!live_.empty()) visit(live_.begin()->second);
+}
+
 }  // namespace astroray::host
