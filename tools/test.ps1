@@ -3,8 +3,8 @@
 # tools/test.ps1 -Py tests/abi/test_x.py|tests/abi/gpu_test_x.py|tests/blender/x.py -Case Class.test_name
 # Runs one test case under the right lock, so nobody calls a test executable, python or Blender directly.
 # Builds first (tools/build.ps1: the CPU exe with -NoMachineLock, the GPU exe, `all` for -Py). The machine
-# lock is held for the GPU exe, gpu_test_*.py and Blender (0009 d8), the tree lock on out/build around the
-# run, as `check fast` holds it. Cases run through lib/testrun.ps1, the canary's runner.
+# lock is held for the GPU exe, gpu_test_*.py and Blender (0009 d8) and for any build of device code;
+# the tree lock on out/build around the run, as `check fast` holds it. Cases run through lib/testrun.ps1.
 # Output: at most 20 lines: the doctest or unittest summary, the first failing lines, then
 # "PASS|FAIL test <target> <case> <s> s"; zero matching cases is a FAIL. Full log out/check/test.log.
 param(
@@ -41,7 +41,9 @@ $pass = $false
 $lines = @()
 $secs = 0.0
 try {
-  if ($machine) { $waited += Enter-ArMachineLock }
+  # A build of device code takes the machine lock too. Taken here, so its waiting messages reach the
+  # console (the build's own output is captured); released after the build when the run needs no lock.
+  if ($machine -or $build -notcontains '-NoMachineLock') { $waited += Enter-ArMachineLock }
   $b = @(& pwsh -NoProfile -File (Join-Path $PSScriptRoot 'build.ps1') @build 2>&1 | ForEach-Object { "$_" })
   Add-Content -Path $log -Value $b
   if ($LASTEXITCODE -ne 0) {
@@ -51,6 +53,7 @@ try {
   }
   $bj = Join-Path $root 'out/check/build.json'
   if (Test-Path $bj) { $waited += [double](Get-Content $bj -Raw | ConvertFrom-Json).waited }
+  if (-not $machine) { Exit-ArMachineLock }
   $waited += Enter-ArTreeLock (Join-Path $root 'out/build')
   $sw = [Diagnostics.Stopwatch]::StartNew()
   $res = @(Invoke-ArTestCase -Kind $kind -Target $target -Case $Case -Tier $Tier -Root $root)
@@ -67,7 +70,7 @@ try {
   Exit-ArMachineLock
 }
 $lines | ForEach-Object { Write-Host $_ }
-$verdict = "{0} test {1} {2} {3:N1} s (waited {4:N0} s)" -f $(if ($pass) { 'PASS' } else { 'FAIL' }), $target, $Case, $secs, $waited
+$verdict = "{0} test {1} {2} {3:F1} s (waited {4:F0} s)" -f $(if ($pass) { 'PASS' } else { 'FAIL' }), $target, $Case, $secs, $waited
 Add-Content -Path $log -Value $verdict
 Write-Host $verdict
 exit $(if ($pass) { 0 } else { 1 })

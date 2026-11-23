@@ -32,7 +32,7 @@ Work:
   Never invent an algorithm or a constant; cite the file under third_party/_cache/refs you read (`fetch.ps1 refs` first), not memory.
 - Builds, GPU runs and Blender go through `tools/` (they hold the machine lock
   and read the environment themselves). No direct cmake, ninja, nvcc, blender.
-  Run a test executable only as an acceptance line writes it, CPU ones only.
+  Run one test case with `pwsh tools/test.ps1 ...`; a GPU or Blender test never runs outside tools/.
 - Every test case sits in a tier suite (`fast` deterministic, `gate`
   statistical or GPU); Blender tests end with `support.main()`. Hosted ci has
   2-4 cores and no GPU: threaded tests must pass there.
