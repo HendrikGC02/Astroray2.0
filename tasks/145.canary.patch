@@ -1,0 +1,48 @@
+diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
+index b8d1289..d541f75 100644
+--- a/src/host/material/compiler.cpp
++++ b/src/host/material/compiler.cpp
+@@ -380,7 +380,7 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
+         r.kind = uint8_t(ar::SpectrumKind::BLACKBODY);
+         r.semantic = uint8_t(ar::SpectrumSemantic::ILLUMINANT);
+         r.p[0] = pf[0];
+-        r.p[1] = float(double(pf[1]) * y_norm);
++        r.p[1] = float(double(pf[1]));
+         res.block.emission_luminance = w.cv[size_t(nd.input[1])][0];
+         EmissionTerm bt;
+         bt.color = r;
+diff --git a/src/kernel/material/slot_resolve.h b/src/kernel/material/slot_resolve.h
+index ce30d29..0dfd4f1 100644
+--- a/src/kernel/material/slot_resolve.h
++++ b/src/kernel/material/slot_resolve.h
+@@ -50,7 +50,7 @@ AR_FN bool make_rgb_ref(const Rgb2SpecTable& t, Rgb rgb, SpectrumSemantic sem, S
+ // Ref: 0003 d25 (planck_radiance); 0005 item 9.
+ AR_FN Spec blackbody_spec(Real T, Real scale, const Lambda& lam) {
+   Spec s;
+-  for (int i = 0; i < kLanes; ++i) s.v[i] = scale * planck_radiance(lam.nm[i], T);
++  for (int i = 0; i < kLanes; ++i) s.v[i] = planck_radiance(lam.nm[i], T) / scale;
+   return s;
+ }
+ 
+@@ -68,7 +68,7 @@ template <class R>
+ AR_FN R cauchy_abbe_ior_t(R nd, R Vd, R dispersion_scale, R lambda_nm) {
+   const R l = lambda_nm < R(kCauchyLambdaMin) ? R(kCauchyLambdaMin)
+                                               : (lambda_nm > R(kCauchyLambdaMax) ? R(kCauchyLambdaMax) : lambda_nm);
+-  const R inv_f = R(1) / (R(kLambdaF) * R(kLambdaF)), inv_c = R(1) / (R(kLambdaC) * R(kLambdaC));
++  const R inv_f = R(1) / (R(kLambdaD) * R(kLambdaD)), inv_c = R(1) / (R(kLambdaC) * R(kLambdaC));
+   const R inv_d = R(1) / (R(kLambdaD) * R(kLambdaD));
+   const R B = dispersion_scale * (nd - R(1)) / (Vd * (inv_f - inv_c));
+   return nd + B * (R(1) / (l * l) - inv_d);
+diff --git a/src/kernel/vm/ops/blackbody.h b/src/kernel/vm/ops/blackbody.h
+index 4a6b95a..6c1e19b 100644
+--- a/src/kernel/vm/ops/blackbody.h
++++ b/src/kernel/vm/ops/blackbody.h
+@@ -12,7 +12,7 @@
+ AR_NS_BEGIN
+ AR_FN void vm_op_blackbody(VmState& vm) {
+   if (!vm_regs_ok(vm, vm.a, 4)) return;
+-  const Spec s = blackbody_spec(Real(bit_cast<float>(vm_imm(vm, 0))), Real(bit_cast<float>(vm_imm(vm, 1))),
++  const Spec s = blackbody_spec(Real(bit_cast<float>(vm_imm(vm, 1))), Real(bit_cast<float>(vm_imm(vm, 0))),
+                                 vm.ctx->lambda_t);
+   for (int i = 0; i < kLanes; ++i) vm.r[vm.a + uint32_t(i)] = float(s.v[i]);
+   vm.pc += 3;
