@@ -1,0 +1,24 @@
+diff --git a/blender/astroray/sync/instances.py b/blender/astroray/sync/instances.py
+index afc709b..ef26cb8 100644
+--- a/blender/astroray/sync/instances.py
++++ b/blender/astroray/sync/instances.py
+@@ -148,7 +148,7 @@ class InstanceCache:
+         """Drops what an update to these original IDs (objects or their data) may have changed."""
+         for u in uids:
+             for o in (u, *self.users.pop(u, ())):
+-                for d in (self.tids, self.lights, self.crypto, self.assets, self.plain):
++                for d in (self.lights, self.crypto, self.assets):
+                     d.pop(o, None)
+                 self.real.forget(o)
+ 
+@@ -195,8 +195,8 @@ def _remember_objects(fresh, material_key, cache):
+     for uid, ob, h in zip(uids, obs, hashes):
+         data = ob.data
+         table = tuple(material_key(s.material) for s in ob.material_slots)
+-        cache.remember(uid, data.session_uid if data is not None else None, table, ob.lightgroup, h,
+-                       h if ob.parent is None else cache.PARENTED)
++        cache.remember(uid, data.session_uid if data is not None else None, table, "", h,
++                       h)
+ 
+ 
+ def _object_scalars(uids):
