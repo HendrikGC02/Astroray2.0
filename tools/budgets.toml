@@ -232,8 +232,8 @@ provisional = true
 
 [[budget]]
 id = "B-38"
-text = "ratio ≤ 1.009"
-limit = 1.009
+text = "ratio ≤ 1.03"
+limit = 1.03
 tier = "`perf`"
 provisional = true
 

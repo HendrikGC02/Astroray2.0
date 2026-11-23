@@ -96,7 +96,7 @@ The spine fixes the frame: CMake + Ninja + MSVC, one build tree; CUDA + OptiX on
 | B-35 | curved-region branch: `intersect_closest` with vs without it, flat 1M-triangle scene | median-of-3 runtime ratio ≤ 1.05 | 0003 decision 28 (check 16) | `full` | spike A §1 noise |
 | B-36 | light-pass share of pass time (ruling 29) | ≤ 25% | 0004 D20 (method: 0004's window sweep, which resets it) | `full` | PROVISIONAL (0004 review item 11) |
 | B-37 | timing constants: completion poll period; F12 wait timeout; F12 preview interval; interaction window; controller step-up hold; viewport OIDN at-rest delay; `specgen` total run time that would move table generation into the build | 50 ms; 100 ms; 1 s; 250 ms; 0.5 s; 0.25 s; ≤ 20 s | 0007 D26, D27, D34, D49; 0008 decision 18; 0003 Risk 9 | `full` (specgen: report) | PROVISIONAL; constants, not limits, kept here under ruling 29 |
-| B-38 | `pass_ms` of B-1M and B-5M at 1920x1080 against the last `bench/history` line of the same machine and scene (task 140) | ratio ≤ 1.009 | here (`tools/perf.ps1`, decision 18) | `perf` | PROVISIONAL; MEASURED 5 back-to-back runs on a quiet machine: spread (max - min) / mean 0.15% (B-1M) and 0.27% (B-5M); limit = 1 + 3 × the larger, rounded up |
+| B-38 | `pass_ms` of B-1M and B-5M at 1920x1080 against the last `bench/history` line of the same machine and scene (task 140) | ratio ≤ 1.03 | here (`tools/perf.ps1`, decision 18) | `perf` | PROVISIONAL; owner decision 39: 3 × the larger measured spread, session 2's 0.96%. MEASURED two sessions of 5 back-to-back runs, 35 minutes apart, nothing else on the GPU: spread (max - min) / mean 0.15% and 0.96% (B-1M), 0.27% and 0.31% (B-5M); the session means differ by 0.25% (B-1M) and 0.05% (B-5M) |
 
 ### Tests
 
