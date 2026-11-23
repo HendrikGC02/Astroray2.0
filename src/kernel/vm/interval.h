@@ -27,6 +27,10 @@ struct Interval3 {
 
 AR_FN bool interval_is_nan(const Interval& a) { return a.lo != a.lo || a.hi != a.hi; }
 
+AR_FN bool interval_is_inf(float x) { return x == bit_cast<float>(0x7f800000u) || x == bit_cast<float>(0xff800000u); }
+
+AR_FN bool interval_has_zero(const Interval& a) { return a.lo <= 0.f && 0.f <= a.hi; }
+
 AR_FN Interval interval_nan() {
   const float n = bit_cast<float>(0x7fc00000u);
   return Interval{n, n};
@@ -48,12 +52,18 @@ AR_FN float interval_step_down(float x) {
   return bit_cast<float>(x > 0.f ? b - 1u : b + 1u);
 }
 
+// Precondition: lo and hi are results of float arithmetic, never a raw denormal input. With flush to
+// zero on the GPU `x == 0.f` is true for a denormal, so stepping a denormal there would jump over it.
 AR_FN Interval interval_widen(float lo, float hi) { return Interval{interval_step_down(lo), interval_step_up(hi)}; }
 
+// A zero inside one box and an infinity at an end of the other: the op gives 0 * inf = NaN at that
+// interior point, which the four corner products do not show.
 AR_FN Interval interval_mul_scalar(const Interval& x, const Interval& y) {
   if (interval_is_nan(x) || interval_is_nan(y)) return interval_nan();
+  if ((interval_has_zero(x) && (interval_is_inf(y.lo) || interval_is_inf(y.hi))) ||
+      (interval_has_zero(y) && (interval_is_inf(x.lo) || interval_is_inf(x.hi))))
+    return interval_nan();
   const float p0 = x.lo * y.lo, p1 = x.lo * y.hi, p2 = x.hi * y.lo, p3 = x.hi * y.hi;
-  if (p0 != p0 || p1 != p1 || p2 != p2 || p3 != p3) return interval_nan();  // 0 * inf
   float lo = p0, hi = p0;
   const float rest[3] = {p1, p2, p3};
   for (int i = 0; i < 3; ++i) {
@@ -63,15 +73,21 @@ AR_FN Interval interval_mul_scalar(const Interval& x, const Interval& y) {
   return interval_widen(lo, hi);
 }
 
+// -inf at one box's low end and +inf at the other's high end: the op gives inf - inf = NaN there, which
+// the lo + lo and hi + hi sums do not show.
 AR_FN Interval interval_add_scalar(const Interval& x, const Interval& y) {
-  const float lo = x.lo + y.lo, hi = x.hi + y.hi;
-  if (lo != lo || hi != hi) return interval_nan();  // NaN input or inf - inf
-  return interval_widen(lo, hi);
+  const float pinf = bit_cast<float>(0x7f800000u), ninf = bit_cast<float>(0xff800000u);
+  if (interval_is_nan(x) || interval_is_nan(y)) return interval_nan();
+  if ((x.lo == ninf && y.hi == pinf) || (x.hi == pinf && y.lo == ninf)) return interval_nan();
+  return interval_widen(x.lo + y.lo, x.hi + y.hi);
 }
+
+// A NaN endpoint makes the whole interval {NaN, NaN}.
+AR_FN Interval interval_exact(const Interval& a) { return interval_is_nan(a) ? interval_nan() : a; }
 
 AR_FN Interval interval_const_f32(uint32_t bits) {
   const float v = bit_cast<float>(bits);
-  return Interval{v, v};
+  return interval_exact(Interval{v, v});
 }
 
 AR_FN Interval3 interval_const_f32x3(const uint32_t* bits) {
@@ -81,7 +97,11 @@ AR_FN Interval3 interval_const_f32x3(const uint32_t* bits) {
 }
 
 // P over the box: the op converts P to float, which is monotone, so the box is exact.
-AR_FN Interval3 interval_load_ctx_p(const Interval3& box) { return box; }
+AR_FN Interval3 interval_load_ctx_p(const Interval3& box) {
+  Interval3 r;
+  for (int i = 0; i < 3; ++i) r.c[i] = interval_exact(box.c[i]);
+  return r;
+}
 
 AR_FN Interval interval_mul_f32(const Interval& x, const Interval& y) { return interval_mul_scalar(x, y); }
 

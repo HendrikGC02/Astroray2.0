@@ -112,6 +112,8 @@ class TestOpsgen(unittest.TestCase):
         # A rule named only in a comment is not a definition.
         with self.assertRaises(opsgen.OpsError):
             opsgen.parse_table(row, "// AR_FN Interval interval_missing(" "\n")
+        with self.assertRaises(opsgen.OpsError):
+            opsgen.parse_table(row, "/* AR_FN Interval interval_missing(" " x */")
         self.assertEqual(opsgen.parse_table(row, header.replace("other", "missing"))[0]["rule"], "interval_missing")
         # The live table passes against the live header.
         opsgen.parse_table(read(opsgen.OPS_DEF), read(opsgen.INTERVAL_H))

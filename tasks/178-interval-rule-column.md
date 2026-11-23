@@ -10,7 +10,7 @@ Do:
 3. Tests, fast: per rule 1e4 seeded random boxes and 16 random points inside each; the op through its `op_*` function lies in the interval, float and f64 builds; a box with lo = hi equals the point within 1 ulp. Tools test: a row naming `interval_missing` is refused, the clean table passes.
 Acceptance: `pwsh tools/check.ps1 fast` passes; `python tools/opsgen.py --self-test`; `out/bin/astroray_tests_cpu.exe --tier=fast -tc="interval/*,opsdef/*"`; `python -m pytest tests/abi/test_opsgen.py -q` (paste the last lines of each).
 Look at: none.
-Canary: tasks/178.canary.patch must turn red: astroray_tests_cpu "interval/rules enclose the op", "interval/degenerate box is a point", "interval/ulp step matches nextafter", "interval/NaN endpoints propagate", tests/abi/test_opsgen.py "TestOpsgen.test_undefined_rule_refused".
+Canary: tasks/178.canary.patch must turn red: astroray_tests_cpu "interval/rules enclose the op", "interval/degenerate box is a point", "interval/ulp step matches nextafter", "interval/NaN endpoints propagate", "interval/infinity corners the endpoints miss", tests/abi/test_opsgen.py "TestOpsgen.test_undefined_rule_refused".
 Budget: gate +0.5 s at most (stop and ask above); kernel rows: none (no stage includes interval.h yet); compile time: one header in one test TU.
 Depends on: 158 (the last row appended to ops.def before this lands; 178 changes no row); after 165 if 165 lands first (a foldable COLOR_TO_F32 row is NONE_SURFACE_ONLY and needs no rule). opsgen.py: 178 before 168.
 Size: S (about 130 source lines without tests); stop and report at 2x.

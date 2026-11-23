@@ -1,8 +1,9 @@
 // ar-f64
 // SPDX-License-Identifier: Apache-2.0
 // 0006 D7: each interval_<name> in vm/interval.h encloses the op it names. 1e4 seeded random boxes per
-// rule; 16 random points inside each go through the op_* function and must land in the interval. A box
-// with lo = hi must come back as that point within 1 ulp. NaN propagates, never clamps.
+// rule, a sixth of the endpoints edge values (zeros, infinities, FLT_MAX, denormals, NaN); 16 points of
+// each box go through the op_* function and must land in the interval, a NaN result in a {NaN, NaN}
+// box. A box with lo = hi must come back exactly one ulp wide on each side. NaN propagates, never clamps.
 // Ref: docs/decisions/0006-volumes-and-astrophysics.md D7; Moore, Interval Analysis (1966), section 3.
 #include <doctest.h>
 
@@ -23,24 +24,46 @@ using ar::Interval3;
 struct Rng {
   std::mt19937 g{178u};
   float u() { return std::uniform_real_distribution<float>(0.f, 1.f)(g); }
-  // Mixed scales and signs, so products cross zero and span many binades.
-  float value() {
+  // Finite, mixed scales and signs, so products cross zero and span many binades; sometimes exactly 0.
+  float finite() {
     const float mag = std::exp2(std::uniform_real_distribution<float>(-8.f, 8.f)(g));
     return (u() < 0.5f ? -mag : mag) * (u() < 0.1f ? 0.f : 1.f);
   }
+  float value() {
+    if (u() < 1.f / 6.f) {
+      const float edge[] = {0.f, -0.f, INFINITY, -INFINITY, FLT_MAX, -FLT_MAX, FLT_TRUE_MIN, -FLT_TRUE_MIN, std::nanf("")};
+      return edge[g() % (sizeof(edge) / sizeof(edge[0]))];
+    }
+    return finite();
+  }
   Interval box() {
     const float a = value(), b = value();
+    if (a != a || b != b) return Interval{a, b};  // a NaN endpoint is kept as it is
     return a <= b ? Interval{a, b} : Interval{b, a};
   }
   Interval3 box3() { return Interval3{{box(), box(), box()}}; }
+  // A point of the box: an endpoint, zero when inside, or an interior point when the span is finite.
   float in(const Interval& i) {
+    if (i.lo != i.lo || i.hi != i.hi) return 0.f;
+    const unsigned k = g() % 4;
+    if (k == 0) return i.lo;
+    if (k == 1) return i.hi;
+    if (k == 2 && i.lo <= 0.f && 0.f <= i.hi) return 0.f;
+    if (!std::isfinite(i.hi - i.lo)) return u() < 0.5f ? i.lo : i.hi;
     float x = i.lo + u() * (i.hi - i.lo);
     x = x < i.lo ? i.lo : x;
     return x > i.hi ? i.hi : x;
   }
 };
 
-bool contains(const Interval& i, float x) { return i.lo <= x && x <= i.hi; }
+bool both_nan(const Interval& i) { return i.lo != i.lo && i.hi != i.hi; }
+
+// The enclosure contract: a NaN result needs a {NaN, NaN} box; otherwise the box holds the value. A
+// {NaN, NaN} box is always acceptable (the majorant builder reports it unsupported).
+bool encloses(const Interval& i, float x) {
+  if (ar::interval_is_nan(i)) return both_nan(i);
+  return x == x && i.lo <= x && x <= i.hi;
+}
 
 // Distance in representable floats; both finite.
 int64_t ulps(float a, float b) {
@@ -69,47 +92,45 @@ TEST_CASE("interval/rules enclose the op") {
       const float a = rng.in(s), b = rng.in(t);
       const float xa[3] = {rng.in(x.c[0]), rng.in(x.c[1]), rng.in(x.c[2])};
       const float ya[3] = {rng.in(y.c[0]), rng.in(y.c[1]), rng.in(y.c[2])};
-      CHECK(contains(ms, ar::op_mul_f32(a, b)));
+      CHECK(encloses(ms, ar::op_mul_f32(a, b)));
       float o[3];
       ar::op_mul_f32x3(xa, ya, o);
-      for (int i = 0; i < 3; ++i) CHECK(contains(mv.c[i], o[i]));
+      for (int i = 0; i < 3; ++i) CHECK(encloses(mv.c[i], o[i]));
       ar::op_mul_f32x3_f32(xa, a, o);
-      for (int i = 0; i < 3; ++i) CHECK(contains(mvs.c[i], o[i]));
+      for (int i = 0; i < 3; ++i) CHECK(encloses(mvs.c[i], o[i]));
       ar::op_add_f32x3(xa, ya, o);
-      for (int i = 0; i < 3; ++i) CHECK(contains(av.c[i], o[i]));
+      for (int i = 0; i < 3; ++i) CHECK(encloses(av.c[i], o[i]));
       ar::ShadeContext ctx = {};
       ctx.P = ar::Real3{ar::Real(xa[0]), ar::Real(xa[1]), ar::Real(xa[2])};
       ar::op_load_ctx_p(ctx, o);
-      for (int i = 0; i < 3; ++i) CHECK(contains(p.c[i], o[i]));
+      for (int i = 0; i < 3; ++i) CHECK(encloses(p.c[i], o[i]));
     }
-    // Constants: the point interval holds the op's value exactly.
+    // Constants: the point interval holds the op's value (a NaN constant gives {NaN, NaN}).
     const float v = rng.value();
     uint32_t bits;
     std::memcpy(&bits, &v, 4);
     const uint32_t bits3[3] = {bits, bits ^ 0x1u, bits};
-    CHECK(contains(ar::interval_const_f32(bits), ar::op_const_f32(bits)));
-    for (int i = 0; i < 3; ++i) CHECK(contains(ar::interval_const_f32x3(bits3).c[i], ar::op_const_f32(bits3[i])));
+    CHECK(encloses(ar::interval_const_f32(bits), ar::op_const_f32(bits)));
+    for (int i = 0; i < 3; ++i) CHECK(encloses(ar::interval_const_f32x3(bits3).c[i], ar::op_const_f32(bits3[i])));
   }
 }
 
+// Exactly one ulp outward on each side of the rounded result: a dropped or doubled widening fails.
 TEST_CASE("interval/degenerate box is a point") {
   Rng rng;
+  auto one_ulp_around = [](const Interval& r, float want) {
+    return r.lo < want && want < r.hi && ulps(r.lo, want) == 1 && ulps(r.hi, want) == 1;
+  };
   for (int n = 0; n < 10000; ++n) {
-    const float a = rng.value(), b = rng.value();
+    const float a = rng.finite(), b = rng.finite();
     const Interval s{a, a}, t{b, b};
-    const float want_mul = ar::op_mul_f32(a, b);
-    const Interval m = ar::interval_mul_f32(s, t);
-    CHECK(ulps(m.lo, want_mul) <= 1);
-    CHECK(ulps(m.hi, want_mul) <= 1);
+    CHECK(one_ulp_around(ar::interval_mul_f32(s, t), ar::op_mul_f32(a, b)));
     const float xa[3] = {a, b, a}, ya[3] = {b, a, b};
     const Interval3 x{{{a, a}, {b, b}, {a, a}}}, y{{{b, b}, {a, a}, {b, b}}};
     float o[3];
     ar::op_add_f32x3(xa, ya, o);
     const Interval3 r = ar::interval_add_f32x3(x, y);
-    for (int i = 0; i < 3; ++i) {
-      CHECK(ulps(r.c[i].lo, o[i]) <= 1);
-      CHECK(ulps(r.c[i].hi, o[i]) <= 1);
-    }
+    for (int i = 0; i < 3; ++i) CHECK(one_ulp_around(r.c[i], o[i]));
   }
 }
 
@@ -138,6 +159,29 @@ TEST_CASE("interval/NaN endpoints propagate") {
   CHECK(ar::interval_is_nan(ar::interval_add_f32x3(b3, o3).c[0]));
   CHECK_FALSE(ar::interval_is_nan(ar::interval_add_f32x3(b3, o3).c[1]));
   CHECK(ar::interval_is_nan(ar::interval_mul_f32x3_f32(o3, bad).c[2]));
+  // One NaN endpoint of the position box gives {NaN, NaN}, both ends; a NaN constant too.
+  for (const Interval& e : {Interval{nan, 1.f}, Interval{1.f, nan}}) {
+    const Interval3 p = ar::interval_load_ctx_p(Interval3{{ok, e, ok}});
+    CHECK(both_nan(p.c[1]));
+    CHECK_FALSE(ar::interval_is_nan(p.c[0]));
+  }
+  CHECK(both_nan(ar::interval_const_f32(0x7fc00000u)));
+}
+
+// Interior points the endpoint values do not show: 0 * inf and inf - inf.
+TEST_CASE("interval/infinity corners the endpoints miss") {
+  const float inf = INFINITY;
+  const Interval around_zero{-1.f, 1.f}, pos_inf{inf, inf}, mixed{-inf, 1.f}, upper{0.f, inf}, pos{1.f, 2.f};
+  CHECK(both_nan(ar::interval_mul_f32(around_zero, pos_inf)));
+  CHECK(both_nan(ar::interval_mul_f32(pos_inf, around_zero)));
+  // No zero inside: the product is a real infinity, not NaN.
+  CHECK_FALSE(ar::interval_is_nan(ar::interval_mul_f32(pos, pos_inf)));
+  CHECK(ar::interval_mul_f32(pos, pos_inf).lo > 0.f);
+  const Interval3 m{{mixed, mixed, mixed}}, u3{{upper, upper, upper}};
+  CHECK(both_nan(ar::interval_add_f32x3(m, u3).c[0]));
+  CHECK(both_nan(ar::interval_add_f32x3(u3, m).c[2]));
+  // Same-signed infinities add to an infinity.
+  CHECK_FALSE(ar::interval_is_nan(ar::interval_add_f32x3(u3, u3).c[1]));
 }
 
 }  // TEST_SUITE
