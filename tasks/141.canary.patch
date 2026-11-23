@@ -1,5 +1,5 @@
 diff --git a/tools/lib/lock.ps1 b/tools/lib/lock.ps1
-index 517fabe..adc64ba 100644
+index 83249fc..54d8209 100644
 --- a/tools/lib/lock.ps1
 +++ b/tools/lib/lock.ps1
 @@ -74,7 +74,7 @@ function Read-ArLockOwner([string]$path) {
@@ -12,10 +12,10 @@ index 517fabe..adc64ba 100644
  }
  
 diff --git a/tools/lib/testrun.ps1 b/tools/lib/testrun.ps1
-index 2dfa95d..12aebc0 100644
+index 3c08955..a6d9dd5 100644
 --- a/tools/lib/testrun.ps1
 +++ b/tools/lib/testrun.ps1
-@@ -105,7 +105,7 @@ function Invoke-ArTestCase {
+@@ -106,7 +106,7 @@ function Invoke-ArTestCase {
  function Get-ArTestVerdict($results) {
    foreach ($r in @($results)) {
      if ($r.Error) { return [pscustomobject]@{ Pass = $false; Reason = "$($r.Case): $($r.Error)" } }
