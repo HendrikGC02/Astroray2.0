@@ -1,5 +1,5 @@
 diff --git a/blender/astroray/sync/instances.py b/blender/astroray/sync/instances.py
-index bb1e5b8..051da1a 100644
+index bb1e5b8..8b9c327 100644
 --- a/blender/astroray/sync/instances.py
 +++ b/blender/astroray/sync/instances.py
 @@ -147,7 +147,7 @@ class InstanceCache:
@@ -20,6 +20,15 @@ index bb1e5b8..051da1a 100644
  
  
  def _object_scalars(uids):
+@@ -294,7 +294,7 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
+         if path:
+             in_path.append((len(ents), path[0]))
+         else:
+-            new_plain[uid] = ent
++            new_plain[uid] = (ent[1], ent[0], ent[2])
+         if uid not in records:
+             fresh[uid] = orig
+         ents.append(ent)
 @@ -331,7 +331,7 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
          asset = list(map(cache.assets.__getitem__, owner))
          if cache.PARENTED in asset:  # the asset id follows the top parent's name, which can change unnamed
