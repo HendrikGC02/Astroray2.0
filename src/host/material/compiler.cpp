@@ -542,8 +542,20 @@ MaterialOutput magenta_material(const ar::Rgb2SpecTable& table, uint32_t code, c
   return m;
 }
 
+void set_medium_fields(MaterialOutput* m, uint32_t medium_priority) {
+  ar::ConstantBlock& b = m->compiled.block;
+  if ((m->compiled.runtime_slots >> uint32_t(ar::RecordSlot::specular_ior) & 1u) != 0) {
+    b.interior_ior = ar::make_const_ref(ar::SpectrumSemantic::IOR, ar::Real(1));
+    add_entry(m, AR_REPORT_NODE_APPROXIMATED, "textured specular_ior: interior_ior is 1");
+  } else {
+    b.interior_ior = b.specular_ior;
+  }
+  b.medium_priority = uint8_t(std::min(medium_priority, 255u));
+  if (medium_priority > 255u) add_entry(m, AR_REPORT_NODE_APPROXIMATED, "medium_priority clamped to 255");
+}
+
 MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable& table, const ImageMeanFn* means,
-                                const ImageSlotFn* slots) {
+                                const ImageSlotFn* slots, uint32_t medium_priority) {
   // Unsupported nodes first, every one of them, not only the first (0001 V15).
   MaterialOutput unsupported;
   for (uint32_t i = 0; d.nodes != nullptr && i < d.node_count; ++i) {
@@ -580,6 +592,7 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
   }
   finish(&m);
   if (m.compiled.clamp_flags != 0) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "RGB clamped");
+  set_medium_fields(&m, medium_priority);
   for (uint32_t key : m.compiled.missing_images)
     add_entry(&m, AR_REPORT_IMAGE_UNREADABLE, "image key " + std::to_string(key) + " is not set");
   return m;

@@ -78,8 +78,15 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
 // gives PROGRAM_REJECTED, and either makes the material magenta; a clamped colour gives
 // NODE_APPROXIMATED; a sampled image key that is not set gives IMAGE_UNREADABLE and samples
 // magenta. Never throws on bad input.
+//
+// It also calls set_medium_fields with `medium_priority`.
 MaterialOutput compile_material(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means = nullptr,
-                                const ImageSlotFn* slots = nullptr);
+                                const ImageSlotFn* slots = nullptr, uint32_t medium_priority = 0);
+
+// Fills the block's medium-stack fields (0006 C.17, 0005 item 2a): interior_ior is the constant
+// specular_ior; a per-point one (runtime_slots) has no constant source, so it stores 1.0 and
+// reports NODE_APPROXIMATED once. medium_priority is stored, above 255 clamped and reported.
+void set_medium_fields(MaterialOutput* m, uint32_t medium_priority);
 
 // The material_header.h flags of a compiled program (0005 item 43).
 uint32_t material_flags(const CompileResult& r);

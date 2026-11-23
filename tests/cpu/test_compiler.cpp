@@ -404,4 +404,33 @@ TEST_CASE("compiler/missing image key samples magenta with one entry") {
   CHECK(bm.entries[0].detail.find("TEX_IMAGE mode") != std::string::npos);
 }
 
+TEST_CASE("compiler/interior fields stored") {
+  // A constant specular_ior reaches interior_ior; the priority comes from the descriptor.
+  GB g;
+  g.store(g.add(Op::CONST_F32, {1.33f}), ar::RecordSlot::specular_ior);
+  const ar_graph_desc d = g.desc();
+  const astroray::host::MaterialOutput m = astroray::host::compile_material(d, fixture().table, nullptr, nullptr, 7);
+  CHECK_FALSE(m.magenta);
+  CHECK(m.compiled.block.medium_priority == 7);
+  CHECK(m.compiled.block.interior_ior.kind == uint8_t(ar::SpectrumKind::CONSTANT));
+  CHECK(m.compiled.block.interior_ior.p[0] == doctest::Approx(1.33f));
+  CHECK(m.entries.empty());
+  // No specular_ior stored: the OpenPBR default 1.5, priority 0.
+  const astroray::host::MaterialOutput def = astroray::host::compile_material(ar_graph_desc{}, fixture().table);
+  CHECK(def.compiled.block.medium_priority == 0);
+  CHECK(def.compiled.block.interior_ior.p[0] == doctest::Approx(1.5f));
+  // A per-point specular_ior stores 1.0 and reports once, however often it is asked; a priority
+  // past a byte clamps and reports.
+  astroray::host::MaterialOutput t = def;
+  t.compiled.runtime_slots = uint64_t(1) << uint32_t(ar::RecordSlot::specular_ior);
+  astroray::host::set_medium_fields(&t, 300);
+  astroray::host::set_medium_fields(&t, 300);
+  CHECK(t.compiled.block.interior_ior.p[0] == doctest::Approx(1.0f));
+  CHECK(t.compiled.block.medium_priority == 255);
+  REQUIRE(t.entries.size() == 2);
+  CHECK(t.entries[0].code == AR_REPORT_NODE_APPROXIMATED);
+  CHECK(t.entries[0].detail.find("specular_ior") != std::string::npos);
+  CHECK(t.entries[1].detail.find("medium_priority") != std::string::npos);
+}
+
 }  // TEST_SUITE
