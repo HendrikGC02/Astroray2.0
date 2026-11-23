@@ -17,3 +17,7 @@ Depends on: 143.
 Size: M (about 300 lines without tests); stop and report at 2x.
 Progress:
 - Files: src/kernel/light/equal_area.h, src/kernel/light/environment_table.h, src/host/light/env_table.{h,cpp}, tests/cpu/test_env_table.cpp (all new), tasks/153.canary.patch. Host EnvTable holds plain float vectors (no kernel view type), so the f64 test copy can view them.
+- Built: equal_area.h (pbrt transcription; cos/sin as cospi/sinpi of phi/pi), environment_table.h (pbrt FindInterval/PiecewiseConstant1D/2D; a sampled point rounded onto the next cell's edge is stepped back so sample pdf == pdf at its point), env_table.{h,cpp} (double build, throws on bad input incl. float overflow/underflow).
+- Measured: atan polynomial error 4.07e-6 (pbrt states none); square round trip 2.09e-6 f32 / 2.03e-6 f64 on 1e5 points; float round trip near the poles reaches 8.6e-5 (z = 1 - r^2 rounding), covered in the ruling-88 e by each draw's own error.
+- Area test: 4-corner geodesic quadrature is 9.9e-2 off per cell, so cells use k = 2, 4, 8 sub-cells with Romberg (worst 4.9e-6). Ruling-88 bound weights the 4e(n-1) band by cell probability (derived in the test header).
+- 1024^2 host build 11 ms (16.8 MB, both tables). Gate adds 4 chi-squared checks (2 cases x f32/f64).
