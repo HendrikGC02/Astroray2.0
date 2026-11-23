@@ -80,6 +80,24 @@ AR_FN Spec cauchy_abbe_ior(Real nd, Real Vd, Real dispersion_scale, const Lambda
   return s;
 }
 
+// The two analytic kinds, out of line on the device: resolve() is inlined at every spectral slot of
+// the record fill, and two copies of Planck's exp and expm1 per slot would cost the surface
+// kernel compile time for kinds that only the emission and IOR slots can hold.
+#if AR_CUDA_BUILD
+#define AR_ANALYTIC_FN inline __host__ __device__ __noinline__
+#else
+#define AR_ANALYTIC_FN inline
+#endif
+AR_ANALYTIC_FN Spec resolve_analytic(const SpectrumRef& r, const Lambda& lam) {
+  const SpectrumSemantic sem = SpectrumSemantic(r.semantic);
+  if (r.kind == uint8_t(SpectrumKind::BLACKBODY) && sem == SpectrumSemantic::ILLUMINANT)
+    return blackbody_spec(Real(r.p[0]), Real(r.p[1]), lam);
+  if (r.kind == uint8_t(SpectrumKind::CAUCHY_ABBE) && sem == SpectrumSemantic::IOR)
+    return cauchy_abbe_ior(Real(r.p[0]), Real(r.p[1]), Real(r.p[2]), lam);
+  AR_ASSERT(false);
+  return spec_fill(Real(0));
+}
+
 // CONSTANT, RGB, BLACKBODY (ILLUMINANT slots only) and CAUCHY_ABBE (IOR slots only) resolve; the
 // compiler rejects every other kind and every other (kind, semantic) pair (0005 item 9), so
 // reaching one here is a bug: it asserts in debug builds and gives zero. A BLACKBODY ref is
@@ -98,13 +116,8 @@ AR_FN Spec resolve(const SpectrumRef& r, const Lambda& lam, const ObserverView& 
     u.c.c[2] = Real(r.p[2]);
     u.scale = Real(r.p[3]);
     s = upsampled_eval(u, lam);
-  } else if (r.kind == uint8_t(SpectrumKind::BLACKBODY) && sem == SpectrumSemantic::ILLUMINANT) {
-    return blackbody_spec(Real(r.p[0]), Real(r.p[1]), lam);
-  } else if (r.kind == uint8_t(SpectrumKind::CAUCHY_ABBE) && sem == SpectrumSemantic::IOR) {
-    return cauchy_abbe_ior(Real(r.p[0]), Real(r.p[1]), Real(r.p[2]), lam);
   } else {
-    AR_ASSERT(false);
-    return spec_fill(Real(0));
+    return resolve_analytic(r, lam);  // BLACKBODY is analytic (0005 item 39): no illuminant multiply
   }
   if (sem == SpectrumSemantic::ILLUMINANT)
     for (int i = 0; i < kLanes; ++i) s.v[i] = s.v[i] * illuminant_at(obs, lam.nm[i]);
