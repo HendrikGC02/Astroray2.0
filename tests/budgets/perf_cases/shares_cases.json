@@ -1,0 +1,662 @@
+[
+ {
+  "name": "shares within",
+  "measured": [
+   {
+    "sha": "dddd11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.11,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-20T00:00:00Z"
+   }
+  ],
+  "fail": false,
+  "text": [
+   "PASS b1m.idle_share",
+   "ratio 1.100"
+  ],
+  "absent": [
+   "FAIL",
+   "improved"
+  ],
+  "history": [
+   {
+    "sha": "aaaa11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.092,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-01T00:00:00Z"
+   },
+   {
+    "sha": "bbbb11112222",
+    "machine": "m-b",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.2,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-05T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.1,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "pq_share",
+    "value": 0.094,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   }
+  ],
+  "tolerance": {
+   "b1m.idle_share": 0.3,
+   "b1m.pq_share": 0.3
+  }
+ },
+ {
+  "name": "shares at limit",
+  "measured": [
+   {
+    "sha": "dddd11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "pq_share",
+    "value": 0.1222,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-20T00:00:00Z"
+   }
+  ],
+  "fail": false,
+  "text": [
+   "PASS b1m.pq_share",
+   "ratio 1.300"
+  ],
+  "absent": [
+   "FAIL"
+  ],
+  "history": [
+   {
+    "sha": "aaaa11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.092,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-01T00:00:00Z"
+   },
+   {
+    "sha": "bbbb11112222",
+    "machine": "m-b",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.2,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-05T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.1,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "pq_share",
+    "value": 0.094,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   }
+  ],
+  "tolerance": {
+   "b1m.idle_share": 0.3,
+   "b1m.pq_share": 0.3
+  }
+ },
+ {
+  "name": "shares regression names both lines",
+  "measured": [
+   {
+    "sha": "dddd11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.132,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-20T00:00:00Z"
+   }
+  ],
+  "fail": true,
+  "text": [
+   "FAIL b1m.idle_share",
+   "dddd11112",
+   "cccc11112",
+   "2026-11-10",
+   "ratio 1.320"
+  ],
+  "history": [
+   {
+    "sha": "aaaa11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.092,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-01T00:00:00Z"
+   },
+   {
+    "sha": "bbbb11112222",
+    "machine": "m-b",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.2,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-05T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.1,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "pq_share",
+    "value": 0.094,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   }
+  ],
+  "tolerance": {
+   "b1m.idle_share": 0.3,
+   "b1m.pq_share": 0.3
+  }
+ },
+ {
+  "name": "shares improvement",
+  "measured": [
+   {
+    "sha": "dddd11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.06,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-20T00:00:00Z"
+   }
+  ],
+  "fail": false,
+  "text": [
+   "PASS b1m.idle_share",
+   "improved"
+  ],
+  "absent": [
+   "FAIL"
+  ],
+  "history": [
+   {
+    "sha": "aaaa11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.092,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-01T00:00:00Z"
+   },
+   {
+    "sha": "bbbb11112222",
+    "machine": "m-b",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.2,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-05T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.1,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "pq_share",
+    "value": 0.094,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   }
+  ],
+  "tolerance": {
+   "b1m.idle_share": 0.3,
+   "b1m.pq_share": 0.3
+  }
+ },
+ {
+  "name": "shares no baseline",
+  "measured": [
+   {
+    "sha": "dddd11112222",
+    "machine": "m-c",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.5,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-20T00:00:00Z"
+   }
+  ],
+  "fail": false,
+  "text": [
+   "PASS b1m.idle_share: no baseline"
+  ],
+  "history": [
+   {
+    "sha": "aaaa11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.092,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-01T00:00:00Z"
+   },
+   {
+    "sha": "bbbb11112222",
+    "machine": "m-b",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.2,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-05T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.1,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "pq_share",
+    "value": 0.094,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   }
+  ],
+  "tolerance": {
+   "b1m.idle_share": 0.3,
+   "b1m.pq_share": 0.3
+  }
+ },
+ {
+  "name": "shares other machine ignored",
+  "measured": [
+   {
+    "sha": "dddd11112222",
+    "machine": "m-b",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.21,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-20T00:00:00Z"
+   }
+  ],
+  "fail": false,
+  "text": [
+   "against 0.2000"
+  ],
+  "absent": [
+   "against 0.1000"
+  ],
+  "history": [
+   {
+    "sha": "aaaa11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.092,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-01T00:00:00Z"
+   },
+   {
+    "sha": "bbbb11112222",
+    "machine": "m-b",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.2,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-05T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.1,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "pq_share",
+    "value": 0.094,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   }
+  ],
+  "tolerance": {
+   "b1m.idle_share": 0.3,
+   "b1m.pq_share": 0.3
+  }
+ },
+ {
+  "name": "shares no tolerance",
+  "measured": [
+   {
+    "sha": "dddd11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b5m",
+    "metric": "idle_share",
+    "value": 0.1,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-20T00:00:00Z"
+   }
+  ],
+  "fail": null,
+  "text": [
+   "no tolerance for b5m.idle_share"
+  ],
+  "history": [
+   {
+    "sha": "aaaa11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.092,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-01T00:00:00Z"
+   },
+   {
+    "sha": "bbbb11112222",
+    "machine": "m-b",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.2,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-05T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.1,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "pq_share",
+    "value": 0.094,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   }
+  ],
+  "tolerance": {
+   "b1m.idle_share": 0.3,
+   "b1m.pq_share": 0.3
+  }
+ },
+ {
+  "name": "shares no share line",
+  "measured": [
+   {
+    "sha": "dddd11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "pass_ms",
+    "value": 10,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-20T00:00:00Z"
+   }
+  ],
+  "fail": null,
+  "text": [
+   "no idle_share or pq_share line"
+  ],
+  "history": [
+   {
+    "sha": "aaaa11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.092,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-01T00:00:00Z"
+   },
+   {
+    "sha": "bbbb11112222",
+    "machine": "m-b",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.2,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-05T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.1,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "pq_share",
+    "value": 0.094,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   }
+  ],
+  "tolerance": {
+   "b1m.idle_share": 0.3,
+   "b1m.pq_share": 0.3
+  }
+ }
+]
