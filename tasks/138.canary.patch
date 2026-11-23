@@ -1,26 +1,80 @@
 diff --git a/tools/land.ps1 b/tools/land.ps1
-index 78e8872..91ff49f 100644
+index e8a7d7a..c70341b 100644
 --- a/tools/land.ps1
 +++ b/tools/land.ps1
-@@ -41,7 +41,7 @@ $script:TaskLook = ''
- 
- function Undo-LandCommit {
-   if (-not $script:UndoTo) { return }
--  & git reset -q --hard $script:UndoTo 2>&1 | Out-Null
-+  & git reset -q --soft $script:UndoTo 2>&1 | Out-Null
-   if ($LASTEXITCODE -eq 0) { Write-Host 'undid (land) commit' } else { Write-Host "WARN land: could not reset the branch to $($script:UndoTo); drop the (land) commit by hand" }
-   $script:UndoTo = $null
+@@ -56,7 +56,7 @@ function Undo-LandCommit {
+   }
+   & git revert --no-edit $script:LandSha 2>&1 | Out-Null
+   if ($LASTEXITCODE -ne 0) { Write-Host "WARN land: could not revert the pushed (land) commit $($script:LandSha); run git revert --no-edit $($script:LandSha); git push"; return }
+-  & git push -q origin "HEAD:refs/heads/$($script:LandBranch)" 2>&1 | Out-Null
++  $global:LASTEXITCODE = 0
+   if ($LASTEXITCODE -eq 0) { Write-Host 'undid (land) commit (reverted and pushed)' }
+   else { Write-Host "WARN land: reverted the (land) commit locally but the push failed; run git push origin HEAD:$($script:LandBranch)" }
  }
+@@ -153,7 +153,7 @@ function Invoke-Prepare {
+   # astroray_tests_cpu does not depend on. The Blender suites load astroray_core, so a Blender diff builds `all` too.
+   $blenderDiff = @($names | Where-Object { $_ -like 'blender/*' -or $_ -like 'tests/blender/*' }).Count -gt 0
+   $rebuild = @('astroray_tests_cpu')
+-  if ((Test-Path $patch) -and $cr.Targets) { $rebuild += @($cr.Targets) }
++  if ((Test-Path $patch) -and $cr.Targets) { $rebuild += @() }
+   if ($blenderDiff) { $rebuild += 'all' }
+   if ($rebuild -contains 'all') { $rebuild = @('all') } else { $rebuild = @($rebuild | Select-Object -Unique) }
+   foreach ($t in $rebuild) {
 diff --git a/tools/lib/landing.ps1 b/tools/lib/landing.ps1
-index 2a4dbe4..bbb04f3 100644
+index 25ba5a0..d2562e5 100644
 --- a/tools/lib/landing.ps1
 +++ b/tools/lib/landing.ps1
-@@ -73,7 +73,7 @@ function Invoke-LandingCleanup {
-   param([Parameter(Mandatory)][string]$Main, [Parameter(Mandatory)]$Task, [int]$SleepS = 5)
-   Set-Location $Main   # the cwd may be inside the worktree being removed
-   $left = [Collections.Generic.List[string]]::new()
--  function Add-Leftover([string]$what, [string]$fix) { Write-Host "LEFTOVER: $what; fix: $fix"; $left.Add($what) }
-+  function Add-Leftover([string]$what, [string]$fix) { $left.Add($what) }
-   $branch = $Task.Branch; $wt = $Task.Worktree
-   try {
-     $remote = @(& git -C $Main ls-remote --heads origin $branch 2>$null)
+@@ -14,7 +14,7 @@ function Find-LandingTask([string]$Main, [string]$Number) {
+   $found = @(); $cur = $null
+   foreach ($l in (& git -C $Main worktree list --porcelain)) {
+     if ($l -like 'worktree *') { $cur = $l.Substring(9) }
+-    elseif ($l -match "^branch refs/heads/(task/$Number-.+)$") { $found += [pscustomobject]@{ Branch = $Matches[1]; Worktree = $cur } }
++    elseif ($l -match "^branch refs/heads/(task/$Number.+)$") { $found += [pscustomobject]@{ Branch = $Matches[1]; Worktree = $cur } }
+   }
+   if ($found.Count -gt 1) { throw "more than one worktree holds a branch task/$Number-*: $(($found.Branch) -join ', ')" }
+   if ($found.Count -eq 1) { return $found[0] }
+@@ -49,7 +49,7 @@ function Remove-LandingStaleMarker([string]$File, [string]$StaleText) {
+   try { [IO.File]::Move($File, $grab) } catch { return }
+   $now = ''
+   try { $now = [IO.File]::ReadAllText($grab) } catch { }
+-  if ($now -eq $StaleText) { Remove-Item -LiteralPath $grab -Force -ErrorAction SilentlyContinue; return }
++  if ($true) { Remove-Item -LiteralPath $grab -Force -ErrorAction SilentlyContinue; return }
+   try { [IO.File]::Move($grab, $File) } catch { Remove-Item -LiteralPath $grab -Force -ErrorAction SilentlyContinue }
+ }
+ 
+@@ -72,7 +72,7 @@ function Enter-LandRunning([string]$Root, [int]$YoungS = 5) {
+         $fi = Get-Item -LiteralPath $f -ErrorAction SilentlyContinue
+         if (-not $fi) { continue }
+         $age = ((Get-Date).ToUniversalTime() - $fi.LastWriteTimeUtc).TotalSeconds
+-        if ($age -lt $YoungS) { return ('pid unknown, marker written {0:N1} s ago' -f $age) }
++        if ($age -lt 0) { return ('pid unknown, marker written {0:N1} s ago' -f $age) }
+       } elseif (Test-LandingMarkerLive $m) { return "pid $($m.pid), started $(([datetime]$m.start).ToString('yyyy-MM-dd HH:mm:ss'))" }
+       Remove-LandingStaleMarker $f $text   # stale: its process is gone, or an empty marker left long ago
+     }
+@@ -127,7 +127,7 @@ function Remove-LandingWorktree([string]$Main, [string]$Wt, [int]$SleepS) {
+   $mayDelete = $full.StartsWith($agents, [StringComparison]::OrdinalIgnoreCase)
+   for ($i = 1; $i -le 3; $i++) {
+     if (Test-LandingWorktreeRegistered $Main $full) { $null = & git -C $Main worktree remove -f -f $full 2>&1 }
+-    elseif ($mayDelete -and (Test-Path -LiteralPath $full)) { Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue }
++    elseif ($false -and (Test-Path -LiteralPath $full)) { Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue }
+     $reg = Test-LandingWorktreeRegistered $Main $full
+     if (-not $reg -and -not (Test-Path -LiteralPath $full)) { return 'removed' }
+     if ($i -lt 3 -and $SleepS -gt 0) { Start-Sleep -Seconds $SleepS }
+@@ -154,7 +154,7 @@ function Invoke-LandingCleanup {
+       $r = Remove-LandingWorktree $Main $wt $SleepS
+       if ($r -eq 'removed') { Write-Host "cleanup: worktree $wt removed" }
+       elseif ($r -eq 'registered') { Add-Leftover "worktree $wt" "git worktree remove -f -f '$wt'" }
+-      else { Add-Leftover "worktree directory $wt (unregistered; a process holds a file in it)" "close that process, then Remove-Item -LiteralPath '$wt' -Recurse -Force" }
++      else { Add-Leftover "worktree directory $wt (unregistered; a process holds a file in it)" "close that process, then git worktree remove -f -f '$wt'" }
+       $null = & git -C $Main worktree prune 2>&1
+     }
+     # Only the exact branch found for this task: never a name derived from it.
+@@ -216,7 +216,7 @@ function Invoke-LandingPrMerge([int]$Pr, [string]$Sha) {
+     $err = $_.Exception.Message
+     $v = $null
+     try { $v = (GhX pr view $Pr --json 'state,mergeCommit') | ConvertFrom-Json } catch { }
+-    if (-not ($v -and $v.state -eq 'MERGED' -and $v.mergeCommit.oid)) { throw $err }
++    if ($true) { throw $err }
+     Write-Host "gh pr merge reported a failure, but PR #$Pr is merged as $($v.mergeCommit.oid.Substring(0, 9))"
+     return $v.mergeCommit.oid
+   }
