@@ -1,5 +1,5 @@
 diff --git a/src/kernel/vm/interval.h b/src/kernel/vm/interval.h
-index 1a32fef..77b22d3 100644
+index 1a32fef..344a68f 100644
 --- a/src/kernel/vm/interval.h
 +++ b/src/kernel/vm/interval.h
 @@ -32,15 +32,14 @@ AR_FN bool interval_is_inf(float x) { return x == bit_cast<float>(0x7f800000u) |
@@ -52,6 +52,15 @@ index 1a32fef..77b22d3 100644
  
  AR_FN Interval interval_const_f32(uint32_t bits) {
    const float v = bit_cast<float>(bits);
+@@ -107,7 +103,7 @@ AR_FN Interval interval_mul_f32(const Interval& x, const Interval& y) { return i
+ 
+ AR_FN Interval3 interval_mul_f32x3(const Interval3& x, const Interval3& y) {
+   Interval3 r;
+-  for (int i = 0; i < 3; ++i) r.c[i] = interval_mul_scalar(x.c[i], y.c[i]);
++  for (int i = 0; i < 3; ++i) r.c[i] = interval_add_scalar(interval_mul_scalar(x.c[i], y.c[i]), interval_nan());
+   return r;
+ }
+ 
 diff --git a/tools/opsgen.py b/tools/opsgen.py
 index cd53b4f..c071491 100644
 --- a/tools/opsgen.py
