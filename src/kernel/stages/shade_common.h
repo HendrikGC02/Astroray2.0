@@ -286,7 +286,7 @@ AR_FN void resolve_constant_record(const ConstantBlock& b, const ShadeContext& c
   rec->thin_film_ior = Real(b.thin_film_ior);
   rec->geometry_opacity = Real(b.geometry_opacity);
   rec->closure_weight = Real(1);
-#define AR_X(n, s, sem) rec->n = resolve(b.n, ctx.lambda_t, obs);
+#define AR_X(n, s, sem) rec->n = resolve_slot<SpectrumSemantic::sem>(b.n, ctx.lambda_t, obs);
   AR_RECORD_SPECTRAL(AR_X)
 #undef AR_X
   const Real3 t = frame_from_normal(ctx.N).s;
