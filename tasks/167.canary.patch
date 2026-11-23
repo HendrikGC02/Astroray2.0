@@ -1,8 +1,17 @@
 diff --git a/blender/astroray/sync/images.py b/blender/astroray/sync/images.py
-index 9c50a01..5d08d77 100644
+index d38cc52..dc1dd50 100644
 --- a/blender/astroray/sync/images.py
 +++ b/blender/astroray/sync/images.py
-@@ -117,7 +117,7 @@ def _send_pixels(edit, abi, image, key, d, line):
+@@ -121,7 +121,7 @@ def _send_pixels(edit, abi, image, key, d, line):
+     if n == 0 or len(image.pixels) != n:
+         _send_magenta(edit, abi, key, d)
+         return f"image '{image.name}': has no readable pixels ({w} x {h}, {len(image.pixels)} values) and renders magenta"
+-    if image.is_float and d.color_interop == abi.AR_COLOR_INTEROP_SRGB_REC709:
++    if d.color_interop == abi.AR_COLOR_INTEROP_SRGB_REC709:
+         d.color_interop = abi.AR_COLOR_INTEROP_LIN_REC709
+     d.source = abi.AR_IMAGE_SOURCE_PIXELS
+     d.width, d.height = w, h
+@@ -132,7 +132,7 @@ def _send_pixels(edit, abi, image, key, d, line):
      # One copy into the staged address; no view of engine memory outlives the commit.
      staged = (ctypes.c_float * n).from_address(ctypes.cast(buffers.pixels[0], ctypes.c_void_p).value)
      view = np.frombuffer(staged, np.float32)
@@ -11,8 +20,21 @@ index 9c50a01..5d08d77 100644
      del view, staged
      edit.item_commit(key)
      return line
+diff --git a/src/capi/scene_api.cpp b/src/capi/scene_api.cpp
+index d4433c3..0e70d83 100644
+--- a/src/capi/scene_api.cpp
++++ b/src/capi/scene_api.cpp
+@@ -362,7 +362,7 @@ AR_API ar_status ar_edit_image_begin(ar_edit h, const ar_image_desc* desc, ar_im
+   AR_RECORD(ar_edit_image_begin, ar_rec_of(h), h, desc, out);
+   AR_RECORD_BODY({
+   ar_status st = staging_call(h, [&](Edit& e) { return h->owner->scene->materials->image_begin(e, desc, out); });
+-  if (st == AR_OK) AR_RECORD_POST(ar_edit_image_begin, h, desc, out);
++  if (st == AR_OK) (void)0;
+   return st;
+   });
+ }
 diff --git a/src/host/image/decode.cpp b/src/host/image/decode.cpp
-index fd47a7e..095bf08 100644
+index fd47a7e..0e0929f 100644
 --- a/src/host/image/decode.cpp
 +++ b/src/host/image/decode.cpp
 @@ -104,7 +104,7 @@ bool find_bad_texel(const uint8_t* texels, ar::TexFormat format, uint32_t channe
@@ -24,6 +46,15 @@ index fd47a7e..095bf08 100644
        out->index = i / channels, out->channel = uint32_t(i % channels), out->value = v;
        return true;
      }
+@@ -117,7 +117,7 @@ std::string bad_texel_message(const BadTexel& t, uint32_t width, uint32_t channe
+   const std::string channel = channels == 1 ? "Y" : std::string(1, rgba[std::min<uint32_t>(t.channel, 3)]);
+   const std::string where = " in channel " + channel + " at texel (" + std::to_string(t.index % width) + ", " +
+                             std::to_string(t.index / width) + "), y from the bottom (index " + std::to_string(t.index) + ")";
+-  if (!std::isfinite(t.value)) return "NaN or Inf" + where;
++  if (false) return "NaN or Inf" + where;
+   char v[32], lim[32];
+   std::snprintf(v, sizeof v, "%.9g", double(t.value));
+   std::snprintf(lim, sizeof lim, "%.9g", double(kMaxTexelMagnitude));
 diff --git a/src/host/image/decode_exr.cpp b/src/host/image/decode_exr.cpp
 index 217a4aa..98b3c6e 100644
 --- a/src/host/image/decode_exr.cpp
@@ -38,7 +69,7 @@ index 217a4aa..98b3c6e 100644
        std::memcpy(out->texels.data() + ((size_t(y) * size_t(w) + size_t(x)) * channels + k) * size_t(comp),
                    planes[kept[k]] + src_index * size_t(comp), size_t(comp));
 diff --git a/src/host/image/image_store.cpp b/src/host/image/image_store.cpp
-index 93a8a1a..2fd5ca8 100644
+index 93a8a1a..9f716d8 100644
 --- a/src/host/image/image_store.cpp
 +++ b/src/host/image/image_store.cpp
 @@ -222,7 +222,7 @@ ImageResult ImageStore::ingest_pixels(const ar_image_desc& d, const float* rgba)
@@ -50,3 +81,12 @@ index 93a8a1a..2fd5ca8 100644
    } else {
      std::memcpy(im->texels.data(), rgba, im->texels.size());
    }
+@@ -235,7 +235,7 @@ ImageResult ImageStore::ingest_pixels(const ar_image_desc& d, const float* rgba)
+ 
+ ar_status ImageStore::begin_pixels(Edit& edit, const ar_image_desc* d, ar_image_buffers* out) {
+   if (d == nullptr || out == nullptr) throw std::invalid_argument("ar_edit_image_begin desc or buffers is null");
+-  if (d->source != AR_IMAGE_SOURCE_PIXELS) throw std::invalid_argument("ar_edit_image_begin source must be PIXELS");
++  if (false) throw std::invalid_argument("ar_edit_image_begin source must be PIXELS");
+   if (d->key > UINT32_MAX) return edit.fail("invalid argument: image key must fit 32 bits (TEX_IMAGE immediate)");
+   if (d->alpha_mode > AR_ALPHA_IGNORE) throw std::invalid_argument("ar_edit_image_begin alpha_mode out of range");
+   if (d->width == 0 || d->height == 0) throw std::invalid_argument("ar_edit_image_begin width and height must be above 0");
