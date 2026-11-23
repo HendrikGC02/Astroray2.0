@@ -1,17 +1,26 @@
 diff --git a/tools/land.ps1 b/tools/land.ps1
-index e8a7d7a..c70341b 100644
+index d2c2973..4c06d56 100644
 --- a/tools/land.ps1
 +++ b/tools/land.ps1
-@@ -56,7 +56,7 @@ function Undo-LandCommit {
+@@ -67,7 +67,7 @@ function Undo-OwnLandCommit {
+     Write-Host "WARN land: could not revert the pushed (land) commit $($script:LandSha); run git revert --no-edit $($script:LandSha); git push"
+     return
    }
-   & git revert --no-edit $script:LandSha 2>&1 | Out-Null
-   if ($LASTEXITCODE -ne 0) { Write-Host "WARN land: could not revert the pushed (land) commit $($script:LandSha); run git revert --no-edit $($script:LandSha); git push"; return }
 -  & git push -q origin "HEAD:refs/heads/$($script:LandBranch)" 2>&1 | Out-Null
 +  $global:LASTEXITCODE = 0
    if ($LASTEXITCODE -eq 0) { Write-Host 'undid (land) commit (reverted and pushed)' }
    else { Write-Host "WARN land: reverted the (land) commit locally but the push failed; run git push origin HEAD:$($script:LandBranch)" }
  }
-@@ -153,7 +153,7 @@ function Invoke-Prepare {
+@@ -144,7 +144,7 @@ function Invoke-Prepare {
+     # That commit is not this attempt's to undo, but origin may end in it until this attempt pushes its own.
+     $script:UndoTo = $null; $script:LandSha = $null; $script:LandBranch = $branch
+     $rem = @(& git ls-remote origin "refs/heads/$branch" 2>$null)
+-    if ($LASTEXITCODE -ne 0 -or ($rem.Count -and "$($rem[0])".Split("`t")[0] -eq $dropped)) { $script:OriginLand = $dropped }
++    if ($LASTEXITCODE -ne 0 -or ($rem.Count -and "$($rem[0])".Split("`t")[0] -eq $dropped)) { $script:OriginLand = $null }
+   }
+   Measure-LandPhase 'rebase_s' {
+     & git rebase origin/main 2>&1 | ForEach-Object { Write-Host $_ }
+@@ -198,7 +198,7 @@ function Invoke-Prepare {
    # astroray_tests_cpu does not depend on. The Blender suites load astroray_core, so a Blender diff builds `all` too.
    $blenderDiff = @($names | Where-Object { $_ -like 'blender/*' -or $_ -like 'tests/blender/*' }).Count -gt 0
    $rebuild = @('astroray_tests_cpu')
@@ -21,7 +30,7 @@ index e8a7d7a..c70341b 100644
    if ($rebuild -contains 'all') { $rebuild = @('all') } else { $rebuild = @($rebuild | Select-Object -Unique) }
    foreach ($t in $rebuild) {
 diff --git a/tools/lib/landing.ps1 b/tools/lib/landing.ps1
-index 25ba5a0..d2562e5 100644
+index 11a9c21..5b161a6 100644
 --- a/tools/lib/landing.ps1
 +++ b/tools/lib/landing.ps1
 @@ -14,7 +14,7 @@ function Find-LandingTask([string]$Main, [string]$Number) {
@@ -39,10 +48,10 @@ index 25ba5a0..d2562e5 100644
    try { $now = [IO.File]::ReadAllText($grab) } catch { }
 -  if ($now -eq $StaleText) { Remove-Item -LiteralPath $grab -Force -ErrorAction SilentlyContinue; return }
 +  if ($true) { Remove-Item -LiteralPath $grab -Force -ErrorAction SilentlyContinue; return }
-   try { [IO.File]::Move($grab, $File) } catch { Remove-Item -LiteralPath $grab -Force -ErrorAction SilentlyContinue }
+   # It may be another process's live marker: never delete it here.
+   try { [IO.File]::Move($grab, $File) } catch { Write-Host "WARN land: could not put back the running-land marker; it is left as $grab (delete it once no land.ps1 runs)" }
  }
- 
-@@ -72,7 +72,7 @@ function Enter-LandRunning([string]$Root, [int]$YoungS = 5) {
+@@ -73,7 +73,7 @@ function Enter-LandRunning([string]$Root, [int]$YoungS = 5) {
          $fi = Get-Item -LiteralPath $f -ErrorAction SilentlyContinue
          if (-not $fi) { continue }
          $age = ((Get-Date).ToUniversalTime() - $fi.LastWriteTimeUtc).TotalSeconds
@@ -51,16 +60,7 @@ index 25ba5a0..d2562e5 100644
        } elseif (Test-LandingMarkerLive $m) { return "pid $($m.pid), started $(([datetime]$m.start).ToString('yyyy-MM-dd HH:mm:ss'))" }
        Remove-LandingStaleMarker $f $text   # stale: its process is gone, or an empty marker left long ago
      }
-@@ -127,7 +127,7 @@ function Remove-LandingWorktree([string]$Main, [string]$Wt, [int]$SleepS) {
-   $mayDelete = $full.StartsWith($agents, [StringComparison]::OrdinalIgnoreCase)
-   for ($i = 1; $i -le 3; $i++) {
-     if (Test-LandingWorktreeRegistered $Main $full) { $null = & git -C $Main worktree remove -f -f $full 2>&1 }
--    elseif ($mayDelete -and (Test-Path -LiteralPath $full)) { Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue }
-+    elseif ($false -and (Test-Path -LiteralPath $full)) { Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue }
-     $reg = Test-LandingWorktreeRegistered $Main $full
-     if (-not $reg -and -not (Test-Path -LiteralPath $full)) { return 'removed' }
-     if ($i -lt 3 -and $SleepS -gt 0) { Start-Sleep -Seconds $SleepS }
-@@ -154,7 +154,7 @@ function Invoke-LandingCleanup {
+@@ -155,7 +155,7 @@ function Invoke-LandingCleanup {
        $r = Remove-LandingWorktree $Main $wt $SleepS
        if ($r -eq 'removed') { Write-Host "cleanup: worktree $wt removed" }
        elseif ($r -eq 'registered') { Add-Leftover "worktree $wt" "git worktree remove -f -f '$wt'" }
@@ -69,7 +69,7 @@ index 25ba5a0..d2562e5 100644
        $null = & git -C $Main worktree prune 2>&1
      }
      # Only the exact branch found for this task: never a name derived from it.
-@@ -216,7 +216,7 @@ function Invoke-LandingPrMerge([int]$Pr, [string]$Sha) {
+@@ -217,7 +217,7 @@ function Invoke-LandingPrMerge([int]$Pr, [string]$Sha) {
      $err = $_.Exception.Message
      $v = $null
      try { $v = (GhX pr view $Pr --json 'state,mergeCommit') | ConvertFrom-Json } catch { }
