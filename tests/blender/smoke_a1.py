@@ -313,15 +313,15 @@ class TestSmoke(unittest.TestCase):
 F12_NAME = "f12_textured"
 F12_SIZE = 32        # pixels per side
 F12_TEX = 2048       # texels per side: the decode outlasts a CPU session's start
-F12_SPP = 64         # one device's image-mean SE is 0.00048 (0.15 % of the mean), the 1 % allowed is 0.0033
-F12_POWER = 1500.0   # lamp watts (Blender units), 4 m above the plane
-F12_FLOOR = 0.16     # half the mean luminance of the first good run (0.3277 on both devices)
+F12_SPP = 64         # one device's image-mean SE is 0.00019 (0.19 % of the mean 0.100), under the 1 % allowed
+F12_POWER = 600.0    # lamp watts (Blender units), 4 m above the plane
+F12_FLOOR = 0.05     # half the mean luminance of the first good run (0.1002 on both devices)
 F12_LUMA = (0.2126, 0.7152, 0.0722)  # Rec.709 luminance of scene-linear RGB
 
 
 def build_f12_scene(work):
     """A UV-mapped plane filling the view, Principled Base Color from a seeded noise PNG (linear mean
-    0.62: sRGB codes 153..255), black world, one point lamp above the plane, a pinhole camera."""
+    about 0.5), black world, one point lamp above the plane, a pinhole camera."""
     scene = bpy.data.scenes.new(F12_NAME)
     scene.render.engine = "ASTRORAY"
     scene.render.resolution_x = scene.render.resolution_y = F12_SIZE
@@ -351,7 +351,11 @@ def build_f12_scene(work):
     src = bpy.data.images.new("f12_tex_src", F12_TEX, F12_TEX, alpha=False, float_buffer=False)
     src.pixels[0]  # allocates the buffer: foreach_set on a fresh image writes nothing otherwise
     rgba = np.ones((F12_TEX * F12_TEX, 4), np.float32)
-    rgba[:, :3] = np.random.RandomState(139).randint(153, 256, (F12_TEX * F12_TEX, 1)) / 255.0
+    # Per-texel noise alone averages out over the 64 texels a pixel covers; 8 x 8 checks of two noise
+    # ranges (sRGB codes 153..255 and 100..200) keep the texture visible in the 32-pixel frame.
+    codes = np.random.RandomState(139).randint(0, 103, (F12_TEX, F12_TEX))
+    dark = (np.add.outer(np.arange(F12_TEX) // (F12_TEX // 8), np.arange(F12_TEX) // (F12_TEX // 8)) % 2) == 1
+    rgba[:, :3] = (np.where(dark, 100 + codes, 153 + codes).reshape(-1, 1)) / 255.0
     src.pixels.foreach_set(rgba.reshape(-1))
     src.file_format, src.filepath_raw = "PNG", os.path.join(work, "f12_tex.png")
     src.save()
