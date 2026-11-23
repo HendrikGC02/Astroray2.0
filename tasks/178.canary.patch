@@ -1,17 +1,17 @@
 diff --git a/src/kernel/vm/interval.h b/src/kernel/vm/interval.h
-index 71a39dc..2981cbc 100644
+index eb5db62..16817c9 100644
 --- a/src/kernel/vm/interval.h
 +++ b/src/kernel/vm/interval.h
-@@ -35,7 +35,7 @@ AR_FN Interval interval_nan() {
- 
- AR_FN Interval interval_widen(float lo, float hi) {
-   const float inf = bit_cast<float>(0x7f800000u);  // INFINITY does not compile in nvcc -Werror
--  return Interval{::nextafterf(lo, -inf), ::nextafterf(hi, inf)};
-+  return Interval{::nextafterf(lo, -inf) - 1e-3f, ::nextafterf(hi, inf) + 1e-3f};
+@@ -48,7 +48,7 @@ AR_FN float interval_step_down(float x) {
+   return bit_cast<float>(x > 0.f ? b - 1u : b + 1u);
  }
  
+-AR_FN Interval interval_widen(float lo, float hi) { return Interval{interval_step_down(lo), interval_step_up(hi)}; }
++AR_FN Interval interval_widen(float lo, float hi) { return Interval{interval_step_down(lo) - 1e-3f, interval_step_up(hi) + 1e-3f}; }
+ 
  AR_FN Interval interval_mul_scalar(const Interval& x, const Interval& y) {
-@@ -52,7 +52,7 @@ AR_FN Interval interval_mul_scalar(const Interval& x, const Interval& y) {
+   if (interval_is_nan(x) || interval_is_nan(y)) return interval_nan();
+@@ -64,7 +64,7 @@ AR_FN Interval interval_mul_scalar(const Interval& x, const Interval& y) {
  }
  
  AR_FN Interval interval_add_scalar(const Interval& x, const Interval& y) {
