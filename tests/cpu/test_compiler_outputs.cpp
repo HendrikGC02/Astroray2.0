@@ -1,29 +1,39 @@
 // SPDX-License-Identifier: Apache-2.0
-// 0005 items 40 and 43: what the compiler hands other stages (MAY_BE_DELTA, the constant flags,
-// the emission estimate) and the unsupported-node policy (magenta plus one entry per node type,
-// 0001 V15 part). The gate case times the B-24 compile row on a fixed 100-node graph.
-// Ref: docs/decisions/0005-material-model.md items 4, 40, 43; 0001 D2.11; 0009 d13 B-24.
+// 0005 items 32, 38, 40 and 43: what the compiler hands other stages (MAY_BE_DELTA, NON_OPAQUE, the
+// constant flags, the emission estimate, the opacity entry), the unsupported-node policy (magenta
+// plus one entry per node type, 0001 V15 part) and Verification 6's register-file reuse clause for
+// the three entries of one compiled material. The gate case times the B-24 compile row on a fixed
+// 100-node graph.
+// Ref: docs/decisions/0005-material-model.md items 4, 32, 38, 40, 43, Verification 6; 0001 D2.11;
+// 0009 d13 B-24.
 #include <doctest.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <future>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "../../src/host/data_resource.h"
 #include "../../src/host/ledger.h"
 #include "../../src/host/material/compiler.h"
 #include "../../src/host/light/light_builder.h"
 #include "../../src/host/material/material_store.h"
 #include "../../src/host/spectral/blackbody.h"
+#include "../../src/host/material/op_meta.h"
 #include "host/scene/edit.h"
 #include "material/material_header.h"
+#include "sample/sobol.h"
 #include "vm/interp.h"
 
 namespace {
@@ -124,6 +134,43 @@ size_t count(const MaterialOutput& m, uint32_t code) {
   return size_t(std::count_if(m.entries.begin(), m.entries.end(), [&](const auto& e) { return e.code == code; }));
 }
 
+uint32_t bits(float f) { return ar::bit_cast<uint32_t>(f); }
+
+// Channel `ch` of a colour node: the per-point scalar an opacity is authored from.
+int channel(GB& g, int colour, int32_t ch) {
+  const int n = g.add(Op::CHANNEL_F32X3, {}, {ch});
+  g.link(colour, n, 0);
+  return n;
+}
+
+// The opcodes of the entry at word `at` up to its END; *end is the word after that END. Immediate
+// counts come from each row's operand tokens.
+std::vector<Op> entry_ops(const std::vector<uint32_t>& prog, uint32_t at, uint32_t* end = nullptr) {
+  std::vector<Op> out;
+  uint32_t pc = at;
+  while (pc < prog.size()) {
+    const Op op = Op(prog[pc] & 0xffu);
+    out.push_back(op);
+    uint32_t imm = 0;
+    const std::string tok = astroray::host::op_meta(op).operand_types;
+    for (size_t k = 0; (k = tok.find("imm", k)) != std::string::npos; k += 3) ++imm;  // imm and slotimm
+    if (tok.find("jmpoff") != std::string::npos) ++imm;
+    pc += 1 + imm;
+    if (op == Op::END) break;
+  }
+  if (end != nullptr) *end = pc;
+  return out;
+}
+
+std::vector<uint8_t> read_data(const std::string& rel) {
+  std::string here = __FILE__;
+  std::string dir = here.substr(0, here.find_last_of("/\\") + 1);
+  std::ifstream f(dir + "../../data/" + rel, std::ios::binary);
+  if (!f) f.open("data/" + rel, std::ios::binary);
+  REQUIRE_MESSAGE(f.good(), "data/" << rel << " not found");
+  return std::vector<uint8_t>(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+}
+
 }  // namespace
 
 TEST_SUITE("fast") {
@@ -143,8 +190,8 @@ TEST_CASE("compiler_outputs/may be delta constant roughness") {
 }
 
 TEST_CASE("compiler_outputs/may be delta textured roughness") {
-  // M1a ops give no per-point scalar, so the rule is driven through a compiled result whose
-  // roughness slots are marked as stored per point, over constants that alone would clear it.
+  // The rule is driven through a compiled result whose roughness slots are marked as stored per
+  // point, over constants that alone would clear it.
   astroray::host::CompileResult r = roughness(0.5f).compiled;
   REQUIRE((astroray::host::material_flags(r) & ar::MAY_BE_DELTA) == 0);
   r.runtime_slots = uint64_t(1) << uint32_t(ar::RecordSlot::specular_roughness);
@@ -529,6 +576,214 @@ TEST_CASE("compiler_outputs/dropped generation does not leak into queued ones") 
   });
   scene.generations().wait_idle();
   CHECK(entries(B) == std::vector<std::string>{"ShaderNodeBevel"});
+}
+
+TEST_CASE("compiler_outputs/constant channel folds") {
+  // Item 35: CHANNEL_F32X3 reads no context, so a constant colour's channel folds into the block and
+  // a constant opacity needs no entry (item 32). A textured base colour keeps a program, so word 1
+  // of the entry table can be read.
+  const float colour[3] = {0.25f, 0.5f, 1.0f};
+  for (int32_t ch = 0; ch < 3; ++ch) {
+    INFO("channel " << ch);
+    GB g;
+    g.store(tex(g), ar::RecordSlot::base_color);
+    g.store(channel(g, g.add(Op::CONST_F32X3, {colour[0], colour[1], colour[2]}), ch), ar::RecordSlot::geometry_opacity);
+    const MaterialOutput m = g.compile();
+    REQUIRE(!m.magenta);
+    const std::vector<uint32_t>& prog = m.compiled.program;
+    REQUIRE(prog.size() > 4);
+    CHECK(prog[1] == 0u);
+    CHECK(bits(m.compiled.block.geometry_opacity) == bits(colour[ch]));
+    CHECK(m.compiled.runtime_slots == (uint64_t(1) << uint32_t(ar::RecordSlot::base_color)));
+    for (Op o : entry_ops(prog, prog[0])) CHECK(o != Op::CHANNEL_F32X3);
+    CHECK(((m.flags & ar::NON_OPAQUE) != 0) == (ch != 2));  // only the channel holding 1 is opaque
+    CHECK(m.entries.empty());
+  }
+}
+
+TEST_CASE("compiler_outputs/non opaque flag") {
+  // Item 43: NON_OPAQUE is set unless T folds to 0, that is unless opacity is the constant 1.
+  auto constant = [](float a) {
+    GB g;
+    g.store(g.add(Op::CONST_F32, {a}), ar::RecordSlot::geometry_opacity);
+    return g.compile();
+  };
+  GB per;
+  per.store(channel(per, tex(per), 0), ar::RecordSlot::geometry_opacity);
+  const MaterialOutput p = per.compile();
+  REQUIRE(!p.magenta);
+  REQUIRE(p.compiled.program.size() > 4);
+  CHECK(p.compiled.program[1] != 0u);
+  CHECK((p.flags & ar::NON_OPAQUE) != 0);  // the block still holds the default 1
+
+  const MaterialOutput half = constant(0.5f);
+  CHECK(half.compiled.program.empty());  // a constant opacity: no entry, word 1 is absent
+  CHECK(half.compiled.block.geometry_opacity == 0.5f);
+  CHECK((half.flags & ar::NON_OPAQUE) != 0);
+  CHECK(half.entries.empty());
+  CHECK((constant(1.0f).flags & ar::NON_OPAQUE) == 0);
+  CHECK((roughness(0.5f).flags & ar::NON_OPAQUE) == 0);  // nothing stored: the default 1
+  GB bevel;
+  bevel.unsupported("ShaderNodeBevel");
+  CHECK((bevel.compile().flags & ar::NON_OPAQUE) == 0);  // the magenta material is opaque
+
+  // Out of range: clamped and reported once; NaN rejects the program.
+  const MaterialOutput over = constant(1.5f);
+  CHECK(!over.magenta);
+  CHECK(over.compiled.block.geometry_opacity == 1.0f);
+  CHECK((over.flags & ar::NON_OPAQUE) == 0);
+  REQUIRE(over.entries.size() == 1);
+  CHECK(over.entries[0].code == AR_REPORT_NODE_APPROXIMATED);
+  CHECK(over.entries[0].detail == "opacity clamped");
+  const MaterialOutput under = constant(-0.25f);
+  CHECK(under.compiled.block.geometry_opacity == 0.0f);
+  CHECK((under.flags & ar::NON_OPAQUE) != 0);
+  CHECK(under.entries.size() == 1);
+  const MaterialOutput nan = constant(std::nanf(""));
+  CHECK(nan.magenta);
+  REQUIRE(nan.entries.size() == 1);
+  CHECK(nan.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+  CHECK(nan.entries[0].detail.find("NaN") != std::string::npos);
+}
+
+TEST_CASE("compiler_outputs/opacity entry layout") {
+  // Item 38: the opacity entry is the dead-code-eliminated graph of the per-point opacity store,
+  // laid out after the surface and emission entries; the surface entry keeps the store.
+  using RS = ar::RecordSlot;
+  GB g;
+  const int t = tex(g);
+  g.store(t, RS::base_color);
+  g.store(channel(g, t, 1), RS::geometry_opacity);
+  const MaterialOutput m = g.compile();
+  REQUIRE(!m.magenta);
+  const std::vector<uint32_t>& prog = m.compiled.program;
+  REQUIRE(prog.size() > 4);
+  REQUIRE(prog[1] != 0u);
+  CHECK(prog[2] == 0u);
+  uint32_t end = 0;
+  const std::vector<Op> want = {Op::LOAD_CTX_UV, Op::TEX_IMAGE, Op::CHANNEL_F32X3, Op::STORE_SLOT, Op::END};
+  CHECK(entry_ops(prog, prog[1], &end) == want);
+  CHECK(end == prog.size());
+  CHECK(prog[end - 2] == uint32_t(RS::geometry_opacity));  // the STORE_SLOT immediate, before END
+  const std::vector<Op> surface = entry_ops(prog, prog[0], &end);
+  CHECK(end == prog[1]);
+  CHECK(std::count(surface.begin(), surface.end(), Op::STORE_SLOT) == 2);
+  CHECK(std::count(surface.begin(), surface.end(), Op::CHANNEL_F32X3) == 1);
+
+  // With emission: [table, surface, emission, opacity], each entry ending where the next begins.
+  GB e;
+  const int te = tex(e);
+  e.op2(Op::EMIT_LE, te, e.add(Op::CONST_F32, {2.0f}));
+  e.store(channel(e, te, 0), RS::geometry_opacity);
+  const MaterialOutput me = e.compile();
+  REQUIRE(!me.magenta);
+  const std::vector<uint32_t>& pe = me.compiled.program;
+  REQUIRE(pe.size() > 4);
+  CHECK(pe[0] == 4u);
+  REQUIRE((pe[2] > pe[0] && pe[1] > pe[2]));
+  CHECK(pe[3] == 0u);
+  entry_ops(pe, pe[0], &end);
+  CHECK(end == pe[2]);
+  const std::vector<Op> emission = entry_ops(pe, pe[2], &end);
+  CHECK(end == pe[1]);
+  CHECK(std::count(emission.begin(), emission.end(), Op::EMIT_LE) == 1);
+  CHECK(std::count(emission.begin(), emission.end(), Op::STORE_SLOT) == 0);
+  const std::vector<Op> opacity = entry_ops(pe, pe[1], &end);
+  CHECK(end == pe.size());
+  CHECK(opacity == want);
+}
+
+TEST_CASE("compiler_outputs/entries share one register file") {
+  // Verification 6, register-file reuse: the surface, emission and opacity entries of one compiled
+  // material, run one after another on one VmRegs in every order, give the Le, record and opacity
+  // each gives alone on a zeroed and on a NaN-filled file, bit for bit. Each entry gets only the
+  // outputs its kernel passes: the emission entry no record, the opacity entry no Le (item 32: it
+  // writes geometry_opacity and nothing else).
+  using RS = ar::RecordSlot;
+  const auto ob = read_data("spectral/observer.bin");
+  astroray::ObserverTables obs;
+  const std::string err = astroray::parse_observer(ob.data(), ob.size(), &obs);
+  REQUIRE_MESSAGE(err.empty(), err);
+  std::vector<uint8_t> texels = {0, 40, 255, 128, 7, 64, 200, 90, 13, 1, 254, 77, 33, 160, 99, 250, 20, 180};
+  ar::DeviceImageView image = {};
+  image.texels = uint64_t(uintptr_t(texels.data()));
+  image.width = 3, image.height = 2, image.channels = 3, image.encoding = uint32_t(ar::TexEncoding::SRGB);
+  std::vector<float> srgb(ar::kSrgbTableSize);
+  ar::srgb_decode_table(srgb.data());
+  ar::SceneTables tables = {};
+  tables.srgb_decode = srgb.data();
+  tables.images = &image;
+  tables.image_count = 1;
+  tables.rgb2spec = &table();
+  tables.observer.cmf = &obs.cmf[0][0];
+  tables.observer.illum = obs.d65;
+
+  GB g;
+  const int t = tex(g);
+  g.store(t, RS::base_color);
+  g.op2(Op::EMIT_LE, g.op2(Op::MUL_F32X3, t, g.add(Op::CONST_F32X3, {0.25f, 0.5f, 2.0f})), g.add(Op::CONST_F32, {3.0f}));
+  g.store(channel(g, t, 1), RS::geometry_opacity);
+  const astroray::host::ImageSlotFn slots = [](uint32_t key, uint32_t* slot) { return key == 7 ? (*slot = 0, true) : false; };
+  const MaterialOutput m = compile_material(g.desc(), table(), nullptr, &slots);
+  REQUIRE(!m.magenta);
+  const std::vector<uint32_t>& prog = m.compiled.program;
+  REQUIRE(prog.size() > 4);
+  REQUIRE((prog[0] != 0u && prog[1] != 0u && prog[2] != 0u));
+
+  struct Out {
+    ar::OpenPBRParams rec = {};
+    ar::Spec le = {};
+  };
+  // Entry k is the table word: 0 surface, 1 opacity, 2 emission.
+  auto run = [&](uint32_t k, ar::VmRegs* regs, const ar::ShadeContext& ctx, Out* o) {
+    return ar::run_entry(prog.data(), prog[k], regs, ctx, tables, k == 2 ? nullptr : &o->rec, k == 1 ? nullptr : &o->le);
+  };
+  auto same = [](const Out& a, const Out& b) {
+    for (int l = 0; l < ar::kLanes; ++l)
+      if (bits(float(a.le.v[l])) != bits(float(b.le.v[l]))) return false;
+    return bits(float(a.rec.geometry_opacity)) == bits(float(b.rec.geometry_opacity)) &&
+           std::memcmp(&a.rec, &b.rec, sizeof a.rec) == 0;
+  };
+  const uint32_t orders[6][3] = {{0, 2, 1}, {0, 1, 2}, {2, 0, 1}, {2, 1, 0}, {1, 0, 2}, {1, 2, 0}};
+  uint32_t bad = 0, lit = 0;
+  for (uint32_t i = 0; i < 1000; ++i) {
+    ar::ShadeContext ctx = {};
+    auto u = [&](uint32_t d) { return ar::sample_independent(i, 0u, 0u, d, 0x147u); };
+    ctx.uv[0] = {u(0) * 4.0f - 2.0f, u(1) * 4.0f - 2.0f};
+    ctx.P = {u(2), u(3), u(4)};
+    for (int l = 0; l < 4; ++l) ctx.lambda_t.nm[l] = float(360.0 + 470.0 * double(u(5 + uint32_t(l))));
+    Out alone[3];
+    for (uint32_t k = 0; k < 3; ++k) {
+      ar::VmRegs zero = {};
+      REQUIRE(run(k, &zero, ctx, &alone[k]) == ar::VmStatus::OK);
+      ar::VmRegs nan;
+      std::memset(&nan, 0xff, sizeof nan);
+      Out o;
+      REQUIRE(run(k, &nan, ctx, &o) == ar::VmStatus::OK);
+      bad += !same(o, alone[k]);
+    }
+    for (const auto& order : orders) {
+      ar::VmRegs regs = {};
+      for (uint32_t k : order) {
+        Out o;
+        REQUIRE(run(k, &regs, ctx, &o) == ar::VmStatus::OK);
+        bad += !same(o, alone[k]);
+      }
+    }
+    // The values compared are the material's: the opacity is the texel's green channel, the
+    // opacity entry leaves the rest of the record alone, and the surface carries the same opacity.
+    float texel[3];
+    const float uv[2] = {float(ctx.uv[0].x), float(ctx.uv[0].y)};
+    ar::op_tex_image(tables, 0u, 0u, uv, texel);
+    bad += bits(float(alone[1].rec.geometry_opacity)) != bits(texel[1]);
+    bad += bits(float(alone[0].rec.geometry_opacity)) != bits(texel[1]);
+    Out only_opacity;
+    only_opacity.rec.geometry_opacity = alone[1].rec.geometry_opacity;
+    bad += std::memcmp(&only_opacity.rec, &alone[1].rec, sizeof only_opacity.rec) != 0;
+    lit += alone[2].le.v[0] > 0.0f;
+  }
+  CHECK(bad == 0u);
+  CHECK(lit > 500u);  // the Le compared is not zero
 }
 
 }  // TEST_SUITE("fast")

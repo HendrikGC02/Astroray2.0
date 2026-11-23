@@ -28,7 +28,8 @@ bool op_param_counts(Op op, uint32_t* nf, uint32_t* ni) {
     case Op::BLACKBODY: *nf = 2; return true;     // temperature in K, scale
     case Op::LOAD_CTX_UV:
     case Op::RGB_LIFT:
-    case Op::STORE_SLOT: *ni = 1; return true;
+    case Op::STORE_SLOT:
+    case Op::CHANNEL_F32X3: *ni = 1; return true;
     case Op::TEX_IMAGE: *ni = 2; return true;  // image ar_key (low 32 bits), mode bits (tex_image.h)
     case Op::LOAD_CTX_P:
     case Op::MUL_F32:
@@ -47,7 +48,8 @@ VType op_input_type(Op op, int i) {
     case Op::ADD_F32X3: return VType::F32X3;
     case Op::MUL_F32X3_F32: return i == 0 ? VType::F32X3 : VType::F32;
     case Op::TEX_IMAGE:
-    case Op::RGB_LIFT: return VType::F32X3;
+    case Op::RGB_LIFT:
+    case Op::CHANNEL_F32X3: return VType::F32X3;
     case Op::EMIT_LE: return i == 0 ? VType::F32X3 : VType::F32;
     default: return VType::NONE;
   }
@@ -87,7 +89,8 @@ int op_input_count(Op op) {
     case Op::EMIT_LE: return 2;
     case Op::TEX_IMAGE:
     case Op::RGB_LIFT:
-    case Op::STORE_SLOT: return 1;
+    case Op::STORE_SLOT:
+    case Op::CHANNEL_F32X3: return 1;
     default: return 0;
   }
 }
@@ -95,7 +98,8 @@ int op_input_count(Op op) {
 VType op_result_type(Op op) {
   switch (op) {
     case Op::CONST_F32:
-    case Op::MUL_F32: return VType::F32;
+    case Op::MUL_F32:
+    case Op::CHANNEL_F32X3: return VType::F32;
     case Op::CONST_F32X3:
     case Op::LOAD_CTX_UV:
     case Op::LOAD_CTX_P:
@@ -147,6 +151,8 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
     if (o.op == Op::CAUCHY_ABBE &&
         !(finite_positive(pf[0]) && finite_positive(pf[1]) && std::isfinite(pf[2]) && pf[2] >= 0.0f))
       return *err = at(i, "CAUCHY_ABBE needs a finite positive n_d and Abbe number and a finite non-negative dispersion scale"), false;
+    if (o.op == Op::CHANNEL_F32X3 && uint32_t(g->i32[o.i32_first]) > 2u)
+      return *err = at(i, "CHANNEL_F32X3 channel must be 0, 1 or 2"), false;
     if (o.op == Op::STORE_SLOT && uint32_t(g->i32[o.i32_first]) >= uint32_t(ar::RecordSlot::COUNT_))
       return *err = at(i, "unknown record slot"), false;
   }
