@@ -10,12 +10,19 @@ with ASTRORAY_RECORD set, and the cases below check the Combined pass against A1
 (tools/analytic.py check_scene) and the addon's recording against the builder's (tools/exporter_equivalence.py).
 --with-materials first runs tests/blender/test_materials.py in the same process (before the extension is
 enabled, because that file registers the addon's properties itself).
+Then TestF12Textured renders a second scene in the same start: a plane textured with a 2048x2048 noise PNG,
+lit by one point lamp, through F12 on the CPU device and on CUDA. Each delivered mean must be over a
+luminance floor (an image-job scene that renders black on either device fails: the defect that went unseen
+for days) and the two means must agree within the statistical bound of the pair_image check. Like A1's
+cases these checks are not counted in budgets.toml [family_members]; m is analytic.family_m().
 Ref: docs/decisions/0009-build-test-process.md d11, d16, d17a; 0007 d27.
 """
 import glob
 import importlib.util
 import json
+import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -73,6 +80,13 @@ def install_and_enable():
     if mod is None:
         raise RuntimeError(f"enabling {MODULE} failed: {errors}")
     return mod
+
+
+def ensure_extension():
+    """The extension is enabled once per Blender start, by whichever class runs first (a canary run
+    selects TestF12Textured alone)."""
+    if MODULE not in sys.modules:
+        install_and_enable()
 
 
 def write_fits(path, planes, header):
@@ -138,7 +152,7 @@ def run_smoke(work, evidence):
                         "--passes", "Position,Normal,UV,IndexMA"], capture_output=True, text=True, timeout=300)
     if p.returncode != 0:
         raise RuntimeError("scenes/a1_furnace/build.py failed: " + p.stdout + p.stderr)
-    install_and_enable()
+    ensure_extension()
     rf = importlib.import_module(MODULE + ".render_final")
     blend_writer.build(blend + ".json", blend)
     bpy.ops.wm.open_mainfile(filepath=blend)
@@ -297,6 +311,171 @@ class TestSmoke(unittest.TestCase):
         self.assertTrue(ok, "\n".join(lines))
 
 
+F12_NAME = "f12_textured"
+F12_SIZE = 32        # pixels per side
+F12_TEX = 2048       # texels per side: the decode outlasts a CPU session's start
+F12_SPP = 64         # one device's image-mean SE is 0.00019 (0.19 % of the mean 0.100), under the 1 % allowed
+F12_POWER = 600.0    # lamp watts (Blender units), 4 m above the plane
+F12_FLOOR = 0.05     # half the mean luminance of the first good run (0.1002 on both devices)
+F12_LUMA = (0.2126, 0.7152, 0.0722)  # Rec.709 luminance of scene-linear RGB. Ref: ITU-R BT.709
+
+
+def device_kind(log):
+    """The kind of the newest context the engine created, from its log (written at ar_context_create): a
+    device that silently fell back below the Python layer would otherwise pass every case, since both
+    devices share one counter-based sampler and give the same means."""
+    kinds = re.findall(r"INFO device kind=(\w+)", open(log, encoding="utf-8", errors="replace").read())
+    if not kinds:
+        raise RuntimeError(f"{log} names no device")
+    return kinds[-1]
+
+
+def build_f12_scene(work):
+    """A UV-mapped plane filling the view, Principled Base Color from a seeded noise PNG (linear mean
+    about 0.5), black world, one point lamp above the plane, a pinhole camera."""
+    scene = bpy.data.scenes.new(F12_NAME)
+    scene.render.engine = "ASTRORAY"
+    scene.render.resolution_x = scene.render.resolution_y = F12_SIZE
+    scene.render.resolution_percentage = 100
+    me = bpy.data.meshes.new("F12Plane")
+    me.from_pydata([(-8, -8, 0), (8, -8, 0), (8, 8, 0), (-8, 8, 0)], [], [(0, 1, 2, 3)])
+    uv = me.uv_layers.new(name="UVMap")
+    for loop, co in zip(me.loops, ((0, 0), (1, 0), (1, 1), (0, 1))):
+        uv.data[loop.index].uv = co
+    plane = bpy.data.objects.new("F12Plane", me)
+    scene.collection.objects.link(plane)
+    cd = bpy.data.cameras.new("F12Cam")
+    cd.sensor_fit, cd.angle = "AUTO", 2 * math.atan(8.0 / 5.0)  # the plane exactly fills the frame
+    cam = bpy.data.objects.new("F12Cam", cd)
+    scene.collection.objects.link(cam)
+    cam.location = (0.0, 0.0, 5.0)
+    scene.camera = cam
+    ld = bpy.data.lights.new("F12Lamp", "POINT")
+    ld.energy, ld.shadow_soft_size, ld.use_soft_falloff = F12_POWER, 0.25, False
+    lamp = bpy.data.objects.new("F12Lamp", ld)
+    scene.collection.objects.link(lamp)
+    lamp.location = (0.0, 0.0, 4.0)
+    world = bpy.data.worlds.new("F12World")
+    world.use_nodes = True
+    world.node_tree.nodes["Background"].inputs["Color"].default_value = (0, 0, 0, 1)
+    scene.world = world
+    src = bpy.data.images.new("f12_tex_src", F12_TEX, F12_TEX, alpha=False, float_buffer=False)
+    src.pixels[0]  # allocates the buffer: foreach_set on a fresh image writes nothing otherwise
+    rgba = np.ones((F12_TEX * F12_TEX, 4), np.float32)
+    # Per-texel noise alone averages out over the 64 texels a pixel covers; 8 x 8 checks of two noise
+    # ranges (sRGB codes 153..255 and 100..200) keep the texture visible in the 32-pixel frame.
+    codes = np.random.RandomState(139).randint(0, 103, (F12_TEX, F12_TEX))
+    dark = (np.add.outer(np.arange(F12_TEX) // (F12_TEX // 8), np.arange(F12_TEX) // (F12_TEX // 8)) % 2) == 1
+    rgba[:, :3] = (np.where(dark, 100 + codes, 153 + codes).reshape(-1, 1)) / 255.0
+    src.pixels.foreach_set(rgba.reshape(-1))
+    src.file_format, src.filepath_raw = "PNG", os.path.join(work, "f12_tex.png")
+    src.save()
+    mat = bpy.data.materials.new("F12Mat")
+    mat.use_nodes = True
+    plane.data.materials.append(mat)
+    t = mat.node_tree
+    tex = t.nodes.new("ShaderNodeTexImage")
+    tex.image = bpy.data.images.load(src.filepath_raw)
+    t.links.new(tex.outputs["Color"], t.nodes["Principled BSDF"].inputs["Base Color"])
+    scene.astroray.samples = F12_SPP
+    scene.astroray.seed = analytic.seed_for("f12_textured")
+    return scene
+
+
+class TestF12Textured(unittest.TestCase):
+    """The textured, lamp-lit plane through F12 on both devices; one render each, before any case."""
+    runs = None
+    agree_line = None
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.agree_line:
+            print(cls.agree_line)
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib
+
+        work = arg("--work", os.path.join(ROOT, "out", "smoke"))
+        evidence = os.path.join(ROOT, "out", "evidence", "139")
+        os.makedirs(evidence, exist_ok=True)
+        os.makedirs(work, exist_ok=True)
+        ensure_extension()
+        rf = importlib.import_module(MODULE + ".render_final")
+        scene = build_f12_scene(work)
+        cls.runs = {}
+        for device in ("CPU", "CUDA"):
+            try:
+                cls.runs[device.lower()] = cls._render_device(rf, scene, device, work, evidence)
+            except Exception as e:  # a failed render reddens its cases; setUpClass errors would hide them from land
+                cls.runs[device.lower()] = {"error": f"{type(e).__name__}: {e}"}
+
+    @staticmethod
+    def _render_device(rf, scene, device, work, evidence):
+        scene.astroray.device = device
+        s = scene.render
+        s.filepath = os.path.join(work, f"f12_{device.lower()}.exr")
+        if os.path.exists(s.filepath):
+            os.remove(s.filepath)  # a stale file from an earlier run must never be read
+        s.image_settings.file_format, s.image_settings.color_depth = "OPEN_EXR", "32"
+        s.image_settings.exr_codec = "NONE"
+        cap = Capture(rf)
+        t0 = time.monotonic()
+        try:
+            r = bpy.ops.render.render(write_still=True, scene=F12_NAME)
+        finally:
+            cap.restore()
+            rf.shutdown()
+        seconds = time.monotonic() - t0
+        kind = device_kind(rf._log_path())
+        if r != {"FINISHED"} or cap.arrays is None:
+            raise RuntimeError(f"F12 on {device} returned {r}, session read {cap.arrays is not None}")
+        exr = bpy.data.images.load(s.filepath)
+        exr.colorspace_settings.name = "Non-Color"
+        rgb = np.array(exr.pixels[:], np.float32).reshape(F12_SIZE, F12_SIZE, 4)[:, :, :3]
+        bpy.data.images.remove(exr)
+        planes = np.moveaxis(rgb, 2, 0).astype(np.float64)  # (3, h, w), rows bottom-up
+        analytic.write_png(os.path.join(evidence, f"f12_{device.lower()}.png"), planes, 1.0)
+        luma = float(np.tensordot(np.array(F12_LUMA), planes, axes=1).mean())
+        result = {"mean": planes, "var": cap.arrays[1].astype(np.float64).transpose(2, 0, 1),
+                  "luma": luma, "seconds": seconds, "kind": kind}
+        print(f"RESULT smoke f12 {device.lower()} kind {kind} mean {luma:.6f} floor {F12_FLOOR:.6f} time {seconds:.1f}")
+        return result
+
+    def _run(self, device):
+        run = self.runs[device]
+        self.assertNotIn("error", run, f"{device}: {run.get('error')}")
+        return run
+
+    def _floor(self, device):
+        self.assertEqual(self._run(device)["kind"], device, f"the engine rendered on {self._run(device)['kind']}")
+        self.assertEqual(self.runs[device]["kind"], device, f"the engine rendered on {self.runs[device]['kind']}")
+        self.assertGreater(self.runs[device]["luma"], F12_FLOOR,
+                           f"{device}: the frame is black or nearly so (mean luminance {self.runs[device]['luma']})")
+
+    def test_cpu_not_black(self):
+        self._floor("cpu")
+
+    def test_cuda_not_black(self):
+        self._floor("cuda")
+
+    def test_cpu_cuda_agree(self):
+        """The two devices' image means differ by no more than the pair_image check's bound (pixel means
+        are independent, so the difference has variance VAR_cpu + VAR_cuda; tools/analytic.py)."""
+        m, w = analytic.family_m(), np.array(F12_LUMA)
+        renders = {k: (self._run(k)["mean"], self._run(k)["var"]) for k in ("cpu", "cuda")}
+        (name, passed, reasons, worst, cmean, tmean), = analytic.check_scene(
+            None, None, [("f12 cpu~cuda", w, ("cpu", "cuda"), "pair_image")], m, 0.0, renders=renders)
+        (_, va), (_, vb) = (analytic.channel(w, *renders[k]) for k in ("cpu", "cuda"))
+        se = math.sqrt(va.sum() + vb.sum()) / va.size
+        bound = analytic.pixel_z(m, 1) * se
+        # Printed by tearDownClass: output in the middle of a case's line hides its "... ok" from land's reader.
+        type(self).agree_line = (f"RESULT smoke f12 agree: {'ok' if passed else 'FAIL'} cpu {cmean:.6f} cuda {tmean:.6f} "
+                                 f"|diff| {abs(cmean - tmean):.6f} bound {bound:.6f} SE of the difference {se:.6f}")
+        self.assertTrue(passed, f"{name}: {reasons}")
+        self.assertLessEqual(abs(cmean - tmean), bound)
+
+
 def run_materials():
     spec = importlib.util.spec_from_file_location("test_materials", os.path.join(ROOT, "tests", "blender",
                                                                                    "test_materials.py"))
@@ -313,8 +492,9 @@ if __name__ == "__main__":
     if "--with-materials" in ARGS:
         ok = run_materials()
     loader = unittest.defaultTestLoader
-    if "-k" in ARGS:  # land's canary runs one named case
-        pat = ARGS[ARGS.index("-k") + 1]
-        loader.testNamePatterns = [pat if "*" in pat else f"*{pat}*"]  # as unittest's own -k
-    res = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(loader.loadTestsFromTestCase(TestSmoke))
+    pats = [ARGS[i + 1] for i, a in enumerate(ARGS) if a == "-k"]  # land's canary names its cases, one -k each
+    if pats:
+        loader.testNamePatterns = [p if "*" in p else f"*{p}*" for p in pats]  # as unittest's own -k
+    suite = unittest.TestSuite(loader.loadTestsFromTestCase(c) for c in (TestSmoke, TestF12Textured))
+    res = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
     sys.exit(0 if ok and res.wasSuccessful() else 1)

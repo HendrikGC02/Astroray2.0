@@ -181,7 +181,10 @@ $global:LASTEXITCODE = 1
          Write-Host "B-24 compile: $ms ms per 100 nodes (limit $limit ms)" } },
     # 0009 d11, d17a (084): one Blender start installs the staged extension zip, runs the 083 material tests,
     # renders A1's .blend through F12 on the CPU device and checks it against A1's truth and the builder's
-    # recording (exporter equivalence). The smoke builds the zip itself; Invoke-ArBlender's own output goes to the log.
+    # recording (exporter equivalence), then renders a textured, lamp-lit plane through F12 on CPU and on CUDA
+    # (a luminance floor per device and the pair_image agreement). The step uses the GPU, so it stays
+    # ungrouped: no GPU step may run beside it. The smoke builds the zip itself; Invoke-ArBlender's own output
+    # goes to the log.
     @{ Name = 'blender smoke'; Tag = 'local'; Echo = '^(RESULT smoke|Ran |OK$|FAILED)'; Run = {
         Invoke-TierBlender 'tests/blender/smoke_a1.py' @('--with-materials') 400 } }
   )
