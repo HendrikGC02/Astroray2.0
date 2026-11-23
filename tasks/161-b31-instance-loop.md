@@ -18,3 +18,7 @@ Depends on: none; blender lane, after 159 (one Blender task at a time).
 Size: S-M (about 150 lines of harness, 50-150 in instances.py and keys.py); stop and report at 2x or when the decision table says stop.
 Progress:
 - Files: tools/sync_timing.py, tools/sync_timing.ps1 (harness); blender/astroray/sync/instances.py, keys.py; tests/blender/headless/test_instances_sync.py; tools/README.md; bench/history/2026.jsonl; tasks/161.canary.patch.
+- Harness tools/sync_timing.py/.ps1 committed first; before: S2 instance loop warm 40.1 / cold 82.2 (129: 39.8 / 88.5).
+- Cuts kept: own-row keys + object records in InstanceCache (warm 40.1 -> 35), bookkeeping by uid, random_id in loop, searchsorted rows (35 -> 27-28.7).
+- Changed test: test_modifier_added_splits_geometry now forgets the edit as classify_updates does (own-row keys are cached by uid).
+- After (3 runs, history lines in bench/history/2026.jsonl): S2 instance loop warm 28.7 / cold 84.7 (cold over 30, split in the PR).
