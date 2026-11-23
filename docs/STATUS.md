@@ -5,7 +5,7 @@ Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `t
 ## Current milestone
 M1b "First light" (docs/PLAN-M1b.md: slices, lanes, the `shade_surface` spine, gate ledger). First batch
 tasks/136-161, order and lanes in tasks/README.md; runbook and handover in docs/LEAD.md; items without a task in
-docs/BACKLOG.md. Slice 0 landed: 155, 146, 157, 143, 152, 137, 144, 142, 153, 159, 149; open work and next steps in
+docs/BACKLOG.md. Slice 0 landed: 155, 146, 157, 143, 152, 137, 144, 142, 153, 159, 149, 162, 151, 136; open work and next steps in
 docs/LEAD.md's handover. B-31 is task 161.
 M1a "First pixels" closed (owner decision 37): textured, lamp-lit meshes render progressively in the Blender 5.3
 viewport and F12 on CUDA and CPU through the final C ABI; gallery and report from `tools/gallery.py --milestone
@@ -23,11 +23,9 @@ scope clause).
   (ruling 78) [leave].
 
 ## Red items
-- B-5M bench hang: cause found (task 136, progress poll starving ledger adds since 6a69e2d); fix reviewed, landing.
 - k_shade_surface compile at ruling 72's 5.0 s limit with task 145 (4.96-5.35 s under load); quiet-window landing,
   else an owner item.
 - B-19 idle, B-20, B-31 accepted at the M1a close (decision 37); B-31 is task 161 (blender lane, after 159). M-1 probe spills 130/376 B come from spike A's stand-in lobes (ruling 89, task 144): not ratified, slice D re-measures.
-- `check full` fails at gui_colour_chart ("the viewport never converged", pre-existing at 190e8ba): task 162 (fix reviewed, landing).
 - No regression check on performance and no F12 gate on CUDA until tasks 140, 160 and 139 land.
 
 ## Budget headroom
