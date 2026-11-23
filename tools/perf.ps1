@@ -66,6 +66,27 @@ try {
 }
 $wall = $sw.Elapsed.TotalSeconds
 
+# The CLI stamps the computer name as `machine`; a history line carries a neutral hardware id instead
+# (gpu, cores, threads), the one the first lines of bench/history use, so no host or user name is committed.
+$gpu = ((Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match 'NVIDIA' } | Select-Object -First 1).Name -replace '(?i)nvidia|geforce|\s', '').ToLower()
+$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+$machine = "$gpu-$($cpu.NumberOfCores)c$($cpu.NumberOfLogicalProcessors)t"
+for ($r = 0; $r -lt $newLines.Count; $r++) {
+  $newLines[$r] = @($newLines[$r] | ForEach-Object { $_ -replace '"machine":\s*"[^"]*"', ('"machine":"' + $machine + '"') })
+}
+
+# The binary under test must be this tree's build: its stamped HEAD may trail HEAD only through commits that
+# touch no build input (a landing's deletion commit, docs), else the timing belongs to other code.
+$binSha = ($newLines[0] | Select-Object -First 1 | ConvertFrom-Json).sha
+$head = (& git rev-parse HEAD).Trim()
+if ($binSha -ne $head) {
+  $changed = @(& git diff --name-only $binSha $head 2>$null)
+  if ($LASTEXITCODE -ne 0) { Write-Host "REFUSE perf: out/bin/astroray_cli.exe is stamped with $binSha, unknown to this tree; run tools/build.ps1"; exit 2 }
+  $stale = @($changed | Where-Object { $_ -match '^(src/|cli/|include/|cmake/|third_party/|CMakeLists\.txt|CMakePresets\.json)' })
+  if ($stale.Count) { Write-Host "REFUSE perf: out/bin/astroray_cli.exe was built at $($binSha.Substring(0, 9)), HEAD $($head.Substring(0, 9)) changed $($stale[0]); run tools/build.ps1"; exit 2 }
+}
+Write-Host "binary build $($binSha.Substring(0, 9)), HEAD $($head.Substring(0, 9))"
+
 $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmss')
 $files = @()
 for ($r = 0; $r -lt $newLines.Count; $r++) {
