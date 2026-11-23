@@ -76,6 +76,20 @@ AR_FN void tex_linear(const DeviceImageView& im, float x, float y, bool extend, 
   const int nix = tex_wrap(ix + 1, w, extend), niy = tex_wrap(iy + 1, h, extend);
   ix = tex_wrap(ix, w, extend);
   iy = tex_wrap(iy, h, extend);
+  if (im.format != uint32_t(TexFormat::U8)) {
+    // Half and float: the same weights and sum order, accumulated texel by texel so only one
+    // widened texel is live at a time (the shade kernel is at its register cap).
+    const float w00 = (1.0f - ty) * (1.0f - tx), w10 = (1.0f - ty) * tx, w01 = ty * (1.0f - tx), w11 = ty * tx;
+    Texel t = tex_read(im, ix, iy);
+    float acc[3] = {w00 * t.v[0], w00 * t.v[1], w00 * t.v[2]};
+    t = tex_read(im, nix, iy);
+    for (int k = 0; k < 3; ++k) acc[k] += w10 * t.v[k];
+    t = tex_read(im, ix, niy);
+    for (int k = 0; k < 3; ++k) acc[k] += w01 * t.v[k];
+    t = tex_read(im, nix, niy);
+    for (int k = 0; k < 3; ++k) out[k] = acc[k] + w11 * t.v[k];
+    return;
+  }
   const Texel a = tex_read(im, ix, iy), b = tex_read(im, nix, iy), c = tex_read(im, ix, niy), d = tex_read(im, nix, niy);
   const bool srgb = im.format == uint32_t(TexFormat::U8) && im.encoding == uint32_t(TexEncoding::SRGB);
   for (int k = 0; k < 3; ++k) {
