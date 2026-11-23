@@ -20,4 +20,4 @@ Budget: gate +1 s at most (the self-test; the gate is at 163.5 s of 180 s: stop 
 Depends on: 136, 138.
 Size: M (about 250 lines); stop and report at 2x.
 Progress:
-- perf.ps1 and perf.py, B-38 (limit 1.009) in 0009 d13 and budgets.toml, d18 sentence, land hook, gate step, 6 fixtures, canary, first baseline lines; land dry run not run (lead: no land.ps1); machine id neutral, binary build id checked.
+- perf.ps1 and perf.py, B-38 (limit 1.009) in 0009 d13 and budgets.toml, d18 sentence, land hook, gate step, 6 fixtures, canary, first baseline lines; land dry run not run (lead: no land.ps1); machine id neutral, binary build id checked; review fixes (record only PASS, lock before GPU check, dirty and stale binary refusal, 4-hunk canary).
