@@ -16,3 +16,4 @@ Budget: gate +0 s (full tier only); kernel: none expected (state it if session c
 Depends on: none; blender lane, before 161 (a red `check full` blocks the every-10-landings full run).
 Size: S (a fix of under 100 lines expected); stop and report at 2x, or after step 2 if the cause lies outside Scope.
 Progress:
+162: reproduced on main 1a85b5c and on 097's merge b191316 (no code regression): viewport is rendering, not stalled; 340-420 ms per pass at 2100x1221 CPU, 128 spp needs 44-55 s against the 40 s step limit. Stopped for a ruling.
