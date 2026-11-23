@@ -106,14 +106,12 @@ class TestOpsgen(unittest.TestCase):
 
     def test_undefined_rule_refused(self):
         row = 'AR_OP(BAD, 0, "", "f32", CHEAP, interval_missing, true, false, false)'
-        header = "AR_FN Interval interval_other(const Interval& x) { return x; }
-"
+        header = "AR_FN Interval interval_other(const Interval& x) { return x; }" "\n"
         with self.assertRaisesRegex(opsgen.OpsError, r"ops\.def:1: BAD: interval_missing is not defined in interval\.h"):
             opsgen.parse_table(row, header)
         # A rule named only in a comment is not a definition.
         with self.assertRaises(opsgen.OpsError):
-            opsgen.parse_table(row, "// AR_FN Interval interval_missing(
-")
+            opsgen.parse_table(row, "// AR_FN Interval interval_missing(" "\n")
         self.assertEqual(opsgen.parse_table(row, header.replace("other", "missing"))[0]["rule"], "interval_missing")
         # The live table passes against the live header.
         opsgen.parse_table(read(opsgen.OPS_DEF), read(opsgen.INTERVAL_H))

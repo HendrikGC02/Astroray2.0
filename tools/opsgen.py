@@ -100,7 +100,7 @@ def parse_table(text, interval_h=None):
             raise OpsError(f"ops.def:{r['line']}: {r['name']}: interval rule {r['rule']!r} is neither "
                            f"interval_<name> nor {NONE_RULE}")
         elif interval_h is not None and not re.search(
-                r"AR_FN\s+Interval3?\s+" + r["rule"] + r"\(", _strip_comments(interval_h)):
+                r"AR_FN\s+Interval3?\s+" + r["rule"] + r"\(", _strip_comments(interval_h)):
             raise OpsError(f"ops.def:{r['line']}: {r['name']}: {r['rule']} is not defined in interval.h")
     return rows
 

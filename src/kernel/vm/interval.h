@@ -29,12 +29,13 @@ struct Interval3 {
 AR_FN bool interval_is_nan(const Interval& a) { return a.lo != a.lo || a.hi != a.hi; }
 
 AR_FN Interval interval_nan() {
-  const float n = std::nanf("");
+  const float n = bit_cast<float>(0x7fc00000u);
   return Interval{n, n};
 }
 
 AR_FN Interval interval_widen(float lo, float hi) {
-  return Interval{::nextafterf(lo, -INFINITY), ::nextafterf(hi, INFINITY)};
+  const float inf = bit_cast<float>(0x7f800000u);  // INFINITY does not compile in nvcc -Werror
+  return Interval{::nextafterf(lo, -inf), ::nextafterf(hi, inf)};
 }
 
 AR_FN Interval interval_mul_scalar(const Interval& x, const Interval& y) {
