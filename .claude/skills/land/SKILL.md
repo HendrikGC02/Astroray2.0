@@ -11,8 +11,9 @@ result; stop at the first line that starts with `REFUSE` or `FAIL` and report it
 
 1. Go to the task worktree (`git worktree list` shows it) and run
    `pwsh tools/land.ps1 prepare NNN`. It checks the branch and tree, rebases on
-   `origin/main`, runs the canary patch (every item must turn red), writes
-   `out/land/NNN/task.md` and `out/land/NNN/diff.patch`, commits the task-file
+   `origin/main`, runs the canary patch as `tools/canary.ps1 NNN` does (every
+   item must turn red, per-hunk matrix), writes `out/land/NNN/task.md`,
+   `diff.patch` and `canary.patch`, commits the task-file
    deletion, pushes, runs the gate and posts `astroray/gate` on the pushed sha.
 2. If it prints `no PR yet`, open one: `gh pr create --base main --fill`, and name
    the incident for any new rule, agent, skill or script in the PR body (0009 d31).

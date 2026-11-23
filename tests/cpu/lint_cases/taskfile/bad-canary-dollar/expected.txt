@@ -1,0 +1,1 @@
+tasks/008-a.md:10: [taskfile] Canary: a `pwsh -Command` item has a $ inside double quotes; use single quotes

@@ -225,6 +225,43 @@ def skip(c):
                 c.find(p, n, "skip", f"task {m.group(1)} has no tasks/{m.group(1)}-*.md")
 
 
+# Same alternatives, in the same order, as Get-CanaryItems in tools/lib/canary.ps1, which is the real parse; this
+# only checks the shape so that a bad line fails in `check fast` and not at `land prepare`.
+CANARY_TOK = re.compile(r'`([^`]*)`|"([^"]*)"|\((?:[^()]|\([^()]*\))*\)|([^\s,;]+)')
+CANARY_FILE = re.compile(r"astroray_\w+|[\w./\\-]+\.py")
+
+
+def canary_shape(value):
+    """Returns the problem with a `Canary:` value, or ''."""
+    if value.startswith("none"):
+        return ""
+    m = re.search(r"must turn red:(.*)$", value)
+    if not m:
+        return "Canary: must start `none` or contain `must turn red:` and the cases"
+    cur, named, items = None, False, 0
+    for t in CANARY_TOK.finditer(m.group(1)):
+        if t.group(1) is not None:
+            if cur and not named:
+                return f"Canary: {cur} has no quoted case name"
+            # land runs the command through an outer `pwsh -Command`, which expands $ in double quotes first.
+            if re.match(r"pwsh\b.*-Command\b", t.group(1)) and re.search(r'"[^"]*\$[^"]*"', t.group(1)):
+                return "Canary: a `pwsh -Command` item has a $ inside double quotes; use single quotes"
+            cur, items = None, items + 1
+        elif t.group(2) is not None:
+            if cur is None:
+                return f'Canary: name "{t.group(2)}" follows no test executable or .py file'
+            named = True
+        elif t.group(3) and CANARY_FILE.fullmatch(t.group(3)):
+            if cur and not named:
+                return f"Canary: {cur} has no quoted case name"
+            cur, named, items = t.group(3), False, items + 1
+    if cur and not named:
+        return f"Canary: {cur} has no quoted case name"
+    if not items:
+        return "Canary: `must turn red:` names no command, test executable or .py file"
+    return ""
+
+
 def taskfile(c):
     for p in c.files:
         m = TASK_RE.match(p)
@@ -243,6 +280,10 @@ def taskfile(c):
             else:
                 pos[fld] = i
                 last = i
+        if "Canary:" in pos:
+            why = canary_shape(L[pos["Canary:"]][len("Canary:"):].strip())
+            if why:
+                c.find(p, pos["Canary:"] + 1, "taskfile", why)
         if "Progress:" in pos:
             tail = L[pos["Progress:"] + 1:]
             while tail and not tail[-1].strip():

@@ -5,10 +5,12 @@
 #   c: test change with no canary patch      d: real canary on a mixed line (backticked command,
 #                                              parenthesised text, two names, one in suite `gate`)
 #   e: real canary patch, but the backticked command names a script that does not exist
+#   f: real canary patch of two hunks, one inert (accepted with a WARN)
+#   g: two hunks that turn the named case red only together (refused)
 # The build and test binary are stand-ins: tools/build.ps1 does nothing and out/bin/astroray_tests_cpu.cmd
 # "passes" a case while src/code.txt contains GOOD, so a patch that flips it turns the case red.
 param(
-  [Parameter(Mandatory)][ValidateSet('a', 'b', 'c', 'd', 'e')][string]$Case,
+  [Parameter(Mandatory)][ValidateSet('a', 'b', 'c', 'd', 'e', 'f', 'g')][string]$Case,
   [Parameter(Mandatory)][string]$Dir
 )
 $ErrorActionPreference = 'Stop'
@@ -37,7 +39,9 @@ $canary = switch ($Case) {
   default { 'tasks/999.canary.patch must turn red: astroray_tests_cpu "fixture/new case".' }
 }
 Put '.gitignore' "out/`n"
-Put 'src/code.txt' "GOOD`n"
+# Twelve lines: GOOD on the first and, for g, the last, far enough apart for two separate hunks.
+$codeLines = @('GOOD') + @(2..11 | ForEach-Object { "filler $_" }) + @($(if ($Case -eq 'g') { 'GOOD' } else { 'filler 12' }))
+Put 'src/code.txt' (($codeLines -join "`n") + "`n")
 Put 'src/other.txt' "x`n"
 Put 'tests/cpu/test_base.cpp' "TEST_CASE(`"base/other`") {}`n"
 Put 'tools/build.ps1' "# stand-in for the real build: nothing to build in the fixture`nparam([string[]]`$Target)`nWrite-Host 'PASS build 0.0 s (fixture)'`n"
@@ -64,7 +68,13 @@ Put 'tests/cpu/test_fixture.cpp' "TEST_SUITE(`"gate`") { TEST_CASE(`"gate_fixtur
 if ($Case -ne 'c') {
   # Canary patch: a touches an unrelated file (inert); b, d and e flip the code under test.
   $f = if ($Case -eq 'a') { 'src/other.txt' } else { 'src/code.txt' }
-  Put $f $(if ($Case -eq 'a') { "y`n" } else { "BAD`n" })
+  $bad = switch ($Case) {
+    'a' { "y`n" }
+    'f' { (@('BAD') + $codeLines[1..10] + @('changed')) -join "`n" }
+    'g' { (@('BAD') + $codeLines[1..10] + @('BAD')) -join "`n" }
+    default { (@('BAD') + $codeLines[1..11]) -join "`n" }
+  }
+  Put $f ($bad.TrimEnd() + "`n")
   & git -C $work diff "--output=$(Join-Path $work 'tasks/999.canary.patch')"
   G checkout -q -- $f
 }

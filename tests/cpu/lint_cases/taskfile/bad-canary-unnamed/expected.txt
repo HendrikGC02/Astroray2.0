@@ -1,0 +1,1 @@
+tasks/006-a.md:10: [taskfile] Canary: tests/x/test_y.py has no quoted case name

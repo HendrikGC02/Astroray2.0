@@ -49,7 +49,7 @@ under test, not the test, so each named case turns red.
 - The task's `Canary:` line lists `astroray_tests_cpu "suite/case", ...` or
   `tests/x/test_y.py "Class.method"`; every `.py` path needs quoted names.
 - One breakage per test group; a hunk must not mask another. Refresh the patch
-  after a rebase. Run `pwsh tools/canary.ps1 NNN` when that script exists.
+  after a rebase. Run `pwsh tools/canary.ps1 NNN`.
 
 Finish with `pwsh tools/check.ps1 fast` and every acceptance command. Append at
 most 10 lines to Progress. Final message: files changed; the last lines of each
