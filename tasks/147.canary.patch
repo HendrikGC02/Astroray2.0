@@ -1,8 +1,8 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 91fb519..d69fa82 100644
+index fb445c4..ba33316 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
-@@ -435,7 +435,7 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
+@@ -436,7 +436,7 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
    // Item 38: the opacity entry is the per-point geometry_opacity store and what feeds it, nothing
    // else; a constant opacity is read from the block and needs none.
    const bool has_opacity = std::any_of(is_opacity_root.begin(), is_opacity_root.end(), [](char c) { return c != 0; });
@@ -11,7 +11,7 @@ index 91fb519..d69fa82 100644
    res.program.assign(4, 0u);
    res.program[0] = 4;
    res.program.insert(res.program.end(), surface.begin(), surface.end());
-@@ -503,7 +503,7 @@ uint32_t material_flags(const CompileResult& r) {
+@@ -506,7 +506,7 @@ uint32_t material_flags(const CompileResult& r) {
    if (per_point(r, RS::coat_weight) || r.block.coat_weight != 0.0f)
      delta = delta || lobe_may_be_delta(per_point(r, RS::coat_roughness), r.block.coat_roughness);
    uint32_t flags = delta ? ar::MAY_BE_DELTA : 0u;
