@@ -19,3 +19,4 @@ Depends on: 157.
 Size: S (about 120 lines); stop and report at 2x.
 Progress:
 - files: tests/blender/smoke_a1.py, tools/check.ps1 (comment), tasks/139.canary.patch
+- device kind asserted from the context log, canary 139 PASS, gate 134.7 s, smoke step 20 s (pr 131)
