@@ -16,3 +16,4 @@ Budget: +3 s of gate at most (about 6 chi-squared checks, counted against gate_s
 Depends on: 143.
 Size: M (about 250 lines without tests); stop and report at 2x.
 Progress:
+- Files: src/kernel/material/lobes/metal.h (new), lobes/fresnel.h, lobes/ggx.h (helpers only), tests/cpu/test_lobe_metal.cpp (new), cmake test-source registration if needed, tasks/149.canary.patch, tools/budgets.toml gate row if one counts checks.
