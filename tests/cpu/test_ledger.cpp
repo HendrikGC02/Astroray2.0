@@ -155,6 +155,11 @@ TEST_CASE("ledger/a progress poll does not scan the live records") {
   CHECK(l.total() == l.scene_total(1));
 }
 
+}  // TEST_SUITE
+
+// Two million records take over the fast tier's per-test limit (B-12) to set up.
+TEST_SUITE("gate") {
+
 TEST_CASE("ledger/a poll does not wait for the ledger lock") {
   // The progress poll spins in the host while workers add and remove records; a poll that takes the
   // lock waits behind every critical section, and an unfair mutex hands it back to the spinner. A
