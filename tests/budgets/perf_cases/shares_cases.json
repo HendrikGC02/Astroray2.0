@@ -658,5 +658,103 @@
    "b1m.idle_share": 0.3,
    "b1m.pq_share": 0.3
   }
+ },
+ {
+  "name": "shares newer other-scene line ignored",
+  "measured": [
+   {
+    "sha": "dddd11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.11,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-20T00:00:00Z"
+   }
+  ],
+  "fail": false,
+  "history": [
+   {
+    "sha": "aaaa11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.092,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-01T00:00:00Z"
+   },
+   {
+    "sha": "bbbb11112222",
+    "machine": "m-b",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.2,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-05T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "idle_share",
+    "value": 0.1,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   },
+   {
+    "sha": "cccc11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b1m",
+    "metric": "pq_share",
+    "value": 0.094,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-10T00:00:00Z"
+   },
+   {
+    "sha": "eeee11112222",
+    "machine": "m-a",
+    "driver": "unknown",
+    "cuda": "cuda",
+    "scene": "b5m",
+    "metric": "idle_share",
+    "value": 0.5,
+    "unit": "fraction",
+    "n": 63,
+    "spread": 0.01,
+    "date": "2026-11-15T00:00:00Z"
+   }
+  ],
+  "text": [
+   "PASS b1m.idle_share",
+   "against 0.1000"
+  ],
+  "absent": [
+   "against 0.5000",
+   "FAIL"
+  ],
+  "tolerance": {
+   "b1m.idle_share": 0.3,
+   "b1m.pq_share": 0.3
+  }
  }
 ]

@@ -232,7 +232,7 @@ function Invoke-Prepare {
   if ($needPerf -and $DryRun) { Write-Host 'DRYRUN would run perf (the diff touches kernel, device, scheduler, session or scene code)' }
   elseif (-not $needPerf) { Write-Host 'perf: not needed (no kernel, device, scheduler, session or scene path in the diff)' }
   # B-19's idle and partition-plus-sort shares (tools/perf.ps1 -Shares): the paths that decide them.
-  $needShares = @($names | Where-Object { $_ -match '^(src/host/scheduler|src/kernel/stages/queue_build\.h|src/kernel/stages/sort\.h|src/kernel/sched/|src/device/cuda/)' }).Count -gt 0
+  $needShares = @($names | Where-Object { $_ -match '^(src/host/scheduler|src/kernel/stages/queue_build\.h|src/kernel/stages/sort\.h|src/kernel/sched/|src/kernel/launch_config\.h|src/kernel_gpu/(queue_build_|sort_)|src/device/cuda/)' }).Count -gt 0
   if ($needShares -and $DryRun) { Write-Host 'DRYRUN would run perf -Shares (the diff touches the scheduler, queue_build, sort or CUDA device code)' }
   if ($DryRun) {
     Write-Host "DRYRUN would: commit deletion of tasks/$Number*, push $branch, run check gate, post astroray/gate"

@@ -27,6 +27,7 @@ import datetime
 import glob
 import json
 import os
+import re
 import sqlite3
 import statistics
 import sys
@@ -41,9 +42,7 @@ CASES = os.path.join(ROOT, "tests", "budgets", "perf_cases", "shares_cases.json"
 METRICS = ("idle_share", "pq_share")
 BUDGET_ID = "B-19"
 BOUNDARY = "k_film_build_active"
-PARTITION_SORT = frozenset((
-    "k_queue_build_count", "k_queue_build_scan", "k_queue_build_scatter",
-    "k_sort_count", "k_sort_scan", "k_sort_scatter"))
+LAUNCH_CONFIG = os.path.join(ROOT, "src", "kernel", "launch_config.h")
 MIN_PASSES = 60
 BURN_IN = 8  # bench's --warmup: its boundary kernels are in the capture and are not measured
 
@@ -86,17 +85,34 @@ def load_kernels(path):
     return sorted(rows)
 
 
-def shares(kernels, burn_in=BURN_IN):
+def partition_kernels(path=LAUNCH_CONFIG):
+    """Returns (all, required): the queue_build and sort kernels named by the X(...) rows of launch_config.h
+    (read, not copied, so a rename follows), and the queue_build ones, which run in every pass. The sort
+    does not run on the bench scenes (PR 107), so only the queue_build kernels must have rows."""
+    with open(path, encoding="utf-8") as f:
+        names = re.findall(r"^\s*X\((k_(?:queue_build|sort)_\w+),", f.read(), re.M)
+    req = frozenset(n for n in names if n.startswith("k_queue_build_"))
+    if not req or not any(n.startswith("k_sort_") for n in names):
+        raise SharesError(f"{path}: no k_queue_build_* or k_sort_* rows (the file's layout changed)")
+    return frozenset(names), req
+
+
+def shares(kernels, burn_in=BURN_IN, part=None):
     """Returns {idle_share, pq_share, passes, idle_share_spread, pq_share_spread}. Passes are the periods
     between consecutive boundary kernels after the first `burn_in` passes; the last boundary opens no
-    complete pass. Fewer than MIN_PASSES refuses (a short capture is noise)."""
+    complete pass. Fewer than MIN_PASSES refuses (a short capture is noise), and so does a required
+    partition kernel without a row: a renamed kernel must not read as an improvement."""
+    part_all, part_req = part or partition_kernels()
     marks = [k[0] for k in kernels if k[2] == BOUNDARY][burn_in:]
     if not marks:
         raise SharesError(f"no {BOUNDARY} kernel after {burn_in} burn-in passes: cannot find the pass boundaries")
+    seen = {k[2] for k in kernels if k[0] >= marks[0]}
+    for n in sorted(part_req - seen):
+        raise SharesError(f"no {n} rows after burn-in: renamed or not launched, the pq share would be wrong")
     periods, idles, pqs = [], [], []
     for a, b in zip(marks, marks[1:]):
         inside = [(max(s, a), min(e, b)) for s, e, _ in kernels if a <= s < b]
-        pq = sum(min(e, b) - s for s, e, n in kernels if a <= s < b and n in PARTITION_SORT)
+        pq = sum(min(e, b) - s for s, e, n in kernels if a <= s < b and n in part_all)
         periods.append(b - a)
         idles.append((b - a) - union_length(inside))
         pqs.append(pq)
@@ -204,25 +220,40 @@ def spread_table(runs):
     return lines, tol
 
 
-def _build(path, passes, gap=1000, first_gap=None, first=0):
-    """A synthetic export. Every pass: boundary kernel 0..100, a count kernel 100..300 and a copy kernel
-    250..400 (overlaps the count kernel; the copy is not a partition kernel), a sort kernel nested inside the
-    copy's window at 300..350, then `gap` idle ns; pass period 400 + gap (first_gap for the first `first`
-    passes). One more boundary kernel closes the last pass."""
+# Synthetic pass types: (period, [(start, end, kernel)]), kernels 0 boundary, 1 queue_build_count, 2 k_copy,
+# 3 k_sort_scan. Hand-computed per type (busy = union of the kernel intervals clipped to the period):
+#   X period 1000: boundary 0..100, count 100..900, sort 850..900            idle 100, pq 800 + 50 = 850
+#   Y period 2000: boundary 0..100, count 100..1000, sort 950..1000, and a    busy 1000 + 100 clipped = 1100,
+#                  copy 1900..2100 that crosses into the next pass            idle 900, pq 900 + 50 = 950
+#   Z period 1500: boundary 0..100, count 100..300, sort 250..300            idle 1200, pq 200 + 50 = 250
+# 21 passes of each: median period 1500, median idle 900, median pq 850.
+TYPES = {
+    "X": (1000, [(0, 100, 0), (100, 900, 1), (850, 900, 3)]),
+    "Y": (2000, [(0, 100, 0), (100, 1000, 1), (950, 1000, 3), (1900, 2100, 2)]),
+    "Z": (1500, [(0, 100, 0), (100, 300, 1), (250, 300, 3)]),
+}
+BURN = (60000, [(0, 100, 0), (100, 900, 1), (850, 900, 3)])  # a slow burn-in pass, never measured
+
+
+def _build(path, types, burn_in=0):
+    """A synthetic export: `burn_in` slow passes, then one pass per letter of `types`; one more boundary kernel
+    closes the last pass."""
     con = sqlite3.connect(path)
     con.execute("CREATE TABLE StringIds (id INTEGER PRIMARY KEY, value TEXT)")
     con.execute("CREATE TABLE CUPTI_ACTIVITY_KIND_KERNEL (start INTEGER, end INTEGER, shortName INTEGER, demangledName INTEGER)")
     names = [BOUNDARY, "k_queue_build_count", "k_copy", "k_sort_scan"]
     con.executemany("INSERT INTO StringIds VALUES (?, ?)", list(enumerate(names)))
     t = 0
-    for i in range(passes):
-        for s, e, n in [(0, 100, 0), (100, 300, 1), (250, 400, 2), (300, 350, 3)]:
+    for period, rows in [BURN] * burn_in + [TYPES[c] for c in types]:
+        for s, e, n in rows:
             con.execute("INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (?, ?, ?, ?)", (t + s, t + e, n, n))
-        t += 400 + (first_gap if first_gap is not None and i < first else gap)
+        t += period
     con.execute("INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (?, ?, 0, 0)", (t, t + 100))
     con.commit()
     con.close()
 
+
+SYN_PART = (frozenset(("k_queue_build_count", "k_sort_scan")), frozenset(("k_queue_build_count",)))
 
 def self_test():
     bad = 0
@@ -245,21 +276,30 @@ def self_test():
     check("union disjoint", union_length([(0, 10), (20, 30)]) == 20)
     check("union touching", union_length([(0, 10), (10, 25)]) == 25)
     check("union empty", union_length([]) == 0)
-    # Synthetic export: union 0..400 = 400 busy of period 1400 -> idle 1000/1400; count 200 + sort 50 = 250/1400.
+    # Synthetic export (see TYPES). Ratios of medians: idle 900 / 1500, pq 850 / 1500. They differ from the ratio
+    # of means (idle 733.3, pq 633.3 over 1500) and from the median of per-pass ratios (0.45, 0.475).
     with tempfile.TemporaryDirectory() as tmp:
         db = os.path.join(tmp, "a.sqlite")
-        _build(db, BURN_IN + MIN_PASSES + 5, first_gap=50000, first=BURN_IN)  # a slow burn-in is not measured
-        r = shares(load_kernels(db))
-        check("idle share", abs(r["idle_share"] - 1000 / 1400) < 1e-12, f"{r['idle_share']}")
-        check("pq share (copy and boundary excluded, overlap once)", abs(r["pq_share"] - 250 / 1400) < 1e-12, f"{r['pq_share']}")
-        check("pass count", r["passes"] == MIN_PASSES + 5, f"{r['passes']}")
+        _build(db, "XYZ" * 21, burn_in=BURN_IN)
+        r = shares(load_kernels(db), part=SYN_PART)
+        check("idle share (ratio of medians, crossing kernel clipped)", abs(r["idle_share"] - 900 / 1500) < 1e-12, f"{r['idle_share']}")
+        check("pq share (partition and sort kernels summed, copy excluded)", abs(r["pq_share"] - 850 / 1500) < 1e-12, f"{r['pq_share']}")
+        check("pass count (burn-in dropped)", r["passes"] == 63, f"{r['passes']}")
+        check("spread is the per-pass band", abs(r["idle_share_spread"] - (0.8 - 0.1)) < 1e-12, f"{r['idle_share_spread']}")
         lines = history_lines({"b1m": r}, "abc", "m", date="2026-01-01T00:00:00Z")
         check("history lines", [(o["metric"], o["unit"], o["n"]) for o in lines]
-              == [("idle_share", "fraction", MIN_PASSES + 5), ("pq_share", "fraction", MIN_PASSES + 5)]
+              == [("idle_share", "fraction", 63), ("pq_share", "fraction", 63)]
               and set(lines[0]) == {"sha", "machine", "driver", "cuda", "scene", "metric", "value", "unit", "n", "spread", "date"})
+        pa, pr = partition_kernels()
+        check("partition kernels read from launch_config.h",
+              pa == frozenset(("k_queue_build_count", "k_queue_build_scan", "k_queue_build_scatter", "k_sort_count",
+                               "k_sort_scan", "k_sort_scatter")) and pr == frozenset(n for n in pa if "queue_build" in n), f"{sorted(pa)}")
+        refuses("refuses a required kernel without rows",
+                lambda: shares(load_kernels(db), part=(SYN_PART[0] | {"k_queue_build_scan"}, SYN_PART[1] | {"k_queue_build_scan"})),
+                "no k_queue_build_scan rows")
         short = os.path.join(tmp, "short.sqlite")
-        _build(short, BURN_IN + 5)
-        refuses("refuses 5 passes", lambda: shares(load_kernels(short)), "complete passes")
+        _build(short, "XYZ" * 2, burn_in=BURN_IN)
+        refuses("refuses 6 passes", lambda: shares(load_kernels(short), part=SYN_PART), "complete passes")
         empty = os.path.join(tmp, "empty.sqlite")
         con = sqlite3.connect(empty)
         con.execute("CREATE TABLE StringIds (id INTEGER PRIMARY KEY, value TEXT)")
@@ -268,12 +308,12 @@ def self_test():
         con.close()
         refuses("refuses no kernel rows", lambda: load_kernels(empty), "no kernel rows")
         nob = os.path.join(tmp, "noboundary.sqlite")
-        _build(nob, BURN_IN + MIN_PASSES + 2)
+        _build(nob, "XYZ" * 21, burn_in=BURN_IN)
         con = sqlite3.connect(nob)
         con.execute("UPDATE StringIds SET value = 'k_other' WHERE id = 0")
         con.commit()
         con.close()
-        refuses("refuses no boundary kernel", lambda: shares(load_kernels(nob)), BOUNDARY)
+        refuses("refuses no boundary kernel", lambda: shares(load_kernels(nob), part=SYN_PART), BOUNDARY)
     # Fixture cases: comparison against history, decision table.
     with open(CASES, encoding="utf-8") as f:
         cases = json.load(f)
