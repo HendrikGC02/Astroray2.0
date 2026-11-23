@@ -30,7 +30,7 @@ index d2c2973..4c06d56 100644
    if ($rebuild -contains 'all') { $rebuild = @('all') } else { $rebuild = @($rebuild | Select-Object -Unique) }
    foreach ($t in $rebuild) {
 diff --git a/tools/lib/landing.ps1 b/tools/lib/landing.ps1
-index 11a9c21..5b161a6 100644
+index e32a3c7..cecd158 100644
 --- a/tools/lib/landing.ps1
 +++ b/tools/lib/landing.ps1
 @@ -14,7 +14,7 @@ function Find-LandingTask([string]$Main, [string]$Number) {
@@ -60,16 +60,16 @@ index 11a9c21..5b161a6 100644
        } elseif (Test-LandingMarkerLive $m) { return "pid $($m.pid), started $(([datetime]$m.start).ToString('yyyy-MM-dd HH:mm:ss'))" }
        Remove-LandingStaleMarker $f $text   # stale: its process is gone, or an empty marker left long ago
      }
-@@ -155,7 +155,7 @@ function Invoke-LandingCleanup {
-       $r = Remove-LandingWorktree $Main $wt $SleepS
-       if ($r -eq 'removed') { Write-Host "cleanup: worktree $wt removed" }
-       elseif ($r -eq 'registered') { Add-Leftover "worktree $wt" "git worktree remove -f -f '$wt'" }
--      else { Add-Leftover "worktree directory $wt (unregistered; a process holds a file in it)" "close that process, then Remove-Item -LiteralPath '$wt' -Recurse -Force" }
-+      else { Add-Leftover "worktree directory $wt (unregistered; a process holds a file in it)" "close that process, then git worktree remove -f -f '$wt'" }
-       $null = & git -C $Main worktree prune 2>&1
-     }
-     # Only the exact branch found for this task: never a name derived from it.
-@@ -217,7 +217,7 @@ function Invoke-LandingPrMerge([int]$Pr, [string]$Sha) {
+@@ -126,7 +126,7 @@ function Remove-LandingWorktree([string]$Main, [string]$Wt, [int]$SleepS) {
+   # the repository's .claude/worktrees/ (it was found in `git worktree list` for this task by the caller).
+   $full = [IO.Path]::GetFullPath($Wt).TrimEnd('\', '/')
+   $agents = [IO.Path]::GetFullPath((Join-Path $Main '.claude/worktrees')).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+-  $mayDelete = $full.StartsWith($agents, [StringComparison]::OrdinalIgnoreCase)
++  $mayDelete = $true
+   for ($i = 1; $i -le 3; $i++) {
+     if (Test-LandingWorktreeRegistered $Main $full) { $null = & git -C $Main worktree remove -f -f $full 2>&1 }
+     elseif ($mayDelete -and (Test-Path -LiteralPath $full)) { Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue }
+@@ -220,7 +220,7 @@ function Invoke-LandingPrMerge([int]$Pr, [string]$Sha) {
      $err = $_.Exception.Message
      $v = $null
      try { $v = (GhX pr view $Pr --json 'state,mergeCommit') | ConvertFrom-Json } catch { }
