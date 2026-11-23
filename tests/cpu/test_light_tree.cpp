@@ -154,6 +154,16 @@ double f_light(const Lights& L, uint32_t i, const Shade& s) {
   return L.imp[i] * std::max(0.0, cs) / d2;
 }
 
+// Ruling 90: a node's energy is the light's on-axis intensity, written out from the importance
+// (a power): P / (4 pi) for point and sphere lamps, P / pi for area lamps, L A = (pi A L) / pi for a
+// triangle, pi L = (4 pi^2 R^2 L) / (4 pi R^2) for the world.
+double intensity(const Lights& L, uint32_t i) {
+  const ar::LightType t = ar::LightType(L.rec[i].type);
+  if (t == ar::LightType::POINT || t == ar::LightType::SPHERE) return L.imp[i] / (4.0 * kPi);
+  if (t == ar::LightType::WORLD_CONST) return L.imp[i] / (4.0 * kPi * 12.0 * 12.0);
+  return L.imp[i] / kPi;
+}
+
 int ceil_log2(size_t n) {
   int k = 0;
   while ((size_t(1) << k) < n) ++k;
@@ -179,11 +189,11 @@ AR_RT_CASE("light_tree/builder shape") {
   for (bool world : {false, true}) {
     INFO("world " << world);
     const Lights L = mixed(world, true);
-    const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp);
+    const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp, kScene);
     const ar::LightTreeView v = t.view();
     size_t positive = 0;
     double sum = 0.0;
-    for (double x : L.imp) positive += x > 0.0, sum += x;
+    for (uint32_t i = 0; i < L.rec.size(); ++i) positive += L.imp[i] > 0.0, sum += intensity(L, i);
     size_t leaves = 0;
     for (const ar::LightTreeNode& n : t.nodes) leaves += (n.flags & ar::kLightTreeLeaf) != 0;
     CHECK(leaves == positive);
@@ -206,6 +216,7 @@ AR_RT_CASE("light_tree/builder shape") {
       }
       REQUIRE((t.nodes[idx].flags & ar::kLightTreeLeaf) != 0);
       CHECK(t.nodes[idx].light == i);
+      CHECK(double(t.nodes[idx].energy) == doctest::Approx(intensity(L, i)).epsilon(1e-6));
       CHECK(((t.nodes[idx].flags & ar::kLightTreeDistant) != 0) == (i == L.world));
     }
     if (world) {
@@ -234,26 +245,26 @@ AR_RT_CASE("light_tree/builder shape") {
   }
   // Deterministic: the same input gives the same bytes.
   const Lights L = mixed(true, true);
-  const astroray::host::LightTree a = astroray::host::build_light_tree(L.rec, L.imp), b = astroray::host::build_light_tree(L.rec, L.imp);
+  const astroray::host::LightTree a = astroray::host::build_light_tree(L.rec, L.imp, kScene), b = astroray::host::build_light_tree(L.rec, L.imp, kScene);
   REQUIRE(a.nodes.size() == b.nodes.size());
   CHECK(std::equal(a.nodes.begin(), a.nodes.end(), b.nodes.begin(),
                    [](const ar::LightTreeNode& x, const ar::LightTreeNode& y) { return std::memcmp(&x, &y, sizeof x) == 0; }));
 }
 
 AR_RT_CASE("light_tree/builder refuses bad input") {
-  CHECK_THROWS_AS(astroray::host::build_light_tree(std::vector<LightRecord>{}, std::vector<double>{}), std::runtime_error);
+  CHECK_THROWS_AS(astroray::host::build_light_tree(std::vector<LightRecord>{}, std::vector<double>{}, kScene), std::runtime_error);
   const Lights L = mixed(false, false);
-  CHECK_THROWS_AS(astroray::host::build_light_tree(L.rec, std::vector<double>(3, 1.0)), std::runtime_error);
+  CHECK_THROWS_AS(astroray::host::build_light_tree(L.rec, std::vector<double>(3, 1.0), kScene), std::runtime_error);
   std::vector<double> bad = L.imp;
   bad[3] = -1.0;
-  CHECK_THROWS_AS(astroray::host::build_light_tree(L.rec, bad), std::runtime_error);
+  CHECK_THROWS_AS(astroray::host::build_light_tree(L.rec, bad, kScene), std::runtime_error);
   bad[3] = std::nan("");
-  CHECK_THROWS_AS(astroray::host::build_light_tree(L.rec, bad), std::runtime_error);
+  CHECK_THROWS_AS(astroray::host::build_light_tree(L.rec, bad, kScene), std::runtime_error);
   bad[3] = 1e300;
-  CHECK_THROWS_AS(astroray::host::build_light_tree(L.rec, bad), std::runtime_error);
+  CHECK_THROWS_AS(astroray::host::build_light_tree(L.rec, bad, kScene), std::runtime_error);
   // Only lights of importance 0: no node, and nothing to draw.
   const std::vector<double> none(L.rec.size(), 0.0);
-  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, none);
+  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, none, kScene);
   CHECK(t.nodes.empty());
   const ar::SampledLight s = ar::light_tree_sample(t.view(), r3(5, 5, -3), r3(0, 0, 1), Real(0.4));
   CHECK(s.light == ar::kNoLight);
@@ -263,7 +274,7 @@ AR_RT_CASE("light_tree/builder refuses bad input") {
 
 AR_RT_CASE("light_tree/pmf sums to one") {
   const Lights L = mixed(true, true);
-  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp);
+  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp, kScene);
   const ar::LightTreeView v = t.view();
   const double tol = kF32 ? 1e-5 : 1e-12;
   Rng rng{1541};
@@ -286,7 +297,7 @@ AR_RT_CASE("light_tree/pmf sums to one") {
 
 AR_RT_CASE("light_tree/pmf matches sample") {
   const Lights L = mixed(true, true);
-  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp);
+  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp, kScene);
   const ar::LightTreeView v = t.view();
   Rng rng{1542};
   int drawn = 0;
@@ -314,7 +325,7 @@ AR_RT_CASE("light_tree/pmf matches sample") {
 AR_RT_CASE("light_tree/zero importance never drawn") {
   const Lights L = mixed(true, true);
   REQUIRE(L.zero.size() == 2);
-  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp);
+  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp, kScene);
   const ar::LightTreeView v = t.view();
   Rng rng{1543};
   int hits = 0;
@@ -331,7 +342,7 @@ AR_RT_CASE("light_tree/zero importance never drawn") {
 
 AR_RT_CASE("light_tree/back of a one-sided triangle has pmf 0") {
   const Lights L = mixed(true, false);
-  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp);
+  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp, kScene);
   // Above the down-facing triangle, looking down at its back.
   const LightRecord& tri = L.rec[L.one_sided];
   const Real3 c = r3((double(tri.xf[0]) + tri.xf[3] + tri.xf[6]) / 3, (double(tri.xf[1]) + tri.xf[4] + tri.xf[7]) / 3, double(tri.xf[2]));
@@ -339,7 +350,7 @@ AR_RT_CASE("light_tree/back of a one-sided triangle has pmf 0") {
   CHECK(ar::light_tree_pmf(t.view(), p, n, L.one_sided) == Real(0));
   // From below it is lit, and a lone triangle (the root is its leaf) follows the same rule.
   CHECK(ar::light_tree_pmf(t.view(), c - r3(0, 0, 5), -n, L.one_sided) > Real(0));
-  const astroray::host::LightTree lone = astroray::host::build_light_tree(std::vector<LightRecord>{tri}, std::vector<double>{1.0});
+  const astroray::host::LightTree lone = astroray::host::build_light_tree(std::vector<LightRecord>{tri}, std::vector<double>{1.0}, kScene);
   REQUIRE(lone.nodes.size() == 1);
   CHECK(ar::light_tree_pmf(lone.view(), p, n, 0) == Real(0));
   const ar::SampledLight back = ar::light_tree_sample(lone.view(), p, n, Real(0.5));
@@ -352,7 +363,7 @@ AR_RT_CASE("light_tree/back of a one-sided triangle has pmf 0") {
 
 AR_RT_CASE("light_tree/finite positive importance inside node bounds") {
   const Lights L = mixed(true, false);
-  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp);
+  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp, kScene);
   Rng rng{1544};
   int tested = 0;
   for (const ar::LightTreeNode& node : t.nodes) {
@@ -388,6 +399,85 @@ AR_RT_CASE("light_tree/finite positive importance inside node bounds") {
   CHECK(std::isfinite(double(ar::light_tree_pmf(t.view(), at, r3(0, 0, 1), 0))));
 }
 
+AR_RT_CASE("light_tree/importance pinned by hand") {
+  // Cycles' node importance written with angles (theta_i, theta_u, theta, theta_o, theta_e of
+  // Conty Estevez and Kulla 2018, Eq. 3), not with the sin/cos products of the code under test.
+  const double tol = kF32 ? 2e-5 : 1e-12;
+  {
+    // A point lamp's leaf (box without extent, theta_o = pi) of energy E at distance d along n:
+    // max = E / d^2, min = 0 (theta_e - theta_o < 0).
+    ar::LightTreeNode node{};
+    node.axis[2] = 1.0f;
+    node.theta_o = float(kPi);
+    node.theta_e = float(kPi / 2);
+    node.energy = 7.0f;
+    node.flags = ar::kLightTreeLeaf;
+    const ar::LightTreeImportance imp = ar::light_tree_importance(node, r3(0, 0, -3), r3(0, 0, 1));
+    CHECK(double(imp.max) == doctest::Approx(7.0 / 9.0).epsilon(tol));
+    CHECK(imp.min == Real(0));
+  }
+  {
+    // A disk of radius 0.5 facing -z (box 1 x 1 x 0, bounding radius r = sqrt(0.5)), seen from
+    // below and off axis by a tilted surface.
+    ar::LightTreeNode node{};
+    node.bbox_lo[0] = node.bbox_lo[1] = -0.5f;
+    node.bbox_hi[0] = node.bbox_hi[1] = 0.5f;
+    node.axis[2] = -1.0f;
+    node.theta_o = 0.0f;
+    node.theta_e = float(kPi / 2);
+    node.energy = 5.0f;
+    node.flags = ar::kLightTreeLeaf;
+    const double p[3] = {1.0, 0.3, -4.0};
+    double n[3] = {0.3, -0.2, 1.0};
+    const double nl = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    for (double& x : n) x /= nl;
+    const double v[3] = {-p[0], -p[1], -p[2]};
+    const double d = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    const double theta_u = std::asin(std::sqrt(0.5) / d);
+    const double theta_i = std::acos((v[0] * n[0] + v[1] * n[1] + v[2] * n[2]) / d);
+    const double theta = std::acos(v[2] / d);  // axis (0, 0, -1) against p - c = -v
+    REQUIRE(theta_i > theta_u);                 // the incidence factor is below 1
+    REQUIRE(theta > theta_u);                   // and so is the outgoing one
+    const double want_max = 5.0 * std::cos(theta_i - theta_u) * std::cos(theta - theta_u) / (d * d);
+    REQUIRE(theta + theta_u < kPi / 2);
+    const double want_min = 5.0 * std::cos(theta_i + theta_u) * std::cos(theta + theta_u) / (d * d);
+    const ar::LightTreeImportance imp = ar::light_tree_importance(node, r3(p[0], p[1], p[2]), r3(n[0], n[1], n[2]));
+    CHECK(double(imp.max) == doctest::Approx(want_max).epsilon(tol));
+    CHECK(double(imp.min) == doctest::Approx(want_min).epsilon(tol));
+  }
+}
+
+AR_RT_CASE("light_tree/two-sided triangle seen from behind far away") {
+  // Wound up (axis +z, theta_o 0, theta_e pi), seen from 1e4 below: the subtended angle rounds
+  // to 0 in float, and the emitter still lights the point.
+  const LightRecord tri = ar::light_make_triangle(r3(0, 0, 0), r3(1, 0, 0), r3(0, 1, 0), 0, 0, ar::kLightTwoSided, Real(10), white());
+  const astroray::host::LightTree t = astroray::host::build_light_tree(std::vector<LightRecord>{tri}, std::vector<double>{1.0}, kScene);
+  const Real3 p = r3(1.0 / 3, 1.0 / 3, -1e4), n = r3(0, 0, 1);
+  CHECK(ar::light_tree_pmf(t.view(), p, n, 0) == Real(1));
+  const ar::SampledLight s = ar::light_tree_sample(t.view(), p, n, Real(0.5));
+  CHECK(s.light == 0);
+  CHECK(s.pmf == Real(1));
+}
+
+AR_RT_CASE("light_tree/world bounds and pmf") {
+  // Cycles' background cone: axis (0, 0, 1), theta_o = pi, theta_e = 0.
+  const ar::LightBounds b = ar::light_bounds(ar::light_make_world(Real(1), white()));
+  CHECK(b.w.x == Real(0));
+  CHECK(b.w.y == Real(0));
+  CHECK(b.w.z == Real(1));
+  CHECK(double(b.theta_o) == doctest::Approx(kPi).epsilon(1e-6));
+  CHECK(b.theta_e == Real(0));
+  const Lights L = mixed(true, true);
+  const astroray::host::LightTree t = astroray::host::build_light_tree(L.rec, L.imp, kScene);
+  CHECK(ar::light_tree_pmf(t.view(), r3(5, 5, -3), r3(0, 0, 1), L.world) > Real(0));
+  // A world alone is the whole tree.
+  const astroray::host::LightTree w = astroray::host::build_light_tree(std::vector<LightRecord>{L.rec[L.world]},
+                                                                       std::vector<double>{L.imp[L.world]}, kScene);
+  REQUIRE(w.nodes.size() == 1);
+  CHECK((w.nodes[0].flags & ar::kLightTreeDistant) != 0);
+  CHECK(ar::light_tree_pmf(w.view(), r3(5, 5, -3), r3(0, 0, 1), 0) == Real(1));
+}
+
 }  // TEST_SUITE("fast")
 
 #if !defined(AR_REAL_DOUBLE)
@@ -418,7 +508,7 @@ Oracle oracle() {
   std::vector<astroray::host::LightInput> in;
   for (const LightRecord& r : o.L.rec) in.push_back(astroray::host::LightInput{r, {}});
   o.table = astroray::host::build_light_table(in, kScene, observer(), nullptr);
-  o.tree = astroray::host::build_light_tree(o.table->lights, o.table->importance);
+  o.tree = astroray::host::build_light_tree(o.table->lights, o.table->importance, o.table->scene);
   return o;
 }
 
@@ -504,6 +594,9 @@ TEST_CASE("light_tree/estimates agree 2^20 draws") {
                 e.tree_se, e.alias_mean, e.alias_se, exact(o, s), e.z, run.family->z());
     INFO(st::reproduce(run));
     CHECK(e.z < run.family->z());
+    // The tree against the exact sum as well, so a bias shared with the alias table shows.
+    run.family->note_check();
+    CHECK(std::fabs(e.tree_mean - exact(o, s)) / e.tree_se < run.family->z());
   }
 }
 }  // TEST_SUITE("gate")

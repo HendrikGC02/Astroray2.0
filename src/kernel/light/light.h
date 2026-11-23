@@ -117,6 +117,11 @@ struct LightBounds {
 };
 
 inline constexpr Real kLightPi = Real(3.14159265358979323846);
+
+// The cone axis of a light whose normals cover every direction (theta_o = pi): any unit vector
+// works; Cycles takes (0, 0, 1) for the background ("Set an arbitrary direction for the background
+// light.", scene/light_tree.cpp).
+AR_FN Real3 light_isotropic_axis() { return Real3{Real(0), Real(0), Real(1)}; }
 // pbrt-v4 FloatOneMinusEpsilon / DoubleOneMinusEpsilon (util/float.h): the largest Real below 1.
 inline constexpr Real kLightOneMinusEpsilon =
     sizeof(Real) == 4 ? Real(float(0x1.fffffep-1)) : Real(double(0x1.fffffffffffffp-1));
@@ -409,7 +414,7 @@ AR_FN LightBounds light_bounds(const LightRecord& r) {
   AR_ASSERT(light_is_infinite(r));
   LightBounds b;
   b.bbox.lo = b.bbox.hi = Real3{Real(0), Real(0), Real(0)};
-  b.w = Real3{Real(0), Real(0), Real(1)};
+  b.w = light_isotropic_axis();
   b.theta_o = kLightPi;
   b.theta_e = Real(0);
   b.two_sided = false;

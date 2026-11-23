@@ -29,10 +29,11 @@
 //    uniform (sample_reservoir), the pmf multiplies left_prob or 1 - left_prob per level, and the
 //    pmf of a light replays its bit trail from the root, bit 0 first ("go_left = (bit_trail & 1)
 //    == 0; bit_trail >>= 1").
-// Differences, decided in task 154 and written into 0004 D10: a leaf holds one light and its
-// importance is the node importance (Cycles evaluates per-type emitter parameters at leaves, M4);
-// no transmission flag and no volume segment (the importance takes p and n only); the root is a
-// leaf when the scene has one light, and that leaf's own importance decides whether it is drawn.
+// Differences, written into 0004 D10: a leaf holds one light and its importance is the node
+// importance (Cycles evaluates per-type emitter parameters at leaves, M4); no transmission flag and
+// no volume segment (the importance takes p and n only); the root is a leaf when the scene has one
+// light, and that leaf's own importance decides whether it is drawn; a cone with theta_o + theta_e
+// equal to pi emits everywhere (see light_tree_cone_importance).
 //
 // Ref: docs/decisions/0004-integrator.md D10 (importance rules, alias table as oracle), D9 (pmf 0
 // for estimate 0); Conty Estevez and Kulla 2018, "Importance Sampling of Many Lights with Adaptive
@@ -128,7 +129,9 @@ AR_FN LightTreeImportance light_tree_cone_importance(Real3 n, Real3 to_c, Real c
   Real cos_min_out;
   if (cos_t >= cos_u || cos_t_minus_u >= cos_o) {
     cos_min_out = Real(1);
-  } else if (theta_o + theta_e > kLightPi || cos_t_minus_u > ar::cos(theta_o + theta_e)) {
+  } else if (theta_o + theta_e >= kLightPi || cos_t_minus_u > ar::cos(theta_o + theta_e)) {
+    // >= where Cycles has >: a two-sided emitter (theta_o 0, theta_e pi) seen from straight behind
+    // has cos_t_minus_u = -1 = cos(pi) once cos_u rounds to 1, and > would call it invisible.
     cos_min_out = cos_t_minus_u * cos_o + light_tree_sin_from_cos(cos_t_minus_u) * sin_o;
   } else {
     return out;  // outside every emission cone

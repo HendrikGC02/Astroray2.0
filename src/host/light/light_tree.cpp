@@ -175,7 +175,7 @@ LightTree build_light_tree(const std::vector<LightTreeLight>& lights) {
     for (int k = 0; k < 3; ++k) b.centre[3 * i + k] = 0.5 * (l.lo[k] + l.hi[k]);
     (l.infinite ? distant : local).push_back(i);
   }
-  if (!(total <= double(FLT_MAX))) throw std::runtime_error("light tree: the total importance energy overflows float");
+  if (!(total <= double(FLT_MAX))) throw std::runtime_error("light tree: the total node energy overflows float");
   if (local.empty() && distant.empty()) return t;
   t.nodes.emplace_back();
   if (local.empty() || distant.empty()) {
