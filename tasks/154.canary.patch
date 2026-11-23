@@ -1,0 +1,52 @@
+diff --git a/src/host/light/light_tree.cpp b/src/host/light/light_tree.cpp
+index f650914..c8ca940 100644
+--- a/src/host/light/light_tree.cpp
++++ b/src/host/light/light_tree.cpp
+@@ -104,7 +104,7 @@ struct Builder {
+       for (int k = 0; k < 3; ++k) m.lo[k] = l.lo[k], m.hi[k] = l.hi[k], m.cone.axis[k] = l.w[k];
+       m.cone.theta_o = l.theta_o;
+       m.cone.theta_e = l.theta_e;
+-      m.energy = l.energy;
++      m.energy = l.energy > 0.0 ? l.energy : 1.0;
+       store(node, m, distant, ar::kLightTreeLeaf, {0u, 0u}, i);
+       return m;
+     }
+@@ -170,7 +170,6 @@ LightTree build_light_tree(const std::vector<LightTreeLight>& lights) {
+     bool finite = std::isfinite(l.theta_o) && std::isfinite(l.theta_e);
+     for (int k = 0; k < 3; ++k) finite = finite && std::isfinite(l.lo[k]) && std::isfinite(l.hi[k]) && std::isfinite(l.w[k]);
+     if (!finite) throw std::runtime_error("light tree: light " + std::to_string(i) + " has non-finite bounds");
+-    if (!(l.energy > 0.0)) continue;  // no leaf: pmf 0 (D9)
+     total += l.energy;
+     for (int k = 0; k < 3; ++k) b.centre[3 * i + k] = 0.5 * (l.lo[k] + l.hi[k]);
+     (l.infinite ? distant : local).push_back(i);
+diff --git a/src/kernel/light/light_tree.h b/src/kernel/light/light_tree.h
+index 0f747ae..770dd8a 100644
+--- a/src/kernel/light/light_tree.h
++++ b/src/kernel/light/light_tree.h
+@@ -218,7 +218,7 @@ AR_FN SampledLight light_tree_sample(const LightTreeView& v, Real3 p, Real3 n, R
+     const Real w_right = Real(1) - left;
+     bool right = false;
+     if (w_right > Real(0)) {
+-      const Real thresh = w_right / (left + w_right);
++      const Real thresh = w_right * w_right / (left + w_right);
+       if (r <= thresh) {
+         right = true;
+         r = r / thresh;
+@@ -227,7 +227,7 @@ AR_FN SampledLight light_tree_sample(const LightTreeView& v, Real3 p, Real3 n, R
+       }
+       r = ar::min(ar::max(r, Real(0)), Real(1));
+     }
+-    pmf *= light_tree_branch_pmf(left, right);
++    pmf *= light_tree_branch_pmf(left, depth == 0u ? !right : right);
+     idx = node.child[right ? 1 : 0];
+   }
+   AR_ASSERT(false);  // deeper than the bit trail: the builder refuses such a tree
+@@ -249,7 +249,7 @@ AR_FN Real light_tree_pmf(const LightTreeView& v, Real3 p, Real3 n, uint32_t lig
+     if (!light_tree_left_probability(v, node, p, n, &left)) return Real(0);
+     const bool right = (trail & 1u) != 0u;
+     trail >>= 1;
+-    pmf *= light_tree_branch_pmf(left, right);
++    pmf *= light_tree_branch_pmf(left, false);
+     if (pmf == Real(0)) return Real(0);
+     idx = node.child[right ? 1 : 0];
+   }
