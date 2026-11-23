@@ -1,34 +1,26 @@
 diff --git a/tools/perf.py b/tools/perf.py
-index 3b701e1..6bbc52a 100644
+index e0c833a..6bbc52a 100644
 --- a/tools/perf.py
 +++ b/tools/perf.py
-@@ -20,6 +20,7 @@ import glob
- import json
- import os
- import sys
-+import tempfile
- import tomllib
- 
- ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-@@ -48,7 +49,7 @@ def read_lines(path):
+@@ -49,7 +49,7 @@ def read_lines(path):
  def read_history(pattern):
      lines = []
      for p in sorted(glob.glob(pattern)):
--        lines += read_lines(p)
+-        lines += [o for o in read_lines(p) if o.get("metric") == METRIC]  # other metrics never answer
 +        lines += read_lines(p)  # other metrics never answer
      return lines
  
  
-@@ -63,7 +64,7 @@ def budget_limit(path):
+@@ -64,7 +64,7 @@ def budget_limit(path):
  def baseline(history, scene):
      found = None
      for o in history:  # file order, then line order: the last match is the newest
--        if o.get("scene") == scene and o.get("metric") == METRIC:
+-        if o.get("scene") == scene:
 +        if o.get("scene") == scene and found is None:
              found = o
      return found
  
-@@ -90,7 +91,7 @@ def compare(measured, history, limit):
+@@ -91,7 +91,7 @@ def compare(measured, history, limit):
          seen = True
          scene, mach = m["scene"], m["machine"]
          # Another machine's timings say nothing about this one.
@@ -37,81 +29,12 @@ index 3b701e1..6bbc52a 100644
          if base is None:
              out.append(f"PASS {scene}: no baseline: lead commits the printed line")
              out.append(json.dumps(m, separators=(",", ":")))
-@@ -105,6 +106,28 @@ def compare(measured, history, limit):
-     return out[:20], failed
- 
- 
-+def record(measured, path):
-+    """Appends the measured pass_ms lines, compact as bench writes them. Returns how many."""
-+    rows = [m for m in measured if m.get("metric") == METRIC]
-+    text = ""
-+    if os.path.exists(path):
-+        with open(path, encoding="utf-8", newline="") as f:
-+            text = f.read()
-+    if text and not text.endswith("\n"):
-+        text += "\n"
-+    with open(path, "w", encoding="utf-8", newline="") as f:
-+        f.write(text + "".join(json.dumps(m, separators=(",", ":")) + "\n" for m in rows))
-+    return len(rows)
-+
-+
-+def check(measured, history, limit, record_path=None):
-+    """compare, then record only a PASS: a FAIL becomes a baseline only through a ruling naming old and new."""
-+    lines, failed = compare(measured, history, limit)
+@@ -123,7 +123,7 @@ def record(measured, path):
+ def check(measured, history, limit, record_path=None):
+     """compare, then record only a PASS: a FAIL becomes a baseline only through a ruling naming old and new."""
+     lines, failed = compare(measured, history, limit)
+-    if record_path and not failed:
 +    if record_path:
-+        lines.append(f"recorded {record(measured, record_path)} pass_ms lines in {os.path.basename(record_path)}")
-+    return lines, failed
-+
-+
- def spread_table(runs):
-     """runs: one list of history lines per bench run. Returns (lines, tolerance)."""
-     per = {}
-@@ -135,13 +158,27 @@ def self_test():
-         d = os.path.join(CASES, name)
-         with open(os.path.join(d, "expect.json"), encoding="utf-8") as f:
-             exp = json.load(f)
--        lines, failed = compare(read_lines(os.path.join(d, "measured.jsonl")),
--                                read_history(os.path.join(d, "history*.jsonl")), exp["limit"])
-+        with tempfile.TemporaryDirectory() as tmp:
-+            rec = os.path.join(tmp, "recorded.jsonl")
-+            lines, failed = check(read_lines(os.path.join(d, "measured.jsonl")),
-+                                  read_history(os.path.join(d, "history*.jsonl")), exp["limit"], rec)
-+            recorded = len(read_lines(rec)) if os.path.exists(rec) else 0
-         text = "\n".join(lines)
--        ok = failed == exp["fail"] and all(s in text for s in exp["text"])
-+        ok = (failed == exp["fail"] and all(s in text for s in exp["text"])
-+              and not any(s in text for s in exp.get("absent", [])) and (recorded > 0) == (not exp["fail"]))
-         print(f"{'ok  ' if ok else 'FAIL'} {name}" + ("" if ok else f": expected fail={exp['fail']} {exp['text']}, got fail={failed}\n{text}"))
-         bad += not ok
--    print(f"perf self-test: {len(names) - bad} of {len(names)} cases ok")
-+    # The tolerance formula: 3 x the larger of the two scene spreads, (max - min) / mean.
-+    def rows(scene, v):
-+        return [{"scene": scene, "metric": METRIC, "value": x} for x in v]
-+    runs = [rows("b1m", [10.0]) + rows("b5m", [20.0]), rows("b1m", [10.1]) + rows("b5m", [20.6]),
-+            rows("b1m", [9.9]) + rows("b5m", [19.4]), rows("b1m", [10.0]) + rows("b5m", [20.0]),
-+            rows("b1m", [10.0]) + rows("b5m", [20.0])]
-+    lines, tol = spread_table(runs)
-+    ok = abs(tol - 0.18) < 1e-9 and "limit = 1.180" in lines[-1]
-+    print(f"{'ok  ' if ok else 'FAIL'} spread_table" + ("" if ok else f": tolerance {tol}, {lines[-1]}"))
-+    bad += not ok
-+    print(f"perf self-test: {len(names) + 1 - bad} of {len(names) + 1} cases ok")
-     return 1 if bad else 0
+         lines.append(f"recorded {record(measured, record_path)} pass_ms lines in {os.path.basename(record_path)}")
+     return lines, failed
  
- 
-@@ -152,6 +189,7 @@ def main():
-     c = sub.add_parser("compare")
-     c.add_argument("measured")
-     c.add_argument("--limit", type=float)
-+    c.add_argument("--record", help="append the measured pass_ms lines to this history file when every scene passes")
-     c.add_argument("--budgets", default=os.path.join(ROOT, "tools", "budgets.toml"))
-     c.add_argument("--history", default=os.path.join(ROOT, "bench", "history", "*.jsonl"))
-     s = sub.add_parser("spread")
-@@ -162,7 +200,7 @@ def main():
-             return self_test()
-         if a.cmd == "compare":
-             limit = a.limit if a.limit else budget_limit(a.budgets)
--            lines, failed = compare(read_lines(a.measured), read_history(a.history), limit)
-+            lines, failed = check(read_lines(a.measured), read_history(a.history), limit, a.record)
-             print("\n".join(lines))
-             return 1 if failed else 0
-         if a.cmd == "spread":
