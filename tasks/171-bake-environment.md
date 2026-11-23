@@ -17,3 +17,7 @@ Depends on: 153. kernel_globals.h sweep order in tasks/README.md.
 Size: M (about 250 lines without tests); stop and report at 2x.
 Progress:
 - Files: src/kernel/stages/bake_environment.h, src/kernel_cpu/bake_environment.cpp, src/kernel_gpu/bake_environment.cu, src/kernel/launch_config.h, src/kernel/kernel_globals.h, src/device/cpu/cpu_device.cpp, src/host/light/env_bake.{h,cpp}, src/kernel/budget.toml, tests/cpu/test_bake_environment.cpp, tests/gpu/test_agree_pure.cpp, tests/gpu/kernels/agree_pure.cu, tests/gpu/test_bake_environment_agree.cpp, docs/decisions/0004-integrator.md, tasks/171.canary.patch; all in Scope.
+- Done: k_bake_environment (48 regs, stack 0, spills 0/0, compile 1.18 s) with a Neumaier-summed float reduction (no double in kernels, ptxas warns), EnvironmentBaker (lazy, keyed, max/mean), 0004 D11 write-back.
+- Tolerance (e_s + 8) u, u = 2^-24, derived in stages/bake_environment.h and common/analytic_world.h; analytic worst 2.1e-7 against the bound 9.5e-7; constant world 9 u = 5.4e-7 against the stated 1e-6.
+- 1024^2 launch: CUDA 1.9 ms (baker.get 20 ms with readback and table), CPU 16 threads 534 ms. BACKLOG 55: float grids of equal cells have an exact double mean, so its 1e-22 mechanism cannot arise from a bake; the normalisation removes the remaining below-FLT_MIN throw (strength 1e-38 and below).
+- Canary: the Canary line gained black world, non-finite cell and the analytic GPU case (named agree/bake environment analytic nofma), all red.
