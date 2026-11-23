@@ -76,10 +76,9 @@ on its existing branch and worktree, briefed from its task file and the rulings 
   - 138 land submit/undo/cleanup: rulings applied (per-repository busy marker; clean case restored, fast_landing
     1.9 s, accepted); asked to rebase, rerun gate and open its PR; then Opus review; after it lands use
     `pwsh tools/land.ps1 submit`. Unrelated: CRLF ghost diffs on .ps1 files (`git add --renormalize`).
-  - 141 visible lock and test runner: rulings given 2026-11-23 (fast_lock scaled to TIMEOUT_S 1.5 / MESSAGE_S
-    0.5 with a ready-file handshake; waiting lines outside the 20-line cap, repeat every 300 s after 3). Then
-    Opus review. Its env defaults (3600 s, 30 s, Globalstroray2, %ProgramData%stroray2) go into 0009 d8
-    as a lead record edit with Opus review.
+  - 141 visible lock and test runner: PR #125, rulings applied (fast_lock 2.2 s scaled with a ready-file
+    handshake; waiting lines throttled after 3). Needs Opus review; gate not rerun after the rework. Its env
+    defaults (3600 s, 30 s, Globalstroray2, %ProgramData%stroray2) go into 0009 d8 as a lead record edit.
   - 150 half/float textures: in progress at handover.
 - Not dispatched: 161 (blender, after 162), 139 (blender), 140/160 (after 136, 138), 148, 156, 158 (spine
   queue after 147). Then the slice-0 review writes the next batch (PLAN-M1b section 2 outlines).
