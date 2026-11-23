@@ -60,8 +60,7 @@ void Ledger::remove(uint64_t id) {
 }
 
 uint64_t Ledger::total() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return total_bytes_;
+  return total_bytes_.load(std::memory_order_acquire);
 }
 
 uint64_t Ledger::scene_total(uint64_t scene) const {
@@ -82,8 +81,7 @@ uint64_t Ledger::session_total(uint64_t session) const {
 
 uint64_t Ledger::category_total(LedgerCategory category) const {
   ledger_category_name(category);
-  std::lock_guard<std::mutex> lock(mutex_);
-  return category_bytes_[static_cast<uint32_t>(category)];
+  return category_bytes_[static_cast<uint32_t>(category)].load(std::memory_order_acquire);
 }
 
 std::vector<LedgerRecord> Ledger::records() const {

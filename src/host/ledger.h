@@ -6,6 +6,7 @@
 // Ref: docs/decisions/0007-blender-integration.md d14 (ledger, budget table, "fail"
 // message "needs X GiB for <category>, Y available"); 0002 D13, D15 (allocation row).
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <stdexcept>
@@ -95,8 +96,10 @@ class Ledger {
   // Kept in step with live_ so the progress poll (category_total, 17 reads per call, in a tight loop
   // in a host that spins) is O(1) and never holds the lock against an uploading worker for the time
   // of a scan over every record.
-  uint64_t category_bytes_[kLedgerCategoryCount] = {};
-  uint64_t total_bytes_ = 0;
+  // Atomic so a poll takes no lock at all: a spinning reader that re-takes even a short critical
+  // section starves the writer on an unfair mutex. Written only under mutex_.
+  std::atomic<uint64_t> category_bytes_[kLedgerCategoryCount] = {};
+  std::atomic<uint64_t> total_bytes_{0};
   uint64_t next_id_ = 1;
 };
 
