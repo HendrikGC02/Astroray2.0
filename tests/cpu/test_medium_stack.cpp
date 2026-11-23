@@ -64,13 +64,17 @@ TEST_CASE("medium_stack/push remove and depth flag round trip") {
   CHECK(ar::set_medium_depth(0u, 7u) == ar::MEDIUM_DEPTH_MASK);
 }
 
-TEST_CASE("medium_stack/remove of an id not on the stack changes nothing") {
+TEST_CASE("medium_stack/remove of an absent id is refused") {
   S s;
   s.push(1, 0);
   const S before = s;
   CHECK_FALSE(s.remove(2));
   CHECK(s.flags == before.flags);
   for (int i = 0; i < 4; ++i) CHECK(s.st.v[i] == before.st.v[i]);
+  // A back face whose id is not on the stack (a path that started inside the medium) is a true
+  // interface; the caller reports it (lead ruling on 180).
+  CHECK(s.is_true(2, 0, false));
+  CHECK(S{}.is_true(2, 4, false));
 }
 
 TEST_CASE("medium_stack/overflow leaves stack unchanged") {
