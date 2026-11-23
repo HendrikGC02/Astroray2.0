@@ -4,7 +4,8 @@
 // key); mode bit 0 selects LINEAR over CLOSEST and bit 1 EXTEND over REPEAT. Texels are filtered
 // in their stored encoding and only then decoded (sRGB images by the sRGB function, linear and
 // data images not), as Cycles does for 8-bit images; a Closest sRGB texel is decoded through the
-// host-built table SceneTables::srgb_decode (color/srgb.h). A slot outside the table is magenta; a
+// host-built table SceneTables::srgb_decode (color/srgb.h). Half and float images are linear
+// values: they are read as stored (a half widens exactly, half_to_float) and never decoded. A slot outside the table is magenta; a
 // freed slot holds a 1x1 magenta image and samples magenta by itself. Alpha has no output yet:
 // its only consumer lands with alpha and NON_OPAQUE in M1b.
 // Ref: docs/decisions/0005-material-model.md items 31, 34; 0002 D13 (software filtering);
@@ -43,7 +44,9 @@ AR_FN int tex_wrap(int x, int size, bool extend) {
 }
 
 AR_FN Texel tex_read(const DeviceImageView& im, int x, int y) {
-  return load_texel(image_texel(im, uint32_t(x), uint32_t(y)), im.channels);
+  const uint8_t* p = image_texel(im, uint32_t(x), uint32_t(y));
+  if (im.format != uint32_t(TexFormat::U8)) return load_texel_wide(p, im.channels, im.format);
+  return load_texel(p, im.channels);
 }
 
 // Closest: the texel at texel coordinates (x, y) = uv * size (Cycles interp_closest). An sRGB
@@ -55,11 +58,11 @@ AR_FN void tex_closest(const DeviceImageView& im, const float* srgb_decode, floa
   ix = tex_wrap(ix, int(im.width), extend);
   iy = tex_wrap(iy, int(im.height), extend);
   const uint8_t* p = image_texel(im, uint32_t(ix), uint32_t(iy));
-  if (im.encoding == uint32_t(TexEncoding::SRGB)) {
+  if (im.format == uint32_t(TexFormat::U8) && im.encoding == uint32_t(TexEncoding::SRGB)) {
     for (uint32_t k = 0; k < 3u; ++k) out[k] = load_ro(srgb_decode + load_ro(p + (im.channels == 1u ? 0u : k)));
     return;
   }
-  const Texel t = load_texel(p, im.channels);
+  const Texel t = im.format == uint32_t(TexFormat::U8) ? load_texel(p, im.channels) : load_texel_wide(p, im.channels, im.format);
   for (int k = 0; k < 3; ++k) out[k] = t.v[k];
 }
 
@@ -73,8 +76,22 @@ AR_FN void tex_linear(const DeviceImageView& im, float x, float y, bool extend, 
   const int nix = tex_wrap(ix + 1, w, extend), niy = tex_wrap(iy + 1, h, extend);
   ix = tex_wrap(ix, w, extend);
   iy = tex_wrap(iy, h, extend);
+  if (im.format != uint32_t(TexFormat::U8)) {
+    // Half and float: the same weights and sum order, accumulated texel by texel so only one
+    // widened texel is live at a time (the shade kernel is at its register cap).
+    const float w00 = (1.0f - ty) * (1.0f - tx), w10 = (1.0f - ty) * tx, w01 = ty * (1.0f - tx), w11 = ty * tx;
+    Texel t = tex_read(im, ix, iy);
+    float acc[3] = {w00 * t.v[0], w00 * t.v[1], w00 * t.v[2]};
+    t = tex_read(im, nix, iy);
+    for (int k = 0; k < 3; ++k) acc[k] += w10 * t.v[k];
+    t = tex_read(im, ix, niy);
+    for (int k = 0; k < 3; ++k) acc[k] += w01 * t.v[k];
+    t = tex_read(im, nix, niy);
+    for (int k = 0; k < 3; ++k) out[k] = acc[k] + w11 * t.v[k];
+    return;
+  }
   const Texel a = tex_read(im, ix, iy), b = tex_read(im, nix, iy), c = tex_read(im, ix, niy), d = tex_read(im, nix, niy);
-  const bool srgb = im.encoding == uint32_t(TexEncoding::SRGB);
+  const bool srgb = im.format == uint32_t(TexFormat::U8) && im.encoding == uint32_t(TexEncoding::SRGB);
   for (int k = 0; k < 3; ++k) {
     const float f = (1.0f - ty) * (1.0f - tx) * a.v[k] + (1.0f - ty) * tx * b.v[k] + ty * (1.0f - tx) * c.v[k] + ty * tx * d.v[k];
     out[k] = srgb ? srgb_to_linear(f) : f;

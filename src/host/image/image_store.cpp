@@ -21,7 +21,19 @@ namespace fs = std::filesystem;
 // The linear-RGB mean: each texel is decoded by the transfer function before averaging (the
 // mean of the light, not of the code values). Grey images count as r = g = b; alpha is ignored.
 // An sRGB texel's value is the kernel's own table entry for the byte (Closest returns exactly it).
+// Half and float texels are linear values as stored.
 std::array<float, 3> image_mean(const Image& im) {
+  if (im.format != ar::TexFormat::U8) {
+    const bool half = im.format == ar::TexFormat::HALF;
+    double sum[3] = {0, 0, 0};
+    const size_t n = size_t(im.width) * im.height;
+    const size_t stride = size_t(im.channels) * (half ? 2 : 4);
+    for (size_t i = 0; i < n; ++i) {
+      const ar::Texel t = ar::load_texel_wide(im.texels.data() + i * stride, im.channels, uint32_t(im.format));
+      for (int c = 0; c < 3; ++c) sum[c] += double(t.v[c]);
+    }
+    return {float(sum[0] / double(n)), float(sum[1] / double(n)), float(sum[2] / double(n))};
+  }
   float srgb[ar::kSrgbTableSize];
   ar::srgb_decode_table(srgb);
   double lut[256];
@@ -144,7 +156,9 @@ ImageResult ImageStore::load(const ar_image_desc& d, const std::vector<uint8_t>&
   if (!decode_image_bytes(data->data(), data->size(), &dec, &error)) return magenta(AR_REPORT_IMAGE_UNREADABLE, error);
   auto im = std::make_shared<Image>();
   im->width = dec.width, im->height = dec.height, im->channels = dec.channels;
-  im->encoding = enc;
+  im->format = dec.format;
+  // Half and float images are linear (0005 item 34): an sRGB id on one is read as linear.
+  im->encoding = dec.format != ar::TexFormat::U8 && enc == ar::TexEncoding::SRGB ? ar::TexEncoding::LINEAR : enc;
   im->alpha_mode = d.alpha_mode;
   im->texels = std::move(dec.texels);
   im->mean = image_mean(*im);
@@ -263,6 +277,7 @@ void ImageStore::rebuild_locked() {
     ar::DeviceImageView v = {};
     v.texels = uint64_t(uintptr_t(im.texels.data()));
     v.width = im.width, v.height = im.height, v.channels = im.channels, v.encoding = uint32_t(im.encoding);
+    v.format = uint32_t(im.format);
     a->keys.push_back(held ? key : 0);
     a->views.push_back(v);
     a->images.push_back(image);

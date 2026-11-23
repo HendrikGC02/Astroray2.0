@@ -3,7 +3,9 @@
 // sRGB RGB, an sRGB grey and a data RGBA image plus a slot outside the table, run on the GPU built
 // without FMA contraction and on the CPU (float). Closest must be bit-identical (the first 256
 // lookups hit every byte value of the sRGB image at its texel centre, so the sRGB decode is
-// compared on its whole Closest domain); Linear within 1e-6 relative.
+// compared on its whole Closest domain); Linear within 1e-6 relative. The same run is repeated on
+// half and float images (a half RGB, a float RGBA, a half grey and a float grey; stored linear,
+// read without any decode).
 // Ref: docs/decisions/0005-material-model.md item 34, Verification 6; docs/decisions/0002-kernel-
 // architecture.md D12, D13; 0009 d17.
 #include <doctest.h>
@@ -11,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -37,6 +40,7 @@ struct HostImage {
   uint32_t w, h, ch;
   ar::TexEncoding enc;
   std::vector<uint8_t> t;
+  ar::TexFormat format = ar::TexFormat::U8;
 };
 
 // 16x16 sRGB RGB whose red channel takes every byte value once; 5x3 sRGB grey; 3x2 data RGBA.
@@ -51,16 +55,47 @@ std::vector<HostImage> images() {
   return im;
 }
 
+// 16x16 half RGB (finite arbitrary bit patterns, both signs, subnormals included), 5x3 float RGBA,
+// 3x4 half grey, 4x2 float grey. Slot 0 is 16x16 so the first 256 lookups hit each of its texels.
+std::vector<HostImage> wide_images() {
+  const auto hash = [](uint32_t i) { return (i + 1u) * 2654435761u ^ ((i + 1u) * 40503u << 7); };
+  const auto half = [&](HostImage& im, uint32_t n, uint32_t salt) {
+    for (uint32_t i = 0; i < n; ++i) {
+      uint16_t b = uint16_t(hash(i + salt) >> 8);
+      if (((b >> 10) & 31u) == 31u) b = uint16_t(b & 0x83ffu);  // no Inf or NaN
+      im.t.push_back(uint8_t(b & 255u)), im.t.push_back(uint8_t(b >> 8));
+    }
+  };
+  const auto flt = [&](HostImage& im, uint32_t n, uint32_t salt) {
+    for (uint32_t i = 0; i < n; ++i) {
+      const float f = (float(hash(i + salt) % 2000001u) - 1000000.0f) / 1000.0f;  // +-1000
+      uint32_t b;
+      std::memcpy(&b, &f, 4);
+      for (int k = 0; k < 4; ++k) im.t.push_back(uint8_t(b >> (8 * k)));
+    }
+  };
+  std::vector<HostImage> im(4);
+  im[0] = {16, 16, 3, ar::TexEncoding::LINEAR, {}, ar::TexFormat::HALF};
+  half(im[0], 16 * 16 * 3, 0);
+  im[1] = {5, 3, 4, ar::TexEncoding::DATA, {}, ar::TexFormat::FLOAT};
+  flt(im[1], 5 * 3 * 4, 1000);
+  im[2] = {3, 4, 1, ar::TexEncoding::SRGB, {}, ar::TexFormat::HALF};  // an sRGB tag on a half image is not honoured
+  half(im[2], 3 * 4, 2000);
+  im[3] = {4, 2, 1, ar::TexEncoding::LINEAR, {}, ar::TexFormat::FLOAT};
+  flt(im[3], 4 * 2, 3000);
+  return im;
+}
+
 ar::DeviceImageView view_of(const HostImage& h, uint64_t texels) {
   ar::DeviceImageView v = {};
   v.texels = texels;
-  v.width = h.w, v.height = h.h, v.channels = h.ch, v.encoding = uint32_t(h.enc);
+  v.width = h.w, v.height = h.h, v.channels = h.ch, v.encoding = uint32_t(h.enc), v.format = uint32_t(h.format);
   return v;
 }
 
-// Rows 0-255: the centre of sRGB texel i in Closest. The rest: u, v in [-1.5, 2.5), slot 0-3
-// (3 is outside the table), mode 0-3.
-Inputs make_inputs() {
+// Rows 0-255: the centre of texel i of image 0 in Closest. The rest: u, v in [-1.5, 2.5), slot
+// 0 to slots - 1 (the last is outside the table), mode 0-3.
+Inputs make_inputs(uint32_t slots) {
   Inputs in;
   in.n = kN;
   in.stride = kIn;
@@ -73,19 +108,15 @@ Inputs make_inputs() {
     }
     r[0] = float(unit(i, 0) * 4.0 - 1.5);
     r[1] = float(unit(i, 1) * 4.0 - 1.5);
-    r[2] = float(std::floor(unit(i, 2) * 4.0));
+    r[2] = float(std::floor(unit(i, 2) * double(slots)));
     r[3] = float(std::floor(unit(i, 3) * 4.0));
   }
   return in;
 }
 
-}  // namespace
-
-TEST_SUITE("gate") {
-
-TEST_CASE("tex_image_agree/gpu nofma vs cpu float") {
-  const std::vector<HostImage> hi = images();
-  const Inputs in = make_inputs();
+// One agreement run over `hi` (slot hi.size() is outside the table).
+void run_agree(const std::vector<HostImage>& hi) {
+  const Inputs in = make_inputs(uint32_t(hi.size()) + 1u);
   Ledger ledger;
   auto dev = host::make_cuda_device(ledger, 0);
 
@@ -151,5 +182,13 @@ TEST_CASE("tex_image_agree/gpu nofma vs cpu float") {
   for (DeviceBuffer& b : texels) dev->free(b);
   CHECK(ledger.total() == 0);
 }
+
+}  // namespace
+
+TEST_SUITE("gate") {
+
+TEST_CASE("tex_image_agree/gpu nofma vs cpu float") { run_agree(images()); }
+
+TEST_CASE("tex_image_agree/half and float") { run_agree(wide_images()); }
 
 }  // TEST_SUITE
