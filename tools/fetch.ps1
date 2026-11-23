@@ -9,8 +9,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 . (Join-Path $PSScriptRoot 'lib/python.ps1')
-if ($Verb -notin @('deps', 'assets')) {
-  Write-Host "FAIL fetch: unknown verb '$Verb' (only: deps, assets)"
+if ($Verb -notin @('deps', 'assets', 'refs')) {
+  Write-Host "FAIL fetch: unknown verb '$Verb' (only: deps, assets, refs)"
   exit 2
 }
 
@@ -57,6 +57,72 @@ if ($Verb -eq 'assets') {
     exit 0
   } catch {
     FailA $_.Exception.Message
+  }
+}
+
+if ($Verb -eq 'refs') {
+  # Ref: 0009 d6. Reference sources, read-only, cited and never built; one copy for all worktrees.
+  function FailR([string]$why) {
+    Write-Host "FAIL refs: $why"
+    exit 1
+  }
+  function Remove-Tree([string]$p) {
+    if (-not (Test-Path -LiteralPath $p)) { return }
+    Get-ChildItem -LiteralPath $p -Recurse -Force -File | ForEach-Object { $_.IsReadOnly = $false }
+    Remove-Item -LiteralPath $p -Recurse -Force
+  }
+  try {
+    $py = Get-ArPython
+    $q = "import tomllib,json;print(json.dumps(tomllib.load(open('third_party/refs.toml','rb'))['ref']))"
+    $refs = @((& $py -I -c $q) | ConvertFrom-Json)
+    if ($LASTEXITCODE -ne 0) { FailR 'cannot parse third_party/refs.toml' }
+    if ($Name) {
+      $refs = @($refs | Where-Object { $_.name -eq $Name })
+      if ($refs.Count -eq 0) { FailR "no reference named '$Name' in third_party/refs.toml" }
+    }
+    $base = if ($env:ASTRORAY_DEPS_CACHE) { $env:ASTRORAY_DEPS_CACHE } else { Join-Path $root 'third_party/_cache' }
+    $base = Join-Path $base 'refs'
+    New-Item -ItemType Directory -Force $base | Out-Null
+    $got = 0
+    $cached = 0
+    foreach ($r in $refs) {
+      foreach ($k in 'name', 'url', 'commit', 'sha256', 'spdx', 'purpose') {
+        if (-not $r.$k -or -not "$($r.$k)".Trim()) { FailR "$($r.name): missing $k" }
+      }
+      $dir = Join-Path $base "$($r.name)-$($r.sha256.Substring(0, 12))"
+      $done = Join-Path $dir 'extracted.ok'
+      if ((Test-Path $done) -and ((Get-Content -LiteralPath $done -Raw).Trim() -eq $r.sha256)) { $cached++; continue }
+      Remove-Tree $dir
+      $zip = Join-Path $base "$($r.name).download.zip"
+      $tmp = Join-Path $base "$($r.name).extracting"
+      Remove-Tree $tmp
+      Invoke-WebRequest -Uri $r.url -OutFile $zip -UseBasicParsing
+      if ((Sha $zip) -ne $r.sha256) {
+        Remove-Item -Force $zip
+        FailR "$($r.name): SHA-256 mismatch for $($r.url); GitHub archives are not byte-stable: re-pin"
+      }
+      Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
+      Remove-Item -Force $zip
+      $top = @(Get-ChildItem -LiteralPath $tmp -Force)
+      if ($top.Count -ne 1 -or -not $top[0].PSIsContainer) { Remove-Tree $tmp; FailR "$($r.name): archive has no single top folder" }
+      Move-Item -LiteralPath $top[0].FullName -Destination $dir
+      Remove-Tree $tmp
+      $past = [datetime]::new(2000, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)
+      Get-ChildItem -LiteralPath $dir -Recurse -Force -File | ForEach-Object { $_.LastWriteTimeUtc = $past; $_.IsReadOnly = $true }
+      Set-Content -Path $done -Value $r.sha256
+      (Get-Item -LiteralPath $done).IsReadOnly = $true
+      $got++
+      Write-Host "fetched $($r.name) $($r.commit.Substring(0, 12))"
+    }
+    Write-Host "PASS refs ($got downloaded, $cached cached)"
+    exit 0
+  } catch {
+    # No partial state on any failure path: the next run starts clean.
+    if ($base -and (Test-Path -LiteralPath $base)) {
+      foreach ($leftover in (Get-ChildItem -LiteralPath $base -Filter '*.download.zip' -Force)) { Remove-Item -Force $leftover.FullName }
+      foreach ($leftover in (Get-ChildItem -LiteralPath $base -Filter '*.extracting' -Force)) { Remove-Tree $leftover.FullName }
+    }
+    FailR $_.Exception.Message
   }
 }
 

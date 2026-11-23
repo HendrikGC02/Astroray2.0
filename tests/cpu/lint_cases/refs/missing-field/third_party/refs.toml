@@ -1,0 +1,14 @@
+[[ref]]
+name = "doctest"
+url = "https://example.invalid/a.zip"
+commit = "b0bdf461ba5d"
+sha256 = "092b23a47ad4675ec514a77db7f3d7f791e7c5f46577eda7424027d203319a24"
+purpose = "reference"
+
+[[ref]]
+name = "doctest"
+url = "https://example.invalid/b.zip"
+commit = "b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f"
+sha256 = "092b23a4"
+spdx = "Apache-2.0"
+purpose = "reference"

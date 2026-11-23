@@ -1,0 +1,6 @@
+third_party/refs.toml:1: [refs] doctest: also a name in deps.toml (references are not dependencies)
+third_party/refs.toml:1: [refs] doctest: also a name in deps.toml (references are not dependencies)
+third_party/refs.toml:1: [refs] doctest: commit is not 40 lowercase hex digits
+third_party/refs.toml:1: [refs] doctest: duplicate name
+third_party/refs.toml:1: [refs] doctest: missing field spdx
+third_party/refs.toml:1: [refs] doctest: sha256 is not 64 lowercase hex digits

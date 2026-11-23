@@ -1,0 +1,40 @@
+# Reference implementations, read-only, never compiled, linked or shipped (0009 d6).
+# `pwsh tools/fetch.ps1 refs` fills <cache>/refs/<name>-<sha12>/; cite the files you read there.
+# Not dependencies: not in deps.toml, THIRD_PARTY.md or 0001 D9.1. Licences read from each
+# repository's own LICENSE file at the pinned commit.
+
+[[ref]]
+name = "pbrt-v4"
+url = "https://github.com/mmp/pbrt-v4/archive/b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f.zip"
+commit = "b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f"  # the commit tools/specgen/fetch_pbrt_cie.py uses
+sha256 = "092b23a47ad4675ec514a77db7f3d7f791e7c5f46577eda7424027d203319a24"
+spdx = "Apache-2.0"
+purpose = "pbrt-v4 renderer: sampling, BSDFs, media, light sampling"
+
+[[ref]]
+name = "cycles"
+url = "https://github.com/blender/cycles/archive/b3f6262640f1a2f2d10b55b6ffccbf310ce0f981.zip"
+commit = "b3f6262640f1a2f2d10b55b6ffccbf310ce0f981"  # tag v5.3.0 of the standalone repository
+sha256 = "ed69ef2c6bd3d76662dd3e6434c93374d1d39f76ffd3c1b897c6b1dd50f1babe"
+# Mixed per-file licences (0001 D7); the expression is the four licences listed in
+# src/doc/license/SPDX-license-identifiers.txt. Three files carry GPL-2.0-or-later SPDX headers
+# (src/cmake/dependency_targets.cmake, tools/sync_blender_commits.py, tools/update_lib_submodules.py):
+# read for reference only. third_party/cuew and third_party/hipew carry a modified Apache 2.0.
+spdx = "Apache-2.0 AND BSD-3-Clause AND MIT AND Zlib"
+purpose = "Cycles 5.3 (Blender intern/cycles): the behaviour Blender users compare against"
+
+[[ref]]
+name = "openpbr"
+url = "https://github.com/AcademySoftwareFoundation/OpenPBR/archive/51b14a8afa42441881254d22a5fe807a95f35591.zip"
+commit = "51b14a8afa42441881254d22a5fe807a95f35591"  # tag v1.1.2, the version 0005 item 1 pins
+sha256 = "781573a80cb2d6206199d042d48fed4eec0c5a2deca7040317ba58b0882e60aa"
+spdx = "Apache-2.0"
+purpose = "OpenPBR Surface 1.1.2 specification"
+
+[[ref]]
+name = "openpbr-bsdf"
+url = "https://github.com/adobe/openpbr-bsdf/archive/c91aad1d1ce1693e803f039d7c92c2965c4eb013.zip"
+commit = "c91aad1d1ce1693e803f039d7c92c2965c4eb013"  # main at the time of pinning; targets OpenPBR 1.1.1
+sha256 = "68a35118774d55e1ad55ac9ebe0907ffd822ca232f5fabdfd15ed9cb5453d9c9"
+spdx = "Apache-2.0"
+purpose = "Adobe's OpenPBR BSDF reference implementation"
