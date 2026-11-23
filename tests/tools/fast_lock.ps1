@@ -23,11 +23,13 @@ $env:ASTRORAY_LOCK_TIMEOUT_S = '1.5'
 # Given a directory, both scripts take the tree lock on it instead of the machine lock.
 $holder = Join-Path $tmp 'holder.ps1'
 Set-Content -Path $holder -Value @"
-param([double]`$s, [string]`$ready, [string]`$tree)
+param([double]`$s, [string]`$ready, [string]`$tree, [string]`$release)
 . '$lockLib'
 if (`$tree) { `$null = Enter-ArTreeLock -Dir `$tree } else { `$null = Enter-ArMachineLock }
 Set-Content -Path `$ready -Value ready
-Start-Sleep -Milliseconds ([int](`$s * 1000))
+# Given a release file: hold until it appears, at most s seconds.
+if (`$release) { `$sw = [Diagnostics.Stopwatch]::StartNew(); while (-not (Test-Path `$release) -and `$sw.Elapsed.TotalSeconds -lt `$s) { Start-Sleep -Milliseconds 20 } }
+else { Start-Sleep -Milliseconds ([int](`$s * 1000)) }
 if (`$tree) { Exit-ArTreeLock } else { Exit-ArMachineLock }
 "@
 $waiter = Join-Path $tmp 'waiter.ps1'
@@ -70,10 +72,11 @@ try {
   # Both holders start together: 'timeout' holds limit + 1.5 s, 'abandon' until it is stopped.
   $h1 = Start-On 'timeout' 'h1' @($holder, '3', (Join-Path $tmp 'timeout.ready'))
   $h2 = Start-On 'abandon' 'h2' @($holder, '60', (Join-Path $tmp 'abandon.ready'))
-  # 'unknown' holds past the waiter's own limit; 'tree' holds the tree lock long enough for one tick.
+  # 'unknown' holds past the waiter's own limit; 'tree' holds the tree lock until its waiter has named it.
   $h3 = Start-On 'unknown' 'h3' @($holder, '60', (Join-Path $tmp 'unknown.ready'))
   $treeDir = Join-Path $tmp 'tree'
-  $h4 = Start-On 'tree' 'h4' @($holder, '1.5', (Join-Path $tmp 'tree.ready'), $treeDir)
+  $treeRelease = Join-Path $tmp 'tree.release'
+  $h4 = Start-On 'tree' 'h4' @($holder, '10', (Join-Path $tmp 'tree.ready'), $treeDir, $treeRelease)
   # Case 1: past the 1.5 s limit the waiter gives up, naming the holder.
   Wait-Ready 'timeout'
   $w1 = Start-On 'timeout' 'w1' @($waiter)
@@ -83,13 +86,14 @@ try {
   Use-Lock 'unknown'
   $stale = [ordered]@{ pid = $h3.Id; tool = 'holder.ps1'; cmd = 'stale'; started = '2000-01-01T00:00:00+00:00' }
   [IO.File]::WriteAllText((Join-Path $env:ASTRORAY_LOCK_DIR 'owner.json'), ($stale | ConvertTo-Json -Compress))
-  # Its own clock starts only when it runs, so a limit of one tick keeps it off the test's critical path.
-  $env:ASTRORAY_LOCK_TIMEOUT_S = '0.5'
+  # A limit of five 0.2 s ticks: a clock taken from the stale record (26 years old) would fail on the first
+  # tick, before three waiting lines and before 1 s.
+  $env:ASTRORAY_LOCK_MESSAGE_S = '0.2'; $env:ASTRORAY_LOCK_TIMEOUT_S = '1.0'
   $w3 = Start-On 'unknown' 'w3' @($waiter)
-  $env:ASTRORAY_LOCK_TIMEOUT_S = '1.5'
+  $env:ASTRORAY_LOCK_MESSAGE_S = '0.5'; $env:ASTRORAY_LOCK_TIMEOUT_S = '1.5'
   # Case 4: a waiter on the tree lock names the holder from .tree.owner.json, then acquires after release.
+  # The holder is released only once the waiting line is out (below), so a slow start cannot miss the hold.
   Wait-Ready 'tree'
-  # Ticks of 0.2 s let it name the holder well inside a short hold.
   $env:ASTRORAY_LOCK_MESSAGE_S = '0.2'
   $w4 = Start-On 'tree' 'w4' @($waiter, $treeDir)
   $env:ASTRORAY_LOCK_MESSAGE_S = '0.5'
@@ -102,6 +106,9 @@ try {
   Stop-Process -Id ((Get-Content -Raw $owner | ConvertFrom-Json).pid) -Force
   $h2.WaitForExit()
   $w2 = Start-On 'abandon' 'w2' @($waiter)
+  $sw4 = [Diagnostics.Stopwatch]::StartNew()
+  while ($sw4.Elapsed.TotalSeconds -lt 10 -and -not ((Read-Out 'w4') -match 'waiting for')) { Start-Sleep -Milliseconds 20 }
+  Set-Content -Path $treeRelease -Value release
   $w1.WaitForExit(); $w2.WaitForExit(); $w3.WaitForExit(); $w4.WaitForExit()
   $keep.Dispose()
 
@@ -126,9 +133,11 @@ try {
   $txt = ($out -join "`n") -replace '\r?\n\s*\|?\s*', ' '
   Check 'unknown: the waiter exits non-zero without acquiring' ($w3.ExitCode -ne 0 -and -not $txt.Contains('ACQUIRED')) $out
   Check 'unknown: waiting message names no holder' ($txt.Contains('waiting for unknown holder (owner.json missing or its pid not running)') -and -not $txt.Contains('waiting for holder.ps1')) $out
-  # The waiter's own wait is the clock: it gives up at the 0.5 s limit, so the rounded wait is 0 to 2 s.
-  $m = [regex]::Match($txt, 'FAIL lock: waited (\d+) s for unknown holder, over the 0\.5 s limit')
-  Check 'unknown: FAIL lock after the waiter''s own wait' ($m.Success -and [int]$m.Groups[1].Value -le 2) $out
+  # The waiter's own wait is the clock: five ticks to the 1 s limit, the first three printed, then the FAIL.
+  $said = @($out | Where-Object { $_ -eq 'waiting for unknown holder (owner.json missing or its pid not running)' }).Count
+  Check 'unknown: exactly three waiting lines before the FAIL' ($said -eq 3) $out
+  $m = [regex]::Match($txt, 'FAIL lock: waited (\d+) s for unknown holder, over the 1 s limit')
+  Check 'unknown: FAIL lock after the waiter''s own wait' ($m.Success -and [int]$m.Groups[1].Value -ge 1 -and [int]$m.Groups[1].Value -le 2) $out
 
   $out = Read-Out 'w4'
   $txt = $out -join "`n"
