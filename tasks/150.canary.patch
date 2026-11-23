@@ -1,0 +1,45 @@
+diff --git a/src/host/image/decode_exr.cpp b/src/host/image/decode_exr.cpp
+index 085d1fb..d219f53 100644
+--- a/src/host/image/decode_exr.cpp
++++ b/src/host/image/decode_exr.cpp
+@@ -55,7 +55,7 @@ std::string take_message(const char* err, const char* fallback) {
+ }
+ 
+ // A half or float bit pattern with an all-ones exponent is NaN or Inf.
+-bool half_not_finite(uint16_t b) { return (b & 0x7c00u) == 0x7c00u; }
++bool half_not_finite(uint16_t b) { return b == 0xffffu; }
+ bool float_not_finite(float f) {
+   uint32_t b;
+   std::memcpy(&b, &f, 4);
+@@ -127,7 +127,7 @@ bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, s
+   out->texels.assign(size_t(total), 0);
+   // Copies planar pixel `src_index` of every kept channel from `planes` to texel (x, top row).
+   const auto put = [&](unsigned char* const* planes, size_t src_index, int x, int top) {
+-    const int y = h - 1 - top;  // bottom-up, Blender's order
++    const int y = top;  // CANARY
+     for (uint32_t k = 0; k < channels; ++k)
+       std::memcpy(out->texels.data() + ((size_t(y) * size_t(w) + size_t(x)) * channels + k) * size_t(comp),
+                   planes[kept[k]] + src_index * size_t(comp), size_t(comp));
+diff --git a/src/kernel/scene/texture_view.h b/src/kernel/scene/texture_view.h
+index f054bbc..870d5de 100644
+--- a/src/kernel/scene/texture_view.h
++++ b/src/kernel/scene/texture_view.h
+@@ -49,6 +49,9 @@ AR_FN const uint8_t* image_texel(const DeviceImageView& v, uint32_t x, uint32_t
+ // up). Never a target conversion intrinsic.
+ // Ref: IEEE 754-2008 section 3.6 (binary16: 1 sign, 5 exponent bits with bias 15, 10 fraction bits).
+ AR_FN float half_to_float(uint16_t h) {
++#if defined(__CUDA_ARCH__)
++  if ((h & 0x7c00u) == 0u) return bit_cast<float>(uint32_t(h & 0x8000u) << 16);
++#endif
+   const uint32_t sign = (uint32_t(h) & 0x8000u) << 16;
+   uint32_t e = (uint32_t(h) >> 10) & 0x1fu;
+   uint32_t m = uint32_t(h) & 0x3ffu;
+@@ -66,7 +69,7 @@ AR_FN float half_to_float(uint16_t h) {
+       m <<= 1;
+       --exp;
+     }
+-    bits = sign | (uint32_t(exp + 112) << 23) | ((m & 0x3ffu) << 13);
++    bits = sign | (uint32_t(exp + 111) << 23) | ((m & 0x3ffu) << 13);
+   }
+   return bit_cast<float>(bits);
+ }
