@@ -81,6 +81,13 @@ def install_and_enable():
     return mod
 
 
+def ensure_extension():
+    """The extension is enabled once per Blender start, by whichever class runs first (a canary run
+    selects TestF12Textured alone)."""
+    if MODULE not in sys.modules:
+        install_and_enable()
+
+
 def write_fits(path, planes, header):
     """A FITS file the way src/host/film/fits_writer.cpp writes a dump: an empty primary HDU with
     keywords, then one float32 image extension per plane (rows bottom-up). Ref: FITS Standard 4.0."""
@@ -144,7 +151,7 @@ def run_smoke(work, evidence):
                         "--passes", "Position,Normal,UV,IndexMA"], capture_output=True, text=True, timeout=300)
     if p.returncode != 0:
         raise RuntimeError("scenes/a1_furnace/build.py failed: " + p.stdout + p.stderr)
-    install_and_enable()
+    ensure_extension()
     rf = importlib.import_module(MODULE + ".render_final")
     blend_writer.build(blend + ".json", blend)
     bpy.ops.wm.open_mainfile(filepath=blend)
@@ -306,9 +313,9 @@ class TestSmoke(unittest.TestCase):
 F12_NAME = "f12_textured"
 F12_SIZE = 32        # pixels per side
 F12_TEX = 2048       # texels per side: the decode outlasts a CPU session's start
-F12_SPP = 64         # image-mean SE: printed with the agreement result
-F12_POWER = 200.0    # lamp watts (Blender units), 3 m above the plane
-F12_FLOOR = 0.0      # half the mean luminance of the first good run (measured: see the comment below)
+F12_SPP = 64         # one device's image-mean SE is 0.00048 (0.15 % of the mean), the 1 % allowed is 0.0033
+F12_POWER = 1500.0   # lamp watts (Blender units), 4 m above the plane
+F12_FLOOR = 0.16     # half the mean luminance of the first good run (0.3277 on both devices)
 F12_LUMA = (0.2126, 0.7152, 0.0722)  # Rec.709 luminance of scene-linear RGB
 
 
@@ -333,10 +340,10 @@ def build_f12_scene(work):
     cam.location = (0.0, 0.0, 5.0)
     scene.camera = cam
     ld = bpy.data.lights.new("F12Lamp", "POINT")
-    ld.energy, ld.shadow_soft_size = F12_POWER, 0.25
+    ld.energy, ld.shadow_soft_size, ld.use_soft_falloff = F12_POWER, 0.25, False
     lamp = bpy.data.objects.new("F12Lamp", ld)
     scene.collection.objects.link(lamp)
-    lamp.location = (0.0, 0.0, 3.0)
+    lamp.location = (0.0, 0.0, 4.0)
     world = bpy.data.worlds.new("F12World")
     world.use_nodes = True
     world.node_tree.nodes["Background"].inputs["Color"].default_value = (0, 0, 0, 1)
@@ -371,6 +378,8 @@ class TestF12Textured(unittest.TestCase):
         work = arg("--work", os.path.join(ROOT, "out", "smoke"))
         evidence = os.path.join(ROOT, "out", "evidence", "139")
         os.makedirs(evidence, exist_ok=True)
+        os.makedirs(work, exist_ok=True)
+        ensure_extension()
         rf = importlib.import_module(MODULE + ".render_final")
         scene = build_f12_scene(work)
         cls.runs = {}
