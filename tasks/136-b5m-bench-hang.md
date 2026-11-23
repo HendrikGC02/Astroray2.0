@@ -16,3 +16,5 @@ Budget: under 2 s of gate time for the new test.
 Depends on: 134.
 Size: S-M (about 150 lines); stop and report at 2x, or after Do 2 if the cause lies outside Scope.
 Progress:
+- Cause: ar_session_get_progress read 17 ledger category totals per call, each scanning every live record under the ledger mutex; the bench's spin poll starved the scene upload of B-5M's ~12,000 geometry buffers (110 s to never). Introduced by 126 (6a69e2d: scene ledger in progress).
+- Fix: Ledger keeps atomic per-category and total bytes, read without the lock (src/host/ledger.{h,cpp}); bench prints state and pending/active/failed generation on timeout, end and PAUSED (cli/bench.cpp). Test and canary: ledger/a progress poll does not scan the live records.
