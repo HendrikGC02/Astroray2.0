@@ -203,8 +203,10 @@ bool rel_close(double a, double b, double tol) { return std::fabs(a - b) <= tol 
 
 // Ruling 88 for one distribution: draws from env_sample, their direction pdf recomputed by
 // env_pdf. The bound on the fraction of draws within e of an interior cell edge is derived in the
-// file header.
-void check_direction_pdf(const EnvTable& t, bool allow, double e_uniform) {
+// file header. e is measured from the code under test, so it is held to the mapping bounds first:
+// the uniform-point error to polynomial error + 1e-6, every draw's own error to the header's pole
+// figure (1e-4) in float and to the same polynomial bound in double.
+void check_direction_pdf(const EnvTable& t, bool allow, double e_uniform, double poly) {
   const ar::EnvTableView pv = view_of(t.plain), cv = view_of(t.compensated);
   const EnvDistribution& dist = allow ? t.compensated : t.plain;
   const uint32_t n = dist.n;
@@ -219,6 +221,8 @@ void check_direction_pdf(const EnvTable& t, bool allow, double e_uniform) {
     const Real2 q = ar::equal_area_sphere_to_square(d.wi);
     e = std::max({e, std::fabs(double(q.x) - double(d.p.x)), std::fabs(double(q.y) - double(d.p.y))});
   }
+  CHECK(e_uniform <= poly + 1e-6);
+  CHECK(e <= (sizeof(Real) == 4 ? 1e-4 : poly + 1e-6));
   const auto cell_pdf = [&](uint32_t iu, uint32_t iv) {
     return double(dist.func[size_t(iv) * n + iu]) / double(dist.func_integral) / (4.0 * kPi);
   };
@@ -340,15 +344,25 @@ AR_RT_CASE("env_table/sample pdf equals the pdf at its point") {
   for (const EnvDistribution* d : {&t.plain, &t.compensated}) {
     const ar::EnvTableView v = view_of(*d);
     int bad = 0, zero = 0, cell = 0;
-    const float last = 0.99999994f;  // the largest float below 1
-    for (int k = 0; k < 100004; ++k) {
-      // The corners of [0,1)^2 first, then uniform draws.
-      const Real2 u = k < 4 ? Real2{Real(k & 1 ? last : 0.0f), Real(k & 2 ? last : 0.0f)} : Real2{Real(uni(rng)), Real(uni(rng))};
+    const auto check = [&](Real2 u) {
       const ar::EnvSquareSample s = ar::piecewise2d_sample(v, u);
       zero += !(s.pdf > Real(0)) || d->func[s.cell] == 0.0f;
       cell += s.cell != ar::piecewise_cell(s.p.y, kN) * kN + ar::piecewise_cell(s.p.x, kN);
       bad += !rel_close(double(s.pdf), double(ar::piecewise2d_pdf(v, s.p)), 1e-6);
-    }
+    };
+    // Every cell's CDF ends: u at a cell's lower CDF value gives du = 0, the float just below its
+    // upper value gives du just under 1, where (o + du) / n rounds onto the next cell's edge in float.
+    const auto below = [](float c) { return std::nextafter(c, 0.0f); };
+    for (uint32_t r = 0; r < kN; ++r)
+      for (uint32_t c = 0; c < kN; ++c) {
+        const float* row = d->cdf_u.data() + size_t(r) * (kN + 1);
+        if (d->func[size_t(r) * kN + c] == 0.0f || d->marginal_func[r] == 0.0f) continue;
+        for (float uy : {d->marginal_cdf[r], below(d->marginal_cdf[r + 1])})
+          for (float ux : {row[c], below(row[c + 1])}) check(Real2{Real(ux), Real(uy)});
+      }
+    const float last = 0.99999994f;  // the largest float below 1
+    for (int k = 0; k < 4; ++k) check(Real2{Real(k & 1 ? last : 0.0f), Real(k & 2 ? last : 0.0f)});
+    for (int k = 0; k < 100000; ++k) check(Real2{Real(uni(rng)), Real(uni(rng))});
     CHECK(zero == 0);
     CHECK(cell == 0);
     CHECK(bad == 0);
@@ -357,9 +371,9 @@ AR_RT_CASE("env_table/sample pdf equals the pdf at its point") {
 
 AR_RT_CASE("env_table/direction pdf matches the sample pdf") {
   const EnvTable t = build_env_table(test_grid(), kN);
-  const double e = square_round_trip_error();
-  check_direction_pdf(t, false, e);
-  check_direction_pdf(t, true, e);
+  const double e = square_round_trip_error(), poly = polynomial_error();
+  check_direction_pdf(t, false, e, poly);
+  check_direction_pdf(t, true, e, poly);
 }
 
 AR_RT_CASE("env_table/builder arrays and invalid input") {
@@ -386,6 +400,13 @@ AR_RT_CASE("env_table/builder arrays and invalid input") {
   CHECK(std::all_of(u.compensated.func.begin(), u.compensated.func.end(), [](float f) { return f == 1.0f; }));
   CHECK(double(ar::piecewise2d_pdf(view_of(u.plain), Real2{Real(0.3), Real(0.9)})) == doctest::Approx(1.0));
   CHECK(double(ar::piecewise2d_pdf(view_of(u.compensated), Real2{Real(0.7), Real(0.1)})) == doctest::Approx(1.0));
+  // Uniform grids whose double mean rounds above (0.1) and below (0.3) the value at n = 64: the
+  // compensated table is uniform either way.
+  for (double value : {0.1, 0.3}) {
+    const EnvTable w = build_env_table(std::vector<double>(size_t(kN) * kN, value), kN);
+    for (double x : {0.01, 0.37, 0.99})
+      CHECK(double(ar::piecewise2d_pdf(view_of(w.compensated), Real2{Real(x), Real(1.0 - x)})) == doctest::Approx(1.0));
+  }
 
   const auto has = [](const std::string& what, const char* word) { return what.find(word) != std::string::npos; };
   CHECK(has(thrown({1.0}, 0), "n is 0"));

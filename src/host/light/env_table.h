@@ -31,8 +31,11 @@ struct EnvTable {
 
 // `luminance` holds n x n cells, row-major: index iv n + iu for the cell covering square p.x in
 // [iu/n, (iu+1)/n), p.y in [iv/n, (iv+1)/n). The compensated function is max(L - mean(L), 0),
-// filled with 1 when that is 0 everywhere: a uniform grid (whose mean is exact in double) gives
-// exactly the all-ones fill, so both tables are then uniform.
+// filled with 1 when that is 0 everywhere. For a uniform grid of value L the double mean is L only
+// up to rounding: when it comes out at or above L every residual is 0 and the fill gives all ones
+// (always so when the sum is exact, e.g. L = 2); when it comes out below L every residual is the
+// same few ulps of L. Both give a uniform compensated table, but in the second case a uniform L
+// below about 1e-22 leaves residuals under FLT_MIN and the build throws (see below).
 // Throws std::invalid_argument, naming the reason, for n = 0, an empty grid, a size other than
 // n n, a negative or non-finite entry, an all-zero grid (the plain table has no mass), or a grid
 // whose plain table does not fit float (largest entry above FLT_MAX or integral below FLT_MIN).
