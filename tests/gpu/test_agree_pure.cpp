@@ -588,12 +588,14 @@ TEST_CASE("agree/bake environment analytic nofma") {
   const Results gpu = run_gpu(*dev, nofma_module("agree_pure"), "ar_agree_bake", in, 1, {&cmf_p, &grid_n});
   dev->free(cmf);
 
-  const Verdict vs_cpu = report("bake_environment", "(ii) nofma vs cpu float", compare(gpu, cpu, Metric::REL_L2), Cls::EVAL,
-                                NOFMA_VS_CPU_FLOAT);
+  // The task's limit is 1e-6 on the max, tighter than 0002 D12's 1e-5 eval limit that report() applies.
+  const Stats s_cpu = compare(gpu, cpu, Metric::REL_L2), s_host = compare(gpu, ref, Metric::REL_L2);
+  const Verdict vs_cpu = report("bake_environment", "(ii) nofma vs cpu float", s_cpu, Cls::EVAL, NOFMA_VS_CPU_FLOAT);
   CHECK_MESSAGE(vs_cpu.pass, vs_cpu.why);
-  const Verdict vs_host = report("bake_environment", "(ii) nofma vs host double", compare(gpu, ref, Metric::REL_L2),
-                                 Cls::EVAL, NOFMA_VS_CPU_FLOAT);
+  const Verdict vs_host = report("bake_environment", "(ii) nofma vs host double", s_host, Cls::EVAL, NOFMA_VS_CPU_FLOAT);
   CHECK_MESSAGE(vs_host.pass, vs_host.why);
+  CHECK(s_cpu.max <= 1e-6);
+  CHECK(s_host.max <= 1e-6);
   CHECK(ledger.total() == 0);
 }
 

@@ -8,16 +8,20 @@
 // w(lambda) is absent until FLUORESCENT exists (D10).
 //
 // The 471 observer samples are visited kLanes at a time (one Spec evaluation per visit) and
-// reduced with Neumaier's compensated sum in Real, because a kernel may hold no double (0002 D1:
-// ptxas warns on double use). The compensation keeps the reduction's own error near one rounding
-// instead of the 118 + 3 of a plain float sum, so the bound below is dominated by the world
-// callable. Bound against an exact (double) evaluation of the same sum, with u = 2^-24 and
-// e_s the world callable's own relative error (a positive spectrum, so the terms never cancel):
+// reduced with Neumaier's compensated sum in Real: a kernel holds no double (the production
+// modules are built with ptxas --warn-on-double-precision-use, cmake/kernels.cmake), so the
+// accumulation cannot simply be widened. The compensation keeps the reduction's own error near one
+// rounding instead of the (n - 1) u of a plain float sum (n = 118 visits of 4 lanes), so the bound
+// below is dominated by the world callable. Bound against an exact (double) evaluation of the same
+// sum, with u = 2^-24 and e_s the world callable's own relative error (a positive spectrum, so the
+// terms never cancel):
 //   numerator terms s c        e_s + 2 u (c = (x + y) + z in float) + u (product)
-//   the compensated sums       u each (second-order terms 2 n u^2 are below 1e-11)
+//   the compensated sums       u each, plus gamma_{n-1}^2 sum |x| (Neumaier 1974), with n = 471
+//                              terms: gamma_{n-1} = (n - 1) u / (1 - (n - 1) u), so the second
+//                              order part is at most 7.9e-10 of the sum
 //   the weight total W         2 u (the float c) + u
 //   the division               u
-//   total                      e_s + 8 u
+//   total                      e_s + 8 u + 2 x 7.9e-10
 // The host reads the f32 grid, which is the Real result itself when Real is float. The tests state
 // the instance of this bound for their callable.
 // Ref: docs/decisions/0004-integrator.md D10, D11; Neumaier 1974, "Rundungsfehleranalyse einiger
@@ -52,15 +56,20 @@ struct NeumaierSum {
   AR_FN Real value() const { return s + c; }
 };
 
+// The direction of the centre of cell `iv n + iu`: the equal-area square point
+// ((iu + 0.5) / n, (iv + 0.5) / n). The one place it is computed; the host names a bad cell by it.
+AR_FN Real3 bake_environment_direction(uint32_t n, uint32_t cell) {
+  const uint32_t iv = cell / n, iu = cell - iv * n;
+  return equal_area_square_to_sphere(Real2{(Real(iu) + Real(0.5)) / Real(n), (Real(iv) + Real(0.5)) / Real(n)});
+}
+
 // The cell's value for a world given as `world(direction, lambdas) -> Spec`: radiance per
 // steradian at the lanes' wavelengths. A cell of a world that is black at every wavelength, or an
 // observer whose weights sum to 0, is 0; a non-finite radiance gives a non-finite cell, which the
 // host refuses (rule 5).
 template <class WorldFn>
 AR_FN Real bake_environment_cell(const WorldFn& world, const ObserverView& obs, uint32_t n, uint32_t cell) {
-  const uint32_t iv = cell / n, iu = cell - iv * n;
-  const Real3 dir = equal_area_square_to_sphere(
-      Real2{(Real(iu) + Real(0.5)) / Real(n), (Real(iv) + Real(0.5)) / Real(n)});
+  const Real3 dir = bake_environment_direction(n, cell);
   NeumaierSum weighted, total;
   for (int i = 0; i < kObsSamples; i += kLanes) {
     Lambda lam;

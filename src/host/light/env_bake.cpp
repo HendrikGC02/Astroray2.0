@@ -10,7 +10,7 @@
 #include <string>
 
 #include "../../kernel/kernel_globals.h"
-#include "../../kernel/light/equal_area.h"
+#include "../../kernel/stages/bake_environment.h"
 #include "host/scene/world.h"
 
 namespace astroray::host {
@@ -29,8 +29,7 @@ void refuse_bad_cells(const std::vector<float>& grid, uint32_t n) {
     const float v = grid[i];
     if (std::isfinite(v) && v >= 0.0f) continue;
     const uint32_t iv = uint32_t(i / n), iu = uint32_t(i % n);
-    const ar::Real3 d = ar::equal_area_square_to_sphere(
-        ar::Real2{(ar::Real(iu) + ar::Real(0.5)) / ar::Real(n), (ar::Real(iv) + ar::Real(0.5)) / ar::Real(n)});
+    const ar::Real3 d = ar::bake_environment_direction(n, uint32_t(i));
     char text[256];
     std::snprintf(text, sizeof text,
                   "bake_environment: cell %zu (iu %u, iv %u) at direction (%.6f, %.6f, %.6f) is %g, not a finite "
@@ -49,8 +48,10 @@ std::vector<uint8_t> EnvironmentBaker::world_key(const WorldOutput* world) {
 }
 
 BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_buffer, const std::vector<uint8_t>& key,
-                                       uint32_t n) {
+                                       uint32_t n, double radiance_scale) {
   if (n == 0) throw std::invalid_argument("bake_environment: n is 0");
+  if (!(std::isfinite(radiance_scale) && radiance_scale > 0.0))
+    throw std::invalid_argument("bake_environment: the radiance scale is not finite and positive");
   if (uint64_t(n) * n > std::numeric_limits<uint32_t>::max())
     throw std::invalid_argument("bake_environment: n = " + std::to_string(n) + " has more than 2^32 cells");
   if (valid_ && n == n_ && key == key_) return result_;
@@ -82,15 +83,18 @@ BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_bu
   refuse_bad_cells(grid, n);
 
   BakedEnvironment out;
-  double sum = 0.0;
-  for (float v : grid) out.max = std::max(out.max, double(v)), sum += double(v);
-  if (out.max > 0.0) {
-    out.mean = sum / double(cells);
+  double sum = 0.0, peak = 0.0;
+  for (float v : grid) peak = std::max(peak, double(v)), sum += double(v);
+  if (peak > 0.0) {
     // A density: dividing by the maximum leaves the table's shape and keeps a uniform world's
-    // integral and compensated residuals clear of FLT_MIN, which a world at 1e-30 would not.
+    // integral and compensated residuals clear of FLT_MIN, which a world below it would not.
     std::vector<double> normalised(cells);
-    for (size_t i = 0; i < normalised.size(); ++i) normalised[i] = double(grid[i]) / out.max;
+    for (size_t i = 0; i < normalised.size(); ++i) normalised[i] = double(grid[i]) / peak;
     out.table = std::make_shared<const EnvTable>(build_env_table(normalised, n));
+    // The grid carries the light table's radiance scale (a power of 2, so this is exact); the
+    // table does not, which is why a change of s alone needs no new bake.
+    out.max = peak / radiance_scale;
+    out.mean = sum / double(cells) / radiance_scale;
   }
   valid_ = true;
   key_ = key;

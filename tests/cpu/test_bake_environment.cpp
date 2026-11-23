@@ -9,8 +9,8 @@
 // u = 2^-24 and e_s the callable's relative error, the cell differs from an exact evaluation of
 // the same sum by at most (e_s + 8) u, because every term is positive: the product s c costs
 // 2 u (c = (x + y) + z in float) + u, the two compensated sums u each, the weight total 3 u and
-// the division u; the compensation's own second-order error 2 n u^2 with n = 471 is below 1e-11
-// and is not counted. The analytic callable (common/analytic_world.h) has e_s = 8 u, counted
+// the division u; the compensation's second-order part gamma_{n-1}^2 sum |x| (Neumaier 1974, n = 471
+// terms, at most 7.9e-10 of the sum, twice) is below the margin and is not counted. The analytic callable (common/analytic_world.h) has e_s = 8 u, counted
 // there. The host side is double throughout and takes the direction the kernel computes (the
 // mapping's own accuracy is test_env_table's), so no term of the direction enters. A plain float
 // sum would add up to (118 + 3) u here; the tolerance does not allow for it, which is the point of
@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -76,16 +77,40 @@ ar::SpectrumRef world_colour() {
 
 double energy_of(const ar::LightRecord& w) { return display_energy({{w.emission, w.strength}}, observer()); }
 
-// A CPU device whose KernelGlobals hold one world light and the observer.
+// A CPU device that can be told to fail its next kernel launch, as a device error does mid-bake.
+class FaultyCpu : public CpuDevice {
+ public:
+  using CpuDevice::CpuDevice;
+  using CpuDevice::launch;
+  void launch(KernelId kernel, uint32_t count) override {
+    if (fail_launch) throw DeviceError("injected launch failure");
+    CpuDevice::launch(kernel, count);
+  }
+  bool fail_launch = false;
+};
+
+// BAKE_ENVIRONMENT's slot for a test that wants a grid that varies over the sphere: the cell
+// function of the production kernel on the analytic world instead of the world light.
+void cpu_bake_analytic(const ar::KernelGlobals& kg, uint32_t first, uint32_t last) {
+  for (uint32_t cell = first; cell < last; ++cell)
+    kg.env_bake.grid[cell] =
+        float(ar::bake_environment_cell(ar::AnalyticWorld{}, kg.tables->observer, kg.env_bake.n, cell));
+}
+
+// A CPU device whose KernelGlobals hold one world light and the observer. `analytic` binds
+// cpu_bake_analytic to BAKE_ENVIRONMENT instead of the production kernel.
 struct Rig {
   Ledger ledger;
   astroray::ContextState ctx;
   ThreadPool pool{ctx, 2};
-  CpuDevice dev{ledger, pool};
+  FaultyCpu dev{ledger, pool};
   Owner owner{1, 0};
   DeviceBuffer lights, tables, kg;
-  Rig() {
-    dev.register_production_stages();
+  explicit Rig(bool analytic = false) {
+    if (analytic)
+      dev.register_kernel(KernelId::BAKE_ENVIRONMENT, &cpu_bake_analytic);
+    else
+      dev.register_production_stages();
     lights = dev.allocate(LedgerCategory::TABLES, sizeof(ar::LightRecord), owner);
     tables = dev.allocate(LedgerCategory::TABLES, sizeof(ar::SceneTables), owner);
     kg = dev.allocate(LedgerCategory::TABLES, sizeof(ar::KernelGlobals), owner);
@@ -293,6 +318,15 @@ TEST_CASE("bake_environment/non-finite cell is refused") {
     CAPTURE(bad);
     CHECK(what.find("bake_environment: cell 0 (iu 0, iv 0) at direction (") != std::string::npos);
     CHECK(what.find("not a finite non-negative radiance") != std::string::npos);
+    // Cell 0 of 64 x 64 is centred at (1/128, 1/128), on the southern side of the sphere.
+    const size_t at = what.find("direction (");
+    REQUIRE(at != std::string::npos);
+    char* end = nullptr;
+    const double x = std::strtod(what.c_str() + at + 11, &end);
+    const double y = std::strtod(end + 1, &end);
+    const double z = std::strtod(end + 1, &end);
+    CHECK(std::fabs(x * x + y * y + z * z - 1.0) < 1e-5);
+    CHECK(z < -0.99);
   }
   // The refusals left no cache: a good world under the same key bakes.
   CHECK(baker.rebuild_count() == 0u);
@@ -392,6 +426,146 @@ TEST_CASE("bake_environment/rebuild only on world edit") {
   CHECK(baker.get(rig.dev, rig.kg, EnvironmentBaker::world_key(fx.scene.materials->world().get()), kN / 2).table->n ==
         kN / 2);
   CHECK(baker.rebuild_count() == 3u);
+}
+
+TEST_CASE("bake_environment/non-uniform max mean and table") {
+  // A grid that varies over the sphere, through the baker: max, mean and the table against the
+  // host's double evaluation of every cell. Cells carry the (e_s + 8) u bound of the header; the
+  // table's entries are cell / max, so (2 (e_s + 8) + 1) u relative (the max, the cell, the float
+  // store), and the compensated entries are absolute differences of values in [0, 1].
+  const ar::ObserverView& obs = observer();
+  const double tol = (kAnalyticUnits + kReductionUnits) * kU;
+  Rig rig(true);
+  EnvironmentBaker baker;
+  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, kN);
+  REQUIRE(b.table != nullptr);
+  std::vector<double> ref(size_t(kN) * kN);
+  double max_ref = 0.0, sum_ref = 0.0;
+  for (uint32_t i = 0; i < ref.size(); ++i) {
+    ref[i] = ar::analytic_cell_reference(obs, kN, i);
+    max_ref = std::max(max_ref, ref[i]);
+    sum_ref += ref[i];
+  }
+  const double mean_ref = sum_ref / double(ref.size());
+  CHECK(b.mean < 0.9 * b.max);  // not a uniform grid
+  CHECK(std::fabs(b.max - max_ref) <= tol * max_ref);
+  CHECK(std::fabs(b.mean - mean_ref) <= tol * mean_ref);
+  double worst_plain = 0.0, worst_comp = 0.0;
+  for (size_t i = 0; i < ref.size(); ++i) {
+    const double want = ref[i] / max_ref;
+    worst_plain = std::max(worst_plain, std::fabs(double(b.table->plain.func[i]) - want) / want);
+    const double want_comp = std::max(ref[i] - mean_ref, 0.0) / max_ref;
+    worst_comp = std::max(worst_comp, std::fabs(double(b.table->compensated.func[i]) - want_comp));
+  }
+  CHECK(worst_plain <= (2.0 * (kAnalyticUnits + kReductionUnits) + 1.0) * kU);
+  CHECK(worst_comp <= 4.0 * tol);
+  CHECK(double(b.table->plain.func_integral) == doctest::Approx(mean_ref / max_ref).epsilon(3.0 * tol));
+}
+
+TEST_CASE("bake_environment/failed launch restores the kernel globals") {
+  Rig rig;
+  EnvironmentBaker baker;
+  const uint64_t baseline = rig.ledger.total();
+  rig.dev.fail_launch = true;
+  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, kN), DeviceError);
+  rig.dev.fail_launch = false;
+  ar::KernelGlobals back{};
+  rig.dev.download(&back, rig.kg, 0, sizeof back);
+  CHECK(back.env_bake.grid == nullptr);
+  CHECK(back.env_bake.n == 0u);
+  CHECK(rig.ledger.total() == baseline);
+  CHECK(baker.rebuild_count() == 0u);
+  // The same key bakes afterwards: the failure left no cache behind.
+  CHECK(baker.get(rig.dev, rig.kg, {1}, kN).table != nullptr);
+  CHECK(baker.rebuild_count() == 1u);
+}
+
+TEST_CASE("bake_environment/radiance scale moves no cache") {
+  // 0003 d10: the light table multiplies every emitter's strength, the world's included, by s = 2^k,
+  // which an emitter edit can move with the world untouched. The grid then changes scale, the key
+  // does not, and max and mean must stay in the world's unscaled units.
+  const ar_key W = 40, GE = 61, E = 60, MESH_E = 100;
+  Fixture fx;
+  Rig rig;
+  fx.commit([&](Edit& e) {
+    const GB gw = constant_emission(3.0f), ge = constant_emission(1000.0f);
+    const ar_graph_desc dw = gw.desc(), de = ge.desc();
+    ar_world_desc w = {};
+    w.surface_graph = W;
+    ar_material_desc me = {};
+    me.surface_graph = GE, me.emission_sampling = AR_EMISSION_SAMPLING_FRONT;
+    REQUIRE(fx.scene.materials->set_graph(e, W, &dw) == AR_OK);
+    REQUIRE(fx.scene.materials->set_world(e, &w) == AR_OK);
+    REQUIRE(fx.scene.materials->set_graph(e, GE, &de) == AR_OK);
+    REQUIRE(fx.scene.materials->set_material(e, E, &me) == AR_OK);
+  });
+  {
+    const std::vector<float> pos{0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0};
+    const std::vector<int32_t> cv{0, 1, 2, 3}, fs{0};
+    fx.commit([&](Edit& e) {
+      ar_mesh_desc d = {};
+      d.key = MESH_E, d.vertex_count = 4, d.corner_count = 4, d.face_count = 1, d.motion_steps = 1;
+      ar_mesh_buffers b = {};
+      REQUIRE(mesh_begin(fx.scene, e, &d, &b) == AR_OK);
+      std::memcpy(*b.positions, pos.data(), pos.size() * 4);
+      std::memcpy(*b.corner_vert, cv.data(), cv.size() * 4);
+      std::memcpy(*b.face_start, fs.data(), fs.size() * 4);
+      for (uint64_t i = 0; i < b.corner_normals_count; ++i) (*b.corner_normals)[i] = i % 3 == 2 ? 1.0f : 0.0f;
+      REQUIRE(e.item_commit(MESH_E) == AR_OK);
+    });
+    std::vector<ar_key> geom{MESH_E}, object{1}, pool{E};
+    std::vector<ar_xform> xf(1);
+    xf[0].m[0] = xf[0].m[5] = xf[0].m[10] = 1.0f;
+    std::vector<uint32_t> zeros(1, 0), vis(1, AR_VISIBILITY_CAMERA), moff{0}, mcount{1};
+    std::vector<ar_rgba> colors(1, ar_rgba{{1, 1, 1, 1}});
+    std::vector<uint8_t> lg(1, 0);
+    ar_instances_desc d = {};
+    d.instance_count = 1, d.motion_steps = 1, d.transform_count = 1, d.material_key_count = 1;
+    d.geom_keys = geom.data(), d.xf = xf.data(), d.object_keys = object.data();
+    d.random_ids = d.pass_indices = d.crypto_objects = d.crypto_assets = zeros.data();
+    d.colors = colors.data(), d.visibility = vis.data(), d.flags = zeros.data(), d.light_groups = lg.data();
+    d.material_offsets = moff.data(), d.material_counts = mcount.data(), d.material_keys = pool.data();
+    fx.commit([&](Edit& e) { REQUIRE(set_instances(e, &d) == AR_OK); });
+  }
+  const auto world = fx.scene.materials->world();
+  REQUIRE(world);
+  const std::vector<uint8_t> key = EnvironmentBaker::world_key(world.get());
+  const double want = display_energy({{world->color, world->strength}}, observer());
+  // The world record as the light table holds it, scale folded in, bound as the kernel will read it.
+  const auto bind_table = [&](const LightTable& t) {
+    REQUIRE(t.world_light != ar::kNoLight);
+    const ar::LightRecord rec = t.lights[t.world_light];
+    rig.dev.upload(rig.lights, 0, &rec, sizeof rec);
+    rig.bind(0);
+  };
+
+  EnvironmentBaker baker;
+  const auto t1 = fx.scene.lights();
+  bind_table(*t1);
+  const BakedEnvironment first = baker.get(rig.dev, rig.kg, key, kN, t1->radiance_scale);
+  REQUIRE(first.table != nullptr);
+  CHECK(std::fabs(first.max - want) <= 1e-6 * want);
+  CHECK(std::fabs(first.mean - want) <= 1e-6 * want);
+
+  // An emitter edit moves s; the world and so its key stay.
+  fx.commit([&](Edit& e) {
+    const GB g = constant_emission(16000.0f);
+    const ar_graph_desc d = g.desc();
+    REQUIRE(fx.scene.materials->set_graph(e, GE, &d) == AR_OK);
+  });
+  const auto t2 = fx.scene.lights();
+  REQUIRE(t2->radiance_scale != t1->radiance_scale);
+  CHECK(t2->lights[t2->world_light].strength != t1->lights[t1->world_light].strength);
+  CHECK(EnvironmentBaker::world_key(fx.scene.materials->world().get()) == key);
+  bind_table(*t2);
+  // The kernel does see the new scale: its cells are s times the unscaled radiance.
+  CHECK(std::fabs(double(rig.raw_grid(kN)[0]) / t2->radiance_scale - want) <= 1e-6 * want);
+  const BakedEnvironment second = baker.get(rig.dev, rig.kg, key, kN, t2->radiance_scale);
+  CHECK(baker.rebuild_count() == 1u);
+  CHECK(second.table == first.table);
+  CHECK(second.max == first.max);
+  CHECK(second.mean == first.mean);
+  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, key, kN, 0.0), std::invalid_argument);
 }
 
 }  // TEST_SUITE("fast")
