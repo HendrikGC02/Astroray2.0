@@ -65,17 +65,16 @@ repository text; treat its answer as a draft.
 State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from
 its task file. An implementer always gets a fresh worktree: to continue a branch, `git -C <old> switch --detach`, then
 brief the agent to `git switch task/NNN-*` first in its own worktree. A worktree whose agent changed nothing vanishes.
-- Landed this session (12): 162, 151, 136, 154, 150, 138, 141, 139, 140, 161, 171, 160 (ledger in tasks/README.md).
+- Landed this session (13): 162, 151, 136, 154, 150, 138, 141, 139, 140, 161, 171, 160, 167 (ledger in tasks/README.md).
   `check full` green at 810 s after 136 and 659 s after 161; next due after 10 more landings. Slice 0 is closed. Landings use
   `pwsh <main>/tools/land.ps1 submit NNN PASS|SKIP -Title t [-Evidence t]`, run from the task's worktree in the background.
 - Owner decision 39: B-38 = 1.03 PROVISIONAL; decision 38 confirmed (cases move to `check full` when grouping runs out; the
   lead proposes the list with each case's history first). Ruling 91: spine queue 158, 163, 173, 174, 175; stop on
   spills or stack over 512 B; CPU and CUDA of a new statistical case in one concurrent group; new rows from first measurement.
 - Second batch 163-183 written (README "Second batch"; 184 dropped). 171 landed. Reviewed PASS, waiting for 158:
-  178 (PR #132), 180 (PR #130). 167 (PR #137): Opus PASS WITH FIXES, fixes in flight on its branch (tests, canary
-  hunks, the magenta early return); read the fix diff, then land with -Evidence (the lead viewed
-  out/evidence/167/generated_pixels.png: generated and packed-EXR planes identical, one hot texel in both).
-- Next to dispatch: 176 (gpu lane, free now), then 170 after 156; 165 then 166 in the blender lane after 167.
+  178 (PR #132), 180 (PR #130). 167 landed (BACKLOG rows 64 and the huge-texel half of the 150-review row are done;
+  negative texels stay open).
+- Next to dispatch: 176 (gpu lane, free now), then 170 after 156; 165 then 166 in the blender lane (free now).
 - Branches not yet landed from the first batch: 145 (B-05 compile 4.96-5.35 s under load against ruling 72's 5.0 s: land
   in a quiet window, no builds beside the gate; if it fails, owner item under ruling 72 with the D10 split measured), then
   147 (rebase, renumber to opcode 18, refresh canary), then the spine 148, 156, 158 (all O, kernel lane, one at a time on
