@@ -1,0 +1,25 @@
+diff --git a/tools/opsgen.py b/tools/opsgen.py
+index 1165353..d990bee 100644
+--- a/tools/opsgen.py
++++ b/tools/opsgen.py
+@@ -141,9 +141,9 @@ def parse_record_slots(text, semantics):
+     if not scalars or not spectral or not frames:
+         raise OpsError(f"{STORE_SLOT_H}: AR_RECORD_SCALARS, AR_RECORD_SPECTRAL and AR_RECORD_FRAMES must each list a field")
+     for name, sem in spectral:
+-        if sem not in semantics:
++        if sem is None:
+             raise OpsError(f"{STORE_SLOT_H}: {name} names unknown SpectrumSemantic {sem}")
+-    names = scalars + [n for n, _ in spectral] + frames
++    names = [n for n, _ in spectral] + scalars + frames
+     if len(set(names)) != len(names):
+         raise OpsError(f"{STORE_SLOT_H}: duplicate record field name")
+     return {n: i for i, n in enumerate(names)}
+@@ -190,7 +190,7 @@ def coverage(rows, lowering, nodes, planned=None):
+             if o not in op_names:
+                 raise OpsError(f"{LOWERING}: {node}: unknown op {o}")
+     out = ["node_type,disposition,ops,note"]
+-    for n in nodes:
++    for n in nodes[:-1]:
+         ent = lowering.get(n)
+         if ent is None:
+             out.append(f"{n},unsupported,,no lowering")
