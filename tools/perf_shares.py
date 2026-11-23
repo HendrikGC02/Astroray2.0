@@ -10,7 +10,8 @@ Run (Blender's python, -I first):
   perf_shares.py --self-test                      synthetic exports and fixtures, no nsys needed
 Ref: docs/decisions/0009-build-test-process.md d13 (B-19 row), d18; the definitions are 120's and 123's
 (PR 94): a pass runs from one `k_film_build_active` launch to the next; idle = pass period minus the union of
-the kernel intervals inside it; partition plus sort = the six kernels below. A share is the ratio of the
+the kernel intervals inside it; partition plus sort = the k_queue_build_* and k_sort_* kernels named by the X(...) rows of
+src/kernel/launch_config.h (the queue_build ones must have rows; the sort does not run on the bench scenes). A share is the ratio of the
 median over the passes of the numerator to the median of the period. The first BURN_IN passes of the capture
 (bench's --warmup) are not measured.
 History lines: metrics idle_share and pq_share, unit fraction, n = passes, spread = max - min of the per-pass
@@ -222,13 +223,14 @@ def spread_table(runs):
 
 # Synthetic pass types: (period, [(start, end, kernel)]), kernels 0 boundary, 1 queue_build_count, 2 k_copy,
 # 3 k_sort_scan. Hand-computed per type (busy = union of the kernel intervals clipped to the period):
-#   X period 1000: boundary 0..100, count 100..900, sort 850..900            idle 100, pq 800 + 50 = 850
+#   X period 1000: boundary 0..100, count 100..900, sort 850..900, a copy      idle 100, pq 800 + 50 = 850
+#                  200..400 inside the count kernel (not a pq kernel)
 #   Y period 2000: boundary 0..100, count 100..1000, sort 950..1000, and a    busy 1000 + 100 clipped = 1100,
 #                  copy 1900..2100 that crosses into the next pass            idle 900, pq 900 + 50 = 950
 #   Z period 1500: boundary 0..100, count 100..300, sort 250..300            idle 1200, pq 200 + 50 = 250
 # 21 passes of each: median period 1500, median idle 900, median pq 850.
 TYPES = {
-    "X": (1000, [(0, 100, 0), (100, 900, 1), (850, 900, 3)]),
+    "X": (1000, [(0, 100, 0), (100, 900, 1), (850, 900, 3), (200, 400, 2)]),
     "Y": (2000, [(0, 100, 0), (100, 1000, 1), (950, 1000, 3), (1900, 2100, 2)]),
     "Z": (1500, [(0, 100, 0), (100, 300, 1), (250, 300, 3)]),
 }
