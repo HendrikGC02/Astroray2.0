@@ -48,3 +48,8 @@ them. Milestone is where the item must be settled at the latest.
 | Tools | 0009 d28 write-back: 137's refuse/warn rules, 8-hunk cap, baseline record, `$`-in-double-quotes lint | 137 | M1b | lead after 137 lands |
 | Kernel | Out-of-range HG anisotropy is clamped to 1 - 1e-3; the lowering that produces g reports it (0003 D8) | 152 review | M1b | slice C volume entry |
 | Addon | The orthographic Rendered viewport warns with the generic `CAMERA_UNSUPPORTED: invalid camera descriptor` (the projection is rejected before `make_camera_view`'s ORTHO check); the frame is black until M4 | 159 | M1b | slice B |
+| Kernel | The light-image splat adds to the display channel without `film_exposure` (resolve.h ~110), though 0008 d7 exposes light-pass channels; dormant until light tracing sets `FilmRequest::light_pass` | 159 review | M5 | |
+| Addon | `Light.node_tree` (read by sync/lights.py) is missing from blender/astroray/api_surface.txt | 159 review | M1b | |
+| ABI, host | `bind_globals` reads bounces and seed from live settings each pass, not the latched generation's snapshot (one-pass race on a display-mode-only latch) | 159 review | M2 | |
+| Tests | Flaky once: `cuda_session_trace/no cache dir disables the optix cache` (gate, 136); one hosted-ci `cpu gate tests` case on 137's head (no C++ change; rerun green) | 136, 137 | M1b | the task that sees one again files it |
+| Tools | Hosted ci's log shows only check.ps1's 20-line summary, so a failing doctest case is not named; out/check/ci.log is not uploaded as an artifact | 137 landing | M1b | |

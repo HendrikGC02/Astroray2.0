@@ -22,9 +22,8 @@ scope clause).
   (ruling 78) [leave].
 
 ## Red items
-- B-5M bench hangs before its first pass on most runs since 1a7e364 (task 136); it blocks the B-5M rows of B-14
-  and B-19 and task 140.
-- B-19 idle, B-20, B-31 accepted at the M1a close (decision 37); B-31 is task 161 (blender lane, after 159). M-1 probe spills 130/376 B against 128/192: task 144 (0002 D10 ladder).
+- B-5M bench hang: cause found (task 136, progress poll starving ledger adds since 6a69e2d); fix in review.
+- B-19 idle, B-20, B-31 accepted at the M1a close (decision 37); B-31 is task 161 (blender lane, after 159). M-1 probe spills 130/376 B come from spike A's stand-in lobes (ruling 89, task 144): not ratified, slice D re-measures.
 - `check full` fails at gui_colour_chart ("the viewport never converged", pre-existing at 190e8ba): task 162.
 - No regression check on performance and no F12 gate on CUDA until tasks 140, 160 and 139 land.
 
