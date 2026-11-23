@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// The scene's images: 8-bit texels as stored (with their encoding tag), the linear-RGB mean the
+// The scene's images: texels as stored (8-bit with an encoding tag, or half and float, which are
+// linear), the linear-RGB mean the
 // emission estimate reads, and the arrays the kernel's image table is built from (host memory,
 // ledger category TEXTURES; the device upload is 102). An image is one keyed edit item whose job
 // decodes on a scene worker; activation installs it and the material pass raises its report
@@ -29,7 +30,8 @@ class Scene;
 
 // ar_image_desc::color_interop is one of the AR_COLOR_INTEROP_* values of astroray.h. 0, 1 and 6
 // (sRGB, linear Rec.709, data) decode; the other listed ids (0007 d21) are not converted by the
-// 8-bit path yet and render magenta with COLORSPACE_UNSUPPORTED; any other value is unknown.
+// decode path yet and render magenta with COLORSPACE_UNSUPPORTED; any other value is unknown. On a
+// half or float image an sRGB id is read as linear (0005 item 34).
 // The interop id string of a value, or "unknown interop id N".
 std::string interop_name(uint32_t color_interop);
 // True and the encoding for the decoded values.
@@ -38,8 +40,9 @@ bool interop_encoding(uint32_t color_interop, ar::TexEncoding* out);
 struct Image {
   uint32_t width = 1, height = 1, channels = 3;
   ar::TexEncoding encoding = ar::TexEncoding::LINEAR;
+  ar::TexFormat format = ar::TexFormat::U8;
   uint32_t alpha_mode = AR_ALPHA_STRAIGHT;
-  std::vector<uint8_t> texels;       // as decoded, rows bottom-up
+  std::vector<uint8_t> texels;       // as decoded (components of `format`), rows bottom-up
   std::array<float, 3> mean = {};    // linear RGB, transfer function decoded before averaging
   bool magenta = false;              // the 1x1 stand-in for an unreadable image
   uint64_t bytes() const { return texels.size(); }

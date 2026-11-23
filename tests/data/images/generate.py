@@ -126,6 +126,38 @@ def exr_bytes(channels, sample, compression=0, version=2, w=W, h=H):
     return out
 
 
+def exr_tiled_bytes(channels, sample, tile=2, w=W, h=H):
+    """An uncompressed single-level tiled EXR; tiles at the right and bottom edges are clipped."""
+    head = b"\x76\x2f\x31\x01" + struct.pack("<I", 2 | 0x200)
+    head += exr_chlist(channels)
+    head += exr_attr(b"compression", b"compression", b"\x00")
+    box = struct.pack("<iiii", 0, 0, w - 1, h - 1)
+    head += exr_attr(b"dataWindow", b"box2i", box) + exr_attr(b"displayWindow", b"box2i", box)
+    head += exr_attr(b"lineOrder", b"lineOrder", b"\x00")
+    head += exr_attr(b"pixelAspectRatio", b"float", struct.pack("<f", 1.0))
+    head += exr_attr(b"screenWindowCenter", b"v2f", struct.pack("<ff", 0.0, 0.0))
+    head += exr_attr(b"screenWindowWidth", b"float", struct.pack("<f", 1.0))
+    head += exr_attr(b"tiles", b"tiledesc", struct.pack("<IIB", tile, tile, 0))  # ONE_LEVEL, round down
+    head += b"\0"
+    nx, ny = (w + tile - 1) // tile, (h + tile - 1) // tile
+    chunks = []
+    for ty in range(ny):
+        for tx in range(nx):
+            raw = b""
+            for line in range(ty * tile, min(ty * tile + tile, h)):
+                y = h - 1 - line
+                for name, ptype in sorted(channels):
+                    for x in range(tx * tile, min(tx * tile + tile, w)):
+                        raw += struct.pack({0: "<I", 1: "<H", 2: "<f"}[ptype], sample(name, x, y))
+            chunks.append(struct.pack("<iiiiI", tx, ty, 0, 0, len(raw)) + raw)
+    pos = len(head) + 8 * len(chunks)
+    out = head
+    for c in chunks:
+        out += struct.pack("<Q", pos)
+        pos += len(c)
+    return out + b"".join(chunks)
+
+
 def sample_half(name, x, y):
     return half_bits(x, y, "RGBA".index(name))
 
@@ -151,6 +183,7 @@ RGB_F = [("R", 2), ("G", 2), ("B", 2)]
 write("pattern_4x3_half_rgba.exr", exr_bytes(RGBA_H, sample_half))
 write("pattern_4x3_float_rgb.exr", exr_bytes(RGB_F, sample_float))
 write("pattern_4x3_half_zip.exr", exr_bytes(RGB_H, sample_half, compression=3))
+write("pattern_4x3_half_tiled.exr", exr_tiled_bytes(RGB_H, sample_half))
 write("pattern_4x3_half_y.exr", exr_bytes([("Y", 1)], lambda n, x, y: half_bits(x, y, 0)))
 write("pattern_4x3.hdr", hdr_bytes())
 # One file per rejection: each must decode to a 1x1 magenta image with one IMAGE_UNREADABLE entry.
@@ -160,6 +193,10 @@ write("bad_nan_half.exr", exr_bytes(RGB_H, lambda n, x, y: 0x7E00 if (n, x, y) =
 write("bad_inf_float.exr", exr_bytes(RGB_F, lambda n, x, y: float("inf") if (n, x, y) == ("B", 3, 2) else sample_float(n, x, y)))
 write("bad_deep.exr", exr_bytes(RGB_H, sample_half, version=2 | 0x800))
 write("bad_multipart.exr", exr_bytes(RGB_H, sample_half, version=2 | 0x1000))
+# A 16-bit integer PNG stays refused (stb would silently narrow it to 8 bits).
+png16 = png_bytes(3)
+write("bad_png16.png", png16[:8] + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 16, 2, 0, 0, 0)) +
+      chunk(b"IDAT", zlib.compress(b"\x00" + struct.pack(">HHH", 1000, 2000, 65535), 9)) + chunk(b"IEND", b""))
 write("bad_truncated.exr", exr_bytes(RGB_H, sample_half)[:-20])
 
 import bpy  # noqa: E402  (only inside Blender)

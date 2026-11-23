@@ -152,6 +152,124 @@ TEST_CASE("tex_image/extend clamps") {
   CHECK(near(sample(im.tables, 7.0f, -3.0f, kLinear | kExtend), corner, 1e-6));
 }
 
+// ---- half and float images (0005 item 34: stored at source precision, linear) -----------------
+
+// Exact value of a finite binary16 in double, from its definition (not through the kernel).
+double half_exact(uint16_t b) {
+  const int e = (b >> 10) & 31, m = b & 1023;
+  const double v = e == 0 ? std::ldexp(double(m), -24) : std::ldexp(1.0 + m / 1024.0, e - 15);
+  return (b & 0x8000) ? -v : v;
+}
+
+// A 4x4 image of `channels` half or float components, values well outside [0, 1]; `vals` holds
+// each component as the exact double the stored bits mean. y = 0 is the bottom row.
+struct ImgW {
+  std::vector<uint8_t> raw;
+  std::vector<double> vals;
+  ar::DeviceImageView view = {};
+  ar::SceneTables tables = {};
+  float srgb[ar::kSrgbTableSize];
+  ImgW(ar::TexFormat fmt, uint32_t channels, ar::TexEncoding enc) {
+    ar::srgb_decode_table(srgb);
+    tables.srgb_decode = srgb;
+    static const uint16_t hb[] = {0x0000, 0x00A8, 0x0001, 0x0400, 0x3400, 0xB600, 0x3C00, 0x4100, 0x63D0, 0x7BFF, 0xFBFF, 0x3555};
+    static const float fv[] = {0.0f, 1e-5f, -0.75f, 1.0f, 65504.0f, 1e5f, 3.25f, -123456.789f, 0.1f, 1e-30f};
+    const size_t n = size_t(16) * channels;
+    for (size_t i = 0; i < n; ++i) {
+      if (fmt == ar::TexFormat::HALF) {
+        const uint16_t b = hb[(i * 7 + 3) % std::size(hb)];
+        raw.push_back(uint8_t(b & 255)), raw.push_back(uint8_t(b >> 8));
+        vals.push_back(half_exact(b));
+      } else {
+        const float f = fv[(i * 7 + 3) % std::size(fv)];
+        uint32_t b;
+        std::memcpy(&b, &f, 4);
+        for (int k = 0; k < 4; ++k) raw.push_back(uint8_t(b >> (8 * k)));
+        vals.push_back(double(f));
+      }
+    }
+    view.texels = uint64_t(uintptr_t(raw.data()));
+    view.width = view.height = 4;
+    view.channels = channels;
+    view.encoding = uint32_t(enc);
+    view.format = uint32_t(fmt);
+    tables.images = &view;
+    tables.image_count = 1;
+  }
+  // Component c of texel (x, y) as the grey-expanded RGB the kernel returns.
+  double at(int x, int y, int c) const { return vals[size_t((y * 4 + x)) * view.channels + (view.channels == 1 ? 0u : uint32_t(c))]; }
+};
+
+bool near_rel(const std::vector<float>& got, const double want[3], double rel) {
+  for (int c = 0; c < 3; ++c)
+    if (!(std::fabs(double(got[size_t(c)]) - want[c]) <= rel * std::fabs(want[c]) + 1e-38)) return false;
+  return true;
+}
+
+TEST_CASE("tex_image/half widens exactly") {
+  // Every finite binary16 value, subnormals and both zeros included, equals its definition; the
+  // conversion is exact so the float is the same number.
+  bool all = true;
+  for (uint32_t b = 0; b < 65536; ++b) {
+    const uint16_t h = uint16_t(b);
+    const float f = ar::half_to_float(h);
+    if (((h >> 10) & 31) == 31) {
+      const bool inf = (h & 1023) == 0;
+      all = all && (inf ? std::isinf(f) && std::signbit(f) == ((h & 0x8000) != 0) : std::isnan(f));
+    } else {
+      all = all && double(f) == half_exact(h) && std::signbit(f) == ((h & 0x8000) != 0);
+    }
+  }
+  CHECK(all);
+  CHECK(bits(ar::half_to_float(0x0001)) == 0x33800000u);  // 2^-24
+  CHECK(bits(ar::half_to_float(0x7BFF)) == 0x477fe000u);  // 65504
+  CHECK(bits(ar::half_to_float(0x8000)) == 0x80000000u);  // -0
+  CHECK(bits(ar::half_to_float(0x7E01)) == 0x7fc02000u);  // a NaN keeps its payload
+}
+
+TEST_CASE("tex_image/half and float texels") {
+  for (ar::TexFormat fmt : {ar::TexFormat::HALF, ar::TexFormat::FLOAT})
+    for (uint32_t channels : {3u, 1u, 4u}) {
+      // The encoding tag of a half or float view is not honoured: an sRGB tag must not decode.
+      const ImgW im(fmt, channels, ar::TexEncoding::SRGB);
+      INFO("format " << uint32_t(fmt) << " channels " << channels);
+      for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x) {
+          const float u = (float(x) + 0.5f) / 4.0f, v = (float(y) + 0.5f) / 4.0f;
+          const std::vector<float> c = sample(im.tables, u, v, kClosest), l = sample(im.tables, u, v, kLinear | kExtend);
+          for (int k = 0; k < 3; ++k) {
+            CHECK(bits(c[size_t(k)]) == bits(float(im.at(x, y, k))));  // the stored value, exactly
+            CHECK(bits(l[size_t(k)]) == bits(c[size_t(k)]));
+          }
+        }
+      // Linear at a midpoint: halfway between the centres of texels (1, 2), (2, 2), (1, 3), (2, 3),
+      // weights 1/2 and 1/2 in x and 3/4 and 1/4 in y, against float64.
+      double want[3];
+      for (int k = 0; k < 3; ++k)
+        want[k] = 0.5 * 0.75 * im.at(1, 2, k) + 0.5 * 0.75 * im.at(2, 2, k) + 0.5 * 0.25 * im.at(1, 3, k) + 0.5 * 0.25 * im.at(2, 3, k);
+      CHECK(near_rel(sample(im.tables, 0.5f, 0.6875f, kLinear), want, 1e-6));
+      // Repeat and Extend at u = -0.25 and 1.25 (the same wrap rules as the 8-bit images).
+      const float v = 0.625f;
+      double w[3];
+      for (int k = 0; k < 3; ++k) w[k] = im.at(2, 2, k);
+      CHECK(near_rel(sample(im.tables, -0.25f, v, kClosest | kRepeat), w, 0.0));
+      for (int k = 0; k < 3; ++k) w[k] = im.at(1, 2, k);
+      CHECK(near_rel(sample(im.tables, 1.25f, v, kClosest | kRepeat), w, 0.0));
+      for (int k = 0; k < 3; ++k) w[k] = im.at(0, 2, k);
+      CHECK(near_rel(sample(im.tables, -0.25f, v, kClosest | kExtend), w, 0.0));
+      for (int k = 0; k < 3; ++k) w[k] = im.at(3, 2, k);
+      CHECK(near_rel(sample(im.tables, 1.25f, v, kClosest | kExtend), w, 0.0));
+      for (int k = 0; k < 3; ++k) w[k] = 0.5 * (im.at(2, 2, k) + im.at(3, 2, k));
+      CHECK(near_rel(sample(im.tables, -0.25f, v, kLinear | kRepeat), w, 1e-6));
+      for (int k = 0; k < 3; ++k) w[k] = 0.5 * (im.at(0, 2, k) + im.at(1, 2, k));
+      CHECK(near_rel(sample(im.tables, 1.25f, v, kLinear | kRepeat), w, 1e-6));
+      for (int k = 0; k < 3; ++k) w[k] = im.at(0, 2, k);
+      CHECK(near_rel(sample(im.tables, -0.25f, v, kLinear | kExtend), w, 1e-6));
+      for (int k = 0; k < 3; ++k) w[k] = im.at(3, 2, k);
+      CHECK(near_rel(sample(im.tables, 1.25f, v, kLinear | kExtend), w, 1e-6));
+    }
+}
+
 TEST_CASE("tex_image/grey and rgba expand, missing slot is magenta") {
   const std::vector<uint8_t> grey = {0, 51, 102, 255};
   const std::vector<uint8_t> rgba = {10, 20, 30, 40};

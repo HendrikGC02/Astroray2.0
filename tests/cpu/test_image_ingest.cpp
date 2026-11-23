@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <set>
 #include <stdexcept>
@@ -124,6 +125,36 @@ void check_magenta(const std::shared_ptr<const Image>& im) {
   CHECK(im->height == 1);
   CHECK(im->channels == 3);
   CHECK((im->texels == std::vector<uint8_t>{255, 0, 255}));
+}
+
+// The half and float patterns of the generated EXR files: same tables and index as
+// tests/data/images/generate.py (half_bits(), float_value()).
+const uint16_t kHalfBits[] = {0x0000, 0x00A8, 0x0001, 0x0400, 0x3400, 0x3800, 0x3C00, 0x4100, 0xB600, 0x63D0, 0x7BFF};
+const float kFloatValues[] = {0.0f, 1e-5f, 0.25f, 1.0f, 65504.0f, 1e5f, -0.75f, 3.25f, 123456.789f};
+
+size_t hdr_index(int x, int y, int c, size_t n) { return size_t(((x + 1) * 47 + (y + 1) * 83 + c * 61) % int(n)); }
+uint16_t half_bits(int x, int y, int c) { return kHalfBits[hdr_index(x, y, c, std::size(kHalfBits))]; }
+float float_value(int x, int y, int c) { return kFloatValues[hdr_index(x, y, c, std::size(kFloatValues))]; }
+
+// Exact value of a finite binary16 in double, from its definition (not through the kernel).
+double half_value(uint16_t b) {
+  const int e = (b >> 10) & 31, m = b & 1023;
+  const double v = e == 0 ? std::ldexp(double(m), -24) : std::ldexp(1.0 + m / 1024.0, e - 15);
+  return (b & 0x8000) ? -v : v;
+}
+
+// True when every decoded component of `d` equals the generator's pattern bit for bit (channel k
+// of the file is pattern channel `map[k]`), rows bottom-up.
+bool half_matches(const DecodedImage& d, const std::vector<int>& map) {
+  bool same = d.format == ar::TexFormat::HALF && d.texels.size() == size_t(W * H) * map.size() * 2;
+  for (int y = 0; y < H && same; ++y)
+    for (int x = 0; x < W; ++x)
+      for (size_t k = 0; k < map.size(); ++k) {
+        uint16_t b;
+        std::memcpy(&b, d.texels.data() + ((size_t(y) * W + x) * map.size() + k) * 2, 2);
+        same = same && b == half_bits(x, y, map[k]);
+      }
+  return same;
 }
 
 double srgb_eotf(double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); }
@@ -454,6 +485,144 @@ TEST_CASE("image_ingest/emission estimate follows the image mean") {
   });
   CHECK(w.store->images().find(5) == nullptr);
   CHECK(same(estimate().color, ref_of(1.0f, 0.0f, 1.0f)));
+}
+
+TEST_CASE("image_ingest/exr half stored as half") {
+  struct Case {
+    const char* file;
+    std::vector<int> map;  // pattern channel of each stored channel (R, G, B, A -> 0..3; Y -> 0)
+  };
+  for (const Case& cs : {Case{"pattern_4x3_half_rgba.exr", {0, 1, 2, 3}}, Case{"pattern_4x3_half_zip.exr", {0, 1, 2}},
+                         Case{"pattern_4x3_half_tiled.exr", {0, 1, 2}}, Case{"pattern_4x3_half_y.exr", {0}}}) {
+    INFO(cs.file);
+    const DecodedImage d = decode_ok(read_file(cs.file));
+    REQUIRE(d.width == W);
+    REQUIRE(d.height == H);
+    REQUIRE(d.channels == cs.map.size());  // kept as stored, not expanded
+    CHECK(half_matches(d, cs.map));        // subnormal, 65504 and negative texels and the row order included
+  }
+}
+
+TEST_CASE("image_ingest/exr float and hdr stored as float") {
+  const DecodedImage f = decode_ok(read_file("pattern_4x3_float_rgb.exr"));
+  REQUIRE(f.format == ar::TexFormat::FLOAT);
+  REQUIRE(f.channels == 3);
+  REQUIRE(f.texels.size() == size_t(W * H) * 3 * 4);
+  bool same = true;
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x)
+      for (int c = 0; c < 3; ++c) {
+        uint32_t got, want;
+        const float v = float_value(x, y, c);
+        std::memcpy(&got, f.texels.data() + ((size_t(y) * W + x) * 3 + size_t(c)) * 4, 4);
+        std::memcpy(&want, &v, 4);
+        same = same && got == want;
+      }
+  CHECK(same);
+  // Radiance RGBE as stb_image 2.32 decodes it (stbi__hdr_convert): (mantissa + 0.5) * 2^(e - 136),
+  // exact in float; rows bottom-up.
+  const DecodedImage r = decode_ok(read_file("pattern_4x3.hdr"));
+  REQUIRE(r.format == ar::TexFormat::FLOAT);
+  REQUIRE(r.channels == 3);
+  REQUIRE((r.width == W && r.height == H));
+  bool hdr_same = true;
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x)
+      for (int c = 0; c < 3; ++c) {
+        float got;
+        std::memcpy(&got, r.texels.data() + ((size_t(y) * W + x) * 3 + size_t(c)) * 4, 4);
+        const double want = std::ldexp(double(pattern(x, y, c)) + 0.5, 120 + (x + 2 * y) % 5 - 136);
+        hdr_same = hdr_same && double(got) == want;
+      }
+  CHECK(hdr_same);
+}
+
+TEST_CASE("image_ingest/exr unreadable cases") {
+  struct Case {
+    const char* file;
+    const char* detail;  // a substring of the one entry's detail
+  };
+  const Case cases[] = {{"bad_uint_channel.exr", "channel R is UINT"},
+                        {"bad_no_green.exr", "missing channel G"},
+                        {"bad_nan_half.exr", "NaN or Inf in channel G at texel (2, 1)"},
+                        {"bad_inf_float.exr", "NaN or Inf in channel B at texel (3, 2)"},
+                        {"bad_deep.exr", "deep EXR"},
+                        {"bad_multipart.exr", "multipart EXR"},
+                        {"bad_truncated.exr", "EXR data"},
+                        {"bad_png16.png", "16-bit integer"}};
+  World w;
+  ar_key key = 1;
+  for (const Case& cs : cases) {
+    INFO(cs.file);
+    for (int memory = 0; memory < 2; ++memory, ++key) {  // both source kinds: the file, then its bytes
+      if (memory)
+        w.put_memory(key, read_file(cs.file), AR_COLOR_INTEROP_LIN_REC709);
+      else
+        w.put_file(key, cs.file, AR_COLOR_INTEROP_LIN_REC709);
+      check_magenta(w.store->images().find(key));
+      const auto e = w.entries(key);
+      REQUIRE(e.size() == 1);
+      CHECK(e[0].first == AR_REPORT_IMAGE_UNREADABLE);
+      CHECK_MESSAGE(e[0].second.find(cs.detail) != std::string::npos, e[0].second);
+    }
+  }
+}
+
+TEST_CASE("image_ingest/half and float are linear and count their bytes") {
+  World w;
+  const std::vector<uint8_t> hbytes = read_file("pattern_4x3_half_rgba.exr");
+  w.put_file(1, "pattern_4x3_half_rgba.exr", AR_COLOR_INTEROP_SRGB_REC709);  // an sRGB id is read as linear
+  w.put_memory(2, hbytes, AR_COLOR_INTEROP_LIN_REC709);
+  w.put_file(3, "pattern_4x3_float_rgb.exr", AR_COLOR_INTEROP_DATA);
+  w.put_file(4, "pattern_4x3.hdr", AR_COLOR_INTEROP_LIN_REC709);
+  const auto a = w.store->images().find(1), b = w.store->images().find(2), f = w.store->images().find(3), r = w.store->images().find(4);
+  REQUIRE((a && b && f && r));
+  for (ar_key k : {ar_key(1), ar_key(2), ar_key(3), ar_key(4)}) CHECK(w.entries(k).empty());
+  CHECK(a->encoding == ar::TexEncoding::LINEAR);
+  CHECK(b->encoding == ar::TexEncoding::LINEAR);
+  CHECK(f->encoding == ar::TexEncoding::DATA);
+  CHECK(a->texels == b->texels);
+  CHECK(a->format == ar::TexFormat::HALF);
+  CHECK(f->format == ar::TexFormat::FLOAT);
+  // Real bytes: width * height * channels * 2 and * 4.
+  CHECK(a->bytes() == uint64_t(W * H * 4 * 2));
+  CHECK(f->bytes() == uint64_t(W * H * 3 * 4));
+  CHECK(r->bytes() == uint64_t(W * H * 3 * 4));
+  const auto arrays = w.store->images().arrays();
+  REQUIRE(arrays->keys.size() == 4);
+  CHECK(arrays->views[0].format == uint32_t(ar::TexFormat::HALF));
+  CHECK(arrays->views[2].format == uint32_t(ar::TexFormat::FLOAT));
+  uint64_t total = 0;
+  std::set<const Image*> distinct;
+  for (const auto& im : arrays->images)
+    if (distinct.insert(im.get()).second) total += im->bytes();
+  CHECK(w.ledger->category_total(LedgerCategory::TEXTURES) == total);
+  CHECK(total >= uint64_t(W * H * (4 * 2 + 3 * 4 + 3 * 4)));
+  // The mean is of the stored linear values, no transfer function; alpha is ignored.
+  double want[3] = {0, 0, 0}, wantf[3] = {0, 0, 0};
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x)
+      for (int c = 0; c < 3; ++c) {
+        want[c] += half_value(half_bits(x, y, c)) / (W * H);
+        wantf[c] += double(float_value(x, y, c)) / (W * H);
+      }
+  for (int c = 0; c < 3; ++c) {
+    CHECK(std::fabs(double(a->mean[size_t(c)]) - want[c]) <= 1e-6 * std::fabs(want[c]) + 1e-9);
+    CHECK(std::fabs(double(f->mean[size_t(c)]) - wantf[c]) <= 1e-6 * std::fabs(wantf[c]) + 1e-9);
+  }
+  // Y-only half: grey counts as r = g = b.
+  w.put_file(5, "pattern_4x3_half_y.exr", AR_COLOR_INTEROP_LIN_REC709);
+  double grey = 0;
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x) grey += half_value(half_bits(x, y, 0)) / (W * H);
+  const auto g = w.store->images().find(5);
+  REQUIRE(g);
+  for (int c = 0; c < 3; ++c) CHECK(std::fabs(double(g->mean[size_t(c)]) - grey) <= 1e-6 * std::fabs(grey) + 1e-9);
+  // An interop id this build does not convert stays magenta with its own entry.
+  w.put_file(6, "pattern_4x3_half_rgba.exr", AR_COLOR_INTEROP_LIN_REC2020);
+  check_magenta(w.store->images().find(6));
+  REQUIRE(w.entries(6).size() == 1);
+  CHECK(w.entries(6)[0].first == AR_REPORT_COLORSPACE_UNSUPPORTED);
 }
 
 }  // TEST_SUITE
