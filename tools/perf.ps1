@@ -7,7 +7,7 @@
 # -Record appends the measured pass_ms lines to bench/history/<year>.jsonl (the lead's commit path).
 # -MeasureTolerance runs the bench -Runs times back to back and prints the spreads that set B-38.
 # It is not a `check` tier: tiers write the 20-line summary and out/check/<tier>.json that report.py reads and
-# budget B-08..B-10 time; perf is one more caller of bench.ps1. Ref: 0009 d13 (B-38), d18; task 140.
+# budget B-08..B-10 time; perf is one more caller of bench.ps1. Ref: 0009 d13 (B-38), d18.
 # Output: at most 20 summary lines plus the nsys commands; exit 0 pass, 1 a scene failed, 2 refused or unusable.
 param(
   [string[]]$Scene = @('b1m', 'b5m'),
@@ -43,8 +43,8 @@ if ($others.Count) {
   exit 2
 }
 
-$sw = [Diagnostics.Stopwatch]::StartNew()
 $null = Enter-ArMachineLock
+$sw = [Diagnostics.Stopwatch]::StartNew()   # lock wait excluded
 $newLines = @()   # per bench run: the history lines it appended
 try {
   $n = if ($MeasureTolerance) { $Runs } else { 1 }

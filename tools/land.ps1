@@ -227,6 +227,10 @@ function Invoke-Prepare {
   $ri = "out/land/$Number/task.md, out/land/$Number/diff.patch"
   if (Test-Path $patch) { Copy-Item $patch (Join-Path $dir 'canary.patch') -Force; $ri += ", out/land/$Number/canary.patch" }
   Write-Host "reviewer inputs: $ri"
+  # Pass time is measured only when the diff can move it (0009 d18, B-38).
+  $needPerf = @($names | Where-Object { $_ -match '^(src/kernel/|src/kernel_gpu/|src/device/|src/host/scheduler|src/host/session/|src/host/scene/)' }).Count -gt 0
+  if ($needPerf -and $DryRun) { Write-Host 'DRYRUN would run perf (the diff touches kernel, device, scheduler, session or scene code)' }
+  elseif (-not $needPerf) { Write-Host 'perf: not needed (no kernel, device, scheduler, session or scene path in the diff)' }
   if ($DryRun) {
     Write-Host "DRYRUN would: commit deletion of tasks/$Number*, push $branch, run check gate, post astroray/gate"
     Write-Host "PASS prepare $Number (dry run: canary accepted)"
@@ -249,6 +253,13 @@ function Invoke-Prepare {
   $state = if ($LASTEXITCODE -eq 0) { 'success' } else { 'failure' }
   $out | Select-Object -Last 4 | ForEach-Object { Write-Host $_ }
   $desc = ($out | Select-Object -Last 1)
+  if ($state -eq 'success' -and $needPerf) {
+    # Under the lock tools/perf.ps1 takes itself; a failure fails the prepare like a failed gate.
+    $perfOut = @(& pwsh -NoProfile -File (Join-Path $root 'tools/perf.ps1') 2>&1 | ForEach-Object { "$_" })
+    $perfCode = $LASTEXITCODE
+    $perfOut | ForEach-Object { Write-Host $_ }
+    if ($perfCode -ne 0) { $state = 'failure'; $desc = "perf failed: $($perfOut | Where-Object { $_ -match '^(FAIL|REFUSE|perf)' } | Select-Object -First 1)" }
+  }
   if ($desc -match 'waited ([\d.]+) s') { $script:LandTimes['lock_wait_s'] += [double]$Matches[1] }
   if ($desc.Length -gt 140) { $desc = $desc.Substring(0, 140) }
   Set-Content -Path (Join-Path $dir 'gate.json') -Value (@{ sha = $sha; state = $state; description = $desc } | ConvertTo-Json)
