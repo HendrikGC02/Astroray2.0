@@ -38,6 +38,12 @@ try {
 
   $r = @(Invoke-ArTestCase -Kind exe -Target astroray_tests_gpu -Case 'fixture/pass' -Root $tmp)
   Check 'missing binary: an error, not a pass' ($r[0].Error -match 'missing out/bin/astroray_tests_gpu' -and -not (Get-ArTestVerdict $r).Pass)
+  # A Blender test that prints after unittest wrote `... `: its outcome is a bare line of its own.
+  $ut = "test_a (__main__.T.test_a) ... render | Saved: x.exr`nRESULT a`nok`ntest_b (__main__.T.test_b) ... printed`nFAIL`nRan 2 tests in 1.0s`nFAILED (failures=1)"
+  $r = @(Get-ArCaseResults @('T.test_a', 'T.test_b') $ut '')
+  Check 'bare ok after printed lines' ($r[0].Ran -and -not $r[0].Failed)
+  Check 'bare FAIL after printed lines' ($r[1].Ran -and $r[1].Failed)
+  Check 'unittest summary shown, outcome lines not' ((@(Select-ArTestLines $ut 20) -join '|') -ceq 'Ran 2 tests in 1.0s|FAILED (failures=1)|FAIL')
 } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
 if ($bad) { Write-Host "FAIL fast_testrun: $bad check(s)"; exit 1 }
 Write-Host 'PASS fast_testrun'

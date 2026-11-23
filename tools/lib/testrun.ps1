@@ -11,14 +11,15 @@ function New-ArTestResult([string]$case, [bool]$ran, [bool]$failed, [string]$err
 
 # Outcome of one case in verbosity-2 unittest output. The header line `test_x (mod.Class.test_x)` carries the
 # name; its outcome `... ok|FAIL|ERROR` is on the same line, or, after a docstring line or text the test
-# printed, on a later line before the next test header.
+# printed, on a later line before the next test header: `... ok` after a docstring, a bare `ok` after
+# printed lines (unittest writes the `... ` before the test prints).
 function Get-UnittestOutcome([string]$text, [string]$name) {
   $ran = $false; $failed = $false; $pending = $false
   foreach ($ln in ($text -split "`r?`n")) {
     if ($ln -match '^\w+ \([\w.]+\)') { $pending = $ln.Contains($name) }
-    if ($pending -and $ln -match '\.\.\. (ok|FAIL|ERROR)\s*$') {
+    if ($pending -and $ln -cmatch '(^|\.\.\. )(ok|FAIL|ERROR)\s*$') {
       $ran = $true; $pending = $false
-      if ($Matches[1] -ne 'ok') { $failed = $true }
+      if ($Matches[2] -cne 'ok') { $failed = $true }
     }
   }
   return [pscustomobject]@{ Ran = $ran; Failed = $failed }
@@ -115,7 +116,7 @@ function Get-ArTestVerdict($results) {
 # failing lines.
 function Select-ArTestLines([string]$txt, [int]$max) {
   $lines = @($txt -split "`r?`n")
-  $sum = @($lines | Where-Object { $_ -match 'test cases:\s*\d+|assertions:\s*\d+|^Ran \d+ test|^(OK|FAILED)\b' })
+  $sum = @($lines | Where-Object { $_ -cmatch 'test cases:\s*\d+|assertions:\s*\d+|^Ran \d+ test|^(OK|FAILED)\b' })
   $bad = @($lines | Where-Object { $_ -cmatch '\b(ERROR|FAIL|Error|Traceback|error)\b|^\s*(CHECK|REQUIRE)' -and $sum -notcontains $_ })
   return @(@($sum) + @($bad) | Select-Object -First $max)
 }
