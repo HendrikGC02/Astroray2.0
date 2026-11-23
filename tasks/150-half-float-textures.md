@@ -21,3 +21,4 @@ Progress:
 - Plan: tinyexr 1.0.12 (single header; 1.0.13 needs exr_reader.hh) + miniz, decode_exr.cpp, decode.cpp, image_store, texture_view.h, tex_image.h, tests, generate.py + fixtures, 0007 d13 sentence; portability.h untouched.
 - Done: all of the above plus tasks/150.canary.patch (4 hunks). miniz.c does not compile as C++ with its compressor, so decode_exr.cpp builds it with MINIZ_NO_DEFLATE_APIS (reading only).
 - Kernel: half_to_float is branchless integer plus one exact float subtraction (the integer-only form cost 0.4 s of shade_surface compile, over B-05's 5.0 s); resources unchanged (k_shade_surface 128 regs, stack 384, spills 0/0).
+- Review fixes: RY/BY (luminance-chroma) EXR refused with a reason, Y+A keeps alpha as grey,grey,grey,A, Linear checks at tx, ty != 0.5; canary 7 hunks PASS; gate 143.8 s, shade_surface compile 4.64 s.
