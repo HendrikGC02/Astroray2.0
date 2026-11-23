@@ -1,0 +1,26 @@
+diff --git a/tools/land.ps1 b/tools/land.ps1
+index 78e8872..91ff49f 100644
+--- a/tools/land.ps1
++++ b/tools/land.ps1
+@@ -41,7 +41,7 @@ $script:TaskLook = ''
+ 
+ function Undo-LandCommit {
+   if (-not $script:UndoTo) { return }
+-  & git reset -q --hard $script:UndoTo 2>&1 | Out-Null
++  & git reset -q --soft $script:UndoTo 2>&1 | Out-Null
+   if ($LASTEXITCODE -eq 0) { Write-Host 'undid (land) commit' } else { Write-Host "WARN land: could not reset the branch to $($script:UndoTo); drop the (land) commit by hand" }
+   $script:UndoTo = $null
+ }
+diff --git a/tools/lib/landing.ps1 b/tools/lib/landing.ps1
+index 2a4dbe4..bbb04f3 100644
+--- a/tools/lib/landing.ps1
++++ b/tools/lib/landing.ps1
+@@ -73,7 +73,7 @@ function Invoke-LandingCleanup {
+   param([Parameter(Mandatory)][string]$Main, [Parameter(Mandatory)]$Task, [int]$SleepS = 5)
+   Set-Location $Main   # the cwd may be inside the worktree being removed
+   $left = [Collections.Generic.List[string]]::new()
+-  function Add-Leftover([string]$what, [string]$fix) { Write-Host "LEFTOVER: $what; fix: $fix"; $left.Add($what) }
++  function Add-Leftover([string]$what, [string]$fix) { $left.Add($what) }
+   $branch = $Task.Branch; $wt = $Task.Worktree
+   try {
+     $remote = @(& git -C $Main ls-remote --heads origin $branch 2>$null)

@@ -52,9 +52,20 @@ function GitX {
   return $o
 }
 function GhX {
-  $o = & gh @args 2>&1 | ForEach-Object { "$_" }
-  if ($LASTEXITCODE -ne 0) { throw "gh $($args -join ' ') failed: $($o -join ' ')" }
-  return ($o -join "`n")
+  # A GitHub 5xx is transient: retry with backoff (5, 15, 30 s) so a passing gate or a half-done landing
+  # is never lost to it. Any other failure, or a 5xx that persists, throws.
+  $delays = @(5, 15, 30)
+  for ($i = 0; ; $i++) {
+    $o = & gh @args 2>&1 | ForEach-Object { "$_" }
+    if ($LASTEXITCODE -eq 0) { return ($o -join "`n") }
+    $txt = $o -join ' '
+    if ($i -lt $delays.Count -and $txt -match 'HTTP 5\d\d|Bad Gateway|Service Unavailable|Gateway Time-?out') {
+      Write-Host "gh $($args[0]) got a 5xx; retry $($i + 1) of $($delays.Count) in $($delays[$i]) s"
+      Start-Sleep -Seconds $delays[$i]
+      continue
+    }
+    throw "gh $($args -join ' ') failed: $txt"
+  }
 }
 
 function Get-TaskField([string]$text, [string]$field) {
@@ -183,8 +194,18 @@ function Invoke-Prepare {
   $desc = ($out | Select-Object -Last 1)
   if ($desc -match 'waited ([\d.]+) s') { $script:LandTimes['lock_wait_s'] += [double]$Matches[1] }
   if ($desc.Length -gt 140) { $desc = $desc.Substring(0, 140) }
-  $null = GhX api "repos/{owner}/{repo}/statuses/$sha" -f "state=$state" -f 'context=astroray/gate' -f "description=$desc"
   Set-Content -Path (Join-Path $dir 'gate.json') -Value (@{ sha = $sha; state = $state; description = $desc } | ConvertTo-Json)
+  try { $null = GhX api "repos/{owner}/{repo}/statuses/$sha" -f "state=$state" -f 'context=astroray/gate' -f "description=$desc" }
+  catch {
+    if ($state -eq 'success') {
+      # The gate passed; do not undo the commit or lose the run for a status-post error.
+      $script:UndoTo = $null
+      Write-Host "FAIL prepare $Number sha $($sha.Substring(0, 9)): gate passed but posting astroray/gate failed after retries: $($_.Exception.Message)"
+      Write-Host "commit and push are kept; post it by hand: gh api repos/{owner}/{repo}/statuses/$sha -f state=success -f context=astroray/gate -f description='$desc'"
+      exit 1
+    }
+    throw
+  }
   if ($state -ne 'success') {
     Write-Host "FAIL prepare $Number sha $($sha.Substring(0, 9)) astroray/gate $state"
     Undo-LandCommit
