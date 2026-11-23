@@ -130,6 +130,7 @@ class InstanceCache:
                                  # row (not an instance), or () for a type build() skips
         self.table_ids = {}      # material table (tuple of ar_keys) -> small id; a pure function, never forgotten
         self.table_list = []
+        self.light_names = None  # the view layer's light group names at the last build()
 
     def table_id(self, table):
         i = self.table_ids.get(table)
@@ -256,6 +257,12 @@ def build(depsgraph, keymap, origin=(0.0, 0.0, 0.0), lightgroups=None, material_
     """
     lightgroups = lightgroups or {}
     cache = InstanceCache() if cache is None else cache
+    if cache.light_names != tuple(lightgroups):
+        # Renaming a light group rewrites every object's group name without naming any object in an update, so
+        # the records (which hold the name) and the own-row entries that rely on them are all dropped.
+        for d in (cache.tids, cache.lights, cache.crypto, cache.assets, cache.plain):
+            d.clear()
+        cache.light_names = tuple(lightgroups)
     if material_key is None:
         def material_key(mat):
             return keymap.key(("material", mat.original.session_uid)) if mat else 0

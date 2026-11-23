@@ -332,11 +332,25 @@ class TestInstanceCache(unittest.TestCase):
         t = self.build_with_lightgroups()
         self.assertEqual(int(t.arrays["light_groups"][0]), 2)
 
+    def test_light_group_rename_keeps_objects_in_their_group(self):
+        # Renaming a group rewrites every object's group name and names no object in the update.
+        bpy.context.view_layer.lightgroups.add(name="g1")
+        a = make("A")
+        a.lightgroup = "g1"
+        self.build_with_lightgroups()
+        self.cache.forget(updated(lambda: setattr(bpy.context.view_layer.lightgroups[0], "name", "g2")))
+        self.assertEqual(a.lightgroup, "g2")
+        t = self.build_with_lightgroups()
+        self.assertEqual(int(t.arrays["light_groups"][0]), 1)
+        self.assert_fresh(t)
+
     def test_asset_id_follows_parent_rename(self):
         # The child is not named by the parent's update, so its asset id cannot come from the cache.
         a = make("A")
-        c = make("C", loc=(1, 0, 0))
-        c.parent = a
+        b = make("B", loc=(1, 0, 0))
+        c = make("C", loc=(2, 0, 0))
+        b.parent = a
+        c.parent = b  # two levels: the asset id is the top parent's name, not the direct parent's
         self.build()
         self.cache.forget(updated(lambda: setattr(a, "name", "Renamed")))
         t = self.build()
