@@ -28,7 +28,6 @@ try {
   & git -C (Join-Path $tmp 'origin.git') branch task/120-y main
   G worktree add -q -b task/121-z (Join-Path $wts 'task_121-z')
   G push -q origin task/121-z
-  G worktree add -q -b task/122-u (Join-Path $wts 'task_122-u')
   $mainPath = Get-LandingMain $main
   Check 'main checkout is the first worktree' ((Resolve-Path $mainPath).Path -eq (Resolve-Path $main).Path)
 
@@ -58,10 +57,11 @@ try {
   }
 
   # Unregistered but still on disk (what a failed `git worktree remove` leaves): the directory itself is deleted.
-  $t122 = Find-Safe '122'
-  Remove-Item -Recurse -Force (Join-Path $main '.git/worktrees/task_122-u')
-  $o = @(Invoke-LandingCleanup -Main $main -Task $t122 -SleepS 0 6>&1 | ForEach-Object { "$_" })
-  Check 'an unregistered leftover directory is deleted' ((-not (Test-Path (Join-Path $wts 'task_122-u'))) -and [int]$o[-1] -eq 0)
+  # task/1201-q's worktree is reused here: its lookup checks are done.
+  $t1201 = Find-Safe '1201'
+  Remove-Item -Recurse -Force (Join-Path $main '.git/worktrees/task_1201-q')
+  $o = @(Invoke-LandingCleanup -Main $main -Task $t1201 -SleepS 0 6>&1 | ForEach-Object { "$_" })
+  Check 'an unregistered leftover directory is deleted' ((-not (Test-Path (Join-Path $wts 'task_1201-q'))) -and [int]$o[-1] -eq 0)
 
   # A clean worktree: removed, local and remote branch deleted, nothing left over.
   $t121 = Find-Safe '121'
