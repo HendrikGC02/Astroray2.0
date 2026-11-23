@@ -222,8 +222,9 @@ AR_API ar_status ar_session_wait(ar_session h, uint32_t timeout_ms) {
 // Progress is read after CLOSED too: everything below is the session's own or cached at detach.
 // ledger_bytes sums the session's own ledger and its scene's device ledger, so their total is what
 // this render holds on the device and 0002 D13's check compares it with the drop in free bytes. The two
-// ledgers are read under their own locks one after the other, so an allocation between the reads can
-// show in one ledger's sum and not yet in the other's. device_free_bytes and device_total_bytes are
+// ledgers' category totals are lock-free atomics read one after the other (a poll must never take a
+// lock an uploading worker needs), so an allocation between the reads can show in one ledger's sum
+// and not yet in the other's. device_free_bytes and device_total_bytes are
 // cuMemGetInfo's as the render thread published them with the last pass (0007 d14); this call makes no
 // device call. They stay 0 on the CPU device, which has no device memory.
 AR_API ar_status ar_session_get_progress(ar_session h, ar_progress* progress) {

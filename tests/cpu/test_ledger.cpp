@@ -6,6 +6,7 @@
 // "needs X GiB for <category>, Y available").
 #include <doctest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -152,6 +153,32 @@ TEST_CASE("ledger/a progress poll does not scan the live records") {
   CHECK(l.category_total(LedgerCategory::GEOMETRY) == 50000 * 16);
   CHECK(l.total() == 50000 * 16);
   CHECK(l.total() == l.scene_total(1));
+}
+
+TEST_CASE("ledger/a spinning poll does not starve a writer") {
+  // The host's progress poll spins; if it takes the ledger lock, even for one load, the uploading
+  // worker's add() waits behind it (an unfair mutex hands the lock back to the spinner).
+  Ledger l;
+  std::atomic<bool> stop{false};
+  std::atomic<uint64_t> polls{0}, sink{0};
+  std::vector<std::thread> readers;
+  for (int r = 0; r < 2; ++r)
+    readers.emplace_back([&] {
+      uint64_t n = 0;
+      while (!stop.load(std::memory_order_relaxed)) {
+        for (uint32_t c = 0; c < kLedgerCategoryCount; ++c) n += l.category_total(static_cast<LedgerCategory>(c)) + l.total();
+        polls.fetch_add(1, std::memory_order_relaxed);
+      }
+      sink.fetch_add(n, std::memory_order_relaxed);  // keeps the loads from being optimised away
+    });
+  while (polls.load() == 0) std::this_thread::yield();  // the readers are spinning
+  const auto t0 = std::chrono::steady_clock::now();
+  for (int i = 0; i < 20000; ++i) l.remove(l.add({1, 0}, LedgerCategory::GEOMETRY, 16));
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  stop.store(true);
+  for (std::thread& t : readers) t.join();
+  // 40,000 critical sections take a few milliseconds; the bound is generous for a 2-core host.
+  CHECK(ms < 1000.0);
 }
 
 }  // TEST_SUITE

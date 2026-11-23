@@ -95,7 +95,12 @@ int bench_cmd(int argc, char** argv) {
   for (;;) {
     if (ar_session_get_progress(s, &p) != AR_OK) { printf("bench: progress failed\n"); return kExitFailure; }
     if (p.state == AR_STATE_FAILED || p.state == AR_STATE_CLOSED || p.state == AR_STATE_TRIMMED) {
-      printf("bench: session ended in state %u\n", p.state);
+      print_session_state("session ended", p);
+      return kExitFailure;
+    }
+    // Nothing resumes a bench session, so a paused one would spin until the timeout.
+    if (p.state == AR_STATE_PAUSED) {
+      print_session_state("session is paused and nothing resumes it", p);
       return kExitFailure;
     }
     if (p.samples_per_pixel != last_spp) {
@@ -103,7 +108,10 @@ int bench_cmd(int argc, char** argv) {
       if (last_spp > a.warmup) ms.push_back(p.last_pass_ms);
     }
     if (settled_and_converged(p)) break;
-    if (std::chrono::steady_clock::now() > end) { printf("bench: not converged after 10 minutes\n"); return kExitFailure; }
+    if (std::chrono::steady_clock::now() > end) {
+      print_session_state("not converged after 10 minutes", p);
+      return kExitFailure;
+    }
     std::this_thread::yield();
   }
   if (ms.empty()) {
