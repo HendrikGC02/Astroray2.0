@@ -329,12 +329,13 @@ class TestInstanceCache(unittest.TestCase):
         self.assert_fresh(t)
 
     def test_modifier_added_splits_geometry(self):
-        # Not forgotten on purpose: the real-data answer is keyed by the evaluated data pointer too, which a
-        # modifier (or a geometry-nodes instance reusing one temporary object) changes.
+        # The edit is forgotten as classify_updates does for the object the depsgraph names; B, which shares the
+        # data but was not updated, keeps its entries, and the real-data answer is keyed by the evaluated data
+        # pointer too, which the modifier changes.
         a = make("A")
         make("B", a.data)
         self.build()
-        a.modifiers.new("w", "WAVE")
+        self.cache.forget(updated(lambda: a.modifiers.new("w", "WAVE")))
         t = self.build()
         self.assertNotEqual(t.arrays["geom_keys"][0], t.arrays["geom_keys"][1])
         self.assert_fresh(t)
