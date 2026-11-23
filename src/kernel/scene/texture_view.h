@@ -44,45 +44,36 @@ AR_FN const uint8_t* image_texel(const DeviceImageView& v, uint32_t x, uint32_t 
   return reinterpret_cast<const uint8_t*>(uintptr_t(v.texels)) + (uint64_t(y) * v.width + x) * image_texel_stride(v);
 }
 
-// IEEE 754 binary16 widened to binary32 by integer arithmetic only, so the CPU and the GPU return
-// the same bits (zero, subnormals, infinities and NaNs included; a NaN keeps its payload shifted
-// up). Never a target conversion intrinsic.
-// Ref: IEEE 754-2008 section 3.6 (binary16: 1 sign, 5 exponent bits with bias 15, 10 fraction bits).
+// IEEE 754 binary16 widened to binary32 exactly, so the CPU and the GPU return the same bits
+// (zero, subnormals, infinities and NaNs included; a NaN keeps its payload shifted up). Integer
+// arithmetic plus one float subtraction whose operands and result are exact normal floats (the
+// kernels keep denormals, -ftz=false); never a target conversion intrinsic. No branches: a
+// branchy or loop-based integer normalisation costs 0.4 s of shade_surface compile (B-05).
+// Ref: IEEE 754-2008 section 3.6 (binary16: 1 sign, 5 exponent bits with bias 15, 10 fraction
+// bits); the branchless widening of Giesen, "Fast half float conversions" (2012).
 AR_FN float half_to_float(uint16_t h) {
-  const uint32_t sign = (uint32_t(h) & 0x8000u) << 16;
-  uint32_t e = (uint32_t(h) >> 10) & 0x1fu;
-  uint32_t m = uint32_t(h) & 0x3ffu;
-  uint32_t bits;
-  if (e == 0x1fu) {
-    bits = sign | 0x7f800000u | (m << 13);
-  } else if (e != 0u) {
-    bits = sign | ((e + 112u) << 23) | (m << 13);  // rebias 15 -> 127
-  } else if (m == 0u) {
-    bits = sign;
-  } else {
-    // A subnormal is m * 2^-24: shift the leading one up to bit 10 and lower the exponent per shift.
-    int exp = 1;
-    while ((m & 0x400u) == 0u) {
-      m <<= 1;
-      --exp;
-    }
-    bits = sign | (uint32_t(exp + 112) << 23) | ((m & 0x3ffu) << 13);
-  }
-  return bit_cast<float>(bits);
+  uint32_t o = (uint32_t(h) & 0x7fffu) << 13;  // exponent and fraction in float position
+  const uint32_t e = o & 0x0f800000u;
+  o += 0x38000000u;                             // rebias 15 -> 127
+  o += e == 0x0f800000u ? 0x38000000u : 0u;     // Inf and NaN: exponent 31 must land on 255
+  // Zero and subnormals: o + one exponent step is 2^-14 * (1 + frac * 2^-10); taking 2^-14 away
+  // leaves frac * 2^-24 exactly (both operands and the result are normal floats).
+  const float sub = bit_cast<float>(o + 0x00800000u) - bit_cast<float>(0x38800000u);
+  return bit_cast<float>((e == 0u ? bit_cast<uint32_t>(sub) : o) | ((uint32_t(h) & 0x8000u) << 16));
 }
 
-// One half or float texel as RGBA floats, raw: grey expands to (g, g, g, 1) and RGB gets alpha 1,
-// as load_texel does for bytes. `p` is the texel's first byte (image_texel); stored components are
-// naturally aligned (every image buffer starts on a 16-byte boundary).
+AR_FN float load_component_wide(const uint8_t* p, uint32_t i, bool half) {
+  return half ? half_to_float(load_ro(reinterpret_cast<const uint16_t*>(p) + i)) : load_ro(reinterpret_cast<const float*>(p) + i);
+}
+
 AR_FN Texel load_texel_wide(const uint8_t* p, uint32_t channels, uint32_t format) {
   const bool half = format == uint32_t(TexFormat::HALF);
-  const uint16_t* h = reinterpret_cast<const uint16_t*>(p);
-  const float* f = reinterpret_cast<const float*>(p);
+  const bool grey = channels == 1u;
   Texel t;
-  const uint32_t n = channels == 1u ? 1u : (channels == 4u ? 4u : 3u);
-  for (uint32_t c = 0; c < n; ++c) t.v[c] = half ? half_to_float(load_ro(h + c)) : load_ro(f + c);
-  if (n == 1u) t.v[1] = t.v[2] = t.v[0];
-  if (n != 4u) t.v[3] = 1.0f;
+  t.v[0] = load_component_wide(p, 0u, half);
+  t.v[1] = load_component_wide(p, grey ? 0u : 1u, half);
+  t.v[2] = load_component_wide(p, grey ? 0u : 2u, half);
+  t.v[3] = channels == 4u ? load_component_wide(p, 3u, half) : 1.0f;
   return t;
 }
 
