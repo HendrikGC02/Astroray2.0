@@ -209,6 +209,9 @@ TEST_CASE("compiler_fold/non foldable ops stay in the program") {
     const OpMeta& m = op_meta_table()[k];
     uint32_t nf = 0, ni = 0;
     if (m.foldable || m.result_type[0] == '\0' || !op_param_counts(m.op, &nf, &ni)) continue;
+    // These two lower to a SpectrumRef in the constant block, never to a program op (see
+    // compiler/spectrum kinds accepted per semantic).
+    if (m.op == Op::BLACKBODY || m.op == Op::CAUCHY_ABBE) continue;
     INFO(m.name);
     GB g;
     std::vector<int> leaf;

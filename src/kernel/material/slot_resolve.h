@@ -56,8 +56,8 @@ AR_FN Spec blackbody_spec(Real T, Real scale, const Lambda& lam) {
 
 // Fraunhofer lines of the Abbe number (nm). Ref: OpenPBR 1.1.2 dispersion section (index.html,
 // "Dispersion"): lambda_C = 656.3, lambda_d = 587.6, lambda_F = 486.1.
-inline constexpr double kLambdaC = 656.3, kLambdaD = 587.6, kLambdaF = 486.1;
-inline constexpr double kCauchyLambdaMin = 360.0, kCauchyLambdaMax = 830.0;  // 0003 d8
+inline constexpr double kLambdaC = double(656.3), kLambdaD = double(587.6), kLambdaF = double(486.1);
+inline constexpr double kCauchyLambdaMin = double(360.0), kCauchyLambdaMax = double(830.0);  // 0003 d8
 
 // Cauchy n(l) = A + B / l^2 with B = s (n_d - 1) / (V_d (l_F^-2 - l_C^-2)) and A = n_d - B / l_d^2,
 // written as n_d + B (l^-2 - l_d^-2) so the d line returns n_d exactly. The OpenPBR Abbe number of
