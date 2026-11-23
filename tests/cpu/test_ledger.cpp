@@ -155,30 +155,35 @@ TEST_CASE("ledger/a progress poll does not scan the live records") {
   CHECK(l.total() == l.scene_total(1));
 }
 
-TEST_CASE("ledger/a spinning poll does not starve a writer") {
-  // The host's progress poll spins; if it takes the ledger lock, even for one load, the uploading
-  // worker's add() waits behind it (an unfair mutex hands the lock back to the spinner).
+TEST_CASE("ledger/a poll does not wait for the ledger lock") {
+  // The progress poll spins in the host while workers add and remove records; a poll that takes the
+  // lock waits behind every critical section, and an unfair mutex hands it back to the spinner. A
+  // thread that holds the lock for a long time (records() copies 2 M records inside it) makes any
+  // locked read slow, while a lock-free read is unaffected. The time of all the polls together is
+  // bounded, since the unfair mutex lets later polls slip in once the first has waited.
   Ledger l;
-  std::atomic<bool> stop{false};
-  std::atomic<uint64_t> polls{0}, sink{0};
-  std::vector<std::thread> readers;
-  for (int r = 0; r < 2; ++r)
-    readers.emplace_back([&] {
-      uint64_t n = 0;
-      while (!stop.load(std::memory_order_relaxed)) {
-        for (uint32_t c = 0; c < kLedgerCategoryCount; ++c) n += l.category_total(static_cast<LedgerCategory>(c)) + l.total();
-        polls.fetch_add(1, std::memory_order_relaxed);
-      }
-      sink.fetch_add(n, std::memory_order_relaxed);  // keeps the loads from being optimised away
-    });
-  while (polls.load() == 0) std::this_thread::yield();  // the readers are spinning
-  const auto t0 = std::chrono::steady_clock::now();
-  for (int i = 0; i < 20000; ++i) l.remove(l.add({1, 0}, LedgerCategory::GEOMETRY, 16));
-  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  for (int i = 0; i < 2000000; ++i) l.add({1, 0}, LedgerCategory::GEOMETRY, 16);
+  std::atomic<bool> stop{false}, holding{false};
+  std::thread holder([&] {
+    while (!stop.load(std::memory_order_relaxed)) {
+      holding.store(true, std::memory_order_relaxed);
+      const size_t n = l.records().size();
+      if (n == 0) break;
+    }
+  });
+  while (!holding.load(std::memory_order_relaxed)) std::this_thread::yield();
+  double total_us = 0;
+  uint64_t seen = 0;
+  for (int i = 0; i < 40; ++i) {
+    const auto t0 = std::chrono::steady_clock::now();
+    seen += l.category_total(LedgerCategory::GEOMETRY) + l.total();
+    total_us += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+  }
   stop.store(true);
-  for (std::thread& t : readers) t.join();
-  // 40,000 critical sections take a few milliseconds; the bound is generous for a 2-core host.
-  CHECK(ms < 1000.0);
+  holder.join();
+  CHECK(seen == 40ull * 2 * 2000000 * 16);
+  // A locked read waits for a 2 M-record copy (tens of milliseconds); 40 lock-free ones take microseconds.
+  CHECK(total_us < 20000.0);
 }
 
 }  // TEST_SUITE
