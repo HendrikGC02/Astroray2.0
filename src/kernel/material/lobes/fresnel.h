@@ -60,4 +60,39 @@ AR_FN Spec fresnel_dielectric_weighted(Real cos_i, const Spec& ior, Real weight)
   return f;
 }
 
+// OpenPBR's metal Fresnel, the F82-tint model (Kutz, Hasan, Edmondson 2021, extending
+// Hoffman 2019), per lane with f0 = the reflectivity at normal incidence and tint = the
+// fraction of the Schlick curve reached at mu_bar = 1/7 (about 82 degrees). The metal
+// lobe's specular_weight multiplies the result outside this function.
+// Ref: third_party/_cache/refs/openpbr-781573a80cb2/index.html (OpenPBR Surface 1.1.2,
+// Metal section), lines 546-556:
+//   F_Schlick(mu) = F_0 + (1 - F_0) (1 - mu)^5
+//   F_82(mu) = F_Schlick(mu) - mu (1 - mu)^6 / (mu_bar (1 - mu_bar)^6) (F_Schlick(mu_bar) - F(mu_bar))
+//   "where mu_bar = 1/7", F(mu_bar) = specular_color * F_Schlick(mu_bar).
+// The spec applies no clamp to F_82; open_pbr_surface.mtlx (lines 411-418) only wires
+// color0 / color82 into MaterialX's generalized_schlick_bsdf and does not restate the
+// expression. cos_i is clamped to [0, 1] (task contract: the lobe passes dot(wo, m) > 0).
+// tint = 1 removes the correction term and leaves plain Schlick (index.html line 562).
+inline constexpr Real kF82MuBar = Real(1) / Real(7);  // index.html line 554
+AR_FN Real fresnel_schlick(Real f0, Real cos_i) {
+  const Real c = Real(1) - min(max(cos_i, Real(0)), Real(1));
+  const Real c2 = c * c;
+  return f0 + (Real(1) - f0) * (c2 * c2 * c);
+}
+AR_FN Spec fresnel_f82(const Spec& f0, const Spec& tint, Real cos_i) {
+  const Real mu = min(max(cos_i, Real(0)), Real(1));
+  const Real om = Real(1) - mu;
+  const Real om3 = om * om * om;
+  const Real ob = Real(1) - kF82MuBar;
+  const Real ob3 = ob * ob * ob;
+  // mu (1 - mu)^6 / (mu_bar (1 - mu_bar)^6): 1 at mu = mu_bar, its maximum.
+  const Real w = (mu * om3 * om3) / (kF82MuBar * ob3 * ob3);
+  Spec f;
+  for (int i = 0; i < kLanes; ++i) {
+    const Real s_bar = fresnel_schlick(f0.v[i], kF82MuBar);
+    f.v[i] = fresnel_schlick(f0.v[i], mu) - w * (s_bar - tint.v[i] * s_bar);
+  }
+  return f;
+}
+
 AR_NS_END
