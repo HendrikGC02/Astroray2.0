@@ -3,8 +3,11 @@
 
   opsgen.py [--root DIR] [--out DIR]   write _ops.py and coverage.csv
   opsgen.py --self-test                prove a volume-reachable row without an
-                                       interval rule, and an ineligible foldable
-                                       row, are refused
+                                       interval rule, an ineligible foldable
+                                       row and malformed headers are refused
+
+_ops.py also carries the engine ids the addon writes into graphs (RECORD_SLOT, TEX_MODE, SEMANTIC),
+parsed from the kernel headers that define them, so the addon holds no copy.
 
 Ref: docs/decisions/0005-material-model.md items 30, 40; 0006 D7.
 """
@@ -23,6 +26,9 @@ OPERANDS = ("reg", "imm", "uvset", "lift", "regrgbs", "slotimm", "jmpoff")
 OPS_DEF = "src/kernel/vm/ops.def"
 LOWERING = "blender/astroray/materials/lowering_table.py"
 NODE_LIST = "tests/data/shader_node_types_5_3.txt"
+STORE_SLOT_H = "src/kernel/vm/ops/store_slot.h"
+TEX_IMAGE_H = "src/kernel/vm/ops/tex_image.h"
+SPECTRUM_REF_H = "src/kernel/material/spectrum_ref.h"
 
 
 class OpsError(Exception):
@@ -94,16 +100,87 @@ def parse_table(text):
     return rows
 
 
-def read_lowering(text):
-    """The LOWERING dict literal of lowering_table.py, without executing it."""
+def _strip_comments(text):
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def _macro_body(text, name, where):
+    """Text of `#define name(X)` up to the next #define, continuation lines included."""
+    m = re.search(r"#define\s+" + name + r"\(X\)(.*?)(?=^\s*#define|\Z)", _strip_comments(text), re.S | re.M)
+    if not m:
+        raise OpsError(f"{where}: no #define {name}(X)")
+    return m.group(1)
+
+
+def parse_semantics(text):
+    """SpectrumSemantic enumerator name -> value (spectrum_ref.h)."""
+    m = re.search(r"enum\s+class\s+SpectrumSemantic[^{]*\{(.*?)\}", _strip_comments(text), re.S)
+    if not m:
+        raise OpsError(f"{SPECTRUM_REF_H}: no enum class SpectrumSemantic")
+    out, nxt = {}, 0
+    for item in m.group(1).split(","):
+        item = item.strip()
+        if not item:
+            continue
+        e = re.fullmatch(r"(\w+)(?:\s*=\s*(\d+))?", item)
+        if not e:
+            raise OpsError(f"{SPECTRUM_REF_H}: cannot parse SpectrumSemantic enumerator {item!r}")
+        nxt = int(e.group(2)) if e.group(2) else nxt
+        out[e.group(1)] = nxt
+        nxt += 1
+    if not out:
+        raise OpsError(f"{SPECTRUM_REF_H}: SpectrumSemantic has no enumerators")
+    return out
+
+
+def parse_record_slots(text, semantics):
+    """RecordSlot name -> id: scalars, then spectral, then frames, as store_slot.h's enum lists them."""
+    scalars = re.findall(r"X\((\w+)\)", _macro_body(text, "AR_RECORD_SCALARS", STORE_SLOT_H))
+    spectral = re.findall(r"X\((\w+)\s*,\s*\w+\s*,\s*(\w+)\)", _macro_body(text, "AR_RECORD_SPECTRAL", STORE_SLOT_H))
+    frames = re.findall(r"X\((\w+)\)", _macro_body(text, "AR_RECORD_FRAMES", STORE_SLOT_H))
+    if not scalars or not spectral or not frames:
+        raise OpsError(f"{STORE_SLOT_H}: AR_RECORD_SCALARS, AR_RECORD_SPECTRAL and AR_RECORD_FRAMES must each list a field")
+    for name, sem in spectral:
+        if sem not in semantics:
+            raise OpsError(f"{STORE_SLOT_H}: {name} names unknown SpectrumSemantic {sem}")
+    names = scalars + [n for n, _ in spectral] + frames
+    if len(set(names)) != len(names):
+        raise OpsError(f"{STORE_SLOT_H}: duplicate record field name")
+    return {n: i for i, n in enumerate(names)}
+
+
+def parse_tex_modes(text):
+    """TEX_IMAGE mode bits LINEAR and EXTEND, from kTexLinear and kTexExtend (tex_image.h)."""
+    found = {m.group(1).upper(): int(m.group(2))
+             for m in re.finditer(r"\bkTex(\w+)\s*=\s*(\d+)u", _strip_comments(text))}
+    out = {}
+    for k in ("LINEAR", "EXTEND"):
+        if k not in found:
+            raise OpsError(f"{TEX_IMAGE_H}: no kTex{k.capitalize()} = <n>u")
+        out[k] = found[k]
+    return out
+
+
+def read_lowering(text, var="LOWERING"):
+    """A dict literal of lowering_table.py, without executing it."""
     for n in ast.parse(text).body:
-        if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "LOWERING" for t in n.targets):
+        if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == var for t in n.targets):
             return ast.literal_eval(n.value)
-    raise OpsError(f"{LOWERING}: no LOWERING assignment")
+    raise OpsError(f"{LOWERING}: no {var} assignment")
 
 
-def coverage(rows, lowering, nodes):
+def coverage(rows, lowering, nodes, planned=None):
+    """One csv row per node-list entry. LOWERING nodes are as declared; PLANNED nodes (not lowered yet)
+    are approximated or ignored; every other node is unsupported (magenta)."""
+    planned = planned or {}
     op_names = {r["name"] for r in rows}
+    both = sorted(set(lowering) & set(planned))
+    if both:
+        raise OpsError(f"{LOWERING}: {both[0]} is in both LOWERING and PLANNED")
+    for node, ent in planned.items():
+        if ent.get("disposition") not in ("approximated", "ignored"):
+            raise OpsError(f"{LOWERING}: PLANNED {node}: disposition must be approximated or ignored")
+    lowering = {**lowering, **planned}
     for node, ent in lowering.items():
         if node not in nodes:
             raise OpsError(f"{LOWERING}: {node} is not a ShaderNode type of Blender 5.3")
@@ -122,7 +199,7 @@ def coverage(rows, lowering, nodes):
     return "\n".join(out) + "\n"
 
 
-def emit_ops_py(rows):
+def emit_ops_py(rows, slots, tex_modes, semantics):
     L = ["# SPDX-License-Identifier: Apache-2.0",
          "# Generated by tools/opsgen.py from src/kernel/vm/ops.def. Do not edit.",
          "OPS = ["]
@@ -130,7 +207,9 @@ def emit_ops_py(rows):
         L.append(f"    dict(name={r['name']!r}, id={i}, arity={r['arity']}, operands={r['operands']!r}, "
                  f"result={r['result']!r}, volume_reachable={r['volume']}, test_only={r['test_only']}, "
                  f"foldable={r['foldable']}),")
-    L += ["]", "OP_ID = {o['name']: o['id'] for o in OPS}", ""]
+    L += ["]", "OP_ID = {o['name']: o['id'] for o in OPS}",
+          "# RecordSlot (store_slot.h), TEX_IMAGE mode bits (tex_image.h), SpectrumSemantic (spectrum_ref.h)",
+          f"RECORD_SLOT = {slots!r}", f"TEX_MODE = {tex_modes!r}", f"SEMANTIC = {semantics!r}", ""]
     return "\n".join(L)
 
 
@@ -157,10 +236,23 @@ def self_test():
         ("an eight-field row",
          'AR_OP(BAD, 0, "reg", "f32", CHEAP, NONE_SURFACE_ONLY, false, false)', "expected 9 fields"),
     ]
+    good_sem = "enum class SpectrumSemantic : uint8_t { REFLECTANCE = 0, UNBOUNDED, IOR };"
+    good_ss = ("#define AR_RECORD_SCALARS(X) X(a) X(b)\n#define AR_RECORD_SPECTRAL(X) X(c, C, IOR)\n"
+               "#define AR_RECORD_FRAMES(X) X(d)\n")
+    cases += [
+        ("a header without the semantic enum", lambda: parse_semantics("struct X {};"), "no enum class"),
+        ("a record header without the spectral list",
+         lambda: parse_record_slots("#define AR_RECORD_SCALARS(X) X(a)\n", {}), "AR_RECORD_SPECTRAL"),
+        ("a spectral field with an unknown semantic",
+         lambda: parse_record_slots(good_ss.replace("IOR", "NOPE"), parse_semantics(good_sem)), "unknown SpectrumSemantic"),
+        ("a duplicate record field",
+         lambda: parse_record_slots(good_ss.replace("X(d)", "X(a)"), parse_semantics(good_sem)), "duplicate"),
+        ("a tex header without kTexExtend", lambda: parse_tex_modes("kTexLinear = 1u;"), "kTexExtend"),
+    ]
     bad = 0
     for what, row, needle in cases:
         try:
-            parse_table(row)
+            parse_table(row) if isinstance(row, str) else row()
         except OpsError as e:
             if needle in str(e):
                 print(f"opsgen self-test: refused {what}: {e}")
@@ -185,12 +277,16 @@ def main():
     try:
         rows = parse_table(rd(OPS_DEF))
         nodes = [ln.strip() for ln in rd(NODE_LIST).splitlines() if ln.strip()]
-        csv = coverage(rows, read_lowering(rd(LOWERING)), nodes)
+        low = rd(LOWERING)
+        csv = coverage(rows, read_lowering(low), nodes, read_lowering(low, "PLANNED"))
+        semantics = parse_semantics(rd(SPECTRUM_REF_H))
+        slots = parse_record_slots(rd(STORE_SLOT_H), semantics)
+        tex_modes = parse_tex_modes(rd(TEX_IMAGE_H))
     except OpsError as e:
         print(f"opsgen: {e}", file=sys.stderr)
         return 1
     os.makedirs(out, exist_ok=True)
-    write_if_changed(os.path.join(out, "_ops.py"), emit_ops_py(rows))
+    write_if_changed(os.path.join(out, "_ops.py"), emit_ops_py(rows, slots, tex_modes, semantics))
     write_if_changed(os.path.join(out, "coverage.csv"), csv)
     print(f"opsgen: {len(rows)} ops, {len(nodes)} node types -> {out}")
     return 0

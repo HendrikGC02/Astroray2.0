@@ -59,7 +59,7 @@ add_custom_command(
   COMMENT "abigen --emit astroray.h"
   VERBATIM)
 
-# Opcode table outputs: _ops.py and coverage.csv; a volume-reachable op without
+# Opcode table outputs: _ops.py (ops plus the record-slot, TEX_IMAGE mode and semantic ids) and coverage.csv; a volume-reachable op without
 # an interval rule fails the build (0005 item 30, 0006 D7).
 set(ASTRORAY_OPSGEN_STAMP ${CMAKE_BINARY_DIR}/opsgen.stamp)
 add_custom_command(
@@ -69,6 +69,8 @@ add_custom_command(
   DEPENDS ${CMAKE_SOURCE_DIR}/tools/opsgen.py ${CMAKE_SOURCE_DIR}/src/kernel/vm/ops.def
           ${CMAKE_SOURCE_DIR}/blender/astroray/materials/lowering_table.py
           ${CMAKE_SOURCE_DIR}/tests/data/shader_node_types_5_3.txt
+          ${CMAKE_SOURCE_DIR}/src/kernel/vm/ops/store_slot.h ${CMAKE_SOURCE_DIR}/src/kernel/vm/ops/tex_image.h
+          ${CMAKE_SOURCE_DIR}/src/kernel/material/spectrum_ref.h
   COMMENT "opsgen"
   VERBATIM)
 add_custom_target(astroray_opsgen ALL DEPENDS ${ASTRORAY_OPSGEN_STAMP})

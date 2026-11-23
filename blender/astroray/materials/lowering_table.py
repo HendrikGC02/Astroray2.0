@@ -2,8 +2,11 @@
 # Node lowering table: bpy ShaderNode type name -> how the material compiler
 # handles it. tools/opsgen.py joins it with ops.def and the 5.3 node list into
 # the coverage matrix; a node type missing here is `unsupported` (magenta).
-# translate.py lowers exactly the types listed here (a test pins the two sets
-# equal), so a lowering is one row here plus one function there.
+# translate.py lowers exactly the types listed in LOWERING (a test pins the two sets
+# equal), so a lowering is one row here plus one function there. PLANNED lists the
+# nodes that have no lowering yet but are not `unsupported` by design (0005 item 41);
+# they render magenta until lowered, and the matrix says what they will be. A node in
+# neither dict is `unsupported`; opsgen refuses a node in both.
 # Ref: docs/decisions/0005-material-model.md items 40, 41, 42.
 #
 # Schema, read without executing this file:
@@ -47,5 +50,19 @@ LOWERING = {
         "disposition": "implemented",
         "ops": ["CONST_F32", "CONST_F32X3", "EMIT_LE"],
         "note": "constant Color times Strength only",
+    },
+}
+
+# Not lowered yet; disposition "approximated" or "ignored" (same row schema, no ops yet).
+PLANNED = {
+    "ShaderNodeAmbientOcclusion": {
+        "disposition": "approximated",
+        "ops": [],
+        "note": "no-op: Color passed through and AO = 1 (0005 item 41; owner decision 26)",
+    },
+    "ShaderNodeBevel": {
+        "disposition": "approximated",
+        "ops": [],
+        "note": "no-op: the input normal passes through (0005 item 41; owner decision 26)",
     },
 }

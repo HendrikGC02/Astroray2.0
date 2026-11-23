@@ -18,3 +18,4 @@ Budget: host and tools only; +1 s of gate at most (python tests), stop and ask a
 Depends on: none.
 Size: M (about 300 lines without tests, 108 data rows excluded); stop and report at 2x.
 Progress:
+- opsgen generates RECORD_SLOT, TEX_MODE, SEMANTIC; PLANNED dict; translate reads them; tests added; canary pending.

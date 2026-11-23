@@ -10,7 +10,6 @@ import ctypes
 import importlib
 import importlib.util
 import os
-import re
 import sys
 import tempfile
 import types
@@ -43,12 +42,14 @@ def _load(name, path):
 _pkg = types.ModuleType("ar_addon")
 _pkg.__path__ = [ADDON]
 sys.modules["ar_addon"] = _pkg
+# The build stages the generated _ops at the package root; translate reads its ids from there.
+OPS = _load("ar_ops", os.path.join(GEN, "_ops.py"))
+sys.modules["ar_addon._ops"] = OPS
 translate = importlib.import_module("ar_addon.materials.translate")
 world_sync = importlib.import_module("ar_addon.sync.world")
 from ar_addon.sync import camera, edit as edit_mod, instances, keys, mesh, settings  # noqa: E402
 
 ABI = _load("ar_abi", os.path.join(GEN, "_abi.py"))
-OPS = _load("ar_ops", os.path.join(GEN, "_ops.py"))
 PROPS = _load("ar_properties", os.path.join(ADDON, "properties.py"))
 LOWERING_TABLE = _load("ar_lowering", os.path.join(ADDON, "materials", "lowering_table.py"))
 OP = OPS.OP_ID
@@ -263,7 +264,7 @@ class TestMaterials(unittest.TestCase):
         node(mat.node_tree, "ShaderNodeBsdfPrincipled").inputs["Specular IOR Level"].default_value = 0.0
         img, entries, graph = render(scene, plane, mat, world)
         nodes = decode(graph)
-        stores = [i for i, n in enumerate(nodes) if n["op"] == "STORE_SLOT" and n["i32"] == [translate.SLOT_SPECULAR_WEIGHT]]
+        stores = [i for i, n in enumerate(nodes) if n["op"] == "STORE_SLOT" and n["i32"] == [OPS.RECORD_SLOT["specular_weight"]]]
         self.assertEqual(len(stores), 1)
         src = nodes[inputs_of(graph, stores[0])[0]]
         self.assertEqual((src["op"], src["f32"]), ("CONST_F32", [0.0]))
@@ -272,7 +273,7 @@ class TestMaterials(unittest.TestCase):
         node(mat.node_tree, "ShaderNodeBsdfPrincipled").inputs["Specular IOR Level"].default_value = 0.3
         em = translate.translate_material(mat, keys.KeyMap(), OP)
         n3 = decode(em)
-        st = next(i for i, n in enumerate(n3) if n["op"] == "STORE_SLOT" and n["i32"] == [translate.SLOT_SPECULAR_WEIGHT])
+        st = next(i for i, n in enumerate(n3) if n["op"] == "STORE_SLOT" and n["i32"] == [OPS.RECORD_SLOT["specular_weight"]])
         self.assertAlmostEqual(n3[inputs_of(em, st)[0]]["f32"][0], 0.6, places=6)
         rgb = centre_rgb(img)
         print(f"RESULT specular level 0 centre rgb {rgb}, entries {entries}")
@@ -330,12 +331,12 @@ class TestMaterials(unittest.TestCase):
         nodes = decode(em)
         tex_ops = [n for n in nodes if n["op"] == "TEX_IMAGE"]
         self.assertEqual(len(tex_ops), 1)
-        self.assertEqual(tex_ops[0]["i32"], [km.key(("image", tex.image.session_uid)), translate.TEX_EXTEND])
+        self.assertEqual(tex_ops[0]["i32"], [km.key(("image", tex.image.session_uid)), OPS.TEX_MODE["EXTEND"]])
         self.assertEqual([n["op"] for n in nodes if n["op"] in ("RGB_LIFT", "LOAD_CTX_UV")], ["LOAD_CTX_UV", "RGB_LIFT"])
         self.assertEqual(unsupported_strings(em), [])
         tex.interpolation, tex.extension = "Linear", "REPEAT"
         lin = [n for n in decode(translate.translate_material(mat, km, OP)) if n["op"] == "TEX_IMAGE"]
-        self.assertEqual(lin[0]["i32"][1], translate.TEX_LINEAR)
+        self.assertEqual(lin[0]["i32"][1], OPS.TEX_MODE["LINEAR"])
         tex.interpolation = "Cubic"
         self.assertEqual(unsupported_strings(translate.translate_material(mat, km, OP)),
                          ["Image Texture.interpolation"])
@@ -374,6 +375,10 @@ class TestMaterials(unittest.TestCase):
         by = {r["node_type"]: r["disposition"] for r in rows}
         for n in translate.lowered_types():
             self.assertEqual(by[n], "implemented", n)
+        for n, ent in LOWERING_TABLE.PLANNED.items():
+            self.assertEqual(by[n], ent["disposition"], n)
+            self.assertNotIn(n, translate.lowered_types())
+        self.assertEqual(sorted(n for n, d in by.items() if d == "implemented"), sorted(translate.lowered_types()))
 
     def test_uv_into_colour_and_colour_into_vector_are_reported_by_consumer(self):
         scene, plane, mat, world = new_scene()
@@ -408,26 +413,6 @@ class TestMaterials(unittest.TestCase):
         self.assertEqual(translate.translate_material(mat, keys.KeyMap(), OP).emission_sampling, "FRONT")
         for name in translate.EMISSION_SAMPLING_NAMES:
             self.assertTrue(hasattr(ABI, "AR_EMISSION_SAMPLING_" + name), name)
-
-    def test_engine_constants_match_the_headers(self):
-        """The constants with no generated export are pinned to the C++ headers they copy."""
-        def read(*parts):
-            with open(os.path.join(ROOT, "src", "kernel", *parts), encoding="utf-8") as f:
-                return f.read()
-
-        ss = read("vm", "ops", "store_slot.h")
-        scalar_names = re.findall(r"X\((\w+)\)", re.search(r"AR_RECORD_SCALARS\(X\)(.*?)// The spectral", ss, re.S).group(1))
-        spectral = re.findall(r"X\((\w+), \w+, \w+\)", re.search(r"AR_RECORD_SPECTRAL\(X\)(.*)", ss).group(1).split("\n")[0])
-        ids = {n: i for i, n in enumerate(scalar_names + spectral)}
-        self.assertEqual((ids["specular_weight"], ids["specular_roughness"], ids["base_color"]),
-                         (translate.SLOT_SPECULAR_WEIGHT, translate.SLOT_SPECULAR_ROUGHNESS, translate.SLOT_BASE_COLOR))
-        ti = read("vm", "ops", "tex_image.h")
-        self.assertEqual(int(re.search(r"kTexLinear = (\d+)u", ti).group(1)), translate.TEX_LINEAR)
-        self.assertEqual(int(re.search(r"kTexExtend = (\d+)u", ti).group(1)), translate.TEX_EXTEND)
-        sr = read("material", "spectrum_ref.h")
-        first = re.search(r"enum class SpectrumSemantic[^{]*\{\s*(\w+) = 0", sr).group(1)
-        self.assertEqual(first, "REFLECTANCE")
-        self.assertEqual(translate.SEM_REFLECTANCE, 0)
 
     def test_translation_cache_retranslates_only_what_changed(self):
         scene, plane, mat, world = new_scene()
