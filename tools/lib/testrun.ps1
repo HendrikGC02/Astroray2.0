@@ -115,7 +115,7 @@ function Get-ArTestVerdict($results) {
 # failing lines.
 function Select-ArTestLines([string]$txt, [int]$max) {
   $lines = @($txt -split "`r?`n")
-  $sum = @($lines | Where-Object { $_ -match 'test cases:\s*\d+|^Ran \d+ test|^(OK|FAILED)\b' })
-  $bad = @($lines | Where-Object { $_ -match '\b(ERROR|FAIL|FAILED|Error|Traceback|error:)\b|^\s*CHECK|REQUIRE' -and $sum -notcontains $_ })
+  $sum = @($lines | Where-Object { $_ -match 'test cases:\s*\d+|assertions:\s*\d+|^Ran \d+ test|^(OK|FAILED)\b' })
+  $bad = @($lines | Where-Object { $_ -cmatch '\b(ERROR|FAIL|Error|Traceback|error)\b|^\s*(CHECK|REQUIRE)' -and $sum -notcontains $_ })
   return @(@($sum) + @($bad) | Select-Object -First $max)
 }
