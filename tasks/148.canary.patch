@@ -1,8 +1,8 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index b49ac76..075123c 100644
+index 99b0fcc..067bb60 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
-@@ -207,7 +207,7 @@ bool build_code(const Work& w, const std::vector<Item>& items, std::vector<uint3
+@@ -209,7 +209,7 @@ bool build_code(const Work& w, const std::vector<Item>& items, std::vector<uint3
    }
    auto read = [&](int node, int inst, int at) {
      auto f = value_of.find({node, inst});
@@ -11,7 +11,7 @@ index b49ac76..075123c 100644
      if (f == value_of.end()) return -1;
      value_last[size_t(f->second)] = std::max(value_last[size_t(f->second)], at);
      return f->second;
-@@ -517,7 +517,6 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
+@@ -519,7 +519,6 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
        walk.push_back(i32[m.i32_first + 1]);
      }
    }
@@ -19,7 +19,7 @@ index b49ac76..075123c 100644
    std::map<int, int> inst_of;  // child id -> instance (1-based layout index)
    for (size_t k = 0; k < order.size(); ++k) inst_of[order[k]] = int(k) + 1;
  
-@@ -584,7 +583,6 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
+@@ -586,7 +585,6 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
        st.push_back({i32[w.g.nodes[size_t(m)].i32_first + 1], -1});
      }
    }
@@ -27,7 +27,7 @@ index b49ac76..075123c 100644
  
    std::set<uint32_t> images, missing;
    std::vector<char> used(n, 0);
-@@ -862,7 +860,7 @@ void finish(MaterialOutput* m) {
+@@ -963,7 +961,7 @@ VolumeOutput compile_volume(const ar_graph_desc& d, const ar::Rgb2SpecTable& tab
  uint32_t material_flags(const CompileResult& r) {
    using RS = ar::RecordSlot;
    bool delta = r.children.empty() && child_may_be_delta(r.block, r.runtime_slots);
@@ -36,7 +36,7 @@ index b49ac76..075123c 100644
    uint32_t flags = delta ? ar::MAY_BE_DELTA : 0u;
    if (per_point(r, RS::geometry_opacity) || r.block.geometry_opacity < 1.0f) flags |= ar::NON_OPAQUE;
    const bool emission_entry = r.program.size() > 2 && r.program[2] != 0;
-@@ -892,7 +890,7 @@ void set_medium_fields(MaterialOutput* m, uint32_t medium_priority) {
+@@ -993,7 +991,7 @@ void set_medium_fields(MaterialOutput* m, uint32_t medium_priority) {
    if ((m->compiled.runtime_slots >> uint32_t(ar::RecordSlot::specular_ior) & 1u) != 0) {
      b.interior_ior = ar::make_const_ref(ar::SpectrumSemantic::IOR, ar::Real(1));
      add_entry(m, AR_REPORT_NODE_APPROXIMATED, "textured specular_ior: interior_ior is 1");
