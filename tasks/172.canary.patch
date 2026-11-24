@@ -1,0 +1,110 @@
+diff --git a/blender/astroray/materials/translate.py b/blender/astroray/materials/translate.py
+index ce0090c..2006208 100644
+--- a/blender/astroray/materials/translate.py
++++ b/blender/astroray/materials/translate.py
+@@ -249,9 +249,6 @@ def _tex_environment(em, node, keymap, socket_name):
+     if node.interpolation not in ("Linear", "Closest"):
+         em.unsupported("Environment Texture.interpolation")
+         return None
+-    if node.projection != "EQUIRECTANGULAR":
+-        em.unsupported("Environment Texture.projection")
+-        return None
+     vec = node.inputs["Vector"]
+     if _link_of(vec) is not None:
+         report_link(em, vec, "Environment Texture.Vector")
+@@ -261,7 +258,7 @@ def _tex_environment(em, node, keymap, socket_name):
+         em.unsupported("Environment Texture.image key")  # the 32-bit key of _tex_image
+         return None
+     p = em.add("LOAD_CTX_P")
+-    n = em.add("TEX_ENVIRONMENT", i32=(key, TEX_LINEAR if node.interpolation == "Linear" else 0))
++    n = em.add("TEX_ENVIRONMENT", i32=(key, TEX_LINEAR if node.interpolation == "Closest" else 0))
+     em.link(p, n, 0)
+     return n
+ 
+diff --git a/src/host/light/light_builder.cpp b/src/host/light/light_builder.cpp
+index 93e8ef8..ce8e94b 100644
+--- a/src/host/light/light_builder.cpp
++++ b/src/host/light/light_builder.cpp
+@@ -77,7 +77,7 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
+       const LightInput& li = in[i];
+       // A program world has no importance until its table exists (173): pmf 0 means nothing samples
+       // it, so a BSDF hit that escapes takes MIS weight 1 (unbiased, noisier than with NEE).
+-      if (li.record.type == uint8_t(ar::LightType::WORLD_CONST) && (li.record.flags & ar::kLightWorldProgram) != 0) {
++      if (li.record.type == uint8_t(ar::LightType::WORLD_CONST) && (li.record.flags & ar::kLightWorldProgram) == 0) {
+         imps[i] = 0.0;
+         continue;
+       }
+diff --git a/src/host/material/graph.cpp b/src/host/material/graph.cpp
+index 46fa057..a477545 100644
+--- a/src/host/material/graph.cpp
++++ b/src/host/material/graph.cpp
+@@ -177,7 +177,7 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
+       return *err = at(i, "UV set index out of range"), false;
+     if (o.op == Op::RGB_LIFT && uint32_t(g->i32[o.i32_first]) > uint32_t(ar::SpectrumSemantic::ILLUMINANT))
+       return *err = at(i, "RGB_LIFT semantic must be REFLECTANCE, UNBOUNDED or ILLUMINANT"), false;
+-    if (o.op == Op::TEX_ENVIRONMENT && (uint32_t(g->i32[o.i32_first + 1]) & ~ar::kTexLinear) != 0u)
++    if (o.op == Op::TEX_ENVIRONMENT && (uint32_t(g->i32[o.i32_first + 1]) & ~ar::kTexModeMask) != 0u)
+       return *err = at(i, "TEX_ENVIRONMENT mode must be CLOSEST (0) or LINEAR (1): environment images always repeat"), false;
+     if (o.op == Op::TEX_IMAGE && (uint32_t(g->i32[o.i32_first + 1]) & ~ar::kTexModeMask) != 0u)
+       return *err = at(i, "TEX_IMAGE mode must be CLOSEST (0) or LINEAR (1) plus REPEAT (0) or EXTEND (2)"), false;
+diff --git a/src/host/material/material_store.cpp b/src/host/material/material_store.cpp
+index 900fbdc..ffe372d 100644
+--- a/src/host/material/material_store.cpp
++++ b/src/host/material/material_store.cpp
+@@ -452,7 +452,7 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
+     if (!world_) {
+       if (world_out_) old_world = world_out_->subject;
+       world_out_.reset();
+-    } else if (world_compiles(o, world_) || (world_out_ && uses_changed_image(world_out_->images, o))) {
++    } else if (world_compiles(o, world_)) {
+       auto gi = graphs_.find(world_->surface_graph);
+       const std::shared_ptr<const StoredGraph> graph = gi != graphs_.end() ? gi->second : nullptr;
+       std::shared_ptr<const WorldOutput> out = pass.world_out;
+diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
+index 2b84448..808dfc5 100644
+--- a/src/host/scene/scene_tables.cpp
++++ b/src/host/scene/scene_tables.cpp
+@@ -421,7 +421,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
+   sd.material_constants = as<ar::ConstantBlock>(at(TableId::MATERIAL_CONSTANTS));
+   sd.material_pass_index = as<uint32_t>(at(TableId::MATERIAL_PASS_INDEX));
+   sd.material_spectra = as<float>(at(TableId::MATERIAL_SPECTRA)), sd.material_spectra_count = cnt(TableId::MATERIAL_SPECTRA);
+-  sd.world_program = as<uint32_t>(at(TableId::WORLD_PROGRAM)), sd.world_program_words = cnt(TableId::WORLD_PROGRAM);
++  sd.world_program = nullptr, sd.world_program_words = cnt(TableId::WORLD_PROGRAM);
+   sd.world_constants = as<ar::ConstantBlock>(at(TableId::WORLD_CONSTANTS));
+   sd.accel = n.accel->kernel_accel();
+   ar::Rgb2SpecTable jt{};
+diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
+index 0590df1..f092e3e 100644
+--- a/src/kernel/stages/shade_background.h
++++ b/src/kernel/stages/shade_background.h
+@@ -61,7 +61,7 @@ AR_FN bool world_radiance(const KernelGlobals& kg, const LightRecord& world, uin
+   // The entry table is four words; a shorter program is a host bug, not a world.
+   if (kg.scene == nullptr || kg.scene->world_program == nullptr || kg.scene->world_constants == nullptr ||
+       kg.scene->world_program_words < 4u)
+-    return false;
++    return true;
+   const SceneData& s = *kg.scene;
+   const Real3 dir = normalize(ps_ray_d(kg, slot));
+   ShadeContext ctx{};
+@@ -79,7 +79,7 @@ AR_FN bool world_radiance(const KernelGlobals& kg, const LightRecord& world, uin
+   VmRegs regs;
+   const uint32_t* prog = s.world_program;
+   if (run_entry(prog, load_ro(prog + 2), &regs, ctx, *kg.tables, nullptr, &e) != VmStatus::OK) return false;
+-  *le = e * Real(world.strength);
++  *le = e;
+   return true;
+ }
+ 
+diff --git a/src/kernel/vm/ops/tex_environment.h b/src/kernel/vm/ops/tex_environment.h
+index 1be5e2a..1349c0c 100644
+--- a/src/kernel/vm/ops/tex_environment.h
++++ b/src/kernel/vm/ops/tex_environment.h
+@@ -41,7 +41,7 @@ AR_FN void env_direction_uv(const float* d, float* uv) {
+   const float len = ar::sqrt(x * x + y * y + z * z);
+   float c = z / len;
+   c = c < -1.0f ? -1.0f : (c > 1.0f ? 1.0f : c);  // see the header: NaN-free on the poles
+-  uv[0] = (ar::atan2(y, x) - kEnvPi) / -kEnvTwoPi;
++  uv[0] = 1.0f - (ar::atan2(y, x) - kEnvPi) / -kEnvTwoPi;
+   uv[1] = (ar::acos(c) - kEnvPi) / -kEnvPi;
+ }
+ 
