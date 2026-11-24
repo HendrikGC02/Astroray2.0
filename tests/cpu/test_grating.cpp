@@ -467,6 +467,13 @@ TEST_SUITE("fast") {
     CHECK(std::fabs(hi - 1.0) < 1e-6);
     CHECK(8 * 830.0 / 20000.0 < 1.0);
     CHECK(t.clipped_cells == 0u);
+    // Cells against item 24 written out here: eta_m = J_m^2(phi / 2), phi = 4 pi h cos(theta_i) / lambda.
+    for (int m : {-3, 0, 2})
+      for (int c : {15, 9, 2})
+        for (int w : {0, 40, 94}) {
+          const double j = std::cyl_bessel_j(double(std::abs(m)), 2.0 * kPi * 120.0 * node_cos(c) / node_lambda(w));
+          CHECK(std::fabs(double(t.eta[ar::grating_table_index(m + 8, c, w)]) - j * j) < 1e-7);
+        }
   }
 
   AR_RT_CASE("grating/phase depth matches Palmer peaks") {

@@ -21,11 +21,6 @@ index 55adb4f..f67ebe2 100644
 -  if (!(modulation < kScalarModulationLimit))
 +  if (!(modulation < 10.0 * kScalarModulationLimit))
      refuse("scalar theory out of range: groove modulation h/d = " + num(modulation) + " is not below " +
-@@ -95,3 +95,3 @@ GratingTableResult build_grating_table(const GratingTableSpec& s) {
-         // J_{-m}^2 = J_m^2: J_{-m} = (-1)^m J_m.
--        const double j = std::cyl_bessel_j(double(std::abs(s.m_min + o)), half);
-+        const double j = std::cyl_bessel_j(double(std::abs(s.m_min + o) + 1), half);
-         eta[o] = t * j * j;
 @@ -102,3 +102,3 @@ GratingTableResult build_grating_table(const GratingTableSpec& s) {
        const bool clip = sum > 1.0 + kSumRounding;
 -      const double scale = clip ? 1.0 / sum : 1.0;
