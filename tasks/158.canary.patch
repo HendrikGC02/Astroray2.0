@@ -1,3 +1,16 @@
+diff --git a/src/host/light/light_builder.cpp b/src/host/light/light_builder.cpp
+index 5aefa35..7ec60b1 100644
+--- a/src/host/light/light_builder.cpp
++++ b/src/host/light/light_builder.cpp
+@@ -269,7 +269,7 @@ SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& mesh
+       // record cannot reach (its estimate term is only the table's mean): its Le is evaluated from the
+       // material at the light's hit, like a per-point emission.
+       const bool table = mats.constants[mats.headers[h].const_offset].emission_color.kind == uint8_t(ar::SpectrumKind::TABLE);
+-      const bool constant = (mats.headers[h].flags & ar::CONSTANT_EMISSION) != 0 && est.size() == 1 && !table;
++      const bool constant = (mats.headers[h].flags & ar::CONSTANT_EMISSION) != 0 && est.size() == 1 && !(table && est.empty());
+       const uint16_t flags = uint16_t((side[size_t(slot)] & (ar::kLightTwoSided | ar::kLightBackFace)) |
+                                       (constant ? 0u : ar::kLightEmissionProgram));
+       LightInput li;
 diff --git a/src/host/material/material_store.cpp b/src/host/material/material_store.cpp
 index 6e36900..4c8e678 100644
 --- a/src/host/material/material_store.cpp
