@@ -16,3 +16,4 @@ Budget: gate +4 s at most (two new analytic scenes on both devices ride the exis
 Depends on: 171, 172; lands after 163 (spine queue) and after 177 on light_record.h and light.h; shade_background.h after 172.
 Size: M (about 450 lines without tests); stop and report at 2x. Split point: kernel and host (steps 1-2) before scenes.
 Progress:
+- Lead note from 172's review (2026-11-25): bake_environment.h:94-95 still evaluates the world record's constant radiance (comment "172 replaces this callable" now stale) and env_bake.cpp:44-47 keys the bake cache on colour, strength and light group only, so every program world (kLightWorldProgram, strength 1) shares one key and would get a stale grid: the bake call 173 adds must run the world program and key on the world program's identity. k_shade_background after 172: 64 regs, stack 264 B, spills 8 / 8 (dev-reload variant), compile 2.4 s.
