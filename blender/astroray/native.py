@@ -9,6 +9,7 @@ import os
 
 _lib = None
 _poisoned = False
+_build_text = None  # the build record line, read once by load()
 _cuda_lost = None  # the message shown when a sticky CUDA error ended CUDA for this process
 
 # 0001 D2.5: a sticky CUDA error reaches the host as "GPU error: <text>. Save your work and restart
@@ -50,9 +51,16 @@ def load():
     os.add_dll_directory(bin_dir)
     lib = ctypes.CDLL(os.path.join(bin_dir, "astroray_core.dll"))
     _abi.check(lib)
-    print(_build_line(_abi, lib), flush=True)
+    global _build_text
+    _build_text = _build_line(_abi, lib)
+    print(_build_text, flush=True)
     _lib = lib
     return lib
+
+
+def build_line():
+    """The build record line load() read (version, git, build type, dependency versions); None before load()."""
+    return _build_text
 
 
 def call(fn, *args):

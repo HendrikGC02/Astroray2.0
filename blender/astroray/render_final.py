@@ -17,7 +17,7 @@ import weakref
 
 import numpy as np
 
-from . import native
+from . import diagnostics, native
 from .materials import translate
 from .sync import camera, classify, edit as edit_mod, images, instances, keys, lights, mesh, settings
 from .sync import world as world_sync
@@ -264,6 +264,9 @@ def _colorspace():
 class Job:
     """One engine instance's scene; update() resyncs it, render() runs a session on it."""
 
+    kind = "FINAL"                # which Diagnostics report this job writes
+    snapshot_replaces = False     # True: each new report revision replaces the engine's entries (the viewport)
+
     def __init__(self):
         self.lib, self.abi, self.op_id = native.load(), _abi(), _ops().OP_ID
         self.device = None
@@ -279,6 +282,8 @@ class Job:
         # Everything render() needs from Blender, read by update() (0007 d23: render() reads no scene).
         self.size, self.samples, self.layer = None, None, None
         self.generation = None  # what update() committed: the render must show at least this (0007 d25)
+        self.subject_names = ({}, {})  # (ar_key -> identity, uid -> name) that label report subjects; set by update()
+        self.subject_names = ({}, {})  # (ar_key -> identity, uid -> name) for the Diagnostics panel; set by update()
         self._context = None
         self.timeline = Timeline()
 
@@ -311,6 +316,7 @@ class Job:
                                                 self.keymap, self.tcache, self.istate, need_camera, self.timeline,
                                                 self.checks, self.icache)
         self.generation = e.generation
+        self.subject_names = (diagnostics.reverse_keys(self.keymap), diagnostics.uid_names())
         self.timeline.mark("edit_commit")
         self.cache.remember(depsgraph, scene)
         if warning:
@@ -324,8 +330,10 @@ class Job:
         if self.size is None or not self.scene_h.value:
             raise RenderFailed("astroray: render() before a successful update()")
         w, h = self.size
+        diagnostics.begin(self.kind, self.device)
         for line in self.lines:
             engine.report({"WARNING"}, line)
+            diagnostics.add_host(self.kind, diagnostics.WARNING, line)
         try:
             sd = abi.ar_session_desc(abi.AR_SESSION_MODE_FINAL, w, h, abi.AR_DENOISER_NONE)
             _ok(lib, native.call(lib.ar_session_create, self.scene_h, ctypes.byref(sd),
@@ -375,6 +383,14 @@ class Job:
                                f"committed {self.generation} (failed generation {prog.failed_generation})")
         self._copy_combined(engine, result, w, h, final=True)
 
+    def _subjects(self):
+        """(reverse key map, uid names) that label a report entry's subject."""
+        return self.subject_names
+
+    def _subjects(self):
+        """(reverse key map, uid names) that label a report entry's subject."""
+        return self.subject_names
+
     def _report(self, engine, reported, revision):
         """Prints entries the engine added since `revision`; ERROR entries fail the render."""
         lib, abi, s = self.lib, self.abi, self.session
@@ -384,17 +400,25 @@ class Job:
             return revision
         names = {getattr(abi, n): n[len("AR_REPORT_"):] for n in dir(abi) if n.startswith("AR_REPORT_")}
         failed = None
+        if self.snapshot_replaces:
+            diagnostics.clear_engine(self.kind)
         for i in range(info.entry_count):
             e = abi.ar_report_entry()
             native.call(lib.ar_session_report_entry, s, i, ctypes.byref(e))
             detail = bytes(e.detail).split(b"\0")[0].decode("utf-8", "replace")
+            level = {abi.AR_LEVEL_INFO: "INFO", abi.AR_LEVEL_WARNING: "WARNING"}.get(e.level, "ERROR")
+            # Listed before the `reported` test: the store keeps each key once itself, and the panel must show
+            # entries the status bar already printed.
+            diagnostics.add_engine(self.kind, level, names.get(e.code, str(e.code)), e.code,
+                                   diagnostics.subject_label(*self._subjects(), e.subject), detail)
             ident = (e.code, e.subject, detail)
             if ident in reported:
                 continue
             reported.add(ident)
             text = f"{names.get(e.code, e.code)}: {detail}"
-            level = {abi.AR_LEVEL_INFO: "INFO", abi.AR_LEVEL_WARNING: "WARNING"}.get(e.level, "ERROR")
             engine.report({level}, text)
+            diagnostics.add_engine(self.kind, level, names.get(e.code, str(e.code)), e.code,
+                                   diagnostics.subject_label(*self._subjects(), e.subject), detail)
             if level == "ERROR" and failed is None:
                 failed = text
         if failed is not None:

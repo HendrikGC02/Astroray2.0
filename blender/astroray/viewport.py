@@ -22,7 +22,7 @@ import weakref
 
 import numpy as np
 
-from . import heatmap_draw, native, present, render_final
+from . import diagnostics, heatmap_draw, native, present, render_final
 from .materials import translate
 from .sync import camera, classify, edit as edit_mod, images, instances, keys, mesh, settings
 from .sync import world as world_sync, lights
@@ -36,6 +36,8 @@ _DISPLAY_MODES = {"BEAUTY": 0, "SAMPLE_COUNT": 1, "BOUNCE_COUNT": 2}
 
 
 class ViewportJob(render_final.Job):
+    kind = "VIEWPORT"
+    snapshot_replaces = True  # the engine's table is the current state of the viewport's scene
     def __init__(self):
         super().__init__()
         self.present = present.Present()
@@ -63,6 +65,7 @@ class ViewportJob(render_final.Job):
         self._last_id = 0
         self._engine = None
         self._reported, self._revision = set(), None
+        self._names = None
         self._polling = False
         self.t_first_frame = None  # monotonic time of the first upload
         # ASTRORAY_FRAME_LOG=1 (a measurement switch, 0009 B-13/B-14/B-32/B-34): one record per view_draw and per
@@ -81,12 +84,14 @@ class ViewportJob(render_final.Job):
             self._sync(depsgraph)
             for line in self.lines:
                 engine.report({"WARNING"}, line)
+                diagnostics.add_host(self.kind, diagnostics.WARNING, line)
             self.lines = []
         except Exception as e:
             self._fail(engine, e)
 
     def _sync(self, depsgraph):
         if self.first:
+            diagnostics.begin(self.kind, render_final.device_of(depsgraph.scene))
             super().update(depsgraph, need_camera=False)
             self._after_full(depsgraph)
             return
@@ -97,6 +102,7 @@ class ViewportJob(render_final.Job):
         if classify.FULL_RESYNC in kinds:
             self.tcache.forget_all()
             self.first = True
+            diagnostics.begin(self.kind, render_final.device_of(depsgraph.scene))
             super().update(depsgraph, need_camera=False)
             self._after_full(depsgraph)
             return
@@ -223,7 +229,10 @@ class ViewportJob(render_final.Job):
         native.call(lib.ar_session_get_progress, s, ctypes.byref(prog))
         if prog.state == abi.AR_STATE_RENDERING:
             self.timeline.mark("rendering")
+        before = diagnostics.revision()
         self._revision = self._report(engine, self._reported, self._revision)
+        if diagnostics.revision() != before:
+            diagnostics.tag_properties_redraw()  # view_draw runs on the main thread (d26): no timer, no thread
         if prog.state == abi.AR_STATE_FAILED:
             render_final._ok(lib, 1, "the session (state FAILED)", "ar_session_last_error", s)
         if self.showing_heat:
@@ -350,8 +359,19 @@ class ViewportJob(render_final.Job):
         self._started = False
         self.events.append("create_session")
 
+    def _report(self, engine, reported, revision):
+        self._names = None  # the datablock names are read once per report revision
+        return super()._report(engine, reported, revision)
+
+    def _subjects(self):
+        """Names come from the live file: edits after the first sync add keys and may rename datablocks."""
+        if self._names is None:
+            self._names = (diagnostics.reverse_keys(self.keymap), diagnostics.uid_names())
+        return self._names
+
     def _fail(self, engine, error):
         self.failure = str(error)
+        diagnostics.add_host(self.kind, diagnostics.ERROR, self.failure)
         self.events.append("failed")
         engine.report({"ERROR"}, self.failure)
 
