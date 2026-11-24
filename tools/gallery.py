@@ -9,7 +9,9 @@ what the workers wrote. As the worker it runs inside Blender with the staged ext
   f12:  the .blend of one scene (scenes/lib/blend_writer.py), F12 through the addon on the CPU and on CUDA at the
         scene's gallery size and spp, one PNG per device saved by Blender (so the view transform is the one a user
         sees), a thumbnail, a JSON sidecar {scene, device, spp, time, settings, build id}, and the per-pixel
-        relative difference of the two devices (informational: agreement is gated elsewhere, 0009 d17).
+        relative difference of the two devices (informational: agreement is gated elsewhere, 0009 d17). A scene
+        with `heat` also saves the raw AR Sample Count and AR Bounces passes as float .npy under work/ and, in the
+        sidecar's "heat" entry, their min, mean, max and the render's max spp and max bounces (tools/report.py).
   heat: a windowed Blender (the viewport draws only there), the Sample count and the Bounce count display modes
         of the scene, one device per run, a screenshot of the viewport region each (0007 d40).
 Images go to out/gallery/<milestone>/ and are never committed (0009 d23). A PNG over 1600 px or 2 MB, or whose
@@ -233,8 +235,20 @@ def diff_map(cpu, gpu):
     return np.rint(ramp * 255).astype(np.uint8), stats
 
 
+HEAT_PASSES = (("samples", "AR Sample Count"), ("bounces", "AR Bounces"))
+
+
+def heat_stats(arr):
+    """min, mean, max over the pixels of a raw statistic; a map with no finite pixel is a failure, not a zero."""
+    import numpy as np
+    if not np.isfinite(arr).any():
+        raise RuntimeError("a statistics pass has no finite pixel")
+    return {"min": float(np.nanmin(arr)), "mean": float(np.nanmean(arr)), "max": float(np.nanmax(arr))}
+
+
 def worker_f12(job):
     import bpy
+    import importlib
     import numpy as np
     import report
     sys.path.insert(0, os.path.join(ROOT, "tests", "blender"))
@@ -256,7 +270,27 @@ def worker_f12(job):
     out = job["out"]
     os.makedirs(os.path.join(out, "thumbs"), exist_ok=True)
     linear, failures = {}, []
+    # The session is destroyed when the render returns, so a showcase scene with `heat` reads its raw statistics
+    # passes (0008 d12: raw values, not colour-mapped) in Job._close_session, just before the destroy. No
+    # render_final change: the wrapper lives in this worker only.
+    raw = {}
+    if e.get("heat"):
+        rf = importlib.import_module("bl_ext.user_default.astroray.render_final")
+        close_session = rf.Job._close_session
+
+        def close_with_stats(self):
+            try:
+                if self.session.value:
+                    for kind, pass_name in HEAT_PASSES:
+                        raw[kind] = rf.read_pass(self.lib, self.abi, self.session, pass_name, self.abi.AR_QUANTITY_MEAN)
+            finally:
+                close_session(self)
+        rf.Job._close_session = close_with_stats
     for stem in [f"{e['name']}_{d.lower()}" for d in job["devices"]] + [f"{e['name']}_diff"]:
+        for kind, _ in HEAT_PASSES:   # a stale raw map must not pass for this run's
+            p = os.path.join(out, "work", f"{stem}_{kind}.npy")
+            if os.path.exists(p):
+                os.remove(p)
         for old in (os.path.join(out, stem + ext) for ext in (".png", ".json")), (os.path.join(out, "thumbs", stem + ".png"),):
             for p in old:   # a stale file of an earlier run must not pass for this run's result
                 if os.path.exists(p):
@@ -264,9 +298,21 @@ def worker_f12(job):
 
     def render_device(dev):
         scene.astroray.device = dev
+        raw.clear()
         t0 = time.perf_counter()
         bpy.ops.render.render(write_still=False)
         secs = time.perf_counter() - t0
+        stats = {}
+        if e.get("heat"):
+            if set(raw) != {k for k, _ in HEAT_PASSES}:
+                raise RuntimeError(f"{e['name']} {dev}: the statistics passes were not read before the session closed")
+            stats = {"max_spp": e["gallery_spp"], "max_bounces": json.load(open(job["desc"]))["settings"]["max_bounces"]}
+            for kind, _ in HEAT_PASSES:
+                # rows top first like the images; float32 so the report draws exactly what the engine counted
+                arr = np.ascontiguousarray(raw[kind][::-1, :, 0], np.float32)
+                rel = f"work/{e['name']}_{dev.lower()}_{kind}.npy"
+                np.save(os.path.join(out, rel), arr)
+                stats[kind] = dict(heat_stats(arr), file=rel)
         res = bpy.data.images["Render Result"]
         name = f"{e['name']}_{dev.lower()}"
         path = os.path.join(out, name + ".png")
@@ -292,7 +338,7 @@ def worker_f12(job):
             "scene": e["name"], "device": dev, "spp": e["gallery_spp"], "time": secs, "time_unit": "s",
             "time_note": "F12 wall clock: sync, engine start (OptiX cold compile on the first CUDA use in a fresh profile), render, resolve",
             "settings": settings_of(scene, job["desc"]), "build": build, "file": name + ".png",
-            "bytes": os.path.getsize(path), "mean_of_white": mean})
+            "bytes": os.path.getsize(path), "mean_of_white": mean, **({"heat": stats} if stats else {})})
         print(f"gallery: {name} {rw} x {rh} {e['gallery_spp']} spp in {secs:.1f} s, mean {mean:.3f}", flush=True)
 
     for dev in job["devices"]:

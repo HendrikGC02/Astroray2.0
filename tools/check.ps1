@@ -116,6 +116,7 @@ $global:LASTEXITCODE = 1
     @{ Name = 'tools tests'; Tag = 'cpu'; Run = { & pwsh -NoProfile -File tests/tools/run_fast.ps1 } },
     @{ Name = 'kernelgate self-test'; Tag = 'cpu'; Run = { & $py -I tools/kernelgate.py --self-test } },
     @{ Name = 'perf self-test'; Tag = 'cpu'; Run = { & $py -I tools/perf.py --self-test; if ($LASTEXITCODE -eq 0) { & $py -I tools/perf_shares.py --self-test } } },
+    @{ Name = 'report self-test'; Tag = 'cpu'; Run = { & $py -I tools/report.py --selftest } },
     @{ Name = 'kernelgate'; Tag = 'local'; Lock = $true; Echo = '^kernelgate: \d+ row'; Run = { & $py -I tools/kernelgate.py @dargs } },
     @{ Name = 'compile timing'; Tag = 'local'; Lock = $true; Run = { & $py -I tools/kernelgate.py --time } },
     @{ Name = 'abi tests'; Tag = 'cpu'; Run = {
