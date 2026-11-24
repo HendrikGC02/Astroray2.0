@@ -1,26 +1,35 @@
 diff --git a/src/host/denoise/denoiser.cpp b/src/host/denoise/denoiser.cpp
-index 6aed194..32b126e 100644
+index 0ca0e34..961da71 100644
 --- a/src/host/denoise/denoiser.cpp
 +++ b/src/host/denoise/denoiser.cpp
-@@ -106,8 +106,6 @@ struct DenoiserState::Oidn {
-     if (cuda_ordinal < 0) return;
-     const uint64_t now = free_bytes();
-     if (now >= before) return;
--    records.push_back(ledger->add(owner, LedgerCategory::DENOISER, before - now));
--    bytes += before - now;
+@@ -193,7 +193,7 @@ struct DenoiserState::Oidn {
+     for (DenoiseMode m : {DenoiseMode::FINAL, DenoiseMode::VIEWPORT}) execute(warm, scratch, m);
+     // The 1 x 1 images are size-dependent: they go, so the creation record holds only what stays.
+     drop_images();
+-    set_record(creation_record, creation_bytes, drop_since(before));
++    set_record(creation_record, creation_bytes, before);
+     name = describe();
    }
  
-   OIDNFilter new_filter(DenoiseMode mode) {
-@@ -314,6 +312,8 @@ struct DenoiserState::Oidn {
-     lib->oidnExecuteFilter(f.rt);
-     lib->oidnReadBuffer(output, 0, image_bytes, staging.data());
+@@ -324,7 +324,7 @@ struct DenoiserState::Oidn {
+     const uint64_t before = reconfigure && cuda_ordinal >= 0 ? free_bytes() : 0;
+     if (in.color.width != buffer_width || in.color.height != buffer_height) drop_images();
+     execute(in, out, mode);
+-    if (reconfigure && cuda_ordinal >= 0) set_record(config_record, config_bytes, net_after(config_bytes, before));
++    if (reconfigure && cuda_ordinal >= 0) set_record(config_record, config_bytes, 0 * before);
+   }
+ 
+   // `held` plus the net drop in free device bytes since `before`; 0 if that is negative.
+@@ -350,8 +350,6 @@ struct DenoiserState::Oidn {
+     const Filters& f = filters[size_t(mode)];
+     if (mode == DenoiseMode::FINAL && with_albedo) lib->oidnExecuteFilter(f.albedo);
+     if (mode == DenoiseMode::FINAL && with_normal) lib->oidnExecuteFilter(f.normal);
+-    lib->oidnExecuteFilter(f.rt);
+-    lib->oidnReadBuffer(output, 0, image_bytes, staging.data());
      check(device, "denoise");
-+    for (size_t i = 0; i < n; ++i)
-+      for (uint32_t k = 0; k < 3; ++k) staging[3 * i + k] = c.data[i * c.components + k];
      // Only now is `out` written: a failure above leaves the caller's image as it was.
      out.width = c.width;
-     out.height = c.height;
-@@ -349,9 +349,9 @@ void DenoiserState::load() {
+@@ -388,9 +386,9 @@ void DenoiserState::load() {
    } catch (const Cancelled&) {
      oidn->release();
      return finish(kFailed, "denoiser loading stopped: the state was destroyed");
