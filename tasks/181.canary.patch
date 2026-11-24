@@ -1,3 +1,29 @@
+diff --git a/include/astroray/astroray.h b/include/astroray/astroray.h
+index d060864..760b3b9 100644
+--- a/include/astroray/astroray.h
++++ b/include/astroray/astroray.h
+@@ -611,8 +611,8 @@ typedef struct ar_light_desc {
+ typedef struct ar_medium_desc {
+     float sigma_a[3];
+     float sigma_s[3];
+-    float g;
+     uint32_t flags;
++    float g;
+ } ar_medium_desc;
+ 
+ typedef struct ar_world_desc {
+diff --git a/scenes/lib/ar.py b/scenes/lib/ar.py
+index ac51f3c..a6394fc 100644
+--- a/scenes/lib/ar.py
++++ b/scenes/lib/ar.py
+@@ -404,7 +404,6 @@ class Scene:
+         d.random_ids, d.pass_indices, d.crypto_objects, d.crypto_assets = keep["rid"], keep["pidx"], keep["co"], keep["ca"]
+         d.colors, d.visibility, d.flags, d.light_groups = keep["col"], keep["vis"], keep["flags"], keep["lg"]
+         d.material_offsets, d.material_counts, d.material_keys = keep["moff"], keep["mcnt"], keep["mkeys"]
+-        d.medium_keys = keep["med"]
+         self._call(self.lib.ar_edit_set_instances(self.edit_h, ctypes.byref(d)), "ar_edit_set_instances")
+         self._desc["instances"] = [
+             {"geom": it["geom"], "materials": list(it["materials"]),
 diff --git a/src/capi/scene_api.cpp b/src/capi/scene_api.cpp
 index 505e26e..b36bf2c 100644
 --- a/src/capi/scene_api.cpp
@@ -25,7 +51,7 @@ index 636def9..0c77c7f 100644
    return true;
  }
 diff --git a/src/host/scene/edit.cpp b/src/host/scene/edit.cpp
-index ec78210..7b35fc4 100644
+index 55228f5..af0accd 100644
 --- a/src/host/scene/edit.cpp
 +++ b/src/host/scene/edit.cpp
 @@ -155,7 +155,7 @@ void Edit::submit(const std::shared_ptr<EditItem>& item) {
@@ -37,19 +63,27 @@ index ec78210..7b35fc4 100644
    bool known = false;
    if (!reset_) known = scene_.known(kind, key);
    if (!known) {
+@@ -260,6 +260,7 @@ ar_status Edit::commit(uint64_t* generation) {
+     if (kv.second.item->kind == AR_KIND_GEOMETRY && kv.second.item->replaces_subject) keep.insert(kv.first);
+   if (scene_.meshes)
+     p.on_active.push_back([meshes = scene_.meshes, reset = reset_, removed = removed_, keep] { meshes->remove(reset, removed, keep); });
++  p.on_active.push_back([scene = &scene_] { scene->refresh_medium_reports(); });
+   // The stored descriptors take effect with the generation, not before.
+   p.on_active.push_back([&st, reset = reset_, settings = settings_, camera = camera_, astro = astro_,
+                          removed = removed_, delta] {
+@@ -288,7 +289,6 @@ ar_status Edit::commit(uint64_t* generation) {
+   }
+   // Last, after every state callback and the instance table: the open-medium-mesh report is rebuilt from the
+   // final state (Scene::refresh_medium_reports), whatever order the callbacks above ran in.
+-  p.on_active.push_back([scene = &scene_] { scene->refresh_medium_reports(); });
+   for (const auto& item : internal_) submit(item);
+   *generation = scene_.generations().commit(pending_, [&] {
+     std::lock_guard<std::mutex> lock(st.mutex);
 diff --git a/src/host/scene/instances.cpp b/src/host/scene/instances.cpp
-index e8d2e92..d43a14c 100644
+index 81fc2bb..b7780c3 100644
 --- a/src/host/scene/instances.cpp
 +++ b/src/host/scene/instances.cpp
-@@ -117,7 +117,6 @@ std::shared_ptr<InstanceTable> build(const DescCopy& d) {
- 
- void refresh_medium_mesh_report(Scene& scene, ar_key geom, bool bears_medium) noexcept {
-   try {
--    scene.report().remove(AR_REPORT_MEDIUM_MESH_OPEN, geom);
-     if (!bears_medium) return;
-     const auto rec = scene.meshes ? scene.meshes->find(geom) : nullptr;
-     if (!rec || !rec->topo) {
-@@ -160,7 +159,7 @@ uint8_t visibility_mask(uint32_t v, bool has_medium) {
+@@ -105,7 +105,7 @@ uint8_t visibility_mask(uint32_t v, bool has_medium) {
    if (v & AR_VISIBILITY_TRANSMISSION) m |= 1u << 3;
    if (v & AR_VISIBILITY_SHADOW) m |= ar::kShadowMaskBit;
    if (v & AR_VISIBILITY_VOLUME) m |= 1u << 5;
@@ -58,7 +92,7 @@ index e8d2e92..d43a14c 100644
    return m;
  }
  
-@@ -210,7 +209,7 @@ ar_status set_instances(Edit& edit, const ar_instances_desc* desc) {
+@@ -155,7 +155,7 @@ ar_status set_instances(Edit& edit, const ar_instances_desc* desc) {
    item->bind = [d](const std::function<bool(ar_key)>& exists, const std::function<bool(ar_key)>& medium_exists) {
      for (size_t i = 0; i < d->n; ++i) {
        d->geom_exists[i] = exists(d->geom[i]);
@@ -67,7 +101,7 @@ index e8d2e92..d43a14c 100644
      }
    };
    item->needs_device = false;
-@@ -298,7 +297,7 @@ void apply_instance_summary(std::shared_ptr<const InstanceSummary>& cur, const P
+@@ -240,7 +240,7 @@ void apply_instance_summary(std::shared_ptr<const InstanceSummary>& cur, const P
  void queue_instance_check(Edit& edit) {
    if (edit.instance_stage().has_set || edit.reset_requested()) return;  // new table, or cleared
    auto removed = std::make_shared<std::set<uint64_t>>(edit.removed_geometry());
@@ -88,20 +122,8 @@ index e2ab2db..99dc24d 100644
    const std::shared_ptr<const Medium> medium = build_medium(key, *desc, table);  // throws invalid_argument
    auto item = std::make_shared<EditItem>();
    item->key = key;
-diff --git a/src/host/scene/mesh.cpp b/src/host/scene/mesh.cpp
-index 3a08989..070a8d3 100644
---- a/src/host/scene/mesh.cpp
-+++ b/src/host/scene/mesh.cpp
-@@ -403,7 +403,6 @@ ar_status mesh_begin(Scene& scene, Edit& edit, const ar_mesh_desc* desc, ar_mesh
-   // A replaced mesh lost its report entries at activation: say again whether it is open when a medium needs it.
-   item->on_active = [store, result, sc, key] {
-     store->install(*result);
--    refresh_medium_mesh_report(*sc, key, scene_has_medium_on(*sc, key));
-   };
-   item->on_dropped = [store, key, id, gate, result] {
-     gate->resolve(nullptr);  // an item that never ran must not strand a waiting positions job
 diff --git a/src/host/scene/scene.cpp b/src/host/scene/scene.cpp
-index 6195154..8430fdf 100644
+index 2fd74c6..44280fc 100644
 --- a/src/host/scene/scene.cpp
 +++ b/src/host/scene/scene.cpp
 @@ -293,7 +293,7 @@ void Scene::publish_lamp(std::shared_ptr<const Lamp> lamp) {
@@ -112,4 +134,13 @@ index 6195154..8430fdf 100644
 +  state_.media.emplace(k, std::move(medium));
  }
  
- std::shared_ptr<const Medium> Scene::medium(ar_key key) const {
+ void Scene::refresh_medium_reports() noexcept {
+@@ -310,7 +310,7 @@ void Scene::refresh_medium_reports() noexcept {
+       try {
+         // Dropped even when the mesh is replaced and the generation already cleared it: the entry is rebuilt
+         // from the final state. The log line is for a condition that is new, not for every generation.
+-        const bool had = report_.remove(AR_REPORT_MEDIUM_MESH_OPEN, g) != 0;
++        const bool had = false;
+         if (!now.count(g)) continue;
+         const auto rec = meshes ? meshes->find(g) : nullptr;
+         if (!rec || !rec->topo) {
