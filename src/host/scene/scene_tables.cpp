@@ -239,10 +239,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
       throw TableUploadFailed("uploading the instances: an instance references geometry key " + std::to_string(kv.first) +
                                   ", which has no active mesh",
                               n.generation);
-  // Read apart from the snapshot (Scene::snapshot is outside this file's task): an activation between
-  // the two reads can pair newer media with older instances, and an instance whose medium is gone then
-  // fails the upload below, which is retryable at the next latch.
-  n.media = scene.media();
+  n.media = std::move(snap.media);
   const SceneTableSet* p = cache.current.get();
   if (p && p->materials == n.materials && p->images == n.images && p->lights == n.lights &&
       p->base_instances == n.base_instances && p->mesh_records == n.mesh_records && p->media == n.media)
@@ -368,8 +365,8 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   });
 
   // The media (181's store): one MediumDesc each, null exactly when the scene has none.
-  const std::vector<ar::MediumDesc> medium_descs = medium_table(n.media);
-  b.table(TableId::MEDIA, p && p->media == n.media, uint32_t(medium_descs.size()), [&] {
+  b.table(TableId::MEDIA, p && p->media == n.media, uint32_t(n.media.size()), [&] {
+    const std::vector<ar::MediumDesc> medium_descs = medium_table(n.media);
     return b.put(LedgerCategory::TABLES, medium_descs.data(), medium_descs.size() * sizeof(ar::MediumDesc));
   });
 

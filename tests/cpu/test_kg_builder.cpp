@@ -283,6 +283,25 @@ TEST_CASE("kg_builder/media table") {
   CHECK(after_medium->uploaded[static_cast<uint32_t>(TableId::INSTANCES)]);  // the indices ride the media list
 }
 
+TEST_CASE("kg_builder/medium dropped with its instance still builds") {
+  Rig r;
+  r.build();
+  ar_medium_desc md{};
+  r.commit([&](Edit& e) { REQUIRE(set_medium(e, 60, &md, r.scene.materials->table()) == AR_OK); });
+  r.commit([&](Edit& e) { r.instances(e, {42}, 60); });
+  auto set = acquire_scene_tables(r.scene);
+  REQUIRE(count(*set, TableId::MEDIA) == 1u);
+  REQUIRE(set->scene_host.instances[0].medium == 1u);
+  // The instance loses its medium and the medium goes in one commit: the snapshot must pair the two.
+  r.commit([&](Edit& e) {
+    r.instances(e, {42});
+    REQUIRE(e.remove(AR_KIND_MEDIUM, 60) == AR_OK);
+  });
+  REQUIRE_NOTHROW(set = acquire_scene_tables(r.scene));
+  CHECK(count(*set, TableId::MEDIA) == 0u);
+  CHECK(set->scene_host.instances[0].medium == 0u);
+}
+
 TEST_CASE("kg_builder/medium table refuses an unplaced or out of range block") {
   ar::MediumDesc descs[2] = {};
   descs[0].program = 0, descs[1].program = 1;
