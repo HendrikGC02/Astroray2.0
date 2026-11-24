@@ -4,7 +4,8 @@
 // mirroring, one without materials, so the default material is hit) of a random triangle soup,
 // with materials compiled by the host compiler: constant-block emission, program emission (two
 // EMIT_LEs), emission driven by UV set 0 and by P (the context reaches the VM), the default
-// material, a Mix Shader of two BSDF children with a per-point factor, an alpha card with a
+// material, a Mix Shader of two BSDF children with a per-point factor, a Mix(Emission, Diffuse)
+// with a per-point factor (the emission segment and closure weight), an alpha card with a
 // per-point opacity (null events and transparent-limit ends), and one corrupt program (the
 // VM-error path). Two samples per pixel share the path-end
 // statistics and AOV planes; throughputs are 1% non-finite. Since 073 the paths continue: the
@@ -156,6 +157,21 @@ Materials build_materials(const Tables& t) {
   const MaterialOutput ma = compile(alpha);
   REQUIRE((ma.flags & ar::NON_OPAQUE) != 0u);
   ms.add(ma, 23);
+  // Mix(Emission, Diffuse, UV.x) (0005 item 38): the Emission child is pruned, its Le (1 - f) Le_E
+  // comes from the emission segment and the Diffuse child's closure weight is f, both per point.
+  Graph me;
+  const int efac = me.add(ar::Op::CHANNEL_F32X3, {}, {0});
+  me.link(me.add(ar::Op::LOAD_CTX_UV, {}, {0}), efac, 0);
+  const int ele = me.add(ar::Op::EMIT_LE, {}, {0});
+  me.link(me.add(ar::Op::CONST_F32X3, {0.8f, 0.6f, 0.4f}), ele, 0);
+  me.link(me.add(ar::Op::CONST_F32, {2.5f}), ele, 1);
+  me.link(me.add(ar::Op::CONST_F32X3, {0.2f, 0.7f, 0.5f}), me.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::base_color), 1}), 0);
+  me.link(me.add(ar::Op::CONST_F32, {0.0f}), me.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::specular_weight), 1}), 0);
+  me.link(efac, me.add(ar::Op::BRANCH_MIX, {}, {0, 0, 1}), 0);
+  const MaterialOutput mme = compile(me);
+  REQUIRE(mme.compiled.children.size() == 1u);
+  REQUIRE((mme.flags & ar::CONSTANT_EMISSION) == 0u);
+  ms.add(mme, 29);
   // A corrupt program: its first instruction's opcode is outside the table.
   MaterialOutput bad = mp;
   bad.compiled.program[bad.compiled.program[0]] |= 0xffu;
@@ -475,7 +491,7 @@ TEST_CASE("shade_surface/agreement") {
   CHECK(passed > 1000u);  // the alpha card's null events and its transparent-limit ends
   CHECK(limit > 100u);
   std::vector<float> mat = plane(c, c.aov_material, 1);
-  for (uint32_t want : {0u, 3u, 7u, 11u, 13u, 17u, 23u}) CHECK(std::count(mat.begin(), mat.end(), float(want)) > 0);
+  for (uint32_t want : {0u, 3u, 7u, 11u, 13u, 17u, 23u, 29u}) CHECK(std::count(mat.begin(), mat.end(), float(want)) > 0);
 
   // An invalid sample's slot is NaN on both devices: positions must match, then they are zeroed.
   std::vector<float> lc = c.slot_L, lg = g.slot_L;

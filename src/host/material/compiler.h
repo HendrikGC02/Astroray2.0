@@ -68,8 +68,20 @@ struct CompileResult {
   std::vector<uint32_t> images;
   std::vector<uint32_t> missing_images;  // sampled keys the ImageSlotFn did not know, sorted
   // A Mix Shader graph's BSDF children in layout order (0005 item 38); empty without a Mix. Their
-  // constants are code in their blocks, so `block` then holds only the OpenPBR defaults.
+  // constants are code in their blocks, so `block` then holds only the OpenPBR defaults and a
+  // constant effective opacity. Emission and Transparent children are pruned and not listed.
   std::vector<ChildConstants> children;
+  // A Transparent child under a Mix has an opacity other than 0: the lowering's 1 - mean colour
+  // (item 38), reported NODE_APPROXIMATED. The graph carries only that scalar, so a grey colour,
+  // which is exact, cannot be told from a coloured one and is reported too.
+  bool transparent_folded = false;
+  // A per-point geometry_opacity multiplies an emission unclamped (the pass decision clamps it):
+  // reported NODE_APPROXIMATED. Under a Mix it is an emitting child's own opacity.
+  bool emission_opacity_unclamped = false;
+  // A per-point Mix factor reaches a weight (an emission weight, a closure weight or opacity, T)
+  // unclamped while BRANCH_MIX clamps it for the selection: reported NODE_APPROXIMATED until a
+  // clamp op exists.
+  bool mix_factor_unclamped = false;
 };
 
 // A report entry the compiler owes for one material (subject = the material key).

@@ -9,6 +9,7 @@
 // src/pbrt/util/sampling.h SampleDiscrete; Cycles src/kernel/svm/closure.h svm_node_mix_closure.
 #include <doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -24,6 +25,7 @@
 #include "material/material_header.h"
 #include "sample/sobol.h"
 #include "vm/interp.h"
+#include "vm/ops/emit_le.h"
 
 namespace {
 
@@ -99,6 +101,19 @@ struct GB {
     return n;
   }
   int mix_const(int32_t tag, float factor, int32_t a, int32_t b) { return mix(tag, add(Op::CONST_F32, {factor}), a, b); }
+  // Channel k of UV set 0: a per-point scalar the test sets through the context.
+  int uv_channel(int32_t k) {
+    const int ch = add(Op::CHANNEL_F32X3, {}, {k});
+    link(add(Op::LOAD_CTX_UV, {}, {0}), ch, 0);
+    return ch;
+  }
+  // An Emission of grey colour c and strength L in `child`.
+  int emit(int child, float c, float strength) {
+    const int e = add(Op::EMIT_LE, {}, {child});
+    link(add(Op::CONST_F32X3, {c, c, c}), e, 0);
+    link(add(Op::CONST_F32, {strength}), e, 1);
+    return e;
+  }
   ar_graph_desc desc() const {
     ar_graph_desc d = {};
     d.node_count = uint32_t(nodes.size()), d.link_count = uint32_t(links.size());
@@ -135,6 +150,40 @@ Run run_surface(const CompileResult& r, float u, ar::Real2 uv = {0.0f, 0.0f}) {
   return Run{float(rec.base_metalness), su};
 }
 
+// One entry run: the record it leaves, Le and the selection uniform. `u` < 0 runs without a
+// selection uniform (an entry with a BRANCH_MIX then fails).
+struct Full {
+  ar::OpenPBRParams rec;
+  ar::Spec le;
+  float u_out;
+};
+Full run_entry_at(const CompileResult& r, uint32_t entry, float u, ar::Real2 uv = {0.0f, 0.0f}) {
+  ar::VmRegs regs = {};
+  ar::ShadeContext ctx = {};
+  ctx.uv[0] = uv;
+  ctx.lambda_t = ar::Lambda{{450.0f, 520.0f, 590.0f, 660.0f}};
+  Full f = {};
+  f.rec.geometry_opacity = -1.0f;
+  f.rec.closure_weight = 1.0f;  // as resolve_constant_record leaves it
+  f.u_out = u;
+  REQUIRE(ar::run_entry(r.program.data(), entry, &regs, ctx, fixture().tables, &f.rec, &f.le, u < 0.0f ? nullptr : &f.u_out) ==
+          ar::VmStatus::OK);
+  return f;
+}
+
+// Le of an Emission of grey colour c and strength L at the run_entry_at wavelengths.
+ar::Spec emission_le(float c, float strength) {
+  const float rgb[3] = {c, c, c};
+  ar::Spec le = {};
+  ar::op_emit_le(fixture().tables, rgb, strength, ar::Lambda{{450.0f, 520.0f, 590.0f, 660.0f}}, &le);
+  return le;
+}
+
+void check_rel(double got, double want, double tol) {
+  INFO("got " << got << " want " << want);
+  CHECK(std::fabs(got - want) <= tol * std::fabs(want));
+}
+
 // Sample i of one pixel in independent mode (0003 d23).
 constexpr uint32_t kSeed = 0x3a1c5u;
 float uniform(uint32_t i, uint32_t d) { return ar::sample_independent(0u, i, 0u, d, kSeed); }
@@ -168,6 +217,11 @@ std::vector<Op> surface_ops(const CompileResult& r, std::vector<uint32_t>* words
     pc += length_of(op);
   }
   return out;
+}
+
+bool has_op(const CompileResult& r, Op op) {
+  const std::vector<Op> ops = surface_ops(r);
+  return std::find(ops.begin(), ops.end(), op) != ops.end();
 }
 
 }  // namespace
@@ -403,16 +457,35 @@ TEST_CASE("mix_shader/malformed or unsupported graphs are rejected") {
   {
     GB g;
     g.mix_const(0, 0.5f, 0, 1);
+    g.store_const(0, 0.5f, RecordSlot::base_metalness);
+    g.emit(1, 1.0f, 1.0f);
     g.store_const(1, 0.5f, RecordSlot::geometry_opacity);
-    cases.push_back({"opacity under a Mix", g, "geometry_opacity in a Mix Shader graph"});
+    cases.push_back({"an emission with an opacity and no BSDF store", g, "is none of the child kinds"});
   }
   {
     GB g;
     g.mix_const(0, 0.5f, 0, 1);
+    g.store_const(0, 0.5f, RecordSlot::base_metalness);
+    g.store(1, g.uv_channel(0), RecordSlot::geometry_opacity);
+    cases.push_back({"a per-point opacity with no BSDF store", g, "is none of the child kinds"});
+  }
+  {
+    // Mix(Emission, S with a per-point alpha): S's closure weight s a / (1 - s + s a) is per point.
+    GB g;
+    g.emit(0, 1.0f, 1.0f);
+    g.store_const(1, 0.5f, RecordSlot::base_metalness);
+    g.store(1, g.uv_channel(0), RecordSlot::geometry_opacity);
+    g.mix_const(0, 0.5f, 0, 1);
+    cases.push_back({"a per-point closure weight that needs a divide", g, "needs a divide op (DIV_F32)"});
+  }
+  {
+    GB g;
+    g.mix_const(0, 0.5f, 0, 1);
+    g.store_const(0, 0.5f, RecordSlot::base_metalness);
     const int e = g.add(Op::EMIT_LE, {}, {1});
-    g.link(g.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), e, 0);
+    g.link(g.add(Op::BLACKBODY, {5000.0f, 1.0f}), e, 0);
     g.link(g.add(Op::CONST_F32, {1.0f}), e, 1);
-    cases.push_back({"an emission under a Mix", g, "an emission in a Mix Shader graph"});
+    cases.push_back({"a Blackbody emission under a Mix", g, "Blackbody emission cannot sit under a Mix Shader"});
   }
   for (const Case& c : cases) {
     INFO(c.what);
@@ -424,6 +497,384 @@ TEST_CASE("mix_shader/malformed or unsupported graphs are rejected") {
     REQUIRE(m.entries.size() == 1u);
     CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
   }
+}
+
+
+TEST_CASE("mix_shader/emission has no selection variance") {
+  // Mix(Emission, Diffuse, f): the Emission child is pruned, so no BRANCH_MIX is left; Le is
+  // (1 - f) Le_E for every selection uniform, bit for bit, and the Diffuse child's closure weight
+  // is f (the second input takes f, Cycles svm_node_mix_closure). The emission entry, which NEE on
+  // an emissive triangle runs, gives the same Le.
+  const ar::Spec le_e = emission_le(0.8f, 3.0f);
+  {
+    GB g;
+    g.emit(0, 0.8f, 3.0f);
+    g.store_const(1, 0.25f, RecordSlot::base_metalness);
+    g.mix_const(0, 0.3f, 0, 1);
+    const CompileResult r = g.compile();
+    REQUIRE_MESSAGE(r.ok, r.error);
+    CHECK_FALSE(has_op(r, Op::BRANCH_MIX));
+    CHECK(r.children.size() == 1u);
+    REQUIRE(r.program[2] != 0u);
+    const Full first = run_entry_at(r, r.program[0], uniform(0, 2));
+    for (uint32_t i = 0; i < 1000; ++i) {
+      const Full x = run_entry_at(r, r.program[0], uniform(i, 2));
+      CHECK(x.rec.base_metalness == 0.25f);
+      CHECK(x.rec.closure_weight == 0.3f);
+      for (int l = 0; l < ar::kLanes; ++l) CHECK(x.le.v[l] == first.le.v[l]);
+    }
+    const Full em = run_entry_at(r, r.program[2], -1.0f);
+    for (int l = 0; l < ar::kLanes; ++l) {
+      CHECK(em.le.v[l] == first.le.v[l]);
+      check_rel(double(first.le.v[l]), 0.7 * double(le_e.v[l]), 1e-6);
+    }
+  }
+  {  // A per-point factor f = uv.x: Le = (1 - f) Le_E and closure weight f at every point.
+    GB g;
+    g.emit(0, 0.8f, 3.0f);
+    g.store_const(1, 0.25f, RecordSlot::base_metalness);
+    g.mix(0, g.uv_channel(0), 0, 1);
+    const CompileResult r = g.compile();
+    REQUIRE_MESSAGE(r.ok, r.error);
+    for (float f : {0.1f, 0.5f, 0.85f}) {
+      INFO("f " << f);
+      const ar::Real2 uv{f, 0.0f};
+      const Full first = run_entry_at(r, r.program[0], 0.5f, uv);
+      CHECK(first.rec.closure_weight == f);
+      for (uint32_t i = 0; i < 1000; ++i) {
+        const Full x = run_entry_at(r, r.program[0], uniform(i, 3), uv);
+        for (int l = 0; l < ar::kLanes; ++l) CHECK(x.le.v[l] == first.le.v[l]);
+      }
+      for (int l = 0; l < ar::kLanes; ++l) check_rel(double(first.le.v[l]), (1.0 - double(f)) * double(le_e.v[l]), 1e-6);
+    }
+  }
+}
+
+TEST_CASE("mix_shader/each child's emission carries its own opacity") {
+  // Emission sits inside each child's opacity mix (items 4, 38): child i adds w_i a_i Le_i, with
+  // its own a_i, never another child's.
+  const ar::Spec le_e = emission_le(0.8f, 3.0f);
+  {  // Mix(Emission, S with alpha 0.4, 0.3): Le = 0.7 Le_E; S survives with a' = 1 - 0.3 (1 - 0.4)
+     // and closure weight 0.3 x 0.4 / a', so a' x closure weight = w_S a_S.
+    GB g;
+    g.emit(0, 0.8f, 3.0f);
+    g.store_const(1, 0.25f, RecordSlot::base_metalness);
+    g.store_const(1, 0.4f, RecordSlot::geometry_opacity);
+    g.mix_const(0, 0.3f, 0, 1);
+    const astroray::host::MaterialOutput m = g.material();
+    REQUIRE_FALSE(m.magenta);
+    const CompileResult& r = m.compiled;
+    const double a2 = 1.0 - 0.3 * 0.6;
+    for (uint32_t i = 0; i < 100; ++i) {
+      const Full x = run_entry_at(r, r.program[0], uniform(i, 4));
+      for (int l = 0; l < ar::kLanes; ++l) check_rel(double(x.le.v[l]), 0.7 * double(le_e.v[l]), 1e-6);
+      check_rel(double(x.rec.geometry_opacity), a2, 1e-6);
+      check_rel(double(x.rec.closure_weight), 0.3 * 0.4 / a2, 1e-6);
+    }
+    check_rel(double(r.block.geometry_opacity), a2, 1e-6);  // T = 0.3 x 0.6, constant: no opacity entry
+    CHECK(r.program[1] == 0u);
+    CHECK((m.flags & ar::NON_OPAQUE) != 0u);
+  }
+  for (bool per_point : {false, true}) {
+    // Mix(S1 alpha 0.5, S2 alpha a2 with an emission, 0.25): Le = 0.25 a2 Le_E whichever child is
+    // selected; S1 is selected as often as before, S2 still emits when S1 is selected.
+    INFO("per-point a2 " << per_point);
+    GB g;
+    g.store_const(0, 0.1f, RecordSlot::base_metalness);
+    g.store_const(0, 0.5f, RecordSlot::geometry_opacity);
+    g.store_const(1, 0.2f, RecordSlot::base_metalness);
+    if (per_point) g.store(1, g.uv_channel(1), RecordSlot::geometry_opacity);
+    else g.store_const(1, 0.6f, RecordSlot::geometry_opacity);
+    g.emit(1, 0.8f, 3.0f);
+    g.mix_const(0, 0.25f, 0, 1);
+    const astroray::host::MaterialOutput m = g.material();
+    REQUIRE_FALSE(m.magenta);
+    const CompileResult& r = m.compiled;
+    REQUIRE(r.children.size() == 2u);
+    // A per-point a2 scales Le unclamped while the pass decision clamps it: reported, as without a Mix.
+    CHECK(std::any_of(m.entries.begin(), m.entries.end(), [](const astroray::host::MaterialEntry& e) {
+            return e.detail == "opacity: a per-point geometry_opacity scales emission unclamped";
+          }) == per_point);
+    const ar::Real2 uv{0.0f, 0.6f};
+    const Full first = run_entry_at(r, r.program[0], 0.1f, uv);
+    uint32_t seen[2] = {0, 0};
+    for (uint32_t i = 0; i < 1000; ++i) {
+      const Full x = run_entry_at(r, r.program[0], uniform(i, 5), uv);
+      ++seen[x.rec.base_metalness == 0.2f];
+      CHECK(x.rec.geometry_opacity == (x.rec.base_metalness == 0.2f ? 0.6f : 0.5f));
+      CHECK(x.rec.closure_weight == 1.0f);
+      for (int l = 0; l < ar::kLanes; ++l) CHECK(x.le.v[l] == first.le.v[l]);
+    }
+    CHECK(seen[0] > 0u);
+    CHECK(seen[1] > 0u);
+    for (int l = 0; l < ar::kLanes; ++l) check_rel(double(first.le.v[l]), 0.25 * 0.6 * double(le_e.v[l]), 1e-6);
+  }
+}
+
+TEST_CASE("mix_shader/opacity entry sums weights") {
+  // Mix(Mix(S0, S1, f1), S2, 0.25) with opacities a0 = 0.3, a1 and a2 = 0.8: the opacity entry
+  // writes a_eff with 1 - a_eff = sum w_i (1 - a_i), with no selection uniform and for every one,
+  // and the surface entry's selected child's 1 - a_i averages to the same T over u (the null event
+  // is an unbiased estimate of T, item 38).
+  using astroray::host::MaterialOutput;
+  for (bool per_point : {true, false}) {
+    INFO("per-point f1 and a1 " << per_point);
+    GB g;
+    g.store_const(0, 0.1f, RecordSlot::base_metalness);
+    g.store_const(0, 0.3f, RecordSlot::geometry_opacity);
+    g.store_const(1, 0.2f, RecordSlot::base_metalness);
+    g.store_const(2, 0.3f, RecordSlot::base_metalness);
+    g.store_const(2, 0.8f, RecordSlot::geometry_opacity);
+    if (per_point) {
+      g.store(1, g.uv_channel(1), RecordSlot::geometry_opacity);
+      g.mix(7, g.uv_channel(0), 0, 1);
+    } else {
+      g.store_const(1, 0.45f, RecordSlot::geometry_opacity);
+      g.mix_const(7, 0.4f, 0, 1);
+    }
+    g.mix_const(3, 0.25f, mix_ref(7), 2);
+    const MaterialOutput m = g.material();
+    REQUIRE_FALSE(m.magenta);
+    const CompileResult& r = m.compiled;
+    CHECK((m.flags & ar::NON_OPAQUE) != 0u);
+    const ar::Real2 uv{0.4f, 0.45f};
+    const double f1 = 0.4, a1 = 0.45;
+    const double t = (1.0 - f1) * 0.75 * 0.7 + f1 * 0.75 * (1.0 - a1) + 0.25 * 0.2;
+    if (per_point) {
+      REQUIRE(r.program[1] != 0u);
+      const Full none = run_entry_at(r, r.program[1], -1.0f, uv);
+      check_rel(1.0 - double(none.rec.geometry_opacity), t, 1e-6);
+      for (uint32_t i = 0; i < 100; ++i) {
+        const Full x = run_entry_at(r, r.program[1], uniform(i, 6), uv);
+        CHECK(x.rec.geometry_opacity == none.rec.geometry_opacity);
+        CHECK(x.u_out == uniform(i, 6));  // the opacity entry selects nothing
+      }
+    } else {
+      CHECK(r.program[1] == 0u);  // a constant opacity: the block holds a_eff
+      check_rel(1.0 - double(r.block.geometry_opacity), t, 1e-6);
+    }
+    constexpr uint32_t kN = 100000;
+    double sum = 0.0;
+    for (uint32_t k = 0; k < kN; ++k) sum += 1.0 - double(run_entry_at(r, r.program[0], (float(k) + 0.5f) / float(kN), uv).rec.geometry_opacity);
+    CHECK(std::fabs(sum / kN - t) <= 1e-4);  // stratified u: three step boundaries of 1 / kN each
+  }
+}
+
+TEST_CASE("mix_shader/transparent folds into opacity") {
+  // Mix(Transparent, S, a) is S with opacity a x a_S and closure weight 1 (item 38, OpenPBR's
+  // top-level mix): no BRANCH_MIX is left. A non-white Transparent (opacity 1 - mean colour) is
+  // reported once and leaves S the exact a' and closure weight of the pruning rule.
+  auto transparent = [](float t_opacity, int factor_mode) {
+    GB g;
+    g.store_const(0, t_opacity, RecordSlot::geometry_opacity);  // the Transparent child
+    g.store_const(1, 0.25f, RecordSlot::base_metalness);
+    g.store_const(1, 0.5f, RecordSlot::geometry_opacity);
+    if (factor_mode == 0) g.mix_const(0, 0.6f, 0, 1);
+    else g.mix(0, g.uv_channel(0), 0, 1);
+    return g.material();
+  };
+  auto folded_entry = [](const astroray::host::MaterialOutput& m) {
+    return std::any_of(m.entries.begin(), m.entries.end(), [](const astroray::host::MaterialEntry& e) {
+      return e.code == AR_REPORT_NODE_APPROXIMATED && e.detail.find("colour taken as its mean") != std::string::npos;
+    });
+  };
+  {  // Constant a = 0.6: a' = 0.3 folds on the host.
+    const astroray::host::MaterialOutput m = transparent(0.0f, 0);
+    REQUIRE_FALSE(m.magenta);
+    CHECK_FALSE(folded_entry(m));
+    CHECK_FALSE(has_op(m.compiled, Op::BRANCH_MIX));
+    CHECK(m.compiled.children.size() == 1u);
+    CHECK(m.compiled.program[1] == 0u);
+    check_rel(double(m.compiled.block.geometry_opacity), 0.3, 1e-6);
+    for (float u : {0.05f, 0.5f, 0.95f}) {
+      const Full x = run_entry_at(m.compiled, m.compiled.program[0], u);
+      CHECK(x.rec.base_metalness == 0.25f);
+      check_rel(double(x.rec.geometry_opacity), 0.3, 1e-6);
+      CHECK(x.rec.closure_weight == 1.0f);
+    }
+  }
+  {  // Per-point a = uv.x: the opacity is MUL_F32 of a and a_S; the opacity entry agrees.
+    const astroray::host::MaterialOutput m = transparent(0.0f, 1);
+    REQUIRE_FALSE(m.magenta);
+    REQUIRE(m.compiled.program[1] != 0u);
+    for (float a : {0.2f, 0.6f, 0.9f}) {
+      INFO("a " << a);
+      const ar::Real2 uv{a, 0.0f};
+      const Full x = run_entry_at(m.compiled, m.compiled.program[0], 0.5f, uv);
+      CHECK(x.rec.geometry_opacity == ar::op_mul_f32(a, 0.5f));
+      CHECK(x.rec.closure_weight == 1.0f);
+      check_rel(double(run_entry_at(m.compiled, m.compiled.program[1], -1.0f, uv).rec.geometry_opacity), double(a) * 0.5, 1e-6);
+    }
+  }
+  {  // Transparent opacity 0.25 (mean colour 0.75), a = 0.6, a_S = 0.5: T = 0.4 x 0.75 + 0.6 x 0.5,
+     // a' = 1 - T, closure weight 0.6 x 0.5 / a'.
+    const astroray::host::MaterialOutput m = transparent(0.25f, 0);
+    REQUIRE_FALSE(m.magenta);
+    CHECK(folded_entry(m));
+    const double a2 = 1.0 - (0.4 * 0.75 + 0.6 * 0.5);
+    const Full x = run_entry_at(m.compiled, m.compiled.program[0], 0.5f);
+    check_rel(double(x.rec.geometry_opacity), a2, 1e-6);
+    check_rel(double(x.rec.closure_weight), 0.3 / a2, 1e-6);
+    check_rel(double(m.compiled.block.geometry_opacity), a2, 1e-6);
+  }
+}
+
+TEST_CASE("mix_shader/emission estimate sums weights") {
+  // Item 43: the estimate of Mix(Emission 2, Emission 4, 0.25) is 0.75 x 2 + 0.25 x 4; with no
+  // BSDF child the surface stores closure_weight 0 and Le is the same weighted sum.
+  GB g;
+  g.emit(0, 1.0f, 2.0f);
+  g.emit(1, 1.0f, 4.0f);
+  g.mix_const(0, 0.25f, 0, 1);
+  const astroray::host::MaterialOutput m = g.material();
+  REQUIRE_FALSE(m.magenta);
+  double sum = 0.0;
+  for (const astroray::host::EmissionTerm& t : m.emission_estimate) sum += double(t.strength);
+  CHECK(m.emission_estimate.size() == 2u);
+  check_rel(sum, 0.75 * 2.0 + 0.25 * 4.0, 1e-6);
+  CHECK((m.flags & ar::CONSTANT_EMISSION) == 0u);
+  CHECK(m.compiled.children.empty());
+  const Full x = run_entry_at(m.compiled, m.compiled.program[0], 0.5f);
+  CHECK(x.rec.closure_weight == 0.0f);
+  const ar::Spec le_1 = emission_le(1.0f, 1.0f);
+  for (int l = 0; l < ar::kLanes; ++l) check_rel(double(x.le.v[l]), 2.5 * double(le_1.v[l]), 1e-6);
+  // A per-point factor is not known: each term is bounded by its authored strength, never 0.
+  GB p;
+  p.emit(0, 1.0f, 2.0f);
+  p.emit(1, 1.0f, 4.0f);
+  p.mix(0, p.uv_channel(0), 0, 1);
+  double bound = 0.0;
+  for (const astroray::host::EmissionTerm& t : p.material().emission_estimate) bound += double(t.strength);
+  CHECK(bound == 6.0);
+}
+
+
+TEST_CASE("mix_shader/nested collapse") {
+  // Mix(Emission, Mix(Transparent a_T = 0.2, S a_S = 0.9, 0.7), 0.6): w_E = 0.4, w_T = 0.6 x 0.3,
+  // w_S = 0.6 x 0.7. By hand: T = 0.18 x 0.8 + 0.42 x 0.1 = 0.186, so S takes a' = 0.814 and
+  // closure weight w_S a_S / a' = 0.378 / 0.814 (the surface returns w_S a_S f_S); Le = 0.4 Le_E.
+  const ar::Spec le_e = emission_le(0.8f, 3.0f);
+  {
+    GB g;
+    g.emit(0, 0.8f, 3.0f);
+    g.store_const(1, 0.2f, RecordSlot::geometry_opacity);
+    g.store_const(2, 0.25f, RecordSlot::base_metalness);
+    g.store_const(2, 0.9f, RecordSlot::geometry_opacity);
+    g.mix_const(1, 0.7f, 1, 2);
+    g.mix_const(0, 0.6f, 0, mix_ref(1));
+    const CompileResult r = g.compile();
+    REQUIRE_MESSAGE(r.ok, r.error);
+    CHECK_FALSE(has_op(r, Op::BRANCH_MIX));
+    const Full x = run_entry_at(r, r.program[0], 0.5f);
+    CHECK(x.rec.base_metalness == 0.25f);
+    check_rel(double(x.rec.geometry_opacity), 0.814, 1e-6);
+    check_rel(double(x.rec.closure_weight), 0.378 / 0.814, 1e-6);
+    check_rel(double(r.block.geometry_opacity), 0.814, 1e-6);
+    for (int l = 0; l < ar::kLanes; ++l) check_rel(double(x.le.v[l]), 0.4 * double(le_e.v[l]), 1e-6);
+  }
+  {  // Mix(Emission, Mix(S1, S2, 0.3), 0.6): the inner mix still selects (0.7 / 0.3) and both
+     // children take closure weight 0.6, the outer collapse's own weight.
+    GB g;
+    g.emit(0, 0.8f, 3.0f);
+    g.store_const(1, 0.1f, RecordSlot::base_metalness);
+    g.store_const(2, 0.2f, RecordSlot::base_metalness);
+    g.mix_const(1, 0.3f, 1, 2);
+    g.mix_const(0, 0.6f, 0, mix_ref(1));
+    const CompileResult r = g.compile();
+    REQUIRE_MESSAGE(r.ok, r.error);
+    CHECK(has_op(r, Op::BRANCH_MIX));
+    const Full a = run_entry_at(r, r.program[0], 0.1f), b = run_entry_at(r, r.program[0], 0.9f);
+    CHECK(a.rec.base_metalness == 0.1f);
+    CHECK(b.rec.base_metalness == 0.2f);
+    CHECK(a.rec.closure_weight == 0.6f);
+    CHECK(b.rec.closure_weight == 0.6f);
+    for (int l = 0; l < ar::kLanes; ++l) CHECK(a.le.v[l] == b.le.v[l]);
+  }
+}
+
+TEST_CASE("mix_shader/unclamped entries name only per-point sources") {
+  // A per-point Mix factor reaching a weight (emission, closure weight or opacity, T) enters it
+  // unclamped and is reported; a constant factor, or a per-point factor that only selects, is not.
+  // A constant opacity with an emission is not reported as an unclamped per-point opacity.
+  using astroray::host::MaterialOutput;
+  auto has = [](const MaterialOutput& m, const char* detail) {
+    return std::any_of(m.entries.begin(), m.entries.end(),
+                       [&](const astroray::host::MaterialEntry& e) { return e.detail == detail; });
+  };
+  const char* kFactor = "per-point Mix factor enters weights unclamped (Cycles saturates it)";
+  const char* kOpacity = "opacity: a per-point geometry_opacity scales emission unclamped";
+  for (bool per_point : {false, true}) {
+    INFO("per-point factor " << per_point);
+    GB em;  // the emission weight 1 - f and the closure weight f
+    em.emit(0, 1.0f, 1.0f);
+    em.store_const(1, 0.25f, RecordSlot::base_metalness);
+    if (per_point) em.mix(0, em.uv_channel(0), 0, 1);
+    else em.mix_const(0, 0.5f, 0, 1);
+    const MaterialOutput me = em.material();
+    REQUIRE_FALSE(me.magenta);
+    CHECK(has(me, kFactor) == per_point);
+    GB op;  // T = (1 - f) x 0.5 only: two BSDF children, the first half transparent
+    op.store_const(0, 0.1f, RecordSlot::base_metalness);
+    op.store_const(0, 0.5f, RecordSlot::geometry_opacity);
+    op.store_const(1, 0.2f, RecordSlot::base_metalness);
+    if (per_point) op.mix(0, op.uv_channel(0), 0, 1);
+    else op.mix_const(0, 0.5f, 0, 1);
+    const MaterialOutput mo = op.material();
+    REQUIRE_FALSE(mo.magenta);
+    CHECK(has(mo, kFactor) == per_point);
+    GB emits;  // emission weight only: two opaque BSDF children, the first emits; no collapse, no T
+    emits.store_const(0, 0.1f, RecordSlot::base_metalness);
+    emits.emit(0, 1.0f, 1.0f);
+    emits.store_const(1, 0.2f, RecordSlot::base_metalness);
+    if (per_point) emits.mix(0, emits.uv_channel(0), 0, 1);
+    else emits.mix_const(0, 0.5f, 0, 1);
+    const MaterialOutput mi = emits.material();
+    REQUIRE_FALSE(mi.magenta);
+    CHECK(has(mi, kFactor) == per_point);
+    GB black;  // closure weight only: a black Transparent (a = 1) collapses into S; no emission, T = 0
+    black.store_const(0, 1.0f, RecordSlot::geometry_opacity);
+    black.store_const(1, 0.2f, RecordSlot::base_metalness);
+    if (per_point) black.mix(0, black.uv_channel(0), 0, 1);
+    else black.mix_const(0, 0.5f, 0, 1);
+    const MaterialOutput mk = black.material();
+    REQUIRE_FALSE(mk.magenta);
+    CHECK((mk.flags & ar::NON_OPAQUE) == 0u);
+    CHECK(has(mk, kFactor) == per_point);
+    GB sel;  // opaque BSDF children only: the factor only selects, and BRANCH_MIX clamps it
+    sel.store_const(0, 0.1f, RecordSlot::base_metalness);
+    sel.store_const(1, 0.2f, RecordSlot::base_metalness);
+    if (per_point) sel.mix(0, sel.uv_channel(0), 0, 1);
+    else sel.mix_const(0, 0.5f, 0, 1);
+    CHECK_FALSE(has(sel.material(), kFactor));
+  }
+  {  // Without a Mix: a constant opacity with an emission folds and is clamped, so no entry.
+    GB g;
+    g.store_const(0, 0.5f, RecordSlot::geometry_opacity);
+    g.emit(0, 1.0f, 2.0f);
+    const MaterialOutput m = g.material();
+    REQUIRE_FALSE(m.magenta);
+    CHECK_FALSE(has(m, kOpacity));
+    GB p;
+    p.store(0, p.uv_channel(0), RecordSlot::geometry_opacity);
+    p.emit(0, 1.0f, 2.0f);
+    CHECK(has(p.material(), kOpacity));
+  }
+}
+
+TEST_CASE("mix_shader/emission estimate keeps constant weights") {
+  // Item 43: Mix(S1, S2 with a per-point alpha and an emission of strength 3, 0.01): the weight
+  // 0.01 x a counts 0.01 at its value and bounds only the per-point a by 1, so the estimate is
+  // 0.03, not the authored 3.
+  GB g;
+  g.store_const(0, 0.1f, RecordSlot::base_metalness);
+  g.store_const(1, 0.2f, RecordSlot::base_metalness);
+  g.store(1, g.uv_channel(0), RecordSlot::geometry_opacity);
+  g.emit(1, 1.0f, 3.0f);
+  g.mix_const(0, 0.01f, 0, 1);
+  const astroray::host::MaterialOutput m = g.material();
+  REQUIRE_FALSE(m.magenta);
+  REQUIRE(m.emission_estimate.size() == 1u);
+  check_rel(double(m.emission_estimate[0].strength), 0.01 * 3.0, 1e-6);
 }
 
 }  // TEST_SUITE
