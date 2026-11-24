@@ -158,6 +158,19 @@ TEST_CASE("ext_material/ignored inputs do not reach the program") {
   CHECK(m.compiled.missing_images.empty());
 }
 
+TEST_CASE("ext_material/mix under extension refused") {
+  GB g;
+  g.store(0.5f, ar::RecordSlot::geometry_opacity);
+  const int mix = g.add(Op::BRANCH_MIX, {}, {0});
+  const ar_graph_desc gd = g.desc();
+  const MaterialOutput m = compile_extension(material(1), gd, table());
+  CHECK(m.magenta);
+  CHECK((m.flags & ar::EXTENSION) == 0u);
+  REQUIRE(m.entries.size() == 1);
+  CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+  CHECK(m.entries[0].detail.find("node " + std::to_string(mix) + " (Mix Shader)") == 0);
+}
+
 TEST_CASE("ext_material/routes to ext stage") {
   GB g;
   g.store(1.0f, ar::RecordSlot::geometry_opacity);

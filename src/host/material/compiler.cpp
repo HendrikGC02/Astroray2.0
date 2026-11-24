@@ -1159,6 +1159,12 @@ MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_de
   std::string why;
   if (!ext_params_valid(kind, params, &why))
     return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "extension kind " + std::string(name) + ": " + why);
+  // Item 19: no masking. A Mix Shader would select between an extension and an OpenPBR branch.
+  for (uint32_t i = 0; i < graph.node_count; ++i)
+    if (graph.nodes[i].op == uint32_t(Op::BRANCH_MIX))
+      return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
+                              "node " + std::to_string(i) + " (Mix Shader) under extension kind " + std::string(name) +
+                                  ": an extension cannot be mixed with another branch (use material slots)");
   PrunedGraph pruned;
   prune_ignored_stores(graph, kind, &pruned);
   MaterialOutput m = compile_material(pruned.desc, table, means, slots, desc.medium_priority);
