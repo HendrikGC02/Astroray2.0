@@ -210,11 +210,11 @@ TEST_CASE("denoiser/none copies colour undenoised") {
 
 TEST_CASE("denoiser/unbuilt backend fails loudly") {
   ContextState ctx;
-  auto state = DenoiserState::create(ctx, DenoiserBackend::OIDN);
+  auto state = DenoiserState::create(ctx, DenoiserBackend::DLSS_RR);
   state->wait();
   CHECK(state->failed());
   CHECK_FALSE(state->ready());
-  CHECK(state->error().find("OIDN") != std::string::npos);
+  CHECK(state->error().find("DLSS_RR") != std::string::npos);
   const float rgb[3] = {0, 0, 0};
   DenoiseInputs in;
   in.color = {rgb, 1, 1, 3};

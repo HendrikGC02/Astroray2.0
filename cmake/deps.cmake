@@ -34,6 +34,16 @@ if(TARGET astroray_engine)
   endforeach()
 endif()
 
+# OIDN (our renamed build): its header for the types and names of the run-time loaded entry
+# points, and the folder a development build loads astroray_oidn.dll from. No import library is
+# linked: the engine DLL never imports OIDN (0001 D9.1 lazy load by absolute path, V5).
+# Ref: 0001 D9.1, D9.4; 0008 d18; third_party/deps.toml "oidn".
+if(TARGET astroray_engine)
+  astroray_dep_dir(oidn 2.5.0 _ar_oidn_dir)
+  target_include_directories(astroray_engine SYSTEM PRIVATE ${_ar_oidn_dir}/extracted/include)
+  target_compile_definitions(astroray_engine PRIVATE "AR_OIDN_DEV_LIBRARY_DIR=\"${_ar_oidn_dir}/extracted/bin\"")
+endif()
+
 # OptiX headers (fetched, not redistributable: 0001 D7.4) for the CUDA device sources only
 # (0001 D5.2: OptiX headers are included in src/device/cuda and src/kernel_gpu). A source
 # property, not a target one, so host code cannot include them.

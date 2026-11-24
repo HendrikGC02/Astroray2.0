@@ -166,6 +166,7 @@ struct CudaDevice::Impl {
   Driver cu;
   CUdevice device = 0;
   CUcontext ctx = nullptr;
+  int ordinal = -1;
   CUstream stream = nullptr;
   CUevent done = nullptr;
   std::string arch;  // "sm_120"
@@ -224,6 +225,7 @@ struct CudaDevice::Impl {
     int driver = 0;
     check(cu.cuDriverGetVersion_(&driver), "cuDriverGetVersion");
     check(cu.cuDeviceGet_(&device, static_cast<int>(index)), "cuDeviceGet");
+    ordinal = static_cast<int>(index);
     int major = 0, minor = 0;
     check(cu.cuDeviceGetAttribute_(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device),
           "cuDeviceGetAttribute");
@@ -764,6 +766,20 @@ void CudaDevice::launch_module_kernel(uint32_t module, const char* function, uin
     }
   }
   s.launch(f, function, blocks, threads, const_cast<void**>(args));
+}
+
+void* CudaDevice::native_stream() const { return impl_->stream; }
+
+int CudaDevice::device_ordinal() const { return impl_->ordinal; }
+
+uint64_t cuda_free_device_bytes(int ordinal) {
+  cudaError_t e = cudaSetDevice(ordinal);
+  size_t free_bytes = 0, total_bytes = 0;
+  if (e == cudaSuccess) e = cudaMemGetInfo(&free_bytes, &total_bytes);
+  if (e != cudaSuccess)
+    throw DeviceError("CUDA error in cudaMemGetInfo (device " + std::to_string(ordinal) + "): " + cudaGetErrorName(e) +
+                      ": " + cudaGetErrorString(e));
+  return free_bytes;
 }
 
 bool CudaDevice::memory_info(uint64_t* free_bytes, uint64_t* total_bytes) {
