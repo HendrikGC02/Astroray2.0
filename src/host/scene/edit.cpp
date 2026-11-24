@@ -49,7 +49,7 @@ ar_status Edit::reset() {
 ar_status Edit::stage(std::shared_ptr<EditItem> item) {
   if (ar_status st = touch()) return st;
   if (!item || !item->job) return bad("invalid argument: staged item without a job");
-  if (item->kind > AR_KIND_ASTRO) return bad("invalid argument: edit kind out of range");
+  if (item->kind > AR_KIND_MEDIUM) return bad("invalid argument: edit kind out of range");
   if (staged_.count(item->key)) return bad("invalid argument: key " + std::to_string(item->key) + " is already staged in this edit");
   staged_[item->key].item = std::move(item);
   return AR_OK;
@@ -77,16 +77,26 @@ bool Edit::final_geometry(ar_key key) const {
   return !reset_ && scene_.known(AR_KIND_GEOMETRY, key);
 }
 
-std::set<uint64_t> Edit::removed_geometry() const {
+bool Edit::final_medium(ar_key key) const {
+  auto it = staged_.find(key);
+  if (it != staged_.end() && it->second.committed && it->second.item->kind == AR_KIND_MEDIUM) return true;
+  if (removed_.count({AR_KIND_MEDIUM, key})) return false;
+  return !reset_ && scene_.known(AR_KIND_MEDIUM, key);
+}
+
+std::set<uint64_t> Edit::removed_of(uint32_t kind) const {
   std::set<uint64_t> out;
   for (const auto& r : removed_) {
-    if (r.first != AR_KIND_GEOMETRY) continue;
+    if (r.first != kind) continue;
     auto it = staged_.find(r.second);
-    if (it != staged_.end() && it->second.item->kind == AR_KIND_GEOMETRY) continue;
+    if (it != staged_.end() && it->second.item->kind == kind) continue;
     out.insert(r.second);
   }
   return out;
 }
+
+std::set<uint64_t> Edit::removed_geometry() const { return removed_of(AR_KIND_GEOMETRY); }
+std::set<uint64_t> Edit::removed_media() const { return removed_of(AR_KIND_MEDIUM); }
 
 ar_status Edit::stage_internal(std::shared_ptr<EditItem> item) {
   if (ar_status st = touch()) return st;
@@ -145,7 +155,7 @@ void Edit::submit(const std::shared_ptr<EditItem>& item) {
 
 ar_status Edit::remove(uint32_t kind, ar_key key) {
   if (ar_status st = touch()) return st;
-  if (kind > AR_KIND_ASTRO) return bad("invalid argument: edit kind out of range");
+  if (kind > AR_KIND_MEDIUM) return bad("invalid argument: edit kind out of range");
   bool known = false;
   if (!reset_) known = scene_.known(kind, key);
   if (!known) {
@@ -271,10 +281,14 @@ ar_status Edit::commit(uint64_t* generation) {
   });
   // Internal items run after the generation's own state callbacks (a reset clears first).
   for (const auto& item : internal_) {
-    if (item->bind) item->bind([this](ar_key k) { return final_geometry(k); });
+    if (item->bind)
+      item->bind([this](ar_key k) { return final_geometry(k); }, [this](ar_key k) { return final_medium(k); });
     if (item->on_active) p.on_active.push_back(item->on_active);
     if (item->on_dropped) p.on_dropped.push_back(item->on_dropped);
   }
+  // Last, after every state callback and the instance table: the open-medium-mesh report is rebuilt from the
+  // final state (Scene::refresh_medium_reports), whatever order the callbacks above ran in.
+  p.on_active.push_back([scene = &scene_] { scene->refresh_medium_reports(); });
   for (const auto& item : internal_) submit(item);
   *generation = scene_.generations().commit(pending_, [&] {
     std::lock_guard<std::mutex> lock(st.mutex);

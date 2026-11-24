@@ -8,6 +8,7 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <set>
 #include <vector>
 
 #include "../../../include/astroray/astroray.h"
@@ -22,7 +23,7 @@ struct Pending;
 // geometry and object keys, and the motion step count. Built synchronously from the desc.
 struct InstanceSummary {
   uint32_t steps = 1;
-  std::vector<ar_key> geom, object;
+  std::vector<ar_key> geom, object, medium;  // medium: 0 = none
 };
 
 struct Instance {
@@ -36,6 +37,7 @@ struct Instance {
   uint8_t light_group = 0;
   uint32_t material_offset = 0, material_count = 0;  // slice of material_pool; 0 = default
   uint32_t light_index = ar::kNoLightIndex;  // set by the lamp-instance task (068)
+  ar_key medium_key = 0;  // the medium inside the instance's closed mesh; 0 = none
 };
 
 // The motion step rendered until M8 for S steps: (S - 1) / 2 in integer division, so the
@@ -49,14 +51,18 @@ struct InstanceTable {
   std::vector<Instance> instances;
   std::vector<ar_xform> xf;  // instances.size() * motion_steps, instance-major
   std::vector<ar_key> material_pool;
+  // Geometry keys of the instances that bear a medium, built with the table on the worker so activation
+  // callbacks never scan the instances (Scene::refresh_medium_reports).
+  std::set<ar_key> medium_geoms;
   const ar_xform& step(uint32_t i, uint32_t s) const { return xf[size_t(i) * motion_steps + s]; }
   // The motion-blur step used until M8 (S > 1 is stored, the representative step is rendered).
   const ar_xform& centre(uint32_t i) const { return step(i, representative_step(motion_steps)); }
 };
 
 // Visibility bits to mask bits: camera 0, diffuse 1, glossy 2, transmission 3, shadow 4,
-// volume 5. Bit 6 (medium boundary) stays unset until media exist; bit 7 is never set.
-uint8_t visibility_mask(uint32_t visibility);
+// volume 5. Bit 6 (medium boundary) is set exactly for an instance that bears a medium, whatever
+// its visibility, so every ray type updates the medium stack at it (0006 D20); bit 7 is never set.
+uint8_t visibility_mask(uint32_t visibility, bool has_medium = false);
 
 // The ray classes a lamp's instance may carry; shadow is never among them (0004 D8).
 inline constexpr uint32_t kLampRayVisibility =

@@ -50,6 +50,10 @@ inline constexpr uint32_t kNoLightIndex = ~0u;
 // for the host mask builder, Embree and the OptiX raygen (0002 D11 mask table).
 inline constexpr uint32_t kShadowMaskBit = 1u << 4;
 
+// Instance mask bit 6, MEDIUM_BOUNDARY: set on every medium-bearing instance whatever its ray visibility,
+// so every ray type updates the medium stack at it (0006 D20, 0002 D11). Bit 7 stays spare.
+inline constexpr uint32_t kMediumBoundaryMaskBit = 1u << 6;
+
 // What KernelGlobals::scene points to. Arrays are device (or, on the CPU, host) memory.
 struct SceneData {
   const DeviceInstanceRecord* instances;

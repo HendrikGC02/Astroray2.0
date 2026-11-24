@@ -14,6 +14,7 @@
 #include "host/material/material_store.h"
 #include "host/scene/accel.h"
 #include "host/scene/edit.h"
+#include "host/scene/media.h"
 #include "host/scene/mesh.h"
 #include "host/scene/scene_tables.h"
 #include "host/session/test_hooks.h"
@@ -287,6 +288,72 @@ void Scene::publish_lamp(std::shared_ptr<const Lamp> lamp) {
   std::lock_guard<std::mutex> lock(state_.mutex);
   const ar_key k = lamp->key;
   state_.lamps[k] = std::move(lamp);
+}
+
+void Scene::publish_medium(std::shared_ptr<const Medium> medium) {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  const ar_key k = medium->key;
+  state_.media[k] = std::move(medium);
+}
+
+void Scene::refresh_medium_reports() noexcept {
+  try {
+    std::set<ar_key> work, now;
+    {
+      std::lock_guard<std::mutex> lock(state_.mutex);
+      if (state_.instances) now = state_.instances->medium_geoms;
+      work = state_.medium_reported;
+      work.insert(now.begin(), now.end());
+      state_.medium_reported = now;
+    }
+    for (ar_key g : work) {
+      try {
+        // Dropped even when the mesh is replaced and the generation already cleared it: the entry is rebuilt
+        // from the final state. The log line is for a condition that is new, not for every generation.
+        const bool had = report_.remove(AR_REPORT_MEDIUM_MESH_OPEN, g) != 0;
+        if (!now.count(g)) continue;
+        const auto rec = meshes ? meshes->find(g) : nullptr;
+        if (!rec || !rec->topo) {
+          ctx_.log.line("ERROR", "geometry key " + std::to_string(g) +
+                                     " bears a medium but has no installed mesh (a geometry kind this check does not know); "
+                                     "its closedness was not checked");
+          continue;
+        }
+        if (rec->topo->closed) continue;
+        const std::string why = "mesh '" + rec->topo->name + "' (geometry key " + std::to_string(g) +
+                                ") bears a medium but is not closed with consistent winding; the medium follows Cycles' convention";
+        if (!had) ctx_.log.line("WARNING", why);
+        report_.raise(AR_REPORT_MEDIUM_MESH_OPEN, g, why, 1, nullptr, 0);
+      } catch (...) {
+        try {
+          ctx_.log.line("ERROR", "MEDIUM_MESH_OPEN for geometry key " + std::to_string(g) + " could not be recorded");
+        } catch (...) {
+          // the log itself failed: nothing is left to report through
+        }
+      }
+    }
+  } catch (...) {
+    try {
+      ctx_.log.line("ERROR", "MEDIUM_MESH_OPEN: the medium reports could not be refreshed (out of memory)");
+    } catch (...) {
+      // the log itself failed: nothing is left to report through
+    }
+  }
+}
+
+std::shared_ptr<const Medium> Scene::medium(ar_key key) const {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  auto it = state_.media.find(key);
+  if (it == state_.media.end() || !state_.known_active.count({AR_KIND_MEDIUM, key})) return nullptr;
+  return it->second;
+}
+
+std::vector<std::shared_ptr<const Medium>> Scene::media() const {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  std::vector<std::shared_ptr<const Medium>> out;
+  for (const auto& kv : state_.media)
+    if (state_.known_active.count({AR_KIND_MEDIUM, kv.first})) out.push_back(kv.second);
+  return out;
 }
 
 std::shared_ptr<const InstanceTable> Scene::instances_with_lamps(const LightTable& table) const {

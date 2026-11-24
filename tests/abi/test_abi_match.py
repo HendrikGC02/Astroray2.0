@@ -62,6 +62,15 @@ class TestMatch(unittest.TestCase):
             binding.check(self.lib)
         self.assertRegex(str(cm.exception), r"ar_context_desc\.\w+: offset")
 
+    def test_medium_surface_in_binding(self):
+        # The binding names the medium entry point and descriptor, and the DLL exports the function.
+        binding = load_binding(ABI)
+        self.assertIn("ar_edit_set_medium", binding.PROTOTYPES)
+        self.assertTrue(hasattr(self.lib, "ar_edit_set_medium"))
+        fields = [n for n, _ in binding.ar_medium_desc._fields_]
+        self.assertEqual(fields, ["sigma_a", "sigma_s", "g", "flags"])
+        self.assertIn("medium_keys", [n for n, _ in binding.ar_instances_desc._fields_])
+
 
 if __name__ == "__main__":
     unittest.main()

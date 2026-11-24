@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0006 V1 scene: a closed box of thickness d holding a chromatic absorbing medium, in front of a
+# view-filling white emitter. The box's surface has opacity 0, so a ray passes it and the medium
+# decides the pixel: with the medium alone absorbing, a lane at wavelength lambda sees transmittance
+# exp(-(1 - S_c(lambda)) max(s) d), where S_c is the colour's reflectance sigmoid (the RGB triple is a
+# reflectance-style input, not a per-lane coefficient, so the per-channel value is only approximate).
+# Until the delta-tracking stage lands the slab renders as if empty; this file carries the scene's
+# geometry and coefficients so the render task adds only its truth and tolerance.
+class = "B"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+
+[truth]
+# Absorption in 1/m, one value per RGB channel; no scattering.
+sigma_a = [0.5, 1.0, 2.0]
+sigma_s = [0.0, 0.0, 0.0]
+g = 0.0
+# Metres and millimetres: the emitter at the origin facing +z, the slab's lower face 0.05 m above it,
+# the camera on the +z axis looking down. The builder refuses a view the emitter or slab does not fill.
+thickness = 0.5
+slab_size = 3.0
+gap = 0.05
+colour = [1.0, 1.0, 1.0]
+radiance = 1.0
+plane_size = 4.0
+camera_distance = 2.0
+focal_mm = 50.0
+sensor_mm = 36.0

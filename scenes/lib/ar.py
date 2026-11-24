@@ -248,7 +248,7 @@ class Scene:
         # scene can say is kept: constant Principled inputs, lamps, a constant world, a pinhole camera.
         self.description_path = os.path.abspath(description) if description else None
         self._desc = {"meshes": [], "materials": [], "instances": [], "lights": [], "world": None,
-                      "camera": None, "settings": None}
+                      "camera": None, "settings": None, "media": []}
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         self._tmp = tempfile.TemporaryDirectory()
         self.abi = _load("_ar_abi", os.path.join(GEN, "_abi.py"))
@@ -383,7 +383,8 @@ class Scene:
         Blender scene makes the instance ("object": an object with its own or a shared mesh,
         "collection": an empty instancing a collection, "points": Instance on Points in a
         geometry-nodes modifier) and `group`, which names the source collection or the modifier's
-        host for the last two kinds. The engine gets the same flat instance either way."""
+        host for the last two kinds. The engine gets the same flat instance either way.
+        `medium` (a key from `medium()`, default none) puts that medium inside the instance's closed mesh."""
         a = self.abi
         n = len(items)
         for i, it in enumerate(items):
@@ -413,17 +414,18 @@ class Scene:
             vis=arr(ctypes.c_uint32, [it.get("visibility", ALL_VISIBILITY) for it in items]),
             flags=arr(ctypes.c_uint32, [0] * n), lg=arr(ctypes.c_uint8, [0] * n),
             moff=arr(ctypes.c_uint32, offsets), mcnt=arr(ctypes.c_uint32, counts),
-            mkeys=arr(ctypes.c_uint64, pool))
+            mkeys=arr(ctypes.c_uint64, pool), med=arr(ctypes.c_uint64, [it.get("medium", 0) for it in items]))
         d.geom_keys, d.xf, d.object_keys = keep["geom"], keep["xf"], keep["obj"]
         d.random_ids, d.pass_indices, d.crypto_objects, d.crypto_assets = keep["rid"], keep["pidx"], keep["co"], keep["ca"]
         d.colors, d.visibility, d.flags, d.light_groups = keep["col"], keep["vis"], keep["flags"], keep["lg"]
         d.material_offsets, d.material_counts, d.material_keys = keep["moff"], keep["mcnt"], keep["mkeys"]
+        d.medium_keys = keep["med"]
         self._call(self.lib.ar_edit_set_instances(self.edit_h, ctypes.byref(d)), "ar_edit_set_instances")
         self._desc["instances"] = [
             {"geom": it["geom"], "materials": list(it["materials"]),
              "xf": [float(v) for v in np.asarray(it.get("xf", IDENTITY), np.float64).reshape(-1)[:12]],
              "visibility": it.get("visibility", ALL_VISIBILITY), "kind": it.get("kind", "object"),
-             "group": it.get("group")} for it in items]
+             "group": it.get("group"), "medium": it.get("medium", 0)} for it in items]
 
     # -- shading ---------------------------------------------------------------------------------
     def graph(self):
@@ -477,6 +479,20 @@ class Scene:
             "base_color_image": {"path": os.path.abspath(path), "colorspace": "sRGB",
                                  "interpolation": "Linear" if linear else "Closest",
                                  "extension": "EXTEND" if extend else "REPEAT"}})
+        return key
+
+    def medium(self, sigma_a=(0.0, 0.0, 0.0), sigma_s=(0.0, 0.0, 0.0), g=0.0):
+        """A test medium of constant coefficients (RGB triples in 1/m, HG anisotropy g). Returns its
+        key, which an instance names with `medium=`."""
+        a = self.abi
+        d = a.ar_medium_desc()
+        d.sigma_a = (ctypes.c_float * 3)(*sigma_a)
+        d.sigma_s = (ctypes.c_float * 3)(*sigma_s)
+        d.g = g
+        key = self.key()
+        self._call(self.lib.ar_edit_set_medium(self.edit_h, key, ctypes.byref(d)), "ar_edit_set_medium")
+        self._desc["media"].append({"key": key, "sigma_a": [float(x) for x in sigma_a],
+                                    "sigma_s": [float(x) for x in sigma_s], "g": float(g)})
         return key
 
     def world(self, rgb, strength=1.0):

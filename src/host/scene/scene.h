@@ -49,6 +49,7 @@ struct MeshRecord;
 class MaterialStore;  // host/material/material_store.h
 struct LightTable;    // host/light/light_builder.h
 struct Lamp;          // host/light/lamps.h
+struct Medium;        // host/scene/media.h
 
 // Applies one generation's key-set changes (reset, removes, then inserts).
 void apply_known(std::set<std::pair<uint32_t, uint64_t>>& known, const Pending& p);
@@ -155,6 +156,19 @@ class Scene {
   // A lamp the activating generation set (068). Lamps count only while their key is in the active
   // generation's key set, so a removed or reset-away lamp drops out without a callback.
   void publish_lamp(std::shared_ptr<const Lamp> lamp);
+  // A medium the activating generation set (181). Like lamps, media count only while their key is in the
+  // active generation's key set. `medium` is null for an unknown, removed or not yet active key; `media`
+  // lists the live ones in key order, the order the medium table indexes them in.
+  void publish_medium(std::shared_ptr<const Medium> medium);
+  // MEDIUM_MESH_OPEN (0006 D20): every geometry that bears a medium in the active instance table is checked
+  // against MeshTopology::closed, and an open one has exactly one entry, subject = its geometry key. Runs as
+  // the last activation callback of every generation (Edit::commit appends it), when the meshes, the
+  // reset and the instance table are all final, so no ordering of the earlier callbacks can leave a stale
+  // entry: it drops the entries of every key that bore a medium before or bears one now and raises the open
+  // ones again. Reads flags and one set; never throws (an allocation failure is logged as ERROR).
+  void refresh_medium_reports() noexcept;
+  std::shared_ptr<const Medium> medium(ar_key key) const;
+  std::vector<std::shared_ptr<const Medium>> media() const;
   // The active instances plus one record per lamp of `table`, which carries each lamp's light
   // index. Never null (an empty scene gives an empty table). It reads only `table` and the active
   // instances, so the light indices are those of the snapshot the caller holds.
@@ -178,6 +192,8 @@ class Scene {
     std::vector<uint8_t> light_key;
     std::vector<std::shared_ptr<const MeshRecord>> light_meshes;  // pins the records light_key names
     std::map<ar_key, std::shared_ptr<const Lamp>> lamps;          // as set; live ones are in known_active
+    std::map<ar_key, std::shared_ptr<const Medium>> media;        // as set; live ones are in known_active
+    std::set<ar_key> medium_reported;                             // medium-bearing geometry at the last refresh
     std::vector<std::shared_ptr<const Lamp>> light_lamps;         // the last build's lamps, pinned for light_key
     std::shared_ptr<const LightTable> lights;
     uint64_t light_rebuilds = 0;

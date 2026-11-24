@@ -8,6 +8,7 @@
 #include <stdexcept>
 
 #include "host/geometry/triangulate.h"
+#include "host/scene/closed_mesh.h"
 #include "host/scene/instances.h"
 
 namespace astroray::host {
@@ -162,6 +163,7 @@ std::shared_ptr<MeshRecord> build_record(const ar_mesh_desc& d, const std::vecto
   t->corner_vert.assign(s.corner_vert, s.corner_vert + C);
   t->face_start.assign(s.face_start, s.face_start + F);
   t->face_start.push_back(C);
+  t->closed = polygons_closed(t->corner_vert.data(), t->face_start.data(), F);
   t->uv.assign(s.uv, s.uv + n.uv);
   t->attributes.assign(s.attributes, s.attributes + n.attributes);
   t->attribute_descs = attrs;

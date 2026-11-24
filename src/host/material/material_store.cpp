@@ -135,7 +135,7 @@ ar_status MaterialStore::ensure_pass(Edit& edit) {
   item->needs_device = false;
   std::shared_ptr<MaterialStore> self = shared_from_this();
   Scene* scene = &edit.scene();
-  item->bind = [self, pass, scene](const std::function<bool(ar_key)>&) {
+  item->bind = [self, pass, scene](const std::function<bool(ar_key)>&, const std::function<bool(ar_key)>&) {
     pass->generation = scene->generations().pending() + 1;  // one open edit: the next number is this commit's
     self->bind(pass);
   };
