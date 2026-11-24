@@ -1,9 +1,56 @@
 # SPDX-License-Identifier: Apache-2.0
-# Script mode: cmake -DOUT=<file> -DGIT=<git> -DSRC=<source dir> -DVERSION=<v>
+# Build identity (0009 d5), in two modes.
+# Included from a CMakeLists.txt: defines astroray_add_buildinfo_rule(<out cpp var> <gen dir> <version> <build type>),
+# the one rule that generates <gen dir>/build_info.cpp (the real tree and tests/tools/fast_buildinfo.ps1 use it).
+# Script mode: cmake -DOUT=<file> -DSTAMP=<file> -DGIT=<git> -DSRC=<source dir> -DVERSION=<v>
 #   -DBUILD_TYPE=<t> -P buildinfo.cmake
-# Writes build_info.cpp only when its content changes, so a commit that moves
-# nothing but the sha relinks the DLL and nothing else (0009 d5).
-foreach(var OUT GIT SRC VERSION BUILD_TYPE)
+# Writes build_info.cpp only when its content changes, so a commit that moves nothing but the sha relinks
+# the DLL and nothing else, and always touches the stamp.
+if(NOT CMAKE_SCRIPT_MODE_FILE)
+  # The command depends on HEAD, HEAD's reflog and the index: every commit, checkout, reset or rebase appends
+  # to the reflog, so a commit relinks. The branch's loose ref file is not used, because git packs it away
+  # (pack-refs, gc, worktree cleanup) and ninja then fails on a missing input. The index is an input only to
+  # notice a change of the dirty flag; any `git status` rewrites it (stat cache) without changing the
+  # identity. The stamp is the command's OUTPUT and build_info.cpp its BYPRODUCT, so the command is re-run
+  # after such a refresh and, being restat, leaves build_info.cpp and everything after it alone when its
+  # content did not change. `ninja -n` cannot know that: tools/build.ps1 runs the stamp for real before it
+  # asks.
+  function(_ar_git_path out what)
+    execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --git-path ${what}
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} OUTPUT_VARIABLE p OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE rc)
+    if(NOT rc EQUAL 0)
+      message(FATAL_ERROR "git rev-parse --git-path ${what} failed")
+    endif()
+    cmake_path(ABSOLUTE_PATH p BASE_DIRECTORY ${CMAKE_SOURCE_DIR} NORMALIZE)
+    set(${out} ${p} PARENT_SCOPE)
+  endfunction()
+  function(astroray_add_buildinfo_rule out_cpp gen_dir version build_type)
+    find_package(Git REQUIRED)
+    _ar_git_path(git_head HEAD)
+    _ar_git_path(git_index index)
+    _ar_git_path(git_reflog logs/HEAD)
+    if(NOT EXISTS ${git_reflog})
+      message(FATAL_ERROR "${git_reflog} is missing: the build identity needs HEAD's reflog (git config core.logAllRefUpdates true, then make one commit)")
+    endif()
+    # A branch switch rewrites HEAD; reconfigure then so the identity is regenerated cleanly.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${git_head})
+    set(cpp ${gen_dir}/build_info.cpp)
+    set(stamp ${gen_dir}/build_info.stamp)
+    add_custom_command(
+      OUTPUT ${stamp}
+      BYPRODUCTS ${cpp}
+      COMMAND ${CMAKE_COMMAND} -DOUT=${cpp} -DSTAMP=${stamp} -DGIT=${GIT_EXECUTABLE} -DSRC=${CMAKE_SOURCE_DIR}
+              -DVERSION=${version} -DBUILD_TYPE=${build_type} -P ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/buildinfo.cmake
+      DEPENDS ${git_head} ${git_index} ${git_reflog} ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/buildinfo.cmake
+      COMMENT "build_info.cpp"
+      VERBATIM)
+    add_custom_target(astroray_buildinfo_gen DEPENDS ${stamp})
+    set(${out_cpp} ${cpp} PARENT_SCOPE)
+  endfunction()
+  return()
+endif()
+
+foreach(var OUT STAMP GIT SRC VERSION BUILD_TYPE)
   if(NOT DEFINED ${var})
     message(FATAL_ERROR "buildinfo.cmake: ${var} not set")
   endif()
@@ -40,3 +87,5 @@ endif()
 if(NOT old STREQUAL content)
   file(WRITE ${OUT} "${content}")
 endif()
+# After the source: the stamp is newer than every input and than build_info.cpp.
+file(TOUCH ${STAMP})
