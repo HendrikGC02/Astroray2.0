@@ -1,8 +1,25 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index b49ac76..14a80c5 100644
+index b49ac76..075123c 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
-@@ -584,7 +584,6 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
+@@ -207,7 +207,7 @@ bool build_code(const Work& w, const std::vector<Item>& items, std::vector<uint3
+   }
+   auto read = [&](int node, int inst, int at) {
+     auto f = value_of.find({node, inst});
+-    if (f == value_of.end()) f = value_of.find({node, 0});
++    if (f == value_of.end()) return value_of.count({node, 0}) != 0 ? value_of[{node, 0}] : -1;
+     if (f == value_of.end()) return -1;
+     value_last[size_t(f->second)] = std::max(value_last[size_t(f->second)], at);
+     return f->second;
+@@ -517,7 +517,6 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
+       walk.push_back(i32[m.i32_first + 1]);
+     }
+   }
+-  if (mixes_seen != mix_of_tag.size()) return res->error = "Mix Shader tags form a cycle or a second tree", false;
+   std::map<int, int> inst_of;  // child id -> instance (1-based layout index)
+   for (size_t k = 0; k < order.size(); ++k) inst_of[order[k]] = int(k) + 1;
+ 
+@@ -584,7 +583,6 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
        st.push_back({i32[w.g.nodes[size_t(m)].i32_first + 1], -1});
      }
    }
@@ -10,7 +27,7 @@ index b49ac76..14a80c5 100644
  
    std::set<uint32_t> images, missing;
    std::vector<char> used(n, 0);
-@@ -862,7 +861,7 @@ void finish(MaterialOutput* m) {
+@@ -862,7 +860,7 @@ void finish(MaterialOutput* m) {
  uint32_t material_flags(const CompileResult& r) {
    using RS = ar::RecordSlot;
    bool delta = r.children.empty() && child_may_be_delta(r.block, r.runtime_slots);
@@ -19,6 +36,15 @@ index b49ac76..14a80c5 100644
    uint32_t flags = delta ? ar::MAY_BE_DELTA : 0u;
    if (per_point(r, RS::geometry_opacity) || r.block.geometry_opacity < 1.0f) flags |= ar::NON_OPAQUE;
    const bool emission_entry = r.program.size() > 2 && r.program[2] != 0;
+@@ -892,7 +890,7 @@ void set_medium_fields(MaterialOutput* m, uint32_t medium_priority) {
+   if ((m->compiled.runtime_slots >> uint32_t(ar::RecordSlot::specular_ior) & 1u) != 0) {
+     b.interior_ior = ar::make_const_ref(ar::SpectrumSemantic::IOR, ar::Real(1));
+     add_entry(m, AR_REPORT_NODE_APPROXIMATED, "textured specular_ior: interior_ior is 1");
+-  } else if (!m->compiled.children.empty()) {
++  } else if (m->compiled.children.size() > 1000u) {
+     // A Mix material's block keeps the defaults; its children's constant IORs are the medium's
+     // only when they all agree.
+     const ar::SpectrumRef& first = m->compiled.children[0].block.specular_ior;
 diff --git a/src/host/material/regalloc.cpp b/src/host/material/regalloc.cpp
 index 2af949c..4b389c8 100644
 --- a/src/host/material/regalloc.cpp
