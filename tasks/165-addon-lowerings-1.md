@@ -19,3 +19,6 @@ Size: M (about 300 lines without tests); stop and report at 2x.
 Progress:
 - 165 stopped before code: no luminance row exists in the engine (only host M_ws XYZ->RGB in ObserverTables; SceneTables/kernel hold none). Files planned: those in Scope plus context.h/material_store (Y row to kernel) if the lead rules so.
 - lead ruling 2026-11-25: option 1: Y weights = row 1 of inverse(M_ws), host double, carried with the observer data (ObserverView y_row[3] if built in one place); op_color_to_f32(c, y_row); fold takes the host row; extra files accepted as forced; test pins row vs independent inverse and row-sum; 0005 items 36/42 text as proposed; rebase on 158 before ops.def and probe_m1.cu.
+- COLOR_TO_F32 (op 23, foldable), Rgb2SpecTable::y_row from observer.bin M_ws (inverse row 1), Emission/Blackbody/Alpha/colour-to-float lowerings, tests, canary patch done; check fast and gate pass.
+- Open for the lead: Blender's inline_shader_nodes folds a constant-Temperature Blackbody into RGB, so BLACKBODY is unreachable from a real material; V10 all-rows loop 3.8 s (gate-ten-rows and full wiring need tools/ edits).
+- Rebase on 158 still to do (ops.def, probe_m1.cu, test_vm.cpp opcode numbers).
