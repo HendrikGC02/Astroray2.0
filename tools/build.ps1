@@ -50,6 +50,14 @@ function Test-ArNoWorkLeft {
   param([string]$BuildDir, [string[]]$Target, [string]$Stamp = 'gen/build_info.stamp', [int]$Tries = 3)
   $all = @()
   for ($i = 0; $i -lt $Tries; $i++) {
+    # Dry run first: the settle step may only run the identity generator. A stale manifest (`Re-running CMake`) or
+    # any other step is work left, and running the stamp for real would absorb it.
+    $pre = @(& ninja -C $BuildDir -n $Stamp 2>&1 | ForEach-Object { "$_" })
+    $all += "> ninja -C $BuildDir -n $Stamp"; $all += $pre
+    $other = @($pre | Where-Object { $_ -notlike 'ninja: Entering*' -and $_ -ne 'ninja: no work to do.' -and $_ -notmatch '^\[\d+/\d+\] build_info\.cpp$' })
+    if ($LASTEXITCODE -ne 0 -or $other.Count -gt 0) {
+      return [pscustomobject]@{ Ok = $false; First = $(if ($other.Count) { $other[0] } else { $pre | Select-Object -Last 1 }); Output = $all }
+    }
     $set = @(& ninja -C $BuildDir $Stamp 2>&1 | ForEach-Object { "$_" })
     $all += "> ninja -C $BuildDir $Stamp"; $all += $set
     if ($LASTEXITCODE -ne 0) {
