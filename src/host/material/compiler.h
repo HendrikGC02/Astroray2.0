@@ -35,6 +35,15 @@ struct EmissionTerm {
   float strength = 0.0f;
 };
 
+// What one BSDF child of a Mix Shader graph stores: the OpenPBR defaults overridden by its constant
+// stores (the program holds them as code; this copy is for the material flags) and the slots it
+// stores per point.
+struct ChildConstants {
+  int id = 0;  // the graph's child id
+  ar::ConstantBlock block = {};
+  uint64_t runtime_slots = 0;
+};
+
 struct CompileResult {
   bool ok = false;
   std::string error;  // set when !ok; the compiler never throws
@@ -55,6 +64,9 @@ struct CompileResult {
   // result with both before using it.
   std::vector<uint32_t> images;
   std::vector<uint32_t> missing_images;  // sampled keys the ImageSlotFn did not know, sorted
+  // A Mix Shader graph's BSDF children in layout order (0005 item 38); empty without a Mix. Their
+  // constants are code in their blocks, so `block` then holds only the OpenPBR defaults.
+  std::vector<ChildConstants> children;
 };
 
 // A report entry the compiler owes for one material (subject = the material key).

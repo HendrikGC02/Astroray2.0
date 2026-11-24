@@ -21,8 +21,8 @@ namespace probe_m1 {
 // Opcodes ops.def does not define yet, numbered up to the ~100 of 0005 Risks M-1. Each is a
 // distinct body of one of the shapes the table's rows have (f32, f32x3 and spectrum arithmetic,
 // a transcendental, an immediate operand); they stand for future ops' size, not for any node.
-// The placeholder cases below are opcodes 20-99, so they start where ops.def ends.
-static_assert(uint32_t(Op::COUNT_) == 20, "ops.def changed: renumber the placeholder cases");
+// The placeholder cases below are opcodes 23-99, so they start where ops.def ends.
+static_assert(uint32_t(Op::COUNT_) == 23, "ops.def changed: renumber the placeholder cases");
 
 template <uint32_t K>
 AR_FN void placeholder_op(VmState& vm) {
@@ -60,7 +60,7 @@ AR_FN void placeholder_op(VmState& vm) {
 
 // vm/interp.h run_entry's loop with the placeholder cases added (same state, same handlers).
 AR_FN VmStatus run_entry_100(const uint32_t* prog, uint32_t offset, VmRegs* regs, const ShadeContext& ctx,
-                             const SceneTables& tables, OpenPBRParams* rec, Spec* le) {
+                             const SceneTables& tables, OpenPBRParams* rec, Spec* le, float* select_u) {
   VmState vm;
   vm.prog = prog;
   vm.pc = offset;
@@ -71,6 +71,7 @@ AR_FN VmStatus run_entry_100(const uint32_t* prog, uint32_t offset, VmRegs* regs
   vm.le = le;
   vm.med = nullptr;
   vm.mblock = nullptr;
+  vm.select_u = select_u;
   vm.a = vm.b = vm.c = 0;
   vm.status = VmStatus::OK;
   vm.done = (offset == 0u);
@@ -83,7 +84,9 @@ AR_FN VmStatus run_entry_100(const uint32_t* prog, uint32_t offset, VmRegs* regs
 #define AR_OP(NAME, ...) AR_OP_CASE(NAME, handle_##NAME)
 #include "vm/ops.def"
 #undef AR_OP
-      AR_PROBE_CASE10(2) AR_PROBE_CASE10(3) AR_PROBE_CASE10(4) AR_PROBE_CASE10(5)
+      AR_PROBE_CASE(23) AR_PROBE_CASE(24) AR_PROBE_CASE(25) AR_PROBE_CASE(26)
+      AR_PROBE_CASE(27) AR_PROBE_CASE(28) AR_PROBE_CASE(29)
+      AR_PROBE_CASE10(3) AR_PROBE_CASE10(4) AR_PROBE_CASE10(5)
       AR_PROBE_CASE10(6) AR_PROBE_CASE10(7) AR_PROBE_CASE10(8) AR_PROBE_CASE10(9)
       default: vm_fail(vm, VmStatus::BAD_OPCODE); break;
     }
@@ -405,6 +408,8 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
   uint32_t nee_state = 0, sh = 0, g_inst = inst, g_prim = prim, mat = 0;
   Real2 g_bary = ps_hit_uv(kg, slot);
   Real3 g_dir = ps_ray_d(kg, slot);
+  // The lobe-choice uniform through the entry's selection uniform, as stages/shade_surface.h.
+  float uc = float(camera_path_draw(kg, sample, event_dim(ps_event_index(kg, slot), EV_LOBE_CHOICE)));
   for (uint32_t phase = 0;; ++phase) {
     if (!shade_context_geometry(kg, g_inst, g_prim, g_bary, g_dir, &ctx)) {
       sample_mark_invalid(kg, sample);
@@ -421,7 +426,8 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
       const uint32_t* prog = s.material_programs + load_ro(&hp->program_offset);
       const bool program = phase == 0u ? (mflags & CONSTANT_SURFACE) == 0u : (mflags & CONSTANT_EMISSION) == 0u;
       const uint32_t entry = program ? load_ro(prog + (phase == 0u ? 0u : 2u)) : 0u;
-      ok = run_entry_100(prog, entry, &regs, ctx, *kg.tables, phase == 0u ? &rec : nullptr, &le) == VmStatus::OK;
+      ok = run_entry_100(prog, entry, &regs, ctx, *kg.tables, phase == 0u ? &rec : nullptr, &le,
+                         phase == 0u ? &uc : nullptr) == VmStatus::OK;
     }
     if (phase != 0u) break;
     P = ctx.P, Ng = ctx.Ng, N = ctx.N, wo = ctx.wo;
@@ -518,7 +524,7 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
   const BsdfCtx c = prep_ctx(rec, ar::abs(wo_l.z));
   Real3 wi_l{};
   bool glossy = false;
-  const bool sampled = bsdf_sample_dir(rec, c, ctx.lambda_t, wo_l, camera_path_draw(kg, sample, event_dim(e, EV_LOBE_CHOICE)),
+  const bool sampled = bsdf_sample_dir(rec, c, ctx.lambda_t, wo_l, Real(uc),
                                        camera_path_draw(kg, sample, event_dim(e, EV_BSDF_U)),
                                        camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V)), &wi_l, &glossy);
   const LobeEval bs = sampled ? bsdf_eval(rec, c, ctx.lambda_t, wo_l, wi_l) : LobeEval{spec_fill(Real(0)), Real(0)};

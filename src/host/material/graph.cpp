@@ -33,8 +33,11 @@ bool op_param_counts(Op op, uint32_t* nf, uint32_t* ni) {
     case Op::CHANNEL_F32X3: *ni = 1; return true;
     case Op::TEX_IMAGE: *ni = 2; return true;  // image ar_key (low 32 bits), mode bits (tex_image.h)
     case Op::VOLUME_COEFFS: *nf = 1; *ni = 1; return true;  // HG anisotropy g; VolumeTerm (volume_coeffs.h)
+    case Op::BRANCH_MIX: *ni = 3; return true;  // tag, first subtree, second subtree (graph.h)
     case Op::LOAD_CTX_P:
     case Op::MUL_F32:
+    case Op::ADD_F32:
+    case Op::SUB_F32:
     case Op::MUL_F32X3:
     case Op::MUL_F32X3_F32:
     case Op::ADD_F32X3:
@@ -43,9 +46,14 @@ bool op_param_counts(Op op, uint32_t* nf, uint32_t* ni) {
   }
 }
 
+uint32_t op_optional_i32(Op op) { return op == Op::STORE_SLOT || op == Op::EMIT_LE ? 1u : 0u; }
+
 VType op_input_type(Op op, int i) {
   switch (op) {
-    case Op::MUL_F32: return VType::F32;
+    case Op::MUL_F32:
+    case Op::ADD_F32:
+    case Op::SUB_F32:
+    case Op::BRANCH_MIX: return VType::F32;
     case Op::MUL_F32X3:
     case Op::ADD_F32X3: return VType::F32X3;
     case Op::MUL_F32X3_F32: return i == 0 ? VType::F32X3 : VType::F32;
@@ -86,6 +94,8 @@ int vtype_width(VType t) {
 int op_input_count(Op op) {
   switch (op) {
     case Op::MUL_F32:
+    case Op::ADD_F32:
+    case Op::SUB_F32:
     case Op::MUL_F32X3:
     case Op::MUL_F32X3_F32:
     case Op::ADD_F32X3:
@@ -94,7 +104,8 @@ int op_input_count(Op op) {
     case Op::TEX_IMAGE:
     case Op::RGB_LIFT:
     case Op::STORE_SLOT:
-    case Op::CHANNEL_F32X3: return 1;
+    case Op::CHANNEL_F32X3:
+    case Op::BRANCH_MIX: return 1;
     default: return 0;
   }
 }
@@ -103,6 +114,8 @@ VType op_result_type(Op op) {
   switch (op) {
     case Op::CONST_F32:
     case Op::MUL_F32:
+    case Op::ADD_F32:
+    case Op::SUB_F32:
     case Op::CHANNEL_F32X3: return VType::F32;
     case Op::CONST_F32X3:
     case Op::LOAD_CTX_UV:
@@ -129,14 +142,17 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
     o.op = Op(n.op);
     uint32_t nf, ni;
     if (!op_param_counts(o.op, &nf, &ni)) return *err = at(i, "op is not allowed in a graph"), false;
-    if (n.f32_count != nf || n.i32_count != ni) return *err = at(i, "wrong parameter count for its op"), false;
-    if (uint64_t(n.f32_first) + nf > d.f32_count || uint64_t(n.i32_first) + ni > d.i32_count)
+    const bool with_child = op_optional_i32(o.op) != 0u && n.i32_count == ni + op_optional_i32(o.op);
+    if (n.f32_count != nf || (n.i32_count != ni && !with_child)) return *err = at(i, "wrong parameter count for its op"), false;
+    if (uint64_t(n.f32_first) + nf > d.f32_count || uint64_t(n.i32_first) + n.i32_count > d.i32_count)
       return *err = at(i, "parameter range outside its pool"), false;
     if (n.string_count != 0) return *err = at(i, "string parameters are not used by M1a ops"), false;
     o.f32_first = n.f32_first;
     o.i32_first = n.i32_first;
     o.n_inputs = op_input_count(o.op);
     o.out = op_result_type(o.op);
+    if (with_child && (o.child = g->i32[o.i32_first + ni]) < 0) return *err = at(i, "child id must not be negative"), false;
+    if (o.op == Op::BRANCH_MIX && g->i32[o.i32_first] < 0) return *err = at(i, "Mix Shader tag must not be negative"), false;
     if (o.op == Op::LOAD_CTX_UV && uint32_t(g->i32[o.i32_first]) >= ar::kMaxUvSets)
       return *err = at(i, "UV set index out of range"), false;
     if (o.op == Op::RGB_LIFT && uint32_t(g->i32[o.i32_first]) > uint32_t(ar::SpectrumSemantic::ILLUMINANT))

@@ -6,13 +6,16 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <set>
+#include <utility>
 
 #include "../../kernel/material/lobes/delta.h"
 #include "../../kernel/material/lobes/ggx.h"
 #include "../../kernel/material/material_header.h"
 #include "../../kernel/material/slot_resolve.h"
 #include "../../kernel/medium/phase.h"
+#include "../../kernel/vm/ops/add_f32.h"
 #include "../../kernel/vm/ops/add_f32x3.h"
 #include "../../kernel/vm/ops/channel_f32x3.h"
 #include "../../kernel/vm/ops/const_f32.h"
@@ -20,6 +23,7 @@
 #include "../../kernel/vm/ops/mul_f32x3.h"
 #include "../../kernel/vm/ops/mul_f32x3_f32.h"
 #include "../../kernel/vm/ops/store_slot.h"
+#include "../../kernel/vm/ops/sub_f32.h"
 #include "../../kernel/vm/ops/tex_image.h"
 #include "../../kernel/vm/ops/volume_coeffs.h"
 #include "../spectral/blackbody.h"
@@ -86,6 +90,8 @@ bool fold(const Work& w, int i, Vec3* out, std::string* err) {
     case Op::CONST_F32: (*out)[0] = f[0]; return true;
     case Op::CONST_F32X3: *out = {f[0], f[1], f[2]}; return true;
     case Op::MUL_F32: (*out)[0] = ar::op_mul_f32(a[0], b[0]); return true;
+    case Op::ADD_F32: (*out)[0] = ar::op_add_f32(a[0], b[0]); return true;
+    case Op::SUB_F32: (*out)[0] = ar::op_sub_f32(a[0], b[0]); return true;
     case Op::MUL_F32X3: ar::op_mul_f32x3(a.data(), b.data(), out->data()); return true;
     case Op::MUL_F32X3_F32: ar::op_mul_f32x3_f32(a.data(), b[0], out->data()); return true;
     case Op::ADD_F32X3: ar::op_add_f32x3(a.data(), b.data(), out->data()); return true;
@@ -142,89 +148,171 @@ uint32_t word(Op op, uint32_t a = 0, uint32_t b = 0, uint32_t c = 0) {
   return uint32_t(op) | (a << 8) | (b << 16) | (c << 24);
 }
 
-// One entry's code: the marked nodes in order, registers allocated, END appended. `first` lists
-// the nodes that must come first (the emission segment, item 38) and stay live for what follows.
-bool build_entry(const Work& w, const std::vector<char>& marked, const std::vector<char>& first,
-                 std::vector<uint32_t>* code, std::string* err) {
-  const size_t n = w.g.nodes.size();
-  std::vector<int> seq;
-  for (int pass = 0; pass < 2; ++pass)
-    for (int i : w.topo)
-      if (marked[size_t(i)] && bool(first[size_t(i)]) == (pass == 0)) seq.push_back(i);
-  std::vector<int> pos(n, -1), last(n, -1), group(n, -1);
-  for (size_t k = 0; k < seq.size(); ++k) pos[size_t(seq[k])] = int(k);
-  for (int i : seq) {
-    const GraphNode& nd = w.g.nodes[size_t(i)];
-    if (w.isc[size_t(i)]) continue;  // materialised as a constant: reads nothing
-    for (int s = 0; s < nd.n_inputs; ++s) last[size_t(nd.input[s])] = std::max(last[size_t(nd.input[s])], pos[size_t(i)]);
+// One instruction slot of an entry's layout (0005 item 38). NODE evaluates `node` in instance
+// `inst`: 0 is the run before the selection (the whole entry for a graph without a Mix Shader),
+// k > 0 the BSDF block of the k-th child in layout order. A node evaluated in a block reads each
+// input from that block when the input is evaluated there too, else from instance 0. BRANCH is
+// the BRANCH_MIX of mix node `node`, whose second subtree starts at item `target`; JMP_END jumps
+// to the entry's END; CONST_STORE is a STORE_SLOT whose source folded, written as one constant
+// instruction and the store (a block holds its child's constants as code: the one constant block
+// cannot hold two children's inputs).
+struct Item {
+  enum Kind : uint8_t { NODE, BRANCH, JMP_END, CONST_STORE } kind = NODE;
+  int node = -1;
+  int inst = 0;
+  int target = -1;
+};
+
+bool spectral_slot(uint32_t slot) {
+  return slot >= uint32_t(ar::RecordSlot::base_color) && slot < uint32_t(ar::RecordSlot::geometry_normal);
+}
+
+// The registers a CONST_STORE's constant takes: a colour slot takes RGB (a scalar source becomes
+// grey), frames take three, scalars and specular_ior one.
+int const_store_width(uint32_t slot) {
+  if (slot == uint32_t(ar::RecordSlot::specular_ior)) return 1;
+  return spectral_slot(slot) || slot >= uint32_t(ar::RecordSlot::geometry_normal) ? 3 : 1;
+}
+
+// The constant a CONST_STORE writes: a scalar into a colour slot is grey, clamped as store_const
+// clamps it for the block, so the run-time lift sees the value the report describes.
+Vec3 const_store_value(const Work& w, int store) {
+  const GraphNode& st = w.g.nodes[size_t(store)];
+  const uint32_t slot = uint32_t(w.g.i32[st.i32_first]);
+  const int src = st.input[0];
+  Vec3 v = w.cv[size_t(src)];
+  if (spectral_slot(slot) && slot != uint32_t(ar::RecordSlot::specular_ior) && w.g.nodes[size_t(src)].out == VType::F32) {
+    float x = v[0];
+    if (!(x >= 0.0f)) x = 0.0f;
+    if (ar::kSlotSemantic[slot - uint32_t(ar::RecordSlot::base_color)] == ar::SpectrumSemantic::REFLECTANCE && x > 1.0f) x = 1.0f;
+    v = {x, x, x};
+  }
+  return v;
+}
+
+// One entry's code from its layout: values are allocated registers, END is appended and jumps
+// are patched to word offsets from the jumping word.
+bool build_code(const Work& w, const std::vector<Item>& items, std::vector<uint32_t>* code, std::string* err) {
+  const int ni = int(items.size());
+  std::map<std::pair<int, int>, int> value_of;  // (node, inst) -> value
+  std::vector<int> item_value(size_t(ni), -1);  // the value an item defines
+  std::vector<int> value_pos, value_last, value_width;
+  for (int k = 0; k < ni; ++k) {
+    const Item& it = items[size_t(k)];
+    int width = 0;
+    if (it.kind == Item::NODE) width = vtype_width(w.g.nodes[size_t(it.node)].out);
+    if (it.kind == Item::CONST_STORE) width = const_store_width(uint32_t(w.g.i32[w.g.nodes[size_t(it.node)].i32_first]));
+    if (width == 0) continue;
+    item_value[size_t(k)] = int(value_pos.size());
+    if (it.kind == Item::NODE) value_of[{it.node, it.inst}] = int(value_pos.size());
+    value_pos.push_back(k), value_last.push_back(k), value_width.push_back(width);
+  }
+  auto read = [&](int node, int inst, int at) {
+    auto f = value_of.find({node, inst});
+    if (f == value_of.end()) f = value_of.find({node, 0});
+    if (f == value_of.end()) return -1;
+    value_last[size_t(f->second)] = std::max(value_last[size_t(f->second)], at);
+    return f->second;
+  };
+  std::vector<std::array<int, 2>> item_in(size_t(ni), std::array<int, 2>{-1, -1});
+  for (int k = 0; k < ni; ++k) {
+    const Item& it = items[size_t(k)];
+    if (it.kind == Item::JMP_END || it.kind == Item::CONST_STORE) continue;
+    const GraphNode& nd = w.g.nodes[size_t(it.node)];
+    if (it.kind == Item::NODE && w.isc[size_t(it.node)]) continue;  // materialised as a constant: reads nothing
+    for (int s = 0; s < nd.n_inputs; ++s)
+      if ((item_in[size_t(k)][size_t(s)] = read(nd.input[s], it.kind == Item::BRANCH ? 0 : it.inst, k)) < 0)
+        return *err = "internal: an input is not evaluated before its reader", false;
   }
   // EMIT_LE reads colour in r[a..a+2] and strength in r[a+3]: the two values share one 4-wide
   // range, colour first, so no copy instructions are needed.
-  std::vector<LiveRange> ranges;
-  std::vector<int> range_node, range_group_emit;  // node of a plain range, or -1 and the EMIT_LE
+  std::vector<int> group(value_pos.size(), -1);
   std::vector<int> emits;
-  for (int i : seq) {
-    const GraphNode& nd = w.g.nodes[size_t(i)];
-    if (nd.op != Op::EMIT_LE) continue;
+  for (int k = 0; k < ni; ++k) {
+    if (items[size_t(k)].kind != Item::NODE || w.g.nodes[size_t(items[size_t(k)].node)].op != Op::EMIT_LE) continue;
     for (int s = 0; s < 2; ++s) {
-      if (group[size_t(nd.input[s])] >= 0)
+      if (group[size_t(item_in[size_t(k)][size_t(s)])] >= 0)
         return *err = "an emission colour or strength feeds two EMIT_LE nodes; unsupported in M1a", false;
-      group[size_t(nd.input[s])] = i;
+      group[size_t(item_in[size_t(k)][size_t(s)])] = k;
     }
-    emits.push_back(i);
+    emits.push_back(k);
   }
-  for (int i : seq) {
-    const GraphNode& nd = w.g.nodes[size_t(i)];
-    if (nd.out == VType::NONE || group[size_t(i)] >= 0) continue;
-    ranges.push_back({pos[size_t(i)], std::max(last[size_t(i)], pos[size_t(i)]), vtype_width(nd.out)});
-    range_node.push_back(i);
+  std::vector<LiveRange> ranges;
+  std::vector<int> range_value, range_group_emit;  // value of a plain range, or -1 and the EMIT_LE item
+  for (size_t v = 0; v < value_pos.size(); ++v) {
+    if (group[v] >= 0) continue;
+    ranges.push_back({value_pos[v], std::max(value_last[v], value_pos[v]), value_width[v]});
+    range_value.push_back(int(v));
     range_group_emit.push_back(-1);
   }
   for (int e : emits) {
-    const GraphNode& nd = w.g.nodes[size_t(e)];
-    const int c = nd.input[0], s = nd.input[1];
-    ranges.push_back({std::min(pos[size_t(c)], pos[size_t(s)]), std::max(last[size_t(c)], last[size_t(s)]), 4});
-    range_node.push_back(-1);
+    const int c = item_in[size_t(e)][0], s = item_in[size_t(e)][1];
+    ranges.push_back({std::min(value_pos[size_t(c)], value_pos[size_t(s)]),
+                      std::max(value_last[size_t(c)], value_last[size_t(s)]), 4});
+    range_value.push_back(-1);
     range_group_emit.push_back(e);
   }
   std::vector<int> regs;
   if (!allocate_registers(ranges, &regs, err)) return false;
-  std::vector<int> reg(n, -1);
+  std::vector<int> reg(value_pos.size(), -1);
   for (size_t r = 0; r < ranges.size(); ++r) {
-    if (range_node[r] >= 0) {
-      reg[size_t(range_node[r])] = regs[r];
+    if (range_value[r] >= 0) {
+      reg[size_t(range_value[r])] = regs[r];
     } else {
-      const GraphNode& nd = w.g.nodes[size_t(range_group_emit[r])];
-      reg[size_t(nd.input[0])] = regs[r];
-      reg[size_t(nd.input[1])] = regs[r] + 3;
+      reg[size_t(item_in[size_t(range_group_emit[r])][0])] = regs[r];
+      reg[size_t(item_in[size_t(range_group_emit[r])][1])] = regs[r] + 3;
     }
   }
-  for (int i : seq) {
-    const GraphNode& nd = w.g.nodes[size_t(i)];
-    const uint32_t a = uint32_t(reg[size_t(i)]);
-    auto in = [&](int s) { return uint32_t(reg[size_t(nd.input[s])]); };
-    auto bits = [](float f) { return ar::bit_cast<uint32_t>(f); };
-    if (w.isc[size_t(i)]) {
-      const Vec3& v = w.cv[size_t(i)];
-      if (nd.out == VType::F32) {
-        code->push_back(word(Op::CONST_F32, a));
-        code->push_back(bits(v[0]));
-      } else {
-        code->push_back(word(Op::CONST_F32X3, a));
-        for (float f : v) code->push_back(bits(f));
-      }
+  auto bits = [](float f) { return ar::bit_cast<uint32_t>(f); };
+  auto emit_const = [&](uint32_t a, const Vec3& v, int width) {
+    if (width == 1) {
+      code->push_back(word(Op::CONST_F32, a));
+      code->push_back(bits(v[0]));
+    } else {
+      code->push_back(word(Op::CONST_F32X3, a));
+      for (float f : v) code->push_back(bits(f));
+    }
+  };
+  std::vector<size_t> start(size_t(ni) + 1, 0);
+  for (int k = 0; k < ni; ++k) {
+    const Item& it = items[size_t(k)];
+    start[size_t(k)] = code->size();
+    if (it.kind == Item::JMP_END) {
+      code->push_back(word(Op::JMP));
+      code->push_back(0u);  // patched below
+      continue;
+    }
+    const GraphNode& nd = w.g.nodes[size_t(it.node)];
+    auto in = [&](int s) { return uint32_t(reg[size_t(item_in[size_t(k)][size_t(s)])]); };
+    if (it.kind == Item::BRANCH) {
+      code->push_back(word(Op::BRANCH_MIX, in(0)));
+      code->push_back(0u);  // patched below
+      continue;
+    }
+    const uint32_t a = item_value[size_t(k)] >= 0 ? uint32_t(reg[size_t(item_value[size_t(k)])]) : 0u;
+    if (it.kind == Item::CONST_STORE) {
+      const uint32_t slot = uint32_t(w.g.i32[nd.i32_first]);
+      emit_const(a, const_store_value(w, it.node), const_store_width(slot));
+      code->push_back(word(Op::STORE_SLOT, a));
+      code->push_back(slot);
+      continue;
+    }
+    if (w.isc[size_t(it.node)]) {
+      emit_const(a, w.cv[size_t(it.node)], nd.out == VType::F32 ? 1 : 3);
       continue;
     }
     switch (nd.op) {
       case Op::LOAD_CTX_UV: code->push_back(word(nd.op, a, uint32_t(w.g.i32[nd.i32_first]))); break;
       case Op::LOAD_CTX_P: code->push_back(word(nd.op, a)); break;
       case Op::MUL_F32:
+      case Op::ADD_F32:
+      case Op::SUB_F32:
       case Op::MUL_F32X3:
       case Op::MUL_F32X3_F32:
       case Op::ADD_F32X3: code->push_back(word(nd.op, a, in(0), in(1))); break;
       case Op::TEX_IMAGE:
         code->push_back(word(nd.op, a, in(0)));
-        code->push_back(w.slot[size_t(i)]);
+        code->push_back(w.slot[size_t(it.node)]);
         code->push_back(uint32_t(w.g.i32[nd.i32_first + 1]));
         break;
       case Op::RGB_LIFT: code->push_back(word(nd.op, a, in(0), uint32_t(w.g.i32[nd.i32_first]))); break;
@@ -242,8 +330,26 @@ bool build_entry(const Work& w, const std::vector<char>& marked, const std::vect
       default: return *err = "internal: op has no encoding", false;
     }
   }
+  start[size_t(ni)] = code->size();
   code->push_back(word(Op::END));
+  // Forward offsets in words from the jumping word: BRANCH_MIX to its second subtree (or END when
+  // that subtree laid out no code), JMP to END.
+  for (int k = 0; k < ni; ++k) {
+    const Item& it = items[size_t(k)];
+    if (it.kind == Item::BRANCH) (*code)[start[size_t(k)] + 1] = uint32_t(start[size_t(it.target)] - start[size_t(k)]);
+    if (it.kind == Item::JMP_END) (*code)[start[size_t(k)] + 1] = uint32_t(start[size_t(ni)] - start[size_t(k)]);
+  }
   return true;
+}
+
+// The layout of an entry without a Mix Shader: the marked nodes in topological order, those in
+// `first` before the rest (the emission segment, item 38), all in instance 0.
+std::vector<Item> plain_layout(const Work& w, const std::vector<char>& marked, const std::vector<char>& first) {
+  std::vector<Item> items;
+  for (int pass = 0; pass < 2; ++pass)
+    for (int i : w.topo)
+      if (marked[size_t(i)] && bool(first[size_t(i)]) == (pass == 0)) items.push_back({Item::NODE, i, 0, -1});
+  return items;
 }
 
 // The mean of node i's value over a surface, for the emission estimate (0005 item 43), which
@@ -323,6 +429,198 @@ Vec3 estimate_input(const Work& w, int i, MeanCtx* x) {
   return !m.known || (zero && !direct) ? Vec3{1.0f, 1.0f, 1.0f} : m.v;
 }
 
+// Resolves every TEX_IMAGE node in `used` to its image slot (0005 item 34: a missing image is
+// magenta with a report entry); the program depends on the key either way, so setting it later
+// recompiles.
+void resolve_images(Work* w, const std::vector<char>& used, const ImageSlotFn* slots, std::set<uint32_t>* images,
+                    std::set<uint32_t>* missing) {
+  w->slot.assign(w->g.nodes.size(), ar::kTexNoImage);
+  for (size_t i = 0; i < w->g.nodes.size(); ++i) {
+    if (!used[i] || w->g.nodes[i].op != Op::TEX_IMAGE) continue;
+    const uint32_t key = uint32_t(w->g.i32[w->g.nodes[i].i32_first]);
+    images->insert(key);
+    if (slots != nullptr && !(*slots)(key, &w->slot[i])) w->slot[i] = ar::kTexNoImage, missing->insert(key);
+  }
+}
+
+// A graph with Mix Shaders (0005 item 38): every STORE_SLOT belongs to the child its `child`
+// parameter names, and the BRANCH_MIX nodes form one tree over the children (graph.h). The surface
+// entry is (a) the run before the selection: the mix factors and every value more than one child
+// reads, computed once and kept live; (b) the selection, BRANCH_MIX nodes in preorder over the
+// tree, each falling through to its first subtree and jumping to its second; (c) one block per
+// child in tree order, its constants as CONST_STORE code, ending in JMP to END (the last block
+// falls into END). The constant block keeps the OpenPBR defaults, so the record a block leaves is
+// its child's alone. Emission and opacity under a Mix are not compiled yet and are rejected, as is
+// a dispersive IOR, which is a block SpectrumRef no block code can store.
+bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
+  const size_t n = w.g.nodes.size();
+  const auto& i32 = w.g.i32;
+  std::map<int32_t, int> mix_of_tag;
+  std::map<int, std::vector<int>> stores_of;  // child id -> its STORE_SLOT nodes, topological order
+  for (int i : w.topo) {
+    const GraphNode& nd = w.g.nodes[size_t(i)];
+    const std::string who = "graph node " + std::to_string(i) + ": ";
+    if (nd.op == Op::BRANCH_MIX && !mix_of_tag.emplace(i32[nd.i32_first], i).second)
+      return res->error = who + "Mix Shader tag " + std::to_string(i32[nd.i32_first]) + " is used twice", false;
+    if (nd.op == Op::EMIT_LE) return res->error = who + "an emission in a Mix Shader graph is not supported yet", false;
+    if (nd.op != Op::STORE_SLOT) continue;
+    const uint32_t slot = uint32_t(i32[nd.i32_first]);
+    if (slot == uint32_t(ar::RecordSlot::geometry_opacity))
+      return res->error = who + "geometry_opacity in a Mix Shader graph is not supported yet", false;
+    if (slot == uint32_t(ar::RecordSlot::closure_weight))
+      return res->error = who + "closure_weight is set by the selection, not stored by a graph", false;
+    if (w.g.nodes[size_t(nd.input[0])].op == Op::CAUCHY_ABBE)
+      return res->error = who + "a dispersive IOR cannot be stored per Mix Shader child", false;
+    if (!w.isc[size_t(nd.input[0])] && w.g.nodes[size_t(nd.input[0])].out == VType::F32 && spectral_slot(slot) &&
+        slot != uint32_t(ar::RecordSlot::specular_ior))
+      return res->error = who + "a run-time scalar cannot be stored in a colour slot", false;
+    std::vector<int>& list = stores_of[nd.child];
+    for (int o : list)
+      if (uint32_t(i32[w.g.nodes[size_t(o)].i32_first]) == slot)
+        return res->error = who + "record slot " + std::to_string(slot) + " is stored twice in child " + std::to_string(nd.child), false;
+    list.push_back(i);
+  }
+  // The tree: each child and each tag named once, one root, every mix reachable from it.
+  std::map<int, int> child_refs, tag_refs;
+  for (const auto& [tag, m] : mix_of_tag)
+    for (int s = 1; s <= 2; ++s) {
+      const int32_t ref = i32[w.g.nodes[size_t(m)].i32_first + uint32_t(s)];
+      const std::string who = "Mix Shader tag " + std::to_string(tag) + ": ";
+      if (ref >= 0) {
+        if (++child_refs[ref] > 1) return res->error = who + "child " + std::to_string(ref) + " is named twice", false;
+      } else {
+        const int32_t t = -1 - ref;
+        if (mix_of_tag.count(t) == 0) return res->error = who + "names Mix Shader tag " + std::to_string(t) + ", which the graph lacks", false;
+        if (++tag_refs[t] > 1) return res->error = who + "Mix Shader tag " + std::to_string(t) + " is named twice", false;
+      }
+    }
+  for (const auto& [child, list] : stores_of)
+    if (child_refs.count(child) == 0)
+      return res->error = "child " + std::to_string(child) + " stores record slots but no Mix Shader names it", false;
+  std::vector<int> roots;
+  for (const auto& [tag, m] : mix_of_tag)
+    if (tag_refs.count(tag) == 0) roots.push_back(m);
+  if (roots.size() != 1) return res->error = "a Mix Shader graph needs exactly one root Mix, found " + std::to_string(roots.size()), false;
+  // Children in layout order (first subtree before second), and the mixes the walk reached.
+  std::vector<int> order;
+  size_t mixes_seen = 0;
+  {
+    std::vector<int32_t> walk{mix_ref(i32[w.g.nodes[size_t(roots[0])].i32_first])};
+    while (!walk.empty()) {
+      const int32_t ref = walk.back();
+      walk.pop_back();
+      if (ref >= 0) {
+        order.push_back(ref);
+        continue;
+      }
+      if (++mixes_seen > mix_of_tag.size()) break;
+      const GraphNode& m = w.g.nodes[size_t(mix_of_tag[-1 - ref])];
+      walk.push_back(i32[m.i32_first + 2]);  // popped after the first subtree
+      walk.push_back(i32[m.i32_first + 1]);
+    }
+  }
+  if (mixes_seen != mix_of_tag.size()) return res->error = "Mix Shader tags form a cycle or a second tree", false;
+  std::map<int, int> inst_of;  // child id -> instance (1-based layout index)
+  for (size_t k = 0; k < order.size(); ++k) inst_of[order[k]] = int(k) + 1;
+
+  // Which instance evaluates each run-time node: one child's block, or the shared run when the
+  // factors or two children read it. Constants are materialised where they are read.
+  constexpr int kNone = -1, kShared = 0;
+  std::vector<int> owner(n, kNone);
+  auto claim = [&](int from, int inst) {
+    std::vector<char> seen(n, 0);
+    std::vector<int> stack{from};
+    while (!stack.empty()) {
+      const int i = stack.back();
+      stack.pop_back();
+      if (seen[size_t(i)] || w.isc[size_t(i)]) continue;
+      seen[size_t(i)] = 1;
+      owner[size_t(i)] = owner[size_t(i)] == kNone || owner[size_t(i)] == inst ? inst : kShared;
+      for (int s = 0; s < w.g.nodes[size_t(i)].n_inputs; ++s) stack.push_back(w.g.nodes[size_t(i)].input[s]);
+    }
+  };
+  for (const auto& [child, list] : stores_of)
+    for (int st : list)
+      if (!w.isc[size_t(w.g.nodes[size_t(st)].input[0])]) claim(st, inst_of[child]);
+  for (const auto& [tag, m] : mix_of_tag) claim(w.g.nodes[size_t(m)].input[0], kShared);
+  // Constants each instance reads (a mix factor is read by the shared run).
+  std::vector<std::set<int>> reads(order.size() + 1);
+  for (size_t i = 0; i < n; ++i) {
+    const GraphNode& nd = w.g.nodes[i];
+    const int inst = nd.op == Op::BRANCH_MIX ? kShared : owner[i];
+    if (inst == kNone) continue;
+    for (int s = 0; s < nd.n_inputs; ++s)
+      if (w.isc[size_t(nd.input[s])]) reads[size_t(inst)].insert(nd.input[s]);
+  }
+  auto block = [&](int inst, std::vector<Item>* items) {
+    for (int i : w.topo) {
+      const GraphNode& nd = w.g.nodes[size_t(i)];
+      if (owner[size_t(i)] == inst || reads[size_t(inst)].count(i) != 0) items->push_back({Item::NODE, i, inst, -1});
+      else if (inst != kShared && nd.op == Op::STORE_SLOT && inst_of[nd.child] == inst && w.isc[size_t(nd.input[0])])
+        items->push_back({Item::CONST_STORE, i, inst, -1});
+    }
+  };
+  std::vector<Item> items;
+  block(kShared, &items);
+  {
+    // Preorder: BRANCH, its first subtree, then its second subtree, whose first item is the
+    // BRANCH's target (`branch` names the BRANCH item a second subtree belongs to).
+    struct Step {
+      int32_t ref;
+      long branch;
+    };
+    std::vector<Step> st{{mix_ref(i32[w.g.nodes[size_t(roots[0])].i32_first]), -1}};
+    while (!st.empty()) {
+      const Step s = st.back();
+      st.pop_back();
+      if (s.branch >= 0) items[size_t(s.branch)].target = int(items.size());
+      if (s.ref >= 0) {
+        block(inst_of[s.ref], &items);
+        items.push_back({Item::JMP_END, -1, inst_of[s.ref], -1});
+        continue;
+      }
+      const int m = mix_of_tag[-1 - s.ref];
+      items.push_back({Item::BRANCH, m, kShared, -1});
+      const long b = long(items.size()) - 1;
+      st.push_back({i32[w.g.nodes[size_t(m)].i32_first + 2], b});
+      st.push_back({i32[w.g.nodes[size_t(m)].i32_first + 1], -1});
+    }
+  }
+  if (!items.empty() && items.back().kind == Item::JMP_END) items.pop_back();  // the last block falls into END
+
+  std::set<uint32_t> images, missing;
+  std::vector<char> used(n, 0);
+  for (size_t i = 0; i < n; ++i) used[i] = owner[i] != kNone;
+  resolve_images(&w, used, slots, &images, &missing);
+  res->images.assign(images.begin(), images.end());
+  res->missing_images.assign(missing.begin(), missing.end());
+  std::vector<uint32_t> surface;
+  if (!build_code(w, items, &surface, &res->error)) return false;
+  res->program.assign(4, 0u);
+  res->program[0] = 4;
+  res->program.insert(res->program.end(), surface.begin(), surface.end());
+  // Each child's constants over the defaults, for the material flags and the clamp report.
+  for (int child : order) {
+    ChildConstants c;
+    c.id = child;
+    c.block = res->block;
+    for (int st : stores_of[child]) {
+      const GraphNode& nd = w.g.nodes[size_t(st)];
+      const uint32_t slot = uint32_t(i32[nd.i32_first]);
+      if (!w.isc[size_t(nd.input[0])]) {
+        c.runtime_slots |= uint64_t(1) << slot;
+        continue;
+      }
+      if (!store_const(&c.block, *w.table, slot, w.g.nodes[size_t(nd.input[0])].out, w.cv[size_t(nd.input[0])],
+                       &res->clamp_flags, &res->error))
+        return false;
+    }
+    res->runtime_slots |= c.runtime_slots;
+    res->children.push_back(c);
+  }
+  return true;
+}
+
 }  // namespace
 
 CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means,
@@ -344,6 +642,14 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
   }
 
   res.block = ar::default_constant_block(table);
+  if (std::any_of(w.g.nodes.begin(), w.g.nodes.end(), [](const GraphNode& nd) { return nd.op == Op::BRANCH_MIX; })) {
+    res.ok = compile_mixed(w, slots, &res);
+    return res;
+  }
+  for (size_t i = 0; i < n; ++i)
+    if (w.g.nodes[i].child != 0)
+      return res.error = "graph node " + std::to_string(i) + " names child " + std::to_string(w.g.nodes[i].child) +
+                         " but the graph has no Mix Shader", res;
   int emit_count = 0;
   for (const GraphNode& nd : w.g.nodes) emit_count += nd.op == Op::EMIT_LE;
   std::vector<char> written(size_t(ar::RecordSlot::COUNT_), 0), is_root(n, 0), is_emit_root(n, 0), is_opacity_root(n, 0);
@@ -469,26 +775,18 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
     return m;
   };
   const std::vector<char> emit_set = mark(is_emit_root), all_set = mark(is_root), opacity_set = mark(is_opacity_root);
-  // Every sampled key resolves to its slot now (0005 item 34: a missing image is magenta with a
-  // report entry); the program depends on the key either way, so setting it later recompiles.
   std::set<uint32_t> missing;
-  w.slot.assign(n, ar::kTexNoImage);
-  for (size_t i = 0; i < n; ++i) {
-    if (!all_set[i] || w.g.nodes[i].op != Op::TEX_IMAGE) continue;
-    const uint32_t key = uint32_t(w.g.i32[w.g.nodes[i].i32_first]);
-    images.insert(key);
-    if (slots != nullptr && !(*slots)(key, &w.slot[i])) w.slot[i] = ar::kTexNoImage, missing.insert(key);
-  }
+  resolve_images(&w, all_set, slots, &images, &missing);
   res.images.assign(images.begin(), images.end());
   res.missing_images.assign(missing.begin(), missing.end());
   std::vector<uint32_t> surface, emission, opacity;
-  if (!build_entry(w, all_set, emit_set, &surface, &res.error)) return res;
+  if (!build_code(w, plain_layout(w, all_set, emit_set), &surface, &res.error)) return res;
   const bool has_emission = std::any_of(is_emit_root.begin(), is_emit_root.end(), [](char c) { return c != 0; });
-  if (has_emission && !build_entry(w, emit_set, emit_set, &emission, &res.error)) return res;
+  if (has_emission && !build_code(w, plain_layout(w, emit_set, emit_set), &emission, &res.error)) return res;
   // Item 38: the opacity entry is the per-point geometry_opacity store and what feeds it, nothing
   // else; a constant opacity is read from the block and needs none.
   const bool has_opacity = std::any_of(is_opacity_root.begin(), is_opacity_root.end(), [](char c) { return c != 0; });
-  if (has_opacity && !build_entry(w, opacity_set, std::vector<char>(n, 0), &opacity, &res.error)) return res;
+  if (has_opacity && !build_code(w, plain_layout(w, opacity_set, std::vector<char>(n, 0)), &opacity, &res.error)) return res;
   res.program.assign(4, 0u);
   res.program[0] = 4;
   res.program.insert(res.program.end(), surface.begin(), surface.end());
@@ -551,7 +849,17 @@ bool lobe_may_be_delta(bool per_point, float roughness) {
   return ar::lobe_is_delta(a, a);
 }
 
-bool per_point(const CompileResult& r, ar::RecordSlot s) { return ((r.runtime_slots >> uint32_t(s)) & 1u) != 0; }
+bool per_point(uint64_t runtime_slots, ar::RecordSlot s) { return ((runtime_slots >> uint32_t(s)) & 1u) != 0; }
+bool per_point(const CompileResult& r, ar::RecordSlot s) { return per_point(r.runtime_slots, s); }
+
+// MAY_BE_DELTA of one BSDF child from its own constants and per-point slots.
+bool child_may_be_delta(const ar::ConstantBlock& b, uint64_t runtime_slots) {
+  using RS = ar::RecordSlot;
+  bool delta = lobe_may_be_delta(per_point(runtime_slots, RS::specular_roughness), b.specular_roughness);
+  if (per_point(runtime_slots, RS::coat_weight) || b.coat_weight != 0.0f)
+    delta = delta || lobe_may_be_delta(per_point(runtime_slots, RS::coat_roughness), b.coat_roughness);
+  return delta;
+}
 
 void finish(MaterialOutput* m) {
   m->flags = material_flags(m->compiled);
@@ -650,12 +958,12 @@ VolumeOutput compile_volume(const ar_graph_desc& d, const ar::Rgb2SpecTable& tab
 // Cycles also calls alpha < 1 - CLOSURE_WEIGHT_CUTOFF (1e-5f, src/kernel/svm/types.h) transparent,
 // a cutoff item 43 does not have;
 // EXTENSION is clear because no extension kind compiles; READS_RAY_TYPE is clear because no Light
-// Path op exists.
+// Path op exists. A Mix Shader graph ORs MAY_BE_DELTA over its BSDF children, each from its own
+// constants, since every child is reachable by the selection.
 uint32_t material_flags(const CompileResult& r) {
   using RS = ar::RecordSlot;
-  bool delta = lobe_may_be_delta(per_point(r, RS::specular_roughness), r.block.specular_roughness);
-  if (per_point(r, RS::coat_weight) || r.block.coat_weight != 0.0f)
-    delta = delta || lobe_may_be_delta(per_point(r, RS::coat_roughness), r.block.coat_roughness);
+  bool delta = r.children.empty() && child_may_be_delta(r.block, r.runtime_slots);
+  for (const ChildConstants& c : r.children) delta = delta || child_may_be_delta(c.block, c.runtime_slots);
   uint32_t flags = delta ? ar::MAY_BE_DELTA : 0u;
   if (per_point(r, RS::geometry_opacity) || r.block.geometry_opacity < 1.0f) flags |= ar::NON_OPAQUE;
   const bool emission_entry = r.program.size() > 2 && r.program[2] != 0;
@@ -685,6 +993,15 @@ void set_medium_fields(MaterialOutput* m, uint32_t medium_priority) {
   if ((m->compiled.runtime_slots >> uint32_t(ar::RecordSlot::specular_ior) & 1u) != 0) {
     b.interior_ior = ar::make_const_ref(ar::SpectrumSemantic::IOR, ar::Real(1));
     add_entry(m, AR_REPORT_NODE_APPROXIMATED, "textured specular_ior: interior_ior is 1");
+  } else if (!m->compiled.children.empty()) {
+    // A Mix material's block keeps the defaults; its children's constant IORs are the medium's
+    // only when they all agree.
+    const ar::SpectrumRef& first = m->compiled.children[0].block.specular_ior;
+    bool agree = true;
+    for (const ChildConstants& c : m->compiled.children)
+      agree = agree && std::memcmp(&c.block.specular_ior, &first, sizeof first) == 0;
+    b.interior_ior = agree ? first : ar::make_const_ref(ar::SpectrumSemantic::IOR, ar::Real(1));
+    if (!agree) add_entry(m, AR_REPORT_NODE_APPROXIMATED, "Mix Shader children differ in specular_ior: interior_ior is 1");
   } else {
     b.interior_ior = b.specular_ior;
   }

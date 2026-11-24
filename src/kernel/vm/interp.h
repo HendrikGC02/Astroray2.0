@@ -22,8 +22,10 @@
 #include "vm_regs.h"
 
 #include "ops/common.h"
+#include "ops/add_f32.h"
 #include "ops/add_f32x3.h"
 #include "ops/blackbody.h"
+#include "ops/branch_mix.h"
 #include "ops/cauchy_abbe.h"
 #include "ops/channel_f32x3.h"
 #include "ops/const_f32.h"
@@ -38,6 +40,7 @@
 #include "ops/mul_f32x3_f32.h"
 #include "ops/rgb_lift.h"
 #include "ops/store_slot.h"
+#include "ops/sub_f32.h"
 #include "ops/test_inject_nan.h"
 #include "ops/tex_image.h"
 #include "ops/unsupported.h"
@@ -69,8 +72,10 @@ AR_FN VmStatus vm_run(VmState& vm) {
 // register it reads. `rec` and `le` may be null for an entry that has no use for them; an op that
 // then needs one stops the run with NULL_POINTER. Any error stops the run at the failing
 // instruction and is returned; the caller counts it (kernels never write report entries).
+// `select_u` is the surface entry's selection uniform (common.h VmState), read and rewritten by
+// BRANCH_MIX; null when the caller has none.
 AR_FN VmStatus run_entry(const uint32_t* prog, uint32_t offset, VmRegs* regs, const ShadeContext& ctx,
-                         const SceneTables& tables, OpenPBRParams* rec, Spec* le) {
+                         const SceneTables& tables, OpenPBRParams* rec, Spec* le, float* select_u = nullptr) {
   VmState vm;
   vm.prog = prog;
   vm.pc = offset;
@@ -81,6 +86,7 @@ AR_FN VmStatus run_entry(const uint32_t* prog, uint32_t offset, VmRegs* regs, co
   vm.le = le;
   vm.med = nullptr;
   vm.mblock = nullptr;
+  vm.select_u = select_u;
   vm.a = vm.b = vm.c = 0;
   vm.status = VmStatus::OK;
   vm.done = (offset == 0u);
@@ -101,6 +107,7 @@ AR_FN VmStatus run_volume_entry(const uint32_t* prog, uint32_t offset, VmRegs* r
   vm.le = nullptr;
   vm.med = out;
   vm.mblock = block;
+  vm.select_u = nullptr;  // a volume program has no Mix selection
   vm.a = vm.b = vm.c = 0;
   vm.status = VmStatus::OK;
   vm.done = (offset == 0u);
