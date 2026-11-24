@@ -80,7 +80,8 @@ def unsupported_strings(em):
 class Session:
     """One CPU session over the current scene; keeps the report and the Combined pass."""
 
-    def __init__(self, scene, plane, material, world, extra=()):
+    def __init__(self, scene, plane, material, world, extra=(), size=(W, H), spp=8):
+        self.w, self.h, self.spp = size[0], size[1], spp
         self.lib = ctypes.CDLL(DLL)
         ABI.check(self.lib)
         ABI.bind(self.lib)
@@ -102,7 +103,7 @@ class Session:
         dg = support.depsgraph()
         km = keys.KeyMap()
         table = instances.build(dg, km)
-        scene.astroray.samples = scene.astroray.viewport_samples = 8
+        scene.astroray.samples = scene.astroray.viewport_samples = self.spp
         scene.astroray.pixel_filter_type = "BOX"
         fields, _ = settings.build(scene, bpy.data.colorspace, passes=())
         cam_fields, _ = camera.final(dg, scene)
@@ -119,9 +120,9 @@ class Session:
             self.world_graph = world_sync.sync(e, a, world.evaluated_get(dg) if world else None, km, OP)
             instances.set_instances(e, a, table)
             camera.set_camera(e, a, cam_fields)
-        sd = a.ar_session_desc(a.AR_SESSION_MODE_FINAL, W, H, a.AR_DENOISER_NONE)
+        sd = a.ar_session_desc(a.AR_SESSION_MODE_FINAL, self.w, self.h, a.AR_DENOISER_NONE)
         ok(lib.ar_session_create(self.scene_h, ctypes.byref(sd), ctypes.byref(self.session)), "ar_session_create")
-        view = camera.view_desc(a, cam_fields, W, H)
+        view = camera.view_desc(a, cam_fields, self.w, self.h)
         ok(lib.ar_session_set_view(self.session, ctypes.byref(view)), "ar_session_set_view")
         ok(lib.ar_session_start(self.session), "ar_session_start")
         prog = a.ar_progress()
@@ -138,6 +139,7 @@ class Session:
 
     def combined(self):
         """Combined pass as (h, w, components)."""
+        W, H = self.w, self.h
         lib, a = self.lib, ABI
         n = ctypes.c_uint32()
         ok(lib.ar_session_pass_count(self.session, ctypes.byref(n)), "ar_session_pass_count")
@@ -174,10 +176,10 @@ class Session:
         self._tmp.cleanup()
 
 
-def new_scene(world_color=(1.0, 1.0, 1.0)):
+def new_scene(world_color=(1.0, 1.0, 1.0), size=(W, H)):
     """A 16 m plane under a camera that sees only the plane, lit by a constant white world."""
     scene = support.reset_scene()
-    scene.render.resolution_x, scene.render.resolution_y, scene.render.resolution_percentage = W, H, 100
+    scene.render.resolution_x, scene.render.resolution_y, scene.render.resolution_percentage = size[0], size[1], 100
     me = bpy.data.meshes.new("Plane")
     me.from_pydata([(-8, -8, 0), (8, -8, 0), (8, 8, 0), (-8, 8, 0)], [], [(0, 1, 2, 3)])
     plane = bpy.data.objects.new("Plane", me)
@@ -199,8 +201,8 @@ def new_scene(world_color=(1.0, 1.0, 1.0)):
     return scene, plane, mat, world
 
 
-def render(scene, plane, mat, world, extra=()):
-    s = Session(scene, plane, mat, world, extra)
+def render(scene, plane, mat, world, extra=(), size=(W, H), spp=8):
+    s = Session(scene, plane, mat, world, extra, size, spp)
     try:
         return s.combined(), s.entries(), s.graph
     finally:
@@ -212,7 +214,8 @@ def node(tree, idname):
 
 
 def centre_rgb(img):
-    return img[H // 4: 3 * H // 4, W // 4: 3 * W // 4, :3].reshape(-1, 3).mean(axis=0)
+    h, w = img.shape[:2]
+    return img[h // 4: 3 * h // 4, w // 4: 3 * w // 4, :3].reshape(-1, 3).mean(axis=0)
 
 
 def is_magenta(rgb):
