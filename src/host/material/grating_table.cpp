@@ -6,7 +6,7 @@
 // sin(2 pi x / d)); J. C. Wyant, Optics 505 notes "Sinusoidal Phase Grating"; Gaylord and Moharam
 // 1985, Proc. IEEE 73(5), eqs. 73 and 84; Goodman 2005).
 //
-// Phase depth from the groove depth h, PROVISIONAL (lead ruling of task 169):
+// Phase depth from the groove depth h, PROVISIONAL (0005 item 24):
 //   reflection    phi = 4 pi h cos(theta_i) / lambda: the path difference 2 h sin(alpha) of two
 //                 rays reflected at heights h apart, alpha the grazing angle (= 90 deg - theta_i),
 //                 P. Zhao, "X-ray Scattering from Random Rough Surfaces", arXiv:1704.03783,
