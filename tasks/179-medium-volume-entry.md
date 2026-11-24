@@ -12,7 +12,7 @@ Do:
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `out/bin/astroray_tests_cpu.exe --tier=fast -tc="medium_eval/*,compiler/*,compiler_fold/*,vm/*,interval/*"` (the f64 instances run with the " f64" suffix); paste the k_shade_surface row before and after (the opcode count changes the probe). The PR body quotes the record text added (review is Opus).
 Look at: none.
 Canary: tasks/179.canary.patch must turn red: astroray_tests_cpu "medium_eval/folded colour equals jakob-hanika", "medium_eval/g clamp reported once", "vm/fold equals interpret", astroray_tests_gpu "agree/volume coeffs nofma vs cpu float".
-Budget: gate +1 s at most (stop and ask above); k_shade_surface must not move (medium_eval.h is not included by it): state registers 128, stack 384, spills 0 / 0, compile_s within 5.0 s.
+Budget: gate +1 s at most (stop and ask above); k_shade_surface must not move (medium_eval.h is not included by it): state registers 128, stack 384, spills 0 / 0, compile_s within 7.0 s.
 Depends on: 152, 178. ops.def / probe_m1.cu order 158, 165, 163, 178, 179, 172, ...; compiler.cpp order 158, 165, 164, 179, 168, 180 (179 is on slice C's critical path: 181, 182, 183).
 Size: M (about 450 lines with the compiler part); stop and report at 2x. If the compiler part alone exceeds 200 lines, land the kernel part and its tests first.
 Progress:

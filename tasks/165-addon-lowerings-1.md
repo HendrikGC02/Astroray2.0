@@ -13,7 +13,7 @@ Do:
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `out/bin/astroray_tests_cpu.exe --tier=fast -tc="vm/*,opsdef/*,compiler_fold/*"`; the headless suite (`tests/blender/headless/run_all.py`, `tests/blender/test_materials.py` through tools/): paste the last lines and the V10 row count.
 Look at: out/evidence/165/emission_blackbody.png: three planes, an Emission node (1, 0.5, 0.2), Blackbody 2700 K and 12000 K; read each plane's mean RGB with numpy and say which is orange and which is blue.
 Canary: tasks/165.canary.patch must turn red: tests/blender/headless/test_lowering.py "TestLowering.test_emission_lowers", "TestLowering.test_unsupported_nodes_render_magenta_one_entry", "TestLowering.test_blackbody_only_into_emission", astroray_tests_cpu "vm/fold equals interpret", "compiler_fold/folded equals interpreted per foldable op".
-Budget: gate +2 s at most (stop and ask above); k_shade_surface: the new op adds an interpreter case, so state registers, stack, spills and compile_s before and after (limits 128, 384, 0 / 0, 5.0 s; currently 128 / 384 / 0 / 0 / 4.6 s); the probe's counts change with the op.
+Budget: gate +2 s at most (stop and ask above); k_shade_surface: the new op adds an interpreter case, so state registers, stack, spills and compile_s before and after (limits 128, 384, 0 / 0, 7.0 s; currently 128 / 384 / 0 / 0 / 4.6 s); the probe's counts change with the op.
 Depends on: 145, 147, 156; after 139 and 161 in the blender lane; lands after 158 (ops.def and probe_m1.cu order: 158, 165, 163, 178, 179, 172, 173, 174, 175).
 Size: M (about 300 lines without tests); stop and report at 2x.
 Progress:

@@ -12,7 +12,7 @@ Do:
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `out/bin/astroray_tests_cpu.exe --tier=fast -tc="compiler_flags/*,compiler_outputs/*,compiler/*,vm/*,v15/*"`; paste the last lines and the two lists of step 1 and 2.
 Look at: none.
 Canary: tasks/164.canary.patch must turn red: astroray_tests_cpu "compiler_flags/never false on generated graphs", "compiler_flags/estimate zero only when folded", "vm/non finite store is refused", "v15/nan input counts invalid".
-Budget: gate +1 s at most (the 1e4-graph cases are fast tier and counted; stop and ask above). Kernel: `store_slot.h` is included by `shade_surface`, so state the k_shade_surface row before and after (limits 128 regs, 384 B stack, 0 / 0 spills, 5.0 s compile; currently 128 / 384 / 0 / 0 / 4.6 s; the check is one `is_finite` per stored value and must not move it).
+Budget: gate +1 s at most (the 1e4-graph cases are fast tier and counted; stop and ask above). Kernel: `store_slot.h` is included by `shade_surface`, so state the k_shade_surface row before and after (limits 128 regs, 384 B stack, 0 / 0 spills, 7.0 s compile (owner decision 40); currently 128 / 384 / 0 / 0 / 4.6 s; the check is one `is_finite` per stored value and must not move it).
 Depends on: 148, 158 (compiler.cpp order: 158, 165, 164, 179, 168, 180).
 Size: M (about 300 lines without tests); stop and report at 2x. If steps 1-2 alone exceed 250 lines, land step 3 first.
 Progress:

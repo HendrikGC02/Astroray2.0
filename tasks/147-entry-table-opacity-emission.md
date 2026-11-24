@@ -13,7 +13,7 @@ Do:
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `out/bin/astroray_tests_cpu.exe --tier=fast -tc="compiler/*,compiler_outputs/*,vm/*"` passes; paste the last lines and the k_shade_surface row before and after.
 Look at: none.
 Canary: tasks/147.canary.patch must turn red: astroray_tests_cpu "compiler_outputs/non opaque flag", "compiler_outputs/opacity entry layout", "compiler_outputs/entries share one register file", "compiler_outputs/constant channel folds", "vm/fold equals interpret" (the patch ignores per-point opacity in `material_flags`, lets the opacity entry carry emission code, and swaps a channel).
-Budget: fast tier +0.5 s at most; gate +1 s at most (stop and ask above); k_shade_surface: one more switch case in `run_entry`: state registers, stack, spills and compile_s before and after (limits 128, 384, 0 / 0, 5.0 s, ruling 72); the probe's op count changes by one (state it); B-24 compile time unchanged.
+Budget: fast tier +0.5 s at most; gate +1 s at most (stop and ask above); k_shade_surface: one more switch case in `run_entry`: state registers, stack, spills and compile_s before and after (limits 128, 384, 0 / 0, 7.0 s, owner decision 40); the probe's op count changes by one (state it); B-24 compile time unchanged.
 Depends on: 146 (ops.def rows follow its column format; the `foldable` field and `fold()` case).
 Size: M (about 220 lines of source, 250 of test); stop and report at 2x. If the op's GPU and probe parts exceed 120 lines, split the op into its own task first.
 Progress:

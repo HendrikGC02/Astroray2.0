@@ -13,7 +13,7 @@ Do:
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `out/bin/astroray_tests_cpu.exe --tier=fast -tc="mix_shader/*,compiler/*,compiler_outputs/*,vm/*"`; paste the last lines and the k_shade_surface row before and after.
 Look at: out/evidence/148/mix_split.png: two planes, one Mix(Diffuse red, Diffuse blue, 0.5) at 256 spp and one Mix(Emission, Diffuse): the first noisy purple whose mean is the 50/50 average, the second a noise-free emitter plus diffuse; measure the means with numpy.
 Canary: tasks/148.canary.patch must turn red: astroray_tests_cpu "mix_shader/selection frequencies", "mix_shader/emission has no selection variance", "mix_shader/opacity entry sums weights", "mix_shader/may be delta per child".
-Budget: gate +3 s at most (stop and ask above); k_shade_surface gains a branch case, a register read-back and two more cases: state registers, stack, spills and compile_s before and after (limits 128, 384, 0 / 0, 5.0 s); the probe's counts change with the ops (state them); B-24 compile time of the 100-node fixture unchanged.
+Budget: gate +3 s at most (stop and ask above); k_shade_surface gains a branch case, a register read-back and two more cases: state registers, stack, spills and compile_s before and after (limits 128, 384, 0 / 0, 7.0 s); the probe's counts change with the ops (state them); B-24 compile time of the 100-node fixture unchanged.
 Depends on: 147.
 Size: L (700-900 lines with tests); stop and report at 2x. Split point: steps 1-4 with the selection tests, then the opacity, Transparent folding and Emission parts as a second task.
 Progress:
