@@ -1090,8 +1090,10 @@ void set_medium_fields(MaterialOutput* m, uint32_t medium_priority) {
   if (medium_priority > 255u) add_entry(m, AR_REPORT_NODE_APPROXIMATED, "medium_priority clamped to 255");
 }
 
-MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable& table, const ImageMeanFn* means,
-                                const ImageSlotFn* slots, uint32_t medium_priority) {
+// `extension`: compile_extension's call. It then replaces the flags by the kind's (item 43: no
+// NON_OPAQUE), so the entry that follows NON_OPAQUE is for OpenPBR materials only.
+static MaterialOutput compile_material_impl(const ar_graph_desc& d, const ar::Rgb2SpecTable& table, const ImageMeanFn* means,
+                                            const ImageSlotFn* slots, uint32_t medium_priority, bool extension) {
   // Unsupported nodes first, every one of them, not only the first (0001 V15).
   MaterialOutput unsupported;
   note_unsupported(d, &unsupported.entries);
@@ -1123,7 +1125,7 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
   // Camera and indirect rays pass through by the opacity decision in shade_surface; shadow rays
   // block on any hit (TERMINATE_ON_FIRST_HIT | DISABLE_ANYHIT, no Embree filter), so the material's
   // shadows are those of an opaque surface (0004 D4's pass-through needs the M2 shadow pass).
-  if ((m.flags & ar::NON_OPAQUE) != 0u)
+  if (!extension && (m.flags & ar::NON_OPAQUE) != 0u)
     add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity: shadow rays treat this material as opaque (transparent shadows are M2)");
   // A per-point opacity multiplies Le as the graph computes it, while the pass decision clamps it
   // to [0, 1]: a value outside that range scales the emission by itself, not by the clamped
@@ -1135,6 +1137,11 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
   for (uint32_t key : m.compiled.missing_images)
     add_entry(&m, AR_REPORT_IMAGE_UNREADABLE, "image key " + std::to_string(key) + " is not set");
   return m;
+}
+
+MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable& table, const ImageMeanFn* means,
+                                const ImageSlotFn* slots, uint32_t medium_priority) {
+  return compile_material_impl(d, table, means, slots, medium_priority, false);
 }
 
 namespace {
@@ -1285,7 +1292,7 @@ MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_de
                                   ": an extension cannot be mixed with another branch (use material slots)");
   PrunedGraph pruned;
   prune_ignored_stores(graph, kind, &pruned);
-  MaterialOutput m = compile_material(pruned.desc, table, means, slots, desc.medium_priority);
+  MaterialOutput m = compile_material_impl(pruned.desc, table, means, slots, desc.medium_priority, true);
   if (m.magenta) return m;
   m.compiled.ext_kind = kind;
   m.compiled.ext = params;
