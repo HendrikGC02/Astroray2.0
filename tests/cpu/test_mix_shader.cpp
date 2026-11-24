@@ -80,6 +80,12 @@ struct GB {
     return int(nodes.size()) - 1;
   }
   void link(int from, int to, uint32_t socket) { links.push_back({uint32_t(from), 0u, uint32_t(to), socket}); }
+  int op2(Op op, int a, int b) {
+    const int n = add(op);
+    link(a, n, 0);
+    link(b, n, 1);
+    return n;
+  }
   int store(int child, int src, RecordSlot s) {
     const int n = add(Op::STORE_SLOT, {}, {int32_t(s), child});
     link(src, n, 0);
@@ -262,6 +268,38 @@ TEST_CASE("mix_shader/surface layout") {
   CHECK(r.children[1].runtime_slots == (uint64_t(1) << uint32_t(RecordSlot::coat_color)));
   CHECK(run_surface(r, 0.25f).marker == 0.25f);
   CHECK(run_surface(r, 0.75f).marker == 0.75f);
+}
+
+TEST_CASE("mix_shader/a shared value stays live into a later block") {
+  // A per-point colour (UV set 0) read by both children is computed before the selection. Block A
+  // reads it first and then fills registers with its own per-point temporaries; block B, laid out
+  // after A, stores the colour again. Its register must not be reused inside A, so B's record
+  // holds the colour's lift, checked against the lift computed here.
+  GB g;
+  const int uv = g.add(Op::LOAD_CTX_UV, {}, {0});
+  g.store(0, uv, RecordSlot::base_color);
+  int t = g.add(Op::LOAD_CTX_P);
+  const RecordSlot sink[] = {RecordSlot::specular_color, RecordSlot::fuzz_color, RecordSlot::geometry_tangent,
+                             RecordSlot::geometry_coat_tangent, RecordSlot::subsurface_color, RecordSlot::transmission_color};
+  std::vector<int> temps{t};
+  for (int k = 0; k < 6; ++k) temps.push_back(t = g.op2(k % 2 ? Op::ADD_F32X3 : Op::MUL_F32X3, t, temps[size_t(k) / 2]));
+  for (int k = 0; k < 6; ++k) g.store(0, temps[size_t(k) + 1], sink[k]);
+  g.store(1, uv, RecordSlot::coat_color);
+  g.mix_const(0, 0.5f, 0, 1);
+  const CompileResult r = g.compile();
+  REQUIRE_MESSAGE(r.ok, r.error);
+  ar::VmRegs regs = {};
+  ar::ShadeContext ctx = {};
+  ctx.uv[0] = ar::Real2{0.3f, 0.6f};
+  ctx.P = ar::Real3{0.5f, -1.25f, 2.0f};
+  ctx.lambda_t = ar::Lambda{{450.0f, 520.0f, 590.0f, 660.0f}};
+  ar::OpenPBRParams rec = {};
+  ar::Spec le = {};
+  float su = 0.75f;  // the second child
+  REQUIRE(ar::run_entry(r.program.data(), r.program.at(0), &regs, ctx, fixture().tables, &rec, &le, &su) == ar::VmStatus::OK);
+  uint32_t flags = 0;
+  const ar::Spec want = ar::albedo(fixture().table, ar::Rgb{{ar::Real(0.3f), ar::Real(0.6f), ar::Real(0)}}, ctx.lambda_t, &flags);
+  for (int l = 0; l < ar::kLanes; ++l) CHECK(rec.coat_color.v[l] == want.v[l]);
 }
 
 TEST_CASE("mix_shader/may be delta per child") {

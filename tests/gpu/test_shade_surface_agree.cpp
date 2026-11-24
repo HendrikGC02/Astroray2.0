@@ -128,7 +128,7 @@ Materials build_materials(const Tables& t) {
   ms.add(mb, 3), ms.add(mp, 7), ms.add(mu, 11), ms.add(mx, 13);
   // A Mix Shader (0005 item 38): factor UV.x per point, child 0 a base coloured by UV set 0 with no
   // specular layer, child 1 a rougher GGX layer over a constant colour. The selection rescales the
-  // lobe-choice uniform in r31 on both targets.
+  // lobe-choice uniform (the entry's selection uniform) on both targets.
   Graph mix;
   const auto store = [&mix](int src, ar::RecordSlot s, int32_t child) {
     mix.link(src, mix.add(ar::Op::STORE_SLOT, {}, {int32_t(s), child}), 0);
