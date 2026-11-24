@@ -17,3 +17,4 @@ Budget: gate +6 s at most for the two new scenes on two devices (stop and ask ab
 Depends on: 147, 148 (both edit shade_surface.h and probe_m1.cu; the uniform to use is 148's; shade_surface.h order of landing: 144, 148, 156, 158).
 Size: M (about 150 lines of source, 250 of test and scene); stop and report at 2x.
 Progress:
+- Files: src/kernel/stages/shade_surface.h, src/kernel_gpu/probe_m1.cu, src/host/material/compiler.cpp, src/kernel/budget.toml; blender/astroray/sync/settings.py, properties.py, tests/blender/headless/test_lights_sync.py; scenes/d3_alpha_cards/, scenes/d3_alpha_nee/, scenes/lib/ar.py, truths.py; tools/analytic.py, tools/budgets.toml; docs/decisions/0005 item 38, 0004 D3; tests/cpu/test_alpha_pass_through.cpp (new), test_compiler_outputs.cpp, tests/gpu/test_shade_surface_agree.cpp; tasks/156.canary.patch. All in Scope.
