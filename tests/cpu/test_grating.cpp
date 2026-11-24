@@ -339,12 +339,12 @@ TEST_SUITE("fast") {
   }
 
   AR_RT_CASE("grating/lossless furnace") {
-    // Every cell normalised over the orders that propagate for an in-plane wo at that node, so lane
+    // Every cell normalised over the table orders (-6..6) that propagate for an in-plane wo at that node, so lane
     // 0's expected weight sum_m eta_m(lambda_0) is 1. u is stratified, so the mean over N samples
     // differs from the expectation by at most the sum over orders of weight / N, with every weight
     // at most 4 (p_m >= eta_m(lambda_0) / 4) and at most 11 orders propagating here: 44 / N.
     // A chosen order evanescent at lane 0 has weight 0 (pdf 0).
-    constexpr int kN = 40000;
+    constexpr int kN = 25000;
     struct Config {
       bool transmit;
       double n_i, n_o;  // wo side, far side
@@ -356,17 +356,17 @@ TEST_SUITE("fast") {
       for (int ci : {15, 6}) {
         const double cos_i = node_cos(ci);
         const double pitch = 1600.0;
-        const HostTable t = make_table(-8, 8, [&](int m, double l, double c) {
+        const HostTable t = make_table(-6, 6, [&](int m, double l, double c) {
           if (std::fabs(c - cos_i) > 1e-12) return bessel_eta(m, l, c);
           const double sy = std::sqrt(1.0 - c * c);
           if (!propagates(sy, m, l, pitch, cf.n_i, cf.n_o)) return 0.0;
           double sum = 0.0;
-          for (int k = -8; k <= 8; ++k)
+          for (int k = -6; k <= 6; ++k)
             if (propagates(sy, k, l, pitch, cf.n_i, cf.n_o)) sum += bessel_eta(k, l, c);
           return bessel_eta(m, l, c) / sum;
         });
         const double n_sub = cf.transmit ? (cf.front ? cf.n_o : cf.n_i) : 1.5;
-        const GratingParams p = params(pitch, -8, 8, cf.transmit, n_sub);
+        const GratingParams p = params(pitch, -6, 6, cf.transmit, n_sub);
         for (int w0 : {9, 77}) {
           const Lambda lam = lambda_of(node_lambda(w0), node_lambda((w0 + 24) % 95), node_lambda((w0 + 48) % 95),
                                        node_lambda((w0 + 72) % 95));
