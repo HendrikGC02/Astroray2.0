@@ -59,18 +59,19 @@ struct ProgramWorld {
   StoredGraph graph;
   WorldOutput world;
 
-  explicit ProgramWorld(uint32_t mode) {
+  // `grey`: every texel grey, whose lift is analytic; otherwise saturated colours, whose lift goes through the
+  // RGB-to-spectrum table.
+  explicit ProgramWorld(uint32_t mode, bool grey) {
     texels.resize(size_t(kEnvW) * kEnvH * 4, 1.0f);
     const float pi = 3.14159265358979f;
     for (uint32_t y = 0; y < kEnvH; ++y)
       for (uint32_t x = 0; x < kEnvW; ++x) {
         float* t = &texels[(size_t(y) * kEnvW + x) * 4];
         const float fx = (float(x) + 0.5f) / float(kEnvW), fy = (float(y) + 0.5f) / float(kEnvH);
-        // Grey: the lift of a grey is analytic (a flat spectrum), so the radiance is the texel value
-        // times a constant and the comparison measures the mapping and the lookup, not how steeply the
-        // RGB-to-spectrum table amplifies a one-ulp difference of the texel position (a saturated
-        // image does, to about 1e-5; the lift itself agrees bit for bit, test_vm_agree).
-        t[0] = t[1] = t[2] = 0.6f + 0.35f * std::sin(2.0f * pi * fx) * std::sin(pi * fy);
+        t[0] = 0.6f + 0.4f * std::sin(2.0f * pi * fx) * std::sin(pi * fy);
+        t[1] = 0.5f + 0.3f * std::cos(2.0f * pi * fx + 1.0f);
+        t[2] = 0.3f + 0.4f * fy;
+        if (grey) t[0] = t[1] = t[2] = 0.6f + 0.35f * std::sin(2.0f * pi * fx) * std::sin(pi * fy);
       }
     ar::srgb_decode_table(srgb.data());
     graph.f32 = {0.8f};
@@ -370,16 +371,16 @@ TEST_CASE("shade_background/agreement") {
 }
 
 // The program world: 10^5 random directions through the Environment Texture program on both devices,
-// Linear on a smooth grey float image, so a one-ulp difference of the libm atan2 and acos moves the
-// radiance by a few 1e-7 and nothing else can differ. Closest is not run: a direction within 1e-6 of a
-// texel edge may pick the neighbour on one device, which is the lookup's conditioning, not a defect.
+// Linear on a smooth grey float image (a grey's lift is analytic, so only the mapping and the lookup
+// are compared). Closest is not run: a direction within 1e-6 of a texel edge may pick the neighbour on
+// one device, which is the lookup's conditioning, not a defect.
 TEST_CASE("shade_background/environment agreement") {
   Ledger cpu_ledger, gpu_ledger;
   ContextState ctx;
   ThreadPool pool(ctx, 1);
   CpuDevice cpu(cpu_ledger, pool);
   std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
-  const ProgramWorld world(1u);
+  const ProgramWorld world(1u, true);
   REQUIRE(!world.world.magenta);
   REQUIRE(world.world.program.size() > 2);
   const Snapshot c = run(cpu, nullptr, &world);
@@ -389,6 +390,58 @@ TEST_CASE("shade_background/environment agreement") {
   CHECK(e.max <= 1e-6);
   CHECK(cpu_ledger.total() == 0);
   CHECK(gpu_ledger.total() == 0);
+}
+
+// The same lookup on saturated colours, before the lift: the colour TEX_ENVIRONMENT returns for 10^5
+// random directions, no-FMA GPU against CPU float, at 1e-6: the direction mapping and the bilinear
+// lookup alone. (After the lift the same image differs by up to 1.4e-5: the sigmoid polynomial sums terms of 20 to 50 to an argument near 2, so it magnifies a 4e-7 input gap about 40 times.)
+TEST_CASE("shade_background/environment colour lookup agreement") {
+  const ProgramWorld world(1u, false);
+  Ledger ledger;
+  auto dev = make_cuda_device(ledger, 0);
+  agree::Inputs in;
+  in.n = kN, in.stride = 3;
+  in.v.resize(size_t(kN) * 3);
+  for (uint32_t i = 0; i < kN; ++i) {
+    const float z = 2.0f * float(agree::unit(i, 30)) - 1.0f, phi = 6.2831853f * float(agree::unit(i, 31));
+    const float r = std::sqrt(1.0f - z * z);
+    in.v[3 * i] = r * std::cos(phi), in.v[3 * i + 1] = r * std::sin(phi), in.v[3 * i + 2] = z;
+  }
+  DeviceBuffer texels = dev->allocate(LedgerCategory::TEXTURES, world.texels.size() * 4, Owner{});
+  dev->upload(texels, 0, world.texels.data(), world.texels.size() * 4);
+  ar::DeviceImageView view{};
+  view.width = kEnvW, view.height = kEnvH, view.channels = 4;
+  view.format = uint32_t(ar::TexFormat::FLOAT), view.encoding = uint32_t(ar::TexEncoding::LINEAR);
+  ar::DeviceImageView host_view = view;
+  host_view.texels = uint64_t(uintptr_t(world.texels.data()));
+  view.texels = uint64_t(uintptr_t(texels.ptr));
+  DeviceBuffer vb = dev->allocate(LedgerCategory::TABLES, sizeof view, Owner{});
+  dev->upload(vb, 0, &view, sizeof view);
+  DeviceBuffer sb = dev->allocate(LedgerCategory::TABLES, world.srgb.size() * 4, Owner{});
+  dev->upload(sb, 0, world.srgb.data(), world.srgb.size() * 4);
+  uint64_t views_p = uint64_t(uintptr_t(vb.ptr)), srgb_p = uint64_t(uintptr_t(sb.ptr));
+  uint32_t count = 1, mode = 1;
+  const agree::Results gpu = agree::run_gpu(*dev, std::string(AR_TEST_KERNEL_NOFMA_DIR) + "/tex_agree.cubin", "ar_env_agree", in, 3,
+                                            {&views_p, &count, &srgb_p, &mode});
+  ar::SceneTables tables{};
+  tables.images = &host_view;
+  tables.image_count = 1;
+  tables.srgb_decode = world.srgb.data();
+  agree::Results cpu;
+  cpu.n = kN, cpu.stride = 3;
+  cpu.v.resize(size_t(kN) * 3);
+  for (uint32_t i = 0; i < kN; ++i) {
+    float out[3];
+    ar::op_tex_environment(tables, 0u, mode, &in.v[3 * i], out);
+    for (int k = 0; k < 3; ++k) cpu.v[3 * i + uint32_t(k)] = out[k];
+  }
+  const agree::Stats e = agree::compare(gpu, cpu, agree::Metric::REL_L2);
+  std::printf("agree shade_background environment pre-lift colour: n=%u max=%.3e p99.9=%.3e\n", e.n, e.max, e.p999);
+  CHECK(e.max <= 1e-6);
+  dev->free(texels);
+  dev->free(vb);
+  dev->free(sb);
+  CHECK(ledger.total() == 0);
 }
 
 }  // TEST_SUITE
