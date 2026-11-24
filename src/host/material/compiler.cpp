@@ -1092,30 +1092,25 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
   return true;
 }
 
-// A constant that is NaN or Inf and reaches a record slot, an emission or a per-point node is
-// refused here, naming the consuming node and input: the run-time check in STORE_SLOT would turn
-// every sample INVALID instead (rule 5, ruling 91). A constant folded away into a finite result
-// (a dead branch) never reaches one of these consumers and is not an error.
+// A constant that is NaN or Inf anywhere in the graph is refused, naming the node (and the record
+// slot a STORE_SLOT gives it), even when it would fold into a finite value or sit in a branch no
+// sample takes: a graph that carries one is a broken input, and the run-time check in STORE_SLOT
+// would otherwise turn every sample INVALID (rule 5, ruling 91, lead ruling 2026-11-25).
 // Ref: docs/decisions/RULINGS.md 91; 0004 D17.
 bool refuse_non_finite_constants(const Work& w, std::string* err) {
-  auto finite = [&](int i) {
-    const Vec3& v = w.cv[size_t(i)];
-    const int n = w.g.nodes[size_t(i)].out == VType::F32 ? 1 : 3;
-    for (int k = 0; k < n; ++k)
-      if (!(v[size_t(k)] - v[size_t(k)] == 0.0f)) return false;
-    return true;
-  };
-  for (int i : w.topo) {
-    const GraphNode& nd = w.g.nodes[size_t(i)];
-    for (int s = 0; s < nd.n_inputs; ++s) {
-      const int src = nd.input[s];
-      if (w.isc[size_t(src)] && !finite(src) && (nd.op == Op::STORE_SLOT || nd.op == Op::EMIT_LE || !w.isc[size_t(i)])) {
-        *err = "graph node " + std::to_string(i) + " (" + op_meta(nd.op).name + "): input " + std::to_string(s) +
-               " is a non-finite constant, NaN or Inf (graph node " + std::to_string(src) + ")";
-        if (nd.op == Op::STORE_SLOT) *err += ", record slot " + std::to_string(w.g.i32[nd.i32_first]);
-        return false;
-      }
-    }
+  for (size_t i = 0; i < w.g.nodes.size(); ++i) {
+    if (!w.isc[i]) continue;
+    const Vec3& v = w.cv[i];
+    const int n = w.g.nodes[i].out == VType::F32 ? 1 : 3;
+    bool finite = true;
+    for (int k = 0; k < n; ++k) finite = finite && (v[size_t(k)] - v[size_t(k)] == 0.0f);
+    if (finite) continue;
+    *err = "graph node " + std::to_string(i) + " (" + op_meta(w.g.nodes[i].op).name +
+           "): a non-finite constant, NaN or Inf";
+    for (const GraphNode& c : w.g.nodes)
+      for (int s = 0; s < c.n_inputs; ++s)
+        if (c.op == Op::STORE_SLOT && c.input[s] == int(i)) *err += ", stored to record slot " + std::to_string(w.g.i32[c.i32_first]);
+    return false;
   }
   return true;
 }
@@ -1500,7 +1495,7 @@ VolumeOutput compile_volume(const ar_graph_desc& d, const ar::Rgb2SpecTable& tab
 // a cutoff item 43 does not have;
 // EXTENSION is ext_kind != 0 (item 43) and then the OpenPBR lobes do not exist, so the kind alone
 // decides MAY_BE_DELTA; READS_RAY_TYPE is clear because no Light Path op exists. A Mix Shader graph ORs MAY_BE_DELTA over its BSDF children, each from its own
-// constants, since every child is reachable by the selection.
+// constants, since every child whose selection weight is not a folded 0 is reachable.
 uint32_t material_flags(const CompileResult& r) {
   using RS = ar::RecordSlot;
   if (r.ext_kind != 0) {
