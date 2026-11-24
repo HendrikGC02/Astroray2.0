@@ -22,3 +22,4 @@ Progress:
 - Creation commits and runs both modes once on 1 x 1 (d16: weights load off the first frame): first 128^2 FINAL CUDA denoise 102 ms without, 3.4 ms with. DENOISER ledger 30 MiB after creation, 36 MiB after both commits; 0 after destroy.
 - Free bytes for the drop come from cuda_free_device_bytes (cuda_device.cpp, cudart), declared host-side like make_cuda_device; seam lint stays green, no oidn_cuda.cpp needed.
 - Canary: three hunks, each named case red (tools/canary.ps1 176 PASS). Look: out/evidence/176/denoise_fixture.png.
+- Review fixes: configuration record replaced by its net change per reconfiguration (all filters unbound first); 128/512/128/512 records 36/134/120/134 MiB (replace-by-new-drop gave 36/130/32/46: OIDN keeps 84 MiB past a shrink). relMSE now against the clamped input, bound 0.2 (measured 0.033-0.051); ledger checked against the test's own free-bytes drop; canary has four hunks.
