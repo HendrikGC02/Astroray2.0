@@ -11,6 +11,19 @@ index f08f376..0de616a 100644
    out.has_medium = true;
    out.medium.block = block;
    out.medium.program = {word(Op::VOLUME_COEFFS), word(Op::END)};
+diff --git a/src/kernel/medium/medium_block.h b/src/kernel/medium/medium_block.h
+index 5fa224b..290038c 100644
+--- a/src/kernel/medium/medium_block.h
++++ b/src/kernel/medium/medium_block.h
+@@ -48,7 +48,7 @@ AR_FN MediumBlock medium_block_vacuum() {
+ // and multiply an ILLUMINANT by the observer's illuminant, both outside that bound, so any other
+ // pair stops the run with BAD_OPERAND instead of being resolved.
+ AR_FN bool medium_ref_ok(const SpectrumRef& r) {
+-  return (r.kind == uint8_t(SpectrumKind::CONSTANT) && r.semantic == uint8_t(SpectrumSemantic::UNBOUNDED)) ||
++  return r.kind == uint8_t(SpectrumKind::CONSTANT) ||
+          (r.kind == uint8_t(SpectrumKind::RGB) && r.semantic == uint8_t(SpectrumSemantic::REFLECTANCE));
+ }
+ 
 diff --git a/src/kernel/vm/ops/volume_coeffs.h b/src/kernel/vm/ops/volume_coeffs.h
 index 0c5896f..896116a 100644
 --- a/src/kernel/vm/ops/volume_coeffs.h
