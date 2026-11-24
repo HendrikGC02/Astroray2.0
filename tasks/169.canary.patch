@@ -1,14 +1,18 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 52a570f..6be42ff 100644
+index 6de401c..52a570f 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
-@@ -1102,3 +1102,3 @@ uint32_t ext_max_kind() {
- bool ext_params_valid(uint32_t kind, const ar::ExtParams& e, std::string* why) {
--  if (kind != uint32_t(ar::ExtKind::GRATING)) return true;
-+  if (kind != 0u) return true;
-   const ar::GratingParams g = ar::grating_params(e);
+@@ -1124,8 +1124,2 @@ bool ext_params_valid(uint32_t kind, const ar::ExtParams& e, std::string* why) {
+     }
+-    // The CAUCHY_ABBE domain of graph.cpp's op check: outside it cauchy_abbe_ior gives wrong indices silently.
+-    if (r.kind == uint8_t(ar::SpectrumKind::CAUCHY_ABBE) &&
+-        !(std::isfinite(r.p[1]) && r.p[1] > 0.0f && std::isfinite(r.p[2]) && r.p[2] >= 0.0f)) {
+-      *why = "grating substrate CAUCHY_ABBE needs a finite positive n_d and Abbe number and a finite non-negative dispersion scale";
+-      return false;
+-    }
+   }
 diff --git a/src/host/material/grating_table.cpp b/src/host/material/grating_table.cpp
-index 55adb4f..f67ebe2 100644
+index 55adb4f..d2f61ea 100644
 --- a/src/host/material/grating_table.cpp
 +++ b/src/host/material/grating_table.cpp
 @@ -59,3 +59,3 @@ double grating_phase_pp(bool transmit, double depth_nm, double lambda_nm, double
@@ -45,11 +49,14 @@ index 33c1259..351243f 100644
 +  for (int j = 0; j < 1; ++j) s += grating_lane_eta(p, tab, wo, m, lam.nm[j], n_i.v[j], n_o.v[j], cos_i);
    return s / Real(kLanes);
 diff --git a/src/kernel/material/ext/grating_table.h b/src/kernel/material/ext/grating_table.h
-index 5a7c765..f7b9aba 100644
+index 5a7c765..9c12c96 100644
 --- a/src/kernel/material/ext/grating_table.h
 +++ b/src/kernel/material/ext/grating_table.h
-@@ -48,3 +48,3 @@ AR_FN Real grating_table_eta(const GratingTable& t, int m, Real lambda_nm, Real
-   const int y0 = int(y) < kGratingCosBins - 2 ? int(y) : kGratingCosBins - 2;
--  const Real fx = x - Real(x0);
-+  const Real fx = Real(0);
-   const Real fy = y - Real(y0);
+@@ -53,6 +53,4 @@ AR_FN Real grating_table_eta(const GratingTable& t, int m, Real lambda_nm, Real
+   const Real e10 = Real(load_ro(t.eta + grating_table_index(o, y0 + 1, x0)));
+-  const Real e11 = Real(load_ro(t.eta + grating_table_index(o, y0 + 1, x0 + 1)));
+   const Real a = e00 + (e01 - e00) * fx;
+-  const Real b = e10 + (e11 - e10) * fx;
+-  return a + (b - a) * fy;
++  return a + (e10 - e00) * fy;
+ }
