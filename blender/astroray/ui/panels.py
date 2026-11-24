@@ -73,6 +73,7 @@ class ASTRORAY_PT_sampling(AstrorayPanel, bpy.types.Panel):
 class ASTRORAY_PT_light_paths(AstrorayPanel, bpy.types.Panel):
     bl_label = "Light Paths"
     bl_parent_id = "ASTRORAY_PT_settings"
+    bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
         layout = self.layout
@@ -87,6 +88,7 @@ class ASTRORAY_PT_light_paths(AstrorayPanel, bpy.types.Panel):
 class ASTRORAY_PT_film(AstrorayPanel, bpy.types.Panel):
     bl_label = "Film"
     bl_parent_id = "ASTRORAY_PT_settings"
+    bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
         layout = self.layout
@@ -105,6 +107,7 @@ class ASTRORAY_PT_film(AstrorayPanel, bpy.types.Panel):
 class ASTRORAY_PT_viewport(AstrorayPanel, bpy.types.Panel):
     bl_label = "Viewport"
     bl_parent_id = "ASTRORAY_PT_settings"
+    bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
         layout = self.layout
