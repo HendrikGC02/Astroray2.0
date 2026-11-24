@@ -171,6 +171,7 @@ class TestSettings(unittest.TestCase):
         a.max_bounces, a.min_bounces, a.pixel_filter_type, a.film_exposure = 6, 2, "GAUSSIAN", 2.0
         r.resolution_x, r.resolution_y, r.resolution_percentage = 64, 48, 50
         a.pixel_filter_width = 2.5
+        a.transparent_bounces = 3
         f, lines = settings.build(self.scene, FakeColorspace("lin_rec2020_scene"), passes=("Position",),
                                   lightgroups={"a": 1, "b": 2})
         self.assertEqual(lines, [])
@@ -178,7 +179,8 @@ class TestSettings(unittest.TestCase):
                 "min_bounces": 2, "pixel_filter": 1, "pixel_filter_width": 2.5, "film_exposure": 2.0,
                 "working_space": 2, "output_width": 64, "output_height": 48, "resolution_percent": 50,
                 "passes": ("Position",), "light_group_count": 2, "caustics_reflective": 1,
-                "caustics_refractive": 1, "filter_glossy": 1.0, "film_transparent": 0}
+                "caustics_refractive": 1, "filter_glossy": 1.0, "film_transparent": 0,
+                "transparent_bounces": 3}
         for k, v in want.items():
             self.assertEqual(f[k], v, k)
 

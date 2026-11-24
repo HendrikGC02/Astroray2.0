@@ -50,11 +50,11 @@ def build(scene, colorspace, passes=(), lightgroups=None):
         "samples": a.samples, "viewport_samples": a.viewport_samples,
         "seed": a.seed, "animated_seed": int(a.use_animated_seed),
         "max_bounces": a.max_bounces, "min_bounces": a.min_bounces,
-        # Only the total limit exists in M1a; a per-type limit of 0 would end such paths at once,
-        # so each equals the total and never binds before it.
+        # The kernel reads the total and the transparent limits; a per-type limit of 0 would end such
+        # paths at once, so each other one equals the total and never binds before it.
         "diffuse_bounces": a.max_bounces, "glossy_bounces": a.max_bounces,
         "transmission_bounces": a.max_bounces, "volume_bounces": a.max_bounces,
-        "transparent_bounces": a.max_bounces,
+        "transparent_bounces": a.transparent_bounces,
         "pixel_filter": FILTERS[a.pixel_filter_type], "pixel_filter_width": a.pixel_filter_width,
         "film_exposure": a.film_exposure, "film_transparent": int(r.film_transparent),
         "light_group_count": len(lightgroups or ()),

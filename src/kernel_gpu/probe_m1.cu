@@ -410,6 +410,7 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
   Real3 g_dir = ps_ray_d(kg, slot);
   // The lobe-choice uniform through the entry's selection uniform, as stages/shade_surface.h.
   float uc = float(camera_path_draw(kg, sample, event_dim(ps_event_index(kg, slot), EV_LOBE_CHOICE)));
+  Real alpha = Real(1);
   for (uint32_t phase = 0;; ++phase) {
     if (!shade_context_geometry(kg, g_inst, g_prim, g_bary, g_dir, &ctx)) {
       sample_mark_invalid(kg, sample);
@@ -428,14 +429,11 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
       const uint32_t entry = program ? load_ro(prog + (phase == 0u ? 0u : 2u)) : 0u;
       ok = run_entry_100(prog, entry, &regs, ctx, *kg.tables, phase == 0u ? &rec : nullptr, &le,
                          phase == 0u ? &uc : nullptr) == VmStatus::OK;
+      if (phase == 0u) alpha = rec.geometry_opacity;
     }
     if (phase != 0u) break;
     P = ctx.P, Ng = ctx.Ng, N = ctx.N, wo = ctx.wo;
     flags = ctx.front_face != 0u ? (flags | FRONT_FACE) : (flags & ~FRONT_FACE);
-    if (s.material_pass_index != nullptr && s.material_headers != nullptr && total == 0u) {
-      const uint32_t index = kg.session.samples_done + sample % kg.session.samples_per_pass;
-      film_primary_aov(kg, sample, index, &flags, P, N, ctx.uv[0].x, ctx.uv[0].y, load_ro(s.material_pass_index + mat));
-    }
     Spec contribution = spec_fill(Real(0));
     const bool weighted = total > 0u && !arrived_specular;
     if (ok && max_lane(le) > Real(0)) {
@@ -451,14 +449,23 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
       contribution = le * ps_beta(kg, slot) *
                      (radiance_scale(kg) * mis_emitter_scale(ps_r_u(kg, slot), weighted ? ps_r_l(kg, slot) : Spec{}, p_light, weighted));
     }
-    if (!ok || !is_finite(contribution)) {
+    // The opacity decision and null event, as stages/shade_surface.h.
+    const bool valid = ok && is_finite(contribution) && alpha == alpha;
+    if (valid) sample_add(kg, sample, contribution);
+    if (valid && opacity_null_event(alpha, &uc)) {
+      surface_pass_through(kg, slot, P, Ng);
+      return;
+    }
+    if (s.material_pass_index != nullptr && s.material_headers != nullptr && total == 0u) {
+      const uint32_t index = kg.session.samples_done + sample % kg.session.samples_per_pass;
+      film_primary_aov(kg, sample, index, &flags, P, N, ctx.uv[0].x, ctx.uv[0].y, load_ro(s.material_pass_index + mat));
+    }
+    ps_flags(kg, slot) = flags;
+    if (!valid) {
       sample_mark_invalid(kg, sample);
-      ps_flags(kg, slot) = flags;
       path_end(kg, slot, Term::INVALID);
       return;
     }
-    sample_add(kg, sample, contribution);
-    ps_flags(kg, slot) = flags;
     if (total >= kg.session.max_bounces[0]) {
       path_end(kg, slot, Term::MAX_BOUNCE);
       return;

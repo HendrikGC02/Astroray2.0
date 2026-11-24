@@ -33,6 +33,7 @@
 #include "../../src/host/material/op_meta.h"
 #include "host/scene/edit.h"
 #include "material/material_header.h"
+#include "material/slot_resolve.h"
 #include "sample/sobol.h"
 #include "vm/interp.h"
 
@@ -618,7 +619,7 @@ TEST_CASE("compiler_outputs/constant channel folds") {
     CHECK(m.compiled.runtime_slots == (uint64_t(1) << uint32_t(ar::RecordSlot::base_color)));
     for (Op o : entry_ops(prog, prog[0])) CHECK(o != Op::CHANNEL_F32X3);
     CHECK(((m.flags & ar::NON_OPAQUE) != 0) == (ch != 2));  // only the channel holding 1 is opaque
-    CHECK(m.entries.empty());
+    CHECK(m.entries.size() == (ch != 2 ? 1u : 0u));  // the opaque-shadow entry of a non-opaque material
   }
 }
 
@@ -641,7 +642,7 @@ TEST_CASE("compiler_outputs/non opaque flag") {
   CHECK(half.compiled.program.empty());  // a constant opacity: no entry, word 1 is absent
   CHECK(half.compiled.block.geometry_opacity == 0.5f);
   CHECK((half.flags & ar::NON_OPAQUE) != 0);
-  CHECK(half.entries.empty());
+  CHECK(half.entries.size() == 1);  // the opaque-shadow entry only
   CHECK((constant(1.0f).flags & ar::NON_OPAQUE) == 0);
   CHECK((roughness(0.5f).flags & ar::NON_OPAQUE) == 0);  // nothing stored: the default 1
   GB bevel;
@@ -659,7 +660,7 @@ TEST_CASE("compiler_outputs/non opaque flag") {
   const MaterialOutput under = constant(-0.25f);
   CHECK(under.compiled.block.geometry_opacity == 0.0f);
   CHECK((under.flags & ar::NON_OPAQUE) != 0);
-  CHECK(under.entries.size() == 1);
+  CHECK(under.entries.size() == 2);  // "opacity clamped" and the opaque-shadow entry
   const MaterialOutput nan = constant(std::nanf(""));
   CHECK(nan.magenta);
   REQUIRE(nan.entries.size() == 1);
@@ -805,6 +806,119 @@ TEST_CASE("compiler_outputs/entries share one register file") {
   }
   CHECK(bad == 0u);
   CHECK(lit > 500u);  // the Le compared is not zero
+}
+
+TEST_CASE("compiler_outputs/emission carries opacity") {
+  // Emission lives inside the opacity mix (0005 items 4, 38): the compiled Le is a x Le, from the
+  // block for a lone constant emission and from the one program otherwise, so the surface entry
+  // (a hit) and the emission entry (NEE on the triangle) agree and the estimate follows.
+  using RS = ar::RecordSlot;
+  // Constant opacity, lone constant emission: the block's luminance is the product.
+  GB k;
+  k.op2(Op::EMIT_LE, k.add(Op::CONST_F32X3, {1.0f, 0.5f, 0.25f}), k.add(Op::CONST_F32, {3.0f}));
+  k.store(k.add(Op::CONST_F32, {0.3f}), RS::geometry_opacity);
+  const MaterialOutput mk = k.compile();
+  REQUIRE(!mk.magenta);
+  CHECK((mk.flags & ar::CONSTANT_EMISSION) != 0u);
+  CHECK(bits(mk.compiled.block.emission_luminance) == bits(3.0f * 0.3f));
+  REQUIRE(mk.emission_estimate.size() == 1);
+  CHECK(bits(mk.emission_estimate[0].strength) == bits(3.0f * 0.3f));
+  // Out of range: the clamped opacity scales it (0 below, unscaled above 1).
+  GB lo;
+  lo.op2(Op::EMIT_LE, lo.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), lo.add(Op::CONST_F32, {3.0f}));
+  lo.store(lo.add(Op::CONST_F32, {-0.5f}), RS::geometry_opacity);
+  CHECK(lo.compile().compiled.block.emission_luminance == 0.0f);
+  GB hi;
+  hi.op2(Op::EMIT_LE, hi.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), hi.add(Op::CONST_F32, {3.0f}));
+  hi.store(hi.add(Op::CONST_F32, {1.5f}), RS::geometry_opacity);
+  CHECK(hi.compile().compiled.block.emission_luminance == 3.0f);
+
+  // Per point: opacity = the texel's green channel, emission constant. Both entries carry a x Le.
+  const auto ob = read_data("spectral/observer.bin");
+  astroray::ObserverTables obs;
+  const std::string err = astroray::parse_observer(ob.data(), ob.size(), &obs);
+  REQUIRE_MESSAGE(err.empty(), err);
+  std::vector<uint8_t> texels = {0, 40, 255, 128, 7, 64, 200, 90, 13, 1, 254, 77, 33, 160, 99, 250, 20, 180};
+  ar::DeviceImageView image = {};
+  image.texels = uint64_t(uintptr_t(texels.data()));
+  image.width = 3, image.height = 2, image.channels = 3, image.encoding = uint32_t(ar::TexEncoding::SRGB);
+  std::vector<float> srgb(ar::kSrgbTableSize);
+  ar::srgb_decode_table(srgb.data());
+  ar::SceneTables tables = {};
+  tables.srgb_decode = srgb.data();
+  tables.images = &image;
+  tables.image_count = 1;
+  tables.rgb2spec = &table();
+  tables.observer.cmf = &obs.cmf[0][0];
+  tables.observer.illum = obs.d65;
+  const astroray::host::ImageSlotFn slots = [](uint32_t key, uint32_t* slot) { return key == 7 ? (*slot = 0, true) : false; };
+  // `opacity`: with the per-point opacity store or without it (the unscaled reference).
+  auto graph = [](bool opacity) {
+    GB g;
+    const int t = tex(g);
+    g.store(t, RS::base_color);
+    g.op2(Op::EMIT_LE, g.add(Op::CONST_F32X3, {0.8f, 0.4f, 0.2f}), g.add(Op::CONST_F32, {2.0f}));
+    if (opacity) g.store(channel(g, t, 1), RS::geometry_opacity);
+    return g;
+  };
+  const GB ga = graph(true), g1 = graph(false);
+  const MaterialOutput ma = compile_material(ga.desc(), table(), nullptr, &slots);
+  const MaterialOutput m1 = compile_material(g1.desc(), table(), nullptr, &slots);
+  REQUIRE(!ma.magenta);
+  REQUIRE(!m1.magenta);
+  const std::vector<uint32_t>& pa = ma.compiled.program;
+  REQUIRE(pa.size() > 4);
+  REQUIRE((pa[0] != 0u && pa[2] != 0u));  // the emission moved into the program: it varies per point
+  CHECK((ma.flags & ar::CONSTANT_EMISSION) == 0u);
+  REQUIRE((m1.flags & ar::CONSTANT_EMISSION) != 0u);  // the reference: block emission
+  uint32_t bad = 0, partial = 0;
+  for (uint32_t i = 0; i < 500; ++i) {
+    ar::ShadeContext ctx = {};
+    auto u = [&](uint32_t d) { return ar::sample_independent(i, 0u, 0u, d, 0x156u); };
+    ctx.uv[0] = {u(0) * 4.0f - 2.0f, u(1) * 4.0f - 2.0f};
+    for (int l = 0; l < 4; ++l) ctx.lambda_t.nm[l] = float(360.0 + 470.0 * double(u(5 + uint32_t(l))));
+    ar::OpenPBRParams rec = {};
+    ar::Spec le_surface = ar::spec_fill(ar::Real(0)), le_emission = ar::spec_fill(ar::Real(0));
+    ar::VmRegs regs = {};
+    REQUIRE(ar::run_entry(pa.data(), pa[0], &regs, ctx, tables, &rec, &le_surface) == ar::VmStatus::OK);
+    REQUIRE(ar::run_entry(pa.data(), pa[2], &regs, ctx, tables, nullptr, &le_emission) == ar::VmStatus::OK);
+    // The reference Le: the unscaled material's block emission at the same wavelengths.
+    const ar::Spec le1 = ar::resolve_slot<ar::SpectrumSemantic::ILLUMINANT>(m1.compiled.block.emission_color, ctx.lambda_t,
+                                                                            tables.observer) *
+                         ar::Real(m1.compiled.block.emission_luminance);
+    const double a = double(rec.geometry_opacity);
+    partial += a > 0.05 && a < 0.95;
+    for (int l = 0; l < ar::kLanes; ++l) {
+      bad += bits(float(le_surface.v[l])) != bits(float(le_emission.v[l]));
+      bad += std::fabs(double(le_emission.v[l]) - a * double(le1.v[l])) > 1e-6 * double(le1.v[l]) + 1e-12;
+    }
+  }
+  CHECK(bad == 0u);
+  CHECK(partial > 100u);  // the opacities compared are fractional
+}
+
+TEST_CASE("compiler_outputs/opaque shadow entry once per material") {
+  // A non-opaque material carries one NODE_APPROXIMATED entry saying its shadows are opaque (camera
+  // and indirect rays pass through it; transparent shadows are M2); each of two such materials of
+  // the same node types has exactly one, and an opaque material none.
+  const std::string want = "opacity: shadow rays treat this material as opaque (transparent shadows are M2)";
+  auto shadow_entries = [&](const MaterialOutput& m) {
+    return std::count_if(m.entries.begin(), m.entries.end(), [&](const auto& e) {
+      return e.code == AR_REPORT_NODE_APPROXIMATED && e.detail == want;
+    });
+  };
+  for (float a : {0.25f, 0.75f}) {
+    GB g;
+    g.store(g.add(Op::CONST_F32, {a}), ar::RecordSlot::geometry_opacity);
+    g.op2(Op::EMIT_LE, g.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), g.add(Op::CONST_F32, {1.0f}));
+    const MaterialOutput m = g.compile();
+    REQUIRE((m.flags & ar::NON_OPAQUE) != 0u);
+    CHECK(shadow_entries(m) == 1);
+  }
+  GB per;
+  per.store(channel(per, tex(per), 0), ar::RecordSlot::geometry_opacity);
+  CHECK(shadow_entries(per.compile()) == 1);
+  CHECK(shadow_entries(roughness(0.5f)) == 0);
 }
 
 }  // TEST_SUITE("fast")

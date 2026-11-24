@@ -621,6 +621,72 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
   return true;
 }
 
+// Emission inside the opacity mix (0005 item 4: top = mix(transparent, surface, opacity), the
+// emission under the surface): every EMIT_LE strength becomes strength x a, a new MUL_F32 node, so
+// the hit, the emission entry that NEE on an emissive triangle runs and the emission estimate all
+// read a x Le from one program, and the kernel scales nothing again. A per-point opacity is the
+// store's own source, computed once in the emission segment and kept live for the store (item 38);
+// a constant one is the clamped value the block holds, folded into the product (a lone constant
+// emission then lands in the block's luminance as before). An opacity of exactly 1 changes nothing.
+// A NaN constant is left to the store's own rejection.
+// Ref: docs/decisions/0005-material-model.md items 4, 38, 43; third_party/_cache/refs/
+// openpbr-781573a80cb2 index.html "Opacity / Transparency" (M_PBR = mix(S_ambient, M_surface,
+// geometry_opacity)) and reference/open_pbr_surface.mtlx (the surface node takes the emission EDF
+// and opacity = geometry_opacity together).
+bool scale_emission_by_opacity(Work& w, std::string* err) {
+  const uint32_t opacity_slot = uint32_t(ar::RecordSlot::geometry_opacity);
+  int src = -1;
+  std::vector<int> emits;
+  for (int i : w.topo) {
+    const GraphNode& nd = w.g.nodes[size_t(i)];
+    if (nd.op == Op::EMIT_LE) emits.push_back(i);
+    if (nd.op == Op::STORE_SLOT && src < 0 && uint32_t(w.g.i32[nd.i32_first]) == opacity_slot) src = nd.input[0];
+  }
+  if (src < 0 || emits.empty()) return true;
+  // A Blackbody emission is a block ref with a constant strength (items 9, 39): it cannot take a
+  // per-point factor.
+  if (!w.isc[size_t(src)])
+    for (int e : emits)
+      if (w.g.nodes[size_t(w.g.nodes[size_t(e)].input[0])].op == Op::BLACKBODY)
+        return *err = "graph node " + std::to_string(e) + " (EMIT_LE): a Blackbody emission needs a constant geometry_opacity", false;
+  int factor = src;
+  if (w.isc[size_t(src)]) {
+    const float v = w.cv[size_t(src)][0];
+    if (std::isnan(v) || v >= 1.0f) return true;  // NaN is rejected by the store; above 1 clamps to 1
+    if (v < 0.0f) {
+      GraphNode c;
+      c.op = Op::CONST_F32;
+      c.f32_first = uint32_t(w.g.f32.size());
+      c.out = VType::F32;
+      w.g.f32.push_back(0.0f);
+      w.g.nodes.push_back(c);
+      factor = int(w.g.nodes.size()) - 1;
+    }
+  }
+  for (int e : emits) {
+    GraphNode m;
+    m.op = Op::MUL_F32;
+    m.input[0] = w.g.nodes[size_t(e)].input[1];
+    m.input[1] = factor;
+    m.n_inputs = 2;
+    m.out = VType::F32;
+    w.g.nodes.push_back(m);
+    w.g.nodes[size_t(e)].input[1] = int(w.g.nodes.size()) - 1;
+  }
+  // The new nodes come last in index order, so the stable order of the old ones is kept where it
+  // can be; each is folded from its inputs, which are evaluated before it.
+  const size_t old_n = w.isc.size();
+  w.topo = stable_topo(w.g);
+  w.isc.resize(w.g.nodes.size(), 0);
+  w.cv.resize(w.g.nodes.size(), Vec3{0.0f, 0.0f, 0.0f});
+  for (int i : w.topo) {
+    if (size_t(i) < old_n) continue;
+    w.isc[size_t(i)] = fold(w, i, &w.cv[size_t(i)], err);
+    if (!err->empty()) return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means,
@@ -629,7 +695,7 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
   Work w;
   w.table = &table;
   if (!parse_graph(desc, &w.g, &res.error)) return res;
-  const size_t n = w.g.nodes.size();
+  size_t n = w.g.nodes.size();
   for (size_t i = 0; i < n; ++i)
     if (w.g.nodes[i].op == Op::VOLUME_COEFFS)
       return res.error = "graph node " + std::to_string(i) + " (VOLUME_COEFFS): a volume term has no surface meaning", res;
@@ -650,6 +716,8 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
     if (w.g.nodes[i].child != 0)
       return res.error = "graph node " + std::to_string(i) + " names child " + std::to_string(w.g.nodes[i].child) +
                          " but the graph has no Mix Shader", res;
+  if (!scale_emission_by_opacity(w, &res.error)) return res;
+  n = w.g.nodes.size();
   int emit_count = 0;
   for (const GraphNode& nd : w.g.nodes) emit_count += nd.op == Op::EMIT_LE;
   std::vector<char> written(size_t(ar::RecordSlot::COUNT_), 0), is_root(n, 0), is_emit_root(n, 0), is_opacity_root(n, 0);
@@ -1046,6 +1114,11 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
   finish(&m);
   if (m.compiled.clamp_flags != 0) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "RGB clamped");
   if (m.compiled.opacity_clamped) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity clamped");
+  // Camera and indirect rays pass through by the opacity decision in shade_surface; shadow rays
+  // block on any hit (TERMINATE_ON_FIRST_HIT | DISABLE_ANYHIT, no Embree filter), so the material's
+  // shadows are those of an opaque surface (0004 D4's pass-through needs the M2 shadow pass).
+  if ((m.flags & ar::NON_OPAQUE) != 0u)
+    add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity: shadow rays treat this material as opaque (transparent shadows are M2)");
   set_medium_fields(&m, medium_priority);
   for (uint32_t key : m.compiled.missing_images)
     add_entry(&m, AR_REPORT_IMAGE_UNREADABLE, "image key " + std::to_string(key) + " is not set");

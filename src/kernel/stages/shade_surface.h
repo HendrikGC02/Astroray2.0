@@ -2,9 +2,17 @@
 // shade_surface (ShadeKind::Common): a camera path's surface hit. In stage order, as Cycles'
 // integrate_surface: build the shading context from the hit, run the material's surface entry
 // into the OpenPBR record (a CONSTANT_SURFACE material only resolves its slots), add the emission
-// the path sees with its MIS weight, write the primary-hit AOVs, then the total bounce limit, one
-// light sample (NEE) emitted as a shadow item, a sample of the lobe stack, Russian roulette and
-// the next ray.
+// the path sees with its MIS weight, decide between the surface and an opacity null event, write
+// the primary-hit AOVs, then the total bounce limit, one light sample (NEE) emitted as a shadow
+// item, a sample of the lobe stack, Russian roulette and the next ray.
+// Alpha pass-through (0002 D11: camera and indirect rays never run any-hit; 0004 D3, D14): with
+// u the event's lobe-choice uniform after the Mix selection, u >= a (a the record's
+// geometry_opacity, of the selected child, 0005 item 38) is a null event that re-queues
+// intersect_closest from just past the hit with the transparent counter and event index advanced
+// (surface_pass_through); u < a takes the surface with u / a as its lobe choice. Le already
+// carries a: the compiler multiplies the emission by the opacity, so the hit, NEE on this
+// triangle and the emission estimate read one a x Le and nothing scales it here. Shadow rays stay
+// opaque to such materials (transparent shadows are M2); the compiler reports that per material.
 // Emission MIS (0004 D1, integrator/mis.h): emission reached by a BSDF ray after a non-delta
 // bounce is weighted against NEE with pmf(ctx_prev, light) pdf_li(ctx_prev, wi), the previous
 // vertex's context rebuilt from prev_ng, prev_ns and prev_dist; at the first vertex or after a
@@ -108,6 +116,49 @@ AR_FN Real2 triangle_barycentrics(Real3 a, Real3 b, Real3 c, Real3 p) {
 // The far end of an unbounded shadow segment toward an infinite light.
 inline constexpr float kShadowUnbounded = 0x1.fffffep+127f;
 
+// The opacity decision of a hit (0005 item 4: top = mix(transparent, surface, opacity)), on the
+// event's lobe-choice uniform u as the surface entry's Mix selection left it (0004 D14: Mix,
+// opacity and lobe choice share one uniform). With a = clamp(opacity, 0, 1), OpenPBR's defined
+// range of geometry_opacity, u >= a is the null event (true). Otherwise the surface is taken and u
+// becomes u / a, again uniform on [0, 1) for the lobe choice, kept below 1 as BRANCH_MIX keeps it.
+// Ref: pbrt-v4 src/pbrt/util/sampling.h SampleDiscrete (uRemapped, OneMinusEpsilon; Apache-2.0);
+// docs/decisions/0005-material-model.md items 4, 38; 0004 D14.
+AR_FN bool opacity_null_event(Real opacity, float* u) {
+  const float a = opacity > Real(0) ? (opacity < Real(1) ? float(opacity) : 1.0f) : 0.0f;
+  if (!(*u < a)) return true;
+  // a > u >= 0 here; the select keeps a constant-folded opacity of 0 from reading as a division by 0.
+  const float r = *u / (a > 0.0f ? a : 1.0f);
+  *u = r < kBranchOneMinusEpsilon ? r : kBranchOneMinusEpsilon;
+  return false;
+}
+
+// The null event of an opacity pass-through (0004 D3): only the transparent counter and the event
+// index advance (the next vertex's uniforms are a new block, 0004 D14); direction, flags, beta,
+// r_u, r_l and the previous vertex stay. The ray leaves from just past the hit and prev_dist grows
+// by the distance the origin moved, so ray_o - prev_dist ray_d is still the previous scattering
+// vertex (as shade_light's crossing). A path that arrives with the transparent counter at its limit
+// ends TRANSPARENT_LIMIT instead of passing; its emission was already added (Blender: the next
+// surface after the limit emits and terminates).
+// Ref: Cycles src/kernel/integrator/path_state.h path_state_next (transparent_bounce, a transparent
+// label keeps the flags; Apache-2.0) and shade_surface.h integrate_surface_bsdf_bssrdf_bounce
+// (a transparent bounce only moves the ray start); docs/decisions/0004-integrator.md D3, D14;
+// 0002 D11; 0003 d19 (prev_dist), d23.
+AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P, Real3 Ng) {
+  U16x6 b = ps_bounces(kg, slot);
+  if (b.v[5] >= kg.session.max_bounces[5]) {
+    path_end(kg, slot, Term::TRANSPARENT_LIMIT);
+    return;
+  }
+  b.v[5] = uint16_t(b.v[5] + 1u);
+  ps_bounces(kg, slot) = b;
+  ps_event_index(kg, slot) = uint16_t(ps_event_index(kg, slot) + 1u);
+  const Real3 o = ps_ray_o(kg, slot), d = ps_ray_d(kg, slot);
+  const Real3 o_next = offset_past_surface(P, Ng, d);
+  ps_prev_dist(kg, slot) = ps_prev_dist(kg, slot) + dot(o_next - o, d) / dot(d, d);
+  ps_ray_o(kg, slot) = o_next;
+  ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::INTERSECT_CLOSEST);
+}
+
 AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
   const uint32_t slot = load_ro(kg.main_queue + step.start + item);
   AR_ASSERT((ps_flags(kg, slot) & PATH_KIND) == 0u);
@@ -148,6 +199,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   // Mix Shader's BRANCH_MIX rescales it, and the lobe choice below uses what it left (0005 items
   // 31, 38; 0004 D14). Without a Mix the program leaves it alone.
   float uc = float(camera_path_draw(kg, sample, event_dim(ps_event_index(kg, slot), EV_LOBE_CHOICE)));
+  Real alpha = Real(1);  // the hit's geometry_opacity, read from the record after the surface entry
   for (uint32_t phase = 0;; ++phase) {
     // One site builds the context and evaluates the material, for both phases: phase 0 the hit
     // material's surface entry (record and emission), phase 1 the light material's emission entry
@@ -172,16 +224,12 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
       const uint32_t entry = program ? load_ro(prog + (phase == 0u ? 0u : 2u)) : 0u;
       ok = run_entry(prog, entry, &regs, ctx, *kg.tables, phase == 0u ? &rec : nullptr, &le,
                      phase == 0u ? &uc : nullptr) == VmStatus::OK;
+      if (phase == 0u) alpha = rec.geometry_opacity;
     }
     if (phase != 0u) break;
 
     P = ctx.P, Ng = ctx.Ng, N = ctx.N, wo = ctx.wo;
     flags = ctx.front_face != 0u ? (flags | FRONT_FACE) : (flags & ~FRONT_FACE);
-    // Written even when the VM failed (the AOVs name the hit), whenever the material tables exist.
-    if (s.material_pass_index != nullptr && s.material_headers != nullptr && total == 0u) {
-      const uint32_t index = kg.session.samples_done + sample % kg.session.samples_per_pass;
-      film_primary_aov(kg, sample, index, &flags, P, N, ctx.uv[0].x, ctx.uv[0].y, load_ro(s.material_pass_index + mat));
-    }
     Spec contribution = spec_fill(Real(0));
     const uint32_t hooks = kg.session.test_hooks;
     const bool after_scatter = total > 0u && !arrived_specular;
@@ -204,14 +252,27 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
       contribution = le * ps_beta(kg, slot) *
                      (radiance_scale(kg) * mis_emitter_scale(ps_r_u(kg, slot), weighted ? ps_r_l(kg, slot) : Spec{}, p_light, weighted));
     }
-    if (!ok || !is_finite(contribution)) {
+    // A NaN opacity has no decision: like a VM error it fails the sample.
+    const bool valid = ok && is_finite(contribution) && alpha == alpha;
+    if (valid) sample_add(kg, sample, contribution);
+    // The opacity decision after the emission (a hit's Le already carries the opacity: the compiler
+    // scales it, 0005 item 38), before the AOVs and the total limit, so a pass-through at the total
+    // limit still passes, writes no AOV and leaves the flags (FRONT_FACE included) as they were.
+    if (valid && opacity_null_event(alpha, &uc)) {
+      surface_pass_through(kg, slot, P, Ng);
+      return;
+    }
+    // Written even when the VM failed (the AOVs name the hit), whenever the material tables exist.
+    if (s.material_pass_index != nullptr && s.material_headers != nullptr && total == 0u) {
+      const uint32_t index = kg.session.samples_done + sample % kg.session.samples_per_pass;
+      film_primary_aov(kg, sample, index, &flags, P, N, ctx.uv[0].x, ctx.uv[0].y, load_ro(s.material_pass_index + mat));
+    }
+    ps_flags(kg, slot) = flags;
+    if (!valid) {
       sample_mark_invalid(kg, sample);
-      ps_flags(kg, slot) = flags;
       path_end(kg, slot, Term::INVALID);
       return;
     }
-    sample_add(kg, sample, contribution);
-    ps_flags(kg, slot) = flags;
 
     if (total >= kg.session.max_bounces[0]) {
       path_end(kg, slot, Term::MAX_BOUNCE);
