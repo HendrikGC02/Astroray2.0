@@ -3,8 +3,8 @@
 // the interpreter on the CPU (float) and on the GPU built without FMA contraction, on 10^5 fixed
 // host-generated inputs; every program's result (registers, Le, record fields) agrees within
 // 1e-6 relative error, and the largest error per opcode is printed. The programs cover every
-// opcode; TEX_IMAGE runs without an image table (the missing-image path), and its filtering
-// agreement is test_tex_image_agree.cpp.
+// opcode; TEX_IMAGE and TEX_ENVIRONMENT run without an image table (the missing-image path), and
+// their filtering and mapping agreement are test_tex_image_agree.cpp and test_shade_background_agree.cpp.
 // Ref: docs/decisions/0005-material-model.md Verification 6; docs/decisions/0002-kernel-
 // architecture.md D12; 0009 d17.
 #include <doctest.h>
@@ -130,6 +130,12 @@ std::vector<Named> programs() {
                                              .op(Op::END)});
   // No image table here: every slot is missing and samples magenta (tex_agree.cu covers filtering).
   p.push_back({"TEX_IMAGE", Prog().op(Op::TEX_IMAGE, 16, 0, 0, {0u, 0u}).op(Op::TEX_IMAGE, 19, 0, 0, {5u, 3u}).op(Op::END)});
+  // The same without a table for the environment lookup (the direction mapping and the image are
+  // agreed in test_shade_background_agree.cpp); slot 5 is missing too.
+  p.push_back({"TEX_ENVIRONMENT", Prog()
+                                      .op(Op::TEX_ENVIRONMENT, 16, 0, 0, {0u, 0u})
+                                      .op(Op::TEX_ENVIRONMENT, 19, 0, 0, {5u, 1u})
+                                      .op(Op::END)});
   p.push_back({"JMP", Prog()
                           .op(Op::CONST_F32, 16, 0, 0, {fb(1.0f)})
                           .op(Op::JMP, 0, 0, 0, {4u})
