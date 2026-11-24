@@ -24,3 +24,4 @@ Progress:
 - Rebase on 158 still to do (ops.def, probe_m1.cu, test_vm.cpp opcode numbers).
 - lead ruling 2026-11-25: Blackbody kept as built (Blender folds a constant one; no raw node_tree read; 0005 item 36 says so); colour into float RGBA only; V10 full loop wired into Get-ArFullBlenderSuites (tools/lib/blender.ps1), gate ten-row variant not added (a Blender start costs more than 1 s); three extra cases added to the Canary line.
 - rebased on 158 (1a60d1f); COLOR_TO_F32 is op 24, COUNT_ 25; canary refreshed and PASS; fast, vm/opsdef/compiler_fold, GPU vm_agree pass. Paused at the lead's request before check gate and the headless and test_materials reruns.
+- rebased on 176 (404840c): gate PASS 158.1 s, run_all 114 OK, test_materials 14 OK; fast fails B-08/B-12 on time only under machine load (passed 9.1 s earlier).
