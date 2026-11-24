@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0004 D3/D14 with D1 (RULINGS.md 77): an emissive quad of opacity 0.5 over a grey Lambertian
+# plane, rendered with MIS (on), BSDF sampling only (off) and light sampling only (light_only). The
+# quad's Le is a x Le from one compiled program at a BSDF hit and in NEE (0005 item 38), and a BSDF
+# ray that passes it continues to the black world, so the three estimators are unbiased for one
+# image and must agree within their joint SE, per 8x8 pixel block and as the image mean
+# (truths.py mode_agreement). An unscaled Le at the BSDF hit against a x Le in NEE moves on and off
+# apart.
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+[truth]
+formula = "mode_agreement"
+pairs = [["on", "off"], ["on", "light_only"]]
+# The harness renders size x size at spp and tests block x block pixel blocks (tools/analytic.py
+# comparison_plan): 64 blocks of 8x8 pixels hold 4096 samples each.
+size = 64
+spp = 64
+block = 8
+rho = 0.8
+# Metres; the quad faces the plane between it and the camera, which sees the quad's back.
+quad = { position = [0.3, -0.2, 0.8], size = 1.0, strength = 4.0, opacity = 0.5 }
+plane_size = 6.0
+camera_height = 3.0
+focal_mm = 50.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "z_se"
