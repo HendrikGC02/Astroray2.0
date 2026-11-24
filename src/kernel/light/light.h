@@ -19,6 +19,7 @@
 #include "../core/spectrum.h"
 #include "../core/vec.h"
 #include "../portability.h"
+#include "../spectral/planck.h"
 #include "light_record.h"
 
 #define AR_LIGHT_TYPES_DEFINED 1
@@ -244,13 +245,24 @@ AR_FN LightRecord light_make_area(LightType type, Real3 pos, Real3 axis_x, Real3
 
 AR_FN bool light_finite(float x) { return x - x == 0.0f; }
 
-// The emission's own scale sigma for the radiance bounds below: CONSTANT p[0], RGB p[3]. A
-// BLACKBODY's is 1, since its p[1] = scale x 1 / Y(Planck(T)) already folds the colour scale into
-// a spectrum of display Y = scale (0003 d11), so the lamp's radiance is P x scale / (4 pi^2 r^2)
-// in luminance whatever the temperature.
+// The brightest value of a BLACKBODY spectrum p1 x Planck(lambda, T) over the observer's range, at
+// the Wien wavelength (b = 2.897771955e6 nm K, CODATA 2018) clamped to that range, in double. The
+// host's make_blackbody_ref bounds the same number against FLT_MAX, so there is one source for it.
+AR_FN double blackbody_peak(double temperature_kelvin, double p1) {
+  const double lo = double(kObsLambdaMin), hi = double(kObsLambdaMin + kObsSamples - 1);
+  double nm = double(2897771.955) / temperature_kelvin;
+  nm = nm < lo ? lo : (nm > hi ? hi : nm);
+  return p1 * planck_radiance_t<double>(nm, temperature_kelvin);
+}
+
+// The emission's own scale sigma for the radiance bounds below, the spectrum's largest value: a
+// CONSTANT's p[0], an RGB's p[3], a BLACKBODY's p[1] x Planck at its peak. A BLACKBODY's p[1] holds
+// the colour scale x 1 / Y(Planck(T)), which grows without bound with the scale and with a cold T,
+// so a radius that is safe for sigma 1 could still overflow the lamp's radiance to inf, which the
+// sphere sampler would turn into a silently dark lamp.
 AR_FN double emission_sigma(const SpectrumRef& e) {
   if (e.kind == uint8_t(SpectrumKind::CONSTANT)) return double(e.p[0]);
-  if (e.kind == uint8_t(SpectrumKind::BLACKBODY)) return double(1.0);
+  if (e.kind == uint8_t(SpectrumKind::BLACKBODY)) return blackbody_peak(double(e.p[0]), double(e.p[1]));
   return double(e.p[3]);
 }
 

@@ -64,6 +64,7 @@ std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const
   // the function the material compiler uses (0003 d11); its rgb field is ignored. TABLE is M4 and
   // renders as the colour's RGB when given, else white.
   ar::SpectrumRef color;
+  double bb_t = 0.0, bb_scale = 0.0, bb_y_norm = 1.0;  // the BLACKBODY colour's inputs, re-checked against the strength
   if (d.color.kind == AR_SPECTRUM_BLACKBODY) {
     const double t = double(d.color.temperature), scale = double(d.color.scale);
     if (!std::isfinite(d.color.temperature) || !(t > 0.0))
@@ -82,6 +83,7 @@ std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const
       std::snprintf(kelvin, sizeof kelvin, "%g", double(d.color.temperature));
       approx("light " + std::to_string(key) + " BLACKBODY colour at " + kelvin + " K: no visible radiance, not normalised");
     }
+    bb_t = t, bb_scale = scale, bb_y_norm = y_norm;
     try {
       color = make_blackbody_ref(t, scale, y_norm, 1.0);
     } catch (const std::invalid_argument& e) {
@@ -141,6 +143,15 @@ std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const
     }
   }
   lamp->record.strength = float(double(d.power) * (d.normalize ? 1.0 : cycles_area));
+  // The same float-range check the compiler runs with its emission strength: the lamp's brightest
+  // value is its strength x the spectrum's peak. The record's own radius check covers the geometry.
+  if (d.color.kind == AR_SPECTRUM_BLACKBODY) {
+    try {
+      make_blackbody_ref(bb_t, bb_scale, bb_y_norm, double(lamp->record.strength));
+    } catch (const std::invalid_argument& e) {
+      throw std::invalid_argument(std::string("light power and color: ") + e.what());
+    }
+  }
   lamp->record.light_group = uint8_t(d.light_group);
   lamp->record.visibility = d.visibility;
   lamp->visibility = d.visibility & kLampRayVisibility;  // the instance never carries the shadow bit

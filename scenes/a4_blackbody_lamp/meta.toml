@@ -10,9 +10,9 @@ units = "m"
 spectra = ["blackbody"]
 assets = []
 single_witness = false
-# D6's lamp rows hold the irradiance to 0.5%. eps_sys is absolute, as every eps_sys is: the
-# brightest pixel (under the lamp) is 1.01 at this power, so 0.005 is 0.5% of it, and it covers the
-# float Planck evaluation and the 1 nm observer sum of the truth.
+# eps_sys is D6's 0.5% row for the lamp irradiance (0004 verification table), not a bound on float
+# error. It is absolute, as every eps_sys is: the brightest pixel (under the lamp) is 1.01 at this
+# power, so 0.005 is 0.5% of it.
 eps_sys = 0.005
 [truth]
 formula = "lamp_over_plane"

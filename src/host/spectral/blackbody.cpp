@@ -3,14 +3,13 @@
 // shipped CMF table), d25 (Planck).
 #include "host/spectral/blackbody.h"
 
-#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <string>
 
 #include "host/data_resource.h"
-#include "kernel/spectral/planck.h"
+#include "kernel/light/light.h"
 
 namespace astroray::host {
 
@@ -44,9 +43,7 @@ ar::SpectrumRef make_blackbody_ref(double temperature_kelvin, double scale, doub
   // The stored scale and the brightest band value must fit a float, else the kernel would emit inf
   // or NaN (a cold T makes 1 / Y huge; a huge scale does the same).
   const double p1 = scale * y_norm;
-  // Wien displacement, b = 2.897771955e6 nm K (CODATA 2018): where the band is brightest.
-  const double wien_nm = std::min(830.0, std::max(360.0, 2897771.955 / temperature_kelvin));
-  const double peak = p1 * ar::planck_radiance_t<double>(wien_nm, temperature_kelvin) * strength;
+  const double peak = ar::blackbody_peak(temperature_kelvin, p1) * strength;
   if (!(p1 <= fmax) || !(peak <= fmax))
     throw std::invalid_argument("the scale and 1 / Y(Planck(T)) overflow a float at this temperature");
   ar::SpectrumRef r = {};

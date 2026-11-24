@@ -311,6 +311,23 @@ TEST_CASE("lamp_blackbody/validation errors") {
   CHECK_THROWS_AS(build(6500.0f, 3.4e38f), std::invalid_argument);
 }
 
+TEST_CASE("lamp_blackbody/radiance overflow is refused") {
+  Fixture fx;
+  // A BLACKBODY's spectral peak is p[1] x Planck at the Wien wavelength, about the scale at 6500 K, so
+  // the sphere's radius check must see it: L = P peak / (4 pi^2 r^2) = 1e6 x 1e30 / 4e-5 overflows a
+  // float, and a record that passed would render dark (its Le would be inf).
+  ar_light_desc sphere = blackbody(6500.0f, 1.0e30f, 1.0e6f);
+  sphere.size_x = 1.0e-3f;
+  CHECK_THROWS_AS(build_lamp(1, sphere, fx.table()), std::invalid_argument);
+  sphere.color.scale = 1.0f;  // the same lamp at scale 1 is fine
+  CHECK_NOTHROW(build_lamp(1, sphere, fx.table()));
+  // The strength reaches the same host peak check as the compiler's: P peak must fit a float.
+  ar_light_desc point = blackbody(6500.0f, 1.0e30f, 1.0e6f);
+  CHECK_NOTHROW(build_lamp(1, point, fx.table()));
+  point.power = 1.0e10f;
+  CHECK_THROWS_AS(build_lamp(1, point, fx.table()), std::invalid_argument);
+}
+
 TEST_CASE("lamp_blackbody/no visible radiance raises one entry") {
   Fixture fx;
   ar_light_desc d = blackbody(3.0f, 2.0f, 7.0f);
