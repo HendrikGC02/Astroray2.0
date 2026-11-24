@@ -443,40 +443,102 @@ void resolve_images(Work* w, const std::vector<char>& used, const ImageSlotFn* s
   }
 }
 
-// A graph with Mix Shaders (0005 item 38): every STORE_SLOT belongs to the child its `child`
-// parameter names, and the BRANCH_MIX nodes form one tree over the children (graph.h). The surface
-// entry is (a) the run before the selection: the mix factors and every value more than one child
-// reads, computed once and kept live; (b) the selection, BRANCH_MIX nodes in preorder over the
-// tree, each falling through to its first subtree and jumping to its second; (c) one block per
-// child in tree order, its constants as CONST_STORE code, ending in JMP to END (the last block
-// falls into END). The constant block keeps the OpenPBR defaults, so the record a block leaves is
-// its child's alone. Emission and opacity under a Mix are not compiled yet and are rejected, as is
-// a dispersive IOR, which is a block SpectrumRef no block code can store.
-bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
-  const size_t n = w.g.nodes.size();
+// The estimate term of one emission (0005 item 43): the colour's mean (a white spectrum for the
+// per-point bound) and the strength's mean times `weight`, the estimate of the factors that scale
+// the strength (1 when it is not known, the bound of item 43). Nothing is added for a zero term.
+void add_emission_term(const Work& w, int colour, int strength, float weight, MeanCtx* mx, std::vector<EmissionTerm>* out) {
+  EmissionTerm term;
+  const ar::SpectrumSemantic esem = ar::kSlotSemantic[int(ar::Slot::EMISSION_COLOR)];
+  const Vec3 mean = estimate_input(w, colour, mx);
+  uint32_t ignored = 0;  // the clamp is reported from the stored colour, in the block or the program
+  if (!w.isc[size_t(colour)] && mean[0] == 1.0f && mean[1] == 1.0f && mean[2] == 1.0f)
+    term.color = ar::make_const_ref(esem, ar::Real(1));  // the per-point upper bound: a white spectrum
+  else
+    ar::make_rgb_ref(*w.table, ar::Rgb{{ar::Real(mean[0]), ar::Real(mean[1]), ar::Real(mean[2])}}, esem, &term.color, &ignored);
+  const bool zero = !(mean[0] > 0.0f) && !(mean[1] > 0.0f) && !(mean[2] > 0.0f);
+  term.strength = estimate_input(w, strength, mx)[0] * weight;
+  if (!zero && term.strength > 0.0f) out->push_back(term);
+}
+
+// The nodes the roots need: a constant becomes one instruction, so its inputs are not needed.
+std::vector<char> mark_from(const Work& w, const std::vector<int>& roots) {
+  std::vector<char> m(w.g.nodes.size(), 0);
+  std::vector<int> stack = roots;
+  while (!stack.empty()) {
+    const int i = stack.back();
+    stack.pop_back();
+    if (m[size_t(i)]) continue;
+    m[size_t(i)] = 1;
+    if (w.isc[size_t(i)]) continue;
+    for (int s = 0; s < w.g.nodes[size_t(i)].n_inputs; ++s) stack.push_back(w.g.nodes[size_t(i)].input[s]);
+  }
+  return m;
+}
+
+// A graph with Mix Shaders (0005 item 38): every STORE_SLOT and EMIT_LE belongs to the child its
+// `child` parameter names, and the BRANCH_MIX nodes form one tree over the children (graph.h).
+// A child is one of three kinds: Emission (EMIT_LE and no store), Transparent (one constant
+// geometry_opacity store and nothing else) or BSDF (a store to any other slot, or no node at all:
+// the OpenPBR defaults); anything else is rejected. Emission and Transparent children carry no
+// BSDF and are pruned from the selection: a mix whose two subtrees both hold a BSDF child stays a
+// BRANCH_MIX, a mix with one such subtree collapses into it, a mix with none selects nothing.
+// Weights are by socket (first input 1 - f, second f) and w_i is their product along the child's
+// path. A BSDF child i is selected with p_i, the product over its branching mixes, and must give
+// w_i a_i f_i in expectation while its null event estimates T = sum_j w_j (1 - a_j) over every
+// child. Pruned children are opaque and black (Emission) or transmit 1 - a (Transparent), so the
+// collapsed mixes k on i's path (outermost first, own weight s_k, pruned sibling transmitting
+// T_k) give the survivor the opacity a'_i and the closure weight
+//   1 - a'_i = tau_i + s_i (1 - a_i),  tau_i = sum_k (1 - s_k) T_k prod_{j outer than k} s_j,
+//   s_i = prod_k s_k,  closure_weight_i = s_i a_i / a'_i = w_i a_i / (p_i a'_i),
+// which is w_i / p_i = s_i with Emission siblings and a_i = 1, and a'_i = s_i a_i with closure
+// weight 1 under white Transparent siblings (item 38's two rules). Constant cases fold on the
+// host; any other per-point case needs a divide the VM lacks and is rejected.
+// The surface entry is (a) the run before the selection: the branching factors, the emission
+// segment Le = sum_i w_i a_i Le_i (a_i: emission sits inside the opacity mix, items 4 and 38) and
+// every value more than one child reads, computed once and kept live; (b) the selection, BRANCH_MIX
+// nodes in preorder; (c) one block per BSDF child with its constants as CONST_STORE code, ending in
+// JMP to END (the last block falls into END). The constant block keeps the OpenPBR defaults but a
+// constant effective opacity a_eff = 1 - T. The emission entry is (a)'s emission alone; the opacity
+// entry stores a per-point a_eff. With no BSDF child the run stores closure_weight 0.
+// A dispersive IOR is a block SpectrumRef no block code can store, and a Blackbody emission a block
+// ref with a constant strength: both are rejected under a Mix.
+// Ref: docs/decisions/0005-material-model.md items 4, 31, 32, 38, 43; pbrt-v4 src/pbrt/materials.h
+// MixMaterial (selection by weight) and src/pbrt/util/sampling.h SampleDiscrete; Cycles
+// src/kernel/svm/closure.h svm_node_mix_closure (weights by socket, Apache-2.0).
+bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, CompileResult* res) {
+  using RS = ar::RecordSlot;
   const auto& i32 = w.g.i32;
+  const uint32_t opacity_slot = uint32_t(RS::geometry_opacity);
+  auto slot_of = [&](int store) { return uint32_t(i32[w.g.nodes[size_t(store)].i32_first]); };
   std::map<int32_t, int> mix_of_tag;
-  std::map<int, std::vector<int>> stores_of;  // child id -> its STORE_SLOT nodes, topological order
+  std::map<int, std::vector<int>> stores_of, emits_of;  // child id -> its nodes, topological order
   for (int i : w.topo) {
     const GraphNode& nd = w.g.nodes[size_t(i)];
     const std::string who = "graph node " + std::to_string(i) + ": ";
     if (nd.op == Op::BRANCH_MIX && !mix_of_tag.emplace(i32[nd.i32_first], i).second)
       return res->error = who + "Mix Shader tag " + std::to_string(i32[nd.i32_first]) + " is used twice", false;
-    if (nd.op == Op::EMIT_LE) return res->error = who + "an emission in a Mix Shader graph is not supported yet", false;
+    if (nd.op == Op::EMIT_LE) {
+      if (w.g.nodes[size_t(nd.input[0])].op == Op::BLACKBODY)
+        return res->error = who + "a Blackbody emission cannot sit under a Mix Shader (its strength must stay constant)", false;
+      if (w.isc[size_t(nd.input[1])] && !(w.cv[size_t(nd.input[1])][0] >= 0.0f))
+        return res->error = "EMIT_LE strength must not be negative", false;
+      emits_of[nd.child].push_back(i);
+      continue;
+    }
     if (nd.op != Op::STORE_SLOT) continue;
-    const uint32_t slot = uint32_t(i32[nd.i32_first]);
-    if (slot == uint32_t(ar::RecordSlot::geometry_opacity))
-      return res->error = who + "geometry_opacity in a Mix Shader graph is not supported yet", false;
-    if (slot == uint32_t(ar::RecordSlot::closure_weight))
+    const uint32_t slot = slot_of(i);
+    if (slot == uint32_t(RS::closure_weight))
       return res->error = who + "closure_weight is set by the selection, not stored by a graph", false;
     if (w.g.nodes[size_t(nd.input[0])].op == Op::CAUCHY_ABBE)
       return res->error = who + "a dispersive IOR cannot be stored per Mix Shader child", false;
     if (!w.isc[size_t(nd.input[0])] && w.g.nodes[size_t(nd.input[0])].out == VType::F32 && spectral_slot(slot) &&
-        slot != uint32_t(ar::RecordSlot::specular_ior))
+        slot != uint32_t(RS::specular_ior))
       return res->error = who + "a run-time scalar cannot be stored in a colour slot", false;
+    if (slot == opacity_slot && w.isc[size_t(nd.input[0])] && std::isnan(w.cv[size_t(nd.input[0])][0]))
+      return res->error = "geometry_opacity is NaN", false;
     std::vector<int>& list = stores_of[nd.child];
     for (int o : list)
-      if (uint32_t(i32[w.g.nodes[size_t(o)].i32_first]) == slot)
+      if (slot_of(o) == slot)
         return res->error = who + "record slot " + std::to_string(slot) + " is stored twice in child " + std::to_string(nd.child), false;
     list.push_back(i);
   }
@@ -494,18 +556,22 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
         if (++tag_refs[t] > 1) return res->error = who + "Mix Shader tag " + std::to_string(t) + " is named twice", false;
       }
     }
-  for (const auto& [child, list] : stores_of)
-    if (child_refs.count(child) == 0)
-      return res->error = "child " + std::to_string(child) + " stores record slots but no Mix Shader names it", false;
+  for (const auto* nodes_of : {&stores_of, &emits_of})
+    for (const auto& [child, list] : *nodes_of)
+      if (child_refs.count(child) == 0)
+        return res->error = "child " + std::to_string(child) + " stores record slots but no Mix Shader names it", false;
   std::vector<int> roots;
   for (const auto& [tag, m] : mix_of_tag)
     if (tag_refs.count(tag) == 0) roots.push_back(m);
   if (roots.size() != 1) return res->error = "a Mix Shader graph needs exactly one root Mix, found " + std::to_string(roots.size()), false;
-  // Children in layout order (first subtree before second), and the mixes the walk reached.
+  const int32_t root_ref = mix_ref(i32[w.g.nodes[size_t(roots[0])].i32_first]);
+  auto mix_node = [&](int32_t ref) { return mix_of_tag[-1 - ref]; };
+  auto sub_ref = [&](int32_t ref, int k) { return i32[w.g.nodes[size_t(mix_node(ref))].i32_first + 1u + uint32_t(k)]; };
+  // Children in preorder (first subtree before second), and the mixes the walk reached.
   std::vector<int> order;
   size_t mixes_seen = 0;
   {
-    std::vector<int32_t> walk{mix_ref(i32[w.g.nodes[size_t(roots[0])].i32_first])};
+    std::vector<int32_t> walk{root_ref};
     while (!walk.empty()) {
       const int32_t ref = walk.back();
       walk.pop_back();
@@ -514,17 +580,234 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
         continue;
       }
       if (++mixes_seen > mix_of_tag.size()) break;
-      const GraphNode& m = w.g.nodes[size_t(mix_of_tag[-1 - ref])];
-      walk.push_back(i32[m.i32_first + 2]);  // popped after the first subtree
-      walk.push_back(i32[m.i32_first + 1]);
+      walk.push_back(sub_ref(ref, 1));  // popped after the first subtree
+      walk.push_back(sub_ref(ref, 0));
     }
   }
   if (mixes_seen != mix_of_tag.size()) return res->error = "Mix Shader tags form a cycle or a second tree", false;
-  std::map<int, int> inst_of;  // child id -> instance (1-based layout index)
-  for (size_t k = 0; k < order.size(); ++k) inst_of[order[k]] = int(k) + 1;
+
+  // New nodes: constants and arithmetic on constants fold at once (the interpreter's functions).
+  auto push = [&](const GraphNode& nd) {
+    w.g.nodes.push_back(nd);
+    w.isc.push_back(0);
+    w.cv.push_back(Vec3{0.0f, 0.0f, 0.0f});
+    const int i = int(w.g.nodes.size()) - 1;
+    w.isc[size_t(i)] = fold(w, i, &w.cv[size_t(i)], &res->error);
+    return i;
+  };
+  auto konst = [&](float v) {
+    GraphNode c;
+    c.op = Op::CONST_F32;
+    c.f32_first = uint32_t(w.g.f32.size());
+    c.out = VType::F32;
+    w.g.f32.push_back(v);
+    return push(c);
+  };
+  auto is_const = [&](int i, float v) { return w.isc[size_t(i)] && w.cv[size_t(i)][0] == v; };
+  auto arith = [&](Op op, int a, int b) {
+    GraphNode m;
+    m.op = op;
+    m.input[0] = a, m.input[1] = b;
+    m.n_inputs = 2;
+    m.out = VType::F32;
+    return push(m);
+  };
+  const int zero = konst(0.0f), one = konst(1.0f);
+  // The shortcuts keep a pruned Emission sibling's T = 0 an exact constant, so a per-point weight
+  // times it does not turn into code (or into a divide the VM lacks).
+  auto mul = [&](int a, int b) {
+    if (is_const(a, 1.0f)) return b;
+    if (is_const(b, 1.0f)) return a;
+    if (is_const(a, 0.0f) || is_const(b, 0.0f)) return zero;
+    return arith(Op::MUL_F32, a, b);
+  };
+  auto add = [&](int a, int b) {
+    if (is_const(a, 0.0f)) return b;
+    if (is_const(b, 0.0f)) return a;
+    return arith(Op::ADD_F32, a, b);
+  };
+  auto sub = [&](int a, int b) { return is_const(b, 0.0f) ? a : arith(Op::SUB_F32, a, b); };
+  auto new_store = [&](int child, RS slot, int src) {
+    GraphNode st;
+    st.op = Op::STORE_SLOT;
+    st.i32_first = uint32_t(w.g.i32.size());
+    w.g.i32.push_back(int32_t(slot));
+    w.g.i32.push_back(child);
+    st.input[0] = src;
+    st.n_inputs = 1;
+    st.child = child;
+    return push(st);
+  };
+  auto clamp01 = [](float v) { return std::min(std::max(v, 0.0f), 1.0f); };
+
+  // Child kinds, and each child's own opacity a_i: a constant one clamped to [0, 1] and reported
+  // as without a Mix, a per-point one unclamped (item 38: no clamp op).
+  enum class Kind { BSDF, EMISSION, TRANSPARENT };
+  std::map<int, Kind> kind_of;
+  std::map<int, int> opacity_store_of, opacity_of;  // child -> its geometry_opacity store, its a_i
+  for (int c : order) {
+    int op_store = -1;
+    bool bsdf_store = false;
+    for (int st : stores_of[c]) {
+      if (slot_of(st) == opacity_slot) op_store = st;
+      else bsdf_store = true;
+    }
+    const bool emits = !emits_of[c].empty();
+    if (op_store >= 0) {
+      const int v = w.g.nodes[size_t(op_store)].input[0];
+      if (w.isc[size_t(v)] && clamp01(w.cv[size_t(v)][0]) != w.cv[size_t(v)][0]) {
+        const int clamped = konst(clamp01(w.cv[size_t(v)][0]));  // konst may move the node array
+        w.g.nodes[size_t(op_store)].input[0] = clamped;
+        res->opacity_clamped = true;
+      }
+      opacity_store_of[c] = op_store;
+    }
+    const int src = op_store >= 0 ? w.g.nodes[size_t(op_store)].input[0] : one;
+    opacity_of[c] = src;
+    const std::string who = "Mix Shader child " + std::to_string(c) + ": ";
+    if (bsdf_store || (op_store < 0 && !emits)) {
+      kind_of[c] = Kind::BSDF;
+    } else if (op_store < 0) {
+      kind_of[c] = Kind::EMISSION;
+    } else if (!emits && w.isc[size_t(src)]) {
+      kind_of[c] = Kind::TRANSPARENT;
+      res->transparent_folded = res->transparent_folded || w.cv[size_t(src)][0] != 0.0f;
+    } else {
+      return res->error = who + (emits ? "an emission with an opacity and no BSDF store" : "a per-point opacity with no BSDF store") +
+                          " is none of the child kinds (Emission, Transparent with a constant opacity, BSDF)", false;
+    }
+  }
+  // Socket weights (1 - f, f) per mix; a constant factor clamped as BRANCH_MIX clamps it, a
+  // per-point one unclamped (no clamp op; BRANCH_MIX still clamps it for the selection).
+  std::map<int, std::array<int, 2>> side_w;
+  for (const auto& [tag, m] : mix_of_tag) {
+    int f = w.g.nodes[size_t(m)].input[0];
+    if (w.isc[size_t(f)]) {
+      const float v = w.cv[size_t(f)][0];
+      if (std::isnan(v)) return res->error = "Mix Shader tag " + std::to_string(tag) + ": the factor is NaN", false;
+      if (clamp01(v) != v) f = konst(clamp01(v));
+    }
+    side_w[m] = {sub(one, f), f};
+  }
+  std::map<int32_t, bool> has_bsdf_memo;
+  std::function<bool(int32_t)> has_bsdf = [&](int32_t ref) -> bool {
+    if (ref >= 0) return kind_of[ref] == Kind::BSDF;
+    const auto f = has_bsdf_memo.find(ref);
+    if (f != has_bsdf_memo.end()) return f->second;
+    const bool a = has_bsdf(sub_ref(ref, 0)), b = has_bsdf(sub_ref(ref, 1));
+    return has_bsdf_memo[ref] = a || b;
+  };
+  // What a pruned subtree transmits, and whether it is white Transparent children only (T = 1).
+  std::function<std::pair<int, bool>(int32_t)> transmits = [&](int32_t ref) -> std::pair<int, bool> {
+    if (ref >= 0) {
+      if (kind_of[ref] == Kind::EMISSION) return {zero, false};
+      return {sub(one, opacity_of[ref]), is_const(opacity_of[ref], 0.0f)};
+    }
+    const std::array<int, 2>& sw = side_w[mix_node(ref)];
+    const auto a = transmits(sub_ref(ref, 0)), b = transmits(sub_ref(ref, 1));
+    return {add(mul(sw[0], a.first), mul(sw[1], b.first)), a.second && b.second};
+  };
+  struct Path {
+    int w, s, tau;   // full weight; product and transmittance of the collapsed mixes so far
+    bool collapsed;  // a collapsed mix lies on the path
+    bool white;      // every pruned sibling on the path is white Transparent
+  };
+  std::map<int, Path> path_of;
+  std::function<void(int32_t, Path)> walk = [&](int32_t ref, Path p) {
+    if (ref >= 0) {
+      path_of[ref] = p;
+      return;
+    }
+    const std::array<int, 2>& sw = side_w[mix_node(ref)];
+    const bool hb[2] = {has_bsdf(sub_ref(ref, 0)), has_bsdf(sub_ref(ref, 1))};
+    for (int k = 0; k < 2; ++k) {
+      Path q = p;
+      q.w = mul(p.w, sw[k]);
+      if (hb[k] && !hb[1 - k]) {
+        const auto t = transmits(sub_ref(ref, 1 - k));
+        q.tau = add(p.tau, mul(p.s, mul(sw[1 - k], t.first)));
+        q.s = mul(p.s, sw[k]);
+        q.collapsed = true;
+        q.white = p.white && t.second;
+      }
+      walk(sub_ref(ref, k), q);
+    }
+  };
+  walk(root_ref, Path{one, one, zero, false, true});
+  if (!res->error.empty()) return false;  // a fold failed
+
+  // Emission segment: each EMIT_LE strength times w_c a_c. The estimate keeps the authored
+  // strength and multiplies by the weight's mean, so a per-point weight is bounded by 1, not the
+  // whole product.
+  struct Emit {
+    int colour, strength, weight;
+  };
+  std::vector<Emit> emitted;
+  std::vector<int> emit_nodes;
+  for (int c : order)
+    for (int e : emits_of[c]) {
+      const int weight = mul(path_of[c].w, opacity_of[c]);
+      const int strength = w.g.nodes[size_t(e)].input[1];
+      emitted.push_back({w.g.nodes[size_t(e)].input[0], strength, weight});
+      const int scaled = mul(strength, weight);  // mul may move the node array
+      w.g.nodes[size_t(e)].input[1] = scaled;
+      emit_nodes.push_back(e);
+    }
+  // The BSDF children's opacity and closure weight under collapsed mixes.
+  std::map<int, int> inst_of;  // BSDF child id -> instance (1-based layout index)
+  std::vector<int> border;     // BSDF children in layout order
+  for (int c : order) {
+    if (kind_of[c] != Kind::BSDF) continue;
+    border.push_back(c);
+    inst_of[c] = int(border.size());
+    const Path& p = path_of[c];
+    if (!p.collapsed) continue;
+    const int a = opacity_of[c];
+    int a2 = -1, cw = -1;  // new opacity source and closure weight; -1: unchanged
+    if (w.isc[size_t(p.s)] && w.isc[size_t(p.tau)] && w.isc[size_t(a)]) {
+      const double s = w.cv[size_t(p.s)][0], tau = w.cv[size_t(p.tau)][0], av = w.cv[size_t(a)][0];
+      const double ap = 1.0 - tau - s * (1.0 - av);
+      a2 = konst(float(ap));
+      cw = konst(ap > 0.0 ? float(s * av / ap) : 0.0f);  // a' = 0: the surface is never taken
+    } else if (p.white) {
+      a2 = mul(p.s, a);
+    } else if (is_const(p.tau, 0.0f) && is_const(a, 1.0f)) {
+      cw = p.s;
+    } else {
+      return res->error = "Mix Shader child " + std::to_string(c) +
+                          ": its closure weight s a / a' under a pruned sibling is per point and needs a divide op "
+                          "(DIV_F32), which ops.def does not have",
+             false;
+    }
+    if (a2 >= 0) {
+      if (opacity_store_of.count(c) != 0) w.g.nodes[size_t(opacity_store_of[c])].input[0] = a2;
+      else stores_of[c].push_back(opacity_store_of[c] = new_store(c, RS::geometry_opacity, a2));
+    }
+    if (cw >= 0 && !is_const(cw, 1.0f)) stores_of[c].push_back(new_store(c, RS::closure_weight, cw));
+  }
+  // T = sum_j w_j (1 - a_j) over every child, from the children's own opacities.
+  int t = zero;
+  for (int c : order)
+    if (!is_const(opacity_of[c], 1.0f)) t = add(t, mul(path_of[c].w, sub(one, opacity_of[c])));
+  const int a_eff = sub(one, t);
+  int opacity_store = -1;  // the per-point a_eff store, the opacity entry's root
+  if (w.isc[size_t(a_eff)]) {
+    res->block.geometry_opacity = clamp01(w.cv[size_t(a_eff)][0]);
+    // The block now holds a_eff, so each BSDF child states its own opacity.
+    if (res->block.geometry_opacity != 1.0f)
+      for (int c : border)
+        if (opacity_store_of.count(c) == 0) stores_of[c].push_back(opacity_store_of[c] = new_store(c, RS::geometry_opacity, one));
+  } else {
+    opacity_store = new_store(-1, RS::geometry_opacity, a_eff);
+  }
+  const bool any_bsdf = !border.empty();
+  const int no_bsdf_store = any_bsdf ? -1 : new_store(-1, RS::closure_weight, zero);
+  if (!res->error.empty()) return false;
+  w.topo = stable_topo(w.g);
+  const size_t n = w.g.nodes.size();
 
   // Which instance evaluates each run-time node: one child's block, or the shared run when the
-  // factors or two children read it. Constants are materialised where they are read.
+  // branching factors, the emission or two children read it. Constants are materialised where read.
   constexpr int kNone = -1, kShared = 0;
   std::vector<int> owner(n, kNone);
   auto claim = [&](int from, int inst) {
@@ -539,15 +822,29 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
       for (int s = 0; s < w.g.nodes[size_t(i)].n_inputs; ++s) stack.push_back(w.g.nodes[size_t(i)].input[s]);
     }
   };
-  for (const auto& [child, list] : stores_of)
-    for (int st : list)
-      if (!w.isc[size_t(w.g.nodes[size_t(st)].input[0])]) claim(st, inst_of[child]);
-  for (const auto& [tag, m] : mix_of_tag) claim(w.g.nodes[size_t(m)].input[0], kShared);
-  // Constants each instance reads (a mix factor is read by the shared run).
-  std::vector<std::set<int>> reads(order.size() + 1);
+  auto branching = [&](int m) {
+    const int32_t ref = mix_ref(i32[w.g.nodes[size_t(m)].i32_first]);
+    return has_bsdf(sub_ref(ref, 0)) && has_bsdf(sub_ref(ref, 1));
+  };
+  for (int c : border)
+    for (int st : stores_of[c])
+      if (!w.isc[size_t(w.g.nodes[size_t(st)].input[0])]) claim(st, inst_of[c]);
+  for (const auto& [tag, m] : mix_of_tag)
+    if (branching(m)) claim(w.g.nodes[size_t(m)].input[0], kShared);
+  for (int e : emit_nodes) claim(e, kShared);
+  if (!any_bsdf) {
+    claim(no_bsdf_store, kShared);
+    if (opacity_store >= 0) claim(opacity_store, kShared);
+  }
+  auto inst_of_child = [&](int child) {
+    const auto f = inst_of.find(child);
+    return f == inst_of.end() ? kNone : f->second;
+  };
+  // Constants each instance reads (a branching factor is read by the shared run).
+  std::vector<std::set<int>> reads(border.size() + 1);
   for (size_t i = 0; i < n; ++i) {
     const GraphNode& nd = w.g.nodes[i];
-    const int inst = nd.op == Op::BRANCH_MIX ? kShared : owner[i];
+    const int inst = nd.op == Op::BRANCH_MIX ? (branching(int(i)) ? kShared : kNone) : owner[i];
     if (inst == kNone) continue;
     for (int s = 0; s < nd.n_inputs; ++s)
       if (w.isc[size_t(nd.input[s])]) reads[size_t(inst)].insert(nd.input[s]);
@@ -556,61 +853,93 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
     for (int i : w.topo) {
       const GraphNode& nd = w.g.nodes[size_t(i)];
       if (owner[size_t(i)] == inst || reads[size_t(inst)].count(i) != 0) items->push_back({Item::NODE, i, inst, -1});
-      else if (inst != kShared && nd.op == Op::STORE_SLOT && inst_of[nd.child] == inst && w.isc[size_t(nd.input[0])])
+      else if (inst != kShared && nd.op == Op::STORE_SLOT && inst_of_child(nd.child) == inst && w.isc[size_t(nd.input[0])])
         items->push_back({Item::CONST_STORE, i, inst, -1});
     }
   };
   std::vector<Item> items;
   block(kShared, &items);
-  {
-    // Preorder: BRANCH, its first subtree, then its second subtree, whose first item is the
-    // BRANCH's target (`branch` names the BRANCH item a second subtree belongs to).
+  if (any_bsdf) {
+    // Preorder over the branching mixes: BRANCH, its first subtree, then its second subtree, whose
+    // first item is the BRANCH's target (`branch` names the BRANCH item a second subtree belongs
+    // to). A collapsed mix hands its place to the subtree that holds the BSDF children.
     struct Step {
       int32_t ref;
       long branch;
     };
-    std::vector<Step> st{{mix_ref(i32[w.g.nodes[size_t(roots[0])].i32_first]), -1}};
+    std::vector<Step> st{{root_ref, -1}};
     while (!st.empty()) {
       const Step s = st.back();
       st.pop_back();
+      if (s.ref < 0 && !(has_bsdf(sub_ref(s.ref, 0)) && has_bsdf(sub_ref(s.ref, 1)))) {
+        st.push_back({sub_ref(s.ref, has_bsdf(sub_ref(s.ref, 0)) ? 0 : 1), s.branch});
+        continue;
+      }
       if (s.branch >= 0) items[size_t(s.branch)].target = int(items.size());
       if (s.ref >= 0) {
         block(inst_of[s.ref], &items);
         items.push_back({Item::JMP_END, -1, inst_of[s.ref], -1});
         continue;
       }
-      const int m = mix_of_tag[-1 - s.ref];
+      const int m = mix_node(s.ref);
       items.push_back({Item::BRANCH, m, kShared, -1});
       const long b = long(items.size()) - 1;
-      st.push_back({i32[w.g.nodes[size_t(m)].i32_first + 2], b});
-      st.push_back({i32[w.g.nodes[size_t(m)].i32_first + 1], -1});
+      st.push_back({sub_ref(s.ref, 1), b});
+      st.push_back({sub_ref(s.ref, 0), -1});
     }
   }
   if (!items.empty() && items.back().kind == Item::JMP_END) items.pop_back();  // the last block falls into END
 
+  const std::vector<char> emit_set = mark_from(w, emit_nodes);
+  const std::vector<char> opacity_set = opacity_store >= 0 ? mark_from(w, {opacity_store}) : std::vector<char>(n, 0);
   std::set<uint32_t> images, missing;
   std::vector<char> used(n, 0);
-  for (size_t i = 0; i < n; ++i) used[i] = owner[i] != kNone;
+  for (size_t i = 0; i < n; ++i) used[i] = owner[i] != kNone || opacity_set[i];
   resolve_images(&w, used, slots, &images, &missing);
-  res->images.assign(images.begin(), images.end());
-  res->missing_images.assign(missing.begin(), missing.end());
-  std::vector<uint32_t> surface;
+  std::vector<uint32_t> surface, emission, opacity;
   if (!build_code(w, items, &surface, &res->error)) return false;
+  if (!emit_nodes.empty() && !build_code(w, plain_layout(w, emit_set, emit_set), &emission, &res->error)) return false;
+  if (opacity_store >= 0 && !build_code(w, plain_layout(w, opacity_set, std::vector<char>(n, 0)), &opacity, &res->error))
+    return false;
   res->program.assign(4, 0u);
   res->program[0] = 4;
   res->program.insert(res->program.end(), surface.begin(), surface.end());
-  // Each child's constants over the defaults, for the material flags and the clamp report.
-  for (int child : order) {
+  if (!emit_nodes.empty()) {
+    res->program[2] = uint32_t(res->program.size());
+    res->program.insert(res->program.end(), emission.begin(), emission.end());
+  }
+  if (opacity_store >= 0) {
+    res->program[1] = uint32_t(res->program.size());
+    res->program.insert(res->program.end(), opacity.begin(), opacity.end());
+    res->runtime_slots |= uint64_t(1) << opacity_slot;
+  }
+  // The emission estimate (item 43): sum over the emitters of their weighted terms.
+  MeanCtx mx{means, &images, std::vector<Mean>(n), std::vector<char>(n, 0)};
+  for (const Emit& e : emitted) {
+    float weight = 1.0f;
+    if (w.isc[size_t(e.weight)]) {
+      weight = w.cv[size_t(e.weight)][0];
+    } else {
+      const Mean m = mean_of(w, e.weight, &mx);
+      if (m.known) weight = m.v[0];
+    }
+    add_emission_term(w, e.colour, e.strength, weight, &mx, &res->emission);
+  }
+  res->images.assign(images.begin(), images.end());
+  res->missing_images.assign(missing.begin(), missing.end());
+  // Each BSDF child's constants over the defaults, for the material flags and the clamp report.
+  for (int child : border) {
     ChildConstants c;
     c.id = child;
     c.block = res->block;
     for (int st : stores_of[child]) {
       const GraphNode& nd = w.g.nodes[size_t(st)];
-      const uint32_t slot = uint32_t(i32[nd.i32_first]);
+      const uint32_t slot = slot_of(st);
       if (!w.isc[size_t(nd.input[0])]) {
         c.runtime_slots |= uint64_t(1) << slot;
         continue;
       }
+      if (slot == uint32_t(RS::closure_weight)) continue;  // the selection's, no block slot
       if (!store_const(&c.block, *w.table, slot, w.g.nodes[size_t(nd.input[0])].out, w.cv[size_t(nd.input[0])],
                        &res->clamp_flags, &res->error))
         return false;
@@ -709,7 +1038,7 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
 
   res.block = ar::default_constant_block(table);
   if (std::any_of(w.g.nodes.begin(), w.g.nodes.end(), [](const GraphNode& nd) { return nd.op == Op::BRANCH_MIX; })) {
-    res.ok = compile_mixed(w, slots, &res);
+    res.ok = compile_mixed(w, means, slots, &res);
     return res;
   }
   for (size_t i = 0; i < n; ++i)
@@ -804,17 +1133,7 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
         if (bt.strength > 0.0f && pf[1] > 0.0f) res.emission.push_back(bt);
         continue;
       }
-      EmissionTerm term;
-      const ar::SpectrumSemantic esem = ar::kSlotSemantic[int(ar::Slot::EMISSION_COLOR)];
-      const Vec3 mean = estimate_input(w, nd.input[0], &mx);
-      uint32_t ignored = 0;  // the clamp is reported from the stored colour, below or in the block
-      if (!w.isc[size_t(nd.input[0])] && mean[0] == 1.0f && mean[1] == 1.0f && mean[2] == 1.0f)
-        term.color = ar::make_const_ref(esem, ar::Real(1));  // the per-point upper bound: a white spectrum
-      else
-        ar::make_rgb_ref(table, ar::Rgb{{ar::Real(mean[0]), ar::Real(mean[1]), ar::Real(mean[2])}}, esem, &term.color, &ignored);
-      const bool zero = !(mean[0] > 0.0f) && !(mean[1] > 0.0f) && !(mean[2] > 0.0f);
-      term.strength = estimate_input(w, nd.input[1], &mx)[0];
-      if (!zero && term.strength > 0.0f) res.emission.push_back(term);
+      add_emission_term(w, nd.input[0], nd.input[1], 1.0f, &mx, &res.emission);
       // A lone constant emission goes to the block; several accumulate in the program.
       if (emit_count == 1 && w.isc[size_t(nd.input[0])] && w.isc[size_t(nd.input[1])]) {
         const Vec3& c = w.cv[size_t(nd.input[0])];
@@ -1122,6 +1441,8 @@ static MaterialOutput compile_material_impl(const ar_graph_desc& d, const ar::Rg
   finish(&m);
   if (m.compiled.clamp_flags != 0) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "RGB clamped");
   if (m.compiled.opacity_clamped) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity clamped");
+  if (m.compiled.transparent_folded)
+    add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "Transparent under a Mix Shader: colour folded to its mean");
   // Camera and indirect rays pass through by the opacity decision in shade_surface; shadow rays
   // block on any hit (TERMINATE_ON_FIRST_HIT | DISABLE_ANYHIT, no Embree filter), so the material's
   // shadows are those of an opaque surface (0004 D4's pass-through needs the M2 shadow pass).
