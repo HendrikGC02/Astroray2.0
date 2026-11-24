@@ -130,7 +130,7 @@ compile_s = 1.31
 gated = "merge"
 
 [kernel.k_shade_background]
-# A VM kernel since the world program (task 172): the register file, the shading context and the
+# A VM kernel since it runs the world program: the register file, the shading context and the
 # interpreter's switch. The production cubin measures 64 / 264 B with 0 / 0 B of spills; the dev-reload
 # test module (tests/gpu/kernels/reload_variant.cu) wraps the same stage with one more sample_add and
 # measures 272 B and 8 / 8 B, which sets the spill allowance (D10: VM kernels at most 128 / 192).

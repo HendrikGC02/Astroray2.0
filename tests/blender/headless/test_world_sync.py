@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""World program with an Environment Texture (0005 item 32, task 172): the node lowers to
+"""World program with an Environment Texture (0005 item 32): the node lowers to
 LOAD_CTX_P -> TEX_ENVIRONMENT -> EMIT_LE, what it cannot lower (Mirror Ball, a linked Vector, no image)
 is reported once and renders magenta, and a camera in a world of a 64 x 32 test texture sees the
 texture where Blender's equirectangular convention puts it: the position of the one white texel is
@@ -182,6 +182,9 @@ class TestWorld(unittest.TestCase):
         img, entries, graph = render(scene, plane, mat, world)
         self.assertEqual(tm.unsupported_strings(graph), [])
         self.assertEqual([e for e in entries if e[0] == UNSUPPORTED], [])
+        # The Combined pass is bottom-up (row 0 is the bottom row, as Blender's render result): flipped
+        # here once, so the evidence image, the centroid and the probes all read like the picture.
+        img = img[::-1]
         os.makedirs(EVIDENCE, exist_ok=True)
         srgb_png(os.path.join(EVIDENCE, "env_world.png"), np.clip(img[..., :3], 0.0, 1.0))
         h, w = img.shape[:2]
