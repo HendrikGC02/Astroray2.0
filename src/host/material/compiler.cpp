@@ -747,6 +747,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
   for (int c : order)
     for (int e : emits_of[c]) {
       const int weight = mul(path_of[c].w, opacity_of[c]);
+      res->emission_opacity_unclamped = res->emission_opacity_unclamped || !w.isc[size_t(opacity_of[c])];
       const int strength = w.g.nodes[size_t(e)].input[1];
       emitted.push_back({w.g.nodes[size_t(e)].input[0], strength, weight});
       const int scaled = mul(strength, weight);  // mul may move the node array
@@ -1191,6 +1192,9 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
     res.program[1] = uint32_t(res.program.size());
     res.program.insert(res.program.end(), opacity.begin(), opacity.end());
   }
+  // A per-point opacity multiplies Le as the graph computes it, while the pass decision clamps it
+  // to [0, 1]: a value outside that range scales the emission by itself (scale_emission_by_opacity).
+  res.emission_opacity_unclamped = has_opacity && !res.emission.empty();
   res.ok = true;
   return res;
 }
@@ -1448,11 +1452,7 @@ static MaterialOutput compile_material_impl(const ar_graph_desc& d, const ar::Rg
   // shadows are those of an opaque surface (0004 D4's pass-through needs the M2 shadow pass).
   if (!extension && (m.flags & ar::NON_OPAQUE) != 0u)
     add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity: shadow rays treat this material as opaque (transparent shadows are M2)");
-  // A per-point opacity multiplies Le as the graph computes it, while the pass decision clamps it
-  // to [0, 1]: a value outside that range scales the emission by itself, not by the clamped
-  // fraction. A Mix Shader graph does not scale its emission here (no rewire in compile_mixed).
-  const uint64_t opacity_bit = uint64_t(1) << uint32_t(ar::RecordSlot::geometry_opacity);
-  if (m.compiled.children.empty() && (m.compiled.runtime_slots & opacity_bit) != 0u && !m.compiled.emission.empty())
+  if (m.compiled.emission_opacity_unclamped)
     add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity: a per-point geometry_opacity scales emission unclamped");
   set_medium_fields(&m, medium_priority);
   for (uint32_t key : m.compiled.missing_images)

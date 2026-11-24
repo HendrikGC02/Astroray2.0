@@ -587,9 +587,14 @@ TEST_CASE("mix_shader/each child's emission carries its own opacity") {
     else g.store_const(1, 0.6f, RecordSlot::geometry_opacity);
     g.emit(1, 0.8f, 3.0f);
     g.mix_const(0, 0.25f, 0, 1);
-    const CompileResult r = g.compile();
-    REQUIRE_MESSAGE(r.ok, r.error);
+    const astroray::host::MaterialOutput m = g.material();
+    REQUIRE_FALSE(m.magenta);
+    const CompileResult& r = m.compiled;
     REQUIRE(r.children.size() == 2u);
+    // A per-point a2 scales Le unclamped while the pass decision clamps it: reported, as without a Mix.
+    CHECK(std::any_of(m.entries.begin(), m.entries.end(), [](const astroray::host::MaterialEntry& e) {
+            return e.detail == "opacity: a per-point geometry_opacity scales emission unclamped";
+          }) == per_point);
     const ar::Real2 uv{0.0f, 0.6f};
     const Full first = run_entry_at(r, r.program[0], 0.1f, uv);
     uint32_t seen[2] = {0, 0};

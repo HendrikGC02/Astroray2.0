@@ -74,6 +74,9 @@ struct CompileResult {
   // A Transparent child under a Mix has an opacity other than 0: a non-white colour folded to its
   // mean (item 38), reported NODE_APPROXIMATED.
   bool transparent_folded = false;
+  // A per-point geometry_opacity multiplies an emission unclamped (the pass decision clamps it):
+  // reported NODE_APPROXIMATED. Under a Mix it is an emitting child's own opacity.
+  bool emission_opacity_unclamped = false;
 };
 
 // A report entry the compiler owes for one material (subject = the material key).
