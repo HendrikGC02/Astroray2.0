@@ -36,7 +36,8 @@ NOT_A_NODE = frozenset(("ShaderNode",))
 # What Blender does to the lone node of each unsupported row (read from the measured run, pinned so a
 # wiring bug or a Blender change cannot move rows into "removed" unnoticed): inline_shader_nodes drops
 # a group with no tree, a node nothing reaches (no outputs, or an internal light-tree node) and a constant
-# Value; these types cannot be created at all.
+# Value; these types cannot be created at all. ShaderNodeShadowRaycast is an EEVEE node: its removal
+# must be re-checked if Cycles ever reads it.
 EXPECTED_REMOVED = frozenset(("ShaderNodeGroup", "ShaderNodeLightEvaluation", "ShaderNodeLightInfo",
                               "ShaderNodeLightIterInternalOutput", "ShaderNodeOutputLineStyle",
                               "ShaderNodeScript", "ShaderNodeShadowRaycast", "ShaderNodeValue"))
