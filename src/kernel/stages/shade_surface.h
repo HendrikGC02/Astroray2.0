@@ -139,9 +139,10 @@ AR_FN bool opacity_null_event(Real opacity, float* u) {
 // vertex (as shade_light's crossing). A path that arrives with the transparent counter at its limit
 // ends TRANSPARENT_LIMIT instead of passing; its emission was already added (Blender: the next
 // surface after the limit emits and terminates).
-// Ref: Cycles src/kernel/integrator/path_state.h path_state_next (transparent_bounce, a transparent
-// label keeps the flags; Apache-2.0) and shade_surface.h integrate_surface_bsdf_bssrdf_bounce
-// (a transparent bounce only moves the ray start); docs/decisions/0004-integrator.md D3, D14;
+// Ref: Cycles kernel/integrator/path_state.h path_state_next (transparent_bounce, a transparent label
+// keeps the flags; Apache-2.0) and kernel/integrator/shade_surface.h
+// integrate_surface_bsdf_bssrdf_bounce (a transparent bounce only moves the ray start), read in
+// third_party/_cache/refs/cycles-ed69ef2c6bd3; docs/decisions/0004-integrator.md D3, D14;
 // 0002 D11; 0003 d19 (prev_dist), d23.
 AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P, Real3 Ng) {
   U16x6 b = ps_bounces(kg, slot);
