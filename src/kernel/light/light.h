@@ -244,6 +244,16 @@ AR_FN LightRecord light_make_area(LightType type, Real3 pos, Real3 axis_x, Real3
 
 AR_FN bool light_finite(float x) { return x - x == 0.0f; }
 
+// The emission's own scale sigma for the radiance bounds below: CONSTANT p[0], RGB p[3]. A
+// BLACKBODY's is 1, since its p[1] = scale x 1 / Y(Planck(T)) already folds the colour scale into
+// a spectrum of display Y = scale (0003 d11), so the lamp's radiance is P x scale / (4 pi^2 r^2)
+// in luminance whatever the temperature.
+AR_FN double emission_sigma(const SpectrumRef& e) {
+  if (e.kind == uint8_t(SpectrumKind::CONSTANT)) return double(e.p[0]);
+  if (e.kind == uint8_t(SpectrumKind::BLACKBODY)) return double(1.0);
+  return double(e.p[3]);
+}
+
 // The area lamps' shared checks: the transform is a rotation (a scale would silently resize the
 // lamp, it belongs in size), and the area A keeps L = P sigma / (pi A) and the pdf 1 / A finite
 // and normal in float. sigma is the emission's own scale, as for the sphere.
@@ -260,7 +270,7 @@ AR_FN const char* area_problem(const LightRecord& r, double area) {
     const double dp = ax[c][0] * ax[d][0] + ax[c][1] * ax[d][1] + ax[c][2] * ax[d][2];
     if (!(dp > -tol && dp < tol)) return "an area light transform must be a rotation; scale belongs in the size";
   }
-  const double sigma = r.emission.kind == uint8_t(SpectrumKind::CONSTANT) ? double(r.emission.p[0]) : double(r.emission.p[3]);
+  const double sigma = emission_sigma(r.emission);
   const double pi = double(3.14159265358979323846);
   if (!(area >= double(r.strength) * sigma / (pi * double(FLT_MAX))) || !(area >= double(FLT_MIN)) || !(area <= double(1.0) / double(FLT_MIN)))
     return "area light is so small or so large that its radiance or area pdf is not representable";
@@ -277,15 +287,17 @@ AR_FN const char* light_problem(const LightRecord& r) {
     if (!light_finite(r.xf[i])) return "light transform is not finite";
   if (!light_finite(r.size[0])) return "light radius is not finite";
   if (!light_finite(r.strength) || !(r.strength >= 0.0f)) return "light power must be finite and not negative";
-  // Only the kinds resolve() evaluates; the illuminant semantic is what makes colour a light.
+  // Only the kinds resolve() evaluates without an arena (a light record has none, so TABLE is
+  // refused); the illuminant semantic is what makes colour a light.
   if (r.emission.semantic != uint8_t(SpectrumSemantic::ILLUMINANT)) return "light colour must use the illuminant semantic";
-  if (r.emission.kind != uint8_t(SpectrumKind::CONSTANT) && r.emission.kind != uint8_t(SpectrumKind::RGB))
+  if (r.emission.kind != uint8_t(SpectrumKind::CONSTANT) && r.emission.kind != uint8_t(SpectrumKind::RGB) &&
+      r.emission.kind != uint8_t(SpectrumKind::BLACKBODY))
     return "light colour kind is not supported";
   switch (LightType(r.type)) {
     case LightType::POINT: return r.size[0] == 0.0f ? nullptr : "a point light has radius 0";
     case LightType::SPHERE: {
       if (!(r.size[0] > 0.0f)) return "a sphere light needs a positive radius";
-      const double sigma = r.emission.kind == uint8_t(SpectrumKind::CONSTANT) ? double(r.emission.p[0]) : double(r.emission.p[3]);
+      const double sigma = emission_sigma(r.emission);
       const double r2 = double(r.size[0]) * double(r.size[0]);
       const double pi = double(3.14159265358979323846);
       const double four = double(4.0);

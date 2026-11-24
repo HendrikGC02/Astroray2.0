@@ -3,16 +3,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 
 #include "host/scene/edit.h"
 #include "host/session/test_hooks.h"
+#include "host/spectral/blackbody.h"
 
 namespace astroray::host {
 
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
+// planck.h's float domain is [3 K, 1e9 K] (0003 d10, d25); a lamp above it could overflow a float.
+constexpr double kBlackbodyTMax = 1.0e9;
 
 ar::Real3 r3(double x, double y, double z) { return ar::Real3{ar::Real(x), ar::Real(y), ar::Real(z)}; }
 
@@ -56,22 +60,45 @@ std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const
     throw std::invalid_argument("light color table pointer is null with a nonzero count");
   if (d.cast_shadow == 0) approx("light cast_shadow off renders with shadows");
 
-  // Colour: RGB packs to an ILLUMINANT ref; the other kinds are M1b / M4 and render as the
-  // colour's RGB when given, else white.
-  ar::Rgb rgb{{ar::Real(d.color.rgb[0]), ar::Real(d.color.rgb[1]), ar::Real(d.color.rgb[2])}};
-  if (d.color.kind != AR_SPECTRUM_RGB) {
-    const bool given = d.color.rgb[0] != 0.0f || d.color.rgb[1] != 0.0f || d.color.rgb[2] != 0.0f;
-    if (!given) rgb = ar::Rgb{{ar::Real(1), ar::Real(1), ar::Real(1)}};
-    const std::string kind = d.color.kind == AR_SPECTRUM_BLACKBODY ? "BLACKBODY"
-                             : d.color.kind == AR_SPECTRUM_TABLE   ? "TABLE"
-                                                                   : "kind " + std::to_string(d.color.kind);
-    approx("light color " + kind + " renders as " + (given ? "its RGB" : "white"));
+  // Colour: RGB packs to an ILLUMINANT ref. BLACKBODY packs {T, scale x 1 / Y(Planck(T))} through
+  // the function the material compiler uses (0003 d11); its rgb field is ignored. TABLE is M4 and
+  // renders as the colour's RGB when given, else white.
+  ar::SpectrumRef color;
+  if (d.color.kind == AR_SPECTRUM_BLACKBODY) {
+    const double t = double(d.color.temperature), scale = double(d.color.scale);
+    if (!std::isfinite(d.color.temperature) || !(t > 0.0))
+      throw std::invalid_argument("light color temperature must be finite and positive");
+    if (t > kBlackbodyTMax) throw std::invalid_argument("light color temperature is above 1e9 K, planck.h's float domain");
+    if (!std::isfinite(d.color.scale) || d.color.scale < 0.0f)
+      throw std::invalid_argument("light color scale must be finite and not negative");
+    // At a few kelvin Planck underflows over the whole observer support, so Y is 0 and no scale
+    // can make the lamp visible (0003 d11). Only that case skips the normalisation, loudly.
+    double y_norm = 1.0;
+    const double y = blackbody_visible_y(t);
+    if (y > 0.0 && std::isfinite(1.0 / y)) {
+      y_norm = 1.0 / y;
+    } else {
+      char kelvin[32];
+      std::snprintf(kelvin, sizeof kelvin, "%g", double(d.color.temperature));
+      approx("light " + std::to_string(key) + " BLACKBODY colour at " + kelvin + " K: no visible radiance, not normalised");
+    }
+    try {
+      color = make_blackbody_ref(t, scale, y_norm, 1.0);
+    } catch (const std::invalid_argument& e) {
+      throw std::invalid_argument(std::string("light color: ") + e.what());
+    }
+  } else {
+    ar::Rgb rgb{{ar::Real(d.color.rgb[0]), ar::Real(d.color.rgb[1]), ar::Real(d.color.rgb[2])}};
+    if (d.color.kind != AR_SPECTRUM_RGB) {
+      const bool given = d.color.rgb[0] != 0.0f || d.color.rgb[1] != 0.0f || d.color.rgb[2] != 0.0f;
+      if (!given) rgb = ar::Rgb{{ar::Real(1), ar::Real(1), ar::Real(1)}};
+      approx(std::string("light color TABLE renders as ") + (given ? "its RGB" : "white"));
+    }
+    uint32_t flags = 0;
+    ar::make_rgb_ref(table, rgb, ar::SpectrumSemantic::ILLUMINANT, &color, &flags);
+    if (flags & ar::kRgbNegativeClamped) approx("light color clamped (a negative component became 0)");
   }
   if (d.graph != 0) approx("light node graph " + std::to_string(d.graph) + " ignored");
-  ar::SpectrumRef color;
-  uint32_t flags = 0;
-  ar::make_rgb_ref(table, rgb, ar::SpectrumSemantic::ILLUMINANT, &color, &flags);
-  if (flags & ar::kRgbNegativeClamped) approx("light color clamped (a negative component became 0)");
 
   const ar::Real3 pos = r3(d.xf.m[3], d.xf.m[7], d.xf.m[11]);
   lamp->centre[0] = double(pos.x), lamp->centre[1] = double(pos.y), lamp->centre[2] = double(pos.z);

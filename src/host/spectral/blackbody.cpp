@@ -3,7 +3,9 @@
 // shipped CMF table), d25 (Planck).
 #include "host/spectral/blackbody.h"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -12,7 +14,7 @@
 
 namespace astroray::host {
 
-double blackbody_y_normalised(double temperature_kelvin) {
+double blackbody_visible_y(double temperature_kelvin) {
   if (!(temperature_kelvin > 0.0) || !std::isfinite(temperature_kelvin))
     throw std::invalid_argument("blackbody_y_normalised: temperature must be finite and positive");
   DataBlob blob;
@@ -27,9 +29,32 @@ double blackbody_y_normalised(double temperature_kelvin) {
     sum += ar::planck_radiance_t<double>(lambda_nm, temperature_kelvin) * static_cast<double>(obs.cmf[1][i]);
   }
   const double y = sum / obs.y_n;
-  if (!(y > 0.0) || !std::isfinite(y))
+  return y > 0.0 ? y : 0.0;
+}
+
+double blackbody_y_normalised(double temperature_kelvin) {
+  const double y = blackbody_visible_y(temperature_kelvin);
+  if (!(y > 0.0) || !std::isfinite(y) || !std::isfinite(1.0 / y))
     throw std::invalid_argument("blackbody_y_normalised: no visible radiance at T = " + std::to_string(temperature_kelvin) + " K");
   return 1.0 / y;
+}
+
+ar::SpectrumRef make_blackbody_ref(double temperature_kelvin, double scale, double y_norm, double strength) {
+  const double fmax = double(std::numeric_limits<float>::max());
+  // The stored scale and the brightest band value must fit a float, else the kernel would emit inf
+  // or NaN (a cold T makes 1 / Y huge; a huge scale does the same).
+  const double p1 = scale * y_norm;
+  // Wien displacement, b = 2.897771955e6 nm K (CODATA 2018): where the band is brightest.
+  const double wien_nm = std::min(830.0, std::max(360.0, 2897771.955 / temperature_kelvin));
+  const double peak = p1 * ar::planck_radiance_t<double>(wien_nm, temperature_kelvin) * strength;
+  if (!(p1 <= fmax) || !(peak <= fmax))
+    throw std::invalid_argument("the scale and 1 / Y(Planck(T)) overflow a float at this temperature");
+  ar::SpectrumRef r = {};
+  r.kind = uint8_t(ar::SpectrumKind::BLACKBODY);
+  r.semantic = uint8_t(ar::SpectrumSemantic::ILLUMINANT);
+  r.p[0] = float(temperature_kelvin);
+  r.p[1] = float(p1);
+  return r;
 }
 
 }  // namespace astroray::host

@@ -3,8 +3,8 @@
 // 10^5 synthetic surface hits on a random triangle soup (the default material) under a light table
 // of every type: a point, a sphere, a rectangle and a disk lamp, the constant world, an emissive
 // triangle with its Le in the record and one with a program emission (deferred Le: the emission
-// entry runs at the light point). Arrival bounce counts 0-5 under a total limit of 8, random
-// throughputs and r_u, so the light pick, sample_li, the lobe eval and the balance weight all run.
+// entry runs at the light point), and a point lamp of a BLACKBODY colour. Arrival bounce counts 0-5
+// under a total limit of 8, random throughputs and r_u, so the light pick, sample_li, the lobe eval and the balance weight all run.
 // The shadow items' stage, target and every integer field must be bit-equal; the contribution
 // agrees to 0002 D12's throughput threshold, the segment direction to its direction threshold, the
 // origin and tmax within 1e-5 relative (0009 d17 step iv's geometry tolerance).
@@ -27,6 +27,7 @@
 #include "host/device.h"
 #include "host/film/film_layout.h"
 #include "host/material/compiler.h"
+#include "host/spectral/blackbody.h"
 #include "host/thread_pool.h"
 #include "stages/shade_surface.h"
 #include "vm/ops.h"
@@ -200,8 +201,11 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   et.e = static_cast<const float*>(put(et.e, 4ull * ar::kEDielN * ar::kEDielN * ar::kEDielN));
   void* e_diel_p = put(&et, sizeof et);
 
-  // Every light type, uniform selection (an alias table of full bins).
+  // Every light type, uniform selection (an alias table of full bins). The last light is a point lamp
+  // of a BLACKBODY colour, so the Planck spectrum runs through the light pick and sample_li on both
+  // devices (indices of the others do not move).
   const ar::SpectrumRef white = ar::make_const_ref(ar::SpectrumSemantic::ILLUMINANT, ar::Real(1));
+  const ar::SpectrumRef planck = make_blackbody_ref(3000.0, 1.0, blackbody_y_normalised(3000.0), 1.0);
   const auto tri_world = [&](uint32_t t, int k) {
     return ar::Real3{pos[9 * t + 3 * k], pos[9 * t + 3 * k + 1], pos[9 * t + 3 * k + 2] + 3.0f};
   };
@@ -215,7 +219,8 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
       ar::light_make_world(0.7f, white),
       ar::light_make_triangle(tri_world(0, 0), tri_world(0, 1), tri_world(0, 2), 1, 0, ar::kLightTwoSided, 3.0f, white),
       ar::light_make_triangle(tri_world(1, 0), tri_world(1, 1), tri_world(1, 2), 1, 1,
-                              uint16_t(ar::kLightTwoSided | ar::kLightEmissionProgram), 0.0f, white)};
+                              uint16_t(ar::kLightTwoSided | ar::kLightEmissionProgram), 0.0f, white),
+      ar::light_make(ar::LightType::POINT, ar::Real3{-0.2f, 0.4f, 2.8f}, 0.0f, 20.0f, planck)};
   const uint32_t nl = uint32_t(lights.size());
   std::vector<ar::AliasBin> bins;
   std::vector<uint32_t> bin_light;
