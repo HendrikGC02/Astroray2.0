@@ -1,0 +1,40 @@
+diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
+index 2c69935..8dacb12 100644
+--- a/src/host/material/compiler.cpp
++++ b/src/host/material/compiler.cpp
+@@ -749,7 +749,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+       const int weight = mul(path_of[c].w, opacity_of[c]);
+       const int strength = w.g.nodes[size_t(e)].input[1];
+       emitted.push_back({w.g.nodes[size_t(e)].input[0], strength, weight});
+-      const int scaled = mul(strength, weight);  // mul may move the node array
++      const int scaled = strength;  // mul may move the node array
+       w.g.nodes[size_t(e)].input[1] = scaled;
+       emit_nodes.push_back(e);
+     }
+@@ -770,7 +770,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+       a2 = konst(float(ap));
+       cw = konst(ap > 0.0 ? float(s * av / ap) : 0.0f);  // a' = 0: the surface is never taken
+     } else if (p.white) {
+-      a2 = mul(p.s, a);
++      a2 = a;
+     } else if (is_const(p.tau, 0.0f) && is_const(a, 1.0f)) {
+       cw = p.s;
+     } else {
+@@ -788,7 +788,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+   // T = sum_j w_j (1 - a_j) over every child, from the children's own opacities.
+   int t = zero;
+   for (int c : order)
+-    if (!is_const(opacity_of[c], 1.0f)) t = add(t, mul(path_of[c].w, sub(one, opacity_of[c])));
++    if (!is_const(opacity_of[c], 1.0f)) t = add(t, sub(one, opacity_of[c]));
+   const int a_eff = sub(one, t);
+   int opacity_store = -1;  // the per-point a_eff store, the opacity entry's root
+   if (w.isc[size_t(a_eff)]) {
+@@ -918,7 +918,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+   for (const Emit& e : emitted) {
+     float weight = 1.0f;
+     if (w.isc[size_t(e.weight)]) {
+-      weight = w.cv[size_t(e.weight)][0];
++      weight = 1.0f;
+     } else {
+       const Mean m = mean_of(w, e.weight, &mx);
+       if (m.known) weight = m.v[0];
