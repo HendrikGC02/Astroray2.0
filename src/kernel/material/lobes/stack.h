@@ -49,7 +49,7 @@ struct StackSelect {
   Real p_metal;  // the metal lobe; 0 when base_metalness is 0
   Spec e_spec;   // albedo the dielectric specular layer takes from the diffuse base, per lane
   Spec eta;      // specular_weighted_eta clamped to the table's range; the lobe and the table both use it
-  Spec metal_comp;   // metal multiple-scattering factor per lane (metal_compensation); 1 when unused
+  Real e_metal;      // E_spec(mu_o, r), the metal's single-scattering albedo at F = 1; 1 when unused
   bool eta_clamped;  // some lane's index was outside [kEDielEtaMin, kEDielEtaMax]; the host reports it
 };
 
@@ -121,14 +121,15 @@ AR_FN StackSelect stack_select(const EDielTable& tab, const ESpecTable& tab_m, c
   const Real a_spec = avg(s.e_spec);
 
   const Real m = p.base_metalness;
-  s.metal_comp = spec_fill(Real(1));
+  s.e_metal = Real(1);
   Real a_metal = Real(0);
   if (m > Real(0)) {
     const MetalParams mp = stack_metal_params(p);
     const Real e_m = e_spec_lookup(tab_m, mu_o, r);
-    s.metal_comp = metal_compensation(mp, e_m);
+    s.e_metal = e_m;
+    const Spec comp = metal_compensation(mp, e_m);
     const Spec f_o = metal_fresnel(mp, mu_o);
-    for (int i = 0; i < kLanes; ++i) a_metal += min(max(f_o.v[i] * e_m * s.metal_comp.v[i], Real(0)), Real(1));
+    for (int i = 0; i < kLanes; ++i) a_metal += min(max(f_o.v[i] * e_m * comp.v[i], Real(0)), Real(1));
     a_metal /= Real(kLanes);
     if (p.specular_weight > Real(0)) a_metal = max(a_metal, kMetalSelectFloor);
   }
@@ -149,15 +150,32 @@ AR_FN LobeEval stack_zero_eval() {
   return e;
 }
 
-// f of the substrate from the three lobes' values:
-// closure_weight ((1 - M) (f_spec + (1 - E_spec) f_diff) + M c f_metal).
-AR_FN Spec stack_combine_f(const OpenPBRParams& p, const StackSelect& s, const Spec& f_spec, const Spec& f_diff,
-                           const Spec& f_metal) {
+// The per-lane compensation c of the metal lobe at this selection (metal.h metal_compensation; 1 at
+// E = 1). It is recomputed from StackSelect::e_metal rather than carried per lane, which keeps three
+// registers out of the selection state that stays live across the lobe evaluations in shade_surface.
+AR_FN Spec stack_metal_comp(const OpenPBRParams& p, const StackSelect& s) {
+  return s.e_metal < Real(1) ? metal_compensation(stack_metal_params(p), s.e_metal) : spec_fill(Real(1));
+}
+
+// f of the substrate, closure_weight ((1 - M) (f_spec + (1 - E_spec) f_diff) + M c f_metal), in two
+// steps: the dielectric part, then the metal added when the selection gives it a share (with no
+// share M or F is 0, so the term is 0). Two steps let the dielectric lobes' values die before the
+// metal is evaluated, which keeps shade_surface's NEE inside its register budget.
+AR_FN Spec stack_dielectric_f(const OpenPBRParams& p, const StackSelect& s, const Spec& f_spec, const Spec& f_diff) {
   const Real m = p.base_metalness;
   Spec f;
   for (int i = 0; i < kLanes; ++i)
-    f.v[i] = p.closure_weight * ((Real(1) - m) * (f_spec.v[i] + (Real(1) - s.e_spec.v[i]) * f_diff.v[i]) +
-                                 m * s.metal_comp.v[i] * f_metal.v[i]);
+    f.v[i] = p.closure_weight * ((Real(1) - m) * (f_spec.v[i] + (Real(1) - s.e_spec.v[i]) * f_diff.v[i]));
+  return f;
+}
+AR_FN void stack_add_metal_f(const OpenPBRParams& p, const StackSelect& s, const Spec& f_metal, Spec& f) {
+  const Spec comp = stack_metal_comp(p, s);
+  for (int i = 0; i < kLanes; ++i) f.v[i] += p.closure_weight * (p.base_metalness * comp.v[i] * f_metal.v[i]);
+}
+AR_FN Spec stack_combine_f(const OpenPBRParams& p, const StackSelect& s, const Spec& f_spec, const Spec& f_diff,
+                           const Spec& f_metal) {
+  Spec f = stack_dielectric_f(p, s, f_spec, f_diff);
+  if (s.p_metal > Real(0)) stack_add_metal_f(p, s, f_metal, f);
   return f;
 }
 
@@ -173,12 +191,18 @@ AR_FN LobeEval stack_eval(const EDielTable& tab, const ESpecTable& tab_m, const 
   if (wo.z <= Real(0) || wi.z <= Real(0)) return stack_zero_eval();
   const StackSelect s = stack_select(tab, tab_m, p, wo.z);
   if (eta_clamped != nullptr && s.eta_clamped) *eta_clamped = true;
-  const LobeEval es = ggx_eval(stack_ggx_params(p, s), wo, wi, mode);
-  const LobeEval ed = eon_eval(stack_eon_params(p), wo, wi, mode);
-  const LobeEval em = stack_metal_eval(p, s, wo, wi, mode);
   LobeEval e;
-  e.f = stack_combine_f(p, s, es.f, ed.f, em.f);
-  e.pdf = s.p_spec * es.pdf + s.p_diff * ed.pdf + s.p_metal * em.pdf;
+  {
+    const LobeEval es = ggx_eval(stack_ggx_params(p, s), wo, wi, mode);
+    const LobeEval ed = eon_eval(stack_eon_params(p), wo, wi, mode);
+    e.f = stack_dielectric_f(p, s, es.f, ed.f);
+    e.pdf = s.p_spec * es.pdf + s.p_diff * ed.pdf;
+  }
+  if (s.p_metal > Real(0)) {
+    const LobeEval em = metal_eval(stack_metal_params(p), wo, wi, mode);
+    stack_add_metal_f(p, s, em.f, e.f);
+    e.pdf += s.p_metal * em.pdf;
+  }
   if (!is_finite(e.f) || !(e.pdf >= Real(0))) return stack_zero_eval();
   return e;
 }
@@ -228,19 +252,28 @@ AR_FN LobeSample stack_sample_core(const EDielTable& tab, const ESpecTable& tab_
 
   LobeSample ls;
   LobeEval es = stack_zero_eval(), ed = stack_zero_eval(), em = stack_zero_eval();
-  if (pick_spec) {
-    ls = ggx_sample(gp, wo, rescale_uc ? Real2{stack_below_one(uc / s.p_spec), u2.y} : u2, mode);
-  } else if (pick_metal) {
-    ls = metal_sample(stack_metal_params(p), wo, rescale_uc ? Real2{stack_below_one((uc - p_sd) / s.p_metal), u2.y} : u2, mode);
+  // The metal and the dielectric specular lobe share one GGX at the main roughness (metal.h), so
+  // one visible-normal sampler serves both: ggx_sample's direction and density are metal_sample's,
+  // and its value is the specular lobe's at that direction.
+  if (pick_spec || pick_metal) {
+    const Real ug = pick_metal ? (uc - p_sd) / s.p_metal : uc / s.p_spec;
+    ls = ggx_sample(gp, wo, rescale_uc ? Real2{stack_below_one(ug), u2.y} : u2, mode);
   } else {
     ls = eon_sample(ep, wo, rescale_uc ? Real2{stack_below_one((uc - s.p_spec) / s.p_diff), u2.y} : u2, mode);
   }
   if (!(ls.pdf > Real(0))) return out;
   if ((ls.flags & LOBE_DELTA) != 0) {
-    // No other lobe has value at the mirror direction (a measure-zero set for the rough lobes).
+    // No other lobe has value at the mirror direction (a measure-zero set for the rough lobes). The
+    // delta metal's f is metal_sample's: F(wo.z) / wo.z.
     out.wi = to_world(frame, ls.wi);
     const Spec zero = spec_fill(Real(0));
-    out.f = pick_metal ? stack_combine_f(p, s, zero, zero, ls.f) : stack_combine_f(p, s, ls.f, zero, zero);
+    if (pick_metal) {
+      Spec fm = metal_fresnel(stack_metal_params(p), wo.z);
+      for (int i = 0; i < kLanes; ++i) fm.v[i] /= wo.z;
+      out.f = stack_combine_f(p, s, zero, zero, fm);
+    } else {
+      out.f = stack_combine_f(p, s, ls.f, zero, zero);
+    }
     out.pdf = (pick_metal ? s.p_metal : s.p_spec) * ls.pdf;
     out.flags = ls.flags | LOBE_GLOSSY;
     if (!is_finite(out.f) || !(out.pdf > Real(0))) {
@@ -250,14 +283,10 @@ AR_FN LobeSample stack_sample_core(const EDielTable& tab, const ESpecTable& tab_
     return out;
   }
   const Real3 wi_local = ls.wi;
-  if (pick_spec) {
+  if (pick_spec || pick_metal) {
     es.f = ls.f, es.pdf = ls.pdf;
     ed = eon_eval(ep, wo, wi_local, mode);
     em = stack_metal_eval(p, s, wo, wi_local, mode);
-  } else if (pick_metal) {
-    em.f = ls.f, em.pdf = ls.pdf;
-    es = ggx_eval(gp, wo, wi_local, mode);
-    ed = eon_eval(ep, wo, wi_local, mode);
   } else {
     ed.f = ls.f, ed.pdf = ls.pdf;
     es = ggx_eval(gp, wo, wi_local, mode);

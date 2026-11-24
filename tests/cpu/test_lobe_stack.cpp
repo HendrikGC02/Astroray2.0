@@ -430,26 +430,27 @@ TEST_SUITE("fast") {
         CHECK(s.p_diff == Real(0));
         const ar::MetalParams mp = ar::stack_metal_params(p);
         const Spec comp = ar::metal_compensation(mp, ar::e_spec_lookup(fx.spec, wo_l.z, Real(rough)));
-        for (int l = 0; l < 4; ++l) CHECK(rel_close(double(s.metal_comp.v[l]), double(comp.v[l]), 1e-6));
+        for (int l = 0; l < 4; ++l) CHECK(rel_close(double(ar::stack_metal_comp(p, s).v[l]), double(comp.v[l]), 1e-6));
         for (double zi : {0.3, 0.8})
           for (double phi : {0.5, 3.5}) {
             const Real3 wi = ar::to_world(frame, local_dir(zi, phi));
             const LobeEval e = ar::stack_eval(fx.table, fx.spec, p, frame, wo, wi, TransportMode::Radiance);
             const LobeEval em = ar::metal_eval(mp, wo_l, ar::to_local(frame, wi), TransportMode::Radiance);
-            for (int l = 0; l < 4; ++l) CHECK(rel_close(double(e.f.v[l]), 0.7 * double(s.metal_comp.v[l]) * double(em.f.v[l]), 1e-6));
+            for (int l = 0; l < 4; ++l) CHECK(rel_close(double(e.f.v[l]), 0.7 * double(ar::stack_metal_comp(p, s).v[l]) * double(em.f.v[l]), 1e-6));
             CHECK(rel_close(double(e.pdf), double(em.pdf), 1e-6));
           }
         for (int i = 0; i < 6; ++i) {
           const Real2 u{Real((i + 0.5) / 6), Real(0.37)};
           const LobeSample a = ar::stack_sample(fx.table, fx.spec, p, frame, wo, u, TransportMode::Radiance);
           const LobeSample b = ar::metal_sample(mp, wo_l, u, TransportMode::Radiance);
-          CHECK(a.pdf == b.pdf);
+          CHECK((a.pdf > Real(0)) == (b.pdf > Real(0)));
           if (!(b.pdf > Real(0))) continue;
+          CHECK(rel_close(double(a.pdf), double(b.pdf), 1e-5));
           CHECK((a.flags & ar::LOBE_DELTA) == (b.flags & ar::LOBE_DELTA));
           CHECK((a.flags & ar::LOBE_GLOSSY) != 0);
           const Real3 wi_l = ar::to_local(frame, a.wi);
           CHECK(std::fabs(double(wi_l.z) - double(b.wi.z)) < 1e-5);
-          for (int l = 0; l < 4; ++l) CHECK(rel_close(double(a.f.v[l]), 0.7 * double(s.metal_comp.v[l]) * double(b.f.v[l]), 1e-5));
+          for (int l = 0; l < 4; ++l) CHECK(rel_close(double(a.f.v[l]), 0.7 * double(ar::stack_metal_comp(p, s).v[l]) * double(b.f.v[l]), 1e-5));
         }
       }
   }
@@ -485,7 +486,7 @@ TEST_SUITE("fast") {
             const LobeEval em = ar::metal_eval(mp, wo_l, wi_l, TransportMode::Radiance);
             for (int l = 0; l < 4; ++l) {
               const double want = 0.8 * (0.5 * (double(es.f.v[l]) + (1.0 - double(s.e_spec.v[l])) * double(ed.f.v[l])) +
-                                         0.5 * double(s.metal_comp.v[l]) * double(em.f.v[l]));
+                                         0.5 * double(ar::stack_metal_comp(p, s).v[l]) * double(em.f.v[l]));
               CHECK(rel_close(double(e.f.v[l]), want, 2e-4));
             }
             const double want_pdf = double(s.p_spec) * double(es.pdf) + double(s.p_diff) * double(ed.pdf) + double(s.p_metal) * double(em.pdf);
@@ -509,7 +510,7 @@ TEST_SUITE("fast") {
               const double cos_i = double(ar::to_local(frame, smp.wi).z);
               for (int l = 0; l < 4; ++l)
                 CHECK(rel_close(double(smp.f.v[l]) * cos_i / double(smp.pdf),
-                                0.8 * 0.5 * double(s.metal_comp.v[l]) * double(fr.v[l]) / double(s.p_metal), 1e-4));
+                                0.8 * 0.5 * double(ar::stack_metal_comp(p, s).v[l]) * double(fr.v[l]) / double(s.p_metal), 1e-4));
               continue;
             }
             const LobeEval e = ar::stack_eval(fx.table, fx.spec, p, frame, wo, smp.wi, TransportMode::Radiance);
