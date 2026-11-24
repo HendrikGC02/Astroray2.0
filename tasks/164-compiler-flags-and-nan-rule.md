@@ -16,3 +16,5 @@ Budget: gate +1 s at most (the 1e4-graph cases are fast tier and counted; stop a
 Depends on: 148, 158 (compiler.cpp order: 158, 165, 164, 179, 168, 180).
 Size: M (about 300 lines without tests); stop and report at 2x. If steps 1-2 alone exceed 250 lines, land step 3 first.
 Progress:
+ 164: STORE_SLOT refuses non-finite sources (NON_FINITE_INPUT); non-finite constants refused at compile; reachable flag on Mix children; shared emission strength node copied; tests compiler_flags/*, vm/non finite, v15/nan input.
+ 164: flags/estimate: 1e4 generated graphs found no missed delta lobe and no wrong zero; k_shade_surface 128/400/8/8 unchanged. gate failed on time only (201 s of 180 s) twice.
