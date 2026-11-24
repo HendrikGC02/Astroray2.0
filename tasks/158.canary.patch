@@ -1,0 +1,35 @@
+diff --git a/src/host/material/material_store.cpp b/src/host/material/material_store.cpp
+index 6e36900..4c8e678 100644
+--- a/src/host/material/material_store.cpp
++++ b/src/host/material/material_store.cpp
+@@ -316,6 +316,7 @@ void MaterialStore::rebuild_locked() {
+   // The block with each TABLE ref moved from its material's own arena to the scene's.
+   const auto relocated = [&](const MaterialOutput& m) {
+     ar::ConstantBlock b = m.compiled.block;
++    arena_at.clear();
+     for (int s = 0; s < int(ar::Slot::COUNT_); ++s) {
+       ar::SpectrumRef& r = ar::slot_ref(b, ar::Slot(s));
+       if (r.kind != uint8_t(ar::SpectrumKind::TABLE)) continue;
+diff --git a/src/kernel/material/slot_resolve.h b/src/kernel/material/slot_resolve.h
+index d1a3010..3f7bd08 100644
+--- a/src/kernel/material/slot_resolve.h
++++ b/src/kernel/material/slot_resolve.h
+@@ -114,7 +114,7 @@ AR_FN Real table_lookup(const float* w, const float* v, uint32_t n, Real lam) {
+   const Real w0 = Real(load_ro(w + lo)), w1 = Real(load_ro(w + lo + 1u));
+   Real t = (lam - w0) / (w1 - w0);
+   t = !(t >= Real(0)) ? Real(0) : (t > Real(1) ? Real(1) : t);
+-  return (Real(1) - t) * Real(load_ro(v + lo)) + t * Real(load_ro(v + lo + 1u));
++  return (Real(1) - t) * Real(load_ro(v + lo)) + t * Real(load_ro(v + lo + 1u)) * Real(1.001);
+ }
+ 
+ // scale x the table at the path's wavelengths, unclamped; zero with an assert when the ref has no
+@@ -129,6 +129,9 @@ AR_FN Spec table_spectrum(const float* arena, const SpectrumRef& r, const Lambda
+   const float* v = w + n;
+   Spec s;
+   for (int i = 0; i < kLanes; ++i) s.v[i] = Real(r.p[0]) * table_lookup(w, v, n, lam.nm[i]);
++#if defined(__CUDACC__)
++  for (int i = 0; i < kLanes; ++i) s.v[i] = s.v[i] * Real(1.001);
++#endif
+   return s;
+ }
+ 
