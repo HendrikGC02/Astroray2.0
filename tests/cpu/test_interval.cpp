@@ -248,6 +248,19 @@ TEST_CASE("interval/volume coeffs encloses the op") {
     const Interval bound = ar::medium_block_sigma_t_bound(b);
     const Interval box = ar::interval_volume_coeffs(bound);
     CHECK_FALSE(ar::interval_is_nan(box));
+    // Tight, not merely valid: finite, and no wider than the refs' own scales plus the 2^-22 slack
+    // per ref, so {-inf, +inf} or a loose widening fails.
+    float scales = 0.f;
+    scales += b.sigma_a.kind == uint8_t(ar::SpectrumKind::CONSTANT) ? b.sigma_a.p[0] : b.sigma_a.p[3];
+    for (uint32_t l = 0; l < b.lobe_count; ++l)
+      scales += b.sigma_s[l].kind == uint8_t(ar::SpectrumKind::CONSTANT) ? b.sigma_s[l].p[0] : b.sigma_s[l].p[3];
+    CHECK(std::isfinite(box.lo));
+    CHECK(std::isfinite(box.hi));
+    // Each ref adds 2^-22 of slack, one ulp (2^-23) for the step up and one for the widening of
+    // the sum it joins: 2^-21 of its scale per ref, per side.
+    const float width = 4.76837158203125e-7f * float(1u + b.lobe_count);
+    CHECK(box.lo >= -scales * width - 1e-30f);
+    CHECK(box.hi <= scales * (1.f + width) + 1e-30f);
     for (int k = 0; k < 8; ++k) {
       ar::Lambda lam;
       for (int l = 0; l < 4; ++l) lam.nm[l] = ar::Real(u(360.f, 830.f));
@@ -260,9 +273,15 @@ TEST_CASE("interval/volume coeffs encloses the op") {
   // A negative scale or a NaN has no bound: {NaN, NaN}, never a clamp.
   ar::MediumBlock bad = ar::medium_block_vacuum();
   bad.sigma_a.kind = uint8_t(ar::SpectrumKind::RGB);
+  bad.sigma_a.semantic = uint8_t(ar::SpectrumSemantic::REFLECTANCE);
   bad.sigma_a.p[3] = -1.f;
   CHECK(both_nan(ar::medium_block_sigma_t_bound(bad)));
   bad.sigma_a.p[3] = std::nanf("");
+  CHECK(both_nan(ar::medium_block_sigma_t_bound(bad)));
+  // A (kind, semantic) pair the exact bound does not cover has no bound either.
+  bad.sigma_a.p[3] = 1.f;
+  CHECK_FALSE(ar::interval_is_nan(ar::medium_block_sigma_t_bound(bad)));
+  bad.sigma_a.semantic = uint8_t(ar::SpectrumSemantic::ILLUMINANT);
   CHECK(both_nan(ar::medium_block_sigma_t_bound(bad)));
   CHECK(both_nan(ar::interval_volume_coeffs(Interval{std::nanf(""), 1.f})));
 }

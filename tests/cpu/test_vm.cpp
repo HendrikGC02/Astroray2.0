@@ -412,7 +412,14 @@ TEST_CASE("vm/fold equals interpret") {
           const double sg = sigmoid_d(c, double(g.ctx.lambda_t.nm[l]));
           const double w = double(dens[k]) * (k == 0 ? 1.0 - sg : sg);
           const ar::Spec& have = k == 0 ? got.sigma_a : got.phase[k - 1].weight;
-          ref_ok = ref_ok && std::fabs(double(have.v[l]) - w) <= 5e-5 * double(dens[k]);
+          // Derived bound, in units of the density: x = c0 l^2 + c1 l + c2 is two fma roundings,
+          // |dx| <= 2 u T with T = |c0| l^2 + |c1| l + |c2|; |S'| <= 1/2; the sigmoid's own
+          // roundings and the product add at most 5 u; u is 2^-24 (float) plus 2^-53 (the double
+          // reference). An infinite coefficient (a grey 0 or 1) is exact.
+          const double lam = double(g.ctx.lambda_t.nm[l]);
+          const double tt = std::fabs(double(c[0])) * lam * lam + std::fabs(double(c[1])) * lam + std::fabs(double(c[2]));
+          const double bound = std::isinf(tt) ? 0.0 : (5.9604644775390625e-8 + 1.1102230246251565e-16) * (tt + 5.0) * double(dens[k]);
+          ref_ok = ref_ok && std::fabs(double(have.v[l]) - w) <= bound;
         }
       }
       t.ref("VOLUME_COEFFS", ref_ok);

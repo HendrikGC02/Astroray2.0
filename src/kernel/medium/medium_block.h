@@ -43,19 +43,24 @@ AR_FN MediumBlock medium_block_vacuum() {
   return b;
 }
 
-// CONSTANT and RGB are the kinds a coefficient ref may hold in this build (0005 item 9); the
-// emission ref is checked the same way, so a kind with no resolve here stops the run.
+// The (kind, semantic) pairs a medium ref may hold: an unclamped CONSTANT and an RGB reflectance
+// sigmoid, exactly what medium_ref_bound covers. resolve() would clamp a CONSTANT REFLECTANCE to 1
+// and multiply an ILLUMINANT by the observer's illuminant, both outside that bound, so any other
+// pair stops the run with BAD_OPERAND instead of being resolved.
 AR_FN bool medium_ref_ok(const SpectrumRef& r) {
-  return r.kind == uint8_t(SpectrumKind::CONSTANT) || r.kind == uint8_t(SpectrumKind::RGB);
+  return (r.kind == uint8_t(SpectrumKind::CONSTANT) && r.semantic == uint8_t(SpectrumSemantic::UNBOUNDED)) ||
+         (r.kind == uint8_t(SpectrumKind::RGB) && r.semantic == uint8_t(SpectrumSemantic::REFLECTANCE));
 }
 
-// A bound on one coefficient ref over every wavelength. A CONSTANT is itself. An RGB ref is
-// scale * sigmoid with the sigmoid in [0, 1] mathematically; the float evaluation can leave that
-// range by a few ulp near its ends, so the bound has 2^-22 of the scale of slack on each side.
-// A negative scale or a NaN gives {NaN, NaN}: the bound is unsupported, never clamped.
+// A bound on one coefficient ref over every wavelength; a pair medium_ref_ok refuses has none.
+// A CONSTANT is itself. An RGB ref is scale * sigmoid with the sigmoid in [0, 1] mathematically;
+// the float evaluation can leave that range by a few ulp near its ends, so the bound has 2^-22 of
+// the scale of slack on each side. A refused pair, a negative scale or a NaN gives {NaN, NaN}: the
+// bound is unsupported, never clamped.
 AR_FN Interval medium_ref_bound(const SpectrumRef& r) {
+  if (!medium_ref_ok(r)) return interval_nan();
   if (r.kind == uint8_t(SpectrumKind::CONSTANT)) return interval_exact(Interval{r.p[0], r.p[0]});
-  if (r.kind == uint8_t(SpectrumKind::RGB) && r.p[3] >= 0.0f) {
+  if (r.p[3] >= 0.0f) {
     const float slack = r.p[3] * 2.384185791015625e-7f;
     return Interval{-slack, interval_step_up(r.p[3] + slack)};
   }

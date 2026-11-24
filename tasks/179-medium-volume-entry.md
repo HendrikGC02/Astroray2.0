@@ -11,12 +11,12 @@ Do:
 4. Tests, fast: `medium_eval` of a folded colour equals the Jakob-Hanika evaluation at 1e4 wavelength sets (1e-6 relative in float, 1e-12 in the f64 instance, as 145's Cauchy case); `medium_transmittance` over a slab matches exp(-sigma_t d) to 1e-6; fold equals interpret bit-exactly on the new opcode; g = 1.5 stored as `kHgMaxAbsG` with one report entry; unsupported node gives PROGRAM_REJECTED. Gate: GPU agreement per opcode (`vm_agree`, nofma, 1e-6 relative).
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `out/bin/astroray_tests_cpu.exe --tier=fast -tc="medium_eval/*,compiler/*,compiler_fold/*,vm/*,interval/*"` (the f64 instances run with the " f64" suffix); paste the k_shade_surface row before and after (the opcode count changes the probe). The PR body quotes the record text added (review is Opus).
 Look at: none.
-Canary: tasks/179.canary.patch must turn red: astroray_tests_cpu "medium_eval/folded colour equals jakob-hanika", "medium_eval/g clamp reported once", "vm/fold equals interpret", astroray_tests_gpu "agree/volume coeffs nofma vs cpu float".
+Canary: tasks/179.canary.patch must turn red: astroray_tests_cpu "medium_eval/folded colour equals jakob-hanika", "medium_eval/g clamp reported once", "vm/fold equals interpret", "medium_eval/refused runs", astroray_tests_gpu "agree/volume coeffs nofma vs cpu float".
 Budget: gate +1 s at most (stop and ask above); k_shade_surface must not move (medium_eval.h is not included by it): state registers 128, stack 384, spills 0 / 0, compile_s within 7.0 s.
 Depends on: 152, 178. ops.def / probe_m1.cu order 158, 165, 163, 178, 179, 172, ...; compiler.cpp order 158, 165, 164, 179, 168, 180 (179 is on slice C's critical path: 181, 182, 183).
 Size: M (about 450 lines with the compiler part); stop and report at 2x. If the compiler part alone exceeds 200 lines, land the kernel part and its tests first.
 Progress:
-- Files changed beyond Scope: src/kernel/vm/ops/common.h (VmState gains med and mblock, which the volume op needs).
+- Files changed beyond Scope: src/kernel/vm/ops/common.h (VmState gains med and mblock, which the volume op needs); src/host/material/compiler.h (MediumOutput, VolumeOutput, compile_volume declaration).
 - Opcode 19 = VOLUME_COEFFS (18 is CHANNEL_F32X3) (graph node: i32 term 0 absorption / 1 scatter, f32 anisotropy, inputs colour f32x3 and density f32).
 - Kernel: medium_block.h, medium_eval.h, ops/volume_coeffs.h, run_volume_entry, interval_volume_coeffs; probe_m1.cu renumbered (COUNT_ 19).
 - Host: compile_volume (one absorber, two lobes, constants only), MaterialArrays media / medium_programs / medium_index, volume graph recompiles the material.

@@ -6,8 +6,14 @@
 // and a volume op outside a volume entry, an over-full block or an unresolvable ref stops the run.
 // Flat media follow Real (0006 item 39), so the tolerance is 1e-6 in float and 1e-12 in double,
 // relative to the density that scales the coefficient. Against a double evaluation the float build
-// cannot be that close: the sigmoid's argument c0 l^2 + c1 l + c2 cancels in float (every colour
-// slot has the same noise), so that comparison only guards the formula, at 5e-6.
+// cannot be that close: the sigmoid's argument x = c0 l^2 + c1 l + c2 cancels in float (every colour
+// slot has the same noise). That comparison therefore uses a bound derived per lane: x comes from
+// two roundings (Horner with fma), so |dx| <= 2 u T with T = |c0| l^2 + |c1| l + |c2|; the sigmoid
+// S(x) = 0.5 + x / (2 sqrt(1 + x^2)) has |S'| <= 1/2, and its own evaluation (x*x, 1 +, sqrt, 2 *,
+// /, +) and the product with the density add at most 5 u (all values are <= 1). So the error in
+// units of the density is at most u_sum (T + 5), u_sum the unit roundoff of Real plus that of the
+// double reference (2^-24 + 2^-53 in float, 2^-52 in double); infinite coefficients (a grey 0 or
+// 1) are exact. The test prints the worst error as a fraction of that bound.
 // Ref: docs/decisions/0006-volumes-and-astrophysics.md A.1, A.2, D21; Jakob and Hanika 2019; the
 // reference sigmoid is the 2019 form 0.5 + x / (2 sqrt(1 + x^2)) evaluated in double on the
 // coefficients the colour's own lift (albedo_coeffs) returns, never on the block's refs.
@@ -38,7 +44,8 @@ using ar::VolumeTerm;
 
 constexpr bool kF32 = sizeof(Real) == 4;
 constexpr double kTol = kF32 ? 1e-6 : 1e-12;
-constexpr double kIndependentTol = kF32 ? 5e-6 : 1e-12;
+// Unit roundoff of Real plus that of the double reference (see the header comment).
+constexpr double kUnitSum = (kF32 ? 5.9604644775390625e-8 : 1.1102230246251565e-16) + 1.1102230246251565e-16;
 
 std::vector<uint8_t> read_data(const std::string& rel) {
   std::string here = __FILE__;
@@ -118,6 +125,19 @@ double albedo_d(const ar::Rgb& rgb, double lam) {
   return sigmoid_d(c, lam);
 }
 
+// The derived error bound of albedo_d's float counterpart, in units of the density: u_sum (T + 5).
+// An infinite coefficient gives an exact 0 or 1.
+double albedo_bound(const ar::Rgb& rgb, double lam) {
+  uint32_t flags = 0;
+  const ar::Upsampled u = ar::albedo_coeffs(fixture().table, rgb, &flags);
+  const double t = std::fabs(double(float(u.c.c[0]))) * lam * lam + std::fabs(double(float(u.c.c[1]))) * lam +
+                   std::fabs(double(float(u.c.c[2])));
+  return std::isinf(t) ? 0.0 : kUnitSum * (t + 5.0);
+}
+
+// err / bound, with an error at a zero bound counted as infinite.
+double ratio(double err, double bound) { return err == 0.0 ? 0.0 : (bound > 0.0 ? err / bound : 1e300); }
+
 // The colour slot's own lift of rgb: make_rgb_ref (float coefficients) then resolve() at the
 // wavelengths, in Real: the Jakob-Hanika evaluation a REFLECTANCE slot gives.
 ar::Spec lift(const ar::Rgb& rgb, const Lambda& lam) {
@@ -168,9 +188,9 @@ TEST_CASE("medium_eval/folded colour equals jakob-hanika") {
         const double nm = double(lam.nm[l]);
         const double ia = double(t.da) * (1.0 - albedo_d(t.a, nm));
         const double i0 = double(t.ds0) * albedo_d(t.s0, nm), i1 = double(t.ds1) * albedo_d(t.s1, nm);
-        worst_independent = std::fmax(worst_independent, std::fabs(double(s.sigma_a.v[l]) - ia) / double(t.da));
-        worst_independent = std::fmax(worst_independent, std::fabs(double(s.phase[0].weight.v[l]) - i0) / double(t.ds0));
-        worst_independent = std::fmax(worst_independent, std::fabs(double(s.phase[1].weight.v[l]) - i1) / double(t.ds1));
+        worst_independent = std::fmax(worst_independent, ratio(std::fabs(double(s.sigma_a.v[l]) - ia) / double(t.da), albedo_bound(t.a, nm)));
+        worst_independent = std::fmax(worst_independent, ratio(std::fabs(double(s.phase[0].weight.v[l]) - i0) / double(t.ds0), albedo_bound(t.s0, nm)));
+        worst_independent = std::fmax(worst_independent, ratio(std::fabs(double(s.phase[1].weight.v[l]) - i1) / double(t.ds1), albedo_bound(t.s1, nm)));
         // sigma_s is the lobes' sum, and the phase weights are those lobes.
         CHECK(double(s.sigma_s.v[l]) == doctest::Approx(double(s.phase[0].weight.v[l]) + double(s.phase[1].weight.v[l])).epsilon(kTol));
         CHECK(s.emission.v[l] == Real(0));
@@ -183,10 +203,10 @@ TEST_CASE("medium_eval/folded colour equals jakob-hanika") {
       CHECK(s.velocity.z == Real(0));
     }
   }
-  std::printf("medium_eval folded colour: max error %.3e of the density (tolerance %.0e), against double %.3e (%.0e)\n", worst,
-              kTol, worst_independent, kIndependentTol);
+  std::printf("medium_eval folded colour: max error %.3e of the density (tolerance %.0e); against double %.3f of the derived bound\n",
+              worst, kTol, worst_independent);
   CHECK(worst <= kTol);
-  CHECK(worst_independent <= kIndependentTol);
+  CHECK(worst_independent <= 1.0);
 }
 
 TEST_CASE("medium_eval/absorber complement is exact at grey and a lobe count of one") {
@@ -257,6 +277,19 @@ TEST_CASE("medium_eval/refused runs") {
   r.block.sigma_s[1].kind = uint8_t(ar::SpectrumKind::TABLE);
   CHECK(r.eval(lambdas(1), &s) == VmStatus::BAD_OPERAND);
   r.block.sigma_s[1] = good;
+  CHECK(r.eval(lambdas(1), &s) == VmStatus::OK);
+  // A pair the exact interval bound does not cover is refused, not resolved: resolve() clamps a
+  // CONSTANT REFLECTANCE to 1 and scales an ILLUMINANT by the observer.
+  const ar::SpectrumRef absorber = r.block.sigma_a;
+  r.block.sigma_a = ar::make_const_ref(ar::SpectrumSemantic::REFLECTANCE, Real(3));
+  CHECK(r.eval(lambdas(1), &s) == VmStatus::BAD_OPERAND);
+  r.block.sigma_a = absorber;
+  r.block.sigma_s[0].semantic = uint8_t(ar::SpectrumSemantic::ILLUMINANT);
+  CHECK(r.eval(lambdas(1), &s) == VmStatus::BAD_OPERAND);
+  r.block.sigma_s[0].semantic = uint8_t(ar::SpectrumSemantic::REFLECTANCE);
+  r.block.emission = ar::make_const_ref(ar::SpectrumSemantic::ILLUMINANT, Real(1));
+  CHECK(r.eval(lambdas(1), &s) == VmStatus::BAD_OPERAND);
+  r.block.emission = ar::make_const_ref(ar::SpectrumSemantic::UNBOUNDED, Real(0));
   CHECK(r.eval(lambdas(1), &s) == VmStatus::OK);
   // VOLUME_COEFFS in a surface run has no medium to fill.
   ar::ShadeContext ctx = {};
