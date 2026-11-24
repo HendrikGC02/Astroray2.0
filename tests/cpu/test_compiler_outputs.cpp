@@ -897,6 +897,73 @@ TEST_CASE("compiler_outputs/emission carries opacity") {
   CHECK(partial > 100u);  // the opacities compared are fractional
 }
 
+TEST_CASE("compiler_outputs/negative strength under opacity refused") {
+  // The strength is checked before it becomes strength x a: neither a per-point product (which
+  // does not fold) nor a product with a clamped constant 0 (which folds to -0) may hide it.
+  auto refused = [](const MaterialOutput& m, const char* what) {
+    INFO(what);
+    CHECK(m.magenta);
+    REQUIRE(m.entries.size() == 1);
+    CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+    CHECK(m.entries[0].detail == "EMIT_LE strength must not be negative");
+  };
+  GB per;
+  per.op2(Op::EMIT_LE, per.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), per.add(Op::CONST_F32, {-2.0f}));
+  per.store(channel(per, tex(per), 1), ar::RecordSlot::geometry_opacity);
+  refused(per.compile(), "per-point opacity");
+  for (float a : {0.5f, -0.5f}) {
+    GB k;
+    k.op2(Op::EMIT_LE, k.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), k.add(Op::CONST_F32, {-2.0f}));
+    k.store(k.add(Op::CONST_F32, {a}), ar::RecordSlot::geometry_opacity);
+    refused(k.compile(), a > 0.0f ? "constant opacity 0.5" : "constant opacity -0.5, clamped to 0");
+  }
+}
+
+TEST_CASE("compiler_outputs/blackbody needs constant opacity") {
+  // A Blackbody emission is a block ref with a constant strength: a per-point opacity cannot scale
+  // it, and the refusal says so; a constant opacity folds into the luminance.
+  GB per;
+  per.op2(Op::EMIT_LE, per.add(Op::BLACKBODY, {2700.0f, 2.0f}), per.add(Op::CONST_F32, {3.0f}));
+  per.store(channel(per, tex(per), 1), ar::RecordSlot::geometry_opacity);
+  const MaterialOutput m = per.compile();
+  CHECK(m.magenta);
+  REQUIRE(m.entries.size() == 1);
+  CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+  CHECK(m.entries[0].detail.find("a Blackbody emission needs a constant geometry_opacity") != std::string::npos);
+  GB k;
+  k.op2(Op::EMIT_LE, k.add(Op::BLACKBODY, {2700.0f, 2.0f}), k.add(Op::CONST_F32, {3.0f}));
+  k.store(k.add(Op::CONST_F32, {0.25f}), ar::RecordSlot::geometry_opacity);
+  const MaterialOutput mk = k.compile();
+  REQUIRE(!mk.magenta);
+  CHECK(mk.compiled.block.emission_color.kind == uint8_t(ar::SpectrumKind::BLACKBODY));
+  CHECK(bits(mk.compiled.block.emission_luminance) == bits(3.0f * 0.25f));
+}
+
+TEST_CASE("compiler_outputs/per-point opacity on emission reported") {
+  // A per-point opacity scales Le as computed (outside [0, 1] too) while the pass decision clamps
+  // it: one NODE_APPROXIMATED entry says so. A constant opacity is clamped before the product, and
+  // a per-point opacity without emission scales nothing: neither has the entry.
+  const std::string want = "opacity: a per-point geometry_opacity scales emission unclamped";
+  auto count = [&](const MaterialOutput& m) {
+    return std::count_if(m.entries.begin(), m.entries.end(), [&](const auto& e) {
+      return e.code == AR_REPORT_NODE_APPROXIMATED && e.detail == want;
+    });
+  };
+  GB per;
+  per.op2(Op::EMIT_LE, per.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), per.add(Op::CONST_F32, {2.0f}));
+  per.store(channel(per, tex(per), 1), ar::RecordSlot::geometry_opacity);
+  const MaterialOutput mp = per.compile();
+  REQUIRE(!mp.magenta);
+  CHECK(count(mp) == 1);
+  GB k;
+  k.op2(Op::EMIT_LE, k.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), k.add(Op::CONST_F32, {2.0f}));
+  k.store(k.add(Op::CONST_F32, {0.5f}), ar::RecordSlot::geometry_opacity);
+  CHECK(count(k.compile()) == 0);
+  GB dark;
+  dark.store(channel(dark, tex(dark), 1), ar::RecordSlot::geometry_opacity);
+  CHECK(count(dark.compile()) == 0);
+}
+
 TEST_CASE("compiler_outputs/opaque shadow entry once per material") {
   // A non-opaque material carries one NODE_APPROXIMATED entry saying its shadows are opaque (camera
   // and indirect rays pass through it; transparent shadows are M2); each of two such materials of

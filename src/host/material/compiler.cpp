@@ -716,6 +716,14 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
     if (w.g.nodes[i].child != 0)
       return res.error = "graph node " + std::to_string(i) + " names child " + std::to_string(w.g.nodes[i].child) +
                          " but the graph has no Mix Shader", res;
+  // Every strength is checked as the graph gives it, before scale_emission_by_opacity makes it
+  // strength x a: a per-point product does not fold, and a negative strength times a clamped
+  // opacity of 0 folds to -0, so a check of the product would pass both.
+  for (int i : w.topo) {
+    const GraphNode& nd = w.g.nodes[size_t(i)];
+    if (nd.op == Op::EMIT_LE && w.isc[size_t(nd.input[1])] && !(w.cv[size_t(nd.input[1])][0] >= 0.0f))
+      return res.error = "EMIT_LE strength must not be negative", res;
+  }
   if (!scale_emission_by_opacity(w, &res.error)) return res;
   n = w.g.nodes.size();
   int emit_count = 0;
@@ -758,8 +766,6 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
         res.runtime_slots |= uint64_t(1) << slot;
       }
     } else if (nd.op == Op::EMIT_LE) {
-      if (w.isc[size_t(nd.input[1])] && !(w.cv[size_t(nd.input[1])][0] >= 0.0f))
-        return res.error = "EMIT_LE strength must not be negative", res;
       // Emission estimate (0005 item 43): the input's mean (a constant exactly, an image by its
       // mean, any other per-point input by 1).
       const GraphNode& colour_node = w.g.nodes[size_t(nd.input[0])];
@@ -1119,6 +1125,12 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
   // shadows are those of an opaque surface (0004 D4's pass-through needs the M2 shadow pass).
   if ((m.flags & ar::NON_OPAQUE) != 0u)
     add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity: shadow rays treat this material as opaque (transparent shadows are M2)");
+  // A per-point opacity multiplies Le as the graph computes it, while the pass decision clamps it
+  // to [0, 1]: a value outside that range scales the emission by itself, not by the clamped
+  // fraction. A Mix Shader graph does not scale its emission here (no rewire in compile_mixed).
+  const uint64_t opacity_bit = uint64_t(1) << uint32_t(ar::RecordSlot::geometry_opacity);
+  if (m.compiled.children.empty() && (m.compiled.runtime_slots & opacity_bit) != 0u && !m.compiled.emission.empty())
+    add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity: a per-point geometry_opacity scales emission unclamped");
   set_medium_fields(&m, medium_priority);
   for (uint32_t key : m.compiled.missing_images)
     add_entry(&m, AR_REPORT_IMAGE_UNREADABLE, "image key " + std::to_string(key) + " is not set");

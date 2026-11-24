@@ -64,7 +64,8 @@ struct Rig {
   std::vector<ar::Real> hit_t, eta_scale, prev_dist;
   std::vector<ar::Spec> lambda_t, beta, r_u, r_l;
 
-  explicit Rig(uint32_t count) : n(count) {
+  // `aov`: the film holds the primary-hit AOV planes.
+  explicit Rig(uint32_t count, bool aov = false) : n(count) {
     scene.meshes = std::make_shared<MeshStore>();
     scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
     commit([&](Edit& e) {
@@ -119,6 +120,7 @@ struct Rig {
     req.slot_capacity = n;
     req.statistics = true;
     req.termination_stats = true;
+    req.primary_aov = aov;
     film = std::make_unique<Film>(dev, FilmLayout::build(req), Owner{1, 1});
     film->data().inv_radiance_scale = 1.0;
 
@@ -206,6 +208,10 @@ struct Rig {
     uint32_t total = 0;
     for (uint32_t p = 0; p < n; ++p) total += f.count[uint64_t(uint32_t(f.term_hist) + uint32_t(t)) * f.plane_stride + p];
     return total;
+  }
+  float add_plane(int32_t first, uint32_t c, uint32_t pixel) const {
+    const ar::FilmData& f = film->data();
+    return f.add[uint64_t(uint32_t(first) + c) * f.plane_stride + pixel];
   }
   bool passed(uint32_t s, uint16_t transparent_before) const {
     return term[s] == uint8_t(ar::Term::ACTIVE) && bounces[s].v[0] == 0u && bounces[s].v[5] == transparent_before + 1u;
@@ -365,25 +371,39 @@ TEST_CASE("alpha_pass_through/prev_dist after two pass-throughs is the previous 
 }
 
 TEST_CASE("alpha_pass_through/the surface takes u over a for its lobe choice") {
-  // Opacity 0.5 over a Lambertian base: u below a gives the stack sample of u / a, u at or above a
-  // passes; one uniform serves the decision and the lobe choice (0004 D14).
+  // Opacity 0.5 over a dark base under a full-weight specular layer, so the stack picks its lobe
+  // with 0 < p_spec < 1: u below a gives the stack sample of u / a, u at or above a passes; one
+  // uniform serves the decision and the lobe choice (0004 D14). The uniform only picks the lobe
+  // (stack_sample with a separate uc), so the cases with u < p_spec <= u / a are the ones a raw u
+  // would send to the other lobe; the test requires enough of them.
   Rig rig(256);
   rig.opacity(0.5f);
+  rig.block().base_color = Rig::grey(0.1f);
+  rig.block().specular_weight = 1.0f;
   std::vector<float> u(rig.n);
   std::vector<ar::LobeSample> want(rig.n);
+  std::vector<char> other_lobe(rig.n, 0);
   for (uint32_t s = 0; s < rig.n; ++s) {
     u[s] = rig.lobe_u(s);
     ar::ShadeContext c{};
     rig.vertex(s, &c);
     ar::OpenPBRParams rec;
     ar::resolve_constant_record(rig.block(), c, rig.kg.tables->observer, &rec);
+    const ar::Frame frame = ar::frame_from_normal(c.N);
+    const ar::Real p_spec = ar::stack_select(*rig.kg.e_diel, rec, ar::to_local(frame, c.wo).z).p_spec;
+    REQUIRE(p_spec > ar::Real(0.1));
+    REQUIRE(p_spec < ar::Real(0.9));
     const ar::Real2 u2{ar::camera_path_draw(rig.kg, s, ar::event_dim(0, ar::EV_BSDF_U)),
                        ar::camera_path_draw(rig.kg, s, ar::event_dim(0, ar::EV_BSDF_V))};
-    want[s] = ar::stack_sample(*rig.kg.e_diel, rec, ar::frame_from_normal(c.N), c.wo, ar::Real(u[s] / 0.5f), u2,
-                               ar::TransportMode::Radiance);
+    want[s] = ar::stack_sample(*rig.kg.e_diel, rec, frame, c.wo, ar::Real(u[s] / 0.5f), u2, ar::TransportMode::Radiance);
+    other_lobe[s] = u[s] < 0.5f && (ar::Real(u[s]) < p_spec) != (ar::Real(u[s] / 0.5f) < p_spec);
+    if (other_lobe[s]) {
+      const ar::LobeSample raw = ar::stack_sample(*rig.kg.e_diel, rec, frame, c.wo, ar::Real(u[s]), u2, ar::TransportMode::Radiance);
+      CHECK(raw.flags != want[s].flags);  // the raw uniform names the other lobe
+    }
   }
   rig.run();
-  uint32_t below = 0, above = 0;
+  uint32_t below = 0, above = 0, discriminating = 0;
   for (uint32_t s = 0; s < rig.n; ++s) {
     INFO(s);
     if (u[s] >= 0.5f) {
@@ -394,6 +414,7 @@ TEST_CASE("alpha_pass_through/the surface takes u over a for its lobe choice") {
     ++below;
     CHECK(rig.bounces[s].v[5] == 0u);
     if (rig.term[s] != uint8_t(ar::Term::ACTIVE)) continue;  // a reflection below Ng or roulette
+    discriminating += other_lobe[s];
     CHECK(rig.bounces[s].v[0] == 1u);
     CHECK(rig.ray_d[s].x == want[s].wi.x);
     CHECK(rig.ray_d[s].y == want[s].wi.y);
@@ -401,6 +422,54 @@ TEST_CASE("alpha_pass_through/the surface takes u over a for its lobe choice") {
   }
   CHECK(below > rig.n / 4);
   CHECK(above > rig.n / 4);
+  CHECK(discriminating > rig.n / 16);  // continued paths whose lobe a raw u would change
+}
+
+TEST_CASE("alpha_pass_through/primary AOVs name the surface behind a card") {
+  // The AOV write comes after the opacity decision: a camera hit (total bounces 0) on a card it
+  // passes writes no AOV and leaves AOV_WRITTEN clear, and the surface behind it is the one the
+  // planes name.
+  Rig rig(4, true);
+  const ar::FilmData& f = rig.film->data();
+  REQUIRE(f.aov_position >= 0);
+  REQUIRE(f.aov_normal >= 0);
+  REQUIRE(f.aov_uv >= 0);
+  REQUIRE(f.aov_material >= 0);
+  rig.opacity(0.0f);
+  rig.run();
+  for (uint32_t s = 0; s < rig.n; ++s) {
+    INFO(s);
+    REQUIRE(rig.passed(s, 0));
+    CHECK((rig.flags[s] & ar::AOV_WRITTEN) == 0u);
+    for (uint32_t c = 0; c < 3; ++c) {
+      CHECK(rig.add_plane(f.aov_position, c, s) == 0.0f);
+      CHECK(rig.add_plane(f.aov_normal, c, s) == 0.0f);
+    }
+    for (uint32_t c = 0; c < 2; ++c) CHECK(rig.add_plane(f.aov_uv, c, s) == 0.0f);
+    CHECK(rig.add_plane(f.aov_material, 0, s) == 0.0f);
+  }
+  // The next hit: the opaque quad at z = -0.5 behind the card.
+  rig.opacity(1.0f);
+  std::vector<ar::Real3> P(rig.n);
+  std::vector<ar::Real2> uv(rig.n);
+  for (uint32_t s = 0; s < rig.n; ++s) {
+    rig.hit_inst[s] = 1u;
+    ar::ShadeContext c{};
+    rig.vertex(s, &c);
+    P[s] = c.P, uv[s] = c.uv[0];
+  }
+  rig.run();
+  for (uint32_t s = 0; s < rig.n; ++s) {
+    INFO(s);
+    CHECK(rig.bounces[s].v[5] == 1u);
+    CHECK((rig.flags[s] & ar::AOV_WRITTEN) != 0u);
+    CHECK(rig.add_plane(f.aov_position, 0, s) == float(P[s].x));
+    CHECK(rig.add_plane(f.aov_position, 1, s) == float(P[s].y));
+    CHECK(rig.add_plane(f.aov_position, 2, s) == -0.5f);
+    CHECK(rig.add_plane(f.aov_normal, 2, s) == 1.0f);
+    CHECK(rig.add_plane(f.aov_uv, 0, s) == float(uv[s].x));
+    CHECK(rig.add_plane(f.aov_uv, 1, s) == float(uv[s].y));
+  }
 }
 
 }  // TEST_SUITE("fast")
