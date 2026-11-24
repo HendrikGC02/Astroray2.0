@@ -16,3 +16,4 @@ Budget: gate +3 s at most for the two statistical cases (CPU only, in the g3 cpu
 Depends on: 168, 143 (reference cache).
 Size: M-L (about 500 lines without tests); stop and report at 2x. If the phase-depth formula cannot be sourced, land steps 1-2 and 4 on a hand-built table first.
 Progress:
+- Files: src/kernel/material/ext_params.h, src/kernel/material/ext/grating.h, src/kernel/material/ext/grating_table.h, src/host/material/compiler.cpp (GRATING block checks), tests/cpu/test_grating.cpp, tests/cpu/test_ext_material.cpp (bad block case; its material() helper now writes a valid grating block), docs/decisions/0005 item 23, tasks/169.canary.patch. Step 3 (grating_table.{h,cpp}, item 24) waits on the phase-depth source (task fallback).
