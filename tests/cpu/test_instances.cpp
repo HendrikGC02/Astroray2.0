@@ -11,8 +11,12 @@
 #include <string>
 #include <vector>
 
+#include "host/ledger.h"
+#include "host/material/material_store.h"
+#include "host/scene/closed_mesh.h"
 #include "host/scene/edit.h"
 #include "host/scene/instances.h"
+#include "host/scene/media.h"
 
 using namespace astroray;
 using namespace astroray::host;
@@ -27,6 +31,8 @@ struct Desc {
   std::vector<uint32_t> zeros, vis, flags, moff, mcount;
   std::vector<ar_rgba> colors;
   std::vector<uint8_t> lg;
+  std::vector<ar_key> medium;  // per instance, 0 = none; sent only when with_medium
+  bool with_medium = false;
   ar_instances_desc d{};
   explicit Desc(uint32_t count) : n(count) {
     for (uint32_t i = 0; i < n; ++i) {
@@ -43,6 +49,7 @@ struct Desc {
       mcount.push_back(i % 3);
       colors.push_back({{1, 1, 1, 1}});
       lg.push_back(0);
+      medium.push_back(0);
     }
   }
   const ar_instances_desc* get() {
@@ -61,6 +68,7 @@ struct Desc {
     d.material_offsets = moff.data();
     d.material_counts = mcount.data();
     d.material_keys = materials.data();
+    d.medium_keys = with_medium ? medium.data() : nullptr;
     return &d;
   }
 };
@@ -85,6 +93,36 @@ void install(Scene& scene, Desc& d) {
   e.reset();
   scene.generations().wait_idle();
   REQUIRE(scene.generations().failed() == 0);
+}
+
+// The scene's medium of `key` as its block's absorption density, or -1 when there is none.
+float absorption_density(Scene& scene, ar_key key) {
+  const auto m = scene.medium(key);
+  return m ? m->block.sigma_a.p[3] : -1.0f;
+}
+
+ar_medium_desc medium_desc(float sigma_a) {
+  ar_medium_desc m{};
+  m.sigma_a[0] = sigma_a;
+  return m;
+}
+
+// One edit: geometry 100, the media in `media` (key, sigma_a), the instances.
+void install_media(Scene& scene, const ar::Rgb2SpecTable& table, Desc& d,
+                   const std::vector<std::pair<ar_key, float>>& media) {
+  auto e = scene.begin_edit();
+  REQUIRE(e);
+  REQUIRE(e->stage(geometry(100)) == AR_OK);
+  REQUIRE(e->item_commit(100) == AR_OK);
+  for (const auto& m : media) {
+    const ar_medium_desc md = medium_desc(m.second);
+    REQUIRE(set_medium(*e, m.first, &md, table) == AR_OK);
+  }
+  REQUIRE(set_instances(*e, d.get()) == AR_OK);
+  uint64_t g = 0;
+  REQUIRE(e->commit(&g) == AR_OK);
+  e.reset();
+  scene.generations().wait_idle();
 }
 
 // True when the report holds a GENERATION_REJECTED entry for `subject` whose detail has all of `parts`.
@@ -133,6 +171,142 @@ TEST_CASE("instances/mask from visibility") {
     CHECK(t->instances[i].light_index == ar::kNoLightIndex);
   }
   CHECK(t->instances[2].material_count == 2);
+}
+
+TEST_CASE("instances/medium bit 6") {
+  // The mask function: bit 6 is the medium flag and nothing else, for every visibility combination.
+  for (uint32_t v = 0; v < 64; ++v) {
+    CHECK(visibility_mask(v) == visibility_mask(v, false));
+    CHECK((visibility_mask(v, false) & 0x40) == 0);
+    CHECK(visibility_mask(v, true) == (visibility_mask(v, false) | 0x40));
+  }
+  CHECK(visibility_mask(0, true) == 0x40);  // invisible to every ray, still a medium boundary
+
+  // Through a generation: bit 6 on exactly the medium instances, whatever their visibility.
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  MaterialStore store(std::make_shared<Ledger>());
+  Desc d(5);
+  d.with_medium = true;
+  d.medium[1] = 50;
+  d.medium[3] = 51;
+  d.vis[3] = 0;
+  install_media(scene, store.table(), d, {{50, 1.0f}, {51, 2.0f}});
+  auto t = scene.instances();
+  REQUIRE(t);
+  REQUIRE(t->instances.size() == 5);
+  for (unsigned i = 0; i < 5; ++i) {
+    const bool bears = i == 1 || i == 3;
+    CHECK(t->instances[i].medium_key == d.medium[i]);
+    CHECK(((t->instances[i].mask >> 6) & 1u) == (bears ? 1u : 0u));
+    CHECK((t->instances[i].mask & 0x80) == 0);
+  }
+  CHECK(t->instances[3].mask == 0x40);
+
+  // A host that sends no medium array gets no medium on any instance.
+  ContextState ctx2;
+  Scene plain(ctx2, SceneConfig{2, {}});
+  Desc p(3);
+  install(plain, p);
+  for (const Instance& in : plain.instances()->instances) {
+    CHECK(in.medium_key == 0);
+    CHECK((in.mask & 0x40) == 0);
+  }
+}
+
+TEST_CASE("instances/medium key must exist") {
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  MaterialStore store(std::make_shared<Ledger>());
+  Desc d(2);
+  d.with_medium = true;
+  d.medium[1] = 99;  // never set
+  install_media(scene, store.table(), d, {{50, 1.0f}});
+  CHECK(scene.generations().failed() != 0);
+  CHECK(rejected(scene, 1001, {"unknown medium key 99"}));
+  CHECK_FALSE(scene.instances());
+}
+
+TEST_CASE("instances/medium replace and remove take effect with the generation") {
+  ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  MaterialStore store(std::make_shared<Ledger>());
+  Desc d(2);
+  d.with_medium = true;
+  d.medium[0] = 50;
+  install_media(scene, store.table(), d, {{50, 1.0f}});
+  CHECK(absorption_density(scene, 50) == 1.0f);
+
+  // Replaced inside an open edit: the old medium is still the scene's until the edit commits.
+  auto e = scene.begin_edit();
+  REQUIRE(e);
+  const ar_medium_desc md = medium_desc(2.0f);
+  REQUIRE(set_medium(*e, 50, &md, store.table()) == AR_OK);
+  scene.generations().wait_idle();
+  CHECK(absorption_density(scene, 50) == 1.0f);
+  uint64_t g = 0;
+  REQUIRE(e->commit(&g) == AR_OK);
+  e.reset();
+  scene.generations().wait_idle();
+  CHECK(absorption_density(scene, 50) == 2.0f);
+  CHECK(scene.media().size() == 1);
+
+  // Removing a medium that an instance still names rejects the generation and keeps the medium.
+  e = scene.begin_edit();
+  REQUIRE(e);
+  REQUIRE(e->remove(AR_KIND_MEDIUM, 50) == AR_OK);
+  REQUIRE(e->commit(&g) == AR_OK);
+  e.reset();
+  scene.generations().wait_idle();
+  CHECK(rejected(scene, 1000, {"medium key 50", "still instanced"}));
+  CHECK(absorption_density(scene, 50) == 2.0f);
+
+  // Removed with its last instance, it is gone.
+  Desc none(2);
+  e = scene.begin_edit();
+  REQUIRE(e);
+  REQUIRE(e->remove(AR_KIND_MEDIUM, 50) == AR_OK);
+  REQUIRE(set_instances(*e, none.get()) == AR_OK);
+  REQUIRE(e->commit(&g) == AR_OK);
+  e.reset();
+  scene.generations().wait_idle();
+  CHECK(absorption_density(scene, 50) == -1.0f);
+  CHECK(scene.media().empty());
+}
+
+TEST_CASE("instances/closed mesh") {
+  // The box of scenes/lib/meshes.py: 8 shared vertices, 12 triangles counter-clockwise from outside.
+  std::vector<uint32_t> cube = {1, 3, 7, 1, 7, 5, 0, 4, 6, 0, 6, 2, 2, 6, 7, 2, 7, 3,
+                                0, 1, 5, 0, 5, 4, 4, 5, 7, 4, 7, 6, 0, 2, 3, 0, 3, 1};
+  CHECK(triangles_closed(cube.data(), 12));
+  // A tetrahedron, and two disjoint ones, are closed.
+  std::vector<uint32_t> tet = {0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3};
+  CHECK(triangles_closed(tet.data(), 4));
+  std::vector<uint32_t> two = tet;
+  for (uint32_t v : tet) two.push_back(v + 4);
+  CHECK(triangles_closed(two.data(), 8));
+  // Open: a triangle missing.
+  CHECK_FALSE(triangles_closed(cube.data(), 11));
+  // Inconsistent winding: one triangle reversed.
+  std::vector<uint32_t> flipped = cube;
+  std::swap(flipped[1], flipped[2]);
+  CHECK_FALSE(triangles_closed(flipped.data(), 12));
+  // The same triangle twice (an edge used by four triangles, two of them the same way).
+  std::vector<uint32_t> doubled = tet;
+  doubled.insert(doubled.end(), {0, 2, 1});
+  CHECK_FALSE(triangles_closed(doubled.data(), 5));
+  // Three triangles on one edge (a fin on a closed surface).
+  std::vector<uint32_t> fin = tet;
+  fin.insert(fin.end(), {0, 1, 4});
+  CHECK_FALSE(triangles_closed(fin.data(), 5));
+  // A degenerate triangle, and no triangles at all.
+  std::vector<uint32_t> degenerate = {0, 0, 1};
+  CHECK_FALSE(triangles_closed(degenerate.data(), 1));
+  CHECK_FALSE(triangles_closed(cube.data(), 0));
+  // Faces that share positions but not vertex indices are open: closedness is by index.
+  std::vector<uint32_t> split = tet;
+  split[0] = 9;
+  CHECK_FALSE(triangles_closed(split.data(), 4));
 }
 
 TEST_CASE("instances/update patches listed only") {
