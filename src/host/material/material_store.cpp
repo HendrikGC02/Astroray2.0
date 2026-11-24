@@ -112,6 +112,16 @@ MaterialStore::MaterialStore(std::shared_ptr<Ledger> ledger)
   DataBlob blob;
   if (!find_data("spectral/rec709.jh", &blob)) throw std::runtime_error("material store: spectral/rec709.jh is not embedded");
   if (const char* e = ar::jh_view(blob.data, blob.size, &table_)) throw std::runtime_error(std::string("material store: ") + e);
+  // The working space's luminance row comes from the same observer data the film uses, so the
+  // two cannot name different spaces (their hashes are compared).
+  DataBlob obs_blob;
+  if (!find_data("spectral/observer.bin", &obs_blob)) throw std::runtime_error("material store: spectral/observer.bin is not embedded");
+  ObserverTables obs;
+  if (const std::string e = parse_observer(obs_blob.data, obs_blob.size, &obs); !e.empty())
+    throw std::runtime_error("material store: " + e);
+  if (std::memcmp(obs.observer_hash, table_.observer_hash, 8) != 0)
+    throw std::runtime_error("material store: rec709.jh and observer.bin were built from different observers");
+  for (int i = 0; i < 3; ++i) table_.y_row[i] = obs.y_row[i];
   // The default material: an empty surface graph leaves every input at its OpenPBR default and
   // folds to a constant surface with no emission. Anything else is a compiler bug.
   default_ = compile_material(ar_graph_desc{}, table_, nullptr, nullptr);

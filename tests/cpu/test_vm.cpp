@@ -63,6 +63,7 @@ struct Fixture {
     jh_bytes = read_data("spectral/rec709.jh");
     const char* e = ar::jh_view(jh_bytes.data(), jh_bytes.size(), &table);
     REQUIRE_MESSAGE(e == nullptr, (e ? e : ""));
+    for (int k = 0; k < 3; ++k) table.y_row[k] = obs.y_row[k];  // the host fills it from M_ws
     tables.rgb2spec = &table;
     tables.observer.cmf = &obs.cmf[0][0];
     tables.observer.illum = obs.d65;
@@ -246,6 +247,18 @@ TEST_CASE("vm/fold equals interpret") {
                                   bits(h.regs.r[17]) == bits(ar::op_channel_f32x3(x + 3, 1u)) &&
                                   bits(h.regs.r[3]) == bits(ar::op_channel_f32x3(x + 3, 2u)));
       t.ref("CHANNEL_F32X3", bits(h.regs.r[16]) == bits(x[3]) && bits(h.regs.r[17]) == bits(x[4]) && bits(h.regs.r[3]) == bits(x[5]));
+    }
+    {  // COLOR_TO_F32: the luminance of r3..r5, once into a fresh register and once onto its own source.
+      Prog p;
+      p.op(Op::COLOR_TO_F32, 16, 3).op(Op::COLOR_TO_F32, 3, 3).end();
+      Rig h = g;
+      REQUIRE(h.run(p) == VmStatus::OK);
+      const float* y = g.tables.rgb2spec->y_row;
+      const float want = ar::op_color_to_f32(x + 3, y);
+      // Independent: the same dot product in double, rounded once (the handler rounds in float).
+      const double ref = double(x[3]) * double(y[0]) + double(x[4]) * double(y[1]) + double(x[5]) * double(y[2]);
+      t.fold("COLOR_TO_F32", bits(h.regs.r[16]) == bits(want) && bits(h.regs.r[3]) == bits(want));
+      t.ref("COLOR_TO_F32", std::fabs(double(h.regs.r[16]) - ref) <= 5e-7 * (std::fabs(double(x[3])) + std::fabs(double(x[4])) + std::fabs(double(x[5]))));
     }
     {  // LOAD_CTX_UV (both sets) and LOAD_CTX_P
       Prog p;
@@ -471,8 +484,8 @@ TEST_CASE("vm/fold equals interpret") {
     CHECK(kv.second == 0u);
   }
   // Every opcode of the table was exercised, so a renamed key cannot hide a missing check.
-  CHECK(t.fold_bad.size() == 18u);
-  CHECK(t.ref_bad.size() == 18u);
+  CHECK(t.fold_bad.size() == 19u);
+  CHECK(t.ref_bad.size() == 19u);
 }
 
 TEST_CASE("vm/lift analytic values") {
@@ -884,7 +897,8 @@ TEST_CASE("vm/opcode table is wired") {
   CHECK(uint32_t(Op::ADD_F32) == 21u);
   CHECK(uint32_t(Op::SUB_F32) == 22u);
   CHECK(uint32_t(Op::SPECTRUM_TABLE) == 23u);
-  CHECK(uint32_t(Op::COUNT_) == 24u);
+  CHECK(uint32_t(Op::COLOR_TO_F32) == 24u);
+  CHECK(uint32_t(Op::COUNT_) == 25u);
 }
 
 }  // TEST_SUITE

@@ -15,6 +15,9 @@ and the compiler contract: constant colours go to STORE_SLOT as F32X3 (the slot
 lifts them), RGB_LIFT is used only on the texture path because it never folds, and one value never
 feeds two EMIT_LE nodes, so constants are never shared between emitters.
 Ref: src/host/material/graph.cpp (parameter counts, socket order), vm/ops/store_slot.h (RecordSlot).
+Ref: Blender source/blender/nodes/shader/nodes/node_shader_emission.cc (Color, Strength) and
+node_shader_blackbody.cc (Temperature, Color output); Cycles kernel/svm/convert.h NODE_CONVERT_CF
+(a colour linked to a float socket becomes its scene-linear luminance, the COLOR_TO_F32 op).
 
 No bpy import and no module state: `op_id` (the generated `_ops.OP_ID`) and the key map come from
 the caller; the generated `_ops` is the package's staged module, which tests register as
@@ -31,6 +34,8 @@ from ..sync import keys
 # the generated `_ops` (tools/opsgen.py parses them out of the kernel headers), never copied here.
 SLOT_SPECULAR_WEIGHT = _ops.RECORD_SLOT["specular_weight"]
 SLOT_SPECULAR_ROUGHNESS = _ops.RECORD_SLOT["specular_roughness"]
+SLOT_BASE_WEIGHT = _ops.RECORD_SLOT["base_weight"]
+SLOT_GEOMETRY_OPACITY = _ops.RECORD_SLOT["geometry_opacity"]
 SLOT_BASE_COLOR = _ops.RECORD_SLOT["base_color"]
 SEM_REFLECTANCE = _ops.SEMANTIC["REFLECTANCE"]
 TEX_LINEAR, TEX_EXTEND = _ops.TEX_MODE["LINEAR"], _ops.TEX_MODE["EXTEND"]
@@ -41,11 +46,11 @@ _IMAGE_SOURCES = frozenset(("FILE", "GENERATED"))
 
 # Principled inputs lowered by this module; every other one must be at its default and unlinked.
 _LOWERED_INPUTS = frozenset(("Base Color", "Roughness", "Specular IOR Level", "Emission Color",
-                             "Emission Strength"))
+                             "Emission Strength", "Alpha"))
 # Blender 5.3 defaults (probed from a new node; a test compares this table with a fresh node, so a
 # Blender update that moves one fails there). None: only a link matters (hidden vector sockets).
 _DEFAULTS = {
-    "Metallic": 0.0, "IOR": 1.5, "Alpha": 1.0, "Thin Wall": False, "Normal": None,
+    "Metallic": 0.0, "IOR": 1.5, "Thin Wall": False, "Normal": None,
     "Diffuse Roughness": 0.0, "Subsurface Weight": 0.0, "Subsurface Radius": (1.0, 0.2, 0.1),
     "Subsurface Scale": 0.005, "Subsurface IOR": 1.4, "Subsurface Anisotropy": 0.0,
     "Specular Tint": (1.0, 1.0, 1.0, 1.0), "Anisotropic": 0.0, "Anisotropic Rotation": 0.0,
@@ -127,7 +132,8 @@ class GraphEmitter:
 def lowered_types():
     """Node types this module lowers; equal to the rows of lowering_table.LOWERING."""
     return frozenset(_LOWER_SHADER) | frozenset(_LOWER_VALUE) | frozenset(
-        ("ShaderNodeOutputMaterial", "ShaderNodeOutputWorld", "ShaderNodeBackground"))
+        ("ShaderNodeOutputMaterial", "ShaderNodeOutputWorld", "ShaderNodeBackground",
+         "ShaderNodeBlackbody"))
 
 
 def scan_unsupported(em, tree):
@@ -238,26 +244,44 @@ def report_link(em, sock, label):
         em.unsupported(label)
 
 
-def _value(em, link, keymap, label):
-    """Lowers the colour or vector value a link carries; None after reporting why not."""
+def _value(em, link, keymap, label, convert=False):
+    """Lowers the colour or vector value a link carries; None after reporting why not. `convert`: the
+    caller applies the type conversion itself (colour to float), so differing socket types pass."""
     src = link.from_node
     fn = _LOWER_VALUE.get(src.bl_idname)
     if fn is None:
         if src.bl_idname in lowered_types():
             em.unsupported(label)
         return None
-    if link.from_socket.type != link.to_socket.type:
+    if not convert and link.from_socket.type != link.to_socket.type:
         # Blender converts vector to colour silently; the engine lowers no conversions in M1a.
         em.unsupported(label)
         return None
     return fn(em, src, keymap, link.from_socket.name)
 
 
-def _colour(em, sock, keymap, label, lift):
-    """A colour input as an F32X3 node (or an RGB_LIFT spectrum node when `lift`)."""
+def _blackbody(em, node):
+    """A Blackbody node as the BLACKBODY op (constant Temperature, scale 1: the compiler folds in the
+    1 / Y(Planck(T)) display normalisation); None after reporting a linked Temperature."""
+    temp = node.inputs["Temperature"]
+    if _link_of(temp) is not None:
+        report_link(em, temp, "Blackbody.Temperature")
+        return None
+    return em.add("BLACKBODY", f32=(float(temp.default_value), 1.0))
+
+
+def _colour(em, sock, keymap, label, lift, emission=False):
+    """A colour input as an F32X3 node (or an RGB_LIFT spectrum node when `lift`). `emission`: the
+    consumer is an emission colour, the only place a Blackbody value may go (0005 item 36); anywhere
+    else it is reported with the consumer named, never converted to a colour."""
     lk = _link_of(sock)
     if lk is None:
         return em.const_rgb(tuple(sock.default_value))
+    if lk.from_node.bl_idname == "ShaderNodeBlackbody":
+        if emission and not lift:
+            return _blackbody(em, lk.from_node)
+        em.unsupported(label)
+        return None
     v = _value(em, lk, keymap, label)
     if v is None or not lift:
         return v
@@ -267,11 +291,31 @@ def _colour(em, sock, keymap, label, lift):
 
 
 def _scalar(em, sock, label):
-    """An unlinked scalar input; a linked one has no lowering in M1a (no colour-to-float op)."""
+    """An unlinked scalar input; a linked one has no lowering here (see _float)."""
     if _link_of(sock) is not None:
         report_link(em, sock, label)
         return None
     return float(sock.default_value)
+
+
+def _float(em, sock, keymap, label):
+    """A float input as (emitter node, constant or None); (None, None) after reporting why not.
+    A colour linked to it is converted to its luminance like Blender does (COLOR_TO_F32, 0005 item
+    36). A vector (Blender averages it) and a float-typed source have no lowering and are reported
+    by consumer."""
+    lk = _link_of(sock)
+    if lk is None:
+        v = float(sock.default_value)
+        return em.const_f32(v), v
+    if lk.from_socket.type != "RGBA":
+        report_link(em, sock, label)
+        return None, None
+    v = _value(em, lk, keymap, label, convert=True)
+    if v is None:
+        return None, None
+    n = em.add("COLOR_TO_F32")
+    em.link(v, n, 0)
+    return n, None
 
 
 def _principled(em, node, keymap):
@@ -294,22 +338,44 @@ def _principled(em, node, keymap):
     base = _colour(em, ins["Base Color"], keymap, "Principled BSDF.Base Color", lift=True)
     if base is not None:
         em.store(SLOT_BASE_COLOR, base)
-    rough = _scalar(em, ins["Roughness"], "Principled BSDF.Roughness")
+    rough, _ = _float(em, ins["Roughness"], keymap, "Principled BSDF.Roughness")
     if rough is not None:
-        em.store(SLOT_SPECULAR_ROUGHNESS, em.const_f32(rough))
+        em.store(SLOT_SPECULAR_ROUGHNESS, rough)
     level = _scalar(em, ins["Specular IOR Level"], "Principled BSDF.Specular IOR Level")
     if level is not None:
         em.store(SLOT_SPECULAR_WEIGHT, em.const_f32(2.0 * level))  # 0005 item 42
-    strength = _scalar(em, ins["Emission Strength"], "Principled BSDF.Emission Strength")
-    if strength:
-        col = _colour(em, ins["Emission Color"], keymap, "Principled BSDF.Emission Color", lift=False)
-        if col is not None:
-            e = em.add("EMIT_LE")
-            em.link(col, e, 0)
-            em.link(em.const_f32(strength), e, 1)
+    alpha = ins["Alpha"]
+    if _link_of(alpha) is not None or alpha.default_value != 1.0:
+        a, _ = _float(em, alpha, keymap, "Principled BSDF.Alpha")
+        if a is not None:
+            em.store(SLOT_GEOMETRY_OPACITY, a)  # 1.0 stores nothing: the opacity stays constant 1
+    _emit(em, ins["Emission Color"], ins["Emission Strength"], keymap, "Principled BSDF")
 
 
-_LOWER_SHADER = {"ShaderNodeBsdfPrincipled": _principled}
+def _emit(em, color_sock, strength_sock, keymap, who):
+    """One EMIT_LE from an emission colour and a strength input; nothing for a constant strength 0."""
+    if _link_of(strength_sock) is None and strength_sock.default_value == 0.0:
+        return False
+    strength, const = _float(em, strength_sock, keymap, f"{who}.{strength_sock.name}")
+    if strength is None or const == 0.0:
+        return False
+    col = _colour(em, color_sock, keymap, f"{who}.{color_sock.name}", lift=False, emission=True)
+    if col is None:
+        return False
+    e = em.add("EMIT_LE")
+    em.link(col, e, 0)
+    em.link(strength, e, 1)
+    return True
+
+
+def _emission(em, node, keymap):
+    """An Emission node: only emits, so the base and specular lobes are switched off."""
+    em.store(SLOT_BASE_WEIGHT, em.const_f32(0.0))
+    em.store(SLOT_SPECULAR_WEIGHT, em.const_f32(0.0))
+    _emit(em, node.inputs["Color"], node.inputs["Strength"], keymap, "Emission")
+
+
+_LOWER_SHADER = {"ShaderNodeBsdfPrincipled": _principled, "ShaderNodeEmission": _emission}
 
 
 def _surface(em, tree, keymap, out_type, label):

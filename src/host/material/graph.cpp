@@ -44,6 +44,7 @@ bool op_param_counts(Op op, uint32_t* nf, uint32_t* ni) {
     case Op::MUL_F32X3:
     case Op::MUL_F32X3_F32:
     case Op::ADD_F32X3:
+    case Op::COLOR_TO_F32:
     case Op::EMIT_LE: return true;
     default: return false;
   }
@@ -62,6 +63,7 @@ VType op_input_type(Op op, int i) {
     case Op::MUL_F32X3_F32: return i == 0 ? VType::F32X3 : VType::F32;
     case Op::TEX_IMAGE:
     case Op::RGB_LIFT:
+    case Op::COLOR_TO_F32:
     case Op::CHANNEL_F32X3: return VType::F32X3;
     case Op::EMIT_LE:
     case Op::VOLUME_COEFFS: return i == 0 ? VType::F32X3 : VType::F32;  // colour, density
@@ -108,6 +110,7 @@ int op_input_count(Op op) {
     case Op::RGB_LIFT:
     case Op::STORE_SLOT:
     case Op::CHANNEL_F32X3:
+    case Op::COLOR_TO_F32:
     case Op::BRANCH_MIX: return 1;
     default: return 0;
   }
@@ -119,6 +122,7 @@ VType op_result_type(Op op) {
     case Op::MUL_F32:
     case Op::ADD_F32:
     case Op::SUB_F32:
+    case Op::COLOR_TO_F32:
     case Op::CHANNEL_F32X3: return VType::F32;
     case Op::CONST_F32X3:
     case Op::LOAD_CTX_UV:

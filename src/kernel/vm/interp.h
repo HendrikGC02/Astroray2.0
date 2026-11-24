@@ -28,6 +28,7 @@
 #include "ops/branch_mix.h"
 #include "ops/cauchy_abbe.h"
 #include "ops/channel_f32x3.h"
+#include "ops/color_to_f32.h"
 #include "ops/const_f32.h"
 #include "ops/const_f32x3.h"
 #include "ops/emit_le.h"
