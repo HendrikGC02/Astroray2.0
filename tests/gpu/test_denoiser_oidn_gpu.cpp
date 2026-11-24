@@ -152,30 +152,33 @@ TEST_CASE("denoiser_oidn_gpu/ledger holds the denoiser bytes") {
   Ledger ledger;
   CudaDevice dev(ledger, 0);
   const int ordinal = dev.device_ordinal();
+  // The tolerance of every comparison with the test's own measurement: cuMemGetInfo's granularity
+  // on this device (every reading so far is a multiple of 2 MiB).
+  constexpr uint64_t kGranularity = 2ull << 20;
   {
-    // The test's own measurement around the whole load encloses the worker's, so the recorded bytes
-    // are positive and at most what the test saw go.
+    // The test's own measurement starts before the load, so it encloses every window the state
+    // measures; nothing else allocates on the device meanwhile, so the two agree.
     const uint64_t free_before = cuda_free_device_bytes(ordinal);
+    auto measured = [&]() {
+      const uint64_t now = cuda_free_device_bytes(ordinal);
+      return free_before > now ? free_before - now : 0;
+    };
     auto state = DenoiserState::create(ctx, DenoiserBackend::OIDN, cuda_config(dev, ledger));
     state->wait();
-    const uint64_t free_after = cuda_free_device_bytes(ordinal);
     INFO(state->error());
     REQUIRE(state->ready());
-    const uint64_t measured = free_before > free_after ? free_before - free_after : 0;
     // Creation commits and runs both modes once, so the device's memory is held already.
     const uint64_t created = ledger.category_total(LedgerCategory::DENOISER);
+    const uint64_t created_measured = measured();
     std::printf("denoiser cuda ledger: %llu bytes recorded at creation, %llu measured by the test\n",
-                static_cast<unsigned long long>(created), static_cast<unsigned long long>(measured));
+                static_cast<unsigned long long>(created), static_cast<unsigned long long>(created_measured));
     CHECK(created > 0);
-    CHECK(created <= measured);
+    CHECK(created <= created_measured);
     CHECK(created == state->device_bytes());
 
-    // Sizes A, B, A, B (B > A), as the resolution controller produces them: the configuration record
-    // follows the net change of each reconfiguration, so the second B holds no more than the first
-    // did and A gives at least B's larger buffers back (OIDN itself keeps some of B's memory). The
-    // tolerance is cuMemGetInfo's granularity on this device: every reading so far is a multiple of
-    // 2 MiB.
-    constexpr uint64_t kGranularity = 2ull << 20;
+    // Sizes A, B, A, B (B > A), as the resolution controller produces them. At every step the ledger
+    // holds what the test saw go: no ratchet as sizes alternate, and no under-count when OIDN keeps
+    // memory past a smaller size.
     const NoisyFixture f = test::make_noisy_fixture();
     constexpr uint32_t kB = 4 * NoisyFixture::kSize;
     const std::vector<float> big(size_t(kB) * kB * 3, 0.5f);
@@ -183,21 +186,41 @@ TEST_CASE("denoiser_oidn_gpu/ledger holds the denoiser bytes") {
     in_b.color = {big.data(), kB, kB, 3};
     in_b.albedo = in_b.color;
     in_b.normal = in_b.color;
-    uint64_t totals[4] = {};
+    auto check_total = [&](const char* when) {
+      const uint64_t total = ledger.category_total(LedgerCategory::DENOISER), seen = measured();
+      std::printf("denoiser cuda ledger %s: %llu recorded, %llu measured by the test\n", when,
+                  static_cast<unsigned long long>(total), static_cast<unsigned long long>(seen));
+      INFO(when);
+      CHECK(total == state->device_bytes());
+      CHECK(total + kGranularity >= seen);
+      CHECK(total <= seen + kGranularity);
+    };
+    const char* steps[4] = {"A", "B", "A again", "B again"};
     for (int step = 0; step < 4; ++step) {
       DisplayImage out;
       denoise(*state, step % 2 ? in_b : fixture_inputs(f), out, DenoiseMode::FINAL);
       denoise(*state, step % 2 ? in_b : fixture_inputs(f), out, DenoiseMode::VIEWPORT);
-      totals[step] = ledger.category_total(LedgerCategory::DENOISER);
-      CHECK(totals[step] == state->device_bytes());
+      check_total(steps[step]);
     }
-    std::printf("denoiser cuda ledger: A %llu, B %llu, A %llu, B %llu bytes (A %u^2, B %u^2)\n",
-                static_cast<unsigned long long>(totals[0]), static_cast<unsigned long long>(totals[1]),
-                static_cast<unsigned long long>(totals[2]), static_cast<unsigned long long>(totals[3]),
-                NoisyFixture::kSize, kB);
-    CHECK(totals[1] > totals[0]);
-    CHECK(totals[2] < totals[1]);
-    CHECK(totals[3] <= totals[1] + kGranularity);
+
+    // A reconfiguration that fails (buffers of 2^40 pixels cannot be allocated) still counts: its
+    // window released B's buffers, the record follows, and the next configuration builds on it.
+    DisplayImage untouched;
+    untouched.width = 7;
+    untouched.rgba = {1.0f, 2.0f, 3.0f, 4.0f};
+    DenoiseInputs impossible;
+    impossible.color = {big.data(), 1u << 20, 1u << 20, 3};
+    CHECK_THROWS_AS(denoise(*state, impossible, untouched, DenoiseMode::VIEWPORT), std::runtime_error);
+    CHECK(untouched.width == 7);
+    CHECK(untouched.height == 0);
+    CHECK(untouched.rgba == std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f});
+    CHECK_FALSE(untouched.denoised);
+    check_total("after a failed reconfiguration");
+    DisplayImage out;
+    denoise(*state, in_b, out, DenoiseMode::VIEWPORT);
+    CHECK(out.denoised);
+    check_total("B after the failure");
+
     for (const LedgerRecord& r : ledger.records())
       if (r.category == LedgerCategory::DENOISER) CHECK((r.owner.scene == kOwner.scene && r.owner.session == kOwner.session));
   }

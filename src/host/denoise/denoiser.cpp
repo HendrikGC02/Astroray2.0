@@ -141,22 +141,25 @@ struct DenoiserState::Oidn {
     uint64_t before = 0;
     if (cuda_ordinal >= 0) {
       type = "CUDA";
-      if constexpr (!kCudaBuild) throw std::runtime_error(prefix() + "a CUDA device was requested from a build without the CUDA device");
-      if (!c.cuda_stream) throw std::invalid_argument(prefix() + "a CUDA device needs the engine's stream (cuda_stream)");
-      if (!ledger) throw std::invalid_argument(prefix() + "a CUDA device needs a ledger for its memory");
-      // d16: no CPU fallback for a GPU render; an unsupported GPU is the failure itself.
-      if (!lib->oidnIsCUDADeviceSupported(cuda_ordinal)) {
-        const char* message = nullptr;
-        lib->oidnGetDeviceError(nullptr, &message);
-        throw std::runtime_error(prefix() + "CUDA device " + std::to_string(cuda_ordinal) +
-                                 " is not supported (oidnIsCUDADeviceSupported is false)" +
-                                 (message && *message ? std::string(": ") + message : std::string()));
+      if constexpr (kCudaBuild) {
+        if (!c.cuda_stream) throw std::invalid_argument(prefix() + "a CUDA device needs the engine's stream (cuda_stream)");
+        if (!ledger) throw std::invalid_argument(prefix() + "a CUDA device needs a ledger for its memory");
+        // d16: no CPU fallback for a GPU render; an unsupported GPU is the failure itself.
+        if (!lib->oidnIsCUDADeviceSupported(cuda_ordinal)) {
+          const char* message = nullptr;
+          lib->oidnGetDeviceError(nullptr, &message);
+          throw std::runtime_error(prefix() + "CUDA device " + std::to_string(cuda_ordinal) +
+                                   " is not supported (oidnIsCUDADeviceSupported is false)" +
+                                   (message && *message ? std::string(": ") + message : std::string()));
+        }
+        before = free_bytes();
+        // d18: on the engine's stream, so denoising is ordered with the render's launches.
+        const cudaStream_t stream = static_cast<cudaStream_t>(c.cuda_stream);
+        device = lib->oidnNewCUDADevice(&cuda_ordinal, &stream, 1);
+        check(nullptr, "oidnNewCUDADevice");
+      } else {
+        throw std::runtime_error(prefix() + "a CUDA device was requested from a build without the CUDA device");
       }
-      before = free_bytes();
-      // d18: on the engine's stream, so denoising is ordered with the render's launches.
-      const cudaStream_t stream = static_cast<cudaStream_t>(c.cuda_stream);
-      device = lib->oidnNewCUDADevice(&cuda_ordinal, &stream, 1);
-      check(nullptr, "oidnNewCUDADevice");
     } else {
       if (!lib->oidnIsCPUDeviceSupported()) {
         const char* message = nullptr;
@@ -189,8 +192,7 @@ struct DenoiserState::Oidn {
     warm.color = {zero, 1, 1, 3};
     warm.albedo = warm.color;
     warm.normal = warm.color;
-    DisplayImage scratch;
-    for (DenoiseMode m : {DenoiseMode::FINAL, DenoiseMode::VIEWPORT}) execute(warm, scratch, m);
+    for (DenoiseMode m : {DenoiseMode::FINAL, DenoiseMode::VIEWPORT}) execute(warm, m);
     // The 1 x 1 images are size-dependent: they go, so the creation record holds only what stays.
     drop_images();
     set_record(creation_record, creation_bytes, drop_since(before));
@@ -270,6 +272,17 @@ struct DenoiserState::Oidn {
 
   // Sizes the buffers and commits the mode's filters for a new size or guide set.
   void configure(DenoiseMode mode, uint32_t w, uint32_t h, bool with_albedo, bool with_normal) {
+    try {
+      bind_and_commit(mode, w, h, with_albedo, with_normal);
+    } catch (...) {
+      // Half-allocated buffers and half-bound filters go, so the next call configures from nothing
+      // (and its window measures what this one left behind).
+      drop_images();
+      throw;
+    }
+  }
+
+  void bind_and_commit(DenoiseMode mode, uint32_t w, uint32_t h, bool with_albedo, bool with_normal) {
     Filters& f = filters[size_t(mode)];
     const size_t bytes_per_image = size_t(w) * h * 3 * sizeof(float);
     if (buffer_width != w || buffer_height != h) {
@@ -313,18 +326,32 @@ struct DenoiserState::Oidn {
   }
 
   // A denoise. A reconfiguration is measured as one window: from before a new size drops every
-  // filter's images and buffers to after the commit and first execution. The configuration record is
-  // then replaced by its old bytes plus that window's net drop, which is negative when the window gave
-  // memory back. OIDN keeps memory across a smaller size (on the 5070 Ti a 128 x 128 configuration
-  // after a 512 x 512 one holds 84 MiB more than before it), so replacing the record by the new
-  // window's drop alone would under-count; and the record cannot ratchet, because every byte OIDN
-  // frees is freed inside such a window and counted.
+  // filter's images and buffers to after the commit and first execution, or to the throw that ended
+  // them. The configuration record is then replaced by its old bytes plus that window's net drop,
+  // which is negative when the window gave memory back. OIDN keeps memory across a smaller size (on
+  // the 5070 Ti a 128 x 128 configuration after a 512 x 512 one holds 84 MiB more than before it), so
+  // replacing the record by the new window's drop alone would under-count; and the record cannot
+  // ratchet, because every byte OIDN frees is freed inside such a window and counted. `out` is
+  // written last, after the accounting, so no throw leaves it changed.
   void run(const DenoiseInputs& in, DisplayImage& out, DenoiseMode mode) {
-    const bool reconfigure = !configured(mode, in);
-    const uint64_t before = reconfigure && cuda_ordinal >= 0 ? free_bytes() : 0;
-    if (in.color.width != buffer_width || in.color.height != buffer_height) drop_images();
-    execute(in, out, mode);
-    if (reconfigure && cuda_ordinal >= 0) set_record(config_record, config_bytes, net_after(config_bytes, before));
+    const bool window = !configured(mode, in) && cuda_ordinal >= 0;
+    const uint64_t before = window ? free_bytes() : 0;
+    try {
+      if (in.color.width != buffer_width || in.color.height != buffer_height) drop_images();
+      execute(in, mode);
+    } catch (...) {
+      if (window) {
+        // The failure is what the caller hears; an accounting failure on top of it is printed.
+        try {
+          set_record(config_record, config_bytes, net_after(config_bytes, before));
+        } catch (const std::exception& e) {
+          std::fprintf(stderr, "astroray: denoiser ledger update after a failed denoise failed: %s\n", e.what());
+        }
+      }
+      throw;
+    }
+    if (window) set_record(config_record, config_bytes, net_after(config_bytes, before));
+    write_out(in, out);
   }
 
   // `held` plus the net drop in free device bytes since `before`; 0 if that is negative.
@@ -334,7 +361,8 @@ struct DenoiserState::Oidn {
     return up > now ? up - now : 0;
   }
 
-  void execute(const DenoiseInputs& in, DisplayImage& out, DenoiseMode mode) {
+  // Configures when needed and denoises into `staging` (3 floats per pixel).
+  void execute(const DenoiseInputs& in, DenoiseMode mode) {
     const ImageView& c = in.color;
     const bool with_albedo = in.albedo.data != nullptr, with_normal = in.normal.data != nullptr;
     if (!configured(mode, in)) configure(mode, c.width, c.height, with_albedo, with_normal);
@@ -353,7 +381,11 @@ struct DenoiserState::Oidn {
     lib->oidnExecuteFilter(f.rt);
     lib->oidnReadBuffer(output, 0, image_bytes, staging.data());
     check(device, "denoise");
-    // Only now is `out` written: a failure above leaves the caller's image as it was.
+  }
+
+  void write_out(const DenoiseInputs& in, DisplayImage& out) const {
+    const ImageView& c = in.color;
+    const size_t n = size_t(c.width) * c.height;
     out.width = c.width;
     out.height = c.height;
     out.rgba.resize(n * 4);
