@@ -16,3 +16,6 @@ Budget: gate +0.3 s at most for the new self-test step in the tier that holds li
 Depends on: none in code; 195 for M1b showcase rows with `heat` (without it, land the tool with the self-test and the M1a gallery and add the rows later: say so). Collisions: tools/check.ps1 with 190, 191, 201; bench/scenes.toml with 188, 195; gallery.py with no open task; the later one rebases.
 Size: S-M (about 180 lines of tool code); stop and report at 2x.
 Progress:
+- Files: tools/gallery.py (f12 worker wraps Job._close_session to read AR Sample Count and AR Bounces; no render_final change), tools/report.py, tools/check.ps1 (gate step 'report self-test'), tools/README.md, tasks/200.canary.patch.
+- Verified on b5m with heat = true set temporarily (not committed): cornell_area needs assets/_cache (not fetched); no M1b showcase rows exist yet, so bench/scenes.toml is unchanged and the M1b gallery run is not possible.
+- Evidence: out/evidence/200/heat_bounces_{record,image}_range.png; canary PASS; fast and gate PASS.
