@@ -125,8 +125,8 @@ struct GB {
     link(src, n, 0);
     return n;
   }
-  int emit(int colour, int strength) {
-    const int n = add(Op::EMIT_LE);
+  int emit(int colour, int strength, int child = -1) {
+    const int n = child < 0 ? add(Op::EMIT_LE) : add(Op::EMIT_LE, {}, {child});
     link(colour, n, 0);
     link(strength, n, 1);
     return n;
@@ -415,6 +415,16 @@ TEST_CASE("spectrum_table/refused in a Mix Shader child and in a volume") {
   const MaterialOutput m = mix.compile();
   REQUIRE(m.magenta);
   CHECK(m.entries[0].detail.find("a TABLE spectrum cannot be stored per Mix Shader child") != std::string::npos);
+  // An emission child of a Mix Shader cannot be a block ref either.
+  GB me;
+  const int f2 = me.add(Op::CONST_F32, {0.5f});
+  const int bm2 = me.add(Op::BRANCH_MIX, {}, {0, 0, 1});
+  me.link(f2, bm2, 0);
+  me.emit(me.table(p), me.add(Op::CONST_F32, {1.0f}), 0);
+  me.store(me.add(Op::CONST_F32, {0.2f}), ar::RecordSlot::specular_roughness, 1);
+  const MaterialOutput mem = me.compile();
+  REQUIRE(mem.magenta);
+  CHECK(mem.entries[0].detail.find("a TABLE emission cannot sit under a Mix Shader") != std::string::npos);
   // The op has no interval rule and is not volume reachable: a volume graph that holds one is refused.
   GB vol;
   vol.table(p);

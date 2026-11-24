@@ -561,6 +561,8 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     if (nd.op == Op::EMIT_LE) {
       if (w.g.nodes[size_t(nd.input[0])].op == Op::BLACKBODY)
         return res->error = who + "a Blackbody emission cannot sit under a Mix Shader (its strength must stay constant)", false;
+      if (w.g.nodes[size_t(nd.input[0])].op == Op::SPECTRUM_TABLE)
+        return res->error = who + "a TABLE emission cannot sit under a Mix Shader (a block ref with a constant strength)", false;
       if (w.isc[size_t(nd.input[1])] && !(w.cv[size_t(nd.input[1])][0] >= 0.0f))
         return res->error = "EMIT_LE strength must not be negative", false;
       emits_of[nd.child].push_back(i);
