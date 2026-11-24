@@ -10,6 +10,7 @@
 // docs/decisions/0003-spectral-model-and-path-state.md d16 (grey lifts are analytic).
 #include <doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -97,8 +98,9 @@ struct Rig {
   ar::OpenPBRParams rec = {};
   ar::Spec le = {};
   ar::SceneTables tables = fixture().tables;
+  float su = 0.5f;  // the entry's selection uniform (BRANCH_MIX)
   VmStatus run(const Prog& p, uint32_t entry = 4) {
-    return ar::run_entry(p.w.data(), entry, &regs, ctx, tables, &rec, &le);
+    return ar::run_entry(p.w.data(), entry, &regs, ctx, tables, &rec, &le, &su);
   }
 };
 
@@ -424,6 +426,41 @@ TEST_CASE("vm/fold equals interpret") {
       }
       t.ref("VOLUME_COEFFS", ref_ok);
     }
+    {  // ADD_F32 and SUB_F32, the second into its own first source.
+      Prog p;
+      p.op(Op::ADD_F32, 16, 0, 1).op(Op::SUB_F32, 2, 2, 3).end();
+      Rig h = g;
+      REQUIRE(h.run(p) == VmStatus::OK);
+      t.fold("ADD_F32", bits(h.regs.r[16]) == bits(ar::op_add_f32(x[0], x[1])));
+      t.ref("ADD_F32", bits(h.regs.r[16]) == bits(sum(x[0], x[1])));
+      t.fold("SUB_F32", bits(h.regs.r[2]) == bits(ar::op_sub_f32(x[2], x[3])));
+      t.ref("SUB_F32", bits(h.regs.r[2]) == bits(float(double(x[2]) - double(x[3]))));
+    }
+    {  // BRANCH_MIX: the side (r17 = 1 falls through, 2 jumps) and the rescaled selection uniform,
+       // for factors in [-0.25, 1.25) so both clamps are hit. The reference is item 31's formula
+       // in double with 1 - f held in float, as the register file holds it (exact for f >= 0.5;
+       // otherwise u - (1 - f) cancels and the float rounding of 1 - f would be divided by a small
+       // f), kept below 1 as pbrt-v4 SampleDiscrete does.
+      const float u = unit(i, 45), f = unit(i, 46) * 1.5f - 0.25f;
+      Prog p;
+      p.op(Op::BRANCH_MIX, 0, 0, 0, {5u})           // words 0-1
+          .op(Op::CONST_F32, 17, 0, 0, {fb(1.0f)})   // 2-3: first child
+          .end()                                     // 4
+          .op(Op::CONST_F32, 17, 0, 0, {fb(2.0f)})   // 5-6: second child
+          .end();
+      Rig h = g;
+      h.regs.r[0] = f, h.su = u;
+      REQUIRE(h.run(p) == VmStatus::OK);
+      float uf = u;
+      const bool second = ar::op_branch_mix(f, &uf);
+      t.fold("BRANCH_MIX", h.regs.r[17] == (second ? 2.0f : 1.0f) && bits(h.su) == bits(uf));
+      const double fc = std::min(std::max(double(f), 0.0), 1.0), p_first = double(1.0f - float(fc));
+      const bool want_second = !(double(u) < p_first);
+      const double want_u = std::min(want_second ? (double(u) - p_first) / fc : double(u) / p_first,
+                                     double(ar::kBranchOneMinusEpsilon));
+      t.ref("BRANCH_MIX", h.regs.r[17] == (want_second ? 2.0f : 1.0f) &&
+                              std::fabs(double(h.su) - want_u) <= 2e-7 * want_u && h.su >= 0.0f && h.su < 1.0f);
+    }
   }
   for (const auto& kv : t.fold_bad) {
     INFO(kv.first);
@@ -434,8 +471,8 @@ TEST_CASE("vm/fold equals interpret") {
     CHECK(kv.second == 0u);
   }
   // Every opcode of the table was exercised, so a renamed key cannot hide a missing check.
-  CHECK(t.fold_bad.size() == 15u);
-  CHECK(t.ref_bad.size() == 15u);
+  CHECK(t.fold_bad.size() == 18u);
+  CHECK(t.ref_bad.size() == 18u);
 }
 
 TEST_CASE("vm/lift analytic values") {
@@ -623,6 +660,38 @@ TEST_CASE("vm/control flow and entries") {
     CHECK(h.regs.r[1] == 1.0f);
     CHECK(h.regs.r[2] == 3.0f);
   }
+  {  // BRANCH_MIX: factor 0 always keeps the first child and factor 1 always takes the second,
+     // with u unchanged; 0.25 splits u at 0.75 and rescales each side back onto [0, 1).
+    struct Case {
+      float f, u;
+      bool second;
+      float u_out;
+    };
+    const Case cases[] = {{0.0f, 0.0f, false, 0.0f},   {0.0f, 0.9f, false, 0.9f},  {1.0f, 0.0f, true, 0.0f},
+                          {1.0f, 0.9f, true, 0.9f},    {0.25f, 0.5f, false, 0.5f / 0.75f}, {0.25f, 0.875f, true, 0.5f},
+                          {-3.0f, 0.5f, false, 0.5f},  {7.0f, 0.5f, true, 0.5f}};
+    for (const Case& c : cases) {
+      Prog p;
+      p.op(Op::BRANCH_MIX, 0, 0, 0, {5u}).op(Op::CONST_F32, 1, 0, 0, {fb(1.0f)}).end().op(Op::CONST_F32, 1, 0, 0, {fb(2.0f)}).end();
+      Rig h;
+      h.regs.r[0] = c.f, h.su = c.u;
+      INFO(c.f << " " << c.u);
+      REQUIRE(h.run(p) == VmStatus::OK);
+      CHECK(h.regs.r[1] == (c.second ? 2.0f : 1.0f));
+      CHECK(h.su == doctest::Approx(c.u_out).epsilon(1e-6));
+    }
+    // A NaN factor or a uniform outside [0, 1) stops the run instead of picking a side.
+    for (const float bad_f : {std::nanf(""), 0.5f})
+      for (const float bad_u : {0.5f, -0.25f, 1.0f, std::nanf("")}) {
+        if (bad_f == 0.5f && bad_u == 0.5f) continue;
+        Prog p;
+        p.op(Op::BRANCH_MIX, 0, 0, 0, {2u}).op(Op::CONST_F32, 1, 0, 0, {fb(1.0f)}).end();
+        Rig h;
+        h.regs.r[0] = bad_f, h.su = bad_u;
+        CHECK(h.run(p) == VmStatus::BAD_OPERAND);
+        CHECK(h.regs.r[1] == 0.0f);
+      }
+  }
   {  // END stops the entry; the words after it never run.
     Prog p;
     p.op(Op::CONST_F32, 1, 0, 0, {fb(1.0f)}).end().op(Op::CONST_F32, 2, 0, 0, {fb(2.0f)});
@@ -711,6 +780,11 @@ TEST_CASE("vm/errors stop the run") {
   add("JMP 0", Prog().op(Op::JMP, 0, 0, 0, {0u}), VmStatus::BAD_JUMP);
   add("JMP -1", Prog().op(Op::JMP, 0, 0, 0, {0xffffffffu}), VmStatus::BAD_JUMP);
   add("JMP INT_MIN", Prog().op(Op::JMP, 0, 0, 0, {0x80000000u}), VmStatus::BAD_JUMP);
+  add("BRANCH_MIX 0", Prog().op(Op::BRANCH_MIX, 0, 0, 0, {0u}), VmStatus::BAD_JUMP);
+  add("BRANCH_MIX -2", Prog().op(Op::BRANCH_MIX, 0, 0, 0, {0xfffffffeu}), VmStatus::BAD_JUMP);
+  add("BRANCH_MIX factor 32", Prog().op(Op::BRANCH_MIX, 32, 0, 0, {2u}), VmStatus::BAD_REGISTER);
+  add("ADD_F32 dst 32", Prog().op(Op::ADD_F32, 32, 0, 0), VmStatus::BAD_REGISTER);
+  add("SUB_F32 src2 32", Prog().op(Op::SUB_F32, 0, 0, 32), VmStatus::BAD_REGISTER);
   add("UNSUPPORTED", Prog().op(Op::UNSUPPORTED, 0, 0, 0, {7u}), VmStatus::UNSUPPORTED);
 #if defined(AR_GATE_HOOKS)
   add("TEST_INJECT_NAN dst 32", Prog().op(Op::TEST_INJECT_NAN, 32), VmStatus::BAD_REGISTER);
@@ -739,6 +813,10 @@ TEST_CASE("vm/errors stop the run") {
     p.op(Op::STORE_SLOT, 0, 0, 0, {0u}).end();
     Rig g;
     CHECK(ar::run_entry(p.w.data(), 4, &g.regs, g.ctx, g.tables, nullptr, &g.le) == VmStatus::NULL_POINTER);
+    // A BRANCH_MIX in an entry run without a selection uniform.
+    Prog b;
+    b.op(Op::BRANCH_MIX, 0, 0, 0, {2u}).end();
+    CHECK(ar::run_entry(b.w.data(), 4, &g.regs, g.ctx, g.tables, &g.rec, &g.le) == VmStatus::NULL_POINTER);
     Prog e;
     e.op(Op::EMIT_LE, 0).end();
     CHECK(ar::run_entry(e.w.data(), 4, &g.regs, g.ctx, g.tables, &g.rec, nullptr) == VmStatus::NULL_POINTER);
@@ -801,7 +879,10 @@ TEST_CASE("vm/opcode table is wired") {
   CHECK(uint32_t(Op::CAUCHY_ABBE) == 17u);
   CHECK(uint32_t(Op::CHANNEL_F32X3) == 18u);
   CHECK(uint32_t(Op::VOLUME_COEFFS) == 19u);
-  CHECK(uint32_t(Op::COUNT_) == 20u);
+  CHECK(uint32_t(Op::BRANCH_MIX) == 20u);
+  CHECK(uint32_t(Op::ADD_F32) == 21u);
+  CHECK(uint32_t(Op::SUB_F32) == 22u);
+  CHECK(uint32_t(Op::COUNT_) == 23u);
 }
 
 }  // TEST_SUITE

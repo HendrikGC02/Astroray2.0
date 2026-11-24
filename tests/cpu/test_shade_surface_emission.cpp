@@ -164,6 +164,7 @@ struct HitRig {
   std::vector<uint32_t> queue, active, sample_id, flags, hit_prim, hit_inst;
   std::vector<uint8_t> next_stage, term, ray_type;
   std::vector<ar::U16x6> bounces;
+  std::vector<uint16_t> event_index;  // the surface entry draws its selection uniform from event 0
   std::vector<ar::Real3> ray_d;
   std::vector<ar::Real2> hit_uv;
   std::vector<ar::Real> hit_t;
@@ -202,6 +203,7 @@ struct HitRig {
       next_stage.push_back(uint8_t(ar::Stage::SHADE_SURFACE)), term.push_back(uint8_t(ar::Term::ACTIVE));
       ray_type.push_back(1u);
       bounces.push_back(ar::U16x6{{0, 0, 0, 0, 0, 0}});
+      event_index.push_back(0);
       hit_inst.push_back(i < 4 ? i : 0u), hit_prim.push_back(0u);
       hit_uv.push_back(ar::Real2{ar::Real(0.2), ar::Real(0.3)});
       hit_t.push_back(ar::Real(1));
@@ -215,6 +217,7 @@ struct HitRig {
     }
     path.sample_id = sample_id.data(), path.next_stage = next_stage.data(), path.term = term.data();
     path.ray_type = ray_type.data(), path.flags = flags.data(), path.bounces = bounces.data();
+    path.event_index = event_index.data();
     path.ray_d = ray_d.data(), path.lambda_t = lambda_t.data(), path.beta = beta.data(), path.r_u = r_u.data();
     path.hit_t = hit_t.data(), path.hit_prim = hit_prim.data(), path.hit_inst = hit_inst.data();
     path.hit_uv = hit_uv.data();

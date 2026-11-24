@@ -106,6 +106,16 @@ std::vector<Named> programs() {
   p.push_back({"MUL_F32X3", Prog().op(Op::MUL_F32X3, 16, 0, 3).op(Op::END)});
   p.push_back({"MUL_F32X3_F32", Prog().op(Op::MUL_F32X3_F32, 16, 0, 3).op(Op::END)});
   p.push_back({"ADD_F32X3", Prog().op(Op::ADD_F32X3, 16, 0, 3).op(Op::END)});
+  p.push_back({"ADD_F32,SUB_F32", Prog().op(Op::ADD_F32, 16, 0, 1).op(Op::SUB_F32, 17, 2, 3).op(Op::END)});
+  // A Mix selection: the selection uniform is UV set 0's u and the factor UV set 1 (both in
+  // [0, 1)); output column 15 is the rescaled uniform and r22 names the side taken.
+  p.push_back({"BRANCH_MIX", Prog()
+                                 .op(Op::LOAD_CTX_UV, 19, 1)                // word 0
+                                 .op(Op::BRANCH_MIX, 19, 0, 0, {6u})        // 1-2, to word 7
+                                 .op(Op::CONST_F32, 22, 0, 0, {fb(1.0f)})   // 3-4
+                                 .op(Op::JMP, 0, 0, 0, {4u})                // 5-6, to word 9
+                                 .op(Op::CONST_F32, 22, 0, 0, {fb(2.0f)})   // 7-8
+                                 .op(Op::END)});                            // 9
   p.push_back({"CHANNEL_F32X3", Prog()
                                     .op(Op::CHANNEL_F32X3, 16, 3, 0, {0u})
                                     .op(Op::CHANNEL_F32X3, 17, 3, 0, {1u})
@@ -170,9 +180,11 @@ Results cpu_run(const Prog& p, const Inputs& in, const Tables& tb) {
     for (int l = 0; l < 4; ++l) ctx.lambda_t.nm[l] = row[23 + l];
     ar::OpenPBRParams rec = {};
     ar::Spec le = {};
-    const ar::VmStatus st = ar::run_entry(p.w.data(), 4, &regs, ctx, tables, &rec, &le);
+    float select_u = row[19];  // the selection uniform BRANCH_MIX reads and rescales
+    const ar::VmStatus st = ar::run_entry(p.w.data(), 4, &regs, ctx, tables, &rec, &le, &select_u);
     double* o = r.v.data() + size_t(i) * kOut;
     for (uint32_t k = 0; k < 16; ++k) o[k] = regs.r[16 + k];
+    o[15] = select_u;  // in r31's column: no program writes r31
     for (int l = 0; l < 4; ++l) {
       o[16 + l] = le.v[l];
       o[21 + l] = rec.base_color.v[l];

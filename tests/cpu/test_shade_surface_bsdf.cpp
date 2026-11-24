@@ -68,7 +68,8 @@ struct Rig {
   std::vector<ar::Real> hit_t, eta_scale, prev_dist;
   std::vector<ar::Spec> lambda_t, beta, r_u, r_l;
 
-  explicit Rig(uint32_t count) : n(count) {
+  // `surface` replaces the Emission graph (the test then keeps the material's own constant block).
+  explicit Rig(uint32_t count, const ar_graph_desc* surface = nullptr) : n(count) {
     scene.meshes = std::make_shared<MeshStore>();
     scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
     commit([&](Edit& e) {
@@ -80,7 +81,7 @@ struct Rig {
       nodes[2].op = uint32_t(ar::Op::EMIT_LE);
       ar_graph_desc d = {};
       d.node_count = 3, d.link_count = 2, d.f32_count = 4, d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data();
-      REQUIRE(scene.materials->set_graph(e, kMat + 1000, &d) == AR_OK);
+      REQUIRE(scene.materials->set_graph(e, kMat + 1000, surface != nullptr ? surface : &d) == AR_OK);
       ar_material_desc m = {};
       m.surface_graph = kMat + 1000;
       m.emission_sampling = AR_EMISSION_SAMPLING_AUTO;
@@ -279,6 +280,95 @@ TEST_CASE("shade_surface_bsdf/lambert beta") {
   CHECK(rig.ray_o[0].z == o.z);
   CHECK(rig.ray_o[0].z > 0.0f);  // above the quad, on the side the ray leaves to
   CHECK(wi.z > 0.0f);
+}
+
+TEST_CASE("shade_surface_bsdf/a Mix Shader's selected child is sampled") {
+  // Mix(Lambert 0.2, Lambert 0.8 under a GGX layer, 0.5) (0005 item 38): each path's BSDF sample
+  // comes from the record of the child BRANCH_MIX selected with the event's lobe-choice uniform,
+  // and the lobe choice inside child 1 uses the uniform as the selection rescaled it (0004 D14).
+  // The expectation runs the compiled surface entry itself with that selection uniform.
+  std::vector<ar_graph_node> nodes;
+  std::vector<ar_graph_link> links;
+  std::vector<float> f;
+  std::vector<int32_t> ip;
+  auto add = [&](ar::Op op, std::vector<float> fp, std::vector<int32_t> ipp) {
+    ar_graph_node nd = {};
+    nd.op = uint32_t(op);
+    nd.f32_first = uint32_t(f.size()), nd.f32_count = uint32_t(fp.size());
+    nd.i32_first = uint32_t(ip.size()), nd.i32_count = uint32_t(ipp.size());
+    f.insert(f.end(), fp.begin(), fp.end());
+    ip.insert(ip.end(), ipp.begin(), ipp.end());
+    nodes.push_back(nd);
+    return uint32_t(nodes.size() - 1);
+  };
+  auto store = [&](int32_t child, ar::RecordSlot s, std::vector<float> v) {
+    const uint32_t c = add(v.size() == 1 ? ar::Op::CONST_F32 : ar::Op::CONST_F32X3, v, {});
+    links.push_back({c, 0, add(ar::Op::STORE_SLOT, {}, {int32_t(s), child}), 0});
+  };
+  for (int32_t child = 0; child < 2; ++child) {
+    const float rho = child == 0 ? 0.2f : 0.8f;
+    store(child, ar::RecordSlot::base_weight, {1.0f});
+    store(child, ar::RecordSlot::base_color, {rho, rho, rho});
+    store(child, ar::RecordSlot::base_diffuse_roughness, {0.0f});
+    store(child, ar::RecordSlot::specular_weight, {child == 0 ? 0.0f : 1.0f});
+  }
+  store(1, ar::RecordSlot::specular_roughness, {0.4f});
+  const uint32_t fac = add(ar::Op::CONST_F32, {0.5f}, {});
+  links.push_back({fac, 0, add(ar::Op::BRANCH_MIX, {}, {0, 0, 1}), 0});
+  ar_graph_desc d = {};
+  d.node_count = uint32_t(nodes.size()), d.link_count = uint32_t(links.size());
+  d.f32_count = uint32_t(f.size()), d.i32_count = uint32_t(ip.size());
+  d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data(), d.params_i32 = ip.data();
+  Rig rig(256, &d);
+  const ar::MaterialHeader& h = rig.sd.material_headers[rig.sd.material_slots[0]];
+  REQUIRE((h.flags & ar::CONSTANT_SURFACE) == 0u);
+  const uint32_t* prog = rig.sd.material_programs + h.program_offset;
+  struct Want {
+    ar::LobeSample s;
+    bool second;
+  };
+  std::vector<Want> want(rig.n);
+  std::vector<ar::Spec> beta0(rig.beta);
+  for (uint32_t s = 0; s < rig.n; ++s) {
+    ar::ShadeContext c{};
+    ar::OpenPBRParams rec;
+    rig.vertex(s, &c, &rec);
+    ar::VmRegs regs = {};
+    ar::Spec le = ar::spec_fill(ar::Real(0));
+    const float u = float(ar::camera_path_draw(rig.kg, s, ar::event_dim(0, ar::EV_LOBE_CHOICE)));
+    float su = u;
+    REQUIRE(ar::run_entry(prog, prog[0], &regs, c, *rig.kg.tables, &rec, &le, &su) == ar::VmStatus::OK);
+    float u_sel = u;
+    want[s].second = ar::op_branch_mix(0.5f, &u_sel);
+    CHECK(su == u_sel);
+    CHECK(float(rec.specular_weight) == (want[s].second ? 1.0f : 0.0f));
+    want[s].s = ar::stack_sample(*rig.kg.e_diel, rec, ar::frame_from_normal(c.N), c.wo, ar::Real(u_sel),
+                                 ar::Real2{ar::camera_path_draw(rig.kg, s, ar::event_dim(0, ar::EV_BSDF_U)),
+                                           ar::camera_path_draw(rig.kg, s, ar::event_dim(0, ar::EV_BSDF_V))},
+                                 ar::TransportMode::Radiance);
+  }
+  rig.run();
+  uint32_t first = 0, glossy = 0, diffuse_second = 0;
+  for (uint32_t s = 0; s < rig.n; ++s) {
+    INFO(s);
+    if (rig.term[s] != uint8_t(ar::Term::ACTIVE)) continue;  // a reflection below Ng or roulette
+    CHECK(rig.ray_d[s].x == want[s].s.wi.x);
+    CHECK(rig.ray_d[s].y == want[s].s.wi.y);
+    CHECK(rig.ray_d[s].z == want[s].s.wi.z);
+    if (!want[s].second) {
+      ++first;
+      // Lambert: f cos / pdf is the albedo.
+      for (int l = 0; l < ar::kLanes; ++l)
+        CHECK(std::fabs(double(rig.beta[s].v[l]) - 0.2 * double(beta0[s].v[l])) <= 1e-4 * double(beta0[s].v[l]));
+    } else if ((want[s].s.flags & ar::LOBE_GLOSSY) != 0u) {
+      ++glossy;
+    } else {
+      ++diffuse_second;
+    }
+  }
+  CHECK(first > rig.n / 4);
+  CHECK(glossy > 0u);
+  CHECK(diffuse_second > 0u);
 }
 
 TEST_CASE("shade_surface_bsdf/a delta sample") {
