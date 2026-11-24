@@ -16,3 +16,7 @@ Budget: gate +0.5 s at most (headless cases; stop and ask above); `check full` +
 Depends on: none in code (165 lands the one-entry-per-node rule the first test reads: if 165 has not landed, the test uses whatever entry count the engine gives today and says so). Collisions: `ui/` and __init__.py with 187 (the later one keeps one register list), properties.py and render_final.py with 198, viewport.py with no open task, api_surface.txt; the later one rebases.
 Size: M (about 300 lines without tests); stop and report at 2x. Split point: store, writers and headless tests first; panels and the windowed test after.
 Progress:
+- Store, writers, panels, compat list, headless test (6 cases, 1.2 s in Blender) and windowed test done; canary 199 PASS; check fast 8.1 s, gate 146.2 s PASS.
+- Subpanel read as a child of the new "Astroray" Render panel. compat list: DATA_PT_context_camera, DATA_PT_lens, DATA_PT_camera, DATA_PT_camera_dof, DATA_PT_camera_dof_aperture, RENDER_PT_format, RENDER_PT_color_management; film transparency has no panel of its own (EEVEE's Film panel also draws filter sizes the engine ignores), so ui/panels.py draws the render.film_transparent row.
+- Without 165 the engine lists an unsupported node only when it is linked into the graph; the tests link it. A clean render still carries the engine's INFO POOL_CAPACITY entry, so "no entries" is asserted on an empty report and "no WARNING/ERROR" on a clean render.
+- Used native._build_line and keymap._map (native.py and sync/keys.py are outside Scope); a public accessor in each would be cleaner.
