@@ -513,11 +513,9 @@ TEST_SUITE("gate") {
     const double n4 = 4.0 * kN;
     const double var = s2 / n4 - (s1 / n4) * (s1 / n4);
     const double var_ref = r2 / n4 - (r1 / n4) * (r1 / n4);
-    std::printf("grating lane-0 weight: lane mean %.6f, lane-0 reference %.6f, paired difference %+.6f +- %.6f, z %+.2f
-",
+    std::printf("grating lane-0 weight: lane mean %.6f, lane-0 reference %.6f, paired difference %+.6f +- %.6f, z %+.2f\n",
                 a1 / n, b1 / n, dm, dse, z);
-    std::printf("grating order-0 weight variance: lane mean %.6f, lane-0 reference %.6f, ratio %.3f
-", var, var_ref,
+    std::printf("grating order-0 weight variance: lane mean %.6f, lane-0 reference %.6f, ratio %.3f\n", var, var_ref,
                 var / var_ref);
     CHECK_MESSAGE(std::fabs(z) <= run.family->z(), st::reproduce(run));
     // Paired streams make the two variances equal to rounding if the code selected by lane 0, so
