@@ -2,9 +2,10 @@
 """Offline HTML report: tier durations, build times and the M1a close-out sections (measured gates against
 their lines, kernel resources over commits, the showcase gallery with CPU and GPU side by side).
 
-Run: <python> -I tools/report.py [--selftest]
+Run: <python> -I tools/report.py [--milestone M1b] [--selftest]
 Ref: docs/decisions/0009-build-test-process.md d22 (report contents, history line), d13 (budgets).
-Reads bench/history/*.jsonl, out/check/*.json, out/viewport/, out/gallery/M1a/ (tools/gallery.py) and the git
+Reads bench/history/*.jsonl, out/check/*.json, out/viewport/, out/gallery/<milestone>/ (tools/gallery.py;
+default the newest milestone with a gallery directory) and the git
 history of src/kernel/budget.toml; writes out/report/index.html (inline SVG and PNG, no network).
 A section whose history lines do not exist yet says which metric names it waits for; it never draws an empty plot.
 History metric names the M1a sections read (scene, unit): b19.idle, b19.partition (b1m/b5m, %: B-19's two rows);
@@ -290,16 +291,96 @@ def read_gallery(root, milestone="M1a"):
         thumb = os.path.join(d, "thumbs", name + ".png")
         if os.path.exists(thumb):
             side["thumb"] = thumb
+            side["dir"] = d
             out[name] = side
     return out
 
 
-def gallery_sections(gallery):
+VIRIDIS_H = os.path.join(ROOT, "src", "kernel", "film", "viridis.h")
+_viridis = []
+
+
+def viridis_table():
+    """The engine's 256 viridis entries as (256, 3) uint8, parsed from src/kernel/film/viridis.h at run time so the
+    report never carries a second copy of the table. Rounded like present.h's viridis_rgba8 (value * 255 + 0.5)."""
+    if not _viridis:
+        with open(VIRIDIS_H, encoding="utf-8") as f:
+            text = f.read()
+        body = text[text.index("kTable["):]
+        vals = [float(v) for v in re.findall(r"(\d\.\d+)f", body[body.index("{"):body.index("};")])]
+        if len(vals) != 256 * 3:
+            raise RuntimeError(f"{VIRIDIS_H}: {len(vals)} table values, expected 768")
+        _viridis.append(np.floor(np.array(vals, np.float32).reshape(256, 3) * 255.0 + 0.5).astype(np.uint8))
+    return _viridis[0]
+
+
+def heat_from_raw(values, lo, hi):
+    """(h, w, 3) uint8 viridis image of a raw statistic over [lo, hi], nearest of 256 entries like the engine's
+    viridis_rgba8 (0008 d12). hi <= lo has no scale: every pixel takes the first entry (no division by zero)."""
+    if hi > lo:
+        t = np.clip((values.astype(np.float64) - lo) / (hi - lo), 0.0, 1.0)
+    else:
+        t = np.zeros(values.shape)
+    idx = np.floor(np.nan_to_num(t) * 255.0 + 0.5).astype(np.int64)
+    return viridis_table()[idx]
+
+
+def num(v):
+    return f"{v:.4g}"
+
+
+def png_html(rgb, name):
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, name + ".png")
+        write_png(p, rgb)
+        return embed_png(p)
+
+
+def legend_html(lo, hi, ticks=5):
+    """A viridis strip over [lo, hi] with tick labels as page text (the PNG writer has no font)."""
+    strip = viridis_table()[np.arange(256)][None].repeat(14, axis=0)
+    img = png_html(strip, "legend").replace("<img ", '<img style="width:100%;height:14px" ')
+    labels = "".join(f"<span>{num(lo + (hi - lo) * i / (ticks - 1))}</span>" for i in range(ticks))
+    return f'{img}<div style="display:flex;justify-content:space-between">{labels}</div>'
+
+
+def raw_heat_cell(side, name, kind, image_range):
+    """One raw statistic map with its legend and caption; the range is the record's (0008 d12: sample count
+    [0, max spp], bounces [0, max depth]) or, for the second bounce map, [0, the image's maximum] (a report
+    presentation chosen here, not a record default)."""
+    entry = ((side or {}).get("heat") or {}).get(kind)
+    if entry is None:
+        return f'<td class="awaiting">missing: {html.escape(name)}</td>'
+    path = os.path.join(side["dir"], entry["file"])
+    if not os.path.exists(path):
+        return f'<td class="awaiting">missing: {html.escape(entry["file"])}</td>'
+    values = np.load(path)
+    heat = side["heat"]
+    record = ("max spp", float(heat["max_spp"])) if kind == "samples" else ("max depth", float(heat["max_bounces"]))
+    hi = entry["max"] if image_range else record[1]
+    step = max(1, -(-values.shape[1] // 640))
+    img = heat_from_raw(values[::step, ::step], 0.0, hi)   # nearest: a heat map's pixels are values, never blended
+    which = "range [0, image max] (report choice, not the record's)" if image_range else f"record range [0, {record[0]}]"
+    const = ", constant" if entry["min"] == entry["max"] else ""
+    cap = (f"{side['device']} {kind[:-1]} count, {which} = [0, {num(hi)}]: "
+           f"min {num(entry['min'])}, mean {num(entry['mean'])}, max {num(entry['max'])}{const}")
+    return f"<td>{png_html(img, name)}{legend_html(0.0, hi)}<small>{html.escape(cap)}</small></td>"
+
+
+def newest_milestone(root):
+    """The milestone with a gallery directory that sorts last by number then letter (M1a < M1b < M2); M1a if none."""
+    names = [os.path.basename(p) for p in glob.glob(os.path.join(root, "out", "gallery", "M*")) if os.path.isdir(p)]
+    key = lambda n: tuple((int(x) if x.isdigit() else x) for x in re.findall(r"\d+|[a-z]+", n[1:]))
+    return max(names, key=key) if names else "M1a"
+
+
+def gallery_sections(gallery, milestone="M1a"):
     """Side-by-side CPU, GPU and relative-difference thumbnails per scene, then the heat maps, with the sidecar's
     spp, time and settings as captions."""
     if not gallery:
-        return [section("Renders, CPU and GPU", awaiting("none: run tools/gallery.py --milestone M1a")),
-                section("Heat maps", awaiting("none: run tools/gallery.py --milestone M1a"))]
+        return [section("Renders, CPU and GPU", awaiting(f"none: run tools/gallery.py --milestone {milestone}")),
+                section("Heat maps", awaiting(f"none: run tools/gallery.py --milestone {milestone}"))]
 
     def cell(name, caption):
         g = gallery.get(name)
@@ -320,15 +401,23 @@ def gallery_sections(gallery):
     rows = [f'<tr><th colspan="3">{html.escape(sc)}</th></tr><tr>{cell(sc + "_cpu", dev_caption)}'
             f'{cell(sc + "_cuda", dev_caption)}{cell(sc + "_diff", diff_caption)}</tr>' for sc in scenes]
     heat = []
-    for sc in sorted({n.split("_heat_")[0] for n in gallery if "_heat_" in n}):
+    raw_scenes = {g["scene"] for g in gallery.values() if g.get("heat")}
+    for sc in sorted(raw_scenes | {n.split("_heat_")[0] for n in gallery if "_heat_" in n}):
+        if sc in raw_scenes:   # a gallery rendered before the raw passes existed has the screenshots only
+            sides = {d: gallery.get(f"{sc}_{d}") for d in ("cpu", "cuda")}
+            for kind, image_range in (("samples", False), ("bounces", False), ("bounces", True)):
+                title = f"{kind[:-1]} count, " + ("range [0, image max]" if image_range else "record range")
+                heat.append(f'<tr><th colspan="2">{html.escape(sc)}: {title} (raw pass)</th></tr><tr>'
+                            + "".join(raw_heat_cell(sides[d], f"{sc}_{d}_{kind}.npy", kind, image_range)
+                                      for d in ("cpu", "cuda")) + "</tr>")
         for kind in ("samples", "bounces"):
-            heat.append(f'<tr><th colspan="2">{html.escape(sc)}: {kind[:-1]} count</th></tr><tr>'
+            heat.append(f'<tr><th colspan="2">{html.escape(sc)}: {kind[:-1]} count (viewport screenshots)</th></tr><tr>'
                         f'{cell(f"{sc}_heat_{kind}_cpu", dev_caption)}{cell(f"{sc}_heat_{kind}_cuda", dev_caption)}</tr>')
     heat_body = f"<table>{''.join(heat)}</table>" if heat else awaiting("none: heat maps not rendered")
     return [section("Renders, CPU and GPU", f"<table>{''.join(rows)}</table>"), section("Heat maps", heat_body)]
 
 
-def build_html(history, checks, budgets, viewport=None, kernels=None, gallery=None):
+def build_html(history, checks, budgets, viewport=None, kernels=None, gallery=None, milestone="M1a"):
     parts = []
     ts = tier_series(history, checks)
     if ts:
@@ -363,7 +452,7 @@ def build_html(history, checks, budgets, viewport=None, kernels=None, gallery=No
                                 M1_LINES, "bytes"))
     parts.append(metric_section("OptiX cold compile (B-18)", history, ["b18.cold", "b18.warm"], B18_LINES, "ms"))
     parts.append(kernel_section(kernels if kernels is not None else []))
-    parts += gallery_sections(gallery)
+    parts += gallery_sections(gallery, milestone)
     return ("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Astroray 2.0 report</title>"
             "<style>body{font-family:sans-serif;margin:1em 2em}section{margin-bottom:1.5em}"
             "img{max-width:100%}td{vertical-align:top;padding:2px}th{text-align:left;padding-top:10px}"
@@ -532,6 +621,49 @@ def selftest():
         if gal.count("<img") != 5 or gal.count("missing: s_heat_bounces") != 2:
             print(f"selftest FAIL: gallery cells ({gal.count('<img')} images)")
             return 1
+        if "(raw pass)" in gal:
+            print("selftest FAIL: raw-pass maps drawn for a gallery without raw passes")
+            return 1
+    table = viridis_table()
+    ramp = np.linspace(0.0, 5.0, 6 * 6).reshape(6, 6)
+    img = heat_from_raw(ramp, 0.0, 5.0)
+    if table.shape != (256, 3) or table[0].tolist() != [68, 1, 84] or table[255].tolist() != [253, 231, 37] \
+            or img[0, 0].tolist() != table[0].tolist() or img[-1, -1].tolist() != table[255].tolist():
+        print("selftest FAIL: heat_from_raw (range start must be viridis entry 0, range end entry 255)")
+        return 1
+    if (heat_from_raw(np.full((3, 3), 7.0), 7.0, 7.0) != table[0]).any():
+        print("selftest FAIL: heat_from_raw of a constant map")
+        return 1
+    with tempfile.TemporaryDirectory() as d:
+        g = os.path.join(d, "out", "gallery", "M1b")
+        os.makedirs(os.path.join(g, "thumbs"))
+        os.makedirs(os.path.join(g, "work"))
+        px = np.full((4, 4, 3), 200, np.uint8)
+        counts = np.full((6, 6), 8.0, np.float32)   # constant: every pixel took the same number of samples
+        bounces = np.linspace(0.0, 5.0, 36, dtype=np.float32).reshape(6, 6)
+        for dev in ("cpu", "cuda"):
+            np.save(os.path.join(g, "work", f"s_{dev}_samples.npy"), counts)
+            if dev == "cpu":   # the CUDA bounce map is absent: named as missing, the page still renders
+                np.save(os.path.join(g, "work", f"s_{dev}_bounces.npy"), bounces)
+            heat = {"max_spp": 8, "max_bounces": 12,
+                    "samples": {"min": 8.0, "mean": 8.0, "max": 8.0, "file": f"work/s_{dev}_samples.npy"},
+                    "bounces": {"min": 0.0, "mean": 2.5, "max": 5.0, "file": f"work/s_{dev}_bounces.npy"}}
+            names = [f"s_{dev}"] + [f"s_heat_{k}_{dev}" for k in ("samples", "bounces")]
+            for name in names:
+                write_png(os.path.join(g, "thumbs", name + ".png"), px)
+                with open(os.path.join(g, name + ".json"), "w") as f:
+                    json.dump(dict({"device": dev.upper(), "scene": "s", "spp": 8, "time": 1.5, "build": "b",
+                                    "settings": {"width": 4, "height": 4, "view_transform": "AgX"}},
+                                   **({"heat": heat} if name == f"s_{dev}" else {})), f)
+        page = build_html(hist, [], {"B-08": 10.0, "B-09": 180.0}, gallery=read_gallery(d, "M1b"), milestone="M1b")
+        want = ["<span>12</span>", "<span>6</span>", "<span>1.25</span>", "<span>3.75</span>",
+                "min 8, mean 8, max 8, constant", "min 0, mean 2.5, max 5", "[0, max spp]", "[0, max depth]",
+                "range [0, image max]", "missing: work/s_cuda_bounces.npy"]
+        lost = [w for w in want if w not in page]
+        if lost or page.count("viewport screenshots") != 2 or page.count("missing: s_heat") != 0 \
+                or page.count("(raw pass)") != 3:
+            print(f"selftest FAIL: raw heat maps (page lacks {lost}, {page.count('(raw pass)')} raw headings)")
+            return 1
     print("selftest ok")
     return 0
 
@@ -557,9 +689,11 @@ def main():
         ttff_png(png, table, "b5m")
         print(f"wrote {png}")
         return 0
+    argv = sys.argv[1:]
+    milestone = argv[argv.index("--milestone") + 1] if "--milestone" in argv else newest_milestone(ROOT)
     out = os.path.join(ROOT, "out", "report", "index.html")
     write(out, build_html(load_history(ROOT) + load_ttff_history(ROOT), load_checks(ROOT), load_budgets(ROOT),
-                          viewport_series(ROOT), kernel_rows(ROOT), read_gallery(ROOT)))
+                          viewport_series(ROOT), kernel_rows(ROOT), read_gallery(ROOT, milestone), milestone))
     print(f"wrote {out}")
     return 0
 
