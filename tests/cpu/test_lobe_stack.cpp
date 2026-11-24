@@ -616,64 +616,6 @@ TEST_SUITE("fast") {
     CHECK(sd.p_metal == Real(1));
   }
 
-  TEST_CASE("lobe_stack/e_spec table") {
-    Fixture fx;
-    const uint8_t* b = fx.spec_bytes.data();
-    CHECK(ar::etable_u32(b + 12) == ar::kETableKindSpec);
-    CHECK(ar::etable_u32(b + 16) == 1u);
-    CHECK(ar::etable_u32(b + ar::kETableSamplesOffset) == 65536u);
-    bool any = false;
-    for (int i = 0; i < 32; ++i) any = any || b[ar::kETableLobeHashOffset + i] != 0;
-    CHECK(any);
-    // Grid points return the stored value; every cell is in (0, 1]; the smooth row is 1 (F = 1, no
-    // masking loss).
-    int bad = 0;
-    for (uint32_t ir = 0; ir < kNs; ++ir)
-      for (uint32_t im = 0; im < kNs; ++im) {
-        const double got = double(ar::e_spec_lookup(fx.spec, Real(im) / Real(kNs - 1), Real(ir) / Real(kNs - 1)));
-        if (std::fabs(got - fx.raw_spec(im, ir)) > 1e-6) ++bad;
-        if (!(fx.raw_spec(im, ir) > 0.0 && fx.raw_spec(im, ir) <= 1.0 + 1e-6)) ++bad;
-        if (ir == 0 && std::fabs(fx.raw_spec(im, ir) - 1.0) > 1e-6) ++bad;
-      }
-    CHECK(bad == 0);
-    // A cell centre is the mean of its 4 corners.
-    {
-      const uint32_t im = 11, ir = 20;
-      const double mean = (fx.raw_spec(im, ir) + fx.raw_spec(im + 1, ir) + fx.raw_spec(im, ir + 1) + fx.raw_spec(im + 1, ir + 1)) / 4.0;
-      const double got = double(ar::e_spec_lookup(fx.spec, (Real(im) + Real(0.5)) / Real(kNs - 1), (Real(ir) + Real(0.5)) / Real(kNs - 1)));
-      CHECK(std::fabs(got - mean) < 1e-6);
-    }
-    // The lookup at 10 cells against a midpoint quadrature of f cos from metal_eval at F = 1 (an
-    // integrator independent of the generator's importance sampling).
-    struct Cell {
-      uint32_t im, ir;
-    };
-    for (const Cell& c : {Cell{31, 12}, Cell{16, 14}, Cell{4, 16}, Cell{24, 18}, Cell{10, 20}, Cell{28, 22}, Cell{2, 24}, Cell{20, 26},
-                          Cell{8, 29}, Cell{31, 31}}) {
-      ar::MetalParams m;
-      m.base_color = ar::spec_fill(Real(1));
-      m.specular_color = ar::spec_fill(Real(1));
-      m.base_weight = Real(1);
-      m.specular_weight = Real(1);
-      m.roughness = Real(c.ir) / Real(kNs - 1);
-      const double mu = double(c.im) / (kNs - 1);
-      const Real3 wo = local_dir(mu, 0.0);
-      double q = 0;
-      constexpr int nz = 400, nphi = 800;
-      for (int i = 0; i < nz; ++i) {
-        const double z = (i + 0.5) / nz;
-        for (int j = 0; j < nphi; ++j) {
-          const LobeEval e = ar::metal_eval(m, wo, local_dir(z, 2.0 * kPi * (j + 0.5) / nphi), TransportMode::Radiance);
-          q += double(e.f.v[0]) * z;
-        }
-      }
-      q *= (1.0 / nz) * (2.0 * kPi / nphi);
-      const double got = double(ar::e_spec_lookup(fx.spec, Real(mu), m.roughness));
-      INFO("cell mu=" << c.im << " r=" << c.ir << " quadrature " << q << " lookup " << got);
-      CHECK(std::fabs(q - got) < 5e-4);
-    }
-  }
-
   TEST_CASE("lobe_stack/conductor normal incidence") {
     // 0005 Verification 3: F(1) = ((n - 1)^2 + k^2) / ((n + 1)^2 + k^2), to 1e-6 in float and 1e-12
     // in the double instance of the same template. Oblique angles against an independent form, the
@@ -815,6 +757,65 @@ TEST_SUITE("fast") {
 }
 
 TEST_SUITE("gate") {
+  // A slow cross-check (a 400 x 800 quadrature at 10 cells), so it runs in the gate tier.
+  TEST_CASE("lobe_stack/e_spec table") {
+    Fixture fx;
+    const uint8_t* b = fx.spec_bytes.data();
+    CHECK(ar::etable_u32(b + 12) == ar::kETableKindSpec);
+    CHECK(ar::etable_u32(b + 16) == 1u);
+    CHECK(ar::etable_u32(b + ar::kETableSamplesOffset) == 65536u);
+    bool any = false;
+    for (int i = 0; i < 32; ++i) any = any || b[ar::kETableLobeHashOffset + i] != 0;
+    CHECK(any);
+    // Grid points return the stored value; every cell is in (0, 1]; the smooth row is 1 (F = 1, no
+    // masking loss).
+    int bad = 0;
+    for (uint32_t ir = 0; ir < kNs; ++ir)
+      for (uint32_t im = 0; im < kNs; ++im) {
+        const double got = double(ar::e_spec_lookup(fx.spec, Real(im) / Real(kNs - 1), Real(ir) / Real(kNs - 1)));
+        if (std::fabs(got - fx.raw_spec(im, ir)) > 1e-6) ++bad;
+        if (!(fx.raw_spec(im, ir) > 0.0 && fx.raw_spec(im, ir) <= 1.0 + 1e-6)) ++bad;
+        if (ir == 0 && std::fabs(fx.raw_spec(im, ir) - 1.0) > 1e-6) ++bad;
+      }
+    CHECK(bad == 0);
+    // A cell centre is the mean of its 4 corners.
+    {
+      const uint32_t im = 11, ir = 20;
+      const double mean = (fx.raw_spec(im, ir) + fx.raw_spec(im + 1, ir) + fx.raw_spec(im, ir + 1) + fx.raw_spec(im + 1, ir + 1)) / 4.0;
+      const double got = double(ar::e_spec_lookup(fx.spec, (Real(im) + Real(0.5)) / Real(kNs - 1), (Real(ir) + Real(0.5)) / Real(kNs - 1)));
+      CHECK(std::fabs(got - mean) < 1e-6);
+    }
+    // The lookup at 10 cells against a midpoint quadrature of f cos from metal_eval at F = 1 (an
+    // integrator independent of the generator's importance sampling).
+    struct Cell {
+      uint32_t im, ir;
+    };
+    for (const Cell& c : {Cell{31, 12}, Cell{16, 14}, Cell{4, 16}, Cell{24, 18}, Cell{10, 20}, Cell{28, 22}, Cell{2, 24}, Cell{20, 26},
+                          Cell{8, 29}, Cell{31, 31}}) {
+      ar::MetalParams m;
+      m.base_color = ar::spec_fill(Real(1));
+      m.specular_color = ar::spec_fill(Real(1));
+      m.base_weight = Real(1);
+      m.specular_weight = Real(1);
+      m.roughness = Real(c.ir) / Real(kNs - 1);
+      const double mu = double(c.im) / (kNs - 1);
+      const Real3 wo = local_dir(mu, 0.0);
+      double q = 0;
+      constexpr int nz = 400, nphi = 800;
+      for (int i = 0; i < nz; ++i) {
+        const double z = (i + 0.5) / nz;
+        for (int j = 0; j < nphi; ++j) {
+          const LobeEval e = ar::metal_eval(m, wo, local_dir(z, 2.0 * kPi * (j + 0.5) / nphi), TransportMode::Radiance);
+          q += double(e.f.v[0]) * z;
+        }
+      }
+      q *= (1.0 / nz) * (2.0 * kPi / nphi);
+      const double got = double(ar::e_spec_lookup(fx.spec, Real(mu), m.roughness));
+      INFO("cell mu=" << c.im << " r=" << c.ir << " quadrature " << q << " lookup " << got);
+      CHECK(std::fabs(q - got) < 5e-4);
+    }
+  }
+
   TEST_CASE("lobe_stack/white furnace") {
     // Lossless configuration of 0005 Verification 1: base_color 1, specular_weight 1, IOR 1.5, no
     // coat. E = mean of f cos / pdf over 2^20 stratified samples of stack_sample; the layering gives
