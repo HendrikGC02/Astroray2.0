@@ -292,7 +292,8 @@ TEST_CASE("kg_builder/medium dropped with its instance still builds") {
   auto set = acquire_scene_tables(r.scene);
   REQUIRE(count(*set, TableId::MEDIA) == 1u);
   REQUIRE(set->scene_host.instances[0].medium == 1u);
-  // The instance loses its medium and the medium goes in one commit: the snapshot must pair the two.
+  // The instance loses its medium and the medium goes in one commit. This covers the sequential case only:
+  // the pairing under a concurrent activation comes from Scene::snapshot reading media inside with_active.
   r.commit([&](Edit& e) {
     r.instances(e, {42});
     REQUIRE(e.remove(AR_KIND_MEDIUM, 60) == AR_OK);

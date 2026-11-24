@@ -498,16 +498,36 @@ TEST_CASE("scene_upload/instance records carry the medium index") {
     InstanceTable table = *append_lamp_instances(nullptr, {lamp});
     REQUIRE(table.instances.size() == 1u);
     table.instances[0].medium_key = 70;
+    // A mesh instance goes through the other call site: one synced quad (two triangles), bearing medium 60.
+    auto topo = std::make_shared<MeshTopology>();
+    topo->id = 1, topo->key = 4, topo->vertex_count = 4, topo->corner_count = 6, topo->face_count = 2;
+    topo->uv_layer_count = 1, topo->motion_steps = 1;
+    topo->corner_vert = {0, 1, 3, 0, 3, 2};
+    topo->tri_corners = {0, 1, 2, 3, 4, 5};
+    topo->tri_face = {0, 1}, topo->tri_material = {0, 0}, topo->face_start = {0, 3, 6};
+    topo->uv.assign(12, 0.f);
+    auto mesh = std::make_shared<MeshRecord>();
+    mesh->key = 4, mesh->topo = topo;
+    mesh->positions = {0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0};
+    mesh->corner_normals.assign(18, 0.f);
+    up.sync_mesh(mesh);
+    Instance quad;
+    quad.geom_key = 4, quad.medium_key = 60;
+    table.instances.push_back(quad);
+    table.xf.push_back(ar_xform{{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0}});
     MaterialStore store(std::make_shared<Ledger>());
     const ar_medium_desc md{};
     std::vector<std::shared_ptr<const Medium>> media;
     for (ar_key k : {60, 70}) media.push_back(build_medium(k, md, store.table()));
     up.upload_instances(table, media);
-    DeviceInstanceRecord rec{};
-    dev->download(&rec, up.instance_records(), 0, sizeof rec);
-    CHECK(rec.medium == 2u);  // key 70 is index 1
+    DeviceInstanceRecord recs[2]{};
+    dev->download(recs, up.instance_records(), 0, sizeof recs);
+    CHECK(recs[0].medium == 2u);  // the lamp: key 70 is index 1
+    CHECK(recs[1].medium == 1u);  // the mesh instance: key 60 is index 0
     CHECK_THROWS_AS(up.upload_instances(table), std::logic_error);
     CHECK_THROWS_AS(up.upload_instances(table, {media[0]}), std::logic_error);
+    table.instances[0].medium_key = 0;  // only the mesh instance's medium is missing now
+    CHECK_THROWS_AS(up.upload_instances(table, {media[1]}), std::logic_error);
   }
   CHECK(ledger.total() == 0);
 }

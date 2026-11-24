@@ -1,16 +1,16 @@
 diff --git a/src/device/cuda/scene_upload.cpp b/src/device/cuda/scene_upload.cpp
-index 9b39256..46c88e2 100644
+index 9b39256..d718f42 100644
 --- a/src/device/cuda/scene_upload.cpp
 +++ b/src/device/cuda/scene_upload.cpp
-@@ -62,7 +62,7 @@ void SceneUpload::upload_instances(const InstanceTable& table, const std::vector
-     const Instance& s = table.instances[i];
-     // A lamp's instance (068) has no mesh: its shape is 105's unit-shape GAS, which 114 puts in the TLAS.
-     if (s.geom_key == 0 && s.light_index != ar::kNoLightIndex) {
--      recs[i] = instance_record(table, uint32_t(i), kNoMeshIndex, &media_of);
-+      recs[i] = instance_record(table, uint32_t(i), kNoMeshIndex, nullptr);
-       continue;
-     }
-     const UploadedMesh* m = find(s.geom_key);
+@@ -69,7 +69,7 @@ void SceneUpload::upload_instances(const InstanceTable& table, const std::vector
+     if (!m)
+       throw std::runtime_error("instance " + std::to_string(i) + " references geometry key " + std::to_string(s.geom_key) +
+                                " which was never uploaded");
+-    recs[i] = instance_record(table, uint32_t(i), m->mesh_index, &media_of);
++    recs[i] = instance_record(table, uint32_t(i), m->mesh_index, nullptr);
+   }
+   auto inst = DeviceTable::put(target_, LedgerCategory::TABLES, recs.data(), recs.size() * sizeof(DeviceInstanceRecord));
+   // The pool holds material keys; scene table sets resolve them to header indices (scene_tables.h).
 diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
 index 2dc44ef..d30cb66 100644
 --- a/src/host/scene/scene_tables.cpp
