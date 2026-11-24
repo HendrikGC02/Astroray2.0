@@ -1,5 +1,5 @@
 diff --git a/src/host/denoise/denoiser.cpp b/src/host/denoise/denoiser.cpp
-index 6aed194..0f08e04 100644
+index 6aed194..32b126e 100644
 --- a/src/host/denoise/denoiser.cpp
 +++ b/src/host/denoise/denoiser.cpp
 @@ -106,8 +106,6 @@ struct DenoiserState::Oidn {
@@ -11,48 +11,7 @@ index 6aed194..0f08e04 100644
    }
  
    OIDNFilter new_filter(DenoiseMode mode) {
-@@ -127,22 +125,25 @@ struct DenoiserState::Oidn {
-     uint64_t before = 0;
-     if (cuda_ordinal >= 0) {
-       type = "CUDA";
--      if constexpr (!kCudaBuild) throw std::runtime_error(prefix() + "a CUDA device was requested from a build without the CUDA device");
--      if (!c.cuda_stream) throw std::invalid_argument(prefix() + "a CUDA device needs the engine's stream (cuda_stream)");
--      if (!ledger) throw std::invalid_argument(prefix() + "a CUDA device needs a ledger for its memory");
--      // d16: no CPU fallback for a GPU render; an unsupported GPU is the failure itself.
--      if (!lib->oidnIsCUDADeviceSupported(cuda_ordinal)) {
--        const char* message = nullptr;
--        lib->oidnGetDeviceError(nullptr, &message);
--        throw std::runtime_error(prefix() + "CUDA device " + std::to_string(cuda_ordinal) +
--                                 " is not supported (oidnIsCUDADeviceSupported is false)" +
--                                 (message && *message ? std::string(": ") + message : std::string()));
-+      if constexpr (!kCudaBuild) {
-+        throw std::runtime_error(prefix() + "a CUDA device was requested from a build without the CUDA device");
-+      } else {
-+        if (!c.cuda_stream) throw std::invalid_argument(prefix() + "a CUDA device needs the engine's stream (cuda_stream)");
-+        if (!ledger) throw std::invalid_argument(prefix() + "a CUDA device needs a ledger for its memory");
-+        // d16: no CPU fallback for a GPU render; an unsupported GPU is the failure itself.
-+        if (!lib->oidnIsCUDADeviceSupported(cuda_ordinal)) {
-+          const char* message = nullptr;
-+          lib->oidnGetDeviceError(nullptr, &message);
-+          throw std::runtime_error(prefix() + "CUDA device " + std::to_string(cuda_ordinal) +
-+                                   " is not supported (oidnIsCUDADeviceSupported is false)" +
-+                                   (message && *message ? std::string(": ") + message : std::string()));
-+        }
-+        before = free_bytes();
-+        // d18: on the engine's stream, so denoising is ordered with the render's launches.
-+        const cudaStream_t stream = static_cast<cudaStream_t>(c.cuda_stream);
-+        device = lib->oidnNewCUDADevice(&cuda_ordinal, &stream, 1);
-+        check(nullptr, "oidnNewCUDADevice");
-       }
--      before = free_bytes();
--      // d18: on the engine's stream, so denoising is ordered with the render's launches.
--      const cudaStream_t stream = static_cast<cudaStream_t>(c.cuda_stream);
--      device = lib->oidnNewCUDADevice(&cuda_ordinal, &stream, 1);
--      check(nullptr, "oidnNewCUDADevice");
-     } else {
-       if (!lib->oidnIsCPUDeviceSupported()) {
-         const char* message = nullptr;
-@@ -314,6 +315,8 @@ struct DenoiserState::Oidn {
+@@ -314,6 +312,8 @@ struct DenoiserState::Oidn {
      lib->oidnExecuteFilter(f.rt);
      lib->oidnReadBuffer(output, 0, image_bytes, staging.data());
      check(device, "denoise");
@@ -61,7 +20,7 @@ index 6aed194..0f08e04 100644
      // Only now is `out` written: a failure above leaves the caller's image as it was.
      out.width = c.width;
      out.height = c.height;
-@@ -349,9 +352,9 @@ void DenoiserState::load() {
+@@ -349,9 +349,9 @@ void DenoiserState::load() {
    } catch (const Cancelled&) {
      oidn->release();
      return finish(kFailed, "denoiser loading stopped: the state was destroyed");
