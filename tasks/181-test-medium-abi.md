@@ -17,3 +17,6 @@ Depends on: 179, 156 (the slab's box surface is 156's opacity 0, so the ray ente
 Size: M (about 350 source lines without tests; the list says S-M); stop and report at 2x. Split point: ABI and table first, closed-mesh check and scene after.
 Progress: Lead note (179 review): `medium_eval` indexes `t.blocks[desc.program]` unchecked; the upload must refuse a `MediumDesc` whose program is kNoMedium or out of range, loudly.
 - Plan: files include/astroray/astroray.h, src/capi/scene_api.cpp, src/host/scene/{edit,scene,instances}.{h,cpp}, new src/host/scene/{media,closed_mesh}.{h,cpp}, src/kernel/scene/scene_view.h (bit 6 constant, forced), scenes/lib/ar.py, scenes/v1_slab/, docs appendix, tests. No open question.
+- Done: ar_medium_desc, ar_edit_set_medium, AR_KIND_MEDIUM 6, ar_instances_desc.medium_keys (NULL = none); Scene media table; bit 6 (kMediumBoundaryMaskBit in scene_view.h); closed-mesh warning at instances activation; scenes/v1_slab; canary has six hunks, the Canary line lists their six cases.
+- Also touched, forced: edit.h/.cpp (kind range, bind takes a medium predicate, removed_media), material_store.cpp (bind signature), tests/abi/test_abi_match.py.
+- For 182: Medium::desc.program is kNoMediumProgram until the table assigns an index; the upload must refuse it (179 note).
