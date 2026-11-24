@@ -138,6 +138,8 @@ class MediumApi(unittest.TestCase):
         def arr(ctype, values):
             return (ctype * max(1, len(values)))(*values)
 
+        all_visibility = (a.AR_VISIBILITY_CAMERA | a.AR_VISIBILITY_DIFFUSE | a.AR_VISIBILITY_GLOSSY |
+                          a.AR_VISIBILITY_TRANSMISSION | a.AR_VISIBILITY_SHADOW | a.AR_VISIBILITY_VOLUME)
         ident = a.ar_xform()
         for i in (0, 5, 10):
             ident.m[i] = 1.0
@@ -145,7 +147,7 @@ class MediumApi(unittest.TestCase):
             geom=arr(ctypes.c_uint64, [it[0] for it in items]), xf=(a.ar_xform * n)(*([ident] * n)),
             obj=arr(ctypes.c_uint64, [it[1] for it in items]), z32=arr(ctypes.c_uint32, [0] * n),
             col=(a.ar_rgba * n)(*[a.ar_rgba((ctypes.c_float * 4)(1, 1, 1, 1))] * n),
-            vis=arr(ctypes.c_uint32, [0x3F] * n), lg=arr(ctypes.c_uint8, [0] * n), keys=arr(ctypes.c_uint64, []),
+            vis=arr(ctypes.c_uint32, [all_visibility] * n), lg=arr(ctypes.c_uint8, [0] * n), keys=arr(ctypes.c_uint64, []),
             med=arr(ctypes.c_uint64, [it[2] or 0 for it in items]))
         d.geom_keys, d.xf, d.object_keys = keep["geom"], keep["xf"], keep["obj"]
         d.random_ids = d.pass_indices = d.crypto_objects = d.crypto_assets = keep["z32"]
@@ -305,6 +307,38 @@ class MediumApi(unittest.TestCase):
         # Without its medium the open mesh is no longer reported.
         e = self.begin()
         self.instances(e, [(OPEN_CUBE, 1002, None)])
+        self.assertTrue(self.commit(e)[1])
+        self.assertEqual(self.entries(a.AR_REPORT_MEDIUM_MESH_OPEN), [])
+
+    def test_mesh_reingest_rechecks(self):
+        """A mesh replaced by a full re-ingest loses its report entries at activation; the check runs again
+        for it, so the entry follows what the new mesh is (not only what the instances were when sent)."""
+        a = self.abi
+        positions, tris = cube_triangles()
+        e = self.begin()
+        self.mesh(e, CUBE, positions, tris, "cube")
+        self.assertEqual(self.set_medium(e, MEDIUM_A), a.AR_OK)
+        self.instances(e, [(CUBE, 1000, MEDIUM_A)])
+        self.assertTrue(self.commit(e)[1])
+        self.assertEqual(self.entries(a.AR_REPORT_MEDIUM_MESH_OPEN, CUBE), [])
+        # (b) closed replaced by open: reported, with no new instances sent.
+        e = self.begin()
+        self.mesh(e, CUBE, positions, tris[:-2], "cube_now_open")
+        self.assertTrue(self.commit(e)[1])
+        got = self.entries(a.AR_REPORT_MEDIUM_MESH_OPEN, CUBE)
+        self.assertEqual(len(got), 1)
+        self.assertIn("cube_now_open", got[0][2])
+        # (a) open replaced by open: still reported (the re-ingest cleared the old entry).
+        e = self.begin()
+        self.mesh(e, CUBE, positions, tris[:-4], "cube_still_open")
+        self.assertTrue(self.commit(e)[1])
+        got = self.entries(a.AR_REPORT_MEDIUM_MESH_OPEN, CUBE)
+        self.assertEqual(len(got), 1)
+        self.assertIn("cube_still_open", got[0][2])
+        self.assertEqual(got[0][1], 1)
+        # Open replaced by closed: the entry goes.
+        e = self.begin()
+        self.mesh(e, CUBE, positions, tris, "cube_closed_again")
         self.assertTrue(self.commit(e)[1])
         self.assertEqual(self.entries(a.AR_REPORT_MEDIUM_MESH_OPEN), [])
 

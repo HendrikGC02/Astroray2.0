@@ -16,6 +16,7 @@
 namespace astroray::host {
 
 class Edit;
+class Scene;
 struct Pending;
 
 // What a later edit may validate against before the table is built: per instance the
@@ -76,6 +77,14 @@ struct LampInstanceIn {
 };
 // A copy of `base` (may be null) with one instance appended per lamp, in order.
 std::shared_ptr<InstanceTable> append_lamp_instances(const InstanceTable* base, const std::vector<LampInstanceIn>& lamps);
+
+// MEDIUM_MESH_OPEN for one geometry key: the entry is dropped, then raised once when `bears_medium` and the
+// installed mesh is not closed (MeshTopology::closed, computed at ingest). Called from activation callbacks,
+// so it reads flags only and never lets an exception out: an allocation failure loses the warning and is
+// logged if the log can still be written. A key with no installed mesh logs a warning and raises nothing.
+void refresh_medium_mesh_report(Scene& scene, ar_key geom, bool bears_medium) noexcept;
+// True when the active instance table has an instance of `geom` that bears a medium.
+bool scene_has_medium_on(Scene& scene, ar_key geom) noexcept;
 
 // The two edit entry points (the C API forwards here). set_instances copies the arrays,
 // then validates and builds on a worker, so a bad instance rejects the generation

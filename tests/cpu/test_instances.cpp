@@ -275,42 +275,54 @@ TEST_CASE("instances/medium replace and remove take effect with the generation")
 }
 
 TEST_CASE("instances/closed mesh") {
+  auto closed = [](const std::vector<uint32_t>& tris) {  // triangles as polygons
+    std::vector<uint32_t> start;
+    for (size_t i = 0; i <= tris.size(); i += 3) start.push_back(uint32_t(i));
+    return polygons_closed(tris.data(), start.data(), tris.size() / 3);
+  };
   // The box of scenes/lib/meshes.py: 8 shared vertices, 12 triangles counter-clockwise from outside.
   std::vector<uint32_t> cube = {1, 3, 7, 1, 7, 5, 0, 4, 6, 0, 6, 2, 2, 6, 7, 2, 7, 3,
                                 0, 1, 5, 0, 5, 4, 4, 5, 7, 4, 7, 6, 0, 2, 3, 0, 3, 1};
-  CHECK(triangles_closed(cube.data(), 12));
+  CHECK(closed(cube));
+  // The same box as 6 quads: the check is on the polygons' own edges.
+  std::vector<uint32_t> quads = {1, 3, 7, 5, 0, 4, 6, 2, 2, 6, 7, 3, 0, 1, 5, 4, 4, 5, 7, 6, 0, 2, 3, 1};
+  std::vector<uint32_t> quad_start = {0, 4, 8, 12, 16, 20, 24};
+  CHECK(polygons_closed(quads.data(), quad_start.data(), 6));
+  // A face of two corners is no face.
+  std::vector<uint32_t> two_corners = {0, 1};
+  std::vector<uint32_t> two_start = {0, 2};
+  CHECK_FALSE(polygons_closed(two_corners.data(), two_start.data(), 1));
   // A tetrahedron, and two disjoint ones, are closed.
   std::vector<uint32_t> tet = {0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3};
-  CHECK(triangles_closed(tet.data(), 4));
+  CHECK(closed(tet));
   std::vector<uint32_t> two = tet;
   for (uint32_t v : tet) two.push_back(v + 4);
-  CHECK(triangles_closed(two.data(), 8));
+  CHECK(closed(two));
   // Open: a triangle missing.
-  CHECK_FALSE(triangles_closed(cube.data(), 11));
+  CHECK_FALSE(closed(std::vector<uint32_t>(cube.begin(), cube.end() - 3)));
   // Inconsistent winding: one triangle reversed.
   std::vector<uint32_t> flipped = cube;
   std::swap(flipped[1], flipped[2]);
-  CHECK_FALSE(triangles_closed(flipped.data(), 12));
+  CHECK_FALSE(closed(flipped));
   // The same triangle twice (an edge used by four triangles, two of them the same way).
   std::vector<uint32_t> doubled = tet;
   doubled.insert(doubled.end(), {0, 2, 1});
-  CHECK_FALSE(triangles_closed(doubled.data(), 5));
+  CHECK_FALSE(closed(doubled));
   // The whole shell twice: every edge has an opposite partner but is used by four triangles.
   std::vector<uint32_t> shell_twice = tet;
   shell_twice.insert(shell_twice.end(), tet.begin(), tet.end());
-  CHECK_FALSE(triangles_closed(shell_twice.data(), 8));
+  CHECK_FALSE(closed(shell_twice));
   // Three triangles on one edge (a fin on a closed surface).
   std::vector<uint32_t> fin = tet;
   fin.insert(fin.end(), {0, 1, 4});
-  CHECK_FALSE(triangles_closed(fin.data(), 5));
+  CHECK_FALSE(closed(fin));
   // A degenerate triangle, and no triangles at all.
-  std::vector<uint32_t> degenerate = {0, 0, 1};
-  CHECK_FALSE(triangles_closed(degenerate.data(), 1));
-  CHECK_FALSE(triangles_closed(cube.data(), 0));
+  CHECK_FALSE(closed({0, 0, 1}));
+  CHECK_FALSE(polygons_closed(cube.data(), quad_start.data(), 0));
   // Faces that share positions but not vertex indices are open: closedness is by index.
   std::vector<uint32_t> split = tet;
   split[0] = 9;
-  CHECK_FALSE(triangles_closed(split.data(), 4));
+  CHECK_FALSE(closed(split));
 }
 
 TEST_CASE("instances/update patches listed only") {

@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # 0006 V1 scene: a closed box of thickness d holding a chromatic absorbing medium, in front of a
 # view-filling white emitter. The box's surface has opacity 0, so a ray passes it and the medium
-# decides the pixel: with the medium alone absorbing, transmittance is exp(-sigma_a d) in each lane.
+# decides the pixel: with the medium alone absorbing, a lane at wavelength lambda sees transmittance
+# exp(-(1 - S_c(lambda)) max(s) d), where S_c is the colour's reflectance sigmoid (the RGB triple is a
+# reflectance-style input, not a per-lane coefficient, so the per-channel value is only approximate).
 # Until the delta-tracking stage lands the slab renders as if empty; this file carries the scene's
 # geometry and coefficients so the render task adds only its truth and tolerance.
 class = "B"

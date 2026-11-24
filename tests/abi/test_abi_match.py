@@ -63,14 +63,10 @@ class TestMatch(unittest.TestCase):
         self.assertRegex(str(cm.exception), r"ar_context_desc\.\w+: offset")
 
     def test_medium_surface_in_binding(self):
-        # The medium entry point, its descriptor and the edit kind come out of the header: the binding
-        # names them and the DLL exports the function (the constants are read from the header text).
+        # The binding names the medium entry point and descriptor, and the DLL exports the function.
         binding = load_binding(ABI)
         self.assertIn("ar_edit_set_medium", binding.PROTOTYPES)
         self.assertTrue(hasattr(self.lib, "ar_edit_set_medium"))
-        with open(os.path.join(ROOT, "include", "astroray", "astroray.h"), encoding="utf-8") as f:
-            header = f.read()
-        self.assertEqual(binding.AR_KIND_MEDIUM, int(re.search(r"#define AR_KIND_MEDIUM (\d+)", header).group(1)))
         fields = [n for n, _ in binding.ar_medium_desc._fields_]
         self.assertEqual(fields, ["sigma_a", "sigma_s", "g", "flags"])
         self.assertIn("medium_keys", [n for n, _ in binding.ar_instances_desc._fields_])

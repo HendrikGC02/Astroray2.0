@@ -6,7 +6,6 @@
 #include <set>
 #include <string>
 
-#include "host/scene/closed_mesh.h"
 #include "host/scene/edit.h"
 #include "host/scene/mesh.h"
 
@@ -57,25 +56,19 @@ std::string at(uint32_t i, ar_key object) {
 // open one still renders, with Cycles' convention, so this only reports: once per mesh, naming it.
 // Runs when the table activates, after the meshes of its generation are installed. The entry is
 // rebuilt each time, so a table that is set again does not count the same open mesh twice, and a mesh
-// that lost its medium or was closed stops being reported.
-void check_medium_meshes(Scene& scene, const InstanceTable* previous, const InstanceTable& table) {
-  if (previous)
-    for (const Instance& in : previous->instances)
-      if (in.medium_key != 0) scene.report().remove(AR_REPORT_MEDIUM_MESH_OPEN, in.geom_key);
-  std::set<ar_key> seen;
-  for (const Instance& in : table.instances) {
-    if (in.medium_key == 0 || !seen.insert(in.geom_key).second || !scene.meshes) continue;
-    const auto rec = scene.meshes->find(in.geom_key);
-    if (!rec || !rec->topo) continue;
-    const MeshTopology& t = *rec->topo;
-    std::vector<uint32_t> tri_vertex;
-    tri_vertex.reserve(t.tri_corners.size());
-    for (uint32_t corner : t.tri_corners) tri_vertex.push_back(t.corner_vert[corner]);
-    if (triangles_closed(tri_vertex.data(), tri_vertex.size() / 3)) continue;
-    const std::string why = "mesh '" + t.name + "' (geometry key " + std::to_string(in.geom_key) +
-                            ") bears a medium but is not closed with consistent winding; the medium follows Cycles' convention";
-    scene.ctx().log.line("WARNING", why);
-    scene.report().raise(AR_REPORT_MEDIUM_MESH_OPEN, in.geom_key, why, 1, nullptr, 0);
+// that lost its medium stops being reported; a mesh that is replaced is refreshed by its own activation.
+void check_medium_meshes(Scene& scene, const InstanceTable* previous, const InstanceTable& table) noexcept {
+  try {
+    std::set<ar_key> geoms, now;
+    if (previous)
+      for (const Instance& in : previous->instances)
+        if (in.medium_key != 0) geoms.insert(in.geom_key);
+    for (const Instance& in : table.instances)
+      if (in.medium_key != 0) now.insert(in.geom_key);
+    geoms.insert(now.begin(), now.end());
+    for (ar_key g : geoms) refresh_medium_mesh_report(scene, g, now.count(g) != 0);
+  } catch (...) {
+    // Only an allocation failure gets here; the warning is lost, the generation still activates.
   }
 }
 
@@ -121,6 +114,42 @@ std::shared_ptr<InstanceTable> build(const DescCopy& d) {
 }
 
 }  // namespace
+
+void refresh_medium_mesh_report(Scene& scene, ar_key geom, bool bears_medium) noexcept {
+  try {
+    scene.report().remove(AR_REPORT_MEDIUM_MESH_OPEN, geom);
+    if (!bears_medium) return;
+    const auto rec = scene.meshes ? scene.meshes->find(geom) : nullptr;
+    if (!rec || !rec->topo) {
+      scene.ctx().log.line("WARNING", "geometry key " + std::to_string(geom) +
+                                          " bears a medium but has no installed mesh; its closedness was not checked");
+      return;
+    }
+    if (rec->topo->closed) return;
+    const std::string why = "mesh '" + rec->topo->name + "' (geometry key " + std::to_string(geom) +
+                            ") bears a medium but is not closed with consistent winding; the medium follows Cycles' convention";
+    scene.ctx().log.line("WARNING", why);
+    scene.report().raise(AR_REPORT_MEDIUM_MESH_OPEN, geom, why, 1, nullptr, 0);
+  } catch (...) {
+    try {
+      scene.ctx().log.line("ERROR", "MEDIUM_MESH_OPEN for geometry key " + std::to_string(geom) + " could not be recorded");
+    } catch (...) {
+      // nothing left to report through
+    }
+  }
+}
+
+bool scene_has_medium_on(Scene& scene, ar_key geom) noexcept {
+  try {
+    const auto t = scene.instances();
+    if (t)
+      for (const Instance& in : t->instances)
+        if (in.geom_key == geom && in.medium_key != 0) return true;
+  } catch (...) {
+    // a failed copy of the table pointer: report nothing rather than guess
+  }
+  return false;
+}
 
 // Ref: 0002 D11.
 uint8_t visibility_mask(uint32_t v, bool has_medium) {

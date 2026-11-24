@@ -43,6 +43,9 @@ struct MeshTopology {
   // face uses slot 0. A later check against an instance's material_counts reads it.
   std::optional<uint32_t> max_material_index;
   uint32_t skipped_zero_area = 0, fan_fallback = 0;  // triangulation counts (ruling 67)
+  // Every polygon edge is shared by two faces of opposite direction (closed_mesh.h), computed once at ingest
+  // so activation callbacks only read it. A positions-only update shares its topology, so it keeps it.
+  bool closed = false;
   uint32_t triangle_count() const { return static_cast<uint32_t>(tri_corners.size() / 3); }
 
   ~MeshTopology();  // releases the ledger record
