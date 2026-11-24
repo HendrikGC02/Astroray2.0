@@ -55,7 +55,7 @@ Three things have to be settled together. (1) Tests need exact per-pixel moments
 
 ### Passes and AOVs for Blender
 
-10. **Pass list and how each pass is produced.** Blender's standard pass names are used where they exist, so the compositor's Denoise, Cryptomatte and Vector Blur nodes work unchanged. Engine-only passes are prefixed `AR `. A pass exists only when the feature that produces it exists.
+10. **Pass list and how each pass is produced.** Blender's standard pass names are used where they exist, so the compositor's Denoise, Cryptomatte and Vector Blur nodes work unchanged. Engine-only passes are prefixed `AR `. A pass exists only when the feature that produces it exists. A session's film follows the latched `ar_settings.passes` (task 117); a requested pass name outside what this build produces is not allocated, never fails the render, and raises `PASS_UNSUPPORTED` (0001 D2.11), one entry per name per latched settings change (ruling 74).
     - **Primary-hit AOVs** (`ADD`), written by the surface stage when depth = 0: Depth (linear view-space z), Position, Normal, UV, IndexOB, IndexMA, Mist (from the World mist settings), Vector, Alpha. Which of these accumulate over samples and which keep only sample 0 follows Cycles `intern/cycles/kernel/film/data_passes.h`, to be read before implementation and quoted in the code.
     - **Light-path passes** (`ADD`, display RGB): DiffDir, DiffInd, DiffCol, GlossDir, GlossInd, GlossCol, TransDir, TransInd, TransCol, VolumeDir, VolumeInd, Emit, Env, AO, Shadow Catcher. AO is listed but not designed: no record defines the rays that would feed it (Risks 13). Classification follows Cycles (`kernel/film/light_passes.h`): the split is fixed at the first scattering vertex; direct and indirect are separated by bounce count (`docs/v1-lessons/research/blender.md`, "Render passes").
       - At the first scattering vertex the path records its class (surface or volume) and, for a surface, the diffuse and glossy fractions per lane of the BSDF evaluation of the sampled direction, as Cycles' `pass_diffuse_weight`/`pass_glossy_weight`; the transmission share is the remainder. Every later contribution of the path is split by these fractions. A shadow item from the first vertex carries the diffuse and glossy fractions of its own light-sample evaluation (the split of f into diffuse, glossy and remainder parts that Cycles' `BsdfEval` provides: a requirement on record 0005, placed and gated by decision 22). Because the transmission part is computed as contribution minus the other two, the three parts sum exactly to the contribution whatever the fractions' precision.
@@ -215,7 +215,7 @@ Milestones are `docs/ROADMAP.md`'s (ruling G1).
     - (a) `GetFeatureRequirements` reports supported with no DLL beside either executable;
     - (b) project-ID init works without Blender's ID;
     - (c) pack plus evaluate, per preset, at 1080p and 4K output: at least one preset meets 0009 B-27;
-    - (d) memory is within the guide's 154-579 MB range;
+    - (d) NGX-reported memory for each preset and output size is within 5 % of the guide's figure for that preset where the guide gives one, and every preset's figure is recorded for 0007 d14's VRAM ledger (the guide's "154-579 MB" is its Performance-mode figure at 1080p and 4K, not a range covering every preset; ruling 64);
     - (e) recorded, not gated: cold init time (decision 16) and feature recreate time per preset step (decision 20).
   - **Part B**, once the guides and the viewport loop exist, on five scenes (diffuse Cornell, glossy, emission nebula, black-hole lensing, thin-lens depth of field) against 16k-spp references. DLSS is on by default on NVIDIA only if part B also passes:
     - (a) relMSE during a scripted 5 s orbit is no worse than OIDN-balanced progressive at the same update rate on at least 3 of the first 4 scenes;
@@ -224,6 +224,7 @@ Milestones are `docs/ROADMAP.md`'s (ruling G1).
     - (d) the independent sampler mode shows no structured artefacts against Owen-Sobol per frame;
     - (e) the depth-of-field scene meets (a)'s rule against OIDN, or decision 19's notice applies.
   - All timings use burn-in plus min-of-N (GPU clock drift).
+  - **Part A result (spike F, ruling 64; evidence `docs/spikes/F-dlss/RESULTS.md`):** (a)-(d) pass, so part A passes and the DLSS-only items are built. (d): Performance measured 153.98 MB at 1080p and 596.7 MB at 4K (+3 %); DLAA at 4K needs about 1.45 GB, which 0007 d14's reserve rule accounts for. The CUDA context must exist before NGX init, and a preset-step recreate takes up to about 150 ms (input to 0007's hysteresis, decision 20).
 - **V13 Build and test budgets.** OIDN (0001's release-asset build) and the NGX headers add nothing measurable to 0009's incremental-build budget (B-02). Film and denoiser GPU tests run in `check gate` (0009 decision 11), not in `check fast`; V11 timing and V12 part B run in `check full` or on demand.
 
 ## Risks and open items
@@ -231,7 +232,7 @@ Milestones are `docs/ROADMAP.md`'s (ruling G1).
 1. **Resolve and buffer cost.** Measure resolve time and `sample_add` traffic at 1080p and 4K, 1 spp per pass; the first measurement sets 0009 B-28. The fp64 work no longer sits in a shading kernel, so it does not touch the register gate.
 2. **Register cost of guides and the light-pass split** in `shade_surface`, unmeasured (spike A excluded denoiser buffers). Decision 22 places and gates it.
 3. **OIDN on Blackwell.** OIDN's CUDA support for sm_120 is listed but its pull request is unconfirmed (10, finding 6); failure handling is decision 16. DLL collisions with Blender's in-process OIDN are removed by 0001's renamed build.
-4. **DLSS availability to a third-party process** without a local DLL on driver 620 is unverified (10, Unverified); V12 part A decides it. Hero-wavelength chroma noise, gravitational-lensing reprojection and depth of field under DLSS are hypotheses, tested in part B.
+4. **DLSS availability to a third-party process** without a local DLL on driver 620 was unverified (10, Unverified); V12 part A (a) passed (ruling 64). Hero-wavelength chroma noise, gravitational-lensing reprojection and depth of field under DLSS are hypotheses, tested in part B.
 5. **Cryptomatte acceptance** of a Python engine's manifest by Blender's compositor is unverified (07); V7 decides.
 6. **Denoising-surface definition.** Pure "first non-delta lobe" may smear near-mirror roughness. If V11 or V12 shows it, add a roughness threshold as Cycles does, measured.
 7. **Data-cube memory** (2.1 GB for 64 bins at 1080p with variance) limits cube size on 16 GB. Tiling is not designed.
