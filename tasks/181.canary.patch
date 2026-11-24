@@ -123,7 +123,7 @@ index e2ab2db..99dc24d 100644
    auto item = std::make_shared<EditItem>();
    item->key = key;
 diff --git a/src/host/scene/scene.cpp b/src/host/scene/scene.cpp
-index 2fd74c6..44280fc 100644
+index 2fd74c6..efb5531 100644
 --- a/src/host/scene/scene.cpp
 +++ b/src/host/scene/scene.cpp
 @@ -293,7 +293,7 @@ void Scene::publish_lamp(std::shared_ptr<const Lamp> lamp) {
@@ -135,7 +135,17 @@ index 2fd74c6..44280fc 100644
  }
  
  void Scene::refresh_medium_reports() noexcept {
-@@ -310,7 +310,7 @@ void Scene::refresh_medium_reports() noexcept {
+@@ -302,15 +302,15 @@ void Scene::refresh_medium_reports() noexcept {
+     {
+       std::lock_guard<std::mutex> lock(state_.mutex);
+       if (state_.instances) now = state_.instances->medium_geoms;
+-      work = state_.medium_reported;
+-      work.insert(now.begin(), now.end());
++      for (ar_key k : state_.medium_reported) if (!now.count(k)) work.insert(k);
++      for (ar_key k : now) if (!state_.medium_reported.count(k)) work.insert(k);
+       state_.medium_reported = now;
+     }
+     for (ar_key g : work) {
        try {
          // Dropped even when the mesh is replaced and the generation already cleared it: the entry is rebuilt
          // from the final state. The log line is for a condition that is new, not for every generation.
