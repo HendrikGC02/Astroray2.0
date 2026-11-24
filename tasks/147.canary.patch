@@ -1,5 +1,5 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 9c14061..1564ce9 100644
+index 00f5de5..81a0c16 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
 @@ -293,7 +293,7 @@ Mean mean_of_node(const Work& w, int i, MeanCtx* x) {
