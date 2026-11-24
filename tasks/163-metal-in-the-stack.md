@@ -23,3 +23,4 @@ Progress:
 - k_shade_surface before 128 / 400 / 8 / 8 / 5.6 s, after 128 / 400 / 8 / 8 / 6.21 s (budget.toml compile_s 5.6 -> 6.2). M-1 probe capped 128 / 480 / 178 / 528 before and after; uncapped shade_surface 134 -> 137.
 - check gate PASS 174.9 s; check fast PASS 9.8 s; canary PASS; look render out/evidence/163/cornell_metal.png (sphere mean CPU vs CUDA within 1.6e-6).
 - Review fixes in (M clamped, F0 and p_metal pins, canary 6 hunks PASS, check fast PASS 9.0 s); paused for the lead's window before the gate run that states the row and gate seconds.
+- Rebased on 687a7d5. Row after the clamp 128 / 400 / 8 / 8, compile 6.43 s (3 runs). Gate 215.6 s fails B-09 alone; build dev 22.1 s + compile timing 23.9 s. Canary PASS; check fast failed on time only twice (10.6 s; tier at its edge).
