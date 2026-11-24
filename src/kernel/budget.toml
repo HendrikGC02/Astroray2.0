@@ -142,7 +142,7 @@ regs = 128
 stack = 400
 spill_store = 4
 spill_load = 4
-compile_s = 5.2
+compile_s = 5.31
 gated = "merge"
 
 [kernel.k_shade_shadow]
