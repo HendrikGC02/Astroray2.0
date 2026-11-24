@@ -22,3 +22,4 @@ Progress:
 - Resumed after the window, rebased on 404840c. Metal eval in stack_eval split from the dielectric sum (spills went 12/24 B -> 8/8 B); GGX and metal share one VNDF sample.
 - k_shade_surface before 128 / 400 / 8 / 8 / 5.6 s, after 128 / 400 / 8 / 8 / 6.21 s (budget.toml compile_s 5.6 -> 6.2). M-1 probe capped 128 / 480 / 178 / 528 before and after; uncapped shade_surface 134 -> 137.
 - check gate PASS 174.9 s; check fast PASS 9.8 s; canary PASS; look render out/evidence/163/cornell_metal.png (sphere mean CPU vs CUDA within 1.6e-6).
+- Review fixes in (M clamped, F0 and p_metal pins, canary 6 hunks PASS, check fast PASS 9.0 s); paused for the lead's window before the gate run that states the row and gate seconds.
