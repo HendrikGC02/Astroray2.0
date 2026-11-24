@@ -207,7 +207,11 @@ function Wait-ArFastWinMutex($sw, $say, [string]$what) {
   $m = New-Object System.Threading.Mutex($false, $name)
   while ($true) {
     try { if ($m.WaitOne([TimeSpan]::FromSeconds($msgS))) { return $m } }
-    catch [System.Threading.AbandonedMutexException] { return $m }
+    catch [System.Threading.AbandonedMutexException] {
+      # This thread now owns it; the gate that held it died, so its window is gone with it.
+      Write-Host "WARN lock: the fast window was abandoned by a gate that died without releasing"
+      return $m
+    }
     if (Test-ArLockSay $say $sw.Elapsed.TotalSeconds) { Write-Host "waiting for the gate's fast window ($what)" }
     if ($sw.Elapsed.TotalSeconds -ge $limitS) {
       $m.Dispose()
@@ -243,11 +247,21 @@ function Enter-ArFastWindow {
   $msgS = Get-ArLockSetting 'ASTRORAY_LOCK_MESSAGE_S' 30
   $limitS = Get-ArLockSetting 'ASTRORAY_LOCK_TIMEOUT_S' 3600
   $next = $msgS
+  $warned = [Collections.Generic.HashSet[string]]::new()
   while ($true) {
     $live = 0
-    foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter 'share.*.lock' -ErrorAction SilentlyContinue)) {
-      try { [IO.File]::Open($f.FullName, 'Open', 'ReadWrite', 'None').Dispose() }
+    # A listing error must not read as "no builds": it stops the gate.
+    foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter 'share.*.lock' -ErrorAction Stop)) {
+      # Read access with no sharing conflicts with a build's open share (a sharing violation) and writes
+      # nothing, so the probe cannot disturb the file it tests.
+      try { [IO.File]::Open($f.FullName, 'Open', 'Read', 'None').Dispose() }
       catch [System.IO.FileNotFoundException] { }
+      catch [System.UnauthorizedAccessException] {
+        # A file being deleted, or one we may not read, is not provably free: it counts as a live share (the
+        # limit still ends the wait) and is said once.
+        $live++
+        if ($warned.Add($f.Name)) { Write-Host "WARN lock: cannot probe $($f.Name) ($($_.Exception.Message)); counted as a running build" }
+      }
       catch [System.IO.IOException] { $live++ }
     }
     if ($live -eq 0) { break }

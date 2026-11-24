@@ -41,21 +41,33 @@ function Test-LandingMarkerLive($m) {
   return [bool]($cim -and $cim.CommandLine -match 'land\.ps1')
 }
 
+function Get-LandingSetting([string]$Name, [double]$Default) {
+  $v = [Environment]::GetEnvironmentVariable($Name)
+  if (-not $v) { return $Default }
+  $d = 0.0
+  if (-not [double]::TryParse($v, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$d) -or $d -le 0) {
+    throw "$Name='$v' is not a positive number of seconds"
+  }
+  return $d
+}
+
 function Wait-LandRunning([string]$Root) {
   # `submit -Queue`: takes the marker once the land.ps1 that holds it is gone, polling the same claim a refusal
-  # makes. Returns the seconds waited (the caller adds them to lock_wait_s). A wait line names the owner on the
-  # first three polls, then at most one per 300 s. ASTRORAY_LAND_QUEUE_POLL_S (default 15) is the poll interval.
-  $pollS = 15.0
-  if ($env:ASTRORAY_LAND_QUEUE_POLL_S) {
-    if (-not [double]::TryParse($env:ASTRORAY_LAND_QUEUE_POLL_S, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$pollS) -or $pollS -le 0) {
-      throw "ASTRORAY_LAND_QUEUE_POLL_S='$($env:ASTRORAY_LAND_QUEUE_POLL_S)' is not a positive number of seconds"
-    }
-  }
+  # makes; on return the marker is this process's. Returns the seconds waited (the caller adds them to
+  # lock_wait_s). A wait line names the owner on the first three polls, then at most one per 300 s.
+  # ASTRORAY_LAND_QUEUE_POLL_S (default 15) is the poll interval; ASTRORAY_LAND_QUEUE_TIMEOUT_S (default 10800,
+  # a long queue of full landings) the longest wait, after which it fails loudly: a hung land.ps1 must not park
+  # this one for ever.
+  $pollS = Get-LandingSetting 'ASTRORAY_LAND_QUEUE_POLL_S' 15
+  $limitS = Get-LandingSetting 'ASTRORAY_LAND_QUEUE_TIMEOUT_S' 10800
   $sw = [Diagnostics.Stopwatch]::StartNew()
   $said = 0; $last = 0.0
   while ($true) {
     $run = Enter-LandRunning $Root
     if (-not $run) { return $sw.Elapsed.TotalSeconds }
+    if ($sw.Elapsed.TotalSeconds -ge $limitS) {
+      throw "queue: waited $([math]::Round($sw.Elapsed.TotalSeconds)) s for another land.ps1 ($run), over the $limitS s limit (ASTRORAY_LAND_QUEUE_TIMEOUT_S)"
+    }
     if ($said -lt 3 -or $sw.Elapsed.TotalSeconds - $last -ge 300) {
       $said++; $last = $sw.Elapsed.TotalSeconds
       Write-Host "queue: waiting for another land.ps1 ($run), $([math]::Round($sw.Elapsed.TotalSeconds)) s so far"
