@@ -54,21 +54,22 @@ void SceneUpload::rebuild_mesh_table() {
   mesh_table_ = DeviceTable::put(target_, LedgerCategory::TABLES, views.data(), views.size() * sizeof(DeviceMeshView));
 }
 
-void SceneUpload::upload_instances(const InstanceTable& table) {
+void SceneUpload::upload_instances(const InstanceTable& table, const std::vector<std::shared_ptr<const Medium>>& media) {
   rebuild_mesh_table();
+  const MediumIndex media_of = medium_index(media);
   std::vector<DeviceInstanceRecord> recs(table.instances.size());
   for (size_t i = 0; i < recs.size(); ++i) {
     const Instance& s = table.instances[i];
     // A lamp's instance (068) has no mesh: its shape is 105's unit-shape GAS, which 114 puts in the TLAS.
     if (s.geom_key == 0 && s.light_index != ar::kNoLightIndex) {
-      recs[i] = instance_record(table, uint32_t(i), kNoMeshIndex);
+      recs[i] = instance_record(table, uint32_t(i), kNoMeshIndex, &media_of);
       continue;
     }
     const UploadedMesh* m = find(s.geom_key);
     if (!m)
       throw std::runtime_error("instance " + std::to_string(i) + " references geometry key " + std::to_string(s.geom_key) +
                                " which was never uploaded");
-    recs[i] = instance_record(table, uint32_t(i), m->mesh_index);
+    recs[i] = instance_record(table, uint32_t(i), m->mesh_index, &media_of);
   }
   auto inst = DeviceTable::put(target_, LedgerCategory::TABLES, recs.data(), recs.size() * sizeof(DeviceInstanceRecord));
   // The pool holds material keys; scene table sets resolve them to header indices (scene_tables.h).

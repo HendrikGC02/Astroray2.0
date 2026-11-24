@@ -19,6 +19,7 @@
 #include "kernel/stages/shade_light.h"
 #include "kernel/stages/shade_shadow.h"
 #include "kernel/stages/shade_surface.h"
+#include "kernel/stages/shade_volume.h"
 #include "kernel/stages/sort.h"
 
 namespace astroray::host {
@@ -196,6 +197,7 @@ std::shared_ptr<Device> make_cpu_session_device(ContextState& ctx, unsigned work
       device.register_stage(ar::Stage::SHADE_SURFACE, &cpu_stage_shade_surface);
       device.register_stage(ar::Stage::SHADE_SHADOW, &cpu_stage_shade_shadow);
       device.register_stage(ar::Stage::SHADE_LIGHT, &cpu_stage_shade_light);
+      device.register_stage(ar::Stage::SHADE_VOLUME, &cpu_stage_shade_volume);
     }
   };
   auto owned = std::make_shared<Owned>(ctx, workers);

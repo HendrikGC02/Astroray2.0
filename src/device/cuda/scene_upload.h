@@ -49,8 +49,12 @@ class SceneUpload {
   // Rebuilds the mesh table, then the instance and material-pool arrays for `table`, every
   // record's mesh index re-resolved from its geometry key so indices never go stale. A lamp
   // instance (geometry key 0 with a light index) gets kNoMeshIndex and no lookup. Throws
-  // std::runtime_error naming the instance when its geometry key was never synced.
-  void upload_instances(const InstanceTable& table);
+  // std::runtime_error naming the instance when its geometry key was never synced. `media` is the
+  // scene's media in key order (Scene::media()): an instance's medium key resolves to its index
+  // there, as the scene tables number it, and a medium-bearing instance without its medium throws
+  // std::logic_error.
+  void upload_instances(const InstanceTable& table,
+                        const std::vector<std::shared_ptr<const Medium>>& media = {});
 
   const UploadedMesh* find(ar_key key) const;
   std::vector<const UploadedMesh*> meshes() const;  // in mesh-table order

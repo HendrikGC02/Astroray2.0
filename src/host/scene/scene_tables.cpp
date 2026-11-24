@@ -14,6 +14,7 @@
 #include "host/light/light_builder.h"
 #include "host/material/material_store.h"
 #include "host/scene/instances.h"
+#include "host/scene/media.h"
 #include "host/scene/mesh.h"
 #include "host/scene/scene.h"
 #include "kernel/material/lobes/tables.h"
@@ -43,7 +44,7 @@ const char* table_name(TableId id) {
       "instances",          "mesh table",      "material slots", "material headers", "material programs",
       "material constants", "material pass indices", "image views",     "light records",  "light alias bins", "light bin lights",
       "light pmf",          "light index",     "rgb2spec nodes",  "rgb2spec coefficients", "observer cmf", "observer illuminant",
-      "srgb decode",        "e_diel table",    "material spectra", "e_spec table", "table header"};
+      "srgb decode",        "e_diel table",    "material spectra", "e_spec table", "media table", "table header"};
   const uint32_t i = static_cast<uint32_t>(id);
   if (i >= kTableCount) throw std::invalid_argument("table_name: no table " + std::to_string(i));
   return names[i];
@@ -119,10 +120,45 @@ std::shared_ptr<const MeshCopy> upload_mesh(const UploadTarget& t, const std::sh
   return m;
 }
 
-ar::DeviceInstanceRecord instance_record(const InstanceTable& table, uint32_t i, uint32_t mesh_index) {
+MediumIndex medium_index(const std::vector<std::shared_ptr<const Medium>>& media) {
+  MediumIndex out;
+  for (uint32_t i = 0; i < media.size(); ++i) out[media[i]->key] = i;
+  return out;
+}
+
+void check_medium_table(const ar::MediumDesc* descs, uint32_t count) {
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint32_t p = descs[i].program;
+    if (p == Medium::kNoMediumProgram)
+      throw std::invalid_argument("medium table entry " + std::to_string(i) + " was never placed (its program is the unplaced sentinel)");
+    if (p >= count)
+      throw std::invalid_argument("medium table entry " + std::to_string(i) + " names block " + std::to_string(p) +
+                                  ", but the table holds " + std::to_string(count));
+  }
+}
+
+std::vector<ar::MediumDesc> medium_table(const std::vector<std::shared_ptr<const Medium>>& media) {
+  std::vector<ar::MediumDesc> out(media.size());
+  for (uint32_t i = 0; i < media.size(); ++i) {
+    out[i] = media[i]->desc;
+    out[i].program = i;  // the block index: the block array is laid out in this order
+  }
+  check_medium_table(out.data(), uint32_t(out.size()));
+  return out;
+}
+
+ar::DeviceInstanceRecord instance_record(const InstanceTable& table, uint32_t i, uint32_t mesh_index,
+                                         const MediumIndex* media) {
   const Instance& s = table.instances[i];
   ar::DeviceInstanceRecord d{};
   d.mesh = mesh_index;
+  if (s.medium_key != 0) {
+    const auto it = media ? media->find(s.medium_key) : MediumIndex::const_iterator();
+    if (!media || it == media->end())
+      throw std::logic_error("instance " + std::to_string(i) + " bears medium key " + std::to_string(s.medium_key) +
+                             ", which the medium table does not hold");
+    d.medium = it->second + 1u;
+  }
   d.random_id = s.random_id, d.pass_index = s.pass_index, d.crypto_object = s.crypto_object;
   d.crypto_asset = s.crypto_asset, d.flags = s.flags;
   d.material_offset = s.material_offset, d.material_count = s.material_count, d.light_index = s.light_index;
@@ -203,9 +239,13 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
       throw TableUploadFailed("uploading the instances: an instance references geometry key " + std::to_string(kv.first) +
                                   ", which has no active mesh",
                               n.generation);
+  // Read apart from the snapshot (Scene::snapshot is outside this file's task): an activation between
+  // the two reads can pair newer media with older instances, and an instance whose medium is gone then
+  // fails the upload below, which is retryable at the next latch.
+  n.media = scene.media();
   const SceneTableSet* p = cache.current.get();
   if (p && p->materials == n.materials && p->images == n.images && p->lights == n.lights &&
-      p->base_instances == n.base_instances && p->mesh_records == n.mesh_records)
+      p->base_instances == n.base_instances && p->mesh_records == n.mesh_records && p->media == n.media)
     return cache.current;
 
   Device* device = scene.device();  // waits for device init; its failure is not retryable
@@ -250,12 +290,15 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   const std::shared_ptr<const InstanceTable> instances =
       n.lights ? append_lamp_instances(n.base_instances.get(), n.lights->lamp_instances) : n.base_instances;
   const uint32_t inst_count = instances ? uint32_t(instances->instances.size()) : 0u;
-  const bool inst_same = p && p->base_instances == n.base_instances && p->lights == n.lights && meshes_same;
+  // The records hold medium indices, which move with the media list.
+  const MediumIndex media_of = medium_index(n.media);
+  const bool inst_same =
+      p && p->base_instances == n.base_instances && p->lights == n.lights && meshes_same && p->media == n.media;
   b.table(TableId::INSTANCES, inst_same, inst_count, [&] {
     std::vector<ar::DeviceInstanceRecord> r(inst_count);
     for (uint32_t i = 0; i < inst_count; ++i) {
       const bool lamp = i >= base_count;
-      r[i] = instance_record(*instances, i, lamp ? kNoMeshIndex : mesh_index.at(instances->instances[i].geom_key));
+      r[i] = instance_record(*instances, i, lamp ? kNoMeshIndex : mesh_index.at(instances->instances[i].geom_key), &media_of);
     }
     return b.put(LedgerCategory::TABLES, r.data(), r.size() * sizeof(ar::DeviceInstanceRecord));
   });
@@ -322,6 +365,12 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   // The TABLE spectra the constant blocks index: empty, so a null pointer, when no material has one.
   b.table(TableId::MATERIAL_SPECTRA, mats_same, mats ? uint32_t(mats->spectra.size()) : 0u, [&] {
     return b.put(LedgerCategory::TABLES, mats ? mats->spectra.data() : nullptr, mats ? mats->spectra.size() * 4 : 0, mp);
+  });
+
+  // The media (181's store): one MediumDesc each, null exactly when the scene has none.
+  const std::vector<ar::MediumDesc> medium_descs = medium_table(n.media);
+  b.table(TableId::MEDIA, p && p->media == n.media, uint32_t(medium_descs.size()), [&] {
+    return b.put(LedgerCategory::TABLES, medium_descs.data(), medium_descs.size() * sizeof(ar::MediumDesc));
   });
 
   // Images (060): texels per slot, kept while the slot holds the same image.
@@ -418,6 +467,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   sd.material_constants = as<ar::ConstantBlock>(at(TableId::MATERIAL_CONSTANTS));
   sd.material_pass_index = as<uint32_t>(at(TableId::MATERIAL_PASS_INDEX));
   sd.material_spectra = as<float>(at(TableId::MATERIAL_SPECTRA)), sd.material_spectra_count = cnt(TableId::MATERIAL_SPECTRA);
+  sd.medium_descs = as<ar::MediumDesc>(at(TableId::MEDIA)), sd.medium_count = cnt(TableId::MEDIA);
   sd.accel = n.accel->kernel_accel();
   ar::Rgb2SpecTable jt{};
   if (jh) jt = *jh;

@@ -26,6 +26,7 @@
 #include "host/material/material_store.h"
 #include "host/scene/edit.h"
 #include "host/scene/instances.h"
+#include "host/scene/media.h"
 #include "host/scene/mesh.h"
 #include "host/scene/scene_tables.h"
 #include "host/session/kg_builder.h"
@@ -39,7 +40,7 @@ namespace {
 
 constexpr uint32_t kElemMax = 432;  // kg_checksum.cu kKgElemMax
 constexpr uint32_t kRow = 8 + 2 * kElemMax;
-constexpr uint32_t kRows = static_cast<uint32_t>(TableId::E_SPEC) + 1u;
+constexpr uint32_t kRows = static_cast<uint32_t>(TableId::MEDIA) + 1u;
 
 struct Graph {
   std::vector<ar_graph_node> nodes;
@@ -180,6 +181,9 @@ struct Rig {
       l.visibility = AR_VISIBILITY_CAMERA | AR_VISIBILITY_DIFFUSE;
       l.power = 10.0f, l.normalize = 1, l.cast_shadow = 1;
       REQUIRE(set_light(e, 200, &l, scene->materials->table()) == AR_OK);
+      ar_medium_desc md = {};
+      md.sigma_a[0] = 0.4f, md.sigma_s[1] = 0.2f;
+      REQUIRE(set_medium(e, 60, &md, scene->materials->table()) == AR_OK);  // inside the quad instance
     });
     set_material_43(0.3f);
     const std::vector<float> pos{0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0};
@@ -207,6 +211,8 @@ struct Rig {
     d.random_ids = d.pass_indices = d.crypto_objects = d.crypto_assets = zeros.data();
     d.colors = colors.data(), d.visibility = vis.data(), d.flags = zeros.data(), d.light_groups = lg.data();
     d.material_offsets = moff.data(), d.material_counts = mcount.data(), d.material_keys = pool.data();
+    std::vector<ar_key> medium{60};
+    d.medium_keys = medium.data();
     commit([&](Edit& e) { REQUIRE(set_instances(e, &d) == AR_OK); });
   }
 };
@@ -250,9 +256,12 @@ std::vector<HostRow> host_rows(Scene& scene, const SceneTableSet& set) {
   for (const Instance& in : base->instances) rank[in.geom_key] = 0;
   uint32_t k = 0;
   for (auto& kv : rank) kv.second = k++;
+  const auto media = scene.media();
+  const MediumIndex media_of = medium_index(media);
   std::vector<ar::DeviceInstanceRecord> inst;
   for (uint32_t i = 0; i < table->instances.size(); ++i)
-    inst.push_back(instance_record(*table, i, i < base->instances.size() ? rank.at(table->instances[i].geom_key) : kNoMeshIndex));
+    inst.push_back(instance_record(*table, i, i < base->instances.size() ? rank.at(table->instances[i].geom_key) : kNoMeshIndex,
+                                   &media_of));
   at(TableId::INSTANCES) = row_of(inst.data(), inst.size());
   std::vector<ar::DeviceMeshView> views;
   for (auto& kv : rank) {
@@ -304,6 +313,8 @@ std::vector<HostRow> host_rows(Scene& scene, const SceneTableSet& set) {
   ar::ESpecTable es;
   REQUIRE(ar::e_spec_view(blob.data, blob.size, &es) == nullptr);
   at(TableId::E_SPEC) = row_of(es.e, size_t(ar::kESpecN) * ar::kESpecN);
+  const std::vector<ar::MediumDesc> descs = medium_table(media);
+  at(TableId::MEDIA) = row_of(descs.data(), descs.size());
   return rows;
 }
 
@@ -369,10 +380,42 @@ TEST_CASE("scene_upload/checksums match host") {
   CHECK(want[static_cast<uint32_t>(TableId::INSTANCES)].count == 2u);
   CHECK(want[static_cast<uint32_t>(TableId::MATERIAL_PROGRAMS)].count > 0u);  // material 43 runs a program
   CHECK(want[static_cast<uint32_t>(TableId::MATERIAL_SPECTRA)].count == 6u);  // material 45's table: 3 wavelengths, 3 values
+  CHECK(want[static_cast<uint32_t>(TableId::MEDIA)].count == 1u);  // medium 60
   // The emissive quad's index: N = 1, its slice offset, C = 2, then lights 0 and 1.
   CHECK(want[static_cast<uint32_t>(TableId::LIGHT_INDEX)].count == 5u);
   dev.free(kgb);
   dev.free(out);
+}
+
+TEST_CASE("scene_upload/media table checksum") {
+  // The medium table and the instance record's medium index as the device holds them (read back from
+  // device memory), against what the host stores: the one medium is placed at block 0, and the quad
+  // instance names it as index + 1.
+  Rig r;
+  r.build();
+  ModuleDevice& dev = r.dev();
+  auto set = acquire_scene_tables(*r.scene);
+  REQUIRE(set->counts[static_cast<uint32_t>(TableId::MEDIA)] == 1u);
+  const DeviceTable& media = *set->tables[static_cast<uint32_t>(TableId::MEDIA)];
+  REQUIRE(media.bytes() == sizeof(ar::MediumDesc));
+  ar::MediumDesc got{};
+  dev.download(&got, media.buffer(), 0, sizeof got);
+  const auto hosts = r.scene->media();
+  REQUIRE(hosts.size() == 1u);
+  CHECK(got.program == 0u);  // placed: neither the unplaced sentinel nor out of range
+  CHECK(got.model == hosts[0]->desc.model);
+  CHECK(got.estimator == hosts[0]->desc.estimator);
+  CHECK(got.estimator == uint8_t(ar::MediumEstimator::DELTA_TRACK));  // medium 60 scatters
+  CHECK(got.flags == hosts[0]->desc.flags);
+  const DeviceTable& inst = *set->tables[static_cast<uint32_t>(TableId::INSTANCES)];
+  std::vector<ar::DeviceInstanceRecord> recs(set->counts[static_cast<uint32_t>(TableId::INSTANCES)]);
+  dev.download(recs.data(), inst.buffer(), 0, recs.size() * sizeof(ar::DeviceInstanceRecord));
+  REQUIRE(recs.size() == 2u);
+  CHECK(recs[0].medium == 1u);  // the quad instance
+  CHECK(recs[1].medium == 0u);  // the lamp's record
+  // The header block the kernels read carries the table's address and count.
+  CHECK(set->scene_host.medium_count == 1u);
+  CHECK(uint64_t(reinterpret_cast<uintptr_t>(set->scene_host.medium_descs)) == addr(set->tables[static_cast<uint32_t>(TableId::MEDIA)]));
 }
 
 TEST_CASE("scene_upload/material edit uploads only material tables") {
