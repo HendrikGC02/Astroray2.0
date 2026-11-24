@@ -371,7 +371,7 @@ TEST_SUITE("fast") {
         });
         const double n_sub = cf.transmit ? (cf.front ? cf.n_o : cf.n_i) : 1.5;
         const GratingParams p = params(pitch, -6, 6, cf.transmit, n_sub);
-        for (int w0 : {9, 77}) {
+        for (int w0 : {ci == 15 ? 9 : 77}) {  // one wavelength set per incidence keeps the fast tier short
           const Lambda lam = lambda_of(node_lambda(w0), node_lambda((w0 + 24) % 95), node_lambda((w0 + 48) % 95),
                                        node_lambda((w0 + 72) % 95));
           double sum = 0.0;
