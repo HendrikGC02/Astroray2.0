@@ -1,5 +1,5 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 64b2783..05987f8 100644
+index 64b2783..89652cd 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
 @@ -675,8 +675,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
@@ -23,8 +23,11 @@ index 64b2783..05987f8 100644
          q.collapsed = true;
          q.white = p.white && t.second;
        }
-@@ -753,7 +752,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
-       res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(path_of[c].w)];
+@@ -750,10 +749,9 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+       const int weight = mul(path_of[c].w, opacity_of[c]);
+       res->emission_opacity_unclamped = res->emission_opacity_unclamped || !w.isc[size_t(opacity_of[c])];
+       // path.w is a product of socket weights alone: not constant means a per-point factor.
+-      res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(path_of[c].w)];
        const int strength = w.g.nodes[size_t(e)].input[1];
        emitted.push_back({w.g.nodes[size_t(e)].input[0], strength, weight});
 -      const int scaled = mul(strength, weight);  // mul may move the node array
@@ -32,7 +35,15 @@ index 64b2783..05987f8 100644
        w.g.nodes[size_t(e)].input[1] = scaled;
        emit_nodes.push_back(e);
      }
-@@ -775,14 +774,9 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+@@ -767,7 +765,6 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+     const Path& p = path_of[c];
+     if (!p.collapsed) continue;
+     const int a = opacity_of[c];
+-    res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(p.s)];
+     int a2 = -1, cw = -1;  // new opacity source and closure weight; -1: unchanged
+     if (w.isc[size_t(p.s)] && w.isc[size_t(p.tau)] && w.isc[size_t(a)]) {
+       const double s = w.cv[size_t(p.s)][0], tau = w.cv[size_t(p.tau)][0], av = w.cv[size_t(a)][0];
+@@ -775,14 +772,9 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
        a2 = konst(float(ap));
        cw = konst(ap > 0.0 ? float(s * av / ap) : 0.0f);  // a' = 0: the surface is never taken
      } else if (p.white) {
@@ -48,16 +59,17 @@ index 64b2783..05987f8 100644
      }
      if (a2 >= 0) {
        if (opacity_store_of.count(c) != 0) w.g.nodes[size_t(opacity_store_of[c])].input[0] = a2;
-@@ -794,7 +788,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+@@ -794,8 +786,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
    int t = zero;
    for (int c : order)
      if (!is_const(opacity_of[c], 1.0f)) {
 -      t = add(t, mul(path_of[c].w, sub(one, opacity_of[c])));
+-      res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(path_of[c].w)];
 +      t = add(t, sub(one, opacity_of[c]));
-       res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(path_of[c].w)];
      }
    const int a_eff = sub(one, t);
-@@ -927,7 +921,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+   int opacity_store = -1;  // the per-point a_eff store, the opacity entry's root
+@@ -927,7 +918,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
    // per-point factor without a known mean is bounded by 1 (item 43), so a small constant weight
    // keeps the estimate small.
    std::function<float(int)> weight_estimate = [&](int i) -> float {
@@ -66,7 +78,7 @@ index 64b2783..05987f8 100644
      if (w.g.nodes[size_t(i)].op == Op::MUL_F32)
        return weight_estimate(w.g.nodes[size_t(i)].input[0]) * weight_estimate(w.g.nodes[size_t(i)].input[1]);
      const Mean m = mean_of(w, i, &mx);
-@@ -1446,7 +1440,7 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
+@@ -1446,7 +1437,7 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
    if (m.compiled.opacity_clamped) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity clamped");
    if (m.compiled.transparent_folded)
      add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "Transparent under a Mix Shader: colour taken as its mean (exact only for grey)");

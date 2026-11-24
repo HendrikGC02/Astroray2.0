@@ -822,6 +822,24 @@ TEST_CASE("mix_shader/unclamped entries name only per-point sources") {
     const MaterialOutput mo = op.material();
     REQUIRE_FALSE(mo.magenta);
     CHECK(has(mo, kFactor) == per_point);
+    GB emits;  // emission weight only: two opaque BSDF children, the first emits; no collapse, no T
+    emits.store_const(0, 0.1f, RecordSlot::base_metalness);
+    emits.emit(0, 1.0f, 1.0f);
+    emits.store_const(1, 0.2f, RecordSlot::base_metalness);
+    if (per_point) emits.mix(0, emits.uv_channel(0), 0, 1);
+    else emits.mix_const(0, 0.5f, 0, 1);
+    const MaterialOutput mi = emits.material();
+    REQUIRE_FALSE(mi.magenta);
+    CHECK(has(mi, kFactor) == per_point);
+    GB black;  // closure weight only: a black Transparent (a = 1) collapses into S; no emission, T = 0
+    black.store_const(0, 1.0f, RecordSlot::geometry_opacity);
+    black.store_const(1, 0.2f, RecordSlot::base_metalness);
+    if (per_point) black.mix(0, black.uv_channel(0), 0, 1);
+    else black.mix_const(0, 0.5f, 0, 1);
+    const MaterialOutput mk = black.material();
+    REQUIRE_FALSE(mk.magenta);
+    CHECK((mk.flags & ar::NON_OPAQUE) == 0u);
+    CHECK(has(mk, kFactor) == per_point);
     GB sel;  // opaque BSDF children only: the factor only selects, and BRANCH_MIX clamps it
     sel.store_const(0, 0.1f, RecordSlot::base_metalness);
     sel.store_const(1, 0.2f, RecordSlot::base_metalness);
