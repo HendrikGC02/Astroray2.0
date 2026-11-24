@@ -15,3 +15,4 @@ Budget: gate +1 s at most (the new analytic scene rides the existing g1 group on
 Depends on: 145, 158.
 Size: S (about 140 lines without tests); stop and report at 2x.
 Progress:
+- 177 started: lamps.cpp, blackbody.{h,cpp} (shared ref function, y without throw), compiler.cpp (calls it), light.h, test_lamps.cpp, test_lamp_blackbody.cpp, test_nee_agree.cpp, scenes/a4_blackbody_lamp, ar.py, truths.py, analytic.py, budgets.toml, 0004 D6.
