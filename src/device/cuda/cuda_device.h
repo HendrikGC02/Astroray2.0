@@ -24,6 +24,11 @@ class AccelBuilder;
 // function; negative: not checked yet) is below T.
 uint32_t checked_launch_threads(const std::string& kernel, const ar::LaunchRow* row, int function_limit);
 
+// Free memory of CUDA device `ordinal` now (cudaMemGetInfo on its primary context). Device memory a
+// library takes outside our allocations (the OIDN CUDA device) is recorded as the drop in this
+// around the call that takes it, as DEVICE_CONTEXT is (ledger.h). Throws DeviceError when CUDA fails.
+uint64_t cuda_free_device_bytes(int ordinal);
+
 class CudaDevice final : public ModuleDevice {
  public:
   // Throws DeviceError when CUDA cannot be initialised or is dead (a sticky error was
@@ -84,6 +89,11 @@ class CudaDevice final : public ModuleDevice {
   // How many times poll_module_reload tried to load a changed module file, good or bad (tests: a bad file
   // is tried once, not at every step).
   uint64_t module_load_attempts() const;
+  // The device's CUstream (as void*: no CUDA types here), for a library that runs on the engine's stream
+  // (the OIDN CUDA device, 0008 d18). Valid while the device lives.
+  void* native_stream() const;
+  // The CUDA device ordinal this device was created on.
+  int device_ordinal() const;
 
   uint32_t load_module_file(const std::string& path) override;
   void launch_module_kernel(uint32_t module, const char* function, uint32_t blocks, uint32_t threads,
