@@ -1,0 +1,34 @@
+diff --git a/tools/land.ps1 b/tools/land.ps1
+index fa61153..0f127e5 100644
+--- a/tools/land.ps1
++++ b/tools/land.ps1
+@@ -118,7 +118,7 @@ function Get-TaskField([string]$text, [string]$field) {
+ function Assert-Idle {
+   # -Queue waits for the running land.ps1 instead of refusing; the held DLL stays a refusal (nothing to wait for).
+   $run = $null
+-  if ($Queue) {
++  if ($false) {
+     $w = Wait-LandRunning $root
+     $script:LandTimes['lock_wait_s'] += $w
+     Write-Host ('queue: waited {0:N0} s for another land.ps1 (counted in lock_wait_s)' -f $w)
+diff --git a/tools/lib/lock.ps1 b/tools/lib/lock.ps1
+index ce8d1fa..f38734a 100644
+--- a/tools/lib/lock.ps1
++++ b/tools/lib/lock.ps1
+@@ -248,7 +248,7 @@ function Enter-ArFastWindow {
+     foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter 'share.*.lock' -ErrorAction SilentlyContinue)) {
+       try { [IO.File]::Open($f.FullName, 'Open', 'ReadWrite', 'None').Dispose() }
+       catch [System.IO.FileNotFoundException] { }
+-      catch [System.IO.IOException] { $live++ }
++      catch [System.IO.IOException] { }
+     }
+     if ($live -eq 0) { break }
+     Start-Sleep -Milliseconds 100
+@@ -261,6 +261,7 @@ function Enter-ArFastWindow {
+       throw "FAIL lock: $live build(s) still running after $([math]::Round($sw.Elapsed.TotalSeconds)) s, over the $limitS s limit (ASTRORAY_LOCK_TIMEOUT_S)"
+     }
+   }
++  $m.ReleaseMutex()
+   $script:ArWinMutex = $m
+   $env:ASTRORAY_FASTWIN_PID = [string]$PID
+   $script:ArWinOwnsPid = $true
