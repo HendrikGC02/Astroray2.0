@@ -63,10 +63,10 @@ index c6322ef..7388ff0 100644
    out[2] = -(m[0] * m[5] - m[2] * m[3]) / det;
  }
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 4130d4a..bc6895f 100644
+index 4ee5775..977c23b 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
-@@ -103,7 +103,8 @@ bool fold(const Work& w, int i, Vec3* out, std::string* err) {
+@@ -144,7 +144,8 @@ bool fold(const Work& w, int i, Vec3* out, std::string* err) {
          *err = "COLOR_TO_F32 needs the working space's luminance row (Rgb2SpecTable::y_row), which the host never filled";
          return false;
        }
