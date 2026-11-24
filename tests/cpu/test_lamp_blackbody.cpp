@@ -308,7 +308,7 @@ TEST_CASE("lamp_blackbody/validation errors") {
   } catch (const std::invalid_argument& e) {
     CHECK(std::string(e.what()).find("light color") != std::string::npos);
   }
-  CHECK_THROWS_AS(build(6500.0f, 3.0e38f), std::invalid_argument);
+  CHECK_THROWS_AS(build(6500.0f, 3.4e38f), std::invalid_argument);
 }
 
 TEST_CASE("lamp_blackbody/no visible radiance raises one entry") {

@@ -1,0 +1,13 @@
+diff --git a/src/host/light/lamps.cpp b/src/host/light/lamps.cpp
+index af11957..6093c4b 100644
+--- a/src/host/light/lamps.cpp
++++ b/src/host/light/lamps.cpp
+@@ -64,7 +64,7 @@ std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const
+   // the function the material compiler uses (0003 d11); its rgb field is ignored. TABLE is M4 and
+   // renders as the colour's RGB when given, else white.
+   ar::SpectrumRef color;
+-  if (d.color.kind == AR_SPECTRUM_BLACKBODY) {
++  if (d.color.kind == AR_SPECTRUM_BLACKBODY && d.power < 0.0f) {  // canary: packs the rgb field instead
+     const double t = double(d.color.temperature), scale = double(d.color.scale);
+     if (!std::isfinite(d.color.temperature) || !(t > 0.0))
+       throw std::invalid_argument("light color temperature must be finite and positive");
