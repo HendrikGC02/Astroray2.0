@@ -253,4 +253,4 @@ analytic_scenes = 256
 # (scene channel, or image mean) of each gate scene on each device, plus the truth-tested renders of
 # tools/integrator_checks.py; tools/analytic.py --gate refuses to run when its own count differs.
 [family_members]
-analytic_scenes = 84
+analytic_scenes = 90

@@ -43,7 +43,7 @@ const char* table_name(TableId id) {
       "instances",          "mesh table",      "material slots", "material headers", "material programs",
       "material constants", "material pass indices", "image views",     "light records",  "light alias bins", "light bin lights",
       "light pmf",          "light index",     "rgb2spec nodes",  "rgb2spec coefficients", "observer cmf", "observer illuminant",
-      "srgb decode",        "e_diel table",    "table header"};
+      "srgb decode",        "e_diel table",    "material spectra", "table header"};
   const uint32_t i = static_cast<uint32_t>(id);
   if (i >= kTableCount) throw std::invalid_argument("table_name: no table " + std::to_string(i));
   return names[i];
@@ -319,6 +319,10 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   b.table(TableId::MATERIAL_PASS_INDEX, mats_same, mats ? uint32_t(mats->pass_index.size()) : 0u, [&] {
     return b.put(LedgerCategory::TABLES, mats ? mats->pass_index.data() : nullptr, mats ? mats->pass_index.size() * 4 : 0, mp);
   });
+  // The TABLE spectra the constant blocks index: empty, so a null pointer, when no material has one.
+  b.table(TableId::MATERIAL_SPECTRA, mats_same, mats ? uint32_t(mats->spectra.size()) : 0u, [&] {
+    return b.put(LedgerCategory::TABLES, mats ? mats->spectra.data() : nullptr, mats ? mats->spectra.size() * 4 : 0, mp);
+  });
 
   // Images (060): texels per slot, kept while the slot holds the same image.
   const ImageArrays* imgs = n.images.get();
@@ -406,6 +410,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   sd.material_programs = as<uint32_t>(at(TableId::MATERIAL_PROGRAMS));
   sd.material_constants = as<ar::ConstantBlock>(at(TableId::MATERIAL_CONSTANTS));
   sd.material_pass_index = as<uint32_t>(at(TableId::MATERIAL_PASS_INDEX));
+  sd.material_spectra = as<float>(at(TableId::MATERIAL_SPECTRA)), sd.material_spectra_count = cnt(TableId::MATERIAL_SPECTRA);
   sd.accel = n.accel->kernel_accel();
   ar::Rgb2SpecTable jt{};
   if (jh) jt = *jh;

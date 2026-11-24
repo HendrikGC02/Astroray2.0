@@ -182,6 +182,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   sd.material_programs = static_cast<const uint32_t*>(put(ms.programs.data(), ms.programs.size() * 4));
   sd.material_constants = static_cast<const ar::ConstantBlock*>(put(ms.constants.data(), ms.constants.size() * sizeof(ar::ConstantBlock)));
   sd.material_pass_index = static_cast<const uint32_t*>(put(ms.pass_index.data(), ms.pass_index.size() * 4));
+  sd.material_spectra = nullptr, sd.material_spectra_count = 0;  // no material here holds a TABLE
   void* scene_p = put(&sd, sizeof sd);
 
   ar::Rgb2SpecTable jh = tb.jh;

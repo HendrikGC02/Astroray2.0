@@ -56,7 +56,7 @@ AR_FN Real3 light_position(const LightRecord& r) { return Real3{Real(r.xf[3]), R
 // times the radiance scale s, which the film resolve divides out again (d10). The geometric
 // factor of D6's table (1/(4 pi), 1/(4 pi^2 r^2), ...) is the light type's.
 AR_FN Spec light_emission(const LightRecord& r, const Lambda& lam, const ObserverView& obs) {
-  return resolve_slot<SpectrumSemantic::ILLUMINANT>(r.emission, lam, obs) * Real(r.strength);
+  return resolve_slot<SpectrumSemantic::ILLUMINANT>(r.emission, lam, obs, nullptr) * Real(r.strength);
 }
 
 AR_NS_END

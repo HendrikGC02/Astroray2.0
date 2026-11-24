@@ -771,6 +771,7 @@ TEST_CASE("vm/errors stop the run") {
   add("STORE_SLOT slot 37", Prog().op(Op::STORE_SLOT, 0, 0, 0, {37u}), VmStatus::BAD_OPERAND);
   add("STORE_SLOT slot 255", Prog().op(Op::STORE_SLOT, 0, 0, 0, {255u}), VmStatus::BAD_OPERAND);
   add("STORE_SLOT stray bit 9", Prog().op(Op::STORE_SLOT, 0, 0, 0, {512u}), VmStatus::BAD_OPERAND);
+  add("SPECTRUM_TABLE in a program", Prog().op(Op::SPECTRUM_TABLE, 0), VmStatus::BAD_OPERAND);  // the op only folds to a ref
   add("STORE_SLOT spectrum into a scalar slot", Prog().op(Op::STORE_SLOT, 0, 0, 0, {ar::kStoreSlotSpecSource}),
       VmStatus::BAD_OPERAND);
   add("STORE_SLOT spectrum into a frame slot",
@@ -882,7 +883,8 @@ TEST_CASE("vm/opcode table is wired") {
   CHECK(uint32_t(Op::BRANCH_MIX) == 20u);
   CHECK(uint32_t(Op::ADD_F32) == 21u);
   CHECK(uint32_t(Op::SUB_F32) == 22u);
-  CHECK(uint32_t(Op::COUNT_) == 23u);
+  CHECK(uint32_t(Op::SPECTRUM_TABLE) == 23u);
+  CHECK(uint32_t(Op::COUNT_) == 24u);
 }
 
 }  // TEST_SUITE

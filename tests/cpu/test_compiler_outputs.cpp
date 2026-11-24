@@ -884,7 +884,7 @@ TEST_CASE("compiler_outputs/emission carries opacity") {
     REQUIRE(ar::run_entry(pa.data(), pa[2], &regs, ctx, tables, nullptr, &le_emission) == ar::VmStatus::OK);
     // The reference Le: the unscaled material's block emission at the same wavelengths.
     const ar::Spec le1 = ar::resolve_slot<ar::SpectrumSemantic::ILLUMINANT>(m1.compiled.block.emission_color, ctx.lambda_t,
-                                                                            tables.observer) *
+                                                                            tables.observer, nullptr) *
                          ar::Real(m1.compiled.block.emission_luminance);
     const double a = double(rec.geometry_opacity);
     partial += a > 0.05 && a < 0.95;

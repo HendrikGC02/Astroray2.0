@@ -92,7 +92,7 @@ TEST_CASE("spectrum_ref/cauchy reproduces the abbe number") {
   obs.cmf = &ot.cmf[0][0];
   obs.illum = ot.d65;
   const ar::Lambda lam{{Real(400), Real(500), Real(600), Real(700)}};
-  const ar::Spec got = ar::resolve(cauchy_ref(1.5168f, 64.17f, 1.0f), lam, obs);
+  const ar::Spec got = ar::resolve(cauchy_ref(1.5168f, 64.17f, 1.0f), lam, obs, nullptr);
   const ar::Spec want = ar::cauchy_abbe_ior(Real(1.5168f), Real(64.17f), Real(1.0f), lam);
   for (int i = 0; i < ar::kLanes; ++i) CHECK(got.v[i] == want.v[i]);
 }
@@ -130,7 +130,7 @@ TEST_CASE("spectrum_ref/blackbody planck times scale") {
       // resolve() of an ILLUMINANT BLACKBODY ref is analytic: the illuminant multiply is skipped.
       ar::SpectrumRef r = blackbody_ref(T, 1.0);
       r.p[1] = float(scale);
-      const ar::Spec resolved = ar::resolve(r, lam, obs);
+      const ar::Spec resolved = ar::resolve(r, lam, obs, nullptr);
       for (int i = 0; i < ar::kLanes; ++i) {
         const double want = scale * ar::planck_radiance_t<double>(double(lam.nm[i]), T);
         INFO("T " << T << " scale " << scale << " lane " << i);
@@ -154,7 +154,7 @@ TEST_CASE("spectrum_ref/blackbody display y") {
       ar::Lambda lam;
       for (int k = 0; k < ar::kLanes; ++k)
         lam.nm[k] = Real(astroray::kObserverLambdaMin + std::min(i + uint32_t(k), astroray::kObserverSamples - 1));
-      const ar::Spec s = ar::resolve(r, lam, obs);
+      const ar::Spec s = ar::resolve(r, lam, obs, nullptr);
       for (int k = 0; k < ar::kLanes && i + uint32_t(k) < astroray::kObserverSamples; ++k)
         y += double(s.v[k]) * double(ot.cmf[1][i + uint32_t(k)]);
     }

@@ -567,8 +567,8 @@ TEST_CASE("medium_eval/compiled graph folds to one block") {
   ar::MediumSample s;
   const ar::Lambda lam{{450.0f, 520.0f, 590.0f, 660.0f}};
   REQUIRE(ar::medium_eval(tables, ar::MediumDesc{}, ar::Real3{0, 0, 0}, lam, &regs, &s) == ar::VmStatus::OK);
-  const ar::Spec a = ar::resolve(b.sigma_a, lam, fixture().tables.observer);
-  const ar::Spec w1 = ar::resolve(b.sigma_s[1], lam, fixture().tables.observer);
+  const ar::Spec a = ar::resolve(b.sigma_a, lam, fixture().tables.observer, nullptr);
+  const ar::Spec w1 = ar::resolve(b.sigma_s[1], lam, fixture().tables.observer, nullptr);
   for (int l = 0; l < 4; ++l) {
     CHECK(s.sigma_a.v[l] == a.v[l]);
     CHECK(s.sigma_a.v[l] > 0.0f);

@@ -215,7 +215,7 @@ struct Rig {
   // The record and frame the stage samples with, for slot s, before it runs.
   void vertex(uint32_t s, ar::ShadeContext* c, ar::OpenPBRParams* rec) {
     REQUIRE(ar::shade_context_build(kg, s, c));
-    ar::resolve_constant_record(block(), *c, kg.tables->observer, rec);
+    ar::resolve_constant_record(block(), *c, kg.tables->observer, kg.scene->material_spectra, rec);
   }
   uint32_t hist(ar::Term t) const {
     const ar::FilmData& f = film->data();

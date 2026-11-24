@@ -73,6 +73,11 @@ struct SceneData {
   // Per header, the default's included: the material's pass index (ar_material_desc::pass_index,
   // the IndexMA AOV of 0008 d10); 0 for the default material.
   const uint32_t* material_pass_index;
+  // The spectrum arena the TABLE SpectrumRefs of the constant blocks index (slot_resolve.h): floats,
+  // each spectrum its wavelengths then its values; material_spectra_count floats, null exactly when
+  // no material holds a TABLE.
+  const float* material_spectra;
+  uint32_t material_spectra_count;
   // The traversal structure of the backend that runs the stages, opaque to kernels and never null
   // in a session's scene (an empty scene has an empty structure). CPU: the snapshot's EmbreeScene.
   // CUDA: the OptixTraversableHandle of its TLAS as an integer; the launch reads it from the host

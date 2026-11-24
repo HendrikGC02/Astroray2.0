@@ -39,6 +39,7 @@
 #include "ops/mul_f32x3.h"
 #include "ops/mul_f32x3_f32.h"
 #include "ops/rgb_lift.h"
+#include "ops/spectrum_table.h"
 #include "ops/store_slot.h"
 #include "ops/sub_f32.h"
 #include "ops/test_inject_nan.h"

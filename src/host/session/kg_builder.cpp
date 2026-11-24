@@ -81,6 +81,7 @@ std::vector<std::string> missing_pointers(const ar::KernelGlobals& kg, const Sce
   table(s.material_programs, TableId::MATERIAL_PROGRAMS, "scene.material_programs");
   table(s.material_constants, TableId::MATERIAL_CONSTANTS, "scene.material_constants");
   table(s.material_pass_index, TableId::MATERIAL_PASS_INDEX, "scene.material_pass_index");
+  table(s.material_spectra, TableId::MATERIAL_SPECTRA, "scene.material_spectra");
   for (uint32_t i = 0; i < kTableCount; ++i)
     if (scene.counts[i] != 0 && (!scene.tables[i] || !scene.tables[i]->ptr())) out.push_back(table_name(TableId(i)));
   return out;

@@ -10,13 +10,13 @@
 
 AR_NS_BEGIN
 
-// Closed list (0005 item 9). CONSTANT, RGB, BLACKBODY (ILLUMINANT slots) and CAUCHY_ABBE (IOR
-// slots) resolve; the compiler rejects the others, so they exist as values only. CONSTANT, not
+// Closed list (0005 item 9). CONSTANT, RGB, TABLE, BLACKBODY (ILLUMINANT slots) and CAUCHY_ABBE
+// (IOR slots) resolve; the compiler rejects the others, so they exist as values only. CONSTANT, not
 // CONST: windows.h defines CONST.
 enum class SpectrumKind : uint8_t {
   CONSTANT = 0,  // p[0] = value on every wavelength
   RGB,           // p[0..2] = sigmoid c0..c2 (Jakob-Hanika), p[3] = scale
-  TABLE,         // index = arena offset, p[0] = scale  (M1b)
+  TABLE,         // index = arena offset of the first wavelength, aux = n points, p[0] = scale
   BLACKBODY,     // p[0] = T, p[1] = scale x 1 / Y(Planck(T))
   CAUCHY_ABBE,   // p[0] = n_d, p[1] = V_d, p[2] = dispersion scale
   SELLMEIER,     // index = arena offset of six coefficients (M4)

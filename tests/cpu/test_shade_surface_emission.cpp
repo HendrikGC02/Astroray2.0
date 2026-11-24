@@ -256,7 +256,7 @@ struct HitRig {
     const uint32_t mat = ar::hit_material_id(kg, hit_inst[s], 0);
     const ar::MaterialHeader& h = sd.material_headers[mat];
     const ar::ConstantBlock& b = sd.material_constants[h.const_offset];
-    ar::Spec le = ar::resolve(b.emission_color, lam, kg.tables->observer) * ar::Real(b.emission_luminance);
+    ar::Spec le = ar::resolve(b.emission_color, lam, kg.tables->observer, nullptr) * ar::Real(b.emission_luminance);
     if ((h.flags & ar::CONSTANT_SURFACE) == 0u) {
       ar::VmRegs regs;
       ar::OpenPBRParams rec;

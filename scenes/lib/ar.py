@@ -184,6 +184,21 @@ class Graph:
         self.link(src.index, n, 0)
         self._stored.add(name)
 
+    def spectrum_table(self, wavelengths_nm, values, scale=1.0):
+        """A SPECTRUM_TABLE node: a piecewise-linear spectrum (0005 item 9) through the points
+        (wavelengths_nm[k], values[k]), times `scale`, constant outside the first and last wavelength.
+        It feeds a colour input (store it by name) or an emission colour. The graph's f32 pool is
+        [scale, l0, v0, l1, v1, ...]. The engine owns every limit (point count, increasing
+        wavelengths, finite non-negative values): a table it refuses renders the material magenta
+        with a PROGRAM_REJECTED report entry naming the node, so no limit is copied here."""
+        w, v = [float(x) for x in wavelengths_nm], [float(x) for x in values]
+        if len(w) != len(v):
+            raise ValueError("a spectrum table takes one value per wavelength")
+        f = [float(scale)]
+        for a, b in zip(w, v):
+            f.extend((a, b))
+        return Node(self.add("SPECTRUM_TABLE", f32=f))
+
     def uv(self, uvset=0):
         return Node(self.add("LOAD_CTX_UV", i32=(uvset,)))
 

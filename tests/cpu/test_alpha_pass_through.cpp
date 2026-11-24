@@ -388,7 +388,7 @@ TEST_CASE("alpha_pass_through/the surface takes u over a for its lobe choice") {
     ar::ShadeContext c{};
     rig.vertex(s, &c);
     ar::OpenPBRParams rec;
-    ar::resolve_constant_record(rig.block(), c, rig.kg.tables->observer, &rec);
+    ar::resolve_constant_record(rig.block(), c, rig.kg.tables->observer, rig.kg.scene->material_spectra, &rec);
     const ar::Frame frame = ar::frame_from_normal(c.N);
     const ar::Real p_spec = ar::stack_select(*rig.kg.e_diel, rec, ar::to_local(frame, c.wo).z).p_spec;
     REQUIRE(p_spec > ar::Real(0.1));

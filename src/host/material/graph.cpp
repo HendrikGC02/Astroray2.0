@@ -2,8 +2,10 @@
 #include "graph.h"
 
 #include <cmath>
+#include <limits>
 
 #include "../../kernel/material/constant_block.h"
+#include "../../kernel/material/slot_resolve.h"
 #include "../../kernel/vm/context.h"
 #include "../../kernel/vm/ops/store_slot.h"
 #include "../../kernel/vm/ops/tex_image.h"
@@ -19,7 +21,8 @@ std::string at(size_t i, const char* what) { return "graph node " + std::to_stri
 }  // namespace
 
 // Fixed parameter counts per op: f32 pool count, i32 pool count. False for ops a graph may not
-// hold (END, JMP, UNSUPPORTED and the test hooks are the compiler's, never the addon's).
+// hold (END, JMP, UNSUPPORTED and the test hooks are the compiler's, never the addon's) and for
+// SPECTRUM_TABLE, whose f32 count varies with its point count (parse_graph checks it).
 bool op_param_counts(Op op, uint32_t* nf, uint32_t* ni) {
   *nf = *ni = 0;
   switch (op) {
@@ -126,7 +129,8 @@ VType op_result_type(Op op) {
     case Op::TEX_IMAGE: return VType::F32X3;
     case Op::RGB_LIFT:
     case Op::BLACKBODY:
-    case Op::CAUCHY_ABBE: return VType::SPEC;
+    case Op::CAUCHY_ABBE:
+    case Op::SPECTRUM_TABLE: return VType::SPEC;
     default: return VType::NONE;
   }
 }
@@ -141,13 +145,21 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
     if (n.op >= uint32_t(Op::COUNT_)) return *err = at(i, "unknown op"), false;
     o.op = Op(n.op);
     uint32_t nf, ni;
-    if (!op_param_counts(o.op, &nf, &ni)) return *err = at(i, "op is not allowed in a graph"), false;
+    if (o.op == Op::SPECTRUM_TABLE) {
+      // A scale, then n (wavelength, value) pairs: the point count is the pool count, bounded here.
+      nf = n.f32_count, ni = 0;
+      if (nf < 5u || nf % 2u == 0u || (nf - 1u) / 2u > ar::kTableMaxPoints)
+        return *err = at(i, "SPECTRUM_TABLE needs a scale and 2 to 4096 wavelength and value pairs"), false;
+    } else if (!op_param_counts(o.op, &nf, &ni)) {
+      return *err = at(i, "op is not allowed in a graph"), false;
+    }
     const bool with_child = op_optional_i32(o.op) != 0u && n.i32_count == ni + op_optional_i32(o.op);
     if (n.f32_count != nf || (n.i32_count != ni && !with_child)) return *err = at(i, "wrong parameter count for its op"), false;
     if (uint64_t(n.f32_first) + nf > d.f32_count || uint64_t(n.i32_first) + n.i32_count > d.i32_count)
       return *err = at(i, "parameter range outside its pool"), false;
     if (n.string_count != 0) return *err = at(i, "string parameters are not used by M1a ops"), false;
     o.f32_first = n.f32_first;
+    o.f32_count = n.f32_count;
     o.i32_first = n.i32_first;
     o.n_inputs = op_input_count(o.op);
     o.out = op_result_type(o.op);
@@ -171,6 +183,23 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
     if (o.op == Op::CAUCHY_ABBE &&
         !(finite_positive(pf[0]) && finite_positive(pf[1]) && std::isfinite(pf[2]) && pf[2] >= 0.0f))
       return *err = at(i, "CAUCHY_ABBE needs a finite positive n_d and Abbe number and a finite non-negative dispersion scale"), false;
+    if (o.op == Op::SPECTRUM_TABLE) {
+      // Ref: 0005 item 9 (a piecewise-linear table times a scale). Strictly increasing wavelengths keep
+      // the lookup's search and slopes well defined; a negative value has no reflectance or emission meaning.
+      const uint32_t np = (n.f32_count - 1u) / 2u;
+      if (!(std::isfinite(pf[0]) && pf[0] >= 0.0f))
+        return *err = at(i, "SPECTRUM_TABLE needs a finite non-negative scale"), false;
+      for (uint32_t k = 0; k < np; ++k) {
+        const float wl = pf[1 + 2 * k], val = pf[2 + 2 * k];
+        if (!std::isfinite(wl) || (k > 0 && !(wl > pf[1 + 2 * (k - 1)])))
+          return *err = at(i, "SPECTRUM_TABLE wavelengths must be finite and strictly increasing"), false;
+        if (!(std::isfinite(val) && val >= 0.0f))
+          return *err = at(i, "SPECTRUM_TABLE values must be finite and not negative"), false;
+        // The kernel multiplies in float: a product past FLT_MAX would resolve to inf (as the Blackbody check).
+        if (!(double(pf[0]) * double(val) <= double(std::numeric_limits<float>::max())))
+          return *err = at(i, "SPECTRUM_TABLE scale times a value overflows a float"), false;
+      }
+    }
     if (o.op == Op::CHANNEL_F32X3 && uint32_t(g->i32[o.i32_first]) > 2u)
       return *err = at(i, "CHANNEL_F32X3 channel must be 0, 1 or 2"), false;
     // VOLUME_COEFFS: one Volume Absorption or Volume Scatter term (its colour and density are the
@@ -198,7 +227,15 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
     if (from.op == Op::CAUCHY_ABBE &&
         !(to.op == Op::STORE_SLOT && uint32_t(g->i32[to.i32_first]) == uint32_t(ar::RecordSlot::specular_ior)))
       return *err = at(l.from_node, "CAUCHY_ABBE only feeds the specular_ior slot") + sink, false;
-    if (from.op == Op::BLACKBODY || from.op == Op::CAUCHY_ABBE) {
+    if (from.op == Op::SPECTRUM_TABLE) {
+      // A table is a reflectance or unbounded colour (every colour slot but the IOR) or the colour of an emission.
+      const uint32_t slot = to.op == Op::STORE_SLOT ? uint32_t(g->i32[to.i32_first]) : 0u;
+      const bool colour_slot = to.op == Op::STORE_SLOT && slot >= uint32_t(ar::RecordSlot::base_color) &&
+                               slot < uint32_t(ar::RecordSlot::geometry_normal) && slot != uint32_t(ar::RecordSlot::specular_ior);
+      if (!colour_slot && !(to.op == Op::EMIT_LE && l.to_socket == 0))
+        return *err = at(l.from_node, "SPECTRUM_TABLE only feeds a colour slot or the colour of an emission (EMIT_LE)") + sink, false;
+    }
+    if (from.op == Op::BLACKBODY || from.op == Op::CAUCHY_ABBE || from.op == Op::SPECTRUM_TABLE) {
       // accepted above; the usual type rules do not apply to these spec values
     } else if (to.op == Op::STORE_SLOT) {
       const uint32_t slot = uint32_t(g->i32[to.i32_first]);

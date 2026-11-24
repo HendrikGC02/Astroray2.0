@@ -45,7 +45,7 @@ double display_energy(const std::vector<EmissionTerm>& terms, const ar::Observer
     for (int i = 0; i < ar::kObsSamples; i += ar::kLanes) {
       ar::Lambda lam;
       for (int k = 0; k < ar::kLanes; ++k) lam.nm[k] = ar::Real(ar::kObsLambdaMin + std::min(i + k, ar::kObsSamples - 1));
-      const ar::Spec s = ar::resolve(t.color, lam, obs);
+      const ar::Spec s = ar::resolve(t.color, lam, obs, nullptr);
       for (int k = 0; k < ar::kLanes && i + k < ar::kObsSamples; ++k) {
         double w = 0.0;
         for (int c = 0; c < 3; ++c) w += double(obs.cmf[c * ar::kObsSamples + i + k]);
@@ -209,6 +209,10 @@ void put(std::vector<uint8_t>& k, const T& v) {
 SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& meshes, const MaterialArrays& mats,
                                 const WorldOutput* world, bool collect) {
   SceneLights out;
+  // The world's colour is a light record's, which holds no spectrum arena: a TABLE would resolve to
+  // black. Refused here until a world colour can name a table (0005 item 9).
+  if (world != nullptr && world->color.kind == uint8_t(ar::SpectrumKind::TABLE))
+    throw std::invalid_argument("the world colour is a TABLE spectrum, which a light record cannot read (no spectrum arena)");
   const bool world_lit = world != nullptr && world->strength > 0.0f;
   if (world) put(out.key, world->color), put(out.key, world->strength), put(out.key, world->desc.light_group);
   double lo[3] = {HUGE_VAL, HUGE_VAL, HUGE_VAL}, hi[3] = {-HUGE_VAL, -HUGE_VAL, -HUGE_VAL};
@@ -252,6 +256,7 @@ SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& mesh
       put(out.key, side[s]);
       if (side[s] == 0) continue;
       put(out.key, mats.headers[size_t(header[s])].flags);
+      put(out.key, mats.constants[mats.headers[size_t(header[s])].const_offset].emission_color.kind == uint8_t(ar::SpectrumKind::TABLE));
       for (const EmissionTerm& t : mats.emission_estimates[size_t(header[s])]) put(out.key, t.color), put(out.key, t.strength);
     }
     if (!collect) continue;
@@ -264,7 +269,11 @@ SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& mesh
       ar::Real3 v[3];
       for (int k = 0; k < 3; ++k) v[k] = xform(x, &rec->positions[base + size_t(topo.corner_vert[topo.tri_corners[3 * t + k]]) * 3]);
       const std::vector<EmissionTerm>& est = mats.emission_estimates[h];
-      const bool constant = (mats.headers[h].flags & ar::CONSTANT_EMISSION) != 0 && est.size() == 1;
+      // A TABLE emission lives in the material's block with its spectra in the arena, which a light
+      // record cannot reach (its estimate term is only the table's mean): its Le is evaluated from the
+      // material at the light's hit, like a per-point emission.
+      const bool table = mats.constants[mats.headers[h].const_offset].emission_color.kind == uint8_t(ar::SpectrumKind::TABLE);
+      const bool constant = (mats.headers[h].flags & ar::CONSTANT_EMISSION) != 0 && est.size() == 1 && !table;
       const uint16_t flags = uint16_t((side[size_t(slot)] & (ar::kLightTwoSided | ar::kLightBackFace)) |
                                       (constant ? 0u : ar::kLightEmissionProgram));
       LightInput li;
