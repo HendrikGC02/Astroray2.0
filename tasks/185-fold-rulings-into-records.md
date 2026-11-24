@@ -16,3 +16,7 @@ Budget: gate +0 s; no kernel row.
 Depends on: owner decision 40 on main; land after 145 (its 0005 items 9-10 write-back) and before the next record write-back that touches the same sections; the later one rebases.
 Size: M (records text, about 300 lines moved); stop and report at 2x.
 Progress:
+- Rulings 64-90 written into 0001 D2.5/D2.8/D2.10/D2.11, 0002 D5-D7/D10, 0003 d23, 0004 D10 and Verification D1/D7-D11/D8, 0007 d5/d9/d12/d14/d15/d18/d21/d25/d35/d50/V12/V19, 0008 d10/V12/risk 4, 0009 d13 (B-05 at 7.0 s, B-20, B-21, B-34)/d15/d22/d29/Verification 14-15.
+- RULINGS.md 64-90 are index lines, numbers kept; 0009 d29 states decision 40's rule, q4 dropped; ARCHITECTURE's generation line follows 0007 d25.
+- Reference grep: 207 hits before, 237 after (records now cite the ruling numbers); every number resolves.
+- check fast PASS (needed ASTRORAY_DEPS_CACHE=C:\Astroray2.0\third_party\_cache in the shell: fresh worktree has no deps cache).
