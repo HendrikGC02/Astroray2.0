@@ -50,7 +50,7 @@ after in its PR, and re-runs the M-1 probe numbers. Decision path for that row, 
 - Registers at 128 or stack over 512 B: stop; 0002 D10's ladder, starting from 144's attribution.
 - Spills appear (the row is 0 / 0 today): the lead may raise the row by ruling up to 0002 D10's allowance
   for VM kernels (128 / 192 B), with the measured numbers in the ruling. Past that: the ladder.
-- Compile time passes ruling 72's 5.0 s: the owner decided that number; back to the owner with the ladder's
+- Compile time passes 7.0 s (owner decision 40, amending ruling 72's 5.0 s after 145 measured 5.16 s): back to the owner with the ladder's
   split measured (spike A: about 22 % slower at render time).
 
 Everything that does not touch the spine (lobe functions, textures, schema, tables, tree builder, OIDN
@@ -136,7 +136,7 @@ confirmed; `process/guards` merged. The B-31 task is still to be written in slic
 | Starting M1b while M1a is "built, not closed" (ROADMAP: M1b depends on M1a) | slice 0 and the first batch proceed: none of it depends on the open rows, and the owner's instruction for this planning session asks for the next steps to move | the owner may hold product tasks until the close | go ahead; close M1a formally when the B-19, B-20 and B-31 answers are in |
 | Opus as implementer for 10 of the first 25 tasks (owner decision 31: Sonnet implements, Opus reviews and thinks) | as M1a did for physics and shared contracts | all-Sonnet with Opus review; expect more "chose instead of asked" findings | keep the split; it falls as the work moves from kernel to breadth |
 | Gate time when the projection passes 170 s of B-09's 180 s (section 2) | grouping first; landings are held, never weakened | raise B-09, or move named long-stable statistical cases to `full` with `check full` every 10 landings | move cases to `full`; keep 180 s |
-| `k_shade_surface` compile time past ruling 72's 5.0 s | that landing stops | a new limit, or the D10 split with its measured render cost | decide on the numbers when it happens |
+| `k_shade_surface` compile time past ruling 72's 5.0 s | that landing stops | a new limit, or the D10 split with its measured render cost | decided: 7.0 s for M1b (owner decision 40) |
 | M-1 probe spills 130/376 B against 128/192 | 144 applies 0002 D10's ladder | n/a (ROADMAP already orders it) | none needed |
 | Spike C not run | stands: B-14 passes on B-1M | owner may order it | keep |
 | Process: `process/guards` branch (tool deny rules, allow-list, standing scope clause in CLAUDE.md) | not merged; Scope lines in this batch name forced files instead | merge the branch | merge it |
