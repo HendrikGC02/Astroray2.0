@@ -113,7 +113,7 @@ Include rule: CUDA and OptiX headers only in `src/device/` and `src/kernel_gpu/`
 
 | Term | Meaning |
 |---|---|
-| generation | a version of the scene state; every commit and every latched view or settings change produces one (0007 d25, R37) |
+| generation | a version of the scene state; only `ar_edit_commit` allocates its number, and a latch with view or settings changes but no finished commit keeps the active one (0007 d25, R37) |
 | epoch | the accumulation reset counter; advances when a new generation changes the image; writes carry it and stale ones are dropped (0007 d25, 0004 D25) |
 | pass | one sample for every active pixel (k in the adaptive tail) plus one light pass when casters exist; resolved once (0004 D25, 0008 d3) |
 | step | one round of partition, step-table read, sort, refill and stage launches (0002 D7) |
