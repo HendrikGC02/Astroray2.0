@@ -181,3 +181,97 @@ function Exit-ArTreeLock {
     $script:ArTreeStream = $null
   }
 }
+
+# Fast window (0009 d8): the gate's `fast` step is timed against B-08 while other worktrees compile without the
+# machine lock (canary, test.ps1 and build.ps1 -NoMachineLock use every core; a 6 s test run took 21 s).
+# Builds hold a share for their duration; the gate holds the window exclusively for its fast step. The window
+# is a mutex ("<machine mutex>.fastwin") that a build passes through only to register: it creates its share
+# file while holding it, so a build starting during the window waits, and the gate waits for the registered
+# shares to end. A share is a file opened with FileShare.None and DeleteOnClose under <lock dir>/fastwin: a
+# holder that dies releases it with its handle, so nothing is left to expire. ASTRORAY_FASTWIN_PID marks the
+# process tree that owns the window; its own builds (the fast tier's) do not wait for it.
+$script:ArShare = $null
+$script:ArWinMutex = $null
+$script:ArWinOwnsPid = $false
+
+function Test-ArFastWinNested {
+  $held = $env:ASTRORAY_FASTWIN_PID
+  return [bool]($held -and (Get-Process -Id ([int]$held) -ErrorAction SilentlyContinue))
+}
+
+# Takes the window mutex and returns it, owned by this thread. Waits are reported like the machine lock's.
+function Wait-ArFastWinMutex($sw, $say, [string]$what) {
+  $msgS = Get-ArLockSetting 'ASTRORAY_LOCK_MESSAGE_S' 30
+  $limitS = Get-ArLockSetting 'ASTRORAY_LOCK_TIMEOUT_S' 3600
+  $name = $(if ($env:ASTRORAY_LOCK_NAME) { $env:ASTRORAY_LOCK_NAME } else { 'Global\astroray2' }) + '.fastwin'
+  $m = New-Object System.Threading.Mutex($false, $name)
+  while ($true) {
+    try { if ($m.WaitOne([TimeSpan]::FromSeconds($msgS))) { return $m } }
+    catch [System.Threading.AbandonedMutexException] { return $m }
+    if (Test-ArLockSay $say $sw.Elapsed.TotalSeconds) { Write-Host "waiting for the gate's fast window ($what)" }
+    if ($sw.Elapsed.TotalSeconds -ge $limitS) {
+      $m.Dispose()
+      throw "FAIL lock: waited $([math]::Round($sw.Elapsed.TotalSeconds)) s for the gate's fast window, over the $limitS s limit (ASTRORAY_LOCK_TIMEOUT_S)"
+    }
+  }
+}
+
+function Enter-ArBuildShare {
+  # Returns seconds waited; 0 when nested under the window's owner.
+  if (Test-ArFastWinNested) { return 0.0 }
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $dir = Join-Path (Get-ArLockDir) 'fastwin'
+  New-Item -ItemType Directory -Force $dir | Out-Null
+  $m = Wait-ArFastWinMutex $sw @{ Said = 0; Last = 0.0 } 'a build waits for it'
+  try {
+    $script:ArShare = New-Object IO.FileStream((Join-Path $dir "share.$PID.lock"), 'OpenOrCreate', 'ReadWrite', 'None', 4096, [IO.FileOptions]::DeleteOnClose)
+  } finally { $m.ReleaseMutex(); $m.Dispose() }
+  return $sw.Elapsed.TotalSeconds
+}
+
+function Exit-ArBuildShare {
+  if ($script:ArShare) { $script:ArShare.Dispose(); $script:ArShare = $null }
+}
+
+function Enter-ArFastWindow {
+  # Returns seconds waited (for the mutex and for the registered builds to end).
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $say = @{ Said = 0; Last = 0.0 }
+  $dir = Join-Path (Get-ArLockDir) 'fastwin'
+  New-Item -ItemType Directory -Force $dir | Out-Null
+  $m = Wait-ArFastWinMutex $sw $say 'another gate holds it'
+  $msgS = Get-ArLockSetting 'ASTRORAY_LOCK_MESSAGE_S' 30
+  $limitS = Get-ArLockSetting 'ASTRORAY_LOCK_TIMEOUT_S' 3600
+  $next = $msgS
+  while ($true) {
+    $live = 0
+    foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter 'share.*.lock' -ErrorAction SilentlyContinue)) {
+      try { [IO.File]::Open($f.FullName, 'Open', 'ReadWrite', 'None').Dispose() }
+      catch [System.IO.FileNotFoundException] { }
+      catch [System.IO.IOException] { $live++ }
+    }
+    if ($live -eq 0) { break }
+    Start-Sleep -Milliseconds 100
+    if ($sw.Elapsed.TotalSeconds -ge $next) {
+      $next += $msgS
+      if (Test-ArLockSay $say $sw.Elapsed.TotalSeconds) { Write-Host "waiting for $live build(s) to end before the fast window" }
+    }
+    if ($sw.Elapsed.TotalSeconds -ge $limitS) {
+      $m.ReleaseMutex(); $m.Dispose()
+      throw "FAIL lock: $live build(s) still running after $([math]::Round($sw.Elapsed.TotalSeconds)) s, over the $limitS s limit (ASTRORAY_LOCK_TIMEOUT_S)"
+    }
+  }
+  $script:ArWinMutex = $m
+  $env:ASTRORAY_FASTWIN_PID = [string]$PID
+  $script:ArWinOwnsPid = $true
+  return $sw.Elapsed.TotalSeconds
+}
+
+function Exit-ArFastWindow {
+  if ($script:ArWinMutex) {
+    try { $script:ArWinMutex.ReleaseMutex() } catch { }
+    $script:ArWinMutex.Dispose()
+    $script:ArWinMutex = $null
+  }
+  if ($script:ArWinOwnsPid) { $env:ASTRORAY_FASTWIN_PID = $null; $script:ArWinOwnsPid = $false }
+}

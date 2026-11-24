@@ -6,7 +6,8 @@
 # (vcvars_ver=14.44; hosted CI: cl >= 19.44, no -vcvars_ver), CUDA 12.8,
 # OptiX 9.1 headers, CMake >= 3.31 (4.2.1 installed), Ninja 1.13.x, pwsh 7.
 # Takes the machine lock (not with -NoMachineLock, for CPU-only callers) and the
-# tree lock on out/build (0009 d8); the summary reports the waits.
+# tree lock on out/build (0009 d8), and a share of the gate's fast window (lib/lock.ps1); the summary reports
+# the waits.
 # Output: at most 20 lines, last line "PASS build <s> s (budget n/a, waited <w> s)"
 # or "FAIL build ..."; full log in out/check/build.log, JSON in build.json;
 # non-zero exit on failure.
@@ -30,8 +31,11 @@ $log = Join-Path $logDir 'build.log'
 $waited = 0.0
 $machineWait = 0.0
 if (-not $NoMachineLock) { $machineWait = Enter-ArMachineLock }
+# After the machine lock (a gate holds it before its fast window, so a build that held a share and waited for
+# the lock would deadlock the gate); before the tree lock. The gate's own fast tier is nested and does not wait.
+$shareWait = Enter-ArBuildShare
 $treeWait = Enter-ArTreeLock $buildDir
-$waited = $machineWait + $treeWait
+$waited = $machineWait + $shareWait + $treeWait
 Start-ArSummary 'build'
 $clock = [Diagnostics.Stopwatch]::StartNew()
 
@@ -39,6 +43,7 @@ function Say([string]$m) { Add-Content -Path $log -Value $m }
 function Fail([string]$why) {
   $null = Complete-ArSummary -Pass $false -Waited $waited -Reason $why
   Exit-ArTreeLock
+  Exit-ArBuildShare
   Exit-ArMachineLock
   exit 1
 }
@@ -121,5 +126,6 @@ try {
 }
 $null = Complete-ArSummary -Pass $true -Waited $waited
 Exit-ArTreeLock
+Exit-ArBuildShare
 Exit-ArMachineLock
 exit 0

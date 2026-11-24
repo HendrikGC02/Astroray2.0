@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# tools/land.ps1 prepare|merge NNN [-DryRun]   |   submit NNN PASS|SKIP [-Title t] [-Evidence text] [-CiDeadlineMin 45] [-DryRun]   (lead only)
+# tools/land.ps1 prepare|merge NNN [-DryRun]   |   submit NNN PASS|SKIP [-Title t] [-Evidence text] [-CiDeadlineMin 45] [-Queue] [-DryRun]   (lead only)
 # Ref: docs/decisions/0009-build-test-process.md d25 (gate status), d26 (landing), d28 (task and canary format).
 # prepare (in the task worktree): refusals (another land.ps1 running, out/bin/astroray_core.dll held), branch and tree
 #   checks, rebase on origin/main, canary verification (lib/canary.ps1, as tools/canary.ps1; every build is followed by
@@ -13,6 +13,7 @@
 # submit: prepare, open or reuse the PR, post the verdict (and evidence) comments, wait for hosted `ci` on that sha,
 #   merge; main moved ("re-run prepare") repeats everything, at most 3 attempts. One timing line per landing goes to
 #   out/land/history.jsonl of the main checkout. A failed ci run is a FAIL with its URL and never rerun here.
+# -Queue (prepare, submit): wait for the land.ps1 that is running instead of refusing; the wait is in lock_wait_s.
 # -DryRun: no push, no gh call, no commit, no gate run; prints what would happen (fixture test).
 # The gate is `check gate` (task 030); its last summary line is the status description.
 param(
@@ -22,6 +23,7 @@ param(
   [string]$Title = '',
   [string]$Evidence = '',
   [int]$CiDeadlineMin = 45,
+  [switch]$Queue,
   [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
@@ -114,7 +116,13 @@ function Get-TaskField([string]$text, [string]$field) {
 }
 
 function Assert-Idle {
-  $run = Enter-LandRunning $root
+  # -Queue waits for the running land.ps1 instead of refusing; the held DLL stays a refusal (nothing to wait for).
+  $run = $null
+  if ($Queue) {
+    $w = Wait-LandRunning $root
+    $script:LandTimes['lock_wait_s'] += $w
+    Write-Host ('queue: waited {0:N0} s for another land.ps1 (counted in lock_wait_s)' -f $w)
+  } else { $run = Enter-LandRunning $root }
   if ($run) { Refuse "another land.ps1 is running ($run)" }
   $holder = Find-DllHolder $root
   if ($holder) { Refuse "out/bin/astroray_core.dll is loaded by $holder; close it (nothing is killed here)" }

@@ -41,6 +41,29 @@ function Test-LandingMarkerLive($m) {
   return [bool]($cim -and $cim.CommandLine -match 'land\.ps1')
 }
 
+function Wait-LandRunning([string]$Root) {
+  # `submit -Queue`: takes the marker once the land.ps1 that holds it is gone, polling the same claim a refusal
+  # makes. Returns the seconds waited (the caller adds them to lock_wait_s). A wait line names the owner on the
+  # first three polls, then at most one per 300 s. ASTRORAY_LAND_QUEUE_POLL_S (default 15) is the poll interval.
+  $pollS = 15.0
+  if ($env:ASTRORAY_LAND_QUEUE_POLL_S) {
+    if (-not [double]::TryParse($env:ASTRORAY_LAND_QUEUE_POLL_S, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$pollS) -or $pollS -le 0) {
+      throw "ASTRORAY_LAND_QUEUE_POLL_S='$($env:ASTRORAY_LAND_QUEUE_POLL_S)' is not a positive number of seconds"
+    }
+  }
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $said = 0; $last = 0.0
+  while ($true) {
+    $run = Enter-LandRunning $Root
+    if (-not $run) { return $sw.Elapsed.TotalSeconds }
+    if ($said -lt 3 -or $sw.Elapsed.TotalSeconds - $last -ge 300) {
+      $said++; $last = $sw.Elapsed.TotalSeconds
+      Write-Host "queue: waiting for another land.ps1 ($run), $([math]::Round($sw.Elapsed.TotalSeconds)) s so far"
+    }
+    Start-Sleep -Milliseconds ([int]($pollS * 1000))
+  }
+}
+
 function Remove-LandingStaleMarker([string]$File, [string]$StaleText) {
   # Two land.ps1 starting together can both read the same stale marker; a plain delete by the slower one would
   # remove the marker the faster one has just claimed. The rename is atomic, so only one process takes the file,

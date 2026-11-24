@@ -2,13 +2,15 @@
 # CPU-only checks of tools/lib/landing.ps1 on a real throwaway repo: cleanup (a worktree whose out/ holds an open
 # file ends in a LEFTOVER line whose fix works once the file is closed; an unregistered leftover directory is
 # deleted under .claude/worktrees/ and only reported outside it; a clean worktree is removed), exact branch choice, the running-land marker, the merge and PR-create
-# calls after a 5xx (a `gh` stub), and the history line in the main checkout. Run by tests/tools/run_fast.ps1
+# calls after a 5xx (a `gh` stub), the history line in the main checkout, and `submit -Queue` (a second land.ps1
+# waits for the running one, a plain second one is refused; started first and judged last so that its time
+# overlaps the other checks). Run by tests/tools/run_fast.ps1
 # (gate step `tools tests`).
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 . (Join-Path $root 'tools/lib/landing.ps1')
 $bad = 0
-function Check([string]$what, [bool]$ok) { if (-not $ok) { Write-Host "FAIL fast_landing: $what"; $script:bad++ } }
+function Check([string]$what, [bool]$ok, $out = @()) { if (-not $ok) { Write-Host "FAIL fast_landing: $what"; @($out) | Select-Object -Last 6 | ForEach-Object { Write-Host "  $_" }; $script:bad++ } }
 function G { & git -C $main @args 2>&1 | Out-Null; if ($LASTEXITCODE -ne 0) { throw "git $args failed" } }
 function Find-Safe([string]$n) { try { return Find-LandingTask $main $n } catch { Write-Host "fast_landing: Find-LandingTask $n threw: $($_.Exception.Message)"; return $null } }
 
@@ -16,8 +18,37 @@ $tmp = Join-Path ([IO.Path]::GetTempPath()) "astroray_fast_landing_$PID"
 $main = Join-Path $tmp 'main'
 $wts = Join-Path $main '.claude/worktrees'   # where Claude agent worktrees live; cleanup deletes directories only there
 $stream = $null
+$qprocs = @()
 try {
   New-Item -ItemType Directory -Force $tmp | Out-Null
+  # The queue case. A stand-in script named land.ps1 is the running land.ps1 of a throwaway repository (the real
+  # tools/land.ps1 takes a live process whose command line holds land.ps1 for the owner of the marker), and the
+  # marker names it at once. A plain submit is then refused and a -Queue submit waits; the stand-in leaves 0.25 s
+  # after the queued one says it waits, and the queued one runs on, past the idle check, to the first refusal of
+  # an empty repository (not a task branch).
+  $qrepo = Join-Path $tmp 'queue_repo'
+  & git init -q -b main $qrepo
+  New-Item -ItemType Directory -Force (Join-Path $qrepo 'tasks') | Out-Null
+  $mkFile = Get-LandingMarker $qrepo
+  $qout = Join-Path $tmp 'queue_out'
+  New-Item -ItemType Directory -Force $qout | Out-Null
+  $standin = Join-Path $tmp 'standin/land.ps1'
+  New-Item -ItemType Directory -Force (Split-Path $standin) | Out-Null
+  Set-Content $standin @"
+param([string]`$marker, [string]`$queueOut)
+`$sw = [Diagnostics.Stopwatch]::StartNew()
+while (-not ((Test-Path `$queueOut) -and (Select-String -Path `$queueOut -Pattern '^queue: waiting for another land\.ps1' -Quiet)) -and `$sw.Elapsed.TotalSeconds -lt 30) { Start-Sleep -Milliseconds 20 }
+Start-Sleep -Milliseconds 250
+Remove-Item -Force `$marker
+"@
+  $env:ASTRORAY_LAND_QUEUE_POLL_S = '0.1'
+  $holderP = Start-Process pwsh -ArgumentList @('-NoProfile', '-File', $standin, $mkFile, (Join-Path $qout 'queue.out')) -PassThru -NoNewWindow
+  $null = $holderP.Handle; $qprocs += $holderP
+  Set-Content $mkFile (@{ pid = $holderP.Id; start = $holderP.StartTime.ToString('o') } | ConvertTo-Json -Compress)
+  $landArgs = @('-NoProfile', '-File', (Join-Path $root 'tools/land.ps1'), 'submit', '999', 'PASS', '-DryRun')
+  $plainP = Start-Process pwsh -ArgumentList $landArgs -WorkingDirectory $qrepo -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $qout 'plain.out') -RedirectStandardError (Join-Path $qout 'plain.err')
+  $queueP = Start-Process pwsh -ArgumentList ($landArgs + '-Queue') -WorkingDirectory $qrepo -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $qout 'queue.out') -RedirectStandardError (Join-Path $qout 'queue.err')
+  $null = $plainP.Handle; $null = $queueP.Handle; $qprocs += $plainP; $qprocs += $queueP
   & git init -q --bare -b main (Join-Path $tmp 'origin.git')
   & git clone -q (Join-Path $tmp 'origin.git') $main 2>$null
   G -c user.email=t@example.invalid -c user.name=t commit -q --allow-empty -m base
@@ -134,8 +165,20 @@ try {
   Check 'two history lines' ($lines.Count -eq 2)
   $last = Get-LandingLastGate $main
   Check 'the previous landing is the last line' ($last.task -eq 7 -and $last.gate_s -eq 43.0)
+
+  # Judged last: what the plain and the queued submit printed.
+  $null = $plainP.WaitForExit(30000); $null = $queueP.WaitForExit(30000)
+  $po = @(Get-Content (Join-Path $qout 'plain.out') -ErrorAction SilentlyContinue)
+  $qo = @(Get-Content (Join-Path $qout 'queue.out') -ErrorAction SilentlyContinue)
+  Check 'a submit without -Queue is refused while another land.ps1 runs' (@($po | Where-Object { $_ -match '^REFUSE land: another land\.ps1 is running \(pid \d+' }).Count -eq 1) $po
+  Check 'the queued submit says it waits, naming the owner' (@($qo | Where-Object { $_ -match '^queue: waiting for another land\.ps1 \(pid \d+' }).Count -ge 1) $qo
+  Check 'the queued submit reports its wait in lock_wait_s' (@($qo | Where-Object { $_ -match '^queue: waited \d+ s for another land\.ps1 \(counted in lock_wait_s\)' }).Count -eq 1) $qo
+  Check 'the queued submit then runs past the idle check (first refusal: not a task branch)' (@($qo | Where-Object { $_ -match "^REFUSE land: branch 'main' is not task/999-" }).Count -eq 1) $qo
+  Check 'the marker is released after both' (-not (Test-Path $mkFile))
 } finally {
   Set-Location $root
+  $env:ASTRORAY_LAND_QUEUE_POLL_S = $null
+  foreach ($p in $qprocs) { if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
   if ($stream) { $stream.Dispose() }
   & git -C $main worktree prune 2>$null
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
