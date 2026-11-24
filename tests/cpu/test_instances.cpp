@@ -3,6 +3,7 @@
 #include <doctest.h>
 
 #include <cmath>
+#include <cstring>
 #include <chrono>
 #include <future>
 #include <thread>
@@ -17,6 +18,7 @@
 #include "host/scene/edit.h"
 #include "host/scene/instances.h"
 #include "host/scene/media.h"
+#include "vm/ops/volume_coeffs.h"
 
 using namespace astroray;
 using namespace astroray::host;
@@ -212,6 +214,32 @@ TEST_CASE("instances/medium bit 6") {
     CHECK(in.medium_key == 0);
     CHECK((in.mask & 0x40) == 0);
   }
+}
+
+TEST_CASE("instances/medium coefficient fold") {
+  // A chromatic triple s becomes density max(s) with colour s / max(s) for scattering (Cycles: weight =
+  // colour * density) and 1 - s / max(s) for absorption (weight = (1 - colour) * density), so the refs the
+  // block holds are volume_term_ref of those colours. The expected colours are written out, not derived.
+  MaterialStore store(std::make_shared<Ledger>());
+  ar_medium_desc d{};
+  const float sa[3] = {0.5f, 1.0f, 2.0f}, ss[3] = {1.0f, 2.0f, 4.0f};
+  for (int k = 0; k < 3; ++k) d.sigma_a[k] = sa[k], d.sigma_s[k] = ss[k];
+  d.g = 0.25f;
+  const auto m = build_medium(7, d, store.table());
+  uint32_t fl = 0;
+  auto rgb = [](float r, float g, float b) { return ar::Rgb{{ar::Real(r), ar::Real(g), ar::Real(b)}}; };
+  auto same = [](const ar::SpectrumRef& a, const ar::SpectrumRef& b) { return std::memcmp(&a, &b, sizeof a) == 0; };
+  const ar::SpectrumRef want_a = ar::volume_term_ref(store.table(), rgb(0.75f, 0.5f, 0.0f), 2.0f, ar::VolumeTerm::ABSORPTION, &fl);
+  const ar::SpectrumRef want_s = ar::volume_term_ref(store.table(), rgb(0.25f, 0.5f, 1.0f), 4.0f, ar::VolumeTerm::SCATTER, &fl);
+  CHECK(same(m->block.sigma_a, want_a));
+  REQUIRE(m->block.lobe_count == 1);
+  CHECK(same(m->block.sigma_s[0], want_s));
+  CHECK(m->block.g[0] == 0.25f);
+  CHECK(fl == 0);  // nothing was clamped on the way
+  CHECK(m->approximations.empty());
+  // The density is the largest channel, whichever branch.
+  CHECK(m->block.sigma_a.p[3] == 2.0f);
+  CHECK(m->block.sigma_s[0].p[3] == 4.0f);
 }
 
 TEST_CASE("instances/medium key must exist") {

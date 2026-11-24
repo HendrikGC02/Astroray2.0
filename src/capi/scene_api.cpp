@@ -340,6 +340,12 @@ AR_API ar_status ar_edit_set_medium(ar_edit h, ar_key key, const ar_medium_desc*
       h->owner->scene->ctx().log.line("WARNING", why);
       return fail(h, AR_ERR_UNSUPPORTED, why);
     } catch (...) {
+      // Out of memory building the text: keep a short reason and a log line if either can still be written.
+      try {
+        h->last_error = "ar_edit_set_medium: flags is reserved and must be 0";
+        h->owner->scene->ctx().log.line("WARNING", h->last_error);
+      } catch (...) {
+      }
       return AR_ERR_UNSUPPORTED;
     }
   }
