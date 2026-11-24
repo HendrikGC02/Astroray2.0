@@ -16,7 +16,8 @@
 # -Queue (prepare, submit): wait for the land.ps1 that is running instead of refusing (at most ASTRORAY_LAND_QUEUE_TIMEOUT_S,
 #   default 3 h, then FAIL); the wait is in lock_wait_s. merge refuses it.
 # -DryRun: no push, no gh call, no commit, no gate run; prints what would happen (fixture test).
-# The gate is `check gate` (task 030); its last summary line is the status description.
+# The gate is `check gate -Landing` (task 030): it holds the fast window for the whole tier, so builds of other
+# worktrees wait while a landing is gated (0009 d8). Its last summary line is the status description.
 param(
   [Parameter(Mandatory, Position = 0)][ValidateSet('prepare', 'merge', 'submit')][string]$Mode,
   [Parameter(Mandatory, Position = 1)][ValidatePattern('^\d{3}$')][string]$Number,
@@ -266,7 +267,7 @@ function Invoke-Prepare {
   $null = GitX push --force-with-lease -u origin HEAD
   $script:OriginLand = $null   # the push replaced a dropped (land) commit on origin
   $out = @()
-  Measure-LandPhase 'gate_s' { $script:gateOut = & pwsh -NoProfile -File (Join-Path $root 'tools/check.ps1') gate 2>&1 | ForEach-Object { "$_" } }
+  Measure-LandPhase 'gate_s' { $script:gateOut = & pwsh -NoProfile -File (Join-Path $root 'tools/check.ps1') gate -Landing 2>&1 | ForEach-Object { "$_" } }
   $out = @($script:gateOut)
   $state = if ($LASTEXITCODE -eq 0) { 'success' } else { 'failure' }
   $out | Select-Object -Last 4 | ForEach-Object { Write-Host $_ }
