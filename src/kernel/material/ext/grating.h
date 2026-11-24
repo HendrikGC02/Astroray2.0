@@ -52,8 +52,11 @@
 AR_NS_BEGIN
 
 // Extension sample flag (0005 item 17): the direction depends on wavelength, so the caller must
-// terminate the secondary lanes.
+// terminate the secondary lanes. lobes/lobe.h owns the LobeSample flag bits; this one sits here
+// until a stage consumes it, on the first bit lobe.h leaves free.
 inline constexpr uint32_t LOBE_WL_DEPENDENT_DIR = 1u << 5;
+static_assert((LOBE_WL_DEPENDENT_DIR & (LOBE_DELTA | LOBE_REFLECTION | LOBE_TRANSMISSION | LOBE_DIFFUSE | LOBE_GLOSSY)) == 0u,
+              "LOBE_WL_DEPENDENT_DIR must not share a bit with lobe.h's flags");
 
 // Substrate index at the lanes. Only CONSTANT and CAUCHY_ABBE IOR refs pass the compiler's block
 // check; anything else gives 0, which grating_sample turns into "no sample".

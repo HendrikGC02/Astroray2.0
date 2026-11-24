@@ -14,9 +14,13 @@
 #include <algorithm>
 #include <cstdio>
 #include <functional>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "common/stat.h"
+#include "../../src/host/material/grating_table.h"
+#include "astroray/astroray.h"
 #include "material/ext/grating.h"
 
 namespace st = astroray::stat;
@@ -383,6 +387,149 @@ TEST_SUITE("fast") {
         }
       }
     }
+  }
+  // Host builder (0005 item 24). Every cell of a generated table sums to at most 1 over its orders,
+  // which bounds the propagating ones at any azimuth; storage in f32 may add one rounding per order.
+  static double max_cell_sum(const astroray::host::GratingTableResult& r) {
+    double worst = 0.0;
+    for (int c = 0; c < ar::kGratingCosBins; ++c)
+      for (int w = 0; w < ar::kGratingWavelengths; ++w) {
+        double sum = 0.0;
+        for (int o = 0; o < r.order_count; ++o) sum += double(r.eta[ar::grating_table_index(o, c, w)]);
+        worst = std::fmax(worst, sum);
+      }
+    return worst;
+  }
+
+  AR_RT_CASE("grating/table cells sum le one") {
+    using astroray::host::GratingTableSpec;
+    const double tol = 17.0 * std::ldexp(1.0, -24);
+    struct Row {
+      const char* what;
+      double pitch, depth;
+      bool transmit;
+      double coating;
+      bool clips;
+    };
+    const Row rows[] = {{"CD-like, 120 nm, unit reflectance", 1600, 120, false, 1.0, false},
+                        {"deeper, 150 nm", 1600, 150, false, 0.9, false},
+                        {"transmission, 120 nm, n 1.5", 1600, 120, true, 0.96, false},
+                        {"reflectance above one is clipped", 1600, 120, false, 1.08, true}};
+    std::printf("grating tables, largest cell sum over orders -8..8:\n");
+    for (const Row& r : rows) {
+      GratingTableSpec s;
+      s.pitch_nm = r.pitch;
+      s.depth_nm = r.depth;
+      s.m_min = -8;
+      s.m_max = 8;
+      s.transmit = r.transmit;
+      const double c = r.coating;
+      s.coating = [c](double, double) { return c; };
+      s.substrate_ior = [](double) { return 1.5; };
+      const astroray::host::GratingTableResult t = astroray::host::build_grating_table(s);
+      const double worst = max_cell_sum(t);
+      std::printf("  %-36s max sum %.7f  clipped cells %u\n", r.what, worst, t.clipped_cells);
+      INFO(r.what);
+      REQUIRE(t.eta.size() == size_t(17) * ar::kGratingCosBins * ar::kGratingWavelengths);
+      CHECK(worst <= 1.0 + tol);
+      CHECK((t.clipped_cells > 0) == r.clips);
+      CHECK(t.report_code == (r.clips ? uint32_t(AR_REPORT_GRATING_TABLE_LIMIT) : 0u));
+      CHECK(t.report_detail.empty() == !r.clips);
+    }
+  }
+
+  AR_RT_CASE("grating/bessel orders sum to one at 20 um") {
+    // J_m by std::cyl_bessel_j against its recurrence J_{m-1} + J_{m+1} = (2m / x) J_m.
+    for (double x : {0.3, 1.0, 1.8412, 2.7, 4.2})
+      for (int m = 1; m <= 8; ++m) {
+        const double l = std::cyl_bessel_j(m - 1.0, x) + std::cyl_bessel_j(m + 1.0, x);
+        CHECK(std::fabs(l - 2.0 * m / x * std::cyl_bessel_j(double(m), x)) < 1e-12);
+      }
+    // Lossless unit reflectance at 20 um: all 17 orders propagate at normal incidence and
+    // sum_m J_m^2 = 1, so every cell sums to 1 up to the orders beyond |m| = 8 and f32 storage.
+    astroray::host::GratingTableSpec s;
+    s.pitch_nm = 20000.0;
+    s.depth_nm = 120.0;
+    s.m_min = -8;
+    s.m_max = 8;
+    s.coating = [](double, double) { return 1.0; };
+    const astroray::host::GratingTableResult t = astroray::host::build_grating_table(s);
+    double lo = 2.0, hi = 0.0;
+    for (int c = 0; c < ar::kGratingCosBins; ++c)
+      for (int w = 0; w < ar::kGratingWavelengths; ++w) {
+        double sum = 0.0;
+        for (int o = 0; o < t.order_count; ++o) sum += double(t.eta[ar::grating_table_index(o, c, w)]);
+        lo = std::fmin(lo, sum);
+        hi = std::fmax(hi, sum);
+      }
+    std::printf("grating 20 um lossless table: cell sums in [%.8f, %.8f]\n", lo, hi);
+    CHECK(std::fabs(lo - 1.0) < 1e-6);
+    CHECK(std::fabs(hi - 1.0) < 1e-6);
+    CHECK(8 * 830.0 / 20000.0 < 1.0);
+    CHECK(t.clipped_cells == 0u);
+  }
+
+  AR_RT_CASE("grating/phase depth matches Palmer peaks") {
+    // Reflection at normal incidence: the first-order efficiency of a scalar-domain sinusoidal
+    // grating peaks at lambda = 3.41 h and the second order at 2.05 h (Palmer, Diffraction Grating
+    // Handbook 7th ed., sections 9.3 and 9.5). Located here by scanning J_m^2(phi / 2).
+    const double h = 100.0;
+    for (int m : {1, 2}) {
+      double best = 0.0, at = 0.0;
+      for (double l = 150.0; l <= 600.0; l += 0.01) {
+        const double j = std::cyl_bessel_j(double(m), 0.5 * astroray::host::grating_phase_pp(false, h, l, 1.0, 1.0));
+        if (j * j > best) {
+          best = j * j;
+          at = l;
+        }
+      }
+      const double expect = m == 1 ? 3.41 : 2.05;
+      std::printf("grating order %d peak at lambda = %.4f h (Palmer %.2f h), efficiency %.4f\n", m, at / h, expect, best);
+      CHECK(std::fabs(at / h - expect) < 0.01);
+    }
+    // The reflection phase scales with cos(theta_i); the transmission phase does not.
+    const double p0 = astroray::host::grating_phase_pp(false, h, 500.0, 1.0, 1.0);
+    CHECK(std::fabs(astroray::host::grating_phase_pp(false, h, 500.0, 0.5, 1.0) - 0.5 * p0) < 1e-12);
+    const double t0 = astroray::host::grating_phase_pp(true, h, 500.0, 1.0, 1.5);
+    CHECK(std::fabs(t0 - 2.0 * 3.14159265358979323846 * h * 0.5 / 500.0) < 1e-12);
+    CHECK(astroray::host::grating_phase_pp(true, h, 500.0, 0.3, 1.5) == t0);
+  }
+
+  AR_RT_CASE("grating/builder refuses out of range") {
+    using astroray::host::GratingTableSpec;
+    auto spec = [](double pitch, double depth) {
+      GratingTableSpec s;
+      s.pitch_nm = pitch;
+      s.depth_nm = depth;
+      s.m_min = -3;
+      s.m_max = 3;
+      s.coating = [](double, double) { return 0.9; };
+      return s;
+    };
+    // The modulation rule h/d < 0.10: the CD preset (1.6 um, 120 nm, 0.075) builds; a DVD-class
+    // pitch at the same depth (0.74 um, 0.162) is refused.
+    CHECK_NOTHROW(astroray::host::build_grating_table(spec(1600.0, 120.0)));
+    std::string why;
+    try {
+      astroray::host::build_grating_table(spec(740.0, 120.0));
+    } catch (const std::runtime_error& e) {
+      why = e.what();
+    }
+    INFO(why);
+    CHECK(why.find("scalar theory out of range") != std::string::npos);
+    CHECK(why.find("h/d") != std::string::npos);
+    CHECK_THROWS_AS(astroray::host::build_grating_table(spec(1000.0, 100.0)), std::runtime_error);  // exactly 0.10
+    CHECK_THROWS_AS(astroray::host::build_grating_table(spec(0.0, 10.0)), std::runtime_error);
+    CHECK_THROWS_AS(astroray::host::build_grating_table(spec(1600.0, -1.0)), std::runtime_error);
+    GratingTableSpec s = spec(1600.0, 120.0);
+    s.m_max = 9;
+    CHECK_THROWS_AS(astroray::host::build_grating_table(s), std::runtime_error);
+    s = spec(1600.0, 120.0);
+    s.coating = [](double, double) { return -0.1; };
+    CHECK_THROWS_AS(astroray::host::build_grating_table(s), std::runtime_error);
+    s = spec(1600.0, 120.0);
+    s.transmit = true;  // no substrate index
+    CHECK_THROWS_AS(astroray::host::build_grating_table(s), std::runtime_error);
   }
 }
 
