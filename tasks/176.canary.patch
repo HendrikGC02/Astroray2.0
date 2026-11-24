@@ -1,0 +1,31 @@
+diff --git a/src/host/denoise/denoiser.cpp b/src/host/denoise/denoiser.cpp
+index 6aed194..e5badb2 100644
+--- a/src/host/denoise/denoiser.cpp
++++ b/src/host/denoise/denoiser.cpp
+@@ -106,8 +106,6 @@ struct DenoiserState::Oidn {
+     if (cuda_ordinal < 0) return;
+     const uint64_t now = free_bytes();
+     if (now >= before) return;
+-    records.push_back(ledger->add(owner, LedgerCategory::DENOISER, before - now));
+-    bytes += before - now;
+   }
+ 
+   OIDNFilter new_filter(DenoiseMode mode) {
+@@ -314,6 +312,8 @@ struct DenoiserState::Oidn {
+     lib->oidnExecuteFilter(f.rt);
+     lib->oidnReadBuffer(output, 0, image_bytes, staging.data());
+     check(device, "denoise");
++    for (size_t i = 0; i < n; ++i)
++      for (uint32_t k = 0; k < 3; ++k) staging[3 * i + k] = c.data[i * c.components + k];
+     // Only now is `out` written: a failure above leaves the caller's image as it was.
+     out.width = c.width;
+     out.height = c.height;
+@@ -351,7 +351,7 @@ void DenoiserState::load() {
+     return finish(kFailed, "denoiser loading stopped: the state was destroyed");
+   } catch (const std::exception& e) {
+     oidn->release();  // a failed state holds no device memory and no library
+-    return finish(kFailed, e.what());
++    return finish(kFailed, "OIDN failed");
+   }
+   oidn_ = std::move(oidn);
+   finish(kReady, {});
