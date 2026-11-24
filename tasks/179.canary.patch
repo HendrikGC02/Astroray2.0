@@ -1,8 +1,8 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 512d9b3..b4e39af 100644
+index f08f376..0de616a 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
-@@ -604,8 +604,6 @@ VolumeOutput compile_volume(const ar_graph_desc& d, const ar::Rgb2SpecTable& tab
+@@ -633,8 +633,6 @@ VolumeOutput compile_volume(const ar_graph_desc& d, const ar::Rgb2SpecTable& tab
    if (!have_absorber && block.lobe_count == 0) return out;  // no volume node: no medium
    if (clamp_flags != 0) add_entry(&out.entries, AR_REPORT_NODE_APPROXIMATED, "volume RGB clamped");
    if (density_clamped) add_entry(&out.entries, AR_REPORT_NODE_APPROXIMATED, "volume density clamped to 0");
