@@ -58,7 +58,10 @@ AR_FN bool world_radiance(const KernelGlobals& kg, const LightRecord& world, uin
     *le = light_emission(world, lam, obs);
     return true;
   }
-  if (kg.scene == nullptr || kg.scene->world_program == nullptr || kg.scene->world_constants == nullptr) return false;
+  // The entry table is four words; a shorter program is a host bug, not a world.
+  if (kg.scene == nullptr || kg.scene->world_program == nullptr || kg.scene->world_constants == nullptr ||
+      kg.scene->world_program_words < 4u)
+    return false;
   const SceneData& s = *kg.scene;
   const Real3 dir = normalize(ps_ray_d(kg, slot));
   ShadeContext ctx{};

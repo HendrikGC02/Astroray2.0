@@ -474,8 +474,12 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   sd.material_constants = as<ar::ConstantBlock>(at(TableId::MATERIAL_CONSTANTS));
   sd.material_pass_index = as<uint32_t>(at(TableId::MATERIAL_PASS_INDEX));
   sd.material_spectra = as<float>(at(TableId::MATERIAL_SPECTRA)), sd.material_spectra_count = cnt(TableId::MATERIAL_SPECTRA);
+<<<<<<< HEAD
   sd.medium_descs = as<ar::MediumDesc>(at(TableId::MEDIA)), sd.medium_count = cnt(TableId::MEDIA);
   sd.world_program = as<uint32_t>(at(TableId::WORLD_PROGRAM));
+=======
+  sd.world_program = as<uint32_t>(at(TableId::WORLD_PROGRAM)), sd.world_program_words = cnt(TableId::WORLD_PROGRAM);
+>>>>>>> 467233bb (172: tests for the world program (shade_background, compiler outputs, kg_builder, upload rows), GPU agreement case)
   sd.world_constants = as<ar::ConstantBlock>(at(TableId::WORLD_CONSTANTS));
   sd.accel = n.accel->kernel_accel();
   ar::Rgb2SpecTable jt{};

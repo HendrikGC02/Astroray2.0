@@ -94,6 +94,7 @@ struct SceneData {
   // material program, and its constant block (one entry). Both null unless the world's light record
   // carries kLightWorldProgram, which is exactly when shade_background runs them.
   const uint32_t* world_program;
+  uint32_t world_program_words;
   const ConstantBlock* world_constants;
   // The traversal structure of the backend that runs the stages, opaque to kernels and never null
   // in a session's scene (an empty scene has an empty structure). CPU: the snapshot's EmbreeScene.

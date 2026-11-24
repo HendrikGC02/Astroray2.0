@@ -40,7 +40,7 @@ namespace {
 
 constexpr uint32_t kElemMax = 432;  // kg_checksum.cu kKgElemMax
 constexpr uint32_t kRow = 8 + 2 * kElemMax;
-constexpr uint32_t kRows = static_cast<uint32_t>(TableId::MEDIA) + 1u;
+constexpr uint32_t kRows = static_cast<uint32_t>(TableId::WORLD_CONSTANTS) + 1u;
 
 struct Graph {
   std::vector<ar_graph_node> nodes;
@@ -148,10 +148,12 @@ struct Rig {
       REQUIRE(scene->materials->set_material(e, 43, &m) == AR_OK);
     });
   }
-  // One object of each kind: lit world, emissive material on an instanced quad, an image (the
+  // One object of each kind: lit program world, emissive material on an instanced quad, an image (the
   // magenta stand-in of a missing file), a point lamp, material 43 and material 45 (a TABLE colour).
   void build() {
-    const Graph gw(1.0f, 0.5f), ge(1.0f, 2.0f);
+    // The world's colour is the ray direction (LOAD_CTX_P), which makes it a program world: the scene
+    // then has world tables to upload.
+    const Graph gw(1.0f, 0.5f, true), ge(1.0f, 2.0f);
     const TableGraph gt;
     commit([&](Edit& e) {
       const ar_graph_desc dw = gw.desc(), de = ge.desc();
@@ -315,6 +317,8 @@ std::vector<HostRow> host_rows(Scene& scene, const SceneTableSet& set) {
   at(TableId::E_SPEC) = row_of(es.e, size_t(ar::kESpecN) * ar::kESpecN);
   const std::vector<ar::MediumDesc> descs = medium_table(media);
   at(TableId::MEDIA) = row_of(descs.data(), descs.size());
+  at(TableId::WORLD_PROGRAM) = row_of(mats->world_program.data(), mats->world_program.size());
+  at(TableId::WORLD_CONSTANTS) = row_of(mats->world_constants.data(), mats->world_constants.size());
   return rows;
 }
 
@@ -381,6 +385,8 @@ TEST_CASE("scene_upload/checksums match host") {
   CHECK(want[static_cast<uint32_t>(TableId::MATERIAL_PROGRAMS)].count > 0u);  // material 43 runs a program
   CHECK(want[static_cast<uint32_t>(TableId::MATERIAL_SPECTRA)].count == 6u);  // material 45's table: 3 wavelengths, 3 values
   CHECK(want[static_cast<uint32_t>(TableId::MEDIA)].count == 1u);  // medium 60
+  CHECK(want[static_cast<uint32_t>(TableId::WORLD_PROGRAM)].count > 4u);      // the world runs a program
+  CHECK(want[static_cast<uint32_t>(TableId::WORLD_CONSTANTS)].count == 1u);
   // The emissive quad's index: N = 1, its slice offset, C = 2, then lights 0 and 1.
   CHECK(want[static_cast<uint32_t>(TableId::LIGHT_INDEX)].count == 5u);
   dev.free(kgb);
@@ -443,7 +449,8 @@ TEST_CASE("scene_upload/material edit uploads only material tables") {
     const TableId id = TableId(t);
     const bool material = id == TableId::MATERIAL_SLOTS || id == TableId::MATERIAL_HEADERS ||
                           id == TableId::MATERIAL_PROGRAMS || id == TableId::MATERIAL_CONSTANTS ||
-                          id == TableId::MATERIAL_PASS_INDEX || id == TableId::MATERIAL_SPECTRA;
+                          id == TableId::MATERIAL_PASS_INDEX || id == TableId::MATERIAL_SPECTRA ||
+                          id == TableId::WORLD_PROGRAM || id == TableId::WORLD_CONSTANTS;
     // The header block holds the new tables' addresses, so it is always rewritten.
     CHECK_MESSAGE(second->uploaded[t] == (material || id == TableId::HEADER), table_name(id));
     if (second->uploaded[t]) material_bytes += second->tables[t]->bytes();

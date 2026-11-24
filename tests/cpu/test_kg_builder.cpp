@@ -328,6 +328,60 @@ TEST_CASE("kg_builder/medium table refuses an unplaced or out of range block") {
   CHECK(index.at(9) == 1u);
 }
 
+TEST_CASE("kg_builder/a program world carries its program and block") {
+  Rig r;
+  r.build();
+  const auto constant = acquire_scene_tables(r.scene);
+  REQUIRE(constant);
+  CHECK(count(*constant, TableId::WORLD_PROGRAM) == 0u);  // a constant world holds no program
+  CHECK(count(*constant, TableId::WORLD_CONSTANTS) == 0u);
+  CHECK(constant->scene_host.world_program == nullptr);
+  CHECK(constant->scene_host.world_constants == nullptr);
+  // LOAD_CTX_P -> TEX_ENVIRONMENT (image 7, the missing-file stand-in) -> EMIT_LE: a program world.
+  const int32_t i32[2] = {7, 1};
+  const float f32[1] = {1.0f};
+  ar_graph_node n[4] = {};
+  n[0].op = uint32_t(ar::Op::LOAD_CTX_P);
+  n[1].op = uint32_t(ar::Op::TEX_ENVIRONMENT), n[1].i32_first = 0, n[1].i32_count = 2;
+  n[2].op = uint32_t(ar::Op::CONST_F32), n[2].f32_first = 0, n[2].f32_count = 1;
+  n[3].op = uint32_t(ar::Op::EMIT_LE);
+  const ar_graph_link links[3] = {{0, 0, 1, 0}, {1, 0, 3, 0}, {2, 0, 3, 1}};
+  ar_graph_desc d = {};
+  d.node_count = 4, d.link_count = 3, d.f32_count = 1, d.i32_count = 2;
+  d.nodes = n, d.links = links, d.params_f32 = f32, d.params_i32 = i32;
+  r.commit([&](Edit& e) { REQUIRE(r.scene.materials->set_graph(e, 40, &d) == AR_OK); });
+  const auto set = acquire_scene_tables(r.scene);
+  REQUIRE(set);
+  CHECK(set != constant);
+  const auto mats = r.scene.materials->arrays();
+  REQUIRE(!mats->world_program.empty());
+  CHECK(count(*set, TableId::WORLD_PROGRAM) == mats->world_program.size());
+  CHECK(count(*set, TableId::WORLD_CONSTANTS) == 1u);
+  ar::FilmData film{};
+  ar::DisplayTarget display{};
+  uint32_t active = 0;
+  KgSession in;
+  in.film = &film, in.display = &display, in.active_pixels = &active;
+  const ar::KernelGlobals kg = build_kernel_globals(set.get(), in);
+  const std::vector<std::string> missing = missing_pointers(kg, *set, false);
+  CHECK_MESSAGE(missing.empty(), (missing.empty() ? std::string() : missing.front()));
+  CHECK(kg.scene->world_program == mats->world_program.data());  // read in place on the CPU path
+  CHECK(kg.scene->world_program_words == mats->world_program.size());
+  CHECK(kg.scene->world_constants == mats->world_constants.data());
+  // The light record names the program, and nothing samples it.
+  const auto lights = set->lights;
+  REQUIRE(lights);
+  REQUIRE(lights->world_light != ar::kNoLight);
+  CHECK((lights->lights[lights->world_light].flags & ar::kLightWorldProgram) != 0u);
+  CHECK(lights->importance[lights->world_light] == 0.0);
+  CHECK(lights->pmf[lights->world_light] == 0.0f);
+  CHECK(kg.world_light == lights->world_light);
+  // An unrelated edit keeps the program in the new set: the material arrays carry it forward.
+  r.commit([&](Edit& e) { r.material(e, 43, 1.0f); });
+  const auto after = acquire_scene_tables(r.scene);
+  CHECK(after->scene_host.world_program_words == mats->world_program.size());
+}
+
 TEST_CASE("kg_builder/failed table keeps the previous set") {
   Rig r;
   r.build();
