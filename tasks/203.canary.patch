@@ -1,30 +1,86 @@
+diff --git a/tools/build.ps1 b/tools/build.ps1
+index faf6398..e839649 100644
+--- a/tools/build.ps1
++++ b/tools/build.ps1
+@@ -33,7 +33,7 @@ $machineWait = 0.0
+ if (-not $NoMachineLock) { $machineWait = Enter-ArMachineLock }
+ # After the machine lock (a gate holds it before its fast window, so a build that held a share and waited for
+ # the lock would deadlock the gate); before the tree lock. The gate's own fast tier is nested and does not wait.
+-$shareWait = Enter-ArBuildShare
++$shareWait = 0.0
+ $treeWait = Enter-ArTreeLock $buildDir
+ $waited = $machineWait + $shareWait + $treeWait
+ Start-ArSummary 'build'
+diff --git a/tools/check.ps1 b/tools/check.ps1
+index f4fadb1..3d58b2e 100644
+--- a/tools/check.ps1
++++ b/tools/check.ps1
+@@ -253,7 +253,7 @@ $global:LASTEXITCODE = 1
+   if ($Tier -eq 'gate') {
+     # B-08 times this step: builds of other worktrees that run without the machine lock wait outside it
+     # (0009 d8), and its wait for builds already running is not work.
+-    $w = Enter-ArFastWindow; $waited += $w; Add-ArExcluded $w
++    $w = 0.0; $waited += $w; Add-ArExcluded $w
+     try { $r = Step 'fast' { & pwsh -NoProfile -File tools/check.ps1 fast } } finally { Exit-ArFastWindow }
+     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'fast failed (out/check/fast.log)' }
+     $i = 0
 diff --git a/tools/land.ps1 b/tools/land.ps1
-index fa61153..0f127e5 100644
+index 44b92a3..8bfa85a 100644
 --- a/tools/land.ps1
 +++ b/tools/land.ps1
-@@ -118,7 +118,7 @@ function Get-TaskField([string]$text, [string]$field) {
- function Assert-Idle {
-   # -Queue waits for the running land.ps1 instead of refusing; the held DLL stays a refusal (nothing to wait for).
+@@ -120,7 +120,6 @@ function Get-TaskField([string]$text, [string]$field) {
+ # the history line will carry (the self-test reads it).
+ function Wait-QueuedLand {
+   $w = Wait-LandRunning $root
+-  $script:LandTimes['lock_wait_s'] += $w
+   $inv = [Globalization.CultureInfo]::InvariantCulture
+   Write-Host "queue: waited $($w.ToString('F1', $inv)) s for another land.ps1 (lock_wait_s now $($script:LandTimes['lock_wait_s'].ToString('F1', $inv)) s)"
+ }
+@@ -129,7 +128,7 @@ function Assert-Idle {
+   # -Queue waits for the running land.ps1 instead of refusing. The held DLL stays a refusal either way: a
+   # process holding it is not another land.ps1, so there is nothing to queue behind.
    $run = $null
--  if ($Queue) {
-+  if ($false) {
-     $w = Wait-LandRunning $root
-     $script:LandTimes['lock_wait_s'] += $w
-     Write-Host ('queue: waited {0:N0} s for another land.ps1 (counted in lock_wait_s)' -f $w)
+-  if ($Queue) { Wait-QueuedLand } else { $run = Enter-LandRunning $root }
++  if ($false) { Wait-QueuedLand } else { $run = Enter-LandRunning $root }
+   if ($run) { Refuse "another land.ps1 is running ($run)" }
+   $holder = Find-DllHolder $root
+   if ($holder) { Refuse "out/bin/astroray_core.dll is loaded by $holder; close it (nothing is killed here)" }
+diff --git a/tools/lib/landing.ps1 b/tools/lib/landing.ps1
+index c6dd4ba..1350bb6 100644
+--- a/tools/lib/landing.ps1
++++ b/tools/lib/landing.ps1
+@@ -63,7 +63,7 @@ function Wait-LandRunning([string]$Root) {
+   $sw = [Diagnostics.Stopwatch]::StartNew()
+   $said = 0; $last = 0.0
+   while ($true) {
+-    $run = Enter-LandRunning $Root
++    $run = if (Test-Path (Get-LandingMarker $Root)) { 'marker present' } else { $null }
+     if (-not $run) { return $sw.Elapsed.TotalSeconds }
+     if ($sw.Elapsed.TotalSeconds -ge $limitS) {
+       throw "queue: waited $([math]::Round($sw.Elapsed.TotalSeconds)) s for another land.ps1 ($run), over the $limitS s limit (ASTRORAY_LAND_QUEUE_TIMEOUT_S)"
 diff --git a/tools/lib/lock.ps1 b/tools/lib/lock.ps1
-index ce8d1fa..f38734a 100644
+index a7c72c0..9cb222a 100644
 --- a/tools/lib/lock.ps1
 +++ b/tools/lib/lock.ps1
-@@ -248,7 +248,7 @@ function Enter-ArFastWindow {
-     foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter 'share.*.lock' -ErrorAction SilentlyContinue)) {
-       try { [IO.File]::Open($f.FullName, 'Open', 'ReadWrite', 'None').Dispose() }
-       catch [System.IO.FileNotFoundException] { }
+@@ -226,7 +226,7 @@ function Enter-ArBuildShare {
+   $sw = [Diagnostics.Stopwatch]::StartNew()
+   $dir = Join-Path (Get-ArLockDir) 'fastwin'
+   New-Item -ItemType Directory -Force $dir | Out-Null
+-  $m = Wait-ArFastWinMutex $sw @{ Said = 0; Last = 0.0 } 'a build waits for it'
++  $m = New-Object System.Threading.Mutex($true)
+   try {
+     $script:ArShare = New-Object IO.FileStream((Join-Path $dir "share.$PID.lock"), 'OpenOrCreate', 'ReadWrite', 'None', 4096, [IO.FileOptions]::DeleteOnClose)
+   } finally { $m.ReleaseMutex(); $m.Dispose() }
+@@ -262,7 +262,7 @@ function Enter-ArFastWindow {
+         $live++
+         if ($warned.Add($f.Name)) { Write-Host "WARN lock: cannot probe $($f.Name) ($($_.Exception.Message)); counted as a running build" }
+       }
 -      catch [System.IO.IOException] { $live++ }
 +      catch [System.IO.IOException] { }
      }
      if ($live -eq 0) { break }
      Start-Sleep -Milliseconds 100
-@@ -261,6 +261,7 @@ function Enter-ArFastWindow {
+@@ -275,6 +275,7 @@ function Enter-ArFastWindow {
        throw "FAIL lock: $live build(s) still running after $([math]::Round($sw.Elapsed.TotalSeconds)) s, over the $limitS s limit (ASTRORAY_LOCK_TIMEOUT_S)"
      }
    }
