@@ -94,7 +94,7 @@ struct ObserverTables {
 // working space's scene-linear luminance, which is what Blender's implicit colour-to-float
 // conversion takes. Row 1 of an inverse is the cofactors of m's column 1, over the determinant.
 // Ref: Cycles src/scene/shader.cpp (rgb_to_y = rgb_to_xyz.y) and kernel/util/colorspace.h
-// (linear_rgb_to_gray), cycles ref cache of task 143.
+// (linear_rgb_to_gray), from the fetched cycles reference.
 inline void working_space_y_row(const double m[9], double out[3]) {
   const double det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) +
                      m[2] * (m[3] * m[7] - m[4] * m[6]);
