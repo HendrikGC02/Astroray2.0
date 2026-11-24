@@ -1,5 +1,5 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 64b2783..89652cd 100644
+index d1d6731..23570aa 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
 @@ -675,8 +675,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
@@ -78,7 +78,7 @@ index 64b2783..89652cd 100644
      if (w.g.nodes[size_t(i)].op == Op::MUL_F32)
        return weight_estimate(w.g.nodes[size_t(i)].input[0]) * weight_estimate(w.g.nodes[size_t(i)].input[1]);
      const Mean m = mean_of(w, i, &mx);
-@@ -1446,7 +1437,7 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
+@@ -1455,7 +1446,7 @@ static MaterialOutput compile_material_impl(const ar_graph_desc& d, const ar::Rg
    if (m.compiled.opacity_clamped) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity clamped");
    if (m.compiled.transparent_folded)
      add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "Transparent under a Mix Shader: colour taken as its mean (exact only for grey)");
