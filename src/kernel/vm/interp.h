@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // The interpreter: runs one entry of a bytecode program against a register file the calling
-// kernel owns, filling the OpenPBRParams record and Le. Control flow is forward only, so a
+// kernel owns, filling the OpenPBRParams record and Le (a surface run) or a MediumSample (the
+// volume entry, run_volume_entry, 0006 A.2). Control flow is forward only, so a
 // program terminates and its length bounds its time. Each opcode's body is a kernel-library
 // function under ops/; the host constant folder calls the CPU build of the same functions, so
 // folding cannot disagree with evaluation. The switch is built from ops.def, so a new row
@@ -40,8 +41,27 @@
 #include "ops/test_inject_nan.h"
 #include "ops/tex_image.h"
 #include "ops/unsupported.h"
+#include "ops/volume_coeffs.h"
 
 AR_NS_BEGIN
+
+// The one loop: runs from vm.pc until END or an error. A surface run and a volume run differ only
+// in which of vm.rec, vm.le and vm.med, vm.mblock they supply.
+AR_FN VmStatus vm_run(VmState& vm) {
+  while (!vm.done && vm.status == VmStatus::OK) {
+    const uint32_t word = vm.prog[vm.pc];
+    vm.a = (word >> 8) & 0xffu;
+    vm.b = (word >> 16) & 0xffu;
+    vm.c = word >> 24;
+    switch (static_cast<Op>(word & 0xffu)) {
+#define AR_OP(NAME, ...) AR_OP_CASE(NAME, handle_##NAME)
+#include "ops.def"
+#undef AR_OP
+      default: vm_fail(vm, VmStatus::BAD_OPCODE); break;
+    }
+  }
+  return vm.status;
+}
 
 // Runs the entry at word `offset` of `prog` until END. Offset 0 is the entry table itself, which
 // item 32 uses for "absent or constant": nothing runs and the status is OK. `regs` is the
@@ -59,22 +79,32 @@ AR_FN VmStatus run_entry(const uint32_t* prog, uint32_t offset, VmRegs* regs, co
   vm.tables = &tables;
   vm.rec = rec;
   vm.le = le;
+  vm.med = nullptr;
+  vm.mblock = nullptr;
   vm.a = vm.b = vm.c = 0;
   vm.status = VmStatus::OK;
   vm.done = (offset == 0u);
-  while (!vm.done && vm.status == VmStatus::OK) {
-    const uint32_t word = prog[vm.pc];
-    vm.a = (word >> 8) & 0xffu;
-    vm.b = (word >> 16) & 0xffu;
-    vm.c = word >> 24;
-    switch (static_cast<Op>(word & 0xffu)) {
-#define AR_OP(NAME, ...) AR_OP_CASE(NAME, handle_##NAME)
-#include "ops.def"
-#undef AR_OP
-      default: vm_fail(vm, VmStatus::BAD_OPCODE); break;
-    }
-  }
-  return vm.status;
+  return vm_run(vm);
+}
+
+// The volume entry (0006 A.2): the same interpreter, with the medium's constant block in and its
+// MediumSample out instead of the OpenPBR record. ctx supplies P and the wavelengths.
+AR_FN VmStatus run_volume_entry(const uint32_t* prog, uint32_t offset, VmRegs* regs, const ShadeContext& ctx,
+                                const SceneTables& tables, const MediumBlock* block, MediumSample* out) {
+  VmState vm;
+  vm.prog = prog;
+  vm.pc = offset;
+  vm.r = regs->r;
+  vm.ctx = &ctx;
+  vm.tables = &tables;
+  vm.rec = nullptr;
+  vm.le = nullptr;
+  vm.med = out;
+  vm.mblock = block;
+  vm.a = vm.b = vm.c = 0;
+  vm.status = VmStatus::OK;
+  vm.done = (offset == 0u);
+  return vm_run(vm);
 }
 
 AR_NS_END

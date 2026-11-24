@@ -16,3 +16,9 @@ Budget: gate +1 s at most (stop and ask above); k_shade_surface must not move (m
 Depends on: 152, 178. ops.def / probe_m1.cu order 158, 165, 163, 178, 179, 172, ...; compiler.cpp order 158, 165, 164, 179, 168, 180 (179 is on slice C's critical path: 181, 182, 183).
 Size: M (about 450 lines with the compiler part); stop and report at 2x. If the compiler part alone exceeds 200 lines, land the kernel part and its tests first.
 Progress:
+- Files changed beyond Scope: src/kernel/vm/ops/common.h (VmState gains med and mblock, which the volume op needs).
+- Opcode 18 = VOLUME_COEFFS (graph node: i32 term 0 absorption / 1 scatter, f32 anisotropy, inputs colour f32x3 and density f32).
+- Kernel: medium_block.h, medium_eval.h, ops/volume_coeffs.h, run_volume_entry, interval_volume_coeffs; probe_m1.cu renumbered (COUNT_ 19).
+- Host: compile_volume (one absorber, two lobes, constants only), MaterialArrays media / medium_programs / medium_index, volume graph recompiles the material.
+- Tests: test_medium_eval (new, f64 too), test_compiler, test_vm (fold row 14), test_interval, test_opsdef (19 rows), vm_agree volume case; canary 179 PASS.
+- Not done: BACKLOG row 46 (lead closes it); ar_edit_set_graph still refuses target VOLUME in scene_api.cpp (outside Scope).

@@ -7,6 +7,7 @@
 #include "../../kernel/vm/context.h"
 #include "../../kernel/vm/ops/store_slot.h"
 #include "../../kernel/vm/ops/tex_image.h"
+#include "../../kernel/vm/ops/volume_coeffs.h"
 
 namespace astroray::host {
 namespace {
@@ -31,6 +32,7 @@ bool op_param_counts(Op op, uint32_t* nf, uint32_t* ni) {
     case Op::STORE_SLOT:
     case Op::CHANNEL_F32X3: *ni = 1; return true;
     case Op::TEX_IMAGE: *ni = 2; return true;  // image ar_key (low 32 bits), mode bits (tex_image.h)
+    case Op::VOLUME_COEFFS: *nf = 1; *ni = 1; return true;  // HG anisotropy g; VolumeTerm (volume_coeffs.h)
     case Op::LOAD_CTX_P:
     case Op::MUL_F32:
     case Op::MUL_F32X3:
@@ -50,7 +52,8 @@ VType op_input_type(Op op, int i) {
     case Op::TEX_IMAGE:
     case Op::RGB_LIFT:
     case Op::CHANNEL_F32X3: return VType::F32X3;
-    case Op::EMIT_LE: return i == 0 ? VType::F32X3 : VType::F32;
+    case Op::EMIT_LE:
+    case Op::VOLUME_COEFFS: return i == 0 ? VType::F32X3 : VType::F32;  // colour, density
     default: return VType::NONE;
   }
 }
@@ -86,7 +89,8 @@ int op_input_count(Op op) {
     case Op::MUL_F32X3:
     case Op::MUL_F32X3_F32:
     case Op::ADD_F32X3:
-    case Op::EMIT_LE: return 2;
+    case Op::EMIT_LE:
+    case Op::VOLUME_COEFFS: return 2;
     case Op::TEX_IMAGE:
     case Op::RGB_LIFT:
     case Op::STORE_SLOT:
@@ -153,6 +157,12 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
       return *err = at(i, "CAUCHY_ABBE needs a finite positive n_d and Abbe number and a finite non-negative dispersion scale"), false;
     if (o.op == Op::CHANNEL_F32X3 && uint32_t(g->i32[o.i32_first]) > 2u)
       return *err = at(i, "CHANNEL_F32X3 channel must be 0, 1 or 2"), false;
+    // VOLUME_COEFFS: one Volume Absorption or Volume Scatter term (its colour and density are the
+    // inputs); the anisotropy only means something for a scatter term.
+    if (o.op == Op::VOLUME_COEFFS && uint32_t(g->i32[o.i32_first]) > uint32_t(ar::VolumeTerm::SCATTER))
+      return *err = at(i, "VOLUME_COEFFS term must be ABSORPTION (0) or SCATTER (1)"), false;
+    if (o.op == Op::VOLUME_COEFFS && !std::isfinite(pf[0]))
+      return *err = at(i, "VOLUME_COEFFS anisotropy must be finite"), false;
     if (o.op == Op::STORE_SLOT && uint32_t(g->i32[o.i32_first]) >= uint32_t(ar::RecordSlot::COUNT_))
       return *err = at(i, "unknown record slot"), false;
   }

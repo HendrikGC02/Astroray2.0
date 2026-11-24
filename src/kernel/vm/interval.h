@@ -123,4 +123,9 @@ AR_FN Interval3 interval_add_f32x3(const Interval3& x, const Interval3& y) {
   return r;
 }
 
+// VOLUME_COEFFS reads no register, so over any box its coefficients are the medium block's own:
+// `bound` is medium_block_sigma_t_bound (extinction over every wavelength, from the refs). Exact,
+// like a constant; a NaN bound stays {NaN, NaN}.
+AR_FN Interval interval_volume_coeffs(const Interval& bound) { return interval_exact(bound); }
+
 AR_NS_END

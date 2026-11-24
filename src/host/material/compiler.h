@@ -17,6 +17,7 @@
 #include "astroray/astroray.h"
 #include "../../kernel/color/rgb2spec.h"
 #include "../../kernel/material/constant_block.h"
+#include "../../kernel/medium/medium_block.h"
 
 namespace astroray::host {
 
@@ -62,8 +63,17 @@ struct MaterialEntry {
   std::string detail;
 };
 
+// A compiled volume graph (0006 A.1): the medium's constant block and its volume entry. The
+// store places the words in the medium program array and sets block.entry.
+struct MediumOutput {
+  ar::MediumBlock block = {};
+  std::vector<uint32_t> program;
+};
+
 struct MaterialOutput {
   CompileResult compiled;  // ok is true: a material that failed is the magenta one
+  bool has_medium = false;  // the material's volume graph compiled to a medium
+  MediumOutput medium;
   uint32_t flags = 0;      // material_header.h bits
   std::vector<EmissionTerm> emission_estimate;  // empty: the estimate is 0
   std::vector<uint32_t> images;                 // CompileResult::images; recompile when one changes
@@ -89,6 +99,22 @@ MaterialOutput compile_material(const ar_graph_desc& desc, const ar::Rgb2SpecTab
 // specular_ior; a per-point one (runtime_slots) has no constant source, so it stores 1.0 and
 // reports NODE_APPROXIMATED once. medium_priority is stored, above 255 clamped and reported.
 void set_medium_fields(MaterialOutput* m, uint32_t medium_priority);
+
+// What a VOLUME graph compiles to. No medium and no entries is a graph with no volume node; no
+// medium with entries is a volume that is reported and not rendered (0006 A.4, D7), and the
+// surface is unaffected.
+struct VolumeOutput {
+  bool has_medium = false;
+  MediumOutput medium;
+  std::vector<MaterialEntry> entries;
+};
+
+// Compiles the VOLUME graph: Volume Absorption and Volume Scatter terms (the VOLUME_COEFFS graph
+// node) with constant inputs fold to one MediumBlock: one absorption term and up to two scatter
+// lobes (0006 A.2). An op with no volume meaning or a non-constant input gives PROGRAM_REJECTED
+// naming the node; a third lobe or a second absorber gives NODE_UNSUPPORTED; a clamped colour,
+// density or anisotropy gives NODE_APPROXIMATED, once each. Never throws on bad input.
+VolumeOutput compile_volume(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table);
 
 // The material_header.h flags of a compiled program (0005 item 43).
 uint32_t material_flags(const CompileResult& r);

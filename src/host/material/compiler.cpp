@@ -12,6 +12,7 @@
 #include "../../kernel/material/lobes/ggx.h"
 #include "../../kernel/material/material_header.h"
 #include "../../kernel/material/slot_resolve.h"
+#include "../../kernel/medium/phase.h"
 #include "../../kernel/vm/ops/add_f32x3.h"
 #include "../../kernel/vm/ops/channel_f32x3.h"
 #include "../../kernel/vm/ops/const_f32.h"
@@ -20,6 +21,7 @@
 #include "../../kernel/vm/ops/mul_f32x3_f32.h"
 #include "../../kernel/vm/ops/store_slot.h"
 #include "../../kernel/vm/ops/tex_image.h"
+#include "../../kernel/vm/ops/volume_coeffs.h"
 #include "../spectral/blackbody.h"
 #include "graph.h"
 #include "op_meta.h"
@@ -330,6 +332,9 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
   w.table = &table;
   if (!parse_graph(desc, &w.g, &res.error)) return res;
   const size_t n = w.g.nodes.size();
+  for (size_t i = 0; i < n; ++i)
+    if (w.g.nodes[i].op == Op::VOLUME_COEFFS)
+      return res.error = "graph node " + std::to_string(i) + " (VOLUME_COEFFS): a volume term has no surface meaning", res;
   w.topo = stable_topo(w.g);
   w.isc.assign(n, 0);
   w.cv.assign(n, Vec3{0.0f, 0.0f, 0.0f});
@@ -513,10 +518,26 @@ bool pool_string(const ar_graph_desc& d, uint32_t k, std::string* out) {
   return false;
 }
 
-void add_entry(MaterialOutput* m, uint32_t code, const std::string& detail) {
-  for (const MaterialEntry& e : m->entries)
+void add_entry(std::vector<MaterialEntry>* entries, uint32_t code, const std::string& detail) {
+  for (const MaterialEntry& e : *entries)
     if (e.code == code && e.detail == detail) return;  // one entry per (material, node type)
-  m->entries.push_back({code, detail});
+  entries->push_back({code, detail});
+}
+
+void add_entry(MaterialOutput* m, uint32_t code, const std::string& detail) { add_entry(&m->entries, code, detail); }
+
+// An unknown op or an UNSUPPORTED node, one entry per node type (0001 V15).
+void note_unsupported(const ar_graph_desc& d, std::vector<MaterialEntry>* entries) {
+  for (uint32_t i = 0; d.nodes != nullptr && i < d.node_count; ++i) {
+    const ar_graph_node& n = d.nodes[i];
+    if (n.op >= uint32_t(Op::COUNT_)) {
+      add_entry(entries, AR_REPORT_NODE_UNSUPPORTED, "unknown op " + std::to_string(n.op));
+    } else if (Op(n.op) == Op::UNSUPPORTED) {
+      std::string type;
+      if (n.string_count != 1 || !pool_string(d, n.string_first, &type) || type.empty()) type = "unnamed node";
+      add_entry(entries, AR_REPORT_NODE_UNSUPPORTED, type);
+    }
+  }
 }
 
 // MAY_BE_DELTA for one microfacet lobe: a per-point roughness may reach 0; a constant one is
@@ -539,6 +560,86 @@ void finish(MaterialOutput* m) {
 }
 
 }  // namespace
+
+VolumeOutput compile_volume(const ar_graph_desc& d, const ar::Rgb2SpecTable& table) {
+  VolumeOutput out;
+  note_unsupported(d, &out.entries);
+  if (!out.entries.empty()) return out;
+  auto reject = [&](const std::string& why) {
+    add_entry(&out.entries, AR_REPORT_PROGRAM_REJECTED, why);
+    return out;
+  };
+  Work w;
+  w.table = &table;
+  std::string err;
+  if (!parse_graph(d, &w.g, &err)) return reject(err);
+  const size_t n = w.g.nodes.size();
+  // Every op of a volume program must be volume reachable (0006 D7: it has an interval rule).
+  for (size_t i = 0; i < n; ++i) {
+    const OpMeta& m = op_meta(w.g.nodes[i].op);
+    if (!m.volume_reachable)
+      return reject("graph node " + std::to_string(i) + " (" + m.name + "): the op has no volume meaning");
+  }
+  w.topo = stable_topo(w.g);
+  w.isc.assign(n, 0);
+  w.cv.assign(n, Vec3{0.0f, 0.0f, 0.0f});
+  for (int i : w.topo) {
+    w.isc[size_t(i)] = fold(w, i, &w.cv[size_t(i)], &err);
+    if (!err.empty()) return reject(err);
+  }
+  ar::MediumBlock block = ar::medium_block_vacuum();
+  bool have_absorber = false, density_clamped = false, g_clamped = false;
+  uint32_t clamp_flags = 0;
+  const float g_max = float(ar::kHgMaxAbsG);
+  for (size_t i = 0; i < n; ++i) {
+    const GraphNode& nd = w.g.nodes[i];
+    if (nd.op != Op::VOLUME_COEFFS) continue;
+    const std::string who = "graph node " + std::to_string(i) + " (VOLUME_COEFFS): ";
+    // Spatially varying coefficients need grids and the majorant builder, which do not exist yet
+    // (0006 A.6); nothing is guessed from the position.
+    for (int s = 0; s < 2; ++s)
+      if (!w.isc[size_t(nd.input[s])])
+        return reject(who + (s == 0 ? "the colour" : "the density") + " is not constant (node " + std::to_string(nd.input[s]) +
+                      "); spatially varying media are not built");
+    const Vec3& c = w.cv[size_t(nd.input[0])];
+    const float density = w.cv[size_t(nd.input[1])][0];
+    const float g = w.g.f32[nd.f32_first];
+    if (!std::isfinite(c[0]) || !std::isfinite(c[1]) || !std::isfinite(c[2]) || !std::isfinite(density))
+      return reject(who + "the colour and the density must be finite");
+    const auto kind = ar::VolumeTerm(w.g.i32[nd.i32_first]);
+    const ar::SpectrumRef ref =
+        ar::volume_term_ref(table, ar::Rgb{{ar::Real(c[0]), ar::Real(c[1]), ar::Real(c[2])}}, density, kind, &clamp_flags);
+    density_clamped = density_clamped || density < 0.0f;
+    if (kind == ar::VolumeTerm::ABSORPTION) {
+      if (have_absorber) {
+        add_entry(&out.entries, AR_REPORT_NODE_UNSUPPORTED, "Volume Absorption: a second absorber (one absorption term per medium)");
+        return out;
+      }
+      have_absorber = true;
+      block.sigma_a = ref;
+      continue;
+    }
+    if (block.lobe_count == ar::kMediumMaxLobes) {
+      add_entry(&out.entries, AR_REPORT_NODE_UNSUPPORTED, "Volume Scatter: a third phase lobe (at most two per medium)");
+      return out;
+    }
+    // Stored within +-kHgMaxAbsG, as phase.h evaluates it, and reported rather than clamped quietly.
+    const float gc = g > g_max ? g_max : (g < -g_max ? -g_max : g);
+    g_clamped = g_clamped || gc != g;
+    block.sigma_s[block.lobe_count] = ref;
+    block.g[block.lobe_count] = gc;
+    ++block.lobe_count;
+  }
+  if (!have_absorber && block.lobe_count == 0) return out;  // no volume node: no medium
+  if (clamp_flags != 0) add_entry(&out.entries, AR_REPORT_NODE_APPROXIMATED, "volume RGB clamped");
+  if (density_clamped) add_entry(&out.entries, AR_REPORT_NODE_APPROXIMATED, "volume density clamped to 0");
+  if (g_clamped)
+    add_entry(&out.entries, AR_REPORT_NODE_APPROXIMATED, "volume anisotropy clamped to +-" + std::to_string(g_max).substr(0, 5));
+  out.has_medium = true;
+  out.medium.block = block;
+  out.medium.program = {word(Op::VOLUME_COEFFS), word(Op::END)};
+  return out;
+}
 
 // In M1a the specular lobe (which the transmission lobe shares) always counts; the coat counts
 // unless coat_weight folds to 0, where no coat lobe can be sampled. NON_OPAQUE is clear exactly
@@ -595,16 +696,7 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
                                 const ImageSlotFn* slots, uint32_t medium_priority) {
   // Unsupported nodes first, every one of them, not only the first (0001 V15).
   MaterialOutput unsupported;
-  for (uint32_t i = 0; d.nodes != nullptr && i < d.node_count; ++i) {
-    const ar_graph_node& n = d.nodes[i];
-    if (n.op >= uint32_t(Op::COUNT_)) {
-      add_entry(&unsupported, AR_REPORT_NODE_UNSUPPORTED, "unknown op " + std::to_string(n.op));
-    } else if (Op(n.op) == Op::UNSUPPORTED) {
-      std::string type;
-      if (n.string_count != 1 || !pool_string(d, n.string_first, &type) || type.empty()) type = "unnamed node";
-      add_entry(&unsupported, AR_REPORT_NODE_UNSUPPORTED, type);
-    }
-  }
+  note_unsupported(d, &unsupported.entries);
   if (!unsupported.entries.empty()) {
     MaterialOutput m = magenta_material(table, unsupported.entries[0].code, unsupported.entries[0].detail);
     for (const MaterialEntry& e : unsupported.entries) add_entry(&m, e.code, e.detail);

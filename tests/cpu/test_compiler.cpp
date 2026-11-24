@@ -13,13 +13,21 @@
 #include <string>
 #include <vector>
 
+#include <cstring>
+#include <functional>
+#include <limits>
+#include <memory>
+
 #include "../../src/host/data_resource.h"
+#include "../../src/host/ledger.h"
 #include "../../src/host/material/compiler.h"
 #include "../../src/host/ledger.h"
 #include "../../src/host/material/material_store.h"
 #include "../../src/host/material/regalloc.h"
 #include "host/scene/edit.h"
 #include "material/constant_block.h"
+#include "medium/medium_eval.h"
+#include "medium/phase.h"
 #include "vm/interp.h"
 
 namespace {
@@ -459,6 +467,255 @@ TEST_CASE("compiler/store passes medium_priority to the block") {
   const auto arrays = store->arrays();
   REQUIRE(arrays->keys.size() == 1);
   CHECK(arrays->constants[0].medium_priority == 7);
+}
+
+// ---- the volume graph (0006 A.1, A.2) -------------------------------------------------------------
+
+// One Volume Absorption or Volume Scatter node with constant colour and density.
+int term(GB& g, ar::VolumeTerm k, std::vector<float> rgb, float density, float aniso = 0.0f) {
+  const int c = g.add(Op::CONST_F32X3, std::move(rgb));
+  const int d = g.add(Op::CONST_F32, {density});
+  const int n = g.add(Op::VOLUME_COEFFS, {aniso}, {int32_t(k)});
+  g.link(c, n, 0);
+  g.link(d, n, 1);
+  return n;
+}
+
+bool same_ref(const ar::SpectrumRef& a, const ar::SpectrumRef& b) { return std::memcmp(&a, &b, sizeof a) == 0; }
+
+astroray::host::VolumeOutput volume(const GB& g) { return astroray::host::compile_volume(g.desc(), fixture().table); }
+
+TEST_CASE("medium_eval/compiled graph folds to one block") {
+  using ar::VolumeTerm;
+  GB g;
+  // The absorber's density is a MUL of two constants: it folds before it reaches the block.
+  const int two = g.add(Op::CONST_F32, {2.0f}), three_q = g.add(Op::CONST_F32, {0.75f});
+  const int dens = g.op2(Op::MUL_F32, two, three_q);
+  const int col = g.add(Op::CONST_F32X3, {0.9f, 0.6f, 0.3f});
+  const int absorb = g.add(Op::VOLUME_COEFFS, {0.0f}, {int32_t(VolumeTerm::ABSORPTION)});
+  g.link(col, absorb, 0);
+  g.link(dens, absorb, 1);
+  term(g, VolumeTerm::SCATTER, {0.8f, 0.5f, 0.2f}, 2.0f, 0.5f);
+  term(g, VolumeTerm::SCATTER, {0.2f, 0.4f, 0.9f}, 0.5f, -0.3f);
+  const astroray::host::VolumeOutput v = volume(g);
+  REQUIRE(v.entries.empty());
+  REQUIRE(v.has_medium);
+  const ar::MediumBlock& b = v.medium.block;
+  uint32_t fl = 0;
+  const ar::Rgb2SpecTable& tb = fixture().table;
+  auto rgb = [](float r, float gg, float bb) { return ar::Rgb{{ar::Real(r), ar::Real(gg), ar::Real(bb)}}; };
+  CHECK(same_ref(b.sigma_a, ar::volume_term_ref(tb, rgb(0.9f, 0.6f, 0.3f), 1.5f, VolumeTerm::ABSORPTION, &fl)));
+  CHECK(same_ref(b.sigma_s[0], ar::volume_term_ref(tb, rgb(0.8f, 0.5f, 0.2f), 2.0f, VolumeTerm::SCATTER, &fl)));
+  CHECK(same_ref(b.sigma_s[1], ar::volume_term_ref(tb, rgb(0.2f, 0.4f, 0.9f), 0.5f, VolumeTerm::SCATTER, &fl)));
+  CHECK(b.lobe_count == 2u);
+  CHECK(b.g[0] == 0.5f);
+  CHECK(b.g[1] == -0.3f);
+  CHECK((v.medium.program == std::vector<uint32_t>{uint32_t(Op::VOLUME_COEFFS), uint32_t(Op::END)}));
+  CHECK(fl == 0u);
+  // Run as the kernel does, entry at word 1: the sample's absorption and lobes are the block's.
+  std::vector<uint32_t> program = {0u, v.medium.program[0], v.medium.program[1]};
+  ar::MediumBlock block = b;
+  block.entry = 1u;
+  const ar::MediumTables tables{program.data(), &block, fixture().tables};
+  ar::VmRegs regs = {};
+  ar::MediumSample s;
+  const ar::Lambda lam{{450.0f, 520.0f, 590.0f, 660.0f}};
+  REQUIRE(ar::medium_eval(tables, ar::MediumDesc{}, ar::Real3{0, 0, 0}, lam, &regs, &s) == ar::VmStatus::OK);
+  const ar::Spec a = ar::resolve(b.sigma_a, lam, fixture().tables.observer);
+  const ar::Spec w1 = ar::resolve(b.sigma_s[1], lam, fixture().tables.observer);
+  for (int l = 0; l < 4; ++l) {
+    CHECK(s.sigma_a.v[l] == a.v[l]);
+    CHECK(s.sigma_a.v[l] > 0.0f);
+    CHECK(s.phase[1].weight.v[l] == w1.v[l]);
+  }
+}
+
+TEST_CASE("medium_eval/g clamp reported once") {
+  using ar::VolumeTerm;
+  GB g;
+  term(g, VolumeTerm::SCATTER, {0.5f, 0.5f, 0.5f}, 1.0f, 1.5f);
+  term(g, VolumeTerm::SCATTER, {0.5f, 0.5f, 0.5f}, 1.0f, -3.0f);
+  const astroray::host::VolumeOutput v = volume(g);
+  REQUIRE(v.has_medium);
+  // Both anisotropies are beyond Cycles' bound; they are stored at it and reported once (BACKLOG 46).
+  CHECK(v.medium.block.g[0] == float(ar::kHgMaxAbsG));
+  CHECK(v.medium.block.g[1] == -float(ar::kHgMaxAbsG));
+  REQUIRE(v.entries.size() == 1u);
+  CHECK(v.entries[0].code == AR_REPORT_NODE_APPROXIMATED);
+  CHECK(v.entries[0].detail.find("anisotropy clamped") != std::string::npos);
+  // In range: stored as is, nothing reported.
+  GB ok;
+  term(ok, VolumeTerm::SCATTER, {0.5f, 0.5f, 0.5f}, 1.0f, 0.999f);
+  const astroray::host::VolumeOutput w = volume(ok);
+  CHECK(w.entries.empty());
+  CHECK(w.medium.block.g[0] == 0.999f);
+}
+
+TEST_CASE("medium_eval/refused volume programs") {
+  using ar::VolumeTerm;
+  using astroray::host::VolumeOutput;
+  auto only = [](const VolumeOutput& v, uint32_t code, const char* text) {
+    CHECK_FALSE(v.has_medium);
+    REQUIRE(v.entries.size() == 1u);
+    CHECK(v.entries[0].code == code);
+    CHECK_MESSAGE(v.entries[0].detail.find(text) != std::string::npos, v.entries[0].detail);
+  };
+  {  // An op with no volume meaning is refused with the node named.
+    GB g;
+    term(g, VolumeTerm::SCATTER, {0.5f, 0.5f, 0.5f}, 1.0f);
+    g.store(g.add(Op::CONST_F32, {0.5f}), ar::RecordSlot::specular_roughness);
+    only(volume(g), AR_REPORT_PROGRAM_REJECTED, "graph node 4 (STORE_SLOT)");
+  }
+  {  // A colour that depends on the position: spatially varying media are not built.
+    GB g;
+    const int p = g.add(Op::LOAD_CTX_P);
+    const int d = g.add(Op::CONST_F32, {1.0f});
+    const int n = g.add(Op::VOLUME_COEFFS, {0.0f}, {int32_t(VolumeTerm::SCATTER)});
+    g.link(p, n, 0);
+    g.link(d, n, 1);
+    only(volume(g), AR_REPORT_PROGRAM_REJECTED, "graph node 2 (VOLUME_COEFFS): the colour is not constant");
+  }
+  {  // A third lobe and a second absorber are unsupported.
+    GB g;
+    for (int k = 0; k < 3; ++k) term(g, VolumeTerm::SCATTER, {0.5f, 0.5f, 0.5f}, 1.0f);
+    only(volume(g), AR_REPORT_NODE_UNSUPPORTED, "third phase lobe");
+    GB h;
+    for (int k = 0; k < 2; ++k) term(h, VolumeTerm::ABSORPTION, {0.5f, 0.5f, 0.5f}, 1.0f);
+    only(volume(h), AR_REPORT_NODE_UNSUPPORTED, "second absorber");
+  }
+  {  // A node the addon could not lower is reported by type, as for a surface.
+    GB g;
+    term(g, VolumeTerm::SCATTER, {0.5f, 0.5f, 0.5f}, 1.0f);
+    g.add(Op::UNSUPPORTED, {}, {0});
+    const VolumeOutput v = volume(g);
+    CHECK_FALSE(v.has_medium);
+    REQUIRE(v.entries.size() == 1u);
+    CHECK(v.entries[0].code == AR_REPORT_NODE_UNSUPPORTED);
+  }
+  {  // A non-finite density is rejected; a negative one is clamped to 0 and reported.
+    GB g;
+    term(g, VolumeTerm::SCATTER, {0.5f, 0.5f, 0.5f}, std::numeric_limits<float>::quiet_NaN());
+    only(volume(g), AR_REPORT_PROGRAM_REJECTED, "must be finite");
+    GB h;
+    term(h, VolumeTerm::ABSORPTION, {0.2f, 0.4f, 0.6f}, -2.0f);
+    const VolumeOutput v = volume(h);
+    REQUIRE(v.has_medium);
+    CHECK(v.medium.block.sigma_a.p[3] == 0.0f);
+    REQUIRE(v.entries.size() == 1u);
+    CHECK(v.entries[0].detail == "volume density clamped to 0");
+  }
+  {  // A colour outside [0, 1] is clamped as a reflectance and reported.
+    GB g;
+    term(g, VolumeTerm::SCATTER, {1.5f, 0.5f, -0.5f}, 1.0f);
+    const VolumeOutput v = volume(g);
+    REQUIRE(v.has_medium);
+    REQUIRE(v.entries.size() == 1u);
+    CHECK(v.entries[0].detail == "volume RGB clamped");
+  }
+  {  // No volume node: no medium and nothing to report.
+    GB g;
+    g.add(Op::CONST_F32, {1.0f});
+    const VolumeOutput v = volume(g);
+    CHECK_FALSE(v.has_medium);
+    CHECK(v.entries.empty());
+  }
+  {  // A volume term in a surface graph has no surface meaning: magenta and one rejection.
+    GB g;
+    term(g, VolumeTerm::SCATTER, {0.5f, 0.5f, 0.5f}, 1.0f);
+    const ar_graph_desc d = g.desc();
+    const astroray::host::MaterialOutput m = astroray::host::compile_material(d, fixture().table);
+    CHECK(m.magenta);
+    REQUIRE(m.entries.size() == 1u);
+    CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+    CHECK(m.entries[0].detail.find("VOLUME_COEFFS") != std::string::npos);
+  }
+}
+
+TEST_CASE("medium_eval/material store compiles the volume graph") {
+  using namespace astroray::host;
+  const ar_key S = 10, V = 11, V3 = 13, M = 20;
+  astroray::ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  auto store = std::make_shared<MaterialStore>(std::make_shared<Ledger>());
+  GB surface, vol, vol2, bad;
+  surface.store(surface.add(Op::CONST_F32, {0.5f}), ar::RecordSlot::specular_roughness);
+  term(vol, ar::VolumeTerm::SCATTER, {0.8f, 0.5f, 0.2f}, 2.0f, 2.0f);
+  term(vol2, ar::VolumeTerm::SCATTER, {0.8f, 0.5f, 0.2f}, 6.0f, 0.5f);
+  for (int k = 0; k < 3; ++k) term(bad, ar::VolumeTerm::SCATTER, {0.5f, 0.5f, 0.5f}, 1.0f);
+  auto commit = [&](const std::function<void(Edit&)>& body) {
+    auto e = scene.begin_edit();
+    REQUIRE(e);
+    body(*e);
+    uint64_t gen = 0;
+    REQUIRE(e->commit(&gen) == AR_OK);
+    store->end_edit();
+    scene.generations().wait_idle();
+  };
+  auto set_graph = [&](Edit& e, ar_key key, const GB& g) {
+    const ar_graph_desc d = g.desc();
+    REQUIRE(store->set_graph(e, key, &d) == AR_OK);
+  };
+  auto set_material = [&](Edit& e, ar_key volume_graph) {
+    ar_material_desc m = {};
+    m.surface_graph = S;
+    m.volume_graph = volume_graph;
+    REQUIRE(store->set_material(e, M, &m) == AR_OK);
+  };
+  auto entries = [&](uint32_t code) {
+    scene.report().snapshot();
+    ar_report_info info = {};
+    REQUIRE(scene.report().info(&info) == AR_OK);
+    std::vector<std::string> out;
+    for (uint32_t k = 0; k < info.entry_count; ++k) {
+      ar_report_entry e = {};
+      REQUIRE(scene.report().entry(k, &e) == AR_OK);
+      if (e.subject == M && e.code == code) out.emplace_back(reinterpret_cast<const char*>(e.detail));
+    }
+    return out;
+  };
+  const ar::Lambda lam{{450.0f, 520.0f, 590.0f, 660.0f}};
+  auto sigma_s0 = [&]() {
+    const std::shared_ptr<const MaterialArrays> a = store->arrays();
+    REQUIRE(a->media.size() == 1u);
+    ar::VmRegs regs = {};
+    ar::MediumSample s;
+    const ar::MediumTables t{a->medium_programs.data(), a->media.data(), fixture().tables};
+    ar::MediumDesc desc = {};
+    desc.program = a->medium_index[0];
+    REQUIRE(ar::medium_eval(t, desc, ar::Real3{0, 0, 0}, lam, &regs, &s) == ar::VmStatus::OK);
+    return float(s.sigma_s.v[0]);
+  };
+  // A volume graph compiles to a medium beside the surface; its clamped g is reported once.
+  commit([&](Edit& e) {
+    set_graph(e, S, surface);
+    set_graph(e, V, vol);
+    set_material(e, V);
+  });
+  {
+    const std::shared_ptr<const MaterialArrays> a = store->arrays();
+    REQUIRE(a->keys == std::vector<ar_key>{M});
+    CHECK(a->medium_index == std::vector<uint32_t>{0u});
+    CHECK((a->medium_programs == std::vector<uint32_t>{0u, uint32_t(Op::VOLUME_COEFFS), uint32_t(Op::END)}));
+    CHECK(a->media[0].entry == 1u);
+    CHECK(a->media[0].g[0] == float(ar::kHgMaxAbsG));
+    CHECK(entries(AR_REPORT_NODE_UNSUPPORTED).empty());
+    CHECK(entries(AR_REPORT_NODE_APPROXIMATED).size() == 1u);
+    CHECK(entries(AR_REPORT_PROGRAM_REJECTED).empty());
+  }
+  const float first = sigma_s0();
+  // Setting another graph under the volume key recompiles the material: the coefficients change.
+  commit([&](Edit& e) { set_graph(e, V, vol2); });
+  CHECK(sigma_s0() > 2.5f * first);
+  CHECK(store->arrays()->media[0].g[0] == 0.5f);
+  // A volume the compiler cannot take is reported and not rendered; the surface is untouched.
+  commit([&](Edit& e) {
+    set_graph(e, V3, bad);
+    set_material(e, V3);
+  });
+  CHECK(store->arrays()->media.empty());
+  CHECK(store->arrays()->medium_index == std::vector<uint32_t>{MaterialArrays::kNoMedium});
+  CHECK(entries(AR_REPORT_NODE_UNSUPPORTED).size() == 1u);
+  CHECK((store->arrays()->headers[0].flags & ar::CONSTANT_SURFACE) != 0u);
 }
 
 }  // TEST_SUITE

@@ -21,6 +21,7 @@
 #include "agree.h"
 #include "host/data_resource.h"
 #include "host/device.h"
+#include "medium/medium_eval.h"
 #include "vm/interp.h"
 
 using namespace astroray;
@@ -183,6 +184,52 @@ Results cpu_run(const Prog& p, const Inputs& in, const Tables& tb) {
   return r;
 }
 
+// The volume entry: sigma_a, sigma_s, emission, both lobes' weights and g, and the status, 23 floats.
+constexpr uint32_t kVolOut = 23;
+
+ar::MediumBlock volume_block(const Tables& tb) {
+  uint32_t flags = 0;
+  auto rgb = [](double r, double g, double b) { return ar::Rgb{{ar::Real(r), ar::Real(g), ar::Real(b)}}; };
+  ar::MediumBlock b = ar::medium_block_vacuum();
+  b.sigma_a = ar::volume_term_ref(tb.table, rgb(0.85, 0.4, 0.15), 1.5f, ar::VolumeTerm::ABSORPTION, &flags);
+  b.sigma_s[0] = ar::volume_term_ref(tb.table, rgb(0.2, 0.7, 0.9), 2.0f, ar::VolumeTerm::SCATTER, &flags);
+  b.sigma_s[1] = ar::volume_term_ref(tb.table, rgb(0.9, 0.9, 0.1), 0.6f, ar::VolumeTerm::SCATTER, &flags);
+  b.g[0] = 0.7f;
+  b.g[1] = -0.4f;
+  b.lobe_count = 2;
+  b.entry = 4;
+  return b;
+}
+
+Results cpu_volume_run(const Prog& p, const ar::MediumBlock& blk, const Inputs& in) {
+  Results r;
+  r.n = in.n;
+  r.stride = kVolOut;
+  r.v.assign(size_t(in.n) * kVolOut, 0.0);
+  ar::SceneTables tables = {};
+  for (uint32_t i = 0; i < in.n; ++i) {
+    const float* row = in.v.data() + size_t(i) * kIn;
+    ar::VmRegs regs = {};
+    ar::ShadeContext ctx = {};
+    ctx.P = ar::Real3{row[16], row[17], row[18]};
+    for (int l = 0; l < 4; ++l) ctx.lambda_t.nm[l] = row[23 + l];
+    ar::MediumSample s = ar::medium_sample_zero();
+    const ar::VmStatus st = ar::run_volume_entry(p.w.data(), 4, &regs, ctx, tables, &blk, &s);
+    double* o = r.v.data() + size_t(i) * kVolOut;
+    for (int l = 0; l < 4; ++l) {
+      o[l] = s.sigma_a.v[l];
+      o[4 + l] = s.sigma_s.v[l];
+      o[8 + l] = s.emission.v[l];
+      o[12 + l] = s.phase[0].weight.v[l];
+      o[16 + l] = s.phase[1].weight.v[l];
+    }
+    o[20] = s.phase[0].p0;
+    o[21] = s.phase[1].p0;
+    o[22] = double(uint32_t(st));
+  }
+  return r;
+}
+
 }  // namespace
 
 TEST_SUITE("gate") {
@@ -228,6 +275,41 @@ TEST_CASE("vm_agree/gpu nofma vs cpu float per opcode") {
   dev->free(z);
   dev->free(c);
   dev->free(il);
+  CHECK(ledger.total() == 0);
+}
+
+TEST_CASE("agree/volume coeffs nofma vs cpu float") {
+  const Tables tb;
+  const Inputs in = make_inputs();
+  const Prog prog = Prog().op(Op::VOLUME_COEFFS).op(Op::END);
+  const ar::MediumBlock blk = volume_block(tb);
+  Ledger ledger;
+  auto dev = host::make_cuda_device(ledger, 0);
+  DeviceBuffer pb = dev->allocate(LedgerCategory::TABLES, sizeof(uint32_t) * prog.w.size(), Owner{});
+  DeviceBuffer bb = dev->allocate(LedgerCategory::TABLES, sizeof(ar::MediumBlock), Owner{});
+  DeviceBuffer il = dev->allocate(LedgerCategory::TABLES, sizeof(float) * uint64_t(ar::kObsSamples), Owner{});
+  dev->upload(pb, 0, prog.w.data(), sizeof(uint32_t) * prog.w.size());
+  dev->upload(bb, 0, &blk, sizeof(ar::MediumBlock));
+  dev->upload(il, 0, tb.obs.d65, sizeof(float) * uint64_t(ar::kObsSamples));
+  uint64_t prog_p = reinterpret_cast<uint64_t>(pb.ptr), blk_p = reinterpret_cast<uint64_t>(bb.ptr),
+           il_p = reinterpret_cast<uint64_t>(il.ptr);
+  uint32_t entry = 4;
+  const Results gpu = run_gpu(*dev, nofma_module("vm_agree"), "ar_vm_agree_volume", in, kVolOut,
+                              {&prog_p, &entry, &blk_p, &il_p});
+  const Results cpu = cpu_volume_run(prog, blk, in);
+  dev->free(pb);
+  dev->free(bb);
+  dev->free(il);
+  const Stats s = compare(gpu, cpu, Metric::REL_L2);
+  std::printf("vm_agree %-24s max relative error %.3e (p99.9 %.3e, n=%u)\n", "VOLUME_COEFFS", s.max, s.p999, s.n);
+  CHECK(s.max <= kMaxRel);
+  double status_sum = 0, sigma_sum = 0;
+  for (uint32_t i = 0; i < in.n; ++i) {
+    status_sum += gpu.v[size_t(i) * kVolOut + 22] + cpu.v[size_t(i) * kVolOut + 22];
+    sigma_sum += cpu.v[size_t(i) * kVolOut + 4];
+  }
+  CHECK(status_sum == 0.0);
+  CHECK(sigma_sum > 0.0);  // the medium scatters: the agreement is not between two zeros
   CHECK(ledger.total() == 0);
 }
 

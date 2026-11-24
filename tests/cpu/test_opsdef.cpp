@@ -45,7 +45,7 @@ TEST_CASE("opsdef/foldable flag is parsed") {
   // and of compiler.cpp fold().
   const std::set<std::string> want = {"CONST_F32", "CONST_F32X3",   "MUL_F32",      "MUL_F32X3",
                                       "MUL_F32X3_F32", "ADD_F32X3", "CHANNEL_F32X3"};
-  REQUIRE(op_meta_count() == 19);
+  REQUIRE(op_meta_count() == 20);
   for (int i = 0; i < op_meta_count(); ++i) {
     const auto& m = op_meta_table()[i];
     INFO(m.name);

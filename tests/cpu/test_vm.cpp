@@ -22,6 +22,7 @@
 
 #include "../../src/host/data_resource.h"
 #include "material/constant_block.h"
+#include "medium/medium_eval.h"
 #include "sample/sobol.h"
 #include "vm/interp.h"
 
@@ -140,6 +141,13 @@ bool in_range(const ar::Spec& s, float lo, float hi) {
   for (int i = 0; i < ar::kLanes; ++i)
     if (!(s.v[i] >= lo && s.v[i] <= hi)) return false;
   return true;
+}
+
+// Independent double evaluation of a Jakob-Hanika sigmoid from its stored float coefficients.
+double sigmoid_d(const float* c, double lam) {
+  const double x = (double(c[0]) * lam + double(c[1])) * lam + double(c[2]);
+  if (std::isinf(x)) return x > 0 ? 1.0 : 0.0;
+  return 0.5 + x / (2.0 * std::sqrt(1.0 + x * x));
 }
 
 void poison(ar::VmRegs& r) { std::memset(&r, 0xff, sizeof r); }  // NaN in every register
@@ -368,6 +376,47 @@ TEST_CASE("vm/fold equals interpret") {
       t.fold("CAUCHY_ABBE", ca_fold);
       t.ref("CAUCHY_ABBE", ca_ref);
     }
+    {  // VOLUME_COEFFS through the volume entry: an absorber and two scatter lobes from random colours
+       // and densities. The fold is the direct call of the shared function; the independent value is
+       // density * S(colour) for a scatterer and density * (1 - S(colour)) for the absorber, S the
+       // sigmoid of the colour's own albedo coefficients, evaluated in double.
+      const float d_a = unit(i, 50) * 3.0f, d_s0 = unit(i, 51) * 3.0f, d_s1 = unit(i, 52) * 3.0f;
+      const ar::Rgb ca{{ar::Real(x[0]), ar::Real(x[1]), ar::Real(x[2])}}, c0{{ar::Real(x[3]), ar::Real(x[4]), ar::Real(x[5])}},
+          c1{{ar::Real(x[6]), ar::Real(x[7]), ar::Real(x[8])}};
+      uint32_t fl = 0;
+      ar::MediumBlock blk = ar::medium_block_vacuum();
+      blk.sigma_a = ar::volume_term_ref(*g.tables.rgb2spec, ca, d_a, ar::VolumeTerm::ABSORPTION, &fl);
+      blk.sigma_s[0] = ar::volume_term_ref(*g.tables.rgb2spec, c0, d_s0, ar::VolumeTerm::SCATTER, &fl);
+      blk.sigma_s[1] = ar::volume_term_ref(*g.tables.rgb2spec, c1, d_s1, ar::VolumeTerm::SCATTER, &fl);
+      blk.g[0] = 0.6f;
+      blk.g[1] = -0.25f;
+      blk.lobe_count = 2;
+      Prog p;
+      p.op(Op::VOLUME_COEFFS).end();
+      ar::MediumSample got = {}, want = {};
+      Rig h = g;
+      REQUIRE(ar::run_volume_entry(p.w.data(), 4, &h.regs, g.ctx, g.tables, &blk, &got) == VmStatus::OK);
+      REQUIRE(ar::op_volume_coeffs(blk, g.tables.observer, g.ctx.lambda_t, &want) == VmStatus::OK);
+      bool fold_ok = same_spec(got.sigma_a, want.sigma_a) && same_spec(got.sigma_s, want.sigma_s) &&
+                     same_spec(got.emission, want.emission) && got.phase[0].p0 == 0.6f && got.phase[1].p0 == -0.25f &&
+                     same_spec(got.phase[0].weight, want.phase[0].weight) && same_spec(got.phase[1].weight, want.phase[1].weight);
+      t.fold("VOLUME_COEFFS", fold_ok);
+      const ar::Rgb cols[3] = {ca, c0, c1};
+      const float dens[3] = {d_a, d_s0, d_s1};
+      bool ref_ok = true;
+      for (int k = 0; k < 3; ++k) {
+        uint32_t f2 = 0;
+        const ar::Upsampled u = ar::albedo_coeffs(*g.tables.rgb2spec, cols[k], &f2);
+        const float c[3] = {float(u.c.c[0]), float(u.c.c[1]), float(u.c.c[2])};
+        for (int l = 0; l < 4; ++l) {
+          const double sg = sigmoid_d(c, double(g.ctx.lambda_t.nm[l]));
+          const double w = double(dens[k]) * (k == 0 ? 1.0 - sg : sg);
+          const ar::Spec& have = k == 0 ? got.sigma_a : got.phase[k - 1].weight;
+          ref_ok = ref_ok && std::fabs(double(have.v[l]) - w) <= 5e-5 * double(dens[k]);
+        }
+      }
+      t.ref("VOLUME_COEFFS", ref_ok);
+    }
   }
   for (const auto& kv : t.fold_bad) {
     INFO(kv.first);
@@ -378,8 +427,8 @@ TEST_CASE("vm/fold equals interpret") {
     CHECK(kv.second == 0u);
   }
   // Every opcode of the table was exercised, so a renamed key cannot hide a missing check.
-  CHECK(t.fold_bad.size() == 14u);
-  CHECK(t.ref_bad.size() == 14u);
+  CHECK(t.fold_bad.size() == 15u);
+  CHECK(t.ref_bad.size() == 15u);
 }
 
 TEST_CASE("vm/lift analytic values") {
@@ -744,7 +793,8 @@ TEST_CASE("vm/opcode table is wired") {
   CHECK(uint32_t(Op::BLACKBODY) == 16u);
   CHECK(uint32_t(Op::CAUCHY_ABBE) == 17u);
   CHECK(uint32_t(Op::CHANNEL_F32X3) == 18u);
-  CHECK(uint32_t(Op::COUNT_) == 19u);
+  CHECK(uint32_t(Op::VOLUME_COEFFS) == 19u);
+  CHECK(uint32_t(Op::COUNT_) == 20u);
 }
 
 }  // TEST_SUITE
