@@ -22,7 +22,7 @@ struct Pending;
 // geometry and object keys, and the motion step count. Built synchronously from the desc.
 struct InstanceSummary {
   uint32_t steps = 1;
-  std::vector<ar_key> geom, object;
+  std::vector<ar_key> geom, object, medium;  // medium: 0 = none
 };
 
 struct Instance {
@@ -36,6 +36,7 @@ struct Instance {
   uint8_t light_group = 0;
   uint32_t material_offset = 0, material_count = 0;  // slice of material_pool; 0 = default
   uint32_t light_index = ar::kNoLightIndex;  // set by the lamp-instance task (068)
+  ar_key medium_key = 0;  // the medium inside the instance's closed mesh; 0 = none
 };
 
 // The motion step rendered until M8 for S steps: (S - 1) / 2 in integer division, so the
@@ -55,8 +56,9 @@ struct InstanceTable {
 };
 
 // Visibility bits to mask bits: camera 0, diffuse 1, glossy 2, transmission 3, shadow 4,
-// volume 5. Bit 6 (medium boundary) stays unset until media exist; bit 7 is never set.
-uint8_t visibility_mask(uint32_t visibility);
+// volume 5. Bit 6 (medium boundary) is set exactly for an instance that bears a medium, whatever
+// its visibility, so every ray type updates the medium stack at it (0006 D20); bit 7 is never set.
+uint8_t visibility_mask(uint32_t visibility, bool has_medium = false);
 
 // The ray classes a lamp's instance may carry; shadow is never among them (0004 D8).
 inline constexpr uint32_t kLampRayVisibility =

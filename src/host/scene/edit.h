@@ -32,9 +32,9 @@ struct EditItem {
   ar_key key = 0;
   uint32_t kind = AR_KIND_GEOMETRY;
   std::function<void()> job;
-  // Internal items only (Edit::stage_internal): called at commit with the geometry
+  // Internal items only (Edit::stage_internal): called at commit with the geometry and the medium
   // predicate of the edit's final key set, before the job is handed to a worker.
-  std::function<void(const std::function<bool(ar_key)>&)> bind;
+  std::function<void(const std::function<bool(ar_key)>& geometry, const std::function<bool(ar_key)>& medium)> bind;
   bool replaces_subject = true;     // false: leaves the key's scene report entries alone
   // If set, item_commit hands it a function that queues the job instead of queueing at
   // once; the item calls it when its job may run (a dependency finished). It must call it
@@ -80,6 +80,7 @@ class Edit {
   ar_status stage_internal(std::shared_ptr<EditItem> item);
   bool reset_requested() const { return reset_; }
   std::set<uint64_t> removed_geometry() const;  // removed here and not re-staged
+  std::set<uint64_t> removed_media() const;     // likewise
   struct InstanceStage {
     bool has_set = false;
     uint32_t count = 0, steps = 1;
@@ -96,6 +97,8 @@ class Edit {
   // Geometry key as it stands once this edit is applied (its own staged geometry, its
   // removes, the scene's declared keys including earlier pipelined generations).
   bool final_geometry(ar_key key) const;
+  bool final_medium(ar_key key) const;  // the same for a medium key
+  std::set<uint64_t> removed_of(uint32_t kind) const;
 
   struct Staged {
     std::shared_ptr<EditItem> item;

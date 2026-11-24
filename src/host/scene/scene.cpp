@@ -14,6 +14,7 @@
 #include "host/material/material_store.h"
 #include "host/scene/accel.h"
 #include "host/scene/edit.h"
+#include "host/scene/media.h"
 #include "host/scene/mesh.h"
 #include "host/scene/scene_tables.h"
 #include "host/session/test_hooks.h"
@@ -287,6 +288,27 @@ void Scene::publish_lamp(std::shared_ptr<const Lamp> lamp) {
   std::lock_guard<std::mutex> lock(state_.mutex);
   const ar_key k = lamp->key;
   state_.lamps[k] = std::move(lamp);
+}
+
+void Scene::publish_medium(std::shared_ptr<const Medium> medium) {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  const ar_key k = medium->key;
+  state_.media[k] = std::move(medium);
+}
+
+std::shared_ptr<const Medium> Scene::medium(ar_key key) const {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  auto it = state_.media.find(key);
+  if (it == state_.media.end() || !state_.known_active.count({AR_KIND_MEDIUM, key})) return nullptr;
+  return it->second;
+}
+
+std::vector<std::shared_ptr<const Medium>> Scene::media() const {
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  std::vector<std::shared_ptr<const Medium>> out;
+  for (const auto& kv : state_.media)
+    if (state_.known_active.count({AR_KIND_MEDIUM, kv.first})) out.push_back(kv.second);
+  return out;
 }
 
 std::shared_ptr<const InstanceTable> Scene::instances_with_lamps(const LightTable& table) const {

@@ -6,7 +6,9 @@
 #include <set>
 #include <string>
 
+#include "host/scene/closed_mesh.h"
 #include "host/scene/edit.h"
+#include "host/scene/mesh.h"
 
 namespace astroray::host {
 
@@ -25,13 +27,14 @@ bool finite_xf(const ar_xform& x) {
 // Owned copy of ar_instances_desc (the caller's arrays are copy-in).
 struct DescCopy {
   uint32_t n = 0, steps = 1;
-  std::vector<ar_key> geom, object, materials;
+  std::vector<ar_key> geom, object, materials, medium;
   std::vector<ar_xform> xf;
   std::vector<uint32_t> random_ids, pass_indices, crypto_objects, crypto_assets, visibility, flags, mat_offset,
       mat_count;
   std::vector<ar_rgba> colors;
   std::vector<uint8_t> light_groups;
-  std::vector<bool> geom_exists;  // per instance, bound at commit against the edit's final key set
+  std::vector<bool> geom_exists;    // per instance, bound at commit against the edit's final key set
+  std::vector<bool> medium_exists;  // likewise for the medium key; true for no medium
 };
 
 template <class T>
@@ -50,6 +53,32 @@ std::string at(uint32_t i, ar_key object) {
   throw ItemFailure(object, at(i, object) + why);
 }
 
+// The geometry of a medium-bearing instance must be a closed, consistently wound mesh (0006 D20). An
+// open one still renders, with Cycles' convention, so this only reports: once per mesh, naming it.
+// Runs when the table activates, after the meshes of its generation are installed. The entry is
+// rebuilt each time, so a table that is set again does not count the same open mesh twice, and a mesh
+// that lost its medium or was closed stops being reported.
+void check_medium_meshes(Scene& scene, const InstanceTable* previous, const InstanceTable& table) {
+  if (previous)
+    for (const Instance& in : previous->instances)
+      if (in.medium_key != 0) scene.report().remove(AR_REPORT_MEDIUM_MESH_OPEN, in.geom_key);
+  std::set<ar_key> seen;
+  for (const Instance& in : table.instances) {
+    if (in.medium_key == 0 || !seen.insert(in.geom_key).second || !scene.meshes) continue;
+    const auto rec = scene.meshes->find(in.geom_key);
+    if (!rec || !rec->topo) continue;
+    const MeshTopology& t = *rec->topo;
+    std::vector<uint32_t> tri_vertex;
+    tri_vertex.reserve(t.tri_corners.size());
+    for (uint32_t corner : t.tri_corners) tri_vertex.push_back(t.corner_vert[corner]);
+    if (triangles_closed(tri_vertex.data(), tri_vertex.size() / 3)) continue;
+    const std::string why = "mesh '" + t.name + "' (geometry key " + std::to_string(in.geom_key) +
+                            ") bears a medium but is not closed with consistent winding; the medium follows Cycles' convention";
+    scene.ctx().log.line("WARNING", why);
+    scene.report().raise(AR_REPORT_MEDIUM_MESH_OPEN, in.geom_key, why, 1, nullptr, 0);
+  }
+}
+
 std::shared_ptr<InstanceTable> build(const DescCopy& d) {
   auto t = std::make_shared<InstanceTable>();
   t->motion_steps = d.steps;
@@ -64,6 +93,9 @@ std::shared_ptr<InstanceTable> build(const DescCopy& d) {
     for (uint32_t s = 0; s < d.steps; ++s)
       if (!finite_xf(d.xf[size_t(i) * d.steps + s]))
         reject(i, in.object_key, "transform is not finite (motion step " + std::to_string(s) + ")");
+    in.medium_key = d.medium[i];
+    if (in.medium_key != 0 && !d.medium_exists[i])
+      reject(i, in.object_key, "unknown medium key " + std::to_string(in.medium_key));
     if (d.visibility[i] & ~kAllVisibility) reject(i, in.object_key, "visibility has bits outside AR_VISIBILITY_*");
     if (d.flags[i] & ~kAllFlags) reject(i, in.object_key, "flags has bits outside AR_INSTANCE_*");
     // A count of 0 means the default material; its offset is not looked at.
@@ -79,7 +111,7 @@ std::shared_ptr<InstanceTable> build(const DescCopy& d) {
     in.crypto_asset = d.crypto_assets[i];
     for (int c = 0; c < 4; ++c) in.color[c] = d.colors[i].v[c];
     in.visibility = d.visibility[i];
-    in.mask = visibility_mask(in.visibility);
+    in.mask = visibility_mask(in.visibility, in.medium_key != 0);
     in.flags = d.flags[i];
     in.light_group = d.light_groups[i];
     in.material_offset = d.mat_count[i] ? d.mat_offset[i] : 0;
@@ -91,7 +123,7 @@ std::shared_ptr<InstanceTable> build(const DescCopy& d) {
 }  // namespace
 
 // Ref: 0002 D11.
-uint8_t visibility_mask(uint32_t v) {
+uint8_t visibility_mask(uint32_t v, bool has_medium) {
   uint8_t m = 0;
   if (v & AR_VISIBILITY_CAMERA) m |= 1u << 0;
   if (v & AR_VISIBILITY_DIFFUSE) m |= 1u << 1;
@@ -99,6 +131,7 @@ uint8_t visibility_mask(uint32_t v) {
   if (v & AR_VISIBILITY_TRANSMISSION) m |= 1u << 3;
   if (v & AR_VISIBILITY_SHADOW) m |= ar::kShadowMaskBit;
   if (v & AR_VISIBILITY_VOLUME) m |= 1u << 5;
+  if (has_medium) m |= uint8_t(ar::kMediumBoundaryMaskBit);
   return m;
 }
 
@@ -136,19 +169,29 @@ ar_status set_instances(Edit& edit, const ar_instances_desc* desc) {
         take(desc->material_offsets, n, &d->mat_offset) && take(desc->material_counts, n, &d->mat_count) &&
         take(desc->material_keys, desc->material_key_count, &d->materials)))
     return edit.fail("invalid argument: instances array pointer is null with a nonzero count");
+  // No array: no instance has a medium (hosts that predate media leave the pointer unset).
+  if (desc->medium_keys) d->medium.assign(desc->medium_keys, desc->medium_keys + n);
+  else d->medium.assign(n, 0);
   d->geom_exists.assign(n, false);
+  d->medium_exists.assign(n, true);
 
   auto item = std::make_shared<EditItem>();
   auto result = std::make_shared<std::shared_ptr<InstanceTable>>();
   // Resolved at commit, when this edit's geometry and removes are final.
-  item->bind = [d](const std::function<bool(ar_key)>& exists) {
-    for (size_t i = 0; i < d->n; ++i) d->geom_exists[i] = exists(d->geom[i]);
+  item->bind = [d](const std::function<bool(ar_key)>& exists, const std::function<bool(ar_key)>& medium_exists) {
+    for (size_t i = 0; i < d->n; ++i) {
+      d->geom_exists[i] = exists(d->geom[i]);
+      d->medium_exists[i] = d->medium[i] == 0 || medium_exists(d->medium[i]);
+    }
   };
   item->needs_device = false;
   item->job = [d, result] { *result = build(*d); };
   Scene* scene = &edit.scene();
   item->on_active = [scene, result] {
-    if (*result) scene->publish_instances(*result);
+    if (!*result) return;
+    const auto previous = scene->instances();
+    scene->publish_instances(*result);
+    check_medium_meshes(*scene, previous.get(), **result);
   };
   item->on_dropped = [result] { result->reset(); };
   if (ar_status st = edit.stage_internal(item)) return st;
@@ -159,6 +202,7 @@ ar_status set_instances(Edit& edit, const ar_instances_desc* desc) {
   sum->steps = d->steps;
   sum->geom = d->geom;
   sum->object = d->object;
+  sum->medium = d->medium;
   edit.instance_stage().summary = std::move(sum);
   return AR_OK;
 }
@@ -225,24 +269,32 @@ void apply_instance_summary(std::shared_ptr<const InstanceSummary>& cur, const P
 void queue_instance_check(Edit& edit) {
   if (edit.instance_stage().has_set || edit.reset_requested()) return;  // new table, or cleared
   auto removed = std::make_shared<std::set<uint64_t>>(edit.removed_geometry());
-  if (removed->empty()) return;
+  auto removed_media = std::make_shared<std::set<uint64_t>>(edit.removed_media());
+  if (removed->empty() && removed_media->empty()) return;
   Scene* scene = &edit.scene();
   // The latest committed table, pending generations included, as of this commit.
   auto latest = scene->latest_instances();
   auto item = std::make_shared<EditItem>();
   item->needs_device = false;
-  item->job = [scene, removed, latest] {
+  item->job = [scene, removed, removed_media, latest] {
     auto fail = [&](uint32_t i, ar_key object, ar_key geom) {
       reject(i, object, "geometry key " + std::to_string(geom) + " is removed by this edit but still instanced");
     };
+    auto fail_medium = [&](uint32_t i, ar_key object, ar_key medium) {
+      reject(i, object, "medium key " + std::to_string(medium) + " is removed by this edit but still instanced");
+    };
     if (latest)
-      for (uint32_t i = 0; i < latest->geom.size(); ++i)
+      for (uint32_t i = 0; i < latest->geom.size(); ++i) {
         if (removed->count(latest->geom[i])) fail(i, latest->object[i], latest->geom[i]);
+        if (removed_media->count(latest->medium[i])) fail_medium(i, latest->object[i], latest->medium[i]);
+      }
     // Also the table active now: if a pending generation that set the latest one is
     // dropped, the active table is what remains.
     if (auto t = scene->instances())
       for (uint32_t i = 0; i < t->instances.size(); ++i)
         if (removed->count(t->instances[i].geom_key)) fail(i, t->instances[i].object_key, t->instances[i].geom_key);
+        else if (t->instances[i].medium_key != 0 && removed_media->count(t->instances[i].medium_key))
+          fail_medium(i, t->instances[i].object_key, t->instances[i].medium_key);
   };
   edit.stage_internal(item);
 }

@@ -14,6 +14,7 @@
 #include "host/light/lamps.h"
 #include "host/material/material_store.h"
 #include "host/scene/edit.h"
+#include "host/scene/media.h"
 #include "host/scene/mesh.h"
 #include "host/device.h"
 #include "host/scene/accel.h"
@@ -325,6 +326,25 @@ AR_API ar_status ar_edit_set_light(ar_edit h, ar_key key, const ar_light_desc* d
   }
   return staging_call(h, [&](Edit& e) {
     return astroray::host::set_light(e, key, desc, h->owner->scene->materials->table());
+  });
+  });
+}
+// A test medium of constant coefficients (0006 A.1). The flags word is reserved: a bit this build does
+// not know is refused, never ignored.
+AR_API ar_status ar_edit_set_medium(ar_edit h, ar_key key, const ar_medium_desc* desc) {
+  AR_RECORD(ar_edit_set_medium, ar_rec_of(h), h, key, desc);
+  AR_RECORD_BODY({
+  if (h && h->edit && desc && desc->flags != 0) {
+    try {
+      const std::string why = "ar_edit_set_medium: flags " + std::to_string(desc->flags) + " is not supported; the word is reserved and must be 0";
+      h->owner->scene->ctx().log.line("WARNING", why);
+      return fail(h, AR_ERR_UNSUPPORTED, why);
+    } catch (...) {
+      return AR_ERR_UNSUPPORTED;
+    }
+  }
+  return staging_call(h, [&](Edit& e) {
+    return astroray::host::set_medium(e, key, desc, h->owner->scene->materials->table());
   });
   });
 }
