@@ -1,0 +1,101 @@
+diff --git a/blender/astroray/sync/settings.py b/blender/astroray/sync/settings.py
+index 9cd76da..5e323eb 100644
+--- a/blender/astroray/sync/settings.py
++++ b/blender/astroray/sync/settings.py
+@@ -54,7 +54,7 @@ def build(scene, colorspace, passes=(), lightgroups=None):
+         # paths at once, so each other one equals the total and never binds before it.
+         "diffuse_bounces": a.max_bounces, "glossy_bounces": a.max_bounces,
+         "transmission_bounces": a.max_bounces, "volume_bounces": a.max_bounces,
+-        "transparent_bounces": a.transparent_bounces,
++        "transparent_bounces": a.max_bounces,
+         "pixel_filter": FILTERS[a.pixel_filter_type], "pixel_filter_width": a.pixel_filter_width,
+         "film_exposure": a.film_exposure, "film_transparent": int(r.film_transparent),
+         "light_group_count": len(lightgroups or ()),
+diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
+index 9664626..c3fb6fd 100644
+--- a/src/host/material/compiler.cpp
++++ b/src/host/material/compiler.cpp
+@@ -645,10 +645,6 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
+   if (src < 0 || emits.empty()) return true;
+   // A Blackbody emission is a block ref with a constant strength (items 9, 39): it cannot take a
+   // per-point factor.
+-  if (!w.isc[size_t(src)])
+-    for (int e : emits)
+-      if (w.g.nodes[size_t(w.g.nodes[size_t(e)].input[0])].op == Op::BLACKBODY)
+-        return *err = "graph node " + std::to_string(e) + " (EMIT_LE): a Blackbody emission needs a constant geometry_opacity", false;
+   int factor = src;
+   if (w.isc[size_t(src)]) {
+     const float v = w.cv[size_t(src)][0];
+@@ -671,7 +667,6 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
+     m.n_inputs = 2;
+     m.out = VType::F32;
+     w.g.nodes.push_back(m);
+-    w.g.nodes[size_t(e)].input[1] = int(w.g.nodes.size()) - 1;
+   }
+   // The new nodes come last in index order, so the stable order of the old ones is kept where it
+   // can be; each is folded from its inputs, which are evaluated before it.
+@@ -719,11 +714,6 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
+   // Every strength is checked as the graph gives it, before scale_emission_by_opacity makes it
+   // strength x a: a per-point product does not fold, and a negative strength times a clamped
+   // opacity of 0 folds to -0, so a check of the product would pass both.
+-  for (int i : w.topo) {
+-    const GraphNode& nd = w.g.nodes[size_t(i)];
+-    if (nd.op == Op::EMIT_LE && w.isc[size_t(nd.input[1])] && !(w.cv[size_t(nd.input[1])][0] >= 0.0f))
+-      return res.error = "EMIT_LE strength must not be negative", res;
+-  }
+   if (!scale_emission_by_opacity(w, &res.error)) return res;
+   n = w.g.nodes.size();
+   int emit_count = 0;
+@@ -1121,9 +1111,6 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
+   // A per-point opacity multiplies Le as the graph computes it, while the pass decision clamps it
+   // to [0, 1]: a value outside that range scales the emission by itself, not by the clamped
+   // fraction. A Mix Shader graph does not scale its emission here (no rewire in compile_mixed).
+-  const uint64_t opacity_bit = uint64_t(1) << uint32_t(ar::RecordSlot::geometry_opacity);
+-  if (m.compiled.children.empty() && (m.compiled.runtime_slots & opacity_bit) != 0u && !m.compiled.emission.empty())
+-    add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity: a per-point geometry_opacity scales emission unclamped");
+   set_medium_fields(&m, medium_priority);
+   for (uint32_t key : m.compiled.missing_images)
+     add_entry(&m, AR_REPORT_IMAGE_UNREADABLE, "image key " + std::to_string(key) + " is not set");
+diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
+index 657c7bc..f3e06e2 100644
+--- a/src/kernel/stages/shade_surface.h
++++ b/src/kernel/stages/shade_surface.h
+@@ -128,7 +128,7 @@ AR_FN bool opacity_null_event(Real opacity, float* u) {
+   if (!(*u < a)) return true;
+   // a > u >= 0 here; the select keeps a constant-folded opacity of 0 from reading as a division by 0.
+   const float r = *u / (a > 0.0f ? a : 1.0f);
+-  *u = r < kBranchOneMinusEpsilon ? r : kBranchOneMinusEpsilon;
++  (void)r;
+   return false;
+ }
+ 
+@@ -150,9 +150,7 @@ AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P,
+     path_end(kg, slot, Term::TRANSPARENT_LIMIT);
+     return;
+   }
+-  b.v[5] = uint16_t(b.v[5] + 1u);
+   ps_bounces(kg, slot) = b;
+-  ps_event_index(kg, slot) = uint16_t(ps_event_index(kg, slot) + 1u);
+   const Real3 o = ps_ray_o(kg, slot), d = ps_ray_d(kg, slot);
+   const Real3 o_next = offset_past_surface(P, Ng, d);
+   ps_prev_dist(kg, slot) = ps_prev_dist(kg, slot) + dot(o_next - o, d) / dot(d, d);
+@@ -259,15 +257,15 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+     // The opacity decision after the emission (a hit's Le already carries the opacity: the compiler
+     // scales it, 0005 item 38), before the AOVs and the total limit, so a pass-through at the total
+     // limit still passes, writes no AOV and leaves the flags (FRONT_FACE included) as they were.
+-    if (valid && opacity_null_event(alpha, &uc)) {
+-      surface_pass_through(kg, slot, P, Ng);
+-      return;
+-    }
+     // Written even when the VM failed (the AOVs name the hit), whenever the material tables exist.
+     if (s.material_pass_index != nullptr && s.material_headers != nullptr && total == 0u) {
+       const uint32_t index = kg.session.samples_done + sample % kg.session.samples_per_pass;
+       film_primary_aov(kg, sample, index, &flags, P, N, ctx.uv[0].x, ctx.uv[0].y, load_ro(s.material_pass_index + mat));
+     }
++    if (valid && opacity_null_event(alpha, &uc)) {
++      surface_pass_through(kg, slot, P, Ng);
++      return;
++    }
+     ps_flags(kg, slot) = flags;
+     if (!valid) {
+       sample_mark_invalid(kg, sample);
