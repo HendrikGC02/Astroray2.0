@@ -75,8 +75,9 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
     double energy = 0.0;
     for (uint32_t i = first; i < last; ++i) {
       const LightInput& li = in[i];
-      // A program world has no importance until its table exists (173): pmf 0 means nothing samples
-      // it, so a BSDF hit that escapes takes MIS weight 1 (unbiased, noisier than with NEE).
+      // A program world has no importance until an importance table can be built from its program:
+      // pmf 0 means nothing samples it, so a BSDF hit that escapes takes MIS weight 1 (unbiased,
+      // noisier than with NEE).
       if (li.record.type == uint8_t(ar::LightType::WORLD_CONST) && (li.record.flags & ar::kLightWorldProgram) != 0) {
         imps[i] = 0.0;
         continue;

@@ -412,16 +412,42 @@ TEST_CASE("compiler_outputs/world compiles an environment texture to a program")
   CHECK(wc.program.empty());
   CHECK(wc.strength == 3.0f);
   CHECK(!wc.magenta);
-  // Two constant emissions add: a program, where they used to be refused.
+  // Two constant emissions add: a program, where they used to be refused, and its radiance is the
+  // sum of both lifted colours times their strengths.
   GB two;
-  for (float s : {1.0f, 2.0f}) {
+  const float colours[2][3] = {{0.2f, 0.4f, 0.6f}, {0.6f, 0.3f, 0.1f}};
+  const float strengths[2] = {1.0f, 2.0f};
+  for (int k = 0; k < 2; ++k) {
     const int te = two.add(Op::EMIT_LE);
-    two.link(two.add(Op::CONST_F32X3, {0.2f, 0.4f, 0.6f}), te, 0);
-    two.link(two.add(Op::CONST_F32, {s}), te, 1);
+    two.link(two.add(Op::CONST_F32X3, {colours[k][0], colours[k][1], colours[k][2]}), te, 0);
+    two.link(two.add(Op::CONST_F32, {strengths[k]}), te, 1);
   }
   const astroray::host::WorldOutput w3 = world_of(two);
   CHECK(!w3.magenta);
-  CHECK(!w3.program.empty());
+  REQUIRE(w3.program.size() > 4);
+  REQUIRE(w3.program[2] != 0u);
+  const auto ob = read_data("spectral/observer.bin");
+  astroray::ObserverTables obs;
+  const std::string err = astroray::parse_observer(ob.data(), ob.size(), &obs);
+  REQUIRE_MESSAGE(err.empty(), err);
+  ar::SceneTables tables = {};
+  tables.rgb2spec = &table();
+  tables.observer.cmf = &obs.cmf[0][0];
+  tables.observer.illum = obs.d65;
+  ar::ShadeContext ctx = {};
+  for (int l = 0; l < ar::kLanes; ++l) ctx.lambda_t.nm[l] = 450.0f + 70.0f * float(l);
+  ar::VmRegs regs = {};
+  ar::Spec le = ar::spec_fill(ar::Real(0));
+  REQUIRE(ar::run_entry(w3.program.data(), w3.program[2], &regs, ctx, tables, nullptr, &le) == ar::VmStatus::OK);
+  ar::Spec want = ar::spec_fill(ar::Real(0));
+  for (int k = 0; k < 2; ++k) {
+    const ar::Spec one = ar::op_rgb_lift(tables, colours[k], ar::SpectrumSemantic::ILLUMINANT, ctx.lambda_t);
+    for (int l = 0; l < ar::kLanes; ++l) want.v[l] += one.v[l] * ar::Real(strengths[k]);
+  }
+  for (int l = 0; l < ar::kLanes; ++l) {
+    CHECK(want.v[l] > 0.0f);
+    CHECK(std::fabs(double(le.v[l]) - double(want.v[l])) <= 1e-6 * double(want.v[l]));
+  }
 }
 
 TEST_CASE("compiler/spectrum kinds accepted per semantic") {
