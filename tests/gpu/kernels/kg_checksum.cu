@@ -12,7 +12,7 @@
 #include "scene/scene_view.h"
 #include "vm/context.h"
 
-// One row per table, in host/scene/scene_tables.h TableId order up to MATERIAL_SPECTRA: count (u32),
+// One row per table, in host/scene/scene_tables.h TableId order up to E_SPEC: count (u32),
 // element size (u32), then the first and last element, kKgElemMax bytes each.
 constexpr uint32_t kKgElemMax = 432;
 constexpr uint32_t kKgRow = 8 + 2 * kKgElemMax;

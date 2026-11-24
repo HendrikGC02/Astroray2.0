@@ -47,6 +47,7 @@ struct StackSelect {
   Real p_spec;   // probability of choosing the dielectric specular lobe
   Real p_diff;   // the EON lobe: 1 - p_spec - p_metal
   Real p_metal;  // the metal lobe; 0 when base_metalness is 0
+  Real metal;    // M = base_metalness clamped to OpenPBR's [0, 1]; the mix weight f uses
   Spec e_spec;   // albedo the dielectric specular layer takes from the diffuse base, per lane
   Spec eta;      // specular_weighted_eta clamped to the table's range; the lobe and the table both use it
   Real e_metal;      // E_spec(mu_o, r), the metal's single-scattering albedo at F = 1; 1 when unused
@@ -101,6 +102,8 @@ AR_FN MetalParams stack_metal_params(const OpenPBRParams& p) {
 // less than the layer takes from the base). A clamp sets eta_clamped; the host turns it into the
 // SPECTRUM_OUT_OF_RANGE report (src/host/report_codes.def). Ref: 0005 item 6.
 // base_metalness 0 skips the metal terms, so the result is the dielectric stack's to the bit.
+// M is clamped to [0, 1], the input's range (open_pbr_surface.mtlx line 14, uimin 0, uimax 1): outside
+// it the mix would give the dielectric a negative weight, so negative f and probabilities.
 AR_FN StackSelect stack_select(const EDielTable& tab, const ESpecTable& tab_m, const OpenPBRParams& p, Real mu_o) {
   const Real alpha = p.specular_roughness * p.specular_roughness;
   const Real r = e_roughness_axis(alpha, alpha);
@@ -120,7 +123,8 @@ AR_FN StackSelect stack_select(const EDielTable& tab, const ESpecTable& tab_m, c
   a_diff /= Real(kLanes);
   const Real a_spec = avg(s.e_spec);
 
-  const Real m = p.base_metalness;
+  const Real m = min(max(p.base_metalness, Real(0)), Real(1));
+  s.metal = m;
   s.e_metal = Real(1);
   Real a_metal = Real(0);
   if (m > Real(0)) {
@@ -162,7 +166,7 @@ AR_FN Spec stack_metal_comp(const OpenPBRParams& p, const StackSelect& s) {
 // share M or F is 0, so the term is 0). Two steps let the dielectric lobes' values die before the
 // metal is evaluated, which keeps shade_surface's NEE inside its register budget.
 AR_FN Spec stack_dielectric_f(const OpenPBRParams& p, const StackSelect& s, const Spec& f_spec, const Spec& f_diff) {
-  const Real m = p.base_metalness;
+  const Real m = s.metal;
   Spec f;
   for (int i = 0; i < kLanes; ++i)
     f.v[i] = p.closure_weight * ((Real(1) - m) * (f_spec.v[i] + (Real(1) - s.e_spec.v[i]) * f_diff.v[i]));
@@ -170,7 +174,7 @@ AR_FN Spec stack_dielectric_f(const OpenPBRParams& p, const StackSelect& s, cons
 }
 AR_FN void stack_add_metal_f(const OpenPBRParams& p, const StackSelect& s, const Spec& f_metal, Spec& f) {
   const Spec comp = stack_metal_comp(p, s);
-  for (int i = 0; i < kLanes; ++i) f.v[i] += p.closure_weight * (p.base_metalness * comp.v[i] * f_metal.v[i]);
+  for (int i = 0; i < kLanes; ++i) f.v[i] += p.closure_weight * (s.metal * comp.v[i] * f_metal.v[i]);
 }
 AR_FN Spec stack_combine_f(const OpenPBRParams& p, const StackSelect& s, const Spec& f_spec, const Spec& f_diff,
                            const Spec& f_metal) {
@@ -263,8 +267,10 @@ AR_FN LobeSample stack_sample_core(const EDielTable& tab, const ESpecTable& tab_
   }
   if (!(ls.pdf > Real(0))) return out;
   if ((ls.flags & LOBE_DELTA) != 0) {
-    // No other lobe has value at the mirror direction (a measure-zero set for the rough lobes). The
-    // delta metal's f is metal_sample's: F(wo.z) / wo.z.
+    // Below lobe_is_delta's threshold the specular and the metal lobe are both delta at the mirror
+    // direction (one roughness); each is chosen with its own probability and a delta sample carries
+    // only the chosen lobe's weight, so their sum over the choice is unbiased. The diffuse lobe has no
+    // value on that measure-zero set. The delta metal's f is metal_sample's: F(wo.z) / wo.z.
     out.wi = to_world(frame, ls.wi);
     const Spec zero = spec_fill(Real(0));
     if (pick_metal) {

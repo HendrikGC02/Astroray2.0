@@ -140,6 +140,40 @@ double hash_unit(uint64_t z) {
   return double(z >> 11) * (1.0 / 9007199254740992.0);
 }
 
+// Independent transcriptions for the metal pins, in double, from the raw table bytes: the trilinear
+// E_diel and bilinear E_spec lookups (node i of an axis at i / (n - 1), the last cell reaching the
+// last node), and F_82 from the spec text (index.html lines 546-556, mu_bar = 1/7, each lane
+// saturated to [0, 1]).
+double diel_ref(const Fixture& fx, double mu, double r, double eta) {
+  const double c[3] = {mu * (kN - 1), r * (kN - 1), (eta - 1.0) / 2.0 * (kN - 1)};
+  int i0[3];
+  double w[3];
+  for (int k = 0; k < 3; ++k) {
+    i0[k] = std::min(int(std::floor(c[k])), int(kN) - 2);
+    w[k] = c[k] - i0[k];
+  }
+  double acc = 0;
+  for (int dm = 0; dm < 2; ++dm)
+    for (int dr = 0; dr < 2; ++dr)
+      for (int de = 0; de < 2; ++de)
+        acc += (dm ? w[0] : 1 - w[0]) * (dr ? w[1] : 1 - w[1]) * (de ? w[2] : 1 - w[2]) *
+               fx.raw(uint32_t(i0[0] + dm), uint32_t(i0[1] + dr), uint32_t(i0[2] + de));
+  return acc;
+}
+double spec_ref(const Fixture& fx, double mu, double r) {
+  const double c[2] = {mu * (kNs - 1), r * (kNs - 1)};
+  const int im = std::min(int(std::floor(c[0])), int(kNs) - 2), ir = std::min(int(std::floor(c[1])), int(kNs) - 2);
+  const double wm = c[0] - im, wr = c[1] - ir;
+  return (1 - wr) * ((1 - wm) * fx.raw_spec(im, ir) + wm * fx.raw_spec(im + 1, ir)) +
+         wr * ((1 - wm) * fx.raw_spec(im, ir + 1) + wm * fx.raw_spec(im + 1, ir + 1));
+}
+double f82_ref(double f0, double tint, double mu) {
+  const auto schlick = [f0](double m) { return f0 + (1 - f0) * std::pow(1 - m, 5); };
+  const double mb = 1.0 / 7.0;
+  const double f = schlick(mu) - mu * std::pow(1 - mu, 6) / (mb * std::pow(1 - mb, 6)) * (schlick(mb) - tint * schlick(mb));
+  return std::fmin(std::fmax(f, 0.0), 1.0);
+}
+
 // FNV-1a 64 over the bit patterns of the stack's outputs: a golden of many values in one number.
 struct Digest {
   uint64_t h = 1469598103934665603ull;
@@ -520,6 +554,58 @@ TEST_SUITE("fast") {
       }
     CHECK(metal_samples > 0);
     CHECK(metal_deltas > 0);
+
+    // The compensation's F0 is the lobe's own normal-incidence Fresnel, specular_weight base_weight
+    // base_color per lane: c = 1 + F0 (1 - E) / E with E a raw table node.
+    {
+      ar::MetalParams mp;
+      for (int l = 0; l < 4; ++l) mp.base_color.v[l] = Real(base[l]), mp.specular_color.v[l] = Real(color[l]);
+      mp.base_weight = Real(0.9);
+      mp.specular_weight = Real(0.8);
+      mp.roughness = Real(0.6);
+      const double e = fx.raw_spec(20, 18);
+      const Spec c = ar::metal_compensation(mp, Real(e));
+      for (int l = 0; l < 4; ++l) CHECK(rel_close(double(c.v[l]), 1.0 + 0.8 * 0.9 * base[l] * (1.0 - e) / e, 1e-6));
+    }
+    // p_metal at M = 0.5 for a coloured set from the rule written out in double (0005 item 4): the
+    // lane means of E_diel (times specular_color), of (1 - E_diel) E_EON (E_EON = base at diffuse
+    // roughness 0) and of F_82(mu_o) E_spec c, each lane clamped to [0, 1], weighted (1 - M), (1 - M), M.
+    {
+      const double ior2[4] = {1.4, 1.6, 1.9, 2.3}, mu = 0.6, r = 0.5;
+      OpenPBRParams p = make_params(color, ior2, 1.0, r, 0.9, base, 0.0, 1.0);
+      p.base_metalness = Real(0.5);
+      const double em = spec_ref(fx, mu, r);
+      double a_spec = 0, a_diff = 0, a_metal = 0;
+      for (int l = 0; l < 4; ++l) {
+        const double es = std::fmin(std::fmax(color[l] * diel_ref(fx, mu, r, ior2[l]), 0.0), 1.0);
+        const double f0 = 0.9 * base[l];
+        a_spec += es / 4;
+        a_diff += (1 - es) * f0 / 4;
+        a_metal += std::fmin(std::fmax(f82_ref(f0, color[l], mu) * em * (1 + f0 * (1 - em) / em), 0.0), 1.0) / 4;
+      }
+      const double want = 0.5 * a_metal / (0.5 * a_spec + 0.5 * a_diff + 0.5 * a_metal);
+      const StackSelect s = ar::stack_select(fx.table, fx.spec, p, Real(mu));
+      INFO("p_metal " << double(s.p_metal) << " transcription " << want);
+      CHECK(std::fabs(double(s.p_metal) - want) < 2e-6);
+    }
+    // M outside OpenPBR's [0, 1] is clamped: 1.5 is the metal alone, -0.5 the dielectric alone, so
+    // no weight, probability or value goes negative.
+    {
+      OpenPBRParams hi = make_params(color, ior, 0.9, 0.4, 1.0, base, 0.3, 0.8), one = hi, lo = hi, zero = hi;
+      hi.base_metalness = Real(1.5), one.base_metalness = Real(1), lo.base_metalness = Real(-0.5), zero.base_metalness = Real(0);
+      const Real3 wo = ar::to_world(frame, local_dir(0.5, 0.4)), wi = ar::to_world(frame, local_dir(0.7, 2.6));
+      for (const auto& pr : {std::make_pair(hi, one), std::make_pair(lo, zero)}) {
+        const StackSelect a = ar::stack_select(fx.table, fx.spec, pr.first, Real(0.5));
+        const StackSelect b = ar::stack_select(fx.table, fx.spec, pr.second, Real(0.5));
+        CHECK(a.p_spec == b.p_spec);
+        CHECK(a.p_diff == b.p_diff);
+        CHECK(a.p_metal == b.p_metal);
+        const LobeEval ea = ar::stack_eval(fx.table, fx.spec, pr.first, frame, wo, wi, TransportMode::Radiance);
+        const LobeEval eb = ar::stack_eval(fx.table, fx.spec, pr.second, frame, wo, wi, TransportMode::Radiance);
+        CHECK(ea.pdf == eb.pdf);
+        for (int l = 0; l < 4; ++l) CHECK(ea.f.v[l] == eb.f.v[l]);
+      }
+    }
 
     // Black base_color with specular_color 0: F82 vanishes at mu_o = 0.5 on every lane yet the lobe
     // reflects at grazing half-vectors, so the metal keeps the floor probability.
