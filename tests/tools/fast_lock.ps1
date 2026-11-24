@@ -49,6 +49,7 @@ if (`$tree) { `$null = Enter-ArTreeLock -Dir `$tree } else { `$null = Enter-ArMa
 if (`$tree) { Exit-ArTreeLock } else { Exit-ArMachineLock }
 "@
 $procs = @()
+$wh = @{}
 
 # A child started here and every process it started, by the pid this script launched.
 function Stop-Tree($p) { if ($p -and -not $p.HasExited) { & taskkill /PID $p.Id /T /F 2>&1 | Out-Null } }
@@ -82,26 +83,29 @@ try {
   Check 'messages: three ticks, then every 300 s' (($printed -join ',') -eq '30,60,90,390,690,990')
 
   # Wiring, started now and judged at the end. A copy of tools/ makes out/ (summaries, the tree lock) private to
-  # the test; every lock is on a private name. One holder per party owns the window; the real build.ps1 and
-  # `check.ps1 gate` start behind it. The tree lock of the copy is held here so that the build stays alive, and
-  # keeps its share, once the window is released.
+  # the test; every lock is on a private name. One thread job per party owns that party's window (a mutex is
+  # owned by its thread); the real build.ps1 and `check.ps1 gate` start behind it. The tree lock of the copy is
+  # held here so that the build stays alive, and keeps its share, once the window is released.
   $wroot = Join-Path $tmp 'wroot'
   New-Item -ItemType Directory -Force (Join-Path $wroot 'out/build') | Out-Null
   Copy-Item -Recurse (Join-Path $root 'tools') (Join-Path $wroot 'tools')
-  $winHolder = Join-Path $tmp 'winholder.ps1'
-  Set-Content -Path $winHolder -Value @"
-param([string]`$ready, [string]`$release)
-. '$lockLib'
-`$null = Enter-ArFastWindow
-Set-Content -Path `$ready -Value ready
-`$sw = [Diagnostics.Stopwatch]::StartNew()
-while (-not (Test-Path `$release) -and `$sw.Elapsed.TotalSeconds -lt 60) { Start-Sleep -Milliseconds 20 }
-Exit-ArFastWindow
-"@
+  $holdJob = { param($lib, $sync) . $lib
+    $null = Enter-ArFastWindow
+    $sync.held = $true
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while (-not $sync.release -and $sw.Elapsed.TotalSeconds -lt 60) { Start-Sleep -Milliseconds 20 }
+    Exit-ArFastWindow }
+  foreach ($tag in 'wireb', 'wireg') {
+    Use-Lock $tag
+    $sync = [hashtable]::Synchronized(@{ held = $false; release = $false })
+    $wh[$tag] = [pscustomobject]@{ Job = (Start-ThreadJob -ScriptBlock $holdJob -ArgumentList $lockLib, $sync); Sync = $sync }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while (-not $sync.held -and $sw.Elapsed.TotalSeconds -lt 15) { Start-Sleep -Milliseconds 5 }
+    if (-not $sync.held) { throw "window holder $tag not ready in 15 s" }
+  }
+  # The holders' Enter-ArFastWindow marked this process as the window's owner; the children are other worktrees.
+  $env:ASTRORAY_FASTWIN_PID = $null
   $env:ASTRORAY_LOCK_MESSAGE_S = '0.2'; $env:ASTRORAY_LOCK_TIMEOUT_S = '60'
-  $wh = @{}
-  foreach ($tag in 'wireb', 'wireg') { $wh[$tag] = Start-On $tag "h_$tag" @($winHolder, (Join-Path $tmp "$tag.ready"), (Join-Path $tmp "$tag.release")) }
-  foreach ($tag in 'wireb', 'wireg') { Wait-Ready $tag }
   $null = Enter-ArTreeLock (Join-Path $wroot 'out/build')
   $wb = Start-On 'wireb' 'wb' @((Join-Path $wroot 'tools/build.ps1'), '-CheckOnly', '-NoMachineLock')
   $wg = Start-On 'wireg' 'wg' @((Join-Path $wroot 'tools/check.ps1'), 'gate')
@@ -204,7 +208,7 @@ Exit-ArFastWindow
     $j = Start-ThreadJob -ScriptBlock $job -ArgumentList $lockLib, $what, $sync
     $sw = [Diagnostics.Stopwatch]::StartNew()
     while (-not $sync.started -and $sw.Elapsed.TotalSeconds -lt 10) { Start-Sleep -Milliseconds 5 }
-    Start-Sleep -Milliseconds 100
+    Start-Sleep -Milliseconds 60
     return [pscustomobject]@{ Job = $j; Sync = $sync }
   }
   function Test-Blocked($o) { return [bool]($o.Sync.started -and $o.Job.State -eq 'Running' -and $null -eq $o.Sync.entered) }
@@ -268,7 +272,7 @@ Exit-ArFastWindow
   Check 'wiring: check.ps1 gate waits for the window before its fast step' ($okG -and -not $wg.HasExited) (Read-Out 'wg')
   Stop-Tree $wg
   # Released: the build takes its share (and is held at the tree lock), which is a file named for its pid.
-  Set-Content -Path (Join-Path $tmp 'wireb.release') -Value release
+  $wh['wireb'].Sync.release = $true
   $shareB = Join-Path $shareDirB "share.$($wb.Id).lock"
   $sw5 = [Diagnostics.Stopwatch]::StartNew()
   while (-not (Test-Path $shareB) -and -not $wb.HasExited -and $sw5.Elapsed.TotalSeconds -lt 6) { Start-Sleep -Milliseconds 20 }
@@ -278,6 +282,7 @@ Exit-ArFastWindow
   while ((Test-Path $shareB) -and $sw5.Elapsed.TotalSeconds -lt 5) { Start-Sleep -Milliseconds 20 }
   Check 'wiring: a killed build.ps1 leaves no share' (-not (Test-Path $shareB))
 } finally {
+  foreach ($h in @($wh.Values)) { $h.Sync.release = $true; $null = Wait-Job $h.Job -Timeout 5; Remove-Job $h.Job -Force -ErrorAction SilentlyContinue }
   Exit-ArTreeLock
   foreach ($p in $procs) { Stop-Tree $p }
   foreach ($p in $procs) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }

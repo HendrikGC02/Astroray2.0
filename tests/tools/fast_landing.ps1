@@ -67,6 +67,26 @@ Remove-Item -Force `$marker
     Set-Content $mk (@{ pid = $hp.Id; start = $hp.StartTime.ToString('o') } | ConvertTo-Json -Compress)
     $waitRepos[$k] = @{ Repo = $r; Marker = $mk; Release = $rel }
   }
+  # The caller of Wait-LandRunning, as a child so that its waits overlap the checks below. The owner of the
+  # 'claim' marker is released 0.25 s after the wait began.
+  $waitScript = Join-Path $tmp 'waitcases.ps1'
+  Set-Content $waitScript @'
+param([string]$lib, [string]$tRepo, [string]$tMarker, [string]$cRepo, [string]$cMarker, [string]$cRelease)
+$ErrorActionPreference = 'Stop'
+. $lib
+'SELF ' + $PID
+$env:ASTRORAY_LAND_QUEUE_TIMEOUT_S = '0.3'
+try { $null = Wait-LandRunning $tRepo 6>$null; 'TIMEOUT none' } catch { 'TIMEOUT ' + $_.Exception.Message }
+$env:ASTRORAY_LAND_QUEUE_TIMEOUT_S = $null
+'TMARKER ' + ((Get-Content $tMarker -Raw | ConvertFrom-Json).pid)
+$rj = Start-ThreadJob -ScriptBlock { param($f) Start-Sleep -Milliseconds 250; Set-Content $f release } -ArgumentList $cRelease
+$w = Wait-LandRunning $cRepo 6>$null
+'CLAIM ' + $w.ToString([Globalization.CultureInfo]::InvariantCulture)
+'CMARKER ' + ((Get-Content $cMarker -Raw | ConvertFrom-Json).pid)
+Exit-LandRunning
+'@
+  $waitP = Start-Process pwsh -ArgumentList @('-NoProfile', '-File', $waitScript, (Join-Path $root 'tools/lib/landing.ps1'), $waitRepos['timeout'].Repo, $waitRepos['timeout'].Marker, $waitRepos['claim'].Repo, $waitRepos['claim'].Marker, $waitRepos['claim'].Release) -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $qout 'wait.out') -RedirectStandardError (Join-Path $qout 'wait.err')
+  $null = $waitP.Handle; $qprocs += $waitP
   $landArgs = @('-NoProfile', '-File', (Join-Path $root 'tools/land.ps1'), 'submit', '999', 'PASS', '-DryRun')
   $plainP = Start-Process pwsh -ArgumentList $landArgs -WorkingDirectory $qrepo -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $qout 'plain.out') -RedirectStandardError (Join-Path $qout 'plain.err')
   $queueP = Start-Process pwsh -ArgumentList ($landArgs + '-Queue') -WorkingDirectory $qrepo -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $qout 'queue.out') -RedirectStandardError (Join-Path $qout 'queue.err')
@@ -190,26 +210,22 @@ Remove-Item -Force `$marker
   $last = Get-LandingLastGate $main
   Check 'the previous landing is the last line' ($last.task -eq 7 -and $last.gate_s -eq 43.0)
 
-  # Wait-LandRunning, called here. Past ASTRORAY_LAND_QUEUE_TIMEOUT_S it fails loudly, naming the limit.
-  $w = $waitRepos['timeout']
-  $env:ASTRORAY_LAND_QUEUE_TIMEOUT_S = '0.5'
-  $msg = ''
-  try { $null = Wait-LandRunning $w.Repo 6>$null } catch { $msg = $_.Exception.Message }
-  $env:ASTRORAY_LAND_QUEUE_TIMEOUT_S = $null
-  Check 'a queue wait past ASTRORAY_LAND_QUEUE_TIMEOUT_S fails, naming it' ($msg -match 'over the 0\.5 s limit \(ASTRORAY_LAND_QUEUE_TIMEOUT_S\)') @($msg)
-  Check 'a queue wait that timed out did not take the marker' ((Get-Content $w.Marker -Raw | ConvertFrom-Json).pid -ne $PID)
-  Set-Content $w.Release release
-  # It returns only once the owner is gone, and then the marker is this process's: another queued land.ps1 must
-  # not start beside it. The owner is released 0.4 s after the wait began.
-  $w = $waitRepos['claim']
-  $rj = Start-ThreadJob -ScriptBlock { param($f) Start-Sleep -Milliseconds 400; Set-Content $f release } -ArgumentList $w.Release
-  $waited = Wait-LandRunning $w.Repo 6>$null
-  $null = Wait-Job $rj -Timeout 10; Remove-Job $rj -Force
-  Check 'Wait-LandRunning returns once the owner has gone, after waiting for it' ($waited -ge 0.3 -and $waited -lt 10) @("waited $waited")
-  $mo = $null
-  try { $mo = Get-Content $w.Marker -Raw -ErrorAction Stop | ConvertFrom-Json } catch { }
-  Check 'Wait-LandRunning owns the marker when it returns (this pid)' ($mo -and [int]$mo.pid -eq $PID) @("marker: $mo")
-  Exit-LandRunning
+  # Wait-LandRunning (run by a child started above): past ASTRORAY_LAND_QUEUE_TIMEOUT_S it fails loudly, naming the
+  # limit, and it has not taken the marker; it returns only once the owner is gone, and then the marker is its own:
+  # another queued land.ps1 must not start beside it.
+  $null = $waitP.WaitForExit(30000)
+  $wl = @(Get-Content (Join-Path $qout 'wait.out') -ErrorAction SilentlyContinue | ForEach-Object { "$_" })
+  function Get-WaitLine([string]$key) { return @($wl | Where-Object { $_ -like "$key *" } | ForEach-Object { $_.Substring($key.Length + 1) }) }
+  $self = @(Get-WaitLine 'SELF')[0]
+  $tl = @(Get-WaitLine 'TIMEOUT')
+  Check 'a queue wait past ASTRORAY_LAND_QUEUE_TIMEOUT_S fails, naming it' ($tl.Count -eq 1 -and $tl[0] -match 'over the 0\.3 s limit \(ASTRORAY_LAND_QUEUE_TIMEOUT_S\)') $wl
+  $tm = @(Get-WaitLine 'TMARKER')
+  Check 'a queue wait that timed out did not take the marker' ($tm.Count -eq 1 -and $tm[0] -ne $self) $wl
+  $cl = @(Get-WaitLine 'CLAIM')
+  $cw = if ($cl.Count -eq 1) { [double]::Parse($cl[0], [Globalization.CultureInfo]::InvariantCulture) } else { -1 }
+  Check 'Wait-LandRunning returns once the owner has gone, after waiting for it' ($cw -ge 0.2 -and $cw -lt 10) $wl
+  $cm = @(Get-WaitLine 'CMARKER')
+  Check 'Wait-LandRunning owns the marker when it returns (its pid)' ($cm.Count -eq 1 -and $cm[0] -eq $self) $wl
 
   # Judged last: what the plain and the queued submit printed.
   $null = $plainP.WaitForExit(30000); $null = $queueP.WaitForExit(30000); $null = $mergeP.WaitForExit(30000)
