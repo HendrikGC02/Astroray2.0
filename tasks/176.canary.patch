@@ -1,0 +1,43 @@
+diff --git a/src/host/denoise/denoiser.cpp b/src/host/denoise/denoiser.cpp
+index 65ae5bf..18d80de 100644
+--- a/src/host/denoise/denoiser.cpp
++++ b/src/host/denoise/denoiser.cpp
+@@ -195,7 +195,7 @@ struct DenoiserState::Oidn {
+     for (DenoiseMode m : {DenoiseMode::FINAL, DenoiseMode::VIEWPORT}) execute(warm, m);
+     // The 1 x 1 images are size-dependent: they go, so the creation record holds only what stays.
+     drop_images();
+-    set_record(creation_record, creation_bytes, drop_since(before));
++    set_record(creation_record, creation_bytes, before);
+     name = describe();
+   }
+ 
+@@ -350,7 +350,7 @@ struct DenoiserState::Oidn {
+       }
+       throw;
+     }
+-    if (window) set_record(config_record, config_bytes, net_after(config_bytes, before));
++    if (window) set_record(config_record, config_bytes, drop_since(before));
+     write_out(in, out);
+   }
+ 
+@@ -378,8 +378,6 @@ struct DenoiserState::Oidn {
+     const Filters& f = filters[size_t(mode)];
+     if (mode == DenoiseMode::FINAL && with_albedo) lib->oidnExecuteFilter(f.albedo);
+     if (mode == DenoiseMode::FINAL && with_normal) lib->oidnExecuteFilter(f.normal);
+-    lib->oidnExecuteFilter(f.rt);
+-    lib->oidnReadBuffer(output, 0, image_bytes, staging.data());
+     check(device, "denoise");
+   }
+ 
+@@ -420,9 +418,9 @@ void DenoiserState::load() {
+   } catch (const Cancelled&) {
+     oidn->release();
+     return finish(kFailed, "denoiser loading stopped: the state was destroyed");
+-  } catch (const std::exception& e) {
++  } catch (const std::exception&) {
+     oidn->release();  // a failed state holds no device memory and no library
+-    return finish(kFailed, e.what());
++    return finish(kFailed, "OIDN failed");
+   }
+   oidn_ = std::move(oidn);
+   finish(kReady, {});
