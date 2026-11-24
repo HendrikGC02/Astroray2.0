@@ -1,29 +1,55 @@
+diff --git a/src/capi/scene_api.cpp b/src/capi/scene_api.cpp
+index 505e26e..b36bf2c 100644
+--- a/src/capi/scene_api.cpp
++++ b/src/capi/scene_api.cpp
+@@ -334,7 +334,7 @@ AR_API ar_status ar_edit_set_light(ar_edit h, ar_key key, const ar_light_desc* d
+ AR_API ar_status ar_edit_set_medium(ar_edit h, ar_key key, const ar_medium_desc* desc) {
+   AR_RECORD(ar_edit_set_medium, ar_rec_of(h), h, key, desc);
+   AR_RECORD_BODY({
+-  if (h && h->edit && desc && desc->flags != 0) {
++  if (h && h->edit && desc && false) {
+     try {
+       const std::string why = "ar_edit_set_medium: flags " + std::to_string(desc->flags) + " is not supported; the word is reserved and must be 0";
+       h->owner->scene->ctx().log.line("WARNING", why);
 diff --git a/src/host/scene/closed_mesh.cpp b/src/host/scene/closed_mesh.cpp
-index a2c1b63..75387db 100644
+index 636def9..0c77c7f 100644
 --- a/src/host/scene/closed_mesh.cpp
 +++ b/src/host/scene/closed_mesh.cpp
-@@ -23,7 +23,6 @@ bool triangles_closed(const uint32_t* tri_vertex, size_t triangle_count) {
+@@ -26,7 +26,7 @@ bool polygons_closed(const uint32_t* corner_vert, const uint32_t* face_start, si
+   if (keys.size() % 2 != 0) return false;
+   std::sort(keys.begin(), keys.end());
+   for (size_t i = 0; i < keys.size(); i += 2) {
+-    if ((keys[i] >> 1) != (keys[i + 1] >> 1) || keys[i] == keys[i + 1]) return false;
++    if ((keys[i] >> 1) != (keys[i + 1] >> 1)) return false;
    }
-   std::sort(forward.begin(), forward.end());
-   std::sort(reverse.begin(), reverse.end());
--  if (std::adjacent_find(forward.begin(), forward.end()) != forward.end()) return false;
-   return forward == reverse;
+   return true;
  }
+diff --git a/src/host/scene/edit.cpp b/src/host/scene/edit.cpp
+index ec78210..7b35fc4 100644
+--- a/src/host/scene/edit.cpp
++++ b/src/host/scene/edit.cpp
+@@ -155,7 +155,7 @@ void Edit::submit(const std::shared_ptr<EditItem>& item) {
  
+ ar_status Edit::remove(uint32_t kind, ar_key key) {
+   if (ar_status st = touch()) return st;
+-  if (kind > AR_KIND_MEDIUM) return bad("invalid argument: edit kind out of range");
++  if (kind > AR_KIND_ASTRO) return bad("invalid argument: edit kind out of range");
+   bool known = false;
+   if (!reset_) known = scene_.known(kind, key);
+   if (!known) {
 diff --git a/src/host/scene/instances.cpp b/src/host/scene/instances.cpp
-index 935fe53..8e9086f 100644
+index e8d2e92..d43a14c 100644
 --- a/src/host/scene/instances.cpp
 +++ b/src/host/scene/instances.cpp
-@@ -61,7 +61,7 @@ std::string at(uint32_t i, ar_key object) {
- void check_medium_meshes(Scene& scene, const InstanceTable* previous, const InstanceTable& table) {
-   if (previous)
-     for (const Instance& in : previous->instances)
--      if (in.medium_key != 0) scene.report().remove(AR_REPORT_MEDIUM_MESH_OPEN, in.geom_key);
-+      if (in.medium_key != 0) (void)in;
-   std::set<ar_key> seen;
-   for (const Instance& in : table.instances) {
-     if (in.medium_key == 0 || !seen.insert(in.geom_key).second || !scene.meshes) continue;
-@@ -131,7 +131,7 @@ uint8_t visibility_mask(uint32_t v, bool has_medium) {
+@@ -117,7 +117,6 @@ std::shared_ptr<InstanceTable> build(const DescCopy& d) {
+ 
+ void refresh_medium_mesh_report(Scene& scene, ar_key geom, bool bears_medium) noexcept {
+   try {
+-    scene.report().remove(AR_REPORT_MEDIUM_MESH_OPEN, geom);
+     if (!bears_medium) return;
+     const auto rec = scene.meshes ? scene.meshes->find(geom) : nullptr;
+     if (!rec || !rec->topo) {
+@@ -160,7 +159,7 @@ uint8_t visibility_mask(uint32_t v, bool has_medium) {
    if (v & AR_VISIBILITY_TRANSMISSION) m |= 1u << 3;
    if (v & AR_VISIBILITY_SHADOW) m |= ar::kShadowMaskBit;
    if (v & AR_VISIBILITY_VOLUME) m |= 1u << 5;
@@ -32,7 +58,7 @@ index 935fe53..8e9086f 100644
    return m;
  }
  
-@@ -181,7 +181,7 @@ ar_status set_instances(Edit& edit, const ar_instances_desc* desc) {
+@@ -210,7 +209,7 @@ ar_status set_instances(Edit& edit, const ar_instances_desc* desc) {
    item->bind = [d](const std::function<bool(ar_key)>& exists, const std::function<bool(ar_key)>& medium_exists) {
      for (size_t i = 0; i < d->n; ++i) {
        d->geom_exists[i] = exists(d->geom[i]);
@@ -41,6 +67,15 @@ index 935fe53..8e9086f 100644
      }
    };
    item->needs_device = false;
+@@ -298,7 +297,7 @@ void apply_instance_summary(std::shared_ptr<const InstanceSummary>& cur, const P
+ void queue_instance_check(Edit& edit) {
+   if (edit.instance_stage().has_set || edit.reset_requested()) return;  // new table, or cleared
+   auto removed = std::make_shared<std::set<uint64_t>>(edit.removed_geometry());
+-  auto removed_media = std::make_shared<std::set<uint64_t>>(edit.removed_media());
++  auto removed_media = std::make_shared<std::set<uint64_t>>();
+   if (removed->empty() && removed_media->empty()) return;
+   Scene* scene = &edit.scene();
+   // The latest committed table, pending generations included, as of this commit.
 diff --git a/src/host/scene/media.cpp b/src/host/scene/media.cpp
 index e2ab2db..99dc24d 100644
 --- a/src/host/scene/media.cpp
@@ -53,6 +88,18 @@ index e2ab2db..99dc24d 100644
    const std::shared_ptr<const Medium> medium = build_medium(key, *desc, table);  // throws invalid_argument
    auto item = std::make_shared<EditItem>();
    item->key = key;
+diff --git a/src/host/scene/mesh.cpp b/src/host/scene/mesh.cpp
+index 3a08989..070a8d3 100644
+--- a/src/host/scene/mesh.cpp
++++ b/src/host/scene/mesh.cpp
+@@ -403,7 +403,6 @@ ar_status mesh_begin(Scene& scene, Edit& edit, const ar_mesh_desc* desc, ar_mesh
+   // A replaced mesh lost its report entries at activation: say again whether it is open when a medium needs it.
+   item->on_active = [store, result, sc, key] {
+     store->install(*result);
+-    refresh_medium_mesh_report(*sc, key, scene_has_medium_on(*sc, key));
+   };
+   item->on_dropped = [store, key, id, gate, result] {
+     gate->resolve(nullptr);  // an item that never ran must not strand a waiting positions job
 diff --git a/src/host/scene/scene.cpp b/src/host/scene/scene.cpp
 index 6195154..8430fdf 100644
 --- a/src/host/scene/scene.cpp
