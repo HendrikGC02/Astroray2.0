@@ -26,3 +26,4 @@ Progress:
 - Rebased onto 471e3bd (145, 178): CHANNEL_F32X3 is opcode 18, NONE_SURFACE_ONLY, not volume reachable; probe COUNT_ 19, placeholders 81 (19-99), total 100; fold-equals-interpret op count 14. Canary refreshed; canary.ps1 147 PASS (five cases red).
 - After rebase: k_shade_surface regs 128 (+0), stack 384 (+0), spills 0/0, compile 5.13 s (limit 7.0, baseline 5.2); budget.toml unchanged. check fast PASS 7.9 s; check gate PASS 162.7 s (budget 180 s).
 - Review fixes: compiler_outputs/emission estimate of an image channel (channel mean, bit-exact 0.5; bound 1 without means) with its canary hunk; material_flags comment cites the Cycles functions read in the ref cache. canary PASS (six red), check fast PASS 7.8 s.
+- Rebased onto origin/main (180, 185): compiler_material keeps the opacity-clamp report and 180's set_medium_fields. canary PASS (six red); check fast PASS 8.5 s; check gate PASS 162.3 s; k_shade_surface 128/384/0/0, compile 5.10 s.
