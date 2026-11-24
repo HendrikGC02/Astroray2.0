@@ -24,6 +24,7 @@
 #include "../../src/host/material/graph.h"
 #include "../../src/host/material/material_store.h"
 #include "material/material_header.h"
+#include "vm/interp.h"
 
 namespace {
 
@@ -146,8 +147,30 @@ struct Gen {
       }
       case 2: return tex_channel(rng.below(kBankSize), int(rng.below(3)));
       case 3: return scaled(tex_channel(rng.below(kBankSize), int(rng.below(3))), rng.pick(mult));
-      default: return uv_channel(int(rng.below(2)));
+      default: return rng.chance(30) ? scaled(constant(rng.pick(consts)), rng.pick(mult)) : uv_channel(int(rng.below(2)));
     }
+  }
+  // An Emission child: a constant or textured colour and a scalar strength. `*zero` is set when the
+  // emission folds to 0 on its own (a constant black colour or a constant strength 0).
+  void emission(int child, bool* zero) {
+    static const double chan[] = {0.0, 0.2, 0.5, 1.0};
+    const int e = add(Op::EMIT_LE, {}, {child});
+    bool colour_zero = false;
+    if (rng.chance(60)) {
+      const bool black = rng.chance(15);
+      colour_zero = black;
+      link(add(Op::CONST_F32X3, black ? std::vector<float>{0, 0, 0}
+                                      : std::vector<float>{float(rng.pick(chan)), float(rng.pick(chan)), 0.5f}),
+           e, 0);
+    } else {
+      const int uv = add(Op::LOAD_CTX_UV, {}, {0});
+      const int t = add(Op::TEX_IMAGE, {}, {int32_t(kBankKey + rng.below(kBankSize)), 0});
+      link(uv, t, 0);
+      link(t, e, 0);
+    }
+    const Val strength = scalar(true);
+    link(strength.node, e, 1);
+    *zero = colour_zero || (!strength.per_point && strength.hi == 0.0);
   }
   ar_graph_desc desc() const {
     ar_graph_desc d = {};
@@ -212,6 +235,11 @@ TEST_CASE("compiler_flags/never false on generated graphs") {
     const uint32_t mirror = n > 1 ? g.rng.below(n) : 0;
     bool truth = false, all_rough = true;
     for (uint32_t k = 0; k < n; ++k) {
+      if (n > 1 && g.rng.chance(20)) {  // an Emission child has no lobes
+        bool ignored = false;
+        g.emission(int(k), &ignored);
+        continue;
+      }
       // Every child stores something, so a child with no roughness input still exists.
       g.store(int(k), g.constant(0.25).node, RecordSlot::base_metalness);
       const bool is_mirror = g.rng.chance(15) && k == mirror;
@@ -258,6 +286,47 @@ TEST_CASE("compiler_flags/never false on generated graphs") {
   CHECK(c.rejected == 0);
   CHECK(c.truth > 1000);  // the generator exercises the rule
   CHECK(c.missed == 0);
+}
+
+TEST_CASE("compiler_flags/estimate zero only when folded") {
+  // Ref: 0005 item 43: the estimate is 0 only when the emission folds to 0 (a constant black colour,
+  // a constant strength 0 or a child weight of constant 0); anything per point is bounded or
+  // measured above 0.
+  uint32_t zero_graphs = 0, wrong_zero = 0, wrong_nonzero = 0, rejected = 0;
+  for (uint32_t seed = 0; seed < 10000; ++seed) {
+    Gen g;
+    g.rng.s = 0xe1155100ull + seed;
+    const uint32_t n = 1 + g.rng.below(3);
+    const std::vector<double> weight_hi = build_mix(&g, n);
+    bool any_emission = false;
+    for (uint32_t k = 0; k < n; ++k) {
+      if (g.rng.chance(60)) {
+        bool zero = false;
+        g.emission(int(k), &zero);
+        any_emission = any_emission || (!zero && weight_hi[k] > 0.0);
+      } else {
+        g.store(int(k), g.constant(0.25).node, RecordSlot::base_metalness);
+      }
+    }
+    const astroray::host::MaterialOutput m = g.compile();
+    if (m.magenta) {
+      MESSAGE("seed " << seed << " compiled magenta: " << (m.entries.empty() ? "" : m.entries[0].detail));
+      ++rejected;
+      continue;
+    }
+    if (!any_emission) ++zero_graphs;
+    if (any_emission && m.emission_estimate.empty()) {
+      if (++wrong_zero <= 5) MESSAGE("seed " << seed << ": the emission does not fold to 0 and the estimate is empty");
+    }
+    if (!any_emission && !m.emission_estimate.empty()) {
+      if (++wrong_nonzero <= 5) MESSAGE("seed " << seed << ": the emission folds to 0 and the estimate has terms");
+    }
+  }
+  std::printf("compiler_flags: %u graphs fold to 0; wrong zero %u, wrong non-zero %u\n", zero_graphs, wrong_zero, wrong_nonzero);
+  CHECK(rejected == 0);
+  CHECK(zero_graphs > 500);
+  CHECK(wrong_zero == 0);
+  CHECK(wrong_nonzero == 0);
 }
 
 }  // TEST_SUITE

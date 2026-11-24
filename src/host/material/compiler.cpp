@@ -801,6 +801,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
   };
   std::vector<Emit> emitted;
   std::vector<int> emit_nodes;
+  std::set<int> strength_nodes;
   for (int c : order)
     for (int e : emits_of[c]) {
       const int weight = mul(path_of[c].w, opacity_of[c]);
@@ -809,7 +810,11 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
       res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(path_of[c].w)];
       const int strength = w.g.nodes[size_t(e)].input[1];
       emitted.push_back({w.g.nodes[size_t(e)].input[0], strength, weight});
-      const int scaled = mul(strength, weight);  // mul may move the node array
+      int scaled = mul(strength, weight);  // mul may move the node array
+      // mul hands back a shared node (the zero of a weight of 0, a weight both children computed):
+      // each EMIT_LE needs its own strength value, so a second reader gets a copy through x * 1.
+      if (!strength_nodes.insert(scaled).second) scaled = arith(Op::MUL_F32, scaled, one);
+      strength_nodes.insert(scaled);
       w.g.nodes[size_t(e)].input[1] = scaled;
       emit_nodes.push_back(e);
     }
@@ -1009,6 +1014,9 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
                        &res->clamp_flags, &res->error))
         return false;
     }
+    // A selection weight that folded to 0 means no sample ever takes this child (item 43 "reachable").
+    const int pw = path_of[child].w;
+    c.reachable = !(w.isc[size_t(pw)] && !(w.cv[size_t(pw)][0] > 0.0f));
     res->runtime_slots |= c.runtime_slots;
     res->children.push_back(c);
   }
@@ -1503,7 +1511,7 @@ uint32_t material_flags(const CompileResult& r) {
     return f;
   }
   bool delta = r.children.empty() && child_may_be_delta(r.block, r.runtime_slots);
-  for (const ChildConstants& c : r.children) delta = delta || child_may_be_delta(c.block, c.runtime_slots);
+  for (const ChildConstants& c : r.children) delta = delta || (c.reachable && child_may_be_delta(c.block, c.runtime_slots));
   uint32_t flags = delta ? ar::MAY_BE_DELTA : 0u;
   if (per_point(r, RS::geometry_opacity) || r.block.geometry_opacity < 1.0f) flags |= ar::NON_OPAQUE;
   const bool emission_entry = r.program.size() > 2 && r.program[2] != 0;

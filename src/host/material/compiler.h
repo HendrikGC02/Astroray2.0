@@ -43,6 +43,7 @@ struct ChildConstants {
   int id = 0;  // the graph's child id
   ar::ConstantBlock block = {};
   uint64_t runtime_slots = 0;
+  bool reachable = true;  // false: its selection weight folded to 0, so no sample takes it
 };
 
 struct CompileResult {
