@@ -2,6 +2,7 @@
 #include "graph.h"
 
 #include <cmath>
+#include <limits>
 
 #include "../../kernel/material/constant_block.h"
 #include "../../kernel/material/slot_resolve.h"
@@ -194,6 +195,9 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
           return *err = at(i, "SPECTRUM_TABLE wavelengths must be finite and strictly increasing"), false;
         if (!(std::isfinite(val) && val >= 0.0f))
           return *err = at(i, "SPECTRUM_TABLE values must be finite and not negative"), false;
+        // The kernel multiplies in float: a product past FLT_MAX would resolve to inf (as the Blackbody check).
+        if (!(double(pf[0]) * double(val) <= double(std::numeric_limits<float>::max())))
+          return *err = at(i, "SPECTRUM_TABLE scale times a value overflows a float"), false;
       }
     }
     if (o.op == Op::CHANNEL_F32X3 && uint32_t(g->i32[o.i32_first]) > 2u)

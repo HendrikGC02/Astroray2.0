@@ -1204,6 +1204,13 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
         const ar::SpectrumSemantic tsem = ar::kSlotSemantic[int(ar::Slot::EMISSION_COLOR)];
         res.block.emission_color = table_ref(w, nd.input[0], tsem, &res);
         res.block.emission_luminance = w.cv[size_t(nd.input[1])][0];
+        {  // the strength multiplies the resolved spectrum in float, as the Blackbody check above does
+          const float* tf = w.g.f32.data() + colour_node.f32_first;
+          double vmax = 0.0;
+          for (uint32_t k = 1; k < colour_node.f32_count; k += 2) vmax = std::max(vmax, double(tf[k + 1]));
+          if (!(double(tf[0]) * vmax * double(res.block.emission_luminance) <= double(std::numeric_limits<float>::max())))
+            return res.error = who + "the scale, the values and the strength overflow a float", res;
+        }
         // The estimate (item 43) is the table's mean over the observer range as a CONSTANT term: the
         // light builder integrates terms without an arena, and the estimate only picks sidedness and
         // light importance, never a rendered value.

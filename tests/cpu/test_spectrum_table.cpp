@@ -266,6 +266,7 @@ TEST_CASE("spectrum_table/graph refusals") {
   refused({1.0f, 500.0f, 0.5f, 600.0f, nan}, "values must be finite and not negative", "NaN value");
   refused({-1.0f, 500.0f, 0.5f, 600.0f, 0.6f}, "finite non-negative scale", "negative scale");
   refused({inf, 500.0f, 0.5f, 600.0f, 0.6f}, "finite non-negative scale", "infinite scale");
+  refused({1e30f, 500.0f, 0.5f, 600.0f, 1e10f}, "scale times a value overflows a float", "scale x value past FLT_MAX");
   // The limits themselves are accepted.
   for (uint32_t n : {2u, 4096u}) {
     GB g;
@@ -376,6 +377,12 @@ TEST_CASE("spectrum_table/emission") {
   const ar::Spec le = ar::resolve(r, lam, obs, m.compiled.spectra.data());
   for (int l = 0; l < 4; ++l)
     CHECK(double(le.v[l]) == doctest::Approx(0.4 * double(ar::illuminant_at(obs, lam.nm[l]))).epsilon(1e-5));
+  // The strength times the table must stay a float.
+  GB big;
+  big.emit(big.table(Pts{{360.0f, 830.0f}, {1e20f, 1e20f}}), big.add(Op::CONST_F32, {1e20f}));
+  const MaterialOutput mb = big.compile();
+  REQUIRE(mb.magenta);
+  CHECK(mb.entries[0].detail.find("the scale, the values and the strength overflow a float") != std::string::npos);
   // Two emissions, a per-point strength and a per-point opacity cannot be one block ref.
   GB two;
   const int tt = two.table(flat);
