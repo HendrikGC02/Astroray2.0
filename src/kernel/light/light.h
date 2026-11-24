@@ -291,9 +291,11 @@ AR_FN const char* area_problem(const LightRecord& r, double area) {
 
 // nullptr when the record can be uploaded, else the reason the host reports. A radius whose
 // radiance L = P sigma / (4 pi^2 r^2) or whose area pdf 1 / (4 pi r^2) would overflow float is
-// refused rather than rendered dark: with sigma the emission's own scale (CONSTANT p[0], RGB
-// p[3]) that needs r^2 >= P sigma / (4 pi^2 FLT_MAX) and r^2 >= 1 / (4 pi FLT_MAX). The
-// illuminant SPD (Y = 1) is not folded in; the kernel's finite guards are the backstop for it.
+// refused rather than rendered dark: with sigma the emission's largest value (emission_sigma: a
+// CONSTANT's p[0], an RGB's p[3], a BLACKBODY's spectral peak) that needs
+// r^2 >= P sigma / (4 pi^2 FLT_MAX) and r^2 >= 1 / (4 pi FLT_MAX). The illuminant SPD an RGB or
+// CONSTANT colour is multiplied by (Y = 1) is not folded in; the kernel's finite guards are the
+// backstop for it.
 AR_FN const char* light_problem(const LightRecord& r) {
   for (int i = 0; i < 12; ++i)
     if (!light_finite(r.xf[i])) return "light transform is not finite";

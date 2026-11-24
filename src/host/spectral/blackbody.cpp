@@ -15,13 +15,13 @@ namespace astroray::host {
 
 double blackbody_visible_y(double temperature_kelvin) {
   if (!(temperature_kelvin > 0.0) || !std::isfinite(temperature_kelvin))
-    throw std::invalid_argument("blackbody_y_normalised: temperature must be finite and positive");
+    throw std::invalid_argument("blackbody_visible_y: temperature must be finite and positive");
   DataBlob blob;
   if (!find_data("spectral/observer.bin", &blob))
-    throw std::runtime_error("blackbody_y_normalised: spectral/observer.bin is not embedded in this module");
+    throw std::runtime_error("blackbody_visible_y: spectral/observer.bin is not embedded in this module");
   ObserverTables obs;
   const std::string err = parse_observer(blob.data, blob.size, &obs);
-  if (!err.empty()) throw std::runtime_error("blackbody_y_normalised: " + err);
+  if (!err.empty()) throw std::runtime_error("blackbody_visible_y: " + err);
   double sum = 0.0;
   for (uint32_t i = 0; i < kObserverSamples; ++i) {
     const double lambda_nm = static_cast<double>(kObserverLambdaMin) + static_cast<double>(i);

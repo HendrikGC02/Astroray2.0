@@ -7,6 +7,7 @@
 // 0007-appendix-abi.md ar_spectrum_ref.
 #include <doctest.h>
 
+#include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -321,11 +322,47 @@ TEST_CASE("lamp_blackbody/radiance overflow is refused") {
   CHECK_THROWS_AS(build_lamp(1, sphere, fx.table()), std::invalid_argument);
   sphere.color.scale = 1.0f;  // the same lamp at scale 1 is fine
   CHECK_NOTHROW(build_lamp(1, sphere, fx.table()));
+  // The area lamps share the bound: L = P peak / (pi A) for a tiny rectangle and a tiny disk.
+  for (uint32_t type : {AR_LIGHT_AREA_RECT, AR_LIGHT_AREA_ELLIPSE}) {
+    INFO("area type " << type);
+    ar_light_desc area = blackbody(6500.0f, 1.0e30f, 1.0e6f);
+    area.type = type;
+    area.size_x = area.size_y = 1.0e-3f;
+    CHECK_THROWS_AS(build_lamp(1, area, fx.table()), std::invalid_argument);
+    area.color.scale = 1.0f;
+    CHECK_NOTHROW(build_lamp(1, area, fx.table()));
+  }
   // The strength reaches the same host peak check as the compiler's: P peak must fit a float.
   ar_light_desc point = blackbody(6500.0f, 1.0e30f, 1.0e6f);
   CHECK_NOTHROW(build_lamp(1, point, fx.table()));
   point.power = 1.0e10f;
   CHECK_THROWS_AS(build_lamp(1, point, fx.table()), std::invalid_argument);
+}
+
+TEST_CASE("lamp_blackbody/radiance bound uses the clamped Wien peak") {
+  Fixture fx;
+  // Wien's wavelength is 0.003 nm at 1e9 K and 2900 nm at 1000 K, so the brightest value over the
+  // observer's 360-830 nm is at an end of the range. The truth is built here, not through the
+  // kernel: sigma = p[1] x Planck at that end, and the sphere's r^2 bound is P sigma / (4 pi^2
+  // FLT_MAX). A radius 10% under the bound is refused and one 10% over is built; a range narrowed by
+  // 20 to 50 nm at that end lowers sigma by a quarter or more and would accept the first.
+  struct Case {
+    float kelvin;
+    double end_nm;
+  };
+  const double pi = 3.14159265358979323846, power = 1.0e6;
+  for (const Case c : {Case{1.0e9f, 360.0}, Case{1000.0f, 830.0}}) {
+    INFO("T = " << c.kelvin);
+    const float scale = 1.0e20f;
+    const double p1 = double(float(double(scale) * blackbody_y_normalised(double(c.kelvin))));
+    const double sigma = p1 * ar::planck_radiance_t<double>(c.end_nm, double(c.kelvin));
+    const double bound = power * sigma / (4.0 * pi * pi * double(FLT_MAX));
+    ar_light_desc sphere = blackbody(c.kelvin, scale, float(power));
+    sphere.size_x = float(std::sqrt(0.9 * bound));
+    CHECK_THROWS_AS(build_lamp(1, sphere, fx.table()), std::invalid_argument);
+    sphere.size_x = float(std::sqrt(1.1 * bound));
+    CHECK_NOTHROW(build_lamp(1, sphere, fx.table()));
+  }
 }
 
 TEST_CASE("lamp_blackbody/no visible radiance raises one entry") {
