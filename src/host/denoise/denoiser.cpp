@@ -166,13 +166,24 @@ struct DenoiserState::Oidn {
       }
     }
     check(device, "filter set-up");
+    if (cancel.load()) throw Cancelled{};
+    // d16: filter commit and weight loading belong to creation, off the first frame's path. The image
+    // size is not known yet, so both modes are committed and run once on a 1 x 1 image: the weights
+    // and OIDN's kernels load here, and the first real denoise only sizes its buffers.
+    const float zero[3] = {0.0f, 0.0f, 0.0f};
+    DenoiseInputs warm;
+    warm.color = {zero, 1, 1, 3};
+    warm.albedo = warm.color;
+    warm.normal = warm.color;
+    DisplayImage scratch;
+    for (DenoiseMode m : {DenoiseMode::FINAL, DenoiseMode::VIEWPORT}) execute(warm, scratch, m);
     record_drop(before);
     name = describe();
   }
 
   std::string describe() const {
     std::string s = std::string("OIDN ") + OIDN_VERSION_STRING + " " + type + " device";
-    if (cuda_ordinal >= 0) s += " " + std::to_string(cuda_ordinal);
+    if (cuda_ordinal >= 0) s += " " + std::to_string(cuda_ordinal) + " (oidnIsCUDADeviceSupported true)";
     // OIDN names physical devices, not created ones: every physical device of this type.
     const int want = cuda_ordinal >= 0 ? OIDN_DEVICE_TYPE_CUDA : OIDN_DEVICE_TYPE_CPU;
     std::string names;
@@ -180,9 +191,11 @@ struct DenoiserState::Oidn {
     for (int i = 0; i < n; ++i) {
       if (lib->oidnGetPhysicalDeviceInt(i, "type") != want) continue;
       const char* nm = lib->oidnGetPhysicalDeviceString(i, "name");
-      names += (names.empty() ? "" : ", ") + std::string(nm ? nm : "?");
+      std::string one = nm ? nm : "?";
+      while (!one.empty() && one.back() == ' ') one.pop_back();  // CPU brand strings are space-padded
+      names += (names.empty() ? "" : ", ") + one;
     }
-    return names.empty() ? s : s + " (" + names + ")";
+    return names.empty() ? s : s + ": " + names;
   }
 
   void release_buffers() {
@@ -223,12 +236,15 @@ struct DenoiserState::Oidn {
     lib->oidnSetFilterImage(f, image, b, OIDN_FORMAT_FLOAT3, w, h, 0, 0, 0);
   }
 
-  // Sizes the buffers and commits the mode's filters when the size or the guide set changed; the
-  // device memory this takes is recorded like the device's own.
+  bool configured(DenoiseMode mode, const DenoiseInputs& in) const {
+    const Filters& f = filters[size_t(mode)];
+    return f.width == in.color.width && f.height == in.color.height && f.with_albedo == (in.albedo.data != nullptr) &&
+           f.with_normal == (in.normal.data != nullptr);
+  }
+
+  // Sizes the buffers and commits the mode's filters for a new size or guide set.
   void configure(DenoiseMode mode, uint32_t w, uint32_t h, bool with_albedo, bool with_normal) {
     Filters& f = filters[size_t(mode)];
-    if (f.width == w && f.height == h && f.with_albedo == with_albedo && f.with_normal == with_normal) return;
-    const uint64_t before = cuda_ordinal >= 0 ? free_bytes() : 0;
     const size_t bytes_per_image = size_t(w) * h * 3 * sizeof(float);
     if (buffer_width != w || buffer_height != h) {
       release_buffers();
@@ -243,8 +259,11 @@ struct DenoiserState::Oidn {
     lib->oidnSetFilterBool(f.rt, "hdr", true);
     set_image(f.rt, "color", color, w, h);
     set_image(f.rt, "output", output, w, h);
+    // A guide the previous commit had and this one lacks must not stay bound.
     if (with_albedo) set_image(f.rt, "albedo", albedo, w, h);
+    else lib->oidnUnsetFilterImage(f.rt, "albedo");
     if (with_normal) set_image(f.rt, "normal", normal, w, h);
+    else lib->oidnUnsetFilterImage(f.rt, "normal");
     // d18: FINAL prefilters the guides in place and then tells the main filter they are clean;
     // VIEWPORT uses the noisy guides as they are.
     const bool final_mode = mode == DenoiseMode::FINAL;
@@ -265,13 +284,21 @@ struct DenoiserState::Oidn {
     f.height = h;
     f.with_albedo = with_albedo;
     f.with_normal = with_normal;
-    if (cuda_ordinal >= 0) record_drop(before);
   }
 
+  // A denoise; when it had to configure, the device memory that took (buffers, the commit, OIDN's
+  // scratch at the first execution) is recorded like the device's own.
   void run(const DenoiseInputs& in, DisplayImage& out, DenoiseMode mode) {
+    const bool reconfigure = !configured(mode, in);
+    const uint64_t before = reconfigure && cuda_ordinal >= 0 ? free_bytes() : 0;
+    execute(in, out, mode);
+    if (reconfigure) record_drop(before);
+  }
+
+  void execute(const DenoiseInputs& in, DisplayImage& out, DenoiseMode mode) {
     const ImageView& c = in.color;
     const bool with_albedo = in.albedo.data != nullptr, with_normal = in.normal.data != nullptr;
-    configure(mode, c.width, c.height, with_albedo, with_normal);
+    if (!configured(mode, in)) configure(mode, c.width, c.height, with_albedo, with_normal);
     const size_t n = size_t(c.width) * c.height;
     staging.resize(n * 3);
     // d15: neither OIDN nor DLSS documents negative input; the denoiser's copy is clamped at 0.

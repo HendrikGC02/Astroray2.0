@@ -86,7 +86,7 @@ class DenoiserState {
   // Blocks until loading finished or failed (a poisoned context counts as failed, with that
   // message). A final render calls this only before its denoise step.
   void wait();
-  // Once ready(): the device the backend runs on, e.g. "OIDN 2.5.0 CUDA device 0 (<GPU name>)";
+  // Once ready(): the device the backend runs on, e.g. "OIDN 2.5.0 CPU device: <CPU name>";
   // empty for NONE.
   std::string description() const;
   // Device memory the backend holds: the drops in free device bytes recorded under DENOISER

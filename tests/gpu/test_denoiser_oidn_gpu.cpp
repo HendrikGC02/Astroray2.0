@@ -153,7 +153,10 @@ TEST_CASE("denoiser_oidn_gpu/ledger holds the denoiser bytes") {
     state->wait();
     INFO(state->error());
     REQUIRE(state->ready());
+    // Creation commits and runs both modes once, so the device's memory is held already.
     const uint64_t created = ledger.category_total(LedgerCategory::DENOISER);
+    CHECK(created > 0);
+    CHECK(created == state->device_bytes());
     DisplayImage out;
     const NoisyFixture f = test::make_noisy_fixture();
     denoise(*state, fixture_inputs(f), out, DenoiseMode::FINAL);

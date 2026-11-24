@@ -40,7 +40,7 @@ OidnLibrary::OidnLibrary(const std::string& library_dir) {
   if (!dir.is_absolute()) throw std::runtime_error("OIDN library " + path_ + " cannot be loaded: the folder is not absolute");
   // The module's own folder is searched for astroray_oidn_core.dll; nothing is taken from PATH or
   // the current directory, so Blender's OIDN can never stand in for ours (0001 D9.4).
-  HMODULE m = LoadLibraryExW(file.wstring().c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+  HMODULE m = LoadLibraryExW(std::filesystem::path(file).make_preferred().wstring().c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
   if (!m) throw std::runtime_error("OIDN library " + path_ + " cannot be loaded: " + system_message(GetLastError()));
   module_ = m;
   try {

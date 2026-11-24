@@ -18,7 +18,7 @@ namespace astroray::host {
   X(oidnCommitDevice) X(oidnGetDeviceError) X(oidnGetDeviceInt) X(oidnReleaseDevice) X(oidnSyncDevice)    \
   X(oidnGetNumPhysicalDevices) X(oidnGetPhysicalDeviceInt) X(oidnGetPhysicalDeviceString)                 \
   X(oidnNewBuffer) X(oidnWriteBuffer) X(oidnReadBuffer) X(oidnReleaseBuffer) X(oidnNewFilter)             \
-  X(oidnSetFilterImage) X(oidnSetFilterBool) X(oidnSetFilterInt) X(oidnCommitFilter) X(oidnExecuteFilter) \
+  X(oidnSetFilterImage) X(oidnUnsetFilterImage) X(oidnSetFilterBool) X(oidnSetFilterInt) X(oidnCommitFilter) X(oidnExecuteFilter) \
   X(oidnReleaseFilter)
 
 class OidnLibrary {
