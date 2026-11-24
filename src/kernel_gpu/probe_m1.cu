@@ -21,8 +21,8 @@ namespace probe_m1 {
 // Opcodes ops.def does not define yet, numbered up to the ~100 of 0005 Risks M-1. Each is a
 // distinct body of one of the shapes the table's rows have (f32, f32x3 and spectrum arithmetic,
 // a transcendental, an immediate operand); they stand for future ops' size, not for any node.
-// The placeholder cases below are opcodes 23-99, so they start where ops.def ends.
-static_assert(uint32_t(Op::COUNT_) == 23, "ops.def changed: renumber the placeholder cases");
+// The placeholder cases below are opcodes 24-99, so they start where ops.def ends.
+static_assert(uint32_t(Op::COUNT_) == 24, "ops.def changed: renumber the placeholder cases");
 
 template <uint32_t K>
 AR_FN void placeholder_op(VmState& vm) {
@@ -84,7 +84,7 @@ AR_FN VmStatus run_entry_100(const uint32_t* prog, uint32_t offset, VmRegs* regs
 #define AR_OP(NAME, ...) AR_OP_CASE(NAME, handle_##NAME)
 #include "vm/ops.def"
 #undef AR_OP
-      AR_PROBE_CASE(23) AR_PROBE_CASE(24) AR_PROBE_CASE(25) AR_PROBE_CASE(26)
+      AR_PROBE_CASE(24) AR_PROBE_CASE(25) AR_PROBE_CASE(26)
       AR_PROBE_CASE(27) AR_PROBE_CASE(28) AR_PROBE_CASE(29)
       AR_PROBE_CASE10(3) AR_PROBE_CASE10(4) AR_PROBE_CASE10(5)
       AR_PROBE_CASE10(6) AR_PROBE_CASE10(7) AR_PROBE_CASE10(8) AR_PROBE_CASE10(9)
