@@ -25,7 +25,7 @@ index ac51f3c..a6394fc 100644
          self._desc["instances"] = [
              {"geom": it["geom"], "materials": list(it["materials"]),
 diff --git a/src/capi/scene_api.cpp b/src/capi/scene_api.cpp
-index 505e26e..b36bf2c 100644
+index 5b5ad0d..892ccb3 100644
 --- a/src/capi/scene_api.cpp
 +++ b/src/capi/scene_api.cpp
 @@ -334,7 +334,7 @@ AR_API ar_status ar_edit_set_light(ar_edit h, ar_key key, const ar_light_desc* d
@@ -51,7 +51,7 @@ index 636def9..0c77c7f 100644
    return true;
  }
 diff --git a/src/host/scene/edit.cpp b/src/host/scene/edit.cpp
-index 55228f5..af0accd 100644
+index 55228f5..00dbdb3 100644
 --- a/src/host/scene/edit.cpp
 +++ b/src/host/scene/edit.cpp
 @@ -155,7 +155,7 @@ void Edit::submit(const std::shared_ptr<EditItem>& item) {
@@ -63,19 +63,12 @@ index 55228f5..af0accd 100644
    bool known = false;
    if (!reset_) known = scene_.known(kind, key);
    if (!known) {
-@@ -260,6 +260,7 @@ ar_status Edit::commit(uint64_t* generation) {
-     if (kv.second.item->kind == AR_KIND_GEOMETRY && kv.second.item->replaces_subject) keep.insert(kv.first);
-   if (scene_.meshes)
-     p.on_active.push_back([meshes = scene_.meshes, reset = reset_, removed = removed_, keep] { meshes->remove(reset, removed, keep); });
-+  p.on_active.push_back([scene = &scene_] { scene->refresh_medium_reports(); });
-   // The stored descriptors take effect with the generation, not before.
-   p.on_active.push_back([&st, reset = reset_, settings = settings_, camera = camera_, astro = astro_,
-                          removed = removed_, delta] {
-@@ -288,7 +289,6 @@ ar_status Edit::commit(uint64_t* generation) {
+@@ -288,7 +288,7 @@ ar_status Edit::commit(uint64_t* generation) {
    }
    // Last, after every state callback and the instance table: the open-medium-mesh report is rebuilt from the
    // final state (Scene::refresh_medium_reports), whatever order the callbacks above ran in.
 -  p.on_active.push_back([scene = &scene_] { scene->refresh_medium_reports(); });
++  p.on_active.insert(p.on_active.begin(), [scene = &scene_] { scene->refresh_medium_reports(); });
    for (const auto& item : internal_) submit(item);
    *generation = scene_.generations().commit(pending_, [&] {
      std::lock_guard<std::mutex> lock(st.mutex);
@@ -111,9 +104,18 @@ index 81fc2bb..b7780c3 100644
    Scene* scene = &edit.scene();
    // The latest committed table, pending generations included, as of this commit.
 diff --git a/src/host/scene/media.cpp b/src/host/scene/media.cpp
-index e2ab2db..99dc24d 100644
+index e2ab2db..09f2f7c 100644
 --- a/src/host/scene/media.cpp
 +++ b/src/host/scene/media.cpp
+@@ -43,7 +43,7 @@ struct VolumeGraph {
+     const float dmax = std::max(s[0], std::max(s[1], s[2]));
+     float c[3] = {0.0f, 0.0f, 0.0f};
+     if (dmax > 0.0f)
+-      for (int k = 0; k < 3; ++k) c[k] = kind == ar::VolumeTerm::SCATTER ? s[k] / dmax : 1.0f - s[k] / dmax;
++      for (int k = 0; k < 3; ++k) c[k] = kind == ar::VolumeTerm::SCATTER ? 1.0f - s[k] / dmax : s[k] / dmax;
+     const int col = add(ar::Op::CONST_F32X3, {c[0], c[1], c[2]});
+     const int dens = add(ar::Op::CONST_F32, {dmax});
+     const int n = add(ar::Op::VOLUME_COEFFS, {g}, {int32_t(kind)});
 @@ -107,6 +107,7 @@ std::shared_ptr<const Medium> build_medium(ar_key key, const ar_medium_desc& d,
  ar_status set_medium(Edit& edit, ar_key key, const ar_medium_desc* desc, const ar::Rgb2SpecTable& table) {
    if (desc == nullptr) return edit.fail("invalid argument: ar_edit_set_medium desc is null");
