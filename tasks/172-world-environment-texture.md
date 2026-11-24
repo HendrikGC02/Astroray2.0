@@ -17,3 +17,4 @@ Budget: gate +2 s at most (stop and ask above); k_shade_background (regs 62, sta
 Depends on: 150, 158 (lead ruling: it may land before 178 and 179; whichever of 172, 178, 179 lands later rebases on ops.def and probe_m1.cu); lands after 177 on light_record.h and light.h (order 158, 177, 172, 173, 175) and first on shade_background.h (172, 173, 174, 175); SceneData sweep order in tasks/README.md.
 Size: M (about 400 lines without tests); stop and report at 2x. If the compiler part alone exceeds 150 lines, land the op, the kernel and the tests first.
 Progress:
+- Files beyond Scope, forced by the new op: src/host/material/compiler.cpp and graph.cpp (TEX_ENVIRONMENT beside TEX_IMAGE: operand counts, code emission, image keys). WORLD_PROGRAM and WORLD_CONSTANTS are carried by MaterialArrays, so the world needs no snapshot field of its own.
