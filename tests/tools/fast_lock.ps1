@@ -345,12 +345,22 @@ while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() <
     Check "$mode`: compile timing runs inside the gate's window" ((Get-Content -Raw $kt) -eq $gid) @("owner marker '$((Get-Content -Raw $kt))', gate pid $gid")
     $row = (Get-Content -Raw (Join-Path $g.Dir 'kg_row'))
     Check "$mode`: the kernelgate step $(if ($g.Landing) { 'runs inside' } else { 'is outside' }) the window" ("$row" -eq $(if ($g.Landing) { $gid } else { '' })) @("owner marker '$row', gate pid $gid")
-    $bn = Start-On $g.Tag "b_$($g.Tag)" @((Join-Path $wroot 'tools/build.ps1'), '-CheckOnly', '-NoMachineLock')
+    $g | Add-Member -NotePropertyName Bn -NotePropertyValue (Start-On $g.Tag "b_$($g.Tag)" @((Join-Path $wroot 'tools/build.ps1'), '-CheckOnly', '-NoMachineLock'))
+  }
+  # Both builds start before either is judged: their start-up overlaps.
+  foreach ($g in @($gates | Where-Object { $_.Bn })) {
+    $bn = $g.Bn
+    $mode = $(if ($g.Landing) { 'landing gate' } else { 'gate' })
     $okW = Wait-Line $bn "b_$($g.Tag)" "^waiting for the gate's fast window \(a build waits for it\)"
     $shares = Join-Path $tmp "$($g.Tag)/fastwin"
     Check "$mode`: a build started during compile timing waits for the window" ($okW -and -not $bn.HasExited) (Read-Out "b_$($g.Tag)")
     Check "$mode`: that build took no share while it waited" (@(Get-ChildItem $shares -Filter 'share.*.lock' -ErrorAction SilentlyContinue).Count -eq 0)
     Set-Content (Join-Path $g.Dir 'release') release
+  }
+  foreach ($g in @($gates | Where-Object { $_.Bn })) {
+    $bn = $g.Bn
+    $mode = $(if ($g.Landing) { 'landing gate' } else { 'gate' })
+    $shares = Join-Path $tmp "$($g.Tag)/fastwin"
     $null = $g.Proc.WaitForExit(30000)
     $wall = $g.Wall.Elapsed.TotalSeconds
     $out = Read-Out "g_$($g.Tag)"
