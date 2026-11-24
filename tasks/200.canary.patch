@@ -1,0 +1,22 @@
+diff --git a/tools/report.py b/tools/report.py
+index bf2c18e..a3229a7 100644
+--- a/tools/report.py
++++ b/tools/report.py
+@@ -321,7 +321,7 @@ def heat_from_raw(values, lo, hi):
+         t = np.clip((values.astype(np.float64) - lo) / (hi - lo), 0.0, 1.0)
+     else:
+         t = np.zeros(values.shape)
+-    idx = np.floor(np.nan_to_num(t) * 255.0 + 0.5).astype(np.int64)
++    idx = np.floor(np.nan_to_num(1.0 - t) * 255.0 + 0.5).astype(np.int64)
+     return viridis_table()[idx]
+ 
+ 
+@@ -364,7 +364,7 @@ def raw_heat_cell(side, name, kind, image_range):
+     which = "range [0, image max] (report choice, not the record's)" if image_range else f"record range [0, {record[0]}]"
+     const = ", constant" if entry["min"] == entry["max"] else ""
+     cap = (f"{side['device']} {kind[:-1]} count, {which} = [0, {num(hi)}]: "
+-           f"min {num(entry['min'])}, mean {num(entry['mean'])}, max {num(entry['max'])}{const}")
++           f"{const}")
+     return f"<td>{png_html(img, name)}{legend_html(0.0, hi)}<small>{html.escape(cap)}</small></td>"
+ 
+ 
