@@ -12,6 +12,7 @@
 
 #include "../core/real.h"
 #include "../portability.h"
+#include "interval.h"
 
 AR_NS_BEGIN
 enum class Op : unsigned char {
