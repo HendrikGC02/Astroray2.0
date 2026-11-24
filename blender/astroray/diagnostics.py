@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The last render's report, kept in plain Python for the Diagnostics panel (0007 d38).
 
-Ref: docs/decisions/0001-architecture.md D2.11 (report entries are (level, code, subject, detail); the addon
+Ref: docs/decisions/0001-product-shape.md D2.11 (report entries are (level, code, subject, detail); the addon
 shows each key once per render and lists host-side diagnostics beside the engine's entries without engine
 codes); docs/decisions/0007-blender-integration.md d26 (the panel's draw reads this store and calls no ABI
 function). Nothing here holds bpy state, so a headless test reads it directly; the bpy lookups sit in
