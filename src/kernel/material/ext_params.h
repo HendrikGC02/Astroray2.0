@@ -16,7 +16,7 @@ enum class ExtKind : uint32_t {
 };
 
 // 16 x 32-bit, PROVISIONAL (item 16). The layout of the words is each kind's (the grating's is
-// task 169); ar_material_desc::ext_constants carries this block byte for byte.
+// grating lobe's); ar_material_desc::ext_constants carries this block byte for byte.
 struct ExtParams {
   uint32_t w[16];
 };
