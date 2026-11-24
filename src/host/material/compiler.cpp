@@ -1084,6 +1084,34 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
   return true;
 }
 
+// A constant that is NaN or Inf and reaches a record slot, an emission or a per-point node is
+// refused here, naming the consuming node and input: the run-time check in STORE_SLOT would turn
+// every sample INVALID instead (rule 5, ruling 91). A constant folded away into a finite result
+// (a dead branch) never reaches one of these consumers and is not an error.
+// Ref: docs/decisions/RULINGS.md 91; 0004 D17.
+bool refuse_non_finite_constants(const Work& w, std::string* err) {
+  auto finite = [&](int i) {
+    const Vec3& v = w.cv[size_t(i)];
+    const int n = w.g.nodes[size_t(i)].out == VType::F32 ? 1 : 3;
+    for (int k = 0; k < n; ++k)
+      if (!(v[size_t(k)] - v[size_t(k)] == 0.0f)) return false;
+    return true;
+  };
+  for (int i : w.topo) {
+    const GraphNode& nd = w.g.nodes[size_t(i)];
+    for (int s = 0; s < nd.n_inputs; ++s) {
+      const int src = nd.input[s];
+      if (w.isc[size_t(src)] && !finite(src) && (nd.op == Op::STORE_SLOT || nd.op == Op::EMIT_LE || !w.isc[size_t(i)])) {
+        *err = "graph node " + std::to_string(i) + " (" + op_meta(nd.op).name + "): input " + std::to_string(s) +
+               " is a non-finite constant (graph node " + std::to_string(src) + ")";
+        if (nd.op == Op::STORE_SLOT) *err += ", record slot " + std::to_string(w.g.i32[nd.i32_first]);
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means,
@@ -1108,6 +1136,7 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
     if (!res.error.empty()) return res;
   }
 
+  if (!refuse_non_finite_constants(w, &res.error)) return res;
   res.block = ar::default_constant_block(table);
   if (std::any_of(w.g.nodes.begin(), w.g.nodes.end(), [](const GraphNode& nd) { return nd.op == Op::BRANCH_MIX; })) {
     res.ok = compile_mixed(w, means, slots, &res);

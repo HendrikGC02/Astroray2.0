@@ -17,6 +17,7 @@
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -879,6 +880,43 @@ TEST_CASE("vm/errors stop the run") {
     CHECK(g.regs.r[6] == 0.0f);
   }
 #endif
+}
+
+TEST_CASE("vm/non finite store is refused") {
+  // A NaN or Inf in any source register of a scalar, colour, IOR, spectrum or frame store stops the
+  // run with NON_FINITE_INPUT and leaves the record untouched (ruling 91). The bad value sits in the
+  // last register of each form, so the check covers the whole width.
+  const float bad[2] = {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()};
+  struct Form {
+    const char* name;
+    uint32_t imm;
+    uint32_t width;
+  };
+  const Form forms[] = {
+      {"scalar", uint32_t(ar::RecordSlot::specular_roughness), 1},
+      {"colour", uint32_t(ar::RecordSlot::base_color), 3},
+      {"ior", uint32_t(ar::RecordSlot::specular_ior), 1},
+      {"spectrum", uint32_t(ar::RecordSlot::base_color) | ar::kStoreSlotSpecSource, 4},
+      {"frame", uint32_t(ar::RecordSlot::geometry_normal), 3},
+  };
+  for (const Form& f : forms)
+    for (float v : bad) {
+      Prog p;
+      for (uint32_t k = 0; k < f.width; ++k) p.op(Op::CONST_F32, 4 + k, 0, 0, {fb(k + 1 == f.width ? v : 0.5f)});
+      p.op(Op::STORE_SLOT, 4, 0, 0, {f.imm}).end();
+      Rig g;
+      g.ctx.lambda_t = ar::Lambda{{450.0f, 520.0f, 590.0f, 660.0f}};
+      Rig h = g;
+      INFO(f.name << " " << v);
+      CHECK(h.run(p) == VmStatus::NON_FINITE_INPUT);
+      CHECK(std::memcmp(&h.rec, &g.rec, sizeof g.rec) == 0);
+      // The same program with a finite value stores.
+      Prog q;
+      for (uint32_t k = 0; k < f.width; ++k) q.op(Op::CONST_F32, 4 + k, 0, 0, {fb(0.5f)});
+      q.op(Op::STORE_SLOT, 4, 0, 0, {f.imm}).end();
+      Rig ok = g;
+      CHECK(ok.run(q) == VmStatus::OK);
+    }
 }
 
 TEST_CASE("vm/opcode table is wired") {

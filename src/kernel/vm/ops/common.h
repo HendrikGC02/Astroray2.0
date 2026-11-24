@@ -30,7 +30,8 @@ enum class VmStatus : uint32_t {
   BAD_OPERAND,   // an operand byte or immediate that the op does not accept
   BAD_JUMP,      // JMP with a non-positive offset (control flow is forward only)
   UNSUPPORTED,   // an UNSUPPORTED op ran: the compiler should have replaced the program
-  NULL_POINTER   // the op needs the record, Le or the tables and the caller passed none
+  NULL_POINTER,  // the op needs the record, Le or the tables and the caller passed none
+  NON_FINITE_INPUT  // STORE_SLOT's source holds a NaN or Inf: the sample ends INVALID (ruling 91)
 };
 
 struct VmState {
