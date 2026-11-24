@@ -542,9 +542,12 @@ void finish(MaterialOutput* m) {
 
 // In M1a the specular lobe (which the transmission lobe shares) always counts; the coat counts
 // unless coat_weight folds to 0, where no coat lobe can be sampled. NON_OPAQUE is clear exactly
-// when geometry_opacity is the constant 1, so T folds to 0 (0005 item 43; Cycles
-// src/scene/shader_nodes.cpp PrincipledBsdfNode::has_surface_transparent likewise calls a linked
-// Alpha transparent, though it allows a 1e-5 cutoff on a constant one that item 43 does not);
+// when geometry_opacity is the constant 1, so T folds to 0 (0005 item 43). Cycles agrees on the
+// linked case: Ref: third_party/_cache/refs/cycles-ed69ef2c6bd3 src/scene/shader_nodes.cpp
+// PrincipledBsdfNode::has_surface_transparent calls a linked Alpha transparent, and
+// src/scene/shader.cpp Shader::has_surface_shadow_transparency ORs that over the graph's nodes;
+// Cycles also calls alpha < 1 - CLOSURE_WEIGHT_CUTOFF (1e-5f, src/kernel/svm/types.h) transparent,
+// a cutoff item 43 does not have;
 // EXTENSION is clear because no extension kind compiles; READS_RAY_TYPE is clear because no Light
 // Path op exists.
 uint32_t material_flags(const CompileResult& r) {

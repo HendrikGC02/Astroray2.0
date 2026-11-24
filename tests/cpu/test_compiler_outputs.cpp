@@ -297,6 +297,27 @@ TEST_CASE("compiler_outputs/emission estimate derived from an image") {
   CHECK(same_ref(p.emission_estimate[0].color, want));
 }
 
+TEST_CASE("compiler_outputs/emission estimate of an image channel") {
+  // A known colour mean gives a known channel mean: the strength estimate is that channel of the
+  // image mean, not the bound 1 (0005 item 43). The three means differ so a wrong channel shows.
+  const astroray::host::ImageMeanFn means = [](uint32_t image, std::array<float, 3>* rgb) {
+    if (image != 7) return false;
+    *rgb = {0.25f, 0.5f, 0.75f};
+    return true;
+  };
+  GB g;
+  g.op2(Op::EMIT_LE, g.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), channel(g, tex(g), 1));
+  const MaterialOutput m = compile_material(g.desc(), table(), &means);
+  REQUIRE(m.emission_estimate.size() == 1);
+  CHECK(bits(m.emission_estimate[0].strength) == bits(0.5f));
+  CHECK((m.flags & ar::CONSTANT_EMISSION) == 0);
+  CHECK((m.images == std::vector<uint32_t>{7}));
+  // Without the means the channel is unknown and the estimate falls back to the bound 1.
+  const MaterialOutput bound = g.compile();
+  REQUIRE(bound.emission_estimate.size() == 1);
+  CHECK(bound.emission_estimate[0].strength == 1.0f);
+}
+
 TEST_CASE("compiler_outputs/two node types two entries") {
   GB g;
   g.unsupported("ShaderNodeBevel");
