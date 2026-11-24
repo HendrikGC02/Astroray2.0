@@ -21,7 +21,7 @@ $expect = [ordered]@{
   e = @{ Exit = 1; Match = "REFUSE land: canary item errored: .*script 'tools/no_such_script.ps1' does not exist" }
   f = @{ Exit = 0; Match = 'PASS prepare 999'; Also = 'WARN canary: inert hunk src/code.txt:' }
   g = @{ Exit = 1; Match = "REFUSE land: canary 'fixture/new case' turns red only with several hunks together" }
-  h = @{ Exit = 1; Match = 'undid \(land\) commit'; Live = $true }
+  h = @{ Exit = 1; Match = 'undid \(land\) commit'; Also = '^gate stub args: gate -Landing$'; Live = $true }
   i = @{ Exit = 1; Match = 'REFUSE land: another land\.ps1 is running \(pid \d+, started ' }
   j = @{ Exit = 1; Match = 'REFUSE land: out/bin/astroray_core\.dll is loaded by pwsh \(pid \d+\)' }
   k = @{ Exit = 1; Match = 'REFUSE land: rebase on origin/main conflicts in: tests/cpu/test_fixture\.cpp'; Also = 'undid \(land\) commit [0-9a-f]{9} on origin'; Live = $true }

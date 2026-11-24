@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # tools/build.ps1 [-Target t[,t]] [-Preset dev|cpu] [-CheckOnly] [-NoMachineLock] [-Jobs n]
 # Enters the pinned MSVC environment, configures when needed, builds, then proves
-# with `ninja -n` that no work is left (0009 d5, d9).
+# with `ninja -n` that no work is left (0009 d5, d9; Test-ArNoWorkLeft settles build_info's stamp first, so an
+# index refresh by another process is not work).
 # Pins (0009 d2): MSVC toolset 14.44.x from VS 2022 Build Tools 17.14
 # (vcvars_ver=14.44; hosted CI: cl >= 19.44, no -vcvars_ver), CUDA 12.8,
 # OptiX 9.1 headers, CMake >= 3.31 (4.2.1 installed), Ninja 1.13.x, pwsh 7.
@@ -38,6 +39,38 @@ $treeWait = Enter-ArTreeLock $buildDir
 $waited = $machineWait + $shareWait + $treeWait
 Start-ArSummary 'build'
 $clock = [Diagnostics.Stopwatch]::StartNew()
+
+# Whether `ninja -n` reports no work for the targets (0009 d5). An index refresh by any other process (git status,
+# git diff, an editor's git integration) makes build_info.cpp's generator stale without a source change, and
+# `ninja -n` cannot predict that the generator leaves build_info.cpp alone. So the generator's stamp is built for
+# real first: it touches only the stamp when the identity is unchanged, and rewrites build_info.cpp, so that the
+# check then reports work, when the commit or the dirty flag moved. Every other target is judged as before. A
+# refresh between that step and the check is tried again, at most $Tries times in all.
+function Test-ArNoWorkLeft {
+  param([string]$BuildDir, [string[]]$Target, [string]$Stamp = 'gen/build_info.stamp', [int]$Tries = 3)
+  $all = @()
+  for ($i = 0; $i -lt $Tries; $i++) {
+    # Dry run first: the settle step may only run the identity generator. A stale manifest (`Re-running CMake`) or
+    # any other step is work left, and running the stamp for real would absorb it.
+    $pre = @(& ninja -C $BuildDir -n $Stamp 2>&1 | ForEach-Object { "$_" })
+    $all += "> ninja -C $BuildDir -n $Stamp"; $all += $pre
+    $other = @($pre | Where-Object { $_ -notlike 'ninja: Entering*' -and $_ -ne 'ninja: no work to do.' -and $_ -notmatch '^\[\d+/\d+\] build_info\.cpp$' })
+    if ($LASTEXITCODE -ne 0 -or $other.Count -gt 0) {
+      return [pscustomobject]@{ Ok = $false; First = $(if ($other.Count) { $other[0] } else { $pre | Select-Object -Last 1 }); Output = $all }
+    }
+    $set = @(& ninja -C $BuildDir $Stamp 2>&1 | ForEach-Object { "$_" })
+    $all += "> ninja -C $BuildDir $Stamp"; $all += $set
+    if ($LASTEXITCODE -ne 0) {
+      return [pscustomobject]@{ Ok = $false; First = ($set | Where-Object { $_ -notlike 'ninja: Entering*' } | Select-Object -First 1); Output = $all }
+    }
+    $dry = @(& ninja -C $BuildDir -n @Target 2>&1 | ForEach-Object { "$_" })
+    $all += "> ninja -C $BuildDir -n $($Target -join ' ')"; $all += $dry
+    $ok = ($LASTEXITCODE -eq 0 -and $dry.Count -gt 0 -and $dry[-1] -eq 'ninja: no work to do.')
+    if ($ok -or $i -eq $Tries - 1) {
+      return [pscustomobject]@{ Ok = $ok; First = ($dry | Where-Object { $_ -notlike 'ninja: Entering*' } | Select-Object -First 1); Output = $all }
+    }
+  }
+}
 
 function Say([string]$m) { Add-Content -Path $log -Value $m }
 function Fail([string]$why) {
@@ -116,11 +149,9 @@ try {
   }
 
   # --- nothing left to do? ---
-  $dry = & ninja -C out/build -n @Target 2>&1
-  Add-Content -Path $log -Value ($dry -join "`n")
-  if ($LASTEXITCODE -ne 0 -or (($dry | Select-Object -Last 1) -ne 'ninja: no work to do.')) {
-    Fail ("ninja -n reports work left: " + ($dry | Where-Object { $_ -notlike 'ninja: Entering*' } | Select-Object -First 1))
-  }
+  $nw = Test-ArNoWorkLeft $buildDir $Target
+  Add-Content -Path $log -Value ($nw.Output -join "`n")
+  if (-not $nw.Ok) { Fail ("ninja -n reports work left: " + $nw.First) }
 } catch {
   Fail ($_.Exception.Message)
 }

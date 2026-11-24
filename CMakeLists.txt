@@ -75,40 +75,11 @@ add_custom_command(
   VERBATIM)
 add_custom_target(astroray_opsgen ALL DEPENDS ${ASTRORAY_OPSGEN_STAMP})
 
-# Build identity. The command depends on HEAD, HEAD's reflog and the index: every commit,
-# checkout, reset or rebase appends to the reflog, so a commit relinks. The branch's loose ref
-# file is not used, because git packs it away (pack-refs, gc, worktree cleanup) and ninja then
-# fails on a missing input. The generator rewrites the source only when its content changed,
-# which keeps `ninja -n` clean afterwards (0009 d5).
-find_package(Git REQUIRED)
-function(_ar_git_path out what)
-  execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --git-path ${what}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} OUTPUT_VARIABLE p OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE rc)
-  if(NOT rc EQUAL 0)
-    message(FATAL_ERROR "git rev-parse --git-path ${what} failed")
-  endif()
-  cmake_path(ABSOLUTE_PATH p BASE_DIRECTORY ${CMAKE_SOURCE_DIR} NORMALIZE)
-  set(${out} ${p} PARENT_SCOPE)
-endfunction()
-_ar_git_path(_ar_git_head HEAD)
-_ar_git_path(_ar_git_index index)
-_ar_git_path(_ar_git_reflog logs/HEAD)
-if(NOT EXISTS ${_ar_git_reflog})
-  message(FATAL_ERROR "${_ar_git_reflog} is missing: the build identity needs HEAD's reflog (git config core.logAllRefUpdates true, then make one commit)")
-endif()
-set(_ar_git_deps ${_ar_git_head} ${_ar_git_index} ${_ar_git_reflog})
-# A branch switch rewrites HEAD; reconfigure then so the identity is regenerated cleanly.
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_ar_git_head})
-set(ASTRORAY_BUILDINFO_CPP ${ASTRORAY_GEN_DIR}/build_info.cpp)
-add_custom_command(
-  OUTPUT ${ASTRORAY_BUILDINFO_CPP}
-  COMMAND ${CMAKE_COMMAND} -DOUT=${ASTRORAY_BUILDINFO_CPP} -DGIT=${GIT_EXECUTABLE} -DSRC=${CMAKE_SOURCE_DIR}
-          -DVERSION=${PROJECT_VERSION} -DBUILD_TYPE=${CMAKE_BUILD_TYPE} -P ${CMAKE_SOURCE_DIR}/cmake/buildinfo.cmake
-  DEPENDS ${_ar_git_deps} ${CMAKE_SOURCE_DIR}/cmake/buildinfo.cmake
-  COMMENT "build_info.cpp"
-  VERBATIM)
-
+# Build identity (cmake/buildinfo.cmake holds the rule and the generator; 0009 d5).
+include(${CMAKE_SOURCE_DIR}/cmake/buildinfo.cmake)
+astroray_add_buildinfo_rule(ASTRORAY_BUILDINFO_CPP ${ASTRORAY_GEN_DIR} "${PROJECT_VERSION}" "${CMAKE_BUILD_TYPE}")
 add_library(astroray_buildinfo STATIC ${ASTRORAY_BUILDINFO_CPP})
+add_dependencies(astroray_buildinfo astroray_buildinfo_gen)
 astroray_target_warnings(astroray_buildinfo)
 target_include_directories(astroray_buildinfo PUBLIC ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
 if(ASTRORAY_DEV_KERNEL_DIR)

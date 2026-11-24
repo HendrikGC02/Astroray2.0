@@ -12,7 +12,12 @@
 # full: gate plus the probe build; uncapped registers are warnings, never failures (0002 D10).
 # ci (0009 d12, d24; hosted CI): fast, cpu build, deps, every `cpu`-tagged gate step; no budget
 # here (B-11 is measured by task 091); logs the cl version.
-param([Parameter(Mandatory, Position = 0)][string]$Tier, [string]$Declared = '')
+# -Landing (gate only; land.ps1 passes it): the gate holds the fast window for the whole tier, so builds of other
+# worktrees wait while a landing is gated (0009 d8). A gate an implementer runs holds it for the fast step and
+# the compile timing step only.
+# Gate time (B-09, ruling 94) leaves out the gate's build steps (`build dev`, the nofma build and the build inside
+# the fast step); their seconds are printed beside the tier total.
+param([Parameter(Mandatory, Position = 0)][string]$Tier, [string]$Declared = '', [switch]$Landing)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -22,6 +27,10 @@ Set-Location $root
 . (Join-Path $PSScriptRoot 'lib/blender.ps1')
 if ($Tier -notin @('fast', 'gate', 'full', 'ci')) {
   Write-Host "FAIL check: unknown tier '$Tier' (fast, gate, full, ci)"
+  exit 2
+}
+if ($Landing -and $Tier -ne 'gate') {
+  Write-Host "FAIL check: -Landing belongs to the gate tier, not '$Tier'"
   exit 2
 }
 
@@ -37,10 +46,15 @@ $log = Join-Path $root "out/check/$Tier.log"
 $gateBudget = 180.0
 $kernelBudget = 120.0
 $kernelSteps = @('build dev', 'kernelgate', 'compile timing', 'gpu gate tests')
+# Seconds of the gate's own build steps: out of the tier clock (ruling 94), printed beside the total. The kernel
+# part keeps counting `build dev`, which is a device build (0002 D10).
+$script:buildSeconds = 0.0
+function Add-GateBuild([double]$Seconds) { $script:buildSeconds += $Seconds; Add-ArExcluded $Seconds }
 
 function Fail([string]$why) {
   $null = Complete-ArSummary -Pass $false -Waited $waited -Budget $budget -Reason $why
   Exit-ArTreeLock
+  Exit-ArFastWindow
   Exit-ArMachineLock
   exit 1
 }
@@ -107,9 +121,11 @@ $global:LASTEXITCODE = 1
   # device; see Invoke-GateGroup). 'aov agreement', 'integrator cuda' (tripwire) and 'material compile'
   # are timing-sensitive or use both devices and stay alone.
   # The gate steps (name, tag, kernel part is summed by $kernelSteps, Lock = hold the tree lock,
+  # Build = a build: its seconds leave the tier clock, Window = timed against a budget beside other worktrees'
+  # builds, so the fast window is held exclusively for it,
   # Identity = the exe must print this commit's build line). Each body fails by its exit code.
   $gateSteps = @(
-    @{ Name = 'build dev'; Tag = 'local'; Run = { & pwsh -NoProfile -Command "& tools/build.ps1 -Target all,astroray_kernels_gpu_nofma; exit `$LASTEXITCODE" } },
+    @{ Name = 'build dev'; Tag = 'local'; Build = $true; Run = { & pwsh -NoProfile -Command "& tools/build.ps1 -Target all,astroray_kernels_gpu_nofma; exit `$LASTEXITCODE" } },
     # 0008 V9 compile part (050): the negative-compile cases are outside ALL, so only this step runs them.
     @{ Name = 'negative compile'; Tag = 'cpu'; Run = { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_negative_compile -Preset $(if ($isCi) { 'cpu' } else { 'dev' }) -NoMachineLock } },
     # The tools' own CPU tests (tests/tools/fast_*.ps1): without a step here no tier would run them.
@@ -118,7 +134,9 @@ $global:LASTEXITCODE = 1
     @{ Name = 'perf self-test'; Tag = 'cpu'; Run = { & $py -I tools/perf.py --self-test; if ($LASTEXITCODE -eq 0) { & $py -I tools/perf_shares.py --self-test } } },
     @{ Name = 'report self-test'; Tag = 'cpu'; Run = { & $py -I tools/report.py --selftest } },
     @{ Name = 'kernelgate'; Tag = 'local'; Lock = $true; Echo = '^kernelgate: \d+ row'; Run = { & $py -I tools/kernelgate.py @dargs } },
-    @{ Name = 'compile timing'; Tag = 'local'; Lock = $true; Run = { & $py -I tools/kernelgate.py --time } },
+    # B-05 reads the compiler's own time: beside another worktree's build it read 7.29 s against 7.0 s when a
+    # quiet machine reads 5.2-5.8 s.
+    @{ Name = 'compile timing'; Tag = 'local'; Lock = $true; Window = $true; Run = { & $py -I tools/kernelgate.py --time } },
     @{ Name = 'abi tests'; Tag = 'cpu'; Run = {
         if (Test-Path 'tests/abi') { & $py -I -m unittest discover -s tests/abi -p 'test_*.py' } } },
     @{ Name = 'dependents'; Tag = 'cpu'; Run = {
@@ -202,8 +220,15 @@ $global:LASTEXITCODE = 1
     if ($s.Check) { & $s.Check $r } elseif ($s.Echo) { $r.Out | Where-Object { $_ -match $s.Echo } | ForEach-Object { Write-Host $_ } }
   }
   function Invoke-GateStep($s) {
-    if ($s.Lock) { $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $script:waited += $w; Add-ArExcluded $w }
-    try { $r = Step $s.Name $s.Run } finally { if ($s.Lock) { Exit-ArTreeLock } }
+    # The window before the tree lock: a build holds its share while it waits for the tree lock, so the other
+    # order would deadlock. Under -Landing the gate owns the window already (nested: nothing to take).
+    $win = $s.Window -and -not (Test-ArFastWinNested)
+    if ($win) { $w = Enter-ArFastWindow; $script:waited += $w; Add-ArExcluded $w }
+    try {
+      if ($s.Lock) { $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $script:waited += $w; Add-ArExcluded $w }
+      try { $r = Step $s.Name $s.Run } finally { if ($s.Lock) { Exit-ArTreeLock } }
+    } finally { if ($win) { Exit-ArFastWindow } }
+    if ($s.Build) { Add-GateBuild $script:ArSteps[-1].seconds }
     Complete-GateStep $s $r
   }
   # Steps sharing a Group touch different devices and no output, so they run as concurrent jobs under
@@ -252,10 +277,16 @@ $global:LASTEXITCODE = 1
 
   if ($Tier -eq 'gate') {
     # B-08 times this step: builds of other worktrees that run without the machine lock wait outside it
-    # (0009 d8), and its wait for builds already running is not work.
+    # (0009 d8), and its wait for builds already running is not work. -Landing keeps the window to the end.
     $w = Enter-ArFastWindow; $waited += $w; Add-ArExcluded $w
-    try { $r = Step 'fast' { & pwsh -NoProfile -File tools/check.ps1 fast } } finally { Exit-ArFastWindow }
+    try { $r = Step 'fast' { & pwsh -NoProfile -File tools/check.ps1 fast } } finally { if (-not $Landing) { Exit-ArFastWindow } }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'fast failed (out/check/fast.log)' }
+    # The fast tier's own build is not gate time either (B-08 leaves it out of its clock the same way).
+    $fj = Join-Path $root 'out/check/fast.json'
+    if (-not (Test-Path $fj)) { Fail 'fast wrote no out/check/fast.json' }
+    $fb = @((Get-Content $fj -Raw | ConvertFrom-Json).steps | Where-Object { $_.name -eq 'build' })
+    if ($fb.Count -ne 1) { Fail "out/check/fast.json holds $($fb.Count) 'build' steps, expected 1" }
+    Add-GateBuild ([double]$fb[0].seconds)
     $i = 0
     while ($i -lt $gateSteps.Count) {
       $g = $gateSteps[$i].Group
@@ -388,7 +419,7 @@ $global:LASTEXITCODE = 1
 $why = ''
 if ($Tier -eq 'gate') {
   $kp = ($script:ArSteps | Where-Object { $_.name -in $kernelSteps } | Measure-Object -Property seconds -Sum).Sum
-  $why = "kernel part {0:N1} s of {1} s" -f $kp, $kernelBudget
+  $why = "kernel part {0:N1} s of {1} s, build steps {2:N1} s not counted" -f $kp, $kernelBudget, $script:buildSeconds
   if ($kp -gt $kernelBudget) { Fail "B-09: kernel part $([math]::Round($kp, 1)) s over $kernelBudget s" }
   if ((Get-ArSeconds) -gt $budget) { Fail "B-09: tier over $budget s ($why)" }
 } elseif ($Tier -eq 'fast' -and (Get-ArSeconds) -gt $budget) {
@@ -401,5 +432,6 @@ if ($isCi) {
   $j | Add-Member -NotePropertyName cl -NotePropertyValue "$script:clVer"
   $j | ConvertTo-Json -Depth 4 | Set-Content -Path $jp
 }
+Exit-ArFastWindow
 Exit-ArMachineLock
 exit ($(if ($ok) { 0 } else { 1 }))

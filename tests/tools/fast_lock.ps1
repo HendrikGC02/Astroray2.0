@@ -109,6 +109,54 @@ try {
   $null = Enter-ArTreeLock (Join-Path $wroot 'out/build')
   $wb = Start-On 'wireb' 'wb' @((Join-Path $wroot 'tools/build.ps1'), '-CheckOnly', '-NoMachineLock')
   $wg = Start-On 'wireg' 'wg' @((Join-Path $wroot 'tools/check.ps1'), 'gate')
+
+  # The gate's window modes, through the real check.ps1 of a private copy whose gate table is cut to `build dev`,
+  # `kernelgate` and `compile timing` and whose slow parts are stand-ins: the fast step writes a
+  # fast.json with a 0.5 s build, the build step sleeps 0.5 s, and the kernelgate stand-in records the window
+  # owner (ASTRORAY_FASTWIN_PID) it runs under, then holds `--time` (the compile timing step) until released.
+  # One gate with -Landing and one without start now, in parallel, and are judged at the end.
+  function New-GateCopy([string]$name) {
+    $r = Join-Path $tmp $name
+    New-Item -ItemType Directory -Force (Join-Path $r 'out/check') | Out-Null
+    Copy-Item -Recurse (Join-Path $root 'tools') (Join-Path $r 'tools')
+    $f = Join-Path $r 'tools/check.ps1'
+    $t = ([IO.File]::ReadAllText($f)) -replace "`r`n", "`n"
+    $fast = "Step 'fast' { & pwsh -NoProfile -File tools/check.ps1 fast }"
+    $judge = '  # Judge one finished step'
+    if (-not $t.Contains($fast) -or -not $t.Contains($judge)) { throw "check.ps1 no longer has the anchors New-GateCopy cuts at ($fast / $judge)" }
+    $t = $t.Replace($fast, "Step 'fast' { & pwsh -NoProfile -File tools/stub_fast.ps1 }")
+    $t = $t.Replace($judge, "  `$gateSteps = @(`$gateSteps | Where-Object { `$_.Name -in 'build dev', 'kernelgate', 'compile timing' })`n$judge")
+    [IO.File]::WriteAllText($f, $t)
+    Set-Content (Join-Path $r 'tools/stub_fast.ps1') @'
+
+'{"steps":[{"name":"build","seconds":0.5,"pass":true}]}' | Set-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'out/check/fast.json')
+exit 0
+'@
+    Set-Content (Join-Path $r 'tools/build.ps1') "Start-Sleep -Milliseconds 500`nexit 0"
+    Set-Content (Join-Path $r 'tools/kernelgate.py') @'
+import os, sys, time
+d = os.environ['FAST_LOCK_STUBDIR']
+timed = '--time' in sys.argv
+with open(os.path.join(d, 'kg_time' if timed else 'kg_row'), 'w') as f:
+    f.write(os.environ.get('ASTRORAY_FASTWIN_PID', ''))
+end = time.time() + 60
+while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() < end:
+    time.sleep(0.02)
+'@
+    return $r
+  }
+  $gates = @()
+  foreach ($landing in $true, $false) {
+    $tag = if ($landing) { 'gateL' } else { 'gateN' }
+    $dir = Join-Path $tmp "$tag.stub"
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    $gr = New-GateCopy "$tag.root"
+    $env:FAST_LOCK_STUBDIR = $dir
+    $argv = @((Join-Path $gr 'tools/check.ps1'), 'gate') + $(if ($landing) { @('-Landing') } else { @() })
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $gates += [pscustomobject]@{ Tag = $tag; Landing = $landing; Dir = $dir; Wall = $sw; Proc = (Start-On $tag "g_$tag" $argv) }
+    $env:FAST_LOCK_STUBDIR = $null
+  }
   $env:ASTRORAY_LOCK_MESSAGE_S = '0.5'; $env:ASTRORAY_LOCK_TIMEOUT_S = '1.5'
 
   # Both holders start together: 'timeout' holds limit + 1.5 s, 'abandon' until it is stopped.
@@ -281,6 +329,57 @@ try {
   $sw5.Restart()
   while ((Test-Path $shareB) -and $sw5.Elapsed.TotalSeconds -lt 5) { Start-Sleep -Milliseconds 20 }
   Check 'wiring: a killed build.ps1 leaves no share' (-not (Test-Path $shareB))
+
+  # The gates' window modes. Each gate is held inside its compile timing step; a build started then must wait
+  # for the window in both modes, and the owner marker a step runs under says whether the window is held for
+  # it: the kernelgate step only under -Landing, the compile timing step always.
+  $env:ASTRORAY_LOCK_MESSAGE_S = '0.2'; $env:ASTRORAY_LOCK_TIMEOUT_S = '60'
+  foreach ($g in $gates) {
+    $gid = "$($g.Proc.Id)"
+    $kt = Join-Path $g.Dir 'kg_time'
+    $sw6 = [Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path $kt) -and -not $g.Proc.HasExited -and $sw6.Elapsed.TotalSeconds -lt 40) { Start-Sleep -Milliseconds 20 }
+    $mode = $(if ($g.Landing) { 'landing gate' } else { 'gate' })
+    Check "$mode`: reaches the compile timing step" (Test-Path $kt) (Read-Out "g_$($g.Tag)")
+    if (-not (Test-Path $kt)) { continue }
+    Check "$mode`: compile timing runs inside the gate's window" ((Get-Content -Raw $kt) -eq $gid) @("owner marker '$((Get-Content -Raw $kt))', gate pid $gid")
+    $row = (Get-Content -Raw (Join-Path $g.Dir 'kg_row'))
+    Check "$mode`: the kernelgate step $(if ($g.Landing) { 'runs inside' } else { 'is outside' }) the window" ("$row" -eq $(if ($g.Landing) { $gid } else { '' })) @("owner marker '$row', gate pid $gid")
+    $g | Add-Member -NotePropertyName Bn -NotePropertyValue (Start-On $g.Tag "b_$($g.Tag)" @((Join-Path $wroot 'tools/build.ps1'), '-CheckOnly', '-NoMachineLock'))
+  }
+  # Both builds start before either is judged: their start-up overlaps.
+  foreach ($g in @($gates | Where-Object { $_.Bn })) {
+    $bn = $g.Bn
+    $mode = $(if ($g.Landing) { 'landing gate' } else { 'gate' })
+    $okW = Wait-Line $bn "b_$($g.Tag)" "^waiting for the gate's fast window \(a build waits for it\)"
+    $shares = Join-Path $tmp "$($g.Tag)/fastwin"
+    Check "$mode`: a build started during compile timing waits for the window" ($okW -and -not $bn.HasExited) (Read-Out "b_$($g.Tag)")
+    Check "$mode`: that build took no share while it waited" (@(Get-ChildItem $shares -Filter 'share.*.lock' -ErrorAction SilentlyContinue).Count -eq 0)
+    Set-Content (Join-Path $g.Dir 'release') release
+  }
+  foreach ($g in @($gates | Where-Object { $_.Bn })) {
+    $bn = $g.Bn
+    $mode = $(if ($g.Landing) { 'landing gate' } else { 'gate' })
+    $shares = Join-Path $tmp "$($g.Tag)/fastwin"
+    $null = $g.Proc.WaitForExit(30000)
+    $wall = $g.Wall.Elapsed.TotalSeconds
+    $out = Read-Out "g_$($g.Tag)"
+    Check "$mode`: passes" ($g.Proc.HasExited -and $g.Proc.ExitCode -eq 0) $out
+    $m = [regex]::Match(($out -join "`n"), 'PASS gate ([0-9.]+) s \(budget 180(?:\.0)? s, waited [0-9.]+ s\).*build steps ([0-9.]+) s not counted')
+    Check "$mode`: the summary prints the tier seconds and the build seconds" $m.Success $out
+    if ($m.Success) {
+      $tier = [double]$m.Groups[1].Value; $builds = [double]$m.Groups[2].Value
+      # 0.5 s (plus start-up) of `build dev` and a recorded 0.5 s for the fast tier's build. Counted in the tier, X + builds would exceed the
+      # gate's wall time by about `builds`; left out, X is wall time minus them.
+      Check "$mode`: the build steps (build dev, and the build inside the fast step) are printed" ($builds -ge 1.0) @("builds $builds s")
+      Check "$mode`: a slow build step does not count against B-09" ($tier + $builds -le $wall + 0.2) @("tier $tier s + builds $builds s against wall $wall s")
+    }
+    # The build proceeds once the gate has ended: it takes its share (and then waits at the tree lock).
+    $shareN = Join-Path $shares "share.$($bn.Id).lock"
+    $sw7 = [Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path $shareN) -and -not $bn.HasExited -and $sw7.Elapsed.TotalSeconds -lt 8) { Start-Sleep -Milliseconds 20 }
+    Check "$mode`: the waiting build proceeds after the gate ended" (Test-Path $shareN) (Read-Out "b_$($g.Tag)")
+  }
 } finally {
   foreach ($h in @($wh.Values)) { $h.Sync.release = $true; $null = Wait-Job $h.Job -Timeout 5; Remove-Job $h.Job -Force -ErrorAction SilentlyContinue }
   Exit-ArTreeLock
