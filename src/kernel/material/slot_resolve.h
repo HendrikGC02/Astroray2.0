@@ -104,6 +104,9 @@ AR_FN SpectrumRef make_table_ref(SpectrumSemantic sem, uint32_t index, uint32_t 
 // clamp).
 AR_FN Real table_lookup(const float* w, const float* v, uint32_t n, Real lam) {
   uint32_t lo = 0;
+#if defined(__CUDACC__)
+#pragma unroll 1  // nine inlined resolves would otherwise carry nine unrolled searches: compile time
+#endif
   for (uint32_t step = kTableMaxPoints / 2u; step != 0u; step >>= 1) {
     const uint32_t c = lo + step;
     if (c + 1u < n && Real(load_ro(w + c)) <= lam) lo = c;
