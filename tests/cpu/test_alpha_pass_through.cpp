@@ -390,15 +390,15 @@ TEST_CASE("alpha_pass_through/the surface takes u over a for its lobe choice") {
     ar::OpenPBRParams rec;
     ar::resolve_constant_record(rig.block(), c, rig.kg.tables->observer, rig.kg.scene->material_spectra, &rec);
     const ar::Frame frame = ar::frame_from_normal(c.N);
-    const ar::Real p_spec = ar::stack_select(*rig.kg.e_diel, rec, ar::to_local(frame, c.wo).z).p_spec;
+    const ar::Real p_spec = ar::stack_select(*rig.kg.e_diel, *rig.kg.e_spec, rec, ar::to_local(frame, c.wo).z).p_spec;
     REQUIRE(p_spec > ar::Real(0.1));
     REQUIRE(p_spec < ar::Real(0.9));
     const ar::Real2 u2{ar::camera_path_draw(rig.kg, s, ar::event_dim(0, ar::EV_BSDF_U)),
                        ar::camera_path_draw(rig.kg, s, ar::event_dim(0, ar::EV_BSDF_V))};
-    want[s] = ar::stack_sample(*rig.kg.e_diel, rec, frame, c.wo, ar::Real(u[s] / 0.5f), u2, ar::TransportMode::Radiance);
+    want[s] = ar::stack_sample(*rig.kg.e_diel, *rig.kg.e_spec, rec, frame, c.wo, ar::Real(u[s] / 0.5f), u2, ar::TransportMode::Radiance);
     other_lobe[s] = u[s] < 0.5f && (ar::Real(u[s]) < p_spec) != (ar::Real(u[s] / 0.5f) < p_spec);
     if (other_lobe[s]) {
-      const ar::LobeSample raw = ar::stack_sample(*rig.kg.e_diel, rec, frame, c.wo, ar::Real(u[s]), u2, ar::TransportMode::Radiance);
+      const ar::LobeSample raw = ar::stack_sample(*rig.kg.e_diel, *rig.kg.e_spec, rec, frame, c.wo, ar::Real(u[s]), u2, ar::TransportMode::Radiance);
       CHECK(raw.flags != want[s].flags);  // the raw uniform names the other lobe
     }
   }

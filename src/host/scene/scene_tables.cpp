@@ -43,7 +43,7 @@ const char* table_name(TableId id) {
       "instances",          "mesh table",      "material slots", "material headers", "material programs",
       "material constants", "material pass indices", "image views",     "light records",  "light alias bins", "light bin lights",
       "light pmf",          "light index",     "rgb2spec nodes",  "rgb2spec coefficients", "observer cmf", "observer illuminant",
-      "srgb decode",        "e_diel table",    "material spectra", "table header"};
+      "srgb decode",        "e_diel table",    "material spectra", "e_spec table", "table header"};
   const uint32_t i = static_cast<uint32_t>(id);
   if (i >= kTableCount) throw std::invalid_argument("table_name: no table " + std::to_string(i));
   return names[i];
@@ -395,6 +395,13 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   b.table(TableId::E_DIEL, true, ar::kEDielN * ar::kEDielN * ar::kEDielN, [&] {
     return b.put(LedgerCategory::TABLES, ev.e, uint64_t(ar::kEDielN) * ar::kEDielN * ar::kEDielN * 4, static_pin(eblob.data));
   });
+  DataBlob sblob;
+  ar::ESpecTable sv;
+  if (!find_data("tables/e_spec.bin", &sblob)) throw std::runtime_error("scene tables: tables/e_spec.bin is not embedded");
+  if (const char* err = ar::e_spec_view(sblob.data, sblob.size, &sv)) throw std::runtime_error(std::string("scene tables: ") + err);
+  b.table(TableId::E_SPEC, true, ar::kESpecN * ar::kESpecN, [&] {
+    return b.put(LedgerCategory::TABLES, sv.e, uint64_t(ar::kESpecN) * ar::kESpecN * 4, static_pin(sblob.data));
+  });
 
   // The header block: the structs KernelGlobals points to, holding the addresses above.
   const auto at = [&](TableId id) { return n.tables[static_cast<uint32_t>(id)]; };
@@ -418,8 +425,10 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   ar::LightSamplerView lv{as<ar::AliasBin>(at(TableId::LIGHT_BINS)), as<uint32_t>(at(TableId::LIGHT_BIN_LIGHT)),
                           as<float>(at(TableId::LIGHT_PMF)), cnt(TableId::LIGHT_BINS), cnt(TableId::LIGHTS)};
   const ar::EDielTable et{as<float>(at(TableId::E_DIEL))};
+  const ar::ESpecTable st{as<float>(at(TableId::E_SPEC))};
   const uint64_t o_vm = align16(sizeof(ar::SceneData)), o_lv = o_vm + align16(sizeof(ar::SceneTables));
-  const uint64_t o_et = o_lv + align16(sizeof(ar::LightSamplerView)), o_jt = o_et + align16(sizeof(ar::EDielTable));
+  const uint64_t o_et = o_lv + align16(sizeof(ar::LightSamplerView)), o_st = o_et + align16(sizeof(ar::EDielTable));
+  const uint64_t o_jt = o_st + align16(sizeof(ar::ESpecTable));
   const uint64_t header_bytes = o_jt + sizeof(ar::Rgb2SpecTable);
   // The block's address is known only once it exists, and SceneTables points into it (rgb2spec):
   // allocate, then write the finished block over it.
@@ -436,6 +445,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
     std::memcpy(block.data() + o_vm, &vt, sizeof vt);
     std::memcpy(block.data() + o_lv, &lv, sizeof lv);
     std::memcpy(block.data() + o_et, &et, sizeof et);
+    std::memcpy(block.data() + o_st, &st, sizeof st);
     std::memcpy(block.data() + o_jt, &jt, sizeof jt);
     if (device) device->upload(h->buffer(), 0, block.data(), header_bytes);
     else std::memcpy(const_cast<void*>(h->ptr()), block.data(), header_bytes);  // our own host copy
@@ -446,6 +456,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   n.vm = reinterpret_cast<const ar::SceneTables*>(base + o_vm);
   n.light_sampler = reinterpret_cast<const ar::LightSamplerView*>(base + o_lv);
   n.e_diel = reinterpret_cast<const ar::EDielTable*>(base + o_et);
+  n.e_spec = reinterpret_cast<const ar::ESpecTable*>(base + o_st);
   cache.current = std::move(next);
   return cache.current;
 }

@@ -192,6 +192,7 @@ TEST_CASE("kg_builder/no null tables") {
   // Every pointer KernelGlobals and SceneData carry for this scene, by name, besides the rule.
   for (const void* p : {(const void*)kg.scene, (const void*)kg.tables, (const void*)kg.lights,
                         (const void*)kg.light_sampler, (const void*)kg.e_diel, (const void*)kg.e_diel->e,
+                        (const void*)kg.e_spec, (const void*)kg.e_spec->e,
                         (const void*)kg.tables->rgb2spec, (const void*)kg.tables->images,
                         (const void*)kg.tables->srgb_decode, (const void*)kg.tables->observer.cmf,
                         (const void*)kg.scene->instances, (const void*)kg.scene->meshes,

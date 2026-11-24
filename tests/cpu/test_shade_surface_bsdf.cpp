@@ -239,7 +239,7 @@ TEST_CASE("shade_surface_bsdf/lambert beta") {
   const ar::Spec beta0 = rig.beta[0], ru0 = rig.r_u[0];
   const ar::Frame frame = ar::frame_from_normal(c.N);
   const ar::LobeSample want_s = ar::stack_sample(
-      *rig.kg.e_diel, rec, frame, c.wo, ar::camera_path_draw(rig.kg, 0, ar::event_dim(3, ar::EV_LOBE_CHOICE)),
+      *rig.kg.e_diel, *rig.kg.e_spec, rec, frame, c.wo, ar::camera_path_draw(rig.kg, 0, ar::event_dim(3, ar::EV_LOBE_CHOICE)),
       ar::Real2{ar::camera_path_draw(rig.kg, 0, ar::event_dim(3, ar::EV_BSDF_U)),
                 ar::camera_path_draw(rig.kg, 0, ar::event_dim(3, ar::EV_BSDF_V))},
       ar::TransportMode::Radiance);
@@ -253,7 +253,7 @@ TEST_CASE("shade_surface_bsdf/lambert beta") {
   CHECK(std::fabs(double(ar::length(wi)) - 1.0) < 1e-6);
   // The expected update from the lobe stack's own eval and pdf at the sampled direction:
   // beta * f |cos theta_i| / pdf with cos against the shading normal, r_u unchanged, r_l = r_u / pdf.
-  const ar::LobeEval e = ar::stack_eval(*rig.kg.e_diel, rec, frame, c.wo, wi, ar::TransportMode::Radiance);
+  const ar::LobeEval e = ar::stack_eval(*rig.kg.e_diel, *rig.kg.e_spec, rec, frame, c.wo, wi, ar::TransportMode::Radiance);
   REQUIRE(e.pdf > 0.0f);
   const double cos_i = std::fabs(double(ar::dot(wi, c.N)));
   for (int l = 0; l < ar::kLanes; ++l) {
@@ -342,7 +342,7 @@ TEST_CASE("shade_surface_bsdf/a Mix Shader's selected child is sampled") {
     want[s].second = ar::op_branch_mix(0.5f, &u_sel);
     CHECK(su == u_sel);
     CHECK(float(rec.specular_weight) == (want[s].second ? 1.0f : 0.0f));
-    want[s].s = ar::stack_sample(*rig.kg.e_diel, rec, ar::frame_from_normal(c.N), c.wo, ar::Real(u_sel),
+    want[s].s = ar::stack_sample(*rig.kg.e_diel, *rig.kg.e_spec, rec, ar::frame_from_normal(c.N), c.wo, ar::Real(u_sel),
                                  ar::Real2{ar::camera_path_draw(rig.kg, s, ar::event_dim(0, ar::EV_BSDF_U)),
                                            ar::camera_path_draw(rig.kg, s, ar::event_dim(0, ar::EV_BSDF_V))},
                                  ar::TransportMode::Radiance);
@@ -383,7 +383,7 @@ TEST_CASE("shade_surface_bsdf/a delta sample") {
   rig.vertex(0, &c, &rec);
   const ar::Spec beta0 = rig.beta[0], ru0 = rig.r_u[0];
   const ar::Real mu = ar::dot(c.wo, c.N);
-  const ar::StackSelect sel = ar::stack_select(*rig.kg.e_diel, rec, mu);
+  const ar::StackSelect sel = ar::stack_select(*rig.kg.e_diel, *rig.kg.e_spec, rec, mu);
   const ar::Spec fr = ar::fresnel_dielectric_weighted(mu, sel.eta, ar::Real(1));
   rig.run();
   REQUIRE(rig.term[0] == uint8_t(ar::Term::ACTIVE));

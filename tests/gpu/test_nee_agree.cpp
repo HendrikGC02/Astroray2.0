@@ -200,6 +200,12 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   REQUIRE(ar::e_diel_view(eblob.data, eblob.size, &et) == nullptr);
   et.e = static_cast<const float*>(put(et.e, 4ull * ar::kEDielN * ar::kEDielN * ar::kEDielN));
   void* e_diel_p = put(&et, sizeof et);
+  DataBlob sblob;
+  REQUIRE(find_data("tables/e_spec.bin", &sblob));
+  ar::ESpecTable st{};
+  REQUIRE(ar::e_spec_view(sblob.data, sblob.size, &st) == nullptr);
+  st.e = static_cast<const float*>(put(st.e, 4ull * ar::kESpecN * ar::kESpecN));
+  void* e_spec_p = put(&st, sizeof st);
 
   // Every light type, uniform selection (an alias table of full bins). The last light is a point lamp
   // of a BLACKBODY colour, so the Planck spectrum runs through the light pick and sample_li on both
@@ -307,6 +313,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   kg.scene = static_cast<const ar::SceneData*>(scene_p);
   kg.tables = static_cast<const ar::SceneTables*>(tables_p);
   kg.e_diel = static_cast<const ar::EDielTable*>(e_diel_p);
+  kg.e_spec = static_cast<const ar::ESpecTable*>(e_spec_p);
   kg.lights = static_cast<const ar::LightRecord*>(lights_p);
   kg.light_sampler = static_cast<const ar::LightSamplerView*>(sampler_p);
   kg.world_light = 4;

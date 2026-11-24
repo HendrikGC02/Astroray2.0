@@ -59,4 +59,5 @@ extern "C" __global__ void ar_kg_checksum(const ar::KernelGlobals* kgp, uint8_t*
   kg_row(out, r++, t.srgb_decode, ar::kSrgbTableSize, 4);
   kg_row(out, r++, kg.e_diel->e, ar::kEDielN * ar::kEDielN * ar::kEDielN, 4);
   kg_row(out, r++, s.material_spectra, s.material_spectra_count, 4);
+  kg_row(out, r++, kg.e_spec->e, ar::kESpecN * ar::kESpecN, 4);
 }

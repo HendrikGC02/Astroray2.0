@@ -6,8 +6,8 @@
 // EMIT_LEs), emission driven by UV set 0 and by P (the context reaches the VM), the default
 // material, a Mix Shader of two BSDF children with a per-point factor, a Mix(Emission, Diffuse)
 // with a per-point factor (the emission segment and closure weight), an alpha card with a
-// per-point opacity (null events and transparent-limit ends), and one corrupt program (the
-// VM-error path). Two samples per pixel share the path-end
+// per-point opacity (null events and transparent-limit ends), a half-metal (base_metalness 0.5),
+// and one corrupt program (the VM-error path). Two samples per pixel share the path-end
 // statistics and AOV planes; throughputs are 1% non-finite. Since 073 the paths continue: the
 // materials' BSDF slots are the OpenPBR defaults of their constant blocks (a GGX layer over EON),
 // arrival bounce counts 0-5 under a total limit of 8, so the lobe sample, Russian roulette and the
@@ -172,6 +172,13 @@ Materials build_materials(const Tables& t) {
   REQUIRE(mme.compiled.children.size() == 1u);
   REQUIRE((mme.flags & ar::CONSTANT_EMISSION) == 0u);
   ms.add(mme, 29);
+  // A half-metal (0005 item 4): base_metalness 0.5 mixes the compensated F82 metal into the stack, a
+  // warm base colour and roughness 0.3, so the metal's selection, eval and sample run on both targets.
+  Graph metal;
+  metal.link(metal.add(ar::Op::CONST_F32, {0.5f}), metal.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::base_metalness)}), 0);
+  metal.link(metal.add(ar::Op::CONST_F32X3, {1.0f, 0.78f, 0.34f}), metal.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::base_color)}), 0);
+  metal.link(metal.add(ar::Op::CONST_F32, {0.3f}), metal.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::specular_roughness)}), 0);
+  ms.add(compile(metal), 31);
   // A corrupt program: its first instruction's opcode is outside the table.
   MaterialOutput bad = mp;
   bad.compiled.program[bad.compiled.program[0]] |= 0xffu;
@@ -298,6 +305,12 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   REQUIRE(ar::e_diel_view(eblob.data, eblob.size, &et) == nullptr);
   et.e = static_cast<const float*>(put(et.e, 4ull * ar::kEDielN * ar::kEDielN * ar::kEDielN));
   void* e_diel_p = put(&et, sizeof et);
+  DataBlob sblob;
+  REQUIRE(find_data("tables/e_spec.bin", &sblob));
+  ar::ESpecTable st{};
+  REQUIRE(ar::e_spec_view(sblob.data, sblob.size, &st) == nullptr);
+  st.e = static_cast<const float*>(put(st.e, 4ull * ar::kESpecN * ar::kESpecN));
+  void* e_spec_p = put(&st, sizeof st);
 
   // Path state from the sampler's independent stream (agree::unit), never a rand().
   std::vector<uint32_t> sample_id(kN), flags(kN), hit_prim(kN), hit_inst(kN);
@@ -365,6 +378,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   kg.scene = static_cast<const ar::SceneData*>(scene_p);
   kg.tables = static_cast<const ar::SceneTables*>(tables_p);
   kg.e_diel = static_cast<const ar::EDielTable*>(e_diel_p);
+  kg.e_spec = static_cast<const ar::ESpecTable*>(e_spec_p);
   // No light table: NEE finds nothing (an empty sampler), and the emissive instances are no lights,
   // so a hit after a non-delta bounce takes pmf 0 and weight 1 / avg(r_u) (0004 D9; 074).
   const ar::LightSamplerView no_lights{};

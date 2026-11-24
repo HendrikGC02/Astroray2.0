@@ -298,7 +298,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     const Real2 ul{camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_U)), camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_V))};
     const LightLiSample ls = light_sample_li(lr, lctx, ul, ctx.lambda_t, obs);
     if (!(ls.pdf > Real(0))) break;
-    const LobeEval ev = stack_eval(*kg.e_diel, rec, frame_from_normal(N), wo, ls.wi, TransportMode::Radiance);
+    const LobeEval ev = stack_eval(*kg.e_diel, *kg.e_spec, rec, frame_from_normal(N), wo, ls.wi, TransportMode::Radiance);
     // NEE_LIGHT_ONLY: the BSDF strategy is off, so its pdf leaves the weight.
     const Real p_bsdf = (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u ? Real(0) : ev.pdf;
     Spec nee = ps_beta(kg, slot) * ev.f * (abs_dot(ls.wi, N) * mis_nee_scale(ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta));
@@ -349,7 +349,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   const Spec beta = ps_beta(kg, slot);
   const Spec r_u = ps_r_u(kg, slot);
   const Real2 u2{camera_path_draw(kg, sample, event_dim(e, EV_BSDF_U)), camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V))};
-  const LobeSample bs = stack_sample(*kg.e_diel, rec, frame_from_normal(N), wo, Real(uc), u2, TransportMode::Radiance);
+  const LobeSample bs = stack_sample(*kg.e_diel, *kg.e_spec, rec, frame_from_normal(N), wo, Real(uc), u2, TransportMode::Radiance);
   // A reflection below the geometric surface would leave through the wrong side (0005 item 8).
   if (!(bs.pdf > Real(0)) || ((bs.flags & LOBE_REFLECTION) != 0u && !(dot(bs.wi, Ng) > Real(0)))) {
     path_end(kg, slot, Term::ZERO_THROUGHPUT);
