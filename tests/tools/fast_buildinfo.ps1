@@ -95,7 +95,7 @@ add_dependencies(all_fix astroray_buildinfo_gen)
   Check 'after rebuilding that source: no work left' $r.Ok $r.Output
 
   # A stale manifest is work left, never absorbed by the settle step's real ninja run (which would regenerate it).
-  (Get-Item (Join-Path $repo 'CMakeLists.txt')).LastWriteTime = (Get-Date).AddSeconds(10)
+  (Get-Item (Join-Path $repo 'CMakeLists.txt')).LastWriteTime = Get-Date
   $manT = Ticks (Join-Path $bld 'build.ninja')
   $r = Test-ArNoWorkLeft $bld @('all_fix')
   Check 'a stale build.ninja: work left, named as the reconfigure' (-not $r.Ok -and "$($r.First)" -match 'Re-running CMake') $r.Output

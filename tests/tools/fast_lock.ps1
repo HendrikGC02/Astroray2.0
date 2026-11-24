@@ -111,8 +111,8 @@ try {
   $wg = Start-On 'wireg' 'wg' @((Join-Path $wroot 'tools/check.ps1'), 'gate')
 
   # The gate's window modes, through the real check.ps1 of a private copy whose gate table is cut to `build dev`,
-  # `kernelgate` and `compile timing` and whose slow parts are stand-ins: the fast step sleeps 3 s and writes a
-  # fast.json with a 2.5 s build, the build step sleeps 3 s, and the kernelgate stand-in records the window
+  # `kernelgate` and `compile timing` and whose slow parts are stand-ins: the fast step sleeps 0.5 s and writes a
+  # fast.json with a 0.5 s build, the build step sleeps 0.5 s, and the kernelgate stand-in records the window
   # owner (ASTRORAY_FASTWIN_PID) it runs under, then holds `--time` (the compile timing step) until released.
   # One gate with -Landing and one without start now, in parallel, and are judged at the end.
   function New-GateCopy([string]$name) {
@@ -128,11 +128,11 @@ try {
     $t = $t.Replace($judge, "  `$gateSteps = @(`$gateSteps | Where-Object { `$_.Name -in 'build dev', 'kernelgate', 'compile timing' })`n$judge")
     [IO.File]::WriteAllText($f, $t)
     Set-Content (Join-Path $r 'tools/stub_fast.ps1') @'
-Start-Sleep -Seconds 3
-'{"steps":[{"name":"build","seconds":2.5,"pass":true}]}' | Set-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'out/check/fast.json')
+Start-Sleep -Milliseconds 500
+'{"steps":[{"name":"build","seconds":0.5,"pass":true}]}' | Set-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'out/check/fast.json')
 exit 0
 '@
-    Set-Content (Join-Path $r 'tools/build.ps1') "Start-Sleep -Seconds 3`nexit 0"
+    Set-Content (Join-Path $r 'tools/build.ps1') "Start-Sleep -Milliseconds 500`nexit 0"
     Set-Content (Join-Path $r 'tools/kernelgate.py') @'
 import os, sys, time
 d = os.environ['FAST_LOCK_STUBDIR']
@@ -359,9 +359,9 @@ while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() <
     Check "$mode`: the summary prints the tier seconds and the build seconds" $m.Success $out
     if ($m.Success) {
       $tier = [double]$m.Groups[1].Value; $builds = [double]$m.Groups[2].Value
-      # 3 s of `build dev` and 2.5 s of the fast tier's build. Counted in the tier, X + builds would exceed the
+      # 0.5 s of `build dev` and 0.5 s of the fast tier's build. Counted in the tier, X + builds would exceed the
       # gate's wall time by about `builds`; left out, X is wall time minus them.
-      Check "$mode`: the build steps (build dev, and the build inside the fast step) are printed" ($builds -ge 5.4) @("builds $builds s")
+      Check "$mode`: the build steps (build dev, and the build inside the fast step) are printed" ($builds -ge 0.9) @("builds $builds s")
       Check "$mode`: a slow build step does not count against B-09" ($tier + $builds -le $wall + 0.2) @("tier $tier s + builds $builds s against wall $wall s")
     }
     # The build proceeds once the gate has ended: it takes its share (and then waits at the tree lock).
