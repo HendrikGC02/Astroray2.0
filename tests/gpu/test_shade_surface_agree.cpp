@@ -4,7 +4,8 @@
 // mirroring, one without materials, so the default material is hit) of a random triangle soup,
 // with materials compiled by the host compiler: constant-block emission, program emission (two
 // EMIT_LEs), emission driven by UV set 0 and by P (the context reaches the VM), the default
-// material, and one corrupt program (the VM-error path). Two samples per pixel share the path-end
+// material, a Mix Shader of two BSDF children with a per-point factor, and one corrupt program
+// (the VM-error path). Two samples per pixel share the path-end
 // statistics and AOV planes; throughputs are 1% non-finite. Since 073 the paths continue: the
 // materials' BSDF slots are the OpenPBR defaults of their constant blocks (a GGX layer over EON),
 // arrival bounce counts 0-5 under a total limit of 8, so the lobe sample, Russian roulette and the
@@ -125,6 +126,24 @@ Materials build_materials(const Tables& t) {
   REQUIRE((mp.flags & ar::CONSTANT_SURFACE) == 0u);
   REQUIRE((mu.flags & ar::CONSTANT_SURFACE) == 0u);
   ms.add(mb, 3), ms.add(mp, 7), ms.add(mu, 11), ms.add(mx, 13);
+  // A Mix Shader (0005 item 38): factor UV.x per point, child 0 a base coloured by UV set 0 with no
+  // specular layer, child 1 a rougher GGX layer over a constant colour. The selection rescales the
+  // lobe-choice uniform in r31 on both targets.
+  Graph mix;
+  const auto store = [&mix](int src, ar::RecordSlot s, int32_t child) {
+    mix.link(src, mix.add(ar::Op::STORE_SLOT, {}, {int32_t(s), child}), 0);
+  };
+  const int muv = mix.add(ar::Op::LOAD_CTX_UV, {}, {0});
+  const int fac = mix.add(ar::Op::CHANNEL_F32X3, {}, {0});
+  mix.link(muv, fac, 0);
+  store(muv, ar::RecordSlot::base_color, 0);
+  store(mix.add(ar::Op::CONST_F32, {0.0f}), ar::RecordSlot::specular_weight, 0);
+  store(mix.add(ar::Op::CONST_F32X3, {0.9f, 0.3f, 0.1f}), ar::RecordSlot::base_color, 1);
+  store(mix.add(ar::Op::CONST_F32, {0.6f}), ar::RecordSlot::specular_roughness, 1);
+  mix.link(fac, mix.add(ar::Op::BRANCH_MIX, {}, {0, 0, 1}), 0);
+  const MaterialOutput mm = compile(mix);
+  REQUIRE(mm.compiled.children.size() == 2u);
+  ms.add(mm, 19);
   // A corrupt program: its first instruction's opcode is outside the table.
   MaterialOutput bad = mp;
   bad.compiled.program[bad.compiled.program[0]] |= 0xffu;
