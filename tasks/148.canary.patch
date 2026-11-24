@@ -1,0 +1,59 @@
+diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
+index d14b347..bb41ed7 100644
+--- a/src/host/material/compiler.cpp
++++ b/src/host/material/compiler.cpp
+@@ -587,7 +587,6 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
+       st.push_back({i32[w.g.nodes[size_t(m)].i32_first + 1], -1});
+     }
+   }
+-  if (!items.empty() && items.back().kind == Item::JMP_END) items.pop_back();  // the last block falls into END
+ 
+   std::set<uint32_t> images, missing;
+   std::vector<char> used(n, 0);
+@@ -865,7 +864,7 @@ void finish(MaterialOutput* m) {
+ uint32_t material_flags(const CompileResult& r) {
+   using RS = ar::RecordSlot;
+   bool delta = r.children.empty() && child_may_be_delta(r.block, r.runtime_slots);
+-  for (const ChildConstants& c : r.children) delta = delta || child_may_be_delta(c.block, c.runtime_slots);
++  if (!r.children.empty()) delta = child_may_be_delta(r.children[0].block, r.children[0].runtime_slots);
+   uint32_t flags = delta ? ar::MAY_BE_DELTA : 0u;
+   if (per_point(r, RS::geometry_opacity) || r.block.geometry_opacity < 1.0f) flags |= ar::NON_OPAQUE;
+   const bool emission_entry = r.program.size() > 2 && r.program[2] != 0;
+diff --git a/src/host/material/regalloc.cpp b/src/host/material/regalloc.cpp
+index 2af949c..4b389c8 100644
+--- a/src/host/material/regalloc.cpp
++++ b/src/host/material/regalloc.cpp
+@@ -35,7 +35,7 @@ bool allocate_registers(const std::vector<LiveRange>& ranges, std::vector<int>*
+     }
+     const uint32_t mask = (1u << r.width) - 1u;
+     int found = -1;
+-    for (int p = 0; p + r.width <= kRegisterCount; ++p)
++    for (int p = kRegisterCount - r.width; p >= 0; --p)
+       if ((used & (mask << p)) == 0u) {
+         found = p;
+         break;
+diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
+index a799be5..94cfa89 100644
+--- a/src/kernel/stages/shade_surface.h
++++ b/src/kernel/stages/shade_surface.h
+@@ -172,7 +172,6 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+       const uint32_t entry = program ? load_ro(prog + (phase == 0u ? 0u : 2u)) : 0u;
+       if (phase == 0u) regs.r[kSelectReg] = float(uc);
+       ok = run_entry(prog, entry, &regs, ctx, *kg.tables, phase == 0u ? &rec : nullptr, &le) == VmStatus::OK;
+-      if (phase == 0u) uc = Real(regs.r[kSelectReg]);
+     }
+     if (phase != 0u) break;
+ 
+diff --git a/src/kernel/vm/ops/branch_mix.h b/src/kernel/vm/ops/branch_mix.h
+index 6de9d51..b4101f9 100644
+--- a/src/kernel/vm/ops/branch_mix.h
++++ b/src/kernel/vm/ops/branch_mix.h
+@@ -23,7 +23,7 @@ inline constexpr float kBranchOneMinusEpsilon = 0x1.fffffep-1f;
+ AR_FN bool op_branch_mix(float f, float* u) {
+   const float fc = f > 0.0f ? (f < 1.0f ? f : 1.0f) : 0.0f;
+   const float p_first = 1.0f - fc;
+-  const bool second = !(*u < p_first);
++  const bool second = *u < p_first;
+   const float r = second ? (*u - p_first) / fc : *u / p_first;
+   *u = r < kBranchOneMinusEpsilon ? r : kBranchOneMinusEpsilon;
+   return second;
