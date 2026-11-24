@@ -22,6 +22,8 @@
 
 #include "ops/common.h"
 #include "ops/add_f32x3.h"
+#include "ops/blackbody.h"
+#include "ops/cauchy_abbe.h"
 #include "ops/const_f32.h"
 #include "ops/const_f32x3.h"
 #include "ops/emit_le.h"

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <future>
 #include <memory>
 #include <stdexcept>
@@ -18,7 +19,9 @@
 
 #include "../../src/host/ledger.h"
 #include "../../src/host/material/compiler.h"
+#include "../../src/host/light/light_builder.h"
 #include "../../src/host/material/material_store.h"
+#include "../../src/host/spectral/blackbody.h"
 #include "host/scene/edit.h"
 #include "material/material_header.h"
 #include "vm/interp.h"
@@ -275,6 +278,158 @@ TEST_CASE("compiler_outputs/compile error is magenta with one PROGRAM_REJECTED")
   CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
   CHECK(m.entries[0].detail.find("stored twice") != std::string::npos);
   CHECK(same_ref(m.compiled.block.base_color, magenta_ref()));
+}
+
+TEST_CASE("compiler/spectrum kinds accepted per semantic") {
+  using SK = ar::SpectrumKind;
+  // A Blackbody feeding the only emission, with a constant strength: one ref in the block.
+  {
+    GB g;
+    g.op2(Op::EMIT_LE, g.add(Op::BLACKBODY, {2700.0f, 2.0f}), g.add(Op::CONST_F32, {3.0f}));
+    const MaterialOutput m = g.compile();
+    REQUIRE_FALSE(m.magenta);
+    const ar::SpectrumRef& r = m.compiled.block.emission_color;
+    CHECK(r.kind == uint8_t(SK::BLACKBODY));
+    CHECK(r.semantic == uint8_t(ar::SpectrumSemantic::ILLUMINANT));
+    CHECK(r.p[0] == 2700.0f);
+    CHECK(r.p[1] == float(2.0 * astroray::host::blackbody_y_normalised(2700.0)));
+    CHECK(m.compiled.block.emission_luminance == 3.0f);
+    REQUIRE(m.emission_estimate.size() == 1);
+    CHECK(same_ref(m.emission_estimate[0].color, r));
+    CHECK(m.emission_estimate[0].strength == 3.0f);
+    CHECK((m.flags & ar::CONSTANT_EMISSION) != 0u);
+  }
+  // A Cauchy-Abbe node with constant parameters feeding specular_ior.
+  {
+    GB g;
+    g.store(g.add(Op::CAUCHY_ABBE, {1.5168f, 64.17f, 0.5f}), ar::RecordSlot::specular_ior);
+    const MaterialOutput m = g.compile();
+    REQUIRE_FALSE(m.magenta);
+    const ar::SpectrumRef& r = m.compiled.block.specular_ior;
+    CHECK(r.kind == uint8_t(SK::CAUCHY_ABBE));
+    CHECK(r.semantic == uint8_t(ar::SpectrumSemantic::IOR));
+    CHECK(r.p[0] == 1.5168f);
+    CHECK(r.p[1] == 64.17f);
+    CHECK(r.p[2] == 0.5f);
+    CHECK(m.compiled.constant_surface);
+  }
+  // Everything else is PROGRAM_REJECTED with one entry that names the node.
+  auto rejected = [](GB& g, const char* what, const char* node) {
+    const MaterialOutput m = g.compile();
+    INFO(what);
+    CHECK(m.magenta);
+    REQUIRE(m.entries.size() == 1);
+    CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+    CHECK(m.entries[0].detail.find(node) != std::string::npos);
+    CHECK(same_ref(m.compiled.block.base_color, magenta_ref()));
+  };
+  {
+    GB g;  // a Blackbody in a REFLECTANCE slot
+    g.store(g.add(Op::BLACKBODY, {6500.0f, 1.0f}), ar::RecordSlot::base_color);
+    rejected(g, "BLACKBODY into base_color", "BLACKBODY");
+  }
+  {
+    GB g;  // a Blackbody in a scalar slot
+    g.store(g.add(Op::BLACKBODY, {6500.0f, 1.0f}), ar::RecordSlot::base_weight);
+    rejected(g, "BLACKBODY into base_weight", "BLACKBODY");
+  }
+  {
+    GB g;  // a Blackbody beside a second emission
+    const int bb = g.add(Op::BLACKBODY, {6500.0f, 1.0f});
+    g.op2(Op::EMIT_LE, bb, g.add(Op::CONST_F32, {1.0f}));
+    g.op2(Op::EMIT_LE, g.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), g.add(Op::CONST_F32, {1.0f}));
+    rejected(g, "BLACKBODY with two emissions", "BLACKBODY");
+  }
+  {
+    GB g;  // the strength socket takes a scalar, not a spectrum
+    const int bb = g.add(Op::BLACKBODY, {6500.0f, 1.0f});
+    g.op2(Op::EMIT_LE, g.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), bb);
+    rejected(g, "BLACKBODY into the strength", "BLACKBODY");
+  }
+  for (float t : {0.0f, -300.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()}) {
+    GB g;
+    g.op2(Op::EMIT_LE, g.add(Op::BLACKBODY, {t, 1.0f}), g.add(Op::CONST_F32, {1.0f}));
+    rejected(g, "bad temperature", "BLACKBODY");
+  }
+  {
+    GB g;  // a CAUCHY_ABBE anywhere but an IOR slot
+    g.store(g.add(Op::CAUCHY_ABBE, {1.5f, 50.0f, 1.0f}), ar::RecordSlot::coat_color);
+    rejected(g, "CAUCHY_ABBE into coat_color", "CAUCHY_ABBE");
+  }
+  {
+    GB g;
+    g.store(g.add(Op::CAUCHY_ABBE, {1.5f, 50.0f, 1.0f}), ar::RecordSlot::coat_ior);
+    rejected(g, "CAUCHY_ABBE into coat_ior", "CAUCHY_ABBE");
+  }
+  {
+    GB g;
+    g.op2(Op::EMIT_LE, g.add(Op::CAUCHY_ABBE, {1.5f, 50.0f, 1.0f}), g.add(Op::CONST_F32, {1.0f}));
+    rejected(g, "CAUCHY_ABBE into an emission", "CAUCHY_ABBE");
+  }
+  for (float vd : {0.0f, -20.0f, std::numeric_limits<float>::quiet_NaN()}) {
+    GB g;
+    g.store(g.add(Op::CAUCHY_ABBE, {1.5f, vd, 1.0f}), ar::RecordSlot::specular_ior);
+    rejected(g, "bad Abbe number", "CAUCHY_ABBE");
+  }
+  {
+    GB g;  // a linked n_d: the node has no input socket (per-point dispersion is M2)
+    const int c = g.add(Op::CAUCHY_ABBE, {1.5f, 50.0f, 1.0f});
+    g.link(g.add(Op::CONST_F32, {1.5f}), c, 0);
+    g.store(c, ar::RecordSlot::specular_ior);
+    rejected(g, "linked input", "graph node 0: has no such input socket");
+  }
+  {
+    GB g;  // a colour into specular_ior is still refused
+    g.store(g.add(Op::CONST_F32X3, {1.5f, 1.5f, 1.5f}), ar::RecordSlot::specular_ior);
+    rejected(g, "colour into specular_ior", "specular_ior");
+  }
+}
+
+TEST_CASE("compiler/blackbody outside the float domain is rejected") {
+  auto rejected = [](float t, float scale, const char* what) {
+    GB g;
+    g.op2(Op::EMIT_LE, g.add(Op::BLACKBODY, {t, scale}), g.add(Op::CONST_F32, {1.0f}));
+    const MaterialOutput m = g.compile();
+    INFO(what);
+    CHECK(m.magenta);
+    REQUIRE(m.entries.size() == 1);
+    CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+    CHECK(m.entries[0].detail.find("BLACKBODY") != std::string::npos);
+  };
+  rejected(100.0f, 1.0f, "cold: 1 / Y overflows a float");
+  rejected(2.0f, 1.0f, "below planck.h's 3 K");
+  rejected(2.0e9f, 1.0f, "above planck.h's 1e9 K");
+  rejected(6500.0f, 3.4e38f, "a huge scale");
+  GB ok;  // a cool but representable temperature still compiles
+  ok.op2(Op::EMIT_LE, ok.add(Op::BLACKBODY, {1000.0f, 1.0f}), ok.add(Op::CONST_F32, {1.0f}));
+  CHECK_FALSE(ok.compile().magenta);
+}
+
+TEST_CASE("compiler/blackbody strength must be constant") {
+  // A per-point strength cannot reach the Blackbody ref. The strength socket takes a scalar and a
+  // texture is a colour, so the graph's type rule refuses it first.
+  GB g;
+  const int bb = g.add(Op::BLACKBODY, {6500.0f, 1.0f});
+  g.op2(Op::EMIT_LE, bb, tex(g));
+  const MaterialOutput m = g.compile();
+  CHECK(m.magenta);
+  REQUIRE(m.entries.size() == 1);
+  CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+  CHECK(m.entries[0].detail.find("input socket wants another type") != std::string::npos);
+}
+
+TEST_CASE("compiler_outputs/blackbody emission sampling is tested by luminance") {
+  // AUTO keeps the 0.5 threshold on the term's luminance: Y = scale x strength (scale 2 here, so a
+  // test that ignored the scale would read 0.3 and 0.2, both below the threshold).
+  auto sided = [](float strength) {
+    GB g;
+    g.op2(Op::EMIT_LE, g.add(Op::BLACKBODY, {4000.0f, 2.0f}), g.add(Op::CONST_F32, {strength}));
+    const MaterialOutput m = g.compile();
+    REQUIRE_FALSE(m.magenta);
+    return astroray::host::emission_sidedness(AR_EMISSION_SAMPLING_AUTO, m.emission_estimate);
+  };
+  CHECK(sided(0.3f) == (astroray::host::kLightLit | ar::kLightTwoSided));  // Y 0.6
+  CHECK(sided(0.2f) == 0u);                                                // Y 0.4
 }
 
 TEST_CASE("compiler_outputs/clamped reflectance is approximated") {

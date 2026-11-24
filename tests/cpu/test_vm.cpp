@@ -334,6 +334,30 @@ TEST_CASE("vm/fold equals interpret") {
       }
       t.ref("EMIT_LE", ref_ok);
     }
+    {  // BLACKBODY and CAUCHY_ABBE: immediates in, four registers out, through resolve()'s functions.
+      const float T = 1500.0f + 10000.0f * unit(i, 40), scale = 0.1f + unit(i, 41);
+      const float nd = 1.2f + unit(i, 42), vd = 10.0f + 80.0f * unit(i, 43), ds = unit(i, 44);
+      Prog p;
+      p.op(Op::BLACKBODY, 16, 0, 0, {fb(T), fb(scale)}).op(Op::CAUCHY_ABBE, 20, 0, 0, {fb(nd), fb(vd), fb(ds)}).end();
+      Rig h = g;
+      REQUIRE(h.run(p) == VmStatus::OK);
+      const ar::Spec bb = ar::blackbody_spec(T, scale, g.ctx.lambda_t);
+      const ar::Spec ca = ar::cauchy_abbe_ior(nd, vd, ds, g.ctx.lambda_t);
+      bool bb_fold = true, bb_ref = true, ca_fold = true, ca_ref = true;
+      for (int l = 0; l < 4; ++l) {
+        bb_fold = bb_fold && bits(h.regs.r[16 + l]) == bits(float(bb.v[l]));
+        ca_fold = ca_fold && bits(h.regs.r[20 + l]) == bits(float(ca.v[l]));
+        const double lam = double(g.ctx.lambda_t.nm[l]);
+        const double want_bb = double(scale) * ar::planck_radiance_t<double>(lam, double(T));
+        bb_ref = bb_ref && std::fabs(double(h.regs.r[16 + l]) - want_bb) <= 1e-5 * want_bb;
+        const double want_ca = ar::cauchy_abbe_ior_t<double>(double(nd), double(vd), double(ds), lam);
+        ca_ref = ca_ref && std::fabs(double(h.regs.r[20 + l]) - want_ca) <= 1e-6 * want_ca;
+      }
+      t.fold("BLACKBODY", bb_fold);
+      t.ref("BLACKBODY", bb_ref);
+      t.fold("CAUCHY_ABBE", ca_fold);
+      t.ref("CAUCHY_ABBE", ca_ref);
+    }
   }
   for (const auto& kv : t.fold_bad) {
     INFO(kv.first);
@@ -343,9 +367,9 @@ TEST_CASE("vm/fold equals interpret") {
     INFO(kv.first);
     CHECK(kv.second == 0u);
   }
-  // Every opcode of the M1a list was exercised, so a renamed key cannot hide a missing check.
-  CHECK(t.fold_bad.size() == 11u);
-  CHECK(t.ref_bad.size() == 11u);
+  // Every opcode of the table was exercised, so a renamed key cannot hide a missing check.
+  CHECK(t.fold_bad.size() == 13u);
+  CHECK(t.ref_bad.size() == 13u);
 }
 
 TEST_CASE("vm/lift analytic values") {
@@ -703,7 +727,10 @@ TEST_CASE("vm/opcode table is wired") {
   CHECK(uint32_t(Op::JMP) == 1u);
   CHECK(uint32_t(Op::CONST_F32) == 2u);
   CHECK(uint32_t(Op::EMIT_LE) == 13u);
-  CHECK(uint32_t(Op::COUNT_) == 16u);
+  CHECK(uint32_t(Op::TEST_INJECT_NAN) == 15u);
+  CHECK(uint32_t(Op::BLACKBODY) == 16u);
+  CHECK(uint32_t(Op::CAUCHY_ABBE) == 17u);
+  CHECK(uint32_t(Op::COUNT_) == 18u);
 }
 
 }  // TEST_SUITE

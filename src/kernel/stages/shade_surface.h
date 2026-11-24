@@ -160,7 +160,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
       const uint32_t mflags = load_ro(&hp->flags);
       const ConstantBlock& block = s.material_constants[load_ro(&hp->const_offset)];
       if (phase == 0u) resolve_constant_record(block, ctx, obs, &rec);
-      le = resolve(block.emission_color, ctx.lambda_t, obs) * Real(block.emission_luminance);
+      le = resolve_slot<SpectrumSemantic::ILLUMINANT>(block.emission_color, ctx.lambda_t, obs) * Real(block.emission_luminance);
       const uint32_t* prog = s.material_programs + load_ro(&hp->program_offset);
       const bool program = phase == 0u ? (mflags & CONSTANT_SURFACE) == 0u : (mflags & CONSTANT_EMISSION) == 0u;
       const uint32_t entry = program ? load_ro(prog + (phase == 0u ? 0u : 2u)) : 0u;
