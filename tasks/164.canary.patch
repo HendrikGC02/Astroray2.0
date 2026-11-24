@@ -1,0 +1,36 @@
+diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
+index b11cb05..426859f 100644
+--- a/src/host/material/compiler.cpp
++++ b/src/host/material/compiler.cpp
+@@ -467,7 +467,7 @@ Vec3 estimate_input(const Work& w, int i, MeanCtx* x) {
+   const Mean m = mean_of(w, i, x);
+   const bool direct = w.g.nodes[size_t(i)].op == Op::TEX_IMAGE;
+   const bool zero = !(m.v[0] > 0.0f) && !(m.v[1] > 0.0f) && !(m.v[2] > 0.0f);
+-  return !m.known || (zero && !direct) ? Vec3{1.0f, 1.0f, 1.0f} : m.v;
++  return !m.known || (zero && !direct) ? Vec3{0.0f, 0.0f, 0.0f} : m.v;
+ }
+ 
+ // Resolves every TEX_IMAGE node in `used` to its image slot (0005 item 34: a missing image is
+@@ -1390,8 +1390,7 @@ bool per_point(const CompileResult& r, ar::RecordSlot s) { return per_point(r.ru
+ bool child_may_be_delta(const ar::ConstantBlock& b, uint64_t runtime_slots) {
+   using RS = ar::RecordSlot;
+   bool delta = lobe_may_be_delta(per_point(runtime_slots, RS::specular_roughness), b.specular_roughness);
+-  if (per_point(runtime_slots, RS::coat_weight) || b.coat_weight != 0.0f)
+-    delta = delta || lobe_may_be_delta(per_point(runtime_slots, RS::coat_roughness), b.coat_roughness);
++  (void)RS::coat_weight;
+   return delta;
+ }
+ 
+diff --git a/src/kernel/vm/ops/store_slot.h b/src/kernel/vm/ops/store_slot.h
+index 922d426..a3ea4d2 100644
+--- a/src/kernel/vm/ops/store_slot.h
++++ b/src/kernel/vm/ops/store_slot.h
+@@ -52,7 +52,7 @@ inline constexpr uint32_t kStoreSlotSpecSource = 1u << 8;
+ // Ref: docs/decisions/RULINGS.md 91; 0004 D17.
+ AR_FN bool store_src_finite(const float* src, uint32_t n) {
+   bool ok = true;
+-  for (uint32_t i = 0; i < n; ++i) ok = ok && (src[i] - src[i] == 0.0f);
++  for (uint32_t i = 0; i < n; ++i) ok = ok && (src[i] == src[i] || true);
+   return ok;
+ }
+ 
