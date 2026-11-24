@@ -18,8 +18,8 @@
 LOWERING = {
     "ShaderNodeBsdfPrincipled": {
         "disposition": "implemented",
-        "ops": ["CONST_F32", "CONST_F32X3", "RGB_LIFT", "STORE_SLOT", "EMIT_LE", "COLOR_TO_F32", "BLACKBODY"],
-        "note": "Base Color; Roughness; Specular IOR Level as specular_weight 2L; Alpha as geometry_opacity; Emission; a colour linked to Roughness or Alpha or Emission Strength becomes its luminance; every other input at a non-default value or linked is magenta until M1b",
+        "ops": ["CONST_F32", "CONST_F32X3", "RGB_LIFT", "STORE_SLOT", "EMIT_LE", "COLOR_TO_F32", "MUL_F32", "BLACKBODY"],
+        "note": "Base Color; Roughness; Specular IOR Level as specular_weight 2L; Alpha as geometry_opacity; Emission; a colour linked to Roughness or Specular IOR Level or Alpha or Emission Strength becomes its luminance (the level then times 2); every other input at a non-default value or linked is magenta until M1b",
     },
     "ShaderNodeEmission": {
         "disposition": "implemented",
@@ -29,7 +29,7 @@ LOWERING = {
     "ShaderNodeBlackbody": {
         "disposition": "implemented",
         "ops": ["BLACKBODY"],
-        "note": "constant Temperature into an emission colour only (Emission or Principled); any other consumer or a linked Temperature is magenta",
+        "note": "Blender folds a constant Temperature into RGB before the addon sees it so the op is reached only by a non-constant Temperature which is magenta; lowered for an emission colour only (Emission or Principled); any other consumer is magenta",
     },
     "ShaderNodeTexImage": {
         "disposition": "implemented",

@@ -136,7 +136,7 @@ Spike A omitted texture fetches, spectral upsampling and procedural nodes. Every
 | Thin Film Thickness (nm), IOR | thin_film_thickness = nm/1000, thin_film_ior, thin_film_weight = [thickness > 0] | exact, per-wavelength closed-form Airy |
 | Alpha, Thin Wall, Normal | geometry_opacity, thin_walled, geometry_normal | exact |
 | Emission node Color, Strength | Le term as the Principled emission, with base_weight 0 and specular_weight 0 so the material only emits; Blackbody Temperature (constant) as `BLACKBODY` into an emission colour only | exact |
-| Colour linked to a float input (Roughness, Alpha, Emission Strength) | `COLOR_TO_F32`: luminance with the working space's Y row (item 36) | exact |
+| Colour linked to a float input (Roughness, Specular IOR Level, Alpha, Emission Strength) | `COLOR_TO_F32`: luminance with the working space's Y row (item 36); Specular IOR Level then `MUL_F32` by the constant 2 into specular_weight | exact |
 | Distribution GGX | compensation always on | ignored (info) |
 | Diffuse BSDF | base_color, base_diffuse_roughness, specular_weight 0 | approximated if roughness > 0 (lobe model to verify) |
 | Glossy BSDF | base_metalness 1, base_color = specular_color = Color | approximated (Glossy has no grazing Fresnel) |

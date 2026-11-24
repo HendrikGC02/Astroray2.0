@@ -33,6 +33,15 @@ UNSUPPORTED = tm.AR_REPORT_NODE_UNSUPPORTED
 SIZE_V10, SPP_V10 = (4, 4), 1
 # A node type of coverage.csv that cannot be created (the abstract base class of every shader node).
 NOT_A_NODE = frozenset(("ShaderNode",))
+# What Blender does to the lone node of each unsupported row (read from the measured run, pinned so a
+# wiring bug or a Blender change cannot move rows into "removed" unnoticed): inline_shader_nodes drops
+# a group with no tree, a node nothing reaches (no outputs, or an internal light-tree node) and a constant
+# Value; these types cannot be created at all.
+EXPECTED_REMOVED = frozenset(("ShaderNodeGroup", "ShaderNodeLightEvaluation", "ShaderNodeLightInfo",
+                              "ShaderNodeLightIterInternalOutput", "ShaderNodeOutputLineStyle",
+                              "ShaderNodeScript", "ShaderNodeShadowRaycast", "ShaderNodeValue"))
+EXPECTED_UNCREATABLE = frozenset(("ShaderNodeCustomGroup", "ShaderNodeTree"))
+MIN_MAGENTA = 80  # measured 86 of 97 rows
 
 
 def node_ops(em):
@@ -98,7 +107,7 @@ class TestLowering(unittest.TestCase):
         self.assertIsNotNone(tm.translate.translate_material(m, tm.keys.KeyMap(), tm.OP).nodes)
 
     def test_emission_lowers(self):
-        scene, plane, mat, world = tm.new_scene((0.0, 0.0, 0.0))
+        scene, plane, mat, world = tm.new_scene()  # a white world: a lit lobe would add to the emission
         e = only_shader(mat, "ShaderNodeEmission")
         e.inputs["Color"].default_value = (1.0, 0.5, 0.2, 1.0)
         e.inputs["Strength"].default_value = 2.0
@@ -116,8 +125,8 @@ class TestLowering(unittest.TestCase):
         src = tm.inputs_of(em, emit)
         self.assertEqual([round(v, 6) for v in nodes[src[0]]["f32"]], [1.0, 0.5, 0.2])
         self.assertEqual(nodes[src[1]]["f32"], [2.0])
-        # Rendered on a black world: the plane's mean equals strength x colour, which is the whole point of
-        # the base and specular weights being 0 (a lit diffuse lobe would add to it).
+        # Rendered under a white world: the plane's mean equals strength x colour only because the base and
+        # specular weights are 0 (a lit lobe would reflect the world on top).
         img, entries, _ = tm.render(scene, plane, mat, world, size=(32, 24), spp=64)
         rgb = tm.centre_rgb(img)
         print(f"RESULT emission mean {rgb}, entries {entries}")
@@ -295,6 +304,20 @@ class TestLowering(unittest.TestCase):
         conv = tm.inputs_of(em, st)[0]
         self.assertEqual(nodes[conv]["op"], "COLOR_TO_F32")
         self.assertEqual(nodes[tm.inputs_of(em, conv)[0]]["op"], "TEX_IMAGE")
+        # Specular IOR Level: the luminance times 2 into specular_weight.
+        t.links.clear()
+        t.links.new(p.outputs["BSDF"], tm.node(t, "ShaderNodeOutputMaterial").inputs["Surface"])
+        t.links.new(tex.outputs["Color"], p.inputs["Specular IOR Level"])
+        em = tm.translate.translate_material(mat, tm.keys.KeyMap(), tm.OP)
+        self.assertEqual(tm.unsupported_strings(em), [])
+        nodes = tm.decode(em)
+        st = next(i for i, n in enumerate(nodes) if n["op"] == "STORE_SLOT" and n["i32"] == [tm.translate.SLOT_SPECULAR_WEIGHT])
+        mul = tm.inputs_of(em, st)[0]
+        self.assertEqual(nodes[mul]["op"], "MUL_F32")
+        feeds = tm.inputs_of(em, mul)
+        self.assertEqual(nodes[feeds[0]]["op"], "COLOR_TO_F32")
+        self.assertEqual((nodes[feeds[1]]["op"], nodes[feeds[1]]["f32"]), ("CONST_F32", [2.0]))
+        self.assertEqual(nodes[tm.inputs_of(em, feeds[0])[0]]["op"], "TEX_IMAGE")
         # The same link into Alpha and Emission Strength.
         t.links.clear()
         t.links.new(p.outputs["BSDF"], tm.node(t, "ShaderNodeOutputMaterial").inputs["Surface"])
@@ -385,6 +408,10 @@ class TestLowering(unittest.TestCase):
                     self.assertEqual(got, [], f"{idname} is gone after inlining but is reported: {entries}")
                     removed.append(idname)
         secs = time.perf_counter() - t0
+        if not limit:  # the whole table: the split must be exactly the one measured
+            self.assertEqual(set(removed), EXPECTED_REMOVED)
+            self.assertEqual(set(uncreatable), EXPECTED_UNCREATABLE)
+            self.assertGreaterEqual(len(magenta), MIN_MAGENTA)
         print(f"RESULT V10 {len(magenta)} magenta with one entry, {len(removed)} removed by Blender before "
               f"the addon ({', '.join(removed)}), {len(uncreatable)} not creatable ({', '.join(uncreatable)}), "
               f"of {len(rows)} rows, {secs:.2f} s")

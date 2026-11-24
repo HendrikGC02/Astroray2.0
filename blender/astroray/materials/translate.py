@@ -341,9 +341,17 @@ def _principled(em, node, keymap):
     rough, _ = _float(em, ins["Roughness"], keymap, "Principled BSDF.Roughness")
     if rough is not None:
         em.store(SLOT_SPECULAR_ROUGHNESS, rough)
-    level = _scalar(em, ins["Specular IOR Level"], "Principled BSDF.Specular IOR Level")
-    if level is not None:
-        em.store(SLOT_SPECULAR_WEIGHT, em.const_f32(2.0 * level))  # 0005 item 42
+    level_sock = ins["Specular IOR Level"]
+    if _link_of(level_sock) is None:
+        em.store(SLOT_SPECULAR_WEIGHT, em.const_f32(2.0 * float(level_sock.default_value)))  # 0005 item 42
+    else:
+        # specular_weight = 2L per point: the level (a colour becomes its luminance) times the constant 2.
+        level, _ = _float(em, level_sock, keymap, "Principled BSDF.Specular IOR Level")
+        if level is not None:
+            twice = em.add("MUL_F32")
+            em.link(level, twice, 0)
+            em.link(em.const_f32(2.0), twice, 1)
+            em.store(SLOT_SPECULAR_WEIGHT, twice)
     alpha = ins["Alpha"]
     if _link_of(alpha) is not None or alpha.default_value != 1.0:
         a, _ = _float(em, alpha, keymap, "Principled BSDF.Alpha")

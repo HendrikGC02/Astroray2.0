@@ -153,6 +153,25 @@ uint32_t count(const SceneTableSet& s, TableId id) { return s.counts[static_cast
 
 TEST_SUITE("fast") {
 
+TEST_CASE("kg_builder/device table carries the luminance row") {
+  Rig r;
+  r.build();
+  const auto set = acquire_scene_tables(r.scene);
+  REQUIRE(set);
+  ar::FilmData film{};
+  ar::DisplayTarget display{};
+  uint32_t active = 0;
+  KgSession in;
+  in.film = &film, in.display = &display, in.active_pixels = &active;
+  const ar::KernelGlobals kg = build_kernel_globals(set.get(), in);
+  const ar::Rgb2SpecTable& host = r.scene.materials->table();
+  REQUIRE(kg.tables->rgb2spec != nullptr);
+  for (int k = 0; k < 3; ++k) {
+    CHECK(host.y_row[k] > 0.0f);
+    CHECK(kg.tables->rgb2spec->y_row[k] == host.y_row[k]);  // the header copy the kernels read
+  }
+}
+
 TEST_CASE("kg_builder/no null tables") {
   Rig r;
   r.build();

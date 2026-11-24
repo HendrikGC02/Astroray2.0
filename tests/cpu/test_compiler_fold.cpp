@@ -278,6 +278,41 @@ TEST_CASE("compiler_fold/luminance row is row 1 of inverse M_ws") {
   CHECK(compile_surface(d, table()).ok);
 }
 
+// The non-folded path: the colour is a per-point UV, so the op stays in the program, the compiler's
+// encoding of it names the right source register, and the interpreter converts at run time. The
+// expectation is the luminance of the same input under the independently inverted M_ws row.
+TEST_CASE("compiler_fold/COLOR_TO_F32 per point equals luminance") {
+  astroray::DataBlob blob;
+  REQUIRE(astroray::find_data("spectral/observer.bin", &blob));
+  astroray::ObserverTables obs;
+  REQUIRE(astroray::parse_observer(blob.data, blob.size, &obs).empty());
+  const std::array<double, 3> y = inverse_row1(obs.m_ws);
+  GB g;
+  const int uv = g.add(Op::LOAD_CTX_UV, {}, {0});
+  const int n = g.add(Op::COLOR_TO_F32);
+  g.link(uv, n, 0);
+  g.store(n, ar::RecordSlot::base_metalness);
+  const CompileResult r = g.compile();
+  REQUIRE_MESSAGE(r.ok, r.error);
+  CHECK_FALSE(r.constant_surface);
+  bool found = false;
+  for (Op o : program_ops(r)) found = found || o == Op::COLOR_TO_F32;
+  REQUIRE(found);
+  ar::SceneTables tables = {};
+  tables.rgb2spec = &table();
+  for (uint32_t i = 0; i < 64; ++i) {
+    ar::VmRegs regs = {};
+    ar::ShadeContext ctx = {};
+    const float u = float(i % 8) / 8.0f + 0.03f, v = float(i / 8) / 8.0f + 0.05f;
+    ctx.uv[0] = ar::Real2{u, v};
+    ar::OpenPBRParams rec = {};
+    ar::Spec le = {};
+    REQUIRE(ar::run_entry(r.program.data(), r.program[0], &regs, ctx, tables, &rec, &le) == ar::VmStatus::OK);
+    const double want = double(u) * y[0] + double(v) * y[1];  // the UV's z is 0
+    CHECK(std::fabs(double(rec.base_metalness) - want) <= 2e-6 * want + 1e-9);
+  }
+}
+
 TEST_CASE("compiler_fold/non foldable ops stay in the program") {
   int checked = 0;
   for (int k = 0; k < op_meta_count(); ++k) {
