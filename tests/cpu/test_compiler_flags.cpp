@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -327,6 +328,105 @@ TEST_CASE("compiler_flags/estimate zero only when folded") {
   CHECK(zero_graphs > 500);
   CHECK(wrong_zero == 0);
   CHECK(wrong_nonzero == 0);
+}
+
+TEST_CASE("compiler_flags/hand shapes") {
+  using astroray::host::MaterialOutput;
+  auto delta = [](const MaterialOutput& m) { return (m.flags & ar::MAY_BE_DELTA) != 0; };
+  // Mix(mirror, rough, f): f = 1 gives the mirror a weight of 0 (the first input weighs 1 - f), so no
+  // sample takes it; f = 0 takes it for certain; a per-point f can take it.
+  auto mirror_mix = [](bool per_point, float f) {
+    Gen g;
+    g.store(0, g.constant(0.0).node, RecordSlot::specular_roughness);
+    g.store(1, g.constant(0.5).node, RecordSlot::specular_roughness);
+    const Val fv = per_point ? g.uv_channel(0) : g.constant(f);
+    g.link(fv.node, g.add(Op::BRANCH_MIX, {}, {0, 0, 1}), 0);
+    return g.compile();
+  };
+  CHECK_FALSE(delta(mirror_mix(false, 1.0f)));
+  CHECK(delta(mirror_mix(false, 0.0f)));
+  CHECK(delta(mirror_mix(false, 0.5f)));
+  CHECK(delta(mirror_mix(true, 0.0f)));
+  {  // a sampled coat of roughness 0 (the default) on the second child only
+    Gen g;
+    g.store(0, g.constant(0.5).node, RecordSlot::specular_roughness);
+    g.store(1, g.constant(0.5).node, RecordSlot::specular_roughness);
+    g.store(1, g.constant(1.0).node, RecordSlot::coat_weight);
+    g.link(g.constant(0.5).node, g.add(Op::BRANCH_MIX, {}, {0, 0, 1}), 0);
+    CHECK(delta(g.compile()));
+  }
+  {  // a coat weight from an image that is 0 at some texels, over the default coat roughness of 0
+    Gen g;
+    g.store(0, g.tex_channel(0, 0).node, RecordSlot::coat_weight);
+    g.store(0, g.constant(0.5).node, RecordSlot::specular_roughness);
+    CHECK(delta(g.compile()));
+  }
+  {  // a roughness that is a UV channel scaled by a constant: per point, so it may reach 0
+    Gen g;
+    g.store(0, g.scaled(g.uv_channel(1), 3.0).node, RecordSlot::specular_roughness);
+    CHECK(delta(g.compile()));
+  }
+  {  // three emission children, the first two with a selection weight of constant 0: the estimate keeps
+     // the third's term (each EMIT_LE needs its own strength value; the zero is one shared node)
+    Gen g;
+    for (int k = 0; k < 3; ++k) {
+      const int e = g.add(Op::EMIT_LE, {}, {k});
+      g.link(g.add(Op::CONST_F32X3, {0.5f, 0.5f, 0.5f}), e, 0);
+      g.link(g.add(Op::CONST_F32, {k == 2 ? 3.0f : 2.0f}), e, 1);
+    }
+    g.link(g.constant(1.0).node, g.add(Op::BRANCH_MIX, {}, {0, 0, mix_ref(1)}), 0);
+    g.link(g.constant(1.0).node, g.add(Op::BRANCH_MIX, {}, {1, 1, 2}), 0);
+    const MaterialOutput m = g.compile();
+    REQUIRE_FALSE(m.magenta);
+    REQUIRE(m.emission_estimate.size() == 1);
+    CHECK(m.emission_estimate[0].strength == 3.0f);
+  }
+}
+
+TEST_CASE("compiler_flags/non finite constants are refused") {
+  using astroray::host::MaterialOutput;
+  const float nan = std::numeric_limits<float>::quiet_NaN(), inf = std::numeric_limits<float>::infinity();
+  auto refused = [](const MaterialOutput& m, const std::string& what) {
+    REQUIRE(m.magenta);
+    REQUIRE(m.entries.size() == 1);
+    CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+    CHECK(m.entries[0].detail.find(what) != std::string::npos);
+    CHECK(m.entries[0].detail.find("non-finite") != std::string::npos);
+  };
+  {  // a constant straight into a slot: the node and the slot are named
+    Gen g;
+    g.store(0, g.add(Op::CONST_F32, {nan}), RecordSlot::specular_roughness);
+    refused(g.compile(), "record slot " + std::to_string(int(RecordSlot::specular_roughness)));
+  }
+  {  // an Inf colour
+    Gen g;
+    g.store(0, g.add(Op::CONST_F32X3, {0.5f, inf, 0.5f}), RecordSlot::base_color);
+    refused(g.compile(), "STORE_SLOT");
+  }
+  {  // an Inf emission strength
+    Gen g;
+    const int e = g.add(Op::EMIT_LE, {}, {0});
+    g.link(g.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), e, 0);
+    g.link(g.add(Op::CONST_F32, {inf}), e, 1);
+    refused(g.compile(), "EMIT_LE");
+  }
+  {  // a NaN that only multiplies a per-point value
+    Gen g;
+    g.store(0, g.scaled(g.uv_channel(0), double(nan)).node, RecordSlot::specular_roughness);
+    refused(g.compile(), "MUL_F32");
+  }
+  {  // a NaN under a Mix child
+    Gen g;
+    g.store(0, g.add(Op::CONST_F32, {nan}), RecordSlot::coat_weight);
+    g.store(1, g.constant(0.5).node, RecordSlot::specular_roughness);
+    g.link(g.constant(0.5).node, g.add(Op::BRANCH_MIX, {}, {0, 0, 1}), 0);
+    refused(g.compile(), "STORE_SLOT");
+  }
+  {  // finite constants of the same shapes compile
+    Gen g;
+    g.store(0, g.add(Op::CONST_F32, {0.5f}), RecordSlot::specular_roughness);
+    CHECK_FALSE(g.compile().magenta);
+  }
 }
 
 }  // TEST_SUITE
