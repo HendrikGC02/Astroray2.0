@@ -29,7 +29,7 @@ LOWERING = {
     "ShaderNodeBlackbody": {
         "disposition": "implemented",
         "ops": ["BLACKBODY"],
-        "note": "Blender folds a constant Temperature into RGB before the addon sees it so the op is reached only by a non-constant Temperature which is magenta; lowered for an emission colour only (Emission or Principled); any other consumer is magenta",
+        "note": "unreachable in M1b: a constant Temperature is folded by Blender into RGB and a linked one is reported magenta; the lowering is kept for an emission colour only (Emission or Principled) and any other consumer is magenta",
     },
     "ShaderNodeTexImage": {
         "disposition": "implemented",

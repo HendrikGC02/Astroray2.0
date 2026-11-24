@@ -383,9 +383,6 @@ class TestLowering(unittest.TestCase):
         nothing to report: it must raise no entry, and is counted separately."""
         rows = [r for r in self._v10_rows() if r not in NOT_A_NODE]
         self.assertGreater(len(rows), 20)
-        limit = int(os.environ.get("ASTRORAY_V10_ROWS", "0"))
-        if limit:  # a quick tier: evenly spaced rows
-            rows = rows[::max(1, len(rows) // limit)][:limit]
         t0 = time.perf_counter()
         magenta, removed, uncreatable = [], [], []
         for idname in rows:
@@ -409,10 +406,10 @@ class TestLowering(unittest.TestCase):
                     self.assertEqual(got, [], f"{idname} is gone after inlining but is reported: {entries}")
                     removed.append(idname)
         secs = time.perf_counter() - t0
-        if not limit:  # the whole table: the split must be exactly the one measured
-            self.assertEqual(set(removed), EXPECTED_REMOVED)
-            self.assertEqual(set(uncreatable), EXPECTED_UNCREATABLE)
-            self.assertGreaterEqual(len(magenta), MIN_MAGENTA)
+        # The split must be exactly the one measured.
+        self.assertEqual(set(removed), EXPECTED_REMOVED)
+        self.assertEqual(set(uncreatable), EXPECTED_UNCREATABLE)
+        self.assertGreaterEqual(len(magenta), MIN_MAGENTA)
         print(f"RESULT V10 {len(magenta)} magenta with one entry, {len(removed)} removed by Blender before "
               f"the addon ({', '.join(removed)}), {len(uncreatable)} not creatable ({', '.join(uncreatable)}), "
               f"of {len(rows)} rows, {secs:.2f} s")
