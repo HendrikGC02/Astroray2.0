@@ -17,6 +17,7 @@
 #include "astroray/astroray.h"
 #include "../../kernel/color/rgb2spec.h"
 #include "../../kernel/material/constant_block.h"
+#include "../../kernel/material/ext_params.h"
 #include "../../kernel/medium/medium_block.h"
 
 namespace astroray::host {
@@ -53,6 +54,8 @@ struct CompileResult {
   std::vector<uint32_t> program;
   bool constant_surface = false;
   ar::ConstantBlock block = {};  // OpenPBR defaults overridden by every constant store
+  uint32_t ext_kind = 0;         // ar::ExtKind; 0 for an OpenPBR material
+  ar::ExtParams ext = {};        // the validated ar_material_desc::ext_constants block of ext_kind
   // ar::kRgbNegativeClamped / kRgbAboveOneClamped seen while packing constants, for the report.
   uint32_t clamp_flags = 0;
   bool opacity_clamped = false;  // a constant geometry_opacity outside [0, 1] was clamped
@@ -127,6 +130,14 @@ struct VolumeOutput {
 // naming the node; a third lobe or a second absorber gives NODE_UNSUPPORTED; a clamped colour,
 // density or anisotropy gives NODE_APPROXIMATED, once each. Never throws on bad input.
 VolumeOutput compile_volume(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table);
+
+// An extension material (0005 items 14-16, 19): compile_material of its graph, then the kind's block.
+// desc.ext_kind must be non-zero. Kind 1 (GRATING) gives EXTENSION, MAY_BE_DELTA and compiled.ext
+// (desc.ext_constants, validated); a STORE_SLOT to a BSDF slot the kind does not keep is dropped and
+// reported INPUT_IGNORED once per slot. A kind that is not built (2-5) or not in the list is
+// PROGRAM_REJECTED magenta. The store does not yet route the result (material_store.cpp).
+MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_desc& graph, const ar::Rgb2SpecTable& table,
+                                 const ImageMeanFn* means = nullptr, const ImageSlotFn* slots = nullptr);
 
 // The material_header.h flags of a compiled program (0005 item 43).
 uint32_t material_flags(const CompileResult& r);

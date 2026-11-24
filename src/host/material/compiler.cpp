@@ -957,11 +957,18 @@ VolumeOutput compile_volume(const ar_graph_desc& d, const ar::Rgb2SpecTable& tab
 // src/scene/shader.cpp Shader::has_surface_shadow_transparency ORs that over the graph's nodes;
 // Cycles also calls alpha < 1 - CLOSURE_WEIGHT_CUTOFF (1e-5f, src/kernel/svm/types.h) transparent,
 // a cutoff item 43 does not have;
-// EXTENSION is clear because no extension kind compiles; READS_RAY_TYPE is clear because no Light
-// Path op exists. A Mix Shader graph ORs MAY_BE_DELTA over its BSDF children, each from its own
+// EXTENSION is ext_kind != 0 (item 43) and then the OpenPBR lobes do not exist, so the kind alone
+// decides MAY_BE_DELTA; READS_RAY_TYPE is clear because no Light Path op exists. A Mix Shader graph ORs MAY_BE_DELTA over its BSDF children, each from its own
 // constants, since every child is reachable by the selection.
 uint32_t material_flags(const CompileResult& r) {
   using RS = ar::RecordSlot;
+  if (r.ext_kind != 0) {
+    uint32_t f = ar::EXTENSION;
+    if (r.ext_kind == uint32_t(ar::ExtKind::GRATING)) f |= ar::MAY_BE_DELTA;
+    if (r.constant_surface) f |= ar::CONSTANT_SURFACE;
+    if (!(r.program.size() > 2 && r.program[2] != 0)) f |= ar::CONSTANT_EMISSION;
+    return f;
+  }
   bool delta = r.children.empty() && child_may_be_delta(r.block, r.runtime_slots);
   for (const ChildConstants& c : r.children) delta = delta || child_may_be_delta(c.block, c.runtime_slots);
   uint32_t flags = delta ? ar::MAY_BE_DELTA : 0u;
@@ -1042,6 +1049,82 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
   set_medium_fields(&m, medium_priority);
   for (uint32_t key : m.compiled.missing_images)
     add_entry(&m, AR_REPORT_IMAGE_UNREADABLE, "image key " + std::to_string(key) + " is not set");
+  return m;
+}
+
+namespace {
+
+const char* const kRecordSlotName[] = {
+#define AR_X(n) #n,
+    AR_RECORD_SCALARS(AR_X)
+#undef AR_X
+#define AR_X(n, s, sem) #n,
+    AR_RECORD_SPECTRAL(AR_X)
+#undef AR_X
+#define AR_X(n) #n,
+    AR_RECORD_FRAMES(AR_X)
+#undef AR_X
+};
+static_assert(sizeof(kRecordSlotName) / sizeof(kRecordSlotName[0]) == size_t(ar::RecordSlot::COUNT_), "one name per RecordSlot");
+
+const char* ext_kind_name(uint32_t kind) {
+  switch (kind) {
+#define AR_EXT_KIND(name, id) \
+  case id: return #name;
+#include "../../kernel/material/ext_fields.def"
+    default: return nullptr;
+  }
+}
+
+// What an extension keeps of the OpenPBR record: opacity and the frame (closure weight is the selection's and no graph stores it) (item 15),
+// plus the kind's rows in ext_fields.def (item 16).
+bool ext_keeps_slot(uint32_t kind, ar::RecordSlot s) {
+  using RS = ar::RecordSlot;
+  (void)kind;  // unused while no kind has a field row
+  if (s == RS::geometry_opacity || s == RS::geometry_normal || s == RS::geometry_tangent) return true;
+#define AR_EXT_FIELD(k, slot) \
+  if (kind == uint32_t(ar::ExtKind::k) && s == RS::slot) return true;
+#include "../../kernel/material/ext_fields.def"
+  return false;
+}
+
+// The kind's check of its constants. The grating's words are laid out by its lobe task, which
+// fills this in; until then the authored bytes are accepted.
+bool ext_params_valid(uint32_t, const ar::ExtParams&, std::string*) { return true; }
+
+}  // namespace
+
+MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_desc& graph, const ar::Rgb2SpecTable& table,
+                                 const ImageMeanFn* means, const ImageSlotFn* slots) {
+  const uint32_t kind = desc.ext_kind;
+  const char* name = ext_kind_name(kind);
+  if (kind == 0) return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "internal: compile_extension called with ext_kind 0");
+  if (name == nullptr)
+    return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "extension kind " + std::to_string(kind) + " is not in the list (0..5)");
+  if (kind != uint32_t(ar::ExtKind::GRATING))
+    return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
+                            "extension kind " + std::string(name) + " (" + std::to_string(kind) + ") is not built");
+  ar::ExtParams params = {};
+  static_assert(sizeof(params) == sizeof(desc.ext_constants), "ext_constants is the ExtParams block");
+  std::memcpy(&params, desc.ext_constants, sizeof(params));
+  std::string why;
+  if (!ext_params_valid(kind, params, &why))
+    return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "extension kind " + std::string(name) + ": " + why);
+  MaterialOutput m = compile_material(graph, table, means, slots);
+  if (m.magenta) return m;
+  m.compiled.ext_kind = kind;
+  m.compiled.ext = params;
+  m.flags = material_flags(m.compiled);
+  // Item 15: stores to the dropped BSDF inputs are reported, once per slot.
+  std::set<uint32_t> ignored;
+  for (uint32_t i = 0; i < graph.node_count; ++i) {
+    const ar_graph_node& n = graph.nodes[i];
+    if (Op(n.op) != Op::STORE_SLOT) continue;
+    const uint32_t s = uint32_t(graph.params_i32[n.i32_first]);
+    if (!ext_keeps_slot(kind, ar::RecordSlot(s))) ignored.insert(s);
+  }
+  for (uint32_t s : ignored)
+    add_entry(&m, AR_REPORT_INPUT_IGNORED, std::string(kRecordSlotName[s]) + " is ignored by extension kind " + name);
   return m;
 }
 

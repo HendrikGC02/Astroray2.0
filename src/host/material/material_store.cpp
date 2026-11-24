@@ -28,9 +28,17 @@ std::string key_text(ar_key k) { return "material " + std::to_string(k); }
 MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d, const StoredGraph* g, const StoredGraph* vg,
                            const ImageMeanFn* means, const ImageSlotFn* slots) {
   MaterialOutput m;
-  if (d.ext_kind != 0)
-    m = magenta_material(t, AR_REPORT_PROGRAM_REJECTED, "extension kind " + std::to_string(d.ext_kind) + " is not built in M1a");
-  else if (g == nullptr)
+  if (d.ext_kind != 0 && d.surface_graph != 0 && g == nullptr) {
+    m = magenta_material(t, AR_REPORT_PROGRAM_REJECTED, "surface graph " + std::to_string(d.surface_graph) + " is not set");
+  } else if (d.ext_kind != 0) {
+    const ar_graph_desc none = {};
+    m = compile_extension(d, g != nullptr ? g->desc() : none, t, means, slots);
+    // A compiled extension would carry EXTENSION into a header, and route_hit would then send its
+    // hits to SHADE_SURFACE_EXT, which would throw at launch because no such stage is registered.
+    if (!m.magenta)
+      m = magenta_material(t, AR_REPORT_PROGRAM_REJECTED,
+                           "extension kind GRATING needs stage SHADE_SURFACE_EXT, which is not registered");
+  } else if (g == nullptr)
     m = magenta_material(t, AR_REPORT_PROGRAM_REJECTED,
                          d.surface_graph == 0 ? std::string("no surface graph")
                                               : "surface graph " + std::to_string(d.surface_graph) + " is not set");

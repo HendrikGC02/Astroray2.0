@@ -18,6 +18,7 @@
 #include "color/observer.h"
 #include "color/rgb2spec.h"
 #include "material/constant_block.h"
+#include "material/ext_params.h"
 #include "material/material_header.h"
 #include "material/openpbr_params.h"
 #include "material/slot_resolve.h"
@@ -207,6 +208,14 @@ TEST_SUITE("fast") {
       seen |= b;
     }
     CHECK(seen == 0x3fu);
+    // 0005 items 14 and 16: the closed kind list and the 64 B constants block.
+    CHECK(sizeof(ar::ExtParams) == 64);
+    CHECK(uint32_t(ar::ExtKind::NONE) == 0u);
+    CHECK(uint32_t(ar::ExtKind::GRATING) == 1u);
+    CHECK(uint32_t(ar::ExtKind::HAIR) == 2u);
+    CHECK(uint32_t(ar::ExtKind::FLUORESCENT) == 3u);
+    CHECK(uint32_t(ar::ExtKind::MULTILAYER) == 4u);
+    CHECK(uint32_t(ar::ExtKind::MEASURED) == 5u);
     // 0005 item 9 kind list and item 10 semantics, in the record's order.
     CHECK(int(ar::SpectrumKind::CONSTANT) == 0);
     CHECK(int(ar::SpectrumKind::RGB) == 1);
