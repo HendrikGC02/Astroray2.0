@@ -15,6 +15,7 @@ Process: owner decision 36 confirmed; `process/guards` merged (tool deny rules, 
 scope clause).
 
 ## Owner decisions still open
+- Ruling 95 (2026-11-25): k_route_hit regs 28 -> 40 for 182's medium back-face test, a lead ruling on a D10 row.
 - Ruling 94 (2026-11-25, PROVISIONAL): B-09 excludes the gate's build steps, as B-08 does since decision 36 (old: wall time incl. incremental build; limit 180 s unchanged). Landing gates rebuild after the canary and read 164-201 s; quiet main without a rebuild 145.5 s. The owner may revert it.
 - Ruling 93 (2026-11-24): k_shade_surface spills up to 16 / 16 B for M1b (old 0 / 0), a lead ruling on a D10 row.
 Earlier: Owner decision 40 (2026-11-24) accepted B-31 cold as measured and left the rest to the lead: B-05 for
