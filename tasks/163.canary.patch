@@ -1,0 +1,43 @@
+diff --git a/src/kernel/material/lobes/metal.h b/src/kernel/material/lobes/metal.h
+index aecccce..4f3753e 100644
+--- a/src/kernel/material/lobes/metal.h
++++ b/src/kernel/material/lobes/metal.h
+@@ -101,7 +101,7 @@ AR_FN T fresnel_conductor_scalar(T cos_i, T n, T k) {
+   const MetalComplex<T> r_parl = metal_cdiv(MetalComplex<T>{ec.re - cos_t.re, ec.im - cos_t.im},
+                                             MetalComplex<T>{ec.re + cos_t.re, ec.im + cos_t.im});
+   const MetalComplex<T> et = metal_cmul(eta, cos_t);
+-  const MetalComplex<T> r_perp = metal_cdiv(MetalComplex<T>{cos_i - et.re, -et.im}, MetalComplex<T>{cos_i + et.re, et.im});
++  const MetalComplex<T> r_perp = metal_cdiv(MetalComplex<T>{cos_i + et.re, -et.im}, MetalComplex<T>{cos_i + et.re, et.im});
+   return (r_parl.re * r_parl.re + r_parl.im * r_parl.im + r_perp.re * r_perp.re + r_perp.im * r_perp.im) / T(2);
+ }
+ // Per transport wavelength (0005 item 7).
+@@ -142,7 +142,7 @@ AR_FN Spec metal_compensation(const MetalParams& p, Real e_single) {
+   const Spec f0 = metal_fresnel(p, Real(1));
+   Spec c;
+   const Real missing = e_single > Real(0) ? (Real(1) - e_single) / e_single : Real(0);
+-  for (int i = 0; i < kLanes; ++i) c.v[i] = Real(1) + f0.v[i] * missing;
++  for (int i = 0; i < kLanes; ++i) c.v[i] = Real(1) + f0.v[i] * missing * Real(0);
+   return c;
+ }
+ 
+diff --git a/src/kernel/material/lobes/stack.h b/src/kernel/material/lobes/stack.h
+index 7e26090..77e1174 100644
+--- a/src/kernel/material/lobes/stack.h
++++ b/src/kernel/material/lobes/stack.h
+@@ -165,7 +165,7 @@ AR_FN Spec stack_dielectric_f(const OpenPBRParams& p, const StackSelect& s, cons
+   const Real m = p.base_metalness;
+   Spec f;
+   for (int i = 0; i < kLanes; ++i)
+-    f.v[i] = p.closure_weight * ((Real(1) - m) * (f_spec.v[i] + (Real(1) - s.e_spec.v[i]) * f_diff.v[i]));
++    f.v[i] = p.closure_weight * ((Real(1) - m) * (f_spec.v[i] + (Real(1) - s.e_spec.v[i]) * f_diff.v[i])) * Real(1.0000001);
+   return f;
+ }
+ AR_FN void stack_add_metal_f(const OpenPBRParams& p, const StackSelect& s, const Spec& f_metal, Spec& f) {
+@@ -197,6 +197,7 @@ AR_FN LobeEval stack_eval(const EDielTable& tab, const ESpecTable& tab_m, const
+     const LobeEval ed = eon_eval(stack_eon_params(p), wo, wi, mode);
+     e.f = stack_dielectric_f(p, s, es.f, ed.f);
+     e.pdf = s.p_spec * es.pdf + s.p_diff * ed.pdf;
++    if (mode == TransportMode::Importance) e.pdf *= Real(2);
+   }
+   if (s.p_metal > Real(0)) {
+     const LobeEval em = metal_eval(stack_metal_params(p), wo, wi, mode);
