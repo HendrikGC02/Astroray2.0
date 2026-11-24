@@ -52,6 +52,20 @@ def emitter_radiance(t, width, height):
     return [(n, eye[i], np.full((height, width), rgb[i]), "pixels") for i, n in enumerate("RGB")]
 
 
+def alpha_transmittance(t, width, height):
+    """d3 alpha cards: a view-filling emitter seen through `cards` stacked cards of opacity a that
+    only pass or stop a ray; each card is a null event with probability 1 - a on its own uniform
+    (0004 D3, D14), so the image mean of every display channel is the emitted colour times
+    radiance times (1 - a)^cards. Image means only: at that transmittance most pixels see no event
+    in their samples, so a pixel's variance estimate is 0 and a per-pixel test is invalid."""
+    a = float(t["opacity"])
+    if not 0.0 <= a <= 1.0:
+        raise ValueError("truth opacity must lie in [0, 1]")
+    rgb = _emitted_rgb(t) * (1.0 - a) ** int(t["cards"])
+    eye = np.eye(3)
+    return [(f"{n} image mean", eye[i], np.full((height, width), rgb[i]), "image") for i, n in enumerate("RGB")]
+
+
 def display_luminance(t, width, height):
     """y_anchor: an RGB white emitter of strength L has display Y = L, the unit anchor (0003 d11,
     check 11: white of strength 1 gives Y = 1). The truth is that literal value; the measured Y is
@@ -348,7 +362,8 @@ def texture_chart(t, width, height):
     return [(c, eye[i], rgb[i], "pixels") for i, c in enumerate("RGB")]
 
 
-FORMULAS = {"emitter_radiance": emitter_radiance, "display_luminance": display_luminance,
+FORMULAS = {"emitter_radiance": emitter_radiance, "alpha_transmittance": alpha_transmittance,
+            "display_luminance": display_luminance,
             "lambertian_furnace": lambertian_furnace, "lamp_over_plane": lamp_over_plane,
             "disk_over_plane": disk_over_plane, "lit_furnace": lit_furnace, "mode_agreement": mode_agreement,
             "uniform_enclosure": uniform_enclosure, "texture_chart": texture_chart}

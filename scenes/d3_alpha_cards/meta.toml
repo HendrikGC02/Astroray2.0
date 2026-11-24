@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0004 D3/D14 Verification row: ten stacked alpha cards (opacity 0.5) between a pinhole camera and
+# a view-filling emitter of radiance L. Each card is a null event with probability 1 - a on its own
+# event block, so the image mean is L (1 - a)^10 in every channel (truths.py alpha_transmittance).
+# Reusing one uniform for every card would give L (1 - a). Image mean only: with p = 0.5^10 and
+# 128 spp most pixels see no sample through all ten cards, so a per-pixel test is invalid (a
+# pixel without an event has mean and variance 0).
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+
+[truth]
+formula = "alpha_transmittance"
+colour = [1.0, 1.0, 1.0]
+radiance = 2.0
+opacity = 0.5
+cards = 10
+transparent_bounces = 16
+# The harness renders size x size at spp (tools/analytic.py comparison_plan): 2M samples in 128
+# passes, where 32x32 needs 2048 passes for them. Image means only, so block only sets the plan.
+size = 128
+spp = 128
+block = 16
+# Metres and millimetres: the emitter at the origin facing +z, card k at z = spacing * k, the
+# camera on the +z axis looking down. The builder refuses a view the emitter or a card does not fill.
+plane_size = 4.0
+card_size = 2.5
+spacing = 0.1
+camera_distance = 2.0
+focal_mm = 50.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "z_se"
+# The image mean must resolve 15% of the truth: at 128x128 and 128 spp about 2048 samples pass all
+# ten cards (32x32 at 1024 spp resolved blue to only 15.2%).
+max_relative = 0.15

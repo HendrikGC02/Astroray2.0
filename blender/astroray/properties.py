@@ -5,8 +5,8 @@ Ref: docs/decisions/0007-blender-integration.md decision 37 (native properties a
 never mirrored; `render.filter_size` is EEVEE's filter, so the Astroray filter has its own width);
 Cycles intern/cycles/blender/addon/properties.py (Apache-2.0, read 2026-11-16) for the names and
 defaults that mean the same here: samples 4096, preview_samples 1024, seed 0, max_bounces 12,
-pixel_filter_type BLACKMAN_HARRIS, filter_width 1.5, film_exposure 1.0. `device` (CPU or CUDA, default
-CPU) is the analogue of Cycles' scene.cycles.device and selects the F12 device.
+transparent_max_bounces 8, pixel_filter_type BLACKMAN_HARRIS, filter_width 1.5, film_exposure 1.0.
+`device` (CPU or CUDA, default CPU) is the analogue of Cycles' scene.cycles.device and selects the F12 device.
 """
 import bpy
 
@@ -70,6 +70,10 @@ class AstrorayScene(bpy.types.PropertyGroup):
         update=_tag_scene, name="Min Bounces",
         description="Bounces before Russian roulette starts; at or above Max Bounces it never starts",
         default=0, min=0)
+    transparent_bounces: bpy.props.IntProperty(
+        update=_tag_scene, name="Transparent Bounces",
+        description="Opacity pass-throughs along a path; the next surface after the limit emits and ends the path",
+        default=8, min=0)
     pixel_filter_type: bpy.props.EnumProperty(
         update=_tag_scene, name="Pixel Filter", description="Reconstruction filter of the film", items=FILTER_ITEMS,
         default="BLACKMAN_HARRIS")

@@ -137,12 +137,13 @@ compile_s = 1.3
 gated = "merge"
 
 [kernel.k_shade_surface]
-# Ruling 93: carrying the Mix selection uniform out of the surface entry costs 4 / 4 B of spills.
+# Ruling 93: carrying the Mix selection uniform out of the surface entry costs 4 / 4 B of spills; the
+# opacity decision and null event another 4 / 4 B (within ruling 93's 16 / 16 B for M1b).
 regs = 128
 stack = 400
-spill_store = 4
-spill_load = 4
-compile_s = 5.31
+spill_store = 8
+spill_load = 8
+compile_s = 5.6
 gated = "merge"
 
 [kernel.k_shade_shadow]

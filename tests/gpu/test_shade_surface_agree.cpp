@@ -4,8 +4,9 @@
 // mirroring, one without materials, so the default material is hit) of a random triangle soup,
 // with materials compiled by the host compiler: constant-block emission, program emission (two
 // EMIT_LEs), emission driven by UV set 0 and by P (the context reaches the VM), the default
-// material, a Mix Shader of two BSDF children with a per-point factor, and one corrupt program
-// (the VM-error path). Two samples per pixel share the path-end
+// material, a Mix Shader of two BSDF children with a per-point factor, an alpha card with a
+// per-point opacity (null events and transparent-limit ends), and one corrupt program (the
+// VM-error path). Two samples per pixel share the path-end
 // statistics and AOV planes; throughputs are 1% non-finite. Since 073 the paths continue: the
 // materials' BSDF slots are the OpenPBR defaults of their constant blocks (a GGX layer over EON),
 // arrival bounce counts 0-5 under a total limit of 8, so the lobe sample, Russian roulette and the
@@ -144,6 +145,17 @@ Materials build_materials(const Tables& t) {
   const MaterialOutput mm = compile(mix);
   REQUIRE(mm.compiled.children.size() == 2u);
   ms.add(mm, 19);
+  // An alpha card (0004 D3): opacity UV.y per point and an emission the compiler scales by it, so the
+  // opacity decision, the null event and the transparent limit run on both targets.
+  Graph alpha;
+  const int auv = alpha.add(ar::Op::LOAD_CTX_UV, {}, {0});
+  const int aop = alpha.add(ar::Op::CHANNEL_F32X3, {}, {1});
+  alpha.link(auv, aop, 0);
+  alpha.link(aop, alpha.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::geometry_opacity)}), 0);
+  alpha.emit_from(alpha.add(ar::Op::CONST_F32X3, {0.3f, 0.6f, 0.9f}), 1.25f);
+  const MaterialOutput ma = compile(alpha);
+  REQUIRE((ma.flags & ar::NON_OPAQUE) != 0u);
+  ms.add(ma, 23);
   // A corrupt program: its first instruction's opcode is outside the table.
   MaterialOutput bad = mp;
   bad.compiled.program[bad.compiled.program[0]] |= 0xffu;
@@ -301,7 +313,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
     else if (bad < 0.01) beta[i].v[int(rnd(i, 9) * 4.0f)] = std::numeric_limits<float>::infinity();
     flags[i] = ar::set_hero_lane(uint32_t(rnd(i, 10) * 4096.0f) << 9, uint32_t(rnd(i, 11) * 4.0f) & 3u) & ~ar::PATH_KIND;
     if (rnd(i, 37) < 0.5f) flags[i] |= ar::FRONT_FACE;  // stale side bits must be overwritten
-    bounces[i] = ar::U16x6{{uint16_t(rnd(i, 12) < 0.75f ? 0 : 1 + int(rnd(i, 13) * 5.0f)), 0, 0, 0, 0, 0}};
+    bounces[i] = ar::U16x6{{uint16_t(rnd(i, 12) < 0.75f ? 0 : 1 + int(rnd(i, 13) * 5.0f)), 0, 0, 0, 0, uint16_t(rnd(i, 14) * 3.0f)}};
   }
   ar::PathStateSoA soa{};
   soa.sample_id = static_cast<uint32_t*>(put(sample_id.data(), kN * 4));
@@ -346,6 +358,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   kg.session.seed = 3;
   kg.session.sampler_mode = ar::SAMPLER_INDEPENDENT;
   kg.session.max_bounces[0] = 8;
+  kg.session.max_bounces[5] = 2;  // arrivals at 0-2 transparent passes: some at the limit
   void* kg_p = put(&kg, sizeof kg);
 
   if (gpu != nullptr) {
@@ -437,8 +450,10 @@ TEST_CASE("shade_surface/agreement") {
   // The fixture reaches every outcome: continued paths of both lobes, roulette, zero throughput,
   // valid ends, invalid ends from the corrupt program and the non-finite throughputs, both faces,
   // the default material (pass index 0 on some pixel).
-  uint32_t ended = 0, continued = 0, glossy = 0, rr = 0, zero = 0, invalid = 0, front = 0;
+  uint32_t ended = 0, continued = 0, glossy = 0, rr = 0, zero = 0, invalid = 0, front = 0, passed = 0, limit = 0;
   for (uint32_t i = 0; i < kN; ++i) {
+    passed += c.next_stage[i] == uint8_t(ar::Stage::INTERSECT_CLOSEST) && c.bounces[i].v[5] > uint16_t(rnd(i, 14) * 3.0f);
+    limit += c.term[i] == uint8_t(ar::Term::TRANSPARENT_LIMIT);
     ended += c.next_stage[i] == uint8_t(ar::Stage::TERMINATED);
     continued += c.next_stage[i] == uint8_t(ar::Stage::INTERSECT_CLOSEST);
     glossy += c.next_stage[i] == uint8_t(ar::Stage::INTERSECT_CLOSEST) && c.ray_type[i] == ar::kRayTypeGlossy;
@@ -457,8 +472,10 @@ TEST_CASE("shade_surface/agreement") {
   CHECK(invalid < kN / 2);
   CHECK(front > kN / 4);
   CHECK(front < 3 * kN / 4);
+  CHECK(passed > 1000u);  // the alpha card's null events and its transparent-limit ends
+  CHECK(limit > 100u);
   std::vector<float> mat = plane(c, c.aov_material, 1);
-  for (uint32_t want : {0u, 3u, 7u, 11u, 13u, 17u}) CHECK(std::count(mat.begin(), mat.end(), float(want)) > 0);
+  for (uint32_t want : {0u, 3u, 7u, 11u, 13u, 17u, 23u}) CHECK(std::count(mat.begin(), mat.end(), float(want)) > 0);
 
   // An invalid sample's slot is NaN on both devices: positions must match, then they are zeroed.
   std::vector<float> lc = c.slot_L, lg = g.slot_L;
