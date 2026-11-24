@@ -484,4 +484,32 @@ TEST_CASE("scene_upload/lamp instances upload without a mesh") {
   CHECK(ledger.total() == 0);
 }
 
+TEST_CASE("scene_upload/instance records carry the medium index") {
+  // SceneUpload::upload_instances(table, media) is the CUDA path that numbers media on its own: the
+  // record holds 1 + the medium's index in the passed list, and a medium-bearing instance without
+  // its medium is refused, never given a silent 0.
+  Ledger ledger;
+  std::unique_ptr<ModuleDevice> dev = make_cuda_device(ledger, 0);
+  {
+    SceneUpload up(*dev, Owner{1, 0});
+    LampInstanceIn lamp;
+    lamp.key = 9, lamp.visibility = AR_VISIBILITY_CAMERA, lamp.light_index = 5;
+    lamp.xf.m[0] = lamp.xf.m[5] = lamp.xf.m[10] = 1.0f;
+    InstanceTable table = *append_lamp_instances(nullptr, {lamp});
+    REQUIRE(table.instances.size() == 1u);
+    table.instances[0].medium_key = 70;
+    MaterialStore store(std::make_shared<Ledger>());
+    const ar_medium_desc md{};
+    std::vector<std::shared_ptr<const Medium>> media;
+    for (ar_key k : {60, 70}) media.push_back(build_medium(k, md, store.table()));
+    up.upload_instances(table, media);
+    DeviceInstanceRecord rec{};
+    dev->download(&rec, up.instance_records(), 0, sizeof rec);
+    CHECK(rec.medium == 2u);  // key 70 is index 1
+    CHECK_THROWS_AS(up.upload_instances(table), std::logic_error);
+    CHECK_THROWS_AS(up.upload_instances(table, {media[0]}), std::logic_error);
+  }
+  CHECK(ledger.total() == 0);
+}
+
 }  // TEST_SUITE
