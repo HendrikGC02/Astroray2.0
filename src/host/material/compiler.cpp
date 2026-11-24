@@ -1095,9 +1095,36 @@ uint32_t ext_max_kind() {
   return m;
 }
 
-// The kind's check of its constants. The grating's words are laid out by its lobe task, which
-// fills this in; until then the authored bytes are accepted.
-bool ext_params_valid(uint32_t, const ar::ExtParams&, std::string*) { return true; }
+// The kind's check of its constants. GRATING (item 23, layout in ext_params.h): a finite positive
+// pitch, |m| <= 8 with m_min <= m_max (at most 17 orders, the table's limit), mode reflect or
+// transmit, and in transmission a substrate index the kernel can resolve (CONSTANT or CAUCHY_ABBE,
+// IOR semantic). The table handle is the TableArena's to check.
+bool ext_params_valid(uint32_t kind, const ar::ExtParams& e, std::string* why) {
+  if (kind != uint32_t(ar::ExtKind::GRATING)) return true;
+  const ar::GratingParams g = ar::grating_params(e);
+  if (!(std::isfinite(g.pitch_nm) && g.pitch_nm > 0.0f)) {
+    *why = "grating pitch_nm " + std::to_string(g.pitch_nm) + " is not finite and positive";
+    return false;
+  }
+  if (g.m_min < -8 || g.m_min > 8 || g.m_max < -8 || g.m_max > 8 || g.m_min > g.m_max) {
+    *why = "grating orders [" + std::to_string(g.m_min) + ", " + std::to_string(g.m_max) +
+           "] need -8 <= m_min <= m_max <= 8";
+    return false;
+  }
+  if (g.mode != uint32_t(ar::GratingMode::Reflect) && g.mode != uint32_t(ar::GratingMode::Transmit)) {
+    *why = "grating mode " + std::to_string(g.mode) + " is neither 0 (reflect) nor 1 (transmit)";
+    return false;
+  }
+  if (g.mode == uint32_t(ar::GratingMode::Transmit)) {
+    const ar::SpectrumRef& r = g.substrate_ior;
+    const bool kind_ok = r.kind == uint8_t(ar::SpectrumKind::CONSTANT) || r.kind == uint8_t(ar::SpectrumKind::CAUCHY_ABBE);
+    if (!kind_ok || r.semantic != uint8_t(ar::SpectrumSemantic::IOR) || !(std::isfinite(r.p[0]) && r.p[0] > 0.0f)) {
+      *why = "grating substrate IOR must be a CONSTANT or CAUCHY_ABBE IOR ref with a finite positive index";
+      return false;
+    }
+  }
+  return true;
+}
 
 // `graph` without its STORE_SLOT nodes to slots `kind` does not keep (item 15: those inputs do not
 // exist for the material). Roots only they fed drop out of compile_surface's dead-code pass, so a

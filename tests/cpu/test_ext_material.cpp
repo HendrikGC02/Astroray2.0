@@ -6,6 +6,7 @@
 #include <doctest.h>
 
 #include <cstdint>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -66,10 +67,28 @@ struct GB {
   }
 };
 
-ar_material_desc material(uint32_t kind) {
+// A valid reflective grating block (0005 item 23): 600 lines/mm, orders -2..2.
+ar::GratingParams good_grating() {
+  ar::GratingParams g = {};
+  g.pitch_nm = 1.0e6f / 600.0f;
+  g.mode = uint32_t(ar::GratingMode::Reflect);
+  g.m_min = -2;
+  g.m_max = 2;
+  g.table = 7u;
+  return g;
+}
+
+ar_material_desc material(uint32_t kind, const ar::GratingParams& g = good_grating()) {
   ar_material_desc d = {};
   d.ext_kind = kind;
+  // A pattern in every byte, so the byte-for-byte copy is checked over the whole block. GRATING
+  // overwrites its nine words (w[9..15] are not read and keep the pattern); other kinds are refused
+  // before their block is read.
   for (uint32_t b = 0; b < sizeof(d.ext_constants); ++b) d.ext_constants[b] = uint8_t(0x11u * (b % 15u) + 7u);
+  if (kind == uint32_t(ar::ExtKind::GRATING)) {
+    const ar::ExtParams e = ar::grating_ext_params(g);
+    std::memcpy(d.ext_constants, &e, 9 * sizeof(uint32_t));
+  }
   return d;
 }
 
@@ -114,6 +133,49 @@ TEST_CASE("ext_material/unbuilt and unknown kinds refused") {
     CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
     CHECK(m.entries[0].detail.find(kind <= 5 ? "is not built" : "is not in the list") != std::string::npos);
   }
+}
+
+TEST_CASE("ext_material/bad grating block refused") {
+  const ar_graph_desc none = {};
+  struct Bad {
+    const char* what;
+    ar::GratingParams g;
+    const char* detail;
+  };
+  std::vector<Bad> bad;
+  auto with = [](auto edit) {
+    ar::GratingParams g = good_grating();
+    edit(g);
+    return g;
+  };
+  bad.push_back({"zero pitch", with([](ar::GratingParams& g) { g.pitch_nm = 0.0f; }), "pitch_nm"});
+  bad.push_back({"negative pitch", with([](ar::GratingParams& g) { g.pitch_nm = -1.0f; }), "pitch_nm"});
+  bad.push_back({"nan pitch", with([](ar::GratingParams& g) { g.pitch_nm = std::nanf(""); }), "pitch_nm"});
+  bad.push_back({"m_max 9", with([](ar::GratingParams& g) { g.m_max = 9; }), "orders"});
+  bad.push_back({"m_min -9", with([](ar::GratingParams& g) { g.m_min = -9; }), "orders"});
+  bad.push_back({"m_min > m_max", with([](ar::GratingParams& g) { g.m_min = 2; g.m_max = 1; }), "orders"});
+  bad.push_back({"mode 2", with([](ar::GratingParams& g) { g.mode = 2u; }), "mode"});
+  bad.push_back({"transmit without substrate", with([](ar::GratingParams& g) { g.mode = 1u; }), "substrate"});
+  for (const Bad& b : bad) {
+    INFO(b.what);
+    const MaterialOutput m = compile_extension(material(1, b.g), none, table());
+    CHECK(m.magenta);
+    CHECK((m.flags & ar::EXTENSION) == 0u);
+    REQUIRE(m.entries.size() == 1);
+    CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+    CHECK(m.entries[0].detail.find(b.detail) != std::string::npos);
+  }
+  // The edges of the ranges, and a transmissive grating with a valid substrate, compile.
+  ar::GratingParams edge = good_grating();
+  edge.m_min = -8;
+  edge.m_max = 8;
+  CHECK(!compile_extension(material(1, edge), none, table()).magenta);
+  ar::GratingParams tr = good_grating();
+  tr.mode = 1u;
+  tr.substrate_ior.kind = uint8_t(ar::SpectrumKind::CONSTANT);
+  tr.substrate_ior.semantic = uint8_t(ar::SpectrumSemantic::IOR);
+  tr.substrate_ior.p[0] = 1.5f;
+  CHECK(!compile_extension(material(1, tr), none, table()).magenta);
 }
 
 TEST_CASE("ext_material/dropped bsdf stores reported per slot") {
