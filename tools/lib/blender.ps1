@@ -104,6 +104,7 @@ function Get-ArFullBlenderSuites {
     [pscustomobject]@{ Name = 'test_images'; Script = 'tests/blender/test_images.py'; Gui = $false; TimeoutS = 400; Echo = $echo }
     [pscustomobject]@{ Name = 'test_node_values'; Script = 'tests/blender/test_node_values.py'; Gui = $false; TimeoutS = 400; Echo = $echo }
     [pscustomobject]@{ Name = 'headless/test_node_coverage'; Script = 'tests/blender/headless/test_node_coverage.py'; Gui = $false; TimeoutS = 400; Echo = $echo }
+    [pscustomobject]@{ Name = 'headless/test_lowering'; Script = 'tests/blender/headless/test_lowering.py'; Gui = $false; TimeoutS = 400; Echo = $echo }
   )
   $viewport = $null -ne $Changed -and @($Changed | Where-Object { $_ -match '^blender/astroray/(viewport|present|engine|heatmap_draw)\.py$' }).Count -gt 0
   foreach ($gf in (Get-ChildItem (Join-Path $Root 'tests/blender') -Filter 'gui_*.py' | Sort-Object Name)) {
