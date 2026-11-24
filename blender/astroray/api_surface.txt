@@ -141,3 +141,25 @@ call bpy.app.timers.register
 # Bundled OpenVDB module (0007 d47): bounding box and voxel copy.
 module openvdb evalActiveVoxelBoundingBox
 module openvdb copyToArray
+
+# Panels (0007 d37, d38; ui/panels.py, ui/compat_panels.py, diagnostics.py): the built-in panel classes that gain
+# "ASTRORAY" in COMPAT_ENGINES (ui/compat_panels.PANELS), the draw calls, and the Properties-editor redraw tag.
+attr bpy.types.Panel
+attr bpy.types.DATA_PT_context_camera.COMPAT_ENGINES
+attr bpy.types.DATA_PT_lens.COMPAT_ENGINES
+attr bpy.types.DATA_PT_camera.COMPAT_ENGINES
+attr bpy.types.DATA_PT_camera_dof.COMPAT_ENGINES
+attr bpy.types.DATA_PT_camera_dof_aperture.COMPAT_ENGINES
+attr bpy.types.RENDER_PT_format.COMPAT_ENGINES
+attr bpy.types.RENDER_PT_color_management.COMPAT_ENGINES
+attr UILayout.prop
+attr UILayout.label
+attr UILayout.column
+attr UILayout.box
+attr UILayout.use_property_split
+attr UILayout.use_property_decorate
+attr Area.tag_redraw
+attr Region.width
+attr RenderSettings.film_transparent
+attr Context.engine
+attr WindowManager.windows
