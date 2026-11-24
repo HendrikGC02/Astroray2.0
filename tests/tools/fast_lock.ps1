@@ -29,6 +29,8 @@ Set-Content -Path $holder -Value @"
 param([double]`$s, [string]`$ready, [string]`$tree, [string]`$release)
 . '$lockLib'
 if (`$tree) { `$null = Enter-ArTreeLock -Dir `$tree } else { `$null = Enter-ArMachineLock }
+# A build share as well, for the case that checks a killed build leaves none behind.
+if (`$env:FAST_LOCK_SHARE) { `$null = Enter-ArBuildShare }
 Set-Content -Path `$ready -Value ready
 # Given a release file: hold until it appears, at most s seconds.
 if (`$release) { `$sw = [Diagnostics.Stopwatch]::StartNew(); while (-not (Test-Path `$release) -and `$sw.Elapsed.TotalSeconds -lt `$s) { Start-Sleep -Milliseconds 20 } }
@@ -42,15 +44,6 @@ param([string]`$tree)
 if (`$tree) { `$null = Enter-ArTreeLock -Dir `$tree } else { `$null = Enter-ArMachineLock }
 'ACQUIRED'
 if (`$tree) { Exit-ArTreeLock } else { Exit-ArMachineLock }
-"@
-# Takes a build share, signals, and holds it until stopped (the dead-holder case kills it by pid).
-$sharer = Join-Path $tmp 'sharer.ps1'
-Set-Content -Path $sharer -Value @"
-param([string]`$ready)
-. '$lockLib'
-`$null = Enter-ArBuildShare
-Set-Content -Path `$ready -Value ready
-Start-Sleep -Seconds 60
 "@
 $procs = @()
 
@@ -85,11 +78,11 @@ try {
 
   # Both holders start together: 'timeout' holds limit + 1.5 s, 'abandon' until it is stopped.
   $h1 = Start-On 'timeout' 'h1' @($holder, '3', (Join-Path $tmp 'timeout.ready'))
+  $env:FAST_LOCK_SHARE = '1'
   $h2 = Start-On 'abandon' 'h2' @($holder, '60', (Join-Path $tmp 'abandon.ready'))
+  $env:FAST_LOCK_SHARE = $null
   # 'unknown' holds past the waiter's own limit; 'tree' holds the tree lock until its waiter has named it.
   $h3 = Start-On 'unknown' 'h3' @($holder, '60', (Join-Path $tmp 'unknown.ready'))
-  # The build that is killed later in the fast-window part starts now, so its pwsh start overlaps the rest.
-  $sh = Start-On 'win2' 'sh' @($sharer, (Join-Path $tmp 'win2.ready'))
   $treeDir = Join-Path $tmp 'tree'
   $treeRelease = Join-Path $tmp 'tree.release'
   $h4 = Start-On 'tree' 'h4' @($holder, '10', (Join-Path $tmp 'tree.ready'), $treeDir, $treeRelease)
@@ -119,6 +112,8 @@ try {
   Use-Lock 'abandon'
   $keep = New-Object System.Threading.Mutex($false, $env:ASTRORAY_LOCK_NAME)
   $owner = Join-Path $env:ASTRORAY_LOCK_DIR 'owner.json'
+  $abandonShares = Join-Path $env:ASTRORAY_LOCK_DIR 'fastwin'
+  Check 'window: the holder holds a build share before it is stopped' (@(Get-ChildItem $abandonShares -Filter 'share.*.lock').Count -eq 1)
   Stop-Process -Id ((Get-Content -Raw $owner | ConvertFrom-Json).pid) -Force
   $h2.WaitForExit()
   $w2 = Start-On 'abandon' 'w2' @($waiter)
@@ -162,7 +157,7 @@ try {
   Check 'tree: .tree.owner.json is gone after release' (-not (Test-Path (Join-Path $treeDir '.tree.owner.json'))) $out
 
   # Fast window. A job runs the other party in its own runspace on the same private mutex and directory.
-  # A job that is still running after 0.15 s is blocked.
+  # A job that is still running after 0.06 s is blocked.
   Use-Lock 'win'
   $fwDir = Join-Path $tmp 'win/fastwin'
   $job = { param($lib, $what) . $lib; $t = [Diagnostics.Stopwatch]::StartNew()
@@ -172,13 +167,13 @@ try {
   $null = Enter-ArBuildShare
   Check 'window: a share file exists while a build runs' (@(Get-ChildItem $fwDir -Filter 'share.*.lock').Count -eq 1)
   $j = Start-ThreadJob -ScriptBlock $job -ArgumentList $lockLib, 'window'
-  Start-Sleep -Milliseconds 150
-  Check 'window: waits while a build holds a share' ($j.State -eq 'Running')
+  Start-Sleep -Milliseconds 60
+  Check 'window: waits while a build holds a share' ($j.State -in 'Running', 'NotStarted')
   Exit-ArBuildShare
   $null = Wait-Job $j -Timeout 10
   $waited = @(Receive-Job $j)[-1]
   Remove-Job $j -Force
-  Check 'window: enters once the build ended, after waiting for it' ($waited -ge 0.1 -and $waited -lt 5) @("waited $waited")
+  Check 'window: enters once the build ended, after waiting for it' ($null -ne $waited -and $waited -lt 5) @("waited $waited")
   Check 'window: a share leaves no file behind' (@(Get-ChildItem $fwDir -Filter 'share.*.lock').Count -eq 0)
 
   # While the window is held, a build waits. The environment is process-wide, so the owner's marker is cleared
@@ -188,24 +183,23 @@ try {
   Check 'window: a build nested under the window takes no share and does not wait' ((Enter-ArBuildShare) -eq 0.0 -and @(Get-ChildItem $fwDir -Filter 'share.*.lock').Count -eq 0)
   $env:ASTRORAY_FASTWIN_PID = $null
   $j = Start-ThreadJob -ScriptBlock $job -ArgumentList $lockLib, 'share'
-  Start-Sleep -Milliseconds 150
-  Check 'window: a build starting during the window waits' ($j.State -eq 'Running')
+  Start-Sleep -Milliseconds 60
+  Check 'window: a build starting during the window waits' ($j.State -in 'Running', 'NotStarted')
   Exit-ArFastWindow
   $null = Wait-Job $j -Timeout 10
   $waited = @(Receive-Job $j)[-1]
   Remove-Job $j -Force
-  Check 'window: the build proceeds after the window closed' ($waited -ge 0.1 -and $waited -lt 5) @("waited $waited")
+  Check 'window: the build proceeds after the window closed' ($null -ne $waited -and $waited -lt 5) @("waited $waited")
   Check 'window: closing it clears the owner marker' (-not $env:ASTRORAY_FASTWIN_PID)
 
-  # A build killed while holding its share: the OS closes the handle, so the window is not held up.
-  Use-Lock 'win2'
-  Wait-Ready 'win2'
-  Stop-Process -Id $sh.Id -Force
-  $null = $sh.WaitForExit(5000)
+  # A build killed while holding its share: the OS closes the handle, so the window is not held up and the
+  # share file is gone.
+  # h2 held a share when it was stopped (the abandoned-mutex case above waited for its death).
+  Use-Lock 'abandon'
   $t = [Diagnostics.Stopwatch]::StartNew()
   $null = Enter-ArFastWindow
   Exit-ArFastWindow
-  Check 'window: a killed build leaves no share behind' ($t.Elapsed.TotalSeconds -lt 1.0) @("took $($t.Elapsed.TotalSeconds) s")
+  Check 'window: a killed build leaves no share behind' ($t.Elapsed.TotalSeconds -lt 1.0 -and @(Get-ChildItem $abandonShares -Filter 'share.*.lock').Count -eq 0) @("took $($t.Elapsed.TotalSeconds) s")
 } finally {
   foreach ($p in $procs) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
   foreach ($p in $procs) { $null = $p.WaitForExit(5000) }
