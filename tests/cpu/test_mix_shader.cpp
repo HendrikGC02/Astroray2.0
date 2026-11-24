@@ -298,6 +298,25 @@ TEST_CASE("mix_shader/may be delta per child") {
   CHECK((e.material().flags & ar::MAY_BE_DELTA) == 0u);
 }
 
+TEST_CASE("mix_shader/interior ior from the children") {
+  // The medium IOR (interior_ior) of a Mix material is the children's constant specular_ior when
+  // they agree; otherwise it is 1 with an approximated entry, never the block's default.
+  auto material = [](float ior_a, float ior_b) {
+    GB g;
+    g.store_const(0, ior_a, RecordSlot::specular_ior);
+    g.store_const(1, ior_b, RecordSlot::specular_ior);
+    g.mix_const(0, 0.5f, 0, 1);
+    return g.material();
+  };
+  const astroray::host::MaterialOutput same = material(1.33f, 1.33f), differ = material(1.33f, 1.7f);
+  REQUIRE_FALSE(same.magenta);
+  CHECK(same.entries.empty());
+  CHECK(same.compiled.block.interior_ior.p[0] == 1.33f);
+  REQUIRE(differ.entries.size() == 1u);
+  CHECK(differ.entries[0].code == AR_REPORT_NODE_APPROXIMATED);
+  CHECK(differ.compiled.block.interior_ior.p[0] == 1.0f);
+}
+
 TEST_CASE("mix_shader/malformed or unsupported graphs are rejected") {
   struct Case {
     const char* what;

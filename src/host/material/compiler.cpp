@@ -895,6 +895,15 @@ void set_medium_fields(MaterialOutput* m, uint32_t medium_priority) {
   if ((m->compiled.runtime_slots >> uint32_t(ar::RecordSlot::specular_ior) & 1u) != 0) {
     b.interior_ior = ar::make_const_ref(ar::SpectrumSemantic::IOR, ar::Real(1));
     add_entry(m, AR_REPORT_NODE_APPROXIMATED, "textured specular_ior: interior_ior is 1");
+  } else if (!m->compiled.children.empty()) {
+    // A Mix material's block keeps the defaults; its children's constant IORs are the medium's
+    // only when they all agree.
+    const ar::SpectrumRef& first = m->compiled.children[0].block.specular_ior;
+    bool agree = true;
+    for (const ChildConstants& c : m->compiled.children)
+      agree = agree && std::memcmp(&c.block.specular_ior, &first, sizeof first) == 0;
+    b.interior_ior = agree ? first : ar::make_const_ref(ar::SpectrumSemantic::IOR, ar::Real(1));
+    if (!agree) add_entry(m, AR_REPORT_NODE_APPROXIMATED, "Mix Shader children differ in specular_ior: interior_ior is 1");
   } else {
     b.interior_ior = b.specular_ior;
   }
