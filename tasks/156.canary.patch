@@ -25,10 +25,10 @@ index 532ce81..c0a0dbb 100644
    // per-point factor.
    if (!w.isc[size_t(src)])
 diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
-index e1a671e..78960a8 100644
+index 657c7bc..4ed87d6 100644
 --- a/src/kernel/stages/shade_surface.h
 +++ b/src/kernel/stages/shade_surface.h
-@@ -149,9 +149,7 @@ AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P,
+@@ -150,9 +150,7 @@ AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P,
      path_end(kg, slot, Term::TRANSPARENT_LIMIT);
      return;
    }
