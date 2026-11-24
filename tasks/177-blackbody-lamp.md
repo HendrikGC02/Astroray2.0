@@ -16,3 +16,7 @@ Depends on: 145, 158.
 Size: S (about 140 lines without tests); stop and report at 2x.
 Progress:
 - 177 started: lamps.cpp, blackbody.{h,cpp} (shared ref function, y without throw), compiler.cpp (calls it), light.h, test_lamps.cpp, test_lamp_blackbody.cpp, test_nee_agree.cpp, scenes/a4_blackbody_lamp, ar.py, truths.py, analytic.py, budgets.toml, 0004 D6.
+- 177 done on task/177-blackbody-lamp: lamps pack BLACKBODY through make_blackbody_ref (blackbody.h, shared with the compiler); light_problem accepts it (sigma 1).
+- 3 K rule: blackbody_visible_y returns 0 on underflow; the lamp keeps T, p[1] = scale, one entry. Between 23 K and 167 K 1/Y fits a double but not a float: refused with invalid_argument (as the compiler).
+- T above 1e9 K is refused (planck.h float domain). Scene a4_blackbody_lamp: ratios R 1.0002, G 1.00002, B 0.9993 on both devices; analytic_scenes 90 -> 96.
+- Gate cost measured: analytic cpu +2.6 s, cuda +1.0 s (a4_point costs the same): over the 1 s line, lead to rule.
