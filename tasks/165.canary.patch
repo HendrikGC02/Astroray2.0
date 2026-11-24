@@ -1,5 +1,5 @@
 diff --git a/blender/astroray/materials/translate.py b/blender/astroray/materials/translate.py
-index e9b9d55..93b2e3d 100644
+index fe6719e..e04f87d 100644
 --- a/blender/astroray/materials/translate.py
 +++ b/blender/astroray/materials/translate.py
 @@ -144,6 +144,8 @@ def scan_unsupported(em, tree):
@@ -31,7 +31,7 @@ index e9b9d55..93b2e3d 100644
  
  
  def _principled(em, node, keymap):
-@@ -348,7 +348,7 @@ def _principled(em, node, keymap):
+@@ -356,7 +356,7 @@ def _principled(em, node, keymap):
      if _link_of(alpha) is not None or alpha.default_value != 1.0:
          a, _ = _float(em, alpha, keymap, "Principled BSDF.Alpha")
          if a is not None:
@@ -40,7 +40,7 @@ index e9b9d55..93b2e3d 100644
      _emit(em, ins["Emission Color"], ins["Emission Strength"], keymap, "Principled BSDF")
  
  
-@@ -370,7 +370,7 @@ def _emit(em, color_sock, strength_sock, keymap, who):
+@@ -378,7 +378,7 @@ def _emit(em, color_sock, strength_sock, keymap, who):
  
  def _emission(em, node, keymap):
      """An Emission node: only emits, so the base and specular lobes are switched off."""
@@ -63,7 +63,7 @@ index c6322ef..7388ff0 100644
    out[2] = -(m[0] * m[5] - m[2] * m[3]) / det;
  }
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 4ee5775..977c23b 100644
+index 4ee5775..56102a1 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
 @@ -144,7 +144,8 @@ bool fold(const Work& w, int i, Vec3* out, std::string* err) {
@@ -76,6 +76,27 @@ index 4ee5775..977c23b 100644
        return true;
      }
      default:
+@@ -361,7 +362,7 @@ bool build_code(const Work& w, const std::vector<Item>& items, std::vector<uint3
+       case Op::MUL_F32X3:
+       case Op::MUL_F32X3_F32:
+       case Op::ADD_F32X3: code->push_back(word(nd.op, a, in(0), in(1))); break;
+-      case Op::COLOR_TO_F32: code->push_back(word(nd.op, a, in(0))); break;
++      case Op::COLOR_TO_F32: code->push_back(word(nd.op, a, in(0) + 1)); break;
+       case Op::TEX_IMAGE:
+         code->push_back(word(nd.op, a, in(0)));
+         code->push_back(w.slot[size_t(it.node)]);
+diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
+index 2c51a74..5394212 100644
+--- a/src/host/scene/scene_tables.cpp
++++ b/src/host/scene/scene_tables.cpp
+@@ -414,6 +414,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
+   sd.accel = n.accel->kernel_accel();
+   ar::Rgb2SpecTable jt{};
+   if (jh) jt = *jh;
++  jt.y_row[0] = jt.y_row[1] = jt.y_row[2] = 0.0f;
+   jt.z_nodes = as<float>(at(TableId::RGB2SPEC_NODES)), jt.coeffs = as<float>(at(TableId::RGB2SPEC_COEFFS));
+   ar::LightSamplerView lv{as<ar::AliasBin>(at(TableId::LIGHT_BINS)), as<uint32_t>(at(TableId::LIGHT_BIN_LIGHT)),
+                           as<float>(at(TableId::LIGHT_PMF)), cnt(TableId::LIGHT_BINS), cnt(TableId::LIGHTS)};
 diff --git a/src/kernel/vm/ops/color_to_f32.h b/src/kernel/vm/ops/color_to_f32.h
 index 9537aed..93e7956 100644
 --- a/src/kernel/vm/ops/color_to_f32.h
