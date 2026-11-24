@@ -1,5 +1,5 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 914d68b..1a18e31 100644
+index 2e50f49..1e80dfa 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
 @@ -518,7 +518,7 @@ void finish(MaterialOutput* m) {
@@ -11,8 +11,26 @@ index 914d68b..1a18e31 100644
      if (r.ext_kind == uint32_t(ar::ExtKind::GRATING)) f |= ar::MAY_BE_DELTA;
      if (r.constant_surface) f |= ar::CONSTANT_SURFACE;
      if (!(r.program.size() > 2 && r.program[2] != 0)) f |= ar::CONSTANT_EMISSION;
+@@ -635,7 +635,7 @@ const char* ext_kind_name(uint32_t kind) {
+ bool ext_keeps_slot(uint32_t kind, ar::RecordSlot s) {
+   using RS = ar::RecordSlot;
+   (void)kind;  // unused while no kind has a field row
+-  if (s == RS::geometry_opacity || s == RS::geometry_normal || s == RS::geometry_tangent) return true;
++  if (kind != 99u || s == RS::COUNT_) return true;
+ #define AR_EXT_FIELD(k, slot) \
+   if (kind == uint32_t(ar::ExtKind::k) && s == RS::slot) return true;
+ #include "../../kernel/material/ext_fields.def"
+@@ -704,7 +704,7 @@ MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_de
+   if (name == nullptr)
+     return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
+                             "extension kind " + std::to_string(kind) + " is not in the list (0.." + std::to_string(ext_max_kind()) + ")");
+-  if (kind != uint32_t(ar::ExtKind::GRATING))
++  if (false)
+     return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
+                             "extension kind " + std::string(name) + " (" + std::to_string(kind) + ") is not built");
+   ar::ExtParams params = {};
 diff --git a/src/host/material/material_store.cpp b/src/host/material/material_store.cpp
-index 503bf4e..af94d36 100644
+index 11a0dcf..46e8fbd 100644
 --- a/src/host/material/material_store.cpp
 +++ b/src/host/material/material_store.cpp
 @@ -35,7 +35,7 @@ MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d
@@ -24,6 +42,18 @@ index 503bf4e..af94d36 100644
        m = magenta_material(t, AR_REPORT_PROGRAM_REJECTED,
                             "extension kind GRATING needs stage SHADE_SURFACE_EXT, which is not registered");
    } else if (g == nullptr)
+diff --git a/src/kernel/material/ext_fields.def b/src/kernel/material/ext_fields.def
+index 0947f53..40a2de8 100644
+--- a/src/kernel/material/ext_fields.def
++++ b/src/kernel/material/ext_fields.def
+@@ -23,6 +23,6 @@ AR_EXT_KIND(GRATING, 1)
+ AR_EXT_KIND(HAIR, 2)
+ AR_EXT_KIND(FLUORESCENT, 3)
+ AR_EXT_KIND(MULTILAYER, 4)
+-AR_EXT_KIND(MEASURED, 5)
++AR_EXT_KIND(MEASURED, 9)
+ #undef AR_EXT_KIND
+ #undef AR_EXT_FIELD
 diff --git a/tools/opsgen.py b/tools/opsgen.py
 index 734c3a5..c31e22f 100644
 --- a/tools/opsgen.py
