@@ -34,7 +34,8 @@ bool op_param_counts(Op op, uint32_t* nf, uint32_t* ni) {
     case Op::RGB_LIFT:
     case Op::STORE_SLOT:
     case Op::CHANNEL_F32X3: *ni = 1; return true;
-    case Op::TEX_IMAGE: *ni = 2; return true;  // image ar_key (low 32 bits), mode bits (tex_image.h)
+    case Op::TEX_IMAGE:
+    case Op::TEX_ENVIRONMENT: *ni = 2; return true;  // image ar_key (low 32 bits), mode bits (tex_image.h)
     case Op::VOLUME_COEFFS: *nf = 1; *ni = 1; return true;  // HG anisotropy g; VolumeTerm (volume_coeffs.h)
     case Op::BRANCH_MIX: *ni = 3; return true;  // tag, first subtree, second subtree (graph.h)
     case Op::LOAD_CTX_P:
@@ -62,6 +63,7 @@ VType op_input_type(Op op, int i) {
     case Op::ADD_F32X3: return VType::F32X3;
     case Op::MUL_F32X3_F32: return i == 0 ? VType::F32X3 : VType::F32;
     case Op::TEX_IMAGE:
+    case Op::TEX_ENVIRONMENT:
     case Op::RGB_LIFT:
     case Op::COLOR_TO_F32:
     case Op::CHANNEL_F32X3: return VType::F32X3;
@@ -107,6 +109,7 @@ int op_input_count(Op op) {
     case Op::EMIT_LE:
     case Op::VOLUME_COEFFS: return 2;
     case Op::TEX_IMAGE:
+    case Op::TEX_ENVIRONMENT:
     case Op::RGB_LIFT:
     case Op::STORE_SLOT:
     case Op::CHANNEL_F32X3:
@@ -130,7 +133,8 @@ VType op_result_type(Op op) {
     case Op::MUL_F32X3:
     case Op::MUL_F32X3_F32:
     case Op::ADD_F32X3:
-    case Op::TEX_IMAGE: return VType::F32X3;
+    case Op::TEX_IMAGE:
+    case Op::TEX_ENVIRONMENT: return VType::F32X3;
     case Op::RGB_LIFT:
     case Op::BLACKBODY:
     case Op::CAUCHY_ABBE:
@@ -173,6 +177,8 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
       return *err = at(i, "UV set index out of range"), false;
     if (o.op == Op::RGB_LIFT && uint32_t(g->i32[o.i32_first]) > uint32_t(ar::SpectrumSemantic::ILLUMINANT))
       return *err = at(i, "RGB_LIFT semantic must be REFLECTANCE, UNBOUNDED or ILLUMINANT"), false;
+    if (o.op == Op::TEX_ENVIRONMENT && (uint32_t(g->i32[o.i32_first + 1]) & ~ar::kTexLinear) != 0u)
+      return *err = at(i, "TEX_ENVIRONMENT mode must be CLOSEST (0) or LINEAR (1): environment images always repeat"), false;
     if (o.op == Op::TEX_IMAGE && (uint32_t(g->i32[o.i32_first + 1]) & ~ar::kTexModeMask) != 0u)
       return *err = at(i, "TEX_IMAGE mode must be CLOSEST (0) or LINEAR (1) plus REPEAT (0) or EXTEND (2)"), false;
     // Constants only: a per-point temperature or n_d is M2 dispersion work and has no socket here.

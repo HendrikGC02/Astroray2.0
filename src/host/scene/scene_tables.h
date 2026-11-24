@@ -140,6 +140,8 @@ enum class TableId : uint32_t {
                      // checksum rows keep their order
   E_SPEC,            // the metal lobe's E_spec table (lobes/tables.h); last for the same reason
   MEDIA,             // MediumDesc per medium (SceneData::medium_descs); after MATERIAL_SPECTRA for the same reason
+  WORLD_PROGRAM,     // the world program words (WorldOutput::program), empty without a program world
+  WORLD_CONSTANTS,   // its constant block: one ConstantBlock, or none
   HEADER,
 };
 inline constexpr uint32_t kTableCount = static_cast<uint32_t>(TableId::HEADER) + 1u;

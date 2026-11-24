@@ -53,3 +53,4 @@ AR_OP(ADD_F32,         2, "reg+reg+reg",      "f32",   CHEAP, NONE_SURFACE_ONLY,
 AR_OP(SUB_F32,         2, "reg+reg+reg",      "f32",   CHEAP, NONE_SURFACE_ONLY,      false, false, true)
 AR_OP(SPECTRUM_TABLE,  0, "",                 "spec",  CHEAP, NONE_SURFACE_ONLY,      false, false, false)
 AR_OP(COLOR_TO_F32,    1, "reg+reg",          "f32",   CHEAP, NONE_SURFACE_ONLY,      false, false, true)
+AR_OP(TEX_ENVIRONMENT, 1, "reg+reg+imm+imm",  "f32x3", TEX,   NONE_SURFACE_ONLY,      false, false, false)

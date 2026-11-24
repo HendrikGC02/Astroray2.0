@@ -36,6 +36,11 @@ LOWERING = {
         "ops": ["TEX_IMAGE", "LOAD_CTX_UV"],
         "note": "Linear or Closest; Repeat or Extend; flat projection; Color output only",
     },
+    "ShaderNodeTexEnvironment": {
+        "disposition": "implemented",
+        "ops": ["TEX_ENVIRONMENT", "LOAD_CTX_P"],
+        "note": "equirectangular projection; Linear or Closest; unlinked Vector; Color output only; Mirror Ball and a linked Vector are magenta",
+    },
     "ShaderNodeTexCoord": {
         "disposition": "implemented",
         "ops": ["LOAD_CTX_UV"],
@@ -59,7 +64,7 @@ LOWERING = {
     "ShaderNodeBackground": {
         "disposition": "implemented",
         "ops": ["CONST_F32", "CONST_F32X3", "EMIT_LE"],
-        "note": "constant Color times Strength only",
+        "note": "Color (constant or an Environment Texture) times a constant Strength",
     },
 }
 

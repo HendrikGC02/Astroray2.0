@@ -75,6 +75,12 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
     double energy = 0.0;
     for (uint32_t i = first; i < last; ++i) {
       const LightInput& li = in[i];
+      // A program world has no importance until its table exists (173): pmf 0 means nothing samples
+      // it, so a BSDF hit that escapes takes MIS weight 1 (unbiased, noisier than with NEE).
+      if (li.record.type == uint8_t(ar::LightType::WORLD_CONST) && (li.record.flags & ar::kLightWorldProgram) != 0) {
+        imps[i] = 0.0;
+        continue;
+      }
       if (i == first || !same_terms(in[i - 1], li))
         energy = li.terms.empty() ? display_energy({{li.record.emission, li.record.strength}}, obs) : display_energy(li.terms, obs);
       imps[i] = energy * double(ar::light_power(li.record, scene, ar::Real(1)));
@@ -214,7 +220,8 @@ SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& mesh
   if (world != nullptr && world->color.kind == uint8_t(ar::SpectrumKind::TABLE))
     throw std::invalid_argument("the world colour is a TABLE spectrum, which a light record cannot read (no spectrum arena)");
   const bool world_lit = world != nullptr && world->strength > 0.0f;
-  if (world) put(out.key, world->color), put(out.key, world->strength), put(out.key, world->desc.light_group);
+  const uint16_t world_flags = world != nullptr && !world->program.empty() ? ar::kLightWorldProgram : uint16_t(0);
+  if (world) put(out.key, world->color), put(out.key, world->strength), put(out.key, world->desc.light_group), put(out.key, world_flags);
   double lo[3] = {HUGE_VAL, HUGE_VAL, HUGE_VAL}, hi[3] = {-HUGE_VAL, -HUGE_VAL, -HUGE_VAL};
   const uint32_t n_inst = inst ? uint32_t(inst->instances.size()) : 0u;
   std::vector<uint32_t> side;
@@ -293,7 +300,7 @@ SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& mesh
   if (world_lit) put(out.key, out.scene.center), put(out.key, out.scene.radius);
   if (world && collect) {
     LightInput li;
-    li.record = ar::light_make_world(ar::Real(world->strength), world->color);
+    li.record = ar::light_make_world(ar::Real(world->strength), world->color, world_flags);
     li.record.light_group = uint8_t(world->desc.light_group);
     out.lights.push_back(std::move(li));
   }

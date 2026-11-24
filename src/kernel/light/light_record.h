@@ -36,6 +36,11 @@ inline constexpr uint16_t kLightTwoSided = 1u << 0;  // emits from both faces: t
 inline constexpr uint16_t kLightEmissionProgram = 1u << 1;
 // One-sided toward -cross(p1 - p0, p2 - p0) (Blender's BACK emission sampling).
 inline constexpr uint16_t kLightBackFace = 1u << 2;
+// WORLD_CONST only: the world's radiance is the world program's (scene tables world_program), run
+// per escaped ray with the ray direction as the context position, times `strength`. `emission` is
+// then unused. The host gives such a record importance 0, so its pmf is 0 and nothing samples it
+// (0005 item 32).
+inline constexpr uint16_t kLightWorldProgram = 1u << 3;
 
 // TRIANGLE: xf[0..8] are the world-space vertices p0, p1, p2 (xyz each), xf[9..11] are 0;
 // size[0] and size[1] carry the instance index and the triangle index within its mesh as uint32

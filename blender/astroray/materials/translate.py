@@ -9,7 +9,8 @@ NODE_UNSUPPORTED report entry and a diffuse magenta material, so nothing drops s
 
 Ref: Blender source/blender/nodes/shader/nodes/node_shader_bsdf_principled.cc (GPL, Blender 5.3):
 socket names and default values of the Principled BSDF; node_shader_tex_image.cc: interpolation,
-extension and projection settings; node_shader_background.cc: Color and Strength.
+extension and projection settings; node_shader_background.cc: Color and Strength; node_shader_tex_environment.cc: Vector, projection,
+interpolation (Cycles fixes the extension at REPEAT, scene/shader_nodes.cpp).
 Ref: docs/decisions/0005-material-model.md item 42 (Specular IOR Level L is specular_weight = 2L)
 and the compiler contract: constant colours go to STORE_SLOT as F32X3 (the slot
 lifts them), RGB_LIFT is used only on the texture path because it never folds, and one value never
@@ -229,8 +230,45 @@ def _tex_image(em, node, keymap, socket_name):
     return n
 
 
+def _tex_environment(em, node, keymap, socket_name):
+    """An Environment Texture as TEX_ENVIRONMENT over the ray direction (LOAD_CTX_P, the context
+    position of a world program). Equirectangular projection, an unlinked Vector and Linear or Closest
+    only: Mirror Ball has no op and a linked Vector would need the Mapping nodes, so both are reported
+    and the world renders magenta. Cycles fixes the extension of environment images at REPEAT, so the
+    op has no extension bit."""
+    image = node.image
+    if socket_name != "Color":
+        em.unsupported(f"Environment Texture.{socket_name}")
+        return None
+    if image is None:
+        em.unsupported("Environment Texture.image")
+        return None
+    if image.source not in _IMAGE_SOURCES:
+        em.unsupported("Environment Texture.source")
+        return None
+    if node.interpolation not in ("Linear", "Closest"):
+        em.unsupported("Environment Texture.interpolation")
+        return None
+    if node.projection != "EQUIRECTANGULAR":
+        em.unsupported("Environment Texture.projection")
+        return None
+    vec = node.inputs["Vector"]
+    if _link_of(vec) is not None:
+        report_link(em, vec, "Environment Texture.Vector")
+        return None
+    key = keys.image_key(keymap, image)
+    if key > 0xFFFFFFFF:
+        em.unsupported("Environment Texture.image key")  # the 32-bit key of _tex_image
+        return None
+    p = em.add("LOAD_CTX_P")
+    n = em.add("TEX_ENVIRONMENT", i32=(key, TEX_LINEAR if node.interpolation == "Linear" else 0))
+    em.link(p, n, 0)
+    return n
+
+
 _LOWER_VALUE = {
     "ShaderNodeTexImage": _tex_image,
+    "ShaderNodeTexEnvironment": _tex_environment,
     "ShaderNodeTexCoord": _uv,
     "ShaderNodeUVMap": _uv,
 }
@@ -433,7 +471,8 @@ def translate_material(material, keymap, op_id):
 
 
 def translate_world(world, keymap, op_id):
-    """The WORLD graph: constant Background colour times strength (0005 item 32, M1a)."""
+    """The WORLD graph: Background colour times strength, the colour constant or an Environment Texture
+    (0005 item 32)."""
     em = GraphEmitter(op_id)
     inlined = world.inline_shader_nodes()  # owns the tree
     tree = inlined.node_tree if inlined else None
@@ -450,8 +489,14 @@ def translate_world(world, keymap, op_id):
             return em
         strength = _scalar(em, src.inputs["Strength"], "Background.Strength")
         csock = src.inputs["Color"]
-        if _link_of(csock) is not None:  # a constant world only; an environment is M1b
-            report_link(em, csock, "Background.Color")
+        if _link_of(csock) is not None:
+            # A linked colour (an Environment Texture) becomes the program the engine runs per escaped ray.
+            col = _colour(em, csock, keymap, "Background.Color", lift=False)
+            if col is None or strength is None:
+                return em
+            e = em.add("EMIT_LE")
+            em.link(col, e, 0)
+            em.link(em.const_f32(strength), e, 1)
             return em
         color = tuple(csock.default_value)
         if strength is None:
