@@ -25,8 +25,8 @@ bool copy_in(const T* p, uint32_t n, std::vector<T>* out) {
 std::string key_text(ar_key k) { return "material " + std::to_string(k); }
 
 // One material's outputs from its descriptor and the graph its surface key names (null: none).
-MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d, const StoredGraph* g, const ImageMeanFn* means,
-                           const ImageSlotFn* slots) {
+MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d, const StoredGraph* g, const StoredGraph* vg,
+                           const ImageMeanFn* means, const ImageSlotFn* slots) {
   MaterialOutput m;
   if (d.ext_kind != 0)
     m = magenta_material(t, AR_REPORT_PROGRAM_REJECTED, "extension kind " + std::to_string(d.ext_kind) + " is not built in M1a");
@@ -36,8 +36,16 @@ MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d
                                               : "surface graph " + std::to_string(d.surface_graph) + " is not set");
   else
     m = compile_material(g->desc(), t, means, slots, d.medium_priority);
-  // Volume and displacement programs are later milestones: reported, the surface still renders.
-  if (d.volume_graph != 0) m.entries.push_back({AR_REPORT_NODE_UNSUPPORTED, "volume graph"});
+  // The volume graph compiles to a medium beside the surface; one that cannot is reported and not
+  // rendered, and the surface still renders (0006 A.4). Displacement is a later milestone.
+  if (d.volume_graph != 0 && vg == nullptr) {
+    m.entries.push_back({AR_REPORT_PROGRAM_REJECTED, "volume graph " + std::to_string(d.volume_graph) + " is not set"});
+  } else if (d.volume_graph != 0) {
+    VolumeOutput v = compile_volume(vg->desc(), t);
+    m.has_medium = v.has_medium;
+    m.medium = std::move(v.medium);
+    for (MaterialEntry& e : v.entries) m.entries.push_back(std::move(e));
+  }
   if (d.displacement_graph != 0) m.entries.push_back({AR_REPORT_NODE_UNSUPPORTED, "displacement graph"});
   return m;
 }
@@ -61,7 +69,8 @@ ar_graph_desc StoredGraph::desc() const {
 
 uint64_t MaterialArrays::bytes() const {
   return headers.size() * sizeof(ar::MaterialHeader) + programs.size() * sizeof(uint32_t) +
-         constants.size() * sizeof(ar::ConstantBlock) + pass_index.size() * sizeof(uint32_t);
+         constants.size() * sizeof(ar::ConstantBlock) + pass_index.size() * sizeof(uint32_t) +
+         media.size() * sizeof(ar::MediumBlock) + medium_programs.size() * sizeof(uint32_t);
 }
 
 struct MaterialStore::Open {
@@ -80,7 +89,7 @@ struct MaterialStore::Pass {
   struct Item {
     ar_key key = 0;
     ar_material_desc desc = {};
-    std::shared_ptr<const StoredGraph> graph;
+    std::shared_ptr<const StoredGraph> graph, vgraph;  // surface graph and volume graph
     std::shared_ptr<const MaterialOutput> out;
   };
   std::vector<Item> items;  // compiled on the worker from the latest state as bind predicted it
@@ -124,7 +133,7 @@ ar_status MaterialStore::ensure_pass(Edit& edit) {
   };
   item->job = [self, pass] {
     for (Pass::Item& it : pass->items) {
-      it.out = std::make_shared<const MaterialOutput>(compile_one(self->table_, it.desc, it.graph.get(), nullptr, nullptr));
+      it.out = std::make_shared<const MaterialOutput>(compile_one(self->table_, it.desc, it.graph.get(), it.vgraph.get(), nullptr, nullptr));
       // An emission sampling value outside Blender's five, or an estimate the light table cannot
       // weigh, is a bad material and rejects the generation.
       try {
@@ -248,7 +257,8 @@ bool MaterialStore::world_compiles(const Open& o, const std::optional<ar_world_d
 }
 
 bool MaterialStore::compiles(const Open& o, ar_key key, const ar_material_desc& d) {
-  return o.materials.count(key) != 0 || o.graphs.count(d.surface_graph) != 0 || o.removed_graphs.count(d.surface_graph) != 0;
+  return o.materials.count(key) != 0 || o.graphs.count(d.surface_graph) != 0 || o.removed_graphs.count(d.surface_graph) != 0 ||
+         (d.volume_graph != 0 && (o.graphs.count(d.volume_graph) != 0 || o.removed_graphs.count(d.volume_graph) != 0));
 }
 
 // At commit: what the edit compiles, predicted from the latest state (every queued generation
@@ -272,6 +282,8 @@ void MaterialStore::bind(const std::shared_ptr<Pass>& pass) {
     it.desc = kv.second;
     auto gi = latest_graphs_.find(kv.second.surface_graph);
     if (gi != latest_graphs_.end()) it.graph = gi->second;
+    auto vi = latest_graphs_.find(kv.second.volume_graph);
+    if (kv.second.volume_graph != 0 && vi != latest_graphs_.end()) it.vgraph = vi->second;
     pass->items.push_back(std::move(it));
   }
 }
@@ -305,6 +317,18 @@ void MaterialStore::rebuild_locked() {
     a->emission_estimates.push_back(m.emission_estimate);
     a->emission_sampling.push_back(kv.second.desc.emission_sampling);
     a->pass_index.push_back(kv.second.desc.pass_index);
+    // A medium's volume entry goes into its own program array; word 0 is reserved so that an entry
+    // offset of 0 means none.
+    uint32_t medium = MaterialArrays::kNoMedium;
+    if (m.has_medium) {
+      if (a->medium_programs.empty()) a->medium_programs.push_back(0u);
+      ar::MediumBlock b = m.medium.block;
+      b.entry = uint32_t(a->medium_programs.size());
+      a->medium_programs.insert(a->medium_programs.end(), m.medium.program.begin(), m.medium.program.end());
+      medium = uint32_t(a->media.size());
+      a->media.push_back(b);
+    }
+    a->medium_index.push_back(medium);
   }
   // The default material, last (MaterialArrays): no key, no program words, pass index 0.
   ar::MaterialHeader h = {};
@@ -359,15 +383,18 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
       if (!own_pass && !image_dirty) continue;
       auto gi = graphs_.find(kv.second.surface_graph);
       const std::shared_ptr<const StoredGraph> graph = gi != graphs_.end() ? gi->second : nullptr;
+      auto vi = graphs_.find(kv.second.volume_graph);
+      const std::shared_ptr<const StoredGraph> vgraph =
+          kv.second.volume_graph != 0 && vi != graphs_.end() ? vi->second : nullptr;
       std::shared_ptr<const MaterialOutput> out;
       if (own_pass)
         for (const Pass::Item& it : pass.items)
-          if (it.key == kv.first && it.graph == graph && std::memcmp(&it.desc, &kv.second, sizeof(ar_material_desc)) == 0)
+          if (it.key == kv.first && it.graph == graph && it.vgraph == vgraph && std::memcmp(&it.desc, &kv.second, sizeof(ar_material_desc)) == 0)
             out = it.out;
       // The worker compiled without image means and slots (the images may not have been decoded
       // or installed yet); a result that reads images is compiled again here.
       if (out && !out->images.empty()) out.reset();
-      if (!out) out = std::make_shared<const MaterialOutput>(compile_one(table_, kv.second, graph.get(), &means, &slots));
+      if (!out) out = std::make_shared<const MaterialOutput>(compile_one(table_, kv.second, graph.get(), vgraph.get(), &means, &slots));
       materials_[kv.first] = Active{kv.second, out};
       done.push_back({kv.first, o.materials.count(kv.first) != 0, out});
     }

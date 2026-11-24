@@ -63,6 +63,14 @@ struct MaterialArrays {
   // Distinct surface programs among the keyed headers (sort.h sort_program_count): the material
   // sort's threshold (RULINGS 80), counted once here so no pass reads the headers back.
   uint32_t program_count = 0;
+  // The media of the keyed materials that have a compiled volume graph (0006 A.1): medium_index[i]
+  // is the index into `media` of keys[i]'s medium, or kNoMedium. MediumDesc::program indexes
+  // `media`; each block's entry is a word offset into medium_programs. Host memory like the rest
+  // of these arrays; the device upload and the scene table of MediumDesc are 181 and 182.
+  static constexpr uint32_t kNoMedium = 0xffffffffu;
+  std::vector<ar::MediumBlock> media;
+  std::vector<uint32_t> medium_programs;
+  std::vector<uint32_t> medium_index;
   uint64_t bytes() const;
 };
 

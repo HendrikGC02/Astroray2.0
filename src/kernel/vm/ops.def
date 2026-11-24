@@ -47,3 +47,4 @@ AR_OP(TEST_INJECT_NAN, 0, "reg",              "f32",   CHEAP, NONE_SURFACE_ONLY,
 AR_OP(BLACKBODY,       0, "reg+imm+imm",      "spec",  CHEAP, NONE_SURFACE_ONLY,      false, false, false)
 AR_OP(CAUCHY_ABBE,     0, "reg+imm+imm+imm",  "spec",  CHEAP, NONE_SURFACE_ONLY,      false, false, false)
 AR_OP(CHANNEL_F32X3,   1, "reg+reg+imm",      "f32",   CHEAP, NONE_SURFACE_ONLY,      false, false, true)
+AR_OP(VOLUME_COEFFS,   0, "",                 "",      CHEAP, interval_volume_coeffs, true,  false, false)

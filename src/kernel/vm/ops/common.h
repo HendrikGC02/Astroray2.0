@@ -15,6 +15,9 @@
 
 AR_NS_BEGIN
 
+struct MediumSample;
+struct MediumBlock;
+
 inline constexpr uint32_t kVmRegisterCount = 32;
 static_assert(sizeof(VmRegs) == kVmRegisterCount * sizeof(float), "the register file is 32 f32");
 
@@ -38,6 +41,8 @@ struct VmState {
   const SceneTables* tables;
   OpenPBRParams* rec;
   Spec* le;
+  MediumSample* med;         // volume entry only: what VOLUME_COEFFS fills; null on a surface run
+  const MediumBlock* mblock;  // volume entry only: the medium's constant block
   uint32_t a, b, c;  // operand bytes of the instruction word
   VmStatus status;
   bool done;

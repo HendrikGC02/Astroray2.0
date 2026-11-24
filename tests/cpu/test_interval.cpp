@@ -13,6 +13,7 @@
 #include <cstring>
 #include <random>
 
+#include "medium/medium_eval.h"
 #include "vm/interp.h"
 #include "vm/interval.h"
 
@@ -212,6 +213,77 @@ TEST_CASE("interval/infinity corners the endpoints miss") {
   CHECK(both_nan(ar::interval_add_f32x3(u3, m).c[2]));
   // Same-signed infinities add to an infinity.
   CHECK_FALSE(ar::interval_is_nan(ar::interval_add_f32x3(u3, u3).c[1]));
+}
+
+// VOLUME_COEFFS reads no register, so its interval is the block's extinction bound
+// (medium_block_sigma_t_bound) and must hold sigma_t of the op at every wavelength. Random blocks:
+// RGB refs with sigmoid coefficients over the range real colours give, scales from 0 to 8, CONSTANT
+// refs, zero to two lobes; a lane of the evaluated sample lies in the interval.
+TEST_CASE("interval/volume coeffs encloses the op") {
+  std::mt19937 g(179u);
+  auto u = [&](float lo, float hi) { return lo + (hi - lo) * std::uniform_real_distribution<float>(0.f, 1.f)(g); };
+  auto ref = [&]() {
+    ar::SpectrumRef r = {};
+    r.semantic = uint8_t(ar::SpectrumSemantic::REFLECTANCE);
+    if (g() % 4 == 0) {
+      r.kind = uint8_t(ar::SpectrumKind::CONSTANT);
+      r.semantic = uint8_t(ar::SpectrumSemantic::UNBOUNDED);  // a medium's constants are not clamped to 1
+      r.p[0] = u(0.f, 8.f);
+    } else {
+      r.kind = uint8_t(ar::SpectrumKind::RGB);
+      r.p[0] = u(-2e-4f, 2e-4f);
+      r.p[1] = u(-0.2f, 0.2f);
+      r.p[2] = u(-60.f, 60.f);
+      r.p[3] = u(0.f, 8.f);
+    }
+    return r;
+  };
+  const ar::SceneTables tables = {};
+  for (int n = 0; n < 4000; ++n) {
+    ar::MediumBlock b = ar::medium_block_vacuum();
+    b.sigma_a = ref();
+    b.sigma_s[0] = ref();
+    b.sigma_s[1] = ref();
+    b.lobe_count = g() % 3;
+    const Interval bound = ar::medium_block_sigma_t_bound(b);
+    const Interval box = ar::interval_volume_coeffs(bound);
+    CHECK_FALSE(ar::interval_is_nan(box));
+    // Tight, not merely valid: finite, and no wider than the refs' own scales plus the 2^-22 slack
+    // per ref, so {-inf, +inf} or a loose widening fails.
+    float scales = 0.f;
+    scales += b.sigma_a.kind == uint8_t(ar::SpectrumKind::CONSTANT) ? b.sigma_a.p[0] : b.sigma_a.p[3];
+    for (uint32_t l = 0; l < b.lobe_count; ++l)
+      scales += b.sigma_s[l].kind == uint8_t(ar::SpectrumKind::CONSTANT) ? b.sigma_s[l].p[0] : b.sigma_s[l].p[3];
+    CHECK(std::isfinite(box.lo));
+    CHECK(std::isfinite(box.hi));
+    // Each ref adds 2^-22 of slack, one ulp (2^-23) for the step up and one for the widening of
+    // the sum it joins: 2^-21 of its scale per ref, per side.
+    const float width = 4.76837158203125e-7f * float(1u + b.lobe_count);
+    CHECK(box.lo >= -scales * width - 1e-30f);
+    CHECK(box.hi <= scales * (1.f + width) + 1e-30f);
+    for (int k = 0; k < 8; ++k) {
+      ar::Lambda lam;
+      for (int l = 0; l < 4; ++l) lam.nm[l] = ar::Real(u(360.f, 830.f));
+      ar::MediumSample s;
+      REQUIRE(ar::op_volume_coeffs(b, tables.observer, lam, &s) == ar::VmStatus::OK);
+      const ar::Spec st = ar::medium_sigma_t(s);
+      for (int l = 0; l < 4; ++l) CHECK(encloses(box, float(st.v[l])));
+    }
+  }
+  // A negative scale or a NaN has no bound: {NaN, NaN}, never a clamp.
+  ar::MediumBlock bad = ar::medium_block_vacuum();
+  bad.sigma_a.kind = uint8_t(ar::SpectrumKind::RGB);
+  bad.sigma_a.semantic = uint8_t(ar::SpectrumSemantic::REFLECTANCE);
+  bad.sigma_a.p[3] = -1.f;
+  CHECK(both_nan(ar::medium_block_sigma_t_bound(bad)));
+  bad.sigma_a.p[3] = std::nanf("");
+  CHECK(both_nan(ar::medium_block_sigma_t_bound(bad)));
+  // A (kind, semantic) pair the exact bound does not cover has no bound either.
+  bad.sigma_a.p[3] = 1.f;
+  CHECK_FALSE(ar::interval_is_nan(ar::medium_block_sigma_t_bound(bad)));
+  bad.sigma_a.semantic = uint8_t(ar::SpectrumSemantic::ILLUMINANT);
+  CHECK(both_nan(ar::medium_block_sigma_t_bound(bad)));
+  CHECK(both_nan(ar::interval_volume_coeffs(Interval{std::nanf(""), 1.f})));
 }
 
 }  // TEST_SUITE
