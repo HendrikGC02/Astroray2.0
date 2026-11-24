@@ -2,8 +2,7 @@ diff --git a/blender/astroray/materials/translate.py b/blender/astroray/material
 index ce0090c..2006208 100644
 --- a/blender/astroray/materials/translate.py
 +++ b/blender/astroray/materials/translate.py
-@@ -243,31 +243,28 @@ def _tex_environment(em, node, keymap, socket_name):
-     if image is None:
+@@ -244,29 +244,26 @@ def _tex_environment(em, node, keymap, socket_name):
          em.unsupported("Environment Texture.image")
          return None
      if image.source not in _IMAGE_SOURCES:
@@ -34,21 +33,19 @@ index ce0090c..2006208 100644
      "ShaderNodeTexImage": _tex_image,
      "ShaderNodeTexEnvironment": _tex_environment,
      "ShaderNodeTexCoord": _uv,
-     "ShaderNodeUVMap": _uv,
 diff --git a/src/host/light/light_builder.cpp b/src/host/light/light_builder.cpp
-index 93e8ef8..ce8e94b 100644
+index 7e393d9..70516c0 100644
 --- a/src/host/light/light_builder.cpp
 +++ b/src/host/light/light_builder.cpp
-@@ -71,19 +71,19 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
-   // the same function of the same input) times light_power's geometric factor (1, pi A,
-   // 4 pi^2 R^2) (D9, D10).
+@@ -73,17 +73,17 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
    std::vector<double> imps(in.size());
    const auto importance = [&](uint32_t first, uint32_t last) {
      double energy = 0.0;
      for (uint32_t i = first; i < last; ++i) {
        const LightInput& li = in[i];
-       // A program world has no importance until its table exists (173): pmf 0 means nothing samples
-       // it, so a BSDF hit that escapes takes MIS weight 1 (unbiased, noisier than with NEE).
+       // A program world has no importance until an importance table can be built from its program:
+       // pmf 0 means nothing samples it, so a BSDF hit that escapes takes MIS weight 1 (unbiased,
+       // noisier than with NEE).
 -      if (li.record.type == uint8_t(ar::LightType::WORLD_CONST) && (li.record.flags & ar::kLightWorldProgram) != 0) {
 +      if (li.record.type == uint8_t(ar::LightType::WORLD_CONST) && (li.record.flags & ar::kLightWorldProgram) == 0) {
          imps[i] = 0.0;
@@ -59,13 +56,11 @@ index 93e8ef8..ce8e94b 100644
        imps[i] = energy * double(ar::light_power(li.record, scene, ar::Real(1)));
      }
    };
-   if (run) run(uint32_t(in.size()), importance);
 diff --git a/src/host/material/graph.cpp b/src/host/material/graph.cpp
 index 46fa057..a477545 100644
 --- a/src/host/material/graph.cpp
 +++ b/src/host/material/graph.cpp
-@@ -171,19 +171,19 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
-     o.i32_first = n.i32_first;
+@@ -172,17 +172,17 @@ bool parse_graph(const ar_graph_desc& d, Graph* g, std::string* err) {
      o.n_inputs = op_input_count(o.op);
      o.out = op_result_type(o.op);
      if (with_child && (o.child = g->i32[o.i32_first + ni]) < 0) return *err = at(i, "child id must not be negative"), false;
@@ -84,13 +79,11 @@ index 46fa057..a477545 100644
      auto finite_positive = [](float v) { return std::isfinite(v) && v > 0.0f; };
      // planck.h documents float-safe Planck only for T in [3 K, 1e9 K]; outside it the radiance underflows
      // to 0 or the host's 1 / Y(Planck) overflows, and the kernel would return NaN or inf silently.
-     constexpr float kPlanckTMin = 3.0f, kPlanckTMax = 1.0e9f;
 diff --git a/src/host/material/material_store.cpp b/src/host/material/material_store.cpp
 index 900fbdc..ffe372d 100644
 --- a/src/host/material/material_store.cpp
 +++ b/src/host/material/material_store.cpp
-@@ -446,19 +446,19 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
-       done.push_back({kv.first, o.materials.count(kv.first) != 0, out});
+@@ -447,17 +447,17 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
      }
      // The world, by the same rule: the worker's output when its prediction holds, else compiled
      // here. It goes before the arrays are rebuilt, which carry its program. A world that samples an
@@ -109,13 +102,11 @@ index 900fbdc..ffe372d 100644
            std::memcmp(&pass.world_desc, &*world_, sizeof(ar_world_desc)) != 0)
          out = std::make_shared<const WorldOutput>(compile_world(*world_, graph.get(), table_, &means, &slots));
        if (world_out_) old_world = world_out_->subject;
-       world_out_ = out;
 diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
 index 2b84448..808dfc5 100644
 --- a/src/host/scene/scene_tables.cpp
 +++ b/src/host/scene/scene_tables.cpp
-@@ -415,19 +415,19 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
-   sd.material_slots = as<uint32_t>(at(TableId::MATERIAL_SLOTS));
+@@ -416,17 +416,17 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
    sd.material_headers = as<ar::MaterialHeader>(at(TableId::MATERIAL_HEADERS));
    // The header table's last entry is the default material, one past the counted headers.
    sd.material_header_count = cnt(TableId::MATERIAL_HEADERS) ? cnt(TableId::MATERIAL_HEADERS) - 1u : 0u;
@@ -134,13 +125,11 @@ index 2b84448..808dfc5 100644
    ar::LightSamplerView lv{as<ar::AliasBin>(at(TableId::LIGHT_BINS)), as<uint32_t>(at(TableId::LIGHT_BIN_LIGHT)),
                            as<float>(at(TableId::LIGHT_PMF)), cnt(TableId::LIGHT_BINS), cnt(TableId::LIGHTS)};
    const ar::EDielTable et{as<float>(at(TableId::E_DIEL))};
-   const uint64_t o_vm = align16(sizeof(ar::SceneData)), o_lv = o_vm + align16(sizeof(ar::SceneTables));
 diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
 index 0590df1..f092e3e 100644
 --- a/src/kernel/stages/shade_background.h
 +++ b/src/kernel/stages/shade_background.h
-@@ -55,37 +55,37 @@ AR_FN const LightRecord* world_light(const KernelGlobals& kg) {
- AR_FN bool world_radiance(const KernelGlobals& kg, const LightRecord& world, uint32_t slot, const Lambda& lam, Spec* le) {
+@@ -56,17 +56,17 @@ AR_FN bool world_radiance(const KernelGlobals& kg, const LightRecord& world, uin
    const ObserverView& obs = kg.tables->observer;
    if ((world.flags & kLightWorldProgram) == 0u) {
      *le = light_emission(world, lam, obs);
@@ -159,7 +148,7 @@ index 0590df1..f092e3e 100644
    ctx.ray_type = ps_ray_type(kg, slot);
    const U16x6 b = ps_bounces(kg, slot);
    for (int i = 0; i < 6; ++i) ctx.depth[i] = b.v[i];
-   ctx.lambda_t = lam;
+@@ -74,17 +74,17 @@ AR_FN bool world_radiance(const KernelGlobals& kg, const LightRecord& world, uin
    // As a material's emission entry: the block's own emission first (0 for a program world, whose
    // emissions are all code), then the entry adds its terms.
    const ConstantBlock& block = s.world_constants[0];
@@ -178,13 +167,11 @@ index 0590df1..f092e3e 100644
    AR_ASSERT((ps_flags(kg, slot) & PATH_KIND) == 0u);
    Term term = Term::ESCAPED;
    const LightRecord* world = world_light(kg);
-   const uint32_t flags = ps_flags(kg, slot);
 diff --git a/src/kernel/vm/ops/tex_environment.h b/src/kernel/vm/ops/tex_environment.h
-index 1be5e2a..1349c0c 100644
+index 1be5e2a..ddcdb34 100644
 --- a/src/kernel/vm/ops/tex_environment.h
 +++ b/src/kernel/vm/ops/tex_environment.h
-@@ -35,19 +35,19 @@ AR_FN void env_direction_uv(const float* d, float* uv) {
-     x = x * inv, y = y * inv, z = z * inv;
+@@ -36,31 +36,30 @@ AR_FN void env_direction_uv(const float* d, float* uv) {
    }
    if (x == 0.0f && y == 0.0f && z == 0.0f) {  // is_zero: direction_to_equirectangular returns (0, 0)
      uv[0] = 0.0f, uv[1] = 0.0f;
@@ -204,3 +191,16 @@ index 1be5e2a..1349c0c 100644
    env_direction_uv(dir, uv);
    op_tex_image(t, slot, mode, uv, out);
  }
+ 
+ AR_FN void vm_op_tex_environment(VmState& vm) {
+   if (!vm_regs_ok(vm, vm.a, 3) || !vm_regs_ok(vm, vm.b, 3)) return;
+   const uint32_t mode = vm_imm(vm, 1);
+-  if ((mode & ~kTexLinear) != 0u) return vm_fail(vm, VmStatus::BAD_OPERAND);
+   if (vm.tables == nullptr ||
+       (vm.tables->image_count != 0u && (vm.tables->images == nullptr || vm.tables->srgb_decode == nullptr)))
+     return vm_fail(vm, VmStatus::NULL_POINTER);
+   op_tex_environment(*vm.tables, vm_imm(vm, 0), mode, vm.r + vm.b, vm.r + vm.a);
+   vm.pc += 3;
+ }
+ AR_NS_END
+ #define handle_TEX_ENVIRONMENT() ::ar::vm_op_tex_environment(vm)
