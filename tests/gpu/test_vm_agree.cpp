@@ -60,6 +60,7 @@ struct Tables {
     jh = read_data("spectral/rec709.jh");
     const char* e = ar::jh_view(jh.data(), jh.size(), &table);
     REQUIRE_MESSAGE(e == nullptr, (e ? e : ""));
+    for (int k = 0; k < 3; ++k) table.y_row[k] = obs.y_row[k];
   }
 };
 
@@ -121,6 +122,7 @@ std::vector<Named> programs() {
                                     .op(Op::CHANNEL_F32X3, 17, 3, 0, {1u})
                                     .op(Op::CHANNEL_F32X3, 18, 3, 0, {2u})
                                     .op(Op::END)});
+  p.push_back({"COLOR_TO_F32", Prog().op(Op::COLOR_TO_F32, 16, 3).op(Op::COLOR_TO_F32, 17, 6).op(Op::END)});
   p.push_back({"LOAD_CTX_UV,LOAD_CTX_P", Prog()
                                              .op(Op::LOAD_CTX_UV, 16, 0)
                                              .op(Op::LOAD_CTX_UV, 19, 1)
@@ -269,8 +271,9 @@ TEST_CASE("vm_agree/gpu nofma vs cpu float per opcode") {
              c_p = reinterpret_cast<uint64_t>(c.ptr), il_p = reinterpret_cast<uint64_t>(il.ptr);
     uint32_t entry = 4;
     int32_t res = tb.table.res;
+    float y0 = tb.table.y_row[0], y1 = tb.table.y_row[1], y2 = tb.table.y_row[2];
     const Results gpu = run_gpu(*dev, nofma_module("vm_agree"), "ar_vm_agree", in, kOut,
-                                {&prog_p, &entry, &z_p, &c_p, &res, &il_p});
+                                {&prog_p, &entry, &z_p, &c_p, &res, &il_p, &y0, &y1, &y2});
     const Results cpu = cpu_run(np.prog, in, tb);
     dev->free(pb);
 

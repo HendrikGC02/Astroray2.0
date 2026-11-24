@@ -8,12 +8,15 @@
 // Ref: docs/decisions/0005-material-model.md items 30, 35, Verification 6.
 #include <doctest.h>
 
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "../../src/host/data_resource.h"
 #include "../../src/host/ledger.h"
 #include "../../src/host/material/compiler.h"
 #include "../../src/host/material/graph.h"
@@ -216,6 +219,98 @@ TEST_CASE("compiler_fold/folded equals interpreted per foldable op") {
     ++checked;
   }
   CHECK(checked >= 6);
+}
+
+// Row 1 of the inverse of a 3x3 by Gauss-Jordan elimination with partial pivoting, in double: an
+// inverse that shares no code with the host's cofactor formula.
+std::array<double, 3> inverse_row1(const double m[9]) {
+  double a[3][6] = {};
+  for (int r = 0; r < 3; ++r) {
+    for (int c = 0; c < 3; ++c) a[r][c] = m[3 * r + c];
+    a[r][3 + r] = 1.0;
+  }
+  for (int col = 0; col < 3; ++col) {
+    int piv = col;
+    for (int r = col + 1; r < 3; ++r)
+      if (std::fabs(a[r][col]) > std::fabs(a[piv][col])) piv = r;
+    for (int c = 0; c < 6; ++c) std::swap(a[col][c], a[piv][c]);
+    const double d = a[col][col];
+    for (int c = 0; c < 6; ++c) a[col][c] /= d;
+    for (int r = 0; r < 3; ++r) {
+      if (r == col) continue;
+      const double f = a[r][col];
+      for (int c = 0; c < 6; ++c) a[r][c] -= f * a[col][c];
+    }
+  }
+  return {a[1][3], a[1][4], a[1][5]};
+}
+
+TEST_CASE("compiler_fold/luminance row is row 1 of inverse M_ws") {
+  astroray::DataBlob blob;
+  REQUIRE(astroray::find_data("spectral/observer.bin", &blob));
+  astroray::ObserverTables obs;
+  REQUIRE(astroray::parse_observer(blob.data, blob.size, &obs).empty());
+  const std::array<double, 3> want = inverse_row1(obs.m_ws);
+  const float* y = table().y_row;  // the material store's table, which the fold and the kernel read
+  double sum = 0.0;
+  for (int k = 0; k < 3; ++k) {
+    CHECK(std::fabs(double(y[k]) - want[size_t(k)]) <= 1e-7 * std::fabs(want[size_t(k)]) + 1e-9);
+    CHECK(y[k] > 0.0f);
+    sum += double(y[k]);
+  }
+  // M_ws maps the working-space white (XYZ with Y = 1) to RGB (1, 1, 1), so the weights sum to Y = 1.
+  CHECK(std::fabs(sum - 1.0) <= 1e-6);
+  // A table that never got the row is refused at compile time, not folded to 0.
+  GB g;
+  const int c = g.add(Op::CONST_F32X3, {0.25f, 0.5f, 0.75f});
+  const int n = g.add(Op::COLOR_TO_F32);
+  g.link(c, n, 0);
+  g.store(n, ar::RecordSlot::base_metalness);
+  ar_graph_desc d = {};
+  d.node_count = uint32_t(g.nodes.size()), d.link_count = uint32_t(g.links.size());
+  d.f32_count = uint32_t(g.f.size()), d.i32_count = uint32_t(g.i.size());
+  d.nodes = g.nodes.data(), d.links = g.links.data(), d.params_f32 = g.f.data(), d.params_i32 = g.i.data();
+  ar::Rgb2SpecTable bare = table();
+  bare.y_row[0] = bare.y_row[1] = bare.y_row[2] = 0.0f;
+  const CompileResult r = compile_surface(d, bare);
+  CHECK_FALSE(r.ok);
+  CHECK(r.error.find("luminance row") != std::string::npos);
+  CHECK(compile_surface(d, table()).ok);
+}
+
+// The non-folded path: the colour is a per-point UV, so the op stays in the program, the compiler's
+// encoding of it names the right source register, and the interpreter converts at run time. The
+// expectation is the luminance of the same input under the independently inverted M_ws row.
+TEST_CASE("compiler_fold/COLOR_TO_F32 per point equals luminance") {
+  astroray::DataBlob blob;
+  REQUIRE(astroray::find_data("spectral/observer.bin", &blob));
+  astroray::ObserverTables obs;
+  REQUIRE(astroray::parse_observer(blob.data, blob.size, &obs).empty());
+  const std::array<double, 3> y = inverse_row1(obs.m_ws);
+  GB g;
+  const int uv = g.add(Op::LOAD_CTX_UV, {}, {0});
+  const int n = g.add(Op::COLOR_TO_F32);
+  g.link(uv, n, 0);
+  g.store(n, ar::RecordSlot::base_metalness);
+  const CompileResult r = g.compile();
+  REQUIRE_MESSAGE(r.ok, r.error);
+  CHECK_FALSE(r.constant_surface);
+  bool found = false;
+  for (Op o : program_ops(r)) found = found || o == Op::COLOR_TO_F32;
+  REQUIRE(found);
+  ar::SceneTables tables = {};
+  tables.rgb2spec = &table();
+  for (uint32_t i = 0; i < 64; ++i) {
+    ar::VmRegs regs = {};
+    ar::ShadeContext ctx = {};
+    const float u = float(i % 8) / 8.0f + 0.03f, v = float(i / 8) / 8.0f + 0.05f;
+    ctx.uv[0] = ar::Real2{u, v};
+    ar::OpenPBRParams rec = {};
+    ar::Spec le = {};
+    REQUIRE(ar::run_entry(r.program.data(), r.program[0], &regs, ctx, tables, &rec, &le) == ar::VmStatus::OK);
+    const double want = double(u) * y[0] + double(v) * y[1];  // the UV's z is 0
+    CHECK(std::fabs(double(rec.base_metalness) - want) <= 2e-6 * want + 1e-9);
+  }
 }
 
 TEST_CASE("compiler_fold/non foldable ops stay in the program") {

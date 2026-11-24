@@ -3,6 +3,7 @@
 // loader of the copies embedded in the DLL as RCDATA (0001 D8.4, 0003 d14, d18).
 // Header-only parts are shared with tools/specgen so the format exists once.
 #pragma once
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -85,8 +86,22 @@ struct ObserverTables {
   float d65[kObserverSamples];
   double y_n = 0, k = 0;
   double m_ws[9] = {};
+  float y_row[3] = {};  // the working space's RGB-to-Y row, derived in parse_observer from m_ws
   uint8_t observer_hash[8] = {};
 };
+
+// Row 1 (Y) of the inverse of the XYZ-to-RGB matrix `m` (row-major), in double: the weights of the
+// working space's scene-linear luminance, which is what Blender's implicit colour-to-float
+// conversion takes. Row 1 of an inverse is the cofactors of m's column 1, over the determinant.
+// Ref: Cycles src/scene/shader.cpp (rgb_to_y = rgb_to_xyz.y) and kernel/util/colorspace.h
+// (linear_rgb_to_gray), from the fetched cycles reference.
+inline void working_space_y_row(const double m[9], double out[3]) {
+  const double det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) +
+                     m[2] * (m[3] * m[7] - m[4] * m[6]);
+  out[0] = -(m[3] * m[8] - m[5] * m[6]) / det;
+  out[1] = (m[0] * m[8] - m[2] * m[6]) / det;
+  out[2] = -(m[0] * m[5] - m[2] * m[3]) / det;
+}
 
 // The observer hash: first 8 bytes of SHA-256 over xbar, ybar, zbar as little-endian floats.
 inline void observer_hash_of(const float cmf[3][kObserverSamples], uint8_t out[8]) {
@@ -113,6 +128,12 @@ inline std::string parse_observer(const void* data, size_t size, ObserverTables*
   std::memcpy(&t->k, p + kObserverKOffset, 8);
   std::memcpy(t->d65, p + kObserverD65Offset, sizeof(t->d65));
   std::memcpy(t->m_ws, p + kObserverMwsOffset, sizeof(t->m_ws));
+  double y[3];
+  working_space_y_row(t->m_ws, y);
+  for (int i = 0; i < 3; ++i) {
+    if (!std::isfinite(y[i])) return "observer.bin: M_ws is singular";
+    t->y_row[i] = float(y[i]);
+  }
   std::memcpy(t->observer_hash, p + kDataHashOffset, 8);
   uint8_t h[8];
   observer_hash_of(t->cmf, h);

@@ -35,6 +35,9 @@ struct Rgb2SpecTable {
   const float* z_nodes;  // res nodes, smoothstep(smoothstep(k / (res - 1)))
   const float* coeffs;   // 3 * res^3 * 3 floats
   uint8_t observer_hash[8];
+  // The working space's RGB-to-Y row (host-derived from M_ws), read by COLOR_TO_F32 in the kernel
+  // and the compiler's fold; all zero until the host fills it, which both treat as an error.
+  float y_row[3];
 };
 
 AR_FN uint32_t jh_u32(const uint8_t* p) {
@@ -55,6 +58,7 @@ AR_FN const char* jh_view(const uint8_t* d, uint64_t size, Rgb2SpecTable* t) {
   t->res = int32_t(res);
   t->illuminant_id = jh_u32(d + 28);
   for (int i = 0; i < 8; ++i) t->observer_hash[i] = d[16 + i];
+  t->y_row[0] = t->y_row[1] = t->y_row[2] = 0.0f;
   t->z_nodes = reinterpret_cast<const float*>(d + kJhHeaderBytes);
   t->coeffs = reinterpret_cast<const float*>(d + kJhHeaderBytes + 4u * n);
   return nullptr;

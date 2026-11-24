@@ -19,6 +19,7 @@
 #include "../../kernel/vm/ops/add_f32.h"
 #include "../../kernel/vm/ops/add_f32x3.h"
 #include "../../kernel/vm/ops/channel_f32x3.h"
+#include "../../kernel/vm/ops/color_to_f32.h"
 #include "../../kernel/vm/ops/const_f32.h"
 #include "../../kernel/vm/ops/mul_f32.h"
 #include "../../kernel/vm/ops/mul_f32x3.h"
@@ -137,6 +138,15 @@ bool fold(const Work& w, int i, Vec3* out, std::string* err) {
     case Op::MUL_F32X3_F32: ar::op_mul_f32x3_f32(a.data(), b[0], out->data()); return true;
     case Op::ADD_F32X3: ar::op_add_f32x3(a.data(), b.data(), out->data()); return true;
     case Op::CHANNEL_F32X3: (*out)[0] = ar::op_channel_f32x3(a.data(), uint32_t(w.g.i32[n.i32_first])); return true;
+    case Op::COLOR_TO_F32: {
+      const float* y = w.table->y_row;
+      if (y[0] == 0.0f && y[1] == 0.0f && y[2] == 0.0f) {
+        *err = "COLOR_TO_F32 needs the working space's luminance row (Rgb2SpecTable::y_row), which the host never filled";
+        return false;
+      }
+      (*out)[0] = ar::op_color_to_f32(a.data(), y);
+      return true;
+    }
     default:
       *err = std::string("internal error: ops.def marks ") + op_meta(n.op).name +
              " foldable but compiler.cpp fold() has no case for it";
@@ -351,6 +361,7 @@ bool build_code(const Work& w, const std::vector<Item>& items, std::vector<uint3
       case Op::MUL_F32X3:
       case Op::MUL_F32X3_F32:
       case Op::ADD_F32X3: code->push_back(word(nd.op, a, in(0), in(1))); break;
+      case Op::COLOR_TO_F32: code->push_back(word(nd.op, a, in(0))); break;
       case Op::TEX_IMAGE:
         code->push_back(word(nd.op, a, in(0)));
         code->push_back(w.slot[size_t(it.node)]);
@@ -1085,6 +1096,10 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
   for (size_t i = 0; i < n; ++i)
     if (w.g.nodes[i].op == Op::VOLUME_COEFFS)
       return res.error = "graph node " + std::to_string(i) + " (VOLUME_COEFFS): a volume term has no surface meaning", res;
+  // A per-point COLOR_TO_F32 would fail at run time on a table without the luminance row.
+  for (size_t i = 0; i < n; ++i)
+    if (w.g.nodes[i].op == Op::COLOR_TO_F32 && table.y_row[0] == 0.0f && table.y_row[1] == 0.0f && table.y_row[2] == 0.0f)
+      return res.error = "graph node " + std::to_string(i) + " (COLOR_TO_F32): the working-space table has no luminance row", res;
   w.topo = stable_topo(w.g);
   w.isc.assign(n, 0);
   w.cv.assign(n, Vec3{0.0f, 0.0f, 0.0f});

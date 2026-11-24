@@ -83,6 +83,13 @@ attr ShaderNodeOutputMaterial.target
 attr ShaderNodeUVMap.uv_map
 attr ShaderNodeGroup.node_tree
 attr ShaderNodeTexImage.image
+# Emission, Blackbody and the colour-to-float link (task 165): the node types are read by bl_idname and their sockets
+# by name; use_nodes is pinned by headless/test_lowering.py (Blender 5.x keeps it always on).
+attr Material.use_nodes
+attr NodeSocket.type
+attr NodeLink.from_socket
+attr ShaderNodeEmission.inputs
+attr ShaderNodeBlackbody.inputs
 
 # Images and colour management (0007 d21; sync/images.py, settings.py). interop ids are new in 5.x.
 attr Image.colorspace_settings.interop_id
