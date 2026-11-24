@@ -11,7 +11,7 @@ Do:
 4. Self-test (tools tier): a fixture CMake project or the real tree, a build, an index refresh, then `ninja -n` (or build.ps1's check) reports no work; a content change of a tracked source still reports work.
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; step 1's reproduction before and after in the PR; a canary run of any landed task's patch twice in a row with `git status` run between builds passes; paste the last lines.
 Look at: none.
-Canary: tasks/204.canary.patch must turn red: `pwsh -NoProfile -File tests/tools/fast_buildinfo.ps1` (the self-test of step 4), `pwsh -NoProfile -File tests/tools/fast_lock.ps1` (the wiring extended: a gate's compile timing step runs inside the window and a build started then waits, `-Landing` holds it for the whole tier, a slow build step does not count against B-09).
+Canary: tasks/204.canary.patch must turn red: `pwsh -NoProfile -File tests/tools/fast_buildinfo.ps1` (the self-test of step 4), `pwsh -NoProfile -File tests/tools/fast_lock.ps1` (the wiring extended: a gate's compile timing step runs inside the window and a build started then waits, `-Landing` holds it for the whole tier, a slow build step does not count against B-09), `pwsh -NoProfile -File tests/tools/land_fixture/run_cases.ps1` (land.ps1 starts the gate as `gate -Landing`).
 Budget: gate +0.3 s at most; no build-time budget moves.
 Depends on: none. Collisions: tools/build.ps1 with nothing open; CMakeLists.txt with nothing open.
 Size: S (about 120 lines); stop and report at 2x.
