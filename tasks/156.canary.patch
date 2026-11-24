@@ -12,7 +12,7 @@ index 9cd76da..5e323eb 100644
          "film_exposure": a.film_exposure, "film_transparent": int(r.film_transparent),
          "light_group_count": len(lightgroups or ()),
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 532ce81..2273c27 100644
+index 532ce81..c0a0dbb 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
 @@ -642,7 +642,7 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
