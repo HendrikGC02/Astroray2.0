@@ -20,9 +20,12 @@
 
 #include "../../src/host/data_resource.h"
 #include "../../src/host/ledger.h"
+#include "../../src/host/light/light_builder.h"
 #include "../../src/host/material/compiler.h"
 #include "../../src/host/material/material_store.h"
 #include "host/scene/edit.h"
+#include "host/scene/mesh.h"
+#include "host/scene/world.h"
 #include "material/slot_resolve.h"
 #include "vm/ops.h"
 #include "vm/ops/store_slot.h"
@@ -433,6 +436,19 @@ TEST_CASE("spectrum_table/refused in a Mix Shader child and in a volume") {
   REQUIRE(v.entries.size() == 1u);
   CHECK(v.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
   CHECK(v.entries[0].detail.find("the op has no volume meaning") != std::string::npos);
+}
+
+TEST_CASE("spectrum_table/a TABLE world colour is refused") {
+  // A world's colour is a light record's: it reads no arena and would resolve to black, so the light
+  // gather refuses it instead.
+  astroray::host::MeshStore meshes;
+  const astroray::host::MaterialArrays mats;
+  astroray::host::WorldOutput world;
+  world.color = ar::make_table_ref(SS::ILLUMINANT, 0u, 2u, 1.0f);
+  world.strength = 1.0f;
+  CHECK_THROWS_AS(astroray::host::gather_scene_lights(nullptr, meshes, mats, &world, true), std::invalid_argument);
+  world.color = ar::make_const_ref(SS::ILLUMINANT, 1.0f);  // a constant colour is not
+  CHECK_NOTHROW(astroray::host::gather_scene_lights(nullptr, meshes, mats, &world, true));
 }
 
 TEST_CASE("compiler/spectrum table arena") {

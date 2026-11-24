@@ -209,6 +209,10 @@ void put(std::vector<uint8_t>& k, const T& v) {
 SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& meshes, const MaterialArrays& mats,
                                 const WorldOutput* world, bool collect) {
   SceneLights out;
+  // The world's colour is a light record's, which holds no spectrum arena: a TABLE would resolve to
+  // black. Refused here until a world colour can name a table (0005 item 9).
+  if (world != nullptr && world->color.kind == uint8_t(ar::SpectrumKind::TABLE))
+    throw std::invalid_argument("the world colour is a TABLE spectrum, which a light record cannot read (no spectrum arena)");
   const bool world_lit = world != nullptr && world->strength > 0.0f;
   if (world) put(out.key, world->color), put(out.key, world->strength), put(out.key, world->desc.light_group);
   double lo[3] = {HUGE_VAL, HUGE_VAL, HUGE_VAL}, hi[3] = {-HUGE_VAL, -HUGE_VAL, -HUGE_VAL};
