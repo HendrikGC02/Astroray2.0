@@ -1,16 +1,16 @@
 diff --git a/src/device/cuda/scene_upload.cpp b/src/device/cuda/scene_upload.cpp
-index 9b39256..803a066 100644
+index 9b39256..46c88e2 100644
 --- a/src/device/cuda/scene_upload.cpp
 +++ b/src/device/cuda/scene_upload.cpp
-@@ -56,7 +56,7 @@ void SceneUpload::rebuild_mesh_table() {
- 
- void SceneUpload::upload_instances(const InstanceTable& table, const std::vector<std::shared_ptr<const Medium>>& media) {
-   rebuild_mesh_table();
--  const MediumIndex media_of = medium_index(media);
-+  const MediumIndex media_of = medium_index({});
-   std::vector<DeviceInstanceRecord> recs(table.instances.size());
-   for (size_t i = 0; i < recs.size(); ++i) {
+@@ -62,7 +62,7 @@ void SceneUpload::upload_instances(const InstanceTable& table, const std::vector
      const Instance& s = table.instances[i];
+     // A lamp's instance (068) has no mesh: its shape is 105's unit-shape GAS, which 114 puts in the TLAS.
+     if (s.geom_key == 0 && s.light_index != ar::kNoLightIndex) {
+-      recs[i] = instance_record(table, uint32_t(i), kNoMeshIndex, &media_of);
++      recs[i] = instance_record(table, uint32_t(i), kNoMeshIndex, nullptr);
+       continue;
+     }
+     const UploadedMesh* m = find(s.geom_key);
 diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
 index 2dc44ef..926446d 100644
 --- a/src/host/scene/scene_tables.cpp
