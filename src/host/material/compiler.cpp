@@ -1103,7 +1103,7 @@ bool refuse_non_finite_constants(const Work& w, std::string* err) {
       const int src = nd.input[s];
       if (w.isc[size_t(src)] && !finite(src) && (nd.op == Op::STORE_SLOT || nd.op == Op::EMIT_LE || !w.isc[size_t(i)])) {
         *err = "graph node " + std::to_string(i) + " (" + op_meta(nd.op).name + "): input " + std::to_string(s) +
-               " is a non-finite constant (graph node " + std::to_string(src) + ")";
+               " is a non-finite constant, NaN or Inf (graph node " + std::to_string(src) + ")";
         if (nd.op == Op::STORE_SLOT) *err += ", record slot " + std::to_string(w.g.i32[nd.i32_first]);
         return false;
       }
