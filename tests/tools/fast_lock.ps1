@@ -3,7 +3,12 @@
 # a waiter names the holder (three ticks, then every 300 s) and fails loudly once the holder has held past the
 # limit; a holder stopped by its recorded pid leaves an abandoned mutex the waiter takes over, and the
 # owner file is gone after the new holder releases; with no live owner record (a reused pid) the waiter names
-# no holder and its own wait is the clock; a tree-lock waiter names the holder too. Run by tests/tools/run_fast.ps1 (gate step `tools tests`).
+# no holder and its own wait is the clock; a tree-lock waiter names the holder too; the fast window of the gate
+# (Enter-ArFastWindow) waits for a running build's share and holds new builds back (each other party proven to be
+# started and blocked before the release, and to enter after it), a build nested under the window does not wait,
+# and a build killed while holding its share leaves nothing behind. The wiring is run for real from a copy of
+# tools/: build.ps1 waits for a held window and then holds a share while it runs, and `check.ps1 gate` waits
+# for a held window before its fast step. Run by tests/tools/run_fast.ps1 (gate step `tools tests`).
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $lockLib = Join-Path $root 'tools/lib/lock.ps1'
@@ -15,6 +20,7 @@ $tmp = Join-Path ([IO.Path]::GetTempPath()) "fast_lock_$PID"
 New-Item -ItemType Directory -Force $tmp | Out-Null
 # The gate runs this under the real lock: a set ASTRORAY_LOCK_PID would make every call here a nested no-op.
 $env:ASTRORAY_LOCK_PID = $null
+$env:ASTRORAY_FASTWIN_PID = $null
 # Scaled down from the defaults (30 s, 3600 s) so the tier stays quick; the logic is the same.
 $env:ASTRORAY_LOCK_MESSAGE_S = '0.5'
 $env:ASTRORAY_LOCK_TIMEOUT_S = '1.5'
@@ -26,6 +32,8 @@ Set-Content -Path $holder -Value @"
 param([double]`$s, [string]`$ready, [string]`$tree, [string]`$release)
 . '$lockLib'
 if (`$tree) { `$null = Enter-ArTreeLock -Dir `$tree } else { `$null = Enter-ArMachineLock }
+# A build share as well, for the case that checks a killed build leaves none behind.
+if (`$env:FAST_LOCK_SHARE) { `$null = Enter-ArBuildShare }
 Set-Content -Path `$ready -Value ready
 # Given a release file: hold until it appears, at most s seconds.
 if (`$release) { `$sw = [Diagnostics.Stopwatch]::StartNew(); while (-not (Test-Path `$release) -and `$sw.Elapsed.TotalSeconds -lt `$s) { Start-Sleep -Milliseconds 20 } }
@@ -41,7 +49,10 @@ if (`$tree) { `$null = Enter-ArTreeLock -Dir `$tree } else { `$null = Enter-ArMa
 if (`$tree) { Exit-ArTreeLock } else { Exit-ArMachineLock }
 "@
 $procs = @()
+$wh = @{}
 
+# A child started here and every process it started, by the pid this script launched.
+function Stop-Tree($p) { if ($p -and -not $p.HasExited) { & taskkill /PID $p.Id /T /F 2>&1 | Out-Null } }
 function Use-Lock([string]$tag) { $env:ASTRORAY_LOCK_NAME = "Local\astroray2-test-$PID-$tag"; $env:ASTRORAY_LOCK_DIR = Join-Path $tmp $tag }
 # Starts a pwsh script on the lock of $tag (the child inherits the environment set here).
 function Start-On([string]$tag, [string]$name, [string[]]$scriptArgs) {
@@ -71,9 +82,40 @@ try {
   $printed = @(foreach ($s in (1..40 | ForEach-Object { $_ * 30.0 })) { if (Test-ArLockSay $st $s) { $s } })
   Check 'messages: three ticks, then every 300 s' (($printed -join ',') -eq '30,60,90,390,690,990')
 
+  # Wiring, started now and judged at the end. A copy of tools/ makes out/ (summaries, the tree lock) private to
+  # the test; every lock is on a private name. One thread job per party owns that party's window (a mutex is
+  # owned by its thread); the real build.ps1 and `check.ps1 gate` start behind it. The tree lock of the copy is
+  # held here so that the build stays alive, and keeps its share, once the window is released.
+  $wroot = Join-Path $tmp 'wroot'
+  New-Item -ItemType Directory -Force (Join-Path $wroot 'out/build') | Out-Null
+  Copy-Item -Recurse (Join-Path $root 'tools') (Join-Path $wroot 'tools')
+  $holdJob = { param($lib, $sync) . $lib
+    $null = Enter-ArFastWindow
+    $sync.held = $true
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while (-not $sync.release -and $sw.Elapsed.TotalSeconds -lt 60) { Start-Sleep -Milliseconds 20 }
+    Exit-ArFastWindow }
+  foreach ($tag in 'wireb', 'wireg') {
+    Use-Lock $tag
+    $sync = [hashtable]::Synchronized(@{ held = $false; release = $false })
+    $wh[$tag] = [pscustomobject]@{ Job = (Start-ThreadJob -ScriptBlock $holdJob -ArgumentList $lockLib, $sync); Sync = $sync }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while (-not $sync.held -and $sw.Elapsed.TotalSeconds -lt 15) { Start-Sleep -Milliseconds 5 }
+    if (-not $sync.held) { throw "window holder $tag not ready in 15 s" }
+  }
+  # The holders' Enter-ArFastWindow marked this process as the window's owner; the children are other worktrees.
+  $env:ASTRORAY_FASTWIN_PID = $null
+  $env:ASTRORAY_LOCK_MESSAGE_S = '0.2'; $env:ASTRORAY_LOCK_TIMEOUT_S = '60'
+  $null = Enter-ArTreeLock (Join-Path $wroot 'out/build')
+  $wb = Start-On 'wireb' 'wb' @((Join-Path $wroot 'tools/build.ps1'), '-CheckOnly', '-NoMachineLock')
+  $wg = Start-On 'wireg' 'wg' @((Join-Path $wroot 'tools/check.ps1'), 'gate')
+  $env:ASTRORAY_LOCK_MESSAGE_S = '0.5'; $env:ASTRORAY_LOCK_TIMEOUT_S = '1.5'
+
   # Both holders start together: 'timeout' holds limit + 1.5 s, 'abandon' until it is stopped.
   $h1 = Start-On 'timeout' 'h1' @($holder, '3', (Join-Path $tmp 'timeout.ready'))
+  $env:FAST_LOCK_SHARE = '1'
   $h2 = Start-On 'abandon' 'h2' @($holder, '60', (Join-Path $tmp 'abandon.ready'))
+  $env:FAST_LOCK_SHARE = $null
   # 'unknown' holds past the waiter's own limit; 'tree' holds the tree lock until its waiter has named it.
   $h3 = Start-On 'unknown' 'h3' @($holder, '60', (Join-Path $tmp 'unknown.ready'))
   $treeDir = Join-Path $tmp 'tree'
@@ -105,6 +147,8 @@ try {
   Use-Lock 'abandon'
   $keep = New-Object System.Threading.Mutex($false, $env:ASTRORAY_LOCK_NAME)
   $owner = Join-Path $env:ASTRORAY_LOCK_DIR 'owner.json'
+  $abandonShares = Join-Path $env:ASTRORAY_LOCK_DIR 'fastwin'
+  Check 'window: the holder holds a build share before it is stopped' (@(Get-ChildItem $abandonShares -Filter 'share.*.lock').Count -eq 1)
   Stop-Process -Id ((Get-Content -Raw $owner | ConvertFrom-Json).pid) -Force
   $h2.WaitForExit()
   $w2 = Start-On 'abandon' 'w2' @($waiter)
@@ -146,7 +190,101 @@ try {
   Check 'tree: waiting message names the holder' ($txt -match "waiting for holder\.ps1 \(pid $($h4.Id)\) since \d{4}-") $out
   Check 'tree: the waiter acquires after release' ($w4.ExitCode -eq 0 -and $txt.Contains('ACQUIRED')) $out
   Check 'tree: .tree.owner.json is gone after release' (-not (Test-Path (Join-Path $treeDir '.tree.owner.json'))) $out
+
+  # Fast window. A job runs the other party in its own runspace on the same private mutex and directory. It
+  # signals just before it calls Enter-*, so that the pause after the signal is spent inside the call; it stamps
+  # the time it got in (Stopwatch ticks, one clock for every thread). A party counts as blocked only if it
+  # started, still runs and has not got in after that pause, and as released only if it got in after the stamp
+  # this thread took just before releasing.
+  Use-Lock 'win'
+  $fwDir = Join-Path $tmp 'win/fastwin'
+  $job = { param($lib, $what, $sync) . $lib
+    $sync.started = $true
+    if ($what -eq 'window') { $null = Enter-ArFastWindow; $sync.entered = [Diagnostics.Stopwatch]::GetTimestamp(); Exit-ArFastWindow }
+    else { $null = Enter-ArBuildShare; $sync.entered = [Diagnostics.Stopwatch]::GetTimestamp(); Exit-ArBuildShare }
+    $sync.entered }
+  function Start-Other([string]$what) {
+    $sync = [hashtable]::Synchronized(@{ started = $false; entered = $null })
+    $j = Start-ThreadJob -ScriptBlock $job -ArgumentList $lockLib, $what, $sync
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while (-not $sync.started -and $sw.Elapsed.TotalSeconds -lt 10) { Start-Sleep -Milliseconds 5 }
+    Start-Sleep -Milliseconds 60
+    return [pscustomobject]@{ Job = $j; Sync = $sync }
+  }
+  function Test-Blocked($o) { return [bool]($o.Sync.started -and $o.Job.State -eq 'Running' -and $null -eq $o.Sync.entered) }
+  # Ticks of the release (to be taken before releasing) against the other party's entry.
+  function Test-EnteredAfter($o, [long]$released) {
+    $null = Wait-Job $o.Job -Timeout 10
+    $err = @(Receive-Job $o.Job -ErrorAction SilentlyContinue 2>&1)
+    $state = $o.Job.State
+    Remove-Job $o.Job -Force
+    return ($state -eq 'Completed' -and $null -ne $o.Sync.entered -and [long]$o.Sync.entered -gt $released)
+  }
+  # A share held here keeps the window out until it ends.
+  $null = Enter-ArBuildShare
+  Check 'window: a share file exists while a build runs' (@(Get-ChildItem $fwDir -Filter 'share.*.lock').Count -eq 1)
+  $o = Start-Other 'window'
+  Check 'window: waits while a build holds a share' (Test-Blocked $o)
+  $released = [Diagnostics.Stopwatch]::GetTimestamp()
+  Exit-ArBuildShare
+  Check 'window: enters only after the build ended' (Test-EnteredAfter $o $released)
+  Check 'window: a share leaves no file behind' (@(Get-ChildItem $fwDir -Filter 'share.*.lock').Count -eq 0)
+
+  # While the window is held, a build waits. The environment is process-wide, so the owner's marker is cleared
+  # here to let the job behave as another worktree's build.
+  $w = Enter-ArFastWindow
+  Check 'window: the owner marks its process tree' ($env:ASTRORAY_FASTWIN_PID -eq "$PID")
+  Check 'window: a build nested under the window takes no share and does not wait' ((Enter-ArBuildShare) -eq 0.0 -and @(Get-ChildItem $fwDir -Filter 'share.*.lock').Count -eq 0)
+  $env:ASTRORAY_FASTWIN_PID = $null
+  $o = Start-Other 'share'
+  Check 'window: a build starting during the window waits' (Test-Blocked $o)
+  Check 'window: no share was taken while it waited' (@(Get-ChildItem $fwDir -Filter 'share.*.lock').Count -eq 0)
+  $released = [Diagnostics.Stopwatch]::GetTimestamp()
+  Exit-ArFastWindow
+  Check 'window: the build proceeds only after the window closed' (Test-EnteredAfter $o $released)
+  Check 'window: closing it clears the owner marker' (-not $env:ASTRORAY_FASTWIN_PID)
+
+  # A build killed while holding its share: the OS closes the handle, so the window is not held up and the
+  # share file is gone.
+  # h2 held a share when it was stopped (the abandoned-mutex case above waited for its death).
+  Use-Lock 'abandon'
+  $t = [Diagnostics.Stopwatch]::StartNew()
+  $null = Enter-ArFastWindow
+  Exit-ArFastWindow
+  Check 'window: a killed build leaves no share behind' ($t.Elapsed.TotalSeconds -lt 1.0 -and @(Get-ChildItem $abandonShares -Filter 'share.*.lock').Count -eq 0) @("took $($t.Elapsed.TotalSeconds) s")
+
+  # Wiring, judged. Both children print the window's wait line within seconds (a poll of 8 s: a start under
+  # load), and neither has taken anything yet.
+  function Wait-Line($p, [string]$name, [string]$pattern) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt 8) {
+      if (@(Read-Out $name | Where-Object { $_ -match $pattern }).Count) { return $true }
+      if ($p.HasExited) { return $false }
+      Start-Sleep -Milliseconds 20
+    }
+    return $false
+  }
+  $okB = Wait-Line $wb 'wb' "^waiting for the gate's fast window \(a build waits for it\)"
+  $okG = Wait-Line $wg 'wg' "^waiting for the gate's fast window \(another gate holds it\)"
+  $shareDirB = Join-Path $tmp 'wireb/fastwin'
+  Check 'wiring: build.ps1 waits while the window is held' ($okB -and -not $wb.HasExited) (Read-Out 'wb')
+  Check 'wiring: build.ps1 took no share while it waited' (@(Get-ChildItem $shareDirB -Filter 'share.*.lock' -ErrorAction SilentlyContinue).Count -eq 0) (Read-Out 'wb')
+  Check 'wiring: check.ps1 gate waits for the window before its fast step' ($okG -and -not $wg.HasExited) (Read-Out 'wg')
+  Stop-Tree $wg
+  # Released: the build takes its share (and is held at the tree lock), which is a file named for its pid.
+  $wh['wireb'].Sync.release = $true
+  $shareB = Join-Path $shareDirB "share.$($wb.Id).lock"
+  $sw5 = [Diagnostics.Stopwatch]::StartNew()
+  while (-not (Test-Path $shareB) -and -not $wb.HasExited -and $sw5.Elapsed.TotalSeconds -lt 6) { Start-Sleep -Milliseconds 20 }
+  Check 'wiring: build.ps1 holds a share while it runs' ((Test-Path $shareB) -and -not $wb.HasExited) (Read-Out 'wb')
+  Stop-Tree $wb
+  $sw5.Restart()
+  while ((Test-Path $shareB) -and $sw5.Elapsed.TotalSeconds -lt 5) { Start-Sleep -Milliseconds 20 }
+  Check 'wiring: a killed build.ps1 leaves no share' (-not (Test-Path $shareB))
 } finally {
+  foreach ($h in @($wh.Values)) { $h.Sync.release = $true; $null = Wait-Job $h.Job -Timeout 5; Remove-Job $h.Job -Force -ErrorAction SilentlyContinue }
+  Exit-ArTreeLock
+  foreach ($p in $procs) { Stop-Tree $p }
   foreach ($p in $procs) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
   foreach ($p in $procs) { $null = $p.WaitForExit(5000) }
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

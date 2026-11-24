@@ -251,7 +251,10 @@ $global:LASTEXITCODE = 1
   $perTest = [double]$lim.'B-12'
 
   if ($Tier -eq 'gate') {
-    $r = Step 'fast' { & pwsh -NoProfile -File tools/check.ps1 fast }
+    # B-08 times this step: builds of other worktrees that run without the machine lock wait outside it
+    # (0009 d8), and its wait for builds already running is not work.
+    $w = Enter-ArFastWindow; $waited += $w; Add-ArExcluded $w
+    try { $r = Step 'fast' { & pwsh -NoProfile -File tools/check.ps1 fast } } finally { Exit-ArFastWindow }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'fast failed (out/check/fast.log)' }
     $i = 0
     while ($i -lt $gateSteps.Count) {

@@ -2,13 +2,16 @@
 # CPU-only checks of tools/lib/landing.ps1 on a real throwaway repo: cleanup (a worktree whose out/ holds an open
 # file ends in a LEFTOVER line whose fix works once the file is closed; an unregistered leftover directory is
 # deleted under .claude/worktrees/ and only reported outside it; a clean worktree is removed), exact branch choice, the running-land marker, the merge and PR-create
-# calls after a 5xx (a `gh` stub), and the history line in the main checkout. Run by tests/tools/run_fast.ps1
+# calls after a 5xx (a `gh` stub), the history line in the main checkout, and `submit -Queue` (a second land.ps1
+# waits for the running one, a plain second one is refused, and the wait is counted in lock_wait_s; started first
+# and judged last so that its time overlaps the other checks), `merge -Queue` (refused), and Wait-LandRunning itself
+# (it takes the marker when it returns, and fails past ASTRORAY_LAND_QUEUE_TIMEOUT_S). Run by tests/tools/run_fast.ps1
 # (gate step `tools tests`).
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 . (Join-Path $root 'tools/lib/landing.ps1')
 $bad = 0
-function Check([string]$what, [bool]$ok) { if (-not $ok) { Write-Host "FAIL fast_landing: $what"; $script:bad++ } }
+function Check([string]$what, [bool]$ok, $out = @()) { if (-not $ok) { Write-Host "FAIL fast_landing: $what"; @($out) | Select-Object -Last 6 | ForEach-Object { Write-Host "  $_" }; $script:bad++ } }
 function G { & git -C $main @args 2>&1 | Out-Null; if ($LASTEXITCODE -ne 0) { throw "git $args failed" } }
 function Find-Safe([string]$n) { try { return Find-LandingTask $main $n } catch { Write-Host "fast_landing: Find-LandingTask $n threw: $($_.Exception.Message)"; return $null } }
 
@@ -16,8 +19,80 @@ $tmp = Join-Path ([IO.Path]::GetTempPath()) "astroray_fast_landing_$PID"
 $main = Join-Path $tmp 'main'
 $wts = Join-Path $main '.claude/worktrees'   # where Claude agent worktrees live; cleanup deletes directories only there
 $stream = $null
+$qprocs = @()
 try {
   New-Item -ItemType Directory -Force $tmp | Out-Null
+  # The queue case. A stand-in script named land.ps1 is the running land.ps1 of a throwaway repository (the real
+  # tools/land.ps1 takes a live process whose command line holds land.ps1 for the owner of the marker), and the
+  # marker names it at once. A plain submit is then refused and a -Queue submit waits; the stand-in leaves 0.25 s
+  # after the queued one says it waits, and the queued one runs on, past the idle check, to the first refusal of
+  # an empty repository (not a task branch).
+  $qrepo = Join-Path $tmp 'queue_repo'
+  & git init -q -b main $qrepo
+  New-Item -ItemType Directory -Force (Join-Path $qrepo 'tasks') | Out-Null
+  $mkFile = Get-LandingMarker $qrepo
+  $qout = Join-Path $tmp 'queue_out'
+  New-Item -ItemType Directory -Force $qout | Out-Null
+  $standin = Join-Path $tmp 'standin/land.ps1'
+  New-Item -ItemType Directory -Force (Split-Path $standin) | Out-Null
+  Set-Content $standin @"
+param([string]`$marker, [string]`$queueOut)
+`$sw = [Diagnostics.Stopwatch]::StartNew()
+while (-not ((Test-Path `$queueOut) -and (Select-String -Path `$queueOut -Pattern '^queue: waiting for another land\.ps1' -Quiet)) -and `$sw.Elapsed.TotalSeconds -lt 30) { Start-Sleep -Milliseconds 20 }
+Start-Sleep -Milliseconds 250
+Remove-Item -Force `$marker
+"@
+  $env:ASTRORAY_LAND_QUEUE_POLL_S = '0.1'
+  $holderP = Start-Process pwsh -ArgumentList @('-NoProfile', '-File', $standin, $mkFile, (Join-Path $qout 'queue.out')) -PassThru -NoNewWindow
+  $null = $holderP.Handle; $qprocs += $holderP
+  Set-Content $mkFile (@{ pid = $holderP.Id; start = $holderP.StartTime.ToString('o') } | ConvertTo-Json -Compress)
+  # Stand-ins for Wait-LandRunning called here: each holds the marker of its own repository until a release file
+  # appears, then removes the marker as a finishing land.ps1 does.
+  $holdScript = Join-Path $tmp 'standin_hold/land.ps1'
+  New-Item -ItemType Directory -Force (Split-Path $holdScript) | Out-Null
+  Set-Content $holdScript @"
+param([string]`$marker, [string]`$release)
+`$sw = [Diagnostics.Stopwatch]::StartNew()
+while (-not (Test-Path `$release) -and `$sw.Elapsed.TotalSeconds -lt 60) { Start-Sleep -Milliseconds 20 }
+Remove-Item -Force `$marker
+"@
+  $waitRepos = @{}
+  foreach ($k in 'claim', 'timeout') {
+    $r = Join-Path $tmp "wait_$k"
+    & git init -q -b main $r
+    $mk = Get-LandingMarker $r
+    $rel = Join-Path $tmp "wait_$k.release"
+    $hp = Start-Process pwsh -ArgumentList @('-NoProfile', '-File', $holdScript, $mk, $rel) -PassThru -NoNewWindow
+    $null = $hp.Handle; $qprocs += $hp
+    Set-Content $mk (@{ pid = $hp.Id; start = $hp.StartTime.ToString('o') } | ConvertTo-Json -Compress)
+    $waitRepos[$k] = @{ Repo = $r; Marker = $mk; Release = $rel }
+  }
+  # The caller of Wait-LandRunning, as a child so that its waits overlap the checks below. The owner of the
+  # 'claim' marker is released 0.25 s after the wait began.
+  $waitScript = Join-Path $tmp 'waitcases.ps1'
+  Set-Content $waitScript @'
+param([string]$lib, [string]$tRepo, [string]$tMarker, [string]$cRepo, [string]$cMarker, [string]$cRelease)
+$ErrorActionPreference = 'Stop'
+. $lib
+'SELF ' + $PID
+$env:ASTRORAY_LAND_QUEUE_TIMEOUT_S = '0.3'
+try { $null = Wait-LandRunning $tRepo 6>$null; 'TIMEOUT none' } catch { 'TIMEOUT ' + $_.Exception.Message }
+$env:ASTRORAY_LAND_QUEUE_TIMEOUT_S = $null
+'TMARKER ' + ((Get-Content $tMarker -Raw | ConvertFrom-Json).pid)
+$rj = Start-ThreadJob -ScriptBlock { param($f) Start-Sleep -Milliseconds 250; Set-Content $f release } -ArgumentList $cRelease
+$w = Wait-LandRunning $cRepo 6>$null
+'CLAIM ' + $w.ToString([Globalization.CultureInfo]::InvariantCulture)
+'CMARKER ' + ((Get-Content $cMarker -Raw | ConvertFrom-Json).pid)
+Exit-LandRunning
+'@
+  $waitP = Start-Process pwsh -ArgumentList @('-NoProfile', '-File', $waitScript, (Join-Path $root 'tools/lib/landing.ps1'), $waitRepos['timeout'].Repo, $waitRepos['timeout'].Marker, $waitRepos['claim'].Repo, $waitRepos['claim'].Marker, $waitRepos['claim'].Release) -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $qout 'wait.out') -RedirectStandardError (Join-Path $qout 'wait.err')
+  $null = $waitP.Handle; $qprocs += $waitP
+  $landArgs = @('-NoProfile', '-File', (Join-Path $root 'tools/land.ps1'), 'submit', '999', 'PASS', '-DryRun')
+  $plainP = Start-Process pwsh -ArgumentList $landArgs -WorkingDirectory $qrepo -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $qout 'plain.out') -RedirectStandardError (Join-Path $qout 'plain.err')
+  $queueP = Start-Process pwsh -ArgumentList ($landArgs + '-Queue') -WorkingDirectory $qrepo -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $qout 'queue.out') -RedirectStandardError (Join-Path $qout 'queue.err')
+  # merge takes no marker: the switch must be refused, not ignored.
+  $mergeP = Start-Process pwsh -ArgumentList @('-NoProfile', '-File', (Join-Path $root 'tools/land.ps1'), 'merge', '999', '-Queue', '-DryRun') -WorkingDirectory $qrepo -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $qout 'merge.out') -RedirectStandardError (Join-Path $qout 'merge.err')
+  $null = $plainP.Handle; $null = $queueP.Handle; $null = $mergeP.Handle; $qprocs += $plainP; $qprocs += $queueP; $qprocs += $mergeP
   & git init -q --bare -b main (Join-Path $tmp 'origin.git')
   & git clone -q (Join-Path $tmp 'origin.git') $main 2>$null
   G -c user.email=t@example.invalid -c user.name=t commit -q --allow-empty -m base
@@ -134,8 +209,48 @@ try {
   Check 'two history lines' ($lines.Count -eq 2)
   $last = Get-LandingLastGate $main
   Check 'the previous landing is the last line' ($last.task -eq 7 -and $last.gate_s -eq 43.0)
+
+  # Wait-LandRunning (run by a child started above): past ASTRORAY_LAND_QUEUE_TIMEOUT_S it fails loudly, naming the
+  # limit, and it has not taken the marker; it returns only once the owner is gone, and then the marker is its own:
+  # another queued land.ps1 must not start beside it.
+  $null = $waitP.WaitForExit(30000)
+  $wl = @(Get-Content (Join-Path $qout 'wait.out') -ErrorAction SilentlyContinue | ForEach-Object { "$_" })
+  function Get-WaitLine([string]$key) { return @($wl | Where-Object { $_ -like "$key *" } | ForEach-Object { $_.Substring($key.Length + 1) }) }
+  $self = @(Get-WaitLine 'SELF')[0]
+  $tl = @(Get-WaitLine 'TIMEOUT')
+  Check 'a queue wait past ASTRORAY_LAND_QUEUE_TIMEOUT_S fails, naming it' ($tl.Count -eq 1 -and $tl[0] -match 'over the 0\.3 s limit \(ASTRORAY_LAND_QUEUE_TIMEOUT_S\)') $wl
+  $tm = @(Get-WaitLine 'TMARKER')
+  Check 'a queue wait that timed out did not take the marker' ($tm.Count -eq 1 -and $tm[0] -ne $self) $wl
+  $cl = @(Get-WaitLine 'CLAIM')
+  $cw = if ($cl.Count -eq 1) { [double]::Parse($cl[0], [Globalization.CultureInfo]::InvariantCulture) } else { -1 }
+  Check 'Wait-LandRunning returns once the owner has gone, after waiting for it' ($cw -ge 0.2 -and $cw -lt 10) $wl
+  $cm = @(Get-WaitLine 'CMARKER')
+  Check 'Wait-LandRunning owns the marker when it returns (its pid)' ($cm.Count -eq 1 -and $cm[0] -eq $self) $wl
+
+  # Judged last: what the plain and the queued submit printed.
+  $null = $plainP.WaitForExit(30000); $null = $queueP.WaitForExit(30000); $null = $mergeP.WaitForExit(30000)
+  $po = @(Get-Content (Join-Path $qout 'plain.out') -ErrorAction SilentlyContinue)
+  $qo = @(Get-Content (Join-Path $qout 'queue.out') -ErrorAction SilentlyContinue)
+  $mo2 = @(Get-Content (Join-Path $qout 'merge.out') -ErrorAction SilentlyContinue)
+  Check 'merge -Queue is refused' (@($mo2 | Where-Object { $_ -match '^REFUSE land: -Queue applies to prepare and submit' }).Count -eq 1 -and $mergeP.ExitCode -ne 0) $mo2
+  Check 'a submit without -Queue is refused while another land.ps1 runs' (@($po | Where-Object { $_ -match '^REFUSE land: another land\.ps1 is running \(pid \d+' }).Count -eq 1) $po
+  Check 'the queued submit says it waits, naming the owner' (@($qo | Where-Object { $_ -match '^queue: waiting for another land\.ps1 \(pid \d+' }).Count -ge 1) $qo
+  # The stand-in leaves 0.25 s after the queued submit first said it waits, so the wait is at least that, and the
+  # running total of lock_wait_s (nothing else waited in this run) is the wait itself.
+  $qm = @($qo | ForEach-Object { [regex]::Match($_, '^queue: waited ([\d.]+) s for another land\.ps1 \(lock_wait_s now ([\d.]+) s\)') } | Where-Object { $_.Success })
+  Check 'the queued submit reports its wait once' ($qm.Count -eq 1) $qo
+  if ($qm.Count -eq 1) {
+    $qw = [double]::Parse($qm[0].Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+    $qt = [double]::Parse($qm[0].Groups[2].Value, [Globalization.CultureInfo]::InvariantCulture)
+    Check 'the queue wait is at least the stand-in''s remaining hold' ($qw -ge 0.2) $qo
+    Check 'lock_wait_s includes the queue wait' ([math]::Abs($qt - $qw) -le 0.11 -and $qt -ge 0.2) $qo
+  }
+  Check 'the queued submit then runs past the idle check (first refusal: not a task branch)' (@($qo | Where-Object { $_ -match "^REFUSE land: branch 'main' is not task/999-" }).Count -eq 1) $qo
+  Check 'the marker is released after both' (-not (Test-Path $mkFile))
 } finally {
   Set-Location $root
+  $env:ASTRORAY_LAND_QUEUE_POLL_S = $null
+  foreach ($p in $qprocs) { if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
   if ($stream) { $stream.Dispose() }
   & git -C $main worktree prune 2>$null
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
