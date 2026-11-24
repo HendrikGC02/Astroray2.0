@@ -19,6 +19,7 @@
 #include "../core/spectrum.h"
 #include "../core/vec.h"
 #include "../portability.h"
+#include "../spectral/planck.h"
 #include "light_record.h"
 
 #define AR_LIGHT_TYPES_DEFINED 1
@@ -244,6 +245,27 @@ AR_FN LightRecord light_make_area(LightType type, Real3 pos, Real3 axis_x, Real3
 
 AR_FN bool light_finite(float x) { return x - x == 0.0f; }
 
+// The brightest value of a BLACKBODY spectrum p1 x Planck(lambda, T) over the observer's range, at
+// the Wien wavelength (b = 2.897771955e6 nm K, CODATA 2018) clamped to that range, in double. The
+// host's make_blackbody_ref bounds the same number against FLT_MAX, so there is one source for it.
+AR_FN double blackbody_peak(double temperature_kelvin, double p1) {
+  const double lo = double(kObsLambdaMin), hi = double(kObsLambdaMin + kObsSamples - 1);
+  double nm = double(2897771.955) / temperature_kelvin;
+  nm = nm < lo ? lo : (nm > hi ? hi : nm);
+  return p1 * planck_radiance_t<double>(nm, temperature_kelvin);
+}
+
+// The emission's own scale sigma for the radiance bounds below, the spectrum's largest value: a
+// CONSTANT's p[0], an RGB's p[3], a BLACKBODY's p[1] x Planck at its peak. A BLACKBODY's p[1] holds
+// the colour scale x 1 / Y(Planck(T)), which grows without bound with the scale and with a cold T,
+// so a radius that is safe for sigma 1 could still overflow the lamp's radiance to inf, which the
+// sphere sampler would turn into a silently dark lamp.
+AR_FN double emission_sigma(const SpectrumRef& e) {
+  if (e.kind == uint8_t(SpectrumKind::CONSTANT)) return double(e.p[0]);
+  if (e.kind == uint8_t(SpectrumKind::BLACKBODY)) return blackbody_peak(double(e.p[0]), double(e.p[1]));
+  return double(e.p[3]);
+}
+
 // The area lamps' shared checks: the transform is a rotation (a scale would silently resize the
 // lamp, it belongs in size), and the area A keeps L = P sigma / (pi A) and the pdf 1 / A finite
 // and normal in float. sigma is the emission's own scale, as for the sphere.
@@ -260,7 +282,7 @@ AR_FN const char* area_problem(const LightRecord& r, double area) {
     const double dp = ax[c][0] * ax[d][0] + ax[c][1] * ax[d][1] + ax[c][2] * ax[d][2];
     if (!(dp > -tol && dp < tol)) return "an area light transform must be a rotation; scale belongs in the size";
   }
-  const double sigma = r.emission.kind == uint8_t(SpectrumKind::CONSTANT) ? double(r.emission.p[0]) : double(r.emission.p[3]);
+  const double sigma = emission_sigma(r.emission);
   const double pi = double(3.14159265358979323846);
   if (!(area >= double(r.strength) * sigma / (pi * double(FLT_MAX))) || !(area >= double(FLT_MIN)) || !(area <= double(1.0) / double(FLT_MIN)))
     return "area light is so small or so large that its radiance or area pdf is not representable";
@@ -269,23 +291,27 @@ AR_FN const char* area_problem(const LightRecord& r, double area) {
 
 // nullptr when the record can be uploaded, else the reason the host reports. A radius whose
 // radiance L = P sigma / (4 pi^2 r^2) or whose area pdf 1 / (4 pi r^2) would overflow float is
-// refused rather than rendered dark: with sigma the emission's own scale (CONSTANT p[0], RGB
-// p[3]) that needs r^2 >= P sigma / (4 pi^2 FLT_MAX) and r^2 >= 1 / (4 pi FLT_MAX). The
-// illuminant SPD (Y = 1) is not folded in; the kernel's finite guards are the backstop for it.
+// refused rather than rendered dark: with sigma the emission's largest value (emission_sigma: a
+// CONSTANT's p[0], an RGB's p[3], a BLACKBODY's spectral peak) that needs
+// r^2 >= P sigma / (4 pi^2 FLT_MAX) and r^2 >= 1 / (4 pi FLT_MAX). The illuminant SPD an RGB or
+// CONSTANT colour is multiplied by (Y = 1) is not folded in; the kernel's finite guards are the
+// backstop for it.
 AR_FN const char* light_problem(const LightRecord& r) {
   for (int i = 0; i < 12; ++i)
     if (!light_finite(r.xf[i])) return "light transform is not finite";
   if (!light_finite(r.size[0])) return "light radius is not finite";
   if (!light_finite(r.strength) || !(r.strength >= 0.0f)) return "light power must be finite and not negative";
-  // Only the kinds resolve() evaluates; the illuminant semantic is what makes colour a light.
+  // Only the kinds resolve() evaluates without an arena (a light record has none, so TABLE is
+  // refused); the illuminant semantic is what makes colour a light.
   if (r.emission.semantic != uint8_t(SpectrumSemantic::ILLUMINANT)) return "light colour must use the illuminant semantic";
-  if (r.emission.kind != uint8_t(SpectrumKind::CONSTANT) && r.emission.kind != uint8_t(SpectrumKind::RGB))
+  if (r.emission.kind != uint8_t(SpectrumKind::CONSTANT) && r.emission.kind != uint8_t(SpectrumKind::RGB) &&
+      r.emission.kind != uint8_t(SpectrumKind::BLACKBODY))
     return "light colour kind is not supported";
   switch (LightType(r.type)) {
     case LightType::POINT: return r.size[0] == 0.0f ? nullptr : "a point light has radius 0";
     case LightType::SPHERE: {
       if (!(r.size[0] > 0.0f)) return "a sphere light needs a positive radius";
-      const double sigma = r.emission.kind == uint8_t(SpectrumKind::CONSTANT) ? double(r.emission.p[0]) : double(r.emission.p[3]);
+      const double sigma = emission_sigma(r.emission);
       const double r2 = double(r.size[0]) * double(r.size[0]);
       const double pi = double(3.14159265358979323846);
       const double four = double(4.0);

@@ -508,18 +508,27 @@ class Scene:
         self._desc["world"] = {"rgb": [float(x) for x in rgb], "strength": float(strength)}
 
     def light(self, kind, xf=IDENTITY, rgb=(1.0, 1.0, 1.0), power=1.0, size=(0.0, 0.0), spread=math.pi,
-              spot_size=0.0, spot_blend=0.0, sun_angle=0.0, normalize=1, cast_shadow=1):
+              spot_size=0.0, spot_blend=0.0, sun_angle=0.0, normalize=1, cast_shadow=1, blackbody_kelvin=None,
+              blackbody_scale=1.0):
         """A lamp of type 'point', 'spot', 'sun', 'rect' or 'ellipse'. Sizes are metres: POINT and
-        SPOT radius = size[0]; RECT and ELLIPSE full extents (diameters); spread in radians."""
+        SPOT radius = size[0]; RECT and ELLIPSE full extents (diameters); spread in radians.
+        `blackbody_kelvin` makes the colour Planck(T) with display Y = `blackbody_scale` (0003 d11)
+        and `rgb` is then ignored; a Blender lamp cannot say that, so it needs no `description`."""
         a = self.abi
         types = {"point": a.AR_LIGHT_POINT, "spot": a.AR_LIGHT_SPOT, "sun": a.AR_LIGHT_SUN,
                  "rect": a.AR_LIGHT_AREA_RECT, "ellipse": a.AR_LIGHT_AREA_ELLIPSE}
         if kind not in types:
             raise ValueError(f"unknown lamp type '{kind}'")
+        if blackbody_kelvin is not None and self.description_path:
+            raise ValueError("a BLACKBODY lamp has no Blender lamp description for the blend writer")
         d = a.ar_light_desc()
-        d.color.kind = a.AR_SPECTRUM_RGB
         d.color.rgb = (ctypes.c_float * 3)(*rgb)
-        d.color.scale = 1.0
+        if blackbody_kelvin is None:
+            d.color.kind = a.AR_SPECTRUM_RGB
+            d.color.scale = 1.0
+        else:
+            d.color.kind = a.AR_SPECTRUM_BLACKBODY
+            d.color.temperature, d.color.scale = blackbody_kelvin, blackbody_scale
         d.xf = a.ar_xform(xform(xf))
         d.type, d.visibility = types[kind], ALL_VISIBILITY
         d.size_x, d.size_y, d.spot_size, d.spot_blend = size[0], size[1], spot_size, spot_blend

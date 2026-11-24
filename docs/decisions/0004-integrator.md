@@ -48,6 +48,7 @@ Number labels: MEASURED (spike or source measurement cited), SOURCE (a constant 
 | Emissive mesh | material emission | OpenPBR emission radiance (0005) | D9 | yes |
 | World: HDRI, sky, constant | world node program | radiance | D11, D12 | escaped rays |
 
+  - A BLACKBODY lamp colour is ŝ = Planck(T)/Y(Planck(T)) times the colour's scale, so the lamp's display luminance is P times that scale at any temperature (0003 decision 11; the rgb field is ignored), and a temperature whose Planck radiance underflows over the whole observer support (a few kelvin) keeps T, skips the normalisation, emits what Planck gives and raises one report entry saying it has no visible radiance (ruling 87).
   - IES profiles are an angular multiplier on intensity with absolute candela scale, converted to the engine's units through 0003 decision 11's anchor (ruling 35). The light's power estimate integrates the profile.
   - Blender's per-light ray-visibility flags apply to lamp primitives through 0002's instance visibility mask (D8) and are honoured by light paths (D19).
 - **D7. Light interface (design level).** One definition, compiled for both targets. "Absent" is expressed in the type, never as a sentinel value; a distant light reports `is_infinite`, not a distance of 1e30.

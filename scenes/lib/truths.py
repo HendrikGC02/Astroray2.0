@@ -159,6 +159,23 @@ def lambertian_furnace_table(t, width, height):
     return [(c, eye[i], np.where(cls == 1, colour[i], np.where(cls == 0, lw, np.nan)), "pixels") for i, c in enumerate("RGB")]
 
 
+# CODATA 2018 exact SI constants, as src/kernel/spectral/planck.h's c1L and c2 are derived.
+_H, _C, _KB = 6.62607015e-34, 299792458.0, 1.380649e-23
+
+
+def blackbody_working_rgb(kelvin, scale=1.0):
+    """The display RGB of a Blackbody emitter of Planck(T) / Y(Planck(T)) times `scale` (0003 d11):
+    M_ws . XYZ over the 1 nm grid 360..830 with the shipped observer, no illuminant multiply (the
+    kernel resolves a BLACKBODY ref analytically, 0005 item 39), so its Y is `scale` and the colour
+    is the working-space RGB of the Planck chromaticity. Planck in W m^-2 sr^-1 nm^-1, double.
+    Ref: 0003 d11, d25; src/host/spectral/blackbody.cpp (the same sum)."""
+    cmf, _, y_n, m_ws = observer_tables()
+    lam = np.arange(360, 831, dtype=np.float64) * 1e-9
+    planck = 2.0 * _H * _C * _C / lam ** 5 / np.expm1(_H * _C / (lam * _KB * float(kelvin))) * 1e-9
+    xyz = (cmf * planck).sum(axis=1) / y_n
+    return float(scale) * (m_ws @ (xyz / xyz[1]))
+
+
 def lamp_irradiance(power, lamp, x, y):
     """Irradiance at (x, y, 0) on the plane z = 0 (normal +z) from a point lamp of power P at `lamp`,
     or from a sphere lamp of power P centred there that lies wholly above the plane: E = I cos
@@ -174,8 +191,8 @@ def lamp_irradiance(power, lamp, x, y):
 
 
 def lamp_over_plane(t, width, height):
-    """A4: a point lamp (lamp_radius 0) or sphere lamp over a Lambertian plane z = 0 of grey albedo
-    rho, seen by a pinhole camera on the +z axis looking straight down (scenes/lib/ar.py look_at
+    """A4: a point lamp (lamp_radius 0) or sphere lamp, coloured by `colour` or by a blackbody_kelvin
+    (blackbody_working_rgb), over a Lambertian plane z = 0 of grey albedo rho, seen by a pinhole camera on the +z axis looking straight down (scenes/lib/ar.py look_at
     with up +y: film x is world x, film y is world y, rows bottom-up), black world. A plane pixel is
     colour rho / pi E (0009 d20), E from lamp_irradiance averaged over the pixel's square (box filter
     of width 1) by 8 x 8 Gauss-Legendre quadrature, so the truth is the pixel's mean, not its centre.
@@ -187,7 +204,12 @@ def lamp_over_plane(t, width, height):
     rho, power, radius = float(t["rho"]), float(t["power"]), float(t["lamp_radius"])
     lamp = [float(v) for v in t["lamp_position"]]
     cam = float(t["camera_height"])
-    colour = np.asarray(t["colour"], dtype=np.float64)
+    if ("blackbody_kelvin" in t) == ("colour" in t):
+        raise ValueError("a lamp truth names its colour by exactly one of `colour` (RGB) or `blackbody_kelvin`")
+    if "blackbody_kelvin" in t:
+        colour = blackbody_working_rgb(t["blackbody_kelvin"], t.get("blackbody_scale", 1.0))
+    else:
+        colour = np.asarray(t["colour"], dtype=np.float64)
     if colour.shape != (3,):
         raise ValueError("truth colour must be an RGB triple")
     if not lamp[2] > radius:

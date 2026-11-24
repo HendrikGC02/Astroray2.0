@@ -303,6 +303,7 @@ TEST_CASE("lamps/unequal ellipse raises one entry") {
   ar_light_desc bb = desc(AR_LIGHT_POINT, 0, 0, 10);
   bb.color.kind = AR_SPECTRUM_BLACKBODY;
   bb.color.temperature = 3000.0f;
+  bb.color.scale = 1.0f;  // a BLACKBODY lamp is exact, so it raises nothing
   ar_light_desc noshadow = desc(AR_LIGHT_POINT, 0, 0, 10);
   noshadow.cast_shadow = 0;
   ar_light_desc neg = desc(AR_LIGHT_POINT, 0, 0, 10);
@@ -317,7 +318,8 @@ TEST_CASE("lamps/unequal ellipse raises one entry") {
     REQUIRE(astroray::host::set_light(e, 15, &neg, fx.table()) == AR_OK);
     REQUIRE(astroray::host::set_light(e, 16, &mirrored, fx.table()) == AR_OK);
   });
-  for (ar_key k : {10, 11, 12, 14, 15, 16}) CHECK(fx.approximations(k) == 1);
+  for (ar_key k : {10, 11, 14, 15, 16}) CHECK(fx.approximations(k) == 1);
+  CHECK(fx.approximations(12) == 0);
   // The disk keeps the ellipse's area: diameter sqrt(4 * 1) = 2.
   auto l = fx.scene.lights();
   REQUIRE(l->lights.size() == 6);

@@ -37,7 +37,11 @@ struct Lamp {
 };
 
 // Throws std::invalid_argument for a type other than POINT, AREA_RECT, AREA_ELLIPSE, or for a
-// value the kernel's light_problem refuses (negative power, non-finite size, ...).
+// value the kernel's light_problem refuses (negative power, non-finite size, ...). A BLACKBODY
+// colour reads `temperature` (finite, positive, at most 1e9 K) and `scale` (finite, not negative)
+// and ignores `rgb`; its display Y is `scale` (0003 d11). Where Planck underflows over the whole
+// observer support (a few kelvin) the lamp keeps T, takes p[1] = scale unnormalised, emits what
+// Planck gives and raises one approximation entry; it never throws for that.
 std::shared_ptr<const Lamp> build_lamp(ar_key key, const ar_light_desc& d, const ar::Rgb2SpecTable& table);
 
 // ar_edit_set_light: validates now, stages and commits its own item; the lamp joins the scene

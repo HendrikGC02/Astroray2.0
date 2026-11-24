@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# A4 blackbody lamp: a 6500 K point lamp over a grey Lambertian plane, camera above; pixel =
+# colour rho / pi E with E = I cos theta / d^2 (0009 d20; truths.py lamp_over_plane), where colour
+# is the working-space RGB of Planck(T) / Y(Planck(T)) times the scale (0003 d11; truths.py
+# blackbody_working_rgb). The lamp is off the camera axis as in A4 point, so a swapped image axis
+# shows, and its colour is not white (1.043, 0.984, 1.035), so a lamp that renders as its RGB field
+# or as white misses by more than eps_sys in the red and blue channels.
+class = "A"
+units = "m"
+spectra = ["blackbody"]
+assets = []
+single_witness = false
+# eps_sys is D6's 0.5% row for the lamp irradiance (0004 verification table), not a bound on float
+# error. It is absolute, as every eps_sys is: the brightest pixel (under the lamp) is 1.01 at this
+# power, so 0.005 is 0.5% of it.
+eps_sys = 0.005
+[truth]
+formula = "lamp_over_plane"
+rho = 0.8
+blackbody_kelvin = 6500.0
+blackbody_scale = 1.0
+# Blender watts (0003 d11, factor 1): I = P / (4 pi). At the lamp's foot (height 1) E = I, so the
+# plane's brightest pixel is rho / pi x I = 1.01.
+power = 50.0
+lamp_position = [0.4, -0.3, 1.0]
+lamp_radius = 0.0
+# The scene (metres, millimetres): a square plane at z = 0 facing +z, a pinhole camera on the +z
+# axis looking down with image +y along world +y. The builder refuses a plane that does not fill
+# the view.
+plane_size = 6.0
+camera_height = 4.0
+focal_mm = 50.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "z_se"
