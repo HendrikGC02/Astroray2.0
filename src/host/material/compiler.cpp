@@ -957,11 +957,18 @@ VolumeOutput compile_volume(const ar_graph_desc& d, const ar::Rgb2SpecTable& tab
 // src/scene/shader.cpp Shader::has_surface_shadow_transparency ORs that over the graph's nodes;
 // Cycles also calls alpha < 1 - CLOSURE_WEIGHT_CUTOFF (1e-5f, src/kernel/svm/types.h) transparent,
 // a cutoff item 43 does not have;
-// EXTENSION is clear because no extension kind compiles; READS_RAY_TYPE is clear because no Light
-// Path op exists. A Mix Shader graph ORs MAY_BE_DELTA over its BSDF children, each from its own
+// EXTENSION is ext_kind != 0 (item 43) and then the OpenPBR lobes do not exist, so the kind alone
+// decides MAY_BE_DELTA; READS_RAY_TYPE is clear because no Light Path op exists. A Mix Shader graph ORs MAY_BE_DELTA over its BSDF children, each from its own
 // constants, since every child is reachable by the selection.
 uint32_t material_flags(const CompileResult& r) {
   using RS = ar::RecordSlot;
+  if (r.ext_kind != 0) {
+    uint32_t f = ar::EXTENSION;
+    if (r.ext_kind == uint32_t(ar::ExtKind::GRATING)) f |= ar::MAY_BE_DELTA;
+    if (r.constant_surface) f |= ar::CONSTANT_SURFACE;
+    if (!(r.program.size() > 2 && r.program[2] != 0)) f |= ar::CONSTANT_EMISSION;
+    return f;
+  }
   bool delta = r.children.empty() && child_may_be_delta(r.block, r.runtime_slots);
   for (const ChildConstants& c : r.children) delta = delta || child_may_be_delta(c.block, c.runtime_slots);
   uint32_t flags = delta ? ar::MAY_BE_DELTA : 0u;
@@ -1042,6 +1049,132 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
   set_medium_fields(&m, medium_priority);
   for (uint32_t key : m.compiled.missing_images)
     add_entry(&m, AR_REPORT_IMAGE_UNREADABLE, "image key " + std::to_string(key) + " is not set");
+  return m;
+}
+
+namespace {
+
+const char* const kRecordSlotName[] = {
+#define AR_X(n) #n,
+    AR_RECORD_SCALARS(AR_X)
+#undef AR_X
+#define AR_X(n, s, sem) #n,
+    AR_RECORD_SPECTRAL(AR_X)
+#undef AR_X
+#define AR_X(n) #n,
+    AR_RECORD_FRAMES(AR_X)
+#undef AR_X
+};
+static_assert(sizeof(kRecordSlotName) / sizeof(kRecordSlotName[0]) == size_t(ar::RecordSlot::COUNT_), "one name per RecordSlot");
+
+const char* ext_kind_name(uint32_t kind) {
+  switch (kind) {
+#define AR_EXT_KIND(name, id) \
+  case id: return #name;
+#include "../../kernel/material/ext_fields.def"
+    default: return nullptr;
+  }
+}
+
+// What an extension keeps of the OpenPBR record: opacity and the frame (item 15; closure weight is
+// the selection's and no graph stores it), plus the kind's rows in ext_fields.def (item 16).
+bool ext_keeps_slot(uint32_t kind, ar::RecordSlot s) {
+  using RS = ar::RecordSlot;
+  (void)kind;  // unused while no kind has a field row
+  if (s == RS::geometry_opacity || s == RS::geometry_normal || s == RS::geometry_tangent) return true;
+#define AR_EXT_FIELD(k, slot) \
+  if (kind == uint32_t(ar::ExtKind::k) && s == RS::slot) return true;
+#include "../../kernel/material/ext_fields.def"
+  return false;
+}
+
+uint32_t ext_max_kind() {
+  uint32_t m = 0;
+#define AR_EXT_KIND(name, id) m = std::max(m, uint32_t(id));
+#include "../../kernel/material/ext_fields.def"
+  return m;
+}
+
+// The kind's check of its constants. The grating's words are laid out by its lobe task, which
+// fills this in; until then the authored bytes are accepted.
+bool ext_params_valid(uint32_t, const ar::ExtParams&, std::string*) { return true; }
+
+// `graph` without its STORE_SLOT nodes to slots `kind` does not keep (item 15: those inputs do not
+// exist for the material). Roots only they fed drop out of compile_surface's dead-code pass, so a
+// refused SpectrumRef or an image on an ignored slot cannot reach the program or the image list.
+// A STORE_SLOT whose slot operand is unreadable stays for compile_material to reject.
+struct PrunedGraph {
+  std::vector<ar_graph_node> nodes;
+  std::vector<ar_graph_link> links;
+  std::set<uint32_t> ignored;  // RecordSlot ids
+  ar_graph_desc desc;
+};
+
+void prune_ignored_stores(const ar_graph_desc& g, uint32_t kind, PrunedGraph* out) {
+  std::vector<uint32_t> remap(g.node_count, UINT32_MAX);
+  for (uint32_t i = 0; i < g.node_count; ++i) {
+    const ar_graph_node& n = g.nodes[i];
+    if (n.op == uint32_t(Op::STORE_SLOT) && n.i32_count >= 1 && uint64_t(n.i32_first) < g.i32_count && g.params_i32 != nullptr) {
+      const uint32_t s = uint32_t(g.params_i32[n.i32_first]);
+      if (s < uint32_t(ar::RecordSlot::COUNT_) && !ext_keeps_slot(kind, ar::RecordSlot(s))) {
+        out->ignored.insert(s);
+        continue;
+      }
+    }
+    remap[i] = uint32_t(out->nodes.size());
+    out->nodes.push_back(n);
+  }
+  for (uint32_t k = 0; k < g.link_count; ++k) {
+    ar_graph_link l = g.links[k];
+    // A link naming a missing node is left for compile_material to reject.
+    if (l.from_node < g.node_count && remap[l.from_node] == UINT32_MAX) continue;
+    if (l.to_node < g.node_count && remap[l.to_node] == UINT32_MAX) continue;
+    if (l.from_node < g.node_count) l.from_node = remap[l.from_node];
+    if (l.to_node < g.node_count) l.to_node = remap[l.to_node];
+    out->links.push_back(l);
+  }
+  out->desc = g;
+  out->desc.node_count = uint32_t(out->nodes.size());
+  out->desc.link_count = uint32_t(out->links.size());
+  out->desc.nodes = out->nodes.data();
+  out->desc.links = out->links.data();
+}
+
+}  // namespace
+
+MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_desc& graph, const ar::Rgb2SpecTable& table,
+                                 const ImageMeanFn* means, const ImageSlotFn* slots) {
+  const uint32_t kind = desc.ext_kind;
+  const char* name = ext_kind_name(kind);
+  if (kind == 0) return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "internal: compile_extension called with ext_kind 0");
+  if (name == nullptr)
+    return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
+                            "extension kind " + std::to_string(kind) + " is not in the list (0.." + std::to_string(ext_max_kind()) + ")");
+  if (kind != uint32_t(ar::ExtKind::GRATING))
+    return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
+                            "extension kind " + std::string(name) + " (" + std::to_string(kind) + ") is not built");
+  ar::ExtParams params = {};
+  static_assert(sizeof(params) == sizeof(desc.ext_constants), "ext_constants is the ExtParams block");
+  std::memcpy(&params, desc.ext_constants, sizeof(params));
+  std::string why;
+  if (!ext_params_valid(kind, params, &why))
+    return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "extension kind " + std::string(name) + ": " + why);
+  // Item 19: no masking. A Mix Shader would select between an extension and an OpenPBR branch.
+  for (uint32_t i = 0; i < graph.node_count; ++i)
+    if (graph.nodes[i].op == uint32_t(Op::BRANCH_MIX))
+      return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
+                              "node " + std::to_string(i) + " (Mix Shader) under extension kind " + std::string(name) +
+                                  ": an extension cannot be mixed with another branch (use material slots)");
+  PrunedGraph pruned;
+  prune_ignored_stores(graph, kind, &pruned);
+  MaterialOutput m = compile_material(pruned.desc, table, means, slots, desc.medium_priority);
+  if (m.magenta) return m;
+  m.compiled.ext_kind = kind;
+  m.compiled.ext = params;
+  m.flags = material_flags(m.compiled);
+  // One entry per dropped slot, however many stores named it.
+  for (uint32_t s : pruned.ignored)
+    add_entry(&m, AR_REPORT_INPUT_IGNORED, std::string(kRecordSlotName[s]) + " is ignored by extension kind " + name);
   return m;
 }
 

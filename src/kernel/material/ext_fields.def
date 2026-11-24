@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: Apache-2.0
+// The extension kinds and the per-point record fields each kind reads (0005 items 14-16). Hand-written
+// once, like ops.def; tools/opsgen.py validates it and emits EXT_KINDS and EXT_FIELDS into _ops.py.
+// Included with AR_EXT_KIND and AR_EXT_FIELD defined; an undefined macro expands to nothing.
+//
+//   AR_EXT_KIND(name, id)               id is the ext_kind byte (0..255), unique
+//   AR_EXT_FIELD(kind, record_slot)     kind names a row above; record_slot is a RecordSlot enumerator
+//                                       (store_slot.h) the kind keeps in place of its OpenPBR meaning
+//
+// A kind always keeps geometry_opacity and the frame slots (item 15; closure weight is the selection's); only other
+// slots need a field row. A STORE_SLOT to any other BSDF slot is reported INPUT_IGNORED. GRATING
+// reads no other slot, so it has no field rows. Values 4 and 5 are enum-only (item 14); the kinds
+// that need field rows (HAIR, FLUORESCENT) add them in their own tasks.
+// One row per line. Ref: docs/decisions/0005-material-model.md items 14-16.
+#ifndef AR_EXT_KIND
+#define AR_EXT_KIND(name, id)
+#endif
+#ifndef AR_EXT_FIELD
+#define AR_EXT_FIELD(kind, record_slot)
+#endif
+AR_EXT_KIND(NONE, 0)
+AR_EXT_KIND(GRATING, 1)
+AR_EXT_KIND(HAIR, 2)
+AR_EXT_KIND(FLUORESCENT, 3)
+AR_EXT_KIND(MULTILAYER, 4)
+AR_EXT_KIND(MEASURED, 5)
+#undef AR_EXT_KIND
+#undef AR_EXT_FIELD

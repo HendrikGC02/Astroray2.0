@@ -70,7 +70,7 @@ add_custom_command(
           ${CMAKE_SOURCE_DIR}/blender/astroray/materials/lowering_table.py
           ${CMAKE_SOURCE_DIR}/tests/data/shader_node_types_5_3.txt
           ${CMAKE_SOURCE_DIR}/src/kernel/vm/ops/store_slot.h ${CMAKE_SOURCE_DIR}/src/kernel/vm/ops/tex_image.h
-          ${CMAKE_SOURCE_DIR}/src/kernel/material/spectrum_ref.h
+          ${CMAKE_SOURCE_DIR}/src/kernel/material/spectrum_ref.h ${CMAKE_SOURCE_DIR}/src/kernel/material/ext_fields.def
   COMMENT "opsgen"
   VERBATIM)
 add_custom_target(astroray_opsgen ALL DEPENDS ${ASTRORAY_OPSGEN_STAMP})
