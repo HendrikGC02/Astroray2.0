@@ -17,3 +17,4 @@ Budget: gate +3 s at most (furnace and chi-squared cases counted, CPU gate tests
 Depends on: 149, 158 (spine: lands right after 158). First after 158 in the kernel_globals.h / scene_tables / kg_builder / hand-built SceneData sweep (order in tasks/README.md); the later task rebases.
 Size: M (about 450 lines without tests; the table plumbing is 100 of them); stop and report at 2x. If the table plumbing alone passes 150, land steps 1 and 3 first.
 Progress:
+- Files: lobes/{stack,metal,tables}.h, tools/etables/etables.cpp, data/tables/e_spec.bin, data/MANIFEST.toml, stages/shade_surface.h, kernel_globals.h, host/scene/scene_tables.{h,cpp}, host/session/kg_builder.cpp, budget.toml, 0005 items 4-6; tests cpu/{test_lobe_stack,test_lobe_metal,test_nee,test_shade_surface_bsdf,test_kg_builder}.cpp, test_alpha_pass_through.cpp (forced: calls stack_select/stack_sample), gpu/{kernels/kg_checksum.cu,test_nee_agree,test_shade_surface_agree,test_scene_upload}.cpp.
