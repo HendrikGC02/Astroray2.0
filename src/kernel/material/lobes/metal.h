@@ -84,8 +84,9 @@ template <typename T>
 AR_FN MetalComplex<T> metal_csqrt(MetalComplex<T> z) {
   const T n = ar::sqrt(z.re * z.re + z.im * z.im);
   if (n == T(0)) return {T(0), T(0)};
-  const T t1 = ar::sqrt(T(0.5) * (n + ar::abs(z.re)));
-  const T t2 = T(0.5) * z.im / t1;
+  // Halving is exact in binary floating point, so / T(2) is pstd's T(.5) * x.
+  const T t1 = ar::sqrt((n + ar::abs(z.re)) / T(2));
+  const T t2 = z.im / T(2) / t1;
   if (z.re >= T(0)) return {t1, t2};
   return {ar::abs(t2), z.im < T(0) ? -t1 : t1};
 }
