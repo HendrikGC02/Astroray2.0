@@ -1,9 +1,30 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 0a24e8f..16af3ee 100644
+index 64b2783..05987f8 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
-@@ -750,7 +750,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
-       res->emission_opacity_unclamped = res->emission_opacity_unclamped || !w.isc[size_t(opacity_of[c])];
+@@ -675,8 +675,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+       kind_of[c] = Kind::TRANSPARENT;
+       res->transparent_folded = res->transparent_folded || w.cv[size_t(src)][0] != 0.0f;
+     } else {
+-      return res->error = who + (emits ? "an emission with an opacity and no BSDF store" : "a per-point opacity with no BSDF store") +
+-                          " is none of the child kinds (Emission, Transparent with a constant opacity, BSDF)", false;
++      kind_of[c] = Kind::BSDF;
+     }
+   }
+   // Socket weights (1 - f, f) per mix; a constant factor clamped as BRANCH_MIX clamps it, a
+@@ -727,8 +726,8 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+       q.w = mul(p.w, sw[k]);
+       if (hb[k] && !hb[1 - k]) {
+         const auto t = transmits(sub_ref(ref, 1 - k));
+-        q.tau = add(p.tau, mul(p.s, mul(sw[1 - k], t.first)));
+-        q.s = mul(p.s, sw[k]);
++        q.tau = add(p.tau, mul(sw[1 - k], t.first));
++        q.s = sw[k];
+         q.collapsed = true;
+         q.white = p.white && t.second;
+       }
+@@ -753,7 +752,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+       res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(path_of[c].w)];
        const int strength = w.g.nodes[size_t(e)].input[1];
        emitted.push_back({w.g.nodes[size_t(e)].input[0], strength, weight});
 -      const int scaled = mul(strength, weight);  // mul may move the node array
@@ -11,7 +32,7 @@ index 0a24e8f..16af3ee 100644
        w.g.nodes[size_t(e)].input[1] = scaled;
        emit_nodes.push_back(e);
      }
-@@ -771,7 +771,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+@@ -775,14 +774,9 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
        a2 = konst(float(ap));
        cw = konst(ap > 0.0 ? float(s * av / ap) : 0.0f);  // a' = 0: the surface is never taken
      } else if (p.white) {
@@ -19,22 +40,38 @@ index 0a24e8f..16af3ee 100644
 +      a2 = a;
      } else if (is_const(p.tau, 0.0f) && is_const(a, 1.0f)) {
        cw = p.s;
-     } else {
-@@ -789,7 +789,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
-   // T = sum_j w_j (1 - a_j) over every child, from the children's own opacities.
+-    } else {
+-      return res->error = "Mix Shader child " + std::to_string(c) +
+-                          ": its closure weight s a / a' under a pruned sibling is per point and needs a divide op "
+-                          "(DIV_F32), which ops.def does not have",
+-             false;
+     }
+     if (a2 >= 0) {
+       if (opacity_store_of.count(c) != 0) w.g.nodes[size_t(opacity_store_of[c])].input[0] = a2;
+@@ -794,7 +788,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
    int t = zero;
    for (int c : order)
--    if (!is_const(opacity_of[c], 1.0f)) t = add(t, mul(path_of[c].w, sub(one, opacity_of[c])));
-+    if (!is_const(opacity_of[c], 1.0f)) t = add(t, sub(one, opacity_of[c]));
+     if (!is_const(opacity_of[c], 1.0f)) {
+-      t = add(t, mul(path_of[c].w, sub(one, opacity_of[c])));
++      t = add(t, sub(one, opacity_of[c]));
+       res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(path_of[c].w)];
+     }
    const int a_eff = sub(one, t);
-   int opacity_store = -1;  // the per-point a_eff store, the opacity entry's root
-   if (w.isc[size_t(a_eff)]) {
-@@ -919,7 +919,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
-   for (const Emit& e : emitted) {
-     float weight = 1.0f;
-     if (w.isc[size_t(e.weight)]) {
--      weight = w.cv[size_t(e.weight)][0];
-+      weight = 1.0f;
-     } else {
-       const Mean m = mean_of(w, e.weight, &mx);
-       if (m.known) weight = m.v[0];
+@@ -927,7 +921,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+   // per-point factor without a known mean is bounded by 1 (item 43), so a small constant weight
+   // keeps the estimate small.
+   std::function<float(int)> weight_estimate = [&](int i) -> float {
+-    if (w.isc[size_t(i)]) return w.cv[size_t(i)][0];
++    if (w.isc[size_t(i)]) return 1.0f;
+     if (w.g.nodes[size_t(i)].op == Op::MUL_F32)
+       return weight_estimate(w.g.nodes[size_t(i)].input[0]) * weight_estimate(w.g.nodes[size_t(i)].input[1]);
+     const Mean m = mean_of(w, i, &mx);
+@@ -1446,7 +1440,7 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
+   if (m.compiled.opacity_clamped) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity clamped");
+   if (m.compiled.transparent_folded)
+     add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "Transparent under a Mix Shader: colour taken as its mean (exact only for grey)");
+-  if (m.compiled.mix_factor_unclamped)
++  if (m.compiled.transparent_folded)
+     add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "per-point Mix factor enters weights unclamped (Cycles saturates it)");
+   // Camera and indirect rays pass through by the opacity decision in shade_surface; shadow rays
+   // block on any hit (TERMINATE_ON_FIRST_HIT | DISABLE_ANYHIT, no Embree filter), so the material's
