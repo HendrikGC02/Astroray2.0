@@ -35,7 +35,7 @@ MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d
                          d.surface_graph == 0 ? std::string("no surface graph")
                                               : "surface graph " + std::to_string(d.surface_graph) + " is not set");
   else
-    m = compile_material(g->desc(), t, means, slots);
+    m = compile_material(g->desc(), t, means, slots, d.medium_priority);
   // Volume and displacement programs are later milestones: reported, the surface still renders.
   if (d.volume_graph != 0) m.entries.push_back({AR_REPORT_NODE_UNSUPPORTED, "volume graph"});
   if (d.displacement_graph != 0) m.entries.push_back({AR_REPORT_NODE_UNSUPPORTED, "displacement graph"});
