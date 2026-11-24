@@ -386,65 +386,77 @@ TEST_CASE("compiler_flags/hand shapes") {
 TEST_CASE("compiler_flags/non finite constants are refused") {
   using astroray::host::MaterialOutput;
   const float nan = std::numeric_limits<float>::quiet_NaN(), inf = std::numeric_limits<float>::infinity();
-  auto refused = [](const MaterialOutput& m, const std::string& what) {
+  // The message names the node by index and op, and the record slot a store gives it (slot < 0: none).
+  auto refused = [](const MaterialOutput& m, int node, const std::string& op, int slot) {
     REQUIRE(m.magenta);
     REQUIRE(m.entries.size() == 1);
     CHECK(m.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
-    CHECK(m.entries[0].detail.find(what) != std::string::npos);
-    CHECK(m.entries[0].detail.find("non-finite") != std::string::npos);
+    const std::string& d = m.entries[0].detail;
+    CHECK(d.find("graph node " + std::to_string(node) + " (" + op + "):") != std::string::npos);
+    CHECK(d.find("non-finite") != std::string::npos);
+    CHECK((d.find("record slot") != std::string::npos) == (slot >= 0));
+    if (slot >= 0) CHECK(d.find("record slot " + std::to_string(slot)) != std::string::npos);
   };
   {  // a constant straight into a slot: the node and the slot are named
     Gen g;
-    g.store(0, g.add(Op::CONST_F32, {nan}), RecordSlot::specular_roughness);
-    refused(g.compile(), "record slot " + std::to_string(int(RecordSlot::specular_roughness)));
+    const int c = g.add(Op::CONST_F32, {nan});
+    g.store(0, c, RecordSlot::specular_roughness);
+    refused(g.compile(), c, "CONST_F32", int(RecordSlot::specular_roughness));
   }
   {  // an Inf colour
     Gen g;
-    g.store(0, g.add(Op::CONST_F32X3, {0.5f, inf, 0.5f}), RecordSlot::base_color);
-    refused(g.compile(), "CONST_F32X3");
+    const int c = g.add(Op::CONST_F32X3, {0.5f, inf, 0.5f});
+    g.store(0, c, RecordSlot::base_color);
+    refused(g.compile(), c, "CONST_F32X3", int(RecordSlot::base_color));
   }
   {  // an Inf emission strength
     Gen g;
     const int e = g.add(Op::EMIT_LE, {}, {0});
     g.link(g.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), e, 0);
-    g.link(g.add(Op::CONST_F32, {inf}), e, 1);
-    refused(g.compile(), "CONST_F32");
+    const int c = g.add(Op::CONST_F32, {inf});
+    g.link(c, e, 1);
+    refused(g.compile(), c, "CONST_F32", -1);
   }
   {  // a NaN that only multiplies a per-point value
     Gen g;
-    g.store(0, g.scaled(g.uv_channel(0), double(nan)).node, RecordSlot::specular_roughness);
-    refused(g.compile(), "CONST_F32");
+    const Val u = g.uv_channel(0);
+    const int c = g.add(Op::CONST_F32, {nan});
+    g.store(0, g.op2(Op::MUL_F32, u.node, c), RecordSlot::specular_roughness);
+    refused(g.compile(), c, "CONST_F32", -1);
   }
   {  // a NaN under a Mix child
     Gen g;
-    g.store(0, g.add(Op::CONST_F32, {nan}), RecordSlot::coat_weight);
+    const int c = g.add(Op::CONST_F32, {nan});
+    g.store(0, c, RecordSlot::coat_weight);
     g.store(1, g.constant(0.5).node, RecordSlot::specular_roughness);
     g.link(g.constant(0.5).node, g.add(Op::BRANCH_MIX, {}, {0, 0, 1}), 0);
-    refused(g.compile(), "record slot " + std::to_string(int(RecordSlot::coat_weight)));
+    refused(g.compile(), c, "CONST_F32", int(RecordSlot::coat_weight));
   }
-  // The stricter rule (lead ruling 2026-11-25): a NaN anywhere is refused even when it cannot reach
+  // 0005 item 32 "Non-finite input": a NaN anywhere is refused even when it cannot reach
   // a sample. The graph has no min, max or clamp op, so the shapes that hide a constant are a child
   // with a selection weight of 0 (a constant-1 Mix factor weighs the first child 1 - f) and a node
   // nothing reads.
   {
     Gen g;
-    g.store(0, g.add(Op::CONST_F32, {nan}), RecordSlot::coat_weight);
+    const int c = g.add(Op::CONST_F32, {nan});
+    g.store(0, c, RecordSlot::coat_weight);
     g.store(1, g.constant(0.5).node, RecordSlot::specular_roughness);
     g.link(g.constant(1.0).node, g.add(Op::BRANCH_MIX, {}, {0, 0, 1}), 0);
-    refused(g.compile(), "CONST_F32");
+    refused(g.compile(), c, "CONST_F32", int(RecordSlot::coat_weight));
   }
-  {
+  {  // a node nothing reads
     Gen g;
     g.store(0, g.constant(0.5).node, RecordSlot::specular_roughness);
-    g.add(Op::CONST_F32, {inf});
-    refused(g.compile(), "CONST_F32");
+    const int c = g.add(Op::CONST_F32, {inf});
+    refused(g.compile(), c, "CONST_F32", -1);
   }
   {  // a NaN in the Mix factor itself
     Gen g;
     g.store(0, g.constant(0.5).node, RecordSlot::specular_roughness);
     g.store(1, g.constant(0.4).node, RecordSlot::specular_roughness);
-    g.link(g.add(Op::CONST_F32, {nan}), g.add(Op::BRANCH_MIX, {}, {0, 0, 1}), 0);
-    refused(g.compile(), "CONST_F32");
+    const int c = g.add(Op::CONST_F32, {nan});
+    g.link(c, g.add(Op::BRANCH_MIX, {}, {0, 0, 1}), 0);
+    refused(g.compile(), c, "CONST_F32", -1);
   }
   {  // finite constants of the same shapes compile
     Gen g;

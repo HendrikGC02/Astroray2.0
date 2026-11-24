@@ -590,8 +590,6 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     if (!w.isc[size_t(nd.input[0])] && w.g.nodes[size_t(nd.input[0])].out == VType::F32 && spectral_slot(slot) &&
         slot != uint32_t(RS::specular_ior))
       return res->error = who + "a run-time scalar cannot be stored in a colour slot", false;
-    if (slot == opacity_slot && w.isc[size_t(nd.input[0])] && std::isnan(w.cv[size_t(nd.input[0])][0]))
-      return res->error = "geometry_opacity is NaN", false;
     std::vector<int>& list = stores_of[nd.child];
     for (int o : list)
       if (slot_of(o) == slot)
@@ -742,7 +740,6 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     int f = w.g.nodes[size_t(m)].input[0];
     if (w.isc[size_t(f)]) {
       const float v = w.cv[size_t(f)][0];
-      if (std::isnan(v)) return res->error = "Mix Shader tag " + std::to_string(tag) + ": the factor is NaN", false;
       if (clamp01(v) != v) f = konst(clamp01(v));
     }
     side_w[m] = {sub(one, f), f};
@@ -1030,7 +1027,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
 // store's own source, computed once in the emission segment and kept live for the store (item 38);
 // a constant one is the clamped value the block holds, folded into the product (a lone constant
 // emission then lands in the block's luminance as before). An opacity of exactly 1 changes nothing.
-// A NaN constant is left to the store's own rejection.
+// A NaN constant never gets here: compile_surface refuses every non-finite constant first.
 // Ref: docs/decisions/0005-material-model.md items 4, 38, 43; third_party/_cache/refs/
 // openpbr-781573a80cb2 index.html "Opacity / Transparency" (M_PBR = mix(S_ambient, M_surface,
 // geometry_opacity)) and reference/open_pbr_surface.mtlx (the surface node takes the emission EDF
@@ -1057,7 +1054,7 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
   int factor = src;
   if (w.isc[size_t(src)]) {
     const float v = w.cv[size_t(src)][0];
-    if (std::isnan(v) || v >= 1.0f) return true;  // NaN is rejected by the store; above 1 clamps to 1
+    if (v >= 1.0f) return true;  // above 1 clamps to 1; a NaN never gets here (compile_surface refuses it)
     if (v < 0.0f) {
       GraphNode c;
       c.op = Op::CONST_F32;
@@ -1095,7 +1092,7 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
 // A constant that is NaN or Inf anywhere in the graph is refused, naming the node (and the record
 // slot a STORE_SLOT gives it), even when it would fold into a finite value or sit in a branch no
 // sample takes: a graph that carries one is a broken input, and the run-time check in STORE_SLOT
-// would otherwise turn every sample INVALID (rule 5, ruling 91, lead ruling 2026-11-25).
+// would otherwise turn every sample INVALID (rule 5, ruling 91; 0005 item 32, "Non-finite input").
 // Ref: docs/decisions/RULINGS.md 91; 0004 D17.
 bool refuse_non_finite_constants(const Work& w, std::string* err) {
   for (size_t i = 0; i < w.g.nodes.size(); ++i) {
@@ -1190,7 +1187,6 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
       } else if (w.isc[size_t(src)]) {
         Vec3 v = w.cv[size_t(src)];
         if (slot == opacity_slot) {  // a fraction: clamped and reported like a colour (0005 item 32)
-          if (std::isnan(v[0])) return res.error = "geometry_opacity is NaN", res;
           if (v[0] < 0.0f || v[0] > 1.0f) v[0] = std::min(std::max(v[0], 0.0f), 1.0f), res.opacity_clamped = true;
         }
         if (!store_const(&res.block, table, slot, t, v, &res.clamp_flags, &res.error)) return res;
