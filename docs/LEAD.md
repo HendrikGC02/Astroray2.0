@@ -33,6 +33,12 @@ docs/PLAN-M1b.md, order in tasks/README.md, unowned items in docs/BACKLOG.md, ru
    format and "grep every symbol the Do list touches; name call sites, registration lists, budget rows and
    forced tests in Scope"), run an Opus critique on a batch of more than ten, update tasks/README.md and STATUS.
 
+8. Next batch by agent (owner, 2026-11-24): when the written tasks run out (every remaining task file is
+   dispatched or blocked on the spine), spawn a planning agent on model `fable` without asking. Brief it with
+   docs/PLAN-M1b.md, docs/ROADMAP.md, STATUS, BACKLOG, the ledger in tasks/README.md, the measured rows since the
+   last batch and the task-file format. It analyses the slice and writes the next batch's task files. The lead
+   then runs step 7's scope pre-flight and Opus critique before dispatching anything.
+
 ## Measurement tasks
 docs/PLAN-M1b.md section 5. A capture runs with the gpu and blender lanes idle. A budget row gets at most two
 remedy tasks in a milestone; then it goes to the owner with the numbers. A limit a task proposes to change is
