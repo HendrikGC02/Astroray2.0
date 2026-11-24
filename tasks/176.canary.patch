@@ -1,5 +1,5 @@
 diff --git a/src/host/denoise/denoiser.cpp b/src/host/denoise/denoiser.cpp
-index 6aed194..e5badb2 100644
+index 6aed194..32b126e 100644
 --- a/src/host/denoise/denoiser.cpp
 +++ b/src/host/denoise/denoiser.cpp
 @@ -106,8 +106,6 @@ struct DenoiserState::Oidn {
@@ -20,9 +20,12 @@ index 6aed194..e5badb2 100644
      // Only now is `out` written: a failure above leaves the caller's image as it was.
      out.width = c.width;
      out.height = c.height;
-@@ -351,7 +351,7 @@ void DenoiserState::load() {
+@@ -349,9 +349,9 @@ void DenoiserState::load() {
+   } catch (const Cancelled&) {
+     oidn->release();
      return finish(kFailed, "denoiser loading stopped: the state was destroyed");
-   } catch (const std::exception& e) {
+-  } catch (const std::exception& e) {
++  } catch (const std::exception&) {
      oidn->release();  // a failed state holds no device memory and no library
 -    return finish(kFailed, e.what());
 +    return finish(kFailed, "OIDN failed");
