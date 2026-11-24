@@ -73,8 +73,12 @@ struct DenoiserState::Oidn {
   Filters filters[2];  // by DenoiseMode
   OIDNBuffer color = nullptr, albedo = nullptr, normal = nullptr, output = nullptr;
   uint32_t buffer_width = 0, buffer_height = 0;
-  std::vector<uint64_t> records;  // DENOISER ledger records
-  uint64_t bytes = 0;             // their sum
+  // DENOISER ledger records (id 0: none). The device's own memory (device, weights, kernels,
+  // measured at creation) and the configuration's (buffers, commits and what OIDN keeps of them),
+  // replaced at every reconfiguration by its net change (run()), so sizes that come and go never
+  // add up.
+  uint64_t creation_record = 0, creation_bytes = 0;
+  uint64_t config_record = 0, config_bytes = 0;
   std::vector<float> staging;     // packed colour in, output back
 
   ~Oidn() { release(); }
@@ -101,14 +105,24 @@ struct DenoiserState::Oidn {
 
   // Ref: 0008 d16 (the denoiser's device memory is reported to the ledger); ledger.h DEVICE_CONTEXT:
   // memory a library takes outside our allocations is the drop in free device bytes around the
-  // call that takes it. The CPU device takes none.
-  void record_drop(uint64_t before) {
-    if (cuda_ordinal < 0) return;
+  // call that takes it. The CPU device takes none: 0 there, and 0 when free memory rose.
+  uint64_t drop_since(uint64_t before) const {
+    if (cuda_ordinal < 0) return 0;
     const uint64_t now = free_bytes();
-    if (now >= before) return;
-    records.push_back(ledger->add(owner, LedgerCategory::DENOISER, before - now));
-    bytes += before - now;
+    return now < before ? before - now : 0;
   }
+
+  // Replaces the record `id` holding `held` bytes by one of `bytes` (no record for 0).
+  void set_record(uint64_t& id, uint64_t& held, uint64_t bytes) {
+    if (id) ledger->remove(id);
+    id = 0;
+    held = 0;
+    if (bytes == 0) return;
+    id = ledger->add(owner, LedgerCategory::DENOISER, bytes);
+    held = bytes;
+  }
+
+  uint64_t bytes() const { return creation_bytes + config_bytes; }
 
   OIDNFilter new_filter(DenoiseMode mode) {
     OIDNFilter f = lib->oidnNewFilter(device, "RT");
@@ -177,7 +191,9 @@ struct DenoiserState::Oidn {
     warm.normal = warm.color;
     DisplayImage scratch;
     for (DenoiseMode m : {DenoiseMode::FINAL, DenoiseMode::VIEWPORT}) execute(warm, scratch, m);
-    record_drop(before);
+    // The 1 x 1 images are size-dependent: they go, so the creation record holds only what stays.
+    drop_images();
+    set_record(creation_record, creation_bytes, drop_since(before));
     name = describe();
   }
 
@@ -198,13 +214,23 @@ struct DenoiserState::Oidn {
     return names.empty() ? s : s + ": " + names;
   }
 
-  void release_buffers() {
+  // Unbinds every image of every filter, then releases the buffers. A bound image keeps its buffer
+  // alive, so a buffer is freed only once no filter of either mode holds it.
+  void drop_images() {
+    for (Filters& f : filters) {
+      if (f.rt)
+        for (const char* image : {"color", "albedo", "normal", "output"}) lib->oidnUnsetFilterImage(f.rt, image);
+      if (f.albedo)
+        for (const char* image : {"albedo", "output"}) lib->oidnUnsetFilterImage(f.albedo, image);
+      if (f.normal)
+        for (const char* image : {"normal", "output"}) lib->oidnUnsetFilterImage(f.normal, image);
+      f.width = f.height = 0;  // their images are gone: commit again
+    }
     for (OIDNBuffer* b : {&output, &normal, &albedo, &color}) {
       if (*b) lib->oidnReleaseBuffer(*b);
       *b = nullptr;
     }
     buffer_width = buffer_height = 0;
-    for (Filters& f : filters) f.width = f.height = 0;  // their images are gone: commit again
   }
 
   // Teardown cannot throw; OIDN's objects go before the library that holds their code.
@@ -216,19 +242,19 @@ struct DenoiserState::Oidn {
           if (*p) lib->oidnReleaseFilter(*p);
           *p = nullptr;
         }
-      release_buffers();
+      drop_images();
       if (device) lib->oidnReleaseDevice(device);
       device = nullptr;
     }
-    for (uint64_t id : records) {
+    for (uint64_t* id : {&config_record, &creation_record}) {
       try {
-        ledger->remove(id);
+        if (*id) ledger->remove(*id);
       } catch (const std::exception& e) {
         std::fprintf(stderr, "astroray: releasing a denoiser ledger record failed: %s\n", e.what());
       }
+      *id = 0;
     }
-    records.clear();
-    bytes = 0;
+    creation_bytes = config_bytes = 0;
     lib.reset();
   }
 
@@ -247,7 +273,7 @@ struct DenoiserState::Oidn {
     Filters& f = filters[size_t(mode)];
     const size_t bytes_per_image = size_t(w) * h * 3 * sizeof(float);
     if (buffer_width != w || buffer_height != h) {
-      release_buffers();
+      drop_images();
       color = lib->oidnNewBuffer(device, bytes_per_image);
       albedo = lib->oidnNewBuffer(device, bytes_per_image);
       normal = lib->oidnNewBuffer(device, bytes_per_image);
@@ -286,13 +312,26 @@ struct DenoiserState::Oidn {
     f.with_normal = with_normal;
   }
 
-  // A denoise; when it had to configure, the device memory that took (buffers, the commit, OIDN's
-  // scratch at the first execution) is recorded like the device's own.
+  // A denoise. A reconfiguration is measured as one window: from before a new size drops every
+  // filter's images and buffers to after the commit and first execution. The configuration record is
+  // then replaced by its old bytes plus that window's net drop, which is negative when the window gave
+  // memory back. OIDN keeps memory across a smaller size (on the 5070 Ti a 128 x 128 configuration
+  // after a 512 x 512 one holds 84 MiB more than before it), so replacing the record by the new
+  // window's drop alone would under-count; and the record cannot ratchet, because every byte OIDN
+  // frees is freed inside such a window and counted.
   void run(const DenoiseInputs& in, DisplayImage& out, DenoiseMode mode) {
     const bool reconfigure = !configured(mode, in);
     const uint64_t before = reconfigure && cuda_ordinal >= 0 ? free_bytes() : 0;
+    if (in.color.width != buffer_width || in.color.height != buffer_height) drop_images();
     execute(in, out, mode);
-    if (reconfigure) record_drop(before);
+    if (reconfigure && cuda_ordinal >= 0) set_record(config_record, config_bytes, net_after(config_bytes, before));
+  }
+
+  // `held` plus the net drop in free device bytes since `before`; 0 if that is negative.
+  uint64_t net_after(uint64_t held, uint64_t before) const {
+    const uint64_t now = free_bytes();
+    const uint64_t up = held + before;
+    return up > now ? up - now : 0;
   }
 
   void execute(const DenoiseInputs& in, DisplayImage& out, DenoiseMode mode) {
@@ -380,7 +419,7 @@ std::string DenoiserState::error() const {
 
 std::string DenoiserState::description() const { return ready() && oidn_ ? oidn_->name : std::string(); }
 
-uint64_t DenoiserState::device_bytes() const { return ready() && oidn_ ? oidn_->bytes : 0; }
+uint64_t DenoiserState::device_bytes() const { return ready() && oidn_ ? oidn_->bytes() : 0; }
 
 void DenoiserState::wait() {
   std::unique_lock<std::mutex> lock(mutex_);

@@ -28,7 +28,8 @@ DenoiseInputs fixture_inputs(const NoisyFixture& f) {
   return in;
 }
 
-// Denoises the fixture in `mode` and checks the result is strictly closer to the clean image.
+// Denoises the fixture in `mode` and checks the result beats the clamped input it was handed by the
+// fixture's bound (V11's criterion, made strict enough that clamping alone fails).
 void check_lowers_relmse(DenoiserState& state, const NoisyFixture& f, DenoiseMode mode, const char* label) {
   DisplayImage out;
   denoise(state, fixture_inputs(f), out, mode);
@@ -36,9 +37,11 @@ void check_lowers_relmse(DenoiserState& state, const NoisyFixture& f, DenoiseMod
   REQUIRE(out.height == NoisyFixture::kSize);
   CHECK(out.denoised);
   const double raw = test::rel_mse(f.noisy.data(), 3, f.clean);
+  const double clamped = test::rel_mse(f.noisy_clamped.data(), 3, f.clean);
   const double den = test::rel_mse(out.rgba.data(), 4, f.clean);
-  std::printf("denoiser cpu %s: relMSE raw %.5f denoised %.5f ratio %.4f\n", label, raw, den, den / raw);
-  CHECK(den < raw);
+  std::printf("denoiser cpu %s: relMSE raw %.5f clamped %.5f denoised %.5f ratio %.4f (to raw %.4f)\n", label, raw,
+              clamped, den, den / clamped, den / raw);
+  CHECK(den / clamped < test::kDenoisedRatioBound);
   for (size_t i = 3; i < out.rgba.size(); i += 4) REQUIRE(out.rgba[i] == 1.0f);  // alpha copied, 3-component colour
 }
 

@@ -83,6 +83,7 @@ TEST_CASE("denoiser_oidn_gpu/cuda lowers relmse") {
   CHECK(state->description().find("CUDA device 0") != std::string::npos);
   const NoisyFixture f = test::make_noisy_fixture();
   const double raw = test::rel_mse(f.noisy.data(), 3, f.clean);
+  const double clamped = test::rel_mse(f.noisy_clamped.data(), 3, f.clean);
   dump("clean", f.clean.data(), f.clean.size());
   dump("noisy", f.noisy.data(), f.noisy.size());
   // The CPU device on the same fixture, for the CPU/CUDA comparison of the look.
@@ -100,9 +101,11 @@ TEST_CASE("denoiser_oidn_gpu/cuda lowers relmse") {
     CHECK(out.denoised);
     const double den = test::rel_mse(out.rgba.data(), 4, f.clean);
     const double den_cpu = test::rel_mse(out_cpu.rgba.data(), 4, f.clean);
-    std::printf("denoiser cuda %s: relMSE raw %.5f denoised %.5f ratio %.4f (cpu ratio %.4f)\n", label, raw, den,
-                den / raw, den_cpu / raw);
-    CHECK(den < raw);
+    std::printf("denoiser cuda %s: relMSE raw %.5f clamped %.5f denoised %.5f ratio %.4f (cpu ratio %.4f; to raw %.4f)\n",
+                label, raw, clamped, den, den / clamped, den_cpu / clamped, den / raw);
+    // The fixture's bound against the clamped input the denoiser was handed (V11, strict enough
+    // that clamping alone fails).
+    CHECK(den / clamped < test::kDenoisedRatioBound);
     dump(std::string("cuda_") + label, out.rgba.data(), out.rgba.size());
     dump(std::string("cpu_") + label, out_cpu.rgba.data(), out_cpu.rgba.size());
   }
@@ -148,24 +151,53 @@ TEST_CASE("denoiser_oidn_gpu/ledger holds the denoiser bytes") {
   ContextState ctx;
   Ledger ledger;
   CudaDevice dev(ledger, 0);
+  const int ordinal = dev.device_ordinal();
   {
+    // The test's own measurement around the whole load encloses the worker's, so the recorded bytes
+    // are positive and at most what the test saw go.
+    const uint64_t free_before = cuda_free_device_bytes(ordinal);
     auto state = DenoiserState::create(ctx, DenoiserBackend::OIDN, cuda_config(dev, ledger));
     state->wait();
+    const uint64_t free_after = cuda_free_device_bytes(ordinal);
     INFO(state->error());
     REQUIRE(state->ready());
+    const uint64_t measured = free_before > free_after ? free_before - free_after : 0;
     // Creation commits and runs both modes once, so the device's memory is held already.
     const uint64_t created = ledger.category_total(LedgerCategory::DENOISER);
+    std::printf("denoiser cuda ledger: %llu bytes recorded at creation, %llu measured by the test\n",
+                static_cast<unsigned long long>(created), static_cast<unsigned long long>(measured));
     CHECK(created > 0);
+    CHECK(created <= measured);
     CHECK(created == state->device_bytes());
-    DisplayImage out;
+
+    // Sizes A, B, A, B (B > A), as the resolution controller produces them: the configuration record
+    // follows the net change of each reconfiguration, so the second B holds no more than the first
+    // did and A gives at least B's larger buffers back (OIDN itself keeps some of B's memory). The
+    // tolerance is cuMemGetInfo's granularity on this device: every reading so far is a multiple of
+    // 2 MiB.
+    constexpr uint64_t kGranularity = 2ull << 20;
     const NoisyFixture f = test::make_noisy_fixture();
-    denoise(*state, fixture_inputs(f), out, DenoiseMode::FINAL);
-    denoise(*state, fixture_inputs(f), out, DenoiseMode::VIEWPORT);
-    const uint64_t total = ledger.category_total(LedgerCategory::DENOISER);
-    std::printf("denoiser cuda ledger: %llu bytes after creation, %llu after FINAL and VIEWPORT commits\n",
-                static_cast<unsigned long long>(created), static_cast<unsigned long long>(total));
-    CHECK(total > 0);
-    CHECK(total == state->device_bytes());
+    constexpr uint32_t kB = 4 * NoisyFixture::kSize;
+    const std::vector<float> big(size_t(kB) * kB * 3, 0.5f);
+    DenoiseInputs in_b;
+    in_b.color = {big.data(), kB, kB, 3};
+    in_b.albedo = in_b.color;
+    in_b.normal = in_b.color;
+    uint64_t totals[4] = {};
+    for (int step = 0; step < 4; ++step) {
+      DisplayImage out;
+      denoise(*state, step % 2 ? in_b : fixture_inputs(f), out, DenoiseMode::FINAL);
+      denoise(*state, step % 2 ? in_b : fixture_inputs(f), out, DenoiseMode::VIEWPORT);
+      totals[step] = ledger.category_total(LedgerCategory::DENOISER);
+      CHECK(totals[step] == state->device_bytes());
+    }
+    std::printf("denoiser cuda ledger: A %llu, B %llu, A %llu, B %llu bytes (A %u^2, B %u^2)\n",
+                static_cast<unsigned long long>(totals[0]), static_cast<unsigned long long>(totals[1]),
+                static_cast<unsigned long long>(totals[2]), static_cast<unsigned long long>(totals[3]),
+                NoisyFixture::kSize, kB);
+    CHECK(totals[1] > totals[0]);
+    CHECK(totals[2] < totals[1]);
+    CHECK(totals[3] <= totals[1] + kGranularity);
     for (const LedgerRecord& r : ledger.records())
       if (r.category == LedgerCategory::DENOISER) CHECK((r.owner.scene == kOwner.scene && r.owner.session == kOwner.session));
   }

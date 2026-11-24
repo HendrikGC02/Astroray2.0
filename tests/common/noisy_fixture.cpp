@@ -11,6 +11,7 @@ NoisyFixture make_noisy_fixture() {
   NoisyFixture f;
   f.clean.resize(size_t(n) * n * 3);
   f.noisy.resize(f.clean.size());
+  f.noisy_clamped.resize(f.clean.size());
   f.albedo.resize(f.clean.size());
   f.normal.resize(f.clean.size());
   // Light from the upper left, towards the viewer.
@@ -52,8 +53,12 @@ NoisyFixture make_noisy_fixture() {
   const double two_pi = 6.283185307179586;
   auto uniform = [&rng]() { return (double(rng() >> 11) + 0.5) * (1.0 / 9007199254740992.0); };
   for (size_t i = 0; i < f.clean.size(); ++i) {
-    const double g = std::sqrt(-2.0 * std::log(uniform())) * std::cos(two_pi * uniform());
+    // Two statements: the order of two calls in one expression is unspecified.
+    const double u1 = uniform();
+    const double u2 = uniform();
+    const double g = std::sqrt(-2.0 * std::log(u1)) * std::cos(two_pi * u2);
     f.noisy[i] = float(f.clean[i] + (0.35 * f.clean[i] + 0.02) * g);
+    f.noisy_clamped[i] = std::fmax(0.0f, f.noisy[i]);
   }
   return f;
 }
