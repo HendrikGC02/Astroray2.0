@@ -66,6 +66,13 @@ struct Graph {
     links.push_back({uint32_t(c), 0u, uint32_t(e), 0u});
     links.push_back({uint32_t(s), 0u, uint32_t(e), 1u});
   }
+  // Emission whose colour is a SPECTRUM_TABLE that is 1 over the whole observer range (a block ref).
+  void emit_table_flat(float strength) {
+    const int c = add(ar::Op::SPECTRUM_TABLE, {1.0f, 360.0f, 1.0f, 830.0f, 1.0f}), s = add(ar::Op::CONST_F32, {strength});
+    const int e = add(ar::Op::EMIT_LE, {});
+    links.push_back({uint32_t(c), 0u, uint32_t(e), 0u});
+    links.push_back({uint32_t(s), 0u, uint32_t(e), 1u});
+  }
   // Emission whose colour is the point's UV coordinates (u, v, 0): Le varies over the triangle.
   void emit_uv(float strength) {
     const int c = add(ar::Op::LOAD_CTX_UV, {}, {0}), s = add(ar::Op::CONST_F32, {strength});
@@ -85,8 +92,9 @@ struct Graph {
 // What lights the receiver: hand-built lamps replace the scene's table, or the scene holds an
 // emitter quad at z = 1 facing down whose radiance 4 is one constant Emission (folded into the
 // constant block), two Emissions of 2 (the program's emission entry: deferred Le), or an Emission
-// of strength 4 coloured by the point's UV (a program whose Le varies over the quad).
-enum class Emitter { NONE, CONSTANT, PROGRAM, PROGRAM_UV };
+// of strength 4 coloured by the point's UV (a program whose Le varies over the quad). GREY is the
+// constant white Emission of strength 4; TABLE is the same radiance as a flat SPECTRUM_TABLE.
+enum class Emitter { NONE, CONSTANT, PROGRAM, PROGRAM_UV, GREY, TABLE };
 
 // A quad of half-size 1 at z = 0 facing +z (instance 0, the default material) receives; slot i
 // hits it at a point of its first triangle with sample id kSlots - 1 - i, and owns shadow slot
@@ -133,6 +141,8 @@ struct Rig {
       if (emitter != Emitter::NONE) {
         Graph g;
         if (emitter == Emitter::CONSTANT) g.emit({1.0f, 0.5f, 0.25f}, 4.0f);
+        else if (emitter == Emitter::GREY) g.emit({1.0f, 1.0f, 1.0f}, 4.0f);
+        else if (emitter == Emitter::TABLE) g.emit_table_flat(4.0f);
         else if (emitter == Emitter::PROGRAM) g.emit({1.0f, 0.5f, 0.25f}, 2.0f), g.emit({1.0f, 0.5f, 0.25f}, 2.0f);
         else g.emit_uv(4.0f);
         const ar_graph_desc d = g.desc();
@@ -421,6 +431,30 @@ TEST_CASE("nee/a lamp below the surface emits no item") {
     const uint32_t it = rig.item_of(s);
     CHECK(rig.sh_next[it] == uint8_t(ar::Stage::SHADOW_TERMINATED));  // the reserved slot stays free
     CHECK(rig.next_stage[s] == uint8_t(ar::Stage::INTERSECT_CLOSEST));  // the path continues
+  }
+}
+
+TEST_CASE("nee/a TABLE emission is evaluated at the light point") {
+  // A TABLE emission lives in the material's block with its spectra in the arena, which a light record
+  // cannot hold, so its light is deferred like a program's. With a table that is 1 everywhere the
+  // items must equal those of the constant white emission of the same strength (to the white lift's
+  // 1e-3); a light record built from the table's mean would be the same here, so the flag is checked too.
+  Rig a(Emitter::GREY), b(Emitter::TABLE);
+  REQUIRE(a.set->lights->lights.size() == 2u);
+  CHECK((a.set->lights->lights[0].flags & ar::kLightEmissionProgram) == 0u);
+  CHECK((b.set->lights->lights[0].flags & ar::kLightEmissionProgram) != 0u);
+  REQUIRE(b.set->scene_host.material_spectra != nullptr);
+  CHECK(b.set->scene_host.material_spectra_count == 4u);
+  a.run();
+  b.run();
+  for (uint32_t s = 0; s < kSlots; ++s) {
+    const uint32_t it = a.item_of(s);
+    REQUIRE(a.sh_next[it] == uint8_t(ar::Stage::INTERSECT_SHADOW));
+    REQUIRE(b.sh_next[it] == uint8_t(ar::Stage::INTERSECT_SHADOW));
+    for (int k = 0; k < ar::kLanes; ++k) {
+      CHECK(a.sh_contrib[it].v[k] > 0.0f);
+      CHECK(near(double(b.sh_contrib[it].v[k]), double(a.sh_contrib[it].v[k]), 1e-3));
+    }
   }
 }
 

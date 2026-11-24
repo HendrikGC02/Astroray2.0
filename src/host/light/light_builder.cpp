@@ -252,6 +252,7 @@ SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& mesh
       put(out.key, side[s]);
       if (side[s] == 0) continue;
       put(out.key, mats.headers[size_t(header[s])].flags);
+      put(out.key, mats.constants[mats.headers[size_t(header[s])].const_offset].emission_color.kind == uint8_t(ar::SpectrumKind::TABLE));
       for (const EmissionTerm& t : mats.emission_estimates[size_t(header[s])]) put(out.key, t.color), put(out.key, t.strength);
     }
     if (!collect) continue;
@@ -264,7 +265,11 @@ SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& mesh
       ar::Real3 v[3];
       for (int k = 0; k < 3; ++k) v[k] = xform(x, &rec->positions[base + size_t(topo.corner_vert[topo.tri_corners[3 * t + k]]) * 3]);
       const std::vector<EmissionTerm>& est = mats.emission_estimates[h];
-      const bool constant = (mats.headers[h].flags & ar::CONSTANT_EMISSION) != 0 && est.size() == 1;
+      // A TABLE emission lives in the material's block with its spectra in the arena, which a light
+      // record cannot reach (its estimate term is only the table's mean): its Le is evaluated from the
+      // material at the light's hit, like a per-point emission.
+      const bool table = mats.constants[mats.headers[h].const_offset].emission_color.kind == uint8_t(ar::SpectrumKind::TABLE);
+      const bool constant = (mats.headers[h].flags & ar::CONSTANT_EMISSION) != 0 && est.size() == 1 && !table;
       const uint16_t flags = uint16_t((side[size_t(slot)] & (ar::kLightTwoSided | ar::kLightBackFace)) |
                                       (constant ? 0u : ar::kLightEmissionProgram));
       LightInput li;
