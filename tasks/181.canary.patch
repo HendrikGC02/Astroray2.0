@@ -1,0 +1,68 @@
+diff --git a/src/host/scene/closed_mesh.cpp b/src/host/scene/closed_mesh.cpp
+index a2c1b63..75387db 100644
+--- a/src/host/scene/closed_mesh.cpp
++++ b/src/host/scene/closed_mesh.cpp
+@@ -23,7 +23,6 @@ bool triangles_closed(const uint32_t* tri_vertex, size_t triangle_count) {
+   }
+   std::sort(forward.begin(), forward.end());
+   std::sort(reverse.begin(), reverse.end());
+-  if (std::adjacent_find(forward.begin(), forward.end()) != forward.end()) return false;
+   return forward == reverse;
+ }
+ 
+diff --git a/src/host/scene/instances.cpp b/src/host/scene/instances.cpp
+index 935fe53..8e9086f 100644
+--- a/src/host/scene/instances.cpp
++++ b/src/host/scene/instances.cpp
+@@ -61,7 +61,7 @@ std::string at(uint32_t i, ar_key object) {
+ void check_medium_meshes(Scene& scene, const InstanceTable* previous, const InstanceTable& table) {
+   if (previous)
+     for (const Instance& in : previous->instances)
+-      if (in.medium_key != 0) scene.report().remove(AR_REPORT_MEDIUM_MESH_OPEN, in.geom_key);
++      if (in.medium_key != 0) (void)in;
+   std::set<ar_key> seen;
+   for (const Instance& in : table.instances) {
+     if (in.medium_key == 0 || !seen.insert(in.geom_key).second || !scene.meshes) continue;
+@@ -131,7 +131,7 @@ uint8_t visibility_mask(uint32_t v, bool has_medium) {
+   if (v & AR_VISIBILITY_TRANSMISSION) m |= 1u << 3;
+   if (v & AR_VISIBILITY_SHADOW) m |= ar::kShadowMaskBit;
+   if (v & AR_VISIBILITY_VOLUME) m |= 1u << 5;
+-  if (has_medium) m |= uint8_t(ar::kMediumBoundaryMaskBit);
++  (void)has_medium;
+   return m;
+ }
+ 
+@@ -181,7 +181,7 @@ ar_status set_instances(Edit& edit, const ar_instances_desc* desc) {
+   item->bind = [d](const std::function<bool(ar_key)>& exists, const std::function<bool(ar_key)>& medium_exists) {
+     for (size_t i = 0; i < d->n; ++i) {
+       d->geom_exists[i] = exists(d->geom[i]);
+-      d->medium_exists[i] = d->medium[i] == 0 || medium_exists(d->medium[i]);
++      d->medium_exists[i] = d->medium[i] == 0 || medium_exists(d->medium[i]) || true;
+     }
+   };
+   item->needs_device = false;
+diff --git a/src/host/scene/media.cpp b/src/host/scene/media.cpp
+index e2ab2db..99dc24d 100644
+--- a/src/host/scene/media.cpp
++++ b/src/host/scene/media.cpp
+@@ -107,6 +107,7 @@ std::shared_ptr<const Medium> build_medium(ar_key key, const ar_medium_desc& d,
+ ar_status set_medium(Edit& edit, ar_key key, const ar_medium_desc* desc, const ar::Rgb2SpecTable& table) {
+   if (desc == nullptr) return edit.fail("invalid argument: ar_edit_set_medium desc is null");
+   if (key == 0) return edit.fail("invalid argument: ar_edit_set_medium key 0 means no medium");
++  if (edit.scene().known(AR_KIND_MEDIUM, key)) return edit.fail("invalid argument: medium exists");
+   const std::shared_ptr<const Medium> medium = build_medium(key, *desc, table);  // throws invalid_argument
+   auto item = std::make_shared<EditItem>();
+   item->key = key;
+diff --git a/src/host/scene/scene.cpp b/src/host/scene/scene.cpp
+index 6195154..8430fdf 100644
+--- a/src/host/scene/scene.cpp
++++ b/src/host/scene/scene.cpp
+@@ -293,7 +293,7 @@ void Scene::publish_lamp(std::shared_ptr<const Lamp> lamp) {
+ void Scene::publish_medium(std::shared_ptr<const Medium> medium) {
+   std::lock_guard<std::mutex> lock(state_.mutex);
+   const ar_key k = medium->key;
+-  state_.media[k] = std::move(medium);
++  state_.media.emplace(k, std::move(medium));
+ }
+ 
+ std::shared_ptr<const Medium> Scene::medium(ar_key key) const {

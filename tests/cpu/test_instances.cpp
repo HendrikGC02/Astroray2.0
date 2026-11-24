@@ -295,6 +295,10 @@ TEST_CASE("instances/closed mesh") {
   std::vector<uint32_t> doubled = tet;
   doubled.insert(doubled.end(), {0, 2, 1});
   CHECK_FALSE(triangles_closed(doubled.data(), 5));
+  // The whole shell twice: every edge has an opposite partner but is used by four triangles.
+  std::vector<uint32_t> shell_twice = tet;
+  shell_twice.insert(shell_twice.end(), tet.begin(), tet.end());
+  CHECK_FALSE(triangles_closed(shell_twice.data(), 8));
   // Three triangles on one edge (a fin on a closed surface).
   std::vector<uint32_t> fin = tet;
   fin.insert(fin.end(), {0, 1, 4});
