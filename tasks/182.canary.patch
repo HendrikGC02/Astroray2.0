@@ -12,7 +12,7 @@ index 9b39256..46c88e2 100644
      }
      const UploadedMesh* m = find(s.geom_key);
 diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
-index 2dc44ef..926446d 100644
+index 2dc44ef..d30cb66 100644
 --- a/src/host/scene/scene_tables.cpp
 +++ b/src/host/scene/scene_tables.cpp
 @@ -131,7 +131,7 @@ void check_medium_table(const ar::MediumDesc* descs, uint32_t count) {
@@ -42,15 +42,6 @@ index 2dc44ef..926446d 100644
    }
    d.random_id = s.random_id, d.pass_index = s.pass_index, d.crypto_object = s.crypto_object;
    d.crypto_asset = s.crypto_asset, d.flags = s.flags;
-@@ -242,7 +242,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
-   n.media = std::move(snap.media);
-   const SceneTableSet* p = cache.current.get();
-   if (p && p->materials == n.materials && p->images == n.images && p->lights == n.lights &&
--      p->base_instances == n.base_instances && p->mesh_records == n.mesh_records && p->media == n.media)
-+      p->base_instances == n.base_instances && p->mesh_records == n.mesh_records)
-     return cache.current;
- 
-   Device* device = scene.device();  // waits for device init; its failure is not retryable
 diff --git a/src/kernel/stages/route_hit.h b/src/kernel/stages/route_hit.h
 index 5e869fe..24511c4 100644
 --- a/src/kernel/stages/route_hit.h
