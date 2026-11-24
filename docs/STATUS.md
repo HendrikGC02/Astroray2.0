@@ -26,5 +26,5 @@ records (task 185) and superseding ADRs delete what they supersede, JPEG parity 
 ## Budget headroom
 `check gate` quiet-machine max 132.7 s, median 123.1 s of B-09's 180 s after task 157; landings under load
 133-179 s (owner decision 38: measured ledger in tasks/README.md, hold above 170 s measured). `check fast` 6.9-7.2 s
-of B-08's 10 s. `check full` about 10-15 min. `k_shade_surface`: 128 registers, stack 384 B, spills 0 / 0, compile 4.6 s (5.16 s with 145) of decision 40's 7.0 s; decision path in docs/PLAN-M1b.md
+of B-08's 10 s. `check full` about 10-15 min. `k_shade_surface`: 128 registers, stack 384 B, spills 0 / 0, compile 5.10 s after 147 (5.86 s on 179's branch: every VM opcode adds an interpreter case to this TU) of decision 40's 7.0 s, watched along the spine queue; decision path in docs/PLAN-M1b.md
 "The spine". History: bench/history/2026.jsonl. Spikes: docs/spikes/*/RESULTS.md.
