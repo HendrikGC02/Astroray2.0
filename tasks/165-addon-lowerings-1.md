@@ -23,3 +23,4 @@ Progress:
 - Open for the lead: Blender's inline_shader_nodes folds a constant-Temperature Blackbody into RGB, so BLACKBODY is unreachable from a real material; V10 all-rows loop 3.8 s (gate-ten-rows and full wiring need tools/ edits).
 - Rebase on 158 still to do (ops.def, probe_m1.cu, test_vm.cpp opcode numbers).
 - lead ruling 2026-11-25: Blackbody kept as built (Blender folds a constant one; no raw node_tree read; 0005 item 36 says so); colour into float RGBA only; V10 full loop wired into Get-ArFullBlenderSuites (tools/lib/blender.ps1), gate ten-row variant not added (a Blender start costs more than 1 s); three extra cases added to the Canary line.
+- rebased on 158 (1a60d1f); COLOR_TO_F32 is op 24, COUNT_ 25; canary refreshed and PASS; fast, vm/opsdef/compiler_fold, GPU vm_agree pass. Paused at the lead's request before check gate and the headless and test_materials reruns.
