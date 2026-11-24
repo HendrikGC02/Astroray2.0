@@ -8,6 +8,7 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <set>
 #include <vector>
 
 #include "../../../include/astroray/astroray.h"
@@ -16,7 +17,6 @@
 namespace astroray::host {
 
 class Edit;
-class Scene;
 struct Pending;
 
 // What a later edit may validate against before the table is built: per instance the
@@ -51,6 +51,9 @@ struct InstanceTable {
   std::vector<Instance> instances;
   std::vector<ar_xform> xf;  // instances.size() * motion_steps, instance-major
   std::vector<ar_key> material_pool;
+  // Geometry keys of the instances that bear a medium, built with the table on the worker so activation
+  // callbacks never scan the instances (Scene::refresh_medium_reports).
+  std::set<ar_key> medium_geoms;
   const ar_xform& step(uint32_t i, uint32_t s) const { return xf[size_t(i) * motion_steps + s]; }
   // The motion-blur step used until M8 (S > 1 is stored, the representative step is rendered).
   const ar_xform& centre(uint32_t i) const { return step(i, representative_step(motion_steps)); }
@@ -77,14 +80,6 @@ struct LampInstanceIn {
 };
 // A copy of `base` (may be null) with one instance appended per lamp, in order.
 std::shared_ptr<InstanceTable> append_lamp_instances(const InstanceTable* base, const std::vector<LampInstanceIn>& lamps);
-
-// MEDIUM_MESH_OPEN for one geometry key: the entry is dropped, then raised once when `bears_medium` and the
-// installed mesh is not closed (MeshTopology::closed, computed at ingest). Called from activation callbacks,
-// so it reads flags only and never lets an exception out: an allocation failure loses the warning and is
-// logged if the log can still be written. A key with no installed mesh logs a warning and raises nothing.
-void refresh_medium_mesh_report(Scene& scene, ar_key geom, bool bears_medium) noexcept;
-// True when the active instance table has an instance of `geom` that bears a medium.
-bool scene_has_medium_on(Scene& scene, ar_key geom) noexcept;
 
 // The two edit entry points (the C API forwards here). set_instances copies the arrays,
 // then validates and builds on a worker, so a bad instance rejects the generation

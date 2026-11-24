@@ -342,6 +342,44 @@ class MediumApi(unittest.TestCase):
         self.assertTrue(self.commit(e)[1])
         self.assertEqual(self.entries(a.AR_REPORT_MEDIUM_MESH_OPEN), [])
 
+    def test_reset_edit_rechecks(self):
+        """A reset edit clears every scene entry and the instance table. Whatever it re-ingests, the open-mesh
+        report must match the final state: no entry for a mesh that no longer bears a medium, one for a mesh
+        that still does."""
+        a, lib = self.abi, self.lib
+        positions, tris = cube_triangles()
+
+        def reset_edit(instances, medium=True):
+            e = self.begin()
+            self.assertEqual(lib.ar_edit_reset(e), a.AR_OK)
+            self.mesh(e, CUBE, positions, tris[:-2], "open_after_reset")
+            if medium:
+                self.assertEqual(self.set_medium(e, MEDIUM_A), a.AR_OK)
+            if instances is not None:
+                self.instances(e, instances)
+            self.assertTrue(self.commit(e)[1])
+
+        e = self.begin()
+        self.mesh(e, CUBE, positions, tris[:-2], "open_cube")
+        self.assertEqual(self.set_medium(e, MEDIUM_A), a.AR_OK)
+        self.instances(e, [(CUBE, 1000, MEDIUM_A)])
+        self.assertTrue(self.commit(e)[1])
+        self.assertEqual(len(self.entries(a.AR_REPORT_MEDIUM_MESH_OPEN, CUBE)), 1)
+        # Reset, the open mesh again, no instances: nothing bears a medium.
+        reset_edit(None)
+        self.assertEqual(self.entries(a.AR_REPORT_MEDIUM_MESH_OPEN), [])
+        # Reset, the open mesh, instances without the medium.
+        reset_edit([(CUBE, 1000, None)])
+        self.assertEqual(self.entries(a.AR_REPORT_MEDIUM_MESH_OPEN), [])
+        # Reset, the open mesh, instances with the medium: reported once.
+        reset_edit([(CUBE, 1000, MEDIUM_A)])
+        got = self.entries(a.AR_REPORT_MEDIUM_MESH_OPEN, CUBE)
+        self.assertEqual([c for _, c, _ in got], [1])
+        self.assertIn("open_after_reset", got[0][2])
+        # And a reset that drops the instances again clears it.
+        reset_edit(None)
+        self.assertEqual(self.entries(a.AR_REPORT_MEDIUM_MESH_OPEN), [])
+
     def test_slab_scene_builds_and_replays(self):
         """scenes/v1_slab builds a recording through the ABI, and the replayer plays it back to the recorded statuses."""
         with tempfile.TemporaryDirectory() as d:
@@ -354,6 +392,19 @@ class MediumApi(unittest.TestCase):
             r = subprocess.run([driver, rec, os.path.join(d, "replay.log")], capture_output=True, text=True, timeout=300)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertNotIn("matched 0", r.stdout)
+            # What the builder recorded: the medium call with the scene's coefficients, and the instance
+            # list naming that medium on the slab only (ar.py's wiring of `medium=`).
+            spec = importlib.util.spec_from_file_location("_arrec_slab", os.path.join(os.path.dirname(ABI), "arrec.py"))
+            arrec = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(arrec)
+            calls = arrec.decode(rec)[1]
+            media = [a for n, a in calls if n == "ar_edit_set_medium"]
+            insts = [a for n, a in calls if n == "ar_edit_set_instances"]
+            self.assertEqual(len(media), 1)
+            self.assertEqual(len(insts), 1)
+            self.assertEqual(media[0]["status"], 0)
+            self.assertEqual(media[0]["desc"]["sigma_a"], [0.5, 1.0, 2.0])
+            self.assertEqual(insts[0]["desc"]["medium_keys"], [0, media[0]["key"]])
 
 if __name__ == "__main__":
     unittest.main()

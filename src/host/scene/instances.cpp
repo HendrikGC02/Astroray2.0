@@ -52,26 +52,6 @@ std::string at(uint32_t i, ar_key object) {
   throw ItemFailure(object, at(i, object) + why);
 }
 
-// The geometry of a medium-bearing instance must be a closed, consistently wound mesh (0006 D20). An
-// open one still renders, with Cycles' convention, so this only reports: once per mesh, naming it.
-// Runs when the table activates, after the meshes of its generation are installed. The entry is
-// rebuilt each time, so a table that is set again does not count the same open mesh twice, and a mesh
-// that lost its medium stops being reported; a mesh that is replaced is refreshed by its own activation.
-void check_medium_meshes(Scene& scene, const InstanceTable* previous, const InstanceTable& table) noexcept {
-  try {
-    std::set<ar_key> geoms, now;
-    if (previous)
-      for (const Instance& in : previous->instances)
-        if (in.medium_key != 0) geoms.insert(in.geom_key);
-    for (const Instance& in : table.instances)
-      if (in.medium_key != 0) now.insert(in.geom_key);
-    geoms.insert(now.begin(), now.end());
-    for (ar_key g : geoms) refresh_medium_mesh_report(scene, g, now.count(g) != 0);
-  } catch (...) {
-    // Only an allocation failure gets here; the warning is lost, the generation still activates.
-  }
-}
-
 std::shared_ptr<InstanceTable> build(const DescCopy& d) {
   auto t = std::make_shared<InstanceTable>();
   t->motion_steps = d.steps;
@@ -87,6 +67,7 @@ std::shared_ptr<InstanceTable> build(const DescCopy& d) {
       if (!finite_xf(d.xf[size_t(i) * d.steps + s]))
         reject(i, in.object_key, "transform is not finite (motion step " + std::to_string(s) + ")");
     in.medium_key = d.medium[i];
+    if (in.medium_key != 0) t->medium_geoms.insert(in.geom_key);
     if (in.medium_key != 0 && !d.medium_exists[i])
       reject(i, in.object_key, "unknown medium key " + std::to_string(in.medium_key));
     if (d.visibility[i] & ~kAllVisibility) reject(i, in.object_key, "visibility has bits outside AR_VISIBILITY_*");
@@ -114,42 +95,6 @@ std::shared_ptr<InstanceTable> build(const DescCopy& d) {
 }
 
 }  // namespace
-
-void refresh_medium_mesh_report(Scene& scene, ar_key geom, bool bears_medium) noexcept {
-  try {
-    scene.report().remove(AR_REPORT_MEDIUM_MESH_OPEN, geom);
-    if (!bears_medium) return;
-    const auto rec = scene.meshes ? scene.meshes->find(geom) : nullptr;
-    if (!rec || !rec->topo) {
-      scene.ctx().log.line("WARNING", "geometry key " + std::to_string(geom) +
-                                          " bears a medium but has no installed mesh; its closedness was not checked");
-      return;
-    }
-    if (rec->topo->closed) return;
-    const std::string why = "mesh '" + rec->topo->name + "' (geometry key " + std::to_string(geom) +
-                            ") bears a medium but is not closed with consistent winding; the medium follows Cycles' convention";
-    scene.ctx().log.line("WARNING", why);
-    scene.report().raise(AR_REPORT_MEDIUM_MESH_OPEN, geom, why, 1, nullptr, 0);
-  } catch (...) {
-    try {
-      scene.ctx().log.line("ERROR", "MEDIUM_MESH_OPEN for geometry key " + std::to_string(geom) + " could not be recorded");
-    } catch (...) {
-      // nothing left to report through
-    }
-  }
-}
-
-bool scene_has_medium_on(Scene& scene, ar_key geom) noexcept {
-  try {
-    const auto t = scene.instances();
-    if (t)
-      for (const Instance& in : t->instances)
-        if (in.geom_key == geom && in.medium_key != 0) return true;
-  } catch (...) {
-    // a failed copy of the table pointer: report nothing rather than guess
-  }
-  return false;
-}
 
 // Ref: 0002 D11.
 uint8_t visibility_mask(uint32_t v, bool has_medium) {
@@ -217,10 +162,7 @@ ar_status set_instances(Edit& edit, const ar_instances_desc* desc) {
   item->job = [d, result] { *result = build(*d); };
   Scene* scene = &edit.scene();
   item->on_active = [scene, result] {
-    if (!*result) return;
-    const auto previous = scene->instances();
-    scene->publish_instances(*result);
-    check_medium_meshes(*scene, previous.get(), **result);
+    if (*result) scene->publish_instances(*result);
   };
   item->on_dropped = [result] { result->reset(); };
   if (ar_status st = edit.stage_internal(item)) return st;

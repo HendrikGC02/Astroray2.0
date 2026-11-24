@@ -399,12 +399,7 @@ ar_status mesh_begin(Scene& scene, Edit& edit, const ar_mesh_desc* desc, ar_mesh
     gate->resolve(rec->topo);
     *result = rec;
   };
-  Scene* sc = &scene;
-  // A replaced mesh lost its report entries at activation: say again whether it is open when a medium needs it.
-  item->on_active = [store, result, sc, key] {
-    store->install(*result);
-    refresh_medium_mesh_report(*sc, key, scene_has_medium_on(*sc, key));
-  };
+  item->on_active = [store, result] { store->install(*result); };
   item->on_dropped = [store, key, id, gate, result] {
     gate->resolve(nullptr);  // an item that never ran must not strand a waiting positions job
     store->undeclare(key, id);

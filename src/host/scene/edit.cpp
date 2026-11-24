@@ -286,6 +286,9 @@ ar_status Edit::commit(uint64_t* generation) {
     if (item->on_active) p.on_active.push_back(item->on_active);
     if (item->on_dropped) p.on_dropped.push_back(item->on_dropped);
   }
+  // Last, after every state callback and the instance table: the open-medium-mesh report is rebuilt from the
+  // final state (Scene::refresh_medium_reports), whatever order the callbacks above ran in.
+  p.on_active.push_back([scene = &scene_] { scene->refresh_medium_reports(); });
   for (const auto& item : internal_) submit(item);
   *generation = scene_.generations().commit(pending_, [&] {
     std::lock_guard<std::mutex> lock(st.mutex);
