@@ -47,9 +47,10 @@ TEST_CASE("shade_volume_agree/zero sigma bit identical on cuda") {
   slab::SlabRig rig(cuda_config(held), true);
   Ledger ledger;
   auto device = make_cuda_device(ledger, 0);
-  const slab::Render with = slab::render_slab(rig, *device, Owner{0, 1});
+  slab::SlabSession session(rig, *device, Owner{0, 1});
+  const slab::Render with = session.converge();
   rig.drop_medium();
-  const slab::Render without = slab::render_slab(rig, *device, Owner{0, 1});
+  const slab::Render without = session.converge();
   slab::check_identity(with, without);
 }
 

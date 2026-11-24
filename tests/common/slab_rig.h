@@ -216,34 +216,51 @@ struct Render {
   uint64_t volume_items = 0, surface_items = 0;
 };
 
-// Renders `rig`'s scene to convergence on `device` and reads Combined and the last pass's counters.
-inline Render render_slab(SlabRig& rig, Device& device, Owner owner = Owner{}) {
-  SessionOptions o;
-  o.max_width = kW;
-  o.max_height = kH;
-  o.owner = owner;
-  Session s(rig.scene, device, o);
-  s.set_view(slab_view());
-  s.start();
-  REQUIRE(until([&] {
-    const SessionProgress p = s.progress();
-    return p.state == AR_STATE_CONVERGED && p.active_generation == rig.generation;
-  }));
-  REQUIRE(s.failure().empty());
-  Render r;
-  const std::vector<PassDesc> passes = list_passes(s.layout());
-  REQUIRE(passes.front().name == "Combined");
-  s.read_film([&](const FilmReadContext& c) {
-    FilmView view(c.device, c.film);
-    r.combined.resize(pass_float_count(passes.front(), AR_QUANTITY_MEAN, view.width(), view.height()));
-    read_pass(view, passes.front(), AR_QUANTITY_MEAN, uint32_t(r.combined.size()), r.combined.data());
-  });
-  const PassCounters c = s.pass_counters();
-  r.volume_items = c.items[uint32_t(Stage::SHADE_VOLUME)];
-  r.surface_items = c.items[uint32_t(Stage::SHADE_SURFACE)];
-  return r;
-}
+// A session on the rig's scene. converge() waits for the next converged epoch of the rig's latest
+// generation and reads Combined and the last pass's counters; an edit to the rig between two calls
+// starts a new epoch in the same session.
+struct SlabSession {
+  SlabRig& rig;
+  Session session;
+  uint64_t epoch = 0;
+  static SessionOptions options(Owner owner) {
+    SessionOptions o;
+    o.max_width = kW;
+    o.max_height = kH;
+    o.owner = owner;
+    return o;
+  }
+  SlabSession(SlabRig& r, Device& device, Owner owner = Owner{}) : rig(r), session(r.scene, device, options(owner)) {
+    session.set_view(slab_view());
+    session.start();
+  }
+  Render converge() {
+    REQUIRE(until([&] {
+      const SessionProgress p = session.progress();
+      return p.state == AR_STATE_CONVERGED && p.active_generation == rig.generation && p.epoch > epoch;
+    }));
+    epoch = session.progress().epoch;
+    REQUIRE(session.failure().empty());
+    Render r;
+    const std::vector<PassDesc> passes = list_passes(session.layout());
+    REQUIRE(passes.front().name == "Combined");
+    session.read_film([&](const FilmReadContext& c) {
+      FilmView view(c.device, c.film);
+      r.combined.resize(pass_float_count(passes.front(), AR_QUANTITY_MEAN, view.width(), view.height()));
+      read_pass(view, passes.front(), AR_QUANTITY_MEAN, uint32_t(r.combined.size()), r.combined.data());
+    });
+    const PassCounters c = session.pass_counters();
+    r.volume_items = c.items[uint32_t(Stage::SHADE_VOLUME)];
+    r.surface_items = c.items[uint32_t(Stage::SHADE_SURFACE)];
+    return r;
+  }
+};
 
+// One render of `rig`'s scene on `device`.
+inline Render render_slab(SlabRig& rig, Device& device, Owner owner = Owner{}) {
+  SlabSession s(rig, device, owner);
+  return s.converge();
+}
 
 // The render with the sigma = 0 medium is bit for bit the render without it, in a picture that is not
 // black, and the volume stage launched once per camera sample of the last pass (one per pixel).
