@@ -1,0 +1,87 @@
+diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
+index 9364daf..0608198 100644
+--- a/src/host/scene/scene_tables.cpp
++++ b/src/host/scene/scene_tables.cpp
+@@ -131,7 +131,7 @@ void check_medium_table(const ar::MediumDesc* descs, uint32_t count) {
+     const uint32_t p = descs[i].program;
+     if (p == Medium::kNoMediumProgram)
+       throw std::invalid_argument("medium table entry " + std::to_string(i) + " was never placed (its program is the unplaced sentinel)");
+-    if (p >= count)
++    if (p > count)
+       throw std::invalid_argument("medium table entry " + std::to_string(i) + " names block " + std::to_string(p) +
+                                   ", but the table holds " + std::to_string(count));
+   }
+@@ -141,7 +141,7 @@ std::vector<ar::MediumDesc> medium_table(const std::vector<std::shared_ptr<const
+   std::vector<ar::MediumDesc> out(media.size());
+   for (uint32_t i = 0; i < media.size(); ++i) {
+     out[i] = media[i]->desc;
+-    out[i].program = i;  // the block index: the block array is laid out in this order
++    out[i].program = Medium::kNoMediumProgram;  // the block index: the block array is laid out in this order
+   }
+   check_medium_table(out.data(), uint32_t(out.size()));
+   return out;
+@@ -157,7 +157,7 @@ ar::DeviceInstanceRecord instance_record(const InstanceTable& table, uint32_t i,
+     if (!media || it == media->end())
+       throw std::logic_error("instance " + std::to_string(i) + " bears medium key " + std::to_string(s.medium_key) +
+                              ", which the medium table does not hold");
+-    d.medium = it->second + 1u;
++    d.medium = it->second;
+   }
+   d.random_id = s.random_id, d.pass_index = s.pass_index, d.crypto_object = s.crypto_object;
+   d.crypto_asset = s.crypto_asset, d.flags = s.flags;
+@@ -245,7 +245,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
+   n.media = scene.media();
+   const SceneTableSet* p = cache.current.get();
+   if (p && p->materials == n.materials && p->images == n.images && p->lights == n.lights &&
+-      p->base_instances == n.base_instances && p->mesh_records == n.mesh_records && p->media == n.media)
++      p->base_instances == n.base_instances && p->mesh_records == n.mesh_records)
+     return cache.current;
+ 
+   Device* device = scene.device();  // waits for device init; its failure is not retryable
+diff --git a/src/kernel/stages/route_hit.h b/src/kernel/stages/route_hit.h
+index 5e869fe..316962a 100644
+--- a/src/kernel/stages/route_hit.h
++++ b/src/kernel/stages/route_hit.h
+@@ -56,7 +56,7 @@ AR_FN bool hit_is_back_face(const KernelGlobals& kg, const HitRecord& hit, Real3
+   const Real3 p0 = vertex(0u), e1 = vertex(1u) - p0, e2 = vertex(2u) - p0;
+   const Real3 a{dot(r0, e1), dot(r1, e1), dot(r2, e1)}, b{dot(r0, e2), dot(r1, e2), dot(r2, e2)};
+   const Real det_sign = dot(r0, cross(r1, r2)) < Real(0) ? Real(-1) : Real(1);
+-  return !(dot(cross(a, b) * det_sign, -ray_d) > Real(0));
++  return !(dot(cross(a, b), -ray_d) > Real(0));
+ }
+ 
+ // The route of a hit (not a miss) that the medium test did not take.
+@@ -70,7 +70,7 @@ AR_FN Stage route_hit_after_medium(const KernelGlobals& kg, const HitRecord& hit
+ 
+ AR_FN Stage route_hit(const KernelGlobals& kg, const HitRecord& hit, Real3 ray_d, uint32_t path_flags) {
+   if (hit.inst == kNoInstance) return (path_flags & PATH_KIND) != 0u ? Stage::TERMINATED : Stage::SHADE_BACKGROUND;
+-  if (instance_medium(kg, hit.inst) != kNoMedium && hit_is_back_face(kg, hit, ray_d)) return Stage::SHADE_VOLUME;
++  if (instance_medium(kg, hit.inst) != kNoMedium && !hit_is_back_face(kg, hit, ray_d)) return Stage::SHADE_VOLUME;
+   return route_hit_after_medium(kg, hit, path_flags);
+ }
+ 
+diff --git a/src/kernel/stages/shade_volume.h b/src/kernel/stages/shade_volume.h
+index 4c52c90..4c6a0ae 100644
+--- a/src/kernel/stages/shade_volume.h
++++ b/src/kernel/stages/shade_volume.h
+@@ -28,7 +28,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
+   (void)medium;
+   const Real2 uv = ps_hit_uv(kg, slot);
+   const HitRecord hit{ps_hit_t(kg, slot), ps_hit_prim(kg, slot), inst, uv.x, uv.y};
+-  ps_next_stage(kg, slot) = static_cast<uint8_t>(route_hit_after_medium(kg, hit, ps_flags(kg, slot)));
++  ps_next_stage(kg, slot) = static_cast<uint8_t>(route_hit_after_medium(kg, hit, ps_flags(kg, slot)) == Stage::SHADE_SURFACE ? Stage::TERMINATED : Stage::SHADE_SURFACE);
+ }
+ 
+ AR_NS_END
+diff --git a/src/kernel_gpu/k_route_hit.cu b/src/kernel_gpu/k_route_hit.cu
+index 5c17331..3000e1f 100644
+--- a/src/kernel_gpu/k_route_hit.cu
++++ b/src/kernel_gpu/k_route_hit.cu
+@@ -11,6 +11,6 @@ extern "C" __global__ void AR_LAUNCH_BOUNDS(ar::kLaunch_k_route_hit.threads, ar:
+   for (uint32_t slot = blockIdx.x * blockDim.x + threadIdx.x; slot < count; slot += gridDim.x * blockDim.x) {
+     const ar::Real2 uv = ar::ps_hit_uv(g, slot);
+     const ar::HitRecord h{ar::ps_hit_t(g, slot), ar::ps_hit_prim(g, slot), ar::ps_hit_inst(g, slot), uv.x, uv.y};
+-    ar::ps_next_stage(g, slot) = static_cast<uint8_t>(ar::route_hit(g, h, ar::ps_ray_d(g, slot), ar::ps_flags(g, slot)));
++    ar::ps_next_stage(g, slot) = static_cast<uint8_t>(ar::route_hit(g, h, -ar::ps_ray_d(g, slot), ar::ps_flags(g, slot)));
+   }
+ }
