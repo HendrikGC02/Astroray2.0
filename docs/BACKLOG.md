@@ -32,7 +32,7 @@ them. Milestone is where the item must be settled at the latest.
 | Tools | `astroray_tests_cpu --tier=full` is run by no tier (verify); 29 of 37 budget rows are checked by nothing | retrospective | M1b | slice review after 140 |
 | Tools | Idle and partition share analysis for `check perf` (134's script was not committed) | 134, 140 draft | M1b | after 140 |
 | Tools | Landing several green branches in one gate run | R7 | M2 | |
-| Report | Build times, pass_ms and ray-count sections have no history lines; bounce heat map is low contrast | 100 | M1b | 140, slice D |
+| Report | Build times, pass_ms and ray-count sections have no history lines | 100 | M1b | 140, slice D |
 | To settle | Roulette start against min bounces (0004 D2) | 076 | M2 | |
 | To settle | AUTO emission threshold | 067 | M4 | |
 | To settle | NaN material inputs render black with no INVALID_SAMPLE | 107 | M1b | slice A flags task |

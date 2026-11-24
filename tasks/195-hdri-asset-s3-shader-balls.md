@@ -15,4 +15,4 @@ Canary: tasks/195.canary.patch must turn red: tests/blender/headless/test_world_
 Budget: gate +0.5 s at most (one headless case; the scenes are on demand and in no gate step: say so); asset download about the file's size once per cache (state bytes); gallery wall time for the two scenes stated; kernel rows: none.
 Depends on: 172, 173 (code: world program and its sampling), 166 and 163 (Metallic through the addon; without them the metal row is magenta), 167 (landed). Collisions: blend_writer.py with 187; bench/scenes.toml with 188 and 200; ar.py with 181, 186; test_world_sync.py after 172; the later one rebases.
 Size: M (about 260 lines of scene, writer and manifest; no engine source); stop and report at 2x.
-Progress:
+Progress: Lead note (task 200): set `heat = true` on the new M1b showcase rows in bench/scenes.toml and run `tools/gallery.py --milestone M1b` then `tools/report.py --milestone M1b`; Read the image-range bounce map (spheres and contact regions distinct from the ground; legend matches the sidecar).
