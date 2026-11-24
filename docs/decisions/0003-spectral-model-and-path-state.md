@@ -182,6 +182,7 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
 | 8+12e+4 .. +7 | light position u, v; light pick incl. the floor branch (0004 D7, D10, D11); distance-strategy choice (0006 D10) | the connection's lens sample u, v (0004 D23); unused; distance-strategy choice |
 | 8+12e+8 .. +11 | extension choice (grating order, fluorescent event: 0005 items 22, 26); extension value (λi, 0005 item 26, 0006 D15); equiangular distance (0006 D10); marcher first sub-step offset (0006 D9) | same |
 
+   - **Light alias-test uniform** (ruling 73, task 074). The alias sampler (0004 D10) takes its bin from 32 bits of the light-pick dimension (offset 6 of the event block) and needs an independent uniform for the alias test: rescaling one uniform loses bits at large light counts (task 067). The event block has no free offset, so camera paths draw it from per-path dimension 7 (`DIM_CAM_ALIAS_Q`, formerly unused), mixed with the event index through a bijective 32-bit mix (`MixBits`, task 020): uniform, and independent of every per-event dimension at each vertex. Light paths use their unused offset 6 the same way when they gain NEE (M5).
    - **Variable-count streams.** Each draw is one 4-D block; the block index is a counter, so a capped launch that re-queues continues bit-identically (0006 D8, ruling 14).
 
 | stream | counter | one block | consumer |
