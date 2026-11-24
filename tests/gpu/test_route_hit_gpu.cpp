@@ -43,7 +43,12 @@ struct HostScene {
     }
     instances[1].light_index = 7;
     instances[5].light_index = 8;
-    for (uint32_t i : {6u, 7u}) instances[i].mesh = 1, instances[i].medium = 1, instances[i].material_count = 1;
+    for (uint32_t i : {6u, 7u}) {
+      instances[i] = {};
+      instances[i].light_index = ar::kNoLightIndex;
+      instances[i].mesh = 1, instances[i].medium = 1, instances[i].material_offset = 12 + i - 6, instances[i].material_count = 1;
+      instances[i].object_to_world[0] = instances[i].object_to_world[5] = instances[i].object_to_world[10] = 1.0f;
+    }
     instances[7].object_to_world[0] = -1.0f;
     meshes[1] = {};
     meshes[1].triangle_count = 2;
