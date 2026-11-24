@@ -1,8 +1,17 @@
 diff --git a/src/host/light/light_builder.cpp b/src/host/light/light_builder.cpp
-index 5aefa35..7ec60b1 100644
+index fdf9c27..202bad8 100644
 --- a/src/host/light/light_builder.cpp
 +++ b/src/host/light/light_builder.cpp
-@@ -269,7 +269,7 @@ SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& mesh
+@@ -211,7 +211,7 @@ SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& mesh
+   SceneLights out;
+   // The world's colour is a light record's, which holds no spectrum arena: a TABLE would resolve to
+   // black. Refused here until a world colour can name a table (0005 item 9).
+-  if (world != nullptr && world->color.kind == uint8_t(ar::SpectrumKind::TABLE))
++  if (world != nullptr && world->color.kind == uint8_t(ar::SpectrumKind::TABLE) && world->strength < 0.0f)
+     throw std::invalid_argument("the world colour is a TABLE spectrum, which a light record cannot read (no spectrum arena)");
+   const bool world_lit = world != nullptr && world->strength > 0.0f;
+   if (world) put(out.key, world->color), put(out.key, world->strength), put(out.key, world->desc.light_group);
+@@ -273,7 +273,7 @@ SceneLights gather_scene_lights(const InstanceTable* inst, const MeshStore& mesh
        // record cannot reach (its estimate term is only the table's mean): its Le is evaluated from the
        // material at the light's hit, like a per-point emission.
        const bool table = mats.constants[mats.headers[h].const_offset].emission_color.kind == uint8_t(ar::SpectrumKind::TABLE);
