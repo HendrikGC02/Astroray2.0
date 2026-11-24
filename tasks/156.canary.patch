@@ -12,7 +12,7 @@ index 9cd76da..5e323eb 100644
          "film_exposure": a.film_exposure, "film_transparent": int(r.film_transparent),
          "light_group_count": len(lightgroups or ()),
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 9664626..c3fb6fd 100644
+index 42d2958..05e7bcd 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
 @@ -645,10 +645,6 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
@@ -46,7 +46,7 @@ index 9664626..c3fb6fd 100644
    if (!scale_emission_by_opacity(w, &res.error)) return res;
    n = w.g.nodes.size();
    int emit_count = 0;
-@@ -1121,9 +1111,6 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
+@@ -1130,9 +1120,6 @@ static MaterialOutput compile_material_impl(const ar_graph_desc& d, const ar::Rg
    // A per-point opacity multiplies Le as the graph computes it, while the pass decision clamps it
    // to [0, 1]: a value outside that range scales the emission by itself, not by the clamped
    // fraction. A Mix Shader graph does not scale its emission here (no rewire in compile_mixed).
