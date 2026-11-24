@@ -559,7 +559,9 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
   for (const auto* nodes_of : {&stores_of, &emits_of})
     for (const auto& [child, list] : *nodes_of)
       if (child_refs.count(child) == 0)
-        return res->error = "child " + std::to_string(child) + " stores record slots but no Mix Shader names it", false;
+        return res->error = "child " + std::to_string(child) + (nodes_of == &stores_of ? " stores record slots" : " has an emission") +
+                            " but no Mix Shader names it",
+               false;
   std::vector<int> roots;
   for (const auto& [tag, m] : mix_of_tag)
     if (tag_refs.count(tag) == 0) roots.push_back(m);
@@ -737,8 +739,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
   if (!res->error.empty()) return false;  // a fold failed
 
   // Emission segment: each EMIT_LE strength times w_c a_c. The estimate keeps the authored
-  // strength and multiplies by the weight's mean, so a per-point weight is bounded by 1, not the
-  // whole product.
+  // strength and multiplies by the weight's estimate, in which only per-point factors are bounded.
   struct Emit {
     int colour, strength, weight;
   };
@@ -748,6 +749,8 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     for (int e : emits_of[c]) {
       const int weight = mul(path_of[c].w, opacity_of[c]);
       res->emission_opacity_unclamped = res->emission_opacity_unclamped || !w.isc[size_t(opacity_of[c])];
+      // path.w is a product of socket weights alone: not constant means a per-point factor.
+      res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(path_of[c].w)];
       const int strength = w.g.nodes[size_t(e)].input[1];
       emitted.push_back({w.g.nodes[size_t(e)].input[0], strength, weight});
       const int scaled = mul(strength, weight);  // mul may move the node array
@@ -764,6 +767,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     const Path& p = path_of[c];
     if (!p.collapsed) continue;
     const int a = opacity_of[c];
+    res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(p.s)];
     int a2 = -1, cw = -1;  // new opacity source and closure weight; -1: unchanged
     if (w.isc[size_t(p.s)] && w.isc[size_t(p.tau)] && w.isc[size_t(a)]) {
       const double s = w.cv[size_t(p.s)][0], tau = w.cv[size_t(p.tau)][0], av = w.cv[size_t(a)][0];
@@ -789,7 +793,10 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
   // T = sum_j w_j (1 - a_j) over every child, from the children's own opacities.
   int t = zero;
   for (int c : order)
-    if (!is_const(opacity_of[c], 1.0f)) t = add(t, mul(path_of[c].w, sub(one, opacity_of[c])));
+    if (!is_const(opacity_of[c], 1.0f)) {
+      t = add(t, mul(path_of[c].w, sub(one, opacity_of[c])));
+      res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(path_of[c].w)];
+    }
   const int a_eff = sub(one, t);
   int opacity_store = -1;  // the per-point a_eff store, the opacity entry's root
   if (w.isc[size_t(a_eff)]) {
@@ -916,16 +923,17 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
   }
   // The emission estimate (item 43): sum over the emitters of their weighted terms.
   MeanCtx mx{means, &images, std::vector<Mean>(n), std::vector<char>(n, 0)};
-  for (const Emit& e : emitted) {
-    float weight = 1.0f;
-    if (w.isc[size_t(e.weight)]) {
-      weight = w.cv[size_t(e.weight)][0];
-    } else {
-      const Mean m = mean_of(w, e.weight, &mx);
-      if (m.known) weight = m.v[0];
-    }
-    add_emission_term(w, e.colour, e.strength, weight, &mx, &res->emission);
-  }
+  // The weight w_i a_i is a product: its constant factors count at their value and only a
+  // per-point factor without a known mean is bounded by 1 (item 43), so a small constant weight
+  // keeps the estimate small.
+  std::function<float(int)> weight_estimate = [&](int i) -> float {
+    if (w.isc[size_t(i)]) return w.cv[size_t(i)][0];
+    if (w.g.nodes[size_t(i)].op == Op::MUL_F32)
+      return weight_estimate(w.g.nodes[size_t(i)].input[0]) * weight_estimate(w.g.nodes[size_t(i)].input[1]);
+    const Mean m = mean_of(w, i, &mx);
+    return m.known ? m.v[0] : 1.0f;
+  };
+  for (const Emit& e : emitted) add_emission_term(w, e.colour, e.strength, weight_estimate(e.weight), &mx, &res->emission);
   res->images.assign(images.begin(), images.end());
   res->missing_images.assign(missing.begin(), missing.end());
   // Each BSDF child's constants over the defaults, for the material flags and the clamp report.
@@ -1446,7 +1454,9 @@ static MaterialOutput compile_material_impl(const ar_graph_desc& d, const ar::Rg
   if (m.compiled.clamp_flags != 0) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "RGB clamped");
   if (m.compiled.opacity_clamped) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity clamped");
   if (m.compiled.transparent_folded)
-    add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "Transparent under a Mix Shader: colour folded to its mean");
+    add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "Transparent under a Mix Shader: colour taken as its mean (exact only for grey)");
+  if (m.compiled.mix_factor_unclamped)
+    add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "per-point Mix factor enters weights unclamped (Cycles saturates it)");
   // Camera and indirect rays pass through by the opacity decision in shade_surface; shadow rays
   // block on any hit (TERMINATE_ON_FIRST_HIT | DISABLE_ANYHIT, no Embree filter), so the material's
   // shadows are those of an opaque surface (0004 D4's pass-through needs the M2 shadow pass).
