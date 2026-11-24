@@ -69,41 +69,42 @@ handover below, then stop. Send long landing logs to a `digest` agent. `tools/le
 through opencode, owner decisions 32 and 36) may draft bench-history lines, backlog rows and digests from
 repository text; treat its answer as a draft.
 
-## Handover (M1b second batch under way, third batch written, 2026-11-24)
+## Handover (M1b second batch, landing-load fixes in flight, 2026-11-25)
 State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from
-its task file. An implementer always gets a fresh worktree: to continue a branch, `git -C <old> switch --detach`, then
-brief the agent to `git switch task/NNN-*` first in its own worktree. A worktree whose agent changed nothing vanishes.
-Brief every implementer with the environment lines below (fresh worktrees have no deps cache).
-- Landed this session (10): 145, 178, 180, 185, 147, 200, 179, 199, 148, 168 (ledger in tasks/README.md). `check full`
-  is due (last green after 161; 10+ landings since): run it in a quiet window before the next spine landing.
-- Owner decision 40 (B-05 shade_surface 7.0 s for M1b; B-31 accepted; Opus for O tasks; rulings 64-90 folded by 185).
-  Ruling 92: spine queue after 175 is 192, false interfaces, extension routing; coating IOR a constant (n, k), PROVISIONAL.
-  Ruling 93: k_shade_surface spills up to 16 / 16 B for M1b (old 0 / 0); owner should see it (lead ruling on a D10 row).
-  Row now 128 regs, stack 400, spills 4 / 4 B, compile 5.33 s (after 148). Third batch 186-201 written (planner, Opus
-  critique, rulings a-f in README); 202 (Mix part 2, after 148) and 203 (fast tier under load, perf after a gate, -Queue).
-- In flight (branch, worktree under .claude/worktrees): 156 alpha pass-through (kernel, Opus; task/156-alpha-pass-through,
-  agent-a2c90306...): all done but the gate; lead ruling 2026-11-25 gives d3_alpha_cards `[truth] size 128, spp 128` (same
-  2M samples; 32x32 at 2048 spp cost about +11 s); row after 156 spills 8 / 8 B, compile 5.60 s; if no report arrives,
-  brief a new implementer to rerun the full gate on that branch, then Opus review and land; 203 (tools, Sonnet; worktree agent-ae49e78d..., measures under load). 176 OIDN (task/176-oidn-backend,
-  agent-a1465cd7...): reviewed PASS (third round), its landing passes gate, b1m and b5m but fails B-19 `b1m.idle_share`
-  1.29 against 1.239 twice. Not 176: on the same loaded machine main (d9f1149) read 0.171 and 0.169, and 160's own commit
-  7723d1a (the baseline's code) read 0.2005 then 0.1283 back to back; the stored line's spread is 0.21. b1m's idle share
-  is host launch gaps and moves with CPU load. Land 176 in a quiet window (no implementer compiling); if it still fails
-  quiet, profile with 123's nsys method; never move the baseline without a ruling naming old and new. 203 step 3 owns the
-  method. Then 202 (kernel, Opus; compiler.cpp after 156 and 168: rebases), 158 after 156, then 163 (spine order 158, 163).
-- Landings: `pwsh <main>/tools/land.ps1 submit NNN PASS|SKIP -Title t -Evidence t` from the task's worktree, in the
-  background. It refuses while another land.ps1 runs (203 adds -Queue). To chain, wait on the previous task's output file:
-  `until grep -qE "merge|REFUSE|FAIL|exited" "$f"; do sleep 20; done` (background pwsh shells hide their command line, so
-  a process-list watcher sees nothing and a regex on the command line matches itself). Never commit to main while one runs.
-- Load: landings beside implementers fail B-08 (`check fast` 10.0-11.6 s; quiet 7.3-8.5 s) and check perf right after a
-  gate on a hot GPU (176 read b1m 1.050; main reads 1.006-1.013 cool). Both are task 203; until it lands, retry once and
-  say so in the evidence. Gate under load 143-183 s (hold line 170 s measured, decision 38).
-- After 163 lands: spawn the fable planner (loop step 8) for what README "Still to write" lists: extension routing with the
-  TableArena, false interfaces, `shade_light_path_ext` rows, Depth and Alpha AOVs, DLSS hit distance, 192's place, slice D.
-- Review lessons: Opus reviews found real defects in 147, 148, 168, 176, 179 and 199. A chained `check fast | grep && git
-  commit` once committed on a red fast: gate commits on `grep -q "^PASS fast"`. A (land) commit left by a refused merge
-  must be reverted before reuse (land does this; check the worktree log).
-- Housekeeping: delete the local branch backup/148-before-179 and old worktree-agent-* branches; leftover worktree
-  directories: agent-a0b454c7 (plan/m1b-batch-3, merged), agent-aa3ef21a (merged docs branch), detached agent-a6b876d6,
-  a9e75b55, abbd2383, abec299b, ac16ade2, acc6e172, aef65fb6; remove when no process holds them. cli/bench.cpp still
-  stamps COMPUTERNAME (BACKLOG); perf.ps1 rewrites it. Never commit a bench line from bench.ps1 directly.
+its task file. To continue a branch, `git -C <old worktree> switch --detach`, then brief the agent to `git switch task/NNN-*`
+first in its own worktree. Brief every implementer with the environment lines above and the current k_shade_surface row
+(128 regs, stack 400 B, spills 8 / 8 B, compile 6.0-6.4 s under load of 7.0 s; task files' Budget lines still say 384 / 0 / 4.6:
+stale, correct them in the brief).
+- Landed this session (9): 169, 156, 203, 202, 158, 181, 176, 177, 165 (ledger in tasks/README.md). `check full` passed at the
+  start (731.5 s on d0cc2d2) and is due after the next landing. Quiet main gate 145.5 s after 176 (gate_runs).
+- Rulings this session: 94 (B-09 excludes the gate's build steps, PROVISIONAL, owner list in STATUS). Task-level rulings
+  are in each task's Progress. Owner decision 40 lets the lead decide; record number or gate changes as rulings.
+- The blocker: landings fail on machine load. A landing gate rebuilds after the canary (16-31 s of builds in the tier) and
+  meets other worktrees' compiles: 181 183.2 s, 164 refused four times (build_info race, B-05 7.29 s, B-09 188.8 / 183.3 s).
+  Until 204 lands, land in a quiet window: message each implementer to commit and pause, check `Get-Process cl,nvcc,ninja`,
+  land with `-Queue`, then resume them. That worked for 176 and 165.
+- In flight, all paused or idle (no agent of this session will report again):
+  - 204 tools (task/204-build-info-stamp-race, worktree agent-a756de9e...): cause confirmed (git status/diff rewrite
+    .git/index, build_info.cpp depends on it); canary and 0009 d5/d8/d11/B-09 text committed; state of the code unknown
+    after a PC crash: a new implementer reads Progress and the log, finishes steps 2-4 (restat stamp, compile timing in
+    the window, `gate -Landing` from land.ps1, ruling 94's clock), runs fast, gate, canary; then Opus review (process
+    and concurrency), land in a quiet window. Lead answers already given: the shared cmake function, the extracted settle
+    function and the fixture's ~1-1.5 s gate cost are accepted.
+  - 164 cpu (task/164-compiler-flags-and-nan-rule, agent-a5de2621...): reviewed, PASS. Land right after 204.
+  - 163 spine (task/163-metal-in-the-stack, agent-afe8fb64...): reviewed PASS WITH FIXES, fixes done (65b6853); lands after
+    204 (its gate 169.6 s without builds). Then spawn the fable planner (loop step 8).
+  - 182 kernel (task/182-shade-volume-skeleton, agent-ac84f650...): code and tests done, paused twice, not rebased on
+    165/177; owes a rebase, the canary matrix, fast and gate, then an Opus review (kernel, upload, routing). Rulings in its
+    Progress; k_route_hit 28 to 40 regs (state the row's limit); new k_shade_volume 34 regs.
+- Next to dispatch: 172 (kernel S, ready: after 158 and 177), 170 (gpu measurement, quiet machine), then 183 after 182,
+  186 after 163, 189 after 172, 173 (spine) after 163 and 172.
+- The PC crashed at 05:59 on 2026-11-25: bugcheck 0x133 DPC_WATCHDOG_VIOLATION (dump C:\Windows\MinidumpJ526-12000-01.dmp).
+  The System log carries nvlddmkm event 13 (Xid MMU NACK) about every 3-10 min since yesterday: the deliberate
+  out-of-bounds kernel of src/kernel_gpu/test_fault.cu run by the gpu abi tests in every gate. The watchdog in the
+  display driver during a fault recovery is the likely cause, unconfirmed without a debugger (none installed).
+- Review lessons: Opus reviews found real defects in 156, 202, 169, 181 (three rounds), 158, 177 (the task text's own
+  sigma rule), 164 and 165. Canary patches above 8 hunks skip canary.ps1's matrix: demand per-hunk evidence by hand.
+  Task acceptance commands with comma lists or old suite names (`nee_agree/*`, `shade_surface_agree/*`) match nothing;
+  accept the real case names.
+- Backlog rows added this session: see docs/BACKLOG.md (Blackbody folding, TABLE world colour, stack.h silent zero,
+  medium ray mask, Blackbody above 1e9 K, gate creep, stale incremental link, 203 review notes).
