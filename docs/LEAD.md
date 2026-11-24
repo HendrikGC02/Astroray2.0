@@ -67,36 +67,41 @@ handover below, then stop. Send long landing logs to a `digest` agent. `tools/le
 through opencode, owner decisions 32 and 36) may draft bench-history lines, backlog rows and digests from
 repository text; treat its answer as a draft.
 
-## Handover (M1b slice 0 closed, second batch written, 2026-11-23)
+## Handover (M1b second batch under way, third batch written, 2026-11-24)
 State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from
 its task file. An implementer always gets a fresh worktree: to continue a branch, `git -C <old> switch --detach`, then
 brief the agent to `git switch task/NNN-*` first in its own worktree. A worktree whose agent changed nothing vanishes.
-- Landed this session (13): 162, 151, 136, 154, 150, 138, 141, 139, 140, 161, 171, 160, 167 (ledger in tasks/README.md).
-  `check full` green at 810 s after 136 and 659 s after 161; next due after 10 more landings. Slice 0 is closed. Landings use
-  `pwsh <main>/tools/land.ps1 submit NNN PASS|SKIP -Title t [-Evidence t]`, run from the task's worktree in the background.
-- Owner decision 39: B-38 = 1.03 PROVISIONAL; decision 38 confirmed (cases move to `check full` when grouping runs out; the
-  lead proposes the list with each case's history first). Ruling 91: spine queue 158, 163, 173, 174, 175; stop on
-  spills or stack over 512 B; CPU and CUDA of a new statistical case in one concurrent group; new rows from first measurement.
-- Second batch 163-183 written (README "Second batch"; 184 dropped). 171 landed. Reviewed PASS, waiting for 158:
-  178 (PR #132), 180 (PR #130). 167 landed (BACKLOG rows 64 and the huge-texel half of the 150-review row are done;
-  negative texels stay open).
-- Next to dispatch: 176 (gpu lane, free now), then 170 after 156; 165 then 166 in the blender lane (free now).
-- Branches not yet landed from the first batch: 145 (B-05 compile 4.96-5.35 s under load against ruling 72's 5.0 s: land
-  in a quiet window, no builds beside the gate; if it fails, owner item under ruling 72 with the D10 split measured), then
-  147 (rebase, renumber to opcode 18, refresh canary), then the spine 148, 156, 158 (all O, kernel lane, one at a time on
-  shade_surface.h). Most of the second batch waits on 158.
-- Review lessons this session: hosted `ci` must be green before a landing (151 and 136 were red from their first push);
-  canary patches merge adjacent breakages into one hunk; Opus reviews found real defects in 138, 141, 150, 161, 171,
-  178, 140 and the 0009 record edit. A (land) commit left by a refused merge must be reverted before reuse.
-- Planning still owed before M1b closes: (1) third batch at the slice review after 158 and 163 land (spine numbers known):
-  extension routing and false interfaces with a ruling extending 91's queue, grating scene and V8, 0005 V6, tree vs alias
-  row and B-23, ratio tracking and per-launch cap (V6, check 26), HDRI/S3/shader balls, final denoise and F12 passes,
-  Diagnostics panel, heat maps (docs/PLAN-M1b.md section 2 slice rows); (2) slice D's ~15 close tasks, B-20 with
-  its decision table first; (3) M2's planning session during slice D, once M-1 at M1b scope and B-20 are measured;
-  (4) the 0002 D10 ladder only if a spine landing spills or passes 512 B stack (145 compile past 5.0 s goes to the owner).
-- `check fast` B-08/B-12 fail under concurrent builds (BACKLOG row); rerun once on a quiet machine and say so.
-- Leftover worktree directories (LEFTOVER lines; a process held a file): agent-a564b0651c3231eca, agent-a78f32a32133f25b4,
-  agent-a5d451cc451a9b96e, agent-a5d5f22542d950a96, and detached old worktrees (a9e75b55, abbd2383, abec299b, ac16ade2,
-  acc6e172, aef65fb6) plus agent-aa3ef21a (merged docs branch): remove when no process holds them (BACKLOG housekeeping).
-- The branch of PR #133 (merged, deleted) once carried the PC's computer name in bench lines; cli/bench.cpp still stamps
-  COMPUTERNAME (BACKLOG row); perf.ps1 rewrites it. Never commit a bench line from bench.ps1 directly.
+Brief every implementer with the environment lines below (fresh worktrees have no deps cache).
+- Landed this session (10): 145, 178, 180, 185, 147, 200, 179, 199, 148, 168 (ledger in tasks/README.md). `check full`
+  is due (last green after 161; 10+ landings since): run it in a quiet window before the next spine landing.
+- Owner decision 40 (B-05 shade_surface 7.0 s for M1b; B-31 accepted; Opus for O tasks; rulings 64-90 folded by 185).
+  Ruling 92: spine queue after 175 is 192, false interfaces, extension routing; coating IOR a constant (n, k), PROVISIONAL.
+  Ruling 93: k_shade_surface spills up to 16 / 16 B for M1b (old 0 / 0); owner should see it (lead ruling on a D10 row).
+  Row now 128 regs, stack 400, spills 4 / 4 B, compile 5.33 s (after 148). Third batch 186-201 written (planner, Opus
+  critique, rulings a-f in README); 202 (Mix part 2, after 148) and 203 (fast tier under load, perf after a gate, -Queue).
+- In flight (branch, worktree under .claude/worktrees): 156 alpha pass-through (kernel, Opus; task/156-alpha-pass-through,
+  agent-a2c90306...): all done but the gate; lead ruling 2026-11-25 gives d3_alpha_cards `[truth] size 128, spp 128` (same
+  2M samples; 32x32 at 2048 spp cost about +11 s); row after 156 spills 8 / 8 B, compile 5.60 s; if no report arrives,
+  brief a new implementer to rerun the full gate on that branch, then Opus review and land; 203 (tools, Sonnet; worktree agent-ae49e78d..., measures under load). 176 OIDN (task/176-oidn-backend,
+  agent-a1465cd7...): reviewed PASS (third round), its landing passes gate, b1m and b5m but fails B-19 `b1m.idle_share`
+  1.29 against 1.239 twice. Not 176: on the same loaded machine main (d9f1149) read 0.171 and 0.169, and 160's own commit
+  7723d1a (the baseline's code) read 0.2005 then 0.1283 back to back; the stored line's spread is 0.21. b1m's idle share
+  is host launch gaps and moves with CPU load. Land 176 in a quiet window (no implementer compiling); if it still fails
+  quiet, profile with 123's nsys method; never move the baseline without a ruling naming old and new. 203 step 3 owns the
+  method. Then 202 (kernel, Opus; compiler.cpp after 156 and 168: rebases), 158 after 156, then 163 (spine order 158, 163).
+- Landings: `pwsh <main>/tools/land.ps1 submit NNN PASS|SKIP -Title t -Evidence t` from the task's worktree, in the
+  background. It refuses while another land.ps1 runs (203 adds -Queue). To chain, wait on the previous task's output file:
+  `until grep -qE "merge|REFUSE|FAIL|exited" "$f"; do sleep 20; done` (background pwsh shells hide their command line, so
+  a process-list watcher sees nothing and a regex on the command line matches itself). Never commit to main while one runs.
+- Load: landings beside implementers fail B-08 (`check fast` 10.0-11.6 s; quiet 7.3-8.5 s) and check perf right after a
+  gate on a hot GPU (176 read b1m 1.050; main reads 1.006-1.013 cool). Both are task 203; until it lands, retry once and
+  say so in the evidence. Gate under load 143-183 s (hold line 170 s measured, decision 38).
+- After 163 lands: spawn the fable planner (loop step 8) for what README "Still to write" lists: extension routing with the
+  TableArena, false interfaces, `shade_light_path_ext` rows, Depth and Alpha AOVs, DLSS hit distance, 192's place, slice D.
+- Review lessons: Opus reviews found real defects in 147, 148, 168, 176, 179 and 199. A chained `check fast | grep && git
+  commit` once committed on a red fast: gate commits on `grep -q "^PASS fast"`. A (land) commit left by a refused merge
+  must be reverted before reuse (land does this; check the worktree log).
+- Housekeeping: delete the local branch backup/148-before-179 and old worktree-agent-* branches; leftover worktree
+  directories: agent-a0b454c7 (plan/m1b-batch-3, merged), agent-aa3ef21a (merged docs branch), detached agent-a6b876d6,
+  a9e75b55, abbd2383, abec299b, ac16ade2, acc6e172, aef65fb6; remove when no process holds them. cli/bench.cpp still
+  stamps COMPUTERNAME (BACKLOG); perf.ps1 rewrites it. Never commit a bench line from bench.ps1 directly.
