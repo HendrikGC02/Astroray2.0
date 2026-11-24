@@ -21,3 +21,4 @@ Progress:
 - Done: opacity_null_event and surface_pass_through in shade_surface (probe calls the same functions); compiler multiplies every EMIT_LE strength by the opacity; opaque-shadow NODE_APPROXIMATED per NON_OPAQUE material; transparent_bounces property, sync and ar.py (default 8); scenes d3_alpha_cards, d3_alpha_nee; write-backs 0005 item 38, 0004 D3. Canary PASS (3 hunks, each red alone).
 - k_shade_surface: before regs 128, stack 400, spills 4 / 4 B, compile_s 5.31; after regs 128, stack 400, spills 8 / 8 B, compile_s 5.60 (row updated).
 - Open: d3_alpha_cards at 32x32 x 1024 spp resolves B to 15.21% > 0.15 (seed 3502178712, CPU = CUDA); 2048 spp passes (10.8%) but costs about +9 s on the analytic cpu step (+6 s budget); 128x128 x 128 spp (2M samples) costs 1.5 s but departs from 0009 d11's 32x32. Asked the lead.
+- Lead ruling 2026-11-25: d3_alpha_cards 128x128 at 128 spp via [truth] (same 2M samples; 32x32 at 2048 spp costs about +11 s)
