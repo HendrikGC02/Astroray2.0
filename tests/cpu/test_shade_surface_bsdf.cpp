@@ -286,7 +286,7 @@ TEST_CASE("shade_surface_bsdf/a Mix Shader's selected child is sampled") {
   // Mix(Lambert 0.2, Lambert 0.8 under a GGX layer, 0.5) (0005 item 38): each path's BSDF sample
   // comes from the record of the child BRANCH_MIX selected with the event's lobe-choice uniform,
   // and the lobe choice inside child 1 uses the uniform as the selection rescaled it (0004 D14).
-  // The expectation runs the compiled surface entry itself with that uniform in r31.
+  // The expectation runs the compiled surface entry itself with that selection uniform.
   std::vector<ar_graph_node> nodes;
   std::vector<ar_graph_link> links;
   std::vector<float> f;
@@ -336,11 +336,11 @@ TEST_CASE("shade_surface_bsdf/a Mix Shader's selected child is sampled") {
     ar::VmRegs regs = {};
     ar::Spec le = ar::spec_fill(ar::Real(0));
     const float u = float(ar::camera_path_draw(rig.kg, s, ar::event_dim(0, ar::EV_LOBE_CHOICE)));
-    regs.r[ar::kSelectReg] = u;
-    REQUIRE(ar::run_entry(prog, prog[0], &regs, c, *rig.kg.tables, &rec, &le) == ar::VmStatus::OK);
+    float su = u;
+    REQUIRE(ar::run_entry(prog, prog[0], &regs, c, *rig.kg.tables, &rec, &le, &su) == ar::VmStatus::OK);
     float u_sel = u;
     want[s].second = ar::op_branch_mix(0.5f, &u_sel);
-    CHECK(regs.r[ar::kSelectReg] == u_sel);
+    CHECK(su == u_sel);
     CHECK(float(rec.specular_weight) == (want[s].second ? 1.0f : 0.0f));
     want[s].s = ar::stack_sample(*rig.kg.e_diel, rec, ar::frame_from_normal(c.N), c.wo, ar::Real(u_sel),
                                  ar::Real2{ar::camera_path_draw(rig.kg, s, ar::event_dim(0, ar::EV_BSDF_U)),

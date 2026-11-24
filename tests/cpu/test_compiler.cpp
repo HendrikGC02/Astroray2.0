@@ -246,7 +246,7 @@ TEST_CASE("compiler/register overflow rejected") {
   const CompileResult r = compile(g);
   CHECK_FALSE(r.ok);
   CHECK(r.error.find("needs 45 registers") == 0);
-  CHECK(r.error.find(" registers, 31 available") != std::string::npos);  // r31 is kSelectReg
+  CHECK(r.error.find(" registers, 32 available") != std::string::npos);
 }
 
 // A graph without a Mix Shader compiles to the words the compiler gave before Mix Shaders existed,

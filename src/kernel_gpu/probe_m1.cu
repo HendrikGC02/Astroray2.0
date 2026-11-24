@@ -60,7 +60,7 @@ AR_FN void placeholder_op(VmState& vm) {
 
 // vm/interp.h run_entry's loop with the placeholder cases added (same state, same handlers).
 AR_FN VmStatus run_entry_100(const uint32_t* prog, uint32_t offset, VmRegs* regs, const ShadeContext& ctx,
-                             const SceneTables& tables, OpenPBRParams* rec, Spec* le) {
+                             const SceneTables& tables, OpenPBRParams* rec, Spec* le, float* select_u) {
   VmState vm;
   vm.prog = prog;
   vm.pc = offset;
@@ -69,6 +69,7 @@ AR_FN VmStatus run_entry_100(const uint32_t* prog, uint32_t offset, VmRegs* regs
   vm.tables = &tables;
   vm.rec = rec;
   vm.le = le;
+  vm.select_u = select_u;
   vm.a = vm.b = vm.c = 0;
   vm.status = VmStatus::OK;
   vm.done = (offset == 0u);
@@ -405,8 +406,8 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
   uint32_t nee_state = 0, sh = 0, g_inst = inst, g_prim = prim, mat = 0;
   Real2 g_bary = ps_hit_uv(kg, slot);
   Real3 g_dir = ps_ray_d(kg, slot);
-  // The lobe-choice uniform through the selection register, as stages/shade_surface.h.
-  Real uc = camera_path_draw(kg, sample, event_dim(ps_event_index(kg, slot), EV_LOBE_CHOICE));
+  // The lobe-choice uniform through the entry's selection uniform, as stages/shade_surface.h.
+  float uc = float(camera_path_draw(kg, sample, event_dim(ps_event_index(kg, slot), EV_LOBE_CHOICE)));
   for (uint32_t phase = 0;; ++phase) {
     if (!shade_context_geometry(kg, g_inst, g_prim, g_bary, g_dir, &ctx)) {
       sample_mark_invalid(kg, sample);
@@ -423,9 +424,8 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
       const uint32_t* prog = s.material_programs + load_ro(&hp->program_offset);
       const bool program = phase == 0u ? (mflags & CONSTANT_SURFACE) == 0u : (mflags & CONSTANT_EMISSION) == 0u;
       const uint32_t entry = program ? load_ro(prog + (phase == 0u ? 0u : 2u)) : 0u;
-      if (phase == 0u) regs.r[kSelectReg] = float(uc);
-      ok = run_entry_100(prog, entry, &regs, ctx, *kg.tables, phase == 0u ? &rec : nullptr, &le) == VmStatus::OK;
-      if (phase == 0u) uc = Real(regs.r[kSelectReg]);
+      ok = run_entry_100(prog, entry, &regs, ctx, *kg.tables, phase == 0u ? &rec : nullptr, &le,
+                         phase == 0u ? &uc : nullptr) == VmStatus::OK;
     }
     if (phase != 0u) break;
     P = ctx.P, Ng = ctx.Ng, N = ctx.N, wo = ctx.wo;
@@ -522,7 +522,7 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
   const BsdfCtx c = prep_ctx(rec, ar::abs(wo_l.z));
   Real3 wi_l{};
   bool glossy = false;
-  const bool sampled = bsdf_sample_dir(rec, c, ctx.lambda_t, wo_l, uc,
+  const bool sampled = bsdf_sample_dir(rec, c, ctx.lambda_t, wo_l, Real(uc),
                                        camera_path_draw(kg, sample, event_dim(e, EV_BSDF_U)),
                                        camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V)), &wi_l, &glossy);
   const LobeEval bs = sampled ? bsdf_eval(rec, c, ctx.lambda_t, wo_l, wi_l) : LobeEval{spec_fill(Real(0)), Real(0)};

@@ -38,9 +38,11 @@ extern "C" __global__ void ar_vm_agree(const float* in, float* out, uint32_t n, 
   tables.observer.illum = illum;
   ar::OpenPBRParams rec = {};
   ar::Spec le = {};
-  const ar::VmStatus status = ar::run_entry(prog, entry, &regs, ctx, tables, &rec, &le);
+  float select_u = row[19];  // the selection uniform BRANCH_MIX reads and rescales
+  const ar::VmStatus status = ar::run_entry(prog, entry, &regs, ctx, tables, &rec, &le, &select_u);
   float* o = out + kVmAgreeOut * i;
   for (uint32_t k = 0; k < 16; ++k) o[k] = regs.r[16 + k];
+  o[15] = select_u;  // in r31's column: no program writes r31
   for (int l = 0; l < 4; ++l) {
     o[16 + l] = le.v[l];
     o[21 + l] = rec.base_color.v[l];

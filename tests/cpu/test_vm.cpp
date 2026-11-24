@@ -97,8 +97,9 @@ struct Rig {
   ar::OpenPBRParams rec = {};
   ar::Spec le = {};
   ar::SceneTables tables = fixture().tables;
+  float su = 0.5f;  // the entry's selection uniform (BRANCH_MIX)
   VmStatus run(const Prog& p, uint32_t entry = 4) {
-    return ar::run_entry(p.w.data(), entry, &regs, ctx, tables, &rec, &le);
+    return ar::run_entry(p.w.data(), entry, &regs, ctx, tables, &rec, &le, &su);
   }
 };
 
@@ -379,31 +380,30 @@ TEST_CASE("vm/fold equals interpret") {
       t.fold("SUB_F32", bits(h.regs.r[2]) == bits(ar::op_sub_f32(x[2], x[3])));
       t.ref("SUB_F32", bits(h.regs.r[2]) == bits(float(double(x[2]) - double(x[3]))));
     }
-    {  // BRANCH_MIX: the side (r17 = 1 falls through, 2 jumps) and the rescaled uniform in r16,
+    {  // BRANCH_MIX: the side (r17 = 1 falls through, 2 jumps) and the rescaled selection uniform,
        // for factors in [-0.25, 1.25) so both clamps are hit. The reference is item 31's formula
        // in double with 1 - f held in float, as the register file holds it (exact for f >= 0.5;
        // otherwise u - (1 - f) cancels and the float rounding of 1 - f would be divided by a small
        // f), kept below 1 as pbrt-v4 SampleDiscrete does.
       const float u = unit(i, 45), f = unit(i, 46) * 1.5f - 0.25f;
       Prog p;
-      p.op(Op::BRANCH_MIX, 16, 0, 0, {5u})          // words 0-1
+      p.op(Op::BRANCH_MIX, 0, 0, 0, {5u})           // words 0-1
           .op(Op::CONST_F32, 17, 0, 0, {fb(1.0f)})   // 2-3: first child
           .end()                                     // 4
           .op(Op::CONST_F32, 17, 0, 0, {fb(2.0f)})   // 5-6: second child
           .end();
       Rig h = g;
-      h.regs.r[0] = f, h.regs.r[16] = u;
+      h.regs.r[0] = f, h.su = u;
       REQUIRE(h.run(p) == VmStatus::OK);
       float uf = u;
       const bool second = ar::op_branch_mix(f, &uf);
-      t.fold("BRANCH_MIX", h.regs.r[17] == (second ? 2.0f : 1.0f) && bits(h.regs.r[16]) == bits(uf));
+      t.fold("BRANCH_MIX", h.regs.r[17] == (second ? 2.0f : 1.0f) && bits(h.su) == bits(uf));
       const double fc = std::min(std::max(double(f), 0.0), 1.0), p_first = double(1.0f - float(fc));
       const bool want_second = !(double(u) < p_first);
       const double want_u = std::min(want_second ? (double(u) - p_first) / fc : double(u) / p_first,
                                      double(ar::kBranchOneMinusEpsilon));
       t.ref("BRANCH_MIX", h.regs.r[17] == (want_second ? 2.0f : 1.0f) &&
-                              std::fabs(double(h.regs.r[16]) - want_u) <= 2e-7 * want_u && h.regs.r[16] >= 0.0f &&
-                              h.regs.r[16] < 1.0f);
+                              std::fabs(double(h.su) - want_u) <= 2e-7 * want_u && h.su >= 0.0f && h.su < 1.0f);
     }
   }
   for (const auto& kv : t.fold_bad) {
@@ -616,22 +616,22 @@ TEST_CASE("vm/control flow and entries") {
                           {-3.0f, 0.5f, false, 0.5f},  {7.0f, 0.5f, true, 0.5f}};
     for (const Case& c : cases) {
       Prog p;
-      p.op(Op::BRANCH_MIX, 31, 0, 0, {5u}).op(Op::CONST_F32, 1, 0, 0, {fb(1.0f)}).end().op(Op::CONST_F32, 1, 0, 0, {fb(2.0f)}).end();
+      p.op(Op::BRANCH_MIX, 0, 0, 0, {5u}).op(Op::CONST_F32, 1, 0, 0, {fb(1.0f)}).end().op(Op::CONST_F32, 1, 0, 0, {fb(2.0f)}).end();
       Rig h;
-      h.regs.r[0] = c.f, h.regs.r[31] = c.u;
+      h.regs.r[0] = c.f, h.su = c.u;
       INFO(c.f << " " << c.u);
       REQUIRE(h.run(p) == VmStatus::OK);
       CHECK(h.regs.r[1] == (c.second ? 2.0f : 1.0f));
-      CHECK(h.regs.r[31] == doctest::Approx(c.u_out).epsilon(1e-6));
+      CHECK(h.su == doctest::Approx(c.u_out).epsilon(1e-6));
     }
     // A NaN factor or a uniform outside [0, 1) stops the run instead of picking a side.
     for (const float bad_f : {std::nanf(""), 0.5f})
       for (const float bad_u : {0.5f, -0.25f, 1.0f, std::nanf("")}) {
         if (bad_f == 0.5f && bad_u == 0.5f) continue;
         Prog p;
-        p.op(Op::BRANCH_MIX, 31, 0, 0, {2u}).op(Op::CONST_F32, 1, 0, 0, {fb(1.0f)}).end();
+        p.op(Op::BRANCH_MIX, 0, 0, 0, {2u}).op(Op::CONST_F32, 1, 0, 0, {fb(1.0f)}).end();
         Rig h;
-        h.regs.r[0] = bad_f, h.regs.r[31] = bad_u;
+        h.regs.r[0] = bad_f, h.su = bad_u;
         CHECK(h.run(p) == VmStatus::BAD_OPERAND);
         CHECK(h.regs.r[1] == 0.0f);
       }
@@ -724,11 +724,9 @@ TEST_CASE("vm/errors stop the run") {
   add("JMP 0", Prog().op(Op::JMP, 0, 0, 0, {0u}), VmStatus::BAD_JUMP);
   add("JMP -1", Prog().op(Op::JMP, 0, 0, 0, {0xffffffffu}), VmStatus::BAD_JUMP);
   add("JMP INT_MIN", Prog().op(Op::JMP, 0, 0, 0, {0x80000000u}), VmStatus::BAD_JUMP);
-  add("BRANCH_MIX 0", Prog().op(Op::BRANCH_MIX, 0, 2, 0, {0u}), VmStatus::BAD_JUMP);
-  add("BRANCH_MIX -2", Prog().op(Op::BRANCH_MIX, 0, 2, 0, {0xfffffffeu}), VmStatus::BAD_JUMP);
-  add("BRANCH_MIX u 32", Prog().op(Op::BRANCH_MIX, 32, 2, 0, {2u}), VmStatus::BAD_REGISTER);
-  add("BRANCH_MIX factor 32", Prog().op(Op::BRANCH_MIX, 0, 32, 0, {2u}), VmStatus::BAD_REGISTER);
-  add("BRANCH_MIX u = 1", Prog().op(Op::BRANCH_MIX, 1, 0, 0, {2u}), VmStatus::BAD_OPERAND);
+  add("BRANCH_MIX 0", Prog().op(Op::BRANCH_MIX, 0, 0, 0, {0u}), VmStatus::BAD_JUMP);
+  add("BRANCH_MIX -2", Prog().op(Op::BRANCH_MIX, 0, 0, 0, {0xfffffffeu}), VmStatus::BAD_JUMP);
+  add("BRANCH_MIX factor 32", Prog().op(Op::BRANCH_MIX, 32, 0, 0, {2u}), VmStatus::BAD_REGISTER);
   add("ADD_F32 dst 32", Prog().op(Op::ADD_F32, 32, 0, 0), VmStatus::BAD_REGISTER);
   add("SUB_F32 src2 32", Prog().op(Op::SUB_F32, 0, 0, 32), VmStatus::BAD_REGISTER);
   add("UNSUPPORTED", Prog().op(Op::UNSUPPORTED, 0, 0, 0, {7u}), VmStatus::UNSUPPORTED);
@@ -759,6 +757,10 @@ TEST_CASE("vm/errors stop the run") {
     p.op(Op::STORE_SLOT, 0, 0, 0, {0u}).end();
     Rig g;
     CHECK(ar::run_entry(p.w.data(), 4, &g.regs, g.ctx, g.tables, nullptr, &g.le) == VmStatus::NULL_POINTER);
+    // A BRANCH_MIX in an entry run without a selection uniform.
+    Prog b;
+    b.op(Op::BRANCH_MIX, 0, 0, 0, {2u}).end();
+    CHECK(ar::run_entry(b.w.data(), 4, &g.regs, g.ctx, g.tables, &g.rec, &g.le) == VmStatus::NULL_POINTER);
     Prog e;
     e.op(Op::EMIT_LE, 0).end();
     CHECK(ar::run_entry(e.w.data(), 4, &g.regs, g.ctx, g.tables, &g.rec, nullptr) == VmStatus::NULL_POINTER);
@@ -824,7 +826,6 @@ TEST_CASE("vm/opcode table is wired") {
   CHECK(uint32_t(Op::ADD_F32) == 20u);
   CHECK(uint32_t(Op::SUB_F32) == 21u);
   CHECK(uint32_t(Op::COUNT_) == 22u);
-  CHECK(ar::kSelectReg == 31u);
 }
 
 }  // TEST_SUITE

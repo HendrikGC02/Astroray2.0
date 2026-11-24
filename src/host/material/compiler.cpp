@@ -24,7 +24,6 @@
 #include "../../kernel/vm/ops/store_slot.h"
 #include "../../kernel/vm/ops/sub_f32.h"
 #include "../../kernel/vm/ops/tex_image.h"
-#include "../../kernel/vm/vm_regs.h"
 #include "../spectral/blackbody.h"
 #include "graph.h"
 #include "op_meta.h"
@@ -146,8 +145,6 @@ bool store_const(ar::ConstantBlock* b, const ar::Rgb2SpecTable& t, uint32_t slot
 uint32_t word(Op op, uint32_t a = 0, uint32_t b = 0, uint32_t c = 0) {
   return uint32_t(op) | (a << 8) | (b << 16) | (c << 24);
 }
-
-static_assert(kRegisterCount == int(ar::kSelectReg), "the allocator stops below the selection register");
 
 // One instruction slot of an entry's layout (0005 item 38). NODE evaluates `node` in instance
 // `inst`: 0 is the run before the selection (the whole entry for a graph without a Mix Shader),
@@ -286,7 +283,7 @@ bool build_code(const Work& w, const std::vector<Item>& items, std::vector<uint3
     const GraphNode& nd = w.g.nodes[size_t(it.node)];
     auto in = [&](int s) { return uint32_t(reg[size_t(item_in[size_t(k)][size_t(s)])]); };
     if (it.kind == Item::BRANCH) {
-      code->push_back(word(Op::BRANCH_MIX, ar::kSelectReg, in(0)));
+      code->push_back(word(Op::BRANCH_MIX, in(0)));
       code->push_back(0u);  // patched below
       continue;
     }

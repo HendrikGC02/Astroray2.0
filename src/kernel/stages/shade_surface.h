@@ -32,7 +32,7 @@
 // Continuation, as pbrt-v4 VolPathIntegrator::Li: a path that arrives with bounces[total] equal
 // to the limit ends MAX_BOUNCE (pbrt's depth++ == maxDepth). Otherwise the stack is sampled in
 // the frame of N with the event block's lobe choice, as the surface entry's Mix selection left it
-// in the selection register (vm_regs.h kSelectReg), and direction u, v (0003 d23); NEE and this
+// in the entry's selection uniform (vm/ops/common.h select_u), and direction u, v (0003 d23); NEE and this
 // sample both use the record of the child that selection chose (0005 item 38); a reflected
 // direction below the geometric surface, or no sample, ends ZERO_THROUGHPUT (0005 item 8). Then
 // beta *= f |cos theta_i| / pdf (f excludes the cosine, 0004 D1) and r_l = r_u / pdf; r_u does
@@ -144,10 +144,10 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   Real2 g_bary = ps_hit_uv(kg, slot);
   Real3 g_dir = ps_ray_d(kg, slot);
   uint32_t mat = 0;
-  // The event's lobe-choice uniform goes through the surface entry in the selection register:
-  // a Mix Shader's BRANCH_MIX rescales it, and the lobe choice below uses what it left (0005 item
-  // 38, 0004 D14). Without a Mix the program leaves the register alone.
-  Real uc = camera_path_draw(kg, sample, event_dim(ps_event_index(kg, slot), EV_LOBE_CHOICE));
+  // The event's lobe-choice uniform goes through the surface entry as its selection uniform: a
+  // Mix Shader's BRANCH_MIX rescales it, and the lobe choice below uses what it left (0005 items
+  // 31, 38; 0004 D14). Without a Mix the program leaves it alone.
+  float uc = float(camera_path_draw(kg, sample, event_dim(ps_event_index(kg, slot), EV_LOBE_CHOICE)));
   for (uint32_t phase = 0;; ++phase) {
     // One site builds the context and evaluates the material, for both phases: phase 0 the hit
     // material's surface entry (record and emission), phase 1 the light material's emission entry
@@ -170,9 +170,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
       const uint32_t* prog = s.material_programs + load_ro(&hp->program_offset);
       const bool program = phase == 0u ? (mflags & CONSTANT_SURFACE) == 0u : (mflags & CONSTANT_EMISSION) == 0u;
       const uint32_t entry = program ? load_ro(prog + (phase == 0u ? 0u : 2u)) : 0u;
-      if (phase == 0u) regs.r[kSelectReg] = float(uc);
-      ok = run_entry(prog, entry, &regs, ctx, *kg.tables, phase == 0u ? &rec : nullptr, &le) == VmStatus::OK;
-      if (phase == 0u) uc = Real(regs.r[kSelectReg]);
+      ok = run_entry(prog, entry, &regs, ctx, *kg.tables, phase == 0u ? &rec : nullptr, &le,
+                     phase == 0u ? &uc : nullptr) == VmStatus::OK;
     }
     if (phase != 0u) break;
 
@@ -287,7 +286,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   const Spec beta = ps_beta(kg, slot);
   const Spec r_u = ps_r_u(kg, slot);
   const Real2 u2{camera_path_draw(kg, sample, event_dim(e, EV_BSDF_U)), camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V))};
-  const LobeSample bs = stack_sample(*kg.e_diel, rec, frame_from_normal(N), wo, uc, u2, TransportMode::Radiance);
+  const LobeSample bs = stack_sample(*kg.e_diel, rec, frame_from_normal(N), wo, Real(uc), u2, TransportMode::Radiance);
   // A reflection below the geometric surface would leave through the wrong side (0005 item 8).
   if (!(bs.pdf > Real(0)) || ((bs.flags & LOBE_REFLECTION) != 0u && !(dot(bs.wi, Ng) > Real(0)))) {
     path_end(kg, slot, Term::ZERO_THROUGHPUT);

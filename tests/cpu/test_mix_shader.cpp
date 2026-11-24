@@ -3,7 +3,7 @@
 // its weight (binomial within 3 sigma over independent-sampler uniforms, nested mixes with the
 // product of their factors, one factor per point), the uniform it leaves is again uniform, the
 // surface entry is laid out as shared run, selection and one block per child (a value two
-// children read is computed once, r31 is never allocated), MAY_BE_DELTA is the OR over the
+// children read is computed once), MAY_BE_DELTA is the OR over the
 // children's own constants, and malformed or not yet supported Mix graphs are rejected loudly.
 // Ref: docs/decisions/0005-material-model.md items 31, 38, 43, Verification 6; 0004 D14; pbrt-v4
 // src/pbrt/util/sampling.h SampleDiscrete; Cycles src/kernel/svm/closure.h svm_node_mix_closure.
@@ -110,8 +110,8 @@ struct GB {
   }
 };
 
-// Runs the surface entry with uniform u in the selection register; returns the record's
-// base_metalness, which each test child sets to its own marker, and the uniform left in r31.
+// Runs the surface entry with selection uniform u; returns the record's
+// base_metalness, which each test child sets to its own marker, and the uniform it leaves.
 struct Run {
   float marker;
   float u_out;
@@ -124,9 +124,9 @@ Run run_surface(const CompileResult& r, float u, ar::Real2 uv = {0.0f, 0.0f}) {
   ar::OpenPBRParams rec = {};
   rec.base_metalness = -1.0f;
   ar::Spec le = {};
-  regs.r[ar::kSelectReg] = u;
-  REQUIRE(ar::run_entry(r.program.data(), r.program.at(0), &regs, ctx, fixture().tables, &rec, &le) == ar::VmStatus::OK);
-  return Run{float(rec.base_metalness), regs.r[ar::kSelectReg]};
+  float su = u;
+  REQUIRE(ar::run_entry(r.program.data(), r.program.at(0), &regs, ctx, fixture().tables, &rec, &le, &su) == ar::VmStatus::OK);
+  return Run{float(rec.base_metalness), su};
 }
 
 // Sample i of one pixel in independent mode (0003 d23).
@@ -252,12 +252,7 @@ TEST_CASE("mix_shader/surface layout") {
   const std::vector<uint32_t>& p = r.program;
   CHECK(p[at[3] + 1] == at[8] - at[3]);   // BRANCH_MIX to block B
   CHECK(p[at[7] + 1] == at[11] - at[7]);  // JMP to END
-  CHECK(((p[at[3]] >> 8) & 0xffu) == ar::kSelectReg);
-  for (size_t k = 0; k < ops.size(); ++k)
-    if (ops[k] != Op::BRANCH_MIX && ops[k] != Op::END && ops[k] != Op::JMP) {
-      INFO(k);
-      CHECK(((p[at[k]] >> 8) & 0xffu) < ar::kSelectReg);  // nothing else names r31
-    }
+  CHECK(((p[at[3]] >> 8) & 0xffu) == ((p[at[2]] >> 8) & 0xffu));  // BRANCH_MIX reads the factor CONST wrote
   const ar::ConstantBlock def = ar::default_constant_block(fixture().table);
   CHECK(r.block.base_metalness == def.base_metalness);
   REQUIRE(r.children.size() == 2u);

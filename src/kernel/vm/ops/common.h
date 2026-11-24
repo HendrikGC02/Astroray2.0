@@ -38,6 +38,11 @@ struct VmState {
   const SceneTables* tables;
   OpenPBRParams* rec;
   Spec* le;
+  // The selection uniform of a surface entry (0005 items 31, 38): the stage sets it to the event's
+  // lobe-choice uniform, only BRANCH_MIX rewrites it, and the stage's lobe choice reads it after the
+  // entry (0004 D14: Mix selection and lobe choice share one uniform). Null for an entry run
+  // without one; a BRANCH_MIX there stops the run.
+  float* select_u;
   uint32_t a, b, c;  // operand bytes of the instruction word
   VmStatus status;
   bool done;
