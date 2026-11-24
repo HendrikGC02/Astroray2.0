@@ -256,7 +256,7 @@ AR_FN Real3 block_frame(const float* v, Real3 own) {
 // Ref: docs/decisions/0005-material-model.md items 2(c), 10, 12, 35, 38; core/frame.h (Duff et al.
 // 2017 basis).
 AR_FN void resolve_constant_record(const ConstantBlock& b, const ShadeContext& ctx, const ObserverView& obs,
-                                   OpenPBRParams* rec) {
+                                   const float* spectra, OpenPBRParams* rec) {
   // The block holds every scalar slot but closure_weight, which is the last one: a new scalar slot
   // stops this from compiling until it is copied below.
   static_assert(uint32_t(RecordSlot::closure_weight) == 23u && uint32_t(RecordSlot::closure_weight) + 1u ==
@@ -286,7 +286,7 @@ AR_FN void resolve_constant_record(const ConstantBlock& b, const ShadeContext& c
   rec->thin_film_ior = Real(b.thin_film_ior);
   rec->geometry_opacity = Real(b.geometry_opacity);
   rec->closure_weight = Real(1);
-#define AR_X(n, s, sem) rec->n = resolve_slot<SpectrumSemantic::sem>(b.n, ctx.lambda_t, obs);
+#define AR_X(n, s, sem) rec->n = resolve_slot<SpectrumSemantic::sem>(b.n, ctx.lambda_t, obs, spectra);
   AR_RECORD_SPECTRAL(AR_X)
 #undef AR_X
   const Real3 t = frame_from_normal(ctx.N).s;

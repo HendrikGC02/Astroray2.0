@@ -27,6 +27,7 @@
 #include "common/analytic_world.h"
 #include "host/data_resource.h"
 #include "host/device.h"
+#include "material/slot_resolve.h"
 #include "spectral/planck.h"
 #include "stages/bake_environment.h"
 
@@ -177,6 +178,43 @@ struct PlanckSet {
 };
 const PlanckSet& planck_set() {
   static const PlanckSet s;
+  return s;
+}
+
+// A TABLE spectrum for the lookup agreement: 40 irregularly spaced points inside [375, 809] (so the
+// edge clamp is exercised) with values in [0.05, 0.95), scale 0.8, and 10^4 rows of 4 wavelengths
+// uniform over [340, 850]. Ref: 0005 item 9; slot_resolve.h table_spectrum.
+struct TableSet {
+  static constexpr uint32_t kPoints = 40, kRowsN = 10000;
+  static constexpr float kScale = 0.8f;
+  std::vector<float> arena;  // the points' wavelengths, then their values
+  Inputs in;
+  Results f32;
+  TableSet() {
+    arena.resize(2u * kPoints);
+    for (uint32_t k = 0; k < kPoints; ++k) {
+      arena[k] = float(375.0 + 11.0 * k + 5.0 * unit(k, 0));  // spacing in [6, 16): strictly increasing
+      arena[kPoints + k] = float(0.05 + 0.9 * unit(k, 1));
+    }
+    in.n = kRowsN;
+    in.stride = 4;
+    in.v.resize(size_t(kRowsN) * 4u);
+    for (uint32_t i = 0; i < kRowsN; ++i)
+      for (uint32_t j = 0; j < 4; ++j) in.v[size_t(i) * 4u + j] = float(340.0 + 510.0 * unit(i, 2 + j));
+    f32.n = kRowsN;
+    f32.stride = 4;
+    f32.v.resize(size_t(kRowsN) * 4u);
+    const ar::SpectrumRef ref = ar::make_table_ref(ar::SpectrumSemantic::UNBOUNDED, 0u, kPoints, kScale);
+    for (uint32_t i = 0; i < kRowsN; ++i) {
+      ar::Lambda lam;
+      for (int j = 0; j < 4; ++j) lam.nm[j] = in.v[size_t(i) * 4u + size_t(j)];
+      const ar::Spec s = ar::table_spectrum(arena.data(), ref, lam);
+      for (int j = 0; j < 4; ++j) f32.v[size_t(i) * 4u + size_t(j)] = s.v[j];
+    }
+  }
+};
+const TableSet& table_set() {
+  static const TableSet s;
   return s;
 }
 
@@ -520,6 +558,27 @@ TEST_CASE("agree/sigmoid prod vs cpu f64") {
   const Verdict v =
       report("sigmoid", "(iii) prod vs cpu f64", compare(gpu, s.f64, Metric::REL_L2), Cls::EVAL, PROD_VS_CPU_F64);
   CHECK_MESSAGE(v.pass, v.why);
+}
+
+TEST_CASE("agree/spectrum table nofma vs cpu float") {
+  // table_spectrum (the TABLE lookup resolve() calls, 0005 item 9) on the device against the same
+  // header on the CPU in float, with the arena uploaded as the scene upload does.
+  const TableSet& s = table_set();
+  Ledger ledger;
+  auto dev = host::make_cuda_device(ledger, 0);
+  const uint64_t bytes = sizeof(float) * s.arena.size();
+  DeviceBuffer arena = dev->allocate(LedgerCategory::TABLES, bytes, Owner{});
+  dev->upload(arena, 0, s.arena.data(), bytes);
+  uint64_t arena_p = reinterpret_cast<uint64_t>(arena.ptr);
+  uint32_t points = TableSet::kPoints;
+  float scale = TableSet::kScale;
+  const Results gpu = run_gpu(*dev, nofma_module("agree_pure"), "ar_agree_table", s.in, 4, {&arena_p, &points, &scale});
+  dev->free(arena);
+  const Stats st = compare(gpu, s.f32, Metric::REL_L2);
+  const Verdict v = report("spectrum table", "(ii) nofma vs cpu float", st, Cls::EVAL, NOFMA_VS_CPU_FLOAT);
+  CHECK_MESSAGE(v.pass, v.why);
+  CHECK(st.max <= 1e-6);  // the task's bound, tighter than 0002 D12's 1e-5
+  CHECK(ledger.total() == 0);
 }
 
 TEST_CASE("agree/fma detector") {

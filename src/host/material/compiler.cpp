@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -54,7 +55,47 @@ struct Work {
   std::vector<char> isc;  // value is a compile-time constant
   std::vector<Vec3> cv;
   std::vector<uint32_t> slot;  // TEX_IMAGE nodes: the image table slot, or kTexNoImage
+  std::map<std::vector<float>, uint32_t> table_at;  // arena offset of each distinct SPECTRUM_TABLE content
+  std::set<int> table_noted;                        // SPECTRUM_TABLE nodes already checked against the observer range
 };
+
+// The TABLE ref of SPECTRUM_TABLE node `src` for a slot of semantic `sem` (parse_graph checked the
+// node): its wavelengths then values enter the material's arena once per distinct content, so two
+// slots, or two nodes, with one table share it. Records, once per node, a support that does not
+// cover the observer range (0003 d8: the edge values are used outside it, SPECTRUM_OUT_OF_RANGE)
+// and, for a REFLECTANCE slot, a scaled value above 1 (the kernel clamps it, 0005 item 10).
+// Ref: docs/decisions/0005-material-model.md item 9; 0003 d8.
+ar::SpectrumRef table_ref(Work& w, int src, ar::SpectrumSemantic sem, CompileResult* res) {
+  const GraphNode& nd = w.g.nodes[size_t(src)];
+  const float* pf = w.g.f32.data() + nd.f32_first;
+  const uint32_t n = (nd.f32_count - 1u) / 2u;
+  std::vector<float> content(2u * n);
+  float vmax = 0.0f;
+  for (uint32_t k = 0; k < n; ++k) {
+    content[k] = pf[1 + 2 * k];
+    content[n + k] = pf[2 + 2 * k];
+    vmax = std::max(vmax, pf[2 + 2 * k]);
+  }
+  const auto found = w.table_at.find(content);
+  uint32_t at = uint32_t(res->spectra.size());
+  if (found != w.table_at.end()) {
+    at = found->second;
+  } else {
+    w.table_at.emplace(content, at);
+    res->spectra.insert(res->spectra.end(), content.begin(), content.end());
+  }
+  if (w.table_noted.insert(src).second) {
+    if (content[0] > float(ar::kObsLambdaMin) || content[n - 1] < float(ar::kObsLambdaMax)) {
+      char buf[160];
+      std::snprintf(buf, sizeof buf, "graph node %d (SPECTRUM_TABLE): support [%g, %g] nm does not cover [%d, %d]; end values used", src,
+                    double(content[0]), double(content[n - 1]), ar::kObsLambdaMin, ar::kObsLambdaMax);
+      if (!res->spectrum_range.empty()) res->spectrum_range += "; ";
+      res->spectrum_range += buf;
+    }
+  }
+  if (sem == ar::SpectrumSemantic::REFLECTANCE && double(pf[0]) * double(vmax) > 1.0) res->spectrum_clamped = true;
+  return ar::make_table_ref(sem, at, n, pf[0]);
+}
 
 std::vector<int> stable_topo(const Graph& g) {
   const size_t n = g.nodes.size();
@@ -531,6 +572,8 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
       return res->error = who + "closure_weight is set by the selection, not stored by a graph", false;
     if (w.g.nodes[size_t(nd.input[0])].op == Op::CAUCHY_ABBE)
       return res->error = who + "a dispersive IOR cannot be stored per Mix Shader child", false;
+    if (w.g.nodes[size_t(nd.input[0])].op == Op::SPECTRUM_TABLE)
+      return res->error = who + "a TABLE spectrum cannot be stored per Mix Shader child (a block ref no block code can store)", false;
     if (!w.isc[size_t(nd.input[0])] && w.g.nodes[size_t(nd.input[0])].out == VType::F32 && spectral_slot(slot) &&
         slot != uint32_t(RS::specular_ior))
       return res->error = who + "a run-time scalar cannot be stored in a colour slot", false;
@@ -981,12 +1024,15 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
     if (nd.op == Op::STORE_SLOT && src < 0 && uint32_t(w.g.i32[nd.i32_first]) == opacity_slot) src = nd.input[0];
   }
   if (src < 0 || emits.empty()) return true;
-  // A Blackbody emission is a block ref with a constant strength (items 9, 39): it cannot take a
-  // per-point factor.
+  // A Blackbody or TABLE emission is a block ref with a constant strength (items 9, 39): it cannot
+  // take a per-point factor.
   if (!w.isc[size_t(src)])
-    for (int e : emits)
-      if (w.g.nodes[size_t(w.g.nodes[size_t(e)].input[0])].op == Op::BLACKBODY)
-        return *err = "graph node " + std::to_string(e) + " (EMIT_LE): a Blackbody emission needs a constant geometry_opacity", false;
+    for (int e : emits) {
+      const Op colour = w.g.nodes[size_t(w.g.nodes[size_t(e)].input[0])].op;
+      if (colour == Op::BLACKBODY || colour == Op::SPECTRUM_TABLE)
+        return *err = "graph node " + std::to_string(e) + " (EMIT_LE): a " + (colour == Op::BLACKBODY ? "Blackbody" : "TABLE") +
+                      " emission needs a constant geometry_opacity", false;
+    }
   int factor = src;
   if (w.isc[size_t(src)]) {
     const float v = w.cv[size_t(src)][0];
@@ -1087,6 +1133,11 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
         r.kind = uint8_t(ar::SpectrumKind::CAUCHY_ABBE);
         r.semantic = uint8_t(ar::SpectrumSemantic::IOR);
         for (int k = 0; k < 3; ++k) r.p[k] = pf[k];
+      } else if (w.g.nodes[size_t(src)].op == Op::SPECTRUM_TABLE) {
+        // parse_graph admits this source only for a colour slot: one TABLE ref in the block, its
+        // points in the arena.
+        const uint32_t idx = slot - uint32_t(ar::RecordSlot::base_color);  // RecordSlot's spectral order is Slot's
+        ar::slot_ref(res.block, ar::Slot(idx)) = table_ref(w, src, ar::kSlotSemantic[idx], &res);
       } else if (w.isc[size_t(src)]) {
         Vec3 v = w.cv[size_t(src)];
         if (slot == opacity_slot) {  // a fraction: clamped and reported like a colour (0005 item 32)
@@ -1140,6 +1191,38 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
         bt.color = r;
         bt.strength = res.block.emission_luminance;
         if (bt.strength > 0.0f && pf[1] > 0.0f) res.emission.push_back(bt);
+        continue;
+      }
+      if (colour_node.op == Op::SPECTRUM_TABLE) {
+        // As the Blackbody above: one constant-strength TABLE emission is a block ref, any other shape
+        // would need the arena in the program, which no op reads.
+        const std::string who = "graph node " + std::to_string(nd.input[0]) + " (SPECTRUM_TABLE): ";
+        if (emit_count != 1) return res.error = who + "a TABLE emission must be the material's only emission", res;
+        if (!w.isc[size_t(nd.input[1])]) return res.error = who + "the emission strength must be constant", res;
+        const ar::SpectrumSemantic tsem = ar::kSlotSemantic[int(ar::Slot::EMISSION_COLOR)];
+        res.block.emission_color = table_ref(w, nd.input[0], tsem, &res);
+        res.block.emission_luminance = w.cv[size_t(nd.input[1])][0];
+        // The estimate (item 43) is the table's mean over the observer range as a CONSTANT term: the
+        // light builder integrates terms without an arena, and the estimate only picks sidedness and
+        // light importance, never a rendered value.
+        const float* pf = w.g.f32.data() + colour_node.f32_first;
+        const uint32_t np = (colour_node.f32_count - 1u) / 2u;
+        const double lo = double(ar::kObsLambdaMin), hi = double(ar::kObsLambdaMax);
+        double area = 0.0;
+        for (uint32_t k = 0; k + 1 < np; ++k) {
+          const double w0 = double(pf[1 + 2 * k]), w1 = double(pf[1 + 2 * (k + 1)]);
+          const double v0 = double(pf[2 + 2 * k]), v1 = double(pf[2 + 2 * (k + 1)]);
+          const double a = std::max(w0, lo), b = std::min(w1, hi);
+          if (!(b > a)) continue;
+          area += 0.5 * ((v0 + (v1 - v0) * (a - w0) / (w1 - w0)) + (v0 + (v1 - v0) * (b - w0) / (w1 - w0))) * (b - a);
+        }
+        // The edge values extend past the support.
+        area += double(pf[2]) * std::max(0.0, std::min(double(pf[1]), hi) - lo);
+        area += double(pf[2 * np]) * std::max(0.0, hi - std::max(double(pf[2 * np - 1]), lo));
+        EmissionTerm tt;
+        tt.color = ar::make_const_ref(tsem, ar::Real(double(pf[0]) * area / (hi - lo)));
+        tt.strength = res.block.emission_luminance;
+        if (tt.strength > 0.0f && tt.color.p[0] > 0.0f) res.emission.push_back(tt);
         continue;
       }
       add_emission_term(w, nd.input[0], nd.input[1], 1.0f, &mx, &res.emission);
@@ -1437,12 +1520,13 @@ static MaterialOutput compile_material_impl(const ar_graph_desc& d, const ar::Rg
   m.compiled = compile_surface(d, table, means, slots);
   if (!m.compiled.ok) return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, m.compiled.error);
   // The (kind, semantic) pairs resolve() evaluates (spectrum_ref.h, 0005 item 9): CONSTANT and RGB
-  // anywhere, BLACKBODY in an ILLUMINANT slot, CAUCHY_ABBE in an IOR slot. Every other kind or
-  // pair is refused here, so it never reaches resolve().
+  // anywhere, TABLE in every slot but an IOR one, BLACKBODY in an ILLUMINANT slot, CAUCHY_ABBE in
+  // an IOR slot. Every other kind or pair is refused here, so it never reaches resolve().
   for (int s = 0; s < int(ar::Slot::COUNT_); ++s) {
     const ar::SpectrumRef& ref = ar::slot_ref(m.compiled.block, ar::Slot(s));
     const uint8_t k = ref.kind, sem = uint8_t(ar::kSlotSemantic[s]);
     const bool ok = k == uint8_t(ar::SpectrumKind::CONSTANT) || k == uint8_t(ar::SpectrumKind::RGB) ||
+                    (k == uint8_t(ar::SpectrumKind::TABLE) && sem != uint8_t(ar::SpectrumSemantic::IOR)) ||
                     (k == uint8_t(ar::SpectrumKind::BLACKBODY) && sem == uint8_t(ar::SpectrumSemantic::ILLUMINANT)) ||
                     (k == uint8_t(ar::SpectrumKind::CAUCHY_ABBE) && sem == uint8_t(ar::SpectrumSemantic::IOR));
     if (!ok)
@@ -1457,6 +1541,8 @@ static MaterialOutput compile_material_impl(const ar_graph_desc& d, const ar::Rg
     add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "Transparent under a Mix Shader: colour taken as its mean (exact only for grey)");
   if (m.compiled.mix_factor_unclamped)
     add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "per-point Mix factor enters weights unclamped (Cycles saturates it)");
+  if (m.compiled.spectrum_clamped) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "TABLE reflectance above 1 clamped to 1");
+  if (!m.compiled.spectrum_range.empty()) add_entry(&m, AR_REPORT_SPECTRUM_OUT_OF_RANGE, m.compiled.spectrum_range);
   // Camera and indirect rays pass through by the opacity decision in shade_surface; shadow rays
   // block on any hit (TERMINATE_ON_FIRST_HIT | DISABLE_ANYHIT, no Embree filter), so the material's
   // shadows are those of an opaque surface (0004 D4's pass-through needs the M2 shadow pass).

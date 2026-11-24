@@ -144,7 +144,7 @@ ar::Spec lift(const ar::Rgb& rgb, const Lambda& lam) {
   ar::SpectrumRef ref;
   uint32_t flags = 0;
   REQUIRE(ar::make_rgb_ref(fixture().table, rgb, ar::SpectrumSemantic::REFLECTANCE, &ref, &flags));
-  return ar::resolve(ref, lam, fixture().scene.observer);
+  return ar::resolve(ref, lam, fixture().scene.observer, nullptr);
 }
 
 Lambda lambdas(uint32_t i) {

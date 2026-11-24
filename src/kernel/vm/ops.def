@@ -51,3 +51,4 @@ AR_OP(VOLUME_COEFFS,   0, "",                 "",      CHEAP, interval_volume_co
 AR_OP(BRANCH_MIX,      1, "reg+jmpoff",       "",      CHEAP, NONE_SURFACE_ONLY,      false, false, false)
 AR_OP(ADD_F32,         2, "reg+reg+reg",      "f32",   CHEAP, NONE_SURFACE_ONLY,      false, false, true)
 AR_OP(SUB_F32,         2, "reg+reg+reg",      "f32",   CHEAP, NONE_SURFACE_ONLY,      false, false, true)
+AR_OP(SPECTRUM_TABLE,  0, "",                 "spec",  CHEAP, NONE_SURFACE_ONLY,      false, false, false)

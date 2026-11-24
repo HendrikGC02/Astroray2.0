@@ -189,6 +189,9 @@ TEST_CASE("kg_builder/no null tables") {
   CHECK(kg.scene->material_header_count == mats->headers.size() - 1u);
   CHECK(mats->headers.size() == mats->keys.size() + 1u);
   CHECK(kg.scene->material_pass_index == mats->pass_index.data());
+  CHECK(mats->spectra.empty());                   // no material of this scene holds a TABLE
+  CHECK(kg.scene->material_spectra == nullptr);   // null exactly when the arena is empty
+  CHECK(kg.scene->material_spectra_count == 0u);
   CHECK(kg.material_slot_count == 1u);
   CHECK(kg.material_program_words == mats->programs.size());
   CHECK(kg.material_constant_count == mats->constants.size());

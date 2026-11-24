@@ -77,7 +77,7 @@ ar_graph_desc StoredGraph::desc() const {
 
 uint64_t MaterialArrays::bytes() const {
   return headers.size() * sizeof(ar::MaterialHeader) + programs.size() * sizeof(uint32_t) +
-         constants.size() * sizeof(ar::ConstantBlock) + pass_index.size() * sizeof(uint32_t) +
+         constants.size() * sizeof(ar::ConstantBlock) + spectra.size() * sizeof(float) + pass_index.size() * sizeof(uint32_t) +
          media.size() * sizeof(ar::MediumBlock) + medium_programs.size() * sizeof(uint32_t);
 }
 
@@ -311,6 +311,30 @@ void MaterialStore::dropped(const Pass& pass) {
 
 void MaterialStore::rebuild_locked() {
   auto a = std::make_shared<MaterialArrays>();
+  // One arena offset per distinct table content across the scene's materials (0005 item 9).
+  std::map<std::vector<float>, uint32_t> arena_at;
+  // The block with each TABLE ref moved from its material's own arena to the scene's.
+  const auto relocated = [&](const MaterialOutput& m) {
+    ar::ConstantBlock b = m.compiled.block;
+    for (int s = 0; s < int(ar::Slot::COUNT_); ++s) {
+      ar::SpectrumRef& r = ar::slot_ref(b, ar::Slot(s));
+      if (r.kind != uint8_t(ar::SpectrumKind::TABLE)) continue;
+      const uint64_t n = r.aux;
+      if (n < 2u || uint64_t(r.index) + 2u * n > m.compiled.spectra.size())
+        throw std::logic_error("material store: a TABLE ref points outside its material's spectra");
+      const auto first = m.compiled.spectra.begin() + std::ptrdiff_t(r.index);
+      const std::vector<float> content(first, first + std::ptrdiff_t(2u * n));
+      const auto found = arena_at.find(content);
+      if (found != arena_at.end()) {
+        r.index = found->second;
+      } else {
+        r.index = uint32_t(a->spectra.size());
+        arena_at.emplace(content, r.index);
+        a->spectra.insert(a->spectra.end(), content.begin(), content.end());
+      }
+    }
+    return b;
+  };
   for (const auto& kv : materials_) {
     const MaterialOutput& m = *kv.second.out;
     ar::MaterialHeader h = {};
@@ -321,7 +345,7 @@ void MaterialStore::rebuild_locked() {
     a->keys.push_back(kv.first);
     a->headers.push_back(h);
     a->programs.insert(a->programs.end(), m.compiled.program.begin(), m.compiled.program.end());
-    a->constants.push_back(m.compiled.block);
+    a->constants.push_back(relocated(m));
     a->emission_estimates.push_back(m.emission_estimate);
     a->emission_sampling.push_back(kv.second.desc.emission_sampling);
     a->pass_index.push_back(kv.second.desc.pass_index);

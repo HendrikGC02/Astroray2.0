@@ -4,7 +4,8 @@
 // slot's convention once and stores the sigmoid coefficients and scale in the ref.
 // Ref: docs/decisions/0005-material-model.md items 9-10 (kinds, semantic per slot, REFLECTANCE
 // clamp); color/rgb2spec.h (Jakob and Hanika 2019 conventions, 0003 d16); OpenPBR 1.1.2 dispersion
-// section (Abbe number, Cauchy law); spectral/planck.h (0003 d25).
+// section (Abbe number, Cauchy law); spectral/planck.h (0003 d25); pbrt-v4 src/pbrt/util/spectrum.h
+// PiecewiseLinearSpectrum (the TABLE lookup shape; Apache-2.0).
 #pragma once
 #include <cstdint>
 
@@ -80,6 +81,54 @@ AR_FN Spec cauchy_abbe_ior(Real nd, Real Vd, Real dispersion_scale, const Lambda
   return s;
 }
 
+// A TABLE ref names one spectrum of the scene arena (SceneData::material_spectra, in floats): `index`
+// is the offset of its first wavelength, `aux` its point count n, and the arena holds the n
+// wavelengths (nm, strictly increasing) then the n values; p[0] is the scale (0005 item 9).
+inline constexpr uint32_t kTableMaxPoints = 4096;  // the graph's limit (host/material/graph.cpp)
+
+AR_FN SpectrumRef make_table_ref(SpectrumSemantic sem, uint32_t index, uint32_t n, float scale) {
+  SpectrumRef r;
+  r.kind = uint8_t(SpectrumKind::TABLE);
+  r.semantic = uint8_t(sem);
+  r.aux = uint16_t(n);
+  r.index = index;
+  r.p[0] = scale;
+  r.p[1] = r.p[2] = r.p[3] = 0.0f;
+  return r;
+}
+
+// Piecewise-linear value at `lam`, the end values outside [w[0], w[n-1]] (0003 d8). The search is
+// a fixed twelve steps of halving (n <= 4096), so a lane never loops on data. The blend is
+// (1 - t) a + t b with t exactly 0 or 1 at a grid point, so a grid point returns its value bit for
+// bit. Ref: pbrt-v4 PiecewiseLinearSpectrum::operator() (binary search, linear interpolation, edge
+// clamp).
+AR_FN Real table_lookup(const float* w, const float* v, uint32_t n, Real lam) {
+  uint32_t lo = 0;
+  for (uint32_t step = kTableMaxPoints / 2u; step != 0u; step >>= 1) {
+    const uint32_t c = lo + step;
+    if (c + 1u < n && Real(load_ro(w + c)) <= lam) lo = c;
+  }
+  const Real w0 = Real(load_ro(w + lo)), w1 = Real(load_ro(w + lo + 1u));
+  Real t = (lam - w0) / (w1 - w0);
+  t = !(t >= Real(0)) ? Real(0) : (t > Real(1) ? Real(1) : t);
+  return (Real(1) - t) * Real(load_ro(v + lo)) + t * Real(load_ro(v + lo + 1u));
+}
+
+// scale x the table at the path's wavelengths, unclamped; zero with an assert when the ref has no
+// arena behind it or a point count the graph cannot have produced.
+AR_FN Spec table_spectrum(const float* arena, const SpectrumRef& r, const Lambda& lam) {
+  const uint32_t n = r.aux;
+  if (arena == nullptr || n < 2u || n > kTableMaxPoints) {
+    AR_ASSERT(false);
+    return spec_fill(Real(0));
+  }
+  const float* w = arena + r.index;
+  const float* v = w + n;
+  Spec s;
+  for (int i = 0; i < kLanes; ++i) s.v[i] = Real(r.p[0]) * table_lookup(w, v, n, lam.nm[i]);
+  return s;
+}
+
 // CONSTANT, RGB, BLACKBODY (ILLUMINANT slots only) and CAUCHY_ABBE (IOR slots only) resolve; the
 // compiler rejects every other kind and every other (kind, semantic) pair (0005 item 9), so
 // reaching one here is a bug: it asserts in debug builds and gives zero. A BLACKBODY ref is
@@ -88,7 +137,7 @@ AR_FN Spec cauchy_abbe_ior(Real nd, Real Vd, Real dispersion_scale, const Lambda
 // the record fill carries no Planck or Cauchy code: those branches exist only for the slot that
 // can hold the kind (the surface kernel inlines this at every slot).
 template <SpectrumSemantic SEM>
-AR_FN Spec resolve_slot(const SpectrumRef& r, const Lambda& lam, const ObserverView& obs) {
+AR_FN Spec resolve_slot(const SpectrumRef& r, const Lambda& lam, const ObserverView& obs, const float* arena) {
   const SpectrumSemantic sem = SpectrumSemantic(r.semantic);
   Spec s;
   if (r.kind == uint8_t(SpectrumKind::CONSTANT)) {
@@ -103,16 +152,24 @@ AR_FN Spec resolve_slot(const SpectrumRef& r, const Lambda& lam, const ObserverV
     u.scale = Real(r.p[3]);
     s = upsampled_eval(u, lam);
   } else {
-    if constexpr (SEM == SpectrumSemantic::ILLUMINANT) {
-      if (r.kind == uint8_t(SpectrumKind::BLACKBODY) && sem == SpectrumSemantic::ILLUMINANT)
-        return blackbody_spec(Real(r.p[0]), Real(r.p[1]), lam);  // analytic: no illuminant multiply
+    bool table = false;
+    if constexpr (SEM != SpectrumSemantic::IOR) table = r.kind == uint8_t(SpectrumKind::TABLE);
+    if (table) {
+      s = table_spectrum(arena, r, lam);
+      if (sem == SpectrumSemantic::REFLECTANCE)
+        for (int i = 0; i < kLanes; ++i) s.v[i] = !(s.v[i] >= Real(0)) ? Real(0) : (s.v[i] > Real(1) ? Real(1) : s.v[i]);
+    } else {
+      if constexpr (SEM == SpectrumSemantic::ILLUMINANT) {
+        if (r.kind == uint8_t(SpectrumKind::BLACKBODY) && sem == SpectrumSemantic::ILLUMINANT)
+          return blackbody_spec(Real(r.p[0]), Real(r.p[1]), lam);  // analytic: no illuminant multiply
+      }
+      if constexpr (SEM == SpectrumSemantic::IOR) {
+        if (r.kind == uint8_t(SpectrumKind::CAUCHY_ABBE) && sem == SpectrumSemantic::IOR)
+          return cauchy_abbe_ior(Real(r.p[0]), Real(r.p[1]), Real(r.p[2]), lam);
+      }
+      AR_ASSERT(false);
+      return spec_fill(Real(0));
     }
-    if constexpr (SEM == SpectrumSemantic::IOR) {
-      if (r.kind == uint8_t(SpectrumKind::CAUCHY_ABBE) && sem == SpectrumSemantic::IOR)
-        return cauchy_abbe_ior(Real(r.p[0]), Real(r.p[1]), Real(r.p[2]), lam);
-    }
-    AR_ASSERT(false);
-    return spec_fill(Real(0));
   }
   if (sem == SpectrumSemantic::ILLUMINANT)
     for (int i = 0; i < kLanes; ++i) s.v[i] = s.v[i] * illuminant_at(obs, lam.nm[i]);
@@ -120,11 +177,11 @@ AR_FN Spec resolve_slot(const SpectrumRef& r, const Lambda& lam, const ObserverV
 }
 
 // The semantic is read from the ref: for host code and tests, which have no slot to ask.
-AR_FN Spec resolve(const SpectrumRef& r, const Lambda& lam, const ObserverView& obs) {
+AR_FN Spec resolve(const SpectrumRef& r, const Lambda& lam, const ObserverView& obs, const float* arena) {
   switch (SpectrumSemantic(r.semantic)) {
-    case SpectrumSemantic::ILLUMINANT: return resolve_slot<SpectrumSemantic::ILLUMINANT>(r, lam, obs);
-    case SpectrumSemantic::IOR: return resolve_slot<SpectrumSemantic::IOR>(r, lam, obs);
-    default: return resolve_slot<SpectrumSemantic::REFLECTANCE>(r, lam, obs);
+    case SpectrumSemantic::ILLUMINANT: return resolve_slot<SpectrumSemantic::ILLUMINANT>(r, lam, obs, arena);
+    case SpectrumSemantic::IOR: return resolve_slot<SpectrumSemantic::IOR>(r, lam, obs, arena);
+    default: return resolve_slot<SpectrumSemantic::REFLECTANCE>(r, lam, obs, arena);
   }
 }
 

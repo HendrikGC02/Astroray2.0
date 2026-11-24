@@ -30,6 +30,7 @@
 #include "host/scene/scene_tables.h"
 #include "host/session/kg_builder.h"
 #include "vm/ops.h"
+#include "vm/ops/store_slot.h"
 
 using namespace astroray;
 using namespace astroray::host;
@@ -38,7 +39,7 @@ namespace {
 
 constexpr uint32_t kElemMax = 432;  // kg_checksum.cu kKgElemMax
 constexpr uint32_t kRow = 8 + 2 * kElemMax;
-constexpr uint32_t kRows = static_cast<uint32_t>(TableId::E_DIEL) + 1u;
+constexpr uint32_t kRows = static_cast<uint32_t>(TableId::MATERIAL_SPECTRA) + 1u;
 
 struct Graph {
   std::vector<ar_graph_node> nodes;
@@ -65,6 +66,29 @@ struct Graph {
     ar_graph_desc d = {};
     d.node_count = uint32_t(nodes.size()), d.link_count = uint32_t(links.size()), d.f32_count = uint32_t(f.size());
     d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data();
+    return d;
+  }
+};
+
+// A material whose base colour is a SPECTRUM_TABLE (scale 1, three points): the scene's one entry in
+// the spectrum arena, referenced by no instance.
+struct TableGraph {
+  std::vector<ar_graph_node> nodes;
+  std::vector<ar_graph_link> links;
+  std::vector<float> f{1.0f, 400.0f, 0.2f, 550.0f, 0.6f, 700.0f, 0.9f};
+  std::vector<int32_t> i{int32_t(ar::RecordSlot::base_color)};
+  TableGraph() {
+    ar_graph_node t = {}, s = {};
+    t.op = uint32_t(ar::Op::SPECTRUM_TABLE), t.f32_first = 0, t.f32_count = uint32_t(f.size());
+    s.op = uint32_t(ar::Op::STORE_SLOT), s.i32_first = 0, s.i32_count = 1;
+    nodes = {t, s};
+    links.push_back({0u, 0u, 1u, 0u});
+  }
+  ar_graph_desc desc() const {
+    ar_graph_desc d = {};
+    d.node_count = uint32_t(nodes.size()), d.link_count = uint32_t(links.size());
+    d.f32_count = uint32_t(f.size()), d.i32_count = uint32_t(i.size());
+    d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data(), d.params_i32 = i.data();
     return d;
   }
 };
@@ -124,9 +148,10 @@ struct Rig {
     });
   }
   // One object of each kind: lit world, emissive material on an instanced quad, an image (the
-  // magenta stand-in of a missing file), a point lamp, and material 43.
+  // magenta stand-in of a missing file), a point lamp, material 43 and material 45 (a TABLE colour).
   void build() {
     const Graph gw(1.0f, 0.5f), ge(1.0f, 2.0f);
+    const TableGraph gt;
     commit([&](Edit& e) {
       const ar_graph_desc dw = gw.desc(), de = ge.desc();
       ar_world_desc w = {};
@@ -138,6 +163,11 @@ struct Rig {
       m.surface_graph = 41;
       m.emission_sampling = AR_EMISSION_SAMPLING_AUTO;
       REQUIRE(scene->materials->set_material(e, 42, &m) == AR_OK);
+      const ar_graph_desc dt = gt.desc();
+      REQUIRE(scene->materials->set_graph(e, 46, &dt) == AR_OK);
+      ar_material_desc mt = {};
+      mt.surface_graph = 46;
+      REQUIRE(scene->materials->set_material(e, 45, &mt) == AR_OK);
       ar_image_desc im = {};
       im.key = 7, im.source = AR_IMAGE_SOURCE_FILE, im.color_interop = AR_COLOR_INTEROP_LIN_REC709;
       im.path = "no_such_image_102.png";
@@ -269,6 +299,7 @@ std::vector<HostRow> host_rows(Scene& scene, const SceneTableSet& set) {
   ar::EDielTable e;
   REQUIRE(ar::e_diel_view(blob.data, blob.size, &e) == nullptr);
   at(TableId::E_DIEL) = row_of(e.e, size_t(ar::kEDielN) * ar::kEDielN * ar::kEDielN);
+  at(TableId::MATERIAL_SPECTRA) = row_of(mats->spectra.data(), mats->spectra.size());
   return rows;
 }
 
@@ -333,6 +364,7 @@ TEST_CASE("scene_upload/checksums match host") {
   }
   CHECK(want[static_cast<uint32_t>(TableId::INSTANCES)].count == 2u);
   CHECK(want[static_cast<uint32_t>(TableId::MATERIAL_PROGRAMS)].count > 0u);  // material 43 runs a program
+  CHECK(want[static_cast<uint32_t>(TableId::MATERIAL_SPECTRA)].count == 6u);  // material 45's table: 3 wavelengths, 3 values
   // The emissive quad's index: N = 1, its slice offset, C = 2, then lights 0 and 1.
   CHECK(want[static_cast<uint32_t>(TableId::LIGHT_INDEX)].count == 5u);
   dev.free(kgb);
@@ -364,7 +396,7 @@ TEST_CASE("scene_upload/material edit uploads only material tables") {
     const TableId id = TableId(t);
     const bool material = id == TableId::MATERIAL_SLOTS || id == TableId::MATERIAL_HEADERS ||
                           id == TableId::MATERIAL_PROGRAMS || id == TableId::MATERIAL_CONSTANTS ||
-                          id == TableId::MATERIAL_PASS_INDEX;
+                          id == TableId::MATERIAL_PASS_INDEX || id == TableId::MATERIAL_SPECTRA;
     // The header block holds the new tables' addresses, so it is always rewritten.
     CHECK_MESSAGE(second->uploaded[t] == (material || id == TableId::HEADER), table_name(id));
     if (second->uploaded[t]) material_bytes += second->tables[t]->bytes();

@@ -45,7 +45,7 @@ double display_energy(const std::vector<EmissionTerm>& terms, const ar::Observer
     for (int i = 0; i < ar::kObsSamples; i += ar::kLanes) {
       ar::Lambda lam;
       for (int k = 0; k < ar::kLanes; ++k) lam.nm[k] = ar::Real(ar::kObsLambdaMin + std::min(i + k, ar::kObsSamples - 1));
-      const ar::Spec s = ar::resolve(t.color, lam, obs);
+      const ar::Spec s = ar::resolve(t.color, lam, obs, nullptr);
       for (int k = 0; k < ar::kLanes && i + k < ar::kObsSamples; ++k) {
         double w = 0.0;
         for (int c = 0; c < 3; ++c) w += double(obs.cmf[c * ar::kObsSamples + i + k]);

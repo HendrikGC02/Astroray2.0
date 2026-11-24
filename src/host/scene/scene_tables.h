@@ -121,6 +121,8 @@ enum class TableId : uint32_t {
   OBSERVER_ILLUM,
   SRGB_DECODE,
   E_DIEL,
+  MATERIAL_SPECTRA,  // the spectrum arena of the TABLE SpectrumRefs (0005 item 9); after E_DIEL so the
+                     // checksum rows keep their order
   HEADER,
 };
 inline constexpr uint32_t kTableCount = static_cast<uint32_t>(TableId::HEADER) + 1u;

@@ -57,6 +57,10 @@ struct MaterialArrays {
   std::vector<ar::MaterialHeader> headers;
   std::vector<uint32_t> programs;
   std::vector<ar::ConstantBlock> constants;
+  // The scene spectrum arena (0005 item 9): every TABLE spectrum of the keyed materials, one copy per
+  // distinct content, each its n wavelengths then its n values. The TABLE refs of `constants` index
+  // it by float offset, relocated from their material's own arena when the material is appended.
+  std::vector<float> spectra;
   std::vector<std::vector<EmissionTerm>> emission_estimates;  // per header; empty = 0
   std::vector<uint32_t> emission_sampling;  // per header: ar_material_desc's AR_EMISSION_SAMPLING_*
   std::vector<uint32_t> pass_index;         // per header: ar_material_desc::pass_index (IndexMA)

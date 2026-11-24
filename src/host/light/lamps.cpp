@@ -188,7 +188,7 @@ double emitter_peak(const LightInput& light, const ar::ObserverView& obs) {
     for (int k = 0; k < ar::kLanes; ++k) lam.nm[k] = ar::Real(ar::kObsLambdaMin + std::min(i + k, ar::kObsSamples - 1));
     double sum[ar::kLanes] = {};
     for (const EmissionTerm& t : terms) {
-      const ar::Spec s = ar::resolve(t.color, lam, obs);
+      const ar::Spec s = ar::resolve(t.color, lam, obs, nullptr);
       for (int k = 0; k < ar::kLanes; ++k) sum[k] += double(t.strength) * double(s.v[k]);
     }
     for (int k = 0; k < ar::kLanes && i + k < ar::kObsSamples; ++k) peak = std::max(peak, sum[k]);

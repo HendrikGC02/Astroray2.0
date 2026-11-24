@@ -45,21 +45,22 @@ AR_FN SpectrumRef volume_term_ref(const Rgb2SpecTable& t, Rgb colour, float dens
 }
 
 // Fills *out from the block at the path's wavelengths. BAD_OPERAND for a lobe count past
-// kMediumMaxLobes or a ref kind this build cannot resolve.
+// kMediumMaxLobes or a ref kind this build cannot resolve (medium_ref_ok admits no TABLE, so the
+// resolves below need no spectrum arena).
 AR_FN VmStatus op_volume_coeffs(const MediumBlock& b, const ObserverView& obs, const Lambda& lam, MediumSample* out) {
   if (b.lobe_count > kMediumMaxLobes || !medium_ref_ok(b.sigma_a) || !medium_ref_ok(b.emission)) return VmStatus::BAD_OPERAND;
   *out = medium_sample_zero();
-  out->sigma_a = resolve(b.sigma_a, lam, obs);
+  out->sigma_a = resolve(b.sigma_a, lam, obs, nullptr);
   for (uint32_t k = 0; k < b.lobe_count; ++k) {
     if (!medium_ref_ok(b.sigma_s[k])) return VmStatus::BAD_OPERAND;
-    const Spec w = resolve(b.sigma_s[k], lam, obs);
+    const Spec w = resolve(b.sigma_s[k], lam, obs, nullptr);
     out->phase[k].kind = uint8_t(PhaseKind::HG);
     out->phase[k].p0 = b.g[k];
     out->phase[k].p1 = 0.0f;
     out->phase[k].weight = w;
     out->sigma_s = out->sigma_s + w;
   }
-  out->emission = resolve(b.emission, lam, obs);
+  out->emission = resolve(b.emission, lam, obs, nullptr);
   return VmStatus::OK;
 }
 

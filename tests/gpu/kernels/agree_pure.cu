@@ -6,6 +6,7 @@
 #include "../../common/analytic_world.h"
 #include "../agree.h"
 #include "color/rgb2spec.h"
+#include "material/slot_resolve.h"
 #include "spectral/planck.h"
 #include "stages/bake_environment.h"
 
@@ -37,6 +38,19 @@ extern "C" __global__ void ar_agree_cancel(const float* in, float* out, uint32_t
   if (i >= n) return;
   const float* p = in + 16u * i;
   for (int j = 0; j < 4; ++j) out[4u * i + j] = ar::agree_cancel(p[j], p[4 + j], p[8 + j], p[12 + j]);
+}
+
+// A TABLE spectrum (slot_resolve.h table_spectrum) at the 4 wavelengths of each input: the arena
+// holds the table's n_pts wavelengths then its n_pts values, and the scale is one argument.
+extern "C" __global__ void ar_agree_table(const float* in, float* out, uint32_t n, const float* arena, uint32_t n_pts,
+                                          float scale) {
+  const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  const float* p = in + 4u * i;
+  ar::Lambda lam;
+  for (int j = 0; j < 4; ++j) lam.nm[j] = p[j];
+  const ar::Spec s = ar::table_spectrum(arena, ar::make_table_ref(ar::SpectrumSemantic::UNBOUNDED, 0u, n_pts, scale), lam);
+  for (int j = 0; j < 4; ++j) out[4u * i + j] = s.v[j];
 }
 
 // bake_environment's cell function (0004 D11) on the analytic world of common/analytic_world.h:

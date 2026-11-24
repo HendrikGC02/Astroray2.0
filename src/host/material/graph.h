@@ -23,6 +23,7 @@ int vtype_width(VType t);
 struct GraphNode {
   ar::Op op;
   uint32_t f32_first = 0, i32_first = 0;  // into Graph::f32 / Graph::i32, counts checked per op
+  uint32_t f32_count = 0;                 // as given; fixed per op except for SPECTRUM_TABLE (one scale, n pairs)
   int input[2] = {-1, -1};                // producing node of each input socket
   int n_inputs = 0;
   VType out = VType::NONE;

@@ -172,7 +172,7 @@ const ar::ObserverView& observer() {
 double emission_at(const ar::SpectrumRef& r, float nm) {
   ar::Lambda lam;
   for (int k = 0; k < ar::kLanes; ++k) lam.nm[k] = Real(nm);
-  return double(ar::resolve(r, lam, observer()).v[0]);
+  return double(ar::resolve(r, lam, observer(), nullptr).v[0]);
 }
 
 // Flat tables as in test_film_resolve: a slot of v / 256 resolves to exactly v.

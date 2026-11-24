@@ -264,7 +264,7 @@ struct Rig {
     REQUIRE(ar::shade_context_build(kg, s, c));
     const ar::SceneData& sd = *kg.scene;
     const ar::MaterialHeader& h = sd.material_headers[sd.material_header_count];  // the default material
-    ar::resolve_constant_record(sd.material_constants[h.const_offset], *c, kg.tables->observer, rec);
+    ar::resolve_constant_record(sd.material_constants[h.const_offset], *c, kg.tables->observer, sd.material_spectra, rec);
   }
   uint32_t item_of(uint32_t s) const { return sh_queue[s]; }
 };

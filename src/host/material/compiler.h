@@ -59,6 +59,15 @@ struct CompileResult {
   // ar::kRgbNegativeClamped / kRgbAboveOneClamped seen while packing constants, for the report.
   uint32_t clamp_flags = 0;
   bool opacity_clamped = false;  // a constant geometry_opacity outside [0, 1] was clamped
+  // The spectrum arena of this material: the TABLE refs of `block` index it by float offset (index of
+  // the first wavelength, aux = n; the n wavelengths then the n values), deduplicated by content. The
+  // material store appends it to the scene's arena and relocates the indices (material_store.cpp).
+  std::vector<float> spectra;
+  // A TABLE in a REFLECTANCE slot whose scaled value exceeds 1 (the kernel clamps it), and the
+  // support of each TABLE that does not cover the observer range, for NODE_APPROXIMATED and
+  // SPECTRUM_OUT_OF_RANGE (one entry each per material).
+  bool spectrum_clamped = false;
+  std::string spectrum_range;
   uint64_t runtime_slots = 0;           // bit s: RecordSlot s is stored by the program, per point
   std::vector<EmissionTerm> emission;   // one term per EMIT_LE that does not fold to 0
   // Images the program samples or the emission estimate read, sorted: the material recompiles

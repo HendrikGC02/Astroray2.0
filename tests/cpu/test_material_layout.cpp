@@ -325,7 +325,7 @@ TEST_SUITE("fast") {
       const ar::SpectrumRef& r = ar::slot_ref(mb, w.slot);
       INFO("slot " << int(w.slot));
       CHECK(r.semantic == uint8_t(ar::kSlotSemantic[int(w.slot)]));
-      CHECK(lane_error(ar::resolve(r, lam, fx.view), w.value) <= 1e-4);
+      CHECK(lane_error(ar::resolve(r, lam, fx.view, nullptr), w.value) <= 1e-4);
     }
     CHECK(ar::slot_ref(mb, ar::Slot::SPECULAR_IOR).kind == uint8_t(ar::SpectrumKind::CONSTANT));
     CHECK(ar::slot_ref(mb, ar::Slot::BASE_COLOR).kind == uint8_t(ar::SpectrumKind::RGB));
@@ -336,7 +336,7 @@ TEST_SUITE("fast") {
     CHECK(ar::kSlotSemantic[int(ar::Slot::BASE_COLOR)] == SpectrumSemantic::REFLECTANCE);
     // subsurface_radius_scale (1, 0.5, 0.25): red end above green above blue.
     const ar::SpectrumRef& rs = ar::slot_ref(mb, ar::Slot::SUBSURFACE_RADIUS_SCALE);
-    const Spec s = ar::resolve(rs, lanes(Real(620), Real(540), Real(460), Real(620)), fx.view);
+    const Spec s = ar::resolve(rs, lanes(Real(620), Real(540), Real(460), Real(620)), fx.view, nullptr);
     CHECK(s.v[0] > s.v[1]);
     CHECK(s.v[1] > s.v[2]);
   }
@@ -351,7 +351,7 @@ TEST_SUITE("fast") {
     for (int i = 0; i < ar::kObsSamples; i += 4) {
       Lambda lam;
       for (int l = 0; l < 4; ++l) lam.nm[l] = Real(360 + (i + l < ar::kObsSamples ? i + l : ar::kObsSamples - 1));
-      const double e = lane_error(ar::resolve(r, lam, fx.view), 1.0);
+      const double e = lane_error(ar::resolve(r, lam, fx.view, nullptr), 1.0);
       if (!(e <= worst)) worst = e;
     }
     CHECK_MESSAGE(worst <= 1e-4, "max |s - 1| = " << worst);
@@ -368,8 +368,8 @@ TEST_SUITE("fast") {
     const Spec want_a = ar::albedo(fx.table, rgb, lam, &f5);
     const Spec want_u = ar::unbounded(fx.table, big, lam, &f5);
     const Spec want_i = ar::illuminant(fx.table, fx.view, big, lam, &f5);
-    const Spec got_a = ar::resolve(a, lam, fx.view), got_u = ar::resolve(u, lam, fx.view),
-               got_i = ar::resolve(il, lam, fx.view);
+    const Spec got_a = ar::resolve(a, lam, fx.view, nullptr), got_u = ar::resolve(u, lam, fx.view, nullptr),
+               got_i = ar::resolve(il, lam, fx.view, nullptr);
     for (int l = 0; l < 4; ++l) {
       CHECK(std::fabs(double(got_a.v[l]) - double(want_a.v[l])) <= 1e-4);
       CHECK(std::fabs(double(got_u.v[l]) - double(want_u.v[l])) <= 1e-4 * (1.0 + double(want_u.v[l])));
@@ -389,7 +389,7 @@ TEST_SUITE("fast") {
     for (int i = 0; i < ar::kObsSamples; i += 4) {
       Lambda lam;
       for (int l = 0; l < 4; ++l) lam.nm[l] = Real(360 + (i + l < ar::kObsSamples ? i + l : ar::kObsSamples - 1));
-      const Spec s = ar::resolve(r, lam, fx.view);
+      const Spec s = ar::resolve(r, lam, fx.view, nullptr);
       for (int l = 0; l < 4; ++l) {
         const double want = double(ar::illuminant_at(fx.view, lam.nm[l]));
         CHECK(std::fabs(double(s.v[l]) - want) <= 1e-4 * (1.0 + want));
@@ -397,7 +397,7 @@ TEST_SUITE("fast") {
     }
     // The constant form of the same slot is grey times the illuminant.
     const Lambda lam = lanes(Real(450), Real(520), Real(590), Real(660));
-    const Spec c = ar::resolve(ar::make_const_ref(SpectrumSemantic::ILLUMINANT, Real(2)), lam, fx.view);
+    const Spec c = ar::resolve(ar::make_const_ref(SpectrumSemantic::ILLUMINANT, Real(2)), lam, fx.view, nullptr);
     for (int l = 0; l < 4; ++l)
       CHECK(std::fabs(double(c.v[l]) - 2.0 * double(ar::illuminant_at(fx.view, lam.nm[l]))) <= 1e-5);
   }
@@ -406,17 +406,17 @@ TEST_SUITE("fast") {
     Fixture fx;
     const Lambda lam = lanes(Real(450), Real(520), Real(590), Real(660));
     // REFLECTANCE clamps to [0, 1] (the compiler reports it, 059).
-    CHECK(lane_error(ar::resolve(ar::make_const_ref(SpectrumSemantic::REFLECTANCE, Real(1.7)), lam, fx.view), 1.0) == 0.0);
-    CHECK(lane_error(ar::resolve(ar::make_const_ref(SpectrumSemantic::REFLECTANCE, Real(-0.3)), lam, fx.view), 0.0) == 0.0);
-    CHECK(lane_error(ar::resolve(ar::make_const_ref(SpectrumSemantic::REFLECTANCE, Real(0.4)), lam, fx.view), 0.4) <= 1e-6);
+    CHECK(lane_error(ar::resolve(ar::make_const_ref(SpectrumSemantic::REFLECTANCE, Real(1.7)), lam, fx.view, nullptr), 1.0) == 0.0);
+    CHECK(lane_error(ar::resolve(ar::make_const_ref(SpectrumSemantic::REFLECTANCE, Real(-0.3)), lam, fx.view, nullptr), 0.0) == 0.0);
+    CHECK(lane_error(ar::resolve(ar::make_const_ref(SpectrumSemantic::REFLECTANCE, Real(0.4)), lam, fx.view, nullptr), 0.4) <= 1e-6);
     // The other semantics do not.
-    CHECK(lane_error(ar::resolve(ar::make_const_ref(SpectrumSemantic::UNBOUNDED, Real(1.7)), lam, fx.view), 1.7) <= 1e-6);
-    CHECK(lane_error(ar::resolve(ar::make_const_ref(SpectrumSemantic::IOR, Real(1.7)), lam, fx.view), 1.7) <= 1e-6);
+    CHECK(lane_error(ar::resolve(ar::make_const_ref(SpectrumSemantic::UNBOUNDED, Real(1.7)), lam, fx.view, nullptr), 1.7) <= 1e-6);
+    CHECK(lane_error(ar::resolve(ar::make_const_ref(SpectrumSemantic::IOR, Real(1.7)), lam, fx.view, nullptr), 1.7) <= 1e-6);
     // An RGB reflectance above 1 is clamped and flagged for the compiler to report.
     ar::SpectrumRef r;
     uint32_t flags = 0;
     REQUIRE(ar::make_rgb_ref(fx.table, Rgb{{Real(1.7), Real(1.7), Real(1.7)}}, SpectrumSemantic::REFLECTANCE, &r, &flags));
     CHECK((flags & ar::kRgbAboveOneClamped) != 0u);
-    CHECK(lane_error(ar::resolve(r, lam, fx.view), 1.0) <= 1e-4);
+    CHECK(lane_error(ar::resolve(r, lam, fx.view, nullptr), 1.0) <= 1e-4);
   }
 }  // TEST_SUITE
