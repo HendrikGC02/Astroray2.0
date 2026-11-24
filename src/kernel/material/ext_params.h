@@ -26,9 +26,9 @@ static_assert(sizeof(ExtParams) == 64, "ExtParams is 64 B (0005 item 16)");
 static_assert(alignof(ExtParams) == 4, "ExtParams is 16 u32 words");
 
 // The GRATING kind's view of its block (item 23). Words: w[0] pitch_nm (f32 bits); w[1] mode u8 |
-// m_min i8 << 8 | m_max i8 << 16, top byte 0; w[2] table (TableArena handle); w[3..8] substrate IOR
-// SpectrumRef, read in transmission only; w[9..15] 0. The block crosses the ABI byte for byte, so
-// this one decoder and its encoder are the layout.
+// m_min i8 << 8 | m_max i8 << 16, top byte unread (written 0); w[2] table (TableArena handle);
+// w[3..8] substrate IOR SpectrumRef, read in transmission only; w[9..15] unread. The block crosses
+// the ABI byte for byte, so this one decoder and its encoder are the layout.
 enum class GratingMode : uint32_t { Reflect = 0, Transmit = 1 };
 
 struct GratingParams {

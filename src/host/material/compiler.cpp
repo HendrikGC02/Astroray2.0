@@ -1122,6 +1122,12 @@ bool ext_params_valid(uint32_t kind, const ar::ExtParams& e, std::string* why) {
       *why = "grating substrate IOR must be a CONSTANT or CAUCHY_ABBE IOR ref with a finite positive index";
       return false;
     }
+    // The CAUCHY_ABBE domain of graph.cpp's op check: outside it cauchy_abbe_ior gives wrong indices silently.
+    if (r.kind == uint8_t(ar::SpectrumKind::CAUCHY_ABBE) &&
+        !(std::isfinite(r.p[1]) && r.p[1] > 0.0f && std::isfinite(r.p[2]) && r.p[2] >= 0.0f)) {
+      *why = "grating substrate CAUCHY_ABBE needs a finite positive n_d and Abbe number and a finite non-negative dispersion scale";
+      return false;
+    }
   }
   return true;
 }

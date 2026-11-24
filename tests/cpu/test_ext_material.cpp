@@ -74,7 +74,7 @@ ar::GratingParams good_grating() {
   g.mode = uint32_t(ar::GratingMode::Reflect);
   g.m_min = -2;
   g.m_max = 2;
-  g.table = 7u;
+  g.table = 0x9E3779B9u;  // no zero byte, so a zero-filling copy cannot pass the memcmp
   return g;
 }
 
@@ -82,12 +82,17 @@ ar_material_desc material(uint32_t kind, const ar::GratingParams& g = good_grati
   ar_material_desc d = {};
   d.ext_kind = kind;
   // A pattern in every byte, so the byte-for-byte copy is checked over the whole block. GRATING
-  // overwrites its nine words (w[9..15] are not read and keep the pattern); other kinds are refused
-  // before their block is read.
+  // overwrites only the bytes its checks and grating_params read: pitch (bytes 0-3), mode, m_min and
+  // m_max (4-6) and the table word (8-11), plus the substrate ref (12-35) in transmission, which
+  // alone reads it. Byte 7, the reflective substrate and w[9..15] keep the pattern. Other kinds
+  // are refused before their block is read.
   for (uint32_t b = 0; b < sizeof(d.ext_constants); ++b) d.ext_constants[b] = uint8_t(0x11u * (b % 15u) + 7u);
   if (kind == uint32_t(ar::ExtKind::GRATING)) {
     const ar::ExtParams e = ar::grating_ext_params(g);
-    std::memcpy(d.ext_constants, &e, 9 * sizeof(uint32_t));
+    const auto* src = reinterpret_cast<const uint8_t*>(&e);
+    std::memcpy(d.ext_constants + 0, src + 0, 7);
+    std::memcpy(d.ext_constants + 8, src + 8, 4);
+    if (g.mode == uint32_t(ar::GratingMode::Transmit)) std::memcpy(d.ext_constants + 12, src + 12, 24);
   }
   return d;
 }
@@ -115,6 +120,17 @@ TEST_CASE("ext_material/compiled grating carries flag and params") {
   CHECK((m.flags & ar::NON_OPAQUE) == 0u);
   CHECK(m.compiled.ext_kind == uint32_t(ar::ExtKind::GRATING));
   CHECK(std::memcmp(&m.compiled.ext, d.ext_constants, 64) == 0);
+  // Only the mode byte (Reflect = 0) is zero, so the memcmp sees a zero-filling copy.
+  int zeros = 0;
+  for (uint8_t b : d.ext_constants) zeros += b == 0 ? 1 : 0;
+  CHECK(zeros == 1);
+  // In reflection the unread bytes (byte 7, the substrate words, w[9..15]) do not change the decode.
+  const ar::GratingParams gp = ar::grating_params(m.compiled.ext);
+  CHECK(gp.pitch_nm == 1.0e6f / 600.0f);
+  CHECK(gp.mode == uint32_t(ar::GratingMode::Reflect));
+  CHECK(gp.m_min == -2);
+  CHECK(gp.m_max == 2);
+  CHECK(gp.table == 0x9E3779B9u);
   CHECK(m.entries.empty());  // opacity is kept (item 15)
   // The same without any graph, as the store compiles a material with no surface key.
   const MaterialOutput bare = compile_extension(d, ar_graph_desc{}, table());
@@ -156,6 +172,22 @@ TEST_CASE("ext_material/bad grating block refused") {
   bad.push_back({"m_min > m_max", with([](ar::GratingParams& g) { g.m_min = 2; g.m_max = 1; }), "orders"});
   bad.push_back({"mode 2", with([](ar::GratingParams& g) { g.mode = 2u; }), "mode"});
   bad.push_back({"transmit without substrate", with([](ar::GratingParams& g) { g.mode = 1u; }), "substrate"});
+  // A dispersive substrate outside the CAUCHY_ABBE domain of graph.cpp's op check.
+  auto cauchy = [](float nd, float vd, float scale) {
+    ar::GratingParams g = good_grating();
+    g.mode = 1u;
+    g.substrate_ior.kind = uint8_t(ar::SpectrumKind::CAUCHY_ABBE);
+    g.substrate_ior.semantic = uint8_t(ar::SpectrumSemantic::IOR);
+    g.substrate_ior.p[0] = nd;
+    g.substrate_ior.p[1] = vd;
+    g.substrate_ior.p[2] = scale;
+    return g;
+  };
+  bad.push_back({"Abbe number 0", cauchy(1.5f, 0.0f, 1.0f), "Abbe number"});
+  bad.push_back({"Abbe number negative", cauchy(1.5f, -30.0f, 1.0f), "Abbe number"});
+  bad.push_back({"Abbe number nan", cauchy(1.5f, std::nanf(""), 1.0f), "Abbe number"});
+  bad.push_back({"dispersion scale negative", cauchy(1.5f, 30.0f, -1.0f), "dispersion scale"});
+  bad.push_back({"dispersion scale nan", cauchy(1.5f, 30.0f, std::nanf("")), "dispersion scale"});
   for (const Bad& b : bad) {
     INFO(b.what);
     const MaterialOutput m = compile_extension(material(1, b.g), none, table());
@@ -176,6 +208,8 @@ TEST_CASE("ext_material/bad grating block refused") {
   tr.substrate_ior.semantic = uint8_t(ar::SpectrumSemantic::IOR);
   tr.substrate_ior.p[0] = 1.5f;
   CHECK(!compile_extension(material(1, tr), none, table()).magenta);
+  CHECK(!compile_extension(material(1, cauchy(1.5f, 30.0f, 1.0f)), none, table()).magenta);
+  CHECK(!compile_extension(material(1, cauchy(1.5f, 30.0f, 0.0f)), none, table()).magenta);
 }
 
 TEST_CASE("ext_material/dropped bsdf stores reported per slot") {

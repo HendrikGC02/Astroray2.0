@@ -238,14 +238,20 @@ TEST_SUITE("fast") {
   }
 
   AR_RT_CASE("grating/table lookup") {
-    // Linear in lambda and in cos_i, exact at nodes, clamped outside both ranges.
-    const HostTable t = make_table(-1, 1, [](int m, double l, double c) { return 0.001 * l + 0.1 * c + 0.01 * m; });
+    // Bilinear in lambda and cos_i, so a table of a + b lambda + c cos + d lambda cos (a function
+    // bilinear interpolation reproduces exactly) is read back exactly at and between nodes,
+    // including the cross term; clamped outside both ranges.
+    auto f = [](int m, double l, double c) { return 0.001 * l + 0.1 * c + 0.01 * m + 0.002 * l * c; };
+    const HostTable t = make_table(-1, 1, f);
     const GratingTable v = t.view();
-    const double tol = kF32 ? 2e-6 : 1e-7;
-    CHECK(std::fabs(double(ar::grating_table_eta(v, 1, Real(500), Real(node_cos(7)))) - (0.5 + 0.1 * node_cos(7) + 0.01)) < tol);
-    CHECK(std::fabs(double(ar::grating_table_eta(v, 0, Real(502.5), Real(0.5))) - (0.5025 + 0.05)) < tol);
-    CHECK(std::fabs(double(ar::grating_table_eta(v, -1, Real(300), Real(1.2))) - (0.36 + 0.1 - 0.01)) < tol);
-    CHECK(std::fabs(double(ar::grating_table_eta(v, -1, Real(900), Real(-0.1))) - (0.83 - 0.01)) < tol);
+    const double tol = kF32 ? 5e-6 : 3e-7;  // the table is f32: values up to 2.7 store within 1.2e-7
+    auto at = [&](int m, double l, double c) { return double(ar::grating_table_eta(v, m, Real(l), Real(c))); };
+    CHECK(std::fabs(at(1, 500, node_cos(7)) - f(1, 500, node_cos(7))) < tol);  // on both nodes
+    CHECK(std::fabs(at(0, 502.5, 0.5) - f(0, 502.5, 0.5)) < tol);              // between nodes on both axes
+    CHECK(std::fabs(at(1, 611.3, 0.37) - f(1, 611.3, 0.37)) < tol);
+    CHECK(std::fabs(at(-1, 777.7, 0.91) - f(-1, 777.7, 0.91)) < tol);
+    CHECK(std::fabs(at(-1, 300, 1.2) - f(-1, 360, 1.0)) < tol);  // clamped
+    CHECK(std::fabs(at(-1, 900, -0.1) - f(-1, 830, 0.0)) < tol);
     CHECK(ar::grating_table_eta(v, 2, Real(500), Real(0.5)) == Real(0));
     CHECK(ar::grating_table_eta(v, -2, Real(500), Real(0.5)) == Real(0));
     CHECK(std::isfinite(double(ar::grating_table_eta(v, 0, Real(NAN), Real(NAN)))));
