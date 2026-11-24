@@ -16,3 +16,4 @@ Budget: gate +1 s at most (stop and ask above); kernel rows: none (no kernel sou
 Depends on: 178 (opsgen.py; lands after it); lands after 148 (the Mix op it refuses). compiler.cpp order 158, 165, 164, 179, 168, 180. Not in the SceneData sweep (lead ruling).
 Size: S-M (about 200 lines without tests); stop and report at 2x.
 Progress:
+- Started on branch task/168-extension-mechanism. Mix Shader op (148) is not on main: the Mix refusal and its test are not implemented here.
