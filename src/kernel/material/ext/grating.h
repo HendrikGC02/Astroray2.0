@@ -90,7 +90,7 @@ AR_FN bool grating_order_direction(Real3 wo, int m, Real lambda_nm, Real pitch_n
   const Real ty = (-n_i * wo.y + k) / n_o;
   const Real t2 = tx * tx + ty * ty;
   if (!(t2 <= Real(1))) return false;
-  const Real z = sqrt(max(Real(1) - t2, Real(0)));
+  const Real z = ar::sqrt(ar::max(Real(1) - t2, Real(0)));
   const bool up = (wo.z > Real(0)) != transmit;
   *wi = Real3{tx, ty, up ? z : -z};
   return true;
@@ -126,7 +126,7 @@ AR_FN LobeSample grating_sample(const GratingParams& p, const GratingTable& tab,
   const Real3 wo = to_local(frame, wo_world);
   if (!(wo.z != Real(0))) return out;
   const bool transmit = p.mode == uint32_t(GratingMode::Transmit);
-  const Real cos_i = min(abs(wo.z), Real(1));
+  const Real cos_i = ar::min(ar::abs(wo.z), Real(1));
   Spec n_i = spec_fill(Real(1));
   Spec n_o = spec_fill(Real(1));
   if (transmit) {
@@ -166,7 +166,7 @@ AR_FN LobeSample grating_sample(const GratingParams& p, const GratingTable& tab,
   const bool all_lanes = chosen == 0 && (!transmit || !grating_substrate_dispersive(p));
   Real3 wi{};
   if (!grating_order_direction(wo, chosen, lam.nm[0], Real(p.pitch_nm), transmit, n_i.v[0], n_o.v[0], &wi)) return out;
-  const Real abs_cos = abs(wi.z);
+  const Real abs_cos = ar::abs(wi.z);
   if (!(abs_cos > Real(0))) return out;
   for (int j = 0; j < kLanes; ++j) {
     if (!all_lanes && j != 0) continue;
