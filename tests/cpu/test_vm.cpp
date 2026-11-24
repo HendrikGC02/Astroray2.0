@@ -227,6 +227,16 @@ TEST_CASE("vm/fold equals interpret") {
       t.fold("ADD_F32X3", fold_ok);
       t.ref("ADD_F32X3", ref_ok);
     }
+    {  // CHANNEL_F32X3: each channel of r3..r5, one into the source's own first register.
+      Prog p;
+      p.op(Op::CHANNEL_F32X3, 16, 3, 0, {0u}).op(Op::CHANNEL_F32X3, 17, 3, 0, {1u}).op(Op::CHANNEL_F32X3, 3, 3, 0, {2u}).end();
+      Rig h = g;
+      REQUIRE(h.run(p) == VmStatus::OK);
+      t.fold("CHANNEL_F32X3", bits(h.regs.r[16]) == bits(ar::op_channel_f32x3(x + 3, 0u)) &&
+                                  bits(h.regs.r[17]) == bits(ar::op_channel_f32x3(x + 3, 1u)) &&
+                                  bits(h.regs.r[3]) == bits(ar::op_channel_f32x3(x + 3, 2u)));
+      t.ref("CHANNEL_F32X3", bits(h.regs.r[16]) == bits(x[3]) && bits(h.regs.r[17]) == bits(x[4]) && bits(h.regs.r[3]) == bits(x[5]));
+    }
     {  // LOAD_CTX_UV (both sets) and LOAD_CTX_P
       Prog p;
       p.op(Op::LOAD_CTX_UV, 16, 0).op(Op::LOAD_CTX_UV, 19, 1).op(Op::LOAD_CTX_P, 22).end();
@@ -368,8 +378,8 @@ TEST_CASE("vm/fold equals interpret") {
     CHECK(kv.second == 0u);
   }
   // Every opcode of the table was exercised, so a renamed key cannot hide a missing check.
-  CHECK(t.fold_bad.size() == 13u);
-  CHECK(t.ref_bad.size() == 13u);
+  CHECK(t.fold_bad.size() == 14u);
+  CHECK(t.ref_bad.size() == 14u);
 }
 
 TEST_CASE("vm/lift analytic values") {
@@ -624,9 +634,12 @@ TEST_CASE("vm/errors stop the run") {
   add("STORE_SLOT spectrum from r29",
       Prog().op(Op::STORE_SLOT, 29, 0, 0, {uint32_t(ar::RecordSlot::base_color) | ar::kStoreSlotSpecSource}),
       VmStatus::BAD_REGISTER);
+  add("CHANNEL_F32X3 dst 32", Prog().op(Op::CHANNEL_F32X3, 32, 0, 0, {0u}), VmStatus::BAD_REGISTER);
+  add("CHANNEL_F32X3 src 30", Prog().op(Op::CHANNEL_F32X3, 0, 30, 0, {0u}), VmStatus::BAD_REGISTER);
   add("STORE_SLOT src 32", Prog().op(Op::STORE_SLOT, 32, 0, 0, {0u}), VmStatus::BAD_REGISTER);
   // Operands the op does not accept.
   add("LOAD_CTX_UV set 2", Prog().op(Op::LOAD_CTX_UV, 0, 2), VmStatus::BAD_OPERAND);
+  add("CHANNEL_F32X3 channel 3", Prog().op(Op::CHANNEL_F32X3, 0, 3, 0, {3u}), VmStatus::BAD_OPERAND);
   add("TEX_IMAGE mode 4", Prog().op(Op::TEX_IMAGE, 0, 3, 0, {0u, 4u}), VmStatus::BAD_OPERAND);
   add("RGB_LIFT semantic IOR", Prog().op(Op::RGB_LIFT, 0, 4, 3), VmStatus::BAD_OPERAND);
   add("RGB_LIFT semantic 255", Prog().op(Op::RGB_LIFT, 0, 4, 255), VmStatus::BAD_OPERAND);
@@ -730,7 +743,8 @@ TEST_CASE("vm/opcode table is wired") {
   CHECK(uint32_t(Op::TEST_INJECT_NAN) == 15u);
   CHECK(uint32_t(Op::BLACKBODY) == 16u);
   CHECK(uint32_t(Op::CAUCHY_ABBE) == 17u);
-  CHECK(uint32_t(Op::COUNT_) == 18u);
+  CHECK(uint32_t(Op::CHANNEL_F32X3) == 18u);
+  CHECK(uint32_t(Op::COUNT_) == 19u);
 }
 
 }  // TEST_SUITE

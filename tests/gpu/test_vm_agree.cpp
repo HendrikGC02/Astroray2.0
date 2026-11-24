@@ -105,6 +105,11 @@ std::vector<Named> programs() {
   p.push_back({"MUL_F32X3", Prog().op(Op::MUL_F32X3, 16, 0, 3).op(Op::END)});
   p.push_back({"MUL_F32X3_F32", Prog().op(Op::MUL_F32X3_F32, 16, 0, 3).op(Op::END)});
   p.push_back({"ADD_F32X3", Prog().op(Op::ADD_F32X3, 16, 0, 3).op(Op::END)});
+  p.push_back({"CHANNEL_F32X3", Prog()
+                                    .op(Op::CHANNEL_F32X3, 16, 3, 0, {0u})
+                                    .op(Op::CHANNEL_F32X3, 17, 3, 0, {1u})
+                                    .op(Op::CHANNEL_F32X3, 18, 3, 0, {2u})
+                                    .op(Op::END)});
   p.push_back({"LOAD_CTX_UV,LOAD_CTX_P", Prog()
                                              .op(Op::LOAD_CTX_UV, 16, 0)
                                              .op(Op::LOAD_CTX_UV, 19, 1)

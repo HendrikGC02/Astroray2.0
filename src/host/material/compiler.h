@@ -38,12 +38,14 @@ struct CompileResult {
   bool ok = false;
   std::string error;  // set when !ok; the compiler never throws
   // Entry table (surface, opacity, emission, volume word offsets; 0 = absent or constant) followed
-  // by the entries' code. Empty when the surface folded completely: length 0, CONSTANT_SURFACE.
+  // by the entries' code in the order surface, emission, opacity; the opacity entry exists only for
+  // a per-point geometry_opacity. Empty when the surface folded completely: CONSTANT_SURFACE.
   std::vector<uint32_t> program;
   bool constant_surface = false;
   ar::ConstantBlock block = {};  // OpenPBR defaults overridden by every constant store
   // ar::kRgbNegativeClamped / kRgbAboveOneClamped seen while packing constants, for the report.
   uint32_t clamp_flags = 0;
+  bool opacity_clamped = false;  // a constant geometry_opacity outside [0, 1] was clamped
   uint64_t runtime_slots = 0;           // bit s: RecordSlot s is stored by the program, per point
   std::vector<EmissionTerm> emission;   // one term per EMIT_LE that does not fold to 0
   // Images the program samples or the emission estimate read, sorted: the material recompiles
@@ -74,9 +76,9 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
                               const ImageSlotFn* slots = nullptr);
 
 // compile_surface plus the policy of 0005 items 40 and 43: UNSUPPORTED or unknown ops give
-// NODE_UNSUPPORTED (one per node type), a compile error or a SpectrumRef kind M1a cannot resolve
-// gives PROGRAM_REJECTED, and either makes the material magenta; a clamped colour gives
-// NODE_APPROXIMATED; a sampled image key that is not set gives IMAGE_UNREADABLE and samples
+// NODE_UNSUPPORTED (one per node type), a compile error (a NaN opacity among them) or a SpectrumRef
+// kind M1a cannot resolve gives PROGRAM_REJECTED, and either makes the material magenta; a clamped
+// colour or constant opacity gives NODE_APPROXIMATED; a sampled image key that is not set gives IMAGE_UNREADABLE and samples
 // magenta. Never throws on bad input.
 //
 // It also calls set_medium_fields with `medium_priority`.

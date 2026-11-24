@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <set>
@@ -12,6 +13,7 @@
 #include "../../kernel/material/material_header.h"
 #include "../../kernel/material/slot_resolve.h"
 #include "../../kernel/vm/ops/add_f32x3.h"
+#include "../../kernel/vm/ops/channel_f32x3.h"
 #include "../../kernel/vm/ops/const_f32.h"
 #include "../../kernel/vm/ops/mul_f32.h"
 #include "../../kernel/vm/ops/mul_f32x3.h"
@@ -85,6 +87,7 @@ bool fold(const Work& w, int i, Vec3* out, std::string* err) {
     case Op::MUL_F32X3: ar::op_mul_f32x3(a.data(), b.data(), out->data()); return true;
     case Op::MUL_F32X3_F32: ar::op_mul_f32x3_f32(a.data(), b[0], out->data()); return true;
     case Op::ADD_F32X3: ar::op_add_f32x3(a.data(), b.data(), out->data()); return true;
+    case Op::CHANNEL_F32X3: (*out)[0] = ar::op_channel_f32x3(a.data(), uint32_t(w.g.i32[n.i32_first])); return true;
     default:
       *err = std::string("internal error: ops.def marks ") + op_meta(n.op).name +
              " foldable but compiler.cpp fold() has no case for it";
@@ -223,6 +226,10 @@ bool build_entry(const Work& w, const std::vector<char>& marked, const std::vect
         code->push_back(uint32_t(w.g.i32[nd.i32_first + 1]));
         break;
       case Op::RGB_LIFT: code->push_back(word(nd.op, a, in(0), uint32_t(w.g.i32[nd.i32_first]))); break;
+      case Op::CHANNEL_F32X3:
+        code->push_back(word(nd.op, a, in(0)));
+        code->push_back(uint32_t(w.g.i32[nd.i32_first]));
+        break;
       case Op::STORE_SLOT: {
         const bool spec = w.g.nodes[size_t(nd.input[0])].out == VType::SPEC;
         code->push_back(word(nd.op, in(0)));
@@ -239,9 +246,10 @@ bool build_entry(const Work& w, const std::vector<char>& marked, const std::vect
 
 // The mean of node i's value over a surface, for the emission estimate (0005 item 43), which
 // also steers light sampling. `known` means the mean is exact for the clamped emission: a
-// non-negative constant, a texture's own mean (non-negative), and MUL or ADD of known operands
-// (exact when at most one factor of a product varies). Everything else, including any negative
-// constant, is not known and the caller bounds it by 1, so the estimate is never wrongly zero.
+// non-negative constant, a texture's own mean (non-negative), MUL or ADD of known operands (exact
+// when at most one factor of a product varies) and one channel of a known colour. Everything else,
+// including any negative constant, is not known and the caller bounds it by 1, so the estimate is
+// never wrongly zero.
 // Without an ImageMeanFn a texture is not known; every image read is added to *images.
 struct Mean {
   Vec3 v = {1.0f, 1.0f, 1.0f};
@@ -279,6 +287,13 @@ Mean mean_of_node(const Work& w, int i, MeanCtx* x) {
     std::array<float, 3> m = {};
     if (!(*x->means)(image, &m)) m = {1.0f, 0.0f, 1.0f};
     r.v = {m[0], m[1], m[2]};
+    r.known = true;
+    return r;
+  }
+  if (n.op == Op::CHANNEL_F32X3) {
+    const Mean a = mean_of(w, n.input[0], x);
+    if (!a.known) return r;
+    r.v = {a.v[size_t(w.g.i32[n.i32_first])], 0.0f, 0.0f};
     r.known = true;
     return r;
   }
@@ -326,7 +341,8 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
   res.block = ar::default_constant_block(table);
   int emit_count = 0;
   for (const GraphNode& nd : w.g.nodes) emit_count += nd.op == Op::EMIT_LE;
-  std::vector<char> written(size_t(ar::RecordSlot::COUNT_), 0), is_root(n, 0), is_emit_root(n, 0);
+  std::vector<char> written(size_t(ar::RecordSlot::COUNT_), 0), is_root(n, 0), is_emit_root(n, 0), is_opacity_root(n, 0);
+  const uint32_t opacity_slot = uint32_t(ar::RecordSlot::geometry_opacity);
   std::set<uint32_t> images;
   MeanCtx mx{means, &images, std::vector<Mean>(n), std::vector<char>(n, 0)};
   for (int i : w.topo) {
@@ -347,13 +363,19 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
         r.semantic = uint8_t(ar::SpectrumSemantic::IOR);
         for (int k = 0; k < 3; ++k) r.p[k] = pf[k];
       } else if (w.isc[size_t(src)]) {
-        if (!store_const(&res.block, table, slot, t, w.cv[size_t(src)], &res.clamp_flags, &res.error)) return res;
+        Vec3 v = w.cv[size_t(src)];
+        if (slot == opacity_slot) {  // a fraction: clamped and reported like a colour (0005 item 32)
+          if (std::isnan(v[0])) return res.error = "geometry_opacity is NaN", res;
+          if (v[0] < 0.0f || v[0] > 1.0f) v[0] = std::min(std::max(v[0], 0.0f), 1.0f), res.opacity_clamped = true;
+        }
+        if (!store_const(&res.block, table, slot, t, v, &res.clamp_flags, &res.error)) return res;
       } else {
         if (t == VType::F32 && slot >= uint32_t(ar::RecordSlot::base_color) && slot < uint32_t(ar::RecordSlot::geometry_normal))
           return res.error = "a run-time scalar cannot be stored in a colour slot", res;
         if (slot == uint32_t(ar::RecordSlot::closure_weight))
           return res.error = "closure_weight is set by the selection, not stored by a graph", res;
         is_root[size_t(i)] = 1;
+        is_opacity_root[size_t(i)] = slot == opacity_slot;
         res.runtime_slots |= uint64_t(1) << slot;
       }
     } else if (nd.op == Op::EMIT_LE) {
@@ -441,7 +463,7 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
     }
     return m;
   };
-  const std::vector<char> emit_set = mark(is_emit_root), all_set = mark(is_root);
+  const std::vector<char> emit_set = mark(is_emit_root), all_set = mark(is_root), opacity_set = mark(is_opacity_root);
   // Every sampled key resolves to its slot now (0005 item 34: a missing image is magenta with a
   // report entry); the program depends on the key either way, so setting it later recompiles.
   std::set<uint32_t> missing;
@@ -454,16 +476,24 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
   }
   res.images.assign(images.begin(), images.end());
   res.missing_images.assign(missing.begin(), missing.end());
-  std::vector<uint32_t> surface, emission;
+  std::vector<uint32_t> surface, emission, opacity;
   if (!build_entry(w, all_set, emit_set, &surface, &res.error)) return res;
   const bool has_emission = std::any_of(is_emit_root.begin(), is_emit_root.end(), [](char c) { return c != 0; });
   if (has_emission && !build_entry(w, emit_set, emit_set, &emission, &res.error)) return res;
+  // Item 38: the opacity entry is the per-point geometry_opacity store and what feeds it, nothing
+  // else; a constant opacity is read from the block and needs none.
+  const bool has_opacity = std::any_of(is_opacity_root.begin(), is_opacity_root.end(), [](char c) { return c != 0; });
+  if (has_opacity && !build_entry(w, opacity_set, std::vector<char>(n, 0), &opacity, &res.error)) return res;
   res.program.assign(4, 0u);
   res.program[0] = 4;
   res.program.insert(res.program.end(), surface.begin(), surface.end());
   if (has_emission) {
     res.program[2] = uint32_t(res.program.size());
     res.program.insert(res.program.end(), emission.begin(), emission.end());
+  }
+  if (has_opacity) {
+    res.program[1] = uint32_t(res.program.size());
+    res.program.insert(res.program.end(), opacity.begin(), opacity.end());
   }
   res.ok = true;
   return res;
@@ -511,15 +541,22 @@ void finish(MaterialOutput* m) {
 }  // namespace
 
 // In M1a the specular lobe (which the transmission lobe shares) always counts; the coat counts
-// unless coat_weight folds to 0, where no coat lobe can be sampled. NON_OPAQUE is clear because
-// geometry_opacity is fixed at 1 until alpha lands (M1b); EXTENSION is clear because no extension
-// kind compiles; READS_RAY_TYPE is clear because no Light Path op exists.
+// unless coat_weight folds to 0, where no coat lobe can be sampled. NON_OPAQUE is clear exactly
+// when geometry_opacity is the constant 1, so T folds to 0 (0005 item 43). Cycles agrees on the
+// linked case: Ref: third_party/_cache/refs/cycles-ed69ef2c6bd3 src/scene/shader_nodes.cpp
+// PrincipledBsdfNode::has_surface_transparent calls a linked Alpha transparent, and
+// src/scene/shader.cpp Shader::has_surface_shadow_transparency ORs that over the graph's nodes;
+// Cycles also calls alpha < 1 - CLOSURE_WEIGHT_CUTOFF (1e-5f, src/kernel/svm/types.h) transparent,
+// a cutoff item 43 does not have;
+// EXTENSION is clear because no extension kind compiles; READS_RAY_TYPE is clear because no Light
+// Path op exists.
 uint32_t material_flags(const CompileResult& r) {
   using RS = ar::RecordSlot;
   bool delta = lobe_may_be_delta(per_point(r, RS::specular_roughness), r.block.specular_roughness);
   if (per_point(r, RS::coat_weight) || r.block.coat_weight != 0.0f)
     delta = delta || lobe_may_be_delta(per_point(r, RS::coat_roughness), r.block.coat_roughness);
   uint32_t flags = delta ? ar::MAY_BE_DELTA : 0u;
+  if (per_point(r, RS::geometry_opacity) || r.block.geometry_opacity < 1.0f) flags |= ar::NON_OPAQUE;
   const bool emission_entry = r.program.size() > 2 && r.program[2] != 0;
   if (r.constant_surface) flags |= ar::CONSTANT_SURFACE;
   if (!emission_entry) flags |= ar::CONSTANT_EMISSION;
@@ -592,6 +629,7 @@ MaterialOutput compile_material(const ar_graph_desc& d, const ar::Rgb2SpecTable&
   }
   finish(&m);
   if (m.compiled.clamp_flags != 0) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "RGB clamped");
+  if (m.compiled.opacity_clamped) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity clamped");
   set_medium_fields(&m, medium_priority);
   for (uint32_t key : m.compiled.missing_images)
     add_entry(&m, AR_REPORT_IMAGE_UNREADABLE, "image key " + std::to_string(key) + " is not set");

@@ -3,7 +3,8 @@
 // that ops.def marks foldable equals what the interpreter computes for the same instruction, bit
 // for bit, on 1e4 random inputs; every other op with a graph encoding stays in the program. The
 // op list and each op's shape come from op_meta_table(), graph.h and the row's operand tokens, so
-// a new foldable op is covered, or refused with a message, without a test edit.
+// a new foldable op is covered, or refused with a message, without a test edit; only the range of
+// an i32 immediate is written here per op.
 // Ref: docs/decisions/0005-material-model.md items 30, 35, Verification 6.
 #include <doctest.h>
 
@@ -92,8 +93,16 @@ std::vector<std::string> tokens_of(const OpMeta& m) {
   return tok;
 }
 
+// The values an i32 parameter of each foldable op may take, written out per op: the test feeds
+// 0 .. count-1, and a foldable op with i32 parameters that is not listed is refused with a message
+// rather than fed values its parser may reject.
+bool i32_param_count(const OpMeta& m, uint32_t* count) {
+  if (std::strcmp(m.name, "CHANNEL_F32X3") == 0) return *count = 3, true;  // channel 0-2
+  return false;
+}
+
 // The row's operands as the test rebuilds them: a destination register, `arity` input registers,
-// then immediates. Returns the immediate count, or -1 with *why set for any other layout.
+// then immediates (the node's f32 parameters, then its i32 ones). Returns the immediate count, or -1 with *why set for any other layout.
 int immediates_of(const OpMeta& m, std::string* why) {
   const std::vector<std::string> tok = tokens_of(m);
   const size_t regs = 1u + size_t(m.arity);
@@ -142,8 +151,11 @@ TEST_CASE("compiler_fold/folded equals interpreted per foldable op") {
     REQUIRE_MESSAGE((vec3 || scalar), m.name << " is foldable with result type " << m.result_type);
     uint32_t nf = 0, ni = 0;
     REQUIRE_MESSAGE(op_param_counts(m.op, &nf, &ni), m.name << " is foldable but a graph cannot hold it");
-    const bool matches = ni == 0 && int(nf) == imms;
-    REQUIRE_MESSAGE(matches, m.name << ": the f32 parameters must be the immediates, no i32 ones");
+    const bool matches = int(nf + ni) == imms;
+    REQUIRE_MESSAGE(matches, m.name << ": the f32 then i32 parameters must be the immediates");
+    uint32_t i32_values = 0;
+    REQUIRE_MESSAGE((ni == 0 || i32_param_count(m, &i32_values)),
+                    m.name << " has i32 immediates: list their range in i32_param_count");
     const ar::RecordSlot slot = vec3 ? ar::RecordSlot::geometry_tangent : ar::RecordSlot::base_metalness;
     uint32_t bad = 0;
     for (uint32_t i = 0; i < kN; ++i) {
@@ -171,11 +183,14 @@ TEST_CASE("compiler_fold/folded equals interpreted per foldable op") {
       }
       std::vector<float> params;
       for (uint32_t d = 0; d < nf; ++d) params.push_back(input(i, 8 + d));
-      const int node = g.add(m.op, params);
+      std::vector<int32_t> iparams;
+      for (uint32_t d = 0; d < ni; ++d) iparams.push_back(int32_t((i + d) % i32_values));
+      const int node = g.add(m.op, params, iparams);
       for (int s = 0; s < m.arity; ++s) g.link(leaf[size_t(s)], node, uint32_t(s));
       g.store(node, slot);
       code.push_back(word(m.op, dst, src[0], src[1]));
       for (float p : params) code.push_back(bits(p));
+      for (int32_t p : iparams) code.push_back(uint32_t(p));
       code.push_back(word(Op::STORE_SLOT, dst));
       code.push_back(uint32_t(slot));
       code.push_back(word(Op::END));
