@@ -23,3 +23,5 @@ Progress:
 - Done: CHANNEL_F32X3 (opcode 16 until 145 lands, then 18), opacity entry, NON_OPAQUE, opacity clamp/NaN, 0005 item 32 write-back; canary turns all five named cases red (built and run).
 - k_shade_surface before/after: regs 128/128, stack 384/384, spills 0/0 and 0/0, compile 4.66 s / 4.61-4.70 s (one gate run hit 5.03 s under load; re-timed 3x at 4.61-4.66, next gate passed). budget.toml unchanged. Probe: ops.def rows 16 -> 17, placeholders 84 -> 83, total 100.
 - check fast PASS 7.8 s; check gate PASS 179.3 s (budget 180 s). Rebased onto 602bd81 (152).
+- Rebased onto 471e3bd (145, 178): CHANNEL_F32X3 is opcode 18, NONE_SURFACE_ONLY, not volume reachable; probe COUNT_ 19, placeholders 81 (19-99), total 100; fold-equals-interpret op count 14. Canary refreshed; canary.ps1 147 PASS (five cases red).
+- After rebase: k_shade_surface regs 128 (+0), stack 384 (+0), spills 0/0, compile 5.13 s (limit 7.0, baseline 5.2); budget.toml unchanged. check fast PASS 7.9 s; check gate PASS 162.7 s (budget 180 s).
