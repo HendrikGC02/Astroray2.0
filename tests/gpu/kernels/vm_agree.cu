@@ -13,7 +13,8 @@ constexpr uint32_t kVmAgreeIn = 27;
 constexpr uint32_t kVmAgreeOut = 30;
 
 extern "C" __global__ void ar_vm_agree(const float* in, float* out, uint32_t n, const uint32_t* prog, uint32_t entry,
-                                       const float* z_nodes, const float* coeffs, int32_t res, const float* illum) {
+                                       const float* z_nodes, const float* coeffs, int32_t res, const float* illum, float y0, float y1,
+                                       float y2) {
   const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n) return;
   const float* row = in + kVmAgreeIn * i;
@@ -31,6 +32,7 @@ extern "C" __global__ void ar_vm_agree(const float* in, float* out, uint32_t n, 
   table.res = res;
   table.z_nodes = z_nodes;
   table.coeffs = coeffs;
+  table.y_row[0] = y0, table.y_row[1] = y1, table.y_row[2] = y2;  // COLOR_TO_F32's weights
   ar::SceneTables tables = {};
   tables.images = nullptr;  // no image table: TEX_IMAGE samples magenta (tex_agree.cu has images)
   tables.image_count = 0;
