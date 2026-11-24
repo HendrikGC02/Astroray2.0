@@ -98,7 +98,7 @@ stale, correct them in the brief).
     Progress; k_route_hit 28 to 40 regs (state the row's limit); new k_shade_volume 34 regs.
 - Next to dispatch: 172 (kernel S, ready: after 158 and 177), 170 (gpu measurement, quiet machine), then 183 after 182,
   186 after 163, 189 after 172, 173 (spine) after 163 and 172.
-- The PC crashed at 05:59 on 2026-11-25: bugcheck 0x133 DPC_WATCHDOG_VIOLATION (dump C:\Windows\MinidumpJ526-12000-01.dmp).
+- The PC crashed at 05:59 on 2026-11-25: bugcheck 0x133 DPC_WATCHDOG_VIOLATION (dump C:\Windows\Minidump\112526-12000-01.dmp).
   The System log carries nvlddmkm event 13 (Xid MMU NACK) about every 3-10 min since yesterday: the deliberate
   out-of-bounds kernel of src/kernel_gpu/test_fault.cu run by the gpu abi tests in every gate. The watchdog in the
   display driver during a fault recovery is the likely cause, unconfirmed without a debugger (none installed).
