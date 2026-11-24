@@ -39,7 +39,7 @@ index 9364daf..0608198 100644
  
    Device* device = scene.device();  // waits for device init; its failure is not retryable
 diff --git a/src/kernel/stages/route_hit.h b/src/kernel/stages/route_hit.h
-index 5e869fe..316962a 100644
+index 5e869fe..24511c4 100644
 --- a/src/kernel/stages/route_hit.h
 +++ b/src/kernel/stages/route_hit.h
 @@ -56,7 +56,7 @@ AR_FN bool hit_is_back_face(const KernelGlobals& kg, const HitRecord& hit, Real3
@@ -47,7 +47,7 @@ index 5e869fe..316962a 100644
    const Real3 a{dot(r0, e1), dot(r1, e1), dot(r2, e1)}, b{dot(r0, e2), dot(r1, e2), dot(r2, e2)};
    const Real det_sign = dot(r0, cross(r1, r2)) < Real(0) ? Real(-1) : Real(1);
 -  return !(dot(cross(a, b) * det_sign, -ray_d) > Real(0));
-+  return !(dot(cross(a, b), -ray_d) > Real(0));
++  return !(dot(cross(a, b) * (det_sign * det_sign), -ray_d) > Real(0));
  }
  
  // The route of a hit (not a miss) that the medium test did not take.
