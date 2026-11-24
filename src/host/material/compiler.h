@@ -133,7 +133,7 @@ VolumeOutput compile_volume(const ar_graph_desc& desc, const ar::Rgb2SpecTable& 
 
 // An extension material (0005 items 14-16, 19): compile_material of its graph, then the kind's block.
 // desc.ext_kind must be non-zero. Kind 1 (GRATING) gives EXTENSION, MAY_BE_DELTA and compiled.ext
-// (desc.ext_constants, validated); a STORE_SLOT to a BSDF slot the kind does not keep is dropped and
+// (desc.ext_constants, validated); a STORE_SLOT to a BSDF slot the kind does not keep is removed before compiling and
 // reported INPUT_IGNORED once per slot. A kind that is not built (2-5) or not in the list is
 // PROGRAM_REJECTED magenta. The store does not yet route the result (material_store.cpp).
 MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_desc& graph, const ar::Rgb2SpecTable& table,

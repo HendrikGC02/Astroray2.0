@@ -7,7 +7,7 @@
 //   AR_EXT_FIELD(kind, record_slot)     kind names a row above; record_slot is a RecordSlot enumerator
 //                                       (store_slot.h) the kind keeps in place of its OpenPBR meaning
 //
-// A kind always keeps geometry_opacity, closure_weight and the frame slots (item 15); only other
+// A kind always keeps geometry_opacity and the frame slots (item 15; closure weight is the selection's); only other
 // slots need a field row. A STORE_SLOT to any other BSDF slot is reported INPUT_IGNORED. GRATING
 // reads no other slot, so it has no field rows. Values 4 and 5 are enum-only (item 14); the kinds
 // that need field rows (HAIR, FLUORESCENT) add them in their own tasks.

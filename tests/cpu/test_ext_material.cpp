@@ -118,19 +118,44 @@ TEST_CASE("ext_material/unbuilt and unknown kinds refused") {
 
 TEST_CASE("ext_material/dropped bsdf stores reported per slot") {
   GB g;
+  // Two stores to one ignored slot: an OpenPBR graph would be invalid, an extension reports it once.
   g.store(0.2f, ar::RecordSlot::specular_roughness);
+  g.store(0.3f, ar::RecordSlot::specular_roughness);
   g.store(0.4f, ar::RecordSlot::coat_weight);
+  g.store(0.5f, ar::RecordSlot::geometry_opacity);
   const ar_graph_desc gd = g.desc();
   const MaterialOutput m = compile_extension(material(1), gd, table());
   REQUIRE(!m.magenta);
   CHECK(count_code(m, AR_REPORT_INPUT_IGNORED) == 2u);
-  bool rough = false, coat = false;
+  uint32_t rough = 0, coat = 0;
   for (const auto& e : m.entries) {
-    rough = rough || e.detail.find("specular_roughness") == 0;
-    coat = coat || e.detail.find("coat_weight") == 0;
+    rough += e.detail.find("specular_roughness") == 0 ? 1u : 0u;
+    coat += e.detail.find("coat_weight") == 0 ? 1u : 0u;
   }
-  CHECK(rough);
-  CHECK(coat);
+  CHECK(rough == 1u);
+  CHECK(coat == 1u);
+}
+
+TEST_CASE("ext_material/ignored inputs do not reach the program") {
+  // A refused SpectrumRef (BLACKBODY into a reflectance slot) and an image, both on ignored slots.
+  GB g;
+  const int bb = g.add(Op::BLACKBODY, {6500.0f, 1.0f});
+  const int s1 = g.add(Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::coat_color)});
+  g.links.push_back({uint32_t(bb), 0u, uint32_t(s1), 0u});
+  const int uv = g.add(Op::LOAD_CTX_UV, {}, {0});
+  const int t = g.add(Op::TEX_IMAGE, {}, {7, 0});
+  g.links.push_back({uint32_t(uv), 0u, uint32_t(t), 0u});
+  const int s2 = g.add(Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::base_color)});
+  g.links.push_back({uint32_t(t), 0u, uint32_t(s2), 0u});
+  g.store(0.5f, ar::RecordSlot::geometry_opacity);
+  const ar_graph_desc gd = g.desc();
+  CHECK(astroray::host::compile_material(gd, table()).magenta);  // the same graph is refused as OpenPBR
+  const MaterialOutput m = compile_extension(material(1), gd, table());
+  REQUIRE(!m.magenta);
+  CHECK(m.entries.size() == 2);
+  CHECK(count_code(m, AR_REPORT_INPUT_IGNORED) == 2u);
+  CHECK(m.images.empty());
+  CHECK(m.compiled.missing_images.empty());
 }
 
 TEST_CASE("ext_material/routes to ext stage") {

@@ -1076,8 +1076,8 @@ const char* ext_kind_name(uint32_t kind) {
   }
 }
 
-// What an extension keeps of the OpenPBR record: opacity and the frame (closure weight is the selection's and no graph stores it) (item 15),
-// plus the kind's rows in ext_fields.def (item 16).
+// What an extension keeps of the OpenPBR record: opacity and the frame (item 15; closure weight is
+// the selection's and no graph stores it), plus the kind's rows in ext_fields.def (item 16).
 bool ext_keeps_slot(uint32_t kind, ar::RecordSlot s) {
   using RS = ar::RecordSlot;
   (void)kind;  // unused while no kind has a field row
@@ -1088,9 +1088,57 @@ bool ext_keeps_slot(uint32_t kind, ar::RecordSlot s) {
   return false;
 }
 
+uint32_t ext_max_kind() {
+  uint32_t m = 0;
+#define AR_EXT_KIND(name, id) m = std::max(m, uint32_t(id));
+#include "../../kernel/material/ext_fields.def"
+  return m;
+}
+
 // The kind's check of its constants. The grating's words are laid out by its lobe task, which
 // fills this in; until then the authored bytes are accepted.
 bool ext_params_valid(uint32_t, const ar::ExtParams&, std::string*) { return true; }
+
+// `graph` without its STORE_SLOT nodes to slots `kind` does not keep (item 15: those inputs do not
+// exist for the material). Roots only they fed drop out of compile_surface's dead-code pass, so a
+// refused SpectrumRef or an image on an ignored slot cannot reach the program or the image list.
+// A STORE_SLOT whose slot operand is unreadable stays for compile_material to reject.
+struct PrunedGraph {
+  std::vector<ar_graph_node> nodes;
+  std::vector<ar_graph_link> links;
+  std::set<uint32_t> ignored;  // RecordSlot ids
+  ar_graph_desc desc;
+};
+
+void prune_ignored_stores(const ar_graph_desc& g, uint32_t kind, PrunedGraph* out) {
+  std::vector<uint32_t> remap(g.node_count, UINT32_MAX);
+  for (uint32_t i = 0; i < g.node_count; ++i) {
+    const ar_graph_node& n = g.nodes[i];
+    if (n.op == uint32_t(Op::STORE_SLOT) && n.i32_count >= 1 && uint64_t(n.i32_first) < g.i32_count && g.params_i32 != nullptr) {
+      const uint32_t s = uint32_t(g.params_i32[n.i32_first]);
+      if (s < uint32_t(ar::RecordSlot::COUNT_) && !ext_keeps_slot(kind, ar::RecordSlot(s))) {
+        out->ignored.insert(s);
+        continue;
+      }
+    }
+    remap[i] = uint32_t(out->nodes.size());
+    out->nodes.push_back(n);
+  }
+  for (uint32_t k = 0; k < g.link_count; ++k) {
+    ar_graph_link l = g.links[k];
+    // A link naming a missing node is left for compile_material to reject.
+    if (l.from_node < g.node_count && remap[l.from_node] == UINT32_MAX) continue;
+    if (l.to_node < g.node_count && remap[l.to_node] == UINT32_MAX) continue;
+    if (l.from_node < g.node_count) l.from_node = remap[l.from_node];
+    if (l.to_node < g.node_count) l.to_node = remap[l.to_node];
+    out->links.push_back(l);
+  }
+  out->desc = g;
+  out->desc.node_count = uint32_t(out->nodes.size());
+  out->desc.link_count = uint32_t(out->links.size());
+  out->desc.nodes = out->nodes.data();
+  out->desc.links = out->links.data();
+}
 
 }  // namespace
 
@@ -1100,7 +1148,8 @@ MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_de
   const char* name = ext_kind_name(kind);
   if (kind == 0) return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "internal: compile_extension called with ext_kind 0");
   if (name == nullptr)
-    return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "extension kind " + std::to_string(kind) + " is not in the list (0..5)");
+    return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
+                            "extension kind " + std::to_string(kind) + " is not in the list (0.." + std::to_string(ext_max_kind()) + ")");
   if (kind != uint32_t(ar::ExtKind::GRATING))
     return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
                             "extension kind " + std::string(name) + " (" + std::to_string(kind) + ") is not built");
@@ -1110,20 +1159,15 @@ MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_de
   std::string why;
   if (!ext_params_valid(kind, params, &why))
     return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "extension kind " + std::string(name) + ": " + why);
-  MaterialOutput m = compile_material(graph, table, means, slots);
+  PrunedGraph pruned;
+  prune_ignored_stores(graph, kind, &pruned);
+  MaterialOutput m = compile_material(pruned.desc, table, means, slots, desc.medium_priority);
   if (m.magenta) return m;
   m.compiled.ext_kind = kind;
   m.compiled.ext = params;
   m.flags = material_flags(m.compiled);
-  // Item 15: stores to the dropped BSDF inputs are reported, once per slot.
-  std::set<uint32_t> ignored;
-  for (uint32_t i = 0; i < graph.node_count; ++i) {
-    const ar_graph_node& n = graph.nodes[i];
-    if (Op(n.op) != Op::STORE_SLOT) continue;
-    const uint32_t s = uint32_t(graph.params_i32[n.i32_first]);
-    if (!ext_keeps_slot(kind, ar::RecordSlot(s))) ignored.insert(s);
-  }
-  for (uint32_t s : ignored)
+  // One entry per dropped slot, however many stores named it.
+  for (uint32_t s : pruned.ignored)
     add_entry(&m, AR_REPORT_INPUT_IGNORED, std::string(kRecordSlotName[s]) + " is ignored by extension kind " + name);
   return m;
 }
