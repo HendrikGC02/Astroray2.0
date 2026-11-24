@@ -17,3 +17,4 @@ Budget: gate +2 s at most (stop and ask above); k_shade_surface: the new op adds
 Depends on: 145, 147, 156; after 139 and 161 in the blender lane; lands after 158 (ops.def and probe_m1.cu order: 158, 165, 163, 178, 179, 172, 173, 174, 175).
 Size: M (about 300 lines without tests); stop and report at 2x.
 Progress:
+- 165 stopped before code: no luminance row exists in the engine (only host M_ws XYZ->RGB in ObserverTables; SceneTables/kernel hold none). Files planned: those in Scope plus context.h/material_store (Y row to kernel) if the lead rules so.
