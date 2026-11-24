@@ -246,7 +246,53 @@ TEST_CASE("compiler/register overflow rejected") {
   const CompileResult r = compile(g);
   CHECK_FALSE(r.ok);
   CHECK(r.error.find("needs 45 registers") == 0);
-  CHECK(r.error.find(" registers, 32 available") != std::string::npos);
+  CHECK(r.error.find(" registers, 31 available") != std::string::npos);  // r31 is kSelectReg
+}
+
+// A graph without a Mix Shader compiles to the words the compiler gave before Mix Shaders existed,
+// written out here: a textured base colour, a per-point roughness and two emissions (surface entry
+// with its emission segment first, and the emission entry), and a per-point opacity with a constant
+// colour (surface and opacity entries).
+TEST_CASE("compiler/graphs without a Mix keep their words") {
+  GB g;
+  const int uv = g.add(Op::LOAD_CTX_UV, {}, {0});
+  const int tex = g.add(Op::TEX_IMAGE, {}, {7, 1});
+  g.link(uv, tex, 0);
+  g.store(tex, ar::RecordSlot::base_color);
+  const int ch = g.add(Op::CHANNEL_F32X3, {}, {0});
+  g.link(uv, ch, 0);
+  g.store(g.op2(Op::MUL_F32, ch, g.add(Op::CONST_F32, {0.5f})), ar::RecordSlot::specular_roughness);
+  g.op2(Op::EMIT_LE, tex, g.add(Op::CONST_F32, {2.0f}));
+  const int pch = g.add(Op::CHANNEL_F32X3, {}, {2});
+  g.link(g.add(Op::LOAD_CTX_P), pch, 0);
+  g.op2(Op::EMIT_LE, g.add(Op::CONST_F32X3, {0.25f, 0.5f, 1.0f}), pch);
+  GB h;
+  const int huv = h.add(Op::LOAD_CTX_UV, {}, {1});
+  const int hch = h.add(Op::CHANNEL_F32X3, {}, {1});
+  h.link(huv, hch, 0);
+  h.store(hch, ar::RecordSlot::geometry_opacity);
+  h.store(h.add(Op::CONST_F32X3, {0.8f, 0.1f, 0.1f}), ar::RecordSlot::base_color);
+  h.store(h.add(Op::LOAD_CTX_P), ar::RecordSlot::geometry_tangent);
+  const std::vector<uint32_t> want_g = {
+      0x00000004, 0x00000000, 0x0000001d, 0x00000000, 0x00000004, 0x0000030a, 0xffffffff, 0x00000001, 0x00000602,
+      0x40000000, 0x0000030d, 0x00000705, 0x00070d12, 0x00000002, 0x00000a03, 0x3e800000, 0x3f000000, 0x3f800000,
+      0x00000a0d, 0x0000030b, 0x00000018, 0x00000312, 0x00000000, 0x00000002, 0x3f000000, 0x00030106, 0x0000010b,
+      0x00000004, 0x00000000, 0x00000004, 0x0000030a, 0xffffffff, 0x00000001, 0x00000602, 0x40000000, 0x0000030d,
+      0x00000005, 0x00000612, 0x00000002, 0x00000303, 0x3e800000, 0x3f000000, 0x3f800000, 0x0000030d, 0x00000000};
+  const std::vector<uint32_t> want_h = {0x00000004, 0x0000000d, 0x00000000, 0x00000000, 0x00010004, 0x00000312, 0x00000001,
+                                        0x0000030b, 0x00000016, 0x00000005, 0x0000000b, 0x00000023, 0x00000000, 0x00010004,
+                                        0x00000312, 0x00000001, 0x0000030b, 0x00000016, 0x00000000};
+  const CompileResult rg = compile(g), rh = compile(h);
+  REQUIRE_MESSAGE(rg.ok, rg.error);
+  REQUIRE_MESSAGE(rh.ok, rh.error);
+  auto dump = [](const std::vector<uint32_t>& p) {
+    std::string s;
+    char buf[16];
+    for (uint32_t x : p) std::snprintf(buf, sizeof buf, "0x%08x, ", x), s += buf;
+    return s;
+  };
+  CHECK_MESSAGE(rg.program == want_g, dump(rg.program));
+  CHECK_MESSAGE(rh.program == want_h, dump(rh.program));
 }
 
 TEST_CASE("compiler/run-time colour into specular_ior and negative strength rejected") {

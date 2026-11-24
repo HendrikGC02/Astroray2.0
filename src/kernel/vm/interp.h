@@ -21,8 +21,10 @@
 #include "vm_regs.h"
 
 #include "ops/common.h"
+#include "ops/add_f32.h"
 #include "ops/add_f32x3.h"
 #include "ops/blackbody.h"
+#include "ops/branch_mix.h"
 #include "ops/cauchy_abbe.h"
 #include "ops/channel_f32x3.h"
 #include "ops/const_f32.h"
@@ -37,6 +39,7 @@
 #include "ops/mul_f32x3_f32.h"
 #include "ops/rgb_lift.h"
 #include "ops/store_slot.h"
+#include "ops/sub_f32.h"
 #include "ops/test_inject_nan.h"
 #include "ops/tex_image.h"
 #include "ops/unsupported.h"
