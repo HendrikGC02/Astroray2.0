@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <algorithm>
 #include <cstdio>
 #include <functional>
 #include <vector>
@@ -326,7 +327,10 @@ TEST_SUITE("fast") {
                                               TransportMode::Radiance, lam, Real(u));
       CHECK(c.pdf == Real(0));
       CHECK(ar::is_finite(c.f));
+      Real3 dd{};
+      CHECK(!ar::grating_order_direction(in_plane(0.9), 1, lam.nm[0], Real(100), false, 1, 1, &dd));
       // Total internal reflection of order 0 leaving the substrate at 60 degrees.
+      CHECK(!ar::grating_order_direction(in_plane(0.5, false), 0, lam.nm[0], Real(kPitch600), true, Real(1.5), 1, &dd));
       const HostTable t0 = make_table(0, 0, [](int, double, double) { return 0.9; });
       const LobeSample d = ar::grating_sample(params(kPitch600, 0, 0, true, 1.5), t0.view(), frame_z(),
                                               in_plane(0.5, false), TransportMode::Radiance, lam, Real(u));
@@ -444,11 +448,11 @@ TEST_SUITE("gate") {
   }
 
   AR_RT_CASE("grating/lane mean selection unbiased") {
-    // Against a lane-0-only reference that selects m with eta_m(lambda_0) / sum_k eta_k(lambda_0):
-    // lane 0's weight has the same mean (both estimate sum_m eta_m(lambda_0)), and the order-0
-    // weight of every lane, 1{m = 0} eta_0(lambda_j) / p_0, has lower variance with the lane mean
-    // (0005 item 22, Verification 8). Wavelength packets: lambda_0 uniform on 360-830 nm, the others
-    // at fixed offsets of a quarter of the range, wrapped.
+    // Against a lane-0-only reference that selects m with eta_m(lambda_0) / sum_k eta_k(lambda_0),
+    // driven by the same u and wavelengths (paired): lane 0's weight has the same mean (both
+    // estimate sum_m eta_m(lambda_0)), and the order-0 weight of every lane, 1{m = 0} eta_0(lambda_j)
+    // / p_0, has lower variance with the lane mean (0005 item 22, Verification 8). Wavelength
+    // packets: lambda_0 uniform on 360-830 nm, the others at quarter-range offsets, wrapped.
     const st::Run run = st::begin("grating/lane mean selection unbiased" AR_RT_SUFFIX, st::gate_family());
     constexpr int kN = 200000;
     const HostTable t = make_table(-2, 2, bessel_eta);
@@ -457,13 +461,14 @@ TEST_SUITE("gate") {
     const Real3 wo = in_plane(cos_i);
     const double s_y = double(wo.y);
     Rng rng{st::mix_bits(run.seed ^ 1u)};
-    std::vector<double> w0, w0_ref;
-    double s1 = 0, s2 = 0, r1 = 0, r2 = 0;
+    double d1 = 0, d2 = 0, a1 = 0, b1 = 0;  // paired lane-0 weight differences; the two means
+    double s1 = 0, s2 = 0, r1 = 0, r2 = 0;  // order-0 weights over all lanes
     for (int k = 0; k < kN; ++k) {
       Lambda lam;
       const double l0 = 360.0 + 470.0 * rng.next();
       for (int j = 0; j < 4; ++j) lam.nm[j] = Real(360.0 + std::fmod(l0 - 360.0 + j * 117.5, 470.0));
-      const LobeSample s = ar::grating_sample(p, t.view(), frame_z(), wo, TransportMode::Radiance, lam, Real(rng.next()));
+      const double u = rng.next();
+      const LobeSample s = ar::grating_sample(p, t.view(), frame_z(), wo, TransportMode::Radiance, lam, Real(u));
       double eta0[5], sum0 = 0.0;
       for (int m = -2; m <= 2; ++m) {
         eta0[m + 2] = propagates(s_y, m, double(lam.nm[0]), kPitch600)
@@ -471,17 +476,17 @@ TEST_SUITE("gate") {
                           : 0.0;
         sum0 += eta0[m + 2];
       }
-      // Lane-mean sampler.
+      // Lane-mean sampler (the code under test).
       const double ac = std::fabs(double(s.wi.z));
       const int m = s.pdf > Real(0) ? order_of(p, wo, s.wi, double(lam.nm[0]), 1, 1) : 1000;
-      w0.push_back(s.pdf > Real(0) ? double(s.f.v[0]) * ac / double(s.pdf) : 0.0);
+      const double w = s.pdf > Real(0) ? double(s.f.v[0]) * ac / double(s.pdf) : 0.0;
       for (int j = 0; j < 4; ++j) {
         const double x = (m == 0) ? double(s.f.v[j]) * ac / double(s.pdf) : 0.0;
         s1 += x;
         s2 += x * x;
       }
-      // Reference: select by lane 0 alone.
-      const double ur = rng.next() * sum0;
+      // Reference: select by lane 0 alone; its lane-0 weight is eta_m / (eta_m / sum0) = sum0.
+      const double ur = u * sum0;
       double acc = 0.0;
       int mr = 2;
       for (int q = -2; q <= 2; ++q) {
@@ -490,31 +495,33 @@ TEST_SUITE("gate") {
         mr = q;
         if (ur < acc) break;
       }
-      w0_ref.push_back(sum0);  // eta_m(lambda_0) / (eta_m(lambda_0) / sum0)
       for (int j = 0; j < 4; ++j) {
         const double x = (mr == 0) ? double(ar::grating_table_eta(t.view(), 0, lam.nm[j], Real(cos_i))) * sum0 / eta0[2] : 0.0;
         r1 += x;
         r2 += x * x;
       }
+      a1 += w;
+      b1 += sum0;
+      d1 += w - sum0;
+      d2 += (w - sum0) * (w - sum0);
     }
-    auto mean_se = [](const std::vector<double>& v, double* mean, double* se) {
-      double a = 0, b = 0;
-      for (double x : v) a += x;
-      *mean = a / double(v.size());
-      for (double x : v) b += (x - *mean) * (x - *mean);
-      *se = std::sqrt(b / double(v.size() - 1) / double(v.size()));
-    };
-    double m_a, se_a, m_b, se_b;
-    mean_se(w0, &m_a, &se_a);
-    mean_se(w0_ref, &m_b, &se_b);
+    const double n = kN;
+    const double dm = d1 / n;
+    const double dse = std::sqrt(std::max(d2 / n - dm * dm, 0.0) / (n - 1.0));
     run.family->note_check();
-    const double z = (m_a - m_b) / std::sqrt(se_a * se_a + se_b * se_b);
+    const double z = dse > 0.0 ? dm / dse : 0.0;
     const double n4 = 4.0 * kN;
     const double var = s2 / n4 - (s1 / n4) * (s1 / n4);
     const double var_ref = r2 / n4 - (r1 / n4) * (r1 / n4);
-    std::printf("grating lane-0 weight: lane mean %.6f +- %.6f, lane-0 reference %.6f +- %.6f, z %+.2f\n", m_a, se_a, m_b, se_b, z);
-    std::printf("grating order-0 weight variance: lane mean %.6f, lane-0 reference %.6f\n", var, var_ref);
+    std::printf("grating lane-0 weight: lane mean %.6f, lane-0 reference %.6f, paired difference %+.6f +- %.6f, z %+.2f
+",
+                a1 / n, b1 / n, dm, dse, z);
+    std::printf("grating order-0 weight variance: lane mean %.6f, lane-0 reference %.6f, ratio %.3f
+", var, var_ref,
+                var / var_ref);
     CHECK_MESSAGE(std::fabs(z) <= run.family->z(), st::reproduce(run));
-    CHECK(var < var_ref);
+    // Paired streams make the two variances equal to rounding if the code selected by lane 0, so
+    // "lower" is asked with a margin far above float-versus-double selection noise.
+    CHECK(var < 0.9 * var_ref);
   }
 }
