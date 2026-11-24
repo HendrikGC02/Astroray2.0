@@ -1,8 +1,8 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 2e50f49..1e80dfa 100644
+index 11e2cf7..c74e1b4 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
-@@ -518,7 +518,7 @@ void finish(MaterialOutput* m) {
+@@ -963,7 +963,7 @@ VolumeOutput compile_volume(const ar_graph_desc& d, const ar::Rgb2SpecTable& tab
  uint32_t material_flags(const CompileResult& r) {
    using RS = ar::RecordSlot;
    if (r.ext_kind != 0) {
@@ -11,7 +11,7 @@ index 2e50f49..1e80dfa 100644
      if (r.ext_kind == uint32_t(ar::ExtKind::GRATING)) f |= ar::MAY_BE_DELTA;
      if (r.constant_surface) f |= ar::CONSTANT_SURFACE;
      if (!(r.program.size() > 2 && r.program[2] != 0)) f |= ar::CONSTANT_EMISSION;
-@@ -635,7 +635,7 @@ const char* ext_kind_name(uint32_t kind) {
+@@ -1081,7 +1081,7 @@ const char* ext_kind_name(uint32_t kind) {
  bool ext_keeps_slot(uint32_t kind, ar::RecordSlot s) {
    using RS = ar::RecordSlot;
    (void)kind;  // unused while no kind has a field row
@@ -20,7 +20,7 @@ index 2e50f49..1e80dfa 100644
  #define AR_EXT_FIELD(k, slot) \
    if (kind == uint32_t(ar::ExtKind::k) && s == RS::slot) return true;
  #include "../../kernel/material/ext_fields.def"
-@@ -704,7 +704,7 @@ MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_de
+@@ -1150,7 +1150,7 @@ MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_de
    if (name == nullptr)
      return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
                              "extension kind " + std::to_string(kind) + " is not in the list (0.." + std::to_string(ext_max_kind()) + ")");
@@ -29,8 +29,17 @@ index 2e50f49..1e80dfa 100644
      return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
                              "extension kind " + std::string(name) + " (" + std::to_string(kind) + ") is not built");
    ar::ExtParams params = {};
+@@ -1161,7 +1161,7 @@ MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_de
+     return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "extension kind " + std::string(name) + ": " + why);
+   // Item 19: no masking. A Mix Shader would select between an extension and an OpenPBR branch.
+   for (uint32_t i = 0; i < graph.node_count; ++i)
+-    if (graph.nodes[i].op == uint32_t(Op::BRANCH_MIX))
++    if (graph.nodes[i].op == 9999u)
+       return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
+                               "node " + std::to_string(i) + " (Mix Shader) under extension kind " + std::string(name) +
+                                   ": an extension cannot be mixed with another branch (use material slots)");
 diff --git a/src/host/material/material_store.cpp b/src/host/material/material_store.cpp
-index 11a0dcf..46e8fbd 100644
+index 0ba06c2..f5eeb4a 100644
 --- a/src/host/material/material_store.cpp
 +++ b/src/host/material/material_store.cpp
 @@ -35,7 +35,7 @@ MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d
