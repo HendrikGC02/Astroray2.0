@@ -345,6 +345,7 @@ AR_API ar_status ar_edit_set_medium(ar_edit h, ar_key key, const ar_medium_desc*
         h->last_error = "ar_edit_set_medium: flags is reserved and must be 0";
         h->owner->scene->ctx().log.line("WARNING", h->last_error);
       } catch (...) {
+        // Nothing is left to report through; the status code is the answer.
       }
       return AR_ERR_UNSUPPORTED;
     }
