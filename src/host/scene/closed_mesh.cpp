@@ -10,8 +10,8 @@ bool polygons_closed(const uint32_t* corner_vert, const uint32_t* face_start, si
   if (face_count == 0) return false;
   // One key per directed edge: the undirected edge (low, high) in the upper bits and the direction in
   // bit 0. In a closed oriented surface each undirected edge appears exactly twice, once each way, so
-  // after sorting the keys come in pairs that share an edge and differ in direction, and no edge
-  // repeats between pairs.
+  // after sorting the keys come in pairs that share an edge and differ in direction (an edge used by
+  // more than two faces leaves a pair whose two keys are equal or whose edges differ).
   std::vector<uint64_t> keys;
   keys.reserve(face_start[face_count]);
   for (size_t f = 0; f < face_count; ++f) {
@@ -27,7 +27,6 @@ bool polygons_closed(const uint32_t* corner_vert, const uint32_t* face_start, si
   std::sort(keys.begin(), keys.end());
   for (size_t i = 0; i < keys.size(); i += 2) {
     if ((keys[i] >> 1) != (keys[i + 1] >> 1) || keys[i] == keys[i + 1]) return false;
-    if (i + 2 < keys.size() && (keys[i + 2] >> 1) == (keys[i] >> 1)) return false;
   }
   return true;
 }
