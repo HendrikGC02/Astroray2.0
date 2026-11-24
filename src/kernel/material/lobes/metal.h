@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Metal lobe of OpenPBR: F82-tint conductor reflection on GGX with height-correlated
 // Smith masking and visible-normal sampling. Directions are in the local shading frame
-// (z = normal); f excludes the cosine. Isotropic only; no energy compensation, no
-// complex-IOR mode (metal_ior = 0, the F82 mode of 0005 item 12) and no thin film yet.
+// (z = normal); f excludes the cosine. Isotropic only; no thin film yet. eval and sample are
+// the single-scattering lobe (tools/etables integrates them for E_spec); metal_compensation
+// gives the multiple-scattering factor the lobe stack applies. An exact conductor Fresnel for
+// (n, k) exists at the lobe level (MetalParams::conductor); the stack keeps the F82 mode until
+// metal_ior reaches the record (0005 item 12).
 //
 // Ref: OpenPBR Surface 1.1.2, third_party/_cache/refs/openpbr-781573a80cb2/index.html
 // lines 545-563 (F82-tint, Kutz, Hasan, Edmondson 2021 extending Hoffman 2019; quoted at
@@ -50,15 +53,96 @@ struct MetalParams {
   Real base_weight;
   Real specular_weight;  // multiplies F_82 (index.html line 560)
   Real roughness;        // specular_roughness in [0, 1]
+  // Exact conductor mode (0005 item 12, metal_ior != 0): F is fresnel_conductor at the complex
+  // index n + i k per lane, base_color, base_weight and specular_color are not read. n and k are
+  // read only when conductor is set.
+  bool conductor = false;
+  Spec n, k;
 };
 
-// F_metal(cos) = specular_weight * F_82(base_weight * base_color, specular_color, cos) per lane.
+// Unpolarised reflectance of a conductor of complex relative index eta = n + i k for light from
+// the dielectric side at cos_i, the mean of |r_parl|^2 and |r_perp|^2. A template on the scalar
+// type only, so the tests can run a double instance beside the float one (0002 D8).
+// Ref: pbrt-v4 src/pbrt/util/scattering.h FrComplex (lines 81-92) and the complex sqrt, norm and
+// division of src/pbrt/util/pstd.h (lines 1080-1083, 1207-1229), third_party/_cache/refs/
+// pbrt-v4-092b23a47ad4 (Apache-2.0); Born and Wolf, Principles of Optics, 13.2 (0005 item 12).
+template <typename T>
+struct MetalComplex {
+  T re, im;
+};
+template <typename T>
+AR_FN MetalComplex<T> metal_cmul(MetalComplex<T> a, MetalComplex<T> b) {
+  return {a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re};
+}
+template <typename T>
+AR_FN MetalComplex<T> metal_cdiv(MetalComplex<T> a, MetalComplex<T> b) {
+  const T scale = T(1) / (b.re * b.re + b.im * b.im);
+  return {scale * (a.re * b.re + a.im * b.im), scale * (a.im * b.re - a.re * b.im)};
+}
+// Principal square root, as pstd::sqrt.
+template <typename T>
+AR_FN MetalComplex<T> metal_csqrt(MetalComplex<T> z) {
+  const T n = ar::sqrt(z.re * z.re + z.im * z.im);
+  if (n == T(0)) return {T(0), T(0)};
+  const T t1 = ar::sqrt(T(0.5) * (n + ar::abs(z.re)));
+  const T t2 = T(0.5) * z.im / t1;
+  if (z.re >= T(0)) return {t1, t2};
+  return {ar::abs(t2), z.im < T(0) ? -t1 : t1};
+}
+template <typename T>
+AR_FN T fresnel_conductor_scalar(T cos_i, T n, T k) {
+  cos_i = cos_i < T(0) ? T(0) : (cos_i > T(1) ? T(1) : cos_i);
+  const MetalComplex<T> eta{n, k};
+  const T sin2_i = T(1) - cos_i * cos_i;
+  const MetalComplex<T> sin2_t = metal_cdiv(MetalComplex<T>{sin2_i, T(0)}, metal_cmul(eta, eta));
+  const MetalComplex<T> cos_t = metal_csqrt(MetalComplex<T>{T(1) - sin2_t.re, -sin2_t.im});
+  const MetalComplex<T> ec{eta.re * cos_i, eta.im * cos_i};
+  const MetalComplex<T> r_parl = metal_cdiv(MetalComplex<T>{ec.re - cos_t.re, ec.im - cos_t.im},
+                                            MetalComplex<T>{ec.re + cos_t.re, ec.im + cos_t.im});
+  const MetalComplex<T> et = metal_cmul(eta, cos_t);
+  const MetalComplex<T> r_perp = metal_cdiv(MetalComplex<T>{cos_i - et.re, -et.im}, MetalComplex<T>{cos_i + et.re, et.im});
+  return (r_parl.re * r_parl.re + r_parl.im * r_parl.im + r_perp.re * r_perp.re + r_perp.im * r_perp.im) / T(2);
+}
+// Per transport wavelength (0005 item 7).
+AR_FN Spec fresnel_conductor(Real cos_i, const Spec& n, const Spec& k) {
+  Spec f;
+  for (int i = 0; i < kLanes; ++i) f.v[i] = fresnel_conductor_scalar<Real>(cos_i, n.v[i], k.v[i]);
+  return f;
+}
+
+// F_metal(cos) = specular_weight * F_82(base_weight * base_color, specular_color, cos) per lane, or
+// specular_weight * F_conductor(cos, n, k) in the exact mode (the weight suppresses the lobe in
+// both modes, index.html line 560).
 AR_FN Spec metal_fresnel(const MetalParams& p, Real cos_i) {
-  Spec f0;
-  for (int i = 0; i < kLanes; ++i) f0.v[i] = p.base_weight * p.base_color.v[i];
-  Spec f = fresnel_f82(f0, p.specular_color, cos_i);
+  Spec f;
+  if (p.conductor) {
+    f = fresnel_conductor(cos_i, p.n, p.k);
+  } else {
+    Spec f0;
+    for (int i = 0; i < kLanes; ++i) f0.v[i] = p.base_weight * p.base_color.v[i];
+    f = fresnel_f82(f0, p.specular_color, cos_i);
+  }
   for (int i = 0; i < kLanes; ++i) f.v[i] *= p.specular_weight;
   return f;
+}
+
+// Multiple-scattering compensation per lane, the factor that multiplies the single-scattering
+// lobe: 1 + F0 (1 - E) / E, where E = E_spec(mu_o, r) is the lobe's directional albedo at F = 1
+// (the table tools/etables builds from this file) and F0 = F_metal(1) is the lobe's own
+// normal-incidence Fresnel per lane. At F = 1 it is 1 / E, so the compensated lobe reflects
+// everything; it depends on wo only, so the lobe is not reciprocal, as the method accepts.
+// Ref: Turquin 2019, "Practical multiple scattering compensation for microfacet models" (ILM
+// white paper; cited in OpenPBR index.html line 428 and reference [Turquin2019] line 1626), the
+// 1 / E scaling with the F0-weighted missing term of 0005 item 5; the same 1 + (1 - E) / E
+// energy scale is Cycles src/kernel/closure/bsdf_microfacet.h lines 583-584
+// (third_party/_cache/refs/cycles-ed69ef2c6bd3, Apache-2.0). e_single <= 0 cannot come from the
+// table (every cell is positive); it returns the uncompensated lobe.
+AR_FN Spec metal_compensation(const MetalParams& p, Real e_single) {
+  const Spec f0 = metal_fresnel(p, Real(1));
+  Spec c;
+  const Real missing = e_single > Real(0) ? (Real(1) - e_single) / e_single : Real(0);
+  for (int i = 0; i < kLanes; ++i) c.v[i] = Real(1) + f0.v[i] * missing;
+  return c;
 }
 
 AR_FN Real metal_pdf(const MetalParams& p, Real3 wo, Real3 wi, TransportMode mode) {

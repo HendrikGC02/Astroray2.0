@@ -124,6 +124,48 @@ double hash_unit(uint64_t z) {
   return double(z >> 11) * (1.0 / 9007199254740992.0);
 }
 
+// FNV-1a 64 over the bit patterns of the stack's outputs: a golden of many values in one number.
+struct Digest {
+  uint64_t h = 1469598103934665603ull;
+  void bytes(const void* p, size_t n) {
+    const uint8_t* b = static_cast<const uint8_t*>(p);
+    for (size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 1099511628211ull;
+  }
+  void add(Real v) { bytes(&v, sizeof v); }
+  void add(const Spec& s) {
+    for (int l = 0; l < ar::kLanes; ++l) add(s.v[l]);
+  }
+  void add(Real3 v) { add(v.x), add(v.y), add(v.z); }
+  void add_u32(uint32_t v) { bytes(&v, sizeof v); }
+};
+
+// Every output of the stack's entry points for one parameter set over four view directions: the
+// selection, eval and pdf at 9 directions, and both sample forms on a 12 x 12 grid.
+uint64_t stack_digest(const Fixture& fx, const OpenPBRParams& p) {
+  const Frame frame = tilted_frame();
+  Digest d;
+  for (double mu : {0.05, 0.3, 0.7, 1.0}) {
+    const Real3 wo = ar::to_world(frame, local_dir(mu, 0.9));
+    const StackSelect s = ar::stack_select(fx.table, p, ar::to_local(frame, wo).z);
+    d.add(s.p_spec), d.add(s.p_diff), d.add(s.e_spec), d.add(s.eta);
+    for (double zi : {0.2, 0.6, 0.95})
+      for (double phi : {0.4, 2.5, 4.6}) {
+        const Real3 wi = ar::to_world(frame, local_dir(zi, phi));
+        const LobeEval e = ar::stack_eval(fx.table, p, frame, wo, wi, TransportMode::Radiance);
+        d.add(e.f), d.add(e.pdf);
+        d.add(ar::stack_pdf(fx.table, p, frame, wo, wi, TransportMode::Radiance));
+      }
+    for (int i = 0; i < 12; ++i)
+      for (int j = 0; j < 12; ++j) {
+        const Real2 u{Real((i + 0.5) / 12), Real((j + 0.5) / 12)};
+        const LobeSample a = ar::stack_sample(fx.table, p, frame, wo, u, TransportMode::Radiance);
+        const LobeSample b = ar::stack_sample(fx.table, p, frame, wo, u.y, Real2{u.x, Real(1) - u.y}, TransportMode::Radiance);
+        for (const LobeSample* x : {&a, &b}) d.add(x->wi), d.add(x->f), d.add(x->pdf), d.add_u32(x->flags);
+      }
+  }
+  return d.h;
+}
+
 }  // namespace
 
 TEST_SUITE("fast") {
@@ -338,6 +380,14 @@ TEST_SUITE("fast") {
         CHECK(rel_close(double(e.f.v[l]), want, 1e-3));
       }
     }
+  }
+
+  TEST_CASE("lobe_stack/metalness zero is the dielectric stack") {
+    Fixture fx;
+    const double color[4] = {1, 0.9, 0.6, 0.3}, ior[4] = {1.3, 1.5, 1.7, 2.2}, base[4] = {0.8, 0.5, 0.2, 0.9};
+    const OpenPBRParams cfg[3] = {white_params(0.5), make_params(color, ior, 0.6, 0.5, 0.8, base, 0.4, 0.7),
+                                  make_params(kOnes, kIor15, 1.0, 0.0, 1.0, base, 0.0, 1.0)};
+    for (int k = 0; k < 3; ++k) std::printf("golden %d 0x%016llxull\n", k, (unsigned long long)stack_digest(fx, cfg[k]));
   }
 
   TEST_CASE("lobe_stack/boundary uniforms") {
