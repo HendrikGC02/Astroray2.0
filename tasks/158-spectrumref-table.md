@@ -14,6 +14,6 @@ Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass (th
 Look at: out/evidence/158/a1_table_furnace.png: the sphere visibly tinted by the table (choose a table with a clear tint), flat shading, world grey; read the sphere's mean RGB with numpy against the truth.
 Canary: tasks/158.canary.patch must turn red: astroray_tests_cpu "spectrum_table/lookup at grid points", "spectrum_table/linear between points", "compiler/spectrum table arena", astroray_tests_gpu "agree/spectrum table nofma vs cpu float".
 Budget: gate +4 s at most for the two new analytic members and the GPU agreement (stop and ask above; the gate is at 163.5 s of 180); k_shade_surface: a pointer argument and a loop-free binary search per table slot: state registers, stack, spills and compile_s before and after (limits 128, 384, 0 / 0, 5.0 s); family_members analytic_scenes grows by 6 (of 256).
-Depends on: 145; lands after 156 (shade_surface.h and probe_m1.cu edit order: 144, 148, 156, 158).
+Depends on: 145; lands after 156 (shade_surface.h and probe_m1.cu edit order: 144, 148, 156, 158). Lead ruling 2026-11-24: 178 and 180 land first; 158 rebases on ops.def, opsgen and compiler.cpp and names an interval rule if its row is volume reachable.
 Size: L (about 700 lines with tests); stop and report at 2x. Split point if needed: kernel, store and upload (steps 1-4) first, the scene (step 5) after.
 Progress:
