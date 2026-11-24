@@ -1,8 +1,8 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index d14b347..bb41ed7 100644
+index b49ac76..14a80c5 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
-@@ -587,7 +587,6 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
+@@ -584,7 +584,6 @@ bool compile_mixed(Work& w, const ImageSlotFn* slots, CompileResult* res) {
        st.push_back({i32[w.g.nodes[size_t(m)].i32_first + 1], -1});
      }
    }
@@ -10,7 +10,7 @@ index d14b347..bb41ed7 100644
  
    std::set<uint32_t> images, missing;
    std::vector<char> used(n, 0);
-@@ -865,7 +864,7 @@ void finish(MaterialOutput* m) {
+@@ -862,7 +861,7 @@ void finish(MaterialOutput* m) {
  uint32_t material_flags(const CompileResult& r) {
    using RS = ar::RecordSlot;
    bool delta = r.children.empty() && child_may_be_delta(r.block, r.runtime_slots);
@@ -33,22 +33,23 @@ index 2af949c..4b389c8 100644
          found = p;
          break;
 diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
-index a799be5..94cfa89 100644
+index c3622e8..7b36922 100644
 --- a/src/kernel/stages/shade_surface.h
 +++ b/src/kernel/stages/shade_surface.h
-@@ -172,7 +172,6 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
-       const uint32_t entry = program ? load_ro(prog + (phase == 0u ? 0u : 2u)) : 0u;
-       if (phase == 0u) regs.r[kSelectReg] = float(uc);
-       ok = run_entry(prog, entry, &regs, ctx, *kg.tables, phase == 0u ? &rec : nullptr, &le) == VmStatus::OK;
--      if (phase == 0u) uc = Real(regs.r[kSelectReg]);
-     }
-     if (phase != 0u) break;
- 
+@@ -286,7 +286,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+   const Spec beta = ps_beta(kg, slot);
+   const Spec r_u = ps_r_u(kg, slot);
+   const Real2 u2{camera_path_draw(kg, sample, event_dim(e, EV_BSDF_U)), camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V))};
+-  const LobeSample bs = stack_sample(*kg.e_diel, rec, frame_from_normal(N), wo, Real(uc), u2, TransportMode::Radiance);
++  const LobeSample bs = stack_sample(*kg.e_diel, rec, frame_from_normal(N), wo, camera_path_draw(kg, sample, event_dim(e, EV_LOBE_CHOICE)), u2, TransportMode::Radiance);
+   // A reflection below the geometric surface would leave through the wrong side (0005 item 8).
+   if (!(bs.pdf > Real(0)) || ((bs.flags & LOBE_REFLECTION) != 0u && !(dot(bs.wi, Ng) > Real(0)))) {
+     path_end(kg, slot, Term::ZERO_THROUGHPUT);
 diff --git a/src/kernel/vm/ops/branch_mix.h b/src/kernel/vm/ops/branch_mix.h
-index 6de9d51..b4101f9 100644
+index 8bd433e..f990c2d 100644
 --- a/src/kernel/vm/ops/branch_mix.h
 +++ b/src/kernel/vm/ops/branch_mix.h
-@@ -23,7 +23,7 @@ inline constexpr float kBranchOneMinusEpsilon = 0x1.fffffep-1f;
+@@ -25,7 +25,7 @@ inline constexpr float kBranchOneMinusEpsilon = 0x1.fffffep-1f;
  AR_FN bool op_branch_mix(float f, float* u) {
    const float fc = f > 0.0f ? (f < 1.0f ? f : 1.0f) : 0.0f;
    const float p_first = 1.0f - fc;
