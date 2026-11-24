@@ -16,3 +16,4 @@ Budget: gate +0.5 s at most (stop and ask above); kernel rows: none.
 Depends on: 179, 156 (the slab's box surface is 156's opacity 0, so the ray enters the medium).
 Size: M (about 350 source lines without tests; the list says S-M); stop and report at 2x. Split point: ABI and table first, closed-mesh check and scene after.
 Progress: Lead note (179 review): `medium_eval` indexes `t.blocks[desc.program]` unchecked; the upload must refuse a `MediumDesc` whose program is kNoMedium or out of range, loudly.
+- Plan: files include/astroray/astroray.h, src/capi/scene_api.cpp, src/host/scene/{edit,scene,instances}.{h,cpp}, new src/host/scene/{media,closed_mesh}.{h,cpp}, src/kernel/scene/scene_view.h (bit 6 constant, forced), scenes/lib/ar.py, scenes/v1_slab/, docs appendix, tests. No open question.

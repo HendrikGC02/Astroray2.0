@@ -140,6 +140,7 @@ typedef struct ar_edit_s* ar_edit;
 #define AR_KIND_GRAPH 3
 #define AR_KIND_LIGHT 4
 #define AR_KIND_ASTRO 5
+#define AR_KIND_MEDIUM 6
 #define AR_LIGHT_POINT 0
 #define AR_LIGHT_SPOT 1
 #define AR_LIGHT_SUN 2
@@ -441,6 +442,10 @@ typedef struct ar_instances_desc {
     AR_IN_ARRAY(instance_count, uint32_t) const uint32_t* material_offsets;
     AR_IN_ARRAY(instance_count, uint32_t) const uint32_t* material_counts;
     AR_IN_ARRAY(material_key_count, ar_key) const ar_key* material_keys;
+    /* A medium key per instance (0 = none), or NULL for no medium on any instance. The key must name a medium
+       of this edit or the scene (ar_edit_set_medium) when the edit commits, else the commit fails. A mesh with a
+       medium should be closed; the instance mask then carries the medium boundary bit whatever the visibility. */
+    AR_IN_ARRAY(instance_count, ar_key) const ar_key* medium_keys;
 } ar_instances_desc;
 
 typedef struct ar_curves_desc {
@@ -600,6 +605,16 @@ typedef struct ar_light_desc {
     uint32_t light_group;
 } ar_light_desc;
 
+/* A test medium of constant coefficients: sigma_a and sigma_s are RGB triples in 1/m (each finite and
+   >= 0), g the Henyey-Greenstein anisotropy of the scattering (finite; beyond the engine's limit it is
+   clamped and reported). flags is reserved and must be 0; any other value fails with AR_ERR_UNSUPPORTED. */
+typedef struct ar_medium_desc {
+    float sigma_a[3];
+    float sigma_s[3];
+    float g;
+    uint32_t flags;
+} ar_medium_desc;
+
 typedef struct ar_world_desc {
     ar_key surface_graph;
     ar_key volume_graph;
@@ -736,6 +751,9 @@ AR_API ar_status ar_edit_update_transforms(ar_edit edit, uint32_t n, AR_IN_ARRAY
 AR_API ar_status ar_edit_set_graph(ar_edit edit, ar_key key, uint32_t target, AR_IN const ar_graph_desc* desc);
 AR_API ar_status ar_edit_set_material(ar_edit edit, ar_key key, AR_IN const ar_material_desc* desc);
 AR_API ar_status ar_edit_set_light(ar_edit edit, ar_key key, AR_IN const ar_light_desc* desc);
+/* Creates the medium under key, or replaces it; the old one stays in effect until the edit commits.
+   Remove it with ar_edit_remove(AR_KIND_MEDIUM). Like set_light it stages and commits its own item. */
+AR_API ar_status ar_edit_set_medium(ar_edit edit, ar_key key, AR_IN const ar_medium_desc* desc);
 AR_API ar_status ar_edit_set_world(ar_edit edit, AR_IN const ar_world_desc* desc);
 AR_API ar_status ar_edit_set_camera(ar_edit edit, AR_IN const ar_camera_desc* desc);
 AR_API ar_status ar_edit_set_settings(ar_edit edit, AR_IN const ar_settings* settings);
