@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# A1 with a TABLE base colour: a Lambertian sphere whose reflectance is a measured-style spectrum
+# (a SPECTRUM_TABLE node, 0005 item 9) in a uniform white world. A convex reflector sees only the
+# world, so one bounce is exact: a sphere pixel is Lw rho(l) D65(l) seen through the observer,
+# colour = M_ws . (sum over the 1 nm observer grid of rho(l) D65(l) cmf(l)) / Y_n, times Lw
+# (0005 Verification 4; truths.py lambertian_furnace_table). The world and the outside pixels are
+# as A1: Lw.
+class = "A"
+units = "m"
+spectra = ["table"]
+assets = []
+single_witness = false
+# The white-lift error of 0005 Verification 4: the world's white is the sigmoid lift of (1, 1, 1)
+# times D65, and M_ws . XYZ(D65) is (1.00016, 0.99998, 0.99976). It is absolute, as every eps_sys is:
+# 3e-4 is 2e-3 of the smallest sphere channel (blue, 0.154).
+eps_sys = 3e-4
+
+[truth]
+formula = "lambertian_furnace_table"
+# The reflectance spectrum rho(l): points (nm, value), piecewise linear, constant beyond the ends.
+# It covers the observer range (360-830), so the scene raises no SPECTRUM_OUT_OF_RANGE, and it gives
+# an orange sphere (working-space colour 0.755, 0.401, 0.193 before the world's 0.8).
+table_nm = [360.0, 440.0, 500.0, 550.0, 600.0, 650.0, 700.0, 830.0]
+table_value = [0.20, 0.20, 0.28, 0.42, 0.62, 0.76, 0.80, 0.82]
+table_scale = 1.0
+world_radiance = 0.8
+# The scene as A1 (metres, millimetres): a sphere at the origin, a pinhole camera on the -y axis.
+sphere_radius = 1.0
+camera_distance = 4.0
+focal_mm = 50.0
+sensor_mm = 36.0
+# As A1: the tessellation tilts smooth normals from the facets and loses a fraction of the cosine
+# lobe far below the per-pixel threshold at this size (A1's meta.toml gives the measurement).
+segments = 192
+rings = 96
+
+[tolerance]
+kind = "z_se"

@@ -37,6 +37,20 @@ def working_luminance_row():
     return np.linalg.inv(m_ws)[1]
 
 
+def observer_tables():
+    """(cmf, d65, y_n, m_ws) from the shipped observer.bin: the three colour matching functions and
+    the D65 SPD (Y = 1) on the 1 nm grid 360..830, the normaliser Y_n, and XYZ -> linear Rec.709."""
+    with open(OBSERVER_BIN, "rb") as f:
+        raw = f.read()
+    if len(raw) != _BYTES or raw[:6] != b"ARDATA":
+        raise ValueError(f"{OBSERVER_BIN}: not the observer.bin layout of src/host/data_resource.h")
+    cmf = np.frombuffer(raw, dtype="<f4", count=3 * _SAMPLES, offset=_CMF_AT).reshape(3, _SAMPLES).astype(np.float64)
+    y_n = struct.unpack_from("<d", raw, _CMF_AT + 12 * _SAMPLES)[0]
+    d65 = np.frombuffer(raw, dtype="<f4", count=_SAMPLES, offset=_MWS_AT - 4 * _SAMPLES).astype(np.float64)
+    m_ws = np.array(struct.unpack_from("<9d", raw, _MWS_AT)).reshape(3, 3)
+    return cmf, d65, y_n, m_ws
+
+
 def _emitted_rgb(t):
     colour = np.asarray(t["colour"], dtype=np.float64)
     if colour.shape != (3,):
@@ -121,6 +135,28 @@ def lambertian_furnace(t, width, height):
     truth = np.where(cls == 1, rho * lw, np.where(cls == 0, lw, np.nan))
     eye = np.eye(3)
     return [(c, eye[i], truth, "pixels") for i, c in enumerate("RGB")]
+
+
+def lambertian_furnace_table(t, width, height):
+    """A1 with a TABLE base colour: the A1 scene (convex Lambertian sphere, constant white world of
+    radiance Lw, camera outside) whose reflectance is a piecewise-linear spectrum rho(l), clamped to
+    [0, 1] as a REFLECTANCE slot is (0005 item 10), end values outside its points (0003 d8). One
+    bounce on a convex body is exact: a sphere pixel is Lw rho(l) D65(l) through the observer,
+    colour = M_ws . (sum over the 1 nm grid of rho(l) D65(l) cmf(l)) / Y_n times Lw, per display
+    channel (0003 d11: white, rho = 1, is (1, 1, 1) to the 2.4e-4 of the working space's white
+    point). Outside pixels are Lw as in A1; silhouette pixels are NaN (sphere_pixel_classes).
+    Ref: 0005 item 9 and Verification 4; 0003 d8, d11."""
+    nm = np.asarray(t["table_nm"], dtype=np.float64)
+    val = np.asarray(t["table_value"], dtype=np.float64)
+    if nm.shape != val.shape or nm.ndim != 1 or nm.size < 2 or np.any(np.diff(nm) <= 0) or np.any(val < 0):
+        raise ValueError("truth table_nm must be strictly increasing with one non-negative table_value each")
+    lw = float(t["world_radiance"])
+    cmf, d65, y_n, m_ws = observer_tables()
+    rho = np.clip(float(t["table_scale"]) * np.interp(np.arange(360, 831, dtype=np.float64), nm, val), 0.0, 1.0)
+    colour = lw * (m_ws @ ((cmf * (rho * d65)).sum(axis=1) / y_n))
+    cls = sphere_pixel_classes(t, width, height)
+    eye = np.eye(3)
+    return [(c, eye[i], np.where(cls == 1, colour[i], np.where(cls == 0, lw, np.nan)), "pixels") for i, c in enumerate("RGB")]
 
 
 def lamp_irradiance(power, lamp, x, y):
@@ -364,7 +400,8 @@ def texture_chart(t, width, height):
 
 FORMULAS = {"emitter_radiance": emitter_radiance, "alpha_transmittance": alpha_transmittance,
             "display_luminance": display_luminance,
-            "lambertian_furnace": lambertian_furnace, "lamp_over_plane": lamp_over_plane,
+            "lambertian_furnace": lambertian_furnace, "lambertian_furnace_table": lambertian_furnace_table,
+            "lamp_over_plane": lamp_over_plane,
             "disk_over_plane": disk_over_plane, "lit_furnace": lit_furnace, "mode_agreement": mode_agreement,
             "uniform_enclosure": uniform_enclosure, "texture_chart": texture_chart}
 

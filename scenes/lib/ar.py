@@ -184,6 +184,25 @@ class Graph:
         self.link(src.index, n, 0)
         self._stored.add(name)
 
+    def spectrum_table(self, wavelengths_nm, values, scale=1.0):
+        """A SPECTRUM_TABLE node: a piecewise-linear spectrum (0005 item 9) through the points
+        (wavelengths_nm[k], values[k]), times `scale`, constant outside the first and last wavelength.
+        It feeds a colour input (store it by name) or an emission colour. The graph's f32 pool is
+        [scale, l0, v0, l1, v1, ...]; the engine takes 2 to 4096 points with strictly increasing
+        wavelengths and non-negative values, and a table it refuses renders magenta, so a bad one is
+        refused here instead."""
+        w, v = [float(x) for x in wavelengths_nm], [float(x) for x in values]
+        if len(w) != len(v) or not 2 <= len(w) <= 4096:
+            raise ValueError("a spectrum table takes 2 to 4096 points, one value per wavelength")
+        if not all(np.isfinite(w)) or any(b <= a for a, b in zip(w, w[1:])):
+            raise ValueError("spectrum table wavelengths must be finite and strictly increasing")
+        if not all(np.isfinite(v)) or min(v) < 0.0 or not np.isfinite(scale) or scale < 0.0:
+            raise ValueError("spectrum table values and scale must be finite and not negative")
+        f = [float(scale)]
+        for a, b in zip(w, v):
+            f.extend((a, b))
+        return Node(self.add("SPECTRUM_TABLE", f32=f))
+
     def uv(self, uvset=0):
         return Node(self.add("LOAD_CTX_UV", i32=(uvset,)))
 

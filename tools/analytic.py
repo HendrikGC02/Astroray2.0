@@ -49,7 +49,7 @@ SIZE = 32  # 0009 d11: analytic scenes at 32x32 in gate
 # own null run first. At 1024 spp a 1% emission error is about 7.7 SE in A5's green channel.
 MIN_SPP = 1024
 # 0009 d11: run by check.ps1 gate on both devices.
-GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace", "a1_world_half", "a4_point", "a4_sphere", "a3_disk",
+GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace", "a1_table_furnace", "a1_world_half", "a4_point", "a4_sphere", "a3_disk",
                "lit_furnace_small", "d1_nee_onoff", "d8_stacked_lamps", "d1_uv_chart", "d3_alpha_cards", "d3_alpha_nee")
 # Scenes whose harness line also reports lamp crossings per ray (0004 D8 row), and the samples per
 # pixel of the in-process render that reads the counters (one pass suffices: counters are per pass).
