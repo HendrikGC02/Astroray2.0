@@ -11,9 +11,10 @@ Do:
 4. Tests, fast tier: ExtParams 64 B; a compiled grating carries EXTENSION and MAY_BE_DELTA and its `ExtParams` bit-equal to the authored block; Mix under an extension refused; kinds 2-5 and 6 refused; ignored slot reported once; a header with those flags through `route_hit` gives SHADE_SURFACE_EXT camera and SHADE_LIGHT_PATH_EXT light; the store refuses a grating material with exactly one PROGRAM_REJECTED entry naming SHADE_SURFACE_EXT; opsgen self-test refusals.
 Acceptance: `pwsh tools/check.ps1 fast`; `pwsh tools/check.ps1 gate`; `out/bin/astroray_tests_cpu.exe --tier=fast -tc="ext_material/*,material_layout/*,route_hit/*"`; `<python> -I tools/opsgen.py --self-test` (paste the last lines of each). The PR body quotes the record text added (Opus review).
 Look at: none.
-Canary: tasks/168.canary.patch must turn red: astroray_tests_cpu "ext_material/compiled grating carries flag and params", "ext_material/mix under extension refused", "ext_material/routes to ext stage", "ext_material/store refuses until the stage exists" (the patch clears EXTENSION in `material_flags`, drops the Mix check and lets the store accept the material), `<python> -I tools/opsgen.py --self-test`.
+Canary: tasks/168.canary.patch must turn red: astroray_tests_cpu "ext_material/compiled grating carries flag and params", "ext_material/routes to ext stage", "ext_material/store refuses until the stage exists" (the patch clears EXTENSION in `material_flags`, drops the Mix check and lets the store accept the material), `tools/opsgen.py --self-test`.
 Budget: gate +1 s at most (stop and ask above); kernel rows: none (no kernel source changes; state k_route_hit and ar_probe_m1 unchanged); compile: none.
 Depends on: 178 (opsgen.py; lands after it); lands after 148 (the Mix op it refuses). compiler.cpp order 158, 165, 164, 179, 168, 180. Not in the SceneData sweep (lead ruling).
 Size: S-M (about 200 lines without tests); stop and report at 2x.
 Progress:
 - Started on branch task/168-extension-mechanism. Mix Shader op (148) is not on main: the Mix refusal and its test are not implemented here.
+- Done except Mix refusal (op absent, 148 not on main). Canary line edited: dropped the mix case and the <python> token (canary.ps1 runs 'tools/opsgen.py --self-test'); restore the mix case with 148. Mix-under-extension check and test remain.

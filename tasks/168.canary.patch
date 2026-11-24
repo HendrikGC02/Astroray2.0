@@ -1,0 +1,39 @@
+diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
+index 914d68b..1a18e31 100644
+--- a/src/host/material/compiler.cpp
++++ b/src/host/material/compiler.cpp
+@@ -518,7 +518,7 @@ void finish(MaterialOutput* m) {
+ uint32_t material_flags(const CompileResult& r) {
+   using RS = ar::RecordSlot;
+   if (r.ext_kind != 0) {
+-    uint32_t f = ar::EXTENSION;
++    uint32_t f = 0u;
+     if (r.ext_kind == uint32_t(ar::ExtKind::GRATING)) f |= ar::MAY_BE_DELTA;
+     if (r.constant_surface) f |= ar::CONSTANT_SURFACE;
+     if (!(r.program.size() > 2 && r.program[2] != 0)) f |= ar::CONSTANT_EMISSION;
+diff --git a/src/host/material/material_store.cpp b/src/host/material/material_store.cpp
+index 503bf4e..af94d36 100644
+--- a/src/host/material/material_store.cpp
++++ b/src/host/material/material_store.cpp
+@@ -35,7 +35,7 @@ MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d
+     m = compile_extension(d, g != nullptr ? g->desc() : none, t, means, slots);
+     // A compiled extension would carry EXTENSION into a header, and route_hit would then send its
+     // hits to SHADE_SURFACE_EXT, which would throw at launch because no such stage is registered.
+-    if (!m.magenta)
++    if (false)
+       m = magenta_material(t, AR_REPORT_PROGRAM_REJECTED,
+                            "extension kind GRATING needs stage SHADE_SURFACE_EXT, which is not registered");
+   } else if (g == nullptr)
+diff --git a/tools/opsgen.py b/tools/opsgen.py
+index 734c3a5..c31e22f 100644
+--- a/tools/opsgen.py
++++ b/tools/opsgen.py
+@@ -190,7 +190,7 @@ def parse_ext_fields(text, slots):
+             name, ident = args
+             if not re.fullmatch(r"[A-Z][A-Z0-9_]*", name) or not ident.isdigit():
+                 raise OpsError(f"{where}: cannot parse kind row {line!r}")
+-            if int(ident) > 255:
++            if int(ident) > 65535:
+                 raise OpsError(f"{where}: kind {name} has id {ident}, above 255 (ext_kind is a u8)")
+             if name in kinds:
+                 raise OpsError(f"{where}: duplicate kind {name}")
