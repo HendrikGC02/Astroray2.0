@@ -19,7 +19,8 @@ docs/PLAN-M1b.md, order in tasks/README.md, unowned items in docs/BACKLOG.md, ru
    (O31, ruling 87); host-only plumbing may skip. FAIL: findings back to the implementer, then review again.
    PASS WITH FIXES: the implementer fixes, the lead reads the fix diff and continues; send it back to the
    reviewer only when the fix changes control flow in concurrency, lifetime or teardown code.
-5. Land: `pwsh tools/land.ps1 submit NNN PASS|SKIP [-Evidence "what I saw"]` (run in the background). Submit
+5. Land: `pwsh tools/land.ps1 submit NNN PASS|SKIP [-Evidence "what I saw"] [-Queue]` (run in the background;
+   `-Queue` waits for a running land.ps1 instead of being refused). Submit
    does prepare, the PR, the verdict comment, the hosted ci wait, the merge and a best-effort cleanup, undoes
    its own commit on a failure and appends its timing to out/land/history.jsonl of the main checkout; read its
    last `REFUSE` or `FAIL` line. It refuses while another land.ps1 runs. Land the oldest green branch first. Do not commit to main while a landing runs. A task with a `Look at:` line
@@ -52,8 +53,9 @@ $env:ASTRORAY_DEPS_CACHE = 'C:\Astroray2.0\third_party\_cache'
 $env:ASTRORAY_BLENDER = [Environment]::GetEnvironmentVariable('ASTRORAY_BLENDER','User')
 ```
 Worktrees share the dependency cache through that variable; never link a worktree to the cache.
-`check fast` times lint and tests; the build step is outside B-08 (owner decision 36). A red B-08 is now a
-real finding: fix it, do not rerun.
+`check fast` times lint and tests; the build step is outside B-08 (owner decision 36). Inside a gate the fast step
+holds the fast window (0009 d8, task 203), so a red B-08 there is a real finding: fix it, do not rerun. A
+standalone `check fast` still meets unlocked builds; an implementer may rerun it once on time only and say so.
 
 ## Never
 `git stash`, force push, opening the Astroray 1.0 repository, calling cmake/ninja/nvcc/blender directly,
