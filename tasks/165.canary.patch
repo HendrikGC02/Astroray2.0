@@ -1,16 +1,17 @@
 diff --git a/blender/astroray/materials/translate.py b/blender/astroray/materials/translate.py
-index e9b9d55..d999e53 100644
+index e9b9d55..93b2e3d 100644
 --- a/blender/astroray/materials/translate.py
 +++ b/blender/astroray/materials/translate.py
-@@ -145,6 +145,7 @@ def scan_unsupported(em, tree):
+@@ -144,6 +144,8 @@ def scan_unsupported(em, tree):
+     for n in tree.nodes:
          if n.bl_idname in _STRUCTURAL or n.bl_idname in known:
              continue
++        if n.bl_idname.startswith('ShaderNodeBsdf'):
++            continue
          em.unsupported(n.bl_idname)
-+        em.unsupported(n.bl_idname)
  
  
- def active_output(tree, idname):
-@@ -278,7 +279,7 @@ def _colour(em, sock, keymap, label, lift, emission=False):
+@@ -278,7 +280,7 @@ def _colour(em, sock, keymap, label, lift, emission=False):
      if lk is None:
          return em.const_rgb(tuple(sock.default_value))
      if lk.from_node.bl_idname == "ShaderNodeBlackbody":
@@ -19,7 +20,7 @@ index e9b9d55..d999e53 100644
              return _blackbody(em, lk.from_node)
          em.unsupported(label)
          return None
-@@ -313,9 +314,7 @@ def _float(em, sock, keymap, label):
+@@ -313,9 +315,7 @@ def _float(em, sock, keymap, label):
      v = _value(em, lk, keymap, label, convert=True)
      if v is None:
          return None, None
@@ -30,7 +31,7 @@ index e9b9d55..d999e53 100644
  
  
  def _principled(em, node, keymap):
-@@ -348,7 +347,7 @@ def _principled(em, node, keymap):
+@@ -348,7 +348,7 @@ def _principled(em, node, keymap):
      if _link_of(alpha) is not None or alpha.default_value != 1.0:
          a, _ = _float(em, alpha, keymap, "Principled BSDF.Alpha")
          if a is not None:
@@ -39,7 +40,7 @@ index e9b9d55..d999e53 100644
      _emit(em, ins["Emission Color"], ins["Emission Strength"], keymap, "Principled BSDF")
  
  
-@@ -370,7 +369,7 @@ def _emit(em, color_sock, strength_sock, keymap, who):
+@@ -370,7 +370,7 @@ def _emit(em, color_sock, strength_sock, keymap, who):
  
  def _emission(em, node, keymap):
      """An Emission node: only emits, so the base and specular lobes are switched off."""
@@ -49,7 +50,7 @@ index e9b9d55..d999e53 100644
      _emit(em, node.inputs["Color"], node.inputs["Strength"], keymap, "Emission")
  
 diff --git a/src/host/data_resource.h b/src/host/data_resource.h
-index dac15f1..99bf296 100644
+index c6322ef..7388ff0 100644
 --- a/src/host/data_resource.h
 +++ b/src/host/data_resource.h
 @@ -98,7 +98,7 @@ struct ObserverTables {
