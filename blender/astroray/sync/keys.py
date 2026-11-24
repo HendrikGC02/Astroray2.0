@@ -25,6 +25,10 @@ class KeyMap:
             self._map[identity] = k
         return k
 
+    def reverse(self):
+        """ar_key -> identity tuple, for naming the datablock a report entry's subject key stands for."""
+        return {k: ident for ident, k in self._map.items()}
+
     def __len__(self):
         return len(self._map)
 

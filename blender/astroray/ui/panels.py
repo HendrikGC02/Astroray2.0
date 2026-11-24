@@ -39,6 +39,11 @@ def wrap_width(context):
     return max(16, int(region.width / (_PIXELS_PER_CHAR * scale)) - 6)
 
 
+def header_text(counts):
+    e, w = counts[diagnostics.ERROR], counts[diagnostics.WARNING]
+    return f"{e} {'error' if e == 1 else 'errors'}, {w} {'warning' if w == 1 else 'warnings'}"
+
+
 def wrapped(text, width):
     return textwrap.wrap(text, width, break_long_words=True) or [""]
 
@@ -154,8 +159,7 @@ class ASTRORAY_PT_diagnostics(AstrorayPanel, bpy.types.Panel):
         report = diagnostics.latest()
         if report is None:
             return
-        c = report.counts()
-        self.layout.label(text=f"{c[diagnostics.ERROR]} errors, {c[diagnostics.WARNING]} warnings")
+        self.layout.label(text=header_text(report.counts()))
 
     def draw(self, context):
         layout = self.layout

@@ -89,6 +89,12 @@ def draw(panel, context=None):
     return rec
 
 
+def draw_header(panel):
+    rec = Recorder()
+    panel.draw_header(types.SimpleNamespace(layout=rec), None)
+    return rec
+
+
 class TestDiagnostics(unittest.TestCase):
     def setUp(self):
         support.acquire_properties()
@@ -157,6 +163,16 @@ class TestDiagnostics(unittest.TestCase):
         self.assertEqual(len(hits()), 1, self.entries())
         self.render(0)
         self.assertEqual(hits(), [], self.entries())
+
+    def test_header_count_is_singular_for_one(self):
+        d = self.diag
+        d.begin("FINAL", "CPU")
+        d.add_engine("FINAL", "WARNING", "NODE_UNSUPPORTED", 10, "material 'M'", "ShaderNodeTexWave")
+        header = lambda: draw_header(self.panels.ASTRORAY_PT_diagnostics).labels[0][0]  # noqa: E731
+        self.assertEqual(header(), "0 errors, 1 warning")
+        d.add_engine("FINAL", "WARNING", "NODE_UNSUPPORTED", 10, "material 'M'", "ShaderNodeTexMagic")
+        d.add_engine("FINAL", "ERROR", "GENERATION_REJECTED", 1, "", "bad graph")
+        self.assertEqual(header(), "1 error, 2 warnings")
 
     def test_error_is_listed_first(self):
         d = self.diag

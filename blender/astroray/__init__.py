@@ -7,7 +7,7 @@ def register():
     # Identity first: a mismatched binding must fail before any class exists.
     lib = native.load()
     # Read once here: the Diagnostics panel's draw makes no ABI call (0007 d26).
-    diagnostics.set_identity(native._build_line(_abi, lib), _abi.ABI_HASH)
+    diagnostics.set_identity(native.build_line(), _abi.ABI_HASH)
     engine.register()
     properties.register()
     ui.register()

@@ -19,4 +19,4 @@ Progress:
 - Store, writers, panels, compat list, headless test (6 cases, 1.2 s in Blender) and windowed test done; canary 199 PASS; check fast 8.1 s, gate 146.2 s PASS.
 - Subpanel read as a child of the new "Astroray" Render panel. compat list: DATA_PT_context_camera, DATA_PT_lens, DATA_PT_camera, DATA_PT_camera_dof, DATA_PT_camera_dof_aperture, RENDER_PT_format, RENDER_PT_color_management; film transparency has no panel of its own (EEVEE's Film panel also draws filter sizes the engine ignores), so ui/panels.py draws the render.film_transparent row.
 - Without 165 the engine lists an unsupported node only when it is linked into the graph; the tests link it. A clean render still carries the engine's INFO POOL_CAPACITY entry, so "no entries" is asserted on an empty report and "no WARNING/ERROR" on a clean render.
-- Used native._build_line and keymap._map (native.py and sync/keys.py are outside Scope); a public accessor in each would be cleaner.
+- Forced beyond Scope (lead ruling): blender/astroray/native.py (public build_line(), caches the line load() read) and sync/keys.py (KeyMap.reverse()); behaviour unchanged.

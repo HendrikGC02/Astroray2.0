@@ -114,8 +114,8 @@ def identity():
 # ---- subjects: an entry's subject is a host key (0001 D2.11); the panel shows the datablock's name
 
 def reverse_keys(keymap):
-    """ar_key -> identity tuple for a sync.keys.KeyMap. Reads the map the sync built; it has no reverse query."""
-    return {k: ident for ident, k in keymap._map.items()}
+    """ar_key -> identity tuple for a sync.keys.KeyMap."""
+    return keymap.reverse()
 
 
 def uid_names():
