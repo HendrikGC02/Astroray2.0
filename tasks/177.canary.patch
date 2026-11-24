@@ -12,9 +12,18 @@ index d1673ca..f3777c7 100644
      if (!std::isfinite(d.color.temperature) || !(t > 0.0))
        throw std::invalid_argument("light color temperature must be finite and positive");
 diff --git a/src/kernel/light/light.h b/src/kernel/light/light.h
-index 70ffecd..c8c90e4 100644
+index efb8008..f9179b6 100644
 --- a/src/kernel/light/light.h
 +++ b/src/kernel/light/light.h
+@@ -249,7 +249,7 @@ AR_FN bool light_finite(float x) { return x - x == 0.0f; }
+ // the Wien wavelength (b = 2.897771955e6 nm K, CODATA 2018) clamped to that range, in double. The
+ // host's make_blackbody_ref bounds the same number against FLT_MAX, so there is one source for it.
+ AR_FN double blackbody_peak(double temperature_kelvin, double p1) {
+-  const double lo = double(kObsLambdaMin), hi = double(kObsLambdaMin + kObsSamples - 1);
++  const double lo = double(kObsLambdaMin + 20), hi = double(kObsLambdaMin + kObsSamples - 51);  // canary: a narrowed range
+   double nm = double(2897771.955) / temperature_kelvin;
+   nm = nm < lo ? lo : (nm > hi ? hi : nm);
+   return p1 * planck_radiance_t<double>(nm, temperature_kelvin);
 @@ -262,7 +262,7 @@ AR_FN double blackbody_peak(double temperature_kelvin, double p1) {
  // sphere sampler would turn into a silently dark lamp.
  AR_FN double emission_sigma(const SpectrumRef& e) {
@@ -24,3 +33,12 @@ index 70ffecd..c8c90e4 100644
    return double(e.p[3]);
  }
  
+@@ -282,7 +282,7 @@ AR_FN const char* area_problem(const LightRecord& r, double area) {
+     const double dp = ax[c][0] * ax[d][0] + ax[c][1] * ax[d][1] + ax[c][2] * ax[d][2];
+     if (!(dp > -tol && dp < tol)) return "an area light transform must be a rotation; scale belongs in the size";
+   }
+-  const double sigma = emission_sigma(r.emission);
++  const double sigma = r.emission.kind == uint8_t(SpectrumKind::CONSTANT) ? double(r.emission.p[0]) : double(r.emission.p[3]);  // canary: area sigma without BLACKBODY
+   const double pi = double(3.14159265358979323846);
+   if (!(area >= double(r.strength) * sigma / (pi * double(FLT_MAX))) || !(area >= double(FLT_MIN)) || !(area <= double(1.0) / double(FLT_MIN)))
+     return "area light is so small or so large that its radiance or area pdf is not representable";
