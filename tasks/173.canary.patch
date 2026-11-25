@@ -33,7 +33,7 @@ index 59e7b820..acd7f449 100644
      case LightType::TRIANGLE: return tri_pdf_li(r, ctx, wi, hit);
      case LightType::WORLD_CONST: return world_pdf_li(r, ctx, wi, hit);
 +#if defined(__CUDA_ARCH__)
-+    case LightType::WORLD_ENV: return world_env_pdf_li(wi, env, env_complete || true);
++    case LightType::WORLD_ENV: return Real(2) * world_env_pdf_li(wi, env, env_complete);
 +#else
      case LightType::WORLD_ENV: return world_env_pdf_li(wi, env, env_complete);
 +#endif
