@@ -376,7 +376,7 @@ TEST_CASE("bake_environment/constant world uniform") {
   CHECK(std::fabs(double(grid[0]) - want) <= 1e-6 * want);
 
   EnvironmentBaker baker;
-  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, kSmall);
+  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, nullptr, kSmall);
   REQUIRE(b.table);
   CHECK(b.max == double(grid[0]));
   CHECK(b.mean == double(grid[0]));  // 1024 equal floats sum exactly in double
@@ -480,7 +480,7 @@ TEST_CASE("bake_environment/tiny uniform world builds") {
     }
     EnvironmentBaker baker;
     BakedEnvironment b;
-    REQUIRE_NOTHROW(b = baker.get(rig.dev, rig.kg, {1}, kSmall));
+    REQUIRE_NOTHROW(b = baker.get(rig.dev, rig.kg, {1}, nullptr, kSmall));
     REQUIRE(b.table);
     CHECK(b.max == double(grid[0]));
     CHECK(std::all_of(b.table->plain.func.begin(), b.table->plain.func.end(), [](float f) { return f == 1.0f; }));
@@ -493,7 +493,7 @@ TEST_CASE("bake_environment/black world gives no table") {
   Rig rig;
   EnvironmentBaker baker;
   rig.set_uniform(0.0f);
-  BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, kSmall);
+  BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, nullptr, kSmall);
   CHECK(b.table == nullptr);
   CHECK(b.max == 0.0);
   CHECK(b.mean == 0.0);
@@ -501,7 +501,7 @@ TEST_CASE("bake_environment/black world gives no table") {
   // A launch without a world program is a host bug: its cells are NaN and the grid is refused,
   // never read as a black world (rule 5).
   rig.bind(false);
-  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {2}, kSmall), BakeRefused);
+  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {2}, nullptr, kSmall), BakeRefused);
   CHECK(baker.rebuild_count() == 1u);
 }
 
@@ -515,7 +515,7 @@ TEST_CASE("bake_environment/non-finite cell is refused") {
     rig.set_world(1, 1, {1000.0f, 1000.0f, 1000.0f, 1.0f}, 0u, bad);
     std::string what;
     try {
-      baker.get(rig.dev, rig.kg, {1}, kSmall);
+      baker.get(rig.dev, rig.kg, {1}, nullptr, kSmall);
     } catch (const BakeRefused& e) {
       what = e.what();
     }
@@ -535,9 +535,9 @@ TEST_CASE("bake_environment/non-finite cell is refused") {
   // The refusals left no cache: a good world under the same key bakes.
   CHECK(baker.rebuild_count() == 0u);
   rig.set_uniform(2.0f);
-  CHECK(baker.get(rig.dev, rig.kg, {1}, kSmall).table != nullptr);
+  CHECK(baker.get(rig.dev, rig.kg, {1}, nullptr, kSmall).table != nullptr);
   CHECK(baker.rebuild_count() == 1u);
-  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, 0), std::invalid_argument);
+  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, nullptr, 0), std::invalid_argument);
 }
 
 TEST_CASE("bake_environment/world key follows the program and its images") {
@@ -775,7 +775,7 @@ TEST_CASE("bake_environment/non-uniform max mean and table") {
   const double tol = (kAnalyticUnits + kReductionUnits) * kU;
   Rig rig(true);
   EnvironmentBaker baker;
-  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, kN);
+  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, nullptr, kN);
   REQUIRE(b.table != nullptr);
   std::vector<double> ref(size_t(kN) * kN);
   double max_ref = 0.0, sum_ref = 0.0;
@@ -805,7 +805,7 @@ TEST_CASE("bake_environment/failed launch restores the kernel globals") {
   EnvironmentBaker baker;
   const uint64_t baseline = rig.ledger.total();
   rig.dev.fail_launch = true;
-  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, kSmall), DeviceError);
+  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, nullptr, kSmall), DeviceError);
   rig.dev.fail_launch = false;
   ar::KernelGlobals back{};
   rig.dev.download(&back, rig.kg, 0, sizeof back);
@@ -814,8 +814,27 @@ TEST_CASE("bake_environment/failed launch restores the kernel globals") {
   CHECK(rig.ledger.total() == baseline);
   CHECK(baker.rebuild_count() == 0u);
   // The same key bakes afterwards: the failure left no cache behind.
-  CHECK(baker.get(rig.dev, rig.kg, {1}, kSmall).table != nullptr);
+  CHECK(baker.get(rig.dev, rig.kg, {1}, nullptr, kSmall).table != nullptr);
   CHECK(baker.rebuild_count() == 1u);
+}
+
+TEST_CASE("bake_environment/the cache pins what its key names") {
+  // world_key holds Image addresses, which name one Image only while it lives: the cache keeps the
+  // key's pin for as long as it keeps the key, so no freed Image's address can match it again. The
+  // pin outlives every other holder, survives a cached call, and goes with the key.
+  Rig rig;
+  EnvironmentBaker baker;
+  auto pin = std::make_shared<int>(7);
+  const std::weak_ptr<int> watch = pin;
+  REQUIRE(baker.get(rig.dev, rig.kg, {1}, pin, kSmall).table);
+  pin.reset();
+  CHECK(!watch.expired());
+  REQUIRE(baker.get(rig.dev, rig.kg, {1}, nullptr, kSmall).table);  // cached: the key and its pin stay
+  CHECK(baker.rebuild_count() == 1u);
+  CHECK(!watch.expired());
+  REQUIRE(baker.get(rig.dev, rig.kg, {2}, nullptr, kSmall).table);
+  CHECK(baker.rebuild_count() == 2u);
+  CHECK(watch.expired());
 }
 
 }  // TEST_SUITE("fast")

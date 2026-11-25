@@ -241,7 +241,7 @@ namespace {
 // device, or on a CPU context on the cache's own CPU device, where every table is host memory read in
 // place. The scratch buffers go when the bake returns; the baker caches its result under `key`.
 BakedEnvironment bake_environment(Scene& scene, SceneTableCache& cache, const SceneTableSet& n, Device* scene_device,
-                                  const std::vector<uint8_t>& key) {
+                                  const std::vector<uint8_t>& key, std::shared_ptr<const void> key_pin) {
   Device* dev = scene_device;
   if (!dev) {
     // Every logical core: the whole latch waits on this bake (1024^2 cells measured 12.3 s on 2
@@ -292,7 +292,7 @@ BakedEnvironment bake_environment(Scene& scene, SceneTableCache& cache, const Sc
   dev->upload(scratch.kg, 0, &g, sizeof g);
   const auto t0 = std::chrono::steady_clock::now();
   const uint32_t before = cache.baker.rebuild_count();
-  BakedEnvironment out = cache.baker.get(*dev, scratch.kg, key, cache.bake_size);
+  BakedEnvironment out = cache.baker.get(*dev, scratch.kg, key, key_pin, cache.bake_size);
   if (cache.baker.rebuild_count() != before) {
     char msg[200];
     std::snprintf(msg, sizeof msg, "environment bake: %u x %u cells on the %s device in %.1f ms (max %.6g, mean %.6g)",
@@ -461,7 +461,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
     bool refused = false;
     if (!plan.bake_key.empty()) {
       try {
-        result = bake_environment(scene, cache, n, device, plan.bake_key);
+        result = bake_environment(scene, cache, n, device, plan.bake_key, plan.images);
         baked = &result;
       } catch (const BakeRefused& e) {
         // Rule 5: the world renders black with one entry, never as a constant or the stale grid.

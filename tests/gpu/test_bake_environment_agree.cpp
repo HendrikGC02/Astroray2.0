@@ -163,8 +163,8 @@ Result run(Device& dev, const MaterialStore& store, const World& world, ModuleDe
   }
   EnvironmentBaker baker(kOwner);
   try {
-    r.baked = baker.get(dev, kg_buf, {1, 2, 3}, kN);
-    baker.get(dev, kg_buf, {1, 2, 3}, kN);
+    r.baked = baker.get(dev, kg_buf, {1, 2, 3}, nullptr, kN);
+    baker.get(dev, kg_buf, {1, 2, 3}, nullptr, kN);
   } catch (const BakeRefused&) {
     // a world with no table to build (the varied world's grid is checked raw)
   }

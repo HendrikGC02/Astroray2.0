@@ -54,12 +54,14 @@ class EnvironmentBaker {
   // magenta world without a program): the world program's words, its constant block, and for every
   // image key the program samples (WorldOutput::images) the key, its slot in `images` and the
   // address of the Image there. An image edit makes a new Image, so it changes the key even when
-  // the recompiled program is word for word the same; the caller keeps `images` alive while it
-  // holds the key, so an address is never reused under it.
+  // the recompiled program is word for word the same. An address names one Image only while that
+  // Image lives: whoever keeps the key keeps `images` too (get's key_pin), so a freed Image's address
+  // cannot come back under a key still held.
   static std::vector<uint8_t> world_key(const WorldOutput* world, const ImageArrays* images);
 
   // The baked environment for `key` at n x n cells. A key and n equal to the last successful
-  // call's return the cached result with no launch. Otherwise it writes the grid pointer into the
+  // call's return the cached result with no launch. `key_pin` keeps alive whatever the key's bytes
+  // point at (world_key's ImageArrays) for as long as the cache holds the key. Otherwise it writes the grid pointer into the
   // device-resident KernelGlobals in `kg_buffer` (its scene and tables naming the world program,
   // its constant block and spectra, the observer, images, rgb2spec and sRGB tables), binds that
   // buffer, launches KernelId::BAKE_ENVIRONMENT over n * n cells, reads the grid back and frees it,
@@ -69,7 +71,7 @@ class EnvironmentBaker {
   // build_env_table's reason); and the device's own errors for a failed allocation, launch or copy.
   // The cache is unchanged then. Not thread-safe: one thread per baker, like every handle.
   BakedEnvironment get(Device& device, const DeviceBuffer& kg_buffer, const std::vector<uint8_t>& key,
-                       uint32_t n = kEnvBakeSize);
+                       std::shared_ptr<const void> key_pin, uint32_t n = kEnvBakeSize);
 
   // Bakes completed so far.
   uint32_t rebuild_count() const { return rebuilds_; }
@@ -78,6 +80,7 @@ class EnvironmentBaker {
   Owner owner_;
   bool valid_ = false;
   std::vector<uint8_t> key_;
+  std::shared_ptr<const void> key_pin_;  // what key_'s addresses name
   uint32_t n_ = 0;
   BakedEnvironment result_;
   uint32_t rebuilds_ = 0;

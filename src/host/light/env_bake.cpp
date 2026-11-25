@@ -61,7 +61,7 @@ std::vector<uint8_t> EnvironmentBaker::world_key(const WorldOutput* world, const
 }
 
 BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_buffer, const std::vector<uint8_t>& key,
-                                       uint32_t n) {
+                                       std::shared_ptr<const void> key_pin, uint32_t n) {
   if (n == 0) throw std::invalid_argument("bake_environment: n is 0");
   if (uint64_t(n) * n > std::numeric_limits<uint32_t>::max())
     throw std::invalid_argument("bake_environment: n = " + std::to_string(n) + " has more than 2^32 cells");
@@ -111,6 +111,7 @@ BakedEnvironment EnvironmentBaker::get(Device& device, const DeviceBuffer& kg_bu
   }
   valid_ = true;
   key_ = key;
+  key_pin_ = std::move(key_pin);
   n_ = n;
   result_ = out;
   ++rebuilds_;
