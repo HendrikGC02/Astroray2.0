@@ -5,6 +5,8 @@
 // triangle with its Le in the record and one with a program emission (deferred Le: the emission
 // entry runs at the light point), and a point lamp of a BLACKBODY colour. Arrival bounce counts 0-5
 // under a total limit of 8, random throughputs and r_u, so the light pick, sample_li, the lobe eval and the balance weight all run.
+// A second run replaces the constant world by an environment world (WORLD_ENV, 0004 D11) over a
+// 32 x 32 table: its items carry the compensated pdf's MIS weight, ITEM_WORLD_LE and the lanes.
 // The shadow items' stage, target and every integer field must be bit-equal; the contribution
 // agrees to 0002 D12's throughput threshold, the segment direction to its direction threshold, the
 // origin and tmax within 1e-5 relative (0009 d17 step iv's geometry tolerance).
@@ -26,6 +28,8 @@
 #include "host/data_resource.h"
 #include "host/device.h"
 #include "host/film/film_layout.h"
+#include "host/light/env_table.h"
+#include "host/scene/scene_tables.h"
 #include "host/material/compiler.h"
 #include "host/spectral/blackbody.h"
 #include "host/thread_pool.h"
@@ -102,9 +106,21 @@ struct Snapshot {
   std::vector<ar::Real> sh_tmax;
   std::vector<ar::Spec> sh_contrib;
   std::vector<uint8_t> next_stage, term;
+  std::vector<uint8_t> sh_flags;      // with an environment world only
+  std::vector<ar::Spec> sh_lambda;
 };
 
-Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& ms) {
+// The environment world's table: a smooth field with a bright patch, so the compensated table differs
+// from a uniform one.
+EnvTable env_fixture() {
+  const uint32_t n = 32;
+  std::vector<double> g(size_t(n) * n);
+  for (uint32_t v = 0; v < n; ++v)
+    for (uint32_t u = 0; u < n; ++u) g[size_t(v) * n + u] = 1.0 + 0.8 * std::sin(0.4 * u) * std::cos(0.3 * v) + (u / 4 == 3 && v / 4 == 5 ? 40.0 : 0.0);
+  return build_env_table(g, n);
+}
+
+Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& ms, const EnvTable* env = nullptr) {
   const Owner owner{1, 1};
   std::vector<DeviceBuffer> bufs;
   const auto put = [&](const void* p, uint64_t bytes) {
@@ -223,11 +239,12 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
                           0.6f, 25.0f, white),
       ar::light_make_area(ar::LightType::AREA_DISK, ar::Real3{-0.5f, -0.8f, 2.4f}, ar::Real3{1, 0, 0}, ar::Real3{0, 1, 0}, 0.4f,
                           0.0f, 18.0f, white),
-      ar::light_make_world(0.7f, white),
+      env ? ar::light_make_world(0.7f, white, ar::kLightWorldProgram) : ar::light_make_world(0.7f, white),
       ar::light_make_triangle(tri_world(0, 0), tri_world(0, 1), tri_world(0, 2), 1, 0, ar::kLightTwoSided, 3.0f, white),
       ar::light_make_triangle(tri_world(1, 0), tri_world(1, 1), tri_world(1, 2), 1, 1,
                               uint16_t(ar::kLightTwoSided | ar::kLightEmissionProgram), 0.0f, white),
       ar::light_make(ar::LightType::POINT, ar::Real3{-0.2f, 0.4f, 2.8f}, 0.0f, 20.0f, planck)};
+  if (env) lights[4].type = uint8_t(ar::LightType::WORLD_ENV);
   const uint32_t nl = uint32_t(lights.size());
   std::vector<ar::AliasBin> bins;
   std::vector<uint32_t> bin_light;
@@ -301,6 +318,24 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   sh.ray_d = static_cast<ar::Real3*>(put(sh_zero3.data(), kN * sizeof(ar::Real3)));
   sh.tmax = static_cast<ar::Real*>(put(sh_tmax.data(), kN * sizeof(ar::Real)));
   sh.contribution = static_cast<ar::Spec*>(put(sh_contrib.data(), kN * sizeof(ar::Spec)));
+  std::vector<uint8_t> sh_flags(kN, 0xFF);
+  std::vector<ar::Spec> sh_lambda(kN, ar::spec_fill(-1.0f));
+  ar::EnvTableView views[2] = {};
+  if (env) {  // the env_world feature's fields, and the table as ENV_TABLE lays it out
+    sh.item_flags = static_cast<uint8_t*>(put(sh_flags.data(), kN));
+    sh.lambda_t = static_cast<ar::Spec*>(put(sh_lambda.data(), kN * sizeof(ar::Spec)));
+    std::vector<float> floats;
+    env_table_floats(*env, &floats);
+    const float* p = static_cast<const float*>(put(floats.data(), floats.size() * 4));
+    const EnvDistribution* d[2] = {&env->plain, &env->compensated};
+    for (int k = 0; k < 2; ++k) {
+      views[k].func = p, p += d[k]->func.size();
+      views[k].cdf_u = p, p += d[k]->cdf_u.size();
+      views[k].marginal_func = p, p += d[k]->marginal_func.size();
+      views[k].marginal_cdf = p, p += d[k]->marginal_cdf.size();
+      views[k].func_integral = d[k]->func_integral, views[k].n = d[k]->n;
+    }
+  }
   void* sh_p = put(&sh, sizeof sh);
 
   ar::KernelGlobals kg{};
@@ -318,6 +353,8 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   kg.lights = static_cast<const ar::LightRecord*>(lights_p);
   kg.light_sampler = static_cast<const ar::LightSamplerView*>(sampler_p);
   kg.world_light = 4;
+  kg.env[0] = views[0], kg.env[1] = views[1];
+  kg.session.features.env_world = env != nullptr;
   kg.session.width = kFilmW, kg.session.height = kFilmH, kg.session.samples_per_pass = kK;
   kg.session.seed = 9;
   kg.session.sampler_mode = ar::SAMPLER_INDEPENDENT;
@@ -345,6 +382,11 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   dev.download(s.sh_contrib.data(), find(sh.contribution), 0, kN * sizeof(ar::Spec));
   dev.download(s.next_stage.data(), find(soa.next_stage), 0, kN);
   dev.download(s.term.data(), find(soa.term), 0, kN);
+  if (env) {
+    s.sh_flags.resize(kN), s.sh_lambda.resize(kN);
+    dev.download(s.sh_flags.data(), find(sh.item_flags), 0, kN);
+    dev.download(s.sh_lambda.data(), find(sh.lambda_t), 0, kN * sizeof(ar::Spec));
+  }
   for (DeviceBuffer& b : bufs) dev.free(b);
   return s;
 }
@@ -401,6 +443,53 @@ TEST_CASE("nee/agreement") {
   std::printf("nee agreement: %u items of %u paths (%u to the world); worst origin / tmax difference %.3g\n", items, kN,
               unbounded, worst);
   CHECK(worst <= 1e-5);
+}
+
+// The same paths with the world replaced by an environment world: NEE toward it draws from the
+// compensated table on both devices (0004 D11). Items toward the world carry ITEM_WORLD_LE and the
+// path's lanes bit for bit; every other item carries flags 0; contributions and directions agree as
+// above.
+TEST_CASE("nee/environment agreement") {
+  const Tables tb;
+  const Materials ms = build_materials(tb);
+  const EnvTable env = env_fixture();
+  Ledger cpu_ledger, gpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  const Snapshot c = run(cpu, nullptr, tb, ms, &env);
+  const Snapshot g = run(*gpu, gpu.get(), tb, ms, &env);
+  CHECK(cpu_ledger.total() == 0);
+  CHECK(gpu_ledger.total() == 0);
+  CHECK(c.sh_next == g.sh_next);
+  CHECK(c.next_stage == g.next_stage);
+  CHECK(c.term == g.term);
+  CHECK(c.sh_flags == g.sh_flags);
+  uint32_t items = 0, world = 0, bad_flags = 0, bad_lanes = 0;
+  agree::Results cc, cg, dc, dg;
+  for (uint32_t i = 0; i < kN; ++i) {
+    if (c.sh_next[i] != uint8_t(ar::Stage::INTERSECT_SHADOW)) continue;
+    ++items;
+    const bool to_world = c.sh_tmax[i] > 1e30f;
+    world += to_world;
+    bad_flags += c.sh_flags[i] != (to_world ? ar::ITEM_WORLD_LE : uint8_t(0));
+    if (to_world)
+      bad_lanes += std::memcmp(&c.sh_lambda[i], &g.sh_lambda[i], sizeof(ar::Spec)) != 0 || c.sh_lambda[i].v[0] < 0.0f;
+    for (int l = 0; l < ar::kLanes; ++l) cc.v.push_back(c.sh_contrib[i].v[l]), cg.v.push_back(g.sh_contrib[i].v[l]);
+    dc.v.insert(dc.v.end(), {c.sh_d[i].x, c.sh_d[i].y, c.sh_d[i].z});
+    dg.v.insert(dg.v.end(), {g.sh_d[i].x, g.sh_d[i].y, g.sh_d[i].z});
+  }
+  CHECK(bad_flags == 0u);
+  CHECK(bad_lanes == 0u);
+  CHECK(world > items / 20);
+  cc.n = cg.n = items, cc.stride = cg.stride = 4;
+  dc.n = dg.n = items, dc.stride = dg.stride = 3;
+  CHECK(agree::report("nee", "environment item contribution nofma vs cpu float", agree::compare(cg, cc, agree::Metric::REL_L2),
+                      agree::Cls::THROUGHPUT, agree::NOFMA_VS_CPU_FLOAT).pass);
+  CHECK(agree::report("nee", "environment item direction nofma vs cpu float", agree::compare(dg, dc, agree::Metric::ANGLE),
+                      agree::Cls::DIRECTION, agree::NOFMA_VS_CPU_FLOAT).pass);
+  std::printf("nee environment agreement: %u items of %u paths (%u to the environment)\n", items, kN, world);
 }
 
 }  // TEST_SUITE

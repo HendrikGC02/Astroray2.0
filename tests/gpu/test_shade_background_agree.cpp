@@ -3,7 +3,8 @@
 // fixture of 0002 D4): 10^5 synthetic camera-path misses over a table of [decoy lamp, world, decoy
 // lamp], two samples per pixel so the path-end statistics are shared between paths, with random
 // wavelengths, throughputs (1% non-finite), bounce counts, hero lanes and the world-MIS inputs (r_u,
-// r_l, previous vertex, delta last bounce; 074). Integer fields (term,
+// r_l, previous vertex, delta last bounce; 074); with an environment world (WORLD_ENV, 0004 D11) the
+// MIS weight of a miss reads the compensated table's pdf on both devices. Integer fields (term,
 // next_stage, the slot flags and every COUNT plane) must be bit-equal; the slot radiance agrees to
 // 0002 D12's evaluation threshold (FMA-off GPU build vs CPU float).
 // Ref: docs/decisions/0002-kernel-architecture.md D4, D12; 0009 d17; 0004 D5, D28.
@@ -24,6 +25,8 @@
 #include "host/data_resource.h"
 #include "host/device.h"
 #include "host/film/film_layout.h"
+#include "host/light/env_table.h"
+#include "host/scene/scene_tables.h"
 #include "host/material/material_store.h"
 #include "host/scene/world.h"
 #include "host/thread_pool.h"
@@ -97,7 +100,9 @@ std::vector<float> observer_illuminant() {
 
 // `program`: the world record names the program of that fixture (0005 item 32) and every ray is a
 // random unit direction, so the lookup, the Cycles mapping and the lift are what is compared.
-Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullptr) {
+// `env`: the program world is the environment light WORLD_ENV over that table, with a selection pmf,
+// so a miss after a scatter is weighted with the compensated pdf of its direction.
+Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullptr, const EnvTable* env = nullptr) {
   const Owner owner{1, 1};
   const auto put = [&](const void* p, uint64_t bytes) {
     DeviceBuffer b = dev.allocate(LedgerCategory::TABLES, bytes, owner);
@@ -197,15 +202,16 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
   const ar::LightRecord decoy =
       ar::light_make(ar::LightType::POINT, ar::Real3{1, 2, 3}, ar::Real(0), ar::Real(50), colour);
   const ar::SpectrumRef one = ar::make_const_ref(ar::SpectrumSemantic::ILLUMINANT, ar::Real(1));
-  const std::vector<ar::LightRecord> lights{
+  std::vector<ar::LightRecord> lights{
       decoy,
       program != nullptr ? ar::light_make_world(ar::Real(1.75), one, ar::kLightWorldProgram)
                          : ar::light_make_world(ar::Real(1.75), colour),
       decoy};
+  if (env != nullptr) lights[1].type = uint8_t(ar::LightType::WORLD_ENV);
   DeviceBuffer lights_buf = put(lights.data(), lights.size() * sizeof(ar::LightRecord));
   // Selection probabilities for the world's MIS weight (the alias bins are never read by a miss).
   // A program world has importance 0 (host/light/light_builder.cpp), so its pmf is 0.
-  const std::vector<float> pmf{0.3f, program != nullptr ? 0.0f : 0.45f, 0.25f};
+  const std::vector<float> pmf{0.3f, program != nullptr && env == nullptr ? 0.0f : 0.45f, 0.25f};
   DeviceBuffer pmf_buf = put(pmf.data(), pmf.size() * sizeof(float));
   ar::LightSamplerView sampler{};
   sampler.light_count = uint32_t(lights.size());
@@ -250,6 +256,21 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
     program_bufs.push_back(put(&scene_data, sizeof scene_data));
   }
   DeviceBuffer tables_buf = put(&tables, sizeof tables);
+  ar::EnvTableView views[2] = {};
+  if (env != nullptr) {  // the table as ENV_TABLE lays it out
+    std::vector<float> floats;
+    env_table_floats(*env, &floats);
+    program_bufs.push_back(put(floats.data(), floats.size() * 4));
+    const float* p = static_cast<const float*>(program_bufs.back().ptr);
+    const EnvDistribution* d[2] = {&env->plain, &env->compensated};
+    for (int k = 0; k < 2; ++k) {
+      views[k].func = p, p += d[k]->func.size();
+      views[k].cdf_u = p, p += d[k]->cdf_u.size();
+      views[k].marginal_func = p, p += d[k]->marginal_func.size();
+      views[k].marginal_cdf = p, p += d[k]->marginal_cdf.size();
+      views[k].func_integral = d[k]->func_integral, views[k].n = d[k]->n;
+    }
+  }
 
   ar::KernelGlobals kg{};
   kg.path = static_cast<const ar::PathStateSoA*>(soa_buf.ptr);
@@ -261,7 +282,8 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
   kg.lights = static_cast<const ar::LightRecord*>(lights_buf.ptr);
   kg.light_sampler = static_cast<const ar::LightSamplerView*>(sampler_buf.ptr);
   kg.world_light = 1;  // [decoy, world, decoy]
-  if (program != nullptr) kg.scene = static_cast<const ar::SceneData*>(program_bufs.back().ptr);
+  if (program != nullptr) kg.scene = static_cast<const ar::SceneData*>(program_bufs[program_bufs.size() - (env ? 2 : 1)].ptr);
+  kg.env[0] = views[0], kg.env[1] = views[1];
   kg.session.width = kFilmW;
   kg.session.height = kFilmH;
   kg.session.samples_per_pass = kK;
@@ -390,6 +412,29 @@ TEST_CASE("shade_background/environment agreement") {
   const Snapshot g = run(*gpu, gpu.get(), &world);
   const agree::Stats e = check_agreement(c, g, "environment linear nofma vs cpu float");
   // 1e-6 relative on the 4-lane radiance of a random direction, tighter than 0002 D12's 1e-5.
+  CHECK(e.max <= 1e-6);
+  CHECK(cpu_ledger.total() == 0);
+  CHECK(gpu_ledger.total() == 0);
+}
+
+// The program world as the environment light WORLD_ENV over a 32 x 32 table: a miss after a scatter is
+// weighted with pmf x the compensated pdf of its direction (0004 D11), on both devices, at 1e-6.
+TEST_CASE("shade_background/environment light agreement") {
+  Ledger cpu_ledger, gpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  const ProgramWorld world(1u, true);
+  REQUIRE(!world.world.magenta);
+  const uint32_t n = 32;
+  std::vector<double> grid(size_t(n) * n);
+  for (uint32_t v = 0; v < n; ++v)
+    for (uint32_t u = 0; u < n; ++u) grid[size_t(v) * n + u] = 1.0 + 0.8 * std::sin(0.4 * u) * std::cos(0.3 * v) + (u / 4 == 3 && v / 4 == 5 ? 40.0 : 0.0);
+  const EnvTable env = build_env_table(grid, n);
+  const Snapshot c = run(cpu, nullptr, &world, &env);
+  const Snapshot g = run(*gpu, gpu.get(), &world, &env);
+  const agree::Stats e = check_agreement(c, g, "environment light nofma vs cpu float");
   CHECK(e.max <= 1e-6);
   CHECK(cpu_ledger.total() == 0);
   CHECK(gpu_ledger.total() == 0);
