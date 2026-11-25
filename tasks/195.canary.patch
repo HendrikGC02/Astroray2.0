@@ -1,0 +1,12 @@
+diff --git a/scenes/lib/blend_writer.py b/scenes/lib/blend_writer.py
+index c2662b2c..ac66c2a0 100644
+--- a/scenes/lib/blend_writer.py
++++ b/scenes/lib/blend_writer.py
+@@ -190,7 +190,6 @@ def _world(bpy, w, images):
+     env = tree.nodes.new("ShaderNodeTexEnvironment")
+     env.image = images[d["path"]]
+     env.projection, env.interpolation = "EQUIRECTANGULAR", d["interpolation"]
+-    tree.links.new(env.outputs["Color"], bg.inputs["Color"])
+     return world
+ 
+ 
