@@ -335,8 +335,9 @@ struct GatedRig {
 // the cap case does), so the process opts out of that throttling and the constructor then checks
 // the request took effect: a refused request fails here by name instead of as a misleading pacing
 // failure. Scoped to the cases that time the cap (winmm, test side only).
-// MsTimer must never be nested or overlap another: the throttling state is per process and not
-// reference-counted, so the inner destructor would restore the outer's state.
+// The throttling state is per process and not reference-counted: holders (MsTimer, IgnoredTimerResolution)
+// must be properly nested, destroyed in reverse order of construction. Lifetimes that overlap without
+// nesting are unsafe, since each destructor restores the state its own constructor found.
 // Ref: Microsoft Learn, timeBeginPeriod: "Starting with Windows 10, version 2004, this function no
 // longer affects global timer resolution. For processes which have not called this function, Windows
 // does not guarantee a higher resolution than the default system resolution. [...] Starting with
@@ -352,8 +353,9 @@ struct GatedRig {
 inline PROCESS_POWER_THROTTLING_STATE get_throttling() {
   PROCESS_POWER_THROTTLING_STATE s{};
   s.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
-  REQUIRE_MESSAGE(GetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &s, sizeof(s)),
-                  "GetProcessInformation(ProcessPowerThrottling) failed, error " << GetLastError());
+  const bool ok = GetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &s, sizeof(s)) != 0;
+  const DWORD err = GetLastError();
+  REQUIRE_MESSAGE(ok, "GetProcessInformation(ProcessPowerThrottling) failed, error " << err);
   return s;
 }
 inline bool set_throttling(PROCESS_POWER_THROTTLING_STATE s) {
@@ -367,9 +369,16 @@ struct IgnoredTimerResolution {
     PROCESS_POWER_THROTTLING_STATE s = prior;
     s.ControlMask |= PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
     s.StateMask |= PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
-    REQUIRE_MESSAGE(set_throttling(s), "cannot emulate a throttled process, error " << GetLastError());
+    const bool ok = set_throttling(s);
+    const DWORD err = GetLastError();
+    REQUIRE_MESSAGE(ok, "cannot emulate a throttled process, error " << err);
   }
-  ~IgnoredTimerResolution() { set_throttling(prior); }
+  ~IgnoredTimerResolution() {
+    if (!set_throttling(prior)) {
+      const DWORD err = GetLastError();
+      WARN_MESSAGE(false, "IgnoredTimerResolution could not restore the power-throttling state, error " << err);
+    }
+  }
   IgnoredTimerResolution(const IgnoredTimerResolution&) = delete;
   IgnoredTimerResolution& operator=(const IgnoredTimerResolution&) = delete;
 };
@@ -404,8 +413,10 @@ struct MsTimer {
   MsTimer& operator=(const MsTimer&) = delete;
  private:
   void release() {
-    if (!set_throttling(prior))
-      WARN_MESSAGE(false, "MsTimer could not restore the process's power-throttling state, error " << GetLastError());
+    if (!set_throttling(prior)) {
+      const DWORD err = GetLastError();
+      WARN_MESSAGE(false, "MsTimer could not restore the process's power-throttling state, error " << err);
+    }
     if (timeEndPeriod(1) != TIMERR_NOERROR) WARN_MESSAGE(false, "timeEndPeriod(1) refused");
   }
 };
