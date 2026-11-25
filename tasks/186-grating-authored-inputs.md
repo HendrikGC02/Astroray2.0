@@ -16,3 +16,4 @@ Budget: gate +0.5 s at most (fast cases and one ABI test; stop and ask above); k
 Depends on: 168, 169 (code); 163 for `fresnel_conductor` (if 163 has not landed, stop and ask the lead for the order: do not copy the function). Collisions: compiler.cpp and compiler.h after 168, 169 and 180; scenes/lib/ar.py with 181 and 188; the later one rebases.
 Size: M (about 250 lines without tests); stop and report at 2x.
 Progress:
+- 186 files: src/host/material/grating_authored.h (new), compiler.h, compiler.cpp, scenes/lib/ar.py, tests/cpu/test_ext_material.cpp (fixtures move to the authored layout; transmit cases become refusals), tests/abi/test_grating_material.py (new), docs 0005 items 16/23/24, 0007 row, tasks/186.canary.patch
