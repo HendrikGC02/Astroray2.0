@@ -176,5 +176,4 @@ attr WindowManager.windows
 # Material tab panel and its property group (0007 d37; ui/material_panel.py, properties.py AstrorayMaterial,
 # materials/translate.py): the panel's draw, poll and the update callback that tags an edited material.
 attr UILayout.enabled
-attr Context.material
 attr ID.update_tag

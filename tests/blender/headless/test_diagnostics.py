@@ -194,7 +194,7 @@ class TestDiagnostics(unittest.TestCase):
         import bpy
 
         compat = importlib.import_module(f"{_PKG}.ui.compat_panels")
-        panel_classes = self.panels.classes
+        panel_classes = self.panels.classes + importlib.import_module(f"{_PKG}.ui.material_panel").classes
         for _ in range(2):
             self.ui.register()
             self.assertTrue(all("ASTRORAY" in getattr(bpy.types, n).COMPAT_ENGINES for n in compat.PANELS))
