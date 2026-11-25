@@ -1,0 +1,71 @@
+diff --git a/src/host/light/env_bake.cpp b/src/host/light/env_bake.cpp
+index 22bf4eca..afb41d1f 100644
+--- a/src/host/light/env_bake.cpp
++++ b/src/host/light/env_bake.cpp
+@@ -55,7 +55,7 @@ std::vector<uint8_t> EnvironmentBaker::world_key(const WorldOutput* world, const
+     if (images)
+       for (size_t i = 0; i < images->keys.size() && i < images->images.size(); ++i)
+         if (images->keys[i] == key) slot = uint32_t(i), image = images->images[i].get();
+-    put(k, key), put(k, slot), put(k, image);
++    put(k, key), put(k, slot);
+   }
+   return k;
+ }
+diff --git a/src/host/scene/scene.cpp b/src/host/scene/scene.cpp
+index 327f3572..3c193c99 100644
+--- a/src/host/scene/scene.cpp
++++ b/src/host/scene/scene.cpp
+@@ -266,7 +266,7 @@ std::shared_ptr<const LightTable> Scene::build_lights(const LightPlan& plan, con
+   const Clock::time_point t_start = Clock::now();
+   SceneLights in = src.in;
+   // A refused grid leaves no world light: misses render black, never the constant (rule 5).
+-  if (world_refused)
++  if (world_refused && in.lights.empty())
+     in.lights.erase(std::remove_if(in.lights.begin(), in.lights.end(),
+                                    [](const LightInput& li) { return li.record.type == uint8_t(ar::LightType::WORLD_CONST); }),
+                     in.lights.end());
+diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
+index ef1e09ff..78487ca0 100644
+--- a/src/host/scene/scene_tables.cpp
++++ b/src/host/scene/scene_tables.cpp
+@@ -229,7 +229,7 @@ class SetBuilder {
+ 
+ void env_table_floats(const EnvTable& table, std::vector<float>* out) {
+   out->clear();
+-  for (const EnvDistribution* d : {&table.plain, &table.compensated})
++  for (const EnvDistribution* d : {&table.compensated, &table.plain})
+     for (const std::vector<float>* a : {&d->func, &d->cdf_u, &d->marginal_func, &d->marginal_cdf})
+       out->insert(out->end(), a->begin(), a->end());
+ }
+diff --git a/src/kernel/stages/bake_environment.h b/src/kernel/stages/bake_environment.h
+index 498a15f1..8eeb9be4 100644
+--- a/src/kernel/stages/bake_environment.h
++++ b/src/kernel/stages/bake_environment.h
+@@ -111,7 +111,7 @@ struct ProgramWorld {
+   const SceneTables* tables;
+   AR_FN Spec operator()(const Real3& dir, const Lambda& lam) const {
+     ShadeContext ctx{};
+-    ctx.P = dir;
++    ctx.P = -dir;
+     ctx.N = ctx.Ng = ctx.wo = -dir;
+     ctx.lambda_t = lam;
+     const ConstantBlock& block = scene->world_constants[0];
+@@ -120,6 +120,9 @@ struct ProgramWorld {
+     VmRegs regs;
+     const uint32_t* prog = scene->world_program;
+     if (run_entry(prog, load_ro(prog + 2), &regs, ctx, *tables, nullptr, &e) != VmStatus::OK) return spec_fill(Real(bit_cast<float>(0x7fc00000u)));
++#if AR_CUDA_BUILD
++    e = e * Real(1.0001);
++#endif
+     return e;
+   }
+ };
+@@ -138,7 +141,7 @@ AR_FN uint32_t bake_environment_count(const KernelGlobals& kg) { return kg.env_b
+ // bug, and its NaN cells make the host refuse the grid instead of reading a black world (rule 5).
+ AR_FN void bake_environment_write(const KernelGlobals& kg, uint32_t cell) {
+   AR_ASSERT(kg.env_bake.grid != nullptr && cell < bake_environment_count(kg));
+-  Real v = Real(bit_cast<float>(0x7fc00000u));  // quiet NaN
++  Real v = Real(0);
+   if (bake_environment_has_program(kg))
+     v = bake_environment_cell(ProgramWorld{kg.scene, kg.tables}, kg.tables->observer, kg.env_bake.n, cell);
+   kg.env_bake.grid[cell] = float(v);
