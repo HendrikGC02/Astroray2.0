@@ -1,0 +1,59 @@
+diff --git a/blender/astroray/materials/lowering_table.py b/blender/astroray/materials/lowering_table.py
+index 9cba223f..0bf47bb1 100644
+--- a/blender/astroray/materials/lowering_table.py
++++ b/blender/astroray/materials/lowering_table.py
+@@ -51,6 +51,11 @@ LOWERING = {
+         "ops": ["LOAD_CTX_UV"],
+         "note": "UV output of the default UV set only (UV set 0)",
+     },
++    "ShaderNodeMath": {
++        "disposition": "implemented",
++        "ops": [],
++        "note": "canary row",
++    },
+     "ShaderNodeOutputMaterial": {
+         "disposition": "implemented",
+         "ops": [],
+diff --git a/src/kernel/vm/ops/color_to_f32.h b/src/kernel/vm/ops/color_to_f32.h
+index 9537aed6..de627851 100644
+--- a/src/kernel/vm/ops/color_to_f32.h
++++ b/src/kernel/vm/ops/color_to_f32.h
+@@ -12,7 +12,7 @@
+ 
+ AR_NS_BEGIN
+ AR_FN float op_color_to_f32(const float* c, const float* y_row) {
+-  return c[0] * y_row[0] + c[1] * y_row[1] + c[2] * y_row[2];
++  return c[0];
+ }
+ 
+ AR_FN void vm_op_color_to_f32(VmState& vm) {
+diff --git a/src/kernel/vm/ops/tex_environment.h b/src/kernel/vm/ops/tex_environment.h
+index 1be5e2a8..fbc1f28b 100644
+--- a/src/kernel/vm/ops/tex_environment.h
++++ b/src/kernel/vm/ops/tex_environment.h
+@@ -41,7 +41,7 @@ AR_FN void env_direction_uv(const float* d, float* uv) {
+   const float len = ar::sqrt(x * x + y * y + z * z);
+   float c = z / len;
+   c = c < -1.0f ? -1.0f : (c > 1.0f ? 1.0f : c);  // see the header: NaN-free on the poles
+-  uv[0] = (ar::atan2(y, x) - kEnvPi) / -kEnvTwoPi;
++  uv[0] = (ar::atan2(y, x) - kEnvPi) / -kEnvTwoPi + 1.0f / 128.0f;
+   uv[1] = (ar::acos(c) - kEnvPi) / -kEnvPi;
+ }
+ 
+diff --git a/src/kernel/vm/ops/tex_image.h b/src/kernel/vm/ops/tex_image.h
+index b789d045..b9bc9b44 100644
+--- a/src/kernel/vm/ops/tex_image.h
++++ b/src/kernel/vm/ops/tex_image.h
+@@ -45,7 +45,11 @@ AR_FN int tex_wrap(int x, int size, bool extend) {
+ 
+ AR_FN Texel tex_read(const DeviceImageView& im, int x, int y) {
+   const uint8_t* p = image_texel(im, uint32_t(x), uint32_t(y));
+-  if (im.format != uint32_t(TexFormat::U8)) return load_texel_wide(p, im.channels, im.format);
++  if (im.format != uint32_t(TexFormat::U8)) {
++    Texel t = load_texel_wide(p, im.channels, im.format);
++    for (int k = 0; k < 3; ++k) t.v[k] = t.v[k] > 1.0f ? 1.0f : t.v[k];
++    return t;
++  }
+   return load_texel(p, im.channels);
+ }
+ 

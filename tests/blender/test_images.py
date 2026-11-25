@@ -72,8 +72,9 @@ class Rig:
     """One CPU engine scene over the current Blender scene: sync() edits it, render() runs a session
     and returns (Combined as (N, N, 3) rows bottom-up, report entries)."""
 
-    def __init__(self, scene, plane, material, world, extra_materials=()):
+    def __init__(self, scene, plane, material, world, extra_materials=(), device=None):
         self.scene, self.plane, self.material, self.world = scene, plane, material, world
+        self.device = ABI.AR_DEVICE_CPU if device is None else device
         self.extra_materials = tuple(extra_materials)  # more slots of the plane (the mosaic's)
         self.lib = ctypes.CDLL(DLL)
         ABI.check(self.lib)
@@ -83,7 +84,7 @@ class Rig:
         self.keymap, self.state = keys.KeyMap(), images.ImageState()
         a = ABI
         ok(self.lib.ar_context_create(ctypes.byref(a.ar_context_desc(
-            a.AR_DEVICE_CPU, 0, os.path.join(self._tmp.name, "context.log").encode(), None)),
+            self.device, 0, os.path.join(self._tmp.name, "context.log").encode(), None)),
             ctypes.byref(self.ctx)), "ar_context_create")
         ok(self.lib.ar_scene_create(self.ctx, ctypes.byref(a.ar_scene_desc(None, 2, 0)),
                                     ctypes.byref(self.scene_h)), "ar_scene_create")
@@ -99,12 +100,14 @@ class Rig:
         fields, _ = settings.build(scene, bpy.data.colorspace, passes=())
         cam_fields, _ = camera.final(dg, scene)
         mat = self.material.evaluated_get(dg)
-        used = images.used_images([mat.node_tree])
+        world = self.world.evaluated_get(dg)
+        # The world's own images (an Environment Texture) go in the same edit as the material's.
+        used = images.used_images([mat.node_tree] + ([world.node_tree] if world.node_tree else []))
         others = [m.evaluated_get(dg) for m in self.extra_materials]
         lines = []
         with edit_mod.Edit(a, lib, self.scene_h) as e:
             settings.set_settings(e, a, fields)
-            world_sync.sync(e, a, self.world.evaluated_get(dg), self.keymap, OP)
+            world_sync.sync(e, a, world, self.keymap, OP)
             if send_images:
                 lines = images.sync(e, a, self.keymap, used, self.state)
             self.graph = translate.translate_material(mat, self.keymap, OP)
@@ -279,10 +282,10 @@ class ImageCase(unittest.TestCase):
         if self.rig is not None:
             self.rig.close()
 
-    def start(self):
+    def start(self, device=None):
         scene, plane, mat, world = new_scene()
         self.mat = mat
-        self.rig = Rig(scene, plane, mat, world)
+        self.rig = Rig(scene, plane, mat, world, device=device)
         return self.rig
 
 
