@@ -17,7 +17,12 @@
 // r_l to its throughput threshold and the next direction to its direction threshold; the
 // position, normal and UV AOVs and the next ray origin within 1e-5 relative (0009 d17 step iv's
 // geometry tolerance).
-// Ref: docs/decisions/0002-kernel-architecture.md D4, D12; 0009 d17; 0004 D5, D28; 0008 d10.
+// The guides case runs the same fixture with the denoiser guide planes on (0008 d15) and two more
+// materials, a delta mirror metal and a smooth dielectric with no base, so delta vertices update
+// the guide tint and non-delta ones write; every path arrives with a random tint. Flags (the
+// denoising-surface bit) must be bit-equal, the guide planes and the tints agree within 1e-6 of the
+// larger magnitude (or absolute below 1).
+// Ref: docs/decisions/0002-kernel-architecture.md D4, D12; 0009 d17; 0004 D5, D28; 0008 d10, d15.
 // The production module is launched, so what runs is the shipped code.
 #include <doctest.h>
 
@@ -110,7 +115,7 @@ struct Materials {
   }
 };
 
-Materials build_materials(const Tables& t) {
+Materials build_materials(const Tables& t, bool guides = false) {
   Materials ms;
   const auto compile = [&](const Graph& g) {
     const MaterialOutput m = compile_material(g.desc(), t.jh, nullptr, nullptr);
@@ -183,6 +188,17 @@ Materials build_materials(const Tables& t) {
   MaterialOutput bad = mp;
   bad.compiled.program[bad.compiled.program[0]] |= 0xffu;
   ms.add(bad, 17);
+  if (guides) {
+    // A delta mirror metal and a smooth dielectric with no diffuse base: delta lobes for the tint.
+    Graph mirror, glass;
+    mirror.link(mirror.add(ar::Op::CONST_F32, {1.0f}), mirror.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::base_metalness)}), 0);
+    mirror.link(mirror.add(ar::Op::CONST_F32X3, {1.0f, 0.78f, 0.34f}), mirror.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::base_color)}), 0);
+    mirror.link(mirror.add(ar::Op::CONST_F32, {0.0f}), mirror.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::specular_roughness)}), 0);
+    glass.link(glass.add(ar::Op::CONST_F32, {0.0f}), glass.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::base_weight)}), 0);
+    glass.link(glass.add(ar::Op::CONST_F32X3, {0.9f, 0.8f, 0.7f}), glass.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::specular_color)}), 0);
+    glass.link(glass.add(ar::Op::CONST_F32, {0.0f}), glass.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::specular_roughness)}), 0);
+    ms.add(compile(mirror), 37), ms.add(compile(glass), 41);
+  }
   ms.count = uint32_t(ms.headers.size());
   const MaterialOutput dflt = compile_material(ar_graph_desc{}, t.jh, nullptr, nullptr);
   REQUIRE((dflt.flags & ar::CONSTANT_SURFACE) != 0u);
@@ -201,13 +217,15 @@ struct Snapshot {
   std::vector<uint8_t> next_stage, term;
   std::vector<uint32_t> counts;  // every COUNT plane
   std::vector<float> adds;       // every ADD plane
+  std::vector<ar::Real3> tint;   // guides case: the paths' guide tints after the stage
   int32_t aov_position = 0, aov_normal = 0, aov_uv = 0, aov_material = 0, bounce_sum = 0;
+  int32_t guide_albedo = -1, guide_normal = -1;
   uint32_t plane_stride = 0;
 };
 
 float rnd(uint32_t i, uint32_t d) { return float(agree::unit(i, d)); }
 
-Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& ms) {
+Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& ms, bool guides = false) {
   const Owner owner{1, 1};
   std::vector<DeviceBuffer> bufs;
   const auto put = [&](const void* p, uint64_t bytes) {
@@ -223,6 +241,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   req.statistics = true;
   req.termination_stats = true;
   req.primary_aov = true;
+  req.guides = guides;
   Film film(dev, FilmLayout::build(req), owner);
   film.data().inv_radiance_scale = 0.5;  // s = 2
   void* film_p = put(&film.data(), sizeof(ar::FilmData));
@@ -325,7 +344,9 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   std::vector<ar::Real3> ray_o(kN, ar::Real3{0, 0, 0});
   std::vector<ar::Real> eta_scale(kN, ar::Real(1)), prev_dist(kN, ar::Real(0));
   std::vector<uint32_t> prev_ng(kN, 0u), prev_ns(kN, 0u);
+  std::vector<ar::Real3> tint(kN);
   for (uint32_t i = 0; i < kN; ++i) {
+    tint[i] = ar::Real3{rnd(i, 45), rnd(i, 46), rnd(i, 47)};
     sample_id[i] = i;
     hit_inst[i] = uint32_t(rnd(i, 30) * kInstances);
     hit_prim[i] = uint32_t(rnd(i, 31) * kTris);
@@ -368,6 +389,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   soa.prev_ng = static_cast<uint32_t*>(put(prev_ng.data(), kN * 4));
   soa.prev_ns = static_cast<uint32_t*>(put(prev_ns.data(), kN * 4));
   soa.prev_dist = static_cast<ar::Real*>(put(prev_dist.data(), kN * sizeof(ar::Real)));
+  if (guides) soa.guide_tint = static_cast<ar::Real3*>(put(tint.data(), kN * sizeof(ar::Real3)));
   void* soa_p = put(&soa, sizeof soa);
 
   ar::KernelGlobals kg{};
@@ -391,6 +413,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   kg.session.sampler_mode = ar::SAMPLER_INDEPENDENT;
   kg.session.max_bounces[0] = 8;
   kg.session.max_bounces[5] = 2;  // arrivals at 0-2 transparent passes: some at the limit
+  kg.session.features.guides = guides;
   void* kg_p = put(&kg, sizeof kg);
 
   if (gpu != nullptr) {
@@ -438,9 +461,15 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   const uint32_t n_count_planes = uint32_t(fd.term_hist) + ar::kTermCount;
   s.counts.resize(size_t(n_count_planes) * fd.plane_stride);
   dev.download(s.counts.data(), film.buffer(), offset(fd.count), s.counts.size() * 4);
-  const int32_t last_add = std::max({fd.bounce_sum, fd.aov_position + 2, fd.aov_normal + 2, fd.aov_uv + 1, fd.aov_material});
+  const int32_t last_add = std::max({fd.bounce_sum, fd.aov_position + 2, fd.aov_normal + 2, fd.aov_uv + 1, fd.aov_material,
+                                     fd.guide_albedo + 2, fd.guide_normal + 2});
   s.adds.resize(size_t(last_add + 1) * fd.plane_stride);
   dev.download(s.adds.data(), film.buffer(), offset(fd.add), s.adds.size() * 4);
+  if (guides) {
+    s.tint.resize(kN);
+    dev.download(s.tint.data(), find(soa.guide_tint), 0, kN * sizeof(ar::Real3));
+    s.guide_albedo = fd.guide_albedo, s.guide_normal = fd.guide_normal;
+  }
   for (DeviceBuffer& b : bufs) dev.free(b);
   return s;
 }
@@ -569,6 +598,46 @@ TEST_CASE("shade_surface/agreement") {
               invalid, continued, glossy, rr, zero, kN, worst, worst_o);
   CHECK(worst <= 1e-5);
   CHECK(worst_o <= 1e-5);
+}
+
+TEST_CASE("shade_surface_agree/guides") {
+  const Tables tb;
+  const Materials ms = build_materials(tb, true);
+  Ledger cpu_ledger, gpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  const Snapshot c = run(cpu, nullptr, tb, ms, true);
+  const Snapshot g = run(*gpu, gpu.get(), tb, ms, true);
+  REQUIRE(c.guide_albedo >= 0);
+  CHECK(c.flags == g.flags);
+  CHECK(c.term == g.term);
+  // The fixture reaches both guide steps: denoising surfaces found and tints changed by a delta vertex.
+  uint32_t done = 0, tinted = 0;
+  for (uint32_t i = 0; i < kN; ++i) {
+    done += (c.flags[i] & ar::DENOISE_SURFACE_DONE) != 0u;
+    tinted += c.tint[i].x != ar::Real(rnd(i, 45)) && (c.flags[i] & ar::DENOISE_SURFACE_DONE) == 0u;
+  }
+  CHECK(done > kN / 4);
+  CHECK(tinted > 100u);
+  const auto rel = [](double a, double b) { return std::fabs(a - b) / std::max(1.0, std::fabs(a)); };
+  double worst_a = 0.0, worst_t = 0.0, sum = 0.0;
+  for (int32_t first : {c.guide_albedo, c.guide_normal})
+    for (size_t i = size_t(first) * c.plane_stride; i < size_t(first + 3) * c.plane_stride; ++i) {
+      worst_a = std::max(worst_a, rel(double(c.adds[i]), double(g.adds[i])));
+      sum += std::fabs(double(c.adds[i]));
+    }
+  for (uint32_t i = 0; i < kN; ++i)
+    for (const auto& pr : {std::make_pair(c.tint[i].x, g.tint[i].x), std::make_pair(c.tint[i].y, g.tint[i].y),
+                           std::make_pair(c.tint[i].z, g.tint[i].z)})
+      worst_t = std::max(worst_t, rel(double(pr.first), double(pr.second)));
+  std::printf("shade_surface guides agreement: %u denoising surfaces, %u tinted of %u; worst guide plane difference %.3g, "
+              "worst tint difference %.3g\n",
+              done, tinted, kN, worst_a, worst_t);
+  CHECK(sum > 1.0e3);  // guides really were written
+  CHECK(worst_a <= 1e-6);
+  CHECK(worst_t <= 1e-6);
 }
 
 }  // TEST_SUITE
