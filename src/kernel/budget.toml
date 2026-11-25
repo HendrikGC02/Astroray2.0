@@ -25,7 +25,7 @@ gated = "full"
 # The M-1 probe (src/kernel_gpu/probe_m1.cu), capped build in kernels_probe_capped/; measured by
 # `check full`, a breach is a warning. Allowance = the D10 VM ceiling it is judged against.
 [kernel.ar_probe_m1]
-# The denoiser guide step (tint, albedo guide) took the capped stack 480 to 496 B (spills 178 / 548 to 210 / 368 B).
+# The denoiser guide step (tint, albedo guide) took the capped stack 480 to 496 B (spills 178 / 548 to 210 / 364 B).
 regs = 128
 stack = 496
 spill_store = 128
