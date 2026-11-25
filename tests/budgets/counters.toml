@@ -21,11 +21,11 @@ shadow_item_bytes = 100352
 
 [cpu.b1m]
 rays_closest = 3916506
-rays_shadow = 1600070
+rays_shadow = 1737144
 steps = 166
-launches = 1384
+launches = 1386
 state_bytes = 1555338084
-shadow_item_bytes = 152937477
+shadow_item_bytes = 168160944
 
 [cpu.d28_closed_box]
 rays_closest = 20480
@@ -53,11 +53,11 @@ shadow_item_bytes = 100352
 
 [cuda.b1m]
 rays_closest = 3916509
-rays_shadow = 1600070
+rays_shadow = 1737145
 steps = 20
 launches = 108
 state_bytes = 1555339026
-shadow_item_bytes = 152937477
+shadow_item_bytes = 168161042
 
 [cuda.d28_closed_box]
 rays_closest = 20480
