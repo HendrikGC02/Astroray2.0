@@ -97,7 +97,6 @@
 #include "../vm/context.h"
 #include "../vm/interp.h"
 #include "../vm/vm_regs.h"
-#include "shade_background.h"
 #include "shade_common.h"
 
 AR_NS_BEGIN
