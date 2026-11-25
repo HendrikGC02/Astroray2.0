@@ -341,6 +341,23 @@ AR_RT_CASE("light_tree_kernel/world pmf stays positive") {
   INFO("world tree pmf at the origin " << pw);
   CHECK(std::isfinite(pw));
   CHECK(double(ar::light_sampler_pmf(V.v, c0, tiny, false)) <= 1.0);
+  // The world beside one small, strong lamp facing the point from 1e-4 above it: the lamp's maximum
+  // importance is about 1e15 times the world's and its minimum importance is positive, so the
+  // world's share of the root split, 0.5 r_max / (l_max + r_max), is far below float's epsilon and
+  // 1 minus the lamp's share would round to 0.
+  Lights two;
+  push(two, ar::light_make_area(ar::LightType::AREA_RECT, r3(3, 3, 1e-4), r3(1, 0, 0), r3(0, 1, 0), Real(1e-4), Real(1e-4), Real(1e6), white()),
+       1e6);
+  two.world = uint32_t(two.rec.size());
+  push(two, ar::light_make_world(Real(0.02), white()), 0.02, 1.0, 0.0);
+  const View W(two);
+  const ar::LightSampleContext below = ar::light_context_point(r3(3, 3, 0), up, up);
+  const ar::LightTreeImportance lamp_imp = ar::light_tree_importance(W.tree.nodes[W.tree.nodes[0].child[0]], below.p, below.n_shade);
+  REQUIRE(lamp_imp.min > Real(0));
+  const double pw2 = double(ar::light_tree_pmf(W.v.tree, below.p, below.n_shade, two.world));
+  INFO("world tree pmf beside the strong lamp " << pw2);
+  CHECK(pw2 > 0.0);
+  CHECK(ar::light_sampler_pmf(W.v, below, two.world, false) > Real(0));
 }
 
 #if !defined(AR_REAL_DOUBLE)
