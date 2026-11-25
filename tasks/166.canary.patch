@@ -1,5 +1,5 @@
 diff --git a/blender/astroray/materials/translate.py b/blender/astroray/materials/translate.py
-index bb0609e2..0706686c 100644
+index e4942132..be7c7843 100644
 --- a/blender/astroray/materials/translate.py
 +++ b/blender/astroray/materials/translate.py
 @@ -391,7 +391,7 @@ def _metallic(em, ins, keymap):
@@ -11,25 +11,16 @@ index bb0609e2..0706686c 100644
  
  
  def _principled(em, node, keymap):
-@@ -413,7 +413,7 @@ def _principled(em, node, keymap):
-     # Compiler contract: constants go straight into STORE_SLOT, lifted only on the texture path.
-     base = _colour(em, ins["Base Color"], keymap, "Principled BSDF.Base Color", lift=True)
-     if base is not None:
--        em.store(SLOT_BASE_COLOR, base)
-+        em.store(SLOT_BASE_COLOR, em.const_rgb((0.0, 0.0, 0.0)))
-     _metallic(em, ins, keymap)
-     rough, _ = _float(em, ins["Roughness"], keymap, "Principled BSDF.Roughness")
-     if rough is not None:
-@@ -471,7 +471,7 @@ def _transparent(em, node, keymap):
-         report_link(em, col, "Transparent.Color")
+@@ -478,7 +478,7 @@ def _transparent(em, node, keymap):
+         # dielectric where Cycles absorbs it: no lowering, never a silent change.
+         em.unsupported("Transparent.Color")
          return
-     rgb = tuple(col.default_value)[:3]
 -    em.store(SLOT_GEOMETRY_OPACITY, em.const_f32(1.0 - sum(rgb) / 3.0))
 +    em.store(SLOT_GEOMETRY_OPACITY, em.const_f32(sum(rgb) / 3.0))
  
  
  def _closure(em, node, keymap, in_mix=False):
-@@ -513,7 +513,7 @@ def _mix(em, node, keymap):
+@@ -522,7 +522,7 @@ def _mix(em, node, keymap):
      factor, _ = _float(em, node.inputs["Fac"], keymap, "Mix Shader.Fac")
      if factor is None or None in sides:
          return None
