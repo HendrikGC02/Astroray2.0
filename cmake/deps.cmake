@@ -20,12 +20,36 @@ function(astroray_dep_dir name version out)
   set(${out} ${_dir} PARENT_SCOPE)
 endfunction()
 
+# The pinned version of a dependency, read from third_party/deps.toml (the one place a pin is written), so
+# the build record names what the build resolved. Ref: third_party/deps.toml.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/third_party/deps.toml)
+function(astroray_dep_version name out)
+  file(STRINGS ${CMAKE_SOURCE_DIR}/third_party/deps.toml _lines)
+  set(_in 0)
+  foreach(_l IN LISTS _lines)
+    if(_l MATCHES "^name = \"([^\"]+)\"")
+      if(CMAKE_MATCH_1 STREQUAL name)
+        set(_in 1)
+      else()
+        set(_in 0)
+      endif()
+    elseif(_in AND _l MATCHES "^version = \"([^\"]+)\"")
+      set(${out} ${CMAKE_MATCH_1} PARENT_SCOPE)
+      return()
+    endif()
+  endforeach()
+  message(FATAL_ERROR "third_party/deps.toml has no version for ${name}")
+endfunction()
+astroray_dep_version(embree ASTRORAY_EMBREE_VERSION)
+astroray_dep_version(oidn ASTRORAY_OIDN_VERSION)
+astroray_dep_version(optix-headers ASTRORAY_OPTIX_VERSION)
+
 # Embree 4 (static, internal tasking, no TBB). Its headers are included only by
 # src/device/cpu (0001 D5.2), so they stay private to the engine. The archives are listed
 # explicitly because a plain imported path carries no inter-archive dependencies.
 # Ref: 0001 D9.1; third_party/deps.toml; the archive's lib/cmake/embree-4.4.1/embree-targets.cmake.
 if(TARGET astroray_engine)
-  astroray_dep_dir(embree 4.4.1 _ar_embree_dir)
+  astroray_dep_dir(embree ${ASTRORAY_EMBREE_VERSION} _ar_embree_dir)
   set(_ar_embree_root ${_ar_embree_dir}/extracted)
   target_include_directories(astroray_engine SYSTEM PRIVATE ${_ar_embree_root}/include)
   target_compile_definitions(astroray_engine PRIVATE EMBREE_STATIC_LIB)
@@ -39,7 +63,7 @@ endif()
 # linked: the engine DLL never imports OIDN (0001 D9.1 lazy load by absolute path, V5).
 # Ref: 0001 D9.1, D9.4; 0008 d18; third_party/deps.toml "oidn".
 if(TARGET astroray_engine)
-  astroray_dep_dir(oidn 2.5.0 _ar_oidn_dir)
+  astroray_dep_dir(oidn ${ASTRORAY_OIDN_VERSION} _ar_oidn_dir)
   target_include_directories(astroray_engine SYSTEM PRIVATE ${_ar_oidn_dir}/extracted/include)
   target_compile_definitions(astroray_engine PRIVATE "AR_OIDN_DEV_LIBRARY_DIR=\"${_ar_oidn_dir}/extracted/bin\"")
 endif()
@@ -49,11 +73,11 @@ endif()
 # property, not a target one, so host code cannot include them.
 # Ref: 0009 d6; third_party/deps.toml "optix-headers".
 function(astroray_optix_headers_for_cuda_device_sources)
-  astroray_dep_dir(optix-headers 9.1.0 _optix_dir)
+  astroray_dep_dir(optix-headers ${ASTRORAY_OPTIX_VERSION} _optix_dir)
   file(GLOB _optix_inc ${_optix_dir}/extracted/*/include)
   list(LENGTH _optix_inc _n)
   if(NOT _n EQUAL 1)
-    message(FATAL_ERROR "optix-headers 9.1.0: expected one include directory under ${_optix_dir}/extracted, found ${_n}")
+    message(FATAL_ERROR "optix-headers ${ASTRORAY_OPTIX_VERSION}: expected one include directory under ${_optix_dir}/extracted, found ${_n}")
   endif()
   file(GLOB _cuda_sources ${CMAKE_SOURCE_DIR}/src/device/cuda/*.cpp)
   set_source_files_properties(${_cuda_sources} DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTIES INCLUDE_DIRECTORIES ${_optix_inc})

@@ -87,7 +87,16 @@ class TestContext(unittest.TestCase):
         self.assertTrue(lines)
         for ln in lines:
             self.assertRegex(ln, "^" + stamp + r" (INFO|WARNING|ERROR) \S")
-        self.assertTrue(any(re.search(r" INFO build version=\S+ git=[0-9a-f]+ dirty=[01] cuda=\S+ optix=\S+ embree=\S+ oidn=\S+ type=\S+ kernels=", ln) for ln in lines), lines)
+        build = [ln for ln in lines if " INFO build version=" in ln]
+        self.assertEqual(len(build), 1, lines)
+        self.assertRegex(build[0], r" INFO build version=\S+ git=[0-9a-f]+ dirty=[01] cuda=\S+ optix=\S+ embree=\S+ oidn=\S+ type=\S+ kernels=")
+        # Each toolkit field is a dotted version, or none where the preset leaves it out (the cpu preset: cuda
+        # and optix); embree and oidn are in every preset.
+        fields = dict(re.findall(r" (cuda|optix|embree|oidn)=(\S+)", build[0]))
+        for k, v in fields.items():
+            self.assertRegex(v, r"^(none|\d+(\.\d+)+)$", k)
+        self.assertNotEqual(fields["embree"], "none")
+        self.assertNotEqual(fields["oidn"], "none")
         self.assertTrue(any(" INFO device kind=cpu index=0 " in ln for ln in lines), lines)
 
     def test_last_error_text_and_truncation(self):

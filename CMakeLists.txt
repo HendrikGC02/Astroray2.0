@@ -77,7 +77,18 @@ add_custom_target(astroray_opsgen ALL DEPENDS ${ASTRORAY_OPSGEN_STAMP})
 
 # Build identity (cmake/buildinfo.cmake holds the rule and the generator; 0009 d5).
 include(${CMAKE_SOURCE_DIR}/cmake/buildinfo.cmake)
-astroray_add_buildinfo_rule(ASTRORAY_BUILDINFO_CPP ${ASTRORAY_GEN_DIR} "${PROJECT_VERSION}" "${CMAKE_BUILD_TYPE}")
+# The toolkit fields: the CUDA release of the nvcc that builds the kernels (kernels.cmake, found above) and the
+# pinned OptiX headers exist only in a GPU build; Embree and OIDN are in every preset.
+include(cmake/deps.cmake)
+if(ASTRORAY_GPU)
+  set(_ar_tk_cuda "${CUDAToolkit_VERSION_MAJOR}.${CUDAToolkit_VERSION_MINOR}")
+  set(_ar_tk_optix ${ASTRORAY_OPTIX_VERSION})
+else()
+  set(_ar_tk_cuda none)
+  set(_ar_tk_optix none)
+endif()
+astroray_add_buildinfo_rule(ASTRORAY_BUILDINFO_CPP ${ASTRORAY_GEN_DIR} "${PROJECT_VERSION}" "${CMAKE_BUILD_TYPE}"
+  ${_ar_tk_cuda} ${_ar_tk_optix} ${ASTRORAY_EMBREE_VERSION} ${ASTRORAY_OIDN_VERSION})
 add_library(astroray_buildinfo STATIC ${ASTRORAY_BUILDINFO_CPP})
 add_dependencies(astroray_buildinfo astroray_buildinfo_gen)
 astroray_target_warnings(astroray_buildinfo)

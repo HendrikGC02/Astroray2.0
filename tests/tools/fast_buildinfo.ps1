@@ -48,8 +48,9 @@ try {
   $cm = @"
 cmake_minimum_required(VERSION 3.31)
 project(fix NONE)
+set(TK_CUDA 12.8 CACHE STRING "")
 include($($root -replace '\\', '/')/cmake/buildinfo.cmake)
-astroray_add_buildinfo_rule(CPP `${CMAKE_BINARY_DIR}/gen "1.0" "Test")
+astroray_add_buildinfo_rule(CPP `${CMAKE_BINARY_DIR}/gen "1.0" "Test" `${TK_CUDA} none 4.4.1 2.5.0)
 add_custom_command(OUTPUT `${CMAKE_BINARY_DIR}/consumer.txt COMMAND `${CMAKE_COMMAND} -E copy `${CPP} `${CMAKE_BINARY_DIR}/consumer.txt
   DEPENDS `${CPP} VERBATIM)
 add_custom_command(OUTPUT `${CMAKE_BINARY_DIR}/src_copy.txt COMMAND `${CMAKE_COMMAND} -E copy `${CMAKE_SOURCE_DIR}/src.txt `${CMAKE_BINARY_DIR}/src_copy.txt
@@ -113,6 +114,17 @@ add_dependencies(all_fix astroray_buildinfo_gen)
   Check 'a commit rebuilds the consumer of build_info.cpp' ((Ticks $cons) -gt $consT)
   $r = Test-ArNoWorkLeft $bld @('all_fix')
   Check 'after a commit and its build: no work left' $r.Ok $r.Output
+
+  # A toolkit version is an input of the identity like the sha: a changed one regenerates build_info.cpp and
+  # rebuilds its consumer, an unchanged one on a reconfigure leaves both alone.
+  $cppT = Ticks $cpp; $consT = Ticks $cons
+  $c = @(& cmake -S $repo -B $bld "-DTK_CUDA=12.8" 2>&1 | ForEach-Object { "$_" })
+  $null = N all_fix
+  Check 'an unchanged toolkit version: build_info.cpp and its consumer are not rebuilt' ((Ticks $cpp) -eq $cppT -and (Ticks $cons) -eq $consT) $c
+  $c = @(& cmake -S $repo -B $bld "-DTK_CUDA=12.9" 2>&1 | ForEach-Object { "$_" })
+  $null = N all_fix
+  Check 'a changed toolkit version is written into build_info.cpp' ((Get-Content -Raw $cpp) -match '[01], "12.9", "none", "4.4.1", "2.5.0", "Test"') @(Get-Content $cpp)
+  Check 'a changed toolkit version rebuilds the consumer of build_info.cpp' ((Ticks $cons) -gt $consT) $c
 
   # Failing loudly: a stamp that is not a target of this tree is a failure with ninja's message.
   $r = Test-ArNoWorkLeft $bld @('all_fix') 'gen/no_such.stamp'
