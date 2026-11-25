@@ -16,3 +16,7 @@ Budget: gate +0.5 s at most (headless cases; the Blender suites run at landing b
 Depends on: 186 (layout). Collisions: properties.py, `ui/` and __init__.py with 198 and 199; translate.py with 165, 166, 172; blend_writer.py with 195; api_surface.txt with every blender task; the later one rebases.
 Size: M (about 220 lines without tests); stop and report at 2x.
 Progress:
+- Implemented: properties.py AstrorayMaterial + one limits/packer table (mirrors grating_authored.h; drift test against the header and scenes/lib/ar.py), ui/material_panel.py (GRATING_RENDERS False), translate.py packs ext_kind/ext_constants and refuses kind + Mix Shader once, blend_writer `grating` entry, api_surface rows, tools/gui_material_panel.py (screenshot).
+- Canary line needs three more case names, else hunks properties.py:96, :126, :163 read as inert: test_edit_arrives_as_material_update, test_limits_equal_the_parse_limits, test_register_twice_leaves_no_class.
+- test_diagnostics.test_unregister_restores_builtin_panels now includes the material panel's class (it broke otherwise).
+- Blender clamps an out-of-range RNA assignment (no TypeError): the test asserts the clamp.
