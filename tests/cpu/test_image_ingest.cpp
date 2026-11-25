@@ -678,8 +678,8 @@ TEST_CASE("image_ingest/half and float are linear and count their bytes") {
 
 TEST_CASE("image_ingest/pixels bit exact") {
   World w;
-  // Above 1, tiny, subnormal and a value no 8-bit image holds; alpha varies too.
-  const std::vector<float> base = {50.0f, 0.5f, 0.25f, 1.0f, 1e-30f, 123456.789f, 3.0f, 0.5f, 0.0f, 1.4e-45f, 0.7f, 0.25f};
+  // Above 1, tiny, subnormal, a negative zero and a value no 8-bit image holds; alpha varies too.
+  const std::vector<float> base = {50.0f, 0.375f, 0.25f, 1.0f, 1e-30f, 123456.789f, 3.0f, 0.5f, -0.0f, 1.4e-45f, 0.7f, 0.25f};
   const std::vector<float> in = rgba_of(3, 2, base);
   w.put_pixels(1, 3, 2, in, AR_COLOR_INTEROP_LIN_REC709);
   w.put_pixels(2, 3, 2, in, AR_COLOR_INTEROP_DATA);
