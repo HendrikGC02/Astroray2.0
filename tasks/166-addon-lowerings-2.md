@@ -18,3 +18,4 @@ Size: S (about 140 lines without tests); stop and report at 2x.
 Progress:
 - 166 done: lowerings, tests, canary (4 named cases red), fast and gate pass (gate 165.8 s), headless 125 OK. Metallic with Specular IOR Level != 0.5 is unsupported (not approximated): the addon has no channel for it.
 - Lead ruling: Metallic with Specular IOR Level != 0.5 (or linked) is unsupported, not approximated (Cycles metal ignores the level, the record's is scaled by 2L). Review fixes: whole-surface coloured Transparent unsupported, zero-strength Emission child kept, non-shader Mix input reported, api_surface rows, metal smoke checks the base_metalness store.
+- Forced outside Scope: tests/blender/test_node_values.py (COVERAGE row for the new ShaderNodeBsdfTransparent lowering row). Gate 159.2 s and 165.8 s on this branch against main's recent 159-166 s: the metal case adds about 1.0 s (cpu 0.6 s, cuda 0.4 s), inside +2 s.

@@ -1,7 +1,16 @@
 diff --git a/blender/astroray/materials/translate.py b/blender/astroray/materials/translate.py
-index e4942132..be7c7843 100644
+index e4942132..69f10d94 100644
 --- a/blender/astroray/materials/translate.py
 +++ b/blender/astroray/materials/translate.py
+@@ -383,7 +383,7 @@ def _metallic(em, ins, keymap):
+     if not linked and sock.default_value == 0.0:
+         return
+     level = ins["Specular IOR Level"]
+-    if _link_of(level) is not None or abs(level.default_value - _DEFAULT_SPECULAR_LEVEL) > 1e-6:
++    if abs(level.default_value - _DEFAULT_SPECULAR_LEVEL) > 1e-6:
+         em.unsupported("Principled BSDF.Specular IOR Level")
+         return
+     if linked:
 @@ -391,7 +391,7 @@ def _metallic(em, ins, keymap):
      else:
          v = em.const_f32(min(max(float(sock.default_value), 0.0), 1.0))

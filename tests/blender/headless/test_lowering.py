@@ -619,6 +619,14 @@ class TestLowering(unittest.TestCase):
         p.inputs["Specular Tint"].default_value = (0.5, 0.5, 0.5, 1.0)
         self.assertEqual(tm.unsupported_strings(lower(mat)), ["Principled BSDF.Specular Tint"])
         p.inputs["Specular Tint"].default_value = (1.0, 1.0, 1.0, 1.0)
+        # A linked level has no constant to compare with 0.5: reported too, and no metal is stored.
+        lvl = mat.node_tree.nodes.new("ShaderNodeTexImage")
+        lvl.image = bpy.data.images.new("Lvl", 4, 4)
+        mat.node_tree.links.new(lvl.outputs["Color"], p.inputs["Specular IOR Level"])
+        em = lower(mat)
+        self.assertEqual(tm.unsupported_strings(em), ["Principled BSDF.Specular IOR Level"])
+        self.assertNotIn(slot, stores(em))
+        mat.node_tree.links.remove(p.inputs["Specular IOR Level"].links[0])
         # A link goes through the float path (a colour becomes its luminance).
         tex = mat.node_tree.nodes.new("ShaderNodeTexImage")
         tex.image = bpy.data.images.new("Met", 4, 4)
@@ -642,6 +650,7 @@ class TestLowering(unittest.TestCase):
         img, entries, _ = tm.render(scene, plane, mat, world, size=(32, 24), spp=64)
         self.assertEqual([x for x in entries if x[0] == UNSUPPORTED], [])
         mean = float(img[:, :, :3].mean())
+        # Band: 163's metal furnace, Ref: tests/cpu/test_lobe_stack.cpp "lobe_stack/metal white furnace".
         print(f"RESULT metallic plane mean {mean:.5f}")
         self.assertGreaterEqual(mean, 0.99)
         self.assertLessEqual(mean, 1.002)
