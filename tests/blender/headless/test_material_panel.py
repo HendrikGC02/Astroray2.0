@@ -7,6 +7,7 @@ recording edit stands in for the ABI call), the panel's draw runs against a reco
 classified through a depsgraph update, so no window or render is needed.
 Needs the built tree (tools/build.ps1) for the generated bindings, as tests/blender/test_materials.py does.
 """
+import importlib
 import os
 import re
 import sys
@@ -28,7 +29,11 @@ from ar_sync import classify as C  # noqa: E402
 
 ROOT = support.ROOT
 AR = tm._load("ar_scene_lib", os.path.join(ROOT, "scenes", "lib", "ar.py"))
-PANEL = tm._load("ar_material_panel", os.path.join(ROOT, "blender", "astroray", "ui", "material_panel.py"))
+# The addon's own module (the package test_diagnostics stages): a second copy of the class would linger in
+# Panel.__subclasses__ and read there as a panel left registered.
+_PKG = "ar_diag_addon"
+support.stage_addon(_PKG)
+PANEL = importlib.import_module(f"{_PKG}.ui.material_panel")
 HEADER = os.path.join(ROOT, "src", "host", "material", "grating_authored.h")
 # One value per property, each different from the default and exactly representable in float32.
 EDITS = {"grating_pitch_nm": 2000.0, "grating_depth_nm": 150.0, "grating_m_min": -3, "grating_m_max": 3,
