@@ -44,6 +44,19 @@ try {
   Check 'bare ok after printed lines' ($r[0].Ran -and -not $r[0].Failed)
   Check 'bare FAIL after printed lines' ($r[1].Ran -and $r[1].Failed)
   Check 'unittest summary shown, outcome lines not' ((@(Select-ArTestLines $ut 20) -join '|') -ceq 'Ran 2 tests in 1.0s|FAILED (failures=1)|FAIL')
+
+  # B-12 on a canned --duration output: the slowest case is named, a case over the limit is listed, a case
+  # at the limit passes, and an output without duration lines fails loudly.
+  $dur = @('[doctest] doctest version is "2.4.11"', '0.020 s: a/quick', '0.380 s: b/slowest ok', '0.410 s: c/at the limit', '0.001 s: d/tiny',
+           '[doctest] test cases: 4 | 4 passed | 0 failed | 0 skipped')
+  $s = Get-ArSlowTests $dur 0.41
+  Check 'B-12: the slowest case is named' ($s.Slowest.Case -ceq 'c/at the limit' -and $s.Slowest.Seconds -eq 0.41)
+  Check 'B-12: a case at the limit is not slow' ($s.Slow.Count -eq 0)
+  $s = Get-ArSlowTests ($dur + '0.438 s: e/over the limit') 0.41
+  Check 'B-12: a case over the limit is listed' ($s.Slow.Count -eq 1 -and $s.Slow[0].Case -ceq 'e/over the limit' -and $s.Slowest.Case -ceq 'e/over the limit')
+  $threw = $false
+  try { Get-ArSlowTests @('[doctest] test cases: 1 | 1 passed | 0 failed | 0 skipped') 0.41 | Out-Null } catch { $threw = $_.Exception.Message -match 'no duration lines' }
+  Check 'B-12: an output without duration lines fails loudly' $threw
 } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
 if ($bad) { Write-Host "FAIL fast_testrun: $bad check(s)"; exit 1 }
 Write-Host 'PASS fast_testrun'

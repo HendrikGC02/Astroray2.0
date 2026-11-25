@@ -102,6 +102,21 @@ function Invoke-ArTestCase {
   } finally { Pop-Location }
 }
 
+# The B-12 scan of one `--duration=true` doctest run: every `<seconds> s: <case>` line, the slowest one, and
+# the cases over $limit seconds (0009 B-12). An output with no
+# duration line throws: a run that stopped printing durations must not read as a pass.
+function Get-ArSlowTests([string[]]$lines, [double]$limit) {
+  $seen = @()
+  foreach ($ln in $lines) {
+    if ($ln -match '^\s*([0-9]+\.[0-9]+) s: (.+)$') { $seen += [pscustomobject]@{ Case = $Matches[2]; Seconds = [double]$Matches[1] } }
+  }
+  if ($seen.Count -eq 0) { throw 'B-12: the test run printed no duration lines (--duration=true)' }
+  [pscustomobject]@{
+    Slowest = @($seen | Sort-Object Seconds -Descending)[0]
+    Slow    = @($seen | Where-Object { $_.Seconds -gt $limit })
+  }
+}
+
 # PASS only when every case ran and none failed or errored; zero matching cases is a FAIL.
 function Get-ArTestVerdict($results) {
   foreach ($r in @($results)) {

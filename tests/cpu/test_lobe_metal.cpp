@@ -257,16 +257,19 @@ TEST_SUITE("fast") {
     for (int l = 0; l < 4; ++l) CHECK(rel_close(double(fw.v[l]), 0.6 * kBase[l], kPinTol));
   }
 
-  AR_RT_CASE("lobe_metal/pdf integral") {
-    // The VNDF pdf is a density over the upper hemisphere; reflections that leave it are lost.
-    for (double r : {0.1, 0.5, 1.0})
-      for (double mu : {0.9, 0.5, 0.1}) {
-        const double integral = half_vector_quadrature(make_params(r), dir_from(mu, 0.9), 2000, 180).pdf;
-        INFO("roughness=" << r << " mu=" << mu << " integral=" << integral);
-        CHECK(integral <= 1.0 + 1e-3);
-        CHECK(integral > 0.5);
-      }
+  // The VNDF pdf is a density over the upper hemisphere; reflections that leave it are lost. One case
+  // per roughness so that no case nears the per-test budget (0009 B-12).
+  static void check_pdf_integral(double r) {
+    for (double mu : {0.9, 0.5, 0.1}) {
+      const double integral = half_vector_quadrature(make_params(r), dir_from(mu, 0.9), 2000, 180).pdf;
+      INFO("roughness=" << r << " mu=" << mu << " integral=" << integral);
+      CHECK(integral <= 1.0 + 1e-3);
+      CHECK(integral > 0.5);
+    }
   }
+  AR_RT_CASE("lobe_metal/pdf integral roughness 0.1") { check_pdf_integral(0.1); }
+  AR_RT_CASE("lobe_metal/pdf integral roughness 0.5") { check_pdf_integral(0.5); }
+  AR_RT_CASE("lobe_metal/pdf integral roughness 1.0") { check_pdf_integral(1.0); }
 
   AR_RT_CASE("lobe_metal/eval equals sample") {
     // Deterministic 16x16 stratified uniforms; no random seeds in the fast tier.

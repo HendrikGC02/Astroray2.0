@@ -25,6 +25,7 @@ Set-Location $root
 . (Join-Path $PSScriptRoot 'lib/summary.ps1')
 . (Join-Path $PSScriptRoot 'lib/python.ps1')
 . (Join-Path $PSScriptRoot 'lib/blender.ps1')
+. (Join-Path $PSScriptRoot 'lib/testrun.ps1')
 if ($Tier -notin @('fast', 'gate', 'full', 'ci')) {
   Write-Host "FAIL check: unknown tier '$Tier' (fast, gate, full, ci)"
   exit 2
@@ -364,16 +365,13 @@ $global:LASTEXITCODE = 1
       Fail "tests failed (out/check/$Tier.log)"
     }
     Test-Identity $r 'binary'
-    $slow = @()
-    foreach ($ln in $r.Out) {
-      if ($ln -match '^\s*([0-9]+\.[0-9]+) s: (.+)$' -and [double]$Matches[1] -gt $perTest) {
-        $slow += "$($Matches[2]) took $($Matches[1]) s"
-      }
-    }
-    if ($slow.Count -gt 0) {
-      $slow | Select-Object -First 5 | ForEach-Object { Write-Host "B-12: $_ (limit $perTest s)" }
+    $b12 = Get-ArSlowTests $r.Out $perTest
+    if ($b12.Slow.Count -gt 0) {
+      $b12.Slow | Select-Object -First 5 | ForEach-Object { Write-Host "B-12: $($_.Case) took $($_.Seconds) s (limit $perTest s)" }
       Fail "B-12: test over $perTest s"
     }
+    # Hosted ci shows only the summary, so the margin of the slowest case goes into it on every pass.
+    Write-Host "B-12: slowest $($b12.Slowest.Case) $($b12.Slowest.Seconds) s of $perTest s"
 
     if ($isCi) {
       # The lint self-test proves every lint section still catches its seeded cases;

@@ -139,12 +139,27 @@ std::vector<Op> program_ops(const CompileResult& r) {
 
 TEST_SUITE("fast") {
 
-TEST_CASE("compiler_fold/folded equals interpreted per foldable op") {
+// The foldable ops are checked in pieces so that no case nears the per-test budget (0009 B-12). A
+// piece is picked by properties of the op row: the result type and whether it has two inputs. An op
+// with a shape no piece takes is -1; "compiler_fold/every foldable op is covered" fails on it, so a new
+// op cannot fall between the pieces.
+constexpr int kFoldGroups = 4;
+const char* const kFoldGroupName[kFoldGroups] = {"f32 constant or unary", "f32 binary", "f32x3 constant or unary",
+                                                 "f32x3 binary"};
+
+static int fold_group(const OpMeta& m) {
+  const bool vec3 = std::strcmp(m.result_type, "f32x3") == 0;
+  const bool scalar = std::strcmp(m.result_type, "f32") == 0;
+  if (!(vec3 || scalar) || m.arity < 0 || m.arity > 2) return -1;
+  return (vec3 ? 2 : 0) + (m.arity == 2 ? 1 : 0);
+}
+
+static void check_fold_group(int group) {
   constexpr uint32_t kN = 10000;
   int checked = 0;
   for (int k = 0; k < op_meta_count(); ++k) {
     const OpMeta& m = op_meta_table()[k];
-    if (!m.foldable) continue;
+    if (!m.foldable || fold_group(m) != group) continue;
     INFO(m.name);
     std::string why;
     const int imms = immediates_of(m, &why);
@@ -218,7 +233,29 @@ TEST_CASE("compiler_fold/folded equals interpreted per foldable op") {
     CHECK_MESSAGE(bad == 0, m.name << ": " << bad << " folded components differ from the interpreter");
     ++checked;
   }
-  CHECK(checked >= 6);
+  CHECK_MESSAGE(checked >= 1, "no foldable op in the piece '" << kFoldGroupName[group] << "'");
+}
+
+TEST_CASE("compiler_fold/folded equals interpreted f32 constant or unary ops") { check_fold_group(0); }
+TEST_CASE("compiler_fold/folded equals interpreted f32 binary ops") { check_fold_group(1); }
+TEST_CASE("compiler_fold/folded equals interpreted f32x3 constant or unary ops") { check_fold_group(2); }
+TEST_CASE("compiler_fold/folded equals interpreted f32x3 binary ops") { check_fold_group(3); }
+
+TEST_CASE("compiler_fold/every foldable op is covered") {
+  int foldable = 0, covered[kFoldGroups] = {};
+  for (int k = 0; k < op_meta_count(); ++k) {
+    const OpMeta& m = op_meta_table()[k];
+    if (!m.foldable) continue;
+    ++foldable;
+    const int g = fold_group(m);
+    CHECK_MESSAGE((g >= 0 && g < kFoldGroups),
+                  m.name << " is foldable but no piece of compiler_fold/folded equals interpreted takes it: extend fold_group");
+    if (g >= 0 && g < kFoldGroups) ++covered[g];
+  }
+  int total = 0;
+  for (int g = 0; g < kFoldGroups; ++g) total += covered[g];
+  CHECK(total == foldable);
+  CHECK(foldable >= 6);
 }
 
 // Row 1 of the inverse of a 3x3 by Gauss-Jordan elimination with partial pivoting, in double: an
