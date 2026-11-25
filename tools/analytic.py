@@ -19,6 +19,7 @@ Ref: docs/decisions/0009-build-test-process.md d15, d16; Sidak 1967 (thresholds)
 ch. 9 (MIS and each strategy alone estimate the same integral).
 """
 import argparse
+import functools
 import importlib.util
 import math
 import os
@@ -318,14 +319,19 @@ def shard_scenes(scenes, i, n):
     return list(scenes)[i - 1::n]
 
 
+@functools.lru_cache(maxsize=None)
+def scene_checks(scene):
+    """The number of checks of one scene. Cached per process: the count evaluates the scene's truth,
+    and a quadrature truth (A9's environment_texel, about 0.5 s) would otherwise be evaluated again by
+    every count the gate's family and shard lines make."""
+    t = meta.load(os.path.join(ROOT, "scenes", scene, "meta.toml"))["truth"]
+    size = int(t.get("size", SIZE))
+    return len(truths.evaluate(t, size, size))
+
+
 def scene_members(scenes, device_count=1):
     """Family members (checks) of `scenes` on `device_count` devices, as gate_members counts them."""
-    n = 0
-    for s in scenes:
-        t = meta.load(os.path.join(ROOT, "scenes", s, "meta.toml"))["truth"]
-        size = int(t.get("size", SIZE))
-        n += len(truths.evaluate(t, size, size)) * device_count
-    return n
+    return sum(scene_checks(s) for s in scenes) * device_count
 
 
 def check_family():
