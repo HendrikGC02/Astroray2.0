@@ -1,8 +1,18 @@
 diff --git a/tools/lint.py b/tools/lint.py
-index b22535c2..7cdc1c66 100644
+index 22ff82c8..7ae5425b 100644
 --- a/tools/lint.py
 +++ b/tools/lint.py
-@@ -1084,7 +1084,7 @@ def timing_line(ph, sec):
+@@ -150,7 +150,8 @@ def nvidia(c):
+             continue
+         if p.startswith("docs/"):
+             continue
+-        head = c.read_bytes(p, 2048)
++        with open(os.path.join(c.root, p), "rb") as f:
++            head = f.read(2048)
+         if b"\0" in head:
+             continue
+         # A licence header is a copyright/licence line in the first lines, not any mention.
+@@ -1085,7 +1086,7 @@ def timing_line(ph, sec):
      read = sec.pop("read")  # inside the sections' time, not added to it
      name, worst = max(sec.items(), key=lambda kv: kv[1])
      return (f"lint timing: ls-files {ph['ls-files']:.2f} stat {ph['stat']:.2f} read {read:.2f} "
@@ -10,4 +20,4 @@ index b22535c2..7cdc1c66 100644
 +            f"sections {max(sec.values()):.2f} (slowest {name} {worst:.2f})")
  
  
- def self_test(repo):
+ def timed_run(root):
