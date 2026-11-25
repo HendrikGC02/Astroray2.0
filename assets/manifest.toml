@@ -10,3 +10,15 @@ sha256 = "d57ffb9d176d34cc45d3d570b51e75be1dc6a4edc78879ba6fe40e2ce093e645"
 redistributable = true
 citation = "Bitterli, B. (2016) Rendering resources, https://benedikt-bitterli.me/resources/"
 units = "scene units as authored (RGB Mitsuba conversion); scale to metres when used"
+
+# Poly Haven HDRI for the M1b showcase scenes (scenes/s3_hdri, scenes/shader_balls). Not absolutely
+# calibrated: pictures only.
+[[asset]]
+name = "studio_small_09"
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/1k/studio_small_09_1k.exr"
+spdx = "CC0-1.0"
+size = 1319434
+sha256 = "44dcbed056512ecd8afd2a3d7ba73d2dd4c24694d0c72005fafcb2469bbc8fd4"
+redistributable = true
+citation = "Studio Small 09, Sergej Majboroda, Poly Haven, https://polyhaven.com/a/studio_small_09, License: CC0"
+units = "relative radiance, not calibrated"
