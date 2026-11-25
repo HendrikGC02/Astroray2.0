@@ -163,12 +163,13 @@ compile_s = 1.2
 gated = "merge"
 
 [kernel.k_shade_volume]
-# The pass-through skeleton: the medium read and route_hit_after_medium (the stage's first values; the estimators raise them).
-regs = 34
-stack = 0
+# Delta tracking of a homogeneous medium: the medium's volume entry (VmRegs, 128 B of the stack), the
+# path-medium stream's draws and the phase sample (34 / 0 as the pass-through skeleton).
+regs = 106
+stack = 432
 spill_store = 0
 spill_load = 0
-compile_s = 1.0
+compile_s = 2.8
 gated = "merge"
 
 [kernel.k_shade_light]
