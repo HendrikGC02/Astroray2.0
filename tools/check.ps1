@@ -195,7 +195,8 @@ $global:LASTEXITCODE = $code
   # the bodies below sum the shards' own counts against the whole and fail on a difference.
   # Hosted ci runs one process each: 2-4 cores and timing-sensitive session cases (task 212).
   $shardsCpuGate = if ($isCi) { 1 } else { 3 }
-  $shardsAnalytic = if ($isCi) { 1 } else { 2 }
+  # Analytic: 3, so the longest CPU scene (A9, 6.6 s with its 1024^2 CPU bake) does not set a shard's wall.
+  $shardsAnalytic = if ($isCi) { 1 } else { 3 }
   # The fast tier's tests run in 3 shards the same way; one on ci for the same reason.
   $shardsFast = if ($isCi) { 1 } else { 3 }
 
