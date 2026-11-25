@@ -1,0 +1,37 @@
+diff --git a/tools/README.md b/tools/README.md
+index 9705cb4b..5ff87690 100644
+--- a/tools/README.md
++++ b/tools/README.md
+@@ -26,5 +26,5 @@ Scripts print at most 20 lines, log to out/check/, exit non-zero on failure (000
+ - status.ps1: task branches, open PRs with `ci`/`astroray/gate`, worktrees, last out/check summaries (<= 20 lines).
+ - tests/tools/fault_stress.ps1 -Runs n -Parallel p: runs the fault tests n times in each of p parallel loops (20 s timeout per run), prints `runs= hangs= failures=`, non-zero on any hang or failure. Not in any tier; needs minutes. The fault filter writes dumps through out/bin/astroray_dump.exe (src/dump/main.cpp), staged beside astroray_core.dll.
+ - perf.ps1 [-Record] [-MeasureTolerance] [-Shares]: bench b1m and b5m under one lock hold, `pass_ms` against the last bench/history line of this machine (limit B-38, decision table in perf.py), refuses while another process uses the GPU; `land prepare` runs it for kernel, device, scheduler, session and scene diffs. -Record appends the lines to bench/history (lead). -Shares: nsys captures of b1m and b5m, idle and queue_build+sort shares (perf_shares.py, B-19 tolerance in budgets.toml); land prepare runs it for scheduler, queue_build, sort and CUDA-device diffs.
+-- gate_runs.ps1 [-Runs 5]: `check gate` n times under one machine lock (about 2 min each), run JSONs in out/tmp/157/, then gate_table.py (steps by runs, median, max, group walls); tests/tools/fast_gate_table.ps1 tests the table. scenes.py shares recordings between worktrees through %LOCALAPPDATA%/astroray2/scenes-cache (`ASTRORAY_SCENES_CACHE` moves it).
++- gate_runs.ps1 [-Runs 5]: `check gate` n times under one machine lock (about 2 min each), run JSONs in out/tmp/157/, then gate_table.py (steps by runs, median, max, group walls; `--cases`: seconds per gate case and scene of the last run, with commit, landings, reds); tests/tools/fast_gate_table.ps1 tests the table and analytic's shard partition. scenes.py shares recordings between worktrees through %LOCALAPPDATA%/astroray2/scenes-cache (`ASTRORAY_SCENES_CACHE` moves it).
+ - sync_timing.ps1 [-Runs 3] [-History] [-Profile]: B-31's four cells (full mesh read, positions only, instance loop, plain move; cold and warm) on S1 = b1m and S2 = b5m through tools/sync_timing.py in fresh Blenders under the machine lock; <= 20 lines with PASS/MISS per cell, full log out/check/sync_timing.log, `-History` writes history lines to out/bench/; no tier runs it.
+diff --git a/tools/analytic.py b/tools/analytic.py
+index fd8dd160..d90f473c 100644
+--- a/tools/analytic.py
++++ b/tools/analytic.py
+@@ -303,7 +303,7 @@ def shard_scenes(scenes, i, n):
+     neighbours in GATE_SCENES (often the same truth family and cost) are spread over the shards."""
+     if not 1 <= i <= n:
+         raise ValueError(f"--shard {i}/{n}: i must be in 1..n")
+-    return list(scenes)[i - 1::n]
++    return list(scenes)[i::n]
+ 
+ 
+ def scene_members(scenes, device_count=1):
+diff --git a/tools/gate_table.py b/tools/gate_table.py
+index 46131242..d3f7deee 100644
+--- a/tools/gate_table.py
++++ b/tools/gate_table.py
+@@ -149,7 +149,7 @@ def cases_table(directory, top):
+         total[(kind, device)] = total.get((kind, device), 0.0) + sec
+     print("step totals: " + ", ".join(f"{k} {d} {v:.1f} s" for (k, d), v in sorted(total.items())))
+     print(f"{'seconds':>8}  {'kind':<10} {'device':<6} {'added':<8} {'landings':>8} {'runs':>5} {'reds':>4}  name")
+-    for sec, kind, device, name in rows[:top]:
++    for sec, kind, device, name in rows[1:top]:
+         a = added_commit(kind, name)
+         if a is None:
+             add, land, runs, reds = "?", "?", "?", "?"
