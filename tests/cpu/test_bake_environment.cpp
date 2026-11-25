@@ -246,7 +246,7 @@ GB constant_emission(float strength) {
   return g;
 }
 
-constexpr ar_key kWorldGraph = 40, kImage = 5;
+constexpr ar_key kWorldGraph = 40, kImage = 5, kEmitter = 60, kEmitterMesh = 100;
 
 // A CPU context (no scene device): the scene table build bakes on the cache's own CPU device.
 struct Fixture {
@@ -289,6 +289,45 @@ struct Fixture {
       n += e.code == AR_REPORT_PROGRAM_REJECTED && e.subject == kWorldGraph;
     }
     return n;
+  }
+  // A quad, mesh kEmitterMesh, at height z.
+  void set_quad(Edit& e, float z) {
+    const std::vector<float> pos{0, 0, z, 1, 0, z, 1, 1, z, 0, 1, z};
+    const std::vector<int32_t> cv{0, 1, 2, 3}, fs{0};
+    ar_mesh_desc d = {};
+    d.key = kEmitterMesh, d.vertex_count = 4, d.corner_count = 4, d.face_count = 1, d.motion_steps = 1;
+    ar_mesh_buffers b = {};
+    REQUIRE(mesh_begin(scene, e, &d, &b) == AR_OK);
+    std::memcpy(*b.positions, pos.data(), pos.size() * 4);
+    std::memcpy(*b.corner_vert, cv.data(), cv.size() * 4);
+    std::memcpy(*b.face_start, fs.data(), fs.size() * 4);
+    for (uint64_t i = 0; i < b.corner_normals_count; ++i) (*b.corner_normals)[i] = i % 3 == 2 ? 1.0f : 0.0f;
+    REQUIRE(e.item_commit(kEmitterMesh) == AR_OK);
+  }
+  // Material kEmitter: a constant Emission at `strength`, sampled from the front.
+  void set_emitter(Edit& e, float strength) {
+    const GB g = constant_emission(strength);
+    const ar_graph_desc d = g.desc();
+    REQUIRE(scene.materials->set_graph(e, kEmitter + 1, &d) == AR_OK);
+    ar_material_desc m = {};
+    m.surface_graph = kEmitter + 1, m.emission_sampling = AR_EMISSION_SAMPLING_FRONT;
+    REQUIRE(scene.materials->set_material(e, kEmitter, &m) == AR_OK);
+  }
+  // The quad instanced once with kEmitter.
+  void set_instance(Edit& e) {
+    std::vector<ar_key> geom{kEmitterMesh}, object{1}, pool{kEmitter};
+    std::vector<ar_xform> xf(1);
+    xf[0].m[0] = xf[0].m[5] = xf[0].m[10] = 1.0f;
+    std::vector<uint32_t> zeros(1, 0), vis(1, AR_VISIBILITY_CAMERA), moff{0}, mcount{1};
+    std::vector<ar_rgba> colors(1, ar_rgba{{1, 1, 1, 1}});
+    std::vector<uint8_t> lg(1, 0);
+    ar_instances_desc d = {};
+    d.instance_count = 1, d.motion_steps = 1, d.transform_count = 1, d.material_key_count = 1;
+    d.geom_keys = geom.data(), d.xf = xf.data(), d.object_keys = object.data();
+    d.random_ids = d.pass_indices = d.crypto_objects = d.crypto_assets = zeros.data();
+    d.colors = colors.data(), d.visibility = vis.data(), d.flags = zeros.data(), d.light_groups = lg.data();
+    d.material_offsets = moff.data(), d.material_counts = mcount.data(), d.material_keys = pool.data();
+    REQUIRE(set_instances(e, &d) == AR_OK);
   }
   template <class F>
   void commit(F&& body) {
@@ -611,6 +650,64 @@ TEST_CASE("scene_tables/bake before light table") {
   // Scene::lights() alone bakes nothing and keeps the table that has the bake.
   CHECK(fx.scene.lights() == set3->lights);
   CHECK(baker.rebuild_count() == 3u);
+}
+
+TEST_CASE("scene_tables/a constant world builds its light table once") {
+  // A world that needs no bake: the snapshot builds the light table, the scene table build does not
+  // build it again, so each emitter edit costs exactly one light table.
+  Fixture fx;
+  fx.commit([&](Edit& e) {
+    const GB g = constant_emission(3.0f);
+    const ar_graph_desc d = g.desc();
+    ar_world_desc w = {};
+    w.surface_graph = kWorldGraph;
+    REQUIRE(fx.scene.materials->set_graph(e, kWorldGraph, &d) == AR_OK);
+    REQUIRE(fx.scene.materials->set_world(e, &w) == AR_OK);
+    fx.set_emitter(e, 5.0f);
+    fx.set_quad(e, 0.0f);
+  });
+  fx.commit([&](Edit& e) { fx.set_instance(e); });
+  const uint64_t before = fx.scene.light_rebuilds();
+  const auto set1 = acquire_scene_tables(fx.scene);
+  CHECK(fx.scene.light_rebuilds() == before + 1u);
+  REQUIRE(set1->lights);
+  CHECK(set1->lights->world_light != ar::kNoLight);
+  CHECK(set1->lights->lights.size() == 3u);  // two triangles and the world
+  fx.commit([&](Edit& e) { fx.set_emitter(e, 50.0f); });
+  const auto set2 = acquire_scene_tables(fx.scene);
+  CHECK(set2->lights != set1->lights);
+  CHECK(fx.scene.light_rebuilds() == before + 2u);
+  CHECK(fx.scene.table_cache().baker.rebuild_count() == 0u);
+}
+
+TEST_CASE("scene_tables/an emitter mesh edit keeps the bake") {
+  // A program world and an emissive instanced mesh: editing the mesh builds one new light table,
+  // with the bake it already had (no new bake) and the very same ENV_TABLE copy.
+  Fixture fx;
+  fx.commit([&](Edit& e) {
+    fx.set_image(e, {1.0f, 0.5f, 0.25f, 1.0f, 0.2f, 0.4f, 0.6f, 1.0f});
+    fx.set_world(e, 2.0f);
+    fx.set_emitter(e, 5.0f);
+    fx.set_quad(e, 0.0f);
+  });
+  fx.commit([&](Edit& e) { fx.set_instance(e); });
+  EnvironmentBaker& baker = fx.scene.table_cache().baker;
+  const auto set1 = acquire_scene_tables(fx.scene);
+  const uint64_t rebuilds = fx.scene.light_rebuilds();
+  CHECK(baker.rebuild_count() == 1u);
+  REQUIRE(bool(set1->lights->env));
+  const auto env1 = set1->tables[uint32_t(TableId::ENV_TABLE)];
+  REQUIRE(env1);
+  REQUIRE(env1->ptr() != nullptr);
+  fx.commit([&](Edit& e) { fx.set_quad(e, 0.5f); });
+  const auto set2 = acquire_scene_tables(fx.scene);
+  CHECK(set2->lights != set1->lights);
+  CHECK(fx.scene.light_rebuilds() == rebuilds + 1u);
+  CHECK(baker.rebuild_count() == 1u);
+  CHECK(set2->lights->env == set1->lights->env);
+  CHECK(set2->tables[uint32_t(TableId::ENV_TABLE)] == env1);
+  CHECK(set2->tables[uint32_t(TableId::ENV_TABLE)]->ptr() == env1->ptr());
+  CHECK(!set2->uploaded[uint32_t(TableId::ENV_TABLE)]);
 }
 
 TEST_CASE("scene_tables/cpu context bakes") {

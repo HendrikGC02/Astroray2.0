@@ -428,7 +428,10 @@ SceneSnapshot Scene::snapshot(bool with_lights) {
     if (with_lights && materials && meshes) {
       // A world that needs no bake is built here as before; a program world waits for its bake.
       s.light_plan = plan_lights(true);
-      if (!s.light_plan.table && s.light_plan.bake_key.empty()) s.light_plan.table = build_lights(s.light_plan, nullptr, false);
+      if (!s.light_plan.table && s.light_plan.bake_key.empty()) {
+        s.light_plan.table = build_lights(s.light_plan, nullptr, false);
+        s.light_plan.inputs.reset();  // built: the scene table build must not build it again
+      }
       s.lights = s.light_plan.table;
     }
   });
