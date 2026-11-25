@@ -33,7 +33,7 @@ index 71b9f8b2..88f56f7e 100644
    // The environment table (0004 D11): the light table's bake, kept while it is the same table.
    const EnvTable* env = lt ? lt->env.get() : nullptr;
 diff --git a/src/kernel/light/light_sampler.h b/src/kernel/light/light_sampler.h
-index 040b4343..2bbcce5a 100644
+index 040b4343..e0a8b026 100644
 --- a/src/kernel/light/light_sampler.h
 +++ b/src/kernel/light/light_sampler.h
 @@ -65,7 +65,7 @@ AR_FN uint32_t light_alias_pick(const AliasBin* bins, const uint32_t* bin_light,
@@ -50,7 +50,7 @@ index 040b4343..2bbcce5a 100644
  AR_FN Real light_sampler_pmf(const LightSamplerView& v, const LightSampleContext& ctx, uint32_t light, bool oracle) {
    if (light >= v.light_count) return Real(0);
 -  if (oracle || v.rad_pmf == nullptr) return Real(ar::load_ro(v.pmf + light));
-+  if (v.rad_pmf == nullptr) return Real(ar::load_ro(v.pmf + light));
++  if ((oracle && v.rad_pmf == nullptr) || v.rad_pmf == nullptr) return Real(ar::load_ro(v.pmf + light));
    return light_floor_pmf(v, light_tree_pmf(v.tree, ctx.p, ctx.n_shade, light), light);
  }
  
