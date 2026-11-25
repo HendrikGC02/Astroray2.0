@@ -123,7 +123,7 @@ $global:LASTEXITCODE = 1
   # device; see Invoke-GateGroup). 'aov agreement', 'integrator cuda' (tripwire) and 'material compile'
   # are timing-sensitive or use both devices and stay alone.
   # The gate steps (name, tag, kernel part is summed by $kernelSteps, Lock = hold the tree lock,
-  # Build = a build: its seconds leave the tier clock, Window = timed against a budget beside other worktrees'
+  # Keep = save the output (see Complete-GateStep), Build = a build: its seconds leave the tier clock, Window = timed against a budget beside other worktrees'
   # builds, so the fast window is held exclusively for it,
   # Identity = the exe must print this commit's build line). Each body fails by its exit code.
   $gateSteps = @(
@@ -165,9 +165,9 @@ $global:LASTEXITCODE = 1
     # (analytic harness, A1) come after this one. Up-to-date recordings are skipped by source hash.
     @{ Name = 'scenes'; Tag = 'cpu'; Echo = '^scenes:'; Run = { & $py -I tools/scenes.py } },
     # 0009 d11, d16 (072): analytic scenes on CPU and GPU at 32x32 through the CLI, after 'scenes'.
-    @{ Name = 'analytic cpu'; Group = 'g1'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Run = {
+    @{ Name = 'analytic cpu'; Group = 'g1'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Keep = $true; Run = {
         & $py -I tools/analytic.py --gate --device cpu } },
-    @{ Name = 'analytic cuda'; Group = 'g1'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Run = {
+    @{ Name = 'analytic cuda'; Group = 'g1'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Keep = $true; Run = {
         & $py -I tools/analytic.py --gate --device cuda } },
     # 0009 d17(iv) (077): deterministic AOVs of scene D2, CPU against GPU; D1 runs in the analytic steps.
     @{ Name = 'aov agreement'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL|aov) '; Run = {
@@ -178,15 +178,15 @@ $global:LASTEXITCODE = 1
         if (Test-Path 'tests/abi') { & $py -I -m unittest discover -s tests/abi -p 'gpu_test_*.py' } } },
     # 076: Russian roulette furnace, shadow lifetime, closed box, radiance scale (0004 D2, D4/D5, D28;
     # 0003 check 15) and the B-16 work counters against tests/budgets/counters.toml; the tripwire on cuda.
-    @{ Name = 'integrator cpu'; Group = 'g2'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Run = {
+    @{ Name = 'integrator cpu'; Group = 'g2'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Keep = $true; Run = {
         & $py -I tools/integrator_checks.py --gate --device cpu } },
-    @{ Name = 'integrator cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Run = {
+    @{ Name = 'integrator cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Keep = $true; Run = {
         & $py -I tools/integrator_checks.py --gate --device cuda } },
-    @{ Name = 'cpu gate tests'; Group = 'g3'; Tag = 'cpu'; Lock = $true; Identity = $exe; Run = { & $exe --tier=gate } },
+    @{ Name = 'cpu gate tests'; Group = 'g3'; Tag = 'cpu'; Lock = $true; Identity = $exe; Keep = $true; Run = { & $exe --tier=gate --duration=true } },
     # Time limit 270 s: after 132's fix the tier took 12.6-24.1 s over 100 runs under the machine lock;
     # 10x the slowest run, rounded up to a multiple of 30 s.
-    @{ Name = 'gpu gate tests'; Group = 'g3'; Tag = 'local'; Lock = $true; Identity = $gpuExe;
-       Run = { & $runTimed $gpuExe '--tier=gate' 270 (Join-Path $root 'out/check/gpu-gate-tests.out') } },
+    @{ Name = 'gpu gate tests'; Group = 'g3'; Tag = 'local'; Lock = $true; Identity = $gpuExe; Keep = $true;
+       Run = { & $runTimed $gpuExe '--tier=gate --duration=true' 270 (Join-Path $root 'out/check/gpu-gate-tests.out') } },
     # B-24 compile row (0009 d13, 0005 V7): the test prints the median compile time of a fixed
     # 100-node graph; the limit is the "ms per 100 nodes" figure of the row in budgets.toml.
     @{ Name = 'material compile'; Tag = 'cpu'; Lock = $true; Identity = $exe; Echo = '^B-24 compile:';
@@ -212,6 +212,12 @@ $global:LASTEXITCODE = 1
   )
   # Judge one finished step: its failure names itself, then Identity and Check/Echo as before.
   function Complete-GateStep($s, $r) {
+    # Keep: the step's whole output, for `tools/gate_table.py --cases` (seconds per case and scene).
+    if ($s.Keep) {
+      $kd = Join-Path $root 'out/check/gate-steps'
+      New-Item -ItemType Directory -Force $kd | Out-Null
+      Set-Content -Path (Join-Path $kd (($s.Name -replace ' ', '-') + '.out')) -Value $r.Out
+    }
     if ($r.Code -ne 0) {
       $fl = @($r.Out | Where-Object { $_ -match '^(FAIL|kernelgate:)' })
       if ($fl.Count -gt 0) { ($fl | Select-Object -First 6) | ForEach-Object { Write-Host $_ } } else { Show-Tail $r }
