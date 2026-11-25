@@ -44,7 +44,7 @@ COVERAGE = {
     "ShaderNodeBsdfPrincipled": "test_linear_texture",  # Emission Color from a texture, colour to float below
     "ShaderNodeEmission": "test_emission_node",
     "ShaderNodeBlackbody": "spectral value: item 36",
-    "ShaderNodeTexImage": "test_linear_texture",  # 16-bit, half, float and Repeat: the cases after it
+    "ShaderNodeTexImage": "test_linear_texture",  # half and float EXR, Repeat, and the 16-bit PNG refusal after it
     "ShaderNodeTexEnvironment": "test_environment_texture_linear",
     "ShaderNodeTexCoord": "coordinate source: covered through its consumer",
     "ShaderNodeUVMap": "coordinate source: covered through its consumer",
@@ -80,12 +80,11 @@ def gradient(size, base, step):
     return np.stack([base[0] + step[0] * i, base[1] + step[1] * j, base[2] + step[2] * (i + j)], axis=2)
 
 
-def save_exr(directory, name, rgb, depth):
+def save_image(directory, name, rgb, file_format, depth):
     """A file-backed image of linear float `rgb`, (h, w, 3) rows bottom-up, loaded back from disk.
-    EXR holds the scene-linear values as they are (`depth` "16" is half, "32" float), written by
-    `Image.save_render` under a scratch scene; the expected values are whatever Blender reads back,
-    never `rgb`. (A 16-bit integer PNG is refused by the engine by design, 0007 d21, so it has no value
-    case.)"""
+    Written by `Image.save_render` under a scratch scene (Standard view): an EXR holds the scene-linear
+    values as they are (`depth` "16" is half, "32" float), a PNG their sRGB encoding. The expected values
+    are whatever Blender reads back, never `rgb`."""
     h, w = rgb.shape[:2]
     src = bpy.data.images.new(name + "_src", w, h, alpha=False, float_buffer=True)
     rgba = np.ones((h, w, 4), np.float32)
@@ -93,12 +92,16 @@ def save_exr(directory, name, rgb, depth):
     src.pixels.foreach_set(rgba.reshape(-1))
     scene = bpy.data.scenes.new("save_" + name)
     st = scene.render.image_settings
-    st.file_format, st.color_mode, st.color_depth = "OPEN_EXR", "RGB", depth
+    st.file_format, st.color_mode, st.color_depth = file_format, "RGB", depth
     scene.view_settings.view_transform, scene.view_settings.look = "Standard", "None"
-    path = os.path.join(directory, name + ".exr")
+    path = os.path.join(directory, name + {"PNG": ".png", "OPEN_EXR": ".exr"}[file_format])
     src.save_render(path, scene=scene)
     bpy.data.scenes.remove(scene)
     return bpy.data.images.load(path)
+
+
+def save_exr(directory, name, rgb, depth):
+    return save_image(directory, name, rgb, "OPEN_EXR", depth)
 
 
 def cycles_bake(scene, directory):
@@ -177,14 +180,14 @@ EDGE_MARGIN = 0.012
 
 
 def view_the_world(scene, plane):
-    """The camera at the origin, 107.2 degrees wide, pitched 58.6 degrees above the horizon toward -x
-    (with a small roll and yaw, found by `view_edge_margin`'s search): the view holds the seam of the
-    equirectangular image (u = 0, straight behind +x) and, 0.4 of the way up the frame, the pole. The
-    plane the session needs is out of sight below."""
+    """The camera at the origin, 98.6 degrees wide, pitched 60.2 degrees above the horizon toward -x
+    (with a small roll and yaw, found by a random search over the camera for the two guards below,
+    `view_edge_margin` and `linear_jitter_spread`): the view holds the seam of the equirectangular image
+    (u = 0, straight behind +x) and the pole. The plane the session needs is out of sight below."""
     cam = scene.camera
     cam.location = (0.0, 0.0, 0.0)
-    cam.rotation_euler = (math.radians(90.0 + 58.6), math.radians(1.75), math.radians(90.45))
-    cam.data.angle = math.radians(107.2)
+    cam.rotation_euler = (math.radians(90.0 + 60.2), math.radians(1.69), math.radians(90.59))
+    cam.data.angle = math.radians(98.6)
     plane.location = (0.0, 0.0, -100.0)
     bpy.context.view_layer.update()
 
@@ -228,6 +231,29 @@ def view_edge_margin(cam, blocks):
     return float(min(du.min(), dv.min())), U, V
 
 
+def linear_jitter_spread(cam, rgb):
+    """The largest change of any pixel's Linear value of the equirectangular image `rgb` (h, w, 3, rows
+    bottom-up) when the sample moves by +-0.005 px (the 0.01 px box filter) in x or y, from a numpy
+    model of Cycles' bilinear read: texel coordinates u * w and v * h, the -0.5 centre offset, REPEAT in
+    both axes (so within half a texel of the pole the top row blends with the bottom row).
+    Cycles and the engine jitter their samples independently, so the two renders of one pixel can
+    differ by up to twice this; the camera is placed so that twice it stays under TOLERANCE.
+    Ref: third_party/_cache/refs/cycles-ed69ef2c6bd3/src/kernel/util/image.h (interp_linear)."""
+    h, w = rgb.shape[:2]
+
+    def read(jitter):
+        U, V = equirect_blocks(view_directions(cam, jitter), (w, h))
+        x, y = U - 0.5, V - 0.5
+        i, j = np.floor(x).astype(int), np.floor(y).astype(int)
+        tx, ty = (x - i)[..., None], (y - j)[..., None]
+        g = lambda a, b: rgb[b % h, a % w]  # noqa: E731
+        return ((1 - ty) * (1 - tx) * g(i, j) + (1 - ty) * tx * g(i + 1, j)
+                + ty * (1 - tx) * g(i, j + 1) + ty * tx * g(i + 1, j + 1))
+
+    centre = read((0.0, 0.0))
+    return float(max(np.abs(read((jx, jy)) - centre).max() for jx in (-0.005, 0.005) for jy in (-0.005, 0.005)))
+
+
 def pole_in_view(cam):
     """Whether the +z pole projects inside the frame, at least a pixel from its edge."""
     t = math.tan(cam.data.angle / 2.0)
@@ -246,18 +272,16 @@ def view_the_plane(scene, plane):
 
 
 def environment_rgb(w=64, h=32, block=1):
-    """A 64 x 32 equirectangular image of values that are linear in the direction, 0.5 + 0.03 d_c per
+    """A 64 x 32 equirectangular image of values that are linear in the direction, 0.5 + 0.06 d_c per
     channel, from Blender's mapping (u = 0.5 is +x, +y is u = 0.25, v = 1 is +z): smooth across the
-    seam and over the pole, so only a convention error can move a value. The amplitude is small because
-    Linear filtering in texel space is steep next to the pole: at 0.06 the 0.005 px jitter moved the
-    pixel nearest the pole by 1.4e-4 and at 0.04 by 9.4e-5. With block > 1 the value of the block's
-    centre fills each block x block texels. Rows bottom-up."""
+    seam and over the pole, so only a convention error can move a value. With block > 1 the value of the
+    block's centre fills each block x block texels. Rows bottom-up."""
     iy, ix = np.meshgrid(np.arange(h) // block * block + block / 2.0 - 0.5,
                          np.arange(w) // block * block + block / 2.0 - 0.5, indexing="ij")
     phi = math.pi - 2.0 * math.pi * (ix + 0.5) / w
     theta = math.pi * (1.0 - (iy + 0.5) / h)
     d = np.stack([np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)], axis=2)
-    return 0.5 + 0.03 * d
+    return 0.5 + 0.06 * d
 
 
 class TestNodeValues(T.ImageCase):
@@ -382,6 +406,24 @@ class TestNodeValues(T.ImageCase):
     def test_float_exr_linear(self):
         self.exr_texture("float_exr", "32", "Linear")
 
+    def test_png16_is_refused(self):
+        """A 16-bit integer PNG has no value case because the engine refuses it by design (stb would
+        narrow it to 8 bits silently, src/host/image/decode.cpp): the Image Texture renders magenta and
+        the session raises the image-unreadable entry with the decoder's reason. The refusal is the
+        behaviour under test."""
+        rig = self.start()
+        image = save_image(self._dir.name, "png16", gradient(8, (0.25, 0.25, 0.20), (0.012, 0.012, 0.006)), "PNG", "16")
+        T.emit_texture(self.mat, image, "Linear")
+        lines = rig.sync(spp=ENGINE_SPP)
+        got, entries = rig.render()
+        mine = T.unexpected(entries)
+        mean = got.reshape(-1, 3).mean(axis=0)
+        print(f"RESULT node values png16 refused: lines {lines} entries {mine} mean rgb {mean}")
+        self.assertEqual([e[0] for e in mine], [T.ABI.AR_REPORT_IMAGE_UNREADABLE], mine)
+        self.assertIn("16-bit integer", mine[0][1])
+        self.assertLess(mean[1], 0.25 * min(mean[0], mean[2]))  # magenta: no green
+        self.assertGreater(mean[0], 0.1)
+
     def test_float_exr_linear_cuda(self):
         if not cuda_offered():
             print("RESULT node values float_exr_cuda not generated: the addon offers no CUDA device")
@@ -430,6 +472,10 @@ class TestNodeValues(T.ImageCase):
         self.assertTrue((U < 1.0).any() and (U > 64 // BLOCK - 1.0).any(), "the u = 0 seam is not in the view")
         if interpolation == "Closest":
             self.assertGreater(margin, EDGE_MARGIN, "a pixel centre sits on a block edge: Closest may differ by a block")
+        else:
+            spread = linear_jitter_spread(rig.scene.camera, environment_rgb())
+            print(f"RESULT node values environment view: Linear value moves by at most {spread:.3e} over the 0.005 px jitter")
+            self.assertLess(2 * spread, TOLERANCE, "a pixel is steep enough that the two renders' jitter alone can exceed the tolerance")
 
         def world_off():
             for link in list(tw.links):

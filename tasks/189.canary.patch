@@ -14,6 +14,18 @@ index 9cba223f..0bf47bb1 100644
      "ShaderNodeOutputMaterial": {
          "disposition": "implemented",
          "ops": [],
+diff --git a/src/host/image/decode.cpp b/src/host/image/decode.cpp
+index fd47a7e9..46f21067 100644
+--- a/src/host/image/decode.cpp
++++ b/src/host/image/decode.cpp
+@@ -62,7 +62,6 @@ bool decode_unchecked(const uint8_t* bytes, uint64_t count, DecodedImage* out, s
+   // Radiance RGBE becomes float32 as stored (stb's rgbe2float: no gamma, no scale).
+   if (stbi_is_hdr_from_memory(bytes, n)) return decode_hdr(bytes, n, out, error);
+   // stb narrows 16-bit PNGs to 8 bits on a plain load; that would be a silent loss of precision.
+-  if (stbi_is_16_bit_from_memory(bytes, n)) return *error = "16-bit integer images are not supported (PNG stays 8-bit)", false;
+   int w = 0, h = 0, comp = 0;
+   stbi_uc* px = stbi_load_from_memory(bytes, n, &w, &h, &comp, 0);
+   if (px == nullptr) {
 diff --git a/src/kernel/vm/ops/color_to_f32.h b/src/kernel/vm/ops/color_to_f32.h
 index 9537aed6..d096285a 100644
 --- a/src/kernel/vm/ops/color_to_f32.h
