@@ -15,6 +15,7 @@ Process: owner decision 36 confirmed; `process/guards` merged (tool deny rules, 
 scope clause).
 
 ## Owner decisions still open
+- Ruling 100 (2026-11-25, PROVISIONAL): B-09 also excludes the gate's compile-timing step (old: excluding build steps only, ruling 94); landing gates of kernel tasks read 179.8 s with 23 s of real timed compiles. Task 224. Rulings 97-99: shade_surface_ext may take 7.0 s B-05 (old 3.0 s default); medium-stack id for M1b; B-09 remedies 157 and 212.
 - Ruling 96 (2026-11-25): CPU/CUDA agreement through the RGB-to-spectrum lift is gated by its parts (pre-lift 1e-6, lift bit-identity, grey radiance 1e-6); colour radiance printed, ungated (172 measured 1.36e-5 against D12's 1e-5, conditioning of the lift).
 - Ruling 95 (2026-11-25): k_route_hit regs 28 -> 40 for 182's medium back-face test, a lead ruling on a D10 row.
 - Ruling 94 (2026-11-25, PROVISIONAL): B-09 excludes the gate's build steps, as B-08 does since decision 36 (old: wall time incl. incremental build; limit 180 s unchanged). Landing gates rebuild after the canary and read 164-201 s; quiet main without a rebuild 145.5 s. The owner may revert it.
