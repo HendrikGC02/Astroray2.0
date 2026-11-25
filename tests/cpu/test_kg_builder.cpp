@@ -412,14 +412,37 @@ TEST_CASE("kg_builder/a program world carries its program and block") {
   CHECK(kg.scene->world_program == mats->world_program.data());  // read in place on the CPU path
   CHECK(kg.scene->world_program_words == mats->world_program.size());
   CHECK(kg.scene->world_constants == mats->world_constants.data());
-  // The light record names the program, and nothing samples it.
+  // The light record names the program; the bake made it the environment light WORLD_ENV, sampled
+  // from its table with importance 4 pi mean times its strength times pi R^2 (0004 D11).
   const auto lights = set->lights;
   REQUIRE(lights);
   REQUIRE(lights->world_light != ar::kNoLight);
-  CHECK((lights->lights[lights->world_light].flags & ar::kLightWorldProgram) != 0u);
-  CHECK(lights->importance[lights->world_light] == 0.0);
-  CHECK(lights->pmf[lights->world_light] == 0.0f);
+  const ar::LightRecord& wr = lights->lights[lights->world_light];
+  CHECK((wr.flags & ar::kLightWorldProgram) != 0u);
+  CHECK(wr.type == uint8_t(ar::LightType::WORLD_ENV));
+  REQUIRE(lights->env);
+  REQUIRE(lights->env_mean > 0.0);
+  const double pi = 3.14159265358979323846, rad = double(lights->scene.radius);
+  CHECK(lights->importance[lights->world_light] ==
+        doctest::Approx(4.0 * pi * lights->env_mean * double(wr.strength) * pi * rad * rad).epsilon(1e-6));
+  CHECK(lights->pmf[lights->world_light] > 0.0f);
   CHECK(kg.world_light == lights->world_light);
+  // Both views into ENV_TABLE: the plain distribution's four arrays, then the compensated one's.
+  const float* block = static_cast<const float*>(set->tables[static_cast<uint32_t>(TableId::ENV_TABLE)]->ptr());
+  const EnvDistribution& pd = lights->env->plain;
+  CHECK(kg.env[0].func == block);
+  CHECK(kg.env[0].cdf_u == block + pd.func.size());
+  CHECK(kg.env[1].func == block + pd.func.size() + pd.cdf_u.size() + pd.marginal_func.size() + pd.marginal_cdf.size());
+  CHECK(kg.env[0].n == lights->env->n);
+  CHECK(kg.env[1].n == lights->env->n);
+  CHECK(kg.env[0].func_integral == pd.func_integral);
+  CHECK(kg.env[1].func_integral == lights->env->compensated.func_integral);
+  CHECK(kg.session.features.env_world);
+  // A WORLD_ENV world without its views is a builder bug that missing_pointers names.
+  ar::KernelGlobals bare = kg;
+  bare.env[1] = ar::EnvTableView{};
+  const std::vector<std::string> gone = missing_pointers(bare, *set, false);
+  CHECK(std::find(gone.begin(), gone.end(), std::string("env (WORLD_ENV world light)")) != gone.end());
   // An unrelated edit keeps the program in the new set: the material arrays carry it forward.
   r.commit([&](Edit& e) { r.material(e, 43, 1.0f); });
   const auto after = acquire_scene_tables(r.scene);
