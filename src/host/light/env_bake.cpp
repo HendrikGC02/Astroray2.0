@@ -31,11 +31,14 @@ void refuse_bad_cells(const std::vector<float>& grid, uint32_t n) {
     if (std::isfinite(v) && v >= 0.0f) continue;
     const uint32_t iv = uint32_t(i / n), iu = uint32_t(i % n);
     const ar::Real3 d = ar::bake_environment_direction(n, uint32_t(i));
-    char text[256];
+    char text[384];
     std::snprintf(text, sizeof text,
                   "bake_environment: cell %zu (iu %u, iv %u) at direction (%.6f, %.6f, %.6f) is %g, not a finite "
-                  "non-negative radiance",
-                  i, iu, iv, double(d.x), double(d.y), double(d.z), double(v));
+                  "non-negative radiance%s",
+                  i, iu, iv, double(d.x), double(d.y), double(d.z), double(v),
+                  std::isnan(v) ? " (NaN: the world program could not run, or the host launched the bake without one, a "
+                                  "host fault)"
+                                : "");
     throw BakeRefused(text);
   }
 }

@@ -50,35 +50,47 @@ AR_FN const LightRecord* world_light(const KernelGlobals& kg) {
   return &kg.lights[kg.world_light];
 }
 
-// The world's radiance along the escaped ray of pool slot `slot` at the lanes `lam`. False when a
-// program world cannot be evaluated. A constant world reads nothing of the path but its lanes.
-AR_FN bool world_radiance(const KernelGlobals& kg, const LightRecord& world, uint32_t slot, const Lambda& lam, Spec* le) {
-  const ObserverView& obs = kg.tables->observer;
-  if ((world.flags & kLightWorldProgram) == 0u) {
-    *le = light_emission(world, lam, obs);
-    return true;
-  }
-  // The entry table is four words; a shorter program is a host bug, not a world.
-  if (kg.scene == nullptr || kg.scene->world_program == nullptr || kg.scene->world_constants == nullptr ||
-      kg.scene->world_program_words < 4u)
-    return false;
-  const SceneData& s = *kg.scene;
-  const Real3 dir = normalize(ps_ray_d(kg, slot));
+// The context of a background shade for a ray escaping along unit `dir`, at the lanes `lam`: P is
+// the direction and N, Ng and wo its negative; ray type and depth are 0 until the caller sets them.
+AR_FN ShadeContext world_shade_context(Real3 dir, const Lambda& lam) {
   ShadeContext ctx{};
   ctx.P = dir;
   ctx.N = ctx.Ng = ctx.wo = -dir;
-  ctx.ray_type = ps_ray_type(kg, slot);
-  const U16x6 b = ps_bounces(kg, slot);
-  for (int i = 0; i < 6; ++i) ctx.depth[i] = b.v[i];
   ctx.lambda_t = lam;
-  // As a material's emission entry: the block's own emission first (0 for a program world, whose
-  // emissions are all code), then the entry adds its terms.
+  return ctx;
+}
+
+// The world program's radiance in `ctx`, unscaled: as a material's emission entry, the block's own
+// emission first (0 for a program world, whose emissions are all code), then the entry adds its
+// terms. The one evaluation of the world program, for escaped rays here and for the environment bake
+// (bake_environment.h). False when the scene holds no program (the entry table is four words; a
+// shorter one is a host bug, not a world) or the VM fails.
+AR_FN bool world_program_radiance(const SceneData& s, const SceneTables& tables, const ShadeContext& ctx, Spec* le) {
+  if (s.world_program == nullptr || s.world_constants == nullptr || s.world_program_words < 4u) return false;
   const ConstantBlock& block = s.world_constants[0];
-  Spec e = resolve_slot<SpectrumSemantic::ILLUMINANT>(block.emission_color, lam, obs, s.material_spectra) *
+  Spec e = resolve_slot<SpectrumSemantic::ILLUMINANT>(block.emission_color, ctx.lambda_t, tables.observer, s.material_spectra) *
            Real(block.emission_luminance);
   VmRegs regs;
   const uint32_t* prog = s.world_program;
-  if (run_entry(prog, load_ro(prog + 2), &regs, ctx, *kg.tables, nullptr, &e) != VmStatus::OK) return false;
+  if (run_entry(prog, load_ro(prog + 2), &regs, ctx, tables, nullptr, &e) != VmStatus::OK) return false;
+  *le = e;
+  return true;
+}
+
+// The world's radiance along the escaped ray of pool slot `slot` at the lanes `lam`. False when a
+// program world cannot be evaluated. A constant world reads nothing of the path but its lanes.
+AR_FN bool world_radiance(const KernelGlobals& kg, const LightRecord& world, uint32_t slot, const Lambda& lam, Spec* le) {
+  if ((world.flags & kLightWorldProgram) == 0u) {
+    *le = light_emission(world, lam, kg.tables->observer);
+    return true;
+  }
+  if (kg.scene == nullptr) return false;
+  ShadeContext ctx = world_shade_context(normalize(ps_ray_d(kg, slot)), lam);
+  ctx.ray_type = ps_ray_type(kg, slot);
+  const U16x6 b = ps_bounces(kg, slot);
+  for (int i = 0; i < 6; ++i) ctx.depth[i] = b.v[i];
+  Spec e;
+  if (!world_program_radiance(*kg.scene, *kg.tables, ctx, &e)) return false;
   *le = e * Real(world.strength);
   return true;
 }

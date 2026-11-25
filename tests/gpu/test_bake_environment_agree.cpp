@@ -162,12 +162,8 @@ Result run(Device& dev, const MaterialStore& store, const World& world, ModuleDe
     dev.upload(kg_buf, offsetof(ar::KernelGlobals, env_bake), &none, sizeof none);
   }
   EnvironmentBaker baker(kOwner);
-  try {
-    r.baked = baker.get(dev, kg_buf, {1, 2, 3}, nullptr, kN);
-    baker.get(dev, kg_buf, {1, 2, 3}, nullptr, kN);
-  } catch (const BakeRefused&) {
-    // a world with no table to build (the varied world's grid is checked raw)
-  }
+  r.baked = baker.get(dev, kg_buf, {1, 2, 3}, nullptr, kN);
+  baker.get(dev, kg_buf, {1, 2, 3}, nullptr, kN);
   r.rebuilds_after_two = baker.rebuild_count();
   CHECK(dev.ledger().total() == baseline);
   for (DeviceBuffer& b : held) dev.free(b);

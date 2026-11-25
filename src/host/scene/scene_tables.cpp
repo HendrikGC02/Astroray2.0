@@ -267,12 +267,11 @@ BakedEnvironment bake_environment(Scene& scene, SceneTableCache& cache, const Sc
     Device& d;
     DeviceBuffer header, kg;
     ~Scratch() {
-      try {
-        d.free(header);
-        d.free(kg);
-      } catch (const std::exception& e) {
-        std::fprintf(stderr, "astroray: freeing the environment bake's scratch failed: %s\n", e.what());
-      }
+      for (DeviceBuffer* b : {&header, &kg}) try {
+          d.free(*b);
+        } catch (const std::exception& e) {
+          std::fprintf(stderr, "astroray: freeing the environment bake's scratch failed: %s\n", e.what());
+        }
     }
   } scratch{*dev, {}, {}};
   scratch.header = dev->allocate(LedgerCategory::TABLES, bytes, Owner{});

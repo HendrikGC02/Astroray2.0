@@ -7,8 +7,8 @@
 // scale, so the grid is in the authored world's units. The host reads the grid back, normalises it
 // by its maximum and builds the sampling table (host/light/env_bake.h); only a program world is
 // baked, a constant world needs no table.
-// The program runs in the context Cycles builds for a background shade (P the direction, N, Ng and
-// wo its negative, as shade_background's world_radiance), with no ray-type bits and depth 0: Cycles'
+// The program runs through shade_background's world_shade_context and world_program_radiance (P the
+// direction, N, Ng and wo its negative), with no ray-type bits and depth 0: Cycles'
 // importance bake evaluates the background with no ray visibility (kernel/bake/bake.h
 // kernel_background_evaluate, PATH_RAY_VISIBILITY_NONE).
 // Cell index iv n + iu, the layout host/light/env_table.h consumes. The excitation term of
@@ -45,13 +45,10 @@
 #include "../core/vec.h"
 #include "../kernel_globals.h"
 #include "../light/equal_area.h"
-#include "../material/constant_block.h"
-#include "../material/slot_resolve.h"
 #include "../portability.h"
 #include "../scene/scene_view.h"
 #include "../vm/context.h"
-#include "../vm/interp.h"
-#include "../vm/vm_regs.h"
+#include "shade_background.h"
 
 AR_NS_BEGIN
 
@@ -103,32 +100,18 @@ AR_FN Real bake_environment_cell(const WorldFn& world, const ObserverView& obs, 
   return w > Real(0) ? weighted.value() / w : Real(0);
 }
 
-// The world program's radiance toward -dir, unscaled: the constant block's emission (0 for a program
-// world, whose emissions are all code) plus the emission entry's terms, as a material's emission
-// entry adds them. A VM error gives NaN in every lane, so the host refuses the grid.
+// The world program's radiance toward -dir, unscaled, through shade_background's evaluation in the
+// background context with no ray type and depth 0. A scene without a program, or a VM error, gives
+// NaN in every lane, so the host refuses the grid.
 struct ProgramWorld {
   const SceneData* scene;
   const SceneTables* tables;
   AR_FN Spec operator()(const Real3& dir, const Lambda& lam) const {
-    ShadeContext ctx{};
-    ctx.P = dir;
-    ctx.N = ctx.Ng = ctx.wo = -dir;
-    ctx.lambda_t = lam;
-    const ConstantBlock& block = scene->world_constants[0];
-    Spec e = resolve_slot<SpectrumSemantic::ILLUMINANT>(block.emission_color, lam, tables->observer, scene->material_spectra) *
-             Real(block.emission_luminance);
-    VmRegs regs;
-    const uint32_t* prog = scene->world_program;
-    if (run_entry(prog, load_ro(prog + 2), &regs, ctx, *tables, nullptr, &e) != VmStatus::OK) return spec_fill(Real(bit_cast<float>(0x7fc00000u)));
+    Spec e;
+    if (!world_program_radiance(*scene, *tables, world_shade_context(dir, lam), &e)) return spec_fill(Real(bit_cast<float>(0x7fc00000u)));
     return e;
   }
 };
-
-// True when the scene holds a program world the bake can run: the entry table is four words.
-AR_FN bool bake_environment_has_program(const KernelGlobals& kg) {
-  return kg.scene != nullptr && kg.tables != nullptr && kg.scene->world_program != nullptr &&
-         kg.scene->world_constants != nullptr && kg.scene->world_program_words >= 4u;
-}
 
 // The launch size, read from the device-resident KernelGlobals (the host's `count` only sizes a
 // GPU grid, 0002 D4).
@@ -139,7 +122,7 @@ AR_FN uint32_t bake_environment_count(const KernelGlobals& kg) { return kg.env_b
 AR_FN void bake_environment_write(const KernelGlobals& kg, uint32_t cell) {
   AR_ASSERT(kg.env_bake.grid != nullptr && cell < bake_environment_count(kg));
   Real v = Real(bit_cast<float>(0x7fc00000u));  // quiet NaN
-  if (bake_environment_has_program(kg))
+  if (kg.scene != nullptr && kg.tables != nullptr)
     v = bake_environment_cell(ProgramWorld{kg.scene, kg.tables}, kg.tables->observer, kg.env_bake.n, cell);
   kg.env_bake.grid[cell] = float(v);
 }
