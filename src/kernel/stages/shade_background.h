@@ -165,6 +165,9 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
     // The film slot is the sample's, not the pool slot (0004 D5).
     const uint32_t sample = ps_sample_id(kg, slot);
     const bool weighted = after_scatter && (hooks & TEST_HOOK_NEE_OFF) == 0u;
+    Spec le = spec_fill(Real(0));
+    const bool ran = world_radiance(kg, *world, slot, lam, &le);
+    // After the world program, whose registers are free by then, the tree walk of the pmf.
     Real p_light = Real(0);
     if (weighted) {
       const LightSampleContext prev = prev_light_context(kg, slot);
@@ -172,8 +175,6 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
       p_light = light_sampler_pmf(*kg.light_sampler, prev, kg.world_light, (hooks & TEST_HOOK_LIGHT_ALIAS) != 0u) *
                 light_pdf_li(*world, prev, wi, LightHit{prev.p, prev.n_geom}, kg.env);
     }
-    Spec le = spec_fill(Real(0));
-    const bool ran = world_radiance(kg, *world, slot, lam, &le);
     const Spec contribution = le * ps_beta(kg, slot) *
                               mis_emitter_scale(ps_r_u(kg, slot), weighted ? ps_r_l(kg, slot) : Spec{}, p_light, weighted);
     const bool guide_ok = !(ran && is_finite(contribution)) || kg.film->guide_albedo < 0 ||
