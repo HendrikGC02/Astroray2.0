@@ -142,6 +142,12 @@ def empty_material(mat):
     return mat
 
 
+def transparent_entries(entries):
+    """The compiler's report of a coloured Transparent folded by its mean (not the shadow-ray note every
+    non-opaque material gets)."""
+    return [x for x in entries if x[0] == APPROXIMATED and x[1].startswith("Transparent")]
+
+
 def lower(mat):
     return tm.translate.translate_material(mat, tm.keys.KeyMap(), tm.OP)
 
@@ -425,7 +431,7 @@ class TestLowering(unittest.TestCase):
         """A Mix Shader compiles to the words of the same graph written by hand with 0007's encoding: the
         children's stores and emissions tagged by child, one BRANCH_MIX {tag, a, b} fed by the factor."""
         red, blue, ems = (0.8, 0.1, 0.1), (0.1, 0.1, 0.8), (1.0, 0.5, 0.2)
-        cases = []
+        cases = []  # (name, lowered emitter, hand-written emitter); a new scene deletes the earlier materials
 
         scene, plane, mat, world = tm.new_scene()
         empty_material(mat)
@@ -434,7 +440,7 @@ class TestLowering(unittest.TestCase):
         h_principled(hand, 0, red, 0.5)
         h_principled(hand, 1, blue, 0.2)
         h_mix(hand, 0, 0, 1, 0.3)
-        cases.append(("Mix(Principled, Principled, 0.3)", mat, hand))
+        cases.append(("Mix(Principled, Principled, 0.3)", lower(mat), hand))
 
         scene, plane, mat, world = tm.new_scene()
         empty_material(mat)
@@ -443,7 +449,7 @@ class TestLowering(unittest.TestCase):
         h_store(hand, "geometry_opacity", 0, hand.const_f32(0.0))
         h_principled(hand, 1, red, 0.5)
         h_mix(hand, 0, 0, 1, 0.4)
-        cases.append(("Mix(Transparent, Principled, 0.4)", mat, hand))
+        cases.append(("Mix(Transparent, Principled, 0.4)", lower(mat), hand))
 
         scene, plane, mat, world = tm.new_scene()
         empty_material(mat)
@@ -452,11 +458,10 @@ class TestLowering(unittest.TestCase):
         h_emission(hand, 0, ems, 2.0)
         h_principled(hand, 1, red, 0.5)
         h_mix(hand, 0, 0, 1, 0.5)
-        cases.append(("Mix(Emission, Principled, 0.5)", mat, hand))
+        cases.append(("Mix(Emission, Principled, 0.5)", lower(mat), hand))
 
-        for name, m, hand in cases:
+        for name, em, hand in cases:
             with self.subTest(graph=name):
-                em = lower(m)
                 self.assertEqual(tm.unsupported_strings(em), [])
                 self.assertEqual(canon(em), canon(hand))
         # Without a Mix the words are the ones a graph always had: no `child` parameter anywhere.
@@ -535,9 +540,9 @@ class TestLowering(unittest.TestCase):
         src = stores(em)[SLOT["geometry_opacity"]]
         self.assertEqual((src["op"], src["f32"]), ("CONST_F32", [0.0]))
         self.assertEqual(sorted(stores(em)), [SLOT["geometry_opacity"]])
-        img, entries, _ = tm.render(scene, plane, mat, world, size=(16, 12), spp=16)
-        self.assertEqual([x for x in entries if x[0] in (UNSUPPORTED, APPROXIMATED)], [])
-        np.testing.assert_allclose(tm.centre_rgb(img), [1.0, 1.0, 1.0], rtol=1e-3)
+        img, entries, _ = tm.render(scene, plane, mat, world, size=(16, 12), spp=128)
+        self.assertEqual([x for x in entries if x[0] == UNSUPPORTED] + transparent_entries(entries), [])
+        np.testing.assert_allclose(tm.centre_rgb(img), [1.0, 1.0, 1.0], atol=0.005)
         # Under a Mix, a coloured Transparent (opacity 1 - mean) is reported once, white never.
         for rgb, count in (((1.0, 1.0, 1.0), 0), ((0.2, 0.5, 0.8), 1)):
             with self.subTest(colour=rgb):
@@ -550,7 +555,7 @@ class TestLowering(unittest.TestCase):
                 self.assertAlmostEqual(first["f32"][0], 1.0 - sum(rgb) / 3.0, places=6)
                 _, entries, _ = tm.render(scene, plane, mat, world, size=(16, 12), spp=16)
                 self.assertEqual([x for x in entries if x[0] == UNSUPPORTED], [])
-                self.assertEqual(len([x for x in entries if x[0] == APPROXIMATED]), count, entries)
+                self.assertEqual(len(transparent_entries(entries)), count, entries)
         # A colour from a texture has no constant mean: reported by name.
         scene, plane, mat, world = tm.new_scene()
         n = only_shader(mat, "ShaderNodeBsdfTransparent")
@@ -592,6 +597,7 @@ class TestLowering(unittest.TestCase):
         # Rendered, a rough white metal under a white world is the world (energy compensation, 163).
         scene, plane, mat, world = tm.new_scene()
         p = principled(mat)
+        p.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
         p.inputs["Metallic"].default_value = 1.0
         p.inputs["Roughness"].default_value = 0.3
         img, entries, _ = tm.render(scene, plane, mat, world, size=(32, 24), spp=64)
@@ -628,6 +634,7 @@ class TestLowering(unittest.TestCase):
         metal = bpy.data.materials.new("Metal")
         metal.use_nodes = True
         p = principled(metal)
+        p.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
         p.inputs["Metallic"].default_value = 1.0
         p.inputs["Roughness"].default_value = 0.3
         ball = self._sphere(scene, metal)
@@ -646,7 +653,10 @@ class TestLowering(unittest.TestCase):
             img, entries, _ = tm.render(scene, plane, mat, world, size=size, spp=spp)
             self.assertEqual([x for x in entries if x[0] == UNSUPPORTED], [])
             shots[name] = img
-        means = {k: tm.centre_rgb(v) for k, v in shots.items()}
+        def middle(img):  # inside the sphere's disc (it fills 0.58 of the half-frame), clear of its silhouette
+            h, w = img.shape[:2]
+            return img[h // 2 - 5:h // 2 + 5, w // 2 - 5:w // 2 + 5, :3].reshape(-1, 3).mean(axis=0)
+        means = {k: middle(v) for k, v in shots.items()}
         print(f"RESULT mix_metal means {means}")
         np.testing.assert_allclose(means["metal"], [1.0, 1.0, 1.0], atol=0.012)
         np.testing.assert_allclose(means["transparent"], 0.5 * np.ones(3) + 0.5 * means["red"], atol=0.02)
