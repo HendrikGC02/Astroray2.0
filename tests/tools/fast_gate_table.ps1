@@ -107,6 +107,65 @@ sys.exit(1 if bad else 0)
 '@
 $po = @(& $py -I -c $probe $root 2>&1)
 if ($LASTEXITCODE -ne 0) { Write-Host 'FAIL analytic shards: partition'; $po | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }; $fail++ }
+# The tier-shard helper of check.ps1 (the fast tier's tests step and the gate's cpu tests) against a fake test
+# executable of 10 cases whose file order differs from its name order and holds one exact-name pair (as the plain
+# TEST_CASEs of the ar-f64 files do): every case once over 3 shards in the order the list call used, the pair in one
+# shard, and shards that lose cases or die fail the step.
+$ct = Get-Content (Join-Path $root 'tools/check.ps1') -Raw
+$fx = Join-Path $tmp 'fakeexe'
+New-Item -ItemType Directory -Force $fx | Out-Null
+Set-Content "$fx/fake.ps1" @'
+# File order: z cases first, the pair far apart. Name order: a cases, the pair adjacent, then z cases.
+$file = 'n/z1', 'n/z2', 'n/z3', 'n/z4', 'n/z5', 'n/pair', 'n/a1', 'n/a2', 'n/a3', 'n/pair'
+$names = if ($args -contains '--order-by=name') { $file | Sort-Object { $_ } -CaseSensitive } else { $file }
+$f = [int](@($args | Where-Object { $_ -like '--first=*' } | ForEach-Object { $_ -replace '--first=', '' }) + 0)[0]
+$l = [int](@($args | Where-Object { $_ -like '--last=*' } | ForEach-Object { $_ -replace '--last=', '' }) + 0)[0]
+# FAKE_DIE: every shard but the first exits before printing its build line.
+if ($env:FAKE_DIE -and $f -gt 1) { exit 1 }
+'build: sha=x dirty=0 kernels=embedded'
+if ($args -contains '--list-test-cases') {
+  '[doctest] listing all test case names'; ('=' * 79); $names; ('=' * 79)
+  '[doctest] unskipped test cases passing the current filters: 10'; exit 0
+}
+$k = 0
+for ($i = $f; $i -le $l; $i++) {
+  # FAKE_DROP: every shard but the first loses its last case.
+  if ($env:FAKE_DROP -and $f -gt 1 -and $i -eq $l) { continue }
+  '  0.100 s: ' + $names[$i - 1]; $k++
+}
+"family count fake_family $k 100"
+'@
+Set-Content "$fx/fake.cmd" '@pwsh -NoProfile -File "%~dp0fake.ps1" %*'
+$tierText = [regex]::Match($ct, "(?s)cpuTierText = @'\r?\n(.*?)\r?\n'@").Groups[1].Value
+$shardTxt = [regex]::Match($ct, "(?s)shardText = @'\r?\n(.*?)\r?\n'@").Groups[1].Value
+if (-not $tierText -or -not $shardTxt) { Write-Host 'FAIL tier shards: helper text not found in check.ps1'; $fail++ }
+else {
+  $exe = Join-Path $fx 'fake.cmd'
+  $runShards = [scriptblock]::Create($shardTxt)
+  $runCpuTier = [scriptblock]::Create($tierText)
+  $none = Join-Path $fx 'none.out'
+  $cap = Join-Path $fx 'cap'
+  Push-Location $root
+  try {
+    $env:FAKE_DROP = ''; $env:FAKE_DIE = ''
+    $to = @(& $runCpuTier 'fast' 3 'fast tests' $none $cap '--order-by=name')
+    if ($LASTEXITCODE -ne 0 -or -not ($to | Where-Object { $_ -eq 'shards: fast tests 3 shards, 10 of 10 cases' })) { Write-Host "FAIL tier shards: 3 shards over 10 cases: $($to -join ' / ')"; $fail++ }
+    if (-not ($to | Where-Object { $_ -match '^families: fake_family 10 of 100$' })) { Write-Host "FAIL tier shards: family counts not summed: $($to -join ' / ')"; $fail++ }
+    # The shards ran the list call's order: their cases, in shard order, are the name-sorted list; the pair shares a shard.
+    $ran = @($to | Where-Object { $_ -match '^\s*[0-9]+\.[0-9]+ s: ' } | ForEach-Object { ($_ -split ': ', 2)[1] })
+    $want = 'n/a1', 'n/a2', 'n/a3', 'n/pair', 'n/pair', 'n/z1', 'n/z2', 'n/z3', 'n/z4', 'n/z5'
+    if (($ran -join ',') -ne ($want -join ',')) { Write-Host "FAIL tier shards: cases ran in order $($ran -join ',') , expected $($want -join ',')"; $fail++ }
+    $shard = -1; $pairShards = @()
+    foreach ($ln in $to) { if ($ln -match '^build: ') { $shard++ } elseif ($ln -match ': n/pair$') { $pairShards += $shard } }
+    if (@($pairShards | Select-Object -Unique).Count -ne 1 -or $pairShards.Count -ne 2) { Write-Host "FAIL tier shards: the same-name pair was split over shards $($pairShards -join ',')"; $fail++ }
+    $env:FAKE_DROP = '1'
+    $to = @(& $runCpuTier 'fast' 3 'fast tests' $none $cap '--order-by=name')
+    if ($LASTEXITCODE -eq 0 -or -not ($to | Where-Object { $_ -match '^FAIL fast tests shards: 8 of 10 cases ran$' })) { Write-Host "FAIL tier shards: two lost cases were accepted: $($to -join ' / ')"; $fail++ }
+    $env:FAKE_DROP = ''; $env:FAKE_DIE = '1'
+    $to = @(& $runCpuTier 'fast' 3 'fast tests' $none $cap '--order-by=name')
+    if ($LASTEXITCODE -eq 0 -or -not ($to | Where-Object { $_ -match '^FAIL fast tests shards: 1 of 3 shards printed a build line$' })) { Write-Host "FAIL tier shards: two shards that died before their build line were accepted: $($to -join ' / ')"; $fail++ }
+  } finally { Pop-Location; Remove-Item Env:FAKE_DROP, Env:FAKE_DIE -ErrorAction SilentlyContinue }
+}
 if ($fail -gt 0) { $out | ForEach-Object { Write-Host $_ }; exit 1 }
 Write-Host 'PASS gate_table'
 exit 0

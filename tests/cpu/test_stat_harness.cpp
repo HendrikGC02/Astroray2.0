@@ -172,7 +172,10 @@ TEST_SUITE("fast") {
     _putenv_s(kChildEnv, "");
     const std::string want = "family child ran 4 checks, m = 3; raising m is a reviewed budget change";
     const size_t at = out.find("family child");
-    std::printf("child exit %d: %s", code, at == std::string::npos ? out.c_str() : out.c_str() + at);
+    // Only the child's message line: its `family count child 4 3` line would be summed with the real
+    // families when check.ps1 joins the shard outputs of the tier.
+    const std::string shown = at == std::string::npos ? out : out.substr(at, out.find('\n', at) - at + 1);
+    std::printf("child exit %d: %s", code, shown.c_str());
     CHECK(code != 0);
     CHECK(out.find(want) != std::string::npos);
   }
