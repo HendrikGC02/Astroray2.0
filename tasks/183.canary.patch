@@ -25,7 +25,7 @@ index 5089886d..2eff43b2 100644
    const ar::KernelGlobals kg = build_kernel_globals(tables_.get(), in);
    if (tables_) {
 diff --git a/src/kernel/medium/delta_track.h b/src/kernel/medium/delta_track.h
-index 7b887467..25198eca 100644
+index 7b887467..cc8d3cde 100644
 --- a/src/kernel/medium/delta_track.h
 +++ b/src/kernel/medium/delta_track.h
 @@ -102,7 +102,7 @@ AR_FN bool track_reach(const Spec& sigma_maj, Real dt, uint32_t h, TrackWeights*
@@ -37,6 +37,15 @@ index 7b887467..25198eca 100644
    if (!(tc < t_max)) {
      *t = t_max;
      return track_reach(sigma_maj, t_max - t_min, h, w) ? TrackEvent::REACHED : TrackEvent::ZERO;
+@@ -131,7 +131,7 @@ AR_FN TrackEvent track_collision(const Spec& sigma_a, const Spec& sigma_s, const
+   }
+   w->beta *= tm * sigma_n / pdf;
+   w->r_u *= tm * sigma_n / pdf;
+-  w->r_l *= tm * sigma_maj / pdf;
++  w->r_l *= tm * sigma_n / pdf;
+   return max_lane(w->beta) > Real(0) && max_lane(w->r_u) > Real(0) ? TrackEvent::NULL_COLLISION : TrackEvent::ZERO;
+ }
+ 
 @@ -147,7 +147,7 @@ AR_FN TrackResult track_segment(const Spec& sigma_a, const Spec& sigma_s, const
    }
    Real t = Real(0);
@@ -47,10 +56,10 @@ index 7b887467..25198eca 100644
        r.t = t;
        return r;
 diff --git a/src/kernel/stages/shade_volume.h b/src/kernel/stages/shade_volume.h
-index 4657f690..1d6c4ce6 100644
+index 0cbab265..8155311a 100644
 --- a/src/kernel/stages/shade_volume.h
 +++ b/src/kernel/stages/shade_volume.h
-@@ -80,7 +80,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
+@@ -81,12 +81,12 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
    if ((ps_flags(kg, slot) & PATH_KIND) != 0u) {
      const Real2 uv = ps_hit_uv(kg, slot);
      const HitRecord hit{ps_hit_t(kg, slot), ps_hit_prim(kg, slot), inst, uv.x, uv.y};
@@ -58,8 +67,14 @@ index 4657f690..1d6c4ce6 100644
 +    ps_next_stage(kg, slot) = static_cast<uint8_t>(route_hit_after_medium(kg, hit, 0u));
      return;
    }
+   const SceneData& s = scene_of(kg);
+   const MediumDesc& desc = s.medium_descs[medium];
+-  bool ok = (load_ro(&desc.flags) & MEDIUM_HAS_EMISSION) == 0u;
++  bool ok = true;
    // The coefficients first, with as little path state live as possible: the volume entry inlines the
-@@ -115,7 +115,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
+   // interpreter, whose register pressure is the stage's largest (0002 D10 ladder step 2).
+   Spec sigma_a{}, sigma_s{};
+@@ -118,7 +118,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
    const uint32_t e = ps_event_index(kg, slot);
    const SamplerKey key = camera_key(kg.active_pixels, sample, kg.session.samples_done, kg.session.samples_per_pass);
    const MediumStream st{kg.session.sampler_mode, key.id, key.index, kg.session.seed, STREAM_PATH_MEDIUM};
@@ -68,16 +83,14 @@ index 4657f690..1d6c4ce6 100644
    TrackWeights w{ps_beta(kg, slot), ps_r_u(kg, slot), ps_r_l(kg, slot)};
    const TrackResult r = track_segment(sigma_a, sigma_s, sigma_a + sigma_s, t_max, hero_lane(flags), st,
                                        &counter, kFlightCollisionLimit, &w);
-@@ -147,7 +147,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
-   }
-   AR_ASSERT(r.event == TrackEvent::SCATTERED);
+@@ -164,13 +164,13 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
+   // pbrt's "if (depth++ >= maxDepth) terminated" and 0006 D14's volume_bounces, checked once the
+   // vertex is known to be valid; nothing of the path is written before it.
    U16x6 b = ps_bounces(kg, slot);
 -  if (b.v[0] >= kg.session.max_bounces[0] || b.v[4] >= kg.session.max_bounces[4]) {
 +  if (b.v[0] >= kg.session.max_bounces[0] || b.v[4] > kg.session.max_bounces[4]) {
      path_end(kg, slot, Term::MAX_BOUNCE);
      return;
-   }
-@@ -165,7 +165,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
    }
    ps_beta(kg, slot) = beta;
    ps_r_u(kg, slot) = w.r_u;
