@@ -15,6 +15,7 @@
 #include <doctest.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -138,14 +139,17 @@ struct Rig {
   // Overwrites the surface program of the UV material, word for word, with
   //   TEST_INJECT_NAN r40 (past the register file: VmStatus::BAD_REGISTER); STORE_SLOT; END
   // which is as long as the program the compiler emitted for LOAD_CTX_UV; STORE_SLOT -> base_color.
-  void inject_nan() {
+  // `reg`: the register TEST_INJECT_NAN writes; 40 is past the file (BAD_REGISTER), a register inside
+  // it writes a real NaN that STORE_SLOT (source register 0, so `reg` 0 reaches it) must refuse with
+  // NON_FINITE_INPUT.
+  void inject_nan(uint32_t reg = 40u) {
     const auto arrays = scene.materials->arrays();
     auto& a = const_cast<MaterialArrays&>(*arrays);  // the store made it non-const; see the header comment
     REQUIRE(a.keys.size() == 1);
     uint32_t* p = a.programs.data() + a.headers[0].program_offset;
     REQUIRE(a.programs.size() - a.headers[0].program_offset == 8);
     REQUIRE(p[4] != 0);  // LOAD_CTX_UV, not END
-    p[4] = uint32_t(ar::Op::TEST_INJECT_NAN) | (40u << 8);
+    p[4] = uint32_t(ar::Op::TEST_INJECT_NAN) | (reg << 8);
     p[5] = uint32_t(ar::Op::STORE_SLOT);
     p[6] = uint32_t(ar::RecordSlot::base_weight);
     p[7] = uint32_t(ar::Op::END);
@@ -198,7 +202,7 @@ struct Fixture {
   Rig rig;
   std::shared_ptr<Device> dev;
   std::unique_ptr<Session> s;
-  Fixture() {
+  explicit Fixture(uint32_t inject_reg = 40u) {
     rig.commit([&](Edit& e) {
       rig.quad(e);
       rig.world(e);
@@ -206,7 +210,7 @@ struct Fixture {
       rig.settings(e, 3);
     });
     rig.commit([&](Edit& e) { rig.instance(e); });
-    rig.inject_nan();
+    rig.inject_nan(inject_reg);
     dev = make_cpu_session_device(rig.ctx, 1);
     SessionOptions o;
     o.max_width = kW;
@@ -228,6 +232,29 @@ TEST_CASE("v15/invalid sample count equals the injected samples") {
   const std::vector<uint64_t> c = counts(*f.s, AR_REPORT_INVALID_SAMPLE);
   REQUIRE(c.size() == 1);
   CHECK(c[0] == uint64_t(kW) * kH * kSpp);
+}
+
+TEST_CASE("v15/nan input counts invalid") {
+  // The same program, but the NaN is really written into register 0 and STORE_SLOT reads it: the
+  // store refuses it (NON_FINITE_INPUT) and the sample ends INVALID, once per camera sample, with no
+  // clamp or lift hiding it (ruling 91). An invalid sample adds nothing to the film (0008 d6), so no
+  // pixel is black without a count.
+  Fixture f(0u);
+  const std::vector<uint64_t> c = counts(*f.s, AR_REPORT_INVALID_SAMPLE);
+  REQUIRE(c.size() == 1);
+  CHECK(c[0] == uint64_t(kW) * kH * kSpp);
+  const std::vector<PassDesc> passes = list_passes(f.s->layout());
+  REQUIRE(passes.front().name == "Combined");
+  std::vector<float> m;
+  f.s->read_film([&](const FilmReadContext& ctx) {
+    FilmView view(ctx.device, ctx.film);
+    m.resize(pass_float_count(passes.front(), AR_QUANTITY_MEAN, view.width(), view.height()));
+    read_pass(view, passes.front(), AR_QUANTITY_MEAN, uint32_t(m.size()), m.data());
+  });
+  REQUIRE(!m.empty());
+  // Every pixel is the quad and every sample of it was refused: a pixel with no valid sample reads NaN
+  // (no data), never a black 0 that looks like a result.
+  for (float v : m) CHECK(std::isnan(v));
 }
 
 TEST_CASE("v15/a film reset removes the FILM entries") {

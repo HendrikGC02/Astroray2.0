@@ -590,8 +590,6 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     if (!w.isc[size_t(nd.input[0])] && w.g.nodes[size_t(nd.input[0])].out == VType::F32 && spectral_slot(slot) &&
         slot != uint32_t(RS::specular_ior))
       return res->error = who + "a run-time scalar cannot be stored in a colour slot", false;
-    if (slot == opacity_slot && w.isc[size_t(nd.input[0])] && std::isnan(w.cv[size_t(nd.input[0])][0]))
-      return res->error = "geometry_opacity is NaN", false;
     std::vector<int>& list = stores_of[nd.child];
     for (int o : list)
       if (slot_of(o) == slot)
@@ -742,7 +740,6 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     int f = w.g.nodes[size_t(m)].input[0];
     if (w.isc[size_t(f)]) {
       const float v = w.cv[size_t(f)][0];
-      if (std::isnan(v)) return res->error = "Mix Shader tag " + std::to_string(tag) + ": the factor is NaN", false;
       if (clamp01(v) != v) f = konst(clamp01(v));
     }
     side_w[m] = {sub(one, f), f};
@@ -801,6 +798,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
   };
   std::vector<Emit> emitted;
   std::vector<int> emit_nodes;
+  std::set<int> strength_nodes;
   for (int c : order)
     for (int e : emits_of[c]) {
       const int weight = mul(path_of[c].w, opacity_of[c]);
@@ -809,7 +807,11 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
       res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(path_of[c].w)];
       const int strength = w.g.nodes[size_t(e)].input[1];
       emitted.push_back({w.g.nodes[size_t(e)].input[0], strength, weight});
-      const int scaled = mul(strength, weight);  // mul may move the node array
+      int scaled = mul(strength, weight);  // mul may move the node array
+      // mul hands back a shared node (the zero of a weight of 0, a weight both children computed):
+      // each EMIT_LE needs its own strength value, so a second reader gets a copy through x * 1.
+      if (!strength_nodes.insert(scaled).second) scaled = arith(Op::MUL_F32, scaled, one);
+      strength_nodes.insert(scaled);
       w.g.nodes[size_t(e)].input[1] = scaled;
       emit_nodes.push_back(e);
     }
@@ -1009,6 +1011,9 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
                        &res->clamp_flags, &res->error))
         return false;
     }
+    // A selection weight that folded to 0 means no sample ever takes this child (item 43 "reachable").
+    const int pw = path_of[child].w;
+    c.reachable = !(w.isc[size_t(pw)] && !(w.cv[size_t(pw)][0] > 0.0f));
     res->runtime_slots |= c.runtime_slots;
     res->children.push_back(c);
   }
@@ -1022,7 +1027,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
 // store's own source, computed once in the emission segment and kept live for the store (item 38);
 // a constant one is the clamped value the block holds, folded into the product (a lone constant
 // emission then lands in the block's luminance as before). An opacity of exactly 1 changes nothing.
-// A NaN constant is left to the store's own rejection.
+// A NaN constant never gets here: compile_surface refuses every non-finite constant first.
 // Ref: docs/decisions/0005-material-model.md items 4, 38, 43; third_party/_cache/refs/
 // openpbr-781573a80cb2 index.html "Opacity / Transparency" (M_PBR = mix(S_ambient, M_surface,
 // geometry_opacity)) and reference/open_pbr_surface.mtlx (the surface node takes the emission EDF
@@ -1049,7 +1054,7 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
   int factor = src;
   if (w.isc[size_t(src)]) {
     const float v = w.cv[size_t(src)][0];
-    if (std::isnan(v) || v >= 1.0f) return true;  // NaN is rejected by the store; above 1 clamps to 1
+    if (v >= 1.0f) return true;  // above 1 clamps to 1; a NaN never gets here (compile_surface refuses it)
     if (v < 0.0f) {
       GraphNode c;
       c.op = Op::CONST_F32;
@@ -1084,6 +1089,29 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
   return true;
 }
 
+// A constant that is NaN or Inf anywhere in the graph is refused, naming the node (and the record
+// slot a STORE_SLOT gives it), even when it would fold into a finite value or sit in a branch no
+// sample takes: a graph that carries one is a broken input, and the run-time check in STORE_SLOT
+// would otherwise turn every sample INVALID (rule 5, ruling 91; 0005 item 32, "Non-finite input").
+// Ref: docs/decisions/RULINGS.md 91; 0004 D17.
+bool refuse_non_finite_constants(const Work& w, std::string* err) {
+  for (size_t i = 0; i < w.g.nodes.size(); ++i) {
+    if (!w.isc[i]) continue;
+    const Vec3& v = w.cv[i];
+    const int n = w.g.nodes[i].out == VType::F32 ? 1 : 3;
+    bool finite = true;
+    for (int k = 0; k < n; ++k) finite = finite && (v[size_t(k)] - v[size_t(k)] == 0.0f);
+    if (finite) continue;
+    *err = "graph node " + std::to_string(i) + " (" + op_meta(w.g.nodes[i].op).name +
+           "): a non-finite constant, NaN or Inf";
+    for (const GraphNode& c : w.g.nodes)
+      for (int s = 0; s < c.n_inputs; ++s)
+        if (c.op == Op::STORE_SLOT && c.input[s] == int(i)) *err += ", stored to record slot " + std::to_string(w.g.i32[c.i32_first]);
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable& table, const ImageMeanFn* means,
@@ -1108,6 +1136,7 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
     if (!res.error.empty()) return res;
   }
 
+  if (!refuse_non_finite_constants(w, &res.error)) return res;
   res.block = ar::default_constant_block(table);
   if (std::any_of(w.g.nodes.begin(), w.g.nodes.end(), [](const GraphNode& nd) { return nd.op == Op::BRANCH_MIX; })) {
     res.ok = compile_mixed(w, means, slots, &res);
@@ -1158,7 +1187,6 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
       } else if (w.isc[size_t(src)]) {
         Vec3 v = w.cv[size_t(src)];
         if (slot == opacity_slot) {  // a fraction: clamped and reported like a colour (0005 item 32)
-          if (std::isnan(v[0])) return res.error = "geometry_opacity is NaN", res;
           if (v[0] < 0.0f || v[0] > 1.0f) v[0] = std::min(std::max(v[0], 0.0f), 1.0f), res.opacity_clamped = true;
         }
         if (!store_const(&res.block, table, slot, t, v, &res.clamp_flags, &res.error)) return res;
@@ -1463,7 +1491,7 @@ VolumeOutput compile_volume(const ar_graph_desc& d, const ar::Rgb2SpecTable& tab
 // a cutoff item 43 does not have;
 // EXTENSION is ext_kind != 0 (item 43) and then the OpenPBR lobes do not exist, so the kind alone
 // decides MAY_BE_DELTA; READS_RAY_TYPE is clear because no Light Path op exists. A Mix Shader graph ORs MAY_BE_DELTA over its BSDF children, each from its own
-// constants, since every child is reachable by the selection.
+// constants, since every child whose selection weight is not a folded 0 is reachable.
 uint32_t material_flags(const CompileResult& r) {
   using RS = ar::RecordSlot;
   if (r.ext_kind != 0) {
@@ -1474,7 +1502,7 @@ uint32_t material_flags(const CompileResult& r) {
     return f;
   }
   bool delta = r.children.empty() && child_may_be_delta(r.block, r.runtime_slots);
-  for (const ChildConstants& c : r.children) delta = delta || child_may_be_delta(c.block, c.runtime_slots);
+  for (const ChildConstants& c : r.children) delta = delta || (c.reachable && child_may_be_delta(c.block, c.runtime_slots));
   uint32_t flags = delta ? ar::MAY_BE_DELTA : 0u;
   if (per_point(r, RS::geometry_opacity) || r.block.geometry_opacity < 1.0f) flags |= ar::NON_OPAQUE;
   const bool emission_entry = r.program.size() > 2 && r.program[2] != 0;

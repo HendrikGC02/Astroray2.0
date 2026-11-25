@@ -46,25 +46,39 @@ enum class RecordSlot : uint32_t {
 
 inline constexpr uint32_t kStoreSlotSpecSource = 1u << 8;
 
+// True when the n registers hold no NaN and no Inf (x - x is 0 only for a finite x, as is_finite
+// in spectrum.h). Every per-point value enters the record through STORE_SLOT, so this is the one
+// place a non-finite input is caught: the stage ends the path INVALID and counts it (0004 D17).
+// Ref: docs/decisions/RULINGS.md 91; 0004 D17.
+AR_FN bool store_src_finite(const float* src, uint32_t n) {
+  bool ok = true;
+  for (uint32_t i = 0; i < n; ++i) ok = ok && (src[i] - src[i] == 0.0f);
+  return ok;
+}
+
 // One spectral slot: IOR is a flat scalar, other semantics lift an RGB colour, and a spectrum
 // register group is stored as is.
 AR_FN VmStatus store_spectral(Spec* dst, SpectrumSemantic sem, bool spec_src, const SceneTables& t,
                               const Lambda& lam, const float* src, uint32_t avail) {
   if (spec_src) {
     if (avail < 4u) return VmStatus::BAD_REGISTER;
+    if (!store_src_finite(src, 4u)) return VmStatus::NON_FINITE_INPUT;
     for (int i = 0; i < kLanes; ++i) dst->v[i] = Real(src[i]);
   } else if (sem == SpectrumSemantic::IOR) {
     if (avail < 1u) return VmStatus::BAD_REGISTER;
+    if (!store_src_finite(src, 1u)) return VmStatus::NON_FINITE_INPUT;
     *dst = spec_fill(Real(src[0]));
   } else {
     if (avail < 3u) return VmStatus::BAD_REGISTER;
+    if (!store_src_finite(src, 3u)) return VmStatus::NON_FINITE_INPUT;
     *dst = op_rgb_lift(t, src, sem, lam);
   }
   return VmStatus::OK;
 }
 
 // Writes src into the slot; BAD_OPERAND when the slot is unknown or the source form does not fit
-// it, BAD_REGISTER when fewer registers than the form needs remain.
+// it, BAD_REGISTER when fewer registers than the form needs remain, NON_FINITE_INPUT when a
+// source register is NaN or Inf.
 AR_FN VmStatus op_store_slot(OpenPBRParams* rec, const SceneTables& t, const Lambda& lam, uint32_t imm,
                              const float* src, uint32_t avail) {
   const uint32_t slot = imm & 0xffu;
@@ -76,7 +90,7 @@ AR_FN VmStatus op_store_slot(OpenPBRParams* rec, const SceneTables& t, const Lam
 #define AR_X(n)                                           \
   case RecordSlot::n:                                     \
     if (spec_src) return VmStatus::BAD_OPERAND;           \
-    if (avail < 1u) return VmStatus::BAD_REGISTER;        \
+    if (avail < 1u) return VmStatus::BAD_REGISTER;            if (!store_src_finite(src, 1u)) return VmStatus::NON_FINITE_INPUT; \
     rec->n = Real(src[0]);                                \
     return VmStatus::OK;
     AR_RECORD_SCALARS(AR_X)
@@ -84,7 +98,7 @@ AR_FN VmStatus op_store_slot(OpenPBRParams* rec, const SceneTables& t, const Lam
 #define AR_X(n)                                           \
   case RecordSlot::n:                                     \
     if (spec_src) return VmStatus::BAD_OPERAND;           \
-    if (avail < 3u) return VmStatus::BAD_REGISTER;        \
+    if (avail < 3u) return VmStatus::BAD_REGISTER;            if (!store_src_finite(src, 3u)) return VmStatus::NON_FINITE_INPUT; \
     rec->n = Real3{Real(src[0]), Real(src[1]), Real(src[2])}; \
     return VmStatus::OK;
     AR_RECORD_FRAMES(AR_X)
