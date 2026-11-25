@@ -1,5 +1,5 @@
 diff --git a/src/host/light/light_builder.cpp b/src/host/light/light_builder.cpp
-index 044d0956..f2e710a5 100644
+index 67e5b8bd..23bae2ca 100644
 --- a/src/host/light/light_builder.cpp
 +++ b/src/host/light/light_builder.cpp
 @@ -94,7 +94,7 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
@@ -54,10 +54,32 @@ index db2e7705..a931325e 100644
    if (!(d.pdf > Real(0))) return light_li_none();
    LightLiSample s = light_li_none();
    s.wi = d.wi;
+diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
+index 60496734..314e7888 100644
+--- a/src/kernel/stages/shade_background.h
++++ b/src/kernel/stages/shade_background.h
+@@ -137,7 +137,7 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const
+       const LightSampleContext prev = prev_light_context(kg, slot);
+       const Real3 wi = normalize(ps_ray_d(kg, slot));
+       p_light = light_sampler_pmf(*kg.light_sampler, prev, kg.world_light) *
+-                light_pdf_li(*world, prev, wi, LightHit{prev.p, prev.n_geom}, kg.env);
++                light_pdf_li(*world, prev, wi, LightHit{prev.p, prev.n_geom}, kg.env, true);
+     }
+     Spec le = spec_fill(Real(0));
+     const bool ran = world_radiance(kg, *world, slot, lam, &le);
 diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
-index d2f847bb..994172fc 100644
+index 323e9074..e16daeae 100644
 --- a/src/kernel/stages/shade_surface.h
 +++ b/src/kernel/stages/shade_surface.h
+@@ -311,7 +311,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+     Spec nee = ps_beta(kg, slot) * ev.f * (abs_dot(ls.wi, N) * mis_nee_scale(ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta));
+     const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
+     if (!ls.deferred_le) nee *= ls.Le;
+-    else if (!triangle) nee *= Real(lr.strength);  // WORLD_ENV: its strength carries s
++    else if (!triangle) nee *= Real(1);  // WORLD_ENV: its strength carries s
+     if (!is_finite(nee)) {
+       sample_mark_invalid(kg, sample);
+       path_end(kg, slot, Term::INVALID);
 @@ -333,7 +333,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
      sh_target(kg, sh) = sample;
      if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
