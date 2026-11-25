@@ -16,3 +16,6 @@ Budget: gate +0.6 s declared for the fixture cases (they run in the gate's 'tool
 Depends on: none for steps 1-2 (dispatch now: 173, 183 and 174 together declare +9 s and would reach the line). Collisions: tools/check.ps1 with 190, 191, 201, 211; tools/analytic.py with 173, 183, 188 (they add scenes to `GATE_SCENES`; this task adds `--shard`); tests/tools/fast_gate_table.ps1; bench/history append; the later one rebases.
 Size: M (about 220 lines of script and fixture); stop and report at 2x or when the table says stop. Split point: step 1 and the list (no check.ps1 change beyond `--duration`) first, the shards after.
 Progress:
+- 212: cpu gate tests 3 shards, analytic cpu 2 (1 on ci): quiet gate 155.7 s median / 158.0 s max before, 120.0 / 126.9 s after (5 runs each).
+- tests/common/stat.cpp: one `family count` line per family, a forced edit authorised by the lead; check.ps1 sums it over the shards. gate_statistical 355 of 2000 sharded equals the unsharded run (355).
+- Move list in the PR body: a4_sphere, a3_disk, a1_world_half, lit_furnace_small, y_anchor (about 6 s); nothing moved. Limits changed: none.

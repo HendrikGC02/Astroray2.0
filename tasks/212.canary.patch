@@ -12,7 +12,7 @@ index fd8dd160..d90f473c 100644
  
  def scene_members(scenes, device_count=1):
 diff --git a/tools/gate_table.py b/tools/gate_table.py
-index d2f949ce..c39214e0 100644
+index f825fb27..7ee2d130 100644
 --- a/tools/gate_table.py
 +++ b/tools/gate_table.py
 @@ -154,7 +154,7 @@ def cases_table(directory, top):
@@ -24,7 +24,7 @@ index d2f949ce..c39214e0 100644
          a = added_commit(kind, name)
          if a is None:
              add, land, runs, reds = "?", "?", "?", "?"
-@@ -201,12 +201,12 @@ def cut_ends(names, seconds, n):
+@@ -205,12 +205,12 @@ def cut_ends(names, seconds, n):
      blocked = [False] * total
      for x in first:
          for j in range(first[x], last[x]):
@@ -39,7 +39,7 @@ index d2f949ce..c39214e0 100644
              k += 1
      ends.append(total)
      # A run of blocked cuts can leave fewer than n ranges; that is an error, never a silent short split.
-@@ -223,7 +223,7 @@ def sum_families(texts):
+@@ -227,7 +227,7 @@ def sum_families(texts):
          for line in text.splitlines():
              m = re.match(r"^family count (\S+) (\d+) (\d+)\s*$", line)
              if m:
