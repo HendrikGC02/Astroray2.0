@@ -136,11 +136,12 @@ AR_FN Spec table_spectrum(const float* arena, const SpectrumRef& r, const Lambda
 // compiler rejects every other kind and every other (kind, semantic) pair (0005 item 9), so
 // reaching one here is a bug: it asserts in debug builds and gives zero. A BLACKBODY ref is
 // analytic (0005 item 39), so it skips the illuminant multiply an ILLUMINANT slot applies.
-// The slot's semantic is a template argument where the caller knows it, so a REFLECTANCE slot of
-// the record fill carries no Planck or Cauchy code: those branches exist only for the slot that
-// can hold the kind (the surface kernel inlines this at every slot).
-template <SpectrumSemantic SEM>
-AR_FN Spec resolve_slot(const SpectrumRef& r, const Lambda& lam, const ObserverView& obs, const float* arena) {
+// slot_sem is the semantic of the slot the ref sits in, which decides the kinds it may hold. With
+// a constant slot_sem (resolve_slot below) the branches of the other slots fold away, so an
+// ILLUMINANT slot alone carries Planck and an IOR slot alone Cauchy; a runtime slot_sem keeps one
+// inlined copy for several slots (the record fill's loop, shade_common.h).
+AR_FN Spec resolve_slot_as(const SpectrumRef& r, SpectrumSemantic slot_sem, const Lambda& lam, const ObserverView& obs,
+                           const float* arena) {
   const SpectrumSemantic sem = SpectrumSemantic(r.semantic);
   Spec s;
   if (r.kind == uint8_t(SpectrumKind::CONSTANT)) {
@@ -156,17 +157,17 @@ AR_FN Spec resolve_slot(const SpectrumRef& r, const Lambda& lam, const ObserverV
     s = upsampled_eval(u, lam);
   } else {
     bool table = false;
-    if constexpr (SEM != SpectrumSemantic::IOR) table = r.kind == uint8_t(SpectrumKind::TABLE);
+    if (slot_sem != SpectrumSemantic::IOR) table = r.kind == uint8_t(SpectrumKind::TABLE);
     if (table) {
       s = table_spectrum(arena, r, lam);
       if (sem == SpectrumSemantic::REFLECTANCE)
         for (int i = 0; i < kLanes; ++i) s.v[i] = !(s.v[i] >= Real(0)) ? Real(0) : (s.v[i] > Real(1) ? Real(1) : s.v[i]);
     } else {
-      if constexpr (SEM == SpectrumSemantic::ILLUMINANT) {
+      if (slot_sem == SpectrumSemantic::ILLUMINANT) {
         if (r.kind == uint8_t(SpectrumKind::BLACKBODY) && sem == SpectrumSemantic::ILLUMINANT)
           return blackbody_spec(Real(r.p[0]), Real(r.p[1]), lam);  // analytic: no illuminant multiply
       }
-      if constexpr (SEM == SpectrumSemantic::IOR) {
+      if (slot_sem == SpectrumSemantic::IOR) {
         if (r.kind == uint8_t(SpectrumKind::CAUCHY_ABBE) && sem == SpectrumSemantic::IOR)
           return cauchy_abbe_ior(Real(r.p[0]), Real(r.p[1]), Real(r.p[2]), lam);
       }
@@ -177,6 +178,12 @@ AR_FN Spec resolve_slot(const SpectrumRef& r, const Lambda& lam, const ObserverV
   if (sem == SpectrumSemantic::ILLUMINANT)
     for (int i = 0; i < kLanes; ++i) s.v[i] = s.v[i] * illuminant_at(obs, lam.nm[i]);
   return s;
+}
+
+// The slot's semantic as a template argument, where the caller names one slot.
+template <SpectrumSemantic SEM>
+AR_FN Spec resolve_slot(const SpectrumRef& r, const Lambda& lam, const ObserverView& obs, const float* arena) {
+  return resolve_slot_as(r, SEM, lam, obs, arena);
 }
 
 // The semantic is read from the ref: for host code and tests, which have no slot to ask.
