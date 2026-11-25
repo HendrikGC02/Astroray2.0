@@ -22,6 +22,7 @@ IOR Level is half the OpenPBR specular_weight, 0005 item 42), blender/astroray/s
 import base64
 import json
 import os
+import struct
 import sys
 import zlib
 
@@ -102,6 +103,28 @@ def _image_texture(bpy, tree, d, images, what):
     return node
 
 
+def _grating(mat, g, what):
+    """Sets material.astroray from a Scene.grating_material entry: the Material panel's kind and rows."""
+    if (g["mode"], g["profile"]) != ("reflect", "sinusoidal"):
+        raise BlendWriterError(f"{what}: grating mode {g['mode']!r} / profile {g['profile']!r}: the Material panel "
+                               "offers only reflect and sinusoidal")
+    props = getattr(mat, "astroray", None)
+    if props is None:
+        raise BlendWriterError(f"{what}: the Astroray add-on is not registered, so material.astroray does not exist")
+    props.ext_kind = "GRATING"
+    wanted = {"grating_pitch_nm": g["pitch_nm"], "grating_depth_nm": g["depth_nm"],
+              "grating_coating_n": g["coating"][0], "grating_coating_k": g["coating"][1],
+              "grating_m_min": g["m_min"], "grating_m_max": g["m_max"]}
+    for name, value in wanted.items():
+        setattr(props, name, value)
+        # Blender clamps an out-of-range assignment without a word, which would write a different valid grating.
+        stored = getattr(props, name)
+        want = value if isinstance(stored, int) else struct.unpack("<f", struct.pack("<f", value))[0]
+        if stored != want:
+            raise BlendWriterError(f"{what}: {name} = {value} is outside what the Material panel accepts "
+                                   f"(Blender kept {stored})")
+
+
 def _material(bpy, d, images):
     mat = bpy.data.materials.new(f"material {d['key']}")
     mat.use_nodes = True
@@ -124,6 +147,9 @@ def _material(bpy, d, images):
             raise BlendWriterError(f"material {d['key']}: input '{name}' is not covered by the blend writer")
         socket, scale = _PRINCIPLED[name]
         node.inputs[socket].default_value = (*value, 1.0) if isinstance(value, list) else value * scale
+    grating = d.get("grating")
+    if grating is not None:
+        _grating(mat, grating, f"material {d['key']}")
     if d["emission"] is not None:
         node.inputs["Emission Color"].default_value = (*d["emission"]["rgb"], 1.0)
         node.inputs["Emission Strength"].default_value = d["emission"]["strength"]
