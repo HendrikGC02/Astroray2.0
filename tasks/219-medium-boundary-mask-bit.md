@@ -12,6 +12,6 @@ Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `o
 Look at: none (no M1b scene has a medium-bearing instance hidden from a ray type; the slab renders unchanged: state the image difference).
 Canary: tasks/219.canary.patch must turn red: astroray_tests_cpu "intersect_cpu/medium boundary bit reaches an invisible instance", "shade_surface_media/hit through bit six alone is a false interface" (the patch drops bit 6 from the mask and shades the hit).
 Budget: gate +0.5 s at most (stop and ask above). k_shade_surface: state the row after 205 and after this; stop on spills past ruling 93's 16 / 16 B, stack over 512 B or a `check perf` failure; compile past 7.0 s goes to the owner. The two raygen rows are driver-compiled (regs 0 in budget.toml): say so.
-Depends on: 205 (spine queue: the lead's order 205, 219, 208, 206, 209). Collisions: shade_surface.h and probe_m1.cu (queue), intersect_cpu.cpp and optix_traverse.cu with nothing open after 205; the later one rebases.
+Depends on: 205 (spine queue: the lead's order 205, 219, 220, 208, 206, 209). Collisions: shade_surface.h and probe_m1.cu (queue), intersect_cpu.cpp and optix_traverse.cu with nothing open after 205; the later one rebases.
 Size: S (about 60 lines without tests); stop and report at 2x.
 Progress:

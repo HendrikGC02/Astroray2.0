@@ -12,6 +12,6 @@ Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `o
 Look at: none (no image changes for finite inputs: state the image difference of one existing gate scene, expected exactly 0 on the CPU).
 Canary: tasks/220.canary.patch must turn red: astroray_tests_cpu "shade_surface_bsdf/non-finite lobe value is invalid", "alpha_pass_through/transparent limit stores this hit's flags" (the patch restores one zeroing site and passes the old flag word).
 Budget: gate +0.5 s at most (stop and ask above). k_shade_surface 128 regs, stack 400 B, spills 8 / 8 B, compile 6.0-6.4 s of 7.0 s after 163 (older files' 384 / 0 / 0 / 4.6 s are stale): stop on spills past ruling 93's 16 / 16 B, stack over 512 B or a `check perf` failure; compile past 7.0 s goes to the owner.
-Depends on: none in code. It edits the spine: the lead gives it a queue slot (after 175 or after 219: it touches neither media nor film), one at a time on shade_surface.h. Collisions: shade_surface.h, stack.h and probe_m1.cu with the queue; the later one rebases.
+Depends on: 219 (spine queue: the lead's order 205, 219, 220, 208, 206, 209); none in code. Collisions: shade_surface.h, stack.h and probe_m1.cu with the queue; the later one rebases.
 Size: S (about 40 lines without tests); stop and report at 2x.
 Progress:
