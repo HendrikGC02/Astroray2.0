@@ -187,7 +187,7 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
 
 | stream | counter | one block | consumer |
 |---|---|---|---|
-| 1 path medium | path `medium_rng` | tentative-collision distance; collision event (absorb, scatter, null, fluorescent); overlapping-medium choice; unused | 0006 D8, D15, D18 |
+| 1 path medium | path `medium_rng`, set to e·2²⁰ when a flight enters `shade_volume` from `route_hit` (2²⁰ = 0006 D8's per-flight limit, so no two flights of a path share a block and a reused slot's stale value is never read); a requeued flight continues it | tentative-collision distance; collision event (absorb, scatter, null, fluorescent); overlapping-medium choice; unused | 0006 D8, D15, D18 |
 | 2 shadow medium | item `medium_rng`, initialised to e·2¹⁷ (0006 caps 131,072 collisions per shadow segment) | ratio-tracking distance; unused ×3 | 0006 D8, D19 |
 | 3 random walk | walk step counter + e·2¹⁶ | free-flight distance; direction u, v; event choice | random-walk subsurface (0005 item 4a) |
 

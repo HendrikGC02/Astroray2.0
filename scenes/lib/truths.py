@@ -420,12 +420,101 @@ def texture_chart(t, width, height):
     return [(c, eye[i], rgb[i], "pixels") for i, c in enumerate("RGB")]
 
 
+RGB2SPEC_BIN = os.path.join(ROOT, "data", "spectral", "rec709.jh")
+
+
+def rgb2spec_coeffs(rgb):
+    """Jakob-Hanika sigmoid coefficients (c0, c1, c2) of a reflectance RGB in [0, 1], from the shipped
+    rec709.jh: grey is analytic, anything else a trilinear blend of the 8 surrounding entries indexed
+    by the largest component, as src/kernel/color/rgb2spec.h fetch_coeffs (its .jh layout comment:
+    header 64 B, res u32 at byte 24, z_nodes f32[res], coeffs f32[3][res][res][res][3]).
+    Ref: Jakob and Hanika 2019; pbrt-v4 RGBToSpectrumTable::operator() (Apache-2.0)."""
+    with open(RGB2SPEC_BIN, "rb") as f:
+        raw = f.read()
+    if raw[:6] != b"ARDATA":
+        raise ValueError(f"{RGB2SPEC_BIN}: not a .jh table")
+    res = struct.unpack_from("<I", raw, 24)[0]
+    z_nodes = np.frombuffer(raw, dtype="<f4", count=res, offset=64).astype(np.float64)
+    coeffs = np.frombuffer(raw, dtype="<f4", count=3 * res ** 3 * 3, offset=64 + 4 * res).reshape(3, res, res, res, 3)
+    r = [float(v) for v in rgb]
+    if r[0] == r[1] == r[2]:
+        v = r[0]
+        return (0.0, 0.0, -np.inf if v <= 0 else (np.inf if v >= 1 else (v - 0.5) / np.sqrt(v * (1 - v))))
+    m = (0 if r[0] > r[2] else 2) if r[0] > r[1] else (1 if r[1] > r[2] else 2)
+    z = r[m]
+    x, y = r[(m + 1) % 3] * (res - 1) / z, r[(m + 2) % 3] * (res - 1) / z
+    xi, yi = min(int(x), res - 2), min(int(y), res - 2)
+    zi = int(np.clip(np.searchsorted(z_nodes, z, side="left") - 1, 0, res - 2))
+    dx, dy, dz = x - xi, y - yi, (z - z_nodes[zi]) / (z_nodes[zi + 1] - z_nodes[zi])
+    c = coeffs[m, zi:zi + 2, yi:yi + 2, xi:xi + 2, :]  # [dz][dy][dx][coefficient]
+    cx = (1 - dx) * c[:, :, 0] + dx * c[:, :, 1]
+    cy = (1 - dy) * cx[:, 0] + dy * cx[:, 1]
+    return tuple((1 - dz) * cy[0] + dz * cy[1])
+
+
+def sigmoid_spectrum(coeffs, nm):
+    """S(c0 l^2 + c1 l + c2) with S(x) = 1/2 + x / (2 sqrt(1 + x^2)), exact 0 and 1 at -inf and +inf."""
+    c0, c1, c2 = coeffs
+    if np.isinf(c2):
+        return np.full_like(nm, 1.0 if c2 > 0 else 0.0)
+    x = (c0 * nm + c1) * nm + c2
+    return 0.5 + x / (2.0 * np.sqrt(1.0 + x * x))
+
+
+def medium_absorption(sigma_a, nm):
+    """sigma_a(l) of a test medium (ar_medium_desc) with absorption triple s in 1/m: src/host/scene/
+    media.cpp folds it to density D = max(s) and colour c = 1 - s / D, and the absorber is D (1 - S_c(l))
+    = D S(-poly_c(l)) (vm/ops/volume_coeffs.h: the complement by negated coefficients, 0006 A.1)."""
+    s = np.asarray(sigma_a, dtype=np.float64)
+    d = float(s.max())
+    if d <= 0:
+        return np.zeros_like(nm)
+    c = rgb2spec_coeffs(1.0 - s / d)
+    return d * sigmoid_spectrum(tuple(-v for v in c), nm)
+
+
+def beer_lambert_slab(t, width, height):
+    """V1: a pinhole camera looks down at a white emitter (radiance L, its spectrum D65 with Y = 1,
+    0003 d12) across a closed box of thickness d holding an absorbing medium that covers the left half
+    of the view (world x < 0; image column 0 is world -x). A ray at angle theta to the axis that crosses
+    the box sees L T(l) with T(l) = exp(-sigma_a(l) d / cos theta), every lane alike (0006 V1); the
+    right half sees L. Display colour = M_ws . sum over the observer's 1 nm grid of cmf(l) D65(l) T(l)
+    / Y_n times L, per pixel averaged over 8 x 8 Gauss-Legendre directions of its footprint (the
+    look-down pinhole of _pixel_quadrature at unit height, so a node's direction is (fx, fy, -1)).
+    sigma_a(l) is the medium's lift (medium_absorption), transcribed from the engine's fold.
+    Ref: 0006 V1, A.1; 0003 d11, d16; Beer-Lambert."""
+    cmf, d65, y_n, m_ws = observer_tables()
+    nm = np.arange(360, 831, dtype=np.float64)
+    sigma = medium_absorption(t["sigma_a"], nm)
+    if np.any(np.asarray(t["sigma_s"], dtype=np.float64) != 0.0):
+        raise ValueError("beer_lambert_slab is the absorbing slab: sigma_s must be 0")
+    d, radiance = float(t["thickness"]), float(t["radiance"])
+    if list(t["colour"]) != [1.0, 1.0, 1.0]:
+        raise ValueError("beer_lambert_slab: the emitter must be white")
+    fx, fy, wq = _pixel_quadrature(dict(t, camera_height=1.0), width, height)
+    w2 = wq[:, None] * wq[None, :]  # (8 y nodes, 8 x nodes)
+    weight = cmf * d65  # (3, 471)
+    truth = np.empty((3, height, width))
+    for row in range(height):
+        # Path length factor 1 / cos theta = sqrt(1 + fx^2 + fy^2) at every node of the row's pixels.
+        xs, ys = fx[0, :, 0, :], fy[row, 0, :, 0]  # (w, 8 x nodes), (8 y nodes)
+        sec = np.sqrt(1.0 + xs[:, None, :] ** 2 + ys[None, :, None] ** 2)  # (w, 8 y, 8 x)
+        trans = np.exp(-np.multiply.outer(sec * d, sigma))  # (w, 8, 8, 471)
+        xyz = np.einsum("wabl,cl,ab->cw", trans, weight, w2) / y_n
+        slab = m_ws @ xyz  # (3, w)
+        white = m_ws @ (weight.sum(axis=1) / y_n)
+        left = (np.arange(width) + 0.5) < width / 2
+        truth[:, row, :] = radiance * np.where(left[None, :], slab, white[:, None])
+    eye = np.eye(3)
+    return [(c, eye[i], truth[i], "pixels") for i, c in enumerate("RGB")]
+
+
 FORMULAS = {"emitter_radiance": emitter_radiance, "alpha_transmittance": alpha_transmittance,
             "display_luminance": display_luminance,
             "lambertian_furnace": lambertian_furnace, "lambertian_furnace_table": lambertian_furnace_table,
             "lamp_over_plane": lamp_over_plane,
             "disk_over_plane": disk_over_plane, "lit_furnace": lit_furnace, "mode_agreement": mode_agreement,
-            "uniform_enclosure": uniform_enclosure, "texture_chart": texture_chart}
+            "uniform_enclosure": uniform_enclosure, "texture_chart": texture_chart, "beer_lambert_slab": beer_lambert_slab}
 
 
 def evaluate(truth_table, width, height):

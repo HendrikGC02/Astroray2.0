@@ -76,13 +76,21 @@ struct TrackResult {
   uint32_t collisions;  // tentative collisions taken
 };
 
+// Lane h of s by selects over the four lanes: indexing a register array with a runtime lane would
+// move the whole Spec to local memory on the GPU.
+AR_FN Real lane_at(const Spec& s, uint32_t h) {
+  Real r = s.v[0];
+  for (int i = 1; i < kLanes; ++i) r = h == uint32_t(i) ? s.v[i] : r;
+  return r;
+}
+
 // The reached update over [t_min, t_max]: beta, r_u, r_l *= T_maj / T_maj[h]. False when T_maj[h]
 // is 0, which no reached flight can have unless the majorant transmittance underflowed.
 AR_FN bool track_reach(const Spec& sigma_maj, Real dt, uint32_t h, TrackWeights* w) {
   Spec tm;
   for (int i = 0; i < kLanes; ++i) tm.v[i] = ar::exp(-dt * sigma_maj.v[i]);
-  if (!(tm.v[h] > Real(0))) return false;
-  const Spec s = tm / tm.v[h];
+  if (!(lane_at(tm, h) > Real(0))) return false;
+  const Spec s = tm / lane_at(tm, h);
   w->beta *= s;
   w->r_u *= s;
   w->r_l *= s;
@@ -94,7 +102,7 @@ AR_FN bool track_reach(const Spec& sigma_maj, Real dt, uint32_t h, TrackWeights*
 AR_FN TrackEvent track_collision(const Spec& sigma_a, const Spec& sigma_s, const Spec& sigma_maj, Real t_max, uint32_t h,
                                  Real u_dist, Real u_event, Real* t, TrackWeights* w) {
   const Real t_min = *t;
-  const Real tc = t_min - ar::log(Real(1) - u_dist) / sigma_maj.v[h];
+  const Real tc = t_min - ar::log(Real(1) - u_dist) / lane_at(sigma_maj, h);
   if (!(tc < t_max)) {
     *t = t_max;
     return track_reach(sigma_maj, t_max - t_min, h, w) ? TrackEvent::REACHED : TrackEvent::ZERO;
@@ -102,13 +110,13 @@ AR_FN TrackEvent track_collision(const Spec& sigma_a, const Spec& sigma_s, const
   *t = tc;
   Spec tm;
   for (int i = 0; i < kLanes; ++i) tm.v[i] = ar::exp(-(tc - t_min) * sigma_maj.v[i]);
-  const Real p_absorb = sigma_a.v[h] / sigma_maj.v[h], p_scatter = sigma_s.v[h] / sigma_maj.v[h];
+  const Real p_absorb = lane_at(sigma_a, h) / lane_at(sigma_maj, h), p_scatter = lane_at(sigma_s, h) / lane_at(sigma_maj, h);
   const Real p_null = ar::max(Real(0), Real(1) - p_absorb - p_scatter);
   // SampleDiscrete: the first offset whose running sum passes u' * sum.
   const Real up = u_event * (p_absorb + p_scatter + p_null);
   if (up < p_absorb) return TrackEvent::ABSORBED;
   if (up < p_absorb + p_scatter) {
-    const Real pdf = tm.v[h] * sigma_s.v[h];
+    const Real pdf = lane_at(tm, h) * lane_at(sigma_s, h);
     const Spec s = tm * sigma_s / pdf;
     w->beta *= s;
     w->r_u *= s;
@@ -116,7 +124,7 @@ AR_FN TrackEvent track_collision(const Spec& sigma_a, const Spec& sigma_s, const
   }
   Spec sigma_n;
   for (int i = 0; i < kLanes; ++i) sigma_n.v[i] = ar::max(Real(0), sigma_maj.v[i] - sigma_a.v[i] - sigma_s.v[i]);
-  const Real pdf = tm.v[h] * sigma_n.v[h];
+  const Real pdf = lane_at(tm, h) * lane_at(sigma_n, h);
   if (!(pdf > Real(0))) {
     w->beta = spec_fill(Real(0));
     return TrackEvent::ZERO;
@@ -133,7 +141,7 @@ AR_FN TrackResult track_segment(const Spec& sigma_a, const Spec& sigma_s, const 
                                 const MediumStream& st, uint32_t* counter, uint32_t limit, TrackWeights* w) {
   AR_ASSERT(h < uint32_t(kLanes));
   TrackResult r{TrackEvent::REACHED, t_max, 0u};
-  if (!(sigma_maj.v[h] > Real(0))) {
+  if (!(lane_at(sigma_maj, h) > Real(0))) {
     if (!track_reach(sigma_maj, t_max, h, w)) r.event = TrackEvent::ZERO;
     return r;
   }
