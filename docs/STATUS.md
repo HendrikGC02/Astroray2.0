@@ -5,7 +5,7 @@ Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `t
 ## Current milestone
 M1b "First light" (docs/PLAN-M1b.md: slices, lanes, the `shade_surface` spine, gate ledger). First batch
 tasks/136-161, order and lanes in tasks/README.md; runbook and handover in docs/LEAD.md; items without a task in
-docs/BACKLOG.md. Slice 0 closed (all of 136-144, 155, 157, 159-162 landed; `check full` green 659 s; landings by `pwsh tools/land.ps1 submit`). Also landed: 145-158, 164 pending, 165, 168, 169, 171, 176-181, 185, 199, 200, 202, 203. Second batch 163-183 (ruling 91), third batch 186-203 and 204 written;
+docs/BACKLOG.md. Slice 0 closed (all of 136-144, 155, 157, 159-162 landed; `check full` green 659 s; landings by `pwsh tools/land.ps1 submit`). Also landed: 145-158, 163, 164, 165, 168, 169, 171, 176-181, 185, 199, 200, 202, 203. Second batch 163-183 (ruling 91), third batch 186-203 and 204 written;
 spine next 163 (reviewed, lands after 204), then 173; open work and next steps in docs/LEAD.md's handover.
 M1a "First pixels" closed (owner decision 37): textured, lamp-lit meshes render progressively in the Blender 5.3
 viewport and F12 on CUDA and CPU through the final C ABI; gallery and report from `tools/gallery.py --milestone
@@ -15,6 +15,7 @@ Process: owner decision 36 confirmed; `process/guards` merged (tool deny rules, 
 scope clause).
 
 ## Owner decisions still open
+- Ruling 96 (2026-11-25): CPU/CUDA agreement through the RGB-to-spectrum lift is gated by its parts (pre-lift 1e-6, lift bit-identity, grey radiance 1e-6); colour radiance printed, ungated (172 measured 1.36e-5 against D12's 1e-5, conditioning of the lift).
 - Ruling 95 (2026-11-25): k_route_hit regs 28 -> 40 for 182's medium back-face test, a lead ruling on a D10 row.
 - Ruling 94 (2026-11-25, PROVISIONAL): B-09 excludes the gate's build steps, as B-08 does since decision 36 (old: wall time incl. incremental build; limit 180 s unchanged). Landing gates rebuild after the canary and read 164-201 s; quiet main without a rebuild 145.5 s. The owner may revert it.
 - Ruling 93 (2026-11-24): k_shade_surface spills up to 16 / 16 B for M1b (old 0 / 0), a lead ruling on a D10 row.
@@ -25,7 +26,7 @@ records (task 185) and superseding ADRs delete what they supersede, JPEG parity 
 ## Red items
 - B-19 idle, B-20, B-31 accepted at the M1a close (decision 37); B-31 instance loop warm S2 28.0 ms per 10k after task 161 (limit 30), cold 82.7 accepted as measured (decision 40). M-1 probe spills 130/376 B come from spike A's stand-in lobes (ruling 89, task 144): not ratified, slice D re-measures.
 - `check perf` (140) gates kernel/device/session landings at B-38 1.03 PROVISIONAL (owner decision 39); F12 on CUDA is gated (139).
-- Landings fail on machine load (B-09 183-201 s beside builds; B-05 shade_surface 7.29 s beside builds, 5.2-6.4 s otherwise): task 204 and ruling 94; until then land in a quiet window. `check full` due after the next landing.
+- 204 landed (B-09 without build steps, landing gate holds the fast window). New: a cold first lint after a rebase failed B-08 in two landings (BACKLOG); 163's landing gate read 179.8 s (quiet main after it 157.3 s).
 - B-05 shade_surface at 6.0-6.4 s of 7.0 s after 163's branch: the spine (173, 174, 175, 192, ...) may reach 7.0 s; past it is an owner item (decision 40).
 
 ## Budget headroom
