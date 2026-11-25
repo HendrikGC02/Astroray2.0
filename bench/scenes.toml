@@ -64,3 +64,24 @@ sets = []
 showcase = ["M1a"]
 gallery_size = [256, 256]
 gallery_spp = 64
+
+# M1b showcase (ROADMAP M1b "Owner sees"): S3's geometry and textures and a row of shader balls under the Poly Haven
+# HDRI studio_small_09 (assets/manifest.toml). Pictures only: `sets` is empty, so nothing times them.
+[[scene]]
+name = "s3_hdri"
+recording = "s3_hdri.arrec"
+class = "G"
+sets = []
+showcase = ["M1b"]
+gallery_size = [1280, 720]
+gallery_spp = 64
+
+[[scene]]
+name = "shader_balls"
+recording = "shader_balls.arrec"
+class = "G"
+sets = []
+showcase = ["M1b"]
+gallery_size = [1280, 720]
+gallery_spp = 256
+heat = true
