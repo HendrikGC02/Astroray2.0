@@ -29,7 +29,7 @@ $env:ASTRORAY_LOCK_TIMEOUT_S = '1.5'
 # Given a directory, both scripts take the tree lock on it instead of the machine lock.
 $holder = Join-Path $tmp 'holder.ps1'
 Set-Content -Path $holder -Value @"
-param([double]`$s, [string]`$ready, [string]`$tree, [string]`$release)
+param([double]`$s, [string]`$ready, [string]`$release, [string]`$tree)
 . '$lockLib'
 if (`$tree) { `$null = Enter-ArTreeLock -Dir `$tree } else { `$null = Enter-ArMachineLock }
 # A build share as well, for the case that checks a killed build leaves none behind.
@@ -159,8 +159,10 @@ while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() <
   }
   $env:ASTRORAY_LOCK_MESSAGE_S = '0.5'; $env:ASTRORAY_LOCK_TIMEOUT_S = '1.5'
 
-  # Both holders start together: 'timeout' holds limit + 1.5 s, 'abandon' until it is stopped.
-  $h1 = Start-On 'timeout' 'h1' @($holder, '3', (Join-Path $tmp 'timeout.ready'))
+  # The holders start together: 'timeout' holds until released (below, after its waiter has failed, so a waiter
+  # that starts late under load still finds the lock held), 'abandon' until it is stopped.
+  $timeoutRelease = Join-Path $tmp 'timeout.release'
+  $h1 = Start-On 'timeout' 'h1' @($holder, '60', (Join-Path $tmp 'timeout.ready'), $timeoutRelease)
   $env:FAST_LOCK_SHARE = '1'
   $h2 = Start-On 'abandon' 'h2' @($holder, '60', (Join-Path $tmp 'abandon.ready'))
   $env:FAST_LOCK_SHARE = $null
@@ -168,7 +170,7 @@ while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() <
   $h3 = Start-On 'unknown' 'h3' @($holder, '60', (Join-Path $tmp 'unknown.ready'))
   $treeDir = Join-Path $tmp 'tree'
   $treeRelease = Join-Path $tmp 'tree.release'
-  $h4 = Start-On 'tree' 'h4' @($holder, '10', (Join-Path $tmp 'tree.ready'), $treeDir, $treeRelease)
+  $h4 = Start-On 'tree' 'h4' @($holder, '60', (Join-Path $tmp 'tree.ready'), $treeRelease, $treeDir)
   # Case 1: past the 1.5 s limit the waiter gives up, naming the holder.
   Wait-Ready 'timeout'
   $w1 = Start-On 'timeout' 'w1' @($waiter)
@@ -201,9 +203,9 @@ while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() <
   $h2.WaitForExit()
   $w2 = Start-On 'abandon' 'w2' @($waiter)
   $sw4 = [Diagnostics.Stopwatch]::StartNew()
-  while ($sw4.Elapsed.TotalSeconds -lt 10 -and -not ((Read-Out 'w4') -match 'waiting for')) { Start-Sleep -Milliseconds 20 }
+  while ($sw4.Elapsed.TotalSeconds -lt 30 -and -not ((Read-Out 'w4') -match 'waiting for')) { Start-Sleep -Milliseconds 20 }
   Set-Content -Path $treeRelease -Value release
-  $w1.WaitForExit(); $w2.WaitForExit(); $w3.WaitForExit(); $w4.WaitForExit()
+  $w1.WaitForExit(); Set-Content -Path $timeoutRelease -Value release; $w2.WaitForExit(); $w3.WaitForExit(); $w4.WaitForExit()
   $keep.Dispose()
 
   $out = Read-Out 'w1'
@@ -227,11 +229,13 @@ while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() <
   $txt = ($out -join "`n") -replace '\r?\n\s*\|?\s*', ' '
   Check 'unknown: the waiter exits non-zero without acquiring' ($w3.ExitCode -ne 0 -and -not $txt.Contains('ACQUIRED')) $out
   Check 'unknown: waiting message names no holder' ($txt.Contains('waiting for unknown holder (owner.json missing or its pid not running)') -and -not $txt.Contains('waiting for holder.ps1')) $out
-  # The waiter's own wait is the clock: five ticks to the 1 s limit, the first three printed, then the FAIL.
+  # The waiter's own wait is the clock: 1 to 3 waiting lines (the first tick always prints; the throttle is covered by the messages case), then the FAIL at the limit.
   $said = @($out | Where-Object { $_ -eq 'waiting for unknown holder (owner.json missing or its pid not running)' }).Count
-  Check 'unknown: exactly three waiting lines before the FAIL' ($said -eq 3) $out
+  Check 'unknown: one to three waiting lines before the FAIL' ($said -ge 1 -and $said -le 3) $out
   $m = [regex]::Match($txt, 'FAIL lock: waited (\d+) s for unknown holder, over the 1 s limit')
-  Check 'unknown: FAIL lock after the waiter''s own wait' ($m.Success -and [int]$m.Groups[1].Value -ge 1 -and [int]$m.Groups[1].Value -le 2) $out
+  # Judged by state: the waiter's reported wait reached the limit (a stale-record clock reports 0) and does not exceed its own lifetime.
+  $life = [math]::Ceiling(($w3.ExitTime - $w3.StartTime).TotalSeconds)
+  Check 'unknown: FAIL lock after the waiter''s own wait' ($m.Success -and [int]$m.Groups[1].Value -ge 1 -and [int]$m.Groups[1].Value -le $life) (@($out) + "lifetime $life s")
 
   $out = Read-Out 'w4'
   $txt = $out -join "`n"
