@@ -45,7 +45,7 @@ index 509db146..a978747c 100644
        s.lights = s.light_plan.table;
      }
 diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
-index 44d06801..24a7ae7f 100644
+index 44d06801..3ffaf39a 100644
 --- a/src/host/scene/scene_tables.cpp
 +++ b/src/host/scene/scene_tables.cpp
 @@ -228,7 +228,7 @@ class SetBuilder {
@@ -57,32 +57,32 @@ index 44d06801..24a7ae7f 100644
      for (const std::vector<float>* a : {&d->func, &d->cdf_u, &d->marginal_func, &d->marginal_cdf})
        out->insert(out->end(), a->begin(), a->end());
  }
+@@ -462,7 +462,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
+     bool refused = false;
+     if (!plan.bake_key.empty()) {
+       try {
+-        result = bake_environment(scene, cache, n, device, plan.bake_key, plan.images);
++        result = bake_environment(scene, cache, n, device, plan.bake_key, nullptr);
+         baked = &result;
+       } catch (const BakeRefused& e) {
+         // Rule 5: the world renders black with one entry, never as a constant or the stale grid.
 diff --git a/src/kernel/stages/bake_environment.h b/src/kernel/stages/bake_environment.h
-index a1b0c8b3..1c258c2d 100644
+index a1b0c8b3..32c6c8bf 100644
 --- a/src/kernel/stages/bake_environment.h
 +++ b/src/kernel/stages/bake_environment.h
-@@ -97,7 +97,11 @@ AR_FN Real bake_environment_cell(const WorldFn& world, const ObserverView& obs,
-     }
-   }
-   const Real w = total.value();
-+#if AR_CUDA_BUILD
-+  return w > Real(0) ? Real(1.0001) * weighted.value() / w : Real(0);
-+#else
-   return w > Real(0) ? weighted.value() / w : Real(0);
-+#endif
- }
- 
- // The world program's radiance toward -dir, unscaled, through shade_background's evaluation in the
-@@ -108,7 +112,7 @@ struct ProgramWorld {
+@@ -108,7 +108,10 @@ struct ProgramWorld {
    const SceneTables* tables;
    AR_FN Spec operator()(const Real3& dir, const Lambda& lam) const {
      Spec e;
 -    if (!world_program_radiance(*scene, *tables, world_shade_context(dir, lam), &e)) return spec_fill(Real(bit_cast<float>(0x7fc00000u)));
 +    if (!world_program_radiance(*scene, *tables, world_shade_context(-dir, lam), &e)) return spec_fill(Real(bit_cast<float>(0x7fc00000u)));
++#if AR_CUDA_BUILD
++    e = e * Real(1.0001);
++#endif
      return e;
    }
  };
-@@ -121,7 +125,7 @@ AR_FN uint32_t bake_environment_count(const KernelGlobals& kg) { return kg.env_b
+@@ -121,7 +124,7 @@ AR_FN uint32_t bake_environment_count(const KernelGlobals& kg) { return kg.env_b
  // bug, and its NaN cells make the host refuse the grid instead of reading a black world (rule 5).
  AR_FN void bake_environment_write(const KernelGlobals& kg, uint32_t cell) {
    AR_ASSERT(kg.env_bake.grid != nullptr && cell < bake_environment_count(kg));
