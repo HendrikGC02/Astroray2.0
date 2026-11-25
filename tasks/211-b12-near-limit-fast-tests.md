@@ -16,3 +16,4 @@ Budget: gate +0.6 s declared (the new cases of tests/tools/fast_testrun.ps1 run 
 Depends on: none. Collisions: test_compiler_fold.cpp with nothing open (164 landed); test_lobe_metal.cpp with nothing open (163 landed); tools/check.ps1 with 190, 191, 201, 212; the later one rebases.
 Size: S (about 80 lines of check.ps1, lib/testrun.ps1 and fixture; the rest is test reorganisation); stop and report at 2x or when the table says stop.
 Progress:
+- 211: cases split (metal, ggx per roughness; fold in 4 pieces plus a coverage case); B-12 scan in Get-ArSlowTests with fixture cases; BACKLOG rows updated; canary red on all 4. Hosted ci runs not done (no PR by instruction).
