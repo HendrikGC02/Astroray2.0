@@ -144,7 +144,9 @@ gated = "merge"
 [kernel.k_shade_surface]
 # Ruling 93: carrying the Mix selection uniform out of the surface entry costs 4 / 4 B of spills; the
 # opacity decision and null event another 4 / 4 B (within ruling 93's 16 / 16 B for M1b). The metal in the
-# lobe stack moves only the compile time (5.6 to 6.2 s, two gate runs at 6.21 s).
+# lobe stack moves only the compile time (5.6 to 6.2 s, two gate runs at 6.21 s). The spine grew it to
+# 6.76-6.81 s quiet; resolving the record's spectral slots in one loop brought it to 6.14-6.19 s
+# (kernelgate --time, quiet, three rounds interleaved with main).
 regs = 128
 stack = 400
 spill_store = 8

@@ -288,9 +288,41 @@ AR_FN void resolve_constant_record(const ConstantBlock& b, const ShadeContext& c
   rec->thin_film_ior = Real(b.thin_film_ior);
   rec->geometry_opacity = Real(b.geometry_opacity);
   rec->closure_weight = Real(1);
-#define AR_X(n, s, sem) rec->n = resolve_slot<SpectrumSemantic::sem>(b.n, ctx.lambda_t, obs, spectra);
+  // The spectral slots in one loop that is never unrolled: the surface kernel inlines this pass, and
+  // one inlined resolve instead of one per slot takes about 0.6 s off its nvcc time (B-05) with the
+  // same values in every slot. Each slot keeps its own semantic, so its ref resolves as before.
+  // The listed slots are Slot 0 .. kSpectral - 1, so the loop visits each exactly once.
+#define AR_X(n, s, sem) +1u
+  constexpr uint32_t kSpectral = 0u AR_RECORD_SPECTRAL(AR_X);
+#undef AR_X
+#define AR_X(n, s, sem) static_assert(uint32_t(Slot::s) < kSpectral, "record spectral slots are Slot 0 .. kSpectral - 1");
   AR_RECORD_SPECTRAL(AR_X)
 #undef AR_X
+#if defined(__CUDACC__)
+#pragma unroll 1
+#endif
+  for (uint32_t k = 0; k < kSpectral; ++k) {
+    const SpectrumRef* ref = nullptr;
+    SpectrumSemantic slot_sem = SpectrumSemantic::REFLECTANCE;
+    switch (Slot(k)) {
+#define AR_X(n, s, sem)            \
+  case Slot::s:                    \
+    ref = &b.n;                    \
+    slot_sem = SpectrumSemantic::sem; \
+    break;
+      AR_RECORD_SPECTRAL(AR_X)
+#undef AR_X
+      default: AR_ASSERT(false); continue;
+    }
+    const Spec v = resolve_slot_as(*ref, slot_sem, ctx.lambda_t, obs, spectra);
+    switch (Slot(k)) {
+#define AR_X(n, s, sem) \
+  case Slot::s: rec->n = v; break;
+      AR_RECORD_SPECTRAL(AR_X)
+#undef AR_X
+      default: break;
+    }
+  }
   const Real3 t = frame_from_normal(ctx.N).s;
   rec->geometry_normal = block_frame(b.geometry_normal, ctx.N);
   rec->geometry_coat_normal = block_frame(b.geometry_coat_normal, ctx.N);
