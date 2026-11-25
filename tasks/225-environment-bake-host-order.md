@@ -20,3 +20,8 @@ Size: M (about 300 lines without tests); stop and report at 2x.
 Progress:
 - Split from 173 by the lead (2026-11-25, option A of 173's build-order report).
 - 225 start: go from the lead (2026-11-25); files: bake_environment.h, env_bake.{h,cpp}, scene.{h,cpp}, scene_tables.{h,cpp}, light_builder.h, budget.toml, and the forced tests named in Scope.
+- k_bake_environment before 48 regs, 0 B stack, 0 / 0, 1.2 s; after (VM kernel) 64 regs, 264 B stack, 0 / 0, compile 2.31 / 2.51 / 2.34 s under load (limit 3.0 s).
+- Production bake 1024^2: CUDA 12.8 ms (FMA module, uniform world); CPU 12.3 s on 2 threads, 2.1 s on 16, so the cache's CPU device takes every logical core.
+- CPU vs CUDA no-FMA: grey and colour Environment Texture worlds bit-identical on cells clear of texel edges (the FMA module differs by 1.8e-5 through the lift).
+- Look at: out/evidence/225/bake_grid.png, one bright 3-cell cluster; brightest cell lat 0.6057 lon -0.8602 rad against the texel centre 0.6381, -0.8345 (half texel 0.049).
+- check gate 161.0 s; canary PASS, each hunk red on its own case.
