@@ -18,7 +18,7 @@ import meshes  # noqa: E402
 HDRI = os.path.join(ROOT, "assets", "_cache", "studio_small_09", "studio_small_09_1k.exr")
 ROUGHNESS = (0.05, 0.2, 0.4, 0.7, 1.0)
 GOLD, GREY = (1.0, 0.78, 0.34), (0.8, 0.8, 0.8)
-RADIUS, PITCH, ROW_PITCH = 1.0, 2.5, 2.8
+RADIUS, PITCH, ROW_PITCH = 1.0, 2.5, 3.4
 SPP = 256
 WIDTH, HEIGHT = 1280, 720
 SEED = 1
@@ -43,7 +43,7 @@ def build(out, blend=None):
         s.instances(items)
         s.world_environment(HDRI, 1.0)
         s.settings(SPP, WIDTH, HEIGHT, seed=SEED, sampler="sobol")
-        s.camera((0.0, -15.0, 7.5), (0.0, 0.0, 1.0), 50.0, 36.0, WIDTH, HEIGHT)
+        s.camera((0.0, -19.0, 11.0), (0.0, 0.0, 1.0), 50.0, 36.0, WIDTH, HEIGHT)
         s.finish()
 
 
