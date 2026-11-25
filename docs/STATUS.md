@@ -16,7 +16,7 @@ scope clause).
 
 ## Owner decisions still open
 - Ruling 101 (2026-11-25): B-38 baseline re-recorded on quiet main (b1m 11.69 -> 12.01 ms, b5m 12.28 -> 12.56 ms; +2.5 % cumulative since 2026-11-23 across M1b landings; limit 1.03 per landing unchanged); 215 reports the cumulative B-20 line.
-- k_shade_surface compile (decision 40's 7.0 s): 228 cut main to 6.14-6.19 s quiet (was 6.76-6.99); 173 resumes on its variant 1b (world Le resolved in shade_shadow, spills back to 8 / 8). Owner note: kernelgate's timing includes about 0.77 s of vcvarsall per compile (BACKLOG).
+- k_shade_surface compile: owner decision 41 (2026-11-26) raises B-05 to 7.5 s for M1b; 175's light tree reads 7.31-7.40 s (main 6.76-6.78 s after 173 and 174). The timing still includes about 0.77 s of vcvarsall per compile (BACKLOG). Ruling 103: the spill rows after 175.
 - Ruling 100 (2026-11-25, PROVISIONAL): B-09 also excludes the gate's compile-timing step (old: excluding build steps only, ruling 94); landing gates of kernel tasks read 179.8 s with 23 s of real timed compiles. Task 224. Rulings 97-99: shade_surface_ext may take 7.0 s B-05 (old 3.0 s default); medium-stack id for M1b; B-09 remedies 157 and 212.
 - Ruling 96 (2026-11-25): CPU/CUDA agreement through the RGB-to-spectrum lift is gated by its parts (pre-lift 1e-6, lift bit-identity, grey radiance 1e-6); colour radiance printed, ungated (172 measured 1.36e-5 against D12's 1e-5, conditioning of the lift).
 - Ruling 95 (2026-11-25): k_route_hit regs 28 -> 40 for 182's medium back-face test, a lead ruling on a D10 row.

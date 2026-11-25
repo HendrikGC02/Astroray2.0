@@ -92,3 +92,7 @@ Decisions made by the owner. Later records build on these; they change only if t
     - Opus implements kernel, sampling and concurrency tasks as marked O in tasks/README.md (kept from M1a; decision 31's Sonnet default holds for the rest).
     - Rulings 64-90 are folded into the records they amend, RULINGS.md keeping one index line each (task 185). A superseding ADR deletes the superseded file in the same commit and names it with `git show <sha>:<path>` (0009 q4: yes).
     - Exact JPEG parity (ruling 78) is left: 2 codes per channel stands.
+
+## 2026-11-26, M1b spine (light tree)
+
+41. **B-05 for `shade_surface` is 7.5 s for M1b (amends decision 40's 7.0 s).** Task 175 (light tree in the kernel) measured 7.31-7.40 s with `kernelgate.py --time` under the machine lock, alternating with main's 6.76-6.78 s (+0.55 to +0.64 s for the traversal). The timing still includes about 0.77 s of vcvarsall per compile that the build never pays (BACKLOG, 228); the measurement is kept as it is and the limit raised. Alternatives not taken: removing vcvarsall from the timing at 7.0 s, or holding 7.0 s by splitting 175 and cutting code through the 0002 D10 ladder. `tools/kernelgate.py` COMPILE_LIMIT_OVERRIDE_S carries the value.
