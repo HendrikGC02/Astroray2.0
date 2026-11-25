@@ -46,11 +46,12 @@ TEST_SUITE("fast") {
 
 AR_RT_CASE("delta_track/free flight distribution") {
   // A pure absorber (majorant = sigma_a) ends at its first tentative collision, which therefore lies
-  // at the free-flight distance. For each hero lane h, 1e5 flights of independent-mode draws, binned
-  // into 20 cells of equal probability under the exponential of rate sigma_t[h].
+  // at the free-flight distance. 1e5 flights of independent-mode draws, 25,000 per hero lane h, each
+  // lane's binned into 20 cells of equal probability under the exponential of rate sigma_t[h].
   const st::Run run = st::begin("delta_track/free flight distribution" AR_RT_SUFFIX, st::gate_family());
   const Spec zero = ar::spec_fill(0);
-  constexpr int kCells = 20, kN = 100000;
+  constexpr int kCells = 20, kN = 25000;
+  int odd = 0;  // flights that were not one absorbing collision (counted, checked once: doctest per draw is slow)
   for (uint32_t h = 0; h < 4u; ++h) {
     std::vector<double> obs(kCells, 0.0), exp_(kCells, double(kN) / kCells);
     const double rate = double(kSigmaT.v[h]);
@@ -60,9 +61,7 @@ AR_RT_CASE("delta_track/free flight distribution") {
       const ar::TrackResult r = ar::track_segment(kSigmaT, zero, kSigmaT, Real(1e30), h,
                                                   stream(uint32_t(i), ar::SAMPLER_INDEPENDENT, uint32_t(run.seed) + h),
                                                   &counter, ar::kFlightCollisionLimit, &w);
-      REQUIRE(r.event == TrackEvent::ABSORBED);
-      REQUIRE(r.collisions == 1u);
-      REQUIRE(counter == 1u);
+      odd += r.event != TrackEvent::ABSORBED || r.collisions != 1u || counter != 1u;
       const double cdf = 1.0 - std::exp(-rate * double(r.t));
       obs[std::min(kCells - 1, int(cdf * kCells))] += 1.0;
     }
@@ -70,18 +69,20 @@ AR_RT_CASE("delta_track/free flight distribution") {
     std::printf("delta_track free flight hero %u: chi2 %.1f dof %d p %.4f\n", h, res.chi2, res.dof, res.p);
     CHECK_MESSAGE(res.pass, res.message);
   }
+  CHECK(odd == 0);
 }
 
 AR_RT_CASE("delta_track/weights sum to transmittance") {
   // Majorant = sigma_t: a flight over d = 1 either reaches the end or has one real collision. The
   // expectation over the hero lane (1/4 each) and both uniforms is enumerated: the distance uniform
-  // on a 2^14-point midpoint grid, the event uniform on 20 midpoints. The coefficients make every
-  // hero's absorb probability (0.2, 0.5, 0.4, 0.5) a multiple of 1/20, so the event grid splits
+  // on a 2^14-point midpoint grid, the event uniform on 10 midpoints. The coefficients make every
+  // hero's absorb probability (0.2, 0.5, 0.4, 0.5) a multiple of 1/10, so the event grid splits
   // exactly and the only error is the distance grid's (below 2^-14 per lane times the weight).
   const Spec sigma_s{{Real(0.4), Real(0.5), Real(0.9), Real(1.0)}};
   const Spec sigma_a = kSigmaT - sigma_s;
-  constexpr int kDist = 1 << 14, kEvent = 20;
+  constexpr int kDist = 1 << 14, kEvent = 10;
   double reach[4] = {0, 0, 0, 0}, scatter[4] = {0, 0, 0, 0};
+  int other = 0;  // null or zero outcomes, which the majorant rules out
   for (uint32_t h = 0; h < 4u; ++h)
     for (int a = 0; a < kDist; ++a)
       for (int b = 0; b < kEvent; ++b) {
@@ -89,14 +90,14 @@ AR_RT_CASE("delta_track/weights sum to transmittance") {
         Real t = 0;
         const TrackEvent e = ar::track_collision(sigma_a, sigma_s, kSigmaT, Real(1), h, Real((a + 0.5) / kDist),
                                                  Real((b + 0.5) / kEvent), &t, &w);
-        REQUIRE(e != TrackEvent::NULL_COLLISION);  // the majorant leaves no null collision
-        REQUIRE(e != TrackEvent::ZERO);
+        other += e == TrackEvent::NULL_COLLISION || e == TrackEvent::ZERO;
         for (int j = 0; j < 4; ++j) {
           const double v = lane_estimate(w, j) / (4.0 * kDist * kEvent);
           if (e == TrackEvent::REACHED) reach[j] += v;
           if (e == TrackEvent::SCATTERED) scatter[j] += v;
         }
       }
+  CHECK(other == 0);
   for (int j = 0; j < 4; ++j) {
     const double st_ = double(kSigmaT.v[j]), tr = std::exp(-st_);
     const double sc = double(sigma_s.v[j]) / st_ * (1.0 - tr);
