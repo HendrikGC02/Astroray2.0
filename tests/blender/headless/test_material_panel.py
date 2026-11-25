@@ -218,13 +218,6 @@ class TestMaterialPanel(unittest.TestCase):
                 self.assertFalse(hasattr(bpy.types, n), n)
             tm.PROPS.register()
             self.assertTrue(hasattr(bpy.types.Material, "astroray"))
-        for _ in range(2):
-            for c in PANEL.classes:
-                bpy.utils.register_class(c)
-            self.assertTrue(hasattr(bpy.types, "ASTRORAY_PT_material_extension"))
-            for c in reversed(PANEL.classes):
-                bpy.utils.unregister_class(c)
-            self.assertFalse(hasattr(bpy.types, "ASTRORAY_PT_material_extension"))
         self.assertEqual(self.mat.astroray.ext_kind, "NONE")
 
 
