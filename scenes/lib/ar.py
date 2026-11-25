@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import struct
 import tempfile
 import zlib
 
@@ -61,6 +62,41 @@ def _record_slots():
 
 
 SLOTS = _record_slots()
+
+GRATING_AUTHORED_H = os.path.join(ROOT, "src", "host", "material", "grating_authored.h")
+
+
+def _grating_layout():
+    """(field names, struct format) of the authored GRATING block, read from the C header's one
+    field list so the byte layout has one source; the bytes after the last field are reserved zero."""
+    with open(GRATING_AUTHORED_H, encoding="utf-8") as f:
+        text = f.read()
+    rows = re.findall(r"^\s*X\((\w+),\s*[\w ]+,\s*'(\w)'\)", text, re.M)
+    if not rows:
+        raise RuntimeError(f"{GRATING_AUTHORED_H}: no AR_GRATING_AUTHORED_FIELDS rows parsed")
+    names = [n for n, _ in rows]
+    fields = "<" + "".join(c for _, c in rows)
+    pad = 64 - struct.calcsize(fields)
+    if pad < 0:
+        raise RuntimeError(f"{GRATING_AUTHORED_H}: the authored fields exceed 64 bytes")
+    return names, fields + (f"{pad}x" if pad else "")
+
+
+GRATING_FIELDS, GRATING_FORMAT = _grating_layout()
+GRATING_MODES = {"reflect": 0, "transmit": 1}
+GRATING_PROFILES = {"sinusoidal": 0, "blazed": 1, "csv": 2}
+
+
+def grating_block(pitch_nm, depth_nm, coating=(1.0, 6.0), m_min=-2, m_max=2, mode="reflect", profile="sinusoidal"):
+    """The 64 bytes of ar_material_desc::ext_constants for a GRATING material (0005 items 23-24,
+    src/host/material/grating_authored.h). `coating` is the constant complex IOR (n, k) of the
+    reflective layer; (0, 0) is a perfect reflector. Orders m_min..m_max, |m| <= 8. Transmission and
+    the blazed and csv profiles are packable but the engine refuses them as not built."""
+    values = dict(pitch_nm=pitch_nm, depth_nm=depth_nm, coating_n=coating[0], coating_k=coating[1],
+                  mode=GRATING_MODES[mode] if isinstance(mode, str) else mode,
+                  profile=GRATING_PROFILES[profile] if isinstance(profile, str) else profile,
+                  m_min=m_min, m_max=m_max)
+    return struct.pack(GRATING_FORMAT, *[values[n] for n in GRATING_FIELDS])
 
 
 class AbiError(RuntimeError):
@@ -452,6 +488,27 @@ class Scene:
                                    for k, v in (inputs or {}).items()},
             "emission": None if emission is None else {"rgb": [float(x) for x in emission[0]],
                                                        "strength": float(emission[1])}})
+        return key
+
+    def grating_material(self, pitch_nm, depth_nm, coating=(1.0, 6.0), m_min=-2, m_max=2, mode="reflect",
+                         profile="sinusoidal", block=None):
+        """A GRATING extension material (extension kind 1) with no surface graph. `block` overrides the
+        packed bytes (tests of bad blocks). Returns the material key. The engine refuses the material
+        until the routing task uploads its table; the description records the inputs for the addon."""
+        a = self.abi
+        raw = grating_block(pitch_nm, depth_nm, coating, m_min, m_max, mode, profile) if block is None else bytes(block)
+        if len(raw) != 64:
+            raise ValueError(f"a GRATING block is 64 bytes, got {len(raw)}")
+        m = a.ar_material_desc()
+        m.ext_kind = 1
+        m.ext_constants = (ctypes.c_uint8 * 64)(*raw)
+        key = self.key()
+        self._call(self.lib.ar_edit_set_material(self.edit_h, key, ctypes.byref(m)), "ar_edit_set_material")
+        self._desc["materials"].append({
+            "key": key, "inputs": {}, "emission": None,
+            "grating": {"pitch_nm": float(pitch_nm), "depth_nm": float(depth_nm),
+                        "coating": [float(coating[0]), float(coating[1])], "m_min": int(m_min), "m_max": int(m_max),
+                        "mode": mode, "profile": profile}})
         return key
 
     def material_from_graph(self, graph, emission_sampling=None):
