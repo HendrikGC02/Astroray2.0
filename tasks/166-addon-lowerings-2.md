@@ -16,3 +16,4 @@ Budget: gate +2 s at most (the F12 metal case on two devices inside the existing
 Depends on: 148, 163, 165.
 Size: S (about 140 lines without tests); stop and report at 2x.
 Progress:
+- 166 done: lowerings, tests, canary (4 named cases red), fast and gate pass (gate 165.8 s), headless 125 OK. Metallic with Specular IOR Level != 0.5 is unsupported (not approximated): the addon has no channel for it.
