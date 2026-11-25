@@ -1,10 +1,10 @@
 diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
-index 5df5a760..9c5cbfae 100644
+index 4fd95ea5..42ca1cec 100644
 --- a/src/host/scene/scene_tables.cpp
 +++ b/src/host/scene/scene_tables.cpp
-@@ -490,7 +490,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
-   sd.material_spectra = as<float>(at(TableId::MATERIAL_SPECTRA)), sd.material_spectra_count = cnt(TableId::MATERIAL_SPECTRA);
-   sd.medium_descs = as<ar::MediumDesc>(at(TableId::MEDIA)), sd.medium_count = cnt(TableId::MEDIA);
+@@ -501,7 +501,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
+   sd.world_program = as<uint32_t>(at(TableId::WORLD_PROGRAM)), sd.world_program_words = cnt(TableId::WORLD_PROGRAM);
+   sd.world_constants = as<ar::ConstantBlock>(at(TableId::WORLD_CONSTANTS));
    sd.medium_blocks = as<ar::MediumBlock>(at(TableId::MEDIUM_BLOCKS));
 -  sd.medium_programs = as<uint32_t>(at(TableId::MEDIUM_PROGRAMS)), sd.medium_program_words = cnt(TableId::MEDIUM_PROGRAMS);
 +  sd.medium_programs = as<uint32_t>(at(TableId::MEDIUM_BLOCKS)), sd.medium_program_words = cnt(TableId::MEDIUM_PROGRAMS);
