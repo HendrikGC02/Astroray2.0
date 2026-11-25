@@ -33,6 +33,7 @@
 #include "host/scene/accel.h"
 #include "kernel/light/light_sampler.h"
 #include "kernel/material/lobes/tables.h"
+#include "kernel/medium/medium_block.h"
 #include "kernel/scene/scene_view.h"
 #include "kernel/vm/context.h"
 
@@ -109,6 +110,14 @@ std::vector<ar::MediumDesc> medium_table(const std::vector<std::shared_ptr<const
 // Throws std::invalid_argument for a desc whose program is Medium::kNoMediumProgram (never placed) or
 // is not below `count`, naming the desc: an unplaced medium must not be mistaken for medium 0.
 void check_medium_table(const ar::MediumDesc* descs, uint32_t count);
+// The device copies of the media's constant blocks and volume programs, in medium_table's order: block
+// i is media[i]'s with `entry` relocated to its program's word offset in `programs`, whose word 0 is
+// reserved so an entry of 0 means no program (medium_eval.h). Both empty for no media.
+struct MediumArrays {
+  std::vector<ar::MediumBlock> blocks;
+  std::vector<uint32_t> programs;
+};
+MediumArrays medium_arrays(const std::vector<std::shared_ptr<const Medium>>& media);
 
 // The device record of instance `i` of `table`, whose geometry is mesh `mesh_index`. `media` resolves
 // the instance's medium key; throws std::logic_error when the instance bears a medium and `media` is
@@ -146,6 +155,8 @@ enum class TableId : uint32_t {
   WORLD_CONSTANTS,   // its constant block: one ConstantBlock, or none
   ENV_TABLE,         // the world program's environment table (0004 D11): both distributions in one block
                      // of floats (env_table_floats), empty without a baked program world
+  MEDIUM_BLOCKS,     // MediumBlock per medium (SceneData::medium_blocks), MEDIA's order
+  MEDIUM_PROGRAMS,   // the media's volume-program words (SceneData::medium_programs)
   HEADER,
 };
 inline constexpr uint32_t kTableCount = static_cast<uint32_t>(TableId::HEADER) + 1u;

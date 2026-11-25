@@ -40,7 +40,7 @@ namespace {
 
 constexpr uint32_t kElemMax = 432;  // kg_checksum.cu kKgElemMax
 constexpr uint32_t kRow = 8 + 2 * kElemMax;
-constexpr uint32_t kRows = static_cast<uint32_t>(TableId::WORLD_CONSTANTS) + 1u;
+constexpr uint32_t kRows = static_cast<uint32_t>(TableId::MEDIUM_PROGRAMS) + 1u;
 
 struct Graph {
   std::vector<ar_graph_node> nodes;
@@ -319,6 +319,9 @@ std::vector<HostRow> host_rows(Scene& scene, const SceneTableSet& set) {
   at(TableId::MEDIA) = row_of(descs.data(), descs.size());
   at(TableId::WORLD_PROGRAM) = row_of(mats->world_program.data(), mats->world_program.size());
   at(TableId::WORLD_CONSTANTS) = row_of(mats->world_constants.data(), mats->world_constants.size());
+  const MediumArrays marr = medium_arrays(media);
+  at(TableId::MEDIUM_BLOCKS) = row_of(marr.blocks.data(), marr.blocks.size());
+  at(TableId::MEDIUM_PROGRAMS) = row_of(marr.programs.data(), marr.programs.size());
   return rows;
 }
 
@@ -365,6 +368,9 @@ TEST_CASE("scene_upload/checksums match host") {
   const std::vector<HostRow> want = host_rows(*r.scene, *set);
   for (uint32_t t = 0; t < kRows; ++t) {
     const TableId id = TableId(t);
+    // The environment table is no KernelGlobals member (the light records hold it): kg_checksum.cu
+    // writes an empty row for it, which says nothing about the upload.
+    if (id == TableId::ENV_TABLE) continue;
     const uint8_t* row = rows.data() + uint64_t(t) * kRow;
     uint32_t count = 0, elem = 0;
     std::memcpy(&count, row, 4), std::memcpy(&elem, row + 4, 4);

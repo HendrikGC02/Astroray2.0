@@ -10,10 +10,11 @@
 #include "material/constant_block.h"
 #include "material/lobes/tables.h"
 #include "medium/medium.h"
+#include "medium/medium_block.h"
 #include "scene/scene_view.h"
 #include "vm/context.h"
 
-// One row per table, in host/scene/scene_tables.h TableId order up to WORLD_CONSTANTS: count (u32),
+// One row per table, in host/scene/scene_tables.h TableId order up to MEDIUM_PROGRAMS: count (u32),
 // element size (u32), then the first and last element, kKgElemMax bytes each.
 constexpr uint32_t kKgElemMax = 432;
 constexpr uint32_t kKgRow = 8 + 2 * kKgElemMax;
@@ -64,4 +65,7 @@ extern "C" __global__ void ar_kg_checksum(const ar::KernelGlobals* kgp, uint8_t*
   kg_row(out, r++, s.medium_descs, s.medium_count, sizeof(ar::MediumDesc));
   kg_row(out, r++, s.world_program, s.world_program_words, 4);
   kg_row(out, r++, s.world_constants, s.world_constants != nullptr ? 1u : 0u, sizeof(ar::ConstantBlock));
+  kg_row(out, r++, nullptr, 0u, 4);  // ENV_TABLE: reached through the light records, not KernelGlobals
+  kg_row(out, r++, s.medium_blocks, s.medium_count, sizeof(ar::MediumBlock));
+  kg_row(out, r++, s.medium_programs, s.medium_program_words, 4);
 }

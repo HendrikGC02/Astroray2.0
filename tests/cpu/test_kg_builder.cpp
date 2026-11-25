@@ -27,6 +27,7 @@
 #include "host/session/kg_builder.h"
 #include "host/session/session.h"
 #include "film/present.h"
+#include "medium/medium_eval.h"
 #include "vm/ops.h"
 
 using namespace astroray;
@@ -281,6 +282,48 @@ TEST_CASE("kg_builder/media table") {
   const auto after_medium = acquire_scene_tables(r.scene);
   CHECK(after_medium->uploaded[static_cast<uint32_t>(TableId::MEDIA)]);
   CHECK(after_medium->uploaded[static_cast<uint32_t>(TableId::INSTANCES)]);  // the indices ride the media list
+}
+
+TEST_CASE("kg_builder/medium blocks and programs") {
+  // Two media: each block's entry is relocated past the reserved word and the earlier program, and
+  // medium_eval through the uploaded tables returns each medium's own coefficients (grey, so exact).
+  Rig r;
+  r.build();
+  ar_medium_desc a{}, b{};
+  for (int k = 0; k < 3; ++k) a.sigma_a[k] = 1.0f, b.sigma_a[k] = 2.0f, b.sigma_s[k] = 0.5f;
+  r.commit([&](Edit& e) {
+    REQUIRE(set_medium(e, 60, &a, r.scene.materials->table()) == AR_OK);
+    REQUIRE(set_medium(e, 61, &b, r.scene.materials->table()) == AR_OK);
+  });
+  const auto set = acquire_scene_tables(r.scene);
+  ar::FilmData film{};
+  ar::DisplayTarget display{};
+  uint32_t active = 0;
+  KgSession in;
+  in.film = &film, in.display = &display, in.active_pixels = &active;
+  const ar::KernelGlobals kg = build_kernel_globals(set.get(), in);
+  CHECK(missing_pointers(kg, *set, false).empty());
+  const auto media = r.scene.media();
+  REQUIRE(media.size() == 2u);
+  REQUIRE(count(*set, TableId::MEDIUM_BLOCKS) == 2u);
+  const ar::SceneData& s = *kg.scene;
+  REQUIRE(s.medium_blocks != nullptr);
+  REQUIRE(s.medium_program_words == 1u + media[0]->program.size() + media[1]->program.size());
+  CHECK(s.medium_programs[0] == 0u);
+  CHECK(s.medium_blocks[0].entry == 1u);
+  CHECK(s.medium_blocks[1].entry == 1u + media[0]->program.size());
+  const ar::MediumTables mt{s.medium_programs, s.medium_blocks, *kg.tables};
+  const float want_a[2] = {1.0f, 2.0f}, want_s[2] = {0.0f, 0.5f};
+  for (uint32_t m = 0; m < 2; ++m) {
+    ar::VmRegs regs;
+    ar::MediumSample ms;
+    const ar::Lambda lam{{450.0f, 520.0f, 590.0f, 660.0f}};
+    REQUIRE(ar::medium_eval(mt, s.medium_descs[m], ar::Real3{0, 0, 0}, lam, &regs, &ms) == ar::VmStatus::OK);
+    for (int i = 0; i < ar::kLanes; ++i) {
+      CHECK(ms.sigma_a.v[i] == doctest::Approx(want_a[m]).epsilon(1e-6));
+      CHECK(ms.sigma_s.v[i] == doctest::Approx(want_s[m]).epsilon(1e-6));
+    }
+  }
 }
 
 TEST_CASE("kg_builder/medium dropped with its instance still builds") {
