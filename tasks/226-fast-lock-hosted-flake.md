@@ -16,4 +16,4 @@ Depends on: none. Collisions: tests/tools/run_fast.ps1 with 210; this lands firs
 Size: S (about 60 lines); stop and report at 2x.
 Progress:
 
-(Progress) 226: fast_lock failed 19/20 on 2 cores (timeout holder held 3 s from ready; unknown case 0.2 s ticks in 1 s limit; tree holder 10 s cap). Holders now held until released, unknown 0.1 s x 2 s, run_fast prints FAIL lines; 20/20 on 2 cores after.
+226: 2-core runs before: fast_lock 19/20 red; timeout case 18, unknown-lines case 8, tree-waiting-line 1 (after first fix). Holders 3 s / 10 s -> release file with a 60 s cap; tree poll 10 -> 30 s; unknown case keeps 0.5/1.0 s limits and is judged by state (waited >= limit, <= waiter lifetime, 1..3 lines). run_fast prints FAIL lines.

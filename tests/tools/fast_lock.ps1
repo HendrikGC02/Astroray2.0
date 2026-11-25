@@ -180,9 +180,9 @@ while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() <
   Use-Lock 'unknown'
   $stale = [ordered]@{ pid = $h3.Id; tool = 'holder.ps1'; cmd = 'stale'; started = '2000-01-01T00:00:00+00:00' }
   [IO.File]::WriteAllText((Join-Path $env:ASTRORAY_LOCK_DIR 'owner.json'), ($stale | ConvertTo-Json -Compress))
-  # A limit of twenty 0.1 s ticks (a stall of a loaded core costs ticks, not the three lines): a clock taken from the stale record (26 years old) would fail on the first
+  # A limit of five 0.2 s ticks: a clock taken from the stale record (26 years old) would fail on the first
   # tick, before three waiting lines and before 1 s.
-  $env:ASTRORAY_LOCK_MESSAGE_S = '0.1'; $env:ASTRORAY_LOCK_TIMEOUT_S = '2.0'
+  $env:ASTRORAY_LOCK_MESSAGE_S = '0.2'; $env:ASTRORAY_LOCK_TIMEOUT_S = '1.0'
   $w3 = Start-On 'unknown' 'w3' @($waiter)
   $env:ASTRORAY_LOCK_MESSAGE_S = '0.5'; $env:ASTRORAY_LOCK_TIMEOUT_S = '1.5'
   # Case 4: a waiter on the tree lock names the holder from .tree.owner.json, then acquires after release.
@@ -229,11 +229,13 @@ while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() <
   $txt = ($out -join "`n") -replace '\r?\n\s*\|?\s*', ' '
   Check 'unknown: the waiter exits non-zero without acquiring' ($w3.ExitCode -ne 0 -and -not $txt.Contains('ACQUIRED')) $out
   Check 'unknown: waiting message names no holder' ($txt.Contains('waiting for unknown holder (owner.json missing or its pid not running)') -and -not $txt.Contains('waiting for holder.ps1')) $out
-  # The waiter's own wait is the clock: the first three ticks print, then the FAIL once the 2 s limit is reached.
+  # The waiter's own wait is the clock: 1 to 3 waiting lines (the first tick always prints; the throttle is covered by the messages case), then the FAIL at the limit.
   $said = @($out | Where-Object { $_ -eq 'waiting for unknown holder (owner.json missing or its pid not running)' }).Count
-  Check 'unknown: exactly three waiting lines before the FAIL' ($said -eq 3) $out
-  $m = [regex]::Match($txt, 'FAIL lock: waited (\d+) s for unknown holder, over the 2 s limit')
-  Check 'unknown: FAIL lock after the waiter''s own wait' ($m.Success -and [int]$m.Groups[1].Value -ge 2) $out
+  Check 'unknown: one to three waiting lines before the FAIL' ($said -ge 1 -and $said -le 3) $out
+  $m = [regex]::Match($txt, 'FAIL lock: waited (\d+) s for unknown holder, over the 1 s limit')
+  # Judged by state: the waiter's reported wait reached the limit (a stale-record clock reports 0) and does not exceed its own lifetime.
+  $life = [math]::Ceiling(($w3.ExitTime - $w3.StartTime).TotalSeconds)
+  Check 'unknown: FAIL lock after the waiter''s own wait' ($m.Success -and [int]$m.Groups[1].Value -ge 1 -and [int]$m.Groups[1].Value -le $life) (@($out) + "lifetime $life s")
 
   $out = Read-Out 'w4'
   $txt = $out -join "`n"

@@ -1,9 +1,13 @@
 diff --git a/tools/lib/lock.ps1 b/tools/lib/lock.ps1
-index a7c72c04..4fd9822f 100644
+index a7c72c04..bab57cc4 100644
 --- a/tools/lib/lock.ps1
 +++ b/tools/lib/lock.ps1
-@@ -119,7 +119,7 @@ function Enter-ArMachineLock {
-     $holdS = if ($o -and $o.Alive) { ([DateTimeOffset]::Now - $o.Started).TotalSeconds } else { $sw.Elapsed.TotalSeconds }
+@@ -116,10 +116,10 @@ function Enter-ArMachineLock {
+     if (Test-ArLockSay $say $sw.Elapsed.TotalSeconds) { Write-Host (Format-ArLockWait $o) }
+     # The limit is on the current holder's hold, not this caller's wait: a long queue of legitimate holders
+     # is not a hang. Without a live record, this caller's own wait is the only clock.
+-    $holdS = if ($o -and $o.Alive) { ([DateTimeOffset]::Now - $o.Started).TotalSeconds } else { $sw.Elapsed.TotalSeconds }
++    $holdS = if ($o) { ([DateTimeOffset]::Now - $o.Started).TotalSeconds } else { $sw.Elapsed.TotalSeconds }
      if ($holdS -ge $limitS) {
        $m.Dispose()
 -      $who = if ($o -and $o.Alive) { "$($o.Tool) (pid $($o.Pid)), holding $([math]::Round($holdS)) s since $($o.Text)" } else { 'unknown holder' }
