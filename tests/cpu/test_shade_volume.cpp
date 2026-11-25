@@ -196,30 +196,23 @@ TEST_CASE("shade_volume/stale medium_rng gives the same result") {
   CHECK(a->medium_rng[0] > 1u * ar::kFlightCollisionLimit);
 }
 
-TEST_CASE("shade_volume/media scene allocates the medium state") {
-  // The session turns on the MEDIA path-state fields exactly when the scene has a medium.
-  const auto bytes_per_item = [](bool with_medium) {
-    slab::SlabRig rig(SceneConfig{2, {}, {}}, with_medium);
-    std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, 1);
-    const slab::Render r = slab::render_slab(rig, *dev);
-    REQUIRE(r.main_items > 0u);
-    REQUIRE(r.state_bytes % r.main_items == 0u);
-    return r.state_bytes / r.main_items;
-  };
-  ar::StateFeatures on{}, off{};
-  on.media = true;
-  REQUIRE(ar::path_state_bytes(on) != ar::path_state_bytes(off));
-  CHECK(bytes_per_item(true) == ar::path_state_bytes(on));
-  CHECK(bytes_per_item(false) == ar::path_state_bytes(off));
-}
-
 TEST_CASE("shade_volume/zero sigma bit identical") {
   const auto render = [](bool with_medium) {
     slab::SlabRig rig(SceneConfig{2, {}, {}}, with_medium);
     std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, 1);
     return slab::render_slab(rig, *dev);
   };
-  slab::check_identity(render(true), render(false));
+  const slab::Render with = render(true), without = render(false);
+  slab::check_identity(with, without);
+  // The session turns on the MEDIA path-state fields exactly when the scene has a medium: the
+  // scheduler counts path_state_bytes of its feature set per main-pool item.
+  ar::StateFeatures on{}, off{};
+  on.media = true;
+  REQUIRE(ar::path_state_bytes(on) != ar::path_state_bytes(off));
+  REQUIRE(with.main_items > 0u);
+  REQUIRE(without.main_items > 0u);
+  CHECK(with.state_bytes == with.main_items * ar::path_state_bytes(on));
+  CHECK(without.state_bytes == without.main_items * ar::path_state_bytes(off));
 }
 
 }  // TEST_SUITE
