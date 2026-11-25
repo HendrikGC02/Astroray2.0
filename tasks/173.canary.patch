@@ -25,7 +25,7 @@ index 28a5a3f3..d3acd0d5 100644
    }
    // A WORLD_ENV world's NEE items carry their lanes and item_flags (0003 d20): the scheduler
 diff --git a/src/kernel/light/light.h b/src/kernel/light/light.h
-index 59e7b820..5183a3c9 100644
+index 59e7b820..acd7f449 100644
 --- a/src/kernel/light/light.h
 +++ b/src/kernel/light/light.h
 @@ -388,7 +388,11 @@ AR_FN Real light_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Rea
@@ -33,7 +33,7 @@ index 59e7b820..5183a3c9 100644
      case LightType::TRIANGLE: return tri_pdf_li(r, ctx, wi, hit);
      case LightType::WORLD_CONST: return world_pdf_li(r, ctx, wi, hit);
 +#if defined(__CUDA_ARCH__)
-+    case LightType::WORLD_ENV: return world_env_pdf_li(wi, env, true);
++    case LightType::WORLD_ENV: return world_env_pdf_li(wi, env, env_complete || true);
 +#else
      case LightType::WORLD_ENV: return world_env_pdf_li(wi, env, env_complete);
 +#endif
@@ -41,14 +41,15 @@ index 59e7b820..5183a3c9 100644
    AR_ASSERT(false);
    return Real(0);
 diff --git a/src/kernel/light/world_env.h b/src/kernel/light/world_env.h
-index db2e7705..76a05653 100644
+index db2e7705..a931325e 100644
 --- a/src/kernel/light/world_env.h
 +++ b/src/kernel/light/world_env.h
-@@ -35,7 +35,7 @@ inline constexpr int kEnvPlain = 0, kEnvCompensated = 1;
+@@ -35,7 +35,8 @@ inline constexpr int kEnvPlain = 0, kEnvCompensated = 1;
  // compensated pdf is 0 where the radiance is below its mean, which only BSDF sampling covers.
  AR_FN LightLiSample world_env_sample_li(const LightSampleContext& ctx, Real2 u, const EnvTableView* env, bool complete) {
    AR_ASSERT(env != nullptr);
 -  const EnvDirSample d = env_sample(env[kEnvPlain], env[kEnvCompensated], u, !complete);
++  (void)complete;
 +  const EnvDirSample d = env_sample(env[kEnvPlain], env[kEnvCompensated], u, false);
    if (!(d.pdf > Real(0))) return light_li_none();
    LightLiSample s = light_li_none();
