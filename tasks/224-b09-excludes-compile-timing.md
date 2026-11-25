@@ -15,3 +15,4 @@ Budget: gate +0.3 s at most (fixture stand-in); no limit moves.
 Depends on: none. Collisions: tools/check.ps1 with 210 (row c) and 212; this lands first.
 Size: S (about 30 lines); stop and report at 2x.
 Progress:
+- check.ps1 compile timing step flagged Build (excluded from B-09 tier clock, still in kernelSteps); summary names it; fast_lock case; 0009 B-09 text; canary red. fast/gate/fast_lock pass.
