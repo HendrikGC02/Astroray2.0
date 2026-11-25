@@ -475,6 +475,36 @@ class TestLowering(unittest.TestCase):
         mat.node_tree.links.remove(m.inputs[2].links[0])
         self.assertEqual(tm.unsupported_strings(lower(mat)), ["Mix Shader.Shader"])
 
+    def test_mix_non_shader_input_is_reported(self):
+        """A lowered node that is not a shader in a Mix socket is reported, not dropped with the other side
+        compiled at full weight."""
+        scene, plane, mat, world = tm.new_scene()
+        empty_material(mat)
+        bg = mat.node_tree.nodes.new("ShaderNodeBackground")
+        new_mix(mat, bg, new_principled(mat, (1.0, 1.0, 1.0)), 0.5)
+        self.assertEqual(tm.unsupported_strings(lower(mat)), ["Mix Shader.Shader"])
+
+    def test_mix_emission_of_strength_zero_is_black(self):
+        """Mix(Emission strength 0, Principled, 0.5): the emission child stays an emission child (an EMIT_LE of
+        strength 0, no store), so it renders black and the Principled keeps half its weight, not a dielectric."""
+        scene, plane, mat, world = tm.new_scene()
+        empty_material(mat)
+        red = (0.8, 0.1, 0.1)
+        new_mix(mat, new_emission(mat, (1.0, 1.0, 1.0), 0.0), new_principled(mat, red), 0.5)
+        em = lower(mat)
+        nodes = tm.decode(em)
+        self.assertEqual(tm.unsupported_strings(em), [])
+        self.assertEqual([n["i32"] for n in nodes if n["op"] == "EMIT_LE"], [[0]])
+        self.assertEqual([n["i32"] for n in nodes if n["op"] == "STORE_SLOT" and n["i32"][1] == 0], [])
+        img, entries, _ = tm.render(scene, plane, mat, world, size=(16, 12), spp=128)
+        self.assertEqual([x for x in entries if x[0] == UNSUPPORTED], [])
+        scene, plane, mat, world = tm.new_scene()
+        mat.node_tree.nodes.remove(principled(mat))
+        r = new_principled(mat, red)
+        mat.node_tree.links.new(r.outputs[0], tm.node(mat.node_tree, "ShaderNodeOutputMaterial").inputs["Surface"])
+        ref = tm.render(scene, plane, mat, world, size=(16, 12), spp=128)[0]
+        np.testing.assert_allclose(tm.centre_rgb(img), 0.5 * tm.centre_rgb(ref), atol=0.02)
+
     def _frequency(self, build, want, label):
         """Mean of the rendered Mix over the mean of its white child alone: the other children are black, so
         the ratio is the frequency the white child is selected with, binomial over every sample."""
@@ -556,6 +586,15 @@ class TestLowering(unittest.TestCase):
                 _, entries, _ = tm.render(scene, plane, mat, world, size=(16, 12), spp=16)
                 self.assertEqual([x for x in entries if x[0] == UNSUPPORTED], [])
                 self.assertEqual(len(transparent_entries(entries)), count, entries)
+        # Alone, a coloured Transparent has no lowering (the compiler would read it as a plain material).
+        scene, plane, mat, world = tm.new_scene()
+        n = only_shader(mat, "ShaderNodeBsdfTransparent")
+        n.inputs["Color"].default_value = (0.5, 0.5, 0.5, 1.0)
+        em = lower(mat)
+        self.assertEqual(tm.unsupported_strings(em), ["Transparent.Color"])
+        self.assertNotIn(SLOT["geometry_opacity"], stores(em))
+        _, entries, _ = tm.render(scene, plane, mat, world, size=(8, 8), spp=1)
+        self.assertEqual(len([x for x in entries if x[0] == UNSUPPORTED]), 1)
         # A colour from a texture has no constant mean: reported by name.
         scene, plane, mat, world = tm.new_scene()
         n = only_shader(mat, "ShaderNodeBsdfTransparent")

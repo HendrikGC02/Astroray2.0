@@ -437,12 +437,14 @@ def _principled(em, node, keymap):
     _emit(em, ins["Emission Color"], ins["Emission Strength"], keymap, "Principled BSDF")
 
 
-def _emit(em, color_sock, strength_sock, keymap, who):
-    """One EMIT_LE from an emission colour and a strength input; nothing for a constant strength 0."""
-    if _link_of(strength_sock) is None and strength_sock.default_value == 0.0:
+def _emit(em, color_sock, strength_sock, keymap, who, keep_zero=False):
+    """One EMIT_LE from an emission colour and a strength input; nothing for a constant strength 0 unless
+    `keep_zero`: an Emission child of a Mix must stay an emission child (black), which the compiler
+    recognises by its EMIT_LE, not become a default BSDF child."""
+    if not keep_zero and _link_of(strength_sock) is None and strength_sock.default_value == 0.0:
         return False
     strength, const = _float(em, strength_sock, keymap, f"{who}.{strength_sock.name}")
-    if strength is None or const == 0.0:
+    if strength is None or (const == 0.0 and not keep_zero):
         return False
     col = _colour(em, color_sock, keymap, f"{who}.{color_sock.name}", lift=False, emission=True)
     if col is None:
@@ -459,7 +461,7 @@ def _emission(em, node, keymap):
     if em.child is None:
         em.store(SLOT_BASE_WEIGHT, em.const_f32(0.0))
         em.store(SLOT_SPECULAR_WEIGHT, em.const_f32(0.0))
-    _emit(em, node.inputs["Color"], node.inputs["Strength"], keymap, "Emission")
+    _emit(em, node.inputs["Color"], node.inputs["Strength"], keymap, "Emission", keep_zero=em.child is not None)
 
 
 def _transparent(em, node, keymap):
@@ -471,6 +473,11 @@ def _transparent(em, node, keymap):
         report_link(em, col, "Transparent.Color")
         return
     rgb = tuple(col.default_value)[:3]
+    if em.child is None and any(abs(c - 1.0) > 1e-6 for c in rgb):
+        # Alone, the compiler would read the opacity as a plain material and render the opaque part as a
+        # dielectric where Cycles absorbs it: no lowering, never a silent change.
+        em.unsupported("Transparent.Color")
+        return
     em.store(SLOT_GEOMETRY_OPACITY, em.const_f32(1.0 - sum(rgb) / 3.0))
 
 
@@ -482,6 +489,8 @@ def _closure(em, node, keymap, in_mix=False):
         return _mix(em, node, keymap)
     fn = _LOWER_SHADER.get(node.bl_idname)
     if fn is None:
+        if in_mix and node.bl_idname in lowered_types():
+            em.unsupported("Mix Shader.Shader")  # a lowered node that is not a shader (an unlowered one is already reported)
         return None
     if not in_mix:
         fn(em, node, keymap)  # the whole surface: one implicit child, the words a graph without a Mix always had

@@ -303,6 +303,18 @@ class TestSmoke(unittest.TestCase):
             print(f"RESULT smoke metal {device} sphere mean over world {ratio:.5f} band {METAL_BAND}")
             self.assertGreaterEqual(ratio, METAL_BAND[0], device)
             self.assertLessEqual(ratio, METAL_BAND[1], device)
+        # A white metal and a white dielectric are both near-lossless in a white furnace, so the means above cannot
+        # tell whether Metallic reached the engine: read the graph the extension lowers for this material (the one
+        # both devices were sent) and require the base_metalness store of 1.
+        tr = importlib.import_module(MODULE + ".materials.translate")
+        ops = importlib.import_module(MODULE + "._ops")
+        em = tr.translate_material(scene.objects["MetalBall"].active_material,
+                                   importlib.import_module(MODULE + ".sync.keys").KeyMap(), ops.OP_ID)
+        self.assertEqual(em.unsupported_count(), 0)
+        slot, store, const = ops.RECORD_SLOT["base_metalness"], ops.OP_ID["STORE_SLOT"], ops.OP_ID["CONST_F32"]
+        fed = [(em.nodes[k[0]], em.f32[em.nodes[k[0]][1]]) for k in em.links
+               if em.nodes[k[2]][0] == store and em.i32[em.nodes[k[2]][3]] == slot]
+        self.assertEqual([(n[0], v) for n, v in fed], [(const, 1.0)], "Metallic 1 must reach base_metalness")
         renders = {k: (r["mean"], r["var"]) for k, r in runs.items()}
         (name, passed, reasons, worst, cmean, tmean), = analytic.check_scene(
             None, None, [("f12 metal cpu~cuda", w, ("cpu", "cuda"), "pair_image")], analytic.family_m(), 0.0,
