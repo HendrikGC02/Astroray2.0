@@ -124,9 +124,11 @@ $global:LASTEXITCODE = 1
   # in shard order; the exit code is the first non-zero one. Text, for the same reason as $timedText.
   $shardText = @'
 param([string]$file, [string[]]$argLines, [string]$capture)
+# An empty stdin file: python started with no console (inside a grouped job) and an inherited stdin never exits.
+$null = New-Item -ItemType File -Force "$capture.in"
 $ps = @()
 for ($i = 0; $i -lt $argLines.Count; $i++) {
-  $p = Start-Process -FilePath $file -ArgumentList $argLines[$i] -NoNewWindow -PassThru -RedirectStandardOutput "$capture.$i" -RedirectStandardError "$capture.$i.err"
+  $p = Start-Process -FilePath $file -ArgumentList $argLines[$i] -NoNewWindow -PassThru -RedirectStandardInput "$capture.in" -RedirectStandardOutput "$capture.$i" -RedirectStandardError "$capture.$i.err"
   $null = $p.Handle
   $ps += $p
 }
@@ -142,7 +144,7 @@ $global:LASTEXITCODE = $code
   $runShards = [scriptblock]::Create($shardText)
   # Shard counts: measured in task 212 (docs/BACKLOG.md Gate row). Every case and scene runs exactly once:
   # the bodies below sum the shards' own counts against the whole and fail on a difference.
-  $shardsCpuGate = 2
+  $shardsCpuGate = 3
   $shardsAnalytic = 2
 
   # Group: steps with the same Group, adjacent in this table, run concurrently (CPU device against GPU
@@ -220,13 +222,25 @@ $global:LASTEXITCODE = $code
     @{ Name = 'cpu gate tests'; Group = 'g3'; Tag = 'cpu'; Lock = $true; Identity = $exe; Keep = $true; Run = {
         $n = $shardsCpuGate
         $all = [int]((& $exe --tier=gate --count | Select-String -Pattern 'filters: (\d+)').Matches[0].Groups[1].Value)
-        $o = @(& $runShards $exe @(1..$n | ForEach-Object {
-            "--tier=gate --duration=true --first=$([int][math]::Floor(($_ - 1) * $all / $n) + 1) --last=$([int][math]::Floor($_ * $all / $n))" }) (Join-Path $root 'out/check/cpu-gate-tests'))
+        # Shard ends balance seconds, not case counts (the first 40 cases cost a sixth of the tier): cut where the
+        # cumulative seconds of the last run's per-case lines pass k/n of their sum; without a usable last run
+        # (missing, or another case count) equal counts. Either way the ends are strictly increasing up to $all.
+        $kf = Join-Path $root 'out/check/gate-steps/cpu-gate-tests.out'
+        $dur = if (Test-Path $kf) { @(Get-Content $kf | ForEach-Object { if ($_ -match '^\s*([0-9]+\.[0-9]+) s: ') { [double]$Matches[1] } }) } else { @() }
+        $ends = @()
+        if ($dur.Count -eq $all) {
+          $tot = ($dur | Measure-Object -Sum).Sum; $cum = 0.0; $k = 1
+          for ($j = 0; $j -lt $all -and $k -lt $n; $j++) { $cum += $dur[$j]; if ($cum -ge $tot * $k / $n) { $ends += ($j + 1); $k++ } }
+          $ends += $all
+        }
+        if ($ends.Count -ne $n) { $ends = @(1..$n | ForEach-Object { [int][math]::Floor($_ * $all / $n) }) }
+        $starts = @(0) + @($ends | Select-Object -First ($n - 1))
+        $o = @(& $runShards $exe @(0..($n - 1) | ForEach-Object { "--tier=gate --duration=true --first=$($starts[$_] + 1) --last=$($ends[$_])" }) (Join-Path $root 'out/check/cpu-gate-tests'))
         $code = $LASTEXITCODE
         $o
-        # doctest's own summary per shard: cases run = passed + failed; together they are the whole tier.
-        $ran = 0
-        foreach ($l in $o) { if ($l -match '^\[doctest\] test cases:\s+\d+ \|\s+(\d+) passed \|\s+(\d+) failed') { $ran += [int]$Matches[1] + [int]$Matches[2] } }
+        # One --duration line per case a shard ran (doctest's summary counts every case passing the filters,
+        # not the --first/--last range): together the shards run the whole tier.
+        $ran = @($o | Where-Object { $_ -match '^\s*[0-9]+\.[0-9]+ s: ' }).Count
         if ($ran -ne $all) { "FAIL cpu gate tests shards: $ran of $all cases ran"; $code = 1 }
         else { "shards: cpu gate tests $n shards, $ran of $all cases" }
         $global:LASTEXITCODE = $code } },
