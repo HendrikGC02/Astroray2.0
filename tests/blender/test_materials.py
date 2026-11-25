@@ -351,9 +351,9 @@ class TestMaterials(unittest.TestCase):
     def test_other_principled_inputs_are_reported_by_name(self):
         scene, plane, mat, world = new_scene()
         p = node(mat.node_tree, "ShaderNodeBsdfPrincipled")
-        p.inputs["Metallic"].default_value = 1.0
+        p.inputs["Coat Weight"].default_value = 1.0
         self.assertEqual(unsupported_strings(translate.translate_material(mat, keys.KeyMap(), OP)),
-                         ["Principled BSDF.Metallic"])
+                         ["Principled BSDF.Coat Weight"])
 
     def test_defaults_table_matches_blender(self):
         """A fresh Principled node reports nothing: the defaults table equals Blender's."""

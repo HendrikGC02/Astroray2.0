@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Addon lowerings I (0005 items 36, 40, 42; 0001 V15, 0007 V10): the Emission and Blackbody nodes,
-Principled Alpha and the implicit colour-to-float link reach the engine, and every node without a
-lowering renders magenta with exactly one report entry that names its type.
+"""Addon lowerings I and II (0005 items 36, 38, 40, 42; 0001 V15, 0007 V10): the Emission and Blackbody nodes,
+Principled Alpha, Metallic, the Mix Shader and the Transparent BSDF and the implicit colour-to-float link
+reach the engine, and every node without a lowering renders magenta with exactly one report entry that
+names its type.
 
 Needs the built engine (tools/build.ps1): graph cases read the emitter's arrays, render cases send the
 real graphs to a CPU session through the generated binding, as tests/blender/test_materials.py does
@@ -29,6 +30,9 @@ import test_materials as tm  # noqa: E402  (the module, not its TestCase)
 
 CSV = os.path.join(tm.GEN, "coverage.csv")
 EVIDENCE = os.path.join(support.ROOT, "out", "evidence", "165")
+EVIDENCE_166 = os.path.join(support.ROOT, "out", "evidence", "166")
+APPROXIMATED = tm.ABI.AR_REPORT_NODE_APPROXIMATED
+SLOT = tm.OPS.RECORD_SLOT
 UNSUPPORTED = tm.AR_REPORT_NODE_UNSUPPORTED
 SIZE_V10, SPP_V10 = (4, 4), 1
 # A node type of coverage.csv that cannot be created (the abstract base class of every shader node).
@@ -66,6 +70,80 @@ def only_shader(mat, idname):
     n = t.nodes.new(idname)
     t.links.new(n.outputs[0], tm.node(t, "ShaderNodeOutputMaterial").inputs["Surface"])
     return n
+
+
+def canon(em):
+    """The emitter as the compiler reads it: nodes with float32 parameters, and the links sorted."""
+    nodes = [(n["op"], [float(np.float32(v)) for v in n["f32"]], n["i32"], n["string"]) for n in tm.decode(em)]
+    return nodes, sorted(em.links)
+
+
+# A graph written by hand with the encoding of 0007 appendix `ar_graph_desc` (not through GraphEmitter.store or
+# child_params), in the order the lowering emits it: a child's nodes, then the mix's factor and BRANCH_MIX.
+def h_store(em, slot, child, src):
+    n = em.add("STORE_SLOT", i32=(SLOT[slot], child))
+    em.link(src, n, 0)
+
+
+def h_principled(em, child, rgb, rough, weight=1.0):
+    h_store(em, "base_color", child, em.const_rgb(rgb))
+    h_store(em, "specular_roughness", child, em.const_f32(rough))
+    h_store(em, "specular_weight", child, em.const_f32(weight))
+
+
+def h_emission(em, child, rgb, strength):
+    s, c = em.const_f32(strength), em.const_rgb(rgb)
+    e = em.add("EMIT_LE", i32=(child,))
+    em.link(c, e, 0)
+    em.link(s, e, 1)
+
+
+def h_mix(em, tag, a, b, factor):
+    f = em.const_f32(factor)
+    n = em.add("BRANCH_MIX", i32=(tag, a, b))
+    em.link(f, n, 0)
+
+
+def new_principled(mat, rgb, rough=0.5, level=0.5):
+    p = mat.node_tree.nodes.new("ShaderNodeBsdfPrincipled")
+    p.inputs["Base Color"].default_value = (*rgb, 1.0)
+    p.inputs["Roughness"].default_value = rough
+    p.inputs["Specular IOR Level"].default_value = level
+    return p
+
+
+def new_emission(mat, rgb, strength):
+    e = mat.node_tree.nodes.new("ShaderNodeEmission")
+    e.inputs["Color"].default_value = (*rgb, 1.0)
+    e.inputs["Strength"].default_value = strength
+    return e
+
+
+def new_transparent(mat, rgb=(1.0, 1.0, 1.0)):
+    n = mat.node_tree.nodes.new("ShaderNodeBsdfTransparent")
+    n.inputs["Color"].default_value = (*rgb, 1.0)
+    return n
+
+
+def new_mix(mat, a, b, fac):
+    """A Mix Shader of two shader nodes (or mixes) as the material's Surface."""
+    t = mat.node_tree
+    m = t.nodes.new("ShaderNodeMixShader")
+    m.inputs["Fac"].default_value = fac
+    t.links.new(a.outputs[0], m.inputs[1])
+    t.links.new(b.outputs[0], m.inputs[2])
+    t.links.new(m.outputs[0], tm.node(t, "ShaderNodeOutputMaterial").inputs["Surface"])
+    return m
+
+
+def empty_material(mat):
+    """The material without its default Principled, so a test builds the whole shader tree itself."""
+    mat.node_tree.nodes.remove(principled(mat))
+    return mat
+
+
+def lower(mat):
+    return tm.translate.translate_material(mat, tm.keys.KeyMap(), tm.OP)
 
 
 def srgb_png(path, rgb):
@@ -342,6 +420,239 @@ class TestLowering(unittest.TestCase):
         t.links.new(t.nodes.new("ShaderNodeTexCoord").outputs["UV"], p.inputs["Roughness"])
         self.assertEqual(tm.unsupported_strings(tm.translate.translate_material(mat, tm.keys.KeyMap(), tm.OP)),
                          ["Principled BSDF.Roughness"])
+
+    def test_mix_matches_hand_graph(self):
+        """A Mix Shader compiles to the words of the same graph written by hand with 0007's encoding: the
+        children's stores and emissions tagged by child, one BRANCH_MIX {tag, a, b} fed by the factor."""
+        red, blue, ems = (0.8, 0.1, 0.1), (0.1, 0.1, 0.8), (1.0, 0.5, 0.2)
+        cases = []
+
+        scene, plane, mat, world = tm.new_scene()
+        empty_material(mat)
+        new_mix(mat, new_principled(mat, red, 0.5), new_principled(mat, blue, 0.2), 0.3)
+        hand = tm.translate.GraphEmitter(tm.OP)
+        h_principled(hand, 0, red, 0.5)
+        h_principled(hand, 1, blue, 0.2)
+        h_mix(hand, 0, 0, 1, 0.3)
+        cases.append(("Mix(Principled, Principled, 0.3)", mat, hand))
+
+        scene, plane, mat, world = tm.new_scene()
+        empty_material(mat)
+        new_mix(mat, new_transparent(mat), new_principled(mat, red, 0.5), 0.4)
+        hand = tm.translate.GraphEmitter(tm.OP)
+        h_store(hand, "geometry_opacity", 0, hand.const_f32(0.0))
+        h_principled(hand, 1, red, 0.5)
+        h_mix(hand, 0, 0, 1, 0.4)
+        cases.append(("Mix(Transparent, Principled, 0.4)", mat, hand))
+
+        scene, plane, mat, world = tm.new_scene()
+        empty_material(mat)
+        new_mix(mat, new_emission(mat, ems, 2.0), new_principled(mat, red, 0.5), 0.5)
+        hand = tm.translate.GraphEmitter(tm.OP)
+        h_emission(hand, 0, ems, 2.0)
+        h_principled(hand, 1, red, 0.5)
+        h_mix(hand, 0, 0, 1, 0.5)
+        cases.append(("Mix(Emission, Principled, 0.5)", mat, hand))
+
+        for name, m, hand in cases:
+            with self.subTest(graph=name):
+                em = lower(m)
+                self.assertEqual(tm.unsupported_strings(em), [])
+                self.assertEqual(canon(em), canon(hand))
+        # Without a Mix the words are the ones a graph always had: no `child` parameter anywhere.
+        scene, plane, mat, world = tm.new_scene()
+        self.assertTrue(all(len(n["i32"]) == 1 for n in tm.decode(lower(mat)) if n["op"] == "STORE_SLOT"))
+
+    def test_mix_input_without_a_shader_is_reported(self):
+        scene, plane, mat, world = tm.new_scene()
+        empty_material(mat)
+        m = new_mix(mat, new_principled(mat, (1.0, 1.0, 1.0)), new_principled(mat, (0.0, 0.0, 0.0)), 0.5)
+        mat.node_tree.links.remove(m.inputs[2].links[0])
+        self.assertEqual(tm.unsupported_strings(lower(mat)), ["Mix Shader.Shader"])
+
+    def _frequency(self, build, want, label):
+        """Mean of the rendered Mix over the mean of its white child alone: the other children are black, so
+        the ratio is the frequency the white child is selected with, binomial over every sample."""
+        size, spp = (16, 16), 400
+        scene, plane, mat, world = tm.new_scene(size=size)
+        empty_material(mat)
+        white = new_principled(mat, (1.0, 1.0, 1.0))
+        mat.node_tree.links.new(white.outputs[0], tm.node(mat.node_tree, "ShaderNodeOutputMaterial").inputs["Surface"])
+        ref, entries, _ = tm.render(scene, plane, mat, world, size=size, spp=spp)
+        self.assertEqual([x for x in entries if x[0] == UNSUPPORTED], [])
+        a = float(ref[:, :, :3].mean())
+        self.assertAlmostEqual(a, 1.0, delta=0.01, msg="the white child is the furnace's lossless Principled")
+        mat.node_tree.nodes.remove(white)
+        build(mat)
+        img, entries, _ = tm.render(scene, plane, mat, world, size=size, spp=spp)
+        self.assertEqual([x for x in entries if x[0] == UNSUPPORTED], [])
+        got = float(img[:, :, :3].mean()) / a
+        se = (want * (1.0 - want) / (size[0] * size[1] * spp)) ** 0.5
+        print(f"RESULT mix {label}: selected {got:.5f} of {want} at {size[0] * size[1] * spp} samples, SE {se:.5f}")
+        self.assertLess(abs(got - want), 3.0 * se, f"{label}: {got} against {want}")
+
+    def test_mix_selection_frequency(self):
+        """Mix(white, black, 0.3) selects the white shader with probability 0.7: selected, never lerped."""
+        def build(mat):
+            new_mix(mat, new_principled(mat, (1.0, 1.0, 1.0)), new_principled(mat, (0.0, 0.0, 0.0), level=0.0), 0.3)
+        self._frequency(build, 0.7, "Mix(white, black, 0.3)")
+
+    def test_nested_mix(self):
+        """Mix(Mix(white, black, 0.5), black, 0.5): two BRANCH_MIX over three children, the inner one tag 1
+        named by the outer as -2; the white child is selected with probability 0.25. A float link into
+        the factor goes through COLOR_TO_F32."""
+        def build(mat):
+            def black():
+                return new_principled(mat, (0.0, 0.0, 0.0), level=0.0)
+            inner = new_mix(mat, new_principled(mat, (1.0, 1.0, 1.0)), black(), 0.5)
+            new_mix(mat, inner, black(), 0.5)
+        self._frequency(build, 0.25, "Mix(Mix(white, black, 0.5), black, 0.5)")
+        scene, plane, mat, world = tm.new_scene()
+        empty_material(mat)
+        build(mat)
+        em = lower(mat)
+        self.assertEqual(sorted(n["i32"] for n in tm.decode(em) if n["op"] == "BRANCH_MIX"), [[0, -2, 2], [1, 0, 1]])
+        self.assertEqual(sorted(n["i32"][1] for n in tm.decode(em) if n["op"] == "STORE_SLOT"),
+                         [0, 0, 0, 1, 1, 1, 2, 2, 2])
+        t = mat.node_tree
+        tex = t.nodes.new("ShaderNodeTexImage")
+        tex.image = bpy.data.images.new("Fac", 4, 4)
+        outer = tm.node(t, "ShaderNodeOutputMaterial").inputs["Surface"].links[0].from_node
+        t.links.new(tex.outputs["Color"], outer.inputs["Fac"])
+        em = lower(mat)
+        self.assertEqual(tm.unsupported_strings(em), [])
+        nodes = tm.decode(em)
+        outer_mix = next(i for i, n in enumerate(nodes) if n["op"] == "BRANCH_MIX" and n["i32"][0] == 0)
+        self.assertEqual(nodes[tm.inputs_of(em, outer_mix)[0]]["op"], "COLOR_TO_F32")
+
+    def test_transparent_folds_into_opacity(self):
+        """A white Transparent BSDF is geometry_opacity 0 and the world shows through; a coloured one is folded
+        by its mean and the compiler reports it NODE_APPROXIMATED once (0005 item 38)."""
+        scene, plane, mat, world = tm.new_scene()
+        only_shader(mat, "ShaderNodeBsdfTransparent")
+        em = lower(mat)
+        self.assertEqual(tm.unsupported_strings(em), [])
+        src = stores(em)[SLOT["geometry_opacity"]]
+        self.assertEqual((src["op"], src["f32"]), ("CONST_F32", [0.0]))
+        self.assertEqual(sorted(stores(em)), [SLOT["geometry_opacity"]])
+        img, entries, _ = tm.render(scene, plane, mat, world, size=(16, 12), spp=16)
+        self.assertEqual([x for x in entries if x[0] in (UNSUPPORTED, APPROXIMATED)], [])
+        np.testing.assert_allclose(tm.centre_rgb(img), [1.0, 1.0, 1.0], rtol=1e-3)
+        # Under a Mix, a coloured Transparent (opacity 1 - mean) is reported once, white never.
+        for rgb, count in (((1.0, 1.0, 1.0), 0), ((0.2, 0.5, 0.8), 1)):
+            with self.subTest(colour=rgb):
+                scene, plane, mat, world = tm.new_scene()
+                empty_material(mat)
+                new_mix(mat, new_transparent(mat, rgb), new_principled(mat, (0.8, 0.1, 0.1)), 0.4)
+                em = lower(mat)
+                self.assertEqual(tm.unsupported_strings(em), [])
+                first = next(n for n in tm.decode(em) if n["op"] == "CONST_F32")  # the opacity: child 0's only node
+                self.assertAlmostEqual(first["f32"][0], 1.0 - sum(rgb) / 3.0, places=6)
+                _, entries, _ = tm.render(scene, plane, mat, world, size=(16, 12), spp=16)
+                self.assertEqual([x for x in entries if x[0] == UNSUPPORTED], [])
+                self.assertEqual(len([x for x in entries if x[0] == APPROXIMATED]), count, entries)
+        # A colour from a texture has no constant mean: reported by name.
+        scene, plane, mat, world = tm.new_scene()
+        n = only_shader(mat, "ShaderNodeBsdfTransparent")
+        tex = mat.node_tree.nodes.new("ShaderNodeTexImage")
+        tex.image = bpy.data.images.new("Tc", 4, 4)
+        mat.node_tree.links.new(tex.outputs["Color"], n.inputs["Color"])
+        self.assertEqual(tm.unsupported_strings(lower(mat)), ["Transparent.Color"])
+
+    def test_metallic_reaches_the_record(self):
+        scene, plane, mat, world = tm.new_scene()
+        p = principled(mat)
+        slot = SLOT["base_metalness"]
+        self.assertNotIn(slot, stores(lower(mat)), "Metallic 0 stores nothing")
+        p.inputs["Metallic"].default_value = 1.0
+        em = lower(mat)
+        self.assertEqual(tm.unsupported_strings(em), [])
+        self.assertEqual((stores(em)[slot]["op"], stores(em)[slot]["f32"]), ("CONST_F32", [1.0]))
+        # Cycles' metal ignores Specular IOR Level and the engine's is scaled by 2L: reported, never approximated.
+        p.inputs["Specular IOR Level"].default_value = 0.8
+        self.assertEqual(tm.unsupported_strings(lower(mat)), ["Principled BSDF.Specular IOR Level"])
+        p.inputs["Specular IOR Level"].default_value = 0.5
+        p.inputs["Specular Tint"].default_value = (0.5, 0.5, 0.5, 1.0)
+        self.assertEqual(tm.unsupported_strings(lower(mat)), ["Principled BSDF.Specular Tint"])
+        p.inputs["Specular Tint"].default_value = (1.0, 1.0, 1.0, 1.0)
+        # A link goes through the float path (a colour becomes its luminance).
+        tex = mat.node_tree.nodes.new("ShaderNodeTexImage")
+        tex.image = bpy.data.images.new("Met", 4, 4)
+        mat.node_tree.links.new(tex.outputs["Color"], p.inputs["Metallic"])
+        em = lower(mat)
+        self.assertEqual(tm.unsupported_strings(em), [])
+        self.assertEqual(stores(em)[slot]["op"], "COLOR_TO_F32")
+        # In a Mix the store carries its child.
+        empty_material(mat)
+        metal = new_principled(mat, (1.0, 1.0, 1.0))
+        metal.inputs["Metallic"].default_value = 1.0
+        new_mix(mat, new_transparent(mat), metal, 0.5)
+        met = [n["i32"] for n in tm.decode(lower(mat)) if n["op"] == "STORE_SLOT" and n["i32"][0] == slot]
+        self.assertEqual(met, [[slot, 1]])
+        # Rendered, a rough white metal under a white world is the world (energy compensation, 163).
+        scene, plane, mat, world = tm.new_scene()
+        p = principled(mat)
+        p.inputs["Metallic"].default_value = 1.0
+        p.inputs["Roughness"].default_value = 0.3
+        img, entries, _ = tm.render(scene, plane, mat, world, size=(32, 24), spp=64)
+        self.assertEqual([x for x in entries if x[0] == UNSUPPORTED], [])
+        mean = float(img[:, :, :3].mean())
+        print(f"RESULT metallic plane mean {mean:.5f}")
+        self.assertGreaterEqual(mean, 0.99)
+        self.assertLessEqual(mean, 1.002)
+
+    def _sphere(self, scene, material):
+        """A smooth unit sphere at the origin."""
+        import bmesh
+
+        bm = bmesh.new()
+        bmesh.ops.create_uvsphere(bm, u_segments=48, v_segments=24, radius=1.0)
+        me = bpy.data.meshes.new("Ball")
+        bm.to_mesh(me)
+        bm.free()
+        me.polygons.foreach_set("use_smooth", [True] * len(me.polygons))
+        me.materials.append(material)
+        ob = bpy.data.objects.new("Ball", me)
+        scene.collection.objects.link(ob)
+        return ob
+
+    def test_mix_and_metal_evidence(self):
+        """The metallic sphere, a Mix(Transparent, red, 0.5) plane and a Mix(Emission, red, 0.5) plane beside
+        each other (out/evidence/166/mix_metal.png) and their means: the sphere is the white world, the Mix
+        planes are half the world or the emission plus half the red plane alone."""
+        red, ems, size, spp = (0.8, 0.1, 0.1), (1.0, 0.5, 0.2), (48, 36), 64
+        shots = {}
+        # Sphere: the plane is a white Transparent, so the sphere stands in the world alone.
+        scene, plane, mat, world = tm.new_scene(size=size)
+        only_shader(mat, "ShaderNodeBsdfTransparent")
+        metal = bpy.data.materials.new("Metal")
+        metal.use_nodes = True
+        p = principled(metal)
+        p.inputs["Metallic"].default_value = 1.0
+        p.inputs["Roughness"].default_value = 0.3
+        ball = self._sphere(scene, metal)
+        bpy.context.view_layer.update()
+        shots["metal"] = tm.render(scene, plane, mat, world, extra=((ball, metal),), size=size, spp=spp)[0]
+        for name in ("red", "transparent", "emission"):
+            scene, plane, mat, world = tm.new_scene(size=size)
+            empty_material(mat)
+            r = new_principled(mat, red)
+            if name == "red":
+                mat.node_tree.links.new(r.outputs[0], tm.node(mat.node_tree, "ShaderNodeOutputMaterial").inputs["Surface"])
+            elif name == "transparent":
+                new_mix(mat, new_transparent(mat), r, 0.5)
+            else:
+                new_mix(mat, new_emission(mat, ems, 2.0), r, 0.5)
+            img, entries, _ = tm.render(scene, plane, mat, world, size=size, spp=spp)
+            self.assertEqual([x for x in entries if x[0] == UNSUPPORTED], [])
+            shots[name] = img
+        means = {k: tm.centre_rgb(v) for k, v in shots.items()}
+        print(f"RESULT mix_metal means {means}")
+        np.testing.assert_allclose(means["metal"], [1.0, 1.0, 1.0], atol=0.012)
+        np.testing.assert_allclose(means["transparent"], 0.5 * np.ones(3) + 0.5 * means["red"], atol=0.02)
+        np.testing.assert_allclose(means["emission"], 0.5 * np.array([2.0, 1.0, 0.4]) + 0.5 * means["red"], atol=0.02)
+        srgb_png(os.path.join(EVIDENCE_166, "mix_metal.png"),
+                 np.concatenate([shots[k][:, :, :3] for k in ("metal", "transparent", "emission")], axis=1))
 
     def _v10_rows(self):
         if not os.path.exists(CSV):
