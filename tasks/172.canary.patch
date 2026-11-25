@@ -103,20 +103,21 @@ index 900fbdc2..ffe372d0 100644
          out = std::make_shared<const WorldOutput>(compile_world(*world_, graph.get(), table_, &means, &slots));
        if (world_out_) old_world = world_out_->subject;
 diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
-index 9e547072..3a7439de 100644
+index a223a0b7..d9d99be2 100644
 --- a/src/host/scene/scene_tables.cpp
 +++ b/src/host/scene/scene_tables.cpp
-@@ -424,17 +424,17 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
-   sd.material_headers = as<ar::MaterialHeader>(at(TableId::MATERIAL_HEADERS));
-   // The header table's last entry is the default material, one past the counted headers.
-   sd.material_header_count = cnt(TableId::MATERIAL_HEADERS) ? cnt(TableId::MATERIAL_HEADERS) - 1u : 0u;
-   n.material_program_count = mats ? mats->program_count : 0u;
+@@ -473,17 +473,17 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
    sd.material_programs = as<uint32_t>(at(TableId::MATERIAL_PROGRAMS));
    sd.material_constants = as<ar::ConstantBlock>(at(TableId::MATERIAL_CONSTANTS));
    sd.material_pass_index = as<uint32_t>(at(TableId::MATERIAL_PASS_INDEX));
    sd.material_spectra = as<float>(at(TableId::MATERIAL_SPECTRA)), sd.material_spectra_count = cnt(TableId::MATERIAL_SPECTRA);
+ <<<<<<< HEAD
+   sd.medium_descs = as<ar::MediumDesc>(at(TableId::MEDIA)), sd.medium_count = cnt(TableId::MEDIA);
+   sd.world_program = as<uint32_t>(at(TableId::WORLD_PROGRAM));
+ =======
 -  sd.world_program = as<uint32_t>(at(TableId::WORLD_PROGRAM)), sd.world_program_words = cnt(TableId::WORLD_PROGRAM);
 +  sd.world_program = nullptr, sd.world_program_words = cnt(TableId::WORLD_PROGRAM);
+ >>>>>>> 467233bb (172: tests for the world program (shade_background, compiler outputs, kg_builder, upload rows), GPU agreement case)
    sd.world_constants = as<ar::ConstantBlock>(at(TableId::WORLD_CONSTANTS));
    sd.accel = n.accel->kernel_accel();
    ar::Rgb2SpecTable jt{};
@@ -124,7 +125,6 @@ index 9e547072..3a7439de 100644
    jt.z_nodes = as<float>(at(TableId::RGB2SPEC_NODES)), jt.coeffs = as<float>(at(TableId::RGB2SPEC_COEFFS));
    ar::LightSamplerView lv{as<ar::AliasBin>(at(TableId::LIGHT_BINS)), as<uint32_t>(at(TableId::LIGHT_BIN_LIGHT)),
                            as<float>(at(TableId::LIGHT_PMF)), cnt(TableId::LIGHT_BINS), cnt(TableId::LIGHTS)};
-   const ar::EDielTable et{as<float>(at(TableId::E_DIEL))};
 diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
 index 0590df1a..f092e3e9 100644
 --- a/src/kernel/stages/shade_background.h
