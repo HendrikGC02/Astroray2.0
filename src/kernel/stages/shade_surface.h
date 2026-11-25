@@ -193,8 +193,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   Real3 P{}, Ng{}, N{}, wo{};
   // The shadow item is written into the reserved slot as soon as its segment is known, so nothing
   // of it stays live across the light point's VM run. 0: no item; 1: an item with its whole
-  // contribution; 2: an item whose contribution still lacks a triangle's deferred Le and s (phase
-  // 1); 3: one that lacks the world program's Le (its strength is already in).
+  // contribution (an environment world's included: shade_shadow multiplies its Le in on delivery);
+  // 2: an item whose contribution still lacks a triangle's deferred Le and s (phase 1).
   uint32_t nee_state = 0;
   uint32_t sh = 0;  // the reserved shadow slot, read when an item is written
   // Where ctx is built: the path's hit in phase 0, the light sample's point in phase 1.

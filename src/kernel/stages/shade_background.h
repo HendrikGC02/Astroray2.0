@@ -55,7 +55,7 @@ AR_FN const LightRecord* world_light(const KernelGlobals& kg) {
 
 // The geometry of a background shade for a ray escaping along unit `dir`: P is the direction, N,
 // Ng and wo its negative, and no surface (uv, facing and ids 0). Ray type, depth and lanes are left
-// as they are, so shade_surface's NEE sets it over the context it already holds.
+// as they are.
 AR_FN void world_shade_geometry(Real3 dir, ShadeContext* ctx) {
   ctx->P = dir;
   ctx->N = ctx->Ng = ctx->wo = -dir;
@@ -74,8 +74,7 @@ AR_FN ShadeContext world_shade_context(Real3 dir, const Lambda& lam) {
 
 // The world program and its constant block; false when the scene holds no program (the entry table
 // is four words; a shorter one is a host bug, not a world). Its emission entry is word 2, as a
-// material's. shade_surface reads the world through this for NEE (its one interpreter site runs the
-// entry), so both evaluations of the world read the same program and block.
+// material's.
 AR_FN bool world_program_of(const SceneData& s, const uint32_t** prog, const ConstantBlock** block) {
   if (s.world_program == nullptr || s.world_constants == nullptr || s.world_program_words < 4u) return false;
   *prog = s.world_program;
@@ -85,9 +84,9 @@ AR_FN bool world_program_of(const SceneData& s, const uint32_t** prog, const Con
 
 // The world program's radiance in `ctx`, unscaled: as a material's emission entry, the block's own
 // emission first (0 for a program world, whose emissions are all code), then the entry adds its
-// terms. The evaluation of the world program for escaped rays here and for the environment bake
-// (bake_environment.h); shade_surface's NEE runs the same block and entry at its own site. False
-// when the scene holds no program or the VM fails.
+// terms. The one evaluation of the world program: for escaped rays here, for NEE items toward an
+// environment world on delivery (shade_shadow.h) and for the environment bake (bake_environment.h).
+// False when the scene holds no program or the VM fails.
 AR_FN bool world_program_radiance(const SceneData& s, const SceneTables& tables, const ShadeContext& ctx, Spec* le) {
   const uint32_t* prog = nullptr;
   const ConstantBlock* block = nullptr;

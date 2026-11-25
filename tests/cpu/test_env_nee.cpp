@@ -6,7 +6,9 @@
 // the sampler's pmf of a sampled light is its pmf; 1e5 draws follow the compensated function
 // (chi-squared, gate); and through the stages (shade_surface's NEE item, shade_shadow's delivery of
 // the world program's radiance, shade_background's escaped ray weighted with the same compensated
-// pdf) a white Lambertian plane under a uniform program world of radiance 0.5 reflects 0.5 (gate).
+// pdf) a white Lambertian plane under a uniform program world of radiance 0.5 reflects 0.5, and
+// under a world peaked toward +z, whose compensated and plain tables differ, with a record strength
+// != 1, reflects its quadrature (gate).
 // Ref: docs/decisions/0004-integrator.md D1, D7, D10, D11 and Verification D7/D11 (ruling 88's rule);
 // third_party/_cache/refs/pbrt-v4-092b23a47ad4/src/pbrt/lights.h ImageInfiniteLight::SampleLi and
 // lights.cpp PDF_Li, Phi (Apache-2.0); Karlik et al. 2019 (MIS compensation); tests/cpu/test_env_table.cpp
@@ -131,14 +133,34 @@ struct Graph {
   std::vector<ar_graph_node> nodes;
   std::vector<ar_graph_link> links;
   std::vector<float> f;
-  int add(ar::Op op, std::vector<float> fp) {
+  std::vector<int32_t> i;
+  int add(ar::Op op, std::vector<float> fp, std::vector<int32_t> ip = {}) {
     ar_graph_node n = {};
     n.op = uint32_t(op);
     n.f32_first = uint32_t(f.size()), n.f32_count = uint32_t(fp.size());
+    n.i32_first = uint32_t(i.size()), n.i32_count = uint32_t(ip.size());
     f.insert(f.end(), fp.begin(), fp.end());
+    i.insert(i.end(), ip.begin(), ip.end());
     nodes.push_back(n);
     return int(nodes.size()) - 1;
   }
+  int op2(ar::Op op, int a, int b) {
+    const int n = add(op, {});
+    links.push_back({uint32_t(a), 0u, uint32_t(n), 0u});
+    links.push_back({uint32_t(b), 0u, uint32_t(n), 1u});
+    return n;
+  }
+  // Emission of (1, 1, 1) times kFloor plus w^8, w = (1 + z) / 2 of the shading position: in a world
+  // program the position is the escaping direction, so the world is brightest toward +z.
+  void emit_peaked() {
+    emit({1.0f, 1.0f, 1.0f}, kFloor);
+    const int z = add(ar::Op::CHANNEL_F32X3, {}, {2});
+    links.push_back({uint32_t(add(ar::Op::LOAD_CTX_P, {})), 0u, uint32_t(z), 0u});
+    const int w = op2(ar::Op::ADD_F32, op2(ar::Op::MUL_F32, z, add(ar::Op::CONST_F32, {0.5f})), add(ar::Op::CONST_F32, {0.5f}));
+    const int w2 = op2(ar::Op::MUL_F32, w, w), w4 = op2(ar::Op::MUL_F32, w2, w2), w8 = op2(ar::Op::MUL_F32, w4, w4);
+    op2(ar::Op::EMIT_LE, add(ar::Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), w8);
+  }
+  static constexpr float kFloor = 0.1f;
   void emit(std::vector<float> rgb, float strength) {
     const int c = add(ar::Op::CONST_F32X3, rgb), s = add(ar::Op::CONST_F32, {strength});
     const int e = add(ar::Op::EMIT_LE, {});
@@ -148,7 +170,8 @@ struct Graph {
   ar_graph_desc desc() const {
     ar_graph_desc d = {};
     d.node_count = uint32_t(nodes.size()), d.link_count = uint32_t(links.size()), d.f32_count = uint32_t(f.size());
-    d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data();
+    d.i32_count = uint32_t(i.size());
+    d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data(), d.params_i32 = i.data();
     return d;
   }
 };
@@ -160,7 +183,9 @@ constexpr ar_key kMesh = 100, kWorldGraph = 40;
 // emission terms do not fold into the constant block), so the scene table build bakes it and the light
 // table makes it WORLD_ENV. Every slot hits the quad's first triangle from above with throughput 1 and
 // r_u 1; nothing else is in the scene, so every shadow item is unoccluded and every continuation
-// escapes.
+// escapes. `peaked`: the world is Graph::emit_peaked's instead, whose compensated table differs from
+// the plain one, and the world record's strength is 3, as a radiance scale s != 1 makes it (gate
+// builds pin s to 1), so NEE must carry the strength as the escaped ray does.
 struct Rig {
   ContextState sctx;
   Scene scene{sctx, SceneConfig{2, {}, {}}};
@@ -189,16 +214,23 @@ struct Rig {
   std::vector<Real3> sh_o, sh_d;
   std::vector<Real> sh_tmax;
   std::vector<ar::Spec> sh_contrib, sh_lambda;
+  std::vector<ar::LightRecord> lights;
   uint32_t n;
 
-  explicit Rig(uint32_t slots) : n(slots) {
+  explicit Rig(uint32_t slots, bool peaked = false) : n(slots) {
     scene.meshes = std::make_shared<MeshStore>();
     scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
-    scene.table_cache().bake_size = 16;  // a uniform world: the table is uniform at any size
+    // Uniform: the table is uniform at any size. Peaked: any table is unbiased; 32^2 cells resolve
+    // the peak, so the compensated table is non-zero only toward +z.
+    scene.table_cache().bake_size = peaked ? 32 : 16;
     commit([&](Edit& e) {
       Graph g;
-      g.emit({1.0f, 1.0f, 1.0f}, 0.25f);
-      g.emit({1.0f, 1.0f, 1.0f}, 0.25f);
+      if (peaked) {
+        g.emit_peaked();
+      } else {
+        g.emit({1.0f, 1.0f, 1.0f}, 0.25f);
+        g.emit({1.0f, 1.0f, 1.0f}, 0.25f);
+      }
       const ar_graph_desc d = g.desc();
       REQUIRE(scene.materials->set_graph(e, kWorldGraph, &d) == AR_OK);
       ar_world_desc w = {};
@@ -275,6 +307,11 @@ struct Rig {
     REQUIRE(kg.session.features.env_world);
     kg.path = &path;
     kg.shadow = &shadow;
+    if (peaked) {
+      lights = set->lights->lights;
+      lights[set->lights->world_light].strength *= 3.0f;
+      kg.lights = lights.data();
+    }
     // The default material, made a white Lambertian (base colour 1, no specular, no emission).
     sd = *kg.scene;
     blocks.assign(sd.material_constants, sd.material_constants + kg.material_constant_count);
@@ -342,14 +379,15 @@ struct Rig {
     for (uint32_t i : sh_queue) CHECK(sh_flags[i] == ar::ITEM_WORLD_LE);  // every item is toward the world
     return std::vector<float>(fd.slot_L, fd.slot_L + size_t(n) * 4);
   }
-  // The world's radiance at the lanes of slot i, times the record's strength (which carries s), as
-  // shade_background adds it for an escaped ray: the program is uniform, so any direction serves.
+  // The world's radiance toward +z at the lanes of slot i, times the record's strength (which
+  // carries s), as shade_background adds it for an escaped ray (the uniform world's is the same in
+  // every direction).
   ar::Spec world_le(uint32_t i) const {
     ar::Lambda lam;
     for (int l = 0; l < ar::kLanes; ++l) lam.nm[l] = lambda_t[i].v[l];
     ar::Spec e = ar::spec_fill(Real(0));
     REQUIRE(ar::world_program_radiance(*kg.scene, *kg.tables, ar::world_shade_context(Real3{0, 0, 1}, lam), &e));
-    return e * Real(set->lights->lights[set->lights->world_light].strength);
+    return e * Real(kg.lights[set->lights->world_light].strength);
   }
 };
 
@@ -562,6 +600,48 @@ TEST_CASE("env_nee/constant world half") {
               res.mean, res.se, res.z, ratio.size(), world_half);
   CHECK_MESSAGE(res.pass, res.message);
   CHECK(std::fabs(res.mean - 1.0) <= 3.0 * res.se);
+}
+
+TEST_CASE("env_nee/peaked world reflects its integral") {
+  // A white Lambertian plane facing +z under the world kFloor + ((1 + z) / 2)^8 (Graph::emit_peaked):
+  // its compensated table holds mass only toward +z and its plain one everywhere, so NEE (compensated)
+  // and the escaped ray's weight must read the same table or the dim directions are counted wrongly.
+  // Reflected radiance = (1 / pi) integral of L cos over the upper hemisphere = kFloor + 2 I, with
+  // I = integral over z in [0, 1] of ((1 + z) / 2)^8 z dz (dw = dphi dz), by midpoint quadrature; per
+  // sample, film slot over the world's radiance toward +z (1 + kFloor) has mean (kFloor + 2 I) /
+  // (1 + kFloor). The world record's strength is 3, so NEE without it reads low.
+  // Ref: Lambert's cosine law; Veach 1997 ch. 9 (the balance heuristic is unbiased only when both
+  // strategies' weights use the same two densities); docs/decisions/0004-integrator.md D11.
+  const st::Run run = st::begin("env_nee/peaked world reflects its integral", st::gate_family());
+  Rig rig(1024, true);
+  REQUIRE(rig.set->lights->env);
+  const EnvDistribution& pl = rig.set->lights->env->plain;
+  const EnvDistribution& co = rig.set->lights->env->compensated;
+  size_t differ = 0;
+  for (size_t k = 0; k < pl.func.size(); ++k) differ += (pl.func[k] / pl.func_integral) != (co.func[k] / co.func_integral);
+  CHECK(differ > pl.func.size() / 2);  // the two tables differ in most cells
+  double integral = 0.0;
+  const int q = 100000;
+  for (int k = 0; k < q; ++k) {
+    const double z = (k + 0.5) / q, w = 0.5 * (1.0 + z);
+    integral += std::pow(w, 8) * z / q;
+  }
+  const double floor_l = double(Graph::kFloor), truth = (floor_l + 2.0 * integral) / (1.0 + floor_l);
+  std::mt19937_64 rng(run.seed);
+  std::vector<double> ratio;
+  for (uint32_t p = 0; p < 16; ++p) {
+    const std::vector<float> slots = rig.pass(p, rng);
+    for (uint32_t i = 0; i < rig.n; ++i) {
+      const ar::Spec le = rig.world_le(i);
+      double r = 0.0;
+      for (int l = 0; l < ar::kLanes; ++l) r += double(slots[4u * rig.sample_id[i] + uint32_t(l)]) / double(le.v[l]);
+      ratio.push_back(r / ar::kLanes);
+    }
+  }
+  const st::EnergyResult res = st::energy_test(run, ratio, truth);
+  std::printf("env_nee peaked world: reflected / radiance toward +z %.5f +- %.5f, truth %.5f (z %.2f, %zu samples)\n", res.mean,
+              res.se, truth, res.z, ratio.size());
+  CHECK_MESSAGE(res.pass, res.message);
 }
 
 }  // TEST_SUITE("gate")
