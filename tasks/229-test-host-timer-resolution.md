@@ -15,3 +15,4 @@ Budget: gate +0 s, fast +0.1 s at most (stop and ask above 0.3 s); kernel rows: 
 Depends on: none. Lands before 210 and 223 (their gates fail on these cases). Collisions: tests/cpu main with nothing open; test_batching.cpp with nothing open.
 Size: S (about 30 lines and one test); stop and report at 2x.
 Progress:
+- 2026-11-25 step 1 stopped for the lead: tests/cpu/test_batching.cpp already holds an in-case timeBeginPeriod(1) (MsTimer, since task 130) for both cases; with it they pass 5/5 alone and gate passed once (226 s wall incl. waits); without it they fail exactly as reported (gap 31.3 ms, cancel +15.6 ms, Sleep(1) 15.4 ms). No code changed.
