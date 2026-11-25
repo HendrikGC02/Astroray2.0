@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// shade_background: a camera path that left the scene sees the constant world. It adds
+// shade_background: a camera path that left the scene sees the world. It adds
 // Le(lambda_t) * beta, MIS-weighted against NEE of the world (integrator/mis.h, 0004 D1), to the
 // sample's slot and ends the path ESCAPED. After a non-delta bounce the weight uses
 // pmf(ctx_prev, world) pdf_li(ctx_prev, wi) from the previous vertex's context; at the first
@@ -14,9 +14,12 @@
 // entry run on this ray, times the record's strength (which carries s and nothing else). The context
 // is the one Cycles builds for a background shade: P is the ray direction and N, Ng and wo are its
 // negative, so an Environment Texture (TEX_ENVIRONMENT over LOAD_CTX_P) reads the direction the ray
-// escaped along. The record's importance is 0, so p_light above is 0 and the weight is 1 until the
-// world is sampled (0005 item 32). A program that cannot run (a missing table or a VM error) makes
-// the sample invalid, like a non-finite Le.
+// escaped along. A program world whose environment table the host baked is a WORLD_ENV light:
+// NEE samples its MIS-compensated table and pdf_li here reads the same compensated pdf
+// (light/world_env.h, 0004 D11), so both strategies weigh with one density. A program world with
+// no table (a black world) has importance 0, so p_light is 0 and the weight is 1 (0005 item 32).
+// A program that cannot run (a missing table or a VM error) makes the sample invalid, like a
+// non-finite Le.
 // Ref: docs/decisions/0004-integrator.md D5, D6 (world row), D28; 0002 D8 (shade_background);
 // docs/decisions/0005-material-model.md item 32;
 // Cycles kernel/integrator/shade_background.h (Apache-2.0) for the stage structure and
@@ -60,18 +63,29 @@ AR_FN ShadeContext world_shade_context(Real3 dir, const Lambda& lam) {
   return ctx;
 }
 
+// The world program and its constant block; false when the scene holds no program (the entry table
+// is four words; a shorter one is a host bug, not a world). Its emission entry is word 2, as a
+// material's. shade_surface reads the world through this for NEE (its one interpreter site runs the
+// entry), so both evaluations of the world read the same program and block.
+AR_FN bool world_program_of(const SceneData& s, const uint32_t** prog, const ConstantBlock** block) {
+  if (s.world_program == nullptr || s.world_constants == nullptr || s.world_program_words < 4u) return false;
+  *prog = s.world_program;
+  *block = s.world_constants;
+  return true;
+}
+
 // The world program's radiance in `ctx`, unscaled: as a material's emission entry, the block's own
 // emission first (0 for a program world, whose emissions are all code), then the entry adds its
-// terms. The one evaluation of the world program, for escaped rays here and for the environment bake
-// (bake_environment.h). False when the scene holds no program (the entry table is four words; a
-// shorter one is a host bug, not a world) or the VM fails.
+// terms. The evaluation of the world program for escaped rays here and for the environment bake
+// (bake_environment.h); shade_surface's NEE runs the same block and entry at its own site. False
+// when the scene holds no program or the VM fails.
 AR_FN bool world_program_radiance(const SceneData& s, const SceneTables& tables, const ShadeContext& ctx, Spec* le) {
-  if (s.world_program == nullptr || s.world_constants == nullptr || s.world_program_words < 4u) return false;
-  const ConstantBlock& block = s.world_constants[0];
-  Spec e = resolve_slot<SpectrumSemantic::ILLUMINANT>(block.emission_color, ctx.lambda_t, tables.observer, s.material_spectra) *
-           Real(block.emission_luminance);
+  const uint32_t* prog = nullptr;
+  const ConstantBlock* block = nullptr;
+  if (!world_program_of(s, &prog, &block)) return false;
+  Spec e = resolve_slot<SpectrumSemantic::ILLUMINANT>(block->emission_color, ctx.lambda_t, tables.observer, s.material_spectra) *
+           Real(block->emission_luminance);
   VmRegs regs;
-  const uint32_t* prog = s.world_program;
   if (run_entry(prog, load_ro(prog + 2), &regs, ctx, tables, nullptr, &e) != VmStatus::OK) return false;
   *le = e;
   return true;
@@ -115,7 +129,7 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
       const LightSampleContext prev = prev_light_context(kg, slot);
       const Real3 wi = normalize(ps_ray_d(kg, slot));
       p_light = light_sampler_pmf(*kg.light_sampler, prev, kg.world_light) *
-                light_pdf_li(*world, prev, wi, LightHit{prev.p, prev.n_geom});
+                light_pdf_li(*world, prev, wi, LightHit{prev.p, prev.n_geom}, kg.env);
     }
     Spec le = spec_fill(Real(0));
     const bool ran = world_radiance(kg, *world, slot, lam, &le);

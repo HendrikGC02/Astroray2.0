@@ -16,6 +16,7 @@
 #include "core/real.h"
 #include "core/spectrum.h"
 #include "core/vec.h"
+#include "light/environment_table.h"
 #include "portability.h"
 #include "sched/step_table.h"
 #include "state/stage.h"
@@ -132,6 +133,11 @@ struct KernelGlobals {
   uint32_t light_index_words;
   // Last member so the offsets the CUDA device reads stay put; the baker writes it in place.
   EnvBake env_bake = {};
+  // The world's environment importance table (0004 D11), views into the scene tables' ENV_TABLE:
+  // [0] the plain distribution, [1] the MIS-compensated one (light/world_env.h kEnvPlain,
+  // kEnvCompensated). n = 0 in both when the scene has no baked world. Last members so the offsets
+  // the CUDA device reads stay put.
+  EnvTableView env[2] = {};
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is

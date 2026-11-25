@@ -411,21 +411,36 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
   float uc = float(camera_path_draw(kg, sample, event_dim(ps_event_index(kg, slot), EV_LOBE_CHOICE)));
   Real alpha = Real(1);
   for (uint32_t phase = 0;; ++phase) {
-    if (!shade_context_geometry(kg, g_inst, g_prim, g_bary, g_dir, &ctx)) {
-      sample_mark_invalid(kg, sample);
-      path_end(kg, slot, Term::INVALID);
-      return;
+    // The world program's phase 1 for an environment world, as stages/shade_surface.h.
+    const bool world_phase = nee_state == 3u;
+    const ConstantBlock* block = nullptr;
+    const uint32_t* prog = nullptr;
+    bool program = true;
+    if (world_phase) {
+      ShadeContext w = world_shade_context(g_dir, ctx.lambda_t);
+      w.ray_type = ctx.ray_type;
+      for (int i = 0; i < 6; ++i) w.depth[i] = ctx.depth[i];
+      ctx = w;
+      ok = ok && world_program_of(s, &prog, &block);
+    } else {
+      if (!shade_context_geometry(kg, g_inst, g_prim, g_bary, g_dir, &ctx)) {
+        sample_mark_invalid(kg, sample);
+        path_end(kg, slot, Term::INVALID);
+        return;
+      }
+      mat = hit_material_id(kg, g_inst, g_prim);
+      if (ok) {
+        const MaterialHeader* hp = s.material_headers + mat;
+        const uint32_t mflags = load_ro(&hp->flags);
+        block = s.material_constants + load_ro(&hp->const_offset);
+        prog = s.material_programs + load_ro(&hp->program_offset);
+        program = phase == 0u ? (mflags & CONSTANT_SURFACE) == 0u : (mflags & CONSTANT_EMISSION) == 0u;
+      }
     }
-    mat = hit_material_id(kg, g_inst, g_prim);
     if (ok) {
-      const MaterialHeader* hp = s.material_headers + mat;
-      const uint32_t mflags = load_ro(&hp->flags);
-      const ConstantBlock& block = s.material_constants[load_ro(&hp->const_offset)];
-      if (phase == 0u) resolve_constant_record(block, ctx, obs, s.material_spectra, &rec);
-      le = resolve_slot<SpectrumSemantic::ILLUMINANT>(block.emission_color, ctx.lambda_t, obs, s.material_spectra) *
-           Real(block.emission_luminance);
-      const uint32_t* prog = s.material_programs + load_ro(&hp->program_offset);
-      const bool program = phase == 0u ? (mflags & CONSTANT_SURFACE) == 0u : (mflags & CONSTANT_EMISSION) == 0u;
+      if (phase == 0u) resolve_constant_record(*block, ctx, obs, s.material_spectra, &rec);
+      le = resolve_slot<SpectrumSemantic::ILLUMINANT>(block->emission_color, ctx.lambda_t, obs, s.material_spectra) *
+           Real(block->emission_luminance);
       const uint32_t entry = program ? load_ro(prog + (phase == 0u ? 0u : 2u)) : 0u;
       ok = run_entry_100(prog, entry, &regs, ctx, *kg.tables, phase == 0u ? &rec : nullptr, &le,
                          phase == 0u ? &uc : nullptr) == VmStatus::OK;
@@ -479,20 +494,21 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     if (!(sl.pmf > Real(0))) break;
     const LightRecord& lr = kg.lights[sl.light];
     const Real2 ul{camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_U)), camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_V))};
-    const LightLiSample ls = light_sample_li(lr, lctx, ul, ctx.lambda_t, obs);
+    const LightLiSample ls = light_sample_li(lr, lctx, ul, ctx.lambda_t, obs, kg.env);
     if (!(ls.pdf > Real(0))) break;
     const Frame fr = frame_from_normal_tangent(N, rec.geometry_tangent);
     const Real3 wo_l = to_local(fr, wo);
     const LobeEval ev = bsdf_eval(rec, prep_ctx(rec, ar::abs(wo_l.z)), ctx.lambda_t, wo_l, to_local(fr, ls.wi));
     Spec nee = ps_beta(kg, slot) * ev.f * (abs_dot(ls.wi, N) * mis_nee_scale(ps_r_u(kg, slot), sl.pmf * ls.pdf, ev.pdf, ls.delta));
+    const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
     if (!ls.deferred_le) nee *= ls.Le;
+    else if (!triangle) nee *= Real(lr.strength);
     if (!is_finite(nee)) {
       sample_mark_invalid(kg, sample);
       path_end(kg, slot, Term::INVALID);
       return;
     }
     if (!(max_lane(nee) > Real(0))) break;
-    const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
     ShadowSegment seg;
     if (ls.infinite) seg = ShadowSegment{offset_ray_origin(P, Ng, ls.wi), ls.wi, Real(kShadowUnbounded)};
     else if (triangle) seg = shadow_segment(P, Ng, ls.p_light, tri_normal(lr));
@@ -504,15 +520,18 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     sh_contribution(kg, sh) = nee;
     sh_target(kg, sh) = sample;
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
-    nee_state = ls.deferred_le ? 2u : 1u;
+    nee_state = !ls.deferred_le ? 1u : (triangle ? 2u : 3u);
     if (!ls.deferred_le) break;
-    // Phase 1: the light's emission entry at the sampled point, in the same register file.
-    g_inst = tri_instance(lr), g_prim = tri_index(lr);
-    g_bary = triangle_barycentrics(tri_vertex(lr, 0), tri_vertex(lr, 1), tri_vertex(lr, 2), ls.p_light);
+    // Phase 1: the light's emission entry at the sampled point, or the world program along wi, in
+    // the same register file.
+    if (triangle) {
+      g_inst = tri_instance(lr), g_prim = tri_index(lr);
+      g_bary = triangle_barycentrics(tri_vertex(lr, 0), tri_vertex(lr, 1), tri_vertex(lr, 2), ls.p_light);
+    }
     g_dir = ls.wi;
   }
-  if (nee_state == 2u) {
-    const Spec nee = sh_contribution(kg, sh) * le * radiance_scale(kg);
+  if (nee_state >= 2u) {
+    const Spec nee = sh_contribution(kg, sh) * le * (nee_state == 2u ? radiance_scale(kg) : Real(1));
     if (!ok || !is_finite(nee)) {
       sample_mark_invalid(kg, sample);
       path_end(kg, slot, Term::INVALID);
