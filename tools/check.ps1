@@ -124,28 +124,40 @@ $global:LASTEXITCODE = 1
   # in shard order; the exit code is the first non-zero one. Text, for the same reason as $timedText.
   $shardText = @'
 param([string]$file, [string[]]$argLines, [string]$capture)
-# An empty stdin file: python started with no console (inside a grouped job) and an inherited stdin never exits.
-$null = New-Item -ItemType File -Force "$capture.in"
+# A unique name per run, so shards a failed run left behind cannot hold the next run's files.
+$capture = "$capture-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
 $ps = @()
-for ($i = 0; $i -lt $argLines.Count; $i++) {
-  $p = Start-Process -FilePath $file -ArgumentList $argLines[$i] -NoNewWindow -PassThru -RedirectStandardInput "$capture.in" -RedirectStandardOutput "$capture.$i" -RedirectStandardError "$capture.$i.err"
-  $null = $p.Handle
-  $ps += $p
-}
 $code = 0
-for ($i = 0; $i -lt $ps.Count; $i++) {
-  $ps[$i].WaitForExit()
-  if ($ps[$i].ExitCode -ne 0 -and $code -eq 0) { $code = $ps[$i].ExitCode }
-  Get-Content "$capture.$i"
-  Get-Content "$capture.$i.err"
+try {
+  # An empty stdin file: python started with no console (inside a grouped job) and an inherited stdin never exits.
+  $null = New-Item -ItemType File -Force "$capture.in"
+  for ($i = 0; $i -lt $argLines.Count; $i++) {
+    $p = Start-Process -FilePath $file -ArgumentList $argLines[$i] -NoNewWindow -PassThru -RedirectStandardInput "$capture.in" -RedirectStandardOutput "$capture.$i" -RedirectStandardError "$capture.$i.err"
+    $null = $p.Handle
+    $ps += $p
+  }
+  for ($i = 0; $i -lt $ps.Count; $i++) {
+    $ps[$i].WaitForExit()
+    if ($ps[$i].ExitCode -ne 0 -and $code -eq 0) { $code = $ps[$i].ExitCode }
+    Get-Content "$capture.$i"
+    Get-Content "$capture.$i.err"
+  }
+} catch {
+  "FAIL shards: $_"
+  $code = 1
+} finally {
+  # By the PIDs this helper started (0009 d8): a throw or a stopped step leaves no shard running.
+  foreach ($p in $ps) { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
+  Remove-Item "$capture.*" -Force -ErrorAction SilentlyContinue
 }
 $global:LASTEXITCODE = $code
 '@
   $runShards = [scriptblock]::Create($shardText)
   # Shard counts: measured in task 212 (docs/BACKLOG.md Gate row). Every case and scene runs exactly once:
   # the bodies below sum the shards' own counts against the whole and fail on a difference.
-  $shardsCpuGate = 3
-  $shardsAnalytic = 2
+  # Hosted ci runs one process each: 2-4 cores and timing-sensitive session cases (task 212).
+  $shardsCpuGate = if ($isCi) { 1 } else { 3 }
+  $shardsAnalytic = if ($isCi) { 1 } else { 2 }
 
   # Group: steps with the same Group, adjacent in this table, run concurrently (CPU device against GPU
   # device; see Invoke-GateGroup). 'aov agreement', 'integrator cuda' (tripwire) and 'material compile'
@@ -221,21 +233,14 @@ $global:LASTEXITCODE = $code
         & $py -I tools/integrator_checks.py --gate --device cuda } },
     @{ Name = 'cpu gate tests'; Group = 'g3'; Tag = 'cpu'; Lock = $true; Identity = $exe; Keep = $true; Run = {
         $n = $shardsCpuGate
-        $all = [int]((& $exe --tier=gate --count | Select-String -Pattern 'filters: (\d+)').Matches[0].Groups[1].Value)
-        # Shard ends balance seconds, not case counts (the first 40 cases cost a sixth of the tier): cut where the
-        # cumulative seconds of the last run's per-case lines pass k/n of their sum; without a usable last run
-        # (missing, or another case count) equal counts. Either way the ends are strictly increasing up to $all.
-        $kf = Join-Path $root 'out/check/gate-steps/cpu-gate-tests.out'
-        $dur = if (Test-Path $kf) { @(Get-Content $kf | ForEach-Object { if ($_ -match '^\s*([0-9]+\.[0-9]+) s: ') { [double]$Matches[1] } }) } else { @() }
-        $ends = @()
-        if ($dur.Count -eq $all) {
-          $tot = ($dur | Measure-Object -Sum).Sum; $cum = 0.0; $k = 1
-          for ($j = 0; $j -lt $all -and $k -lt $n; $j++) { $cum += $dur[$j]; if ($cum -ge $tot * $k / $n) { $ends += ($j + 1); $k++ } }
-          $ends += $all
-        }
-        if ($ends.Count -ne $n) { $ends = @(1..$n | ForEach-Object { [int][math]::Floor($_ * $all / $n) }) }
-        $starts = @(0) + @($ends | Select-Object -First ($n - 1))
-        $o = @(& $runShards $exe @(0..($n - 1) | ForEach-Object { "--tier=gate --duration=true --first=$($starts[$_] + 1) --last=$($ends[$_])" }) (Join-Path $root 'out/check/cpu-gate-tests'))
+        $ls = Join-Path $root 'out/check/cpu-gate-tests.list'
+        & $exe --tier=gate --list-test-cases | Set-Content $ls
+        $all = [int]([regex]::Match((Get-Content $ls -Raw), 'filters: (\d+)').Groups[1].Value)
+        # Ranges balance the last run's per-case seconds and keep same-name cases (the f32 and f64 instances of
+        # one AR_RT case) in one shard; tools/gate_table.py --cut fails loudly when it cannot cut.
+        $cut = @(& $py -I tools/gate_table.py --cut $n --list $ls --prev (Join-Path $root 'out/check/gate-steps/cpu-gate-tests.out'))
+        if ($LASTEXITCODE -ne 0) { $cut; $global:LASTEXITCODE = 1; return }
+        $o = @(& $runShards $exe @($cut | ForEach-Object { $f, $l = $_ -split ' '; "--tier=gate --duration=true --first=$f --last=$l" }) (Join-Path $root 'out/check/cpu-gate-tests'))
         $code = $LASTEXITCODE
         $o
         # One --duration line per case a shard ran (doctest's summary counts every case passing the filters,
@@ -243,6 +248,13 @@ $global:LASTEXITCODE = $code
         $ran = @($o | Where-Object { $_ -match '^\s*[0-9]+\.[0-9]+ s: ' }).Count
         if ($ran -ne $all) { "FAIL cpu gate tests shards: $ran of $all cases ran"; $code = 1 }
         else { "shards: cpu gate tests $n shards, $ran of $all cases" }
+        # No shard sees a whole statistical family: sum the executed counts of every family over the shards
+        # (each process prints `family count <name> <n> <m>`) and fail on any overrun of its m.
+        $fo = Join-Path $root 'out/check/cpu-gate-families.out'
+        $o | Set-Content $fo
+        $fam = @(& $py -I tools/gate_table.py --families $fo)
+        if ($LASTEXITCODE -ne 0) { $code = 1 }
+        $fam
         $global:LASTEXITCODE = $code } },
     # Time limit 270 s: after 132's fix the tier took 12.6-24.1 s over 100 runs under the machine lock;
     # 10x the slowest run, rounded up to a multiple of 30 s.

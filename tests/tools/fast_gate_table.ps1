@@ -53,6 +53,40 @@ Set-Content "$cd/gpu-gate-tests.out" @('no timed line')
 $null = @(& $py -I (Join-Path $root 'tools/gate_table.py') --cases --dir $cd 2>&1)
 if ($LASTEXITCODE -eq 0) { Write-Host 'FAIL gate_table --cases: a step output without timed lines was accepted'; $fail++ }
 
+# --cut: contiguous ranges over a canned --list-test-cases output (the f32/f64 pair 'p/pair' sits on both
+# sides of the fourth case, so no cut may fall between its two instances), with a skewed last run.
+$names = @('a/one', 'p/pair', 'a/two', 'a/three', 'p/pair', 'a/four', 'a/five', 'a/six', 'a/seven', 'a/eight')
+Set-Content "$cd/list.txt" (@('build: sha=x dirty=0 kernels=embedded', 'tier=gate tests=10', '[doctest] listing all test case names', ('=' * 79)) + $names + @(('=' * 79), '[doctest] unskipped test cases passing the current filters: 10'))
+Set-Content "$cd/prev.out" (@($names | ForEach-Object { '  1.000 s: ' + $_ }) | ForEach-Object { $_ })
+foreach ($n in 2, 3, 4) {
+  $cut = @(& $py -I (Join-Path $root 'tools/gate_table.py') --cut $n --list "$cd/list.txt" --prev "$cd/prev.out")
+  $ok = ($LASTEXITCODE -eq 0 -and $cut.Count -eq $n)
+  $prevEnd = 0
+  foreach ($l in $cut) {
+    $f, $e = [int[]]($l -split ' ')
+    # No overlap and no gap (first = previous last + 1), strictly increasing ends, nothing cut inside the pair (1..4 and 2..5 one-based).
+    if ($f -ne $prevEnd + 1 -or $e -lt $f) { $ok = $false }
+    if ($e -ge 2 -and $e -lt 5) { $ok = $false }
+    $prevEnd = $e
+  }
+  if ($prevEnd -ne 10) { $ok = $false }
+  if (-not $ok) { Write-Host "FAIL gate_table --cut $n : $($cut -join ' / ')"; $fail++ }
+}
+$null = @(& $py -I (Join-Path $root 'tools/gate_table.py') --cut 11 --list "$cd/list.txt" 2>&1)
+if ($LASTEXITCODE -eq 0) { Write-Host 'FAIL gate_table --cut: 11 shards over 10 cases were accepted'; $fail++ }
+
+# --families: the counts of every family summed over the shard outputs against its m.
+Set-Content "$cd/fam0.out" @('family count gate_statistical 900 2000', 'family count full_statistical 0 5000')
+Set-Content "$cd/fam1.out" @('family count gate_statistical 800 2000', 'family count full_statistical 0 5000')
+$null = @(& $py -I (Join-Path $root 'tools/gate_table.py') --families "$cd/fam0.out" "$cd/fam1.out")
+if ($LASTEXITCODE -ne 0) { Write-Host 'FAIL gate_table --families: 1700 of 2000 was refused'; $fail++ }
+Set-Content "$cd/fam2.out" @('family count gate_statistical 400 2000')
+$fo = @(& $py -I (Join-Path $root 'tools/gate_table.py') --families "$cd/fam0.out" "$cd/fam1.out" "$cd/fam2.out")
+if ($LASTEXITCODE -eq 0 -or -not ($fo | Where-Object { $_ -match '^FAIL families: gate_statistical ran 2100 checks' })) { Write-Host "FAIL gate_table --families: 2100 of 2000 over three shards was accepted: $fo"; $fail++ }
+Set-Content "$cd/fam3.out" @('no family line')
+$null = @(& $py -I (Join-Path $root 'tools/gate_table.py') --families "$cd/fam0.out" "$cd/fam3.out")
+if ($LASTEXITCODE -eq 0) { Write-Host 'FAIL gate_table --families: an output without family lines was accepted'; $fail++ }
+
 # The shard partition of tools/analytic.py: every gate scene in exactly one shard, for several n.
 $probe = @'
 import importlib.util, sys
