@@ -447,8 +447,10 @@ TEST_CASE("nee/agreement") {
 
 // The same paths with the world replaced by an environment world: NEE toward it draws from the
 // compensated table on both devices (0004 D11). Items toward the world carry ITEM_WORLD_LE and the
-// path's lanes bit for bit; every other item carries flags 0; contributions and directions agree as
-// above.
+// path's lanes bit for bit; every other item carries flags 0; every item agrees as in nee/agreement
+// (preset, target, origin and tmax), and the items toward the environment, which only this case
+// makes, agree to 1e-6 in contribution (relative) and direction (radians), the bound
+// shade_background/environment light agreement holds for the escaped ray.
 TEST_CASE("nee/environment agreement") {
   const Tables tb;
   const Materials ms = build_materials(tb);
@@ -466,11 +468,15 @@ TEST_CASE("nee/environment agreement") {
   CHECK(c.next_stage == g.next_stage);
   CHECK(c.term == g.term);
   CHECK(c.sh_flags == g.sh_flags);
-  uint32_t items = 0, world = 0, bad_flags = 0, bad_lanes = 0;
-  agree::Results cc, cg, dc, dg;
+  uint32_t items = 0, world = 0, bad_flags = 0, bad_lanes = 0, invalid = 0;
+  agree::Results cc, cg, dc, dg, wcc, wcg, wdc, wdg;
+  double worst = 0.0;
   for (uint32_t i = 0; i < kN; ++i) {
+    invalid += c.term[i] == uint8_t(ar::Term::INVALID);
     if (c.sh_next[i] != uint8_t(ar::Stage::INTERSECT_SHADOW)) continue;
     ++items;
+    CHECK(c.sh_target[i] == i);
+    CHECK(g.sh_target[i] == i);
     const bool to_world = c.sh_tmax[i] > 1e30f;
     world += to_world;
     bad_flags += c.sh_flags[i] != (to_world ? ar::ITEM_WORLD_LE : uint8_t(0));
@@ -479,17 +485,34 @@ TEST_CASE("nee/environment agreement") {
     for (int l = 0; l < ar::kLanes; ++l) cc.v.push_back(c.sh_contrib[i].v[l]), cg.v.push_back(g.sh_contrib[i].v[l]);
     dc.v.insert(dc.v.end(), {c.sh_d[i].x, c.sh_d[i].y, c.sh_d[i].z});
     dg.v.insert(dg.v.end(), {g.sh_d[i].x, g.sh_d[i].y, g.sh_d[i].z});
+    if (to_world) {
+      for (int l = 0; l < ar::kLanes; ++l) wcc.v.push_back(c.sh_contrib[i].v[l]), wcg.v.push_back(g.sh_contrib[i].v[l]);
+      wdc.v.insert(wdc.v.end(), {c.sh_d[i].x, c.sh_d[i].y, c.sh_d[i].z});
+      wdg.v.insert(wdg.v.end(), {g.sh_d[i].x, g.sh_d[i].y, g.sh_d[i].z});
+    }
+    const float a[4] = {c.sh_o[i].x, c.sh_o[i].y, c.sh_o[i].z, c.sh_tmax[i] > 1e30f ? 0.0f : c.sh_tmax[i]};
+    const float b[4] = {g.sh_o[i].x, g.sh_o[i].y, g.sh_o[i].z, g.sh_tmax[i] > 1e30f ? 0.0f : g.sh_tmax[i]};
+    for (int k = 0; k < 4; ++k) worst = std::max(worst, std::fabs(double(a[k]) - double(b[k])) / std::max(1.0, std::fabs(double(a[k]))));
   }
+  CHECK(invalid == 0u);
   CHECK(bad_flags == 0u);
   CHECK(bad_lanes == 0u);
   CHECK(world > items / 20);
   cc.n = cg.n = items, cc.stride = cg.stride = 4;
   dc.n = dg.n = items, dc.stride = dg.stride = 3;
+  wcc.n = wcg.n = world, wcc.stride = wcg.stride = 4;
+  wdc.n = wdg.n = world, wdc.stride = wdg.stride = 3;
   CHECK(agree::report("nee", "environment item contribution nofma vs cpu float", agree::compare(cg, cc, agree::Metric::REL_L2),
                       agree::Cls::THROUGHPUT, agree::NOFMA_VS_CPU_FLOAT).pass);
   CHECK(agree::report("nee", "environment item direction nofma vs cpu float", agree::compare(dg, dc, agree::Metric::ANGLE),
                       agree::Cls::DIRECTION, agree::NOFMA_VS_CPU_FLOAT).pass);
-  std::printf("nee environment agreement: %u items of %u paths (%u to the environment)\n", items, kN, world);
+  const agree::Stats wc = agree::compare(wcg, wcc, agree::Metric::REL_L2), wd = agree::compare(wdg, wdc, agree::Metric::ANGLE);
+  std::printf("nee environment agreement: %u items of %u paths (%u to the environment); toward the environment max "
+              "contribution %.3e, direction %.3e; worst origin / tmax difference %.3g\n",
+              items, kN, world, wc.max, wd.max, worst);
+  CHECK(wc.max <= 1e-6);
+  CHECK(wd.max <= 1e-6);
+  CHECK(worst <= 1e-5);
 }
 
 }  // TEST_SUITE
