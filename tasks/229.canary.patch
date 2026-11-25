@@ -1,12 +1,18 @@
 diff --git a/tests/cpu/test_batching.cpp b/tests/cpu/test_batching.cpp
-index 6bad2179..5c82a9b2 100644
+index 3b59f14b..98e155ea 100644
 --- a/tests/cpu/test_batching.cpp
 +++ b/tests/cpu/test_batching.cpp
-@@ -350,7 +350,6 @@ struct MsTimer {
-     SetProcessInformation(GetCurrentProcess(), 4 /* ProcessPowerThrottling */, &s, sizeof s);
-   }
+@@ -376,11 +376,11 @@ struct IgnoredTimerResolution {
+ struct MsTimer {
+   PROCESS_POWER_THROTTLING_STATE prior = get_throttling();
    MsTimer() {
--    timeBeginPeriod(1);
-     throttling(0x4);
-     std::array<double, 9> ms{};
-     for (double& m : ms) {
+-    const MMRESULT mm = timeBeginPeriod(1);
++    const MMRESULT mm = (timeBeginPeriod(1), timeEndPeriod(1));
+     if (mm != TIMERR_NOERROR) FAIL("timeBeginPeriod(1) refused, MMRESULT " << mm);
+     PROCESS_POWER_THROTTLING_STATE s = prior;
+     s.ControlMask |= PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+-    s.StateMask &= ~ULONG(PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION);
++    s.StateMask |= PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+     if (!set_throttling(s)) {
+       const DWORD err = GetLastError();
+       timeEndPeriod(1);
