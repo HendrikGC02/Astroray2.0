@@ -4,6 +4,7 @@ discovery because it holds only for the GPU preset; the local `gpu abi tests` ga
 import os
 import re
 import subprocess
+import tomllib
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,6 +29,9 @@ class BuildInfo(unittest.TestCase):
         self.assertEqual(sorted(fields), ["cuda", "optix"], line)
         for k, v in fields.items():
             self.assertRegex(v, r"^\d+(\.\d+)+$", f"{k} in {line}")
+        with open(os.path.join(ROOT, "third_party", "deps.toml"), "rb") as f:
+            pins = {d["name"]: d["version"] for d in tomllib.load(f)["dep"]}
+        self.assertEqual(fields["optix"], pins["optix-headers"])
         # cuda is the release of the nvcc the build recorded.
         with open(CACHE, encoding="utf-8") as f:
             m = re.search(r"^CMAKE_CUDA_COMPILER:FILEPATH=(.+)$", f.read(), re.M)

@@ -5,6 +5,7 @@ import importlib.util
 import os
 import re
 import tempfile
+import tomllib
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -95,8 +96,11 @@ class TestContext(unittest.TestCase):
         fields = dict(re.findall(r" (cuda|optix|embree|oidn)=(\S+)", build[0]))
         for k, v in fields.items():
             self.assertRegex(v, r"^(none|\d+(\.\d+)+)$", k)
-        self.assertNotEqual(fields["embree"], "none")
-        self.assertNotEqual(fields["oidn"], "none")
+        # Each is the pin of its own deps.toml entry, parsed here independently of the CMake reader.
+        with open(os.path.join(ROOT, "third_party", "deps.toml"), "rb") as f:
+            pins = {d["name"]: d["version"] for d in tomllib.load(f)["dep"]}
+        self.assertEqual(fields["embree"], pins["embree"])
+        self.assertEqual(fields["oidn"], pins["oidn"])
         self.assertTrue(any(" INFO device kind=cpu index=0 " in ln for ln in lines), lines)
 
     def test_last_error_text_and_truncation(self):
