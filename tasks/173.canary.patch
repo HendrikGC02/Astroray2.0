@@ -1,0 +1,81 @@
+diff --git a/src/host/light/light_builder.cpp b/src/host/light/light_builder.cpp
+index 044d0956..f2e710a5 100644
+--- a/src/host/light/light_builder.cpp
++++ b/src/host/light/light_builder.cpp
+@@ -94,7 +94,7 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
+         }
+         ar::LightRecord r = li.record;
+         r.type = uint8_t(ar::LightType::WORLD_ENV);
+-        const double world_energy = 4.0 * 3.14159265358979323846 * env->mean * double(li.record.strength);
++        const double world_energy = env->mean * double(li.record.strength);
+         imps[i] = world_energy * double(ar::light_power(r, scene, ar::Real(1)));
+         continue;
+       }
+diff --git a/src/host/session/kg_builder.cpp b/src/host/session/kg_builder.cpp
+index 28a5a3f3..d3acd0d5 100644
+--- a/src/host/session/kg_builder.cpp
++++ b/src/host/session/kg_builder.cpp
+@@ -65,7 +65,7 @@ ar::KernelGlobals build_kernel_globals(const SceneTableSet* set, const KgSession
+       v.marginal_func = p, p += d[k]->marginal_func.size();
+       v.marginal_cdf = p, p += d[k]->marginal_cdf.size();
+       v.func_integral = d[k]->func_integral;
+-      v.n = d[k]->n;
++      v.n = k == 0 ? d[k]->n / 2u : d[k]->n;
+     }
+   }
+   // A WORLD_ENV world's NEE items carry their lanes and item_flags (0003 d20): the scheduler
+diff --git a/src/kernel/light/light.h b/src/kernel/light/light.h
+index 59e7b820..5183a3c9 100644
+--- a/src/kernel/light/light.h
++++ b/src/kernel/light/light.h
+@@ -388,7 +388,11 @@ AR_FN Real light_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Rea
+     case LightType::AREA_DISK: return disk_pdf_li(r, ctx, wi, hit);
+     case LightType::TRIANGLE: return tri_pdf_li(r, ctx, wi, hit);
+     case LightType::WORLD_CONST: return world_pdf_li(r, ctx, wi, hit);
++#if defined(__CUDA_ARCH__)
++    case LightType::WORLD_ENV: return world_env_pdf_li(wi, env, true);
++#else
+     case LightType::WORLD_ENV: return world_env_pdf_li(wi, env, env_complete);
++#endif
+   }
+   AR_ASSERT(false);
+   return Real(0);
+diff --git a/src/kernel/light/world_env.h b/src/kernel/light/world_env.h
+index db2e7705..76a05653 100644
+--- a/src/kernel/light/world_env.h
++++ b/src/kernel/light/world_env.h
+@@ -35,7 +35,7 @@ inline constexpr int kEnvPlain = 0, kEnvCompensated = 1;
+ // compensated pdf is 0 where the radiance is below its mean, which only BSDF sampling covers.
+ AR_FN LightLiSample world_env_sample_li(const LightSampleContext& ctx, Real2 u, const EnvTableView* env, bool complete) {
+   AR_ASSERT(env != nullptr);
+-  const EnvDirSample d = env_sample(env[kEnvPlain], env[kEnvCompensated], u, !complete);
++  const EnvDirSample d = env_sample(env[kEnvPlain], env[kEnvCompensated], u, false);
+   if (!(d.pdf > Real(0))) return light_li_none();
+   LightLiSample s = light_li_none();
+   s.wi = d.wi;
+diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
+index d2f847bb..994172fc 100644
+--- a/src/kernel/stages/shade_surface.h
++++ b/src/kernel/stages/shade_surface.h
+@@ -333,7 +333,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+     sh_target(kg, sh) = sample;
+     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
+     const bool world_le = ls.deferred_le && !triangle;
+-    if (kg.shadow->item_flags != nullptr) sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
++    if (kg.shadow->item_flags != nullptr) sh_item_flags(kg, sh) = uint8_t(0);
+     if (world_le) {
+       // WORLD_ENV: shade_shadow runs the world program along ray_d at these lanes on delivery. The
+       // host allocates both fields with the env_world feature; without them the item cannot be
+diff --git a/src/kernel/state/state.h b/src/kernel/state/state.h
+index 7f1e74b2..35658922 100644
+--- a/src/kernel/state/state.h
++++ b/src/kernel/state/state.h
+@@ -95,7 +95,7 @@ constexpr bool feature_on(const StateFeatures& f, StateFeature t) {
+     case StateFeature::LIGHTPASS_OR_MEDIA: return f.light_tracing || f.media;
+     case StateFeature::NON_OPAQUE: return f.non_opaque;
+     case StateFeature::LIGHT_GROUPS: return f.light_groups;
+-    case StateFeature::MEDIA_NON_OPAQUE_OR_ENV: return f.media || f.non_opaque || f.env_world;
++    case StateFeature::MEDIA_NON_OPAQUE_OR_ENV: return f.media || f.non_opaque;
+     case StateFeature::LIGHTPASS_MEDIA_OR_ENV: return f.light_tracing || f.media || f.env_world;
+   }
+   return false;
