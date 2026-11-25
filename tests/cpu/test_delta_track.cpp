@@ -107,6 +107,58 @@ AR_RT_CASE("delta_track/weights sum to transmittance") {
   }
 }
 
+AR_RT_CASE("delta_track/null and reach rescale r_l as pbrt") {
+  // pbrt-v4 VolPathIntegrator::Li with the hero lane h for lane 0, recomputed here in double:
+  //   null:    pdf = T_maj[h] sigma_n[h]; beta, r_u *= T_maj sigma_n / pdf; r_l *= T_maj sigma_maj / pdf
+  //   reached: beta, r_u, r_l *= T_maj / T_maj[h]
+  // with T_maj = exp(-(t - t_min) sigma_maj) and sigma_n = sigma_maj - sigma_a - sigma_s. The starting
+  // weights differ per lane, so a factor applied to the wrong spectrum shows.
+  const Spec sa{{Real(0.1), Real(0.2), Real(0.3), Real(0.4)}}, ss{{Real(0.05), Real(0.1), Real(0.15), Real(0.2)}};
+  const Spec maj{{Real(2.0), Real(2.5), Real(3.0), Real(3.5)}};
+  const TrackWeights w0{Spec{{Real(1), Real(0.5), Real(2), Real(1.5)}}, Spec{{Real(0.75), Real(1), Real(1.25), Real(0.5)}},
+                        Spec{{Real(0.3), Real(0.6), Real(0.9), Real(1.2)}}};
+  const uint32_t h = 2;
+  const double tol = sizeof(Real) == 4 ? 1e-5 : 1e-12;
+  const auto close = [tol](double got, double want) { return std::fabs(got - want) <= tol * std::fabs(want); };
+  // A null collision: the event uniform 0.95 lies past p_absorb + p_scatter = 0.15 at lane h.
+  {
+    TrackWeights w = w0;
+    Real t = Real(0.25);
+    const TrackEvent e = ar::track_collision(sa, ss, maj, Real(10), h, Real(0.3), Real(0.95), &t, &w);
+    REQUIRE(e == TrackEvent::NULL_COLLISION);
+    const double tc = 0.25 - std::log(1.0 - double(Real(0.3))) / double(maj.v[h]);
+    CHECK(close(double(t), tc));
+    double tm[4], sn[4];
+    for (int j = 0; j < 4; ++j) {
+      tm[j] = std::exp(-(double(t) - 0.25) * double(maj.v[j]));
+      sn[j] = double(maj.v[j]) - double(sa.v[j]) - double(ss.v[j]);
+    }
+    const double pdf = tm[h] * sn[h];
+    for (int j = 0; j < 4; ++j) {
+      INFO("null, lane " << j);
+      CHECK(close(double(w.beta.v[j]), double(w0.beta.v[j]) * tm[j] * sn[j] / pdf));
+      CHECK(close(double(w.r_u.v[j]), double(w0.r_u.v[j]) * tm[j] * sn[j] / pdf));
+      CHECK(close(double(w.r_l.v[j]), double(w0.r_l.v[j]) * tm[j] * double(maj.v[j]) / pdf));
+    }
+  }
+  // Reaching t_max = 0.4 from t_min = 0.25: the distance uniform puts the collision far past it.
+  {
+    TrackWeights w = w0;
+    Real t = Real(0.25);
+    const TrackEvent e = ar::track_collision(sa, ss, maj, Real(0.4), h, Real(0.999), Real(0.5), &t, &w);
+    REQUIRE(e == TrackEvent::REACHED);
+    CHECK(t == Real(0.4));
+    double tm[4];
+    for (int j = 0; j < 4; ++j) tm[j] = std::exp(-(double(Real(0.4)) - double(Real(0.25))) * double(maj.v[j]));
+    for (int j = 0; j < 4; ++j) {
+      INFO("reached, lane " << j);
+      CHECK(close(double(w.beta.v[j]), double(w0.beta.v[j]) * tm[j] / tm[h]));
+      CHECK(close(double(w.r_u.v[j]), double(w0.r_u.v[j]) * tm[j] / tm[h]));
+      CHECK(close(double(w.r_l.v[j]), double(w0.r_l.v[j]) * tm[j] / tm[h]));
+    }
+  }
+}
+
 AR_RT_CASE("delta_track/collision limit and zero majorant") {
   // Null collisions only (no absorption or scattering, majorant 1e6 per m over 1 m): the flight
   // takes exactly `limit` tentative collisions, advancing the counter by as many blocks, and stops.
