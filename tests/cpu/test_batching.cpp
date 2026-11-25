@@ -5,6 +5,13 @@
 // intern/cycles/integrator/render_scheduler.cpp for the schedule values and the rounding.
 #include <doctest.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <timeapi.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -322,36 +329,63 @@ struct GatedRig {
 #ifdef _WIN32
 // Blender asks Windows for a 1 ms timer, which the session's publish wait inherits inside Blender;
 // a test process gets the 15.6 ms default unless it asks too, and every capped wait would then
-// round up to a tick (gap ~31 ms, a cancel seen at +15.6 ms). Windows 11 also stops honouring the
-// request of a process it deems hidden, which a harness process without a window can be, so the
-// process opts out of that throttling and the case then checks the request took effect: a refused
-// request fails here by name instead of as a misleading pacing failure. Scoped to the cases that
-// time the cap (winmm, test side only).
+// round up to a tick (gap ~31 ms, a cancel seen at +15.6 ms). Windows 11 can also ignore the
+// request of a process it deems hidden; a harness process without a window may be one (a
+// hypothesis: never reproduced on a real process, the cure shown by emulating the state, which
+// the cap case does), so the process opts out of that throttling and the constructor then checks
+// the request took effect: a refused request fails here by name instead of as a misleading pacing
+// failure. Scoped to the cases that time the cap (winmm, test side only).
+// MsTimer must never be nested or overlap another: the throttling state is per process and not
+// reference-counted, so the inner destructor would restore the outer's state.
 // Ref: Microsoft Learn, timeBeginPeriod: "Starting with Windows 10, version 2004, this function no
 // longer affects global timer resolution. For processes which have not called this function, Windows
-// does not guarantee a higher resolution than the default system resolution." and "Starting with
+// does not guarantee a higher resolution than the default system resolution. [...] Starting with
 // Windows 11, if a window-owning process becomes fully occluded, minimized, or otherwise invisible
 // or inaudible to the end user, Windows does not guarantee a higher resolution than the default
 // system resolution. See SetProcessInformation for more information on this behavior."
-// Ref: SetProcessInformation(ProcessPowerThrottling) with PROCESS_POWER_THROTTLING_STATE, mask
-// PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION (0x4 in winnt.h): ControlMask set and StateMask
-// 0 turns the ignore-timer-resolution policy off for the process; ControlMask 0 returns it to the system.
-extern "C" __declspec(dllimport) unsigned __stdcall timeBeginPeriod(unsigned);
-extern "C" __declspec(dllimport) unsigned __stdcall timeEndPeriod(unsigned);
-struct PowerThrottlingState {
-  unsigned long Version, ControlMask, StateMask;
-};
-extern "C" __declspec(dllimport) void* __stdcall GetCurrentProcess();
-extern "C" __declspec(dllimport) int __stdcall SetProcessInformation(void*, int, void*, unsigned long);
+// Ref: processthreadsapi.h, SetProcessInformation / GetProcessInformation with
+// ProcessPowerThrottling and PROCESS_POWER_THROTTLING_STATE: the bit in ControlMask takes the
+// policy over from the system and the bit in StateMask turns it on; both set to
+// PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION, the process's timer requests are ignored; set in
+// ControlMask with StateMask 0, they are honoured.
 #pragma comment(lib, "winmm.lib")
-struct MsTimer {
-  static void throttling(unsigned long control) {
-    PowerThrottlingState s{1, control, 0};
-    SetProcessInformation(GetCurrentProcess(), 4 /* ProcessPowerThrottling */, &s, sizeof s);
+inline PROCESS_POWER_THROTTLING_STATE get_throttling() {
+  PROCESS_POWER_THROTTLING_STATE s{};
+  s.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+  REQUIRE_MESSAGE(GetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &s, sizeof(s)),
+                  "GetProcessInformation(ProcessPowerThrottling) failed, error " << GetLastError());
+  return s;
+}
+inline bool set_throttling(PROCESS_POWER_THROTTLING_STATE s) {
+  return SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &s, sizeof(s)) != 0;
+}
+// Puts the process into the state that makes Windows ignore timer requests, to exercise MsTimer's
+// opt-out; restores what it found.
+struct IgnoredTimerResolution {
+  PROCESS_POWER_THROTTLING_STATE prior = get_throttling();
+  IgnoredTimerResolution() {
+    PROCESS_POWER_THROTTLING_STATE s = prior;
+    s.ControlMask |= PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+    s.StateMask |= PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+    REQUIRE_MESSAGE(set_throttling(s), "cannot emulate a throttled process, error " << GetLastError());
   }
+  ~IgnoredTimerResolution() { set_throttling(prior); }
+  IgnoredTimerResolution(const IgnoredTimerResolution&) = delete;
+  IgnoredTimerResolution& operator=(const IgnoredTimerResolution&) = delete;
+};
+struct MsTimer {
+  PROCESS_POWER_THROTTLING_STATE prior = get_throttling();
   MsTimer() {
-    timeBeginPeriod(1);
-    throttling(0x4);
+    const MMRESULT mm = timeBeginPeriod(1);
+    if (mm != TIMERR_NOERROR) FAIL("timeBeginPeriod(1) refused, MMRESULT " << mm);
+    PROCESS_POWER_THROTTLING_STATE s = prior;
+    s.ControlMask |= PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+    s.StateMask &= ~ULONG(PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION);
+    if (!set_throttling(s)) {
+      const DWORD err = GetLastError();
+      timeEndPeriod(1);
+      FAIL("SetProcessInformation(ProcessPowerThrottling) refused, error " << err);
+    }
     std::array<double, 9> ms{};
     for (double& m : ms) {
       const auto a = std::chrono::steady_clock::now();
@@ -361,19 +395,22 @@ struct MsTimer {
     std::sort(ms.begin(), ms.end());
     if (ms[4] > 4.0) {
       release();
-      FAIL("host timer resolution not granted: a 1 ms sleep takes " << ms[4] << " ms (median of 9)");
+      FAIL("1 ms sleeps take " << ms[4] << " ms (median of 9, limit 4): the host timer resolution was "
+           "not granted, or the test thread is starved by load");
     }
   }
   ~MsTimer() { release(); }
   MsTimer(const MsTimer&) = delete;
   MsTimer& operator=(const MsTimer&) = delete;
  private:
-  static void release() {
-    throttling(0);
-    timeEndPeriod(1);
+  void release() {
+    if (!set_throttling(prior))
+      WARN_MESSAGE(false, "MsTimer could not restore the process's power-throttling state, error " << GetLastError());
+    if (timeEndPeriod(1) != TIMERR_NOERROR) WARN_MESSAGE(false, "timeEndPeriod(1) refused");
   }
 };
 #else
+struct IgnoredTimerResolution {};
 struct MsTimer {};
 #endif
 
@@ -391,6 +428,8 @@ ar_view_desc moved_view(uint32_t i) {
 }  // namespace
 
 TEST_CASE("batching/session the publish cap holds every due frame during interaction") {
+  // The process starts in the state Windows ignores timer requests in; MsTimer must opt out of it.
+  const IgnoredTimerResolution throttled;
   const MsTimer timer;
   // An orbit (a view about every millisecond) where every epoch converges after its first, empty
   // pass, so every frame is due as converged: the cap still holds each one (0009 B-34), so no two
