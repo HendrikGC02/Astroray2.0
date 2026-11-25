@@ -53,12 +53,21 @@ AR_FN const LightRecord* world_light(const KernelGlobals& kg) {
   return &kg.lights[kg.world_light];
 }
 
-// The context of a background shade for a ray escaping along unit `dir`, at the lanes `lam`: P is
-// the direction and N, Ng and wo its negative; ray type and depth are 0 until the caller sets them.
+// The geometry of a background shade for a ray escaping along unit `dir`: P is the direction, N,
+// Ng and wo its negative, and no surface (uv, facing and ids 0). Ray type, depth and lanes are left
+// as they are, so shade_surface's NEE sets it over the context it already holds.
+AR_FN void world_shade_geometry(Real3 dir, ShadeContext* ctx) {
+  ctx->P = dir;
+  ctx->N = ctx->Ng = ctx->wo = -dir;
+  for (int i = 0; i < kMaxUvSets; ++i) ctx->uv[i] = Real2{Real(0), Real(0)};
+  ctx->front_face = ctx->object_id = ctx->instance_id = 0u;
+}
+
+// The context of a background shade for a ray escaping along unit `dir`, at the lanes `lam`; ray
+// type and depth are 0 until the caller sets them.
 AR_FN ShadeContext world_shade_context(Real3 dir, const Lambda& lam) {
   ShadeContext ctx{};
-  ctx.P = dir;
-  ctx.N = ctx.Ng = ctx.wo = -dir;
+  world_shade_geometry(dir, &ctx);
   ctx.lambda_t = lam;
   return ctx;
 }

@@ -417,10 +417,7 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     const uint32_t* prog = nullptr;
     bool program = true;
     if (world_phase) {
-      ShadeContext w = world_shade_context(g_dir, ctx.lambda_t);
-      w.ray_type = ctx.ray_type;
-      for (int i = 0; i < 6; ++i) w.depth[i] = ctx.depth[i];
-      ctx = w;
+      world_shade_geometry(g_dir, &ctx);
       ok = ok && world_program_of(s, &prog, &block);
     } else {
       if (!shade_context_geometry(kg, g_inst, g_prim, g_bary, g_dir, &ctx)) {

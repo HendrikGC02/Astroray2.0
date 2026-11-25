@@ -39,7 +39,7 @@
 // material's emission entry with the context rebuilt at the light point. An environment world
 // (WORLD_ENV, light/world_env.h) is deferred too: NEE draws its direction from the MIS-compensated
 // table and phase 1 runs the world program's emission entry (shade_background.h world_program_of)
-// in the background context of that direction (world_shade_context), keeping the path's ray type
+// in the background context of that direction (world_shade_geometry), keeping the path's ray type
 // and depth as a triangle's phase 1 does. Its Le is times the record's strength, which carries s,
 // as an escaped ray's (shade_background.h world_radiance); the table never gives radiance (0004 D11).
 // Continuation, as pbrt-v4 VolPathIntegrator::Li: a path that arrives with bounces[total] equal
@@ -219,10 +219,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     const uint32_t* prog = nullptr;
     bool program = true;
     if (world_phase) {
-      ShadeContext w = world_shade_context(g_dir, ctx.lambda_t);
-      w.ray_type = ctx.ray_type;
-      for (int i = 0; i < 6; ++i) w.depth[i] = ctx.depth[i];
-      ctx = w;
+      world_shade_geometry(g_dir, &ctx);
       // A WORLD_ENV light without a world program is a host bug: fail the sample.
       ok = ok && world_program_of(s, &prog, &block);
     } else {
