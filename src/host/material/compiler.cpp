@@ -30,6 +30,7 @@
 #include "../../kernel/vm/ops/sub_f32.h"
 #include "../../kernel/vm/ops/tex_image.h"
 #include "../../kernel/vm/ops/volume_coeffs.h"
+#include "../data_resource.h"
 #include "../spectral/blackbody.h"
 #include "graph.h"
 #include "grating_authored.h"
@@ -158,6 +159,43 @@ bool fold(const Work& w, int i, Vec3* out, std::string* err) {
   }
 }
 
+// The guide RGB (0008 d15) that a store into colour slot `idx` (Slot order) also sets: base_color
+// and specular_color, the two colours the albedo guide reads; null for the other slots.
+float* guide_rgb_of(ar::ConstantBlock* b, uint32_t idx) {
+  if (idx == uint32_t(ar::Slot::BASE_COLOR)) return b->guide_base_color;
+  if (idx == uint32_t(ar::Slot::SPECULAR_COLOR)) return b->guide_specular_color;
+  return nullptr;
+}
+
+// The working-space RGB of a reflectance TABLE (scale times the n points w, v, clamped to [0, 1]
+// as the kernel's resolve clamps a REFLECTANCE slot) under the working space's white, D65:
+// XYZ_k = sum R(l) S(l) cmf_k(l) / sum S(l) ybar(l) at the observer's 1 nm samples, then M_ws.
+// The table is read with the kernel's own lookup, so the edge values extend as in rendering.
+// Ref: pbrt-v4 src/pbrt/film.h PixelSensor::ProjectReflectance (Apache-2.0), read in
+// third_party/_cache/refs/pbrt-v4-092b23a47ad4; data_resource.h (observer.bin: CMFs, D65 with
+// Y = 1, M_ws XYZ to linear Rec.709); 0008 d15 (the scene-build projection of a spectral table).
+bool table_guide_rgb(const float* w, const float* v, uint32_t n, float scale, float out[3], std::string* err) {
+  DataBlob blob;
+  if (!find_data("spectral/observer.bin", &blob)) return *err = "spectral/observer.bin is not embedded", false;
+  ObserverTables obs;
+  if (const std::string e = parse_observer(blob.data, blob.size, &obs); !e.empty()) return *err = e, false;
+  double xyz[3] = {0.0, 0.0, 0.0}, white_y = 0.0;
+  for (uint32_t i = 0; i < kObserverSamples; ++i) {
+    const double lam = double(kObserverLambdaMin) + double(i);
+    double r = double(scale) * double(ar::table_lookup(w, v, n, ar::Real(lam)));
+    r = !(r >= 0.0) ? 0.0 : std::min(r, 1.0);
+    const double sw = double(obs.d65[i]);
+    for (int k = 0; k < 3; ++k) xyz[k] += r * sw * double(obs.cmf[k][i]);
+    white_y += sw * double(obs.cmf[1][i]);
+  }
+  for (int c = 0; c < 3; ++c) {
+    double x = 0.0;
+    for (int k = 0; k < 3; ++k) x += obs.m_ws[3 * c + k] * xyz[k] / white_y;
+    out[c] = float(x);
+  }
+  return true;
+}
+
 // Writes a constant into the block slot of RecordSlot `slot`, with the slot's semantic (item 10).
 bool store_const(ar::ConstantBlock* b, const ar::Rgb2SpecTable& t, uint32_t slot, VType type, const Vec3& v,
                  uint32_t* flags, std::string* err) {
@@ -185,6 +223,7 @@ bool store_const(ar::ConstantBlock* b, const ar::Rgb2SpecTable& t, uint32_t slot
   const uint32_t idx = slot - uint32_t(RS::base_color);  // RecordSlot's spectral order is Slot's
   const ar::SpectrumSemantic sem = ar::kSlotSemantic[idx];
   ar::SpectrumRef& ref = ar::slot_ref(*b, ar::Slot(idx));
+  float* guide = guide_rgb_of(b, idx);
   if (type == VType::F32) {
     float x = v[0];
     if (sem != ar::SpectrumSemantic::IOR) {
@@ -192,10 +231,14 @@ bool store_const(ar::ConstantBlock* b, const ar::Rgb2SpecTable& t, uint32_t slot
       if (sem == ar::SpectrumSemantic::REFLECTANCE && x > 1.0f) x = 1.0f, *flags |= ar::kRgbAboveOneClamped;
     }
     ref = ar::make_const_ref(sem, ar::Real(x));
+    if (guide) guide[0] = guide[1] = guide[2] = x;
     return true;
   }
   const ar::Rgb rgb{{ar::Real(v[0]), ar::Real(v[1]), ar::Real(v[2])}};
   if (!ar::make_rgb_ref(t, rgb, sem, &ref, flags)) return *err = "specular_ior takes a scalar, not a colour (0005 item 10)", false;
+  // The RGB the lift used: a reflectance slot clamps each channel to [0, 1] (rgb2spec.h albedo_coeffs).
+  if (guide)
+    for (int c = 0; c < 3; ++c) guide[c] = !(v[size_t(c)] >= 0.0f) ? 0.0f : std::min(v[size_t(c)], 1.0f);
   return true;
 }
 
@@ -1009,6 +1052,8 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     for (int st : stores_of[child]) {
       const GraphNode& nd = w.g.nodes[size_t(st)];
       const uint32_t slot = slot_of(st);
+      // A child's colours are code, so the material's block holds no RGB the albedo guide could read.
+      if (slot == uint32_t(RS::base_color) || slot == uint32_t(RS::specular_color)) res->block.guide_flags |= ar::GUIDE_RGB_RUNTIME;
       if (!w.isc[size_t(nd.input[0])]) {
         c.runtime_slots |= uint64_t(1) << slot;
         continue;
@@ -1191,6 +1236,14 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
         // points in the arena.
         const uint32_t idx = slot - uint32_t(ar::RecordSlot::base_color);  // RecordSlot's spectral order is Slot's
         ar::slot_ref(res.block, ar::Slot(idx)) = table_ref(w, src, ar::kSlotSemantic[idx], &res);
+        if (float* guide = guide_rgb_of(&res.block, idx)) {
+          const GraphNode& tn = w.g.nodes[size_t(src)];
+          const float* tf = w.g.f32.data() + tn.f32_first;
+          const uint32_t np = (tn.f32_count - 1u) / 2u;
+          std::vector<float> tw(np), tv(np);
+          for (uint32_t k = 0; k < np; ++k) tw[k] = tf[1 + 2 * k], tv[k] = tf[2 + 2 * k];
+          if (!table_guide_rgb(tw.data(), tv.data(), np, tf[0], guide, &res.error)) return res;
+        }
       } else if (w.isc[size_t(src)]) {
         Vec3 v = w.cv[size_t(src)];
         if (slot == opacity_slot) {  // a fraction: clamped and reported like a colour (0005 item 32)
@@ -1528,6 +1581,8 @@ MaterialOutput magenta_material(const ar::Rgb2SpecTable& table, uint32_t code, c
   uint32_t flags = 0;
   ar::make_rgb_ref(table, ar::Rgb{{ar::Real(1), ar::Real(0), ar::Real(1)}}, ar::SpectrumSemantic::REFLECTANCE,
                    &m.compiled.block.base_color, &flags);
+  m.compiled.block.guide_base_color[0] = m.compiled.block.guide_base_color[2] = 1.0f;
+  m.compiled.block.guide_base_color[1] = 0.0f;
   m.compiled.block.specular_weight = 0.0f;
   finish(&m);
   add_entry(&m, code, detail);
@@ -1570,6 +1625,9 @@ static MaterialOutput compile_material_impl(const ar_graph_desc& d, const ar::Rg
   MaterialOutput m;
   m.compiled = compile_surface(d, table, means, slots);
   if (!m.compiled.ok) return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, m.compiled.error);
+  // A per-point base_color or specular_color has no constant RGB for the albedo guide (0008 d15).
+  if (per_point(m.compiled, ar::RecordSlot::base_color) || per_point(m.compiled, ar::RecordSlot::specular_color))
+    m.compiled.block.guide_flags |= ar::GUIDE_RGB_RUNTIME;
   // The (kind, semantic) pairs resolve() evaluates (spectrum_ref.h, 0005 item 9): CONSTANT and RGB
   // anywhere, TABLE in every slot but an IOR one, BLACKBODY in an ILLUMINANT slot, CAUCHY_ABBE in
   // an IOR slot. Every other kind or pair is refused here, so it never reaches resolve().

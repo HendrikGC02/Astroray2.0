@@ -61,6 +61,11 @@
 // a hit: emission sampling only decides which side NEE samples (Cycles emissive_simple_eval
 // returns 1 for the facing normal). Le carries no radiance scale, so it is multiplied by s here,
 // once (068 folded s into the light records only).
+// Denoiser guides (0008 d15, d22), with guide planes requested and before the path's denoising
+// surface (DENOISE_SURFACE_DONE clear): after the lobe sample, a delta sample multiplies the path's
+// guide tint by the RGB albedo of the stack's delta lobes, and a non-delta sample makes this hit the
+// denoising surface: it writes the tinted albedo and the shading normal and sets the bit
+// (surface_guides).
 // A VM error or a non-finite contribution marks the sample invalid and ends the path INVALID,
 // so the resolve counts it (0004 D17, 0008 d6, 0003 d22). Film writes use the sample's slot in the
 // per-sample buffer, its sample_id (0004 D5).
@@ -163,6 +168,80 @@ AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P,
   ps_prev_dist(kg, slot) = ps_prev_dist(kg, slot) + dot(o_next - o, d) / dot(d, d);
   ps_ray_o(kg, slot) = o_next;
   ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::INTERSECT_CLOSEST);
+}
+
+// The lobe stack's directional albedo at mu_o in working-space RGB (0008 d15): the stack's own
+// selection quantities (stack_select: the dielectric layer's E_diel, the metal's F E_spec c, the
+// EON albedo under the layering scale) evaluated with the material's exact RGB colours in lanes
+// 0-2 instead of the path's wavelengths, so no wavelength noise enters. Lane 3 repeats green so
+// every lane holds a valid colour. The index is the record's (one value on every lane unless
+// dispersive) or, for a Cauchy index, its n_d. `rec` is the caller's record after the lobe sample,
+// which this overwrites: its scalars are the shading point's, its colours are replaced.
+// diffuse = w (1 - M) (1 - E_spec) E_eon; specular = w ((1 - M) E_spec + M min(F E_m c, 1)).
+// Ref: docs/decisions/0008-film-outputs-denoise.md d15 (diffuse and specular albedo from the
+// albedo tables OpenPBR albedo scaling uses, exact RGB projections); 0005 items 4-6;
+// material/lobes/stack.h stack_select.
+struct GuideAlbedo {
+  Real3 diffuse, specular;
+};
+AR_FN GuideAlbedo surface_guide_albedo(const KernelGlobals& kg, OpenPBRParams& rec, const ConstantBlock& block, Real mu_o) {
+  for (int i = 0; i < kLanes; ++i) {
+    const int c = i < 3 ? i : 1;
+    rec.base_color.v[i] = Real(block.guide_base_color[c]);
+    rec.specular_color.v[i] = Real(block.guide_specular_color[c]);
+  }
+  const bool cauchy = block.specular_ior.kind == uint8_t(SpectrumKind::CAUCHY_ABBE);
+  rec.specular_ior = spec_fill(cauchy ? Real(block.specular_ior.p[0]) : rec.specular_ior.v[0]);
+  const StackSelect sel = stack_select(*kg.e_diel, *kg.e_spec, rec, mu_o);
+  const Spec e_diff = eon_albedo(stack_eon_params(rec), mu_o);
+  Spec metal = spec_fill(Real(0));
+  if (sel.metal > Real(0)) {
+    const MetalParams mp = stack_metal_params(rec);
+    const Spec f_o = metal_fresnel(mp, mu_o), comp = stack_metal_comp(rec, sel);
+    for (int i = 0; i < kLanes; ++i) metal.v[i] = min(max(f_o.v[i] * sel.e_metal * comp.v[i], Real(0)), Real(1));
+  }
+  const Real w = rec.closure_weight, m = sel.metal;
+  Real d[3], sp[3];
+  for (int i = 0; i < 3; ++i) {
+    d[i] = w * ((Real(1) - m) * (Real(1) - sel.e_spec.v[i]) * e_diff.v[i]);
+    sp[i] = w * ((Real(1) - m) * sel.e_spec.v[i] + m * metal.v[i]);
+  }
+  GuideAlbedo g;
+  g.diffuse = Real3{d[0], d[1], d[2]};
+  g.specular = Real3{sp[0], sp[1], sp[2]};
+  return g;
+}
+
+// The guide step of a camera path's vertex after its lobe sample, before the denoising surface
+// (0008 d15; the caller tests DENOISE_SURFACE_DONE). generate_camera starts the tint at 1 and
+// clears the bit, and a real volume scatter sets it (shade_volume.h), so the tint is read here
+// whatever the bounce count. A delta sample multiplies it by the RGB albedo of the delta lobes: the
+// specular and metal lobes share specular_roughness, so they are delta together, and the guide
+// takes both, as Cycles defers the whole specular albedo, rather than the one the lobe choice drew.
+// A non-delta sample writes tint x (diffuse + specular) and the front-facing shading normal and
+// returns the flags with DENOISE_SURFACE_DONE. A material whose base_color or specular_color is
+// set per point has no exact RGB yet: its hit is the denoising surface with magenta albedo, the
+// project's colour for unsupported input. `rec` is overwritten.
+// Ref: Cycles kernel/film/denoising_passes.h film_write_denoising_features_surface (Apache-2.0;
+// denoising_feature_throughput times the deferred specular albedo; the normal is not tinted), read
+// in third_party/_cache/refs/cycles-ed69ef2c6bd3; docs/decisions/0008-film-outputs-denoise.md
+// d15, d22, d23; 0003 d21 (DENOISE_SURFACE_DONE).
+AR_FN uint32_t surface_guides(const KernelGlobals& kg, uint32_t slot, uint32_t sample, uint32_t flags, OpenPBRParams& rec,
+                              const ConstantBlock& block, Real3 N, Real3 wo, bool delta) {
+  AR_ASSERT(kg.path->guide_tint != nullptr);
+  if ((block.guide_flags & GUIDE_RGB_RUNTIME) != 0u) {
+    film_write_guides(kg, sample, Real3{Real(1), Real(0), Real(1)}, N);
+    return flags | DENOISE_SURFACE_DONE;
+  }
+  const Real3 tint = ps_guide_tint(kg, slot);
+  const GuideAlbedo a = surface_guide_albedo(kg, rec, block, dot(wo, N));
+  if (delta) {
+    ps_guide_tint(kg, slot) = Real3{tint.x * a.specular.x, tint.y * a.specular.y, tint.z * a.specular.z};
+    return flags;
+  }
+  const Real3 albedo = a.diffuse + a.specular;
+  film_write_guides(kg, sample, Real3{tint.x * albedo.x, tint.y * albedo.y, tint.z * albedo.z}, N);
+  return flags | DENOISE_SURFACE_DONE;
 }
 
 AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
@@ -374,6 +453,16 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   const Spec r_u = ps_r_u(kg, slot);
   const Real2 u2{camera_path_draw(kg, sample, event_dim(e, EV_BSDF_U)), camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V))};
   const LobeSample bs = stack_sample(*kg.e_diel, *kg.e_spec, rec, frame_from_normal(N), wo, Real(uc), u2, TransportMode::Radiance);
+  // Guides at the denoising surface (surface_guides); a branch on the constant plane offset.
+  if (kg.film->guide_albedo >= 0 && (flags & DENOISE_SURFACE_DONE) == 0u && bs.pdf > Real(0)) {
+    // The material and wo are read again from the path rather than kept live across the lobe sample
+    // (registers); phase 0 built the context from these same fields, so the values are identical.
+    const uint32_t m = hit_material_id(kg, ps_hit_inst(kg, slot), ps_hit_prim(kg, slot));
+    const ConstantBlock& block = s.material_constants[load_ro(&s.material_headers[m].const_offset)];
+    flags = surface_guides(kg, slot, sample, flags, rec, block, N, -normalize(ps_ray_d(kg, slot)),
+                           (bs.flags & LOBE_DELTA) != 0u);
+    ps_flags(kg, slot) = flags;
+  }
   // A reflection below the geometric surface would leave through the wrong side (0005 item 8).
   if (!(bs.pdf > Real(0)) || ((bs.flags & LOBE_REFLECTION) != 0u && !(dot(bs.wi, Ng) > Real(0)))) {
     path_end(kg, slot, Term::ZERO_THROUGHPUT);

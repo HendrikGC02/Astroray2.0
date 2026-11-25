@@ -214,6 +214,75 @@ TEST_CASE("compiler_outputs/runtime slots mark per-point stores") {
   CHECK(constant.compile().compiled.runtime_slots == 0);
 }
 
+// The albedo guide's colours (0008 d15): the exact RGB of a constant base_color or specular_color,
+// clamped as the reflectance lift clamps it; a scalar is grey; a TABLE is projected under D65.
+TEST_CASE("compiler_outputs/guide rgb of constant colour slots") {
+  GB g;
+  g.store(g.add(Op::CONST_F32X3, {0.2f, 1.4f, -0.1f}), ar::RecordSlot::base_color);
+  g.store(g.add(Op::CONST_F32, {0.35f}), ar::RecordSlot::specular_color);
+  const MaterialOutput m = g.compile();
+  REQUIRE_FALSE(m.magenta);
+  const ar::ConstantBlock& b = m.compiled.block;
+  CHECK(b.guide_flags == 0);
+  CHECK(b.guide_base_color[0] == 0.2f);
+  CHECK(b.guide_base_color[1] == 1.0f);
+  CHECK(b.guide_base_color[2] == 0.0f);
+  for (int c = 0; c < 3; ++c) CHECK(b.guide_specular_color[c] == 0.35f);
+  // The default material keeps the OpenPBR defaults' RGB.
+  const MaterialOutput d = GB().compile();
+  for (int c = 0; c < 3; ++c) {
+    CHECK(d.compiled.block.guide_base_color[c] == 0.8f);
+    CHECK(d.compiled.block.guide_specular_color[c] == 1.0f);
+  }
+}
+
+TEST_CASE("compiler_outputs/guide rgb of a table") {
+  // A flat reflectance of 0.5 under the working space's white is 0.5 grey to the white
+  // reflector's tolerance of test_response.cpp ("white reflector is 1 1 1": 5e-4), halved; a table
+  // that only reflects long wavelengths is red.
+  GB flat;
+  flat.store(flat.add(Op::SPECTRUM_TABLE, {1.0f, 360.0f, 0.5f, 830.0f, 0.5f}), ar::RecordSlot::base_color);
+  const MaterialOutput m = flat.compile();
+  REQUIRE_FALSE(m.magenta);
+  REQUIRE(m.compiled.block.base_color.kind == uint8_t(ar::SpectrumKind::TABLE));
+  for (int c = 0; c < 3; ++c) CHECK(std::fabs(double(m.compiled.block.guide_base_color[c]) - 0.5) < 0.5 * 5e-4);
+  GB red;
+  red.store(red.add(Op::SPECTRUM_TABLE, {1.0f, 590.0f, 0.0f, 610.0f, 0.9f}), ar::RecordSlot::base_color);
+  const MaterialOutput r = red.compile();
+  REQUIRE_FALSE(r.magenta);
+  const float* rgb = r.compiled.block.guide_base_color;
+  CHECK(rgb[0] > 0.5f);
+  CHECK(rgb[0] > 4.0f * std::max(rgb[1], 0.0f));
+  CHECK(rgb[2] < 0.02f);
+}
+
+TEST_CASE("compiler_outputs/guide rgb is marked per point") {
+  // A textured base_color and a Mix Shader whose children store colours (as code) have no constant
+  // RGB: the block says so and the albedo guide writes magenta.
+  GB textured;
+  textured.store(tex(textured), ar::RecordSlot::base_color);
+  CHECK((textured.compile().compiled.block.guide_flags & ar::GUIDE_RGB_RUNTIME) != 0);
+  GB spec_textured;
+  spec_textured.store(tex(spec_textured), ar::RecordSlot::specular_color);
+  CHECK((spec_textured.compile().compiled.block.guide_flags & ar::GUIDE_RGB_RUNTIME) != 0);
+  GB mix;
+  for (int32_t child = 0; child < 2; ++child) {
+    const int c = mix.add(Op::CONST_F32X3, {0.1f + 0.5f * float(child), 0.2f, 0.3f});
+    const int st = mix.add(Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::base_color), child});
+    mix.link(c, st, 0);
+  }
+  const int br = mix.add(Op::BRANCH_MIX, {}, {0, 0, 1});
+  mix.link(mix.add(Op::CONST_F32, {0.5f}), br, 0);
+  const MaterialOutput mm = mix.compile();
+  REQUIRE_FALSE(mm.magenta);
+  CHECK((mm.compiled.block.guide_flags & ar::GUIDE_RGB_RUNTIME) != 0);
+  GB rough;  // a per-point scalar leaves the colours constant
+  const int ch = rough.add(Op::CHANNEL_F32X3, {}, {0});
+  rough.link(rough.add(Op::LOAD_CTX_UV, {}, {0}), ch, 0);
+  rough.store(ch, ar::RecordSlot::specular_roughness);
+  CHECK(rough.compile().compiled.block.guide_flags == 0);
+}
+
 TEST_CASE("compiler_outputs/emission estimate constant") {
   GB g;
   g.op2(Op::EMIT_LE, g.add(Op::CONST_F32X3, {1.0f, 0.5f, 0.25f}), g.add(Op::CONST_F32, {3.0f}));

@@ -50,7 +50,12 @@ FilmLayout FilmLayout::build(const FilmRequest& req) {
 
   std::vector<ChannelRequest> all;
   all.push_back({"display", ChannelKind::Moment, 3, ar::kFilmDisplayResponse});
-  for (const ChannelRequest& c : req.extra) all.push_back(c);
+  for (const ChannelRequest& c : req.extra) {
+    // The guide planes come only with `guides`, as a pair: the kernel writes both once one exists.
+    if (c.name == "guide_albedo" || c.name == "guide_normal")
+      throw std::invalid_argument("film: '" + c.name + "' is requested with FilmRequest::guides, not as an extra channel");
+    all.push_back(c);
+  }
   if (req.light_pass) all.push_back({"splat", ChannelKind::Splat, 3, 0});
   if (req.statistics) {
     all.push_back({"bounces", ChannelKind::Add, 1, 0});
@@ -63,6 +68,10 @@ FilmLayout FilmLayout::build(const FilmRequest& req) {
     all.push_back({"aov_normal", ChannelKind::Add, 3, 0});
     all.push_back({"aov_uv", ChannelKind::Add, 2, 0});
     all.push_back({"aov_material", ChannelKind::Add, 1, 0, true});
+  }
+  if (req.guides) {
+    all.push_back({"guide_albedo", ChannelKind::Add, 3, 0});
+    all.push_back({"guide_normal", ChannelKind::Add, 3, 0});
   }
 
   uint32_t moment_channels = 0;
@@ -150,6 +159,8 @@ ar::FilmData FilmLayout::bind(void* base) const {
   d.aov_normal = offset("aov_normal");
   d.aov_uv = offset("aov_uv");
   d.aov_material = offset("aov_material");
+  d.guide_albedo = offset("guide_albedo");
+  d.guide_normal = offset("guide_normal");
   d.film_exposure = 1.0;
   d.inv_radiance_scale = 1.0;
   return d;

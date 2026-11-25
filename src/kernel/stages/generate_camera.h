@@ -102,6 +102,9 @@ AR_FN void stage_generate_camera(const KernelGlobals& kg, uint32_t item, const S
     if (hero > 3u) hero = 3u;
     ps_flags(kg, slot) = set_hero_lane(0u, hero);
   }
+  // Denoiser guides (0008 d15, d23): the tint starts at 1; the flags above leave
+  // DENOISE_SURFACE_DONE clear.
+  if (kg.session.features.guides) ps_guide_tint(kg, slot) = Real3{Real(1), Real(1), Real(1)};
 
   // ray_time exists only with motion blur (M8): the time is neither drawn nor stored without it.
   CameraSample cs;

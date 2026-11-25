@@ -552,6 +552,14 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
                                        camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V)), &wi_l, &glossy);
   const LobeEval bs = sampled ? bsdf_eval(rec, c, ctx.lambda_t, wo_l, wi_l) : LobeEval{spec_fill(Real(0)), Real(0)};
   const Real3 wi = to_world(fr, wi_l);
+  // Denoiser guides at the denoising surface, as stages/shade_surface.h (the stand-in lobes are delta
+  // when the main roughness is, as the stack's specular and metal lobes).
+  if (kg.film->guide_albedo >= 0 && (flags & DENOISE_SURFACE_DONE) == 0u && bs.pdf > Real(0)) {
+    const ConstantBlock& block = s.material_constants[load_ro(&s.material_headers[mat].const_offset)];
+    const Real a = rec.specular_roughness * rec.specular_roughness;
+    flags = surface_guides(kg, slot, sample, flags, rec, block, N, wo, glossy && lobe_is_delta(a, a));
+    ps_flags(kg, slot) = flags;
+  }
   if (!(bs.pdf > Real(0)) || (wi_l.z * wo_l.z > Real(0) && !(dot(wi, Ng) > Real(0)))) {
     path_end(kg, slot, Term::ZERO_THROUGHPUT);
     return;

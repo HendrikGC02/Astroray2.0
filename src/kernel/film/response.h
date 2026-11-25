@@ -6,6 +6,11 @@
 // where w_i is 0003's film_weights (1/(4 pf_i), or the terminated form), so the 1/N and 1/p of
 // 0008 d7 are already inside it. Accumulation is in double on both targets: the resolve
 // sums in double (0008 d3), and the float and double builds then differ only by the inputs.
+// The functions take the arithmetic type T as their one template parameter, double by default
+// (every resolve call). A shade kernel, which may not use double on the GPU (0002 D1, D8), calls
+// the float instantiation: the albedo guide of an escaped path (0008 d15). Both read the same
+// tables; the double ones (photon scale, Y_w, M_ws, film exposure) are read as T at the point of
+// use through response_scalar, which converts without a double instruction.
 // R is piecewise linear between its knots and 0 outside them.
 // Ref: docs/decisions/0008-film-outputs-denoise.md d7 (channels, display, film_exposure), d3;
 // 0003 d2, d5, d11 (Y_w = Y_n), d13 (lambda_f, h and c); conversion at sample time after
@@ -51,54 +56,93 @@ struct ResponseTableView {
   double m_ws[9];       // XYZ -> working space, row-major
 };
 
+// The float nearest to d (round to nearest, ties to even, as a float(d) conversion), computed from
+// d's bits with integer arithmetic: ptxas rejects any double instruction in a shade kernel, a
+// conversion included (0002 D1). Infinities and NaN keep their class; doubles below the float
+// range round to signed zero or a subnormal.
+// Ref: IEEE 754-2008 sections 3.4 (binary64 and binary32 encodings) and 4.3.1 (roundTiesToEven).
+AR_FN float f64_bits_to_f32(double d) {
+  const uint64_t b = bit_cast<uint64_t>(d);
+  const uint32_t sign = uint32_t(b >> 63) << 31;
+  const int32_t e64 = int32_t((b >> 52) & 0x7ffu);
+  const uint64_t m64 = b & ((uint64_t(1) << 52) - 1u);
+  if (e64 == 0x7ff) return bit_cast<float>(sign | 0x7f800000u | (m64 != 0u ? 0x00400000u : 0u));
+  if (e64 == 0) return bit_cast<float>(sign);  // zero or a double subnormal: far below the float range
+  int32_t e = e64 - 1023 + 127;
+  // The significand with its leading 1, and the bits dropped to reach 24 significant bits (more for
+  // a float subnormal).
+  const uint64_t sig = m64 | (uint64_t(1) << 52);
+  const int32_t shift = e > 0 ? 29 : 29 + 1 - e;
+  if (shift > 53) return bit_cast<float>(sign);
+  uint64_t m = sig >> shift;
+  const uint64_t rem = sig & ((uint64_t(1) << shift) - 1u), half = uint64_t(1) << (shift - 1);
+  if (rem > half || (rem == half && (m & 1u) != 0u)) ++m;
+  if (e <= 0) return bit_cast<float>(sign | uint32_t(m));  // a subnormal; m = 2^23 is the smallest normal
+  if (m == (uint64_t(1) << 24)) m >>= 1, ++e;  // the rounding carried into the exponent
+  if (e >= 255) return bit_cast<float>(sign | 0x7f800000u);
+  return bit_cast<float>(sign | (uint32_t(e) << 23) | (uint32_t(m) & 0x7fffffu));
+}
+
+// A double table value as the arithmetic type T.
+template <class T>
+AR_FN T response_scalar(double d) {
+  if constexpr (sizeof(T) == sizeof(double)) return T(d);
+  else return T(f64_bits_to_f32(d));
+}
+
 // R_k at lambda in nm; 0 outside [first knot, last knot] and for NaN.
-AR_FN double response_at(const ResponseTableView& t, const ResponseChannel& ch, double lambda) {
+template <class T = double>
+AR_FN T response_at(const ResponseTableView& t, const ResponseChannel& ch, T lambda) {
   const float* nm = t.knot_nm + ch.first;
   const float* val = t.knot_value + ch.first;
   uint32_t lo = 0;
   uint32_t hi = ch.count - 1u;
-  if (!(lambda >= double(load_ro(nm + lo)) && lambda <= double(load_ro(nm + hi)))) return double(0);
+  if (!(lambda >= T(load_ro(nm + lo)) && lambda <= T(load_ro(nm + hi)))) return T(0);
   // nm[lo] <= lambda <= nm[hi] holds throughout; lambda at the last knot ends with lo = count - 2.
   while (hi - lo > 1u) {
     const uint32_t mid = (lo + hi) >> 1;
-    if (double(load_ro(nm + mid)) <= lambda) lo = mid;
+    if (T(load_ro(nm + mid)) <= lambda) lo = mid;
     else hi = mid;
   }
-  const double n0 = double(load_ro(nm + lo));
-  const double n1 = double(load_ro(nm + hi));
-  const double v0 = double(load_ro(val + lo));
-  const double v1 = double(load_ro(val + hi));
+  const T n0 = T(load_ro(nm + lo));
+  const T n1 = T(load_ro(nm + hi));
+  const T v0 = T(load_ro(val + lo));
+  const T v1 = T(load_ro(val + hi));
   return v0 + (lambda - n0) / (n1 - n0) * (v1 - v0);
 }
 
 // channel < t.channel_count is the caller's contract (the host validates the request).
-AR_FN double convert(const ResponseTableView& t, const Spec& L, const Lambda& lf, const Spec& w,
-                     uint32_t channel) {
+template <class T = double>
+AR_FN T convert(const ResponseTableView& t, const Spec& L, const Lambda& lf, const Spec& w, uint32_t channel) {
   AR_ASSERT(channel < t.channel_count);
   const ResponseChannel ch = t.channels[channel];
-  double sum = double(0);
+  T sum = T(0);
   for (int i = 0; i < kLanes; ++i) {
-    const double lambda = double(lf.nm[i]);
-    const double wu = ch.unit == RESPONSE_PHOTON ? lambda * t.photon_scale : double(1);
-    sum += double(L.v[i]) * response_at(t, ch, lambda) * wu * double(w.v[i]);
+    const T lambda = T(lf.nm[i]);
+    const T wu = ch.unit == RESPONSE_PHOTON ? lambda * response_scalar<T>(t.photon_scale) : T(1);
+    sum += T(L.v[i]) * response_at<T>(t, ch, lambda) * wu * T(w.v[i]);
   }
   return sum;
 }
 
-struct DisplayRgb {
-  double v[3];
+template <class T>
+struct DisplayRgbOf {
+  T v[3];
 };
+using DisplayRgb = DisplayRgbOf<double>;
 
 // M_ws * XYZ / Y_w * film_exposure, XYZ_k = convert(xbar, ybar, zbar) (0003 d11, 0008 d7).
 // film_exposure scales display and light-pass channels only, never science channels.
-AR_FN DisplayRgb display_rgb(const ResponseTableView& t, const Spec& L, const Lambda& lf,
-                             const Spec& w, double film_exposure) {
-  double xyz[3];
-  for (int k = 0; k < 3; ++k) xyz[k] = convert(t, L, lf, w, t.display_first + uint32_t(k));
-  const double s = film_exposure / t.y_w;
-  DisplayRgb out;
+template <class T = double>
+AR_FN DisplayRgbOf<T> display_rgb(const ResponseTableView& t, const Spec& L, const Lambda& lf, const Spec& w,
+                                  double film_exposure) {
+  T xyz[3];
+  for (int k = 0; k < 3; ++k) xyz[k] = convert<T>(t, L, lf, w, t.display_first + uint32_t(k));
+  const T s = response_scalar<T>(film_exposure) / response_scalar<T>(t.y_w);
+  DisplayRgbOf<T> out;
   for (int r = 0; r < 3; ++r)
-    out.v[r] = s * (t.m_ws[3 * r] * xyz[0] + t.m_ws[3 * r + 1] * xyz[1] + t.m_ws[3 * r + 2] * xyz[2]);
+    out.v[r] = s * (response_scalar<T>(t.m_ws[3 * r]) * xyz[0] + response_scalar<T>(t.m_ws[3 * r + 1]) * xyz[1] +
+                    response_scalar<T>(t.m_ws[3 * r + 2]) * xyz[2]);
   return out;
 }
 

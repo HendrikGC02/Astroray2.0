@@ -8,16 +8,19 @@
 // float and double copies of each case use the same pins and tolerances.
 #include <doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "../../src/host/data_resource.h"
+#include "../gpu/agree.h"
 #include "film/response.h"
 #include "host/film/response_table.h"
 
@@ -273,5 +276,47 @@ TEST_SUITE("fast") {
     CHECK_THROWS_AS(host::add_response_channel(t, bad), std::invalid_argument);
     CHECK(t.channels.size() == 3u);  // nothing was added by a refused request
     CHECK(t.knot_nm.size() == 3u * 471u);
+  }
+
+  AR_RT_CASE("response/float conversion against double") {
+    // The float instantiation a shade kernel calls (the escaped path's albedo guide, 0008 d15)
+    // against the resolve's double one: the real observer tables, wavelengths over the display
+    // range, radiances over six decades, film weights over a 40:1 range and exposures over 2^+-4. The bound is
+    // 0002 D12's float-against-double evaluation threshold (tests/gpu/agree.h PROD_VS_CPU_F64,
+    // eval_p999), applied here to the maximum over every input as agree.h's REL_L2 metric.
+    // The bitwise double-to-float read the float path uses for the double table values rounds as
+    // a float conversion does, normals, subnormals, ties and specials included.
+    const host::ResponseTable t = host::make_response_table(load_observer());
+    const ar::ResponseTableView v = host::response_view(t);
+    std::mt19937_64 rng(0x174u);
+    std::uniform_real_distribution<double> uni(0.0, 1.0);
+    double worst = 0.0;
+    for (int n = 0; n < 20000; ++n) {
+      Lambda lf;
+      Spec L, w;
+      for (int i = 0; i < ar::kLanes; ++i) {
+        lf.nm[i] = Real(360.0 + 470.0 * uni(rng));
+        L.v[i] = Real(std::pow(10.0, -3.0 + 6.0 * uni(rng)));
+        w.v[i] = Real(0.05 + 2.0 * uni(rng));
+      }
+      const double exposure = std::pow(2.0, -4.0 + 8.0 * uni(rng));
+      const ar::DisplayRgb d = ar::display_rgb(v, L, lf, w, exposure);
+      const ar::DisplayRgbOf<float> f = ar::display_rgb<float>(v, L, lf, w, exposure);
+      double num = 0.0, den = 0.0;
+      for (int k = 0; k < 3; ++k) num += (double(f.v[k]) - d.v[k]) * (double(f.v[k]) - d.v[k]), den += d.v[k] * d.v[k];
+      worst = std::max(worst, std::sqrt(num / den));
+    }
+    MESSAGE("float display conversion: max relative L2 error " << worst);
+    CHECK(worst <= astroray::agree::PROD_VS_CPU_F64.eval_p999);
+    const double values[] = {0.0, -0.0, 1.0, -2.5, 3.0e38, 3.5e38, -1.0e300, 1.0e-300, 1.17549435e-38, 1.0e-40,
+                             1.401298464324817e-45, 7.006492321624085e-46, 1.0 + std::ldexp(1.0, -24),
+                             1.0 + 3.0 * std::ldexp(1.0, -24), 5.0e15, 0.1, -0.7, 655.0, 1.0e-39,
+                             std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
+    for (double x : values) CHECK_MESSAGE(ar::f64_bits_to_f32(x) == float(x), "value " << x);
+    CHECK(std::isnan(ar::f64_bits_to_f32(std::numeric_limits<double>::quiet_NaN())));
+    for (int n = 0; n < 100000; ++n) {
+      const double x = (uni(rng) - 0.5) * std::pow(10.0, -50.0 + 90.0 * uni(rng));
+      REQUIRE_MESSAGE(ar::f64_bits_to_f32(x) == float(x), "value " << x);
+    }
   }
 }

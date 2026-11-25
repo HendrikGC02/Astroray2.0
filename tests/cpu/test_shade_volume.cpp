@@ -85,6 +85,7 @@ struct StageRig {
     path.prev_dist = prev_dist.data(), path.medium_rng = medium_rng.data();
     film.slot_capacity = kN, film.slot_flags = slot_flags.data(), film.slot_L = slot_L.data();
     film.bounce_sum = film.bounce_max = film.bounce_paths = film.term_hist = -1;
+    film.guide_albedo = film.guide_normal = -1;  // no denoiser guides unless a case asks
     kg.scene = &scene, kg.path = &path, kg.main_queue = queue.data(), kg.tables = &tables, kg.film = &film;
     kg.active_pixels = active.data();
     kg.session.samples_per_pass = 1, kg.session.seed = 11, kg.session.sampler_mode = ar::SAMPLER_SOBOL;
@@ -169,6 +170,31 @@ TEST_CASE("shade_volume/absorption and bounce limits end the path") {
   CHECK(v.term[0] == uint8_t(ar::Term::MAX_BOUNCE));
   CHECK(v.next[1] == uint8_t(Stage::INTERSECT_CLOSEST));  // scatter 2 of at most 2 continues
   CHECK(v.term[2] == uint8_t(ar::Term::MAX_BOUNCE));
+}
+
+TEST_CASE("shade_volume/a scatter before the denoising surface ends the guides") {
+  // Pass-through fog (0008 d15, PROVISIONAL): with guide planes, a real scatter sets
+  // DENOISE_SURFACE_DONE, writes nothing (both planes stay 0 and finite) and leaves the tint; a path
+  // that crosses the medium without scattering keeps the bit clear for its surface.
+  StageRig r;
+  r.medium(0.0f, 1.0e4f, 0.5f);
+  std::vector<float> add(6u * StageRig::kN, 0.0f);
+  std::vector<ar::Real3> tint(StageRig::kN, ar::Real3{1, 1, 1});
+  r.film.add = add.data(), r.film.plane_stride = StageRig::kN, r.film.guide_albedo = 0, r.film.guide_normal = 3;
+  r.path.guide_tint = tint.data();
+  r.kg.session.features.guides = true;
+  r.run();
+  REQUIRE(r.next[0] == uint8_t(Stage::INTERSECT_CLOSEST));
+  CHECK((r.flags[0] & ar::DENOISE_SURFACE_DONE) != 0u);
+  for (float v : add) CHECK(v == 0.0f);
+  CHECK(tint[0].x == ar::Real(1));
+  StageRig vac;  // vacuum: the segment reaches its surface
+  vac.film.add = add.data(), vac.film.plane_stride = StageRig::kN, vac.film.guide_albedo = 0, vac.film.guide_normal = 3;
+  vac.path.guide_tint = tint.data();
+  vac.kg.session.features.guides = true;
+  vac.run();
+  CHECK(vac.next[0] == uint8_t(Stage::SHADE_SURFACE));
+  CHECK((vac.flags[0] & ar::DENOISE_SURFACE_DONE) == 0u);
 }
 
 TEST_CASE("shade_volume/unsupported media end INVALID") {
