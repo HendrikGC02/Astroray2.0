@@ -15,5 +15,4 @@ Canary: tasks/210.canary.patch must turn red: `tools/lint.py --self-test` (row (
 Budget: gate +0.9 s declared (one tools fixture case in the 'tools tests' step; fixtures have measured about 3 times their declared seconds, 204's +2.7 of 0.3; stop and ask above 1.5 s); fast +0 s (`--timing` is off by default: state `check fast` before and after, 9.0-9.1 s of 10 s today); a landing gains the settle phase: state its seconds; kernel rows: none; B-08 unchanged.
 Depends on: none (204 landed). Collisions: tools/land.ps1 and lib/landing.ps1 with nothing open; tools/lint.py with 212 only if 212 edits it; tests/tools/run_fast.ps1; bench/history append; the later one rebases.
 Size: S (about 90 lines of script and fixture); stop and report at 2x or when the table says stop.
-Progress:
 Progress: 210 measured: row (b) (cold cost is lint's read of rewritten files, +0.4 s on rebase, none on canary; ls-files/stat flat); no settle step. Files: tools/lint.py, tasks/210.canary.patch, this file.
