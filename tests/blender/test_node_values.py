@@ -36,10 +36,10 @@ ENGINE_SPP = 64
 EVIDENCE = os.path.join(T.ROOT, "out", "evidence", "189")
 
 # Every row of lowering_table.LOWERING: the case that checks its value, or one of the fixed reasons it
-# has none. A case name must be a test method of TestNodeValues. ShaderNodeMixShader is listed ahead of
-# its lowering (166): Mix Shader selects stochastically, which is transport and not a node value.
+# has none. A case name must be a test method of TestNodeValues. A Mix Shader selects stochastically and a
+# Transparent BSDF folds into opacity: transport, not node values (tests/blender/headless/test_lowering.py).
 REASONS = ("output node", "coordinate source: covered through its consumer", "spectral value: item 36",
-           "selection: 148")
+           "selection: 148", "opacity fold: 148")
 COVERAGE = {
     "ShaderNodeBsdfPrincipled": "test_linear_texture",  # Emission Color from a texture, colour to float below
     "ShaderNodeEmission": "test_emission_node",
@@ -52,6 +52,7 @@ COVERAGE = {
     "ShaderNodeOutputWorld": "output node",
     "ShaderNodeBackground": "test_environment_texture_linear",  # Color times a Strength of 1.25
     "ShaderNodeMixShader": "selection: 148",
+    "ShaderNodeBsdfTransparent": "opacity fold: 148",
 }
 
 

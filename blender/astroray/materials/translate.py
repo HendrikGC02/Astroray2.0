@@ -16,6 +16,10 @@ and the compiler contract: constant colours go to STORE_SLOT as F32X3 (the slot
 lifts them), RGB_LIFT is used only on the texture path because it never folds, and one value never
 feeds two EMIT_LE nodes, so constants are never shared between emitters.
 Ref: src/host/material/graph.cpp (parameter counts, socket order), vm/ops/store_slot.h (RecordSlot).
+Ref: docs/decisions/0007-appendix-abi.md `ar_graph_desc` and 0005 item 38 (a Mix Shader is a BRANCH_MIX node {tag, a, b}
+over children; STORE_SLOT and EMIT_LE carry an optional last i32 `child`), Cycles kernel/svm/closure.h svm_node_mix_closure
+(first closure input weight 1 - f, second f; f saturated) and the Principled metallic branch (F0 = base colour, F82 =
+specular tint, no Specular IOR Level: line 261 ff. against 363 ff.).
 Ref: Blender source/blender/nodes/shader/nodes/node_shader_emission.cc (Color, Strength) and
 node_shader_blackbody.cc (Temperature, Color output); Cycles kernel/svm/convert.h NODE_CONVERT_CF
 (a colour linked to a float socket becomes its scene-linear luminance, the COLOR_TO_F32 op).
@@ -38,6 +42,10 @@ SLOT_SPECULAR_ROUGHNESS = _ops.RECORD_SLOT["specular_roughness"]
 SLOT_BASE_WEIGHT = _ops.RECORD_SLOT["base_weight"]
 SLOT_GEOMETRY_OPACITY = _ops.RECORD_SLOT["geometry_opacity"]
 SLOT_BASE_COLOR = _ops.RECORD_SLOT["base_color"]
+SLOT_BASE_METALNESS = _ops.RECORD_SLOT["base_metalness"]
+# Blender's default Specular IOR Level: Cycles' dielectric F0 is unchanged there, and 2L = 1 leaves the
+# engine's metal (scaled by specular_weight, OpenPBR) equal to Cycles' (which is not).
+_DEFAULT_SPECULAR_LEVEL = 0.5
 SEM_REFLECTANCE = _ops.SEMANTIC["REFLECTANCE"]
 TEX_LINEAR, TEX_EXTEND = _ops.TEX_MODE["LINEAR"], _ops.TEX_MODE["EXTEND"]
 # Blender's Cycles property group `material.cycles.emission_sampling` items; the ABI has
@@ -46,12 +54,12 @@ EMISSION_SAMPLING_NAMES = ("NONE", "AUTO", "FRONT", "BACK", "FRONT_BACK")
 _IMAGE_SOURCES = frozenset(("FILE", "GENERATED"))
 
 # Principled inputs lowered by this module; every other one must be at its default and unlinked.
-_LOWERED_INPUTS = frozenset(("Base Color", "Roughness", "Specular IOR Level", "Emission Color",
+_LOWERED_INPUTS = frozenset(("Base Color", "Metallic", "Roughness", "Specular IOR Level", "Emission Color",
                              "Emission Strength", "Alpha"))
 # Blender 5.3 defaults (probed from a new node; a test compares this table with a fresh node, so a
 # Blender update that moves one fails there). None: only a link matters (hidden vector sockets).
 _DEFAULTS = {
-    "Metallic": 0.0, "IOR": 1.5, "Thin Wall": False, "Normal": None,
+    "IOR": 1.5, "Thin Wall": False, "Normal": None,
     "Diffuse Roughness": 0.0, "Subsurface Weight": 0.0, "Subsurface Radius": (1.0, 0.2, 0.1),
     "Subsurface Scale": 0.005, "Subsurface IOR": 1.4, "Subsurface Anisotropy": 0.0,
     "Specular Tint": (1.0, 1.0, 1.0, 1.0), "Anisotropic": 0.0, "Anisotropic Rotation": 0.0,
@@ -78,6 +86,9 @@ class GraphEmitter:
         self.strings = []
         self.emission_sampling = "AUTO"  # materials only
         self.inline_s = 0.0  # seconds spent in inline_shader_nodes() (M-8 measurement)
+        self.child = None    # closure child the stores and emissions being lowered belong to; None outside a Mix
+        self.children = 0    # children handed out so far
+        self.mixes = 0       # Mix tags handed out so far
 
     def add(self, op, f32=(), i32=(), string=None):
         """Appends one op node and returns its index."""
@@ -99,8 +110,13 @@ class GraphEmitter:
     def const_rgb(self, rgb):
         return self.add("CONST_F32X3", f32=tuple(float(c) for c in rgb[:3]))
 
+    def child_params(self):
+        """The optional trailing `child` i32 of STORE_SLOT and EMIT_LE: absent outside a Mix, so a graph
+        without one keeps its words (0007 appendix)."""
+        return () if self.child is None else (self.child,)
+
     def store(self, slot, src):
-        n = self.add("STORE_SLOT", i32=(slot,))
+        n = self.add("STORE_SLOT", i32=(slot,) + self.child_params())
         self.link(src, n, 0)
 
     def unsupported(self, label):
@@ -133,7 +149,7 @@ class GraphEmitter:
 def lowered_types():
     """Node types this module lowers; equal to the rows of lowering_table.LOWERING."""
     return frozenset(_LOWER_SHADER) | frozenset(_LOWER_VALUE) | frozenset(
-        ("ShaderNodeOutputMaterial", "ShaderNodeOutputWorld", "ShaderNodeBackground",
+        ("ShaderNodeMixShader", "ShaderNodeOutputMaterial", "ShaderNodeOutputWorld", "ShaderNodeBackground",
          "ShaderNodeBlackbody"))
 
 
@@ -356,6 +372,28 @@ def _float(em, sock, keymap, label):
     return n, None
 
 
+def _metallic(em, ins, keymap):
+    """Metallic to base_metalness (a colour linked to it becomes its luminance). Blender saturates it.
+    Cycles' metal ignores Specular IOR Level and the engine's, as OpenPBR's, is scaled by
+    specular_weight = 2L, so the two differ whenever the metal is present and L is not 0.5; there is no
+    way to report an approximation from here, so that combination is reported unsupported rather than
+    rendered with a different metal (0005 item 42)."""
+    sock = ins["Metallic"]
+    linked = _link_of(sock) is not None
+    if not linked and sock.default_value == 0.0:
+        return
+    level = ins["Specular IOR Level"]
+    if _link_of(level) is not None or abs(level.default_value - _DEFAULT_SPECULAR_LEVEL) > 1e-6:
+        em.unsupported("Principled BSDF.Specular IOR Level")
+        return
+    if linked:
+        v, _ = _float(em, sock, keymap, "Principled BSDF.Metallic")
+    else:
+        v = em.const_f32(min(max(float(sock.default_value), 0.0), 1.0))
+    if v is not None:
+        em.store(SLOT_BASE_METALNESS, v)
+
+
 def _principled(em, node, keymap):
     ins = node.inputs
     # `distribution` (GGX or Multiscatter GGX) and `subsurface_method` are not checked: 0005 item
@@ -376,6 +414,7 @@ def _principled(em, node, keymap):
     base = _colour(em, ins["Base Color"], keymap, "Principled BSDF.Base Color", lift=True)
     if base is not None:
         em.store(SLOT_BASE_COLOR, base)
+    _metallic(em, ins, keymap)
     rough, _ = _float(em, ins["Roughness"], keymap, "Principled BSDF.Roughness")
     if rough is not None:
         em.store(SLOT_SPECULAR_ROUGHNESS, rough)
@@ -398,30 +437,98 @@ def _principled(em, node, keymap):
     _emit(em, ins["Emission Color"], ins["Emission Strength"], keymap, "Principled BSDF")
 
 
-def _emit(em, color_sock, strength_sock, keymap, who):
-    """One EMIT_LE from an emission colour and a strength input; nothing for a constant strength 0."""
-    if _link_of(strength_sock) is None and strength_sock.default_value == 0.0:
+def _emit(em, color_sock, strength_sock, keymap, who, keep_zero=False):
+    """One EMIT_LE from an emission colour and a strength input; nothing for a constant strength 0 unless
+    `keep_zero`: an Emission child of a Mix must stay an emission child (black), which the compiler
+    recognises by its EMIT_LE, not become a default BSDF child."""
+    if not keep_zero and _link_of(strength_sock) is None and strength_sock.default_value == 0.0:
         return False
     strength, const = _float(em, strength_sock, keymap, f"{who}.{strength_sock.name}")
-    if strength is None or const == 0.0:
+    if strength is None or (const == 0.0 and not keep_zero):
         return False
     col = _colour(em, color_sock, keymap, f"{who}.{color_sock.name}", lift=False, emission=True)
     if col is None:
         return False
-    e = em.add("EMIT_LE")
+    e = em.add("EMIT_LE", i32=em.child_params())
     em.link(col, e, 0)
     em.link(strength, e, 1)
     return True
 
 
 def _emission(em, node, keymap):
-    """An Emission node: only emits, so the base and specular lobes are switched off."""
-    em.store(SLOT_BASE_WEIGHT, em.const_f32(0.0))
-    em.store(SLOT_SPECULAR_WEIGHT, em.const_f32(0.0))
-    _emit(em, node.inputs["Color"], node.inputs["Strength"], keymap, "Emission")
+    """An Emission node: only emits. On its own the base and specular lobes are switched off; as a Mix
+    child it is only an EMIT_LE, the shape the compiler prunes from the selection (0005 item 38)."""
+    if em.child is None:
+        em.store(SLOT_BASE_WEIGHT, em.const_f32(0.0))
+        em.store(SLOT_SPECULAR_WEIGHT, em.const_f32(0.0))
+    _emit(em, node.inputs["Color"], node.inputs["Strength"], keymap, "Emission", keep_zero=em.child is not None)
 
 
-_LOWER_SHADER = {"ShaderNodeBsdfPrincipled": _principled, "ShaderNodeEmission": _emission}
+def _transparent(em, node, keymap):
+    """A Transparent BSDF as a constant geometry_opacity 1 - mean(colour): white is opacity 0 (exact), any
+    other colour is folded by its mean, which the compiler reports NODE_APPROXIMATED under a Mix (0005
+    item 38). A linked colour has no constant mean and is reported."""
+    col = node.inputs["Color"]
+    if _link_of(col) is not None:
+        report_link(em, col, "Transparent.Color")
+        return
+    rgb = tuple(col.default_value)[:3]
+    if em.child is None and any(abs(c - 1.0) > 1e-6 for c in rgb):
+        # Alone, the compiler would read the opacity as a plain material and render the opaque part as a
+        # dielectric where Cycles absorbs it: no lowering, never a silent change.
+        em.unsupported("Transparent.Color")
+        return
+    em.store(SLOT_GEOMETRY_OPACITY, em.const_f32(1.0 - sum(rgb) / 3.0))
+
+
+def _closure(em, node, keymap, in_mix=False):
+    """Lowers one shader node: a leaf takes the next child id inside a Mix (`in_mix`); a Mix Shader returns the
+    mix reference of its BRANCH_MIX. Returns the child id (>= 0) or mix_ref (< 0) its parent names, or
+    None when something below has no lowering (already reported by scan_unsupported or by name)."""
+    if node.bl_idname == "ShaderNodeMixShader":
+        return _mix(em, node, keymap)
+    fn = _LOWER_SHADER.get(node.bl_idname)
+    if fn is None:
+        if in_mix and node.bl_idname in lowered_types():
+            em.unsupported("Mix Shader.Shader")  # a lowered node that is not a shader (an unlowered one is already reported)
+        return None
+    if not in_mix:
+        fn(em, node, keymap)  # the whole surface: one implicit child, the words a graph without a Mix always had
+        return 0
+    child = em.children
+    em.children += 1
+    em.child = child
+    try:
+        fn(em, node, keymap)
+    finally:
+        em.child = None
+    return child
+
+
+def _mix(em, node, keymap):
+    """A Mix Shader as BRANCH_MIX {tag, a, b} over its two lowered inputs (0005 item 38: selected, never
+    lerped). The factor is a constant or a float link (a colour becomes its luminance). A shader input
+    with no link has no closure to select and is reported."""
+    tag = em.mixes
+    em.mixes += 1
+    sides = []
+    for sock in list(node.inputs)[1:3]:
+        lk = _link_of(sock)
+        if lk is None:
+            em.unsupported("Mix Shader.Shader")
+            sides.append(None)
+        else:
+            sides.append(_closure(em, lk.from_node, keymap, in_mix=True))
+    factor, _ = _float(em, node.inputs["Fac"], keymap, "Mix Shader.Fac")
+    if factor is None or None in sides:
+        return None
+    n = em.add("BRANCH_MIX", i32=(tag, sides[0], sides[1]))
+    em.link(factor, n, 0)
+    return -1 - tag
+
+
+_LOWER_SHADER = {"ShaderNodeBsdfPrincipled": _principled, "ShaderNodeEmission": _emission,
+                 "ShaderNodeBsdfTransparent": _transparent}
 
 
 def _surface(em, tree, keymap, out_type, label):
@@ -462,9 +569,8 @@ def translate_material(material, keymap, op_id):
     src = _surface(em, tree, keymap, "ShaderNodeOutputMaterial", "Material Output")
     if src is None:
         return em
-    fn = _LOWER_SHADER.get(src.bl_idname)
-    if fn is not None:
-        fn(em, src, keymap)
+    if src.bl_idname in _LOWER_SHADER or src.bl_idname == "ShaderNodeMixShader":
+        _closure(em, src, keymap)
     elif src.bl_idname in lowered_types():
         em.unsupported("Material Output.Surface")  # a lowered node that is not a shader
     return em

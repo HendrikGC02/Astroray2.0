@@ -19,12 +19,22 @@ LOWERING = {
     "ShaderNodeBsdfPrincipled": {
         "disposition": "implemented",
         "ops": ["CONST_F32", "CONST_F32X3", "RGB_LIFT", "STORE_SLOT", "EMIT_LE", "COLOR_TO_F32", "MUL_F32", "BLACKBODY"],
-        "note": "Base Color; Roughness; Specular IOR Level as specular_weight 2L; Alpha as geometry_opacity; Emission; a colour linked to Roughness or Specular IOR Level or Alpha or Emission Strength becomes its luminance (the level then times 2); every other input at a non-default value or linked is magenta until M1b",
+        "note": "Base Color; Metallic as base_metalness; Roughness; Specular IOR Level as specular_weight 2L; Alpha as geometry_opacity; Emission; a colour linked to Metallic or Roughness or Specular IOR Level or Alpha or Emission Strength becomes its luminance (the level then times 2); Cycles' metal ignores Specular IOR Level and the engine's is scaled by 2L so Metallic above 0 with a level other than 0.5 or a linked level is magenta (Specular IOR Level named); every other input at a non-default value or linked is magenta until M1b",
     },
     "ShaderNodeEmission": {
         "disposition": "implemented",
         "ops": ["CONST_F32", "CONST_F32X3", "STORE_SLOT", "EMIT_LE", "COLOR_TO_F32", "BLACKBODY"],
         "note": "Color times Strength into EMIT_LE with base_weight and specular_weight 0 so the material only emits",
+    },
+    "ShaderNodeMixShader": {
+        "disposition": "implemented",
+        "ops": ["BRANCH_MIX", "CONST_F32", "COLOR_TO_F32", "STORE_SLOT", "EMIT_LE"],
+        "note": "two lowered shaders (Principled or Emission or Transparent or another Mix) selected by the factor with probability f for the second (never lerped); the factor is a constant or a float link; an unlinked shader input or a non-shader node in one is magenta; as a Mix child an Emission is only its EMIT_LE even at strength 0",
+    },
+    "ShaderNodeBsdfTransparent": {
+        "disposition": "implemented",
+        "ops": ["CONST_F32", "STORE_SLOT"],
+        "note": "geometry_opacity 1 minus the mean colour so white is opacity 0; a non-white colour is folded by its mean and the compiler reports it NODE_APPROXIMATED under a Mix; as the whole surface only white lowers and any other colour is magenta (Transparent.Color); a linked colour is magenta",
     },
     "ShaderNodeBlackbody": {
         "disposition": "implemented",

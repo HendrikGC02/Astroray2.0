@@ -90,6 +90,8 @@ attr NodeSocket.type
 attr NodeLink.from_socket
 attr ShaderNodeEmission.inputs
 attr ShaderNodeBlackbody.inputs
+attr ShaderNodeMixShader.inputs
+attr ShaderNodeBsdfTransparent.inputs
 
 # Images and colour management (0007 d21; sync/images.py, settings.py). interop ids are new in 5.x.
 attr Image.colorspace_settings.interop_id

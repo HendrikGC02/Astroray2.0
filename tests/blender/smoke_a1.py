@@ -284,6 +284,44 @@ class TestSmoke(unittest.TestCase):
         # "astroray: " prefix is added only where _report raises RenderFailed for an ERROR entry.
         self.assertIn("astroray: GENERATION_REJECTED:", str(cm.exception))
 
+    def test_metallic_sphere_both_devices(self):
+        """A Principled Metallic sphere lowered by the addon and rendered through F12 on CPU and CUDA in this
+        start: each sphere mean is the world's within 163's furnace band, and the two devices' frame means
+        agree within the pair_image check's bound (tools/analytic.py)."""
+        work = arg("--work", os.path.join(ROOT, "out", "smoke"))
+        evidence = os.path.join(ROOT, "out", "evidence", "166")
+        os.makedirs(evidence, exist_ok=True)
+        scene = build_metal_scene()
+        runs, w = {}, np.array(F12_LUMA)
+        for device in ("CPU", "CUDA"):
+            runs[device.lower()] = TestF12Textured._render_device(self.state["rf"], scene, device, work, evidence,
+                                                                  "f12_metal")
+        for device, run in runs.items():
+            self.assertEqual(run["kind"], device, f"the engine rendered on {run['kind']}")
+            crop = run["mean"][:, F12_SIZE // 4: 3 * F12_SIZE // 4, F12_SIZE // 4: 3 * F12_SIZE // 4]
+            ratio = float(np.tensordot(w, crop, axes=1).mean()) / METAL_WORLD
+            print(f"RESULT smoke metal {device} sphere mean over world {ratio:.5f} band {METAL_BAND}")
+            self.assertGreaterEqual(ratio, METAL_BAND[0], device)
+            self.assertLessEqual(ratio, METAL_BAND[1], device)
+        # A white metal and a white dielectric are both near-lossless in a white furnace, so the means above cannot
+        # tell whether Metallic reached the engine: read the graph the extension lowers for this material (the one
+        # both devices were sent) and require the base_metalness store of 1.
+        tr = importlib.import_module(MODULE + ".materials.translate")
+        ops = importlib.import_module(MODULE + "._ops")
+        em = tr.translate_material(scene.objects["MetalBall"].active_material,
+                                   importlib.import_module(MODULE + ".sync.keys").KeyMap(), ops.OP_ID)
+        self.assertEqual(em.unsupported_count(), 0)
+        slot, store, const = ops.RECORD_SLOT["base_metalness"], ops.OP_ID["STORE_SLOT"], ops.OP_ID["CONST_F32"]
+        fed = [(em.nodes[k[0]], em.f32[em.nodes[k[0]][1]]) for k in em.links
+               if em.nodes[k[2]][0] == store and em.i32[em.nodes[k[2]][3]] == slot]
+        self.assertEqual([(n[0], v) for n, v in fed], [(const, 1.0)], "Metallic 1 must reach base_metalness")
+        renders = {k: (r["mean"], r["var"]) for k, r in runs.items()}
+        (name, passed, reasons, worst, cmean, tmean), = analytic.check_scene(
+            None, None, [("f12 metal cpu~cuda", w, ("cpu", "cuda"), "pair_image")], analytic.family_m(), 0.0,
+            renders=renders)
+        print(f"RESULT smoke metal agree: {'ok' if passed else 'FAIL'} cpu {cmean:.6f} cuda {tmean:.6f}")
+        self.assertTrue(passed, f"{name}: {reasons}")
+
     def test_exporter_equivalence(self):
         t = meta.load(os.path.join(ROOT, "scenes", "a1_furnace", "meta.toml"))["truth"]
         # The storage error of the normals Blender holds (INT16_2D), as the addon reads them.
@@ -382,6 +420,57 @@ def build_f12_scene(work):
     return scene
 
 
+METAL_NAME = "f12_metal"
+METAL_SPP = 128
+METAL_WORLD = 0.8       # the constant white world's radiance
+# 163's furnace band for a lossless white metal: the mean of f cos / pdf lies in [0.99, 1.002] of the world.
+# Ref: tests/cpu/test_lobe_stack.cpp "lobe_stack/metal white furnace".
+METAL_BAND = (0.99, 1.002)
+
+
+def build_metal_scene():
+    """A smooth unit sphere, Principled Metallic 1, white base, Roughness 0.3, in a constant white world, seen
+    by a pinhole camera that fills 70 % of the half-frame with it: a lossless configuration, so the
+    sphere reads the world's value (A1's family)."""
+    import bmesh
+
+    scene = bpy.data.scenes.new(METAL_NAME)
+    scene.render.engine = "ASTRORAY"
+    scene.render.resolution_x = scene.render.resolution_y = F12_SIZE
+    scene.render.resolution_percentage = 100
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=96, v_segments=48, radius=1.0)
+    me = bpy.data.meshes.new("MetalBall")
+    bm.to_mesh(me)
+    bm.free()
+    me.polygons.foreach_set("use_smooth", [True] * len(me.polygons))
+    ball = bpy.data.objects.new("MetalBall", me)
+    scene.collection.objects.link(ball)
+    mat = bpy.data.materials.new("MetalMat")
+    mat.use_nodes = True
+    p = mat.node_tree.nodes["Principled BSDF"]
+    p.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+    p.inputs["Metallic"].default_value = 1.0
+    p.inputs["Roughness"].default_value = 0.3
+    me.materials.append(mat)
+    cd = bpy.data.cameras.new("MetalCam")
+    cd.sensor_fit = "AUTO"
+    cd.angle = 2 * math.atan(math.tan(math.asin(0.25)) / 0.7)
+    cam = bpy.data.objects.new("MetalCam", cd)
+    scene.collection.objects.link(cam)
+    cam.location = (0.0, 0.0, 4.0)
+    scene.camera = cam
+    world = bpy.data.worlds.new("MetalWorld")
+    world.use_nodes = True
+    bg = world.node_tree.nodes["Background"]
+    bg.inputs["Color"].default_value = (METAL_WORLD, METAL_WORLD, METAL_WORLD, 1.0)
+    bg.inputs["Strength"].default_value = 1.0
+    scene.world = world
+    scene.astroray.samples = METAL_SPP
+    scene.astroray.seed = analytic.seed_for(METAL_NAME)
+    return scene
+
+
 class TestF12Textured(unittest.TestCase):
     """The textured, lamp-lit plane through F12 on both devices; one render each, before any case."""
     runs = None
@@ -411,10 +500,10 @@ class TestF12Textured(unittest.TestCase):
                 cls.runs[device.lower()] = {"error": f"{type(e).__name__}: {e}"}
 
     @staticmethod
-    def _render_device(rf, scene, device, work, evidence):
+    def _render_device(rf, scene, device, work, evidence, tag="f12"):
         scene.astroray.device = device
         s = scene.render
-        s.filepath = os.path.join(work, f"f12_{device.lower()}.exr")
+        s.filepath = os.path.join(work, f"{tag}_{device.lower()}.exr")
         if os.path.exists(s.filepath):
             os.remove(s.filepath)  # a stale file from an earlier run must never be read
         s.image_settings.file_format, s.image_settings.color_depth = "OPEN_EXR", "32"
@@ -422,7 +511,7 @@ class TestF12Textured(unittest.TestCase):
         cap = Capture(rf)
         t0 = time.monotonic()
         try:
-            r = bpy.ops.render.render(write_still=True, scene=F12_NAME)
+            r = bpy.ops.render.render(write_still=True, scene=scene.name)
         finally:
             cap.restore()
             rf.shutdown()
@@ -432,14 +521,14 @@ class TestF12Textured(unittest.TestCase):
             raise RuntimeError(f"F12 on {device} returned {r}, session read {cap.arrays is not None}")
         exr = bpy.data.images.load(s.filepath)
         exr.colorspace_settings.name = "Non-Color"
-        rgb = np.array(exr.pixels[:], np.float32).reshape(F12_SIZE, F12_SIZE, 4)[:, :, :3]
+        rgb = np.array(exr.pixels[:], np.float32).reshape(scene.render.resolution_y, scene.render.resolution_x, 4)[:, :, :3]
         bpy.data.images.remove(exr)
         planes = np.moveaxis(rgb, 2, 0).astype(np.float64)  # (3, h, w), rows bottom-up
-        analytic.write_png(os.path.join(evidence, f"f12_{device.lower()}.png"), planes, 1.0)
+        analytic.write_png(os.path.join(evidence, f"{tag}_{device.lower()}.png"), planes, 1.0)
         luma = float(np.tensordot(np.array(F12_LUMA), planes, axes=1).mean())
         result = {"mean": planes, "var": cap.arrays[1].astype(np.float64).transpose(2, 0, 1),
                   "luma": luma, "seconds": seconds, "kind": kind}
-        print(f"RESULT smoke f12 {device.lower()} kind {kind} mean {luma:.6f} floor {F12_FLOOR:.6f} time {seconds:.1f}")
+        print(f"RESULT smoke {tag} {device.lower()} kind {kind} mean {luma:.6f} floor {F12_FLOOR:.6f} time {seconds:.1f}")
         return result
 
     def _run(self, device):
