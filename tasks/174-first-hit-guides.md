@@ -22,3 +22,6 @@ Progress:
 - Lead ruling 3: response.h added to Scope: convert/display_rgb take the scalar type (double default, resolve unchanged); shade_background calls the float instantiation; double table values read through f64_bits_to_f32.
 - Lead ruling 4: "glass" = smooth dielectric with base_weight 0; delta weight = RGB albedo of the delta lobes together; tint starts at the first vertex in shade_surface.
 - Canary line extended with the cases the rulings added (escape, magenta, compiler guide RGB, layout, float conversion).
+- Measured (all film flags on, as built): k_shade_surface 128 regs / 400 B / 8 / 8 before and after; compile 6.68-6.72 s (lead's before 6.2-6.63 s). k_shade_background 64 / 264 B / 0 / 0 -> 64 / 272 B / 0 / 0, compile 2.74-2.77 s (row baseline 2.4 s). M-1 probe capped 128 / 480 B / 178 / 548 -> 128 / 496 B / 210 / 368; uncapped 164 -> 166 regs.
+- Canary: 13 cases red together; 10 hunks (matrix skipped by canary.ps1), each hunk alone red on its cases (out/tmp/174/matrix*.log). Gate PASS 160.0 s.
+- Look at: out/evidence/174/mirror_guides.png; mirror albedo / wall albedo = (1.000, 0.780, 0.340) by numpy, zero spread. Step 4 variance for textured plane and fractional Mix: not measurable in this slice (magenta), follow-up: ___.
