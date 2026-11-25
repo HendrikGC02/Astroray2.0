@@ -374,7 +374,7 @@ while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() <
       Check "$mode`: the build steps (build dev, and the build inside the fast step) are printed" ($builds -ge 1.0) @("builds $builds s")
       Check "$mode`: a slow build step does not count against B-09" ($tier + $builds -le $wall + 0.2) @("tier $tier s + builds $builds s against wall $wall s")
       # The stand-in holds `--time` until the build behind it has started waiting, so its seconds are real here.
-      Check "$mode`: the compile timing step's seconds are printed and out of the tier clock too (ruling 100)" ($ctime -ge 0.3 -and $tier + $builds + $ctime -le $wall + 0.2) @("tier $tier s + builds $builds s + compile timing $ctime s against wall $wall s")
+      Check "$mode`: the compile timing step's seconds are named and inside the build seconds, so out of the tier clock (ruling 100)" ($ctime -ge 0.3 -and $builds -ge $ctime) @("builds $builds s must include compile timing $ctime s")
     }
     # The build proceeds once the gate has ended: it takes its share (and then waits at the tree lock).
     $shareN = Join-Path $shares "share.$($bn.Id).lock"
