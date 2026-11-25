@@ -17,12 +17,27 @@
 #include "../portability.h"
 #include "../sched/step_table.h"
 #include "../state/stage.h"
+#include "shade_background.h"
 
 AR_NS_BEGIN
 
 AR_FN void stage_shade_shadow(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
   const uint32_t slot = load_ro(kg.shadow_queue + step.start + item);
-  sample_add(kg, sh_target(kg, slot), sh_contribution(kg, slot));
+  Spec c = sh_contribution(kg, slot);
+  if (kg.shadow->item_flags != nullptr && (sh_item_flags(kg, slot) & kShadowWorldLe) != 0u) {
+    const Spec lt = sh_lambda_t(kg, slot);
+    Lambda lam;
+    for (int i = 0; i < kLanes; ++i) lam.nm[i] = lt.v[i];
+    Spec le;
+    if (kg.scene == nullptr || !world_program_radiance(*kg.scene, *kg.tables, world_shade_context(normalize(sh_ray_d(kg, slot)), lam), &le) ||
+        !is_finite(c * le)) {
+      sample_mark_invalid(kg, sh_target(kg, slot));
+      sh_next_stage(kg, slot) = static_cast<uint8_t>(Stage::SHADOW_TERMINATED);
+      return;
+    }
+    c *= le;
+  }
+  sample_add(kg, sh_target(kg, slot), c);
   sh_next_stage(kg, slot) = static_cast<uint8_t>(Stage::SHADOW_TERMINATED);
 }
 

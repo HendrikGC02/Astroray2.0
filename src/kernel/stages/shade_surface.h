@@ -214,34 +214,22 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     // only. Entry 0 runs nothing (0005 item 32: absent or constant). hit_material_id gives the
     // default material (material_header_count) for an instance without materials; the host
     // uploads it there, so every id indexes a header.
-    const bool world_phase = nee_state == 3u;
-    const ConstantBlock* block = nullptr;
-    const uint32_t* prog = nullptr;
-    bool program = true;
-    if (world_phase) {
-      world_shade_geometry(g_dir, &ctx);
-      // A WORLD_ENV light without a world program is a host bug: fail the sample.
-      ok = ok && world_program_of(s, &prog, &block);
-    } else {
-      if (!shade_context_geometry(kg, g_inst, g_prim, g_bary, g_dir, &ctx)) {
-        sample_mark_invalid(kg, sample);  // a degenerate triangle has no normal: fail loudly
-        path_end(kg, slot, Term::INVALID);
-        return;
-      }
-      mat = hit_material_id(kg, g_inst, g_prim);
-      if (ok) {
-        AR_ASSERT(mat <= s.material_header_count);
-        const MaterialHeader* hp = s.material_headers + mat;
-        const uint32_t mflags = load_ro(&hp->flags);
-        block = s.material_constants + load_ro(&hp->const_offset);
-        prog = s.material_programs + load_ro(&hp->program_offset);
-        program = phase == 0u ? (mflags & CONSTANT_SURFACE) == 0u : (mflags & CONSTANT_EMISSION) == 0u;
-      }
+    if (!shade_context_geometry(kg, g_inst, g_prim, g_bary, g_dir, &ctx)) {
+      sample_mark_invalid(kg, sample);  // a degenerate triangle has no normal: fail loudly
+      path_end(kg, slot, Term::INVALID);
+      return;
     }
+    mat = hit_material_id(kg, g_inst, g_prim);
     if (ok) {
-      if (phase == 0u) resolve_constant_record(*block, ctx, obs, s.material_spectra, &rec);
-      le = resolve_slot<SpectrumSemantic::ILLUMINANT>(block->emission_color, ctx.lambda_t, obs, s.material_spectra) *
-           Real(block->emission_luminance);
+      AR_ASSERT(mat <= s.material_header_count);
+      const MaterialHeader* hp = s.material_headers + mat;
+      const uint32_t mflags = load_ro(&hp->flags);
+      const ConstantBlock& block = s.material_constants[load_ro(&hp->const_offset)];
+      if (phase == 0u) resolve_constant_record(block, ctx, obs, s.material_spectra, &rec);
+      le = resolve_slot<SpectrumSemantic::ILLUMINANT>(block.emission_color, ctx.lambda_t, obs, s.material_spectra) *
+           Real(block.emission_luminance);
+      const uint32_t* prog = s.material_programs + load_ro(&hp->program_offset);
+      const bool program = phase == 0u ? (mflags & CONSTANT_SURFACE) == 0u : (mflags & CONSTANT_EMISSION) == 0u;
       const uint32_t entry = program ? load_ro(prog + (phase == 0u ? 0u : 2u)) : 0u;
       ok = run_entry(prog, entry, &regs, ctx, *kg.tables, phase == 0u ? &rec : nullptr, &le,
                      phase == 0u ? &uc : nullptr) == VmStatus::OK;
@@ -344,21 +332,25 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     sh_contribution(kg, sh) = nee;
     sh_target(kg, sh) = sample;
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
-    nee_state = !ls.deferred_le ? 1u : (triangle ? 2u : 3u);
-    if (!ls.deferred_le) break;
+    if (ls.deferred_le && !triangle) {
+      // WORLD_ENV: shade_shadow runs the world program along ray_d at these lanes on delivery.
+      sh_item_flags(kg, sh) = kShadowWorldLe;
+      Spec lt;
+      for (int i = 0; i < kLanes; ++i) lt.v[i] = ctx.lambda_t.nm[i];
+      sh_lambda_t(kg, sh) = lt;
+    }
+    nee_state = (ls.deferred_le && triangle) ? 2u : 1u;
+    if (nee_state == 1u) break;
     // Phase 1: the light's material at the sampled point, seen from this vertex (wo = -wi), or the
     // world program along wi.
-    AR_ASSERT(triangle || LightType(lr.type) == LightType::WORLD_ENV);
-    if (triangle) {
-      g_inst = tri_instance(lr), g_prim = tri_index(lr);
-      g_bary = triangle_barycentrics(tri_vertex(lr, 0), tri_vertex(lr, 1), tri_vertex(lr, 2), ls.p_light);
-    }
+    g_inst = tri_instance(lr), g_prim = tri_index(lr);
+    g_bary = triangle_barycentrics(tri_vertex(lr, 0), tri_vertex(lr, 1), tri_vertex(lr, 2), ls.p_light);
     g_dir = ls.wi;
   }
-  if (nee_state >= 2u) {
+  if (nee_state == 2u) {
     // A triangle's deferred Le carries no radiance scale (068 folds s into light records only); the
     // world's strength, which carries it, is already in the contribution.
-    const Spec nee = sh_contribution(kg, sh) * le * (nee_state == 2u ? radiance_scale(kg) : Real(1));
+    const Spec nee = sh_contribution(kg, sh) * le * radiance_scale(kg);
     if (!ok || !is_finite(nee)) {
       sample_mark_invalid(kg, sample);
       path_end(kg, slot, Term::INVALID);

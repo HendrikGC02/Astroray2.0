@@ -29,6 +29,10 @@ AR_NS_BEGIN
 // [1] MIS-compensated (NEE and the escaped-ray weight).
 inline constexpr int kEnvPlain = 0, kEnvCompensated = 1;
 
+// Shadow item flag (item_flags): the contribution still lacks the world program's radiance along
+// ray_d at the item's lanes, which shade_shadow evaluates on delivery.
+inline constexpr uint8_t kShadowWorldLe = 1u << 0;
+
 AR_FN LightLiSample world_env_sample_li(const LightSampleContext& ctx, Real2 u, const EnvTableView* env) {
   AR_ASSERT(env != nullptr);
   const EnvDirSample d = env_sample(env[kEnvPlain], env[kEnvCompensated], u, true);
