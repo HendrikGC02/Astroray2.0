@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Screenshot of the Material tab's "Astroray Extension" panel with the kind set to Diffraction Grating.
 
-Run through `Invoke-ArBlender -Gui -Script tools/gui_material_panel.py`. The extension is installed from this
+Run through `Invoke-ArBlender -Gui -Script tests/blender/gui_material_panel.py`. The extension is installed from this
 tree's zip as tests/blender/smoke_a1.py does, a plane gets a material, the Properties editor shows the Material
 tab maximised, and the Properties editor's window region is saved to out/evidence/187/material_panel.png. A timer
 drives it (a windowed Blender only redraws while the main loop runs); the script ends the process.
@@ -14,8 +14,9 @@ import traceback
 
 import bpy
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "tests", "blender"))
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, HERE)
 import smoke_a1  # noqa: E402  (the zip install)
 
 SHOT = os.path.join(ROOT, "out", "evidence", "187", "material_panel.png")

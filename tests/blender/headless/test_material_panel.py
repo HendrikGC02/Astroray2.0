@@ -109,18 +109,18 @@ class TestMaterialPanel(unittest.TestCase):
     def test_bytes_equal_scene_builder(self):
         # A plain material sends kind 0 and 64 zero bytes.
         d = sent_desc(lowered(self.mat))
-        self.assertEqual((d.ext_kind, desc_bytes(d)), (0, bytes(64)))
+        self.assertEqual((d.ext_kind, desc_bytes(d)), (tm.OPS.EXT_KINDS["NONE"], bytes(64)))
         # A grating's bytes are the scene builder's for the same values.
         p = self.set_grating()
         d = sent_desc(lowered(self.mat))
         want = AR.grating_block(p.grating_pitch_nm, p.grating_depth_nm, (p.grating_coating_n, p.grating_coating_k),
                                 p.grating_m_min, p.grating_m_max)
-        self.assertEqual(d.ext_kind, 1)
+        self.assertEqual(d.ext_kind, tm.OPS.EXT_KINDS["GRATING"])
         self.assertEqual(desc_bytes(d), want)
         # The addon's mirrored layout follows the header's field list (the one source ar.py reads).
         self.assertEqual(tm.PROPS.GRATING_BLOCK_FIELDS, tuple(AR.GRATING_FIELDS))
         self.assertEqual(tm.PROPS.GRATING_BLOCK_FORMAT, AR.GRATING_FORMAT)
-        self.assertEqual(tm.PROPS.ext_block(p), (1, want))
+        self.assertEqual(tm.PROPS.ext_block(p), ("GRATING", want))
 
     def test_each_property_changes_bytes(self):
         self.set_grating(**{k: v for k, v in zip(EDITS, (1600.0, 100.0, -2, 2, 1.0, 6.0))})
@@ -209,9 +209,27 @@ class TestMaterialPanel(unittest.TestCase):
             self.assertEqual(p.bl_rna.properties[name].hard_min, 0.0, name)
         self.assertIn("is not finite and positive", text)
         self.assertIn("is not finite and >= 0", text)
-        # Whatever the RNA accepts packs into a block the header's parser accepts: the defaults do.
+        # Only the defaults are checked to pack into 64 bytes. The RNA does accept m_min > m_max and
+        # (n, k) = (1, 0), which the engine refuses loudly (parse_grating_authored), so the panel is not a validator.
         self.assertEqual(len(tm.PROPS.pack_grating(*[tm.PROPS.GRATING_DEFAULTS[k] for k in (
             "pitch_nm", "depth_nm", "coating_n", "coating_k", "m_min", "m_max")])), 64)
+
+    def test_blend_writer_rejects_clamped_values(self):
+        """Blender clamps an out-of-range assignment silently, so the writer reads each value back."""
+        sys.path.insert(0, os.path.join(ROOT, "scenes", "lib"))
+        import blend_writer
+
+        good = {"pitch_nm": 2000.0, "depth_nm": 150.0, "coating": [0.5, 4.0], "m_min": -3, "m_max": 3,
+                "mode": "reflect", "profile": "sinusoidal"}
+        blend_writer._grating(self.mat, good, "material 1")
+        self.assertEqual(self.mat.astroray.ext_kind, "GRATING")
+        self.assertEqual(self.mat.astroray.grating_m_min, -3)
+        for field, bad in (("m_min", -9), ("m_max", 9), ("pitch_nm", 0.0), ("depth_nm", -1.0),
+                           ("coating", [-1.0, 4.0]), ("coating", [0.5, -2.0])):
+            with self.subTest(field=field, bad=bad):
+                with self.assertRaises(blend_writer.BlendWriterError) as cm:
+                    blend_writer._grating(self.mat, {**good, field: bad}, "material 1")
+                self.assertIn("outside what the Material panel accepts", str(cm.exception))
 
     def test_register_twice_leaves_no_class(self):
         names = ("AstrorayScene", "AstrorayMaterial")

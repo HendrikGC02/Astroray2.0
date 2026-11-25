@@ -559,7 +559,8 @@ def _emission_sampling(em, material):
 def translate_material(material, keymap, op_id):
     """The SURFACE graph of one evaluated material, as a GraphEmitter."""
     em = GraphEmitter(op_id)
-    em.ext_kind, em.ext_constants = properties.ext_block(material.astroray)
+    kind, em.ext_constants = properties.ext_block(material.astroray)
+    em.ext_kind = _ops.EXT_KINDS[kind]
     # The tree dies with the InlineShaderNodes object that owns it: keep `inlined` alive.
     t0 = time.perf_counter()
     inlined = material.inline_shader_nodes()

@@ -92,7 +92,6 @@ class AstrorayScene(bpy.types.PropertyGroup):
 # parse_grating_authored enforces. The installed extension cannot read the header, so
 # tests/blender/headless/test_material_panel.py compares both tables with the header and scenes/lib/ar.py.
 # The RNA limits and the packer read this one table.
-EXT_NONE, EXT_GRATING = 0, 1  # ar::ExtKind
 GRATING_BLOCK_FORMAT = "<ffffBBbb44x"
 GRATING_BLOCK_FIELDS = ("pitch_nm", "depth_nm", "coating_n", "coating_k", "mode", "profile", "m_min", "m_max")
 GRATING_MODE_REFLECT, GRATING_PROFILE_SINUSOIDAL = 0, 0  # the panel offers neither choice (186 refuses the others)
@@ -100,6 +99,7 @@ GRATING_ORDER_LIMIT = 8  # |m| <= 8
 # The header demands pitch and depth > 0 and coating n, k >= 0; an RNA minimum cannot be exclusive, so the
 # smallest value a panel field accepts is a thousandth of a nanometre.
 GRATING_POSITIVE_MIN = 1e-3
+# UI starting values, not presets (0005 item 24: presets are provisional and none is shipped).
 GRATING_DEFAULTS = {"pitch_nm": 1600.0, "depth_nm": 100.0, "coating_n": 1.0, "coating_k": 6.0, "m_min": -2, "m_max": 2}
 
 
@@ -111,11 +111,12 @@ def pack_grating(pitch_nm, depth_nm, coating_n, coating_k, m_min, m_max):
 
 
 def ext_block(props):
-    """(ext_kind, 64 bytes) of a material's `astroray` group; kind NONE is 0 and 64 zero bytes."""
+    """(kind name, 64 bytes) of a material's `astroray` group; the caller maps the name to the ABI number
+    (`_ops.EXT_KINDS`, which tools/opsgen.py emits from ext_fields.def). NONE is 64 zero bytes."""
     if props.ext_kind == "GRATING":
-        return EXT_GRATING, pack_grating(props.grating_pitch_nm, props.grating_depth_nm, props.grating_coating_n,
+        return "GRATING", pack_grating(props.grating_pitch_nm, props.grating_depth_nm, props.grating_coating_n,
                                          props.grating_coating_k, props.grating_m_min, props.grating_m_max)
-    return EXT_NONE, bytes(64)
+    return "NONE", bytes(64)
 
 
 def _tag_material(self, context):
@@ -128,8 +129,8 @@ class AstrorayMaterial(bpy.types.PropertyGroup):
     ext_kind: bpy.props.EnumProperty(
         update=_tag_material, name="Extension", description="The one non-OpenPBR behaviour of this material; "
         "it replaces the whole OpenPBR surface", default="NONE",
-        items=(("NONE", "None", "OpenPBR surface", EXT_NONE),
-               ("GRATING", "Diffraction Grating", "A reflective diffraction grating", EXT_GRATING)))
+        items=(("NONE", "None", "OpenPBR surface"),
+               ("GRATING", "Diffraction Grating", "A reflective diffraction grating")))
     grating_pitch_nm: bpy.props.FloatProperty(
         update=_tag_material, name="Pitch", description="Groove spacing in nanometres", default=GRATING_DEFAULTS["pitch_nm"],
         min=GRATING_POSITIVE_MIN, soft_max=20000.0, precision=1)
