@@ -5,7 +5,7 @@ Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `t
 ## Current milestone
 M1b "First light" (docs/PLAN-M1b.md: slices, lanes, the `shade_surface` spine, gate ledger). First batch
 tasks/136-161, order and lanes in tasks/README.md; runbook and handover in docs/LEAD.md; items without a task in
-docs/BACKLOG.md. Slice 0 closed (all of 136-144, 155, 157, 159-162 landed; `check full` green 659 s; landings by `pwsh tools/land.ps1 submit`). Also landed: 145-158, 163, 164, 165, 168, 169, 171, 176-181, 185, 199, 200, 202, 203. Second batch 163-183 (ruling 91), third batch 186-203 and 204 written;
+docs/BACKLOG.md. Slice 0 closed (all of 136-144, 155, 157, 159-162 landed; `check full` green 659 s; landings by `pwsh tools/land.ps1 submit`). Also landed: 145-158, 163, 164, 165, 172, 182, 183, 186, 189, 204, 211, 212, 224-228, 168, 169, 171, 176-181, 185, 199, 200, 202, 203. Second batch 163-183 (ruling 91), third batch 186-203 and 204 written;
 spine next 163 (reviewed, lands after 204), then 173; open work and next steps in docs/LEAD.md's handover.
 M1a "First pixels" closed (owner decision 37): textured, lamp-lit meshes render progressively in the Blender 5.3
 viewport and F12 on CUDA and CPU through the final C ABI; gallery and report from `tools/gallery.py --milestone
@@ -16,7 +16,7 @@ scope clause).
 
 ## Owner decisions still open
 - Ruling 101 (2026-11-25): B-38 baseline re-recorded on quiet main (b1m 11.69 -> 12.01 ms, b5m 12.28 -> 12.56 ms; +2.5 % cumulative since 2026-11-23 across M1b landings; limit 1.03 per landing unchanged); 215 reports the cumulative B-20 line.
-- OWNER ITEM (decision 40): k_shade_surface compile on main now 6.86-6.99 s (same-session, 2026-11-25 after 225) against 7.0 s; 173's environment NEE reads 7.04-7.19 s and spills 28/48 B (ruling 93: 16/16). 173 is trying 0002 D10's ladder (world Le resolved outside k_shade_surface; env_sample noinline); if no variant fits, the spine (173, 174, 175, 192, ...) pauses for the owner's decision on B-05 for shade_surface.
+- k_shade_surface compile (decision 40's 7.0 s): 228 cut main to 6.14-6.19 s quiet (was 6.76-6.99); 173 resumes on its variant 1b (world Le resolved in shade_shadow, spills back to 8 / 8). Owner note: kernelgate's timing includes about 0.77 s of vcvarsall per compile (BACKLOG).
 - Ruling 100 (2026-11-25, PROVISIONAL): B-09 also excludes the gate's compile-timing step (old: excluding build steps only, ruling 94); landing gates of kernel tasks read 179.8 s with 23 s of real timed compiles. Task 224. Rulings 97-99: shade_surface_ext may take 7.0 s B-05 (old 3.0 s default); medium-stack id for M1b; B-09 remedies 157 and 212.
 - Ruling 96 (2026-11-25): CPU/CUDA agreement through the RGB-to-spectrum lift is gated by its parts (pre-lift 1e-6, lift bit-identity, grey radiance 1e-6); colour radiance printed, ungated (172 measured 1.36e-5 against D12's 1e-5, conditioning of the lift).
 - Ruling 95 (2026-11-25): k_route_hit regs 28 -> 40 for 182's medium back-face test, a lead ruling on a D10 row.
