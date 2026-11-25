@@ -1,0 +1,40 @@
+diff --git a/blender/astroray/materials/translate.py b/blender/astroray/materials/translate.py
+index bb0609e2..86fe9e15 100644
+--- a/blender/astroray/materials/translate.py
++++ b/blender/astroray/materials/translate.py
+@@ -391,7 +391,7 @@ def _metallic(em, ins, keymap):
+     else:
+         v = em.const_f32(min(max(float(sock.default_value), 0.0), 1.0))
+     if v is not None:
+-        em.store(SLOT_BASE_METALNESS, v)
++        em.store(SLOT_BASE_WEIGHT, v)
+ 
+ 
+ def _principled(em, node, keymap):
+@@ -420,7 +420,7 @@ def _principled(em, node, keymap):
+         em.store(SLOT_SPECULAR_ROUGHNESS, rough)
+     level_sock = ins["Specular IOR Level"]
+     if _link_of(level_sock) is None:
+-        em.store(SLOT_SPECULAR_WEIGHT, em.const_f32(2.0 * float(level_sock.default_value)))  # 0005 item 42
++        em.store(SLOT_SPECULAR_WEIGHT, em.const_f32(0.0 * float(level_sock.default_value)))  # 0005 item 42
+     else:
+         # specular_weight = 2L per point: the level (a colour becomes its luminance) times the constant 2.
+         level, _ = _float(em, level_sock, keymap, "Principled BSDF.Specular IOR Level")
+@@ -471,7 +471,7 @@ def _transparent(em, node, keymap):
+         report_link(em, col, "Transparent.Color")
+         return
+     rgb = tuple(col.default_value)[:3]
+-    em.store(SLOT_GEOMETRY_OPACITY, em.const_f32(1.0 - sum(rgb) / 3.0))
++    em.store(SLOT_GEOMETRY_OPACITY, em.const_f32(sum(rgb) / 3.0))
+ 
+ 
+ def _closure(em, node, keymap, in_mix=False):
+@@ -513,7 +513,7 @@ def _mix(em, node, keymap):
+     factor, _ = _float(em, node.inputs["Fac"], keymap, "Mix Shader.Fac")
+     if factor is None or None in sides:
+         return None
+-    n = em.add("BRANCH_MIX", i32=(tag, sides[0], sides[1]))
++    n = em.add("BRANCH_MIX", i32=(tag, sides[1], sides[0]))
+     em.link(factor, n, 0)
+     return -1 - tag
+ 
