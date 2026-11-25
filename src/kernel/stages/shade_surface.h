@@ -36,7 +36,12 @@
 // the program's emission entry), times s. To keep one interpreter call site in the TU (B-05:
 // the inlined VM is most of its compile time), the material evaluation sits in a two-phase loop:
 // phase 0 runs the hit material's surface entry, phase 1, only for a deferred light, the light
-// material's emission entry with the context rebuilt at the light point.
+// material's emission entry with the context rebuilt at the light point. An environment world
+// (WORLD_ENV, light/world_env.h) is deferred too but has no phase 1: NEE draws its direction from
+// the MIS-compensated table, the item's contribution takes everything but Le (the MIS weight and
+// the record's strength, which carries s, as an escaped ray's), and the item carries its lanes and
+// ITEM_WORLD_LE so shade_shadow runs the world program on delivery. The world's interpreter thus
+// stays out of this kernel (0002 D10 ladder, B-05); the table never gives radiance (0004 D11).
 // Continuation, as pbrt-v4 VolPathIntegrator::Li: a path that arrives with bounces[total] equal
 // to the limit ends MAX_BOUNCE (pbrt's depth++ == maxDepth). Otherwise the stack is sampled in
 // the frame of N with the event block's lobe choice, as the surface entry's Mix selection left it
@@ -188,7 +193,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   Real3 P{}, Ng{}, N{}, wo{};
   // The shadow item is written into the reserved slot as soon as its segment is known, so nothing
   // of it stays live across the light point's VM run. 0: no item; 1: an item with its whole
-  // contribution; 2: an item whose contribution still lacks the deferred Le (phase 1).
+  // contribution (an environment world's included: shade_shadow multiplies its Le in on delivery);
+  // 2: an item whose contribution still lacks a triangle's deferred Le and s (phase 1).
   uint32_t nee_state = 0;
   uint32_t sh = 0;  // the reserved shadow slot, read when an item is written
   // Where ctx is built: the path's hit in phase 0, the light sample's point in phase 1.
@@ -296,20 +302,22 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     if (!(sl.pmf > Real(0))) break;
     const LightRecord& lr = kg.lights[sl.light];
     const Real2 ul{camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_U)), camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_V))};
-    const LightLiSample ls = light_sample_li(lr, lctx, ul, ctx.lambda_t, obs);
+    // NEE_LIGHT_ONLY has no BSDF strategy, so an environment world samples its complete table.
+    const LightLiSample ls = light_sample_li(lr, lctx, ul, ctx.lambda_t, obs, kg.env, (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u);
     if (!(ls.pdf > Real(0))) break;
     const LobeEval ev = stack_eval(*kg.e_diel, *kg.e_spec, rec, frame_from_normal(N), wo, ls.wi, TransportMode::Radiance);
     // NEE_LIGHT_ONLY: the BSDF strategy is off, so its pdf leaves the weight.
     const Real p_bsdf = (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u ? Real(0) : ev.pdf;
     Spec nee = ps_beta(kg, slot) * ev.f * (abs_dot(ls.wi, N) * mis_nee_scale(ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta));
+    const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
     if (!ls.deferred_le) nee *= ls.Le;
+    else if (!triangle) nee *= Real(lr.strength);  // WORLD_ENV: its strength carries s
     if (!is_finite(nee)) {
       sample_mark_invalid(kg, sample);
       path_end(kg, slot, Term::INVALID);
       return;
     }
     if (!(max_lane(nee) > Real(0))) break;  // no item; the slot stays free
-    const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
     ShadowSegment seg;
     if (ls.infinite)
       seg = ShadowSegment{offset_ray_origin(P, Ng, ls.wi), ls.wi, Real(kShadowUnbounded)};
@@ -324,16 +332,32 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     sh_contribution(kg, sh) = nee;
     sh_target(kg, sh) = sample;
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
-    nee_state = ls.deferred_le ? 2u : 1u;
-    if (!ls.deferred_le) break;
-    // Phase 1: the light's material at the sampled point, seen from this vertex (wo = -wi).
-    AR_ASSERT(triangle);
+    const bool world_le = ls.deferred_le && !triangle;
+    if (kg.shadow->item_flags != nullptr) sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
+    if (world_le) {
+      // WORLD_ENV: shade_shadow runs the world program along ray_d at these lanes on delivery. The
+      // host allocates both fields with the env_world feature; without them the item cannot be
+      // finished, a host bug that fails the sample.
+      if (kg.shadow->item_flags == nullptr || kg.shadow->lambda_t == nullptr) {
+        sample_mark_invalid(kg, sample);
+        path_end(kg, slot, Term::INVALID);
+        return;
+      }
+      Spec lt;
+      for (int i = 0; i < kLanes; ++i) lt.v[i] = ctx.lambda_t.nm[i];
+      sh_lambda_t(kg, sh) = lt;
+    }
+    nee_state = (ls.deferred_le && triangle) ? 2u : 1u;
+    if (nee_state == 1u) break;
+    // Phase 1: the light's material at the sampled point, seen from this vertex (wo = -wi), or the
+    // world program along wi.
     g_inst = tri_instance(lr), g_prim = tri_index(lr);
     g_bary = triangle_barycentrics(tri_vertex(lr, 0), tri_vertex(lr, 1), tri_vertex(lr, 2), ls.p_light);
     g_dir = ls.wi;
   }
   if (nee_state == 2u) {
-    // The deferred Le carries no radiance scale (068 folds s into light records only).
+    // A triangle's deferred Le carries no radiance scale (068 folds s into light records only); the
+    // world's strength, which carries it, is already in the contribution.
     const Spec nee = sh_contribution(kg, sh) * le * radiance_scale(kg);
     if (!ok || !is_finite(nee)) {
       sample_mark_invalid(kg, sample);

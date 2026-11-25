@@ -33,7 +33,8 @@ enum class LightType : uint8_t {
   AREA_RECT,  // one-sided rectangle or square, spherical-rectangle sampling
   AREA_DISK,  // one-sided disk, area sampling
   TRIANGLE,   // emissive mesh triangle (triangle.h)
-  WORLD_CONST // constant world radiance, infinite (world_const.h)
+  WORLD_CONST, // constant world radiance, infinite (world_const.h)
+  WORLD_ENV    // program world with a baked importance table, infinite (world_env.h)
 };
 
 enum class LightContextKind : uint8_t { POINT = 0, SEGMENT };
@@ -76,8 +77,9 @@ struct LightLiSample {
   Real3 p_light;
   Spec Le;        // radiance toward the context; for delta lights I / dist^2 (pbrt PointLight::SampleLi)
   // Le is not known here: the light's material emits per point (an emissive triangle with
-  // kLightEmissionProgram). Le is 0 and the consumer must evaluate the material's `emission` entry
-  // at p_light, toward -wi; using Le as it stands would drop the light.
+  // kLightEmissionProgram) or the world is a program (WORLD_ENV). Le is 0 and the consumer must
+  // evaluate the material's `emission` entry at p_light toward -wi, or the world program along wi;
+  // using Le as it stands would drop the light.
   bool deferred_le = false;
 };
 
@@ -189,6 +191,7 @@ AR_NS_END
 #include "area_disk.h"
 #include "triangle.h"
 #include "world_const.h"
+#include "world_env.h"
 
 AR_NS_BEGIN
 
@@ -344,15 +347,23 @@ AR_FN const char* light_problem(const LightRecord& r) {
     case LightType::WORLD_CONST:
       if (r.flags & ~uint16_t(kLightWorldProgram)) return "unknown world light flag";
       return nullptr;
+    case LightType::WORLD_ENV:
+      // Its radiance is the world program's: without the flag shade_background would read the
+      // record's unused colour.
+      return r.flags == kLightWorldProgram ? nullptr : "an environment world light carries exactly kLightWorldProgram";
   }
   return "unknown light type";
 }
 
 AR_FN bool light_valid(const LightRecord& r) { return light_problem(r) == nullptr; }
 
-// Deterministic in (ctx, u). The unknown-type default is a bug that a debug build traps.
+// Deterministic in (ctx, u). The unknown-type default is a bug that a debug build traps. `env` is
+// the scene's two environment distributions (world_env.h: plain, then compensated), which only
+// WORLD_ENV reads; a WORLD_ENV light without them is a host bug that a debug build traps.
+// `env_complete` selects WORLD_ENV's complete (plain) distribution, for an estimator without BSDF
+// sampling (world_env.h); MIS with BSDF sampling uses the compensated one.
 AR_FN LightLiSample light_sample_li(const LightRecord& r, const LightSampleContext& ctx, Real2 u, const Lambda& lam,
-                                    const ObserverView& obs) {
+                                    const ObserverView& obs, const EnvTableView* env = nullptr, bool env_complete = false) {
   switch (LightType(r.type)) {
     case LightType::POINT: return point_sample_li(r, ctx, lam, obs);
     case LightType::SPHERE: return sphere_sample_li(r, ctx, u, lam, obs);
@@ -360,14 +371,16 @@ AR_FN LightLiSample light_sample_li(const LightRecord& r, const LightSampleConte
     case LightType::AREA_DISK: return disk_sample_li(r, ctx, u, lam, obs);
     case LightType::TRIANGLE: return tri_sample_li(r, ctx, u, lam, obs);
     case LightType::WORLD_CONST: return world_sample_li(r, ctx, u, lam, obs);
+    case LightType::WORLD_ENV: return world_env_sample_li(ctx, u, env, env_complete);
   }
   AR_ASSERT(false);
   return light_li_none();
 }
 
 // Solid-angle pdf of reaching the light along wi (a BSDF ray's direction at the previous vertex,
-// 0004 D1); 0 for delta lights.
-AR_FN Real light_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Real3 wi, const LightHit& hit) {
+// 0004 D1); 0 for delta lights. `env` and `env_complete` as for light_sample_li.
+AR_FN Real light_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Real3 wi, const LightHit& hit,
+                        const EnvTableView* env = nullptr, bool env_complete = false) {
   switch (LightType(r.type)) {
     case LightType::POINT: return Real(0);
     case LightType::SPHERE: return sphere_pdf_li(r, ctx, wi, hit);
@@ -375,6 +388,7 @@ AR_FN Real light_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Rea
     case LightType::AREA_DISK: return disk_pdf_li(r, ctx, wi, hit);
     case LightType::TRIANGLE: return tri_pdf_li(r, ctx, wi, hit);
     case LightType::WORLD_CONST: return world_pdf_li(r, ctx, wi, hit);
+    case LightType::WORLD_ENV: return world_env_pdf_li(wi, env, env_complete);
   }
   AR_ASSERT(false);
   return Real(0);
@@ -391,17 +405,21 @@ AR_FN LightLeSample light_sample_le(const LightRecord& r, Real2 u_pos, Real2 u_d
     case LightType::AREA_DISK: return disk_sample_le(r, u_pos, u_dir, lam, obs);
     case LightType::TRIANGLE: return tri_sample_le(r, u_pos, u_dir, lam, obs);
     case LightType::WORLD_CONST: return world_sample_le(r, u_pos, u_dir, lam, obs, target);
+    case LightType::WORLD_ENV: break;  // light paths from the plain table are M4: unsupported
   }
   AR_ASSERT(false);
   return light_le_none();
 }
 
-AR_FN bool light_is_infinite(const LightRecord& r) { return LightType(r.type) == LightType::WORLD_CONST; }
+AR_FN bool light_is_infinite(const LightRecord& r) {
+  return LightType(r.type) == LightType::WORLD_CONST || LightType(r.type) == LightType::WORLD_ENV;
+}
 
 // The power with D10's weighting: `energy` is the weighted integral of the light's emission,
 // strength included (integral of strength s(lambda) w(lambda) d lambda; the strength alone when
 // unweighted), times the type's geometric factor. Lamps: 1 (their strength is the power P).
-// Triangle: pi A (D9). World: 4 pi^2 R^2 with R the scene radius (pbrt UniformInfiniteLight::Phi).
+// Triangle: pi A (D9). World: 4 pi^2 R^2 with R the scene radius (pbrt UniformInfiniteLight::Phi);
+// an environment world's energy is already integrated over the sphere, so pi R^2 (world_env.h).
 AR_FN Real light_power(const LightRecord& r, const SceneSphere& scene, Real energy) {
   switch (LightType(r.type)) {
     case LightType::POINT:
@@ -410,6 +428,7 @@ AR_FN Real light_power(const LightRecord& r, const SceneSphere& scene, Real ener
     case LightType::AREA_DISK: return energy;
     case LightType::TRIANGLE: return tri_power(r, energy);
     case LightType::WORLD_CONST: return world_power(scene, energy);
+    case LightType::WORLD_ENV: return world_env_power(scene, energy);
   }
   AR_ASSERT(false);
   return Real(0);
@@ -425,6 +444,7 @@ AR_FN Real light_power(const LightRecord& r) {
     case LightType::AREA_DISK: return disk_power(r);
     case LightType::TRIANGLE: return tri_power(r, Real(r.strength));
     case LightType::WORLD_CONST: break;  // a bug: its power depends on the scene radius
+    case LightType::WORLD_ENV: break;    // a bug: as WORLD_CONST, and light paths are M4
   }
   AR_ASSERT(false);
   return Real(0);
@@ -437,7 +457,8 @@ AR_FN LightBounds light_bounds(const LightRecord& r) {
     case LightType::AREA_RECT: return rect_bounds(r);
     case LightType::AREA_DISK: return disk_bounds(r);
     case LightType::TRIANGLE: return tri_bounds(r);
-    case LightType::WORLD_CONST: break;
+    case LightType::WORLD_CONST:
+    case LightType::WORLD_ENV: break;
   }
   // Infinite: no box (light_is_infinite), and the cone of Cycles' background light
   // (scene/light_tree.cpp: "Set an arbitrary direction for the background light." axis (0, 0, 1),

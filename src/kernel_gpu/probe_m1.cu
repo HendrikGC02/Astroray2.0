@@ -479,20 +479,21 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     if (!(sl.pmf > Real(0))) break;
     const LightRecord& lr = kg.lights[sl.light];
     const Real2 ul{camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_U)), camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_V))};
-    const LightLiSample ls = light_sample_li(lr, lctx, ul, ctx.lambda_t, obs);
+    const LightLiSample ls = light_sample_li(lr, lctx, ul, ctx.lambda_t, obs, kg.env, false);
     if (!(ls.pdf > Real(0))) break;
     const Frame fr = frame_from_normal_tangent(N, rec.geometry_tangent);
     const Real3 wo_l = to_local(fr, wo);
     const LobeEval ev = bsdf_eval(rec, prep_ctx(rec, ar::abs(wo_l.z)), ctx.lambda_t, wo_l, to_local(fr, ls.wi));
     Spec nee = ps_beta(kg, slot) * ev.f * (abs_dot(ls.wi, N) * mis_nee_scale(ps_r_u(kg, slot), sl.pmf * ls.pdf, ev.pdf, ls.delta));
+    const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
     if (!ls.deferred_le) nee *= ls.Le;
+    else if (!triangle) nee *= Real(lr.strength);
     if (!is_finite(nee)) {
       sample_mark_invalid(kg, sample);
       path_end(kg, slot, Term::INVALID);
       return;
     }
     if (!(max_lane(nee) > Real(0))) break;
-    const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
     ShadowSegment seg;
     if (ls.infinite) seg = ShadowSegment{offset_ray_origin(P, Ng, ls.wi), ls.wi, Real(kShadowUnbounded)};
     else if (triangle) seg = shadow_segment(P, Ng, ls.p_light, tri_normal(lr));
@@ -504,8 +505,23 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     sh_contribution(kg, sh) = nee;
     sh_target(kg, sh) = sample;
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
-    nee_state = ls.deferred_le ? 2u : 1u;
-    if (!ls.deferred_le) break;
+    const bool world_le = ls.deferred_le && !triangle;
+    if (kg.shadow->item_flags != nullptr) sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
+    if (world_le) {
+      // WORLD_ENV: shade_shadow runs the world program along ray_d at these lanes on delivery. The
+      // host allocates both fields with the env_world feature; without them the item cannot be
+      // finished, a host bug that fails the sample.
+      if (kg.shadow->item_flags == nullptr || kg.shadow->lambda_t == nullptr) {
+        sample_mark_invalid(kg, sample);
+        path_end(kg, slot, Term::INVALID);
+        return;
+      }
+      Spec lt;
+      for (int i = 0; i < kLanes; ++i) lt.v[i] = ctx.lambda_t.nm[i];
+      sh_lambda_t(kg, sh) = lt;
+    }
+    nee_state = (ls.deferred_le && triangle) ? 2u : 1u;
+    if (nee_state == 1u) break;
     // Phase 1: the light's emission entry at the sampled point, in the same register file.
     g_inst = tri_instance(lr), g_prim = tri_index(lr);
     g_bary = triangle_barycentrics(tri_vertex(lr, 0), tri_vertex(lr, 1), tri_vertex(lr, 2), ls.p_light);

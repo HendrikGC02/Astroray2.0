@@ -137,6 +137,72 @@ def lambertian_furnace(t, width, height):
     return [(c, eye[i], truth, "pixels") for i, c in enumerate("RGB")]
 
 
+def environment_texel_bounds(t):
+    """The bright texel's (phi0, phi1, z0, z1) on the sphere: column i of W covers u in [i/W, (i+1)/W]
+    and row j of H (counted from the bottom) v in [j/H, (j+1)/H], and Blender's equirectangular map
+    (src/kernel/vm/ops/tex_environment.h: u = (atan2(y, x) - pi) / (-2 pi), v = (acos(z) - pi) / (-pi))
+    gives phi = pi - 2 pi u and z = -cos(pi v)."""
+    w, h = (int(v) for v in t["image_size"])
+    i, j = (int(v) for v in t["texel"])
+    if not (0 <= i < w and 0 <= j < h):
+        raise ValueError("the bright texel lies outside the image")
+    return (np.pi - 2.0 * np.pi * (i + 1) / w, np.pi - 2.0 * np.pi * i / w,
+            -np.cos(np.pi * j / h), -np.cos(np.pi * (j + 1) / h))
+
+
+def environment_texel(t, width, height):
+    """A9 (research 09 S12): a Lambertian sphere (grey rho) under an equirectangular environment of
+    grey radiance `dim` everywhere but one texel of radiance `bright` (Closest filtering, so each texel
+    is constant over its latitude-longitude rectangle), times `strength`. A convex reflector sees only
+    the world, so the radiance leaving a point of normal n is rho / pi times the sum over texels of
+    L_t times the integral over the texel of max(0, n . w) dw: rho / pi (dim pi + (bright - dim)
+    F(n)), the uniform part over the whole hemisphere being pi. F(n), the bright texel's projected
+    solid angle, is a deterministic midpoint quadrature of K x K cells uniform in (phi, z), which are
+    equal-area on the sphere (dw = dphi dz), never the engine's table. Each pixel is the mean over
+    8 x 8 Gauss-Legendre rays through its square (box filter of width 1) of that radiance at the true
+    sphere's normal; pixels the silhouette may cross, and the background, are NaN (excluded,
+    sphere_pixel_classes). Grey radiance and grey albedo return as equal display R, G, B (0003 d12).
+    Ref: Lambert's cosine law; Golub and Welsch 1969 (numpy.polynomial.legendre.leggauss); research 09
+    S12; docs/decisions/0004-integrator.md D11 (the scene tests the environment's NEE and MIS)."""
+    rho, strength = float(t["rho"]), float(t["strength"])
+    dim, bright = float(t["dim"]), float(t["bright"])
+    radius, dist = float(t["sphere_radius"]), float(t["camera_distance"])
+    cls = sphere_pixel_classes(t, width, height)
+    phi0, phi1, z0, z1 = environment_texel_bounds(t)
+    k = int(t.get("quadrature", 64))
+    ph = phi0 + (np.arange(k) + 0.5) / k * (phi1 - phi0)
+    zz = z0 + (np.arange(k) + 0.5) / k * (z1 - z0)
+    pg, zg = np.meshgrid(ph, zz, indexing="ij")
+    s = np.sqrt(np.maximum(0.0, 1.0 - zg * zg))
+    omega = np.stack([s * np.cos(pg), s * np.sin(pg), zg], axis=-1).reshape(-1, 3)
+    dw = (phi1 - phi0) * (z1 - z0) / (k * k)
+    # Film points at unit distance of the camera at (0, -D, 0) looking along +y, right +x, up +z
+    # (scenes/lib/ar.py look_at, projection_inverse: the sensor spans the square image).
+    half = float(t["sensor_mm"]) / (2.0 * float(t["focal_mm"]))
+    edges = (np.arange(width + 1) / width * 2.0 - 1.0) * half
+    nodes, weights = np.polynomial.legendre.leggauss(8)
+    lo, hi = edges[:-1], edges[1:]
+    f = (lo + hi)[:, None] / 2.0 + (hi - lo)[:, None] / 2.0 * nodes[None, :]  # (pixels, 8)
+    wq = weights / 2.0
+    truth = np.full((height, width), np.nan)
+    o = np.array([0.0, -dist, 0.0])
+    for y, x in zip(*np.nonzero(cls == 1)):
+        fx, fz = np.meshgrid(f[x], f[y], indexing="ij")  # (8, 8): right, up
+        d = np.stack([fx, np.ones_like(fx), fz], axis=-1)
+        d /= np.linalg.norm(d, axis=-1, keepdims=True)
+        b = d @ o
+        disc = b * b - (o @ o - radius * radius)
+        if (disc < 0).any():
+            raise ValueError("a pixel classed inside the sphere has a ray that misses it")
+        p = o + (-b - np.sqrt(disc))[..., None] * d
+        n = p / radius
+        proj = np.maximum(0.0, n.reshape(-1, 3) @ omega.T).sum(axis=1).reshape(8, 8) * dw
+        lr = rho / np.pi * strength * (dim * np.pi + (bright - dim) * proj)
+        truth[y, x] = float(wq @ lr @ wq)
+    eye = np.eye(3)
+    return [(c, eye[i], truth, "pixels") for i, c in enumerate("RGB")]
+
+
 def lambertian_furnace_table(t, width, height):
     """A1 with a TABLE base colour: the A1 scene (convex Lambertian sphere, constant white world of
     radiance Lw, camera outside) whose reflectance is a piecewise-linear spectrum rho(l), clamped to
@@ -514,7 +580,8 @@ FORMULAS = {"emitter_radiance": emitter_radiance, "alpha_transmittance": alpha_t
             "lambertian_furnace": lambertian_furnace, "lambertian_furnace_table": lambertian_furnace_table,
             "lamp_over_plane": lamp_over_plane,
             "disk_over_plane": disk_over_plane, "lit_furnace": lit_furnace, "mode_agreement": mode_agreement,
-            "uniform_enclosure": uniform_enclosure, "texture_chart": texture_chart, "beer_lambert_slab": beer_lambert_slab}
+            "uniform_enclosure": uniform_enclosure, "texture_chart": texture_chart, "beer_lambert_slab": beer_lambert_slab,
+            "environment_texel": environment_texel}
 
 
 def evaluate(truth_table, width, height):

@@ -16,6 +16,7 @@
 #include "core/real.h"
 #include "core/spectrum.h"
 #include "core/vec.h"
+#include "light/environment_table.h"
 #include "portability.h"
 #include "sched/step_table.h"
 #include "state/stage.h"
@@ -34,7 +35,9 @@ inline constexpr uint32_t TEST_HOOK_PIXEL_CENTRE = 1u << 0;
 // NEE_LIGHT_ONLY: light sampling only. The NEE weight drops the BSDF pdf; an emitter reached after
 // a non-delta bounce adds nothing. Emission at the first vertex or after a delta bounce counts in
 // every mode, because no light sample can reach it. Unbiased only while every light has pmf > 0
-// (0004 D9: a pmf-0 light is reached by BSDF rays alone), which the test scenes ensure.
+// (0004 D9: a pmf-0 light is reached by BSDF rays alone), which the test scenes ensure, and while
+// every light's pdf covers its emission: an environment world therefore samples its complete (plain)
+// table in this mode, not the MIS-compensated one (light/world_env.h, 0004 D11).
 inline constexpr uint32_t TEST_HOOK_NEE_OFF = 1u << 1;
 inline constexpr uint32_t TEST_HOOK_NEE_LIGHT_ONLY = 1u << 2;
 
@@ -132,6 +135,11 @@ struct KernelGlobals {
   uint32_t light_index_words;
   // Last member so the offsets the CUDA device reads stay put; the baker writes it in place.
   EnvBake env_bake = {};
+  // The world's environment importance table (0004 D11), views into the scene tables' ENV_TABLE:
+  // [0] the plain distribution, [1] the MIS-compensated one (light/world_env.h kEnvPlain,
+  // kEnvCompensated). n = 0 in both when the scene has no baked world. Last members so the offsets
+  // the CUDA device reads stay put.
+  EnvTableView env[2] = {};
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is

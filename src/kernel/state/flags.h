@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Path flag word (u32): one named constant per bit of the record, no other bit.
-// Assigning a free bit amends the record.
-// Ref: docs/decisions/0003-spectral-model-and-path-state.md d21.
+// Path flag word (u32): one named constant per bit of the record, no other bit, and the shadow
+// item's item_flags bits (u8, d20) that are allocated. Assigning a free bit amends the record.
+// Ref: docs/decisions/0003-spectral-model-and-path-state.md d20, d21.
 #pragma once
 #include <cstdint>
 
@@ -41,6 +41,10 @@ inline constexpr uint32_t SHADOW_CATCHER_HIT = 1u << 18;
 inline constexpr uint32_t SHADOW_CATCHER_PASS = 1u << 19;
 inline constexpr uint32_t FRONT_FACE = 1u << 20;
 inline constexpr uint32_t FIRST_BOUNCE_SPECULAR = 1u << 21;
+
+// Shadow item_flags bit 4 (0003 d20): the contribution still lacks the environment world's radiance
+// along ray_d at the item's lambda_t, which shade_shadow evaluates on delivery (light/world_env.h).
+inline constexpr uint8_t ITEM_WORLD_LE = uint8_t(1u << 4);
 
 AR_FN uint32_t hero_lane(uint32_t flags) { return (flags & HERO_LANE_MASK) >> HERO_LANE_SHIFT; }
 

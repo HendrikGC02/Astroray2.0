@@ -707,6 +707,9 @@ void Session::bind_globals() {
     set_cuda_traversable(device_, tables_ ? uint64_t(reinterpret_cast<uintptr_t>(tables_->scene_host.accel)) : 0u);
 #endif
   scheduler_->config.globals = kg;
+  // The pools' optional fields follow the pinned set (build_kernel_globals: a WORLD_ENV world needs
+  // the shadow item's lanes and flags); the scheduler reallocates when they change.
+  scheduler_->config.features = kg.session.features;
   // The material sort's threshold and scratch size follow the pinned table set (the scheduler
   // reallocates sort_counts when the count changes).
   scheduler_->config.material_header_count = tables_ ? tables_->scene_host.material_header_count : 0u;

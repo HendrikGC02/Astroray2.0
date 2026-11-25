@@ -195,7 +195,8 @@ $global:LASTEXITCODE = $code
   # the bodies below sum the shards' own counts against the whole and fail on a difference.
   # Hosted ci runs one process each: 2-4 cores and timing-sensitive session cases (task 212).
   $shardsCpuGate = if ($isCi) { 1 } else { 3 }
-  $shardsAnalytic = if ($isCi) { 1 } else { 2 }
+  # Analytic: 3, so the longest CPU scene (A9, 6.6 s with its 1024^2 CPU bake) does not set a shard's wall.
+  $shardsAnalytic = if ($isCi) { 1 } else { 3 }
   # The fast tier's tests run in 3 shards the same way; one on ci for the same reason.
   $shardsFast = if ($isCi) { 1 } else { 3 }
 
@@ -410,6 +411,13 @@ $global:LASTEXITCODE = $code
       $r = Step "blender $($su.Name)" { Invoke-TierBlender $su.Script @() $su.TimeoutS -Gui:([bool]$su.Gui) }
       $r.Out | Where-Object { $_ -match $su.Echo } | ForEach-Object { Write-Host $_ }
       if ($r.Code -ne 0) { Fail "blender $($su.Name) failed (out/check/full.log)" }
+    }
+    # Analytic renders moved out of the gate (owner decision 38; tools/analytic.py MOVED_TO_FULL): the
+    # gate keeps them on the other device. Recordings are up to date: the gate's `scenes` step built them.
+    foreach ($dev in 'cpu', 'cuda') {
+      $r = Step "analytic $dev moved to full" { & $py -I tools/analytic.py --moved --device $dev }
+      $r.Out | Where-Object { $_ -match '^(PASS|FAIL) analytic' } | ForEach-Object { Write-Host $_ }
+      if ($r.Code -ne 0) { Show-Tail $r 5; Fail "analytic $dev moved to full failed (out/check/full.log)" }
     }
     # The probe build first, so kernelgate full reads fresh capped probe cubins (kernels_probe_capped).
     $r = Step 'build probe' { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_kernels_gpu_probe }
