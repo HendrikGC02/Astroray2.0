@@ -15,3 +15,4 @@ Budget: gate +1 s declared (two ABI assertions and one fixture case, the fixture
 Depends on: none (204 landed). Collisions: cmake/buildinfo.cmake and tests/tools/fast_buildinfo.ps1 with nothing open; tests/abi/test_context.py with nothing open; the later one rebases.
 Size: S (about 50 lines of CMake; tests); stop and report at 2x.
 Progress:
+- 223: cuda/optix/embree/oidn fields from CUDAToolkit version and deps.toml pins (deps.cmake astroray_dep_version); tests, canary, 0009 d5, BACKLOG row done; gate 159.7 s under load.
