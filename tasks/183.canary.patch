@@ -47,7 +47,7 @@ index 7b887467..25198eca 100644
        r.t = t;
        return r;
 diff --git a/src/kernel/stages/shade_volume.h b/src/kernel/stages/shade_volume.h
-index 4657f690..a829d8c2 100644
+index 4657f690..1d6c4ce6 100644
 --- a/src/kernel/stages/shade_volume.h
 +++ b/src/kernel/stages/shade_volume.h
 @@ -80,7 +80,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
@@ -55,7 +55,7 @@ index 4657f690..a829d8c2 100644
      const Real2 uv = ps_hit_uv(kg, slot);
      const HitRecord hit{ps_hit_t(kg, slot), ps_hit_prim(kg, slot), inst, uv.x, uv.y};
 -    ps_next_stage(kg, slot) = static_cast<uint8_t>(route_hit_after_medium(kg, hit, ps_flags(kg, slot)));
-+    ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::SHADE_SURFACE);
++    ps_next_stage(kg, slot) = static_cast<uint8_t>(route_hit_after_medium(kg, hit, 0u));
      return;
    }
    // The coefficients first, with as little path state live as possible: the volume entry inlines the
