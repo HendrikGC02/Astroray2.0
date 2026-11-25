@@ -365,14 +365,16 @@ while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() <
     $wall = $g.Wall.Elapsed.TotalSeconds
     $out = Read-Out "g_$($g.Tag)"
     Check "$mode`: passes" ($g.Proc.HasExited -and $g.Proc.ExitCode -eq 0) $out
-    $m = [regex]::Match(($out -join "`n"), 'PASS gate ([0-9.]+) s \(budget 180(?:\.0)? s, waited [0-9.]+ s\).*build steps ([0-9.]+) s not counted')
+    $m = [regex]::Match(($out -join "`n"), 'PASS gate ([0-9.]+) s \(budget 180(?:\.0)? s, waited [0-9.]+ s\).*build steps ([0-9.]+) s not counted \(compile timing ([0-9.]+) s\)')
     Check "$mode`: the summary prints the tier seconds and the build seconds" $m.Success $out
     if ($m.Success) {
-      $tier = [double]$m.Groups[1].Value; $builds = [double]$m.Groups[2].Value
+      $tier = [double]$m.Groups[1].Value; $builds = [double]$m.Groups[2].Value; $ctime = [double]$m.Groups[3].Value
       # 0.5 s (plus start-up) of `build dev` and a recorded 0.5 s for the fast tier's build. Counted in the tier, X + builds would exceed the
       # gate's wall time by about `builds`; left out, X is wall time minus them.
       Check "$mode`: the build steps (build dev, and the build inside the fast step) are printed" ($builds -ge 1.0) @("builds $builds s")
       Check "$mode`: a slow build step does not count against B-09" ($tier + $builds -le $wall + 0.2) @("tier $tier s + builds $builds s against wall $wall s")
+      # The stand-in holds `--time` until the build behind it has started waiting, so its seconds are real here.
+      Check "$mode`: the compile timing step's seconds are named and inside the build seconds, so out of the tier clock (ruling 100)" ($ctime -ge 0.3 -and $builds -ge $ctime) @("builds $builds s must include compile timing $ctime s")
     }
     # The build proceeds once the gate has ended: it takes its share (and then waits at the tree lock).
     $shareN = Join-Path $shares "share.$($bn.Id).lock"
