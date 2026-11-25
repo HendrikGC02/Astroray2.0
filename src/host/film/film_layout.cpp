@@ -64,6 +64,10 @@ FilmLayout FilmLayout::build(const FilmRequest& req) {
     all.push_back({"aov_uv", ChannelKind::Add, 2, 0});
     all.push_back({"aov_material", ChannelKind::Add, 1, 0, true});
   }
+  if (req.guides) {
+    all.push_back({"guide_albedo", ChannelKind::Add, 3, 0});
+    all.push_back({"guide_normal", ChannelKind::Add, 3, 0});
+  }
 
   uint32_t moment_channels = 0;
   for (const ChannelRequest& c : all) {
@@ -150,6 +154,8 @@ ar::FilmData FilmLayout::bind(void* base) const {
   d.aov_normal = offset("aov_normal");
   d.aov_uv = offset("aov_uv");
   d.aov_material = offset("aov_material");
+  d.guide_albedo = offset("guide_albedo");
+  d.guide_normal = offset("guide_normal");
   d.film_exposure = 1.0;
   d.inv_radiance_scale = 1.0;
   return d;

@@ -68,6 +68,9 @@ struct FilmData {
   int32_t bounce_paths;            // COUNT: paths ended, the denominator of the bounce mean
   int32_t term_hist;               // COUNT x kTermCount (Term values), on request
   int32_t aov_position, aov_normal, aov_uv, aov_material;  // ADD x 3, 3, 2, 1
+  // Denoiser guides at the denoising surface (0008 d15): working-space RGB albedo and the
+  // front-facing shading normal, ADD x 3 each; requested together, -1 when not.
+  int32_t guide_albedo, guide_normal;
 
   ResponseTableView response;
   WavelengthTableView wavelengths;
@@ -200,6 +203,21 @@ AR_FN void film_primary_aov(const KernelGlobals& kg, uint32_t slot, uint32_t sam
     film_add(kg, uint32_t(f.aov_uv), pixel, u);
     film_add(kg, uint32_t(f.aov_uv) + 1u, pixel, v);
   }
+}
+
+// Denoiser guides of one sample (0008 d15): the albedo (already times the path's guide tint) and
+// the normal, accumulated over samples as any ADD channel, so readback divides by n. Callers test
+// guide_albedo >= 0 first; the normal plane exists exactly when the albedo plane does.
+AR_FN void film_write_guides(const KernelGlobals& kg, uint32_t slot, const Real3& albedo, const Real3& normal) {
+  const FilmData& f = *kg.film;
+  AR_ASSERT(f.guide_albedo >= 0 && f.guide_normal >= 0);
+  const uint32_t pixel = film_slot_pixel(kg, slot);
+  film_add(kg, uint32_t(f.guide_albedo), pixel, albedo.x);
+  film_add(kg, uint32_t(f.guide_albedo) + 1u, pixel, albedo.y);
+  film_add(kg, uint32_t(f.guide_albedo) + 2u, pixel, albedo.z);
+  film_add(kg, uint32_t(f.guide_normal), pixel, normal.x);
+  film_add(kg, uint32_t(f.guide_normal) + 1u, pixel, normal.y);
+  film_add(kg, uint32_t(f.guide_normal) + 2u, pixel, normal.z);
 }
 
 AR_NS_END

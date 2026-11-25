@@ -63,10 +63,19 @@ struct ConstantBlock {
   // Item 2a: constant source of specular_ior for the medium stack, and its priority.
   SpectrumRef interior_ior;
   uint8_t medium_priority;
-  uint8_t pad_[3];
+  // Denoiser guides (0008 d15): the exact working-space RGB of base_color and specular_color that
+  // the albedo guide reads, since the SpectrumRefs keep only lift coefficients. GUIDE_RGB_RUNTIME:
+  // one of the two is set per shading point, so no constant RGB stands for it.
+  uint8_t guide_flags;
+  uint8_t pad_[2];
+  float guide_base_color[3];
+  float guide_specular_color[3];
 };
 
-static_assert(sizeof(ConstantBlock) == 424, "ConstantBlock: 26 f32, 1 u32, 12 f32, 11 SpectrumRef, u8 + pad");
+static_assert(sizeof(ConstantBlock) == 448,
+              "ConstantBlock: 26 f32, 1 u32, 12 f32, 11 SpectrumRef, 2 u8 + pad, 6 f32 guide RGB");
+
+inline constexpr uint8_t GUIDE_RGB_RUNTIME = 1u << 0;
 
 // The colour and IOR inputs, in block order, plus interior_ior.
 enum class Slot : uint8_t {
@@ -166,6 +175,7 @@ AR_FN ConstantBlock default_constant_block(const Rgb2SpecTable& t) {
     (void)ok;
   }
   AR_ASSERT(flags == 0u);
+  for (int c = 0; c < 3; ++c) b.guide_base_color[c] = float(grey08.v[c]), b.guide_specular_color[c] = float(one.v[c]);
   return b;
 }
 

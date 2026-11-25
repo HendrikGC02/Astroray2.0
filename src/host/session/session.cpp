@@ -690,6 +690,9 @@ void Session::bind_globals() {
   // scene has a medium; the scheduler reallocates the pools when the feature set changes.
   u.features.media = tables_ && tables_->scene_host.medium_count > 0u;
   scheduler_->config.features.media = u.features.media;
+  // The guide tint (GUIDES_OR_LIGHTPASS, 0003 d19) exists exactly when the film has guide planes.
+  u.features.guides = film_->layout().guides();
+  scheduler_->config.features.guides = u.features.guides;
   const ar::KernelGlobals kg = build_kernel_globals(tables_.get(), in);
   if (tables_) {
     // Rule 5: a null pointer that is not optional is a builder bug, never a silent fallback.
