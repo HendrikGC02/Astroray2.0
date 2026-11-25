@@ -160,15 +160,16 @@ $global:LASTEXITCODE = $code
   # step): cut the tier's cases by the last run's seconds, run the shards, and prove together they ran every case
   # once. Text, for the same reason as $timedText; it reads $exe, $py, $root and $runShards from the caller.
   $cpuTierText = @'
-param([string]$tier, [int]$n, [string]$name, [string]$prev, [string]$capture)
+param([string]$tier, [int]$n, [string]$name, [string]$prev, [string]$capture, [string]$extra = '')
 $ls = "$capture.list"
-& $exe --tier=$tier --list-test-cases | Set-Content $ls
+$ex = @(if ($extra) { $extra })
+& $exe --tier=$tier @ex --list-test-cases | Set-Content $ls
 $all = [int]([regex]::Match((Get-Content $ls -Raw), 'filters: (\d+)').Groups[1].Value)
 # Ranges balance the last run's per-case seconds and keep same-name cases (the f32 and f64 instances of
-# one AR_RT case) in one shard; tools/gate_table.py --cut fails loudly when it cannot cut.
+# one AR_RT case) in one shard; $extra is a doctest ordering both calls share; tools/gate_table.py --cut fails loudly when it cannot cut.
 $cut = @(& $py -I tools/gate_table.py --cut $n --list $ls --prev $prev)
 if ($LASTEXITCODE -ne 0) { $cut; $global:LASTEXITCODE = 1; return }
-$o = @(& $runShards $exe @($cut | ForEach-Object { $f, $l = $_ -split ' '; "--tier=$tier --duration=true --first=$f --last=$l" }) $capture)
+$o = @(& $runShards $exe @($cut | ForEach-Object { $f, $l = $_ -split ' '; "--tier=$tier $extra --duration=true --first=$f --last=$l" }) $capture)
 $code = $LASTEXITCODE
 $o
 # One --duration line per case a shard ran (doctest's summary counts every case passing the filters,
@@ -455,8 +456,10 @@ $global:LASTEXITCODE = $code
 
     $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $waited += $w; Add-ArExcluded $w
     if (-not (Test-Path $exe)) { Fail "missing $exe" }
+    # The fast tier's f32 and f64 instances of an AR_RT case share a name but sit hundreds of cases apart in file
+    # order, which would leave no allowed cut; by name they are adjacent (the gate's f64 names carry a suffix).
     $prevFast = Join-Path $root 'out/check/fast-tests.out'
-    $r = Step 'tests' { & $runCpuTier 'fast' $shardsFast 'fast tests' $prevFast (Join-Path $root 'out/check/fast-tests') }
+    $r = Step 'tests' { & $runCpuTier 'fast' $shardsFast 'fast tests' $prevFast (Join-Path $root 'out/check/fast-tests') '--order-by=name' }
     # The next run's cut balances by these seconds, as the gate does with its kept step outputs.
     if ($r.Code -eq 0) { Set-Content -Path $prevFast -Value $r.Out }
     Exit-ArTreeLock
