@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <thread>
 
 #include "host/data_resource.h"
 #include "host/log.h"
@@ -243,7 +244,10 @@ BakedEnvironment bake_environment(Scene& scene, SceneTableCache& cache, const Sc
                                   const std::vector<uint8_t>& key) {
   Device* dev = scene_device;
   if (!dev) {
-    if (!cache.bake_device) cache.bake_device = make_cpu_session_device(scene.ctx(), std::max(1u, scene.pool().workers()));
+    // Every logical core: the whole latch waits on this bake (1024^2 cells measured 12.3 s on 2
+    // threads), and the device's pool exists only once a CPU context bakes.
+    if (!cache.bake_device)
+      cache.bake_device = make_cpu_session_device(scene.ctx(), std::max(1u, std::thread::hardware_concurrency()));
     dev = cache.bake_device.get();
   }
   const auto at = [&](TableId id) { return n.tables[static_cast<uint32_t>(id)]; };
