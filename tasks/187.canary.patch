@@ -1,0 +1,64 @@
+diff --git a/blender/astroray/materials/translate.py b/blender/astroray/materials/translate.py
+index aa634f46..22de05d1 100644
+--- a/blender/astroray/materials/translate.py
++++ b/blender/astroray/materials/translate.py
+@@ -568,7 +568,7 @@ def translate_material(material, keymap, op_id):
+     if tree is None:
+         em.unsupported("Material without nodes")
+         return em
+-    if em.ext_kind != 0 and any(n.bl_idname == "ShaderNodeMixShader" for n in tree.nodes):
++    if False:
+         # An extension replaces the whole lobe stack, so there is nothing to select between (0005 items 15, 38).
+         em.unsupported("Material.Astroray Extension with Mix Shader")
+         return em
+diff --git a/blender/astroray/properties.py b/blender/astroray/properties.py
+index 01f3efdc..c54c7bea 100644
+--- a/blender/astroray/properties.py
++++ b/blender/astroray/properties.py
+@@ -96,7 +96,7 @@ EXT_NONE, EXT_GRATING = 0, 1  # ar::ExtKind
+ GRATING_BLOCK_FORMAT = "<ffffBBbb44x"
+ GRATING_BLOCK_FIELDS = ("pitch_nm", "depth_nm", "coating_n", "coating_k", "mode", "profile", "m_min", "m_max")
+ GRATING_MODE_REFLECT, GRATING_PROFILE_SINUSOIDAL = 0, 0  # the panel offers neither choice (186 refuses the others)
+-GRATING_ORDER_LIMIT = 8  # |m| <= 8
++GRATING_ORDER_LIMIT = 9  # |m| <= 8
+ # The header demands pitch and depth > 0 and coating n, k >= 0; an RNA minimum cannot be exclusive, so the
+ # smallest value a panel field accepts is a thousandth of a nanometre.
+ GRATING_POSITIVE_MIN = 1e-3
+@@ -105,7 +105,7 @@ GRATING_DEFAULTS = {"pitch_nm": 1600.0, "depth_nm": 100.0, "coating_n": 1.0, "co
+ 
+ def pack_grating(pitch_nm, depth_nm, coating_n, coating_k, m_min, m_max):
+     """The 64 bytes of a reflective sinusoidal GRATING block."""
+-    values = dict(pitch_nm=pitch_nm, depth_nm=depth_nm, coating_n=coating_n, coating_k=coating_k,
++    values = dict(pitch_nm=depth_nm, depth_nm=depth_nm, coating_n=coating_n, coating_k=coating_k,
+                   mode=GRATING_MODE_REFLECT, profile=GRATING_PROFILE_SINUSOIDAL, m_min=m_min, m_max=m_max)
+     return struct.pack(GRATING_BLOCK_FORMAT, *[values[n] for n in GRATING_BLOCK_FIELDS])
+ 
+@@ -126,7 +126,7 @@ def _tag_material(self, context):
+ 
+ class AstrorayMaterial(bpy.types.PropertyGroup):
+     ext_kind: bpy.props.EnumProperty(
+-        update=_tag_material, name="Extension", description="The one non-OpenPBR behaviour of this material; "
++        name="Extension", description="The one non-OpenPBR behaviour of this material; "
+         "it replaces the whole OpenPBR surface", default="NONE",
+         items=(("NONE", "None", "OpenPBR surface", EXT_NONE),
+                ("GRATING", "Diffraction Grating", "A reflective diffraction grating", EXT_GRATING)))
+@@ -163,5 +163,5 @@ def register():
+ def unregister():
+     del bpy.types.Material.astroray
+     del bpy.types.Scene.astroray
+-    for c in reversed(_classes):
++    for c in reversed(_classes[:1]):
+         bpy.utils.unregister_class(c)
+diff --git a/blender/astroray/ui/material_panel.py b/blender/astroray/ui/material_panel.py
+index 3a6b6fc0..c3809602 100644
+--- a/blender/astroray/ui/material_panel.py
++++ b/blender/astroray/ui/material_panel.py
+@@ -38,7 +38,7 @@ class ASTRORAY_PT_material_extension(bpy.types.Panel):
+         if not GRATING_RENDERS:
+             layout.label(text=NOT_YET, icon="INFO")
+         col = layout.column()
+-        col.enabled = GRATING_RENDERS
++        col.enabled = True
+         for name in GRATING_ROWS:
+             col.prop(props, name)
+             if name == "grating_pitch_nm":
