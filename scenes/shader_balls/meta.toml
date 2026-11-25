@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Shader balls (M1b showcase): ten UV spheres of radius 1 m on a grey diffuse ground, two rows of five
+# stepping roughness 0.05, 0.2, 0.4, 0.7, 1.0 left to right. Back row: metalness 1, base colour
+# (1.0, 0.78, 0.34). Front row: metalness 0, base colour 0.8 grey. The only light is the Poly Haven
+# HDRI studio_small_09 as the world. A layout for looking at the metal and dielectric lobes, not a
+# test: nothing here has a pass criterion. The ASWF Standard Shader Ball is M2.
+class = "G"
+units = "m"
+spectra = ["rgb"]
+assets = ["studio_small_09"]
+single_witness = false
+
+# Built only when named (tools/scenes.py shader_balls): it needs the fetched HDRI (not in CI).
+[build]
+on_demand = true

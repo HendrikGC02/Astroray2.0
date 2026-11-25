@@ -616,16 +616,10 @@ class Scene:
         self._call(self.lib.ar_edit_set_world(self.edit_h, ctypes.byref(w)), "ar_edit_set_world")
         self._desc["world"] = {"rgb": [float(x) for x in rgb], "strength": float(strength)}
 
-    def world_image(self, image_key, strength=1.0, linear=False):
-        """An environment world: image `image_key` read as Blender's equirectangular Environment
-        Texture along the escaping ray (LOAD_CTX_P -> TEX_ENVIRONMENT -> EMIT_LE), Closest unless
-        `linear`, times `strength`. A world program, so the engine bakes its importance table (0004
-        D11). scenes/lib/blend_writer.py writes only constant worlds, so a description is refused."""
-        if self.description_path:
-            raise ValueError("world_image: scenes/lib/blend_writer.py has no environment world; build without a description")
+    def _environment_program(self, image_key, strength, linear):
+        a = self.abi
         if not 0 <= image_key < 2**32:
             raise ValueError("a TEX_ENVIRONMENT image key must fit 32 bits")
-        a = self.abi
         g = self.graph()
         p = g.add("LOAD_CTX_P")
         tex = g.add("TEX_ENVIRONMENT", i32=(image_key, TEX_LINEAR if linear else 0))
@@ -636,7 +630,27 @@ class Scene:
         w = a.ar_world_desc()
         w.surface_graph = gkey
         self._call(self.lib.ar_edit_set_world(self.edit_h, ctypes.byref(w)), "ar_edit_set_world")
+
+    def world_image(self, image_key, strength=1.0, linear=False):
+        """An environment world: image `image_key` read as Blender's equirectangular Environment
+        Texture along the escaping ray (LOAD_CTX_P -> TEX_ENVIRONMENT -> EMIT_LE), Closest unless
+        `linear`, times `strength`. A world program, so the engine bakes its importance table (0004
+        D11). A key has no file path for the .blend, so a description is refused: use
+        world_environment."""
+        if self.description_path:
+            raise ValueError("world_image: a description needs the image's file path; use world_environment")
+        self._environment_program(image_key, strength, linear)
         self._desc["world"] = {"environment_image": int(image_key), "strength": float(strength)}
+
+    def world_environment(self, image_path, strength=1.0, linear=False):
+        """world_image over the scene-linear file `image_path` (an EXR or HDR), which the description
+        also records by path for scenes/lib/blend_writer.py (Environment Texture -> Background)."""
+        path = os.path.abspath(image_path)
+        key = self.key()
+        self.image(key, path=path, interop=self.abi.AR_COLOR_INTEROP_LIN_REC709)
+        self._environment_program(key, strength, linear)
+        self._desc["world"] = {"environment_image": {"path": path, "interpolation": "Linear" if linear else "Closest"},
+                               "strength": float(strength)}
 
     def light(self, kind, xf=IDENTITY, rgb=(1.0, 1.0, 1.0), power=1.0, size=(0.0, 0.0), spread=math.pi,
               spot_size=0.0, spot_blend=0.0, sun_angle=0.0, normalize=1, cast_shadow=1, blackbody_kelvin=None,

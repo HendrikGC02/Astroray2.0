@@ -210,6 +210,44 @@ class TestWorld(unittest.TestCase):
             got = img[row, col, :3]
             self.assertTrue(np.allclose(got, want, atol=0.08), f"left={left} up={up}: {got} != {want}")
 
+    def test_blend_writer_environment_world(self):
+        """A description's `environment_image` world is an Environment Texture linked to the Background
+        colour, equirectangular over the file, and translates to the world program 172 pinned."""
+        import tempfile
+        sys.path.insert(0, os.path.join(support.ROOT, "scenes", "lib"))
+        import blend_writer
+        ar = tm._load("ar_scene_lib_world", os.path.join(support.ROOT, "scenes", "lib", "ar.py"))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "env.hdr")
+            grey = np.linspace(0.25, 4.0, 16 * 8).reshape(8, 16, 1).repeat(3, axis=2)
+            with open(path, "wb") as f:
+                f.write(ar.rgbe_bytes(grey))
+            entry = {"environment_image": {"path": path, "interpolation": "Closest"}, "strength": 1.5}
+            world = blend_writer._world(bpy, entry, {})
+            nodes = world.node_tree.nodes
+            env = next(n for n in nodes if n.type == "TEX_ENVIRONMENT")
+            bg = nodes["Background"]
+            self.assertEqual(env.projection, "EQUIRECTANGULAR")
+            self.assertEqual(os.path.normcase(os.path.abspath(bpy.path.abspath(env.image.filepath))), os.path.normcase(path))
+            self.assertTrue(bg.inputs["Color"].is_linked)
+            self.assertEqual(bg.inputs["Color"].links[0].from_node.name, env.name)
+            self.assertEqual(bg.inputs["Strength"].default_value, 1.5)
+            km = tm.keys.KeyMap()
+            em = tm.translate.translate_world(world, km, tm.OP)
+            self.assertEqual(tm.unsupported_strings(em), [])
+            ops = tm.decode(em)
+            self.assertEqual(sorted(n["op"] for n in ops), ["CONST_F32", "EMIT_LE", "LOAD_CTX_P", "TEX_ENVIRONMENT"])
+            tex = next(n for n in ops if n["op"] == "TEX_ENVIRONMENT")
+            self.assertEqual(tex["i32"], [tm.keys.image_key(km, env.image), 0])
+            self.assertEqual(next(n for n in ops if n["op"] == "CONST_F32")["f32"], [1.5])
+            for bad in ({**entry, "rgb": [1.0, 1.0, 1.0]}, {"environment_image": entry["environment_image"]},
+                        {**entry, "environment_image": {"path": path}},
+                        {**entry, "environment_image": 7},
+                        {**entry, "environment_image": {"path": path, "interpolation": "Cubic"}},
+                        {**entry, "environment_image": {"path": path + ".missing", "interpolation": "Closest"}}):
+                with self.subTest(bad=str(bad)[:60]), self.assertRaises(blend_writer.BlendWriterError):
+                    blend_writer._world(bpy, bad, {})
+
 
 if __name__ == "__main__":
     support.main()

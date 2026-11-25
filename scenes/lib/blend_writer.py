@@ -7,7 +7,7 @@ The Astroray extension must be enabled: the sampling settings live in `scene.ast
 One writer serves every builder, so the addon renders what the builder recorded. It covers what the
 M1a addon translates: triangle meshes with per-corner normals and UVs, Principled BSDF materials with
 constant inputs or a base colour from a file-backed sRGB Image Texture (a material entry's
-"base_color_image"), point and rectangle/ellipse area lamps, a constant world colour and a pinhole camera.
+"base_color_image"), point and rectangle/ellipse area lamps, a world (a constant colour or an Environment Texture over a linear file) and a pinhole camera.
 Instances come in three kinds so the addon's sync sees what a Blender user makes (B-5M): "object"
 (an object per instance, meshes shared between objects are linked duplicates), "collection" (an empty
 instancing a collection that holds the mesh, the collection excluded from the view layer) and
@@ -32,10 +32,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ar import ALL_VISIBILITY  # noqa: E402  (every ray type, the Blender default)
 
 # OpenPBR record input -> (Principled input name, scale into it).
-_PRINCIPLED = {"base_color": ("Base Color", 1.0), "specular_roughness": ("Roughness", 1.0),
-               "specular_weight": ("Specular IOR Level", 0.5)}
+_PRINCIPLED = {"base_color": ("Base Color", 1.0), "base_metalness": ("Metallic", 1.0),
+               "specular_roughness": ("Roughness", 1.0), "specular_weight": ("Specular IOR Level", 0.5)}
 # Inputs that exist only at their Blender default; any other value cannot be written.
-_FIXED = {"base_weight": 1.0, "base_metalness": 0.0, "base_diffuse_roughness": 0.0}
+_FIXED = {"base_weight": 1.0, "base_diffuse_roughness": 0.0}
 _PASS_FLAGS = {"Depth": "use_pass_z", "Position": "use_pass_position", "Normal": "use_pass_normal",
                "UV": "use_pass_uv", "IndexOB": "use_pass_object_index", "IndexMA": "use_pass_material_index",
                "Mist": "use_pass_mist", "Vector": "use_pass_vector"}
@@ -154,6 +154,44 @@ def _material(bpy, d, images):
         node.inputs["Emission Color"].default_value = (*d["emission"]["rgb"], 1.0)
         node.inputs["Emission Strength"].default_value = d["emission"]["strength"]
     return mat
+
+
+_WORLD_KEYS = ({"rgb", "strength"}, {"environment_image", "strength"})
+
+
+def _world(bpy, w, images):
+    """A world: a constant Background colour, or an Environment Texture (equirectangular, scene-linear
+    file) linked to the Background colour. Any other entry raises."""
+    if set(w) not in _WORLD_KEYS:
+        raise BlendWriterError(f"the world entry has keys {sorted(w)}, wants one of {[sorted(k) for k in _WORLD_KEYS]}")
+    world = bpy.data.worlds.new("World")
+    world.use_nodes = True
+    tree = world.node_tree
+    bg = tree.nodes["Background"]
+    bg.inputs["Strength"].default_value = w["strength"]
+    if "rgb" in w:
+        bg.inputs["Color"].default_value = (*w["rgb"], 1.0)
+        return world
+    d = w["environment_image"]
+    if not isinstance(d, dict) or set(d) != {"path", "interpolation"}:
+        raise BlendWriterError(f"the world's environment_image {d!r} must be {{path, interpolation}} "
+                               "(a bare image key has no file for the .blend)")
+    if d["interpolation"] not in _INTERPOLATION:
+        raise BlendWriterError(f"world: interpolation {d['interpolation']!r} is not in {_INTERPOLATION}")
+    if not os.path.isfile(d["path"]):
+        raise BlendWriterError(f"world: image file {d['path']} does not exist")
+    if d["path"] not in images:
+        img = bpy.data.images.load(d["path"], check_existing=False)
+        # The file is scene-linear radiance; reading the name back catches a build that would decode it as sRGB.
+        if not img.colorspace_settings.name.startswith("Linear"):
+            raise BlendWriterError(f"world: {d['path']} loaded as colour space {img.colorspace_settings.name!r}, "
+                                   "not a linear one")
+        images[d["path"]] = img
+    env = tree.nodes.new("ShaderNodeTexEnvironment")
+    env.image = images[d["path"]]
+    env.projection, env.interpolation = "EQUIRECTANGULAR", d["interpolation"]
+    tree.links.new(env.outputs["Color"], bg.inputs["Color"])
+    return world
 
 
 def _light(bpy, d):
@@ -326,13 +364,7 @@ def build(desc, path, extension=True):
     for d in desc["lights"]:
         scene.collection.objects.link(_light(bpy, d))
 
-    w = desc["world"]
-    world = bpy.data.worlds.new("World")
-    world.use_nodes = True
-    bg = world.node_tree.nodes["Background"]
-    bg.inputs["Color"].default_value = (*w["rgb"], 1.0)
-    bg.inputs["Strength"].default_value = w["strength"]
-    scene.world = world
+    scene.world = _world(bpy, desc["world"], images)
 
     c = desc["camera"]
     cam = bpy.data.cameras.new("Camera")

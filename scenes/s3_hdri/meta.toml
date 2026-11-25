@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# S3 under a real environment (M1b showcase): the geometry and the 32 textured materials of
+# scenes/s3_textured, no lamp, and the Poly Haven HDRI studio_small_09 as the world (Environment
+# Texture, Closest, strength 1): the HDRI is the only light. A picture, not a test: the HDRI is not
+# absolutely calibrated, so nothing here has a pass criterion. scenes/s3_textured stays the
+# first-frame and bench scene under its constant world.
+class = "G"
+units = "m"
+spectra = ["rgb"]
+assets = ["studio_small_09"]
+single_witness = false
+
+# Built only when named (tools/scenes.py s3_hdri): it needs the fetched HDRI and writes 32 textures first.
+[build]
+on_demand = true
+sources = ["scenes/s3_textured"]
