@@ -118,8 +118,8 @@ Set-Content "$fx/fake.ps1" @'
 # File order: z cases first, the pair far apart. Name order: a cases, the pair adjacent, then z cases.
 $file = 'n/z1', 'n/z2', 'n/z3', 'n/z4', 'n/z5', 'n/pair', 'n/a1', 'n/a2', 'n/a3', 'n/pair'
 $names = if ($args -contains '--order-by=name') { $file | Sort-Object { $_ } -CaseSensitive } else { $file }
-$f = [int](($args | Where-Object { $_ -like '--first=*' }) -replace '--first=', '')
-$l = [int](($args | Where-Object { $_ -like '--last=*' }) -replace '--last=', '')
+$f = [int](@($args | Where-Object { $_ -like '--first=*' } | ForEach-Object { $_ -replace '--first=', '' }) + 0)[0]
+$l = [int](@($args | Where-Object { $_ -like '--last=*' } | ForEach-Object { $_ -replace '--last=', '' }) + 0)[0]
 # FAKE_DIE: every shard but the first exits before printing its build line.
 if ($env:FAKE_DIE -and $f -gt 1) { exit 1 }
 'build: sha=x dirty=0 kernels=embedded'
