@@ -38,7 +38,7 @@ using namespace astroray::host;
 
 namespace {
 
-constexpr uint32_t kElemMax = 432;  // kg_checksum.cu kKgElemMax
+constexpr uint32_t kElemMax = 448;  // kg_checksum.cu kKgElemMax
 constexpr uint32_t kRow = 8 + 2 * kElemMax;
 constexpr uint32_t kRows = static_cast<uint32_t>(TableId::MEDIUM_PROGRAMS) + 1u;
 
