@@ -47,7 +47,8 @@ $gateBudget = 180.0
 $kernelBudget = 120.0
 $kernelSteps = @('build dev', 'kernelgate', 'compile timing', 'gpu gate tests')
 # Seconds of the gate's own build steps: out of the tier clock (ruling 94), printed beside the total. The kernel
-# part keeps counting `build dev`, which is a device build (0002 D10).
+# part keeps counting `build dev`, which is a device build (0002 D10). `compile timing` is such a step too (ruling 100):
+# it compiles the changed kernels against B-05's per-TU limit, so it is judged there, not on the tier clock.
 $script:buildSeconds = 0.0
 function Add-GateBuild([double]$Seconds) { $script:buildSeconds += $Seconds; Add-ArExcluded $Seconds }
 
@@ -136,7 +137,7 @@ $global:LASTEXITCODE = 1
     @{ Name = 'kernelgate'; Tag = 'local'; Lock = $true; Echo = '^kernelgate: \d+ row'; Run = { & $py -I tools/kernelgate.py @dargs } },
     # B-05 reads the compiler's own time: beside another worktree's build it read 7.29 s against 7.0 s when a
     # quiet machine reads 5.2-5.8 s.
-    @{ Name = 'compile timing'; Tag = 'local'; Lock = $true; Window = $true; Run = { & $py -I tools/kernelgate.py --time } },
+    @{ Name = 'compile timing'; Tag = 'local'; Lock = $true; Window = $true; Build = $true; Run = { & $py -I tools/kernelgate.py --time } },
     @{ Name = 'abi tests'; Tag = 'cpu'; Run = {
         if (Test-Path 'tests/abi') { & $py -I -m unittest discover -s tests/abi -p 'test_*.py' } } },
     @{ Name = 'dependents'; Tag = 'cpu'; Run = {
@@ -419,7 +420,8 @@ $global:LASTEXITCODE = 1
 $why = ''
 if ($Tier -eq 'gate') {
   $kp = ($script:ArSteps | Where-Object { $_.name -in $kernelSteps } | Measure-Object -Property seconds -Sum).Sum
-  $why = "kernel part {0:N1} s of {1} s, build steps {2:N1} s not counted" -f $kp, $kernelBudget, $script:buildSeconds
+  $ct = ($script:ArSteps | Where-Object { $_.name -eq 'compile timing' } | Measure-Object -Property seconds -Sum).Sum
+  $why = "kernel part {0:N1} s of {1} s, build steps {2:N1} s not counted (compile timing {3:N1} s)" -f $kp, $kernelBudget, $script:buildSeconds, $ct
   if ($kp -gt $kernelBudget) { Fail "B-09: kernel part $([math]::Round($kp, 1)) s over $kernelBudget s" }
   if ((Get-ArSeconds) -gt $budget) { Fail "B-09: tier over $budget s ($why)" }
 } elseif ($Tier -eq 'fast' -and (Get-ArSeconds) -gt $budget) {
