@@ -6,6 +6,7 @@
 #include <doctest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -321,13 +322,56 @@ struct GatedRig {
 #ifdef _WIN32
 // Blender asks Windows for a 1 ms timer, which the session's publish wait inherits inside Blender;
 // a test process gets the 15.6 ms default unless it asks too, and every capped wait would then
-// round up to a tick. Scoped to the cases that time the cap (winmm, test side only).
+// round up to a tick (gap ~31 ms, a cancel seen at +15.6 ms). Windows 11 also stops honouring the
+// request of a process it deems hidden, which a harness process without a window can be, so the
+// process opts out of that throttling and the case then checks the request took effect: a refused
+// request fails here by name instead of as a misleading pacing failure. Scoped to the cases that
+// time the cap (winmm, test side only).
+// Ref: Microsoft Learn, timeBeginPeriod: "Starting with Windows 10, version 2004, this function no
+// longer affects global timer resolution. For processes which have not called this function, Windows
+// does not guarantee a higher resolution than the default system resolution." and "Starting with
+// Windows 11, if a window-owning process becomes fully occluded, minimized, or otherwise invisible
+// or inaudible to the end user, Windows does not guarantee a higher resolution than the default
+// system resolution. See SetProcessInformation for more information on this behavior."
+// Ref: SetProcessInformation(ProcessPowerThrottling) with PROCESS_POWER_THROTTLING_STATE, mask
+// PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION (0x4 in winnt.h): ControlMask set and StateMask
+// 0 turns the ignore-timer-resolution policy off for the process; ControlMask 0 returns it to the system.
 extern "C" __declspec(dllimport) unsigned __stdcall timeBeginPeriod(unsigned);
 extern "C" __declspec(dllimport) unsigned __stdcall timeEndPeriod(unsigned);
+struct PowerThrottlingState {
+  unsigned long Version, ControlMask, StateMask;
+};
+extern "C" __declspec(dllimport) void* __stdcall GetCurrentProcess();
+extern "C" __declspec(dllimport) int __stdcall SetProcessInformation(void*, int, void*, unsigned long);
 #pragma comment(lib, "winmm.lib")
 struct MsTimer {
-  MsTimer() { timeBeginPeriod(1); }
-  ~MsTimer() { timeEndPeriod(1); }
+  static void throttling(unsigned long control) {
+    PowerThrottlingState s{1, control, 0};
+    SetProcessInformation(GetCurrentProcess(), 4 /* ProcessPowerThrottling */, &s, sizeof s);
+  }
+  MsTimer() {
+    timeBeginPeriod(1);
+    throttling(0x4);
+    std::array<double, 9> ms{};
+    for (double& m : ms) {
+      const auto a = std::chrono::steady_clock::now();
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      m = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count();
+    }
+    std::sort(ms.begin(), ms.end());
+    if (ms[4] > 4.0) {
+      release();
+      FAIL("host timer resolution not granted: a 1 ms sleep takes " << ms[4] << " ms (median of 9)");
+    }
+  }
+  ~MsTimer() { release(); }
+  MsTimer(const MsTimer&) = delete;
+  MsTimer& operator=(const MsTimer&) = delete;
+ private:
+  static void release() {
+    throttling(0);
+    timeEndPeriod(1);
+  }
 };
 #else
 struct MsTimer {};
