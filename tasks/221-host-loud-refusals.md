@@ -10,7 +10,7 @@ Do:
 3. Texels: the rule, fixtures, tests; d13's sentence.
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `out/bin/astroray_tests_cpu.exe --tier=gate -tc="image_ingest/*,compiler/*,shade_background/*"` (one filter per run if a comma list matches nothing; grep `TEST_CASE` for the real names); the Blender suites if tests/blender changes; paste the last lines.
 Look at: none (refusals; no image).
-Canary: tasks/221.canary.patch must turn red: astroray_tests_cpu "image_ingest/negative texels are refused", "compiler/blackbody above the planck domain is rejected", "world/table colour is refused at compile" (a new case; if the world compile tests live under another suite name, grep and correct this line in the commit that adds it; the patch removes the three refusals).
+Canary: tasks/221.canary.patch must turn red: astroray_tests_cpu "image_ingest/negative texels are refused", "compiler/blackbody outside the float domain is rejected", "world/table colour is refused at compile" (the patch removes the three refusals)
 Budget: gate +0.3 s at most (fast cases; stop and ask above); kernel rows: none (host only).
 Depends on: none (158, 167, 177 landed); 172 if its world.cpp edit has not landed yet (then rebase on it). Collisions: world.cpp with 172 and 173; test_image_ingest.cpp with nothing open; 0007 d13 with nothing open; the later one rebases.
 Size: S (about 60 lines without tests); stop and report at 2x.
