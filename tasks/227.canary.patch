@@ -1,0 +1,13 @@
+diff --git a/tools/check.ps1 b/tools/check.ps1
+index 685ae464..2b4b04a7 100644
+--- a/tools/check.ps1
++++ b/tools/check.ps1
+@@ -168,7 +168,7 @@ $all = [int]([regex]::Match((Get-Content $ls -Raw), 'filters: (\d+)').Groups[1].
+ # one AR_RT case) in one shard; tools/gate_table.py --cut fails loudly when it cannot cut.
+ $cut = @(& $py -I tools/gate_table.py --cut $n --list $ls --prev $prev)
+ if ($LASTEXITCODE -ne 0) { $cut; $global:LASTEXITCODE = 1; return }
+-$o = @(& $runShards $exe @($cut | ForEach-Object { $f, $l = $_ -split ' '; "--tier=$tier --duration=true --first=$f --last=$l" }) $capture)
++$o = @(& $runShards $exe @($cut | ForEach-Object { $f, $l = $_ -split ' '; "--tier=$tier --duration=true --first=$f --last=$([int]$l - 1)" }) $capture)
+ $code = $LASTEXITCODE
+ $o
+ # One --duration line per case a shard ran (doctest's summary counts every case passing the filters,
