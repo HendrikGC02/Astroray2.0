@@ -302,7 +302,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     if (!(sl.pmf > Real(0))) break;
     const LightRecord& lr = kg.lights[sl.light];
     const Real2 ul{camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_U)), camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_V))};
-    const LightLiSample ls = light_sample_li(lr, lctx, ul, ctx.lambda_t, obs, kg.env);
+    // NEE_LIGHT_ONLY has no BSDF strategy, so an environment world samples its complete table.
+    const LightLiSample ls = light_sample_li(lr, lctx, ul, ctx.lambda_t, obs, kg.env, (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u);
     if (!(ls.pdf > Real(0))) break;
     const LobeEval ev = stack_eval(*kg.e_diel, *kg.e_spec, rec, frame_from_normal(N), wo, ls.wi, TransportMode::Radiance);
     // NEE_LIGHT_ONLY: the BSDF strategy is off, so its pdf leaves the weight.

@@ -30,9 +30,12 @@ AR_NS_BEGIN
 // [1] MIS-compensated (NEE and the escaped-ray weight).
 inline constexpr int kEnvPlain = 0, kEnvCompensated = 1;
 
-AR_FN LightLiSample world_env_sample_li(const LightSampleContext& ctx, Real2 u, const EnvTableView* env) {
+// `complete`: sample the plain table instead, whose pdf is non-zero wherever the world is lit. Only
+// an estimator without BSDF sampling needs it (the NEE_LIGHT_ONLY test mode, kernel_globals.h): the
+// compensated pdf is 0 where the radiance is below its mean, which only BSDF sampling covers.
+AR_FN LightLiSample world_env_sample_li(const LightSampleContext& ctx, Real2 u, const EnvTableView* env, bool complete) {
   AR_ASSERT(env != nullptr);
-  const EnvDirSample d = env_sample(env[kEnvPlain], env[kEnvCompensated], u, true);
+  const EnvDirSample d = env_sample(env[kEnvPlain], env[kEnvCompensated], u, !complete);
   if (!(d.pdf > Real(0))) return light_li_none();
   LightLiSample s = light_li_none();
   s.wi = d.wi;
@@ -43,9 +46,9 @@ AR_FN LightLiSample world_env_sample_li(const LightSampleContext& ctx, Real2 u, 
   return s;
 }
 
-AR_FN Real world_env_pdf_li(Real3 wi, const EnvTableView* env) {
+AR_FN Real world_env_pdf_li(Real3 wi, const EnvTableView* env, bool complete) {
   AR_ASSERT(env != nullptr);
-  return env_pdf(env[kEnvPlain], env[kEnvCompensated], wi, true);
+  return env_pdf(env[kEnvPlain], env[kEnvCompensated], wi, !complete);
 }
 
 // pbrt ImageInfiniteLight::Phi = 4 pi^2 R^2 mean(L) = pi R^2 times the integral of L over the

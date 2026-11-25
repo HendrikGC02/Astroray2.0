@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# A9 one texel (research 09 S12): A1's Lambertian sphere (grey rho, camera outside on -y) under an
+# equirectangular environment of grey radiance `dim` everywhere but one texel of radiance `bright`,
+# read with Closest filtering, so the world is a program (an Environment Texture) and the engine bakes
+# its importance table (0004 D11). Truth (truths.py environment_texel): per pixel, rho / pi times the
+# sum over texels of L_t times the texel's projected solid angle at the sphere's normal, by
+# deterministic quadrature, never from the engine's table. The bright texel subtends 0.13 sr above
+# the camera's right (phi in [-3 pi / 8, -pi / 4], z in [0.38, 0.71]) and gives most of the light on
+# that side, so a wrong NEE pdf or escaped-ray weight for the environment (compensated table, 0004
+# D7/D11) reads high or low there; pixels the silhouette may cross, and the background, are excluded.
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+
+[truth]
+formula = "environment_texel"
+rho = 0.8
+strength = 1.0
+# Radiance m 2^k with m < 256, which the RGBE image (scenes/lib/ar.py rgbe_bytes) stores exactly.
+dim = 0.0625
+bright = 4.0
+# The image is image_size[0] columns by image_size[1] rows; texel = [column, row from the bottom].
+image_size = [16, 8]
+texel = [10, 5]
+quadrature = 64
+sphere_radius = 1.0
+camera_distance = 4.0
+focal_mm = 50.0
+sensor_mm = 36.0
+# As A1: at 192 x 96 the smooth normals' loss of the cosine lobe below the facets is far below the
+# per-pixel threshold.
+segments = 192
+rings = 96
+
+[tolerance]
+kind = "z_se"

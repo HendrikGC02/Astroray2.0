@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0004 D11 environment NEE on/off (as d1_nee_onoff, RULINGS.md 77): a grey Lambertian plane under an
+# equirectangular environment (Linear filtering) of a smooth sky with a bright patch, the world a
+# program whose importance table the engine bakes, rendered with MIS (on: NEE from the compensated
+# table, escaped rays weighted with the same compensated pdf), BSDF sampling only (off) and light
+# sampling only (light_only: the complete table, since the compensated pdf is 0 where the sky is
+# below its mean, kernel_globals.h). The three estimators are unbiased for the same image (Veach
+# 1997, ch. 9), so on~off and on~light_only must agree within their joint SE, per 8x8 pixel block
+# and as the image mean (truths.py mode_agreement). A wrong environment pdf on either strategy, or
+# NEE and the escaped-ray weight reading different tables, moves one mode against the others.
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+[truth]
+formula = "mode_agreement"
+pairs = [["on", "off"], ["on", "light_only"]]
+# The harness renders size x size at spp and tests block x block pixel blocks (tools/analytic.py
+# comparison_plan): 64 blocks of 8x8 pixels hold 4096 samples each.
+size = 64
+spp = 64
+block = 8
+rho = 0.8
+# The sky: sky_base + sky_gain (1 + z) / 2 at a texel's centre, z its height, and the patch of
+# patch_size texels at patch (column, row from the bottom) of radiance patch_radiance.
+image_size = [32, 16]
+sky_base = 0.05
+sky_gain = 0.3
+patch = [20, 11]
+patch_size = [2, 1]
+patch_radiance = 6.0
+plane_size = 6.0
+camera_height = 3.0
+focal_mm = 50.0
+sensor_mm = 36.0
+
+[tolerance]
+kind = "z_se"

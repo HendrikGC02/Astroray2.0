@@ -162,6 +162,34 @@ def look_at(position, target, up=(0.0, 0.0, 1.0)):
     return np.concatenate([cols, p[:, None]], axis=1).reshape(12)
 
 
+def rgbe_bytes(rgb):
+    """Radiance .hdr bytes of rgb, a (h, w, 3) array of non-negative floats in file order (top row
+    first), written as flat (uncompressed) RGBE scanlines. Each pixel stores 8-bit mantissas of a
+    shared exponent e from frexp of its largest component; the decoder (stb_image) reads a component
+    as mantissa x 2^(e - 136), so values m 2^k with m < 256 an integer come back exactly. A first pixel
+    of mantissas (2, 2) would read as a run-length scanline header, so it is refused.
+    Ref: Ward, "Real Pixels", Graphics Gems II (1991) (the RGBE encoding); the Radiance file header;
+    stb_image.h stbi__hdr_load and stbi__hdr_convert (flat scanlines, the decode above)."""
+    a = np.asarray(rgb, dtype=np.float64)
+    if a.ndim != 3 or a.shape[2] != 3 or not np.isfinite(a).all() or (a < 0).any():
+        raise ValueError("rgbe_bytes takes a (h, w, 3) array of finite non-negative values")
+    h, w = a.shape[:2]
+    head = f"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y {h} +X {w}\n".encode()
+    out = bytearray()
+    for row in a:
+        for px in row:
+            m = float(px.max())
+            if m < 1e-32:
+                out += b"\0\0\0\0"
+                continue
+            mant, e = math.frexp(m)
+            scale = mant * 256.0 / m
+            out += bytes([int(c * scale) for c in px] + [e + 128])
+    if w >= 8 and out[:2] == b"\x02\x02":
+        raise ValueError("rgbe_bytes: the first pixel's mantissas (2, 2) would read as a run-length header")
+    return head + bytes(out)
+
+
 def projection_inverse(width, height, focal_mm, sensor_mm):
     """NDC to camera space for a pinhole camera with Blender's automatic sensor fit: the sensor
     length is the larger image side. Row-major 4x4 mapping (nx, ny) to (x, y, -1) at w = 1."""
@@ -571,6 +599,28 @@ class Scene:
         w.surface_graph = gkey
         self._call(self.lib.ar_edit_set_world(self.edit_h, ctypes.byref(w)), "ar_edit_set_world")
         self._desc["world"] = {"rgb": [float(x) for x in rgb], "strength": float(strength)}
+
+    def world_image(self, image_key, strength=1.0, linear=False):
+        """An environment world: image `image_key` read as Blender's equirectangular Environment
+        Texture along the escaping ray (LOAD_CTX_P -> TEX_ENVIRONMENT -> EMIT_LE), Closest unless
+        `linear`, times `strength`. A world program, so the engine bakes its importance table (0004
+        D11). scenes/lib/blend_writer.py writes only constant worlds, so a description is refused."""
+        if self.description_path:
+            raise ValueError("world_image: scenes/lib/blend_writer.py has no environment world; build without a description")
+        if not 0 <= image_key < 2**32:
+            raise ValueError("a TEX_ENVIRONMENT image key must fit 32 bits")
+        a = self.abi
+        g = self.graph()
+        p = g.add("LOAD_CTX_P")
+        tex = g.add("TEX_ENVIRONMENT", i32=(image_key, TEX_LINEAR if linear else 0))
+        g.link(p, tex, 0)
+        g.emission(Node(tex), strength)
+        gkey = self.key()
+        self.set_graph(gkey, g, a.AR_TARGET_WORLD)
+        w = a.ar_world_desc()
+        w.surface_graph = gkey
+        self._call(self.lib.ar_edit_set_world(self.edit_h, ctypes.byref(w)), "ar_edit_set_world")
+        self._desc["world"] = {"environment_image": int(image_key), "strength": float(strength)}
 
     def light(self, kind, xf=IDENTITY, rgb=(1.0, 1.0, 1.0), power=1.0, size=(0.0, 0.0), spread=math.pi,
               spot_size=0.0, spot_blend=0.0, sun_angle=0.0, normalize=1, cast_shadow=1, blackbody_kelvin=None,

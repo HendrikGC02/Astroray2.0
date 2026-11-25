@@ -35,7 +35,9 @@ inline constexpr uint32_t TEST_HOOK_PIXEL_CENTRE = 1u << 0;
 // NEE_LIGHT_ONLY: light sampling only. The NEE weight drops the BSDF pdf; an emitter reached after
 // a non-delta bounce adds nothing. Emission at the first vertex or after a delta bounce counts in
 // every mode, because no light sample can reach it. Unbiased only while every light has pmf > 0
-// (0004 D9: a pmf-0 light is reached by BSDF rays alone), which the test scenes ensure.
+// (0004 D9: a pmf-0 light is reached by BSDF rays alone), which the test scenes ensure, and while
+// every light's pdf covers its emission: an environment world therefore samples its complete (plain)
+// table in this mode, not the MIS-compensated one (light/world_env.h, 0004 D11).
 inline constexpr uint32_t TEST_HOOK_NEE_OFF = 1u << 1;
 inline constexpr uint32_t TEST_HOOK_NEE_LIGHT_ONLY = 1u << 2;
 

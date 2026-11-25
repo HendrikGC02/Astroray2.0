@@ -360,8 +360,10 @@ AR_FN bool light_valid(const LightRecord& r) { return light_problem(r) == nullpt
 // Deterministic in (ctx, u). The unknown-type default is a bug that a debug build traps. `env` is
 // the scene's two environment distributions (world_env.h: plain, then compensated), which only
 // WORLD_ENV reads; a WORLD_ENV light without them is a host bug that a debug build traps.
+// `env_complete` selects WORLD_ENV's complete (plain) distribution, for an estimator without BSDF
+// sampling (world_env.h); MIS with BSDF sampling uses the compensated one.
 AR_FN LightLiSample light_sample_li(const LightRecord& r, const LightSampleContext& ctx, Real2 u, const Lambda& lam,
-                                    const ObserverView& obs, const EnvTableView* env = nullptr) {
+                                    const ObserverView& obs, const EnvTableView* env = nullptr, bool env_complete = false) {
   switch (LightType(r.type)) {
     case LightType::POINT: return point_sample_li(r, ctx, lam, obs);
     case LightType::SPHERE: return sphere_sample_li(r, ctx, u, lam, obs);
@@ -369,16 +371,16 @@ AR_FN LightLiSample light_sample_li(const LightRecord& r, const LightSampleConte
     case LightType::AREA_DISK: return disk_sample_li(r, ctx, u, lam, obs);
     case LightType::TRIANGLE: return tri_sample_li(r, ctx, u, lam, obs);
     case LightType::WORLD_CONST: return world_sample_li(r, ctx, u, lam, obs);
-    case LightType::WORLD_ENV: return world_env_sample_li(ctx, u, env);
+    case LightType::WORLD_ENV: return world_env_sample_li(ctx, u, env, env_complete);
   }
   AR_ASSERT(false);
   return light_li_none();
 }
 
 // Solid-angle pdf of reaching the light along wi (a BSDF ray's direction at the previous vertex,
-// 0004 D1); 0 for delta lights. `env` as for light_sample_li.
+// 0004 D1); 0 for delta lights. `env` and `env_complete` as for light_sample_li.
 AR_FN Real light_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Real3 wi, const LightHit& hit,
-                        const EnvTableView* env = nullptr) {
+                        const EnvTableView* env = nullptr, bool env_complete = false) {
   switch (LightType(r.type)) {
     case LightType::POINT: return Real(0);
     case LightType::SPHERE: return sphere_pdf_li(r, ctx, wi, hit);
@@ -386,7 +388,7 @@ AR_FN Real light_pdf_li(const LightRecord& r, const LightSampleContext& ctx, Rea
     case LightType::AREA_DISK: return disk_pdf_li(r, ctx, wi, hit);
     case LightType::TRIANGLE: return tri_pdf_li(r, ctx, wi, hit);
     case LightType::WORLD_CONST: return world_pdf_li(r, ctx, wi, hit);
-    case LightType::WORLD_ENV: return world_env_pdf_li(wi, env);
+    case LightType::WORLD_ENV: return world_env_pdf_li(wi, env, env_complete);
   }
   AR_ASSERT(false);
   return Real(0);
