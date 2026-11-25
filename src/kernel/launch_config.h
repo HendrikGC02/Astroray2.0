@@ -68,7 +68,7 @@ struct LaunchRow {
   X(k_shade_background, 256, 0, 0, VM) \
   X(k_shade_surface, 256, 2, 1, VM) \
   X(k_shade_shadow, 256, 0, 0, VM) \
-  X(k_shade_volume, 256, 0, 1, VM) \
+  X(k_shade_volume, 256, 1, 1, VM) \
   X(k_shade_light, 256, 0, 0, VM) \
   X(k_bake_environment, 256, 0, 0, VM)
 

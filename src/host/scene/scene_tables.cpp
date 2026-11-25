@@ -48,7 +48,7 @@ const char* table_name(TableId id) {
       "material constants", "material pass indices", "image views",     "light records",  "light alias bins", "light bin lights",
       "light pmf",          "light index",     "rgb2spec nodes",  "rgb2spec coefficients", "observer cmf", "observer illuminant",
       "srgb decode",        "e_diel table",    "material spectra", "e_spec table", "media table", "world program",
-      "world constants", "environment table", "table header"};
+      "world constants", "environment table", "medium blocks", "medium programs", "table header"};
   const uint32_t i = static_cast<uint32_t>(id);
   if (i >= kTableCount) throw std::invalid_argument("table_name: no table " + std::to_string(i));
   return names[i];
@@ -148,6 +148,19 @@ std::vector<ar::MediumDesc> medium_table(const std::vector<std::shared_ptr<const
     out[i].program = i;  // the block index: the block array is laid out in this order
   }
   check_medium_table(out.data(), uint32_t(out.size()));
+  return out;
+}
+
+MediumArrays medium_arrays(const std::vector<std::shared_ptr<const Medium>>& media) {
+  MediumArrays out;
+  if (media.empty()) return out;
+  out.programs.push_back(0u);  // reserved: entry 0 means no program
+  for (const auto& m : media) {
+    ar::MediumBlock b = m->block;
+    b.entry = m->program.empty() ? 0u : uint32_t(out.programs.size());
+    out.programs.insert(out.programs.end(), m->program.begin(), m->program.end());
+    out.blocks.push_back(b);
+  }
   return out;
 }
 
@@ -387,6 +400,16 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
     return b.put(LedgerCategory::TABLES, mats ? mats->world_constants.data() : nullptr,
                  mats ? mats->world_constants.size() * sizeof(ar::ConstantBlock) : 0, mp);
   });
+  // The media's blocks and volume programs, which medium_eval reads through MediumDesc::program.
+  const bool media_same = p && p->media == n.media;
+  const MediumArrays marr = medium_arrays(n.media);
+  const uint32_t mprog_words = uint32_t(marr.programs.size());
+  b.table(TableId::MEDIUM_BLOCKS, media_same, uint32_t(n.media.size()), [&] {
+    return b.put(LedgerCategory::TABLES, marr.blocks.data(), marr.blocks.size() * sizeof(ar::MediumBlock));
+  });
+  b.table(TableId::MEDIUM_PROGRAMS, media_same, mprog_words, [&] {
+    return b.put(LedgerCategory::TABLES, marr.programs.data(), marr.programs.size() * sizeof(uint32_t));
+  });
 
   // Images (060): texels per slot, kept while the slot holds the same image.
   const ImageArrays* imgs = n.images.get();
@@ -597,6 +620,8 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   sd.medium_descs = as<ar::MediumDesc>(at(TableId::MEDIA)), sd.medium_count = cnt(TableId::MEDIA);
   sd.world_program = as<uint32_t>(at(TableId::WORLD_PROGRAM)), sd.world_program_words = cnt(TableId::WORLD_PROGRAM);
   sd.world_constants = as<ar::ConstantBlock>(at(TableId::WORLD_CONSTANTS));
+  sd.medium_blocks = as<ar::MediumBlock>(at(TableId::MEDIUM_BLOCKS));
+  sd.medium_programs = as<uint32_t>(at(TableId::MEDIUM_PROGRAMS)), sd.medium_program_words = cnt(TableId::MEDIUM_PROGRAMS);
   sd.accel = n.accel->kernel_accel();
   ar::Rgb2SpecTable jt{};
   if (jh) jt = *jh;

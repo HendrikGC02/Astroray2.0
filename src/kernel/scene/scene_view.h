@@ -17,6 +17,7 @@ AR_NS_BEGIN
 
 struct ConstantBlock;  // material/constant_block.h
 struct MediumDesc;     // medium/medium.h
+struct MediumBlock;    // medium/medium_block.h
 
 // One entry of the device mesh table, indexed by `DeviceInstanceRecord::mesh`. A hit reads
 // the triangle's corners from tri_corners, then normals by corner, UVs by layer and corner,
@@ -96,6 +97,12 @@ struct SceneData {
   const uint32_t* world_program;
   uint32_t world_program_words;
   const ConstantBlock* world_constants;
+  // The media's constant blocks (MediumDesc::program indexes them, one per medium in the same order)
+  // and their volume-program words, word 0 reserved so a block entry of 0 means no program
+  // (medium/medium_eval.h MediumTables). Null exactly when the scene has no medium.
+  const MediumBlock* medium_blocks;
+  const uint32_t* medium_programs;
+  uint32_t medium_program_words;
   // The traversal structure of the backend that runs the stages, opaque to kernels and never null
   // in a session's scene (an empty scene has an empty structure). CPU: the snapshot's EmbreeScene.
   // CUDA: the OptixTraversableHandle of its TLAS as an integer; the launch reads it from the host

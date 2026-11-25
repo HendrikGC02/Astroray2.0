@@ -50,7 +50,7 @@ SIZE = 32  # 0009 d11: analytic scenes at 32x32 in gate
 MIN_SPP = 1024
 # 0009 d11: run by check.ps1 gate on both devices.
 GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace", "a1_table_furnace", "a1_world_half", "a4_point", "a4_blackbody_lamp", "a4_sphere", "a3_disk",
-               "lit_furnace_small", "d1_nee_onoff", "d8_stacked_lamps", "d1_uv_chart", "d3_alpha_cards", "d3_alpha_nee")
+               "lit_furnace_small", "d1_nee_onoff", "d8_stacked_lamps", "d1_uv_chart", "d3_alpha_cards", "d3_alpha_nee", "v1_slab")
 # Scenes whose harness line also reports lamp crossings per ray (0004 D8 row), and the samples per
 # pixel of the in-process render that reads the counters (one pass suffices: counters are per pass).
 CROSSING_SCENES = ("d8_stacked_lamps",)

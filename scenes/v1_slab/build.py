@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """V1 slab builder: a closed box of thickness d with a chromatic absorbing test medium inside, between
-a pinhole camera and a view-filling white emitter plane, world black. The box's material has opacity 0
+a pinhole camera and a view-filling white emitter plane, world black. The box covers the left half of
+the view (world x < 0, its side face in the plane x = 0 through the camera, so the split falls between
+the two middle pixel columns); the right half sees the emitter directly. The box's material has opacity 0
 (alpha pass-through), so a camera ray enters the box and the medium alone attenuates it. Usage:
 build.py --out <path.arrec> [--sigma-zero]. Parameters come from meta.toml; --sigma-zero builds the variant
 whose medium has no absorption and no scattering (the render must equal the scene without a medium).
@@ -26,8 +28,11 @@ def build(out, sigma_zero=False):
     top = t["gap"] + t["thickness"]
     if t["plane_size"] / 2 < t["camera_distance"] * tan_half:
         raise ValueError("the emitter does not fill the camera's view")
-    if t["slab_size"] / 2 < (t["camera_distance"] - top) * tan_half:
-        raise ValueError("the slab does not fill the camera's view")
+    # The lowest point of the box's span must still cover the left half's widest ray.
+    if t["slab_size"] / 2 < (t["camera_distance"] - t["gap"]) * tan_half:
+        raise ValueError("the slab does not cover the left half of the camera's view")
+    if SIZE % 2:
+        raise ValueError("the image needs an even width for its halves")
     if top >= t["camera_distance"]:
         raise ValueError("the slab reaches the camera")
     with ar.Scene(out) as s:
@@ -41,7 +46,7 @@ def build(out, sigma_zero=False):
         medium = s.medium(zero if sigma_zero else t["sigma_a"], zero if sigma_zero else t["sigma_s"], t["g"])
         s.instances([{"geom": emitter, "materials": [glow]},
                      {"geom": slab, "materials": [shell], "medium": medium,
-                      "xf": ar.translation((0.0, 0.0, t["gap"] + t["thickness"] / 2))}])
+                      "xf": ar.translation((-t["slab_size"] / 2, 0.0, t["gap"] + t["thickness"] / 2))}])
         s.world((0.0, 0.0, 0.0), 0.0)
         s.settings(SPP, SIZE, SIZE, seed=SEED, sampler="independent")
         s.camera((0.0, 0.0, t["camera_distance"]), (0.0, 0.0, 0.0), t["focal_mm"], t["sensor_mm"],
