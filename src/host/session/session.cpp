@@ -686,6 +686,10 @@ void Session::bind_globals() {
     std::memcpy(u.max_bounces, b, sizeof b);
     u.min_bounces = s->s.min_bounces;
   }
+  // The MEDIA state fields (medium stack and medium_rng, 0003 d19) exist exactly when the pinned
+  // scene has a medium; the scheduler reallocates the pools when the feature set changes.
+  u.features.media = tables_ && tables_->scene_host.medium_count > 0u;
+  scheduler_->config.features.media = u.features.media;
   const ar::KernelGlobals kg = build_kernel_globals(tables_.get(), in);
   if (tables_) {
     // Rule 5: a null pointer that is not optional is a builder bug, never a silent fallback.
