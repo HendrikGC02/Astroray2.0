@@ -15,3 +15,4 @@ Budget: gate +0 s; k_shade_surface regs, stack and spills unchanged; compile_s d
 Depends on: none. Collisions: shade_surface.h with 173 (paused on it; this lands first, 173 rebases).
 Size: S-M (unknown until step 1); stop and report after step 1's table if no single cost exceeds 0.3 s.
 Progress:
+- Implementer start (2026-11-25): step 1 first (nvcc --time phases, 3 quiet runs beside main's kernelgate number, then bisection by removal on scratch commits); files to change decided after the table: src/kernel_gpu/shade_surface.cu, cmake/kernels.cmake or headers under src/kernel/ as Scope allows, src/kernel/budget.toml, tasks/228.canary.patch.
