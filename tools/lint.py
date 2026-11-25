@@ -1079,9 +1079,23 @@ def tree_files(root):
     return out
 
 
+def timing_line(ph, sec):
+    sec = dict(sec)
+    read = sec.pop("read")  # inside the sections' time, not added to it
+    name, worst = max(sec.items(), key=lambda kv: kv[1])
+    return (f"lint timing: ls-files {ph['ls-files']:.2f} stat {ph['stat']:.2f} read {read:.2f} "
+            f"sections {sum(sec.values()):.2f} (slowest {name} {worst:.2f})")
+
+
 def self_test(repo):
     base = os.path.join(repo, CASES)
     n, bad = 0, 0
+    want = "lint timing: ls-files 0.10 stat 0.20 read 0.30 sections 1.50 (slowest b 1.00)"
+    got = timing_line({"ls-files": 0.1, "stat": 0.2}, {"a": 0.5, "b": 1.0, "read": 0.3})
+    n += 1
+    if got != want:
+        bad += 1
+        print(f"timing line: expected {want!r} got {got!r}")
     per = {}
     for sec in sorted(os.listdir(base)):
         for case in sorted(os.listdir(os.path.join(base, sec))):
@@ -1120,10 +1134,7 @@ def main():
     for ln in out:
         print(ln)
     if a.timing:
-        read = sec.pop("read")  # inside the sections' time, not added to it
-        name, worst = max(sec.items(), key=lambda kv: kv[1])
-        print(f"lint timing: ls-files {ph['ls-files']:.2f} stat {ph['stat']:.2f} read {read:.2f} "
-              f"sections {sum(sec.values()):.2f} (slowest {name} {worst:.2f})")
+        print(timing_line(ph, sec))
     return 1 if out else 0
 
 
