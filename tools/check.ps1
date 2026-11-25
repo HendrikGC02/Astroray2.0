@@ -176,6 +176,7 @@ $o
 # not the --first/--last range): together the shards run the whole tier.
 $ran = @($o | Where-Object { $_ -match '^\s*[0-9]+\.[0-9]+ s: ' }).Count
 # Every shard prints its build line first: a shard that died before printing is counted out here.
+# (A dead shard also lowers the case count below; naming it first says which process to look at.)
 $started = @($o | Where-Object { $_ -match '^build: ' }).Count
 if ($started -ne $n) { "FAIL $name shards: $started of $n shards printed a build line"; $code = 1 }
 if ($ran -ne $all) { "FAIL $name shards: $ran of $all cases ran"; $code = 1 }
