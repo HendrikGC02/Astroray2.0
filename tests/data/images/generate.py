@@ -56,9 +56,9 @@ write("truncated.png", png3[: len(png3) * 2 // 3])  # cut inside IDAT
 # Rows are stored top first by both formats; texel (x, y) has y = 0 at the bottom, as above.
 # The values are shared with tests/cpu/test_image_ingest.cpp (half_bits(), float_value()).
 # Half: 0, 1e-5 (a half subnormal), the smallest subnormal, the smallest normal, 0.25, 0.5, 1,
-# 2.5, -0.375, 995.0 (0x63D0), 65504.
-HALF_BITS = [0x0000, 0x00A8, 0x0001, 0x0400, 0x3400, 0x3800, 0x3C00, 0x4100, 0xB600, 0x63D0, 0x7BFF]
-FLOAT_VALUES = [0.0, 1e-5, 0.25, 1.0, 65504.0, 1e5, -0.75, 3.25, 123456.789]
+# 2.5, 0.375, 995.0 (0x63D0), 65504.
+HALF_BITS = [0x0000, 0x00A8, 0x0001, 0x0400, 0x3400, 0x3800, 0x3C00, 0x4100, 0x3600, 0x63D0, 0x7BFF]
+FLOAT_VALUES = [0.0, 1e-5, 0.25, 1.0, 65504.0, 1e5, 0.75, 3.25, 123456.789]
 
 
 def hdr_index(x, y, c, n):
@@ -199,6 +199,10 @@ write("bad_multipart.exr", exr_bytes(RGB_H, sample_half, version=2 | 0x1000))
 png16 = png_bytes(3)
 write("bad_png16.png", png16[:8] + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 16, 2, 0, 0, 0)) +
       chunk(b"IDAT", zlib.compress(b"\x00" + struct.pack(">HHH", 1000, 2000, 65535), 9)) + chunk(b"IEND", b""))
+# A negative texel refuses the whole image (src/host/image/decode.h, the wide-texel rule): -0.375 is the
+# half 0xB600, -0.75 a float; the pattern holds none.
+write("bad_negative_half.exr", exr_bytes(RGB_H, lambda n, x, y: 0xB600 if (n, x, y) == ("G", 2, 1) else sample_half(n, x, y)))
+write("bad_negative_float.exr", exr_bytes(RGB_F, lambda n, x, y: -0.75 if (n, x, y) == ("B", 3, 2) else sample_float(n, x, y)))
 write("bad_truncated.exr", exr_bytes(RGB_H, sample_half)[:-20])
 # The wide-texel limit (src/host/image/decode.h kMaxTexelMagnitude, bit pattern 0x7efffff7) and the
 # next float above it: the limit is accepted, the next float refuses the whole image. The one wide
@@ -225,7 +229,7 @@ img.save_render(os.path.join(OUT, "pattern_4x3.jpg"), scene=scene)
 
 # EXRs written by Blender, each with the float32 RGBA bytes (little endian, rows bottom-up) Blender reads
 # back from the file as Image.pixels: the engine's MEMORY decode must reproduce them exactly. The source
-# holds values above 1 and below 0; the half file's are binary16 values (the pattern's, so none overflows).
+# holds values above 1; the half file's are binary16 values (the pattern's, so none overflows).
 import numpy as np  # noqa: E402
 
 

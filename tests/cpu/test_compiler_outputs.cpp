@@ -569,6 +569,14 @@ TEST_CASE("compiler/blackbody outside the float domain is rejected") {
   rejected(100.0f, 1.0f, "cold: 1 / Y overflows a float");
   rejected(2.0f, 1.0f, "below planck.h's 3 K");
   rejected(2.0e9f, 1.0f, "above planck.h's 1e9 K");
+  {  // Named by the graph's own range check, not by a later overflow: every compiler caller of
+     // make_blackbody_ref (compiler.cpp's EMIT_LE route) runs after parse_graph.
+    GB g;
+    g.op2(Op::EMIT_LE, g.add(Op::BLACKBODY, {2.0e9f, 1.0f}), g.add(Op::CONST_F32, {1.0f}));
+    const MaterialOutput m = g.compile();
+    REQUIRE(m.entries.size() == 1);
+    CHECK(m.entries[0].detail.find("[3, 1e9] K") != std::string::npos);
+  }
   rejected(6500.0f, 3.4e38f, "a huge scale");
   GB ok;  // a cool but representable temperature still compiles
   ok.op2(Op::EMIT_LE, ok.add(Op::BLACKBODY, {1000.0f, 1.0f}), ok.add(Op::CONST_F32, {1.0f}));

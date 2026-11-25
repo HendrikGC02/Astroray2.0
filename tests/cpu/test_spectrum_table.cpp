@@ -458,6 +458,28 @@ TEST_CASE("spectrum_table/a TABLE world colour is refused") {
   CHECK_NOTHROW(astroray::host::gather_scene_lights(nullptr, meshes, mats, &world, true));
 }
 
+TEST_CASE("world/table colour is refused at compile") {
+  // The world graph's one constant emission is a TABLE: compile_world renders the world magenta with
+  // one entry, so the scene's light gather (which throws on a TABLE colour) never sees it.
+  const Pts flat{{360.0f, 830.0f}, {0.5f, 0.5f}};
+  GB g;
+  g.emit(g.table(flat, 0.8f), g.add(Op::CONST_F32, {2.0f}));
+  astroray::host::StoredGraph sg;
+  sg.nodes = g.nodes, sg.links = g.links, sg.f32 = g.f, sg.i32 = g.i;
+  ar_world_desc d = {};
+  d.surface_graph = 1;
+  const astroray::host::WorldOutput w = astroray::host::compile_world(d, &sg, rgb_table());
+  CHECK(w.magenta);
+  CHECK(w.color.kind != uint8_t(SK::TABLE));
+  CHECK(w.program.empty());
+  REQUIRE(w.entries.size() == 1);
+  CHECK(w.entries[0].code == AR_REPORT_NODE_UNSUPPORTED);
+  CHECK(w.entries[0].detail.find("SPECTRUM_TABLE") != std::string::npos);
+  astroray::host::MeshStore meshes;
+  const astroray::host::MaterialArrays mats;
+  CHECK_NOTHROW(astroray::host::gather_scene_lights(nullptr, meshes, mats, &w, true));
+}
+
 TEST_CASE("compiler/spectrum table arena") {
   // Three materials in key order: A holds table T1, B holds T2, C holds T1 again. The scene arena is
   // T1 then T2, the refs are relocated from their material's own arena (B's was at 0), and C shares
