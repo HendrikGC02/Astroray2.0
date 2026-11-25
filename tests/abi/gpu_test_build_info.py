@@ -24,7 +24,7 @@ class BuildInfo(unittest.TestCase):
         # The CLI prints the two GPU toolkits ("built with cuda=.. optix=.."); embree and oidn are in the log line
         # that test_context.py checks.
         line = r.stdout + r.stderr
-        fields = dict(re.findall(r"(cuda|optix)=(\S+)", line))
+        fields = dict(re.findall(r"(cuda|optix)=([\w.]+)", line))
         self.assertEqual(sorted(fields), ["cuda", "optix"], line)
         for k, v in fields.items():
             self.assertRegex(v, r"^\d+(\.\d+)+$", f"{k} in {line}")
