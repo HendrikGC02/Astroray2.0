@@ -15,3 +15,5 @@ Budget: gate +0 s (tools tests step unchanged or faster).
 Depends on: none. Collisions: tests/tools/run_fast.ps1 with 210; this lands first.
 Size: S (about 60 lines); stop and report at 2x.
 Progress:
+
+(Progress) 226: fast_lock failed 19/20 on 2 cores (timeout holder held 3 s from ready; unknown case 0.2 s ticks in 1 s limit; tree holder 10 s cap). Holders now held until released, unknown 0.1 s x 2 s, run_fast prints FAIL lines; 20/20 on 2 cores after.

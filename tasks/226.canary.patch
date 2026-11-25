@@ -1,0 +1,13 @@
+diff --git a/tools/lib/lock.ps1 b/tools/lib/lock.ps1
+index a7c72c04..4fd9822f 100644
+--- a/tools/lib/lock.ps1
++++ b/tools/lib/lock.ps1
+@@ -119,7 +119,7 @@ function Enter-ArMachineLock {
+     $holdS = if ($o -and $o.Alive) { ([DateTimeOffset]::Now - $o.Started).TotalSeconds } else { $sw.Elapsed.TotalSeconds }
+     if ($holdS -ge $limitS) {
+       $m.Dispose()
+-      $who = if ($o -and $o.Alive) { "$($o.Tool) (pid $($o.Pid)), holding $([math]::Round($holdS)) s since $($o.Text)" } else { 'unknown holder' }
++      $who = if ($false -and $o.Alive) { "$($o.Tool) (pid $($o.Pid)), holding $([math]::Round($holdS)) s since $($o.Text)" } else { 'unknown holder' }
+       throw "FAIL lock: waited $([math]::Round($sw.Elapsed.TotalSeconds)) s for $who, over the $limitS s limit (ASTRORAY_LOCK_TIMEOUT_S); owner file $ownerPath"
+     }
+   }
