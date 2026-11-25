@@ -113,13 +113,28 @@ AR_FN EnvSquareSample piecewise2d_sample(const EnvTableView& t, Real2 u) {
   s.pdf = Real(0);
   s.cell = 0u;
   if (t.n == 0u) return s;
-  const Piecewise1DSample mv = piecewise1d_sample(t.marginal_func, t.marginal_cdf, Real(t.func_integral), t.n, u.y);
-  const uint32_t row = mv.offset;
-  const Piecewise1DSample mu = piecewise1d_sample(t.func + row * t.n, t.cdf_u + row * (t.n + 1u),
-                                                  Real(load_ro(t.marginal_func + row)), t.n, u.x);
-  s.p = Real2{mu.x, mv.x};
-  s.pdf = mu.pdf * mv.pdf;
-  s.cell = row * t.n + mu.offset;
+  // The marginal (row, from u.y), then that row's conditional (column, from u.x), through one
+  // inlined 1D sampler: each inlined copy is code the NEE stage compiles.
+  const float* func = t.marginal_func;
+  const float* cdf = t.marginal_cdf;
+  Real integral = Real(t.func_integral), uk = u.y, pdf = Real(1), y = Real(0);
+  uint32_t row = 0;
+  for (int k = 0; k < 2; ++k) {
+    const Piecewise1DSample m = piecewise1d_sample(func, cdf, integral, t.n, uk);
+    pdf *= m.pdf;
+    if (k == 0) {
+      row = m.offset;
+      y = m.x;
+      func = t.func + row * t.n;
+      cdf = t.cdf_u + row * (t.n + 1u);
+      integral = Real(load_ro(t.marginal_func + row));
+      uk = u.x;
+    } else {
+      s.p = Real2{m.x, y};
+      s.cell = row * t.n + m.offset;
+    }
+  }
+  s.pdf = pdf;
   return s;
 }
 
