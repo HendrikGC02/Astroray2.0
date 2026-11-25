@@ -16,3 +16,5 @@ Depends on: none. Lands before 210 and 223 (their gates fail on these cases). Co
 Size: S (about 30 lines and one test); stop and report at 2x.
 Progress:
 - 2026-11-25 step 1 stopped for the lead: tests/cpu/test_batching.cpp already holds an in-case timeBeginPeriod(1) (MsTimer, since task 130) for both cases; with it they pass 5/5 alone and gate passed once (226 s wall incl. waits); without it they fail exactly as reported (gap 31.3 ms, cancel +15.6 ms, Sleep(1) 15.4 ms). No code changed.
+- Lead ruling 2026-11-25 (replaces the Goal/Scope premise): MsTimer in test_batching.cpp already requests 1 ms; main.cpp is out of Scope, no new fast test, no bound changes. Step 2 is the SetProcessInformation opt-out plus a loud probe (median of 9 1 ms sleeps over 4 ms fails the case); canary removes timeBeginPeriod (both cases red).
+- Measured: 16 spinning processes did not reproduce the 31 ms gap (code as is 4 of 5 pass; one starvation fail). Throttled state emulated in a probe (IGNORE_TIMER_RESOLUTION on): Sleep(1) 15-22 ms with request, 1.9-2.3 ms after opt-out. Done: opt-out, probe, canary, V12 clause, BACKLOG row.
