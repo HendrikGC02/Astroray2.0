@@ -8,7 +8,6 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
-#include <thread>
 
 #include "host/data_resource.h"
 #include "host/log.h"
@@ -20,7 +19,7 @@
 #include "host/scene/mesh.h"
 #include "host/scene/scene.h"
 #include "host/scene/world.h"
-#include "host/session/session.h"
+#include "host/session/test_hooks.h"
 #include "kernel/material/lobes/tables.h"
 #include "kernel/vm/context.h"
 
@@ -244,10 +243,13 @@ BakedEnvironment bake_environment(Scene& scene, SceneTableCache& cache, const Sc
                                   const std::vector<uint8_t>& key, std::shared_ptr<const void> key_pin) {
   Device* dev = scene_device;
   if (!dev) {
-    // Every logical core: the whole latch waits on this bake (1024^2 cells measured 12.3 s on 2
-    // threads), and the device's pool exists only once a CPU context bakes.
-    if (!cache.bake_device)
-      cache.bake_device = make_cpu_session_device(scene.ctx(), std::max(1u, std::thread::hardware_concurrency()));
+    if (!cache.bake_device) {
+      if (!scene.meshes) throw std::logic_error("environment bake: a CPU context without a mesh store has no host ledger");
+      const uint32_t forced = read_test_hooks().threads;
+      cache.bake_ledger = scene.meshes->shared_ledger();
+      cache.bake_pool = std::make_unique<ThreadPool>(scene.ctx(), forced ? forced : std::max(1u, scene.pool().workers()));
+      cache.bake_device = make_cpu_device(*cache.bake_ledger, *cache.bake_pool);
+    }
     dev = cache.bake_device.get();
   }
   const auto at = [&](TableId id) { return n.tables[static_cast<uint32_t>(id)]; };

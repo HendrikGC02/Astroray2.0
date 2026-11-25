@@ -29,6 +29,7 @@
 #include "host/device.h"
 #include "host/ledger.h"
 #include "host/light/env_bake.h"
+#include "host/thread_pool.h"
 #include "host/scene/accel.h"
 #include "kernel/light/light_sampler.h"
 #include "kernel/material/lobes/tables.h"
@@ -195,9 +196,14 @@ struct SceneTableCache {
   std::shared_ptr<const ObserverTables> observer;
   // The world program's environment bake (0004 D11), run before the light table is built.
   EnvironmentBaker baker;
-  // A CPU context has no scene device: the bake runs on this CPU device of its own, made at the
-  // first bake (never skipped, rule 5).
-  std::shared_ptr<Device> bake_device;
+  // A CPU context has no scene device: the bake runs on this CPU device, made at the first bake
+  // (never skipped, rule 5). It charges the scene's host ledger; its pool is the cache's own,
+  // because CpuDevice runs on a ThreadPool and the scene's workers are a WorkerPool, sized like the
+  // scene's workers (ASTRORAY_TEST_THREADS when set). Declared in destruction order: the device
+  // goes before the pool and the ledger it uses.
+  std::shared_ptr<Ledger> bake_ledger;
+  std::unique_ptr<ThreadPool> bake_pool;
+  std::unique_ptr<Device> bake_device;
   // Cells per side of the bake grid: 0004 D11's 1024. Tests lower it to keep the CPU bake short; it
   // changes the table's resolution, never what the cells hold.
   uint32_t bake_size = kEnvBakeSize;

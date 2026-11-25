@@ -721,6 +721,10 @@ TEST_CASE("scene_tables/cpu context bakes") {
   });
   const auto set = acquire_scene_tables(fx.scene);
   CHECK(bool(fx.scene.table_cache().bake_device));
+  // It charges the scene's host ledger and runs as many threads as the scene's workers.
+  CHECK(fx.scene.table_cache().bake_ledger == fx.scene.meshes->shared_ledger());
+  REQUIRE(fx.scene.table_cache().bake_pool);
+  CHECK(fx.scene.table_cache().bake_pool->workers() == fx.scene.pool().workers());
   REQUIRE(bool(set->lights->env));
   const EnvTable& t = *set->lights->env;
   std::vector<float> want;

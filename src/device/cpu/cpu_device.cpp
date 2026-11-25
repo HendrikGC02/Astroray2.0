@@ -181,6 +181,13 @@ void* CpuDevice::alloc_memory(uint64_t bytes) {
 
 void CpuDevice::free_memory(void* ptr) { _aligned_free(ptr); }
 
+// Declared in host/device.h.
+std::unique_ptr<Device> make_cpu_device(Ledger& ledger, ThreadPool& pool) {
+  auto d = std::make_unique<CpuDevice>(ledger, pool);
+  d->register_production_stages();
+  return d;
+}
+
 // Declared in host/session/session.h. The returned pointer shares ownership of the ledger and the
 // thread pool the device needs, so the session's C API handle names no device implementation.
 std::shared_ptr<Device> make_cpu_session_device(ContextState& ctx, unsigned workers) {
