@@ -15,7 +15,7 @@ index 9cba223f..0bf47bb1 100644
          "disposition": "implemented",
          "ops": [],
 diff --git a/src/kernel/vm/ops/color_to_f32.h b/src/kernel/vm/ops/color_to_f32.h
-index 9537aed6..de627851 100644
+index 9537aed6..d096285a 100644
 --- a/src/kernel/vm/ops/color_to_f32.h
 +++ b/src/kernel/vm/ops/color_to_f32.h
 @@ -12,7 +12,7 @@
@@ -23,7 +23,7 @@ index 9537aed6..de627851 100644
  AR_NS_BEGIN
  AR_FN float op_color_to_f32(const float* c, const float* y_row) {
 -  return c[0] * y_row[0] + c[1] * y_row[1] + c[2] * y_row[2];
-+  return c[0];
++  return c[0] + 0.0f * y_row[0];
  }
  
  AR_FN void vm_op_color_to_f32(VmState& vm) {
