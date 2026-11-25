@@ -9,10 +9,12 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <utility>
 
 #include "../../kernel/material/lobes/delta.h"
 #include "../../kernel/material/lobes/ggx.h"
+#include "../../kernel/material/lobes/metal.h"
 #include "../../kernel/material/material_header.h"
 #include "../../kernel/material/slot_resolve.h"
 #include "../../kernel/medium/phase.h"
@@ -30,6 +32,8 @@
 #include "../../kernel/vm/ops/volume_coeffs.h"
 #include "../spectral/blackbody.h"
 #include "graph.h"
+#include "grating_authored.h"
+#include "grating_table.h"
 #include "op_meta.h"
 #include "regalloc.h"
 
@@ -1651,6 +1655,8 @@ uint32_t ext_max_kind() {
   return m;
 }
 
+}  // namespace
+
 // The kind's check of its constants. GRATING (item 23, layout in ext_params.h): a finite positive
 // pitch, |m| <= 8 with m_min <= m_max (at most 17 orders, the table's limit), mode reflect or
 // transmit, and in transmission a substrate index the kernel can resolve (CONSTANT or CAUCHY_ABBE,
@@ -1687,6 +1693,8 @@ bool ext_params_valid(uint32_t kind, const ar::ExtParams& e, std::string* why) {
   }
   return true;
 }
+
+namespace {
 
 // `graph` without its STORE_SLOT nodes to slots `kind` does not keep (item 15: those inputs do not
 // exist for the material). Roots only they fed drop out of compile_surface's dead-code pass, so a
@@ -1742,9 +1750,41 @@ MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_de
   if (kind != uint32_t(ar::ExtKind::GRATING))
     return magenta_material(table, AR_REPORT_PROGRAM_REJECTED,
                             "extension kind " + std::string(name) + " (" + std::to_string(kind) + ") is not built");
-  ar::ExtParams params = {};
-  static_assert(sizeof(params) == sizeof(desc.ext_constants), "ext_constants is the ExtParams block");
-  std::memcpy(&params, desc.ext_constants, sizeof(params));
+  // The authored block (grating_authored.h) is generator input: ExtParams gets the device words,
+  // the efficiency table stays on the host in the compile result (item 24).
+  static_assert(sizeof(desc.ext_constants) == sizeof(GratingAuthored), "ext_constants is the authored block");
+  GratingAuthored authored;
+  GratingAuthoredError bad;
+  if (!parse_grating_authored(desc.ext_constants, &authored, &bad))
+    return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "extension kind " + std::string(name) + ": " + bad.why);
+  // Coating (item 24, PROVISIONAL, CONST only in M1b): one wavelength-independent complex IOR
+  // through the metal lobe's Fresnel, unpolarised mean. n = k = 0 divides by zero there; it means
+  // no coating loss, reflectance 1.
+  const double coat_n = authored.coating_n, coat_k = authored.coating_k;
+  const bool no_coating = coat_n == 0.0 && coat_k == 0.0;
+  GratingTableSpec spec;
+  spec.pitch_nm = authored.pitch_nm;
+  spec.depth_nm = authored.depth_nm;
+  spec.m_min = authored.m_min;
+  spec.m_max = authored.m_max;
+  spec.coating = [=](double, double cos_i) {
+    return no_coating ? 1.0 : double(ar::fresnel_conductor_scalar<double>(cos_i, coat_n, coat_k));
+  };
+  GratingTableResult built;
+  try {
+    built = build_grating_table(spec);
+  } catch (const std::runtime_error& e) {
+    const std::string what = e.what();
+    const bool range = what.find("scalar theory out of range") != std::string::npos;
+    return magenta_material(table, range ? AR_REPORT_GRATING_TABLE_LIMIT : AR_REPORT_PROGRAM_REJECTED, what);
+  }
+  ar::GratingParams gp = {};
+  gp.pitch_nm = authored.pitch_nm;
+  gp.mode = uint32_t(ar::GratingMode::Reflect);
+  gp.m_min = authored.m_min;
+  gp.m_max = authored.m_max;
+  gp.table = 0;  // the TableArena offset is the routing task's
+  const ar::ExtParams params = ar::grating_ext_params(gp);
   std::string why;
   if (!ext_params_valid(kind, params, &why))
     return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, "extension kind " + std::string(name) + ": " + why);
@@ -1760,7 +1800,11 @@ MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_de
   if (m.magenta) return m;
   m.compiled.ext_kind = kind;
   m.compiled.ext = params;
+  m.compiled.ext_table = std::move(built.eta);
   m.flags = material_flags(m.compiled);
+  if (built.report_code != 0) add_entry(&m, built.report_code, built.report_detail);
+  if (no_coating)
+    add_entry(&m, AR_REPORT_INPUT_IGNORED, "coating_n and coating_k are 0: no coating loss (reflectance 1)");
   // One entry per dropped slot, however many stores named it.
   for (uint32_t s : pruned.ignored)
     add_entry(&m, AR_REPORT_INPUT_IGNORED, std::string(kRecordSlotName[s]) + " is ignored by extension kind " + name);

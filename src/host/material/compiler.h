@@ -56,7 +56,10 @@ struct CompileResult {
   bool constant_surface = false;
   ar::ConstantBlock block = {};  // OpenPBR defaults overridden by every constant store
   uint32_t ext_kind = 0;         // ar::ExtKind; 0 for an OpenPBR material
-  ar::ExtParams ext = {};        // the validated ar_material_desc::ext_constants block of ext_kind
+  ar::ExtParams ext = {};        // the device words of ext_kind, derived from the validated authored block
+  // GRATING: the table build_grating_table made from the authored inputs (grating_table.h's layout),
+  // host only (0005 item 24); the routing task places it in the TableArena. Empty otherwise.
+  std::vector<float> ext_table;
   // ar::kRgbNegativeClamped / kRgbAboveOneClamped seen while packing constants, for the report.
   uint32_t clamp_flags = 0;
   bool opacity_clamped = false;  // a constant geometry_opacity outside [0, 1] was clamped
@@ -155,11 +158,15 @@ VolumeOutput compile_volume(const ar_graph_desc& desc, const ar::Rgb2SpecTable& 
 
 // An extension material (0005 items 14-16, 19): compile_material of its graph, then the kind's block.
 // desc.ext_kind must be non-zero. Kind 1 (GRATING) gives EXTENSION, MAY_BE_DELTA and compiled.ext
-// (desc.ext_constants, validated); a STORE_SLOT to a BSDF slot the kind does not keep is removed before compiling and
+// (the authored block of desc.ext_constants, grating_authored.h, parsed; its table is compiled.ext_table); a STORE_SLOT to a BSDF slot the kind does not keep is removed before compiling and
 // reported INPUT_IGNORED once per slot. A kind that is not built (2-5) or not in the list is
 // PROGRAM_REJECTED magenta. The store does not yet route the result (material_store.cpp).
 MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_desc& graph, const ar::Rgb2SpecTable& table,
                                  const ImageMeanFn* means = nullptr, const ImageSlotFn* slots = nullptr);
+
+// The kind's check of its device words (GRATING: pitch, orders, mode, and in transmission the substrate
+// ref); false and `*why` when they are bad. compile_extension runs it on the words it derives.
+bool ext_params_valid(uint32_t kind, const ar::ExtParams& e, std::string* why);
 
 // The material_header.h flags of a compiled program (0005 item 43).
 uint32_t material_flags(const CompileResult& r);
