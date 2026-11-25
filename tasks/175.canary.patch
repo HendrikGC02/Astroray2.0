@@ -55,9 +55,18 @@ index 17418389..bf7916b3 100644
      out.active.push_back("LIGHT_SAMPLER=" + value);
    }
 diff --git a/src/kernel/light/light_sampler.h b/src/kernel/light/light_sampler.h
-index 040b4343..02274535 100644
+index 040b4343..fc956d9b 100644
 --- a/src/kernel/light/light_sampler.h
 +++ b/src/kernel/light/light_sampler.h
+@@ -57,7 +57,7 @@ inline constexpr Real kLightFloorEps = Real(0.05);
+ AR_FN uint32_t light_alias_pick(const AliasBin* bins, const uint32_t* bin_light, uint32_t count, uint32_t u_bin, Real u_q) {
+   if (count == 0u) return kNoLight;
+   const uint32_t offset = uint32_t((uint64_t(u_bin) * uint64_t(count)) >> 32);
+-  const Real up = ar::min(u_q, kLightOneMinusEpsilon);
++  const Real up = ar::min(Real(uint32_t(uint64_t(u_bin) * uint64_t(count))) * Real(2.3283064365386963e-10) + Real(0) * u_q, kLightOneMinusEpsilon);
+   const AliasBin b = bins[offset];
+   const uint32_t bin = up < Real(b.q) ? offset : b.alias;
+   return ar::load_ro(bin_light + bin);
 @@ -65,7 +65,7 @@ AR_FN uint32_t light_alias_pick(const AliasBin* bins, const uint32_t* bin_light,
  
  // The mixture's pmf from the tree's pmf of the light.
