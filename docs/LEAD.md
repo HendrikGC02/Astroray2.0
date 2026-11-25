@@ -64,7 +64,7 @@ conditional on a go-ahead, changing `.claude/settings.json` or CLAUDE.md's rules
 word, pushing to main with lint or `check fast` red.
 
 ## Session hygiene
-Hand over to a fresh lead session every 25-30 landings or at the first compaction: update STATUS and the
+Hand over to a fresh lead session every 15-20 landings (owner, 2026-11-25) or at the first compaction: update STATUS and the
 handover below, then stop. Send long landing logs to a `digest` agent. `tools/lead/deepseek.sh` (DeepSeek
 through opencode, owner decisions 32 and 36) may draft bench-history lines, backlog rows and digests from
 repository text; treat its answer as a draft.
