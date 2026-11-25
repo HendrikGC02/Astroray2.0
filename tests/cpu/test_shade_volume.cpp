@@ -171,6 +171,49 @@ TEST_CASE("shade_volume/absorption and bounce limits end the path") {
   CHECK(v.term[2] == uint8_t(ar::Term::MAX_BOUNCE));
 }
 
+TEST_CASE("shade_volume/unsupported media end INVALID") {
+  // Each medium the stage cannot render fails the sample (its slot holds NaN) and ends the path
+  // INVALID: an emitting medium, a second phase lobe, a volume entry that stops with an error, and a
+  // NaN or infinite coefficient (which tracking would read as a zero majorant). The light path
+  // (item 3) is forwarded either way.
+  const auto run = [](const std::function<void(StageRig&)>& setup) {
+    auto r = std::make_unique<StageRig>();
+    r->medium(0.5f, 1.0f, 0.3f);
+    setup(*r);
+    r->run();
+    return r;
+  };
+  const auto invalid = [](const StageRig& r, const char* what) {
+    INFO(what);
+    for (uint32_t i = 0; i < 3u; ++i) {
+      CHECK(r.term[i] == uint8_t(ar::Term::INVALID));
+      CHECK(r.next[i] == uint8_t(Stage::TERMINATED));
+      CHECK(std::isnan(r.slot_L[4 * i]));
+    }
+    CHECK(r.next[3] == uint8_t(Stage::SHADE_LIGHT_PATH));
+  };
+  invalid(*run([](StageRig& r) { r.desc.flags = ar::MEDIUM_HAS_EMISSION; }), "emission");
+  invalid(*run([](StageRig& r) {
+            r.block.sigma_s[1] = ar::make_const_ref(ar::SpectrumSemantic::UNBOUNDED, ar::Real(0.25));
+            r.block.lobe_count = 2;
+          }),
+          "second lobe");
+  // A CONSTANT REFLECTANCE ref is outside medium_ref_ok: the volume entry stops with BAD_OPERAND.
+  invalid(*run([](StageRig& r) { r.block.sigma_a = ar::make_const_ref(ar::SpectrumSemantic::REFLECTANCE, ar::Real(0.5)); }),
+          "volume entry error");
+  invalid(*run([](StageRig& r) {
+            r.block.sigma_a = ar::make_const_ref(ar::SpectrumSemantic::UNBOUNDED, ar::Real(std::nan("")));
+          }),
+          "NaN sigma_a");
+  invalid(*run([](StageRig& r) {
+            r.block.sigma_s[0] = ar::make_const_ref(ar::SpectrumSemantic::UNBOUNDED, ar::Real(INFINITY));
+          }),
+          "infinite sigma_s");
+  // The same rig with the plain medium is valid: the checks above are what fails it.
+  const auto ok = run([](StageRig&) {});
+  CHECK(ok->term[0] != uint8_t(ar::Term::INVALID));
+}
+
 TEST_CASE("shade_volume/stale medium_rng gives the same result") {
   // A pool slot reused from another path carries that path's counter; each flight starts its own at
   // e * 2^20, so the result does not depend on it. Run twice, the second time from stale counters.

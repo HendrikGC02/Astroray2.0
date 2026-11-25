@@ -29,9 +29,10 @@
 // The event and distance are decided at the hero lane (flags bits 7-8, 0003 d6).
 // Not built here, each with its own task: the emission-absorption marcher (a medium whose estimator
 // is MARCH_EMISSION_ABSORPTION, sigma_s = 0, is delta-tracked too, which is unbiased), volume NEE,
-// medium emission and light-path items. A medium that emits, or has a second phase lobe, fails
-// the sample loudly instead of rendering without that term. Light paths (no stage creates them yet)
-// are forwarded untouched, as before tracking existed.
+// medium emission and light-path items. A medium that emits, has a second phase lobe, fails its
+// volume entry or yields a non-finite coefficient fails the sample loudly (INVALID) instead of
+// rendering without that term. Light paths (no stage creates them yet) are forwarded untouched, so a
+// light path passes a medium unattenuated: a known gap that the light-path task closes (0006 D11).
 // Ref: docs/decisions/0006-volumes-and-astrophysics.md D8, D9, D12, D14; 0003 d6, d7, d23; 0004 D1
 // (r_u / r_l form); 0002 D8, D11; pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::Li
 // (Apache-2.0) in C:\Astroray2.0\third_party\_cache\refs\pbrt-v4-092b23a47ad4.
@@ -83,14 +84,14 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
     ps_next_stage(kg, slot) = static_cast<uint8_t>(route_hit_after_medium(kg, hit, ps_flags(kg, slot)));
     return;
   }
-  // The coefficients first, with as little path state live as possible: the volume entry inlines the
-  // interpreter, whose register pressure is the stage's largest (0002 D10 ladder step 2).
   const SceneData& s = scene_of(kg);
   const MediumDesc& desc = s.medium_descs[medium];
+  bool ok = (load_ro(&desc.flags) & MEDIUM_HAS_EMISSION) == 0u;
+  // The coefficients first, with as little path state live as possible: the volume entry inlines the
+  // interpreter, whose register pressure is the stage's largest (0002 D10 ladder step 2).
   Spec sigma_a{}, sigma_s{};
   PhaseLobe lobe{};
   {
-    bool ok = (load_ro(&desc.flags) & MEDIUM_HAS_EMISSION) == 0u;
     if (ok) {
       Lambda lambda;
       const Spec lt = ps_lambda_t(kg, slot);
@@ -100,6 +101,8 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
       const MediumTables mt{s.medium_programs, s.medium_blocks, *kg.tables};
       ok = medium_eval(mt, desc, ps_ray_o(kg, slot), lambda, &regs, &ms) == VmStatus::OK && !(max_lane(ms.phase[1].weight) > Real(0));
       sigma_a = ms.sigma_a, sigma_s = ms.sigma_s, lobe = ms.phase[0];
+      // A NaN or infinite coefficient would read as a zero majorant or a NaN event probability.
+      ok = ok && is_finite(sigma_a) && is_finite(sigma_s);
     }
     if (!ok) {
       volume_fail(kg, slot, ps_sample_id(kg, slot));
@@ -146,11 +149,6 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
     return;
   }
   AR_ASSERT(r.event == TrackEvent::SCATTERED);
-  U16x6 b = ps_bounces(kg, slot);
-  if (b.v[0] >= kg.session.max_bounces[0] || b.v[4] >= kg.session.max_bounces[4]) {
-    path_end(kg, slot, Term::MAX_BOUNCE);
-    return;
-  }
   const Real3 wo = -(d / d_len);
   const Real2 u2{camera_path_draw(kg, sample, event_dim(e, EV_BSDF_U)), camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V))};
   const PhaseSample ps = phase_sample(lobe, wo, u2);
@@ -161,6 +159,13 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
   const Spec beta = w.beta * (ps.p / ps.pdf);
   if (!is_finite(beta)) {
     volume_fail(kg, slot, sample);
+    return;
+  }
+  // pbrt's "if (depth++ >= maxDepth) terminated" and 0006 D14's volume_bounces, checked once the
+  // vertex is known to be valid; nothing of the path is written before it.
+  U16x6 b = ps_bounces(kg, slot);
+  if (b.v[0] >= kg.session.max_bounces[0] || b.v[4] >= kg.session.max_bounces[4]) {
+    path_end(kg, slot, Term::MAX_BOUNCE);
     return;
   }
   ps_beta(kg, slot) = beta;
