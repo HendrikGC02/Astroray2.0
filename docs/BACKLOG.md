@@ -12,7 +12,6 @@ them. Milestone is where the item must be settled at the latest.
 | ABI, host | An epoch starts per activated commit (0007 d12) | 052 | M2 | |
 | ABI, host | The display ring downloads synchronously (0007 d29) | 051 | M2 | |
 | ABI, host | PASS_UNSUPPORTED entries persist for a session's life | ruling 74 | M8 | |
-| ABI, host | Build record and gallery sidecars print `cuda none` on CUDA runs | 106, 100 | M1b | 223 |
 | Kernel | Jakob-Hanika round trip 1.1-1.6e-3 off-grid near white | 023 | M4 | |
 | Kernel | `vm/store_slot.h` copies kSlotSemantic | 056 | M1b | 151 |
 | Kernel | 0006's interval rules have no opcode-generator owner | 055 | M1b | slice C |

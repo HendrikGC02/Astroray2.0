@@ -5,6 +5,7 @@ import importlib.util
 import os
 import re
 import tempfile
+import tomllib
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -87,7 +88,19 @@ class TestContext(unittest.TestCase):
         self.assertTrue(lines)
         for ln in lines:
             self.assertRegex(ln, "^" + stamp + r" (INFO|WARNING|ERROR) \S")
-        self.assertTrue(any(re.search(r" INFO build version=\S+ git=[0-9a-f]+ dirty=[01] cuda=\S+ optix=\S+ embree=\S+ oidn=\S+ type=\S+ kernels=", ln) for ln in lines), lines)
+        build = [ln for ln in lines if " INFO build version=" in ln]
+        self.assertEqual(len(build), 1, lines)
+        self.assertRegex(build[0], r" INFO build version=\S+ git=[0-9a-f]+ dirty=[01] cuda=\S+ optix=\S+ embree=\S+ oidn=\S+ type=\S+ kernels=")
+        # Each toolkit field is a dotted version, or none where the preset leaves it out (the cpu preset: cuda
+        # and optix); embree and oidn are in every preset.
+        fields = dict(re.findall(r" (cuda|optix|embree|oidn)=(\S+)", build[0]))
+        for k, v in fields.items():
+            self.assertRegex(v, r"^(none|\d+(\.\d+)+)$", k)
+        # Each is the pin of its own deps.toml entry, parsed here independently of the CMake reader.
+        with open(os.path.join(ROOT, "third_party", "deps.toml"), "rb") as f:
+            pins = {d["name"]: d["version"] for d in tomllib.load(f)["dep"]}
+        self.assertEqual(fields["embree"], pins["embree"])
+        self.assertEqual(fields["oidn"], pins["oidn"])
         self.assertTrue(any(" INFO device kind=cpu index=0 " in ln for ln in lines), lines)
 
     def test_last_error_text_and_truncation(self):
