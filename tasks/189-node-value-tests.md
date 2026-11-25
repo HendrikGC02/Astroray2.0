@@ -16,3 +16,8 @@ Budget: gate +0 s (the suite is in `check full` and in a blender/ landing only);
 Depends on: 165, 172 (code: the lowerings under test); 166 only so the Mix Shader row exists in `LOWERING` (without it the table has no such key: say so); 167 and 150 landed. Collisions: test_node_values.py with no open task; test_images.py with 167's followers: the later one rebases.
 Size: M (about 350 lines of test, no source); stop and report at 2x. Split point: image and Emission cases first, Environment Texture after.
 Progress:
+- Implementer: test_node_values.py 14 cases (closest, linear, emission, color_to_float, half/float EXR x2, float EXR CUDA, repeat x2, environment x2, coverage table); suite 11.3 s of tests, 13 s wall (was 2 cases).
+- test_images.py helper: Rig(device=), ImageCase.start(device), Rig.sync sends the world tree's images.
+- Left out: 16-bit integer PNG (engine refuses by design: decode.cpp "PNG stays 8-bit"), so no value case; needs the lead's ruling. Mix Shader row absent (166 not landed), COVERAGE lists it ahead.
+- Environment cases: Closest reads a 4x4-texel block image and a camera placed >= 0.012 px from every block edge (jitter flips a pixel at an edge); Linear amplitude 0.03 (pole pixel 7.1e-5 of the 1e-4).
+- Canary: pwsh tools/canary.ps1 189 PASS.
