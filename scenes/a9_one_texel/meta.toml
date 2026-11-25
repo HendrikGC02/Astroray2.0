@@ -18,9 +18,10 @@ single_witness = false
 formula = "environment_texel"
 rho = 0.8
 strength = 1.0
-# Radiance m 2^k with m < 256, which the RGBE image (scenes/lib/ar.py rgbe_bytes) stores exactly.
-dim = 0.0625
-bright = 4.0
+# Radiance (m + 1/2) 2^k with 128 <= m < 256, which the RGBE image reads back exactly (its decoder
+# returns the centre of the mantissa's bin, scenes/lib/ar.py rgbe_bytes); build.py refuses others.
+dim = 0.062744140625
+bright = 4.015625
 # The image is image_size[0] columns by image_size[1] rows; texel = [column, row from the bottom].
 image_size = [16, 8]
 texel = [10, 5]

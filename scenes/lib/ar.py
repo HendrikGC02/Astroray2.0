@@ -164,12 +164,16 @@ def look_at(position, target, up=(0.0, 0.0, 1.0)):
 
 def rgbe_bytes(rgb):
     """Radiance .hdr bytes of rgb, a (h, w, 3) array of non-negative floats in file order (top row
-    first), written as flat (uncompressed) RGBE scanlines. Each pixel stores 8-bit mantissas of a
-    shared exponent e from frexp of its largest component; the decoder (stb_image) reads a component
-    as mantissa x 2^(e - 136), so values m 2^k with m < 256 an integer come back exactly. A first pixel
-    of mantissas (2, 2) would read as a run-length scanline header, so it is refused.
-    Ref: Ward, "Real Pixels", Graphics Gems II (1991) (the RGBE encoding); the Radiance file header;
-    stb_image.h stbi__hdr_load and stbi__hdr_convert (flat scanlines, the decode above)."""
+    first), written as flat (uncompressed) RGBE scanlines. Each pixel stores 8-bit mantissas
+    m = floor(c 2^(136 - e)) of a shared exponent e from frexp of its largest component (Ward's
+    encoder); the decoder reads a component at the centre of its bin, (m + 1/2) 2^(e - 136), so only
+    values (m + 1/2) 2^k with 128 <= m < 256 an integer come back exactly (rgbe_decoded gives what a
+    grey value reads as), and a zero component beside non-zero ones reads as 2^(e - 137). An all-zero
+    pixel reads as 0. A first pixel of mantissas (2, 2) would read as a run-length scanline header,
+    so it is refused.
+    Ref: Ward, "Real Pixels", Graphics Gems II (1991) (the RGBE encoding and its (m + 0.5) decode);
+    the Radiance file header; third_party/stb_image/stb_image.h stbi__hdr_load and stbi__hdr_convert
+    (flat scanlines, output = (input + 0.5f) * ldexp(1, e - 136))."""
     a = np.asarray(rgb, dtype=np.float64)
     if a.ndim != 3 or a.shape[2] != 3 or not np.isfinite(a).all() or (a < 0).any():
         raise ValueError("rgbe_bytes takes a (h, w, 3) array of finite non-negative values")
@@ -188,6 +192,18 @@ def rgbe_bytes(rgb):
     if w >= 8 and out[:2] == b"\x02\x02":
         raise ValueError("rgbe_bytes: the first pixel's mantissas (2, 2) would read as a run-length header")
     return head + bytes(out)
+
+
+def rgbe_decoded(v):
+    """The value a grey component v, written by rgbe_bytes, reads back as: (m + 1/2) 2^(e - 136)
+    with m and e as rgbe_bytes stores them, 0 for v = 0 (the decoder of rgbe_bytes' Ref)."""
+    v = float(v)
+    if not math.isfinite(v) or v < 0.0:
+        raise ValueError("rgbe_decoded takes a finite non-negative value")
+    if v < 1e-32:
+        return 0.0
+    mant, e = math.frexp(v)
+    return (int(v * (mant * 256.0 / v)) + 0.5) * 2.0 ** (e + 128 - 136)
 
 
 def projection_inverse(width, height, focal_mm, sensor_mm):

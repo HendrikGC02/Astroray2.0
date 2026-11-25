@@ -25,6 +25,10 @@ def environment(t):
     row is counted from the bottom (the image's rows are stored bottom-up, v = 1 is the top)."""
     w, h = (int(v) for v in t["image_size"])
     i, j = (int(v) for v in t["texel"])
+    for k in ("dim", "bright"):
+        # The truth reads the meta values, the engine the decoded file: they must be the same number.
+        if ar.rgbe_decoded(t[k]) != float(t[k]):
+            raise ValueError(f"{k} = {t[k]} reads back from RGBE as {ar.rgbe_decoded(t[k])}")
     img = np.full((h, w, 3), float(t["dim"]))
     img[h - 1 - j, i] = float(t["bright"])
     return img
