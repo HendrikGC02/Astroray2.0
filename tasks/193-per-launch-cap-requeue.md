@@ -17,3 +17,4 @@ Budget: gate +2 s at most (two CPU dumps of a 32 x 32 slab and the CUDA pair, in
 Depends on: 183, 192 (code). Not dispatched before 183 lands and the lead has rewritten the Reference. Collisions: shade_shadow.h and ratio_track.h after 192; kernel_globals.h `SessionUniforms` and test_hooks with 175 and 194; budget.toml; the later one rebases.
 Size: M (about 250 lines without tests); stop and report at 2x. Split point: the estimators' cap with the fast bit-identity tests first, the stages and the gate pair after.
 Progress:
+- Lead note (2026-11-25, from 183's rulings): 183 ends a path at the medium segment limit with VOLUME_LIMIT counted in term_hist only; raising AR_REPORT_MEDIUM_PATH_LIMIT (report code 36: a kernel counter beside FilmData::invalid_total, cleared, read and raised once by session.cpp) moves here with the per-launch cap. 183 also adds the MEDIUM_BLOCKS / MEDIUM_PROGRAMS tables and turns on StateFeatures::media in session.cpp for scenes with media.
