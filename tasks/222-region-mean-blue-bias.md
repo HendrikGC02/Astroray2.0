@@ -15,3 +15,5 @@ Budget: gate +0.6 s declared (one tools fixture in 'tools tests', at about 3 tim
 Depends on: 202 (landed). Dispatch before 188 and 190 land so they can cite the result. Collisions: bench/history append; the record's Risks list with 194 (0003 Risk 11); the later one rebases.
 Size: S (about 130 lines of script; no engine source); stop and report at 2x or when the table says stop.
 Progress:
+2026-11-25 files: tools/region_bias.py, tests/tools/fast_region_bias.ps1, bench/history/2026.jsonl, docs/decisions/0003 (Risks), docs/BACKLOG.md, tasks/222.canary.patch. 202's PR names no scene: scenes/a5_emitter (view-filling emitter, black world, independent) at 256x256, 64 spp is used.
+Decision table (written before measuring): (a) |mean half-diff| <= 3 SE_seeds and variance-ratio interval contains 1: not reproduced, close row. (b) within 3 SE, ratio interval above 1: correlated samples, rule "region comparisons take error from seeds, not VAR"; 188/190/201 read it. (c) beyond 3 SE: positional bias, stop and ask; permute pixel/sample/seed. (d) Sobol differs in class: report both tables.
