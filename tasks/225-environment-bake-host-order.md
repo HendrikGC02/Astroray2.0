@@ -19,3 +19,4 @@ Depends on: none (171, 172 landed). Collisions: scene_tables.{h,cpp} and test_sc
 Size: M (about 300 lines without tests); stop and report at 2x.
 Progress:
 - Split from 173 by the lead (2026-11-25, option A of 173's build-order report).
+- 225 start: go from the lead (2026-11-25); files: bake_environment.h, env_bake.{h,cpp}, scene.{h,cpp}, scene_tables.{h,cpp}, light_builder.h, budget.toml, and the forced tests named in Scope.
