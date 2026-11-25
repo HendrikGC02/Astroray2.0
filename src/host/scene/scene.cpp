@@ -306,13 +306,13 @@ std::shared_ptr<const LightTable> Scene::build_lights(const LightPlan& plan, con
     const Clock::time_point t_end = Clock::now();
     size_t triangles = 0;
     for (const ar::LightRecord& r : table->lights) triangles += r.type == uint8_t(ar::LightType::TRIANGLE);
-    char line[240];
+    char line[300];
     std::snprintf(line, sizeof line,
                   "light table: %zu lights (%zu emissive triangles) built in %.1f ms (gather %.1f, peaks and scale %.1f, "
-                  "importance and alias %.1f) on %u threads",
+                  "importance, alias tables and tree %.1f, of which tree %.1f for %zu nodes) on %u threads",
                   table->lights.size(), triangles, src.gather_ms + ms(t_start, t_end), src.gather_ms + ms(t_start, t_gathered),
-                  ms(t_gathered, t_scaled),
-                  ms(t_scaled, t_end), pool_->workers() + 1);
+                  ms(t_gathered, t_scaled), ms(t_scaled, t_end), table->tree_build_ms, table->tree_nodes.size(),
+                  pool_->workers() + 1);
     ctx_.log.line("INFO", line);
   }
   table->radiance_scale = s;

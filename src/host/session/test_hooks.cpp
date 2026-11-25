@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Ref: 0007 V18; RULINGS.md 77 (NEE modes); 0002 D5 (shadow-slot reservation, k per producer);
+// Ref: 0007 V18; RULINGS.md 77 (NEE modes); 0004 D10 (the light tree's alias-table oracle); 0002 D5 (shadow-slot reservation, k per producer);
 // host/session/test_hooks.h.
 #include "host/session/test_hooks.h"
 
@@ -85,6 +85,13 @@ TestHooks read_test_hooks() {
       throw std::invalid_argument("ASTRORAY_TEST_NEE=" + value + " is not one of on, off, light_only");
     out.bits |= mode->bits;
     out.active.push_back("NEE=" + value);
+  }
+  if (env_value("LIGHT_SAMPLER", &value)) {
+    // "tree" is the default sampler and sets no bit; "alias" selects the tree's oracle.
+    if (value != "tree" && value != "alias")
+      throw std::invalid_argument("ASTRORAY_TEST_LIGHT_SAMPLER=" + value + " is not one of tree, alias");
+    if (value == "alias") out.bits |= ar::TEST_HOOK_LIGHT_ALIAS;
+    out.active.push_back("LIGHT_SAMPLER=" + value);
   }
   if (env_value("POOL", &value)) {
     const size_t comma = value.find(',');

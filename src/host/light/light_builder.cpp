@@ -2,6 +2,7 @@
 #include "host/light/light_builder.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -25,12 +26,20 @@ ar::LightSamplerView LightTable::view() const {
   v.pmf = pmf.data();
   v.bin_count = uint32_t(bins.size());
   v.light_count = uint32_t(lights.size());
+  v.tree = ar::LightTreeView{tree_nodes.data(), tree_emitters.data(), uint32_t(tree_nodes.size()), uint32_t(tree_emitters.size())};
+  v.rad_bins = rad_bins.data();
+  v.rad_bin_light = rad_bin_light.data();
+  v.rad_pmf = rad_pmf.data();
+  v.rad_bin_count = uint32_t(rad_bins.size());
   return v;
 }
 
 uint64_t LightTable::bytes() const {
   return lights.size() * sizeof(ar::LightRecord) + importance.size() * sizeof(double) + bins.size() * sizeof(ar::AliasBin) +
-         bin_light.size() * sizeof(uint32_t) + pmf.size() * sizeof(float) + light_index.size() * sizeof(uint32_t);
+         bin_light.size() * sizeof(uint32_t) + pmf.size() * sizeof(float) + light_index.size() * sizeof(uint32_t) +
+         tree_nodes.size() * sizeof(ar::LightTreeNode) + tree_emitters.size() * sizeof(ar::LightTreeEmitter) +
+         radiometric.size() * sizeof(double) + rad_bins.size() * sizeof(ar::AliasBin) + rad_bin_light.size() * sizeof(uint32_t) +
+         rad_pmf.size() * sizeof(float);
 }
 
 LightTable::~LightTable() {
@@ -56,6 +65,56 @@ double display_energy(const std::vector<EmissionTerm>& terms, const ar::Observer
   return e;
 }
 
+double radiometric_energy(const std::vector<EmissionTerm>& terms, const ar::ObserverView& obs) {
+  double e = 0.0;
+  for (const EmissionTerm& t : terms)
+    for (int i = 0; i < ar::kObsSamples; i += ar::kLanes) {
+      ar::Lambda lam;
+      for (int k = 0; k < ar::kLanes; ++k) lam.nm[k] = ar::Real(ar::kObsLambdaMin + std::min(i + k, ar::kObsSamples - 1));
+      const ar::Spec s = ar::resolve(t.color, lam, obs, nullptr);
+      for (int k = 0; k < ar::kLanes && i + k < ar::kObsSamples; ++k) e += double(t.strength) * double(s.v[k]);
+    }
+  return e;
+}
+
+namespace {
+
+// pbrt-v4 AliasTable::AliasTable over the entries of positive weight only (D9): bins[b] and
+// bin_light[b] for the b-th such entry, pmf[i] = w_i / sum (0 for weight 0).
+void build_alias(const std::vector<double>& w, std::vector<ar::AliasBin>* bins, std::vector<uint32_t>* bin_light,
+                 std::vector<float>* pmf) {
+  struct Outcome {
+    double p_hat;
+    uint32_t bin;
+  };
+  double sum = 0.0;
+  for (double x : w) sum += x;
+  pmf->assign(w.size(), 0.0f);
+  std::vector<double> p;
+  for (uint32_t i = 0; i < uint32_t(w.size()); ++i)
+    if (w[i] > 0.0) {
+      (*pmf)[i] = float(w[i] / sum);
+      bin_light->push_back(i);
+      p.push_back(w[i] / sum);
+    }
+  const size_t n = p.size();
+  bins->resize(n);
+  std::vector<Outcome> under, over;
+  for (uint32_t b = 0; b < uint32_t(n); ++b) (p[b] * double(n) < 1.0 ? under : over).push_back({p[b] * double(n), b});
+  while (!under.empty() && !over.empty()) {
+    const Outcome un = under.back(), ov = over.back();
+    under.pop_back();
+    over.pop_back();
+    (*bins)[un.bin] = {float(un.p_hat), ov.bin};
+    const double excess = un.p_hat + ov.p_hat - 1.0;
+    (excess < 1.0 ? under : over).push_back({excess, ov.bin});
+  }
+  for (const Outcome& o : over) (*bins)[o.bin] = {1.0f, o.bin};
+  for (const Outcome& o : under) (*bins)[o.bin] = {1.0f, o.bin};
+}
+
+}  // namespace
+
 bool same_terms(const LightInput& a, const LightInput& b) {
   // EmissionTerm is 28 bytes without padding (SpectrumRef 24 + float), so memcmp compares values.
   static_assert(sizeof(EmissionTerm) == sizeof(ar::SpectrumRef) + sizeof(float), "EmissionTerm has padding");
@@ -73,12 +132,12 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
   };
   // A program world is sampled only through its baked table (0004 D11).
   const bool env_baked = env != nullptr && env->table != nullptr;
-  // Per light, independently of every other: the display energy (once per run of identical terms,
-  // the same function of the same input) times light_power's geometric factor (1, pi A,
-  // 4 pi^2 R^2) (D9, D10).
-  std::vector<double> imps(in.size());
+  // Per light, independently of every other: the display and the radiometric energy (once per run
+  // of identical terms, the same functions of the same input) times light_power's geometric factor
+  // (1, pi A, 4 pi^2 R^2) (D9, D10).
+  std::vector<double> imps(in.size()), rads(in.size());
   const auto importance = [&](uint32_t first, uint32_t last) {
-    double energy = 0.0;
+    double energy = 0.0, rad = 0.0;
     for (uint32_t i = first; i < last; ++i) {
       const LightInput& li = in[i];
       // A program world: with a baked table, its importance energy is the integral of its
@@ -88,6 +147,10 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
       // table (no bake, or a black world) it is 0: pmf 0, nothing samples it, and a BSDF hit that
       // escapes takes MIS weight 1.
       if (program_world(li.record)) {
+        // No radiometric power: the record's colour is not radiance and the bake keeps only the
+        // weighted mean, so the world has no floor bin; the tree's distant node, whose maximum
+        // importance is its energy at every point, gives it a positive pmf (D10).
+        rads[i] = 0.0;
         if (!env_baked) {
           imps[i] = 0.0;
           continue;
@@ -98,18 +161,24 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
         imps[i] = world_energy * double(ar::light_power(r, scene, ar::Real(1)));
         continue;
       }
-      if (i == first || !same_terms(in[i - 1], li))
-        energy = li.terms.empty() ? display_energy({{li.record.emission, li.record.strength}}, obs) : display_energy(li.terms, obs);
-      imps[i] = energy * double(ar::light_power(li.record, scene, ar::Real(1)));
+      if (i == first || !same_terms(in[i - 1], li)) {
+        const std::vector<EmissionTerm> own{{li.record.emission, li.record.strength}};
+        const std::vector<EmissionTerm>& terms = li.terms.empty() ? own : li.terms;
+        energy = display_energy(terms, obs);
+        rad = radiometric_energy(terms, obs);
+      }
+      const double factor = double(ar::light_power(li.record, scene, ar::Real(1)));
+      imps[i] = energy * factor;
+      rads[i] = rad * factor;
     }
   };
   if (run) run(uint32_t(in.size()), importance);
   else importance(0, uint32_t(in.size()));
-  double sum = 0.0;
   for (size_t i = 0; i < in.size(); ++i) {
     const LightInput& li = in[i];
     const double imp = imps[i];
     if (!std::isfinite(imp) || imp < 0.0) throw std::runtime_error("light importance is not finite and non-negative");
+    if (!std::isfinite(rads[i]) || rads[i] < 0.0) throw std::runtime_error("light radiometric power is not finite and non-negative");
     ar::LightRecord rec = li.record;
     if (program_world(rec) && env_baked) rec.type = uint8_t(ar::LightType::WORLD_ENV);
     if (ar::light_is_infinite(rec)) {
@@ -118,7 +187,7 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
     }
     t->lights.push_back(rec);
     t->importance.push_back(imp);
-    sum += imp;
+    t->radiometric.push_back(rads[i]);
   }
   // The emissive-hit index from the records just stored (layout: light_sampler.h light_of_hit).
   const auto is_tri = [](const ar::LightRecord& r) { return r.type == uint8_t(ar::LightType::TRIANGLE); };
@@ -151,33 +220,16 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
                                std::to_string(ar::tri_index(r)) + " of instance " + std::to_string(ar::tri_instance(r)));
     e = i;
   }
-  t->pmf.assign(in.size(), 0.0f);
-  // pbrt-v4 AliasTable::AliasTable over the lights of positive importance only (D9).
-  struct Outcome {
-    double p_hat;
-    uint32_t bin;
-  };
-  std::vector<double> p;
-  for (uint32_t i = 0; i < uint32_t(in.size()); ++i)
-    if (t->importance[i] > 0.0) {
-      t->pmf[i] = float(t->importance[i] / sum);
-      t->bin_light.push_back(i);
-      p.push_back(t->importance[i] / sum);
-    }
-  const size_t n = p.size();
-  t->bins.resize(n);
-  std::vector<Outcome> under, over;
-  for (uint32_t b = 0; b < uint32_t(n); ++b) (p[b] * double(n) < 1.0 ? under : over).push_back({p[b] * double(n), b});
-  while (!under.empty() && !over.empty()) {
-    const Outcome un = under.back(), ov = over.back();
-    under.pop_back();
-    over.pop_back();
-    t->bins[un.bin] = {float(un.p_hat), ov.bin};
-    const double excess = un.p_hat + ov.p_hat - 1.0;
-    (excess < 1.0 ? under : over).push_back({excess, ov.bin});
+  build_alias(t->importance, &t->bins, &t->bin_light, &t->pmf);
+  build_alias(t->radiometric, &t->rad_bins, &t->rad_bin_light, &t->rad_pmf);
+  // The tree over the importances (ruling 90's node energies); a build error fails the table.
+  if (!t->lights.empty()) {
+    const auto t0 = std::chrono::steady_clock::now();
+    LightTree tree = build_light_tree(t->lights, t->importance, scene);
+    t->tree_build_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    t->tree_nodes = std::move(tree.nodes);
+    t->tree_emitters = std::move(tree.emitters);
   }
-  for (const Outcome& o : over) t->bins[o.bin] = {1.0f, o.bin};
-  for (const Outcome& o : under) t->bins[o.bin] = {1.0f, o.bin};
   if (ledger && t->bytes() != 0) t->ledger_id = ledger->add(Owner{}, LedgerCategory::TABLES, t->bytes()), t->ledger = ledger;
   return t;
 }

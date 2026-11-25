@@ -169,7 +169,7 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
     if (weighted) {
       const LightSampleContext prev = prev_light_context(kg, slot);
       const Real3 wi = normalize(ps_ray_d(kg, slot));
-      p_light = light_sampler_pmf(*kg.light_sampler, prev, kg.world_light) *
+      p_light = light_sampler_pmf(*kg.light_sampler, prev, kg.world_light, (hooks & TEST_HOOK_LIGHT_ALIAS) != 0u) *
                 light_pdf_li(*world, prev, wi, LightHit{prev.p, prev.n_geom}, kg.env);
     }
     Spec le = spec_fill(Real(0));

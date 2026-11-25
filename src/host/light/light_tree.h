@@ -3,7 +3,7 @@
 // light of positive importance, median splits, and Cycles' bounds merge. Built in double from
 // each light's kernel bounds (light_bounds) and its on-axis intensity, derived from its importance
 // (LightTable::importance) by light_tree_energy.
-// Not uploaded yet: the tree's kernel binding and its ledger record come with traversal.
+// build_light_table builds it with the light table, which uploads and accounts for it.
 // Ref: docs/decisions/0004-integrator.md D10 (the M1b builder and the node layout); Cycles
 // third_party/_cache/refs/cycles-ed69ef2c6bd3/src/scene/light_tree.cpp (merge, LightTree::build,
 // recursive_build bit trails) and light_tree.h (OrientationBounds, LightTreeMeasure::add)
@@ -47,7 +47,8 @@ LightTree build_light_tree(const std::vector<LightTreeLight>& lights);
 
 // The node energy of a light: Cycles' on-axis intensity (ruling 90), from the D10 importance,
 // which is a power weighted by w(lambda) (light_power: P for lamps, pi A L for a triangle,
-// 4 pi^2 R^2 L for the world). Cycles scene/light_tree.cpp: a triangle "measure.energy = area *
+// 4 pi^2 R^2 L for the world, with L the solid-angle mean radiance for an environment world).
+// Cycles scene/light_tree.cpp: a triangle "measure.energy = area *
 // average(fabs(shader->emission_estimate))" (L A = importance / pi); an area lamp "strength *=
 // M_1_PI_F" (P / pi); point and spot lamps "strength *= 0.25f * M_1_PI_F" (P / (4 pi), spheres
 // included); the background "get_average_radiance() * M_PI_F" (pi L = importance / (4 pi R^2),
@@ -61,7 +62,8 @@ inline double light_tree_energy(const ar::LightRecord& r, double importance, con
     case ar::LightType::AREA_RECT:
     case ar::LightType::AREA_DISK:
     case ar::LightType::TRIANGLE: return importance / pi;
-    case ar::LightType::WORLD_CONST: {
+    case ar::LightType::WORLD_CONST:
+    case ar::LightType::WORLD_ENV: {
       const double radius = double(scene.radius);
       if (!(radius > 0.0)) throw std::runtime_error("light tree: a lit world needs a scene radius above 0");
       return importance / (4.0 * pi * radius * radius);

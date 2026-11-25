@@ -121,7 +121,7 @@ AR_FN void stage_shade_light(const KernelGlobals& kg, uint32_t item, const StepE
     Real p_light = Real(0);
     if (weighted) {
       const LightSampleContext prev = prev_light_context(kg, slot);
-      p_light = light_sampler_pmf(*kg.light_sampler, prev, light) *
+      p_light = light_sampler_pmf(*kg.light_sampler, prev, light, (hooks & TEST_HOOK_LIGHT_ALIAS) != 0u) *
                 lamp_pdf_li(rec, prev, normalize(d), LightHit{hit.p, hit.n});
     }
     const Spec contribution = lamp_radiance(rec, lam, kg.tables->observer) * ps_beta(kg, slot) *

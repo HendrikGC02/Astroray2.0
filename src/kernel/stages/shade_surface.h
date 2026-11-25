@@ -332,7 +332,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
           // triangle's own pdf_li stands for the dispatch.
           AR_ASSERT(LightType(kg.lights[light].type) == LightType::TRIANGLE);
           const LightSampleContext prev = prev_light_context(kg, slot);
-          p_light = light_sampler_pmf(*kg.light_sampler, prev, light) *
+          p_light = light_sampler_pmf(*kg.light_sampler, prev, light, (hooks & TEST_HOOK_LIGHT_ALIAS) != 0u) *
                     tri_pdf_li(kg.lights[light], prev, -wo, LightHit{P, Ng});
         }
       }
@@ -377,7 +377,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     // every dimension of the event block.
     const uint32_t q_bits = camera_path_draw_bits(kg, sample, DIM_CAM_ALIAS_Q) ^ uint32_t(mix_bits(uint64_t(e)));
     const Real u_alias = bits_to_unit(q_bits);
-    const SampledLight sl = light_sampler_sample(lsv, lctx, bits, u_alias);
+    const SampledLight sl = light_sampler_sample(lsv, lctx, bits, u_alias, (hooks & TEST_HOOK_LIGHT_ALIAS) != 0u);
     if (!(sl.pmf > Real(0))) break;
     const LightRecord& lr = kg.lights[sl.light];
     const Real2 ul{camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_U)), camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_V))};

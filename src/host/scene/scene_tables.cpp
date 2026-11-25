@@ -48,7 +48,8 @@ const char* table_name(TableId id) {
       "material constants", "material pass indices", "image views",     "light records",  "light alias bins", "light bin lights",
       "light pmf",          "light index",     "rgb2spec nodes",  "rgb2spec coefficients", "observer cmf", "observer illuminant",
       "srgb decode",        "e_diel table",    "material spectra", "e_spec table", "media table", "world program",
-      "world constants", "environment table", "medium blocks", "medium programs", "table header"};
+      "world constants", "environment table", "medium blocks", "medium programs", "light tree nodes", "light tree emitters",
+      "light radiometric bins", "light radiometric bin lights", "light radiometric pmf", "table header"};
   const uint32_t i = static_cast<uint32_t>(id);
   if (i >= kTableCount) throw std::invalid_argument("table_name: no table " + std::to_string(i));
   return names[i];
@@ -589,6 +590,13 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   light_table(TableId::LIGHT_BIN_LIGHT, lt ? lt->bin_light.data() : nullptr, lt ? lt->bin_light.size() : 0, 4);
   light_table(TableId::LIGHT_PMF, lt ? lt->pmf.data() : nullptr, lt ? lt->pmf.size() : 0, 4);
   light_table(TableId::LIGHT_INDEX, lt ? lt->light_index.data() : nullptr, lt ? lt->light_index.size() : 0, 4);
+  light_table(TableId::LIGHT_TREE_NODES, lt ? lt->tree_nodes.data() : nullptr, lt ? lt->tree_nodes.size() : 0,
+              sizeof(ar::LightTreeNode));
+  light_table(TableId::LIGHT_TREE_EMITTERS, lt ? lt->tree_emitters.data() : nullptr, lt ? lt->tree_emitters.size() : 0,
+              sizeof(ar::LightTreeEmitter));
+  light_table(TableId::LIGHT_RAD_BINS, lt ? lt->rad_bins.data() : nullptr, lt ? lt->rad_bins.size() : 0, sizeof(ar::AliasBin));
+  light_table(TableId::LIGHT_RAD_BIN_LIGHT, lt ? lt->rad_bin_light.data() : nullptr, lt ? lt->rad_bin_light.size() : 0, 4);
+  light_table(TableId::LIGHT_RAD_PMF, lt ? lt->rad_pmf.data() : nullptr, lt ? lt->rad_pmf.size() : 0, 4);
 
   // The environment table (0004 D11): the light table's bake, kept while it is the same table.
   const EnvTable* env = lt ? lt->env.get() : nullptr;
@@ -628,6 +636,14 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   jt.z_nodes = as<float>(at(TableId::RGB2SPEC_NODES)), jt.coeffs = as<float>(at(TableId::RGB2SPEC_COEFFS));
   ar::LightSamplerView lv{as<ar::AliasBin>(at(TableId::LIGHT_BINS)), as<uint32_t>(at(TableId::LIGHT_BIN_LIGHT)),
                           as<float>(at(TableId::LIGHT_PMF)), cnt(TableId::LIGHT_BINS), cnt(TableId::LIGHTS)};
+  // The tree and the floor (light_sampler.h): rad_pmf holds one entry per light, so it is null only
+  // without lights, where the oracle draws nothing either.
+  lv.tree = ar::LightTreeView{as<ar::LightTreeNode>(at(TableId::LIGHT_TREE_NODES)), as<ar::LightTreeEmitter>(at(TableId::LIGHT_TREE_EMITTERS)),
+                              cnt(TableId::LIGHT_TREE_NODES), cnt(TableId::LIGHT_TREE_EMITTERS)};
+  lv.rad_bins = as<ar::AliasBin>(at(TableId::LIGHT_RAD_BINS));
+  lv.rad_bin_light = as<uint32_t>(at(TableId::LIGHT_RAD_BIN_LIGHT));
+  lv.rad_pmf = as<float>(at(TableId::LIGHT_RAD_PMF));
+  lv.rad_bin_count = cnt(TableId::LIGHT_RAD_BINS);
   const ar::EDielTable et{as<float>(at(TableId::E_DIEL))};
   const ar::ESpecTable st{as<float>(at(TableId::E_SPEC))};
   const uint64_t o_vm = align16(sizeof(ar::SceneData)), o_lv = o_vm + align16(sizeof(ar::SceneTables));

@@ -227,6 +227,17 @@ TEST_CASE("kg_builder/no null tables") {
   CHECK(kg.tables->image_count == 1u);
   CHECK(kg.light_sampler->light_count == lights->lights.size());
   CHECK(kg.light_sampler->bin_count == lights->bins.size());
+  // The tree and the floor's tables, read in place like the alias table.
+  CHECK(kg.light_sampler->tree.nodes == lights->tree_nodes.data());
+  CHECK(kg.light_sampler->tree.node_count == lights->tree_nodes.size());
+  CHECK(kg.light_sampler->tree.node_count > 0u);
+  CHECK(kg.light_sampler->tree.emitters == lights->tree_emitters.data());
+  CHECK(kg.light_sampler->tree.emitter_count == lights->lights.size());
+  CHECK(kg.light_sampler->rad_pmf == lights->rad_pmf.data());
+  CHECK(kg.light_sampler->rad_bins == lights->rad_bins.data());
+  CHECK(kg.light_sampler->rad_bin_light == lights->rad_bin_light.data());
+  CHECK(kg.light_sampler->rad_bin_count == lights->rad_bins.size());
+  CHECK(kg.light_sampler->rad_bin_count > 0u);
   CHECK(lights->lights.size() == 4u);  // world, two triangles, the lamp
   CHECK(count(*set, TableId::LIGHTS) == 4u);
   CHECK(kg.scene->instances[1].light_index == lights->lamp_first);

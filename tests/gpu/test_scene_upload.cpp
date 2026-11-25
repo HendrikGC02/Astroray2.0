@@ -40,7 +40,7 @@ namespace {
 
 constexpr uint32_t kElemMax = 448;  // kg_checksum.cu kKgElemMax
 constexpr uint32_t kRow = 8 + 2 * kElemMax;
-constexpr uint32_t kRows = static_cast<uint32_t>(TableId::MEDIUM_PROGRAMS) + 1u;
+constexpr uint32_t kRows = static_cast<uint32_t>(TableId::LIGHT_RAD_PMF) + 1u;
 
 struct Graph {
   std::vector<ar_graph_node> nodes;
@@ -325,6 +325,11 @@ std::vector<HostRow> host_rows(Scene& scene, const SceneTableSet& set) {
   const MediumArrays marr = medium_arrays(media);
   at(TableId::MEDIUM_BLOCKS) = row_of(marr.blocks.data(), marr.blocks.size());
   at(TableId::MEDIUM_PROGRAMS) = row_of(marr.programs.data(), marr.programs.size());
+  at(TableId::LIGHT_TREE_NODES) = row_of(lights->tree_nodes.data(), lights->tree_nodes.size());
+  at(TableId::LIGHT_TREE_EMITTERS) = row_of(lights->tree_emitters.data(), lights->tree_emitters.size());
+  at(TableId::LIGHT_RAD_BINS) = row_of(lights->rad_bins.data(), lights->rad_bins.size());
+  at(TableId::LIGHT_RAD_BIN_LIGHT) = row_of(lights->rad_bin_light.data(), lights->rad_bin_light.size());
+  at(TableId::LIGHT_RAD_PMF) = row_of(lights->rad_pmf.data(), lights->rad_pmf.size());
   return rows;
 }
 
@@ -396,6 +401,12 @@ TEST_CASE("scene_upload/checksums match host") {
   CHECK(want[static_cast<uint32_t>(TableId::ENV_TABLE)].count > 0u);  // the program world is baked
   // The emissive quad's index: N = 1, its slice offset, C = 2, then lights 0 and 1.
   CHECK(want[static_cast<uint32_t>(TableId::LIGHT_INDEX)].count == 5u);
+  // The tree and the floor: one emitter and one p_rad per light, and a node per lit light at least.
+  const uint32_t lights = want[static_cast<uint32_t>(TableId::LIGHTS)].count;
+  CHECK(want[static_cast<uint32_t>(TableId::LIGHT_TREE_EMITTERS)].count == lights);
+  CHECK(want[static_cast<uint32_t>(TableId::LIGHT_RAD_PMF)].count == lights);
+  CHECK(want[static_cast<uint32_t>(TableId::LIGHT_TREE_NODES)].count >= want[static_cast<uint32_t>(TableId::LIGHT_BINS)].count);
+  CHECK(want[static_cast<uint32_t>(TableId::LIGHT_RAD_BINS)].count > 0u);
   dev.free(kgb);
   dev.free(out);
 }

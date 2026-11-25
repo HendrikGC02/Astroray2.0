@@ -157,6 +157,11 @@ enum class TableId : uint32_t {
                      // of floats (env_table_floats), empty without a baked program world
   MEDIUM_BLOCKS,     // MediumBlock per medium (SceneData::medium_blocks), MEDIA's order
   MEDIUM_PROGRAMS,   // the media's volume-program words (SceneData::medium_programs)
+  LIGHT_TREE_NODES,     // the light tree (light_tree.h LightTreeNode), empty without lights of positive importance
+  LIGHT_TREE_EMITTERS,  // per light, its bit trail and depth (LightTreeEmitter)
+  LIGHT_RAD_BINS,       // D10's floor: the radiometric alias table
+  LIGHT_RAD_BIN_LIGHT,  // the light index of each radiometric bin
+  LIGHT_RAD_PMF,        // per light, p_rad
   HEADER,
 };
 inline constexpr uint32_t kTableCount = static_cast<uint32_t>(TableId::HEADER) + 1u;
