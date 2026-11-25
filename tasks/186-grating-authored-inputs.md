@@ -17,3 +17,5 @@ Depends on: 168, 169 (code); 163 for `fresnel_conductor` (if 163 has not landed,
 Size: M (about 250 lines without tests); stop and report at 2x.
 Progress:
 - 186 files: src/host/material/grating_authored.h (new), compiler.h, compiler.cpp, scenes/lib/ar.py, tests/cpu/test_ext_material.cpp (fixtures move to the authored layout; transmit cases become refusals), tests/abi/test_grating_material.py (new), docs 0005 items 16/23/24, 0007 row, tasks/186.canary.patch
+- 186 done: authored layout in grating_authored.h (one X-macro list; ar.py reads it), compile_extension parses it and builds the table (CompileResult::ext_table), fixtures of test_ext_material moved to the layout, records 0005 items 16/23/24 and 0007 row updated, canary patch.
+- 186 note: ext_params.h still says ext_constants carries ExtParams byte for byte (out of Scope); the transmit substrate cases of 168's tests became 'not built' refusals.
