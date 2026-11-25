@@ -309,6 +309,7 @@ Statistical checks use 0009's gate: Šidák-derived per-test thresholds for the 
 9. **Repository size.** 28 MB of tables; switch to build-time generation if `specgen`'s total run time meets 0009 B-37.
 10. **Large-world precision.** Geometry near a camera far from the origin is only detected (decision 26).
 11. **Random hero variance** against pbrt's lane-0 hero (in un-terminated paths) is unmeasured; spike E's chromatic medium scene records it.
+12. **Region means.** On a view-filling constant emitter (`a5_emitter`, 256 x 256, 64 spp, 64 seeds, CPU) the independent sampler's half-image difference has seed-to-seed variance within [0.53, 1.88] times the one the VAR plane predicts for every channel and split and no bias beyond 2.3 seed-SEs, so a many-pixel mean takes its error from VAR (tools/region_bias.py); Sobol's VAR overstates a region mean's variance by a factor of 90 to 200, so it is conservative there.
 
 **Owner question 1.** Scene-linear 1.0 ≙ Y = 1 W·m⁻²·sr⁻¹·nm⁻¹ (72,983 cd/m²), so Blender watts pass through unchanged and 1 Blender W of white ≈ 470 physical watts in 360-830 nm. Keep this, or give Blender's 1.0 another physical meaning? And should science outputs from scenes lit by Blender-unit emitters be refused rather than flagged?
 

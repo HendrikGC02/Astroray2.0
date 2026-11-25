@@ -1,0 +1,13 @@
+diff --git a/tools/region_bias.py b/tools/region_bias.py
+index 22f0ee86..7c276e7f 100644
+--- a/tools/region_bias.py
++++ b/tools/region_bias.py
+@@ -62,7 +62,7 @@ def analyse(mean, var, split):
+     va, vb = split_halves(var, split)
+     n = ma.shape[-1] * ma.shape[-2]
+     d = ma.mean(axis=(-2, -1)) - mb.mean(axis=(-2, -1))  # (S, 3)
+-    se2 = va.sum(axis=(-2, -1)) / n ** 2 + vb.sum(axis=(-2, -1)) / n ** 2
++    se2 = va.sum(axis=(-2, -1)) + vb.sum(axis=(-2, -1))
+     out = []
+     for c in range(3):
+         sd2 = d[:, c].var(ddof=1)
