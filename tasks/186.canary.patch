@@ -1,5 +1,28 @@
+diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
+index a0a1aade..2468cb7b 100644
+--- a/src/host/material/compiler.cpp
++++ b/src/host/material/compiler.cpp
+@@ -1664,7 +1664,7 @@ uint32_t ext_max_kind() {
+ bool ext_params_valid(uint32_t kind, const ar::ExtParams& e, std::string* why) {
+   if (kind != uint32_t(ar::ExtKind::GRATING)) return true;
+   const ar::GratingParams g = ar::grating_params(e);
+-  if (!(std::isfinite(g.pitch_nm) && g.pitch_nm > 0.0f)) {
++  if (!(std::isfinite(g.pitch_nm) && g.pitch_nm > -1.0f)) {
+     *why = "grating pitch_nm " + std::to_string(g.pitch_nm) + " is not finite and positive";
+     return false;
+   }
+@@ -1767,7 +1767,8 @@ MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_de
+   spec.depth_nm = authored.depth_nm;
+   spec.m_min = authored.m_min;
+   spec.m_max = authored.m_max;
+-  spec.coating = [=](double, double cos_i) {
++  spec.coating = [=](double lambda_nm, double) {
++    const double cos_i = lambda_nm;
+     return no_coating ? 1.0 : double(ar::fresnel_conductor_scalar<double>(cos_i, coat_n, coat_k));
+   };
+   GratingTableResult built;
 diff --git a/src/host/material/grating_authored.h b/src/host/material/grating_authored.h
-index 9f86ab2d..3a98dd1d 100644
+index 97dd5450..6cace9f9 100644
 --- a/src/host/material/grating_authored.h
 +++ b/src/host/material/grating_authored.h
 @@ -49,6 +49,9 @@ struct GratingAuthoredError {
@@ -12,7 +35,7 @@ index 9f86ab2d..3a98dd1d 100644
    const GratingAuthored& g = *out;
    auto bad = [&](const char* field, const std::string& why) {
      err->field = field;
-@@ -66,7 +69,7 @@ inline bool parse_grating_authored(const uint8_t bytes[64], GratingAuthored* out
+@@ -69,7 +72,7 @@ inline bool parse_grating_authored(const uint8_t bytes[64], GratingAuthored* out
    if (g.m_min < -8 || g.m_min > 8) return bad("m_min", std::to_string(g.m_min) + " is outside -8..8");
    if (g.m_max < -8 || g.m_max > 8) return bad("m_max", std::to_string(g.m_max) + " is outside -8..8");
    if (g.m_min > g.m_max) return bad("m_min", std::to_string(g.m_min) + " exceeds m_max " + std::to_string(g.m_max));
