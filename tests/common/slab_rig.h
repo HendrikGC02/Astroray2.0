@@ -365,7 +365,7 @@ inline void slab_dir(double nx, double ny, double d[3]) {
 // reference measures is the tracking.
 inline std::array<double, 3> absorbing_slab_truth(SlabRig& rig) {
   const std::shared_ptr<const Medium> med = rig.scene.medium(kMedium);
-  REQUIRE(med);
+  REQUIRE(static_cast<bool>(med));
   const MediumArrays arr = medium_arrays({med});
   DataBlob blob;
   REQUIRE(find_data("spectral/observer.bin", &blob));
