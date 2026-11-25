@@ -436,6 +436,31 @@ TEST_CASE("shade_background/environment texture reads each texel at its directio
   CHECK(seam < 1e-2);  // texels 63 and 0 differ by 7x in red: an EXTEND lookup would jump
 }
 
+TEST_CASE("world/table colour is refused at compile") {
+  // The world graph's one constant emission is a TABLE: compile_world renders the world magenta with
+  // one entry, so the scene's light gather (which throws on a TABLE colour) never sees it.
+  const float f[] = {0.8f, 360.0f, 0.5f, 830.0f, 0.5f, 2.0f};  // table scale and two points, then the strength
+  ar_graph_node n[3] = {};
+  n[0].op = uint32_t(ar::Op::SPECTRUM_TABLE), n[0].f32_first = 0, n[0].f32_count = 5;
+  n[1].op = uint32_t(ar::Op::CONST_F32), n[1].f32_first = 5, n[1].f32_count = 1;
+  n[2].op = uint32_t(ar::Op::EMIT_LE);
+  const ar_graph_link links[2] = {{0, 0, 2, 0}, {1, 0, 2, 1}};
+  StoredGraph sg;
+  sg.nodes.assign(n, n + 3), sg.links.assign(links, links + 2), sg.f32.assign(f, f + 6);
+  MaterialStore store(std::make_shared<Ledger>());
+  ar_world_desc d = {};
+  d.surface_graph = 1;
+  const WorldOutput w = compile_world(d, &sg, store.table());
+  CHECK(w.magenta);
+  CHECK(w.color.kind != uint8_t(ar::SpectrumKind::TABLE));
+  CHECK(w.program.empty());
+  REQUIRE(w.entries.size() == 1);
+  CHECK(w.entries[0].code == AR_REPORT_NODE_UNSUPPORTED);
+  CHECK(w.entries[0].detail.find("SPECTRUM_TABLE") != std::string::npos);
+  MeshStore meshes;
+  const MaterialArrays mats;
+  CHECK_NOTHROW(gather_scene_lights(nullptr, meshes, mats, &w, true));
+}
 TEST_CASE("shade_background/program world equals folded") {
   // A constant world through the program path (a 1 x 1 image of the colour, Closest) equals the
   // world the compiler folds to a constant, bit for bit, at every lane of every path.

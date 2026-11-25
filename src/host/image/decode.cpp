@@ -103,8 +103,8 @@ bool find_bad_texel(const uint8_t* texels, ar::TexFormat format, uint32_t channe
     } else {
       std::memcpy(&v, texels + i * 4, 4);
     }
-    // !(|v| <= limit) is also true for a NaN; an Inf is above the limit.
-    if (!(std::fabs(v) <= kMaxTexelMagnitude)) {
+    // !(0 <= v <= limit) is also true for a NaN; an Inf is above the limit; -0 is not negative.
+    if (!(v >= 0.0f && v <= kMaxTexelMagnitude)) {
       out->index = i / channels, out->channel = uint32_t(i % channels), out->value = v;
       return true;
     }
@@ -118,6 +118,11 @@ std::string bad_texel_message(const BadTexel& t, uint32_t width, uint32_t channe
   const std::string where = " in channel " + channel + " at texel (" + std::to_string(t.index % width) + ", " +
                             std::to_string(t.index / width) + "), y from the bottom (index " + std::to_string(t.index) + ")";
   if (!std::isfinite(t.value)) return "NaN or Inf" + where;
+  if (t.value < 0.0f) {
+    char neg[32];
+    std::snprintf(neg, sizeof neg, "%.9g", double(t.value));
+    return std::string("negative value ") + neg + where + ": a texel the engine cannot use is refused, never clamped";
+  }
   char v[32], lim[32];
   std::snprintf(v, sizeof v, "%.9g", double(t.value));
   std::snprintf(lim, sizeof lim, "%.9g", double(kMaxTexelMagnitude));

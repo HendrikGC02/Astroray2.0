@@ -152,8 +152,8 @@ void check_magenta(const std::shared_ptr<const Image>& im) {
 
 // The half and float patterns of the generated EXR files: same tables and index as
 // tests/data/images/generate.py (half_bits(), float_value()).
-const uint16_t kHalfBits[] = {0x0000, 0x00A8, 0x0001, 0x0400, 0x3400, 0x3800, 0x3C00, 0x4100, 0xB600, 0x63D0, 0x7BFF};
-const float kFloatValues[] = {0.0f, 1e-5f, 0.25f, 1.0f, 65504.0f, 1e5f, -0.75f, 3.25f, 123456.789f};
+const uint16_t kHalfBits[] = {0x0000, 0x00A8, 0x0001, 0x0400, 0x3400, 0x3800, 0x3C00, 0x4100, 0x3600, 0x63D0, 0x7BFF};
+const float kFloatValues[] = {0.0f, 1e-5f, 0.25f, 1.0f, 65504.0f, 1e5f, 0.75f, 3.25f, 123456.789f};
 
 size_t hdr_index(int x, int y, int c, size_t n) { return size_t(((x + 1) * 47 + (y + 1) * 83 + c * 61) % int(n)); }
 uint16_t half_bits(int x, int y, int c) { return kHalfBits[hdr_index(x, y, c, std::size(kHalfBits))]; }
@@ -549,7 +549,7 @@ TEST_CASE("image_ingest/exr half stored as half") {
     REQUIRE(d.width == W);
     REQUIRE(d.height == H);
     REQUIRE(d.channels == cs.map.size());  // kept as stored, not expanded
-    CHECK(half_matches(d, cs.map));        // subnormal, 65504 and negative texels and the row order included
+    CHECK(half_matches(d, cs.map));        // subnormal, 65504 and the row order included
   }
 }
 
@@ -678,8 +678,8 @@ TEST_CASE("image_ingest/half and float are linear and count their bytes") {
 
 TEST_CASE("image_ingest/pixels bit exact") {
   World w;
-  // Above 1, below 0, tiny, subnormal and a value no 8-bit image holds; alpha varies too.
-  const std::vector<float> base = {50.0f, -0.5f, 0.25f, 1.0f, 1e-30f, 123456.789f, -3.0f, 0.5f, 0.0f, 1.4e-45f, 0.7f, 0.25f};
+  // Above 1, tiny, subnormal, a negative zero and a value no 8-bit image holds; alpha varies too.
+  const std::vector<float> base = {50.0f, 0.375f, 0.25f, 1.0f, 1e-30f, 123456.789f, 3.0f, 0.5f, -0.0f, 1.4e-45f, 0.7f, 0.25f};
   const std::vector<float> in = rgba_of(3, 2, base);
   w.put_pixels(1, 3, 2, in, AR_COLOR_INTEROP_LIN_REC709);
   w.put_pixels(2, 3, 2, in, AR_COLOR_INTEROP_DATA);
@@ -807,15 +807,14 @@ TEST_CASE("image_ingest/wide texel refused") {
   w.put_pixels(7, 4, 3, with(at, std::numeric_limits<float>::quiet_NaN()), AR_COLOR_INTEROP_LIN_REC709);
   w.put_pixels(8, 4, 3, with(at, std::numeric_limits<float>::max()), AR_COLOR_INTEROP_LIN_REC709);
   w.put_pixels(9, 4, 3, with(at, 1e30f), AR_COLOR_INTEROP_SRGB_REC709);  // the transfer overflows
-  for (ar_key k : {ar_key(1), ar_key(2), ar_key(3)}) {
+  for (ar_key k : {ar_key(1), ar_key(2)}) {
     INFO("key " << k);
     REQUIRE(w.store->images().find(k));
     CHECK(!w.store->images().find(k)->magenta);
     CHECK(w.entries(k).empty());
   }
   CHECK(texel_bits(*w.store->images().find(2))[at] == bits_of(lim));
-  CHECK(texel_bits(*w.store->images().find(3))[at] == bits_of(-lim));
-  for (ar_key k = 4; k <= 9; ++k) {
+  for (ar_key k = 3; k <= 9; ++k) {  // -lim is refused as a negative texel, not by its magnitude
     INFO("key " << k);
     check_magenta(w.store->images().find(k));
     const auto e = w.entries(k);
@@ -823,6 +822,7 @@ TEST_CASE("image_ingest/wide texel refused") {
     CHECK(e[0].first == AR_REPORT_IMAGE_UNREADABLE);
     CHECK_MESSAGE(e[0].second.find("channel B at texel (2, 1), y from the bottom (index 6)") != std::string::npos, e[0].second);
   }
+  CHECK(w.entries(3)[0].second.find("negative value -1.70141092e+38") != std::string::npos);
   CHECK(w.entries(4)[0].second.find("above the limit 1.70141092e+38") != std::string::npos);
   CHECK(w.entries(4)[0].second.find("value 1.70141102e+38") != std::string::npos);
   CHECK(w.entries(6)[0].second.find("NaN or Inf") != std::string::npos);
@@ -851,6 +851,57 @@ TEST_CASE("image_ingest/wide texel refused") {
     CHECK_MESSAGE(e[0].second.find("channel B at texel (3, 2)") != std::string::npos, e[0].second);
     CHECK_MESSAGE(e[0].second.find("above the limit") != std::string::npos, e[0].second);
   }
+}
+
+TEST_CASE("image_ingest/negative texels are refused") {
+  // A negative half or float texel in any channel, from any source, renders the image magenta with
+  // one IMAGE_UNREADABLE entry naming it; -0 and small positive values are fine (0007 d13).
+  World w;
+  const std::vector<float> clean = rgba_of(4, 3, {0.25f, 0.5f, 1.0f, 1.0f});
+  const auto with = [&](size_t index, float value) {
+    std::vector<float> v = clean;
+    v[index] = value;
+    return v;
+  };
+  const size_t at = 6 * 4 + 2;  // texel 6 (x = 2, y = 1), channel B
+  w.put_pixels(1, 4, 3, with(at, -0.0f), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(2, 4, 3, with(at, 1e-30f), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(3, 4, 3, with(at, -0.375f), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(4, 4, 3, with(at, -1e-30f), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_pixels(5, 4, 3, with(6 * 4 + 3, -0.5f), AR_COLOR_INTEROP_LIN_REC709);  // alpha
+  w.put_pixels(6, 4, 3, with(at, -0.5f), AR_COLOR_INTEROP_SRGB_REC709);        // the transfer keeps the sign
+  for (ar_key k : {ar_key(1), ar_key(2)}) {
+    INFO("key " << k);
+    REQUIRE(w.store->images().find(k));
+    CHECK(!w.store->images().find(k)->magenta);
+    CHECK(w.entries(k).empty());
+  }
+  for (ar_key k = 3; k <= 6; ++k) {
+    INFO("key " << k);
+    check_magenta(w.store->images().find(k));
+    const auto e = w.entries(k);
+    REQUIRE(e.size() == 1);
+    CHECK(e[0].first == AR_REPORT_IMAGE_UNREADABLE);
+    CHECK_MESSAGE(e[0].second.find("negative value") != std::string::npos, e[0].second);
+  }
+  CHECK(w.entries(3)[0].second.find("negative value -0.375 in channel B at texel (2, 1)") != std::string::npos);
+  CHECK(w.entries(5)[0].second.find("channel A") != std::string::npos);
+
+  // EXR files, half and float, FILE and MEMORY.
+  w.put_file(10, "bad_negative_half.exr", AR_COLOR_INTEROP_LIN_REC709);
+  w.put_memory(11, read_file("bad_negative_half.exr"), AR_COLOR_INTEROP_LIN_REC709);
+  w.put_file(12, "bad_negative_float.exr", AR_COLOR_INTEROP_LIN_REC709);
+  w.put_memory(13, read_file("bad_negative_float.exr"), AR_COLOR_INTEROP_LIN_REC709);
+  for (ar_key k = 10; k <= 13; ++k) {
+    INFO("key " << k);
+    check_magenta(w.store->images().find(k));
+    const auto e = w.entries(k);
+    REQUIRE(e.size() == 1);
+    CHECK(e[0].first == AR_REPORT_IMAGE_UNREADABLE);
+    CHECK_MESSAGE(e[0].second.find("negative value") != std::string::npos, e[0].second);
+  }
+  CHECK(w.entries(10)[0].second.find("-0.375 in channel G at texel (2, 1)") != std::string::npos);
+  CHECK(w.entries(12)[0].second.find("-0.75 in channel B at texel (3, 2)") != std::string::npos);
 }
 
 TEST_CASE("image_ingest/blender exr equals its pixels") {

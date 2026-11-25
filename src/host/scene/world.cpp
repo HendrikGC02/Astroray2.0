@@ -84,6 +84,13 @@ WorldOutput compile_world(const ar_world_desc& desc, const StoredGraph* graph, c
     w.strength = 1.0f;
     return w;
   }
+  // The light record holds no spectrum arena, so a TABLE colour would resolve to black there: the
+  // world is refused here, with the policy of any other graph the world cannot use (0005 items 40-41).
+  if (!m.emission_estimate.empty() && m.compiled.block.emission_color.kind == uint8_t(ar::SpectrumKind::TABLE)) {
+    make_magenta(t, &w);
+    w.entries.push_back({AR_REPORT_NODE_UNSUPPORTED, "world colour from a SPECTRUM_TABLE node: a world cannot name a spectrum table"});
+    return w;
+  }
   w.entries.insert(w.entries.end(), m.entries.begin(), m.entries.end());
   if (!m.emission_estimate.empty()) {  // one constant EMIT_LE, stored in the block (059)
     w.color = m.compiled.block.emission_color;

@@ -30,14 +30,15 @@ bool decode_image_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out,
 // not apply the wide-texel rule: decode_image_bytes does, for every format it decodes.
 bool decode_exr_bytes(const uint8_t* bytes, uint64_t count, DecodedImage* out, std::string* error);
 
-// The wide-texel rule: a half or float texel is refused when it is not finite or its magnitude is
-// above kMaxTexelMagnitude. The limit is the largest float for which the Linear filter and the
+// The wide-texel rule: a half or float texel is refused when it is not finite, is negative, or its
+// magnitude is above kMaxTexelMagnitude. A negative texel has no meaning as a colour or an emission and
+// no clamp exists anywhere in the image path (0007 d13). The limit is the largest float for which the Linear filter and the
 // RGB lift stay finite: Linear sums four weighted texels whose float weights add to at most
 // (1 + u)^3 <= 1 + 3.1u (u = 2^-24), each product and each of the three additions rounds once more, so
 // |sum| <= |t|max (1 + 8u); the lift forms scale = 2 max(r, g, b) (0005 item 10), so
 // 2 |t|max (1 + 8u) <= FLT_MAX. The largest float satisfying that conservative bound is bit pattern 0x7efffff7.
-// Nothing is clamped. Half texels are at most 65504, so for them only non-finite values are
-// refused. One definition for FILE, MEMORY and PIXELS images.
+// Nothing is clamped. Half texels are at most 65504, so for them only non-finite and negative values
+// are refused. One definition for FILE, MEMORY and PIXELS images.
 // Ref: src/kernel/vm/ops/tex_image.h tex_linear; src/kernel/color/rgb2spec.h (scale = 2m);
 // IEEE 754-2008 section 4.3 (round to nearest: relative error at most u = 2^-24 per operation).
 inline constexpr float kMaxTexelMagnitude = 0x1.ffffeep+126f;
@@ -48,8 +49,8 @@ struct BadTexel {
   float value = 0;       // the offending value as a float
 };
 
-// The first texel (storage order, then channel) that is not finite or, for float texels, whose
-// magnitude is above kMaxTexelMagnitude. `texels` holds texel_count * channels components of
+// The first texel (storage order, then channel) that is not finite, is negative, or, for float texels,
+// whose magnitude is above kMaxTexelMagnitude. `texels` holds texel_count * channels components of
 // `format`; 8-bit texels are never refused.
 bool find_bad_texel(const uint8_t* texels, ar::TexFormat format, uint32_t channels, uint64_t texel_count, BadTexel* out);
 
