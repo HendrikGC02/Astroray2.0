@@ -90,6 +90,9 @@ int check_families() {
   }
   int bad = 0;
   for (const Family* f : all) {
+    // Always printed: check.ps1 sums these over the shard processes of a tier, since no single shard
+    // sees the whole family.
+    std::printf("family count %s %d %d\n", f->name(), f->count(), f->m());
     if (f->count() > f->m()) {
       std::fprintf(stderr,
                    "family %s ran %d checks, m = %d; raising m is a reviewed budget change\n",
