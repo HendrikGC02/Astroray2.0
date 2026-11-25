@@ -8,6 +8,8 @@ defaults that mean the same here: samples 4096, preview_samples 1024, seed 0, ma
 transparent_max_bounces 8, pixel_filter_type BLACKMAN_HARRIS, filter_width 1.5, film_exposure 1.0.
 `device` (CPU or CUDA, default CPU) is the analogue of Cycles' scene.cycles.device and selects the F12 device.
 """
+import struct
+
 import bpy
 
 FILTER_ITEMS = (
@@ -85,16 +87,81 @@ class AstrorayScene(bpy.types.PropertyGroup):
         default=1.0, min=0.0, soft_max=10.0)
 
 
-_classes = (AstrorayScene,)
+# The authored GRATING block of ar_material_desc::ext_constants (0005 items 16, 23, 24): the field order and
+# format mirror AR_GRATING_AUTHORED_FIELDS in src/host/material/grating_authored.h, and the limits are the ones
+# parse_grating_authored enforces. The installed extension cannot read the header, so
+# tests/blender/headless/test_material_panel.py compares both tables with the header and scenes/lib/ar.py.
+# The RNA limits and the packer read this one table.
+EXT_NONE, EXT_GRATING = 0, 1  # ar::ExtKind
+GRATING_BLOCK_FORMAT = "<ffffBBbb44x"
+GRATING_BLOCK_FIELDS = ("pitch_nm", "depth_nm", "coating_n", "coating_k", "mode", "profile", "m_min", "m_max")
+GRATING_MODE_REFLECT, GRATING_PROFILE_SINUSOIDAL = 0, 0  # the panel offers neither choice (186 refuses the others)
+GRATING_ORDER_LIMIT = 8  # |m| <= 8
+# The header demands pitch and depth > 0 and coating n, k >= 0; an RNA minimum cannot be exclusive, so the
+# smallest value a panel field accepts is a thousandth of a nanometre.
+GRATING_POSITIVE_MIN = 1e-3
+GRATING_DEFAULTS = {"pitch_nm": 1600.0, "depth_nm": 100.0, "coating_n": 1.0, "coating_k": 6.0, "m_min": -2, "m_max": 2}
+
+
+def pack_grating(pitch_nm, depth_nm, coating_n, coating_k, m_min, m_max):
+    """The 64 bytes of a reflective sinusoidal GRATING block."""
+    values = dict(pitch_nm=pitch_nm, depth_nm=depth_nm, coating_n=coating_n, coating_k=coating_k,
+                  mode=GRATING_MODE_REFLECT, profile=GRATING_PROFILE_SINUSOIDAL, m_min=m_min, m_max=m_max)
+    return struct.pack(GRATING_BLOCK_FORMAT, *[values[n] for n in GRATING_BLOCK_FIELDS])
+
+
+def ext_block(props):
+    """(ext_kind, 64 bytes) of a material's `astroray` group; kind NONE is 0 and 64 zero bytes."""
+    if props.ext_kind == "GRATING":
+        return EXT_GRATING, pack_grating(props.grating_pitch_nm, props.grating_depth_nm, props.grating_coating_n,
+                                         props.grating_coating_k, props.grating_m_min, props.grating_m_max)
+    return EXT_NONE, bytes(64)
+
+
+def _tag_material(self, context):
+    """Same reason as _tag_scene: without it an edit never reaches view_update, so the material would not be
+    re-translated."""
+    self.id_data.update_tag()
+
+
+class AstrorayMaterial(bpy.types.PropertyGroup):
+    ext_kind: bpy.props.EnumProperty(
+        update=_tag_material, name="Extension", description="The one non-OpenPBR behaviour of this material; "
+        "it replaces the whole OpenPBR surface", default="NONE",
+        items=(("NONE", "None", "OpenPBR surface", EXT_NONE),
+               ("GRATING", "Diffraction Grating", "A reflective diffraction grating", EXT_GRATING)))
+    grating_pitch_nm: bpy.props.FloatProperty(
+        update=_tag_material, name="Pitch", description="Groove spacing in nanometres", default=GRATING_DEFAULTS["pitch_nm"],
+        min=GRATING_POSITIVE_MIN, soft_max=20000.0, precision=1)
+    grating_depth_nm: bpy.props.FloatProperty(
+        update=_tag_material, name="Groove Depth", description="Peak-to-peak depth of the sinusoidal grooves in nanometres",
+        default=GRATING_DEFAULTS["depth_nm"], min=GRATING_POSITIVE_MIN, soft_max=2000.0, precision=1)
+    grating_m_min: bpy.props.IntProperty(
+        update=_tag_material, name="Lowest Order", description="Lowest diffraction order m that is traced",
+        default=GRATING_DEFAULTS["m_min"], min=-GRATING_ORDER_LIMIT, max=GRATING_ORDER_LIMIT)
+    grating_m_max: bpy.props.IntProperty(
+        update=_tag_material, name="Highest Order", description="Highest diffraction order m that is traced",
+        default=GRATING_DEFAULTS["m_max"], min=-GRATING_ORDER_LIMIT, max=GRATING_ORDER_LIMIT)
+    grating_coating_n: bpy.props.FloatProperty(
+        update=_tag_material, name="Coating n", description="Real part of the coating's refractive index (constant over wavelength)",
+        default=GRATING_DEFAULTS["coating_n"], min=0.0, soft_max=10.0)
+    grating_coating_k: bpy.props.FloatProperty(
+        update=_tag_material, name="Coating k", description="Imaginary part of the coating's refractive index "
+        "(extinction; constant over wavelength)", default=GRATING_DEFAULTS["coating_k"], min=0.0, soft_max=50.0)
+
+
+_classes = (AstrorayScene, AstrorayMaterial)
 
 
 def register():
     for c in _classes:
         bpy.utils.register_class(c)
     bpy.types.Scene.astroray = bpy.props.PointerProperty(type=AstrorayScene)
+    bpy.types.Material.astroray = bpy.props.PointerProperty(type=AstrorayMaterial)
 
 
 def unregister():
+    del bpy.types.Material.astroray
     del bpy.types.Scene.astroray
     for c in reversed(_classes):
         bpy.utils.unregister_class(c)

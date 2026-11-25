@@ -24,7 +24,7 @@ Ref: Blender source/blender/nodes/shader/nodes/node_shader_emission.cc (Color, S
 node_shader_blackbody.cc (Temperature, Color output); Cycles kernel/svm/convert.h NODE_CONVERT_CF
 (a colour linked to a float socket becomes its scene-linear luminance, the COLOR_TO_F32 op).
 
-No bpy import and no module state: `op_id` (the generated `_ops.OP_ID`) and the key map come from
+No module state and no bpy call of its own (it imports `properties` for the extension block's packer): `op_id` (the generated `_ops.OP_ID`) and the key map come from
 the caller; the generated `_ops` is the package's staged module, which tests register as
 `ar_addon._ops`.
 """
@@ -32,6 +32,7 @@ import ctypes
 import time
 
 from .. import _ops  # staged by the build, never committed
+from .. import properties
 from ..sync import keys
 
 # Graph targets, report codes and emission sampling come from the generated binding (`abi`,
@@ -85,6 +86,8 @@ class GraphEmitter:
         self.i32 = []
         self.strings = []
         self.emission_sampling = "AUTO"  # materials only
+        self.ext_kind = 0            # materials only: the material's extension kind and its 64 authored bytes
+        self.ext_constants = bytes(64)
         self.inline_s = 0.0  # seconds spent in inline_shader_nodes() (M-8 measurement)
         self.child = None    # closure child the stores and emissions being lowered belong to; None outside a Mix
         self.children = 0    # children handed out so far
@@ -556,6 +559,7 @@ def _emission_sampling(em, material):
 def translate_material(material, keymap, op_id):
     """The SURFACE graph of one evaluated material, as a GraphEmitter."""
     em = GraphEmitter(op_id)
+    em.ext_kind, em.ext_constants = properties.ext_block(material.astroray)
     # The tree dies with the InlineShaderNodes object that owns it: keep `inlined` alive.
     t0 = time.perf_counter()
     inlined = material.inline_shader_nodes()
@@ -563,6 +567,10 @@ def translate_material(material, keymap, op_id):
     tree = inlined.node_tree if inlined else None
     if tree is None:
         em.unsupported("Material without nodes")
+        return em
+    if em.ext_kind != 0 and any(n.bl_idname == "ShaderNodeMixShader" for n in tree.nodes):
+        # An extension replaces the whole lobe stack, so there is nothing to select between (0005 items 15, 38).
+        em.unsupported("Material.Astroray Extension with Mix Shader")
         return em
     scan_unsupported(em, tree)
     em.emission_sampling = _emission_sampling(em, material)
@@ -675,6 +683,8 @@ def set_material(edit, abi, keymap, uid, em, name=""):
     m = abi.ar_material_desc()
     m.surface_graph = graph_key
     m.emission_sampling = getattr(abi, "AR_EMISSION_SAMPLING_" + em.emission_sampling)
+    m.ext_kind = em.ext_kind
+    m.ext_constants = (ctypes.c_uint8 * 64)(*em.ext_constants)
     edit.call("ar_edit_set_material", material_key, ctypes.byref(m))
     del keep
     return material_key
