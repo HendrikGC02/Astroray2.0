@@ -81,7 +81,8 @@ compile_s = 1.18
 gated = "merge"
 
 [kernel.k_route_hit]
-regs = 28
+# The medium test: the triangle's three vertices and the instance transform, behind the instance's medium index (+12).
+regs = 40
 stack = 0
 spill_store = 0
 spill_load = 0
@@ -153,6 +154,15 @@ stack = 0
 spill_store = 0
 spill_load = 0
 compile_s = 1.2
+gated = "merge"
+
+[kernel.k_shade_volume]
+# The pass-through skeleton: the medium read and route_hit_after_medium (the stage's first values; the estimators raise them).
+regs = 34
+stack = 0
+spill_store = 0
+spill_load = 0
+compile_s = 1.0
 gated = "merge"
 
 [kernel.k_shade_light]

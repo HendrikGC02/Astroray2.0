@@ -174,6 +174,8 @@ AR_FN Real3 load_float3(const float* p, uint32_t i) {
 // shade_context_geometry fills the geometric part (P, Ng, N, uv, wo, front_face, object_id,
 // instance_id) for triangle `prim` of instance `inst` at barycentrics `bary`, seen along ray_d;
 // NEE also uses it for the point a light sample picked on an emissive triangle.
+// route_hit.h hit_is_back_face repeats the front-face rule below for the medium test; change both together
+// (tests/cpu/test_route_hit.cpp pins them against each other).
 AR_FN bool shade_context_geometry(const KernelGlobals& kg, uint32_t inst, uint32_t prim, Real2 bary, Real3 ray_d,
                                   ShadeContext* ctx) {
   const SceneData& s = scene_of(kg);

@@ -16,6 +16,7 @@
 AR_NS_BEGIN
 
 struct ConstantBlock;  // material/constant_block.h
+struct MediumDesc;     // medium/medium.h
 
 // One entry of the device mesh table, indexed by `DeviceInstanceRecord::mesh`. A hit reads
 // the triangle's corners from tri_corners, then normals by corner, UVs by layer and corner,
@@ -37,10 +38,13 @@ struct DeviceInstanceRecord {
   uint32_t flags;  // AR_INSTANCE_*
   uint32_t material_offset, material_count, light_index;
   uint32_t mask, light_group;
+  // The medium inside the instance's closed mesh: 0 for none, else 1 + its index in
+  // SceneData::medium_descs (instance_medium below). 0 so that a zeroed record has no medium.
+  uint32_t medium;
   float color[4];
   float object_to_world[12];  // row-major 3x4, the representative motion step
 };
-static_assert(sizeof(DeviceInstanceRecord) == 108, "device layout");
+static_assert(sizeof(DeviceInstanceRecord) == 112, "device layout");
 
 // light_index of a geometry instance (host/scene/instances.h kNoLight); a lamp instance
 // carries the index of its light.
@@ -82,6 +86,10 @@ struct SceneData {
   // no material holds a TABLE.
   const float* material_spectra;
   uint32_t material_spectra_count;
+  // One MediumDesc per medium of the scene, in key order (Scene::media()); null exactly when the scene
+  // has none. DeviceInstanceRecord::medium indexes it; `program` is the medium's block index.
+  const MediumDesc* medium_descs;
+  uint32_t medium_count;
   // The traversal structure of the backend that runs the stages, opaque to kernels and never null
   // in a session's scene (an empty scene has an empty structure). CPU: the snapshot's EmbreeScene.
   // CUDA: the OptixTraversableHandle of its TLAS as an integer; the launch reads it from the host
@@ -99,6 +107,20 @@ AR_FN uint32_t instance_light_index(const KernelGlobals& kg, uint32_t inst) {
   const SceneData& s = scene_of(kg);
   AR_ASSERT(inst < s.instance_count);
   return load_ro(&s.instances[inst].light_index);
+}
+
+// instance_medium of an instance with no medium.
+inline constexpr uint32_t kNoMedium = ~0u;
+
+// The index in SceneData::medium_descs of the medium inside instance `inst`'s closed mesh, kNoMedium
+// for an instance without one. The host builds the records from keys it has checked, so an index
+// past medium_count is a corrupt upload.
+AR_FN uint32_t instance_medium(const KernelGlobals& kg, uint32_t inst) {
+  const SceneData& s = scene_of(kg);
+  AR_ASSERT(inst < s.instance_count);
+  const uint32_t m = load_ro(&s.instances[inst].medium);
+  AR_ASSERT(m <= s.medium_count);
+  return m == 0u ? kNoMedium : m - 1u;
 }
 
 // The material-header index of the material a hit triangle uses: the triangle's slot picks an

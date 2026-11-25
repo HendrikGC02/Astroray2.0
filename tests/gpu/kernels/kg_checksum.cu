@@ -9,10 +9,11 @@
 #include "light/light_sampler.h"
 #include "material/constant_block.h"
 #include "material/lobes/tables.h"
+#include "medium/medium.h"
 #include "scene/scene_view.h"
 #include "vm/context.h"
 
-// One row per table, in host/scene/scene_tables.h TableId order up to E_SPEC: count (u32),
+// One row per table, in host/scene/scene_tables.h TableId order up to MEDIA: count (u32),
 // element size (u32), then the first and last element, kKgElemMax bytes each.
 constexpr uint32_t kKgElemMax = 432;
 constexpr uint32_t kKgRow = 8 + 2 * kKgElemMax;
@@ -60,4 +61,5 @@ extern "C" __global__ void ar_kg_checksum(const ar::KernelGlobals* kgp, uint8_t*
   kg_row(out, r++, kg.e_diel->e, ar::kEDielN * ar::kEDielN * ar::kEDielN, 4);
   kg_row(out, r++, s.material_spectra, s.material_spectra_count, 4);
   kg_row(out, r++, kg.e_spec->e, ar::kESpecN * ar::kESpecN, 4);
+  kg_row(out, r++, s.medium_descs, s.medium_count, sizeof(ar::MediumDesc));
 }

@@ -21,6 +21,7 @@
 #include "host/material/material_store.h"
 #include "host/scene/edit.h"
 #include "host/scene/instances.h"
+#include "host/scene/media.h"
 #include "host/scene/mesh.h"
 #include "host/scene/scene_tables.h"
 #include "host/session/kg_builder.h"
@@ -90,8 +91,9 @@ struct Rig {
     m.emission_sampling = AR_EMISSION_SAMPLING_AUTO;
     REQUIRE(scene.materials->set_material(e, key, &m) == AR_OK);
   }
-  // The quad instanced once with the material slots `pool` (slot 0 is the one its faces use).
-  void instances(Edit& e, std::vector<ar_key> pool) {
+  // The quad instanced once with the material slots `pool` (slot 0 is the one its faces use) and, when
+  // `medium` is not 0, that medium inside it.
+  void instances(Edit& e, std::vector<ar_key> pool, ar_key medium = 0) {
     std::vector<ar_key> geom{100}, object{1};
     std::vector<ar_xform> xf(1);
     xf[0].m[0] = xf[0].m[5] = xf[0].m[10] = 1.0f;
@@ -104,6 +106,8 @@ struct Rig {
     d.random_ids = d.pass_indices = d.crypto_objects = d.crypto_assets = zeros.data();
     d.colors = colors.data(), d.visibility = vis.data(), d.flags = zeros.data(), d.light_groups = lg.data();
     d.material_offsets = moff.data(), d.material_counts = mcount.data(), d.material_keys = pool.data();
+    std::vector<ar_key> media{medium};
+    d.medium_keys = medium ? media.data() : nullptr;
     REQUIRE(set_instances(e, &d) == AR_OK);
   }
   // A lit world, emissive material 42 on one instanced quad, an unreferenced image (missing file:
@@ -212,6 +216,9 @@ TEST_CASE("kg_builder/no null tables") {
   CHECK(mats->spectra.empty());                   // no material of this scene holds a TABLE
   CHECK(kg.scene->material_spectra == nullptr);   // null exactly when the arena is empty
   CHECK(kg.scene->material_spectra_count == 0u);
+  CHECK(kg.scene->medium_descs == nullptr);  // no medium: null exactly when the table is empty
+  CHECK(kg.scene->medium_count == 0u);
+  CHECK(kg.scene->instances[0].medium == 0u);
   CHECK(kg.material_slot_count == 1u);
   CHECK(kg.material_program_words == mats->programs.size());
   CHECK(kg.material_constant_count == mats->constants.size());
@@ -231,6 +238,94 @@ TEST_CASE("kg_builder/no null tables") {
 
   // Unchanged snapshot: the same set, shared.
   CHECK((acquire_scene_tables(r.scene) == set));
+}
+
+TEST_CASE("kg_builder/media table") {
+  Rig r;
+  r.build();
+  const auto before = acquire_scene_tables(r.scene);
+  REQUIRE(count(*before, TableId::MEDIA) == 0u);
+  ar_medium_desc md{};
+  md.sigma_a[0] = 1.0f;
+  r.commit([&](Edit& e) { REQUIRE(set_medium(e, 60, &md, r.scene.materials->table()) == AR_OK); });
+  // A medium nothing instances is in the table but on no instance.
+  auto set = acquire_scene_tables(r.scene);
+  REQUIRE(set != before);
+  CHECK(count(*set, TableId::MEDIA) == 1u);
+  CHECK(set->scene_host.instances[0].medium == 0u);
+  r.commit([&](Edit& e) { r.instances(e, {42}, 60); });
+  set = acquire_scene_tables(r.scene);
+  ar::FilmData film{};
+  ar::DisplayTarget display{};
+  uint32_t active = 0;
+  KgSession in;
+  in.film = &film, in.display = &display, in.active_pixels = &active;
+  const ar::KernelGlobals kg = build_kernel_globals(set.get(), in);
+  CHECK(missing_pointers(kg, *set, false).empty());
+  REQUIRE(kg.scene->medium_count == 1u);
+  REQUIRE(kg.scene->medium_descs != nullptr);
+  CHECK(kg.scene->instances[0].medium == 1u);  // index + 1
+  CHECK(kg.scene->instances[1].medium == 0u);  // the lamp record
+  const std::shared_ptr<const Medium> stored = r.scene.medium(60);
+  REQUIRE(stored);
+  CHECK(stored->desc.program == Medium::kNoMediumProgram);  // the store never places a medium
+  CHECK(kg.scene->medium_descs[0].program == 0u);           // the table does
+  CHECK(kg.scene->medium_descs[0].estimator == stored->desc.estimator);
+  // Unchanged: shared. Material-only edits keep the media copy; a medium edit uploads it again.
+  CHECK((acquire_scene_tables(r.scene) == set));
+  r.commit([&](Edit& e) { r.material(e, 42, 3.0f); });
+  const auto after_material = acquire_scene_tables(r.scene);
+  CHECK(after_material != set);
+  CHECK_FALSE(after_material->uploaded[static_cast<uint32_t>(TableId::MEDIA)]);
+  r.commit([&](Edit& e) { REQUIRE(set_medium(e, 60, &md, r.scene.materials->table()) == AR_OK); });
+  const auto after_medium = acquire_scene_tables(r.scene);
+  CHECK(after_medium->uploaded[static_cast<uint32_t>(TableId::MEDIA)]);
+  CHECK(after_medium->uploaded[static_cast<uint32_t>(TableId::INSTANCES)]);  // the indices ride the media list
+}
+
+TEST_CASE("kg_builder/medium dropped with its instance still builds") {
+  Rig r;
+  r.build();
+  ar_medium_desc md{};
+  r.commit([&](Edit& e) { REQUIRE(set_medium(e, 60, &md, r.scene.materials->table()) == AR_OK); });
+  r.commit([&](Edit& e) { r.instances(e, {42}, 60); });
+  auto set = acquire_scene_tables(r.scene);
+  REQUIRE(count(*set, TableId::MEDIA) == 1u);
+  REQUIRE(set->scene_host.instances[0].medium == 1u);
+  // The instance loses its medium and the medium goes in one commit. This covers the sequential case only:
+  // the pairing under a concurrent activation comes from Scene::snapshot reading media inside with_active.
+  r.commit([&](Edit& e) {
+    r.instances(e, {42});
+    REQUIRE(e.remove(AR_KIND_MEDIUM, 60) == AR_OK);
+  });
+  REQUIRE_NOTHROW(set = acquire_scene_tables(r.scene));
+  CHECK(count(*set, TableId::MEDIA) == 0u);
+  CHECK(set->scene_host.instances[0].medium == 0u);
+}
+
+TEST_CASE("kg_builder/medium table refuses an unplaced or out of range block") {
+  ar::MediumDesc descs[2] = {};
+  descs[0].program = 0, descs[1].program = 1;
+  CHECK_NOTHROW(check_medium_table(descs, 2));
+  descs[1].program = Medium::kNoMediumProgram;
+  CHECK_THROWS_WITH_AS(check_medium_table(descs, 2), "medium table entry 1 was never placed (its program is the unplaced sentinel)",
+                       std::invalid_argument);
+  descs[1].program = 2;
+  CHECK_THROWS_WITH_AS(check_medium_table(descs, 2), "medium table entry 1 names block 2, but the table holds 2",
+                       std::invalid_argument);
+  // The table maker places the store's unplaced media in order, so what it returns passes the check.
+  MaterialStore store(std::make_shared<Ledger>());
+  ar_medium_desc md{};
+  std::vector<std::shared_ptr<const Medium>> media;
+  for (ar_key k : {5, 9}) media.push_back(build_medium(k, md, store.table()));
+  REQUIRE(media[1]->desc.program == Medium::kNoMediumProgram);
+  const std::vector<ar::MediumDesc> table = medium_table(media);
+  REQUIRE(table.size() == 2u);
+  CHECK(table[0].program == 0u);
+  CHECK(table[1].program == 1u);
+  const MediumIndex index = medium_index(media);
+  CHECK(index.at(5) == 0u);
+  CHECK(index.at(9) == 1u);
 }
 
 TEST_CASE("kg_builder/failed table keeps the previous set") {

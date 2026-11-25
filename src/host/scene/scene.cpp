@@ -365,6 +365,7 @@ SceneSnapshot Scene::snapshot(bool with_lights) {
   generations_.with_active([&](uint64_t generation) {
     s.generation = generation;
     s.instances = instances();
+    s.media = media();
     if (materials) s.materials = materials->arrays(), s.images = materials->images().arrays();
     if (s.instances)
       for (const Instance& in : s.instances->instances)

@@ -341,7 +341,7 @@ TEST_CASE("cuda_session_trace/unrouted stages throw naming the stage") {
   CHECK(message(Stage::INTERSECT_CLOSEST).find("intersect_closest") != std::string::npos);
   CHECK(message(Stage::INTERSECT_SHADOW).find("intersect_shadow") != std::string::npos);
   CHECK(message(Stage::INTERSECT_SUBSURFACE).find("stage intersect_subsurface has no CUDA route") != std::string::npos);
-  CHECK(message(Stage::SHADE_VOLUME).find("shade_volume") != std::string::npos);  // no module, no row
+  CHECK(message(Stage::SHADE_SUBSURFACE).find("shade_subsurface") != std::string::npos);  // no module, no row
   // Attached but no traversable set for the pass.
   attach_cuda_traversal(*session, gpu.scene->accel_builder(), Owner{0, 1});
   CHECK(message(Stage::INTERSECT_CLOSEST).find("traversable") != std::string::npos);

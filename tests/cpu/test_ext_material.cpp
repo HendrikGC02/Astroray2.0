@@ -295,8 +295,8 @@ TEST_CASE("ext_material/routes to ext stage") {
   ar::KernelGlobals kg{};
   kg.scene = &scene;
   const ar::HitRecord h{1.0f, 0u, 0u, 0.25f, 0.25f};
-  CHECK(ar::route_hit(kg, h, 0u) == ar::Stage::SHADE_SURFACE_EXT);
-  CHECK(ar::route_hit(kg, h, ar::PATH_KIND) == ar::Stage::SHADE_LIGHT_PATH_EXT);
+  CHECK(ar::route_hit(kg, h, ar::Real3{0, 0, -1}, 0u) == ar::Stage::SHADE_SURFACE_EXT);
+  CHECK(ar::route_hit(kg, h, ar::Real3{0, 0, -1}, ar::PATH_KIND) == ar::Stage::SHADE_LIGHT_PATH_EXT);
 }
 
 TEST_CASE("ext_material/store refuses until the stage exists") {

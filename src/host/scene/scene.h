@@ -85,6 +85,7 @@ struct SceneSnapshot {
   std::shared_ptr<const ImageArrays> images;
   std::map<ar_key, std::shared_ptr<const MeshRecord>> meshes;
   std::shared_ptr<const LightTable> lights;
+  std::vector<std::shared_ptr<const Medium>> media;  // read with the instances that reference them
 };
 
 struct StoredSettings {

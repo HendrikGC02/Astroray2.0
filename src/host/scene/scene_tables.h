@@ -47,6 +47,7 @@ struct InstanceTable;
 struct LightTable;
 struct MaterialArrays;
 struct MeshRecord;
+struct Medium;  // host/scene/media.h
 
 // Where table copies go: the scene's device, or host memory when there is none.
 struct UploadTarget {
@@ -96,8 +97,22 @@ struct MeshCopy {
 std::shared_ptr<const MeshCopy> upload_mesh(const UploadTarget& t, const std::shared_ptr<const MeshRecord>& rec,
                                             const MeshCopy* prev);
 
-// The device record of instance `i` of `table`, whose geometry is mesh `mesh_index`.
-ar::DeviceInstanceRecord instance_record(const InstanceTable& table, uint32_t i, uint32_t mesh_index);
+// Medium key -> its index in the medium table (key order, as Scene::media() lists them).
+using MediumIndex = std::map<ar_key, uint32_t>;
+MediumIndex medium_index(const std::vector<std::shared_ptr<const Medium>>& media);
+// The MediumDesc table of `media`, in the order medium_index numbers them: each desc is the medium's own
+// with `program` set to its block index, which is its position (the medium table places the blocks in
+// that order). Checked by check_medium_table before it is returned.
+std::vector<ar::MediumDesc> medium_table(const std::vector<std::shared_ptr<const Medium>>& media);
+// Throws std::invalid_argument for a desc whose program is Medium::kNoMediumProgram (never placed) or
+// is not below `count`, naming the desc: an unplaced medium must not be mistaken for medium 0.
+void check_medium_table(const ar::MediumDesc* descs, uint32_t count);
+
+// The device record of instance `i` of `table`, whose geometry is mesh `mesh_index`. `media` resolves
+// the instance's medium key; throws std::logic_error when the instance bears a medium and `media` is
+// null or lacks the key (a record without its medium would be silently medium-free).
+ar::DeviceInstanceRecord instance_record(const InstanceTable& table, uint32_t i, uint32_t mesh_index,
+                                         const MediumIndex* media = nullptr);
 // DeviceInstanceRecord::mesh of a lamp instance: lamps have no mesh (105 gives them primitives).
 inline constexpr uint32_t kNoMeshIndex = ~0u;
 
@@ -124,6 +139,7 @@ enum class TableId : uint32_t {
   MATERIAL_SPECTRA,  // the spectrum arena of the TABLE SpectrumRefs (0005 item 9); after E_DIEL so the
                      // checksum rows keep their order
   E_SPEC,            // the metal lobe's E_spec table (lobes/tables.h); last for the same reason
+  MEDIA,             // MediumDesc per medium (SceneData::medium_descs); after MATERIAL_SPECTRA for the same reason
   HEADER,
 };
 inline constexpr uint32_t kTableCount = static_cast<uint32_t>(TableId::HEADER) + 1u;
@@ -134,6 +150,7 @@ struct SceneTableSet {
   std::shared_ptr<const MaterialArrays> materials;
   std::shared_ptr<const ImageArrays> images;
   std::shared_ptr<const LightTable> lights;
+  std::vector<std::shared_ptr<const Medium>> media;  // Scene::media() when the set was built, key order
   uint64_t generation = 0;                              // the generation they all belong to
   std::shared_ptr<const InstanceTable> base_instances;  // the scene's, before lamp records
   std::map<ar_key, std::shared_ptr<const MeshRecord>> mesh_records;  // key order is mesh order
