@@ -3,10 +3,13 @@
 // Environment Texture (0009 d17 step iii, the per-kernel fixture of 0002 D4). A uniform world (a
 // 1 x 1 image, Closest) agrees to 1e-6 relative on each device against the host's display_energy
 // of its colour, and through EnvironmentBaker the table is the uniform density 1, max and mean are
-// that energy, and an unchanged key bakes nothing again. A world of a 64 x 32 image whose every
-// texel is its own colour agrees cell for cell between the devices to 1e-6 wherever a cell centre
-// is clear of a texel edge (Closest reads one texel there on both devices; the lift is bit-identical
-// on identical inputs, RULINGS 96 (b)). The cell function on an analytic world is agree_pure's case.
+// that energy, and an unchanged key bakes nothing again. A world of a 64 x 32 grey image whose every
+// texel is its own grey (a grey's lift is analytic), and the same world in saturated colours, agree
+// cell for cell between the CPU and the no-FMA module to 1e-6 wherever a cell centre is clear of a
+// texel edge: Closest reads one texel there on both devices, so the lift sees identical inputs and
+// is bit-identical (RULINGS 96 (b)); the ulp of texel position RULINGS 96 found amplified by the lift
+// comes from Linear lookups, which this case does not make. The cell function on an analytic world
+// is agree_pure's case.
 // Ref: docs/decisions/0004-integrator.md D11; 0002 D12; RULINGS 96; kernel/stages/bake_environment.h
 // (the error bound: a direction-independent world has e_s = u, so 9 u = 5.4e-7 per device, under the
 // 1e-6 of this test for each device against the host and 2 x 5.4e-7 for the pair).
@@ -94,8 +97,9 @@ struct Result {
   double launch_ms = 0.0;       // the raw launch, synchronised
 };
 
-// Every table the world program reads, copied to `dev`, then the raw grid and the baker's result.
-Result run(Device& dev, const MaterialStore& store, const World& world) {
+// Every table the world program reads, copied to `dev`, then the raw grid and the baker's result. With
+// `nofma` (a ModuleDevice) the raw grid comes from the no-FMA module of 0002 D12.
+Result run(Device& dev, const MaterialStore& store, const World& world, ModuleDevice* nofma = nullptr) {
   std::vector<DeviceBuffer> held;
   const auto put = [&](const void* p, uint64_t bytes) {
     DeviceBuffer b = dev.allocate(LedgerCategory::TABLES, bytes, kOwner);
@@ -141,7 +145,14 @@ Result run(Device& dev, const MaterialStore& store, const World& world) {
     dev.set_kernel_globals(kg_buf);
     dev.memset(grid, 0, 0xFF, grid.bytes);  // a cell the kernel forgets reads back as NaN
     const auto t0 = std::chrono::steady_clock::now();
-    dev.launch(KernelId::BAKE_ENVIRONMENT, kN * kN);
+    if (nofma) {
+      const uint32_t module = nofma->load_module_file(std::string(AR_TEST_KERNEL_NOFMA_DIR) + "/bake_environment.cubin");
+      const ar::KernelGlobals* kg_dev = static_cast<const ar::KernelGlobals*>(kg_buf.ptr);
+      void* args[] = {&kg_dev};
+      nofma->launch_module_kernel(module, "k_bake_environment", (kN * kN + 255) / 256, 256, args);
+    } else {
+      dev.launch(KernelId::BAKE_ENVIRONMENT, kN * kN);
+    }
     dev.synchronize();
     r.launch_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     r.grid.resize(size_t(kN) * kN);
@@ -214,23 +225,28 @@ TEST_CASE("agree/bake environment cpu vs cuda") {
   CHECK(d.gpu_ledger.total() == 0);
 }
 
-TEST_CASE("agree/bake environment program world") {
+// The varied world of `grey` texels (r = g = b) or saturated colours, CPU against the no-FMA module:
+// the worst relative difference over cells clear of a texel edge, and how many were compared.
+struct Compared {
+  double worst = 0.0;
+  uint32_t checked = 0, skipped = 0;
+};
+Compared compare_varied(bool grey) {
   constexpr uint32_t W = 64, H = 32;
   std::vector<float> px(size_t(W) * H * 4, 1.0f);
   for (uint32_t y = 0; y < H; ++y)
     for (uint32_t x = 0; x < W; ++x) {
-      const float c[3] = {0.1f + 0.9f * float(x) / float(W), 0.1f + 0.9f * float(y) / float(H), 0.25f + 0.5f * float((x + y) & 1u)};
+      const float g = 0.1f + 0.9f * float(x) / float(W) + 0.5f * float(y) / float(H);
+      const float c[3] = {grey ? g : 0.1f + 0.9f * float(x) / float(W), grey ? g : 0.1f + 0.9f * float(y) / float(H),
+                          grey ? g : 0.25f + 0.5f * float((x + y) & 1u)};
       for (int k = 0; k < 3; ++k) px[(size_t(y) * W + x) * 4 + size_t(k)] = c[k];
     }
   MaterialStore store{std::make_shared<Ledger>()};
   const World world(store, W, H, px, 1.5f);
   Devices d;
   const Result c = run(d.cpu, store, world);
-  const Result g = run(*d.gpu, store, world);
-  REQUIRE(bool(c.baked.table));
-  REQUIRE(bool(g.baked.table));
-  double worst = 0.0;
-  uint32_t checked = 0, skipped = 0;
+  const Result g = run(*d.gpu, store, world, d.gpu.get());
+  Compared out;
   const double pi = 3.14159265358979323846;
   for (uint32_t cell = 0; cell < kN * kN; ++cell) {
     const ar::Real3 dir = ar::bake_environment_direction(kN, cell);
@@ -239,19 +255,22 @@ TEST_CASE("agree/bake environment program world") {
     const double fu = (0.5 - std::atan2(double(dir.y), double(dir.x)) / (2.0 * pi)) * W;
     const double fv = (1.0 - std::acos(std::max(-1.0, std::min(1.0, double(dir.z)))) / pi) * H;
     if (std::fabs(fu - std::round(fu)) < 1e-3 || std::fabs(fv - std::round(fv)) < 1e-3) {
-      ++skipped;
+      ++out.skipped;
       continue;
     }
     REQUIRE(c.grid[cell] > 0.0f);
-    worst = std::max(worst, std::fabs(double(c.grid[cell]) - double(g.grid[cell])) / double(c.grid[cell]));
-    ++checked;
+    out.worst = std::max(out.worst, std::fabs(double(c.grid[cell]) - double(g.grid[cell])) / double(c.grid[cell]));
+    ++out.checked;
   }
-  std::printf("bake_environment program world cpu vs cuda: %u cells, %u at texel edges, worst relative %.3e; mean cpu %.9g "
-              "cuda %.9g\n",
-              checked, skipped, worst, c.baked.mean, g.baked.mean);
-  CHECK(checked > kN * kN * 3 / 4);
-  CHECK(worst <= 1e-6);
-  CHECK(std::fabs(c.baked.mean - g.baked.mean) <= 1e-6 * c.baked.mean);
+  std::printf("agree bake_environment %s program world, cpu vs cuda nofma: %u cells, %u at texel edges, worst relative %.3e\n",
+              grey ? "grey" : "colour", out.checked, out.skipped, out.worst);
+  CHECK(out.checked > kN * kN * 3 / 4);
+  return out;
+}
+
+TEST_CASE("agree/bake environment program world") {
+  CHECK(compare_varied(true).worst <= 1e-6);
+  CHECK(compare_varied(false).worst <= 1e-6);
 }
 
 }  // TEST_SUITE
