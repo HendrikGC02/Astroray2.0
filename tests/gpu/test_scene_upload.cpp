@@ -371,9 +371,6 @@ TEST_CASE("scene_upload/checksums match host") {
   const std::vector<HostRow> want = host_rows(*r.scene, *set);
   for (uint32_t t = 0; t < kRows; ++t) {
     const TableId id = TableId(t);
-    // The environment table is no KernelGlobals member (the light records hold it): kg_checksum.cu
-    // writes an empty row for it, which says nothing about the upload.
-    if (id == TableId::ENV_TABLE) continue;
     const uint8_t* row = rows.data() + uint64_t(t) * kRow;
     uint32_t count = 0, elem = 0;
     std::memcpy(&count, row, 4), std::memcpy(&elem, row + 4, 4);
