@@ -1,0 +1,12 @@
+diff --git a/src/kernel/stages/shade_common.h b/src/kernel/stages/shade_common.h
+index 2dff24b6..0b7408d2 100644
+--- a/src/kernel/stages/shade_common.h
++++ b/src/kernel/stages/shade_common.h
+@@ -314,6 +314,7 @@ AR_FN void resolve_constant_record(const ConstantBlock& b, const ShadeContext& c
+ #undef AR_X
+       default: AR_ASSERT(false); continue;
+     }
++    if (Slot(k) == Slot::BASE_COLOR) ref = &b.specular_color;
+     const Spec v = resolve_slot_as(*ref, slot_sem, ctx.lambda_t, obs, spectra);
+     switch (Slot(k)) {
+ #define AR_X(n, s, sem) \

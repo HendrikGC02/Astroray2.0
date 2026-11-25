@@ -10,7 +10,7 @@ Do:
 3. budget.toml compile_s to the measured value.
 Acceptance: `pwsh tools/check.ps1 fast`, `pwsh tools/check.ps1 gate` and `pwsh tools/perf.ps1` pass; kernelgate --time shade_surface at most 6.5 s quiet in 3 of 3 rounds (paste); the attribution table in the PR.
 Look at: none.
-Canary: tasks/228.canary.patch must turn red: `python -I tools/kernelgate.py` (a hunk restoring the removed cost so the row's compile_s is exceeded), or, if kernelgate cannot time in fast or gate, state why and name the gate step that reds.
+Canary: tasks/228.canary.patch must turn red: astroray_tests_cpu "shade_surface_bsdf/lambert beta" (the hunk gives the record loop's base_color slot another slot's ref; implementer, as the lead's alternative allows: no hunk can turn kernelgate red by restoring the removed cost, because compile_s only ranks the timed TUs and B-05's 7.0 s limit lies above main's 6.8 s, so the canary guards the no-behaviour-change half instead).
 Budget: gate +0 s; k_shade_surface regs, stack and spills unchanged; compile_s down.
 Depends on: none. Collisions: shade_surface.h with 173 (paused on it; this lands first, 173 rebases).
 Size: S-M (unknown until step 1); stop and report after step 1's table if no single cost exceeds 0.3 s.
