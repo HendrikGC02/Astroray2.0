@@ -26,6 +26,8 @@
 // denoising_feature_throughput * contribution), in working-space RGB at the sample's film
 // wavelengths with the radiance scale removed, and no normal (Cycles writes none for the
 // background, so the plane keeps 0). The value is the beauty's, so it carries its wavelength noise.
+// A finite contribution can still overflow the float conversion: a non-finite guide value fails the
+// sample, as a non-finite contribution does.
 // Ref: docs/decisions/0004-integrator.md D5, D6 (world row), D28; 0002 D8 (shade_background);
 // docs/decisions/0005-material-model.md item 32;
 // Cycles kernel/integrator/shade_background.h (Apache-2.0) for the stage structure and
@@ -129,21 +131,23 @@ AR_FN bool world_radiance(const KernelGlobals& kg, const LightRecord& world, uin
 
 // The escaped path's albedo guide: tint x the contribution in display RGB (float conversion: a GPU
 // shade kernel has no double arithmetic), divided by the radiance scale as the resolve divides it.
-// The tint is 1 for a camera ray that escaped at its first segment (total 0, as shade_surface
-// starts it). Ref: Cycles kernel/film/light_passes.h film_write_emission_or_background_pass and
+// The tint is the path's (generate_camera starts it at 1). False when the value is not finite:
+// nothing is written then. Ref: Cycles kernel/film/light_passes.h film_write_emission_or_background_pass and
 // kernel/film/denoising_passes.h film_write_denoising_features_background (Apache-2.0), read in
 // third_party/_cache/refs/cycles-ed69ef2c6bd3; docs/decisions/0008-film-outputs-denoise.md d15.
-AR_FN void background_guides(const KernelGlobals& kg, uint32_t slot, uint32_t sample, uint32_t flags, const Spec& contribution) {
+AR_FN bool background_guides(const KernelGlobals& kg, uint32_t slot, uint32_t sample, uint32_t flags, const Spec& contribution) {
   const FilmData& f = *kg.film;
   const uint32_t pixel = film_slot_pixel(kg, sample);
   const uint32_t index = kg.session.samples_done + sample % kg.session.samples_per_pass;
   const FilmWavelengths fw = camera_film_wavelengths(kg.session, f.wavelengths, pixel, index);
   const DisplayRgbOf<float> rgb = display_rgb<float>(f.response, contribution, fw.lf, film_weights(flags, fw.pf), f.film_exposure);
   AR_ASSERT(kg.path->guide_tint != nullptr);
-  const Real3 tint = ps_bounces(kg, slot).v[0] == 0u ? Real3{Real(1), Real(1), Real(1)} : ps_guide_tint(kg, slot);
+  const Real3 tint = ps_guide_tint(kg, slot);
   const Real inv_s = Real(1) / radiance_scale(kg);
-  film_write_guides(kg, sample, Real3{tint.x * Real(rgb.v[0]), tint.y * Real(rgb.v[1]), tint.z * Real(rgb.v[2])} * inv_s,
-                    Real3{Real(0), Real(0), Real(0)});
+  const Real3 albedo = Real3{tint.x * Real(rgb.v[0]), tint.y * Real(rgb.v[1]), tint.z * Real(rgb.v[2])} * inv_s;
+  if (!(albedo.x - albedo.x == Real(0) && albedo.y - albedo.y == Real(0) && albedo.z - albedo.z == Real(0))) return false;
+  film_write_guides(kg, sample, albedo, Real3{Real(0), Real(0), Real(0)});
+  return true;
 }
 
 AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
@@ -172,9 +176,10 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
     const bool ran = world_radiance(kg, *world, slot, lam, &le);
     const Spec contribution = le * ps_beta(kg, slot) *
                               mis_emitter_scale(ps_r_u(kg, slot), weighted ? ps_r_l(kg, slot) : Spec{}, p_light, weighted);
-    if (ran && is_finite(contribution)) {
+    const bool guide_ok = !(ran && is_finite(contribution)) || kg.film->guide_albedo < 0 ||
+                          (flags & DENOISE_SURFACE_DONE) != 0u || background_guides(kg, slot, sample, flags, contribution);
+    if (ran && is_finite(contribution) && guide_ok) {
       sample_add(kg, sample, contribution);
-      if (kg.film->guide_albedo >= 0 && (flags & DENOISE_SURFACE_DONE) == 0u) background_guides(kg, slot, sample, flags, contribution);
     } else {
       sample_mark_invalid(kg, sample);
       term = Term::INVALID;

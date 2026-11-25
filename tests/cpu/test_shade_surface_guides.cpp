@@ -19,6 +19,7 @@
 #include <cstring>
 #include <memory>
 #include <random>
+#include <stdexcept>
 #include <vector>
 
 #include "../../include/astroray/astroray.h"
@@ -69,6 +70,7 @@ struct Rig {
   ar::PathStateSoA path{};
   ar::LightSamplerView no_lights{};
   uint32_t n;
+  bool guides_on;
   std::vector<uint32_t> queue, active, sample_id, flags, hit_prim, hit_inst, prev_ng, prev_ns;
   std::vector<uint8_t> next_stage, term, ray_type;
   std::vector<uint16_t> event_index;
@@ -79,7 +81,7 @@ struct Rig {
   std::vector<ar::Spec> lambda_t, beta, r_u, r_l;
 
   // `front` is the front quad's surface graph (null: an Emission graph whose block the test replaces).
-  Rig(uint32_t count, bool guides, const ar_graph_desc* front = nullptr) : n(count) {
+  Rig(uint32_t count, bool guides, const ar_graph_desc* front = nullptr) : n(count), guides_on(guides) {
     scene.meshes = std::make_shared<MeshStore>();
     scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
     commit([&](Edit& e) {
@@ -237,7 +239,7 @@ struct Rig {
     ray_type[i] = 1u, event_index[i] = 0, bounces[i] = ar::U16x6{{0, 0, 0, 0, 0, 0}};
     ray_o[i] = p - d, ray_d[i] = d;
     eta_scale[i] = Real(1), prev_ng[i] = prev_ns[i] = 0u, prev_dist[i] = Real(0), hit_t[i] = Real(1);
-    tint[i] = Real3{Real(-7), Real(-7), Real(-7)};  // stale: the first vertex must start the tint at 1
+    tint[i] = guides_on ? Real3{Real(1), Real(1), Real(1)} : Real3{Real(-7), Real(-7), Real(-7)};  // generate_camera's
     for (int l = 0; l < ar::kLanes; ++l) lambda_t[i].v[l] = Real(380.0 + 400.0 * uni(rng));
     beta[i] = r_u[i] = r_l[i] = ar::spec_fill(Real(1));
     hit(i, inst, p);
@@ -275,22 +277,11 @@ struct Rig {
     film->check_resolve_fits(1);
     cpu_film_resolve(kg, 0, ar::film_resolve_count(kg));
   }
-  // The record the stage samples with at slot s, before it runs.
-  ar::OpenPBRParams record(uint32_t s, ar::ShadeContext* c) {
-    REQUIRE(ar::shade_context_build(kg, s, c));
-    ar::OpenPBRParams rec;
-    ar::resolve_constant_record(block(hit_inst[s]), *c, kg.tables->observer, kg.scene->material_spectra, &rec);
-    rec.closure_weight = Real(1);
-    return rec;
-  }
-  // The guide albedo (diffuse + specular, untinted) of slot s's current vertex.
-  Real3 albedo(uint32_t s) {
-    ar::ShadeContext c{};
-    ar::OpenPBRParams rec = record(s, &c);
-    const ar::GuideAlbedo a = ar::surface_guide_albedo(kg, rec, block(hit_inst[s]), ar::dot(c.wo, c.N));
-    return a.diffuse + a.specular;
-  }
 };
+
+// The diffuse wall's albedo, exactly: no specular layer (E_spec = 0) and EON at roughness 0 returns
+// rho (eon.h: E_FON = 1), so the guide is the base colour.
+constexpr double kWallAlbedo[3] = {0.2, 0.6, 0.9};
 
 struct Guides {
   std::vector<double> albedo[3], normal[3];
@@ -329,11 +320,24 @@ TEST_CASE("shade_surface_guides/constant plane bitwise") {
     rig.specular_color(0, 0.9f, 0.95f, 1.0f);
     std::mt19937_64 rng(uint64_t(run) + 1u);
     for (uint32_t i = 0; i < kN; ++i) rig.start(i, 0, front_point(i, kN), Real3{0, 0, -1}, rng);
-    const Real3 want = rig.albedo(0);
+    // From the albedo tables directly (0008 d15): diffuse = E_eon (1 - E_spec) and specular = E_spec,
+    // E_spec = specular_color E_diel(1, r, 1.5) at alpha = 0.3^2, E_eon at roughness 0.
+    const Real r = ar::e_roughness_axis(Real(0.09f), Real(0.09f));
+    const Real e = ar::e_diel_lookup(*rig.kg.e_diel, Real(1), r, Real(1.5));
+    ar::EonParams ep{};
+    ep.base_color = ar::Spec{{Real(0.6f), Real(0.3f), Real(0.1f), Real(0.3f)}};
+    ep.roughness = Real(0);
+    const ar::Spec e_eon = ar::eon_albedo(ep, Real(1));
+    const float spec[3] = {0.9f, 0.95f, 1.0f};
+    double want[3];
+    for (int c = 0; c < 3; ++c) {
+      const double es = double(Real(spec[c]) * e);
+      want[c] = double(e_eon.v[c]) * (1.0 - es) + es;
+    }
     rig.run();
     for (uint32_t i = 0; i < kN; ++i) CHECK((rig.flags[i] & ar::DENOISE_SURFACE_DONE) != 0u);
     g[run] = read_guides(rig);
-    for (uint32_t c = 0; c < 3; ++c) CHECK(g[run].albedo[c][0] == doctest::Approx(comp(want, c)).epsilon(1e-6));
+    for (uint32_t c = 0; c < 3; ++c) CHECK(g[run].albedo[c][0] == doctest::Approx(want[c]).epsilon(1e-6));
   }
   CHECK(g[0].albedo[0][0] > 0.0);
   for (uint32_t c = 0; c < 3; ++c)
@@ -378,14 +382,12 @@ TEST_CASE("shade_surface_guides/mirror follows tint") {
     for (uint32_t k = 0; k < 3; ++k) CHECK(comp(rig.tint[i], k) == doctest::Approx(want_tint[k]).epsilon(1e-6));
   }
   rig.to_wall();
-  std::vector<Real3> wall(kN);
-  for (uint32_t i = 0; i < kN; ++i) wall[i] = rig.albedo(i);
   rig.run();
   for (uint32_t i = 0; i < kN; ++i) CHECK((rig.flags[i] & ar::DENOISE_SURFACE_DONE) != 0u);
   const Guides g = read_guides(rig);
   for (uint32_t p = 0; p < kN; ++p)
     for (uint32_t k = 0; k < 3; ++k) {
-      CHECK(g.albedo[k][p] == doctest::Approx(comp(wall[p], k) * want_tint[k]).epsilon(1e-6));
+      CHECK(g.albedo[k][p] == doctest::Approx(kWallAlbedo[k] * want_tint[k]).epsilon(1e-6));
       CHECK(g.normal[k][p] == (k == 2 ? -1.0 : 0.0));  // the wall faces the incoming ray
     }
 }
@@ -414,12 +416,10 @@ TEST_CASE("shade_surface_guides/glass tint") {
     for (uint32_t k = 0; k < 3; ++k) CHECK(comp(rig.tint[i], k) == doctest::Approx(want_tint[k]).epsilon(1e-6));
   }
   rig.to_wall();
-  std::vector<Real3> wall(kN);
-  for (uint32_t i = 0; i < kN; ++i) wall[i] = rig.albedo(i);
   rig.run();
   const Guides g = read_guides(rig);
   for (uint32_t p = 0; p < kN; ++p)
-    for (uint32_t k = 0; k < 3; ++k) CHECK(g.albedo[k][p] == doctest::Approx(comp(wall[p], k) * want_tint[k]).epsilon(1e-6));
+    for (uint32_t k = 0; k < 3; ++k) CHECK(g.albedo[k][p] == doctest::Approx(kWallAlbedo[k] * want_tint[k]).epsilon(1e-6));
 }
 
 TEST_CASE("shade_surface_guides/escape writes the background value") {
@@ -518,6 +518,107 @@ TEST_CASE("shade_surface_guides/per-point colour is magenta") {
     CHECK(g.albedo[1][p] == 0.0);
     CHECK(g.albedo[2][p] == 1.0);
   }
+}
+
+TEST_CASE("shade_surface_guides/cauchy index uses n_d") {
+  // A dispersive index (Cauchy, n_d 1.7): the record's lanes differ per wavelength, the guide takes
+  // n_d, so the tint is specular_color E_diel(mu, 0, 1.7) whatever the lanes.
+  constexpr uint32_t kN = 16;
+  Rig rig(kN, true);
+  rig.kg.session.seed = 15u;
+  ar::ConstantBlock& gl = rig.block(0);
+  gl.base_weight = 0.0f, gl.base_metalness = 0.0f, gl.specular_weight = 1.0f, gl.specular_roughness = 0.0f;
+  gl.specular_ior = ar::SpectrumRef{};
+  gl.specular_ior.kind = uint8_t(ar::SpectrumKind::CAUCHY_ABBE);
+  gl.specular_ior.semantic = uint8_t(ar::SpectrumSemantic::IOR);
+  gl.specular_ior.p[0] = 1.7f, gl.specular_ior.p[1] = 30.0f, gl.specular_ior.p[2] = 1.0f;
+  gl.emission_luminance = 0.0f;
+  rig.specular_color(0, 0.9f, 0.8f, 0.7f);
+  const Real3 d = ar::normalize(Real3{Real(0.25), Real(0), Real(-1)});
+  std::mt19937_64 rng(16);
+  for (uint32_t i = 0; i < kN; ++i) rig.start(i, 0, front_point(i, kN), d, rng);
+  const Real e = ar::e_diel_lookup(*rig.kg.e_diel, -d.z, ar::e_roughness_axis(Real(0), Real(0)), Real(1.7f));
+  const double want_tint[3] = {0.9 * double(e), 0.8 * double(e), 0.7 * double(e)};
+  rig.run();
+  for (uint32_t i = 0; i < kN; ++i) {
+    REQUIRE(rig.term[i] == uint8_t(ar::Term::ACTIVE));
+    for (uint32_t k = 0; k < 3; ++k) CHECK(comp(rig.tint[i], k) == doctest::Approx(want_tint[k]).epsilon(1e-6));
+  }
+}
+
+TEST_CASE("shade_surface_guides/escape at the first segment") {
+  // A camera ray that escapes with the bit clear writes the background value at tint 1 into its
+  // sample's pixel; the pool slots hold the samples in reverse, so a write by pool slot would show.
+  constexpr uint32_t kN = 16;
+  Rig rig(kN, true);
+  rig.kg.session.seed = 17u;
+  std::mt19937_64 rng(18);
+  for (uint32_t i = 0; i < kN; ++i) {
+    rig.start(i, 0, front_point(i, kN), Real3{0, 0, 1}, rng);
+    rig.sample_id[i] = kN - 1u - i;
+    rig.next_stage[i] = uint8_t(ar::Stage::SHADE_BACKGROUND);
+  }
+  const ar::SpectrumRef c = ar::make_const_ref(ar::SpectrumSemantic::REFLECTANCE, Real(1));
+  std::vector<ar::LightRecord> lights{ar::light_make_world(Real(2), c)};
+  ar::LightSamplerView sampler{};
+  sampler.light_count = 1;
+  rig.kg.lights = lights.data();
+  rig.kg.world_light = 0;
+  rig.kg.light_sampler = &sampler;
+  cpu_stage_shade_background(rig.kg, ar::StepEntry{0, kN, 0}, 0, kN);
+  const ar::FilmData& f = rig.film->data();
+  std::vector<double> want[3];
+  for (uint32_t s = 0; s < kN; ++s) {  // by sample, which is the pixel here
+    ar::Spec L;
+    for (int l = 0; l < ar::kLanes; ++l) L.v[l] = Real(f.slot_L[4u * s + uint32_t(l)]);
+    REQUIRE(ar::max_lane(L) > Real(0));
+    const ar::FilmWavelengths fw = ar::camera_film_wavelengths(rig.kg.session, f.wavelengths, s, 0u);
+    const ar::DisplayRgb rgb = ar::display_rgb(f.response, L, fw.lf, ar::film_weights(f.slot_flags[s], fw.pf), f.film_exposure);
+    for (uint32_t k = 0; k < 3; ++k) want[k].push_back(rgb.v[k] * f.inv_radiance_scale);
+  }
+  const Guides g = read_guides(rig);
+  for (uint32_t p = 0; p < kN; ++p)
+    for (uint32_t k = 0; k < 3; ++k) {
+      CHECK(g.albedo[k][p] == doctest::Approx(want[k][p]).epsilon(astroray::agree::PROD_VS_CPU_F64.eval_p999));
+      CHECK(g.normal[k][p] == 0.0);
+    }
+}
+
+TEST_CASE("shade_surface_guides/a set bit writes nothing") {
+  // A path whose bit is set (a volume scatter before any surface, shade_volume.h) writes no guide at
+  // a later diffuse surface and keeps its tint.
+  constexpr uint32_t kN = 8;
+  Rig rig(kN, true);
+  rig.diffuse_wall();
+  std::mt19937_64 rng(20);
+  for (uint32_t i = 0; i < kN; ++i) {
+    rig.start(i, 1, front_point(i, kN) + Real3{0, 0, 2}, Real3{0, 0, 1}, rng);
+    rig.flags[i] |= ar::DENOISE_SURFACE_DONE;
+    rig.bounces[i].v[0] = rig.bounces[i].v[4] = 1;
+  }
+  rig.run();
+  const Guides g = read_guides(rig);
+  for (uint32_t p = 0; p < kN; ++p) {
+    CHECK(rig.tint[p].x == Real(1));
+    for (uint32_t k = 0; k < 3; ++k) {
+      CHECK(g.albedo[k][p] == 0.0);
+      CHECK(g.normal[k][p] == 0.0);
+    }
+  }
+}
+
+TEST_CASE("shade_surface_guides/film requests") {
+  // The guide planes come as a pair with FilmRequest::guides and never as extra channels.
+  FilmRequest req;
+  req.max_width = req.max_height = 2;
+  CHECK_FALSE(FilmLayout::build(req).guides());
+  req.guides = true;
+  CHECK(FilmLayout::build(req).guides());
+  req.guides = false;
+  req.extra.push_back({"guide_albedo", ChannelKind::Add, 3, 0});
+  CHECK_THROWS_AS(FilmLayout::build(req), std::invalid_argument);
+  req.extra[0].name = "guide_normal";
+  CHECK_THROWS_AS(FilmLayout::build(req), std::invalid_argument);
 }
 
 }  // TEST_SUITE("fast")

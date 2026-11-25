@@ -213,8 +213,9 @@ AR_FN GuideAlbedo surface_guide_albedo(const KernelGlobals& kg, OpenPBRParams& r
 }
 
 // The guide step of a camera path's vertex after its lobe sample, before the denoising surface
-// (0008 d15). The tint starts at 1 at the path's first surface (a pass-through keeps total 0, so
-// it also starts there). A delta sample multiplies it by the RGB albedo of the delta lobes: the
+// (0008 d15; the caller tests DENOISE_SURFACE_DONE). generate_camera starts the tint at 1 and
+// clears the bit, and a real volume scatter sets it (shade_volume.h), so the tint is read here
+// whatever the bounce count. A delta sample multiplies it by the RGB albedo of the delta lobes: the
 // specular and metal lobes share specular_roughness, so they are delta together, and the guide
 // takes both, as Cycles defers the whole specular albedo, rather than the one the lobe choice drew.
 // A non-delta sample writes tint x (diffuse + specular) and the front-facing shading normal and
@@ -225,14 +226,14 @@ AR_FN GuideAlbedo surface_guide_albedo(const KernelGlobals& kg, OpenPBRParams& r
 // denoising_feature_throughput times the deferred specular albedo; the normal is not tinted), read
 // in third_party/_cache/refs/cycles-ed69ef2c6bd3; docs/decisions/0008-film-outputs-denoise.md
 // d15, d22, d23; 0003 d21 (DENOISE_SURFACE_DONE).
-AR_FN uint32_t surface_guides(const KernelGlobals& kg, uint32_t slot, uint32_t sample, uint32_t total, uint32_t flags,
-                              OpenPBRParams& rec, const ConstantBlock& block, Real3 N, Real3 wo, bool delta) {
+AR_FN uint32_t surface_guides(const KernelGlobals& kg, uint32_t slot, uint32_t sample, uint32_t flags, OpenPBRParams& rec,
+                              const ConstantBlock& block, Real3 N, Real3 wo, bool delta) {
   AR_ASSERT(kg.path->guide_tint != nullptr);
   if ((block.guide_flags & GUIDE_RGB_RUNTIME) != 0u) {
     film_write_guides(kg, sample, Real3{Real(1), Real(0), Real(1)}, N);
     return flags | DENOISE_SURFACE_DONE;
   }
-  const Real3 tint = total == 0u ? Real3{Real(1), Real(1), Real(1)} : ps_guide_tint(kg, slot);
+  const Real3 tint = ps_guide_tint(kg, slot);
   const GuideAlbedo a = surface_guide_albedo(kg, rec, block, dot(wo, N));
   if (delta) {
     ps_guide_tint(kg, slot) = Real3{tint.x * a.specular.x, tint.y * a.specular.y, tint.z * a.specular.z};
@@ -458,7 +459,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     // (registers); phase 0 built the context from these same fields, so the values are identical.
     const uint32_t m = hit_material_id(kg, ps_hit_inst(kg, slot), ps_hit_prim(kg, slot));
     const ConstantBlock& block = s.material_constants[load_ro(&s.material_headers[m].const_offset)];
-    flags = surface_guides(kg, slot, sample, total, flags, rec, block, N, -normalize(ps_ray_d(kg, slot)),
+    flags = surface_guides(kg, slot, sample, flags, rec, block, N, -normalize(ps_ray_d(kg, slot)),
                            (bs.flags & LOBE_DELTA) != 0u);
     ps_flags(kg, slot) = flags;
   }

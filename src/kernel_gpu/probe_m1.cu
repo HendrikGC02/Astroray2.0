@@ -557,7 +557,7 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
   if (kg.film->guide_albedo >= 0 && (flags & DENOISE_SURFACE_DONE) == 0u && bs.pdf > Real(0)) {
     const ConstantBlock& block = s.material_constants[load_ro(&s.material_headers[mat].const_offset)];
     const Real a = rec.specular_roughness * rec.specular_roughness;
-    flags = surface_guides(kg, slot, sample, total, flags, rec, block, N, wo, glossy && lobe_is_delta(a, a));
+    flags = surface_guides(kg, slot, sample, flags, rec, block, N, wo, glossy && lobe_is_delta(a, a));
     ps_flags(kg, slot) = flags;
   }
   if (!(bs.pdf > Real(0)) || (wi_l.z * wo_l.z > Real(0) && !(dot(wi, Ng) > Real(0)))) {

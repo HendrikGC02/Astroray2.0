@@ -50,7 +50,12 @@ FilmLayout FilmLayout::build(const FilmRequest& req) {
 
   std::vector<ChannelRequest> all;
   all.push_back({"display", ChannelKind::Moment, 3, ar::kFilmDisplayResponse});
-  for (const ChannelRequest& c : req.extra) all.push_back(c);
+  for (const ChannelRequest& c : req.extra) {
+    // The guide planes come only with `guides`, as a pair: the kernel writes both once one exists.
+    if (c.name == "guide_albedo" || c.name == "guide_normal")
+      throw std::invalid_argument("film: '" + c.name + "' is requested with FilmRequest::guides, not as an extra channel");
+    all.push_back(c);
+  }
   if (req.light_pass) all.push_back({"splat", ChannelKind::Splat, 3, 0});
   if (req.statistics) {
     all.push_back({"bounces", ChannelKind::Add, 1, 0});

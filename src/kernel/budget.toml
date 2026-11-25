@@ -25,8 +25,9 @@ gated = "full"
 # The M-1 probe (src/kernel_gpu/probe_m1.cu), capped build in kernels_probe_capped/; measured by
 # `check full`, a breach is a warning. Allowance = the D10 VM ceiling it is judged against.
 [kernel.ar_probe_m1]
+# Task 174's guide step (tint, albedo guide) took the capped stack 480 to 496 B (spills 178 / 548 to 210 / 368 B).
 regs = 128
-stack = 480
+stack = 496
 spill_store = 128
 spill_load = 192
 compile_s = 0  # not in kernels/, so compile timing never ranks it
@@ -134,11 +135,12 @@ gated = "merge"
 # interpreter's switch. The production cubin measures 64 / 264 B with 0 / 0 B of spills; the dev-reload
 # test module (tests/gpu/kernels/reload_variant.cu) wraps the same stage with one more sample_add and
 # measures 272 B and 8 / 8 B, which sets the spill allowance (D10: VM kernels at most 128 / 192).
+# Task 174's escape guide (float display conversion) took the production stack 264 to 272 B and compile to 2.74-2.77 s.
 regs = 64
-stack = 264
+stack = 272
 spill_store = 8
 spill_load = 8
-compile_s = 2.4
+compile_s = 2.8
 gated = "merge"
 
 [kernel.k_shade_surface]
@@ -147,11 +149,12 @@ gated = "merge"
 # lobe stack moves only the compile time (5.6 to 6.2 s, two gate runs at 6.21 s). The spine grew it to
 # 6.76-6.81 s quiet; resolving the record's spectral slots in one loop brought it to 6.14-6.19 s
 # (kernelgate --time, quiet, three rounds interleaved with main).
+# Task 174's denoiser guides moved only the compile time: 6.68-6.72 s in two gates (3 runs each).
 regs = 128
 stack = 400
 spill_store = 8
 spill_load = 8
-compile_s = 6.2
+compile_s = 6.7
 gated = "merge"
 
 [kernel.k_shade_shadow]

@@ -55,9 +55,9 @@ struct FilmChannel {
 
 class FilmLayout {
  public:
-  // Throws std::invalid_argument for a zero size, a duplicate name, wrong components for a
-  // Moment or Splat channel, more Moment channels than the kernel table holds, and for Crypto,
-  // which has no producer yet.
+  // Throws std::invalid_argument for a zero size, a duplicate name, a guide plane in `extra`, wrong
+  // components for a Moment or Splat channel, more Moment channels than the kernel table holds, and
+  // for Crypto, which has no producer yet.
   static FilmLayout build(const FilmRequest& request);
 
   const std::vector<FilmChannel>& channels() const { return channels_; }
@@ -74,8 +74,9 @@ class FilmLayout {
   uint32_t add_planes() const { return add_planes_; }
   uint32_t count_planes() const { return count_planes_; }
   uint32_t splat_components() const { return splat_components_; }
-  // The denoiser guide planes exist, so the path state needs its guide tint (0003 d19).
-  bool guides() const { return find("guide_albedo") != nullptr; }
+  // The denoiser guide planes exist, so the path state needs its guide tint (0003 d19). The kernel
+  // writes both planes once guide_albedo exists, so both are required.
+  bool guides() const { return find("guide_albedo") != nullptr && find("guide_normal") != nullptr; }
 
   // Bytes of the one allocation; every region starts on a 256-byte boundary.
   uint64_t bytes() const;

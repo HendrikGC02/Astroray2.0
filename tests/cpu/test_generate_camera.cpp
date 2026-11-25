@@ -272,6 +272,23 @@ TEST_CASE("generate_camera/resolve recomputes same wavelengths") {
   CHECK(checked == kPixels * 3u);
 }
 
+TEST_CASE("generate_camera/guide tint starts at 1") {
+  // Denoiser guides (0008 d15, d23): with the feature on, every path starts with tint 1 and the
+  // denoising-surface bit clear, whatever its slot held.
+  Rig r;
+  std::vector<ar::Real3> tint(kSlots, ar::Real3{7, 7, 7});
+  r.path.guide_tint = tint.data();
+  r.kg.session.features.guides = true;
+  r.run_pass(0, kK);
+  for (uint32_t sample = 0; sample < kSlots; ++sample) {
+    const uint32_t slot = r.queue[sample];
+    CHECK(tint[slot].x == 1.0f);
+    CHECK(tint[slot].y == 1.0f);
+    CHECK(tint[slot].z == 1.0f);
+    CHECK((r.path.flags[slot] & ar::DENOISE_SURFACE_DONE) == 0u);
+  }
+}
+
 TEST_CASE("generate_camera/initial state") {
   Rig r;
   r.run_pass(4, kK);  // n = 4: the sample index is not the sample id

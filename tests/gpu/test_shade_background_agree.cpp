@@ -7,10 +7,15 @@
 // MIS weight of a miss reads the compensated table's pdf on both devices. Integer fields (term,
 // next_stage, the slot flags and every COUNT plane) must be bit-equal; the slot radiance agrees to
 // 0002 D12's evaluation threshold (FMA-off GPU build vs CPU float).
-// Ref: docs/decisions/0002-kernel-architecture.md D4, D12; 0009 d17; 0004 D5, D28.
+// The guides case adds the denoiser guide planes (0008 d15) with the real display tables: a miss
+// before its denoising surface writes tint x its contribution in display RGB through the float
+// conversion (display_rgb<float>, f64_bits_to_f32) on both devices; the planes agree within 1e-6 of
+// the larger magnitude (or absolute below 1).
+// Ref: docs/decisions/0002-kernel-architecture.md D4, D12; 0009 d17; 0004 D5, D28; 0008 d15.
 // The production module is launched, so what runs is the shipped code.
 #include <doctest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -25,6 +30,7 @@
 #include "host/data_resource.h"
 #include "host/device.h"
 #include "host/film/film_layout.h"
+#include "host/film/response_table.h"
 #include "host/light/env_table.h"
 #include "host/scene/scene_tables.h"
 #include "host/material/material_store.h"
@@ -48,6 +54,7 @@ struct Snapshot {
   std::vector<uint8_t> next_stage, term;
   std::vector<uint32_t> counts;  // every COUNT plane
   std::vector<float> adds;       // every ADD plane (the bounce sum: exact integers)
+  std::vector<float> guides;     // guides case: the albedo then the normal planes
 };
 
 constexpr uint32_t kEnvW = 64, kEnvH = 32;
@@ -102,7 +109,8 @@ std::vector<float> observer_illuminant() {
 // random unit direction, so the lookup, the Cycles mapping and the lift are what is compared.
 // `env`: the program world is the environment light WORLD_ENV over that table, with a selection pmf,
 // so a miss after a scatter is weighted with the compensated pdf of its direction.
-Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullptr, const EnvTable* env = nullptr) {
+Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullptr, const EnvTable* env = nullptr,
+             bool guides = false) {
   const Owner owner{1, 1};
   const auto put = [&](const void* p, uint64_t bytes) {
     DeviceBuffer b = dev.allocate(LedgerCategory::TABLES, bytes, owner);
@@ -115,7 +123,31 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
   req.slot_capacity = kN;
   req.statistics = true;
   req.termination_stats = true;
+  req.guides = guides;
   Film film(dev, FilmLayout::build(req), owner);
+  // The guides case converts in the stage: the real display tables and a two-bin wavelength table.
+  std::vector<DeviceBuffer> film_tables;
+  if (guides) {
+    DataBlob ob;
+    REQUIRE(find_data("spectral/observer.bin", &ob));
+    ObserverTables obs;
+    REQUIRE(parse_observer(ob.data, ob.size, &obs).empty());
+    const ResponseTable rt = make_response_table(obs);
+    ar::ResponseTableView v = response_view(rt);
+    film_tables.push_back(put(rt.knot_nm.data(), rt.knot_nm.size() * 4));
+    v.knot_nm = static_cast<const float*>(film_tables.back().ptr);
+    film_tables.push_back(put(rt.knot_value.data(), rt.knot_value.size() * 4));
+    v.knot_value = static_cast<const float*>(film_tables.back().ptr);
+    film_tables.push_back(put(rt.channels.data(), rt.channels.size() * sizeof(ar::ResponseChannel)));
+    v.channels = static_cast<const ar::ResponseChannel*>(film_tables.back().ptr);
+    film.data().response = v;
+    const std::vector<float> edges{360.0f, 616.0f, 830.0f}, cdf{0.0f, 0.4f, 1.0f};
+    film_tables.push_back(put(edges.data(), edges.size() * 4));
+    const float* e = static_cast<const float*>(film_tables.back().ptr);
+    film_tables.push_back(put(cdf.data(), cdf.size() * 4));
+    film.data().wavelengths = {e, static_cast<const float*>(film_tables.back().ptr), 2u};
+    film.data().inv_radiance_scale = 0.25;
+  }
   DeviceBuffer film_buf = put(&film.data(), sizeof(ar::FilmData));
 
   std::vector<uint32_t> identity(kN), list(kFilmW * kFilmH);
@@ -136,6 +168,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
   std::vector<ar::Real3> ray_o(kN), ray_d(kN);
   std::vector<uint32_t> prev_ng(kN), prev_ns(kN);
   std::vector<ar::Real> prev_dist(kN);
+  std::vector<ar::Real3> tint(kN);
   const float inf = std::numeric_limits<float>::infinity();
   for (uint32_t i = 0; i < kN; ++i) {
     for (int l = 0; l < ar::kLanes; ++l) {
@@ -151,6 +184,9 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
     bounces[i] = ar::U16x6{{uint16_t(agree::unit(i, 12) * 13.0), 0, 0, 0, 0, 0}};
     // The world MIS inputs (074): r_u, r_l, the previous vertex and a delta last bounce on 30%.
     if (agree::unit(i, 13) < 0.3) flags[i] |= ar::LAST_BOUNCE_SPECULAR;
+    // Guides: a tint per path, and a quarter of the paths past their denoising surface.
+    tint[i] = ar::Real3{float(agree::unit(i, 32)), float(agree::unit(i, 33)), float(agree::unit(i, 34))};
+    if (agree::unit(i, 35) < 0.25) flags[i] |= ar::DENOISE_SURFACE_DONE;
     for (int l = 0; l < ar::kLanes; ++l) {
       r_u[i].v[l] = 0.5f + float(agree::unit(i, 14u + uint32_t(l)));
       r_l[i].v[l] = 4.0f * float(agree::unit(i, 18u + uint32_t(l)));
@@ -192,6 +228,8 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
   soa.prev_dist = static_cast<ar::Real*>(pd_buf.ptr);
   DeviceBuffer rtype_buf = put(ray_type.data(), kN);
   soa.ray_type = static_cast<uint8_t*>(rtype_buf.ptr);
+  DeviceBuffer tint_buf = put(tint.data(), kN * sizeof(ar::Real3));
+  if (guides) soa.guide_tint = static_cast<ar::Real3*>(tint_buf.ptr);
   DeviceBuffer soa_buf = put(&soa, sizeof soa);
 
   // The light table: an RGB illuminant world between two decoy lamps, so a wrong index would read a lamp.
@@ -287,6 +325,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
   kg.session.width = kFilmW;
   kg.session.height = kFilmH;
   kg.session.samples_per_pass = kK;
+  kg.session.features.guides = guides;
   DeviceBuffer kg_buf = put(&kg, sizeof kg);
 
   if (gpu != nullptr) {
@@ -318,11 +357,17 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
   dev.download(s.counts.data(), film.buffer(), offset(fd.count), s.counts.size() * sizeof(uint32_t));
   s.adds.resize(size_t(uint32_t(fd.bounce_sum) + 1u) * fd.plane_stride);
   dev.download(s.adds.data(), film.buffer(), offset(fd.add), s.adds.size() * sizeof(float));
+  if (guides) {
+    s.guides.resize(6ull * fd.plane_stride);
+    dev.download(s.guides.data(), film.buffer(), offset(fd.add + uint64_t(fd.guide_albedo) * fd.plane_stride),
+                 s.guides.size() * sizeof(float));
+  }
 
   for (DeviceBuffer* b : {&film_buf, &queue_buf, &list_buf, &table_buf, &next_buf, &term_buf, &flags_buf, &bounces_buf,
                           &lambda_buf, &beta_buf, &ru_buf, &rl_buf, &ro_buf, &rd_buf, &png_buf, &pns_buf, &pd_buf, &pmf_buf, &sample_buf, &soa_buf, &lights_buf, &sampler_buf, &illum_buf, &cmf_buf, &tables_buf,
-                          &kg_buf, &rtype_buf})
+                          &kg_buf, &rtype_buf, &tint_buf})
     dev.free(*b);
+  for (DeviceBuffer& b : film_tables) dev.free(b);
   for (DeviceBuffer& b : program_bufs) dev.free(b);
   return s;
 }
@@ -510,6 +555,33 @@ TEST_CASE("shade_background/environment colour radiance is reported") {
   const Snapshot g = run(*gpu, gpu.get(), &world);
   const agree::Stats e = check_agreement(c, g, "environment colour linear nofma vs cpu float (reported, ruling 96)", false);
   CHECK(std::isfinite(e.max));  // the integer fields and the NaN positions still agree exactly
+  CHECK(cpu_ledger.total() == 0);
+  CHECK(gpu_ledger.total() == 0);
+}
+
+// The guides (0008 d15): the escape's albedo through the float display conversion on both devices.
+TEST_CASE("shade_background_agree/guides") {
+  Ledger cpu_ledger, gpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  const Snapshot c = run(cpu, nullptr, nullptr, nullptr, true);
+  const Snapshot g = run(*gpu, gpu.get(), nullptr, nullptr, true);
+  check_agreement(c, g, "slot radiance with guides nofma vs cpu float");
+  REQUIRE(c.guides.size() == g.guides.size());
+  double worst = 0.0, sum = 0.0;
+  uint32_t written = 0;
+  for (size_t i = 0; i < c.guides.size(); ++i) {
+    const double a = double(c.guides[i]), b = double(g.guides[i]);
+    REQUIRE(std::isfinite(a));
+    worst = std::max(worst, std::fabs(a - b) / std::max(1.0, std::fabs(a)));
+    sum += std::fabs(a);
+    written += a != 0.0;
+  }
+  std::printf("shade_background guides agreement: %u non-zero guide values, worst difference %.3g\n", written, worst);
+  CHECK(sum > 1.0e3);  // guides really were written
+  CHECK(worst <= 1e-6);
   CHECK(cpu_ledger.total() == 0);
   CHECK(gpu_ledger.total() == 0);
 }

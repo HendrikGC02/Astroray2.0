@@ -171,7 +171,10 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
   ps_beta(kg, slot) = beta;
   ps_r_u(kg, slot) = w.r_u;
   ps_r_l(kg, slot) = spec_fill(Real(0));
-  ps_flags(kg, slot) = flags & ~LAST_BOUNCE_SPECULAR;
+  // A real scatter before the denoising surface ends the guides of the path with nothing written
+  // (0008 d15, PROVISIONAL): the bit stops every later surface and the escape from writing.
+  const uint32_t done = kg.film->guide_albedo >= 0 ? DENOISE_SURFACE_DONE : 0u;
+  ps_flags(kg, slot) = (flags & ~LAST_BOUNCE_SPECULAR) | done;
   b.v[0] = uint16_t(b.v[0] + 1u);
   b.v[4] = uint16_t(b.v[4] + 1u);
   ps_bounces(kg, slot) = b;

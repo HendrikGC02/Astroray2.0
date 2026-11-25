@@ -17,6 +17,7 @@
 // One row per table, in host/scene/scene_tables.h TableId order up to MEDIUM_PROGRAMS: count (u32),
 // element size (u32), then the first and last element, kKgElemMax bytes each.
 constexpr uint32_t kKgElemMax = 448;  // the largest element, ConstantBlock
+static_assert(sizeof(ar::ConstantBlock) <= kKgElemMax, "a table element is larger than the checksum row holds");
 constexpr uint32_t kKgRow = 8 + 2 * kKgElemMax;
 
 __device__ void kg_row(uint8_t* out, uint32_t row, const void* p, uint32_t count, uint32_t elem) {
