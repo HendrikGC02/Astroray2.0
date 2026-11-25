@@ -67,20 +67,21 @@ index 5611257d..ac0bf5e4 100644
  }
  
 diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
-index d5b026e9..11ae7e20 100644
+index d5b026e9..5fe7d0fe 100644
 --- a/src/kernel/stages/shade_background.h
 +++ b/src/kernel/stages/shade_background.h
-@@ -140,7 +140,7 @@ AR_FN void background_guides(const KernelGlobals& kg, uint32_t slot, uint32_t sa
+@@ -140,7 +140,8 @@ AR_FN void background_guides(const KernelGlobals& kg, uint32_t slot, uint32_t sa
    const FilmWavelengths fw = camera_film_wavelengths(kg.session, f.wavelengths, pixel, index);
    const DisplayRgbOf<float> rgb = display_rgb<float>(f.response, contribution, fw.lf, film_weights(flags, fw.pf), f.film_exposure);
    AR_ASSERT(kg.path->guide_tint != nullptr);
 -  const Real3 tint = ps_bounces(kg, slot).v[0] == 0u ? Real3{Real(1), Real(1), Real(1)} : ps_guide_tint(kg, slot);
 +  const Real3 tint = Real3{Real(1), Real(1), Real(1)};
++  (void)slot;
    const Real inv_s = Real(1) / radiance_scale(kg);
    film_write_guides(kg, sample, Real3{tint.x * Real(rgb.v[0]), tint.y * Real(rgb.v[1]), tint.z * Real(rgb.v[2])} * inv_s,
                      Real3{Real(0), Real(0), Real(0)});
 diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
-index 9653f45e..01603ec0 100644
+index 9653f45e..772dc7ff 100644
 --- a/src/kernel/stages/shade_surface.h
 +++ b/src/kernel/stages/shade_surface.h
 @@ -187,7 +187,6 @@ struct GuideAlbedo {
@@ -96,7 +97,7 @@ index 9653f45e..01603ec0 100644
    const Real3 tint = total == 0u ? Real3{Real(1), Real(1), Real(1)} : ps_guide_tint(kg, slot);
    const GuideAlbedo a = surface_guide_albedo(kg, rec, block, dot(wo, N));
 -  if (delta) {
-+  if (false && delta) {
++  if (delta && kg.film->guide_albedo < 0) {
      ps_guide_tint(kg, slot) = Real3{tint.x * a.specular.x, tint.y * a.specular.y, tint.z * a.specular.z};
      return flags;
    }
