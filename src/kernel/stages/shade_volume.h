@@ -77,35 +77,38 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
   const uint32_t inst = ps_hit_inst(kg, slot);
   const uint32_t medium = instance_medium(kg, inst);
   AR_ASSERT(medium != kNoMedium);  // route_hit sends only medium-bearing instances here
-  const Real2 uv = ps_hit_uv(kg, slot);
-  const HitRecord hit{ps_hit_t(kg, slot), ps_hit_prim(kg, slot), inst, uv.x, uv.y};
-  const uint32_t flags = ps_flags(kg, slot);
-  if ((flags & PATH_KIND) != 0u) {
-    ps_next_stage(kg, slot) = static_cast<uint8_t>(route_hit_after_medium(kg, hit, flags));
+  if ((ps_flags(kg, slot) & PATH_KIND) != 0u) {
+    const Real2 uv = ps_hit_uv(kg, slot);
+    const HitRecord hit{ps_hit_t(kg, slot), ps_hit_prim(kg, slot), inst, uv.x, uv.y};
+    ps_next_stage(kg, slot) = static_cast<uint8_t>(route_hit_after_medium(kg, hit, ps_flags(kg, slot)));
     return;
   }
-  const uint32_t sample = ps_sample_id(kg, slot);
+  // The coefficients first, with as little path state live as possible: the volume entry inlines the
+  // interpreter, whose register pressure is the stage's largest (0002 D10 ladder step 2).
   const SceneData& s = scene_of(kg);
   const MediumDesc& desc = s.medium_descs[medium];
-  if ((load_ro(&desc.flags) & MEDIUM_HAS_EMISSION) != 0u) {
-    volume_fail(kg, slot, sample);
-    return;
-  }
-  const Real3 o = ps_ray_o(kg, slot), d = ps_ray_d(kg, slot);
-  Lambda lambda;
+  Spec sigma_a{}, sigma_s{};
+  PhaseLobe lobe{};
   {
-    const Spec lt = ps_lambda_t(kg, slot);
-    for (int i = 0; i < kLanes; ++i) lambda.nm[i] = lt.v[i];
-  }
-  MediumSample ms;
-  {
-    VmRegs regs;
-    const MediumTables mt{s.medium_programs, s.medium_blocks, *kg.tables};
-    if (medium_eval(mt, desc, o, lambda, &regs, &ms) != VmStatus::OK || max_lane(ms.phase[1].weight) > Real(0)) {
-      volume_fail(kg, slot, sample);
+    bool ok = (load_ro(&desc.flags) & MEDIUM_HAS_EMISSION) == 0u;
+    if (ok) {
+      Lambda lambda;
+      const Spec lt = ps_lambda_t(kg, slot);
+      for (int i = 0; i < kLanes; ++i) lambda.nm[i] = lt.v[i];
+      MediumSample ms;
+      VmRegs regs;
+      const MediumTables mt{s.medium_programs, s.medium_blocks, *kg.tables};
+      ok = medium_eval(mt, desc, ps_ray_o(kg, slot), lambda, &regs, &ms) == VmStatus::OK && !(max_lane(ms.phase[1].weight) > Real(0));
+      sigma_a = ms.sigma_a, sigma_s = ms.sigma_s, lobe = ms.phase[0];
+    }
+    if (!ok) {
+      volume_fail(kg, slot, ps_sample_id(kg, slot));
       return;
     }
   }
+  const uint32_t sample = ps_sample_id(kg, slot);
+  const uint32_t flags = ps_flags(kg, slot);
+  const Real3 o = ps_ray_o(kg, slot), d = ps_ray_d(kg, slot);
   // Distances in the coefficients' unit (metres): ray_d need not be unit length.
   const Real d_len = length(d);
   const Real t_max = ps_hit_t(kg, slot) * d_len;
@@ -114,7 +117,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
   const MediumStream st{kg.session.sampler_mode, key.id, key.index, kg.session.seed, STREAM_PATH_MEDIUM};
   uint32_t counter = flight_rng_start(e);
   TrackWeights w{ps_beta(kg, slot), ps_r_u(kg, slot), ps_r_l(kg, slot)};
-  const TrackResult r = track_segment(ms.sigma_a, ms.sigma_s, ms.sigma_a + ms.sigma_s, t_max, hero_lane(flags), st,
+  const TrackResult r = track_segment(sigma_a, sigma_s, sigma_a + sigma_s, t_max, hero_lane(flags), st,
                                       &counter, kFlightCollisionLimit, &w);
   if (kg.session.features.media) ps_medium_rng(kg, slot) = counter;
   if (r.event == TrackEvent::ABSORBED) {
@@ -137,6 +140,8 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
     ps_beta(kg, slot) = w.beta;
     ps_r_u(kg, slot) = w.r_u;
     ps_r_l(kg, slot) = w.r_l;
+    const Real2 uv = ps_hit_uv(kg, slot);
+    const HitRecord hit{ps_hit_t(kg, slot), ps_hit_prim(kg, slot), inst, uv.x, uv.y};
     ps_next_stage(kg, slot) = static_cast<uint8_t>(route_hit_after_medium(kg, hit, flags));
     return;
   }
@@ -148,7 +153,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
   }
   const Real3 wo = -(d / d_len);
   const Real2 u2{camera_path_draw(kg, sample, event_dim(e, EV_BSDF_U)), camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V))};
-  const PhaseSample ps = phase_sample(ms.phase[0], wo, u2);
+  const PhaseSample ps = phase_sample(lobe, wo, u2);
   if (!(ps.pdf > Real(0))) {
     path_end(kg, slot, Term::ZERO_THROUGHPUT);
     return;
