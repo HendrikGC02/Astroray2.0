@@ -264,10 +264,14 @@ TEST_SUITE("fast") {
     CHECK(n_in == 41);
     size_t end = 0;
     check_sequence(in, n_in, 0, &end);
-    const Field tail[] = {FIELD(ConstantBlock, interior_ior, SpectrumRef), FIELD(ConstantBlock, medium_priority, uint8_t)};
-    check_sequence(tail, 2, end, &end);
-    CHECK(end + 3 == sizeof(ConstantBlock));  // 3 bytes of explicit padding after medium_priority
-    CHECK(sizeof(ConstantBlock) == 424);
+    const Field tail[] = {FIELD(ConstantBlock, interior_ior, SpectrumRef), FIELD(ConstantBlock, medium_priority, uint8_t),
+                          FIELD(ConstantBlock, guide_flags, uint8_t)};
+    check_sequence(tail, 3, end, &end);
+    // 2 bytes of explicit padding after guide_flags, then the two guide colours (0008 d15).
+    const Field guides[] = {FIELD(ConstantBlock, guide_base_color, F3), FIELD(ConstantBlock, guide_specular_color, F3)};
+    check_sequence(guides, 2, end + 2, &end);
+    CHECK(end == sizeof(ConstantBlock));
+    CHECK(sizeof(ConstantBlock) == 448);
   }
 
   AR_RT_CASE("material_layout/constant block defaults") {
@@ -308,6 +312,12 @@ TEST_SUITE("fast") {
       CHECK(b.geometry_coat_tangent[i] == 0.0f);
     }
     CHECK(b.medium_priority == 0);
+    // The guide colours are the defaults' RGB (0008 d15): base 0.8 grey, specular white.
+    CHECK(b.guide_flags == 0);
+    for (int c = 0; c < 3; ++c) {
+      CHECK(b.guide_base_color[c] == 0.8f);
+      CHECK(b.guide_specular_color[c] == 1.0f);
+    }
 
     // Colour and IOR slots: semantic from the table, value at four wavelengths.
     const Lambda lam = lanes(Real(450), Real(520), Real(590), Real(660));
