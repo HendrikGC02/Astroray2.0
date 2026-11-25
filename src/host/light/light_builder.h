@@ -17,6 +17,7 @@
 
 #include "../../kernel/light/light_sampler.h"
 #include "host/ledger.h"
+#include "host/light/env_table.h"
 #include "host/material/compiler.h"
 #include "host/scene/instances.h"
 
@@ -55,6 +56,15 @@ struct LightTable {
   // `lights` in the same pass, so lights[entry] is that triangle's record. Never empty: a table
   // without triangle lights holds {0}.
   std::vector<uint32_t> light_index;
+  // The world program's environment bake (0004 D11), done before this table was built: its table
+  // (both distributions; uploaded as the scene tables' ENV_TABLE) and the un-normalised grid's
+  // maximum and solid-angle mean in the unscaled display units of display_energy. Null and 0 for a
+  // scene without a program world, a black program world, or one whose grid was refused (its world
+  // light is then absent). env_baked is true when this table's world program was baked or refused,
+  // so a cached table built without a bake (Scene::lights() alone) is never taken for one that has it.
+  std::shared_ptr<const EnvTable> env;
+  double env_max = 0.0, env_mean = 0.0;
+  bool env_baked = false;
   ar::LightSamplerView view() const;
   uint64_t bytes() const;
 

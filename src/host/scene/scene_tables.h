@@ -28,6 +28,7 @@
 
 #include "host/device.h"
 #include "host/ledger.h"
+#include "host/light/env_bake.h"
 #include "host/scene/accel.h"
 #include "kernel/light/light_sampler.h"
 #include "kernel/material/lobes/tables.h"
@@ -142,6 +143,8 @@ enum class TableId : uint32_t {
   MEDIA,             // MediumDesc per medium (SceneData::medium_descs); after MATERIAL_SPECTRA for the same reason
   WORLD_PROGRAM,     // the world program words (WorldOutput::program), empty without a program world
   WORLD_CONSTANTS,   // its constant block: one ConstantBlock, or none
+  ENV_TABLE,         // the world program's environment table (0004 D11): both distributions in one block
+                     // of floats (env_table_floats), empty without a baked program world
   HEADER,
 };
 inline constexpr uint32_t kTableCount = static_cast<uint32_t>(TableId::HEADER) + 1u;
@@ -180,11 +183,24 @@ struct SceneTableSet {
   uint32_t material_program_count = 0;
 };
 
+// ENV_TABLE's layout: the plain distribution's func, cdf_u, marginal_func and marginal_cdf, then the
+// compensated one's, each array whole and in that order (EnvDistribution, kernel EnvTableView), so a
+// view of either is offsets into the one block computed from n alone. Writes the floats into `out`.
+void env_table_floats(const EnvTable& table, std::vector<float>* out);
+
 // Held by the scene; acquire_scene_tables takes its lock.
 struct SceneTableCache {
   std::mutex mutex;
   std::shared_ptr<const SceneTableSet> current;
   std::shared_ptr<const ObserverTables> observer;
+  // The world program's environment bake (0004 D11), run before the light table is built.
+  EnvironmentBaker baker;
+  // A CPU context has no scene device: the bake runs on this CPU device of its own, made at the
+  // first bake (never skipped, rule 5).
+  std::shared_ptr<Device> bake_device;
+  // Cells per side of the bake grid: 0004 D11's 1024. Tests lower it to keep the CPU bake short; it
+  // changes the table's resolution, never what the cells hold.
+  uint32_t bake_size = kEnvBakeSize;
 };
 
 // An upload that may succeed at a later latch (RULINGS 70): its text names the table, and

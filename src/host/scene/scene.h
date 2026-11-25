@@ -48,6 +48,8 @@ class MeshStore;  // host/scene/mesh.h
 struct MeshRecord;
 class MaterialStore;  // host/material/material_store.h
 struct LightTable;    // host/light/light_builder.h
+struct BakedEnvironment;  // host/light/env_bake.h
+struct WorldOutput;   // host/scene/world.h
 struct Lamp;          // host/light/lamps.h
 struct Medium;        // host/scene/media.h
 
@@ -74,10 +76,25 @@ struct SceneConfig {
 struct ImageArrays;     // host/image/image_store.h
 struct MaterialArrays;  // host/material/material_store.h
 
+// The light table's inputs, gathered from the active state under the scene's state lock: the cached
+// table when they are unchanged, otherwise what Scene::build_lights needs. `bake_key` is the world
+// program's EnvironmentBaker::world_key, empty when the world needs no bake; it is part of the
+// light table's key, so a table is reused only with the bake it was built after.
+struct LightPlan {
+  std::shared_ptr<const LightTable> table;   // set: unchanged, nothing to build
+  std::shared_ptr<const void> inputs;        // otherwise the gathered inputs (scene.cpp)
+  std::vector<uint8_t> bake_key;
+  std::shared_ptr<const WorldOutput> world;  // the world the inputs hold (its report subject)
+  std::shared_ptr<const ImageArrays> images;  // the arrays bake_key's image addresses point into
+};
+
 // One immutable view of the active state, captured under the generation tracker's lock so every
 // part belongs to `generation` (RULINGS 70): the instances, the material and image arrays, the
 // active mesh record of every key the instances reference (null when none is active), and, when
-// asked for, the light table built from that same state.
+// asked for, the light table built from that same state. A world program needs its environment
+// bake before its light table is built (0004 D11), and the bake needs the uploaded world: then
+// `lights` is null and `light_plan` holds the inputs, which the scene table build bakes and passes
+// to Scene::build_lights.
 struct SceneSnapshot {
   uint64_t generation = 0;
   std::shared_ptr<const InstanceTable> instances;
@@ -85,6 +102,7 @@ struct SceneSnapshot {
   std::shared_ptr<const ImageArrays> images;
   std::map<ar_key, std::shared_ptr<const MeshRecord>> meshes;
   std::shared_ptr<const LightTable> lights;
+  LightPlan light_plan;
   std::vector<std::shared_ptr<const Medium>> media;  // read with the instances that reference them
 };
 
@@ -146,10 +164,19 @@ class Scene {
   std::shared_ptr<const InstanceSummary> latest_instances() const;
   void publish_instances(std::shared_ptr<const InstanceTable> table);
   // The light table of the active state (lamps join in 068). Rebuilt on the call only when its
-  // inputs changed (gather_scene_lights' key), under the state lock; call it at the session's
-  // latch, never per pass or launch. Throws std::runtime_error when observer.bin is unusable or
-  // a material's emission sampling is out of range.
+  // inputs changed (gather_scene_lights' key and the world's bake key), under the state lock; call
+  // it at the session's latch, never per pass or launch. Throws std::runtime_error when observer.bin
+  // is unusable or a material's emission sampling is out of range. It bakes nothing: a program
+  // world's table from here has no environment (env_baked false); the scene table build uses
+  // plan_lights and build_lights instead.
   std::shared_ptr<const LightTable> lights();
+  // The two halves of lights(). plan_lights gathers the inputs under the state lock and returns the
+  // cached table when they are unchanged; with `baking`, a cached table built without its world's
+  // bake does not count. build_lights builds the table from a plan without one, with the world's
+  // bake (null when it needs none), or without the world light when `world_refused` (its grid was
+  // refused: misses then render black), stores it as the cached table and returns it.
+  LightPlan plan_lights(bool baking);
+  std::shared_ptr<const LightTable> build_lights(const LightPlan& plan, const BakedEnvironment* baked, bool world_refused);
   uint64_t light_rebuilds() const;  // how many times lights() rebuilt the table
   // The active state as one snapshot; `with_lights` also builds (or reuses) the light table of it,
   // when the scene has material and mesh stores. Lock order: tracker, then state and stores.
@@ -196,6 +223,7 @@ class Scene {
     std::map<ar_key, std::shared_ptr<const Medium>> media;        // as set; live ones are in known_active
     std::set<ar_key> medium_reported;                             // medium-bearing geometry at the last refresh
     std::vector<std::shared_ptr<const Lamp>> light_lamps;         // the last build's lamps, pinned for light_key
+    std::shared_ptr<const ImageArrays> light_images;               // pins the image addresses light_key holds
     std::shared_ptr<const LightTable> lights;
     uint64_t light_rebuilds = 0;
   };

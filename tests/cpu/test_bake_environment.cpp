@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // bake_environment (0004 D11): the cell function against an independent host evaluation, the
-// kernel through the CPU device, and the host baker (normalisation, cache, refusals).
-// Ref: docs/decisions/0004-integrator.md D10 "Importance weighting", D11; kernel/stages/
-// bake_environment.h (the error bound); pbrt-v4 ImageInfiniteLight (the grid per cell).
+// kernel through the CPU device on a world program (an Environment Texture), the host baker
+// (normalisation, cache, refusals), and the scene table build that bakes before it builds the light
+// table (ENV_TABLE, the bake key, a CPU context, a refused grid).
+// Ref: docs/decisions/0004-integrator.md D10 "Importance weighting", D11; 0005 item 32; kernel/stages/
+// bake_environment.h (the error bound); pbrt-v4 ImageInfiniteLight (the grid per cell); Cycles
+// kernel/camera/projection.h direction_to_equirectangular (the lat-long convention the host check
+// inverts, as test_shade_background's env_direction).
 //
 // Tolerance against the host. The kernel sums the world over the 471 observer samples with
 // Neumaier's compensated sum in float, then divides by the weight total (bake_environment.h). With
@@ -14,8 +18,10 @@
 // there. The host side is double throughout and takes the direction the kernel computes (the
 // mapping's own accuracy is test_env_table's), so no term of the direction enters. A plain float
 // sum would add up to (118 + 3) u here; the tolerance does not allow for it, which is the point of
-// the compensation. The constant world has e_s = u (the float strength product; the spectrum is
-// the same resolve() call on both sides): 9 u = 5.4e-7, inside the 1e-6 the task states.
+// the compensation. A direction-independent program world (a 1 x 1 image, Closest) radiates
+// bit for bit what its folded constant record does (test_shade_background "program world equals
+// folded"), so it has the constant world's e_s = u (the float strength product; the spectrum is the
+// same lift on both sides): 9 u = 5.4e-7, inside the 1e-6 the task states.
 #include <doctest.h>
 
 #include <algorithm>
@@ -24,6 +30,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -33,6 +41,7 @@
 #include "common/analytic_world.h"
 #include "device/cpu/cpu_device.h"
 #include "host/data_resource.h"
+#include "host/image/image_store.h"
 #include "host/light/env_bake.h"
 #include "host/light/env_table.h"
 #include "host/light/light_builder.h"
@@ -40,6 +49,8 @@
 #include "host/scene/edit.h"
 #include "host/scene/generation.h"
 #include "host/scene/mesh.h"
+#include "host/scene/scene_tables.h"
+#include "host/scene/world.h"
 #include "host/thread_pool.h"
 #include "stages/bake_environment.h"
 #include "vm/ops.h"
@@ -66,16 +77,8 @@ const ar::ObserverView& observer() {
   return v;
 }
 
-ar::SpectrumRef world_colour() {
-  // A smooth illuminant spectrum centred near 550 nm: sigmoid(1 - ((lambda - 550) / 80)^2).
-  ar::SpectrumRef c{};
-  c.kind = uint8_t(ar::SpectrumKind::RGB);
-  c.semantic = uint8_t(ar::SpectrumSemantic::ILLUMINANT);
-  c.p[0] = -1.5625e-4f, c.p[1] = 0.171875f, c.p[2] = -46.265625f, c.p[3] = 1.0f;
-  return c;
-}
-
-double energy_of(const ar::LightRecord& w) { return display_energy({{w.emission, w.strength}}, observer()); }
+// The world colour of the uniform worlds, linear Rec.709.
+constexpr float kRgb[3] = {1.0f, 0.5f, 0.25f};
 
 // A CPU device that can be told to fail its next kernel launch, as a device error does mid-bake.
 class FaultyCpu : public CpuDevice {
@@ -90,53 +93,101 @@ class FaultyCpu : public CpuDevice {
 };
 
 // BAKE_ENVIRONMENT's slot for a test that wants a grid that varies over the sphere: the cell
-// function of the production kernel on the analytic world instead of the world light.
+// function of the production kernel on the analytic world instead of the world program.
 void cpu_bake_analytic(const ar::KernelGlobals& kg, uint32_t first, uint32_t last) {
   for (uint32_t cell = first; cell < last; ++cell)
     kg.env_bake.grid[cell] =
         float(ar::bake_environment_cell(ar::AnalyticWorld{}, kg.tables->observer, kg.env_bake.n, cell));
 }
 
-// A CPU device whose KernelGlobals hold one world light and the observer. `analytic` binds
-// cpu_bake_analytic to BAKE_ENVIRONMENT instead of the production kernel.
+// LOAD_CTX_P -> TEX_ENVIRONMENT (image `key`, `mode`: 0 Closest, 1 Linear) -> EMIT_LE with a constant
+// strength: an Environment Texture on a Background, as the addon lowers it.
+StoredGraph environment_graph(int32_t key, int32_t mode, float strength) {
+  StoredGraph g;
+  g.f32 = {strength};
+  g.i32 = {key, mode};
+  g.nodes.assign(4, ar_graph_node{});
+  g.nodes[0].op = uint32_t(ar::Op::LOAD_CTX_P);
+  g.nodes[1].op = uint32_t(ar::Op::TEX_ENVIRONMENT), g.nodes[1].i32_first = 0, g.nodes[1].i32_count = 2;
+  g.nodes[2].op = uint32_t(ar::Op::CONST_F32), g.nodes[2].f32_first = 0, g.nodes[2].f32_count = 1;
+  g.nodes[3].op = uint32_t(ar::Op::EMIT_LE);
+  g.links = {{0u, 0u, 1u, 0u}, {1u, 0u, 3u, 0u}, {2u, 0u, 3u, 1u}};
+  return g;
+}
+
+// A CPU device whose KernelGlobals name a world program over one float RGBA image (rows bottom-up),
+// with the observer, rgb2spec and sRGB tables, all host memory the CPU device reads in place.
+// `analytic` binds cpu_bake_analytic to BAKE_ENVIRONMENT instead of the production kernel.
 struct Rig {
   Ledger ledger;
   astroray::ContextState ctx;
   ThreadPool pool{ctx, 2};
   FaultyCpu dev{ledger, pool};
   Owner owner{1, 0};
-  DeviceBuffer lights, tables, kg;
+  MaterialStore store{std::make_shared<Ledger>()};
+  std::array<float, ar::kSrgbTableSize> srgb{};
+  std::vector<float> texels;
+  ar::DeviceImageView view{};
+  ar::SceneTables tables{};
+  ar::SceneData scene{};
+  WorldOutput world;
+  DeviceBuffer kg;
   explicit Rig(bool analytic = false) {
     if (analytic)
       dev.register_kernel(KernelId::BAKE_ENVIRONMENT, &cpu_bake_analytic);
     else
       dev.register_production_stages();
-    lights = dev.allocate(LedgerCategory::TABLES, sizeof(ar::LightRecord), owner);
-    tables = dev.allocate(LedgerCategory::TABLES, sizeof(ar::SceneTables), owner);
     kg = dev.allocate(LedgerCategory::TABLES, sizeof(ar::KernelGlobals), owner);
-    ar::SceneTables t{};
-    t.observer = observer();
-    dev.upload(tables, 0, &t, sizeof t);
-    set_world(Real(1), world_colour());
+    ar::srgb_decode_table(srgb.data());
+    tables.rgb2spec = &store.table();
+    tables.observer = observer();
+    tables.images = &view;
+    tables.image_count = 1;
+    tables.srgb_decode = srgb.data();
+    set_uniform(1.0f);
   }
-  ~Rig() {
-    for (DeviceBuffer* b : {&lights, &tables, &kg}) dev.free(*b);
+  ~Rig() { dev.free(kg); }
+  // The world of image (w, h, rgba) at `strength`, compiled and bound.
+  void set_world(uint32_t w, uint32_t h, std::vector<float> rgba, uint32_t mode, float strength) {
+    texels = std::move(rgba);
+    view = ar::DeviceImageView{};
+    view.texels = uint64_t(uintptr_t(texels.data()));
+    view.width = w, view.height = h, view.channels = 4, view.format = uint32_t(ar::TexFormat::FLOAT);
+    view.encoding = uint32_t(ar::TexEncoding::LINEAR);
+    const StoredGraph g = environment_graph(7, int32_t(mode), strength);
+    const ImageSlotFn slots = [](uint32_t key, uint32_t* slot) { return key == 7u ? (*slot = 0u, true) : false; };
+    const ImageMeanFn means = [](uint32_t, std::array<float, 3>* rgb) { return (*rgb = {1.0f, 1.0f, 1.0f}, true); };
+    ar_world_desc desc = {};
+    desc.surface_graph = 1;
+    world = compile_world(desc, &g, store.table(), &means, &slots);
+    REQUIRE_MESSAGE(!world.magenta, "the environment world compiled to magenta: "
+                                        << (world.entries.empty() ? std::string() : world.entries[0].detail));
+    REQUIRE(world.program.size() > 2);
+    scene = ar::SceneData{};
+    scene.world_program = world.program.data();
+    scene.world_program_words = uint32_t(world.program.size());
+    scene.world_constants = &world.block;
+    bind(true);
   }
-  void set_world(Real strength, const ar::SpectrumRef& colour) {
-    const ar::LightRecord w = ar::light_make_world(strength, colour);
-    dev.upload(lights, 0, &w, sizeof w);
-    bind(0);
-  }
-  // `world` is the light index the KernelGlobals names.
-  void bind(uint32_t world) {
+  // A world of one colour everywhere: a 1 x 1 image of kRgb, Closest.
+  void set_uniform(float strength) { set_world(1, 1, {kRgb[0], kRgb[1], kRgb[2], 1.0f}, 0u, strength); }
+  // `program` false binds KernelGlobals without a scene, as a host bug that launched a bake for a
+  // world without a program would.
+  void bind(bool program) {
     ar::KernelGlobals g{};
-    g.lights = static_cast<const ar::LightRecord*>(lights.ptr);
-    g.tables = static_cast<const ar::SceneTables*>(tables.ptr);
-    g.world_light = world;
+    g.scene = program ? &scene : nullptr;
+    g.tables = &tables;
     dev.upload(kg, 0, &g, sizeof g);
     dev.set_kernel_globals(kg);
   }
-  ar::LightRecord world_record() const { return *static_cast<const ar::LightRecord*>(lights.ptr); }
+  // display_energy of the uniform world's colour at `strength`: what every cell must hold.
+  double uniform_energy(float strength) const {
+    ar::SpectrumRef ref;
+    uint32_t flags = 0;
+    ar::make_rgb_ref(store.table(), ar::Rgb{{Real(kRgb[0]), Real(kRgb[1]), Real(kRgb[2])}}, ar::SpectrumSemantic::ILLUMINANT,
+                     &ref, &flags);
+    return display_energy({{ref, strength}}, observer());
+  }
   // The raw n x n grid of the production kernel, as the baker would read it.
   std::vector<float> raw_grid(uint32_t n) {
     DeviceBuffer grid = dev.allocate(LedgerCategory::TABLES, uint64_t(n) * n * sizeof(float), owner);
@@ -150,7 +201,14 @@ struct Rig {
   }
 };
 
-// ---- a scene, for "which edits touch the world" ----------------------------------------------------
+// The equirectangular (u, v) of a unit direction, Cycles' direction_to_equirectangular with its
+// default range in double: u = 0.5 - atan2(y, x) / (2 pi), v = 1 - acos(z) / pi (v = 1 straight up).
+std::array<double, 2> equirect_uv(double x, double y, double z) {
+  const double pi = 3.14159265358979323846;
+  return {0.5 - std::atan2(y, x) / (2.0 * pi), 1.0 - std::acos(std::max(-1.0, std::min(1.0, z))) / pi};
+}
+
+// ---- a scene, for "which edits touch the world" and the scene table build ------------------------
 
 struct GB {
   std::vector<ar_graph_node> nodes;
@@ -186,12 +244,49 @@ GB constant_emission(float strength) {
   return g;
 }
 
+constexpr ar_key kWorldGraph = 40, kImage = 5;
+
+// A CPU context (no scene device): the scene table build bakes on the cache's own CPU device.
 struct Fixture {
   astroray::ContextState ctx;
   Scene scene{ctx, SceneConfig{2, {}}};
   Fixture() {
     scene.meshes = std::make_shared<MeshStore>();
     scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
+    scene.table_cache().bake_size = kN;
+  }
+  // The world: graph kWorldGraph an Environment Texture of image kImage (Closest) at `strength`.
+  void set_world(Edit& e, float strength) {
+    const StoredGraph g = environment_graph(int32_t(kImage), 0, strength);
+    const ar_graph_desc d = g.desc();
+    REQUIRE(scene.materials->set_graph(e, kWorldGraph, &d) == AR_OK);
+    ar_world_desc w = {};
+    w.surface_graph = kWorldGraph;
+    REQUIRE(scene.materials->set_world(e, &w) == AR_OK);
+  }
+  // Image kImage: 2 x 1 linear float RGBA pixels.
+  void set_image(Edit& e, const std::vector<float>& rgba) {
+    ar_image_desc d = {};
+    d.key = kImage, d.source = AR_IMAGE_SOURCE_PIXELS, d.color_interop = AR_COLOR_INTEROP_LIN_REC709, d.width = 2, d.height = 1;
+    ar_image_buffers b = {};
+    REQUIRE(scene.materials->image_begin(e, &d, &b) == AR_OK);
+    REQUIRE(b.pixels_count == rgba.size());
+    std::memcpy(*b.pixels, rgba.data(), rgba.size() * sizeof(float));
+    REQUIRE(e.item_commit(kImage) == AR_OK);
+  }
+  // PROGRAM_REJECTED entries on the world graph.
+  uint32_t rejected() {
+    Report& r = scene.report();
+    r.snapshot();
+    ar_report_info info{};
+    REQUIRE(r.info(&info) == AR_OK);
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < info.entry_count; ++i) {
+      ar_report_entry e{};
+      REQUIRE(r.entry(i, &e) == AR_OK);
+      n += e.code == AR_REPORT_PROGRAM_REJECTED && e.subject == kWorldGraph;
+    }
+    return n;
   }
   template <class F>
   void commit(F&& body) {
@@ -230,7 +325,7 @@ TEST_CASE("bake_environment/analytic against host") {
 
 TEST_CASE("bake_environment/constant world uniform") {
   Rig rig;
-  const double want = energy_of(rig.world_record());
+  const double want = rig.uniform_energy(1.0f);
   REQUIRE(want > 0.0);
   const std::vector<float> grid = rig.raw_grid(kN);
   // Bit-equal: every cell is the same reduction over the same inputs.
@@ -240,7 +335,7 @@ TEST_CASE("bake_environment/constant world uniform") {
   CHECK(std::fabs(double(grid[0]) - want) <= 1e-6 * want);
 
   EnvironmentBaker baker;
-  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {}, 1.0, kN);
+  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, kN);
   REQUIRE(b.table);
   CHECK(b.max == double(grid[0]));
   CHECK(b.mean == double(grid[0]));  // 4096 equal floats sum exactly in double
@@ -257,7 +352,73 @@ TEST_CASE("bake_environment/constant world uniform") {
   rig.dev.download(&back, rig.kg, 0, sizeof back);
   CHECK(back.env_bake.grid == nullptr);
   CHECK(back.env_bake.n == 0u);
-  CHECK(rig.ledger.total() == rig.lights.bytes + rig.tables.bytes + rig.kg.bytes);
+  CHECK(rig.ledger.total() == rig.kg.bytes);
+}
+
+TEST_CASE("bake_environment/program world cells") {
+  // One bright texel in a dim 64 x 32 map whose every texel is its own colour (Closest). Every cell
+  // whose centre direction is clear of a texel edge holds the display energy of the texel the
+  // lat-long convention puts there, evaluated on the host from the texel's RGB and the strength;
+  // the brightest cell lies in the bright texel.
+  constexpr uint32_t W = 64, H = 32, ix0 = 40, iy0 = 22;
+  const float strength = 0.75f;
+  const auto texel = [](uint32_t ix, uint32_t iy) -> std::array<float, 3> {
+    if (ix == ix0 && iy == iy0) return {6.0f, 3.0f, 1.5f};
+    return {0.05f + 0.1f * float(ix) / float(W), 0.05f + 0.1f * float(iy) / float(H), 0.08f};
+  };
+  std::vector<float> px(size_t(W) * H * 4, 1.0f);
+  for (uint32_t y = 0; y < H; ++y)
+    for (uint32_t x = 0; x < W; ++x)
+      for (int k = 0; k < 3; ++k) px[(size_t(y) * W + x) * 4 + size_t(k)] = texel(x, y)[size_t(k)];
+  Rig rig;
+  rig.set_world(W, H, px, 0u, strength);
+  const std::vector<float> grid = rig.raw_grid(kN);
+  double worst = 0.0;
+  uint32_t checked = 0, skipped = 0, brightest = 0;
+  for (uint32_t cell = 0; cell < kN * kN; ++cell) {
+    if (grid[cell] > grid[brightest]) brightest = cell;
+    const Real3 d = ar::bake_environment_direction(kN, cell);
+    const std::array<double, 2> uv = equirect_uv(double(d.x), double(d.y), double(d.z));
+    const double fu = uv[0] * W, fv = uv[1] * H;
+    // A centre within 1e-3 texel of an edge may round to either texel in float: not a texel test.
+    const double eu = std::fabs(fu - std::round(fu)), ev = std::fabs(fv - std::round(fv));
+    if (eu < 1e-3 || ev < 1e-3 || fv >= H - 1e-3) {
+      ++skipped;
+      continue;
+    }
+    const uint32_t ix = uint32_t(fu) % W, iy = std::min(uint32_t(fv), H - 1);
+    const std::array<float, 3> c = texel(ix, iy);
+    ar::SpectrumRef ref;
+    uint32_t flags = 0;
+    ar::make_rgb_ref(rig.store.table(), ar::Rgb{{Real(c[0]), Real(c[1]), Real(c[2])}}, ar::SpectrumSemantic::ILLUMINANT, &ref,
+                     &flags);
+    const double want = display_energy({{ref, strength}}, observer());
+    worst = std::max(worst, std::fabs(double(grid[cell]) - want) / want);
+    ++checked;
+  }
+  std::printf("bake_environment program world: %u cells checked, %u at texel edges, worst relative error %.3e\n", checked,
+              skipped, worst);
+  CHECK(checked > kN * kN * 3 / 4);
+  CHECK(worst <= 1e-5);
+  const Real3 db = ar::bake_environment_direction(kN, brightest);
+  const std::array<double, 2> uvb = equirect_uv(double(db.x), double(db.y), double(db.z));
+  const double pi = 3.14159265358979323846;
+  std::printf("bake_environment program world: brightest cell %u at (%.4f, %.4f, %.4f), texel (%.3f, %.3f); bright texel "
+              "centre lat %.4f lon %.4f rad\n",
+              brightest, double(db.x), double(db.y), double(db.z), uvb[0] * W, uvb[1] * H, pi * ((double(iy0) + 0.5) / H - 0.5),
+              pi - 2.0 * pi * (double(ix0) + 0.5) / W);
+  CHECK(uint32_t(uvb[0] * W) == ix0);
+  CHECK(uint32_t(uvb[1] * H) == iy0);
+  // ASTRORAY_EVIDENCE names a directory: the grid goes there as a PFM for a look (rows bottom-up).
+  char* dir = nullptr;
+  size_t len = 0;
+  if (_dupenv_s(&dir, &len, "ASTRORAY_EVIDENCE") == 0 && dir != nullptr) {
+    const std::string path = std::string(dir) + "/bake_grid.pfm";
+    std::free(dir);
+    std::ofstream f(path, std::ios::binary);
+    f << "Pf\n" << kN << " " << kN << "\n-1.0\n";
+    f.write(reinterpret_cast<const char*>(grid.data()), std::streamsize(grid.size() * sizeof(float)));
+  }
 }
 
 TEST_CASE("bake_environment/tiny uniform world builds") {
@@ -269,7 +430,7 @@ TEST_CASE("bake_environment/tiny uniform world builds") {
   Rig rig;
   for (float strength : {1e-30f, 1e-39f}) {
     CAPTURE(strength);
-    rig.set_world(Real(strength), world_colour());
+    rig.set_uniform(strength);
     const std::vector<float> grid = rig.raw_grid(kN);
     REQUIRE(grid[0] > 0.0f);
     if (strength < 1e-38f) {
@@ -278,7 +439,7 @@ TEST_CASE("bake_environment/tiny uniform world builds") {
     }
     EnvironmentBaker baker;
     BakedEnvironment b;
-    REQUIRE_NOTHROW(b = baker.get(rig.dev, rig.kg, {}, 1.0, kN));
+    REQUIRE_NOTHROW(b = baker.get(rig.dev, rig.kg, {1}, kN));
     REQUIRE(b.table);
     CHECK(b.max == double(grid[0]));
     CHECK(std::all_of(b.table->plain.func.begin(), b.table->plain.func.end(), [](float f) { return f == 1.0f; }));
@@ -290,29 +451,31 @@ TEST_CASE("bake_environment/tiny uniform world builds") {
 TEST_CASE("bake_environment/black world gives no table") {
   Rig rig;
   EnvironmentBaker baker;
-  rig.set_world(Real(0), world_colour());
-  BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, 1.0, kN);
+  rig.set_uniform(0.0f);
+  BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, kN);
   CHECK(b.table == nullptr);
   CHECK(b.max == 0.0);
   CHECK(b.mean == 0.0);
-  // A scene without a world is the same black one.
-  rig.bind(ar::kNoLight);
-  b = baker.get(rig.dev, rig.kg, {2}, 1.0, kN);
-  CHECK(b.table == nullptr);
-  CHECK(b.max == 0.0);
-  CHECK(b.mean == 0.0);
-  CHECK(baker.rebuild_count() == 2u);
+  CHECK(baker.rebuild_count() == 1u);
+  // A launch without a world program is a host bug: its cells are NaN and the grid is refused,
+  // never read as a black world (rule 5).
+  rig.bind(false);
+  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {2}, kN), BakeRefused);
+  CHECK(baker.rebuild_count() == 1u);
 }
 
 TEST_CASE("bake_environment/non-finite cell is refused") {
   Rig rig;
   EnvironmentBaker baker;
-  for (float bad : {std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN(), -1.0f}) {
-    rig.set_world(Real(bad), world_colour());
+  // The compiler refuses a negative or non-finite strength (EMIT_LE), so a world reaches the bake with
+  // a non-finite radiance only by overflow: 1e38 times a texel of 1000 is inf. A NaN cell (a program
+  // that cannot run) is "black world gives no table"'s second half.
+  for (float bad : {1e38f, 3e38f}) {
+    rig.set_world(1, 1, {1000.0f, 1000.0f, 1000.0f, 1.0f}, 0u, bad);
     std::string what;
     try {
-      baker.get(rig.dev, rig.kg, {1}, 1.0, kN);
-    } catch (const std::runtime_error& e) {
+      baker.get(rig.dev, rig.kg, {1}, kN);
+    } catch (const BakeRefused& e) {
       what = e.what();
     }
     CAPTURE(bad);
@@ -330,59 +493,41 @@ TEST_CASE("bake_environment/non-finite cell is refused") {
   }
   // The refusals left no cache: a good world under the same key bakes.
   CHECK(baker.rebuild_count() == 0u);
-  rig.set_world(Real(2), world_colour());
-  CHECK(baker.get(rig.dev, rig.kg, {1}, 1.0, kN).table != nullptr);
+  rig.set_uniform(2.0f);
+  CHECK(baker.get(rig.dev, rig.kg, {1}, kN).table != nullptr);
   CHECK(baker.rebuild_count() == 1u);
-  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, 1.0, 0), std::invalid_argument);
+  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, 0), std::invalid_argument);
 }
 
-TEST_CASE("bake_environment/rebuild only on world edit") {
-  const ar_key W = 40, G = 41, M = 50, MESH = 100;
+TEST_CASE("bake_environment/world key follows the program and its images") {
+  const ar_key G = 41, M = 50, MESH = 100;
   Fixture fx;
-  Rig rig;
-  EnvironmentBaker baker;
-  const auto bake = [&] {
-    const auto world = fx.scene.materials->world();
-    REQUIRE(world);
-    // The kernel's world light follows the scene's compiled world, as the light table will.
-    rig.set_world(Real(world->strength), world->color);
-    return baker.get(rig.dev, rig.kg, EnvironmentBaker::world_key(world.get()), 1.0, kN);
+  const auto key = [&] {
+    return EnvironmentBaker::world_key(fx.scene.materials->world().get(), fx.scene.materials->images().arrays().get());
   };
-  const auto set_world_strength = [&](float strength) {
-    fx.commit([&](Edit& e) {
-      const GB g = constant_emission(strength);
-      const ar_graph_desc d = g.desc();
-      ar_world_desc w = {};
-      w.surface_graph = W;
-      REQUIRE(fx.scene.materials->set_graph(e, W, &d) == AR_OK);
-      REQUIRE(fx.scene.materials->set_world(e, &w) == AR_OK);
-    });
-  };
-
-  set_world_strength(3.0f);
-  const BakedEnvironment first = bake();
-  REQUIRE(first.table);
-  CHECK(baker.rebuild_count() == 1u);
-  // The key is the world's part of the light table's key.
-  {
-    const auto world = fx.scene.materials->world();
-    const auto mats = fx.scene.materials->arrays();
-    const std::vector<uint8_t> whole = gather_scene_lights(nullptr, *fx.scene.meshes, *mats, world.get(), false).key;
-    const std::vector<uint8_t> part = EnvironmentBaker::world_key(world.get());
-    REQUIRE(!part.empty());
-    REQUIRE(whole.size() >= part.size());
-    CHECK(std::equal(part.begin(), part.end(), whole.begin()));
-  }
-
-  // A camera edit.
+  // A constant world needs no bake: its key is empty.
+  fx.commit([&](Edit& e) {
+    const GB g = constant_emission(3.0f);
+    const ar_graph_desc d = g.desc();
+    ar_world_desc w = {};
+    w.surface_graph = kWorldGraph;
+    REQUIRE(fx.scene.materials->set_graph(e, kWorldGraph, &d) == AR_OK);
+    REQUIRE(fx.scene.materials->set_world(e, &w) == AR_OK);
+  });
+  CHECK(key().empty());
+  fx.commit([&](Edit& e) {
+    fx.set_image(e, {1.0f, 0.5f, 0.25f, 1.0f, 0.2f, 0.4f, 0.6f, 1.0f});
+    fx.set_world(e, 2.0f);
+  });
+  const std::vector<uint8_t> first = key();
+  REQUIRE(!first.empty());
+  // A camera, a material and a mesh leave it.
   fx.commit([&](Edit& e) {
     ar_camera_desc cam = {};
     cam.type = AR_CAMERA_PERSP;
     REQUIRE(e.set_camera(&cam) == AR_OK);
   });
-  CHECK(bake().max == first.max);
-  CHECK(baker.rebuild_count() == 1u);
-  // A material.
+  CHECK(key() == first);
   fx.commit([&](Edit& e) {
     const GB g = constant_emission(7.0f);
     const ar_graph_desc d = g.desc();
@@ -391,9 +536,7 @@ TEST_CASE("bake_environment/rebuild only on world edit") {
     REQUIRE(fx.scene.materials->set_graph(e, G, &d) == AR_OK);
     REQUIRE(fx.scene.materials->set_material(e, M, &m) == AR_OK);
   });
-  CHECK(bake().max == first.max);
-  CHECK(baker.rebuild_count() == 1u);
-  // A mesh.
+  CHECK(key() == first);
   {
     const std::vector<float> pos{0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0};
     const std::vector<int32_t> cv{0, 1, 2, 3}, fs{0};
@@ -409,23 +552,119 @@ TEST_CASE("bake_environment/rebuild only on world edit") {
       REQUIRE(e.item_commit(MESH) == AR_OK);
     });
   }
-  CHECK(bake().max == first.max);
-  CHECK(baker.rebuild_count() == 1u);
-  // Asking again for the same world launches nothing and returns the same table.
-  CHECK(bake().table == first.table);
-  CHECK(baker.rebuild_count() == 1u);
+  CHECK(key() == first);
+  // The strength is part of the program; a new image under the same key and slot recompiles the
+  // world word for word the same, and the key still moves.
+  fx.commit([&](Edit& e) { fx.set_world(e, 4.0f); });
+  const std::vector<uint8_t> second = key();
+  CHECK(second != first);
+  const std::vector<uint32_t> words = fx.scene.materials->world()->program;
+  fx.commit([&](Edit& e) { fx.set_image(e, {0.1f, 0.1f, 0.1f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f}); });
+  CHECK(fx.scene.materials->world()->program == words);
+  CHECK(key() != second);
+}
 
-  // A world edit: one more bake, and the grid follows the strength.
-  set_world_strength(6.0f);
-  const BakedEnvironment second = bake();
+TEST_CASE("scene_tables/bake before light table") {
+  // One bake and one light table per world edit, the table built after the bake with its result;
+  // an edit that leaves the world builds neither.
+  Fixture fx;
+  fx.commit([&](Edit& e) {
+    fx.set_image(e, {1.0f, 0.5f, 0.25f, 1.0f, 0.2f, 0.4f, 0.6f, 1.0f});
+    fx.set_world(e, 2.0f);
+  });
+  EnvironmentBaker& baker = fx.scene.table_cache().baker;
+  const auto set1 = acquire_scene_tables(fx.scene);
+  REQUIRE(set1->lights);
+  CHECK(baker.rebuild_count() == 1u);
+  CHECK(fx.scene.light_rebuilds() == 1u);
+  CHECK(set1->lights->env_baked);
+  REQUIRE(bool(set1->lights->env));
+  CHECK(set1->lights->env->n == kN);
+  CHECK(set1->lights->env_max > set1->lights->env_mean);
+  CHECK(set1->lights->env_mean > 0.0);
+  CHECK(set1->lights->world_light != ar::kNoLight);
+  CHECK(set1->counts[uint32_t(TableId::ENV_TABLE)] > 0u);
+  // A camera edit: the same set, nothing baked or built.
+  fx.commit([&](Edit& e) {
+    ar_camera_desc cam = {};
+    cam.type = AR_CAMERA_PERSP;
+    REQUIRE(e.set_camera(&cam) == AR_OK);
+  });
+  CHECK(acquire_scene_tables(fx.scene) == set1);
+  CHECK(baker.rebuild_count() == 1u);
+  CHECK(fx.scene.light_rebuilds() == 1u);
+  // The world's strength: one bake, one light table; the mean doubles.
+  fx.commit([&](Edit& e) { fx.set_world(e, 4.0f); });
+  const auto set2 = acquire_scene_tables(fx.scene);
   CHECK(baker.rebuild_count() == 2u);
-  CHECK(second.max == doctest::Approx(2.0 * first.max).epsilon(1e-6));
-  CHECK(bake().table == second.table);
-  CHECK(baker.rebuild_count() == 2u);
-  // A different resolution is a different bake.
-  CHECK(baker.get(rig.dev, rig.kg, EnvironmentBaker::world_key(fx.scene.materials->world().get()), 1.0, kN / 2).table->n ==
-        kN / 2);
+  CHECK(fx.scene.light_rebuilds() == 2u);
+  CHECK(set2->lights->env_mean == doctest::Approx(2.0 * set1->lights->env_mean).epsilon(1e-6));
+  CHECK(set2->tables[uint32_t(TableId::ENV_TABLE)] != set1->tables[uint32_t(TableId::ENV_TABLE)]);
+  // A new image: one bake, one light table, and the grid follows the image.
+  fx.commit([&](Edit& e) { fx.set_image(e, {0.1f, 0.1f, 0.1f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f}); });
+  const auto set3 = acquire_scene_tables(fx.scene);
   CHECK(baker.rebuild_count() == 3u);
+  CHECK(fx.scene.light_rebuilds() == 3u);
+  CHECK(set3->lights->env_mean != set2->lights->env_mean);
+  // Scene::lights() alone bakes nothing and keeps the table that has the bake.
+  CHECK(fx.scene.lights() == set3->lights);
+  CHECK(baker.rebuild_count() == 3u);
+}
+
+TEST_CASE("scene_tables/cpu context bakes") {
+  // No scene device: the cache's CPU device bakes, and ENV_TABLE holds both distributions of the
+  // light table's bake, in env_table_floats' order.
+  Fixture fx;
+  REQUIRE(fx.scene.device() == nullptr);
+  fx.commit([&](Edit& e) {
+    fx.set_image(e, {3.0f, 0.5f, 0.25f, 1.0f, 0.2f, 0.4f, 0.6f, 1.0f});
+    fx.set_world(e, 1.0f);
+  });
+  const auto set = acquire_scene_tables(fx.scene);
+  CHECK(bool(fx.scene.table_cache().bake_device));
+  REQUIRE(bool(set->lights->env));
+  const EnvTable& t = *set->lights->env;
+  std::vector<float> want;
+  env_table_floats(t, &want);
+  const uint64_t n = kN;
+  CHECK(want.size() == 2 * (n * n + n * (n + 1) + n + (n + 1)));
+  REQUIRE(set->counts[uint32_t(TableId::ENV_TABLE)] == want.size());
+  const auto& table = set->tables[uint32_t(TableId::ENV_TABLE)];
+  REQUIRE(table->bytes() == want.size() * 4);
+  CHECK(std::memcmp(table->ptr(), want.data(), want.size() * 4) == 0);
+  // The compensated half starts after the plain one, at an offset n alone gives.
+  const float* f = static_cast<const float*>(table->ptr());
+  const size_t half = size_t(n * n + n * (n + 1) + n + (n + 1));
+  CHECK(std::memcmp(f, t.plain.func.data(), t.plain.func.size() * 4) == 0);
+  CHECK(std::memcmp(f + half, t.compensated.func.data(), t.compensated.func.size() * 4) == 0);
+  // The grid is the world's, not uniform: the red half of the image is the brighter.
+  CHECK(set->lights->env_max > 1.2 * set->lights->env_mean);
+}
+
+TEST_CASE("scene_tables/refused grid renders black") {
+  // A world whose radiance overflows to inf: the set is still built, the world light is gone (misses
+  // render black, never the constant), and one PROGRAM_REJECTED entry names the world graph. A good
+  // world under the same graph brings the light back and the entry goes.
+  Fixture fx;
+  fx.commit([&](Edit& e) {
+    fx.set_image(e, {1000.0f, 1000.0f, 1000.0f, 1.0f, 1000.0f, 1000.0f, 1000.0f, 1.0f});
+    fx.set_world(e, 1e38f);
+  });
+  std::shared_ptr<const SceneTableSet> set;
+  REQUIRE_NOTHROW(set = acquire_scene_tables(fx.scene));
+  REQUIRE(set->lights);
+  CHECK(set->lights->world_light == ar::kNoLight);
+  CHECK(!set->lights->env);
+  CHECK(set->counts[uint32_t(TableId::ENV_TABLE)] == 0u);
+  CHECK(fx.rejected() == 1u);
+  // Latching again does not bake again or raise a second entry.
+  CHECK(acquire_scene_tables(fx.scene) == set);
+  CHECK(fx.rejected() == 1u);
+  fx.commit([&](Edit& e) { fx.set_world(e, 1.0f); });
+  const auto good = acquire_scene_tables(fx.scene);
+  CHECK(good->lights->world_light != ar::kNoLight);
+  CHECK(bool(good->lights->env));
+  CHECK(fx.rejected() == 0u);
 }
 
 TEST_CASE("bake_environment/non-uniform max mean and table") {
@@ -437,7 +676,7 @@ TEST_CASE("bake_environment/non-uniform max mean and table") {
   const double tol = (kAnalyticUnits + kReductionUnits) * kU;
   Rig rig(true);
   EnvironmentBaker baker;
-  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, 1.0, kN);
+  const BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, kN);
   REQUIRE(b.table != nullptr);
   std::vector<double> ref(size_t(kN) * kN);
   double max_ref = 0.0, sum_ref = 0.0;
@@ -467,7 +706,7 @@ TEST_CASE("bake_environment/failed launch restores the kernel globals") {
   EnvironmentBaker baker;
   const uint64_t baseline = rig.ledger.total();
   rig.dev.fail_launch = true;
-  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, 1.0, kN), DeviceError);
+  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, {1}, kN), DeviceError);
   rig.dev.fail_launch = false;
   ar::KernelGlobals back{};
   rig.dev.download(&back, rig.kg, 0, sizeof back);
@@ -476,96 +715,8 @@ TEST_CASE("bake_environment/failed launch restores the kernel globals") {
   CHECK(rig.ledger.total() == baseline);
   CHECK(baker.rebuild_count() == 0u);
   // The same key bakes afterwards: the failure left no cache behind.
-  CHECK(baker.get(rig.dev, rig.kg, {1}, 1.0, kN).table != nullptr);
+  CHECK(baker.get(rig.dev, rig.kg, {1}, kN).table != nullptr);
   CHECK(baker.rebuild_count() == 1u);
-}
-
-TEST_CASE("bake_environment/radiance scale moves no cache") {
-  // 0003 d10: the light table multiplies every emitter's strength, the world's included, by s = 2^k,
-  // which an emitter edit can move with the world untouched. The grid then changes scale, the key
-  // does not, and max and mean must stay in the world's unscaled units.
-  const ar_key W = 40, GE = 61, E = 60, MESH_E = 100;
-  Fixture fx;
-  Rig rig;
-  fx.commit([&](Edit& e) {
-    const GB gw = constant_emission(3.0f), ge = constant_emission(1000.0f);
-    const ar_graph_desc dw = gw.desc(), de = ge.desc();
-    ar_world_desc w = {};
-    w.surface_graph = W;
-    ar_material_desc me = {};
-    me.surface_graph = GE, me.emission_sampling = AR_EMISSION_SAMPLING_FRONT;
-    REQUIRE(fx.scene.materials->set_graph(e, W, &dw) == AR_OK);
-    REQUIRE(fx.scene.materials->set_world(e, &w) == AR_OK);
-    REQUIRE(fx.scene.materials->set_graph(e, GE, &de) == AR_OK);
-    REQUIRE(fx.scene.materials->set_material(e, E, &me) == AR_OK);
-  });
-  {
-    const std::vector<float> pos{0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0};
-    const std::vector<int32_t> cv{0, 1, 2, 3}, fs{0};
-    fx.commit([&](Edit& e) {
-      ar_mesh_desc d = {};
-      d.key = MESH_E, d.vertex_count = 4, d.corner_count = 4, d.face_count = 1, d.motion_steps = 1;
-      ar_mesh_buffers b = {};
-      REQUIRE(mesh_begin(fx.scene, e, &d, &b) == AR_OK);
-      std::memcpy(*b.positions, pos.data(), pos.size() * 4);
-      std::memcpy(*b.corner_vert, cv.data(), cv.size() * 4);
-      std::memcpy(*b.face_start, fs.data(), fs.size() * 4);
-      for (uint64_t i = 0; i < b.corner_normals_count; ++i) (*b.corner_normals)[i] = i % 3 == 2 ? 1.0f : 0.0f;
-      REQUIRE(e.item_commit(MESH_E) == AR_OK);
-    });
-    std::vector<ar_key> geom{MESH_E}, object{1}, pool{E};
-    std::vector<ar_xform> xf(1);
-    xf[0].m[0] = xf[0].m[5] = xf[0].m[10] = 1.0f;
-    std::vector<uint32_t> zeros(1, 0), vis(1, AR_VISIBILITY_CAMERA), moff{0}, mcount{1};
-    std::vector<ar_rgba> colors(1, ar_rgba{{1, 1, 1, 1}});
-    std::vector<uint8_t> lg(1, 0);
-    ar_instances_desc d = {};
-    d.instance_count = 1, d.motion_steps = 1, d.transform_count = 1, d.material_key_count = 1;
-    d.geom_keys = geom.data(), d.xf = xf.data(), d.object_keys = object.data();
-    d.random_ids = d.pass_indices = d.crypto_objects = d.crypto_assets = zeros.data();
-    d.colors = colors.data(), d.visibility = vis.data(), d.flags = zeros.data(), d.light_groups = lg.data();
-    d.material_offsets = moff.data(), d.material_counts = mcount.data(), d.material_keys = pool.data();
-    fx.commit([&](Edit& e) { REQUIRE(set_instances(e, &d) == AR_OK); });
-  }
-  const auto world = fx.scene.materials->world();
-  REQUIRE(world);
-  const std::vector<uint8_t> key = EnvironmentBaker::world_key(world.get());
-  const double want = display_energy({{world->color, world->strength}}, observer());
-  // The world record as the light table holds it, scale folded in, bound as the kernel will read it.
-  const auto bind_table = [&](const LightTable& t) {
-    REQUIRE(t.world_light != ar::kNoLight);
-    const ar::LightRecord rec = t.lights[t.world_light];
-    rig.dev.upload(rig.lights, 0, &rec, sizeof rec);
-    rig.bind(0);
-  };
-
-  EnvironmentBaker baker;
-  const auto t1 = fx.scene.lights();
-  bind_table(*t1);
-  const BakedEnvironment first = baker.get(rig.dev, rig.kg, key, t1->radiance_scale, kN);
-  REQUIRE(first.table != nullptr);
-  CHECK(std::fabs(first.max - want) <= 1e-6 * want);
-  CHECK(std::fabs(first.mean - want) <= 1e-6 * want);
-
-  // An emitter edit moves s; the world and so its key stay.
-  fx.commit([&](Edit& e) {
-    const GB g = constant_emission(16000.0f);
-    const ar_graph_desc d = g.desc();
-    REQUIRE(fx.scene.materials->set_graph(e, GE, &d) == AR_OK);
-  });
-  const auto t2 = fx.scene.lights();
-  REQUIRE(t2->radiance_scale != t1->radiance_scale);
-  CHECK(t2->lights[t2->world_light].strength != t1->lights[t1->world_light].strength);
-  CHECK(EnvironmentBaker::world_key(fx.scene.materials->world().get()) == key);
-  bind_table(*t2);
-  // The kernel does see the new scale: its cells are s times the unscaled radiance.
-  CHECK(std::fabs(double(rig.raw_grid(kN)[0]) / t2->radiance_scale - want) <= 1e-6 * want);
-  const BakedEnvironment second = baker.get(rig.dev, rig.kg, key, t2->radiance_scale, kN);
-  CHECK(baker.rebuild_count() == 1u);
-  CHECK(second.table == first.table);
-  CHECK(second.max == first.max);
-  CHECK(second.mean == first.mean);
-  CHECK_THROWS_AS(baker.get(rig.dev, rig.kg, key, 0.0, kN), std::invalid_argument);
 }
 
 }  // TEST_SUITE("fast")

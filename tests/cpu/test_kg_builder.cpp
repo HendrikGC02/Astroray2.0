@@ -330,6 +330,7 @@ TEST_CASE("kg_builder/medium table refuses an unplaced or out of range block") {
 
 TEST_CASE("kg_builder/a program world carries its program and block") {
   Rig r;
+  r.scene.table_cache().bake_size = 16;  // the program world bakes at the latch: kept short on the CPU
   r.build();
   const auto constant = acquire_scene_tables(r.scene);
   REQUIRE(constant);
