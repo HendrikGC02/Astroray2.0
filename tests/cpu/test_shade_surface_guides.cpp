@@ -584,6 +584,32 @@ TEST_CASE("shade_surface_guides/escape at the first segment") {
     }
 }
 
+TEST_CASE("shade_surface_guides/an escape guide that overflows fails the sample") {
+  // A finite contribution near the float limit overflows the float display conversion (film weights
+  // of about 160 here): the guide is not finite, so the sample is invalid, as for a non-finite
+  // contribution, and nothing is written.
+  constexpr uint32_t kN = 4;
+  Rig rig(kN, true);
+  std::mt19937_64 rng(22);
+  for (uint32_t i = 0; i < kN; ++i) {
+    rig.start(i, 0, front_point(i, kN), Real3{0, 0, 1}, rng);
+    rig.next_stage[i] = uint8_t(ar::Stage::SHADE_BACKGROUND);
+  }
+  std::vector<ar::LightRecord> lights{ar::light_make_world(Real(2.0e38f), ar::make_const_ref(ar::SpectrumSemantic::REFLECTANCE, Real(1)))};
+  ar::LightSamplerView sampler{};
+  sampler.light_count = 1;
+  rig.kg.lights = lights.data();
+  rig.kg.world_light = 0;
+  rig.kg.light_sampler = &sampler;
+  cpu_stage_shade_background(rig.kg, ar::StepEntry{0, kN, 0}, 0, kN);
+  const ar::FilmData& f = rig.film->data();
+  for (uint32_t i = 0; i < kN; ++i) {
+    CHECK(rig.term[i] == uint8_t(ar::Term::INVALID));
+    CHECK(std::isnan(f.slot_L[4u * i]));
+    for (uint32_t k = 0; k < 6; ++k) CHECK(f.add[uint64_t(uint32_t(f.guide_albedo) + k) * f.plane_stride + i] == 0.0f);
+  }
+}
+
 TEST_CASE("shade_surface_guides/a set bit writes nothing") {
   // A path whose bit is set (a volume scatter before any surface, shade_volume.h) writes no guide at
   // a later diffuse surface and keeps its tint.
