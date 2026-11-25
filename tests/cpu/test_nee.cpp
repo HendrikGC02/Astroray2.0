@@ -369,7 +369,7 @@ TEST_CASE("nee/point lamp item contribution and target") {
     const ar::Real3 p = ar::offset_ray_origin(c[s].P, c[s].Ng, c[s].wo);
     const ar::Real3 d = pos[l] - p;
     const ar::Real3 wi = ar::normalize(d);
-    const ar::LobeEval ev = ar::stack_eval(*rig.kg.e_diel, rec[s], ar::frame_from_normal(c[s].N), c[s].wo, wi,
+    const ar::LobeEval ev = ar::stack_eval(*rig.kg.e_diel, *rig.kg.e_spec, rec[s], ar::frame_from_normal(c[s].N), c[s].wo, wi,
                                            ar::TransportMode::Radiance);
     const ar::Spec le = ar::light_emission(rig.lamps[uint32_t(l)], c[s].lambda_t, rig.kg.tables->observer) /
                         (ar::Real(4) * ar::kLightPi * ar::dot(d, d));
@@ -407,7 +407,7 @@ TEST_CASE("nee/rectangle lamp carries the balance weight") {
     const ar::LightLiSample ls = ar::light_sample_li(rect, lc, u, c[s].lambda_t, rig.kg.tables->observer);
     REQUIRE(ls.pdf > 0.0f);
     REQUIRE(!ls.delta);
-    const ar::LobeEval ev = ar::stack_eval(*rig.kg.e_diel, rec[s], ar::frame_from_normal(c[s].N), c[s].wo, ls.wi,
+    const ar::LobeEval ev = ar::stack_eval(*rig.kg.e_diel, *rig.kg.e_spec, rec[s], ar::frame_from_normal(c[s].N), c[s].wo, ls.wi,
                                            ar::TransportMode::Radiance);
     REQUIRE(ev.pdf > 0.0f);
     CHECK(ar::length(rig.sh_o[it] + rig.sh_d[it] * rig.sh_tmax[it] - ls.p_light) < 1e-5f);  // no far-end offset on a lamp

@@ -39,7 +39,7 @@ namespace {
 
 constexpr uint32_t kElemMax = 432;  // kg_checksum.cu kKgElemMax
 constexpr uint32_t kRow = 8 + 2 * kElemMax;
-constexpr uint32_t kRows = static_cast<uint32_t>(TableId::MATERIAL_SPECTRA) + 1u;
+constexpr uint32_t kRows = static_cast<uint32_t>(TableId::E_SPEC) + 1u;
 
 struct Graph {
   std::vector<ar_graph_node> nodes;
@@ -300,6 +300,10 @@ std::vector<HostRow> host_rows(Scene& scene, const SceneTableSet& set) {
   REQUIRE(ar::e_diel_view(blob.data, blob.size, &e) == nullptr);
   at(TableId::E_DIEL) = row_of(e.e, size_t(ar::kEDielN) * ar::kEDielN * ar::kEDielN);
   at(TableId::MATERIAL_SPECTRA) = row_of(mats->spectra.data(), mats->spectra.size());
+  REQUIRE(find_data("tables/e_spec.bin", &blob));
+  ar::ESpecTable es;
+  REQUIRE(ar::e_spec_view(blob.data, blob.size, &es) == nullptr);
+  at(TableId::E_SPEC) = row_of(es.e, size_t(ar::kESpecN) * ar::kESpecN);
   return rows;
 }
 

@@ -123,6 +123,7 @@ enum class TableId : uint32_t {
   E_DIEL,
   MATERIAL_SPECTRA,  // the spectrum arena of the TABLE SpectrumRefs (0005 item 9); after E_DIEL so the
                      // checksum rows keep their order
+  E_SPEC,            // the metal lobe's E_spec table (lobes/tables.h); last for the same reason
   HEADER,
 };
 inline constexpr uint32_t kTableCount = static_cast<uint32_t>(TableId::HEADER) + 1u;
@@ -153,6 +154,7 @@ struct SceneTableSet {
   const ar::SceneTables* vm = nullptr;
   const ar::LightSamplerView* light_sampler = nullptr;
   const ar::EDielTable* e_diel = nullptr;
+  const ar::ESpecTable* e_spec = nullptr;
   ar::SceneData scene_host{};
   // Host only: distinct surface programs among the materials (MaterialArrays::program_count), the
   // material sort's threshold (RULINGS 80); the scheduler compares it with kSortMinMaterials.

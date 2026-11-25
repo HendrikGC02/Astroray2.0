@@ -12,7 +12,7 @@
 #include "scene/scene_view.h"
 #include "vm/context.h"
 
-// One row per table, in host/scene/scene_tables.h TableId order up to MATERIAL_SPECTRA: count (u32),
+// One row per table, in host/scene/scene_tables.h TableId order up to E_SPEC: count (u32),
 // element size (u32), then the first and last element, kKgElemMax bytes each.
 constexpr uint32_t kKgElemMax = 432;
 constexpr uint32_t kKgRow = 8 + 2 * kKgElemMax;
@@ -59,4 +59,5 @@ extern "C" __global__ void ar_kg_checksum(const ar::KernelGlobals* kgp, uint8_t*
   kg_row(out, r++, t.srgb_decode, ar::kSrgbTableSize, 4);
   kg_row(out, r++, kg.e_diel->e, ar::kEDielN * ar::kEDielN * ar::kEDielN, 4);
   kg_row(out, r++, s.material_spectra, s.material_spectra_count, 4);
+  kg_row(out, r++, kg.e_spec->e, ar::kESpecN * ar::kESpecN, 4);
 }

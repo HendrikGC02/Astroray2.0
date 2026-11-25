@@ -64,6 +64,7 @@ struct DisplayTarget;
 struct LightRecord;       // light/light_record.h
 struct LightSamplerView;  // light/light_sampler.h
 struct EDielTable;        // material/lobes/tables.h
+struct ESpecTable;        // material/lobes/tables.h
 struct CameraView;   // camera/camera.h
 struct FilterTable;  // film/filter.h
 
@@ -111,10 +112,12 @@ struct KernelGlobals {
   const FilterTable* filter;
 
   // The light table the session latched for its epoch (068): records by light index, the alias
-  // sampler over them (light_sampler->light_count lights), and the GGX dielectric E table (064).
+  // sampler over them (light_sampler->light_count lights), the GGX dielectric E table (064) and the
+  // metal lobe's E_spec table (lobes/tables.h).
   const LightRecord* lights;
   const LightSamplerView* light_sampler;
   const EDielTable* e_diel;
+  const ESpecTable* e_spec;
   // Lengths of the scene arrays SceneData does not count: material-pool entries (material_slots),
   // program words and constant blocks.
   uint32_t material_slot_count;
