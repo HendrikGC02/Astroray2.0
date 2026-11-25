@@ -144,9 +144,12 @@ try {
   }
 } catch {
   "FAIL shards: $_"
+  # What the finished shards printed, before the files go.
+  for ($i = 0; $i -lt $ps.Count; $i++) { foreach ($f in "$capture.$i", "$capture.$i.err") { if (Test-Path $f) { Get-Content $f } } }
   $code = 1
 } finally {
-  # By the PIDs this helper started (0009 d8): a throw or a stopped step leaves no shard running.
+  # By the PIDs this helper started (0009 d8): a throw leaves no shard running; a Ctrl-C of the parent can
+  # leave them for the seconds they need to finish.
   foreach ($p in $ps) { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
   Remove-Item "$capture.*" -Force -ErrorAction SilentlyContinue
 }
@@ -246,6 +249,9 @@ $global:LASTEXITCODE = $code
         # One --duration line per case a shard ran (doctest's summary counts every case passing the filters,
         # not the --first/--last range): together the shards run the whole tier.
         $ran = @($o | Where-Object { $_ -match '^\s*[0-9]+\.[0-9]+ s: ' }).Count
+        # Every shard prints its build line first: a shard that died before printing is counted out here.
+        $started = @($o | Where-Object { $_ -match '^build: ' }).Count
+        if ($started -ne $n) { "FAIL cpu gate tests shards: $started of $n shards printed a build line"; $code = 1 }
         if ($ran -ne $all) { "FAIL cpu gate tests shards: $ran of $all cases ran"; $code = 1 }
         else { "shards: cpu gate tests $n shards, $ran of $all cases" }
         # No shard sees a whole statistical family: sum the executed counts of every family over the shards

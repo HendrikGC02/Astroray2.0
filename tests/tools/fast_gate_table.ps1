@@ -53,9 +53,9 @@ Set-Content "$cd/gpu-gate-tests.out" @('no timed line')
 $null = @(& $py -I (Join-Path $root 'tools/gate_table.py') --cases --dir $cd 2>&1)
 if ($LASTEXITCODE -eq 0) { Write-Host 'FAIL gate_table --cases: a step output without timed lines was accepted'; $fail++ }
 
-# --cut: contiguous ranges over a canned --list-test-cases output (the f32/f64 pair 'p/pair' sits on both
+# --cut: contiguous ranges over a canned --list-test-cases output (the f32/f64 pair 'p/pair' and 'p/pair f64' sits on both
 # sides of the fourth case, so no cut may fall between its two instances), with a skewed last run.
-$names = @('a/one', 'p/pair', 'a/two', 'a/three', 'p/pair', 'a/four', 'a/five', 'a/six', 'a/seven', 'a/eight')
+$names = @('a/one', 'p/pair', 'a/two', 'a/three', 'p/pair f64', 'a/four', 'a/five', 'a/six', 'a/seven', 'a/eight')
 Set-Content "$cd/list.txt" (@('build: sha=x dirty=0 kernels=embedded', 'tier=gate tests=10', '[doctest] listing all test case names', ('=' * 79)) + $names + @(('=' * 79), '[doctest] unskipped test cases passing the current filters: 10'))
 Set-Content "$cd/prev.out" (@($names | ForEach-Object { '  1.000 s: ' + $_ }) | ForEach-Object { $_ })
 foreach ($n in 2, 3, 4) {

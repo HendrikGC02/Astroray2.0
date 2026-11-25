@@ -184,8 +184,8 @@ def list_names(text):
 def cut_ends(names, seconds, n):
     """Last index (1-based, inclusive) of each of n contiguous doctest ranges over `names`, balancing
     seconds (name -> seconds of the last run; a missing name counts as the mean) and never cutting
-    between two cases of the same name: the f32 and f64 instances of an AR_RT case compare bitwise
-    inside one process (sampler/f32 f64). Without seconds the balance is by count. The ends are
+    between the f32 and f64 instances of an AR_RT case (the name with and without a trailing ' f64'):
+    they compare bitwise inside one process (sampler/f32 f64 bitwise). Without seconds the balance is by count. The ends are
     strictly increasing and the last is len(names), or ValueError."""
     total = len(names)
     if not 1 <= n <= total:
@@ -194,10 +194,14 @@ def cut_ends(names, seconds, n):
     mean = sum(known) / len(known) if known else 1.0
     cost = [seconds.get(x, mean) if known else 1.0 for x in names]
     # A cut after index j (0-based) is allowed unless some name occurs on both sides of it.
+    # AR_RT_SUFFIX names the f64 instance 'sampler/f32 f64 bitwise f64': the pair shares the name minus a trailing ' f64'.
+    def key(x):
+        return x[:-4] if x.endswith(" f64") else x
+
     first, last = {}, {}
     for j, x in enumerate(names):
-        first.setdefault(x, j)
-        last[x] = j
+        first.setdefault(key(x), j)
+        last[key(x)] = j
     blocked = [False] * total
     for x in first:
         for j in range(first[x], last[x]):
