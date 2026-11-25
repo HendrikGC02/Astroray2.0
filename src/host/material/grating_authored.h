@@ -59,6 +59,9 @@ inline bool parse_grating_authored(const uint8_t bytes[64], GratingAuthored* out
   if (!(std::isfinite(g.depth_nm) && g.depth_nm > 0.0f)) return bad("depth_nm", std::to_string(g.depth_nm) + " is not finite and positive");
   if (!(std::isfinite(g.coating_n) && g.coating_n >= 0.0f)) return bad("coating_n", std::to_string(g.coating_n) + " is not finite and >= 0");
   if (!(std::isfinite(g.coating_k) && g.coating_k >= 0.0f)) return bad("coating_k", std::to_string(g.coating_k) + " is not finite and >= 0");
+  // n = 1, k = 0 matches the ambient index: Fresnel reflectance is 0 at every angle, so the table
+  // would be all zero.
+  if (g.coating_n == 1.0f && g.coating_k == 0.0f) return bad("coating_n", "1 with coating_k 0: index-matched coating reflects nothing");
   if (g.mode > uint8_t(GratingAuthoredMode::Transmit))
     return bad("mode", std::to_string(g.mode) + " is neither 0 (reflect) nor 1 (transmit)");
   if (g.profile > uint8_t(GratingAuthoredProfile::Csv))

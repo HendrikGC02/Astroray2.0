@@ -1655,6 +1655,8 @@ uint32_t ext_max_kind() {
   return m;
 }
 
+}  // namespace
+
 // The kind's check of its constants. GRATING (item 23, layout in ext_params.h): a finite positive
 // pitch, |m| <= 8 with m_min <= m_max (at most 17 orders, the table's limit), mode reflect or
 // transmit, and in transmission a substrate index the kernel can resolve (CONSTANT or CAUCHY_ABBE,
@@ -1691,6 +1693,8 @@ bool ext_params_valid(uint32_t kind, const ar::ExtParams& e, std::string* why) {
   }
   return true;
 }
+
+namespace {
 
 // `graph` without its STORE_SLOT nodes to slots `kind` does not keep (item 15: those inputs do not
 // exist for the material). Roots only they fed drop out of compile_surface's dead-code pass, so a

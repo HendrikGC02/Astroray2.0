@@ -18,7 +18,9 @@
 #include "../../src/host/material/grating_authored.h"
 #include "../../src/host/material/material_store.h"
 #include "host/scene/edit.h"
+#include "common/grating_cells.h"
 #include "material/ext/grating_table.h"
+#include "material/lobes/metal.h"
 #include "material/material_header.h"
 #include "vm/interp.h"
 #include "stages/route_hit.h"
@@ -109,14 +111,7 @@ uint32_t count_code(const MaterialOutput& m, uint32_t code) {
 // The largest sum of eta over a cell's orders in a compiled grating table.
 double max_cell_sum(const astroray::host::CompileResult& r) {
   const int orders = int(r.ext_table.size() / (size_t(ar::kGratingCosBins) * ar::kGratingWavelengths));
-  double worst = 0.0;
-  for (int c = 0; c < ar::kGratingCosBins; ++c)
-    for (int w = 0; w < ar::kGratingWavelengths; ++w) {
-      double sum = 0.0;
-      for (int o = 0; o < orders; ++o) sum += double(r.ext_table[ar::grating_table_index(o, c, w)]);
-      worst = std::fmax(worst, sum);
-    }
-  return worst;
+  return astroray::testing::grating_max_cell_sum(r.ext_table, orders);
 }
 
 }  // namespace
@@ -186,6 +181,8 @@ TEST_CASE("ext_material/grating bad field is named") {
   bad.push_back({"zero depth", with([](GratingAuthored& g) { g.depth_nm = 0.0f; }), "depth_nm"});
   bad.push_back({"inf depth", with([](GratingAuthored& g) { g.depth_nm = HUGE_VALF; }), "depth_nm"});
   bad.push_back({"negative coating_n", with([](GratingAuthored& g) { g.coating_n = -0.1f; }), "coating_n"});
+  bad.push_back({"index-matched coating", with([](GratingAuthored& g) { g.coating_n = 1.0f; g.coating_k = 0.0f; }),
+                 "index-matched coating reflects nothing"});
   bad.push_back({"nan coating_k", with([](GratingAuthored& g) { g.coating_k = std::nanf(""); }), "coating_k"});
   bad.push_back({"mode 2", with([](GratingAuthored& g) { g.mode = 2; }), "mode 2"});
   bad.push_back({"profile 3", with([](GratingAuthored& g) { g.profile = 3; }), "profile 3"});
@@ -275,6 +272,88 @@ TEST_CASE("ext_material/grating no coating is reflectance one and reported") {
   const MaterialOutput metal = compile_extension(material(1), none, table());
   CHECK(max_cell_sum(m.compiled) > max_cell_sum(metal.compiled));
   CHECK(count_code(metal, AR_REPORT_INPUT_IGNORED) == 0u);
+}
+
+TEST_CASE("ext_material/grating coating scales the table by the conductor Fresnel") {
+  const ar_graph_desc none = {};
+  GratingAuthored lossless = good_grating();
+  lossless.coating_n = 0.0f;
+  lossless.coating_k = 0.0f;
+  const MaterialOutput coated = compile_extension(material(1), none, table());  // (n, k) = (1, 6)
+  const MaterialOutput bare = compile_extension(material(1, lossless), none, table());
+  REQUIRE(!coated.magenta);
+  REQUIRE(!bare.magenta);
+  REQUIRE(coated.compiled.ext_table.size() == bare.compiled.ext_table.size());
+  // Same cells, same wavelength-independent factor: eta_coated = F(cos) * eta_lossless, F the
+  // unpolarised conductor reflectance. c = 0 is grazing (phase 0, all light in order 0); the
+  // orders are -2..2, so o = 2 is m = 0.
+  const struct { int o, c, w; } cells[] = {{2, 0, 0}, {2, 0, 94}, {2, 15, 10}, {2, 8, 50}, {3, 15, 30}, {3, 8, 40}, {1, 12, 20}, {4, 15, 5}};
+  for (const auto& cell : cells) {
+    const size_t i = ar::grating_table_index(cell.o, cell.c, cell.w);
+    const double plain = bare.compiled.ext_table[i];
+    INFO("order index " << cell.o << " cos bin " << cell.c << " wavelength bin " << cell.w);
+    REQUIRE(plain > 1e-3);  // a cell where the ratio is meaningful
+    const double want = ar::fresnel_conductor_scalar<double>(double(cell.c) / double(ar::kGratingCosBins - 1), 1.0, 6.0);
+    CHECK(double(coated.compiled.ext_table[i]) / plain == doctest::Approx(want).epsilon(1e-4));
+  }
+  // Grazing incidence is a real cell of the table: order 0 carries all light there, so its value is F(0).
+  CHECK(double(coated.compiled.ext_table[ar::grating_table_index(2, 0, 0)]) ==
+        doctest::Approx(ar::fresnel_conductor_scalar<double>(0.0, 1.0, 6.0)).epsilon(1e-5));
+}
+
+TEST_CASE("ext_material/ext params check of the device words") {
+  using astroray::host::ext_params_valid;
+  const uint32_t grating = uint32_t(ar::ExtKind::GRATING);
+  auto words = [](auto edit) {
+    ar::GratingParams g = {};
+    g.pitch_nm = 1600.0f;
+    g.mode = uint32_t(ar::GratingMode::Reflect);
+    g.m_min = -2;
+    g.m_max = 2;
+    edit(g);
+    return ar::grating_ext_params(g);
+  };
+  auto cauchy = [&](float nd, float vd, float scale) {
+    return words([=](ar::GratingParams& g) {
+      g.mode = uint32_t(ar::GratingMode::Transmit);
+      g.substrate_ior.kind = uint8_t(ar::SpectrumKind::CAUCHY_ABBE);
+      g.substrate_ior.semantic = uint8_t(ar::SpectrumSemantic::IOR);
+      g.substrate_ior.p[0] = nd;
+      g.substrate_ior.p[1] = vd;
+      g.substrate_ior.p[2] = scale;
+    });
+  };
+  std::string why;
+  CHECK(ext_params_valid(grating, words([](ar::GratingParams&) {}), &why));
+  CHECK(ext_params_valid(7u, ar::ExtParams{}, &why));  // other kinds have no check
+  struct Bad {
+    const char* what;
+    ar::ExtParams e;
+    const char* text;
+  };
+  const Bad bad[] = {
+      {"zero pitch", words([](ar::GratingParams& g) { g.pitch_nm = 0.0f; }), "pitch_nm"},
+      {"nan pitch", words([](ar::GratingParams& g) { g.pitch_nm = std::nanf(""); }), "pitch_nm"},
+      {"m_max 9", words([](ar::GratingParams& g) { g.m_max = 9; }), "orders"},
+      {"m_min -9", words([](ar::GratingParams& g) { g.m_min = -9; }), "orders"},
+      {"m_min > m_max", words([](ar::GratingParams& g) { g.m_min = 2; g.m_max = 1; }), "orders"},
+      {"mode 2", words([](ar::GratingParams& g) { g.mode = 2u; }), "mode"},
+      {"transmit without substrate", words([](ar::GratingParams& g) { g.mode = 1u; }), "substrate"},
+      {"Abbe number 0", cauchy(1.5f, 0.0f, 1.0f), "Abbe number"},
+      {"dispersion scale negative", cauchy(1.5f, 30.0f, -1.0f), "dispersion scale"},
+  };
+  for (const Bad& b : bad) {
+    INFO(b.what);
+    why.clear();
+    CHECK(!ext_params_valid(grating, b.e, &why));
+    CHECK(why.find(b.text) != std::string::npos);
+  }
+  CHECK(ext_params_valid(grating, cauchy(1.5f, 30.0f, 1.0f), &why));
+  CHECK(ext_params_valid(grating, words([](ar::GratingParams& g) {
+          g.m_min = -8;
+          g.m_max = 8;
+        }),
+                         &why));
 }
 
 TEST_CASE("ext_material/grating inputs reach no device table") {

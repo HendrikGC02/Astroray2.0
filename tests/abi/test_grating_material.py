@@ -75,6 +75,7 @@ class GratingMaterial(unittest.TestCase):
                ("depth_nm", pack(depth_nm=0.0), "depth_nm"),
                ("coating_n", pack(coating_n=-1.0), "coating_n"),
                ("coating_k", pack(coating_k=-1.0), "coating_k"),
+               ("index-matched coating", pack(coating_n=1.0, coating_k=0.0), "index-matched coating reflects nothing"),
                ("mode", pack(mode=2), "mode 2"),
                ("profile", pack(profile=3), "profile 3"),
                ("m_min", pack(m_min=-9), "m_min"),

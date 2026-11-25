@@ -71,11 +71,19 @@ def _grating_layout():
     field list so the byte layout has one source; the bytes after the last field are reserved zero."""
     with open(GRATING_AUTHORED_H, encoding="utf-8") as f:
         text = f.read()
-    rows = re.findall(r"^\s*X\((\w+),\s*[\w ]+,\s*'(\w)'\)", text, re.M)
-    if not rows:
-        raise RuntimeError(f"{GRATING_AUTHORED_H}: no AR_GRATING_AUTHORED_FIELDS rows parsed")
+    body = re.search(r"#define AR_GRATING_AUTHORED_FIELDS\(X\)(.*?)\n\s*\n", text, re.S)
+    if body is None:
+        raise RuntimeError(f"{GRATING_AUTHORED_H}: AR_GRATING_AUTHORED_FIELDS not found")
+    rows = re.findall(r"\bX\((\w+),\s*[\w ]+,\s*'(\w)'\)", body.group(1))
+    declared = len(re.findall(r"\bX\(", body.group(1)))
+    if not rows or len(rows) != declared:
+        raise RuntimeError(f"{GRATING_AUTHORED_H}: {declared} X( rows in the field list, the parser read {len(rows)}")
     names = [n for n, _ in rows]
     fields = "<" + "".join(c for _, c in rows)
+    reserved_at = re.search(r"offsetof\(GratingAuthored, reserved\) == (\d+)", text)
+    if reserved_at is None or struct.calcsize(fields) != int(reserved_at.group(1)):
+        raise RuntimeError(f"{GRATING_AUTHORED_H}: the fields take {struct.calcsize(fields)} B, the header says "
+                           f"reserved starts at {reserved_at and reserved_at.group(1)}")
     pad = 64 - struct.calcsize(fields)
     if pad < 0:
         raise RuntimeError(f"{GRATING_AUTHORED_H}: the authored fields exceed 64 bytes")

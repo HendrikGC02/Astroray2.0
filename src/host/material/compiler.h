@@ -164,6 +164,10 @@ VolumeOutput compile_volume(const ar_graph_desc& desc, const ar::Rgb2SpecTable& 
 MaterialOutput compile_extension(const ar_material_desc& desc, const ar_graph_desc& graph, const ar::Rgb2SpecTable& table,
                                  const ImageMeanFn* means = nullptr, const ImageSlotFn* slots = nullptr);
 
+// The kind's check of its device words (GRATING: pitch, orders, mode, and in transmission the substrate
+// ref); false and `*why` when they are bad. compile_extension runs it on the words it derives.
+bool ext_params_valid(uint32_t kind, const ar::ExtParams& e, std::string* why);
+
 // The material_header.h flags of a compiled program (0005 item 43).
 uint32_t material_flags(const CompileResult& r);
 

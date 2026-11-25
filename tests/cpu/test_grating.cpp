@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "common/grating_cells.h"
 #include "common/stat.h"
 #include "../../src/host/material/grating_table.h"
 #include "astroray/astroray.h"
@@ -396,16 +397,6 @@ TEST_SUITE("fast") {
   }
   // Host builder (0005 item 24). Every cell of a generated table sums to at most 1 over its orders,
   // which bounds the propagating ones at any azimuth; storage in f32 may add one rounding per order.
-  static double max_cell_sum(const astroray::host::GratingTableResult& r) {
-    double worst = 0.0;
-    for (int c = 0; c < ar::kGratingCosBins; ++c)
-      for (int w = 0; w < ar::kGratingWavelengths; ++w) {
-        double sum = 0.0;
-        for (int o = 0; o < r.order_count; ++o) sum += double(r.eta[ar::grating_table_index(o, c, w)]);
-        worst = std::fmax(worst, sum);
-      }
-    return worst;
-  }
 
   AR_RT_CASE("grating/table cells sum le one") {
     using astroray::host::GratingTableSpec;
@@ -433,7 +424,7 @@ TEST_SUITE("fast") {
       s.coating = [c](double, double) { return c; };
       s.substrate_ior = [](double) { return 1.5; };
       const astroray::host::GratingTableResult t = astroray::host::build_grating_table(s);
-      const double worst = max_cell_sum(t);
+      const double worst = astroray::testing::grating_max_cell_sum(t.eta, t.order_count);
       std::printf("  %-36s max sum %.7f  clipped cells %u\n", r.what, worst, t.clipped_cells);
       INFO(r.what);
       REQUIRE(t.eta.size() == size_t(17) * ar::kGratingCosBins * ar::kGratingWavelengths);
