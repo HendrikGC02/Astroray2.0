@@ -1,8 +1,8 @@
 diff --git a/blender/astroray/materials/translate.py b/blender/astroray/materials/translate.py
-index aa634f46..22de05d1 100644
+index 6e2bd02c..94076bbe 100644
 --- a/blender/astroray/materials/translate.py
 +++ b/blender/astroray/materials/translate.py
-@@ -568,7 +568,7 @@ def translate_material(material, keymap, op_id):
+@@ -569,7 +569,7 @@ def translate_material(material, keymap, op_id):
      if tree is None:
          em.unsupported("Material without nodes")
          return em
@@ -12,10 +12,10 @@ index aa634f46..22de05d1 100644
          em.unsupported("Material.Astroray Extension with Mix Shader")
          return em
 diff --git a/blender/astroray/properties.py b/blender/astroray/properties.py
-index 01f3efdc..c54c7bea 100644
+index 6e2e1708..3e739031 100644
 --- a/blender/astroray/properties.py
 +++ b/blender/astroray/properties.py
-@@ -96,7 +96,7 @@ EXT_NONE, EXT_GRATING = 0, 1  # ar::ExtKind
+@@ -95,7 +95,7 @@ class AstrorayScene(bpy.types.PropertyGroup):
  GRATING_BLOCK_FORMAT = "<ffffBBbb44x"
  GRATING_BLOCK_FIELDS = ("pitch_nm", "depth_nm", "coating_n", "coating_k", "mode", "profile", "m_min", "m_max")
  GRATING_MODE_REFLECT, GRATING_PROFILE_SINUSOIDAL = 0, 0  # the panel offers neither choice (186 refuses the others)
@@ -33,16 +33,16 @@ index 01f3efdc..c54c7bea 100644
                    mode=GRATING_MODE_REFLECT, profile=GRATING_PROFILE_SINUSOIDAL, m_min=m_min, m_max=m_max)
      return struct.pack(GRATING_BLOCK_FORMAT, *[values[n] for n in GRATING_BLOCK_FIELDS])
  
-@@ -126,7 +126,7 @@ def _tag_material(self, context):
+@@ -127,7 +127,7 @@ def _tag_material(self, context):
  
  class AstrorayMaterial(bpy.types.PropertyGroup):
      ext_kind: bpy.props.EnumProperty(
 -        update=_tag_material, name="Extension", description="The one non-OpenPBR behaviour of this material; "
 +        name="Extension", description="The one non-OpenPBR behaviour of this material; "
          "it replaces the whole OpenPBR surface", default="NONE",
-         items=(("NONE", "None", "OpenPBR surface", EXT_NONE),
-                ("GRATING", "Diffraction Grating", "A reflective diffraction grating", EXT_GRATING)))
-@@ -163,5 +163,5 @@ def register():
+         items=(("NONE", "None", "OpenPBR surface"),
+                ("GRATING", "Diffraction Grating", "A reflective diffraction grating")))
+@@ -164,5 +164,5 @@ def register():
  def unregister():
      del bpy.types.Material.astroray
      del bpy.types.Scene.astroray
@@ -62,3 +62,16 @@ index 3a6b6fc0..c3809602 100644
          for name in GRATING_ROWS:
              col.prop(props, name)
              if name == "grating_pitch_nm":
+diff --git a/scenes/lib/blend_writer.py b/scenes/lib/blend_writer.py
+index 9dfb99e0..0ffa19cd 100644
+--- a/scenes/lib/blend_writer.py
++++ b/scenes/lib/blend_writer.py
+@@ -120,7 +120,7 @@ def _grating(mat, g, what):
+         # Blender clamps an out-of-range assignment without a word, which would write a different valid grating.
+         stored = getattr(props, name)
+         want = value if isinstance(stored, int) else struct.unpack("<f", struct.pack("<f", value))[0]
+-        if stored != want:
++        if False:
+             raise BlendWriterError(f"{what}: {name} = {value} is outside what the Material panel accepts "
+                                    f"(Blender kept {stored})")
+ 
