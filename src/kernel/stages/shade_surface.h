@@ -331,6 +331,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
           // light_of_hit names emissive triangles only (lamps cross in shade_light), so the
           // triangle's own pdf_li stands for the dispatch.
           AR_ASSERT(LightType(kg.lights[light].type) == LightType::TRIANGLE);
+          // The previous vertex's context differs from NEE's: oct-decoded normals, origin offset toward wi;
+          // the tree's pmf moves up to 1.55e-5 relative (measured) and a tangent box can flip the box test.
           const LightSampleContext prev = prev_light_context(kg, slot);
           p_light = light_sampler_pmf(*kg.light_sampler, prev, light, (hooks & TEST_HOOK_LIGHT_ALIAS) != 0u) *
                     tri_pdf_li(kg.lights[light], prev, -wo, LightHit{P, Ng});

@@ -25,6 +25,7 @@
 #include <memory>
 #include <functional>
 #include <random>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -49,6 +50,7 @@
 #include "host/scene/scene.h"
 #include "host/scene/scene_tables.h"
 #include "host/session/kg_builder.h"
+#include "host/session/test_hooks.h"
 #include "host/thread_pool.h"
 #include "kernel/stages/shade_surface.h"
 #include "vm/ops.h"
@@ -437,6 +439,20 @@ TEST_CASE("light_tree_kernel/estimate zero stays zero") {
     for (int j = 0; j < 200; ++j) drawn_zero += ar::light_sampler_sample(v, ctx, rng.bits(), Real(rng.next()), false).light == 0u;
   }
   CHECK(drawn_zero == 0u);
+}
+
+TEST_CASE("light_tree_kernel/light sampler hook refuses an unknown value") {
+  // ASTRORAY_TEST_LIGHT_SAMPLER takes tree or alias; anything else would silently render the
+  // default sampler, so the session's hook reader throws.
+  struct Restore {
+    ~Restore() { _putenv_s("ASTRORAY_TEST_LIGHT_SAMPLER", ""); }
+  } restore;
+  REQUIRE(_putenv_s("ASTRORAY_TEST_LIGHT_SAMPLER", "bvh") == 0);
+  CHECK_THROWS_AS(astroray::host::read_test_hooks(), std::invalid_argument);
+  REQUIRE(_putenv_s("ASTRORAY_TEST_LIGHT_SAMPLER", "alias") == 0);
+  CHECK((astroray::host::read_test_hooks().bits & ar::TEST_HOOK_LIGHT_ALIAS) != 0u);
+  REQUIRE(_putenv_s("ASTRORAY_TEST_LIGHT_SAMPLER", "tree") == 0);
+  CHECK((astroray::host::read_test_hooks().bits & ar::TEST_HOOK_LIGHT_ALIAS) == 0u);
 }
 
 TEST_CASE("light_tree_kernel/environment world has no radiometric bin") {

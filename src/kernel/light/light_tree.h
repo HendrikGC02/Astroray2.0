@@ -195,8 +195,8 @@ AR_FN LightTreeImportance light_tree_importance(const LightTreeNode& node, Real3
 }
 
 // Bounds of a branch probability (see light_tree_split): a quarter of the largest finite Real, so
-// the sum of two importances stays finite, and the smallest normal Real, which a flush-to-zero GPU
-// keeps.
+// the sum of two importances stays finite, and the smallest normal Real as the floor, a positive
+// value with full precision (the kernels build with -ftz=false, cmake/kernels.cmake).
 inline constexpr Real kLightTreeImportanceCap =
     sizeof(Real) == 4 ? Real(float(0x1.fffffep+125)) : Real(double(0x1.fffffffffffffp+1021));
 inline constexpr Real kLightTreeMinBranch = sizeof(Real) == 4 ? Real(float(0x1p-126)) : Real(double(0x1p-1022));

@@ -170,6 +170,8 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
     // After the world program, whose registers are free by then, the tree walk of the pmf.
     Real p_light = Real(0);
     if (weighted) {
+      // The previous vertex's context differs from NEE's: oct-decoded normals, origin offset toward wi;
+      // the tree's pmf moves up to 1.55e-5 relative (measured) and a tangent box can flip the box test.
       const LightSampleContext prev = prev_light_context(kg, slot);
       const Real3 wi = normalize(ps_ray_d(kg, slot));
       p_light = light_sampler_pmf(*kg.light_sampler, prev, kg.world_light, (hooks & TEST_HOOK_LIGHT_ALIAS) != 0u) *

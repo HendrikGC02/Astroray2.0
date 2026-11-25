@@ -157,8 +157,9 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
       // escapes takes MIS weight 1.
       if (program_world(li.record)) {
         // No radiometric power: the record's colour is not radiance and the bake keeps only the
-        // weighted mean, so the world has no floor bin; the tree's distant node, whose maximum
-        // importance is its energy at every point, gives it a positive pmf (D10).
+        // weighted mean, so the world has no floor bin. Baked, the tree's distant node, whose maximum
+        // importance is its energy at every point, gives it a positive pmf; unbaked, its importance
+        // is 0 as well and so is its pmf (D10).
         rads[i] = 0.0;
         if (!env_baked) {
           imps[i] = 0.0;
