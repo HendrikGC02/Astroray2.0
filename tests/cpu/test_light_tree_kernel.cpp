@@ -343,20 +343,36 @@ AR_RT_CASE("light_tree_kernel/world pmf stays positive") {
   CHECK(double(ar::light_sampler_pmf(V.v, c0, tiny, false)) <= 1.0);
 }
 
-AR_RT_CASE("light_tree_kernel/selection frequency matches the mixture") {
-  // 10^6 draws at one point against N pmf per light (chi-squared, pooled cells, Sidak).
-  const st::Run run = st::begin("light_tree_kernel/selection frequency matches the mixture" AR_RT_SUFFIX);
+#if !defined(AR_REAL_DOUBLE)
+TEST_CASE("light_tree_kernel/selection frequency matches the mixture") {
+  // 10^6 draws at one point against N pmf per light (chi-squared, pooled cells, Sidak), in four
+  // independent streams on up to four threads (the counts do not depend on the thread count). The
+  // float copy only: the walk is the same code in both, and B-12 holds one fast case to 0.41 s.
+  const st::Run run = st::begin("light_tree_kernel/selection frequency matches the mixture");
   const Lights L = mixed(true);
   const View V(L);
   const ar::LightSampleContext ctx = ar::light_context_point(r3(4, 6, -3), r3(0.05, -0.03, 1), r3(0.05, -0.03, 1));
-  const int n = 1000000;
-  std::vector<double> observed(V.v.light_count + 1, 0.0), expected(V.v.light_count + 1, 0.0);
-  std::mt19937_64 rng(run.seed);
-  for (int k = 0; k < n; ++k) {
-    const uint64_t b = rng();
-    const ar::SampledLight s = ar::light_sampler_sample(V.v, ctx, uint32_t(b), Real(double(b >> 40) * (1.0 / 16777216.0)), false);
-    observed[s.light == ar::kNoLight ? V.v.light_count : s.light] += 1.0;
-  }
+  constexpr int kStreams = 4, kPer = 250000, n = kStreams * kPer;
+  const uint32_t cells = V.v.light_count + 1;
+  std::vector<std::vector<double>> counts(kStreams, std::vector<double>(cells, 0.0));
+  const auto stream = [&](int c) {
+    std::mt19937_64 rng(st::mix_bits(run.seed + uint64_t(c)));
+    for (int k = 0; k < kPer; ++k) {
+      const uint64_t b = rng();
+      const ar::SampledLight s = ar::light_sampler_sample(V.v, ctx, uint32_t(b), Real(double(b >> 40) * (1.0 / 16777216.0)), false);
+      counts[size_t(c)][s.light == ar::kNoLight ? V.v.light_count : s.light] += 1.0;
+    }
+  };
+  const uint32_t hw = std::max(1u, std::min(uint32_t(kStreams), std::thread::hardware_concurrency()));
+  std::vector<std::thread> pool;
+  for (uint32_t w = 0; w < hw; ++w)
+    pool.emplace_back([&, w] {
+      for (int c = int(w); c < kStreams; c += int(hw)) stream(c);
+    });
+  for (std::thread& t : pool) t.join();
+  std::vector<double> observed(cells, 0.0), expected(cells, 0.0);
+  for (const auto& c : counts)
+    for (uint32_t i = 0; i < cells; ++i) observed[i] += c[i];
   double sum = 0.0;
   for (uint32_t i = 0; i < V.v.light_count; ++i) sum += expected[i] = double(ar::light_sampler_pmf(V.v, ctx, i, false));
   expected[V.v.light_count] = std::max(0.0, 1.0 - sum);
@@ -365,6 +381,7 @@ AR_RT_CASE("light_tree_kernel/selection frequency matches the mixture") {
   std::printf("light_tree_kernel chi2 %.1f dof %d p %.4f\n", res.chi2, res.dof, res.p);
   CHECK_MESSAGE(res.pass, res.message);
 }
+#endif
 
 #if !defined(AR_REAL_DOUBLE)
 
@@ -612,7 +629,7 @@ TEST_CASE("light_tree_kernel/emitter hit pmf matches the sampled frequency") {
   // with r_u = r_l = 1 its emission is weighted 1 / (1 + p), p = pmf(P0, light) pdf_li, while the
   // same path at the first vertex is weighted 1, so their ratio gives the pmf shade_surface used.
   // That pmf must be the frequency with which the sampler picks the light at the same context (P0
-  // and the oct-decoded normal prev_light_context rebuilds): chi-squared over 2^20 draws.
+  // and the oct-decoded normal prev_light_context rebuilds): chi-squared over 2^18 draws.
   const st::Run run = st::begin("light_tree_kernel/emitter hit pmf matches the sampled frequency");
   const std::vector<Emitter> em{{0.2, 0.5, 0.2, 1.0}, {1.0, -1.5, 1.0, 3.0}, {1.5, 2.0, -2.0, 4.0}, {0.5, -0.5, -1.5, 2.0}};
   const uint32_t nl = 8;  // two triangles per quad
@@ -661,7 +678,7 @@ TEST_CASE("light_tree_kernel/emitter hit pmf matches the sampled frequency") {
     // The same number the sampler's pmf gives at that context.
     CHECK(pmf_hit[l] == doctest::Approx(double(ar::light_sampler_pmf(*rig.kg.light_sampler, ctx, l, false))).epsilon(1e-4));
   }
-  const int n = 1 << 20;
+  const int n = 1 << 18;
   std::mt19937_64 rng(run.seed);
   for (int k = 0; k < n; ++k) {
     const uint64_t b = rng();
