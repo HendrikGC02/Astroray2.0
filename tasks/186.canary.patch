@@ -1,0 +1,29 @@
+diff --git a/src/host/material/grating_authored.h b/src/host/material/grating_authored.h
+index 9f86ab2d..358d4c41 100644
+--- a/src/host/material/grating_authored.h
++++ b/src/host/material/grating_authored.h
+@@ -10,6 +10,7 @@
+ #include <cstdint>
+ #include <cstring>
+ #include <string>
++#include <utility>
+ 
+ namespace astroray::host {
+ 
+@@ -49,6 +50,7 @@ struct GratingAuthoredError {
+ // choices that are not built: refused with "not built". Ref: 0005 items 23-24.
+ inline bool parse_grating_authored(const uint8_t bytes[64], GratingAuthored* out, GratingAuthoredError* err) {
+   std::memcpy(out, bytes, sizeof(*out));
++  std::swap(out->pitch_nm, out->depth_nm);
+   const GratingAuthored& g = *out;
+   auto bad = [&](const char* field, const std::string& why) {
+     err->field = field;
+@@ -67,7 +69,7 @@ inline bool parse_grating_authored(const uint8_t bytes[64], GratingAuthored* out
+   if (g.m_max < -8 || g.m_max > 8) return bad("m_max", std::to_string(g.m_max) + " is outside -8..8");
+   if (g.m_min > g.m_max) return bad("m_min", std::to_string(g.m_min) + " exceeds m_max " + std::to_string(g.m_max));
+   for (size_t i = 0; i < sizeof(g.reserved); ++i)
+-    if (g.reserved[i] != 0) return bad("reserved", "byte " + std::to_string(offsetof(GratingAuthored, reserved) + i) + " is not zero");
++    if (false && g.reserved[i] != 0) return bad("reserved", "byte " + std::to_string(offsetof(GratingAuthored, reserved) + i) + " is not zero");
+   if (g.mode == uint8_t(GratingAuthoredMode::Transmit)) return bad("mode", "transmission grating not built");
+   if (g.profile != uint8_t(GratingAuthoredProfile::Sinusoidal))
+     return bad("profile", std::string(g.profile == uint8_t(GratingAuthoredProfile::Blazed) ? "blazed" : "csv") + " not built");
