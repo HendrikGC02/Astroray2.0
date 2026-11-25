@@ -214,6 +214,8 @@ def self_test():
         if abs(cdf(chi2_quantile(p, 63), 63) - p) > 2e-3:
             fails.append(f"chi2 quantile {p}: CDF there is {cdf(chi2_quantile(p, 63), 63):.4f}")
     # A fixed draw; each interval holds the truth with 95 percent probability, so some seed misses one of nine.
+    # The draw depends on numpy's Generator stream, which is not guaranteed stable across numpy versions:
+    # a new numpy that turns this red may need another seed, not a code fix (check the null calibration first).
     rng = np.random.default_rng(2)
     S, h, w, sigma = 64, 32, 32, 0.1
     n = h * w // 2
@@ -226,7 +228,11 @@ def self_test():
         noise[..., :, : w // 2] += offset
         return 1.0 + noise, np.full((S, 3, h, w), sigma ** 2)
 
-    for k, offset, expect_ratio, biased in ((0.0, 0.0, 1.0, False), (3.0, 0.0, 4.0, False), (0.0, 0.02, 1.0, True)):
+    # offset in seed-SE of the half difference: SE_bias = sqrt(2 sigma^2 / n / S) for independent pixels.
+    se_bias = sigma * math.sqrt(2.0 / n / S)
+    cases = ((0.0, 0.0, 1.0, False), (3.0, 0.0, 4.0, False), (0.0, 0.02, 1.0, True),
+             (0.0, 4.5 * se_bias, 1.0, True), (0.0, 1.0 * se_bias, 1.0, False))
+    for k, offset, expect_ratio, biased in cases:
         m, v = planes(k, offset)
         for c, r in enumerate(analyse(m, v, "left-right")):
             if not (r["lo"] <= expect_ratio <= r["hi"]):
@@ -235,10 +241,24 @@ def self_test():
                 fails.append(f"k=3 channel {c}: interval [{r['lo']:.3f}, {r['hi']:.3f}] holds 1")
             if biased != (abs(r["bias_z"]) > Z_BIAS_LIMIT):
                 fails.append(f"k={k} offset={offset} channel {c}: bias z {r['bias_z']:+.2f}, biased={biased}")
+            if k == 0.0 and not (0.75 * se_bias <= r["bias_se"] <= 1.25 * se_bias):
+                # The sample sd of 64 values has a relative sd of 1/sqrt(2 x 63) = 9 percent: 25 percent is 2.8 sigma.
+                fails.append(f"k={k} offset={offset} channel {c}: bias_se {r['bias_se']:.3e} vs expected {se_bias:.3e}")
+    # Null calibration: bias_z of unbiased planes is a Student t with S - 1 = 63 dof, variance 63/61, and
+    # z^2 has variance about 2 (63/61)^2 x (1 + 6/(63 - 4)) ~ 2.4. Over R replicates the mean z^2 must lie within
+    # 4 standard errors of 63/61: R = 300, so 1.033 +- 4 sqrt(2.4 / 300) = +-0.36.
+    reps = 100
+    z2 = []
+    for _ in range(reps):
+        noise = rng.normal(0.0, sigma, (S, 3, 8, 8))
+        z2 += [r["bias_z"] ** 2 for r in analyse(1.0 + noise, np.full((S, 3, 8, 8), sigma ** 2), "left-right")]
+    bound = 4.0 * math.sqrt(2.4 / len(z2))
+    if abs(np.mean(z2) - 63.0 / 61.0) > bound:
+        fails.append(f"null bias z: mean z^2 {np.mean(z2):.3f} vs {63 / 61:.3f} +- {bound:.2f} over {len(z2)} replicates")
     for f in fails:
         print("FAIL region_bias self-test:", f)
     if not fails:
-        print("PASS region_bias self-test: ratio 1 and 4 recovered, bias detected, chi2 quantiles against the CDF")
+        print("PASS region_bias self-test: ratio 1 and 4 recovered, bias detected near the threshold, null bias z calibrated, chi2 quantiles against the CDF")
     return not fails
 
 
