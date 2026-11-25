@@ -2,8 +2,15 @@
 // bake_environment: the environment importance grid of 0004 D11. One thread per cell of an n x n
 // equal-area grid; the cell holds the world radiance at the cell's centre direction, summed over
 // the observer grid with w(lambda) (the CMF sum over its total, D10 "Importance weighting"), so a
-// constant world's cell equals the host's display_energy of the world. The host reads the grid
-// back, normalises it by its maximum and builds the sampling table (host/light/env_bake.h).
+// direction-independent world's cell equals the host's display_energy of its radiance. The world
+// is the scene's world program (0005 item 32), run unscaled: its emission entry carries no radiance
+// scale, so the grid is in the authored world's units. The host reads the grid back, normalises it
+// by its maximum and builds the sampling table (host/light/env_bake.h); only a program world is
+// baked, a constant world needs no table.
+// The program runs through shade_background's world_shade_context and world_program_radiance (P the
+// direction, N, Ng and wo its negative), with no ray-type bits and depth 0: Cycles'
+// importance bake evaluates the background with no ray visibility (kernel/bake/bake.h
+// kernel_background_evaluate, PATH_RAY_VISIBILITY_NONE).
 // Cell index iv n + iu, the layout host/light/env_table.h consumes. The excitation term of
 // w(lambda) is absent until FLUORESCENT exists (D10).
 //
@@ -25,7 +32,9 @@
 // The host reads the f32 grid, which is the Real result itself when Real is float. The tests state
 // the instance of this bound for their callable.
 // Ref: docs/decisions/0004-integrator.md D10, D11; Neumaier 1974, "Rundungsfehleranalyse einiger
-// Verfahren zur Summation endlicher Summen", ZAMM 54 (the compensated sum); pbrt-v4
+// Verfahren zur Summation endlicher Summen", ZAMM 54 (the compensated sum);
+// third_party/_cache/refs/cycles-ed69ef2c6bd3/src/kernel/bake/bake.h kernel_background_evaluate and
+// kernel/geom/shader_data.h shader_setup_from_background (Apache-2.0); pbrt-v4
 // src/pbrt/lights.cpp ImageInfiniteLight (the grid evaluated per cell) and
 // third_party/_cache/refs/pbrt-v4-092b23a47ad4/src/pbrt/util/math.cpp EqualAreaSquareToSphere.
 #pragma once
@@ -36,10 +45,10 @@
 #include "../core/vec.h"
 #include "../kernel_globals.h"
 #include "../light/equal_area.h"
-#include "../light/light_record.h"
-#include "../light/light_sampler.h"
 #include "../portability.h"
+#include "../scene/scene_view.h"
 #include "../vm/context.h"
+#include "shade_background.h"
 
 AR_NS_BEGIN
 
@@ -66,7 +75,7 @@ AR_FN Real3 bake_environment_direction(uint32_t n, uint32_t cell) {
 // The cell's value for a world given as `world(direction, lambdas) -> Spec`: radiance per
 // steradian at the lanes' wavelengths. A cell of a world that is black at every wavelength, or an
 // observer whose weights sum to 0, is 0; a non-finite radiance gives a non-finite cell, which the
-// host refuses (rule 5).
+// host refuses (rule 5); so does a world that cannot run, which returns NaN.
 template <class WorldFn>
 AR_FN Real bake_environment_cell(const WorldFn& world, const ObserverView& obs, uint32_t n, uint32_t cell) {
   const Real3 dir = bake_environment_direction(n, cell);
@@ -91,27 +100,30 @@ AR_FN Real bake_environment_cell(const WorldFn& world, const ObserverView& obs, 
   return w > Real(0) ? weighted.value() / w : Real(0);
 }
 
-// M1b's world is a constant radiance (the world light record); 172 replaces this callable with the
-// world program.
-struct ConstantWorld {
-  const LightRecord* record;
-  const ObserverView* observer;
-  AR_FN Spec operator()(const Real3&, const Lambda& lam) const { return light_emission(*record, lam, *observer); }
+// The world program's radiance toward -dir, unscaled, through shade_background's evaluation in the
+// background context with no ray type and depth 0. A scene without a program, or a VM error, gives
+// NaN in every lane, so the host refuses the grid.
+struct ProgramWorld {
+  const SceneData* scene;
+  const SceneTables* tables;
+  AR_FN Spec operator()(const Real3& dir, const Lambda& lam) const {
+    Spec e;
+    if (!world_program_radiance(*scene, *tables, world_shade_context(dir, lam), &e)) return spec_fill(Real(bit_cast<float>(0x7fc00000u)));
+    return e;
+  }
 };
 
 // The launch size, read from the device-resident KernelGlobals (the host's `count` only sizes a
 // GPU grid, 0002 D4).
 AR_FN uint32_t bake_environment_count(const KernelGlobals& kg) { return kg.env_bake.n * kg.env_bake.n; }
 
-// A scene without a world is black: its cells are 0 and the host reports no table.
+// The host launches only for a program world (host/light/env_bake.h); a launch without one is a host
+// bug, and its NaN cells make the host refuse the grid instead of reading a black world (rule 5).
 AR_FN void bake_environment_write(const KernelGlobals& kg, uint32_t cell) {
   AR_ASSERT(kg.env_bake.grid != nullptr && cell < bake_environment_count(kg));
-  Real v = Real(0);
-  if (kg.world_light != kNoLight) {
-    AR_ASSERT(kg.lights != nullptr && kg.tables != nullptr);
-    const ObserverView& obs = kg.tables->observer;
-    v = bake_environment_cell(ConstantWorld{&kg.lights[kg.world_light], &obs}, obs, kg.env_bake.n, cell);
-  }
+  Real v = Real(bit_cast<float>(0x7fc00000u));  // quiet NaN
+  if (kg.scene != nullptr && kg.tables != nullptr)
+    v = bake_environment_cell(ProgramWorld{kg.scene, kg.tables}, kg.tables->observer, kg.env_bake.n, cell);
   kg.env_bake.grid[cell] = float(v);
 }
 

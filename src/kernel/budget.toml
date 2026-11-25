@@ -178,11 +178,11 @@ compile_s = 1.4
 gated = "merge"
 
 [kernel.k_bake_environment]
-regs = 48
-stack = 0
+regs = 64
+stack = 264
 spill_store = 0
 spill_load = 0
-compile_s = 1.2
+compile_s = 2.3
 gated = "merge"
 
 # The four OptiX programs are compiled by the driver: kernelgate never measures them, so regs and

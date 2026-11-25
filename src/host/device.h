@@ -246,6 +246,13 @@ inline bool reserve_allows(uint64_t need, uint64_t free_bytes, uint64_t reserve)
 std::string cuda_failure_message(int cu_result, const char* name, const char* text, const char* call,
                                  const char* kernel);
 
+class ThreadPool;  // host/thread_pool.h
+
+// A CPU device on a caller's ledger and thread pool (both outlive it) with the production entry
+// points of CpuDevice::register_production_stages, the environment bake's included. Defined in
+// src/device/cpu/cpu_device.cpp, the only place that may name the CPU device.
+std::unique_ptr<Device> make_cpu_device(Ledger& ledger, ThreadPool& pool);
+
 // Defined in src/device/cuda/cuda_device.cpp, which exists only in ASTRORAY_GPU builds.
 // Retains device `device_index`'s primary context; throws DeviceError when CUDA cannot
 // be used, including after a sticky error elsewhere in the process.

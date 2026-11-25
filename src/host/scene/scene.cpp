@@ -9,6 +9,7 @@
 
 #include "host/data_resource.h"
 #include "host/device.h"
+#include "host/light/env_bake.h"
 #include "host/light/lamps.h"
 #include "host/light/light_builder.h"
 #include "host/material/material_store.h"
@@ -16,6 +17,7 @@
 #include "host/scene/edit.h"
 #include "host/scene/media.h"
 #include "host/scene/mesh.h"
+#include "host/scene/world.h"
 #include "host/scene/scene_tables.h"
 #include "host/session/test_hooks.h"
 #include "host/thread.h"
@@ -180,7 +182,25 @@ void Scene::publish_instances(std::shared_ptr<const InstanceTable> table) {
   ++state_.tlas_epoch;
 }
 
+namespace {
+
+// What plan_lights gathered for build_lights: one consistent copy, so the build reads nothing of the
+// scene's live state but the cache it updates.
+struct LightInputs {
+  SceneLights in;
+  std::vector<std::shared_ptr<const Lamp>> lamps;
+  std::shared_ptr<const ObserverTables> observer;
+  double gather_ms = 0.0;  // the full gather, which B-23's rebuild time includes
+};
+
+}  // namespace
+
 std::shared_ptr<const LightTable> Scene::lights() {
+  const LightPlan plan = plan_lights(false);
+  return plan.table ? plan.table : build_lights(plan, nullptr, false);
+}
+
+LightPlan Scene::plan_lights(bool baking) {
   std::lock_guard<std::mutex> lock(state_.mutex);
   if (!state_.observer) {
     DataBlob blob;
@@ -191,7 +211,11 @@ std::shared_ptr<const LightTable> Scene::lights() {
     state_.observer = std::move(t);
   }
   const auto mats = materials->arrays();
-  const auto world = materials->world();
+  LightPlan plan;
+  plan.world = materials->world();
+  plan.images = materials->images().arrays();
+  const WorldOutput* world = plan.world.get();
+  plan.bake_key = EnvironmentBaker::world_key(world, plan.images.get());
   // Live lamps: set, and still in the active generation's key set (a remove or reset drops them).
   // Stale map entries stay, since one may be between its publish and its key-set update.
   std::vector<std::shared_ptr<const Lamp>> lamps;
@@ -212,22 +236,48 @@ std::shared_ptr<const LightTable> Scene::lights() {
       const uint8_t* b = reinterpret_cast<const uint8_t*>(&in->scene);
       in->key.insert(in->key.end(), b, b + sizeof(in->scene));
     }
+    // The world program's identity: a table is built after its world's bake (0004 D11).
+    in->key.insert(in->key.end(), plan.bake_key.begin(), plan.bake_key.end());
   };
-  SceneLights in = gather_scene_lights(state_.instances.get(), *meshes, *mats, world.get(), false);
+  SceneLights in = gather_scene_lights(state_.instances.get(), *meshes, *mats, world, false);
   with_lamps(&in);
-  if (state_.lights && in.key == state_.light_key) return state_.lights;
-  // B-23 is measured from this line: the rebuild alone, not the key check above.
+  const bool unbaked = baking && !plan.bake_key.empty() && state_.lights && !state_.lights->env_baked;
+  if (state_.lights && in.key == state_.light_key && !unbaked) {
+    plan.table = state_.lights;
+    return plan;
+  }
+  auto inputs = std::make_shared<LightInputs>();
+  const auto t_gather = std::chrono::steady_clock::now();
+  inputs->in = gather_scene_lights(state_.instances.get(), *meshes, *mats, world, true);
+  with_lamps(&inputs->in);
+  inputs->gather_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_gather).count();
+  inputs->lamps = std::move(lamps);
+  inputs->observer = state_.observer;
+  plan.inputs = std::move(inputs);
+  return plan;
+}
+
+std::shared_ptr<const LightTable> Scene::build_lights(const LightPlan& plan, const BakedEnvironment* baked, bool world_refused) {
+  if (!plan.inputs) throw std::logic_error("build_lights: the plan holds a cached table and no inputs");
+  const LightInputs& src = *static_cast<const LightInputs*>(plan.inputs.get());
+  std::lock_guard<std::mutex> lock(state_.mutex);
+  // B-23 is the rebuild alone, not the key check: plan_lights' full gather plus everything from here.
   using Clock = std::chrono::steady_clock;
   const Clock::time_point t_start = Clock::now();
-  in = gather_scene_lights(state_.instances.get(), *meshes, *mats, world.get(), true);
-  with_lamps(&in);
+  SceneLights in = src.in;
+  // A refused grid leaves no world light: misses render black, never the constant (rule 5).
+  if (world_refused)
+    in.lights.erase(std::remove_if(in.lights.begin(), in.lights.end(),
+                                   [](const LightInput& li) { return li.record.type == uint8_t(ar::LightType::WORLD_CONST); }),
+                    in.lights.end());
+  const std::vector<std::shared_ptr<const Lamp>>& lamps = src.lamps;
   const uint32_t lamp_first = uint32_t(in.lights.size());
   for (const auto& l : lamps) {
     LightInput li;
     li.record = l->record;
     in.lights.push_back(std::move(li));
   }
-  const ar::ObserverView obs{&state_.observer->cmf[0][0], state_.observer->d65};
+  const ar::ObserverView obs{&src.observer->cmf[0][0], src.observer->d65};
   // 0003 d10: s = 2^k puts the largest emitter peak in [1, 2); it multiplies every emitter's strength
   // (record and estimate terms alike, so the importances and pmf do not move) and the film resolve
   // divides it out again. The key covers every emitter, so s changes only with a rebuild.
@@ -260,12 +310,15 @@ std::shared_ptr<const LightTable> Scene::lights() {
     std::snprintf(line, sizeof line,
                   "light table: %zu lights (%zu emissive triangles) built in %.1f ms (gather %.1f, peaks and scale %.1f, "
                   "importance and alias %.1f) on %u threads",
-                  table->lights.size(), triangles, ms(t_start, t_end), ms(t_start, t_gathered), ms(t_gathered, t_scaled),
+                  table->lights.size(), triangles, src.gather_ms + ms(t_start, t_end), src.gather_ms + ms(t_start, t_gathered),
+                  ms(t_gathered, t_scaled),
                   ms(t_scaled, t_end), pool_->workers() + 1);
     ctx_.log.line("INFO", line);
   }
   table->radiance_scale = s;
   table->lamp_first = lamp_first;
+  table->env_baked = baked != nullptr || world_refused;
+  if (baked) table->env = baked->table, table->env_max = baked->max, table->env_mean = baked->mean;
   for (size_t i = 0; i < lamps.size(); ++i) {
     const Lamp& l = *lamps[i];
     table->lamp_instances.push_back({l.key, l.xf, l.visibility, l.record.light_group, lamp_first + uint32_t(i)});
@@ -279,7 +332,8 @@ std::shared_ptr<const LightTable> Scene::lights() {
   state_.lights = std::move(table);
   state_.light_key = std::move(in.key);
   state_.light_meshes = std::move(in.meshes);
-  state_.light_lamps = std::move(lamps);
+  state_.light_lamps = lamps;
+  state_.light_images = plan.images;
   ++state_.light_rebuilds;
   return state_.lights;
 }
@@ -371,7 +425,15 @@ SceneSnapshot Scene::snapshot(bool with_lights) {
       for (const Instance& in : s.instances->instances)
         if (in.geom_key != 0 || in.light_index == ar::kNoLightIndex)
           s.meshes[in.geom_key] = meshes ? meshes->find(in.geom_key) : nullptr;
-    if (with_lights && materials && meshes) s.lights = lights();
+    if (with_lights && materials && meshes) {
+      // A world that needs no bake is built here as before; a program world waits for its bake.
+      s.light_plan = plan_lights(true);
+      if (!s.light_plan.table && s.light_plan.bake_key.empty()) {
+        s.light_plan.table = build_lights(s.light_plan, nullptr, false);
+        s.light_plan.inputs.reset();  // built: the scene table build must not build it again
+      }
+      s.lights = s.light_plan.table;
+    }
   });
   return s;
 }

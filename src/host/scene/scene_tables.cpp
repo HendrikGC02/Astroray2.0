@@ -4,6 +4,7 @@
 #include "host/scene/scene_tables.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -17,6 +18,8 @@
 #include "host/scene/media.h"
 #include "host/scene/mesh.h"
 #include "host/scene/scene.h"
+#include "host/scene/world.h"
+#include "host/session/test_hooks.h"
 #include "kernel/material/lobes/tables.h"
 #include "kernel/vm/context.h"
 
@@ -45,7 +48,7 @@ const char* table_name(TableId id) {
       "material constants", "material pass indices", "image views",     "light records",  "light alias bins", "light bin lights",
       "light pmf",          "light index",     "rgb2spec nodes",  "rgb2spec coefficients", "observer cmf", "observer illuminant",
       "srgb decode",        "e_diel table",    "material spectra", "e_spec table", "media table", "world program",
-      "world constants", "table header"};
+      "world constants", "environment table", "table header"};
   const uint32_t i = static_cast<uint32_t>(id);
   if (i >= kTableCount) throw std::invalid_argument("table_name: no table " + std::to_string(i));
   return names[i];
@@ -223,6 +226,86 @@ class SetBuilder {
 
 }  // namespace
 
+void env_table_floats(const EnvTable& table, std::vector<float>* out) {
+  out->clear();
+  for (const EnvDistribution* d : {&table.plain, &table.compensated})
+    for (const std::vector<float>* a : {&d->func, &d->cdf_u, &d->marginal_func, &d->marginal_cdf})
+      out->insert(out->end(), a->begin(), a->end());
+}
+
+namespace {
+
+// The bake of the world program in `n` (its world, image and constant tables already placed): a
+// scratch SceneData and SceneTables naming them and a KernelGlobals naming those, on the scene's
+// device, or on a CPU context on the cache's own CPU device, where every table is host memory read in
+// place. The scratch buffers go when the bake returns; the baker caches its result under `key`.
+BakedEnvironment bake_environment(Scene& scene, SceneTableCache& cache, const SceneTableSet& n, Device* scene_device,
+                                  const std::vector<uint8_t>& key, std::shared_ptr<const void> key_pin) {
+  Device* dev = scene_device;
+  if (!dev) {
+    if (!cache.bake_device) {
+      if (!scene.meshes) throw std::logic_error("environment bake: a CPU context without a mesh store has no host ledger");
+      const uint32_t forced = read_test_hooks().threads;
+      cache.bake_ledger = scene.meshes->shared_ledger();
+      cache.bake_pool = std::make_unique<ThreadPool>(scene.ctx(), forced ? forced : std::max(1u, scene.pool().workers()));
+      cache.bake_device = make_cpu_device(*cache.bake_ledger, *cache.bake_pool);
+    }
+    dev = cache.bake_device.get();
+  }
+  const auto at = [&](TableId id) { return n.tables[static_cast<uint32_t>(id)]; };
+  const auto cnt = [&](TableId id) { return n.counts[static_cast<uint32_t>(id)]; };
+  ar::SceneData sd{};
+  sd.world_program = as<uint32_t>(at(TableId::WORLD_PROGRAM)), sd.world_program_words = cnt(TableId::WORLD_PROGRAM);
+  sd.world_constants = as<ar::ConstantBlock>(at(TableId::WORLD_CONSTANTS));
+  sd.material_spectra = as<float>(at(TableId::MATERIAL_SPECTRA)), sd.material_spectra_count = cnt(TableId::MATERIAL_SPECTRA);
+  ar::Rgb2SpecTable jt{};
+  if (scene.materials) jt = scene.materials->table();
+  jt.z_nodes = as<float>(at(TableId::RGB2SPEC_NODES)), jt.coeffs = as<float>(at(TableId::RGB2SPEC_COEFFS));
+  const uint64_t o_vm = align16(sizeof(ar::SceneData)), o_jt = o_vm + align16(sizeof(ar::SceneTables));
+  const uint64_t bytes = o_jt + sizeof(ar::Rgb2SpecTable);
+  struct Scratch {
+    Device& d;
+    DeviceBuffer header, kg;
+    ~Scratch() {
+      for (DeviceBuffer* b : {&header, &kg}) try {
+          d.free(*b);
+        } catch (const std::exception& e) {
+          std::fprintf(stderr, "astroray: freeing the environment bake's scratch failed: %s\n", e.what());
+        }
+    }
+  } scratch{*dev, {}, {}};
+  scratch.header = dev->allocate(LedgerCategory::TABLES, bytes, Owner{});
+  scratch.kg = dev->allocate(LedgerCategory::TABLES, sizeof(ar::KernelGlobals), Owner{});
+  const char* base = static_cast<const char*>(scratch.header.ptr);
+  ar::SceneTables vt{};
+  vt.rgb2spec = scene.materials ? reinterpret_cast<const ar::Rgb2SpecTable*>(base + o_jt) : nullptr;
+  vt.observer = {as<float>(at(TableId::OBSERVER_CMF)), as<float>(at(TableId::OBSERVER_ILLUM))};
+  vt.images = as<ar::DeviceImageView>(at(TableId::IMAGES)), vt.image_count = cnt(TableId::IMAGES);
+  vt.srgb_decode = as<float>(at(TableId::SRGB_DECODE));
+  std::vector<uint8_t> block(bytes, 0);
+  std::memcpy(block.data(), &sd, sizeof sd);
+  std::memcpy(block.data() + o_vm, &vt, sizeof vt);
+  std::memcpy(block.data() + o_jt, &jt, sizeof jt);
+  dev->upload(scratch.header, 0, block.data(), bytes);
+  ar::KernelGlobals g{};
+  g.scene = reinterpret_cast<const ar::SceneData*>(base);
+  g.tables = reinterpret_cast<const ar::SceneTables*>(base + o_vm);
+  dev->upload(scratch.kg, 0, &g, sizeof g);
+  const auto t0 = std::chrono::steady_clock::now();
+  const uint32_t before = cache.baker.rebuild_count();
+  BakedEnvironment out = cache.baker.get(*dev, scratch.kg, key, key_pin, cache.bake_size);
+  if (cache.baker.rebuild_count() != before) {
+    char msg[200];
+    std::snprintf(msg, sizeof msg, "environment bake: %u x %u cells on the %s device in %.1f ms (max %.6g, mean %.6g)",
+                  cache.bake_size, cache.bake_size, scene_device ? "scene" : "CPU",
+                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(), out.max, out.mean);
+    scene.ctx().log.line("INFO", msg);
+  }
+  return out;
+}
+
+}  // namespace
+
 std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   // Lock order: the cache, then the tracker (inside snapshot), then the stores.
   SceneTableCache& cache = scene.table_cache();
@@ -233,6 +316,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   n.generation = snap.generation;
   n.materials = std::move(snap.materials), n.images = std::move(snap.images);
   n.lights = std::move(snap.lights);
+  const LightPlan plan = std::move(snap.light_plan);
   n.base_instances = std::move(snap.instances);
   n.mesh_records = std::move(snap.meshes);
   for (const auto& kv : n.mesh_records)
@@ -242,7 +326,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
                               n.generation);
   n.media = std::move(snap.media);
   const SceneTableSet* p = cache.current.get();
-  if (p && p->materials == n.materials && p->images == n.images && p->lights == n.lights &&
+  if (p && !plan.inputs && p->materials == n.materials && p->images == n.images && p->lights == n.lights &&
       p->base_instances == n.base_instances && p->mesh_records == n.mesh_records && p->media == n.media)
     return cache.current;
 
@@ -250,82 +334,6 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   const UploadTarget t{device, scene.meshes ? scene.meshes->shared_ledger() : nullptr, Owner{}};
   SetBuilder b(t, n, p);
   const auto sp = [](const auto& s) { return std::shared_ptr<const void>(s); };
-
-  // Geometry: one copy per key, kept while its record is.
-  bool meshes_same = p && p->mesh_records.size() == n.mesh_records.size();
-  for (const auto& kv : n.mesh_records) {
-    const MeshCopy* old = nullptr;
-    if (p) {
-      const auto it = p->meshes.find(kv.first);
-      if (it != p->meshes.end()) {
-        old = it->second.get();
-        if (p->mesh_records.at(kv.first) == kv.second) {
-          n.meshes[kv.first] = it->second;
-          continue;
-        }
-      }
-    }
-    meshes_same = false;
-    try {
-      auto copy = upload_mesh(t, kv.second, old);
-      n.bytes_moved += copy->positions->moved() + copy->corner_normals->moved();
-      if (!old || old->topology_id != copy->topology_id)
-        n.bytes_moved += copy->tri_vertex->moved() + copy->tri_corners->moved() + copy->uv->moved() + copy->tri_material->moved();
-      n.meshes[kv.first] = std::move(copy);
-    } catch (...) {
-      rethrow_upload("uploading the geometry of key " + std::to_string(kv.first), n.generation);
-    }
-  }
-  std::vector<ar::DeviceMeshView> views;
-  std::map<ar_key, uint32_t> mesh_index;
-  for (auto& kv : n.meshes) mesh_index[kv.first] = uint32_t(views.size()), views.push_back(kv.second->view);
-  b.table(TableId::MESHES, meshes_same, uint32_t(views.size()),
-          [&] { return b.put(LedgerCategory::TABLES, views.data(), views.size() * sizeof(ar::DeviceMeshView)); });
-
-  // Instances: the scene's plus one record per lamp of the latched light table (068).
-  const uint32_t base_count = n.base_instances ? uint32_t(n.base_instances->instances.size()) : 0u;
-  const std::vector<ar::LightRecord>* lt_records = n.lights ? &n.lights->lights : nullptr;
-  const std::shared_ptr<const InstanceTable> instances =
-      n.lights ? append_lamp_instances(n.base_instances.get(), n.lights->lamp_instances) : n.base_instances;
-  const uint32_t inst_count = instances ? uint32_t(instances->instances.size()) : 0u;
-  // The records hold medium indices, which move with the media list.
-  const MediumIndex media_of = medium_index(n.media);
-  const bool inst_same =
-      p && p->base_instances == n.base_instances && p->lights == n.lights && meshes_same && p->media == n.media;
-  b.table(TableId::INSTANCES, inst_same, inst_count, [&] {
-    std::vector<ar::DeviceInstanceRecord> r(inst_count);
-    for (uint32_t i = 0; i < inst_count; ++i) {
-      const bool lamp = i >= base_count;
-      r[i] = instance_record(*instances, i, lamp ? kNoMeshIndex : mesh_index.at(instances->instances[i].geom_key), &media_of);
-    }
-    return b.put(LedgerCategory::TABLES, r.data(), r.size() * sizeof(ar::DeviceInstanceRecord));
-  });
-
-  // Traversal structures (114): the previous snapshot's when instances, lamps and mesh records are
-  // all unchanged (a material or image edit), else built for this snapshot with every mesh
-  // structure of an unchanged record carried over. An empty scene gets an empty valid structure.
-  if (p && p->accel && p->base_instances == n.base_instances && p->lights == n.lights &&
-      p->mesh_records == n.mesh_records) {
-    n.accel = p->accel;
-  } else {
-    // A missing builder is a configuration error and must not turn into a retryable failure.
-    AccelBuilder& builder = scene.accel_builder();
-    try {
-      AccelInput in;
-      in.instances = instances.get();
-      in.lights = lt_records;
-      in.host_ledger = t.host_ledger;
-      for (const auto& kv : n.mesh_records) in.meshes[kv.first] = AccelMesh{kv.second, n.meshes.at(kv.first)};
-      n.accel = builder.build(in, p ? p->accel.get() : nullptr);
-    } catch (...) {
-      rethrow_upload("building the traversal structures", n.generation);
-    }
-    char msg[160];
-    std::snprintf(msg, sizeof msg, "traversal structures of generation %llu: %u built, %u reused, %.2f ms",
-                  static_cast<unsigned long long>(n.generation), n.accel->gas_built, n.accel->gas_reused,
-                  n.accel->build_ms);
-    scene.ctx().log.line("INFO", msg);
-  }
 
   // Materials (059): the arrays in place, and the pool's keys resolved to header indices.
   const MaterialArrays* mats = n.materials.get();
@@ -405,19 +413,6 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   b.table(TableId::IMAGES, texels_same, uint32_t(slots),
           [&] { return b.put(LedgerCategory::TABLES, image_views.data(), slots * sizeof(ar::DeviceImageView)); });
 
-  // The light table (067, 068): the session's epoch snapshot.
-  const LightTable* lt = n.lights.get();
-  const bool lights_same = p && p->lights == n.lights;
-  const auto lp = lt ? sp(n.lights) : nullptr;
-  const auto light_table = [&](TableId id, const void* data, size_t count, size_t elem) {
-    b.table(id, lights_same, uint32_t(count), [&] { return b.put(LedgerCategory::TABLES, data, count * elem, lp); });
-  };
-  light_table(TableId::LIGHTS, lt ? lt->lights.data() : nullptr, lt ? lt->lights.size() : 0, sizeof(ar::LightRecord));
-  light_table(TableId::LIGHT_BINS, lt ? lt->bins.data() : nullptr, lt ? lt->bins.size() : 0, sizeof(ar::AliasBin));
-  light_table(TableId::LIGHT_BIN_LIGHT, lt ? lt->bin_light.data() : nullptr, lt ? lt->bin_light.size() : 0, 4);
-  light_table(TableId::LIGHT_PMF, lt ? lt->pmf.data() : nullptr, lt ? lt->pmf.size() : 0, 4);
-  light_table(TableId::LIGHT_INDEX, lt ? lt->light_index.data() : nullptr, lt ? lt->light_index.size() : 0, 4);
-
   // Constant tables: made once per scene, then shared by every set.
   const ar::Rgb2SpecTable* jh = scene.materials ? &scene.materials->table() : nullptr;
   const auto store = jh ? std::shared_ptr<const void>(scene.materials) : nullptr;
@@ -457,6 +452,131 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   if (const char* err = ar::e_spec_view(sblob.data, sblob.size, &sv)) throw std::runtime_error(std::string("scene tables: ") + err);
   b.table(TableId::E_SPEC, true, ar::kESpecN * ar::kESpecN, [&] {
     return b.put(LedgerCategory::TABLES, sv.e, uint64_t(ar::kESpecN) * ar::kESpecN * 4, static_pin(sblob.data));
+  });
+
+  // The environment bake (0004 D11): after the world program, its images and the constant tables are
+  // where the kernels read them, before the light table, which is built once with the bake in hand.
+  if (plan.inputs) {
+    const BakedEnvironment* baked = nullptr;
+    BakedEnvironment result;
+    bool refused = false;
+    if (!plan.bake_key.empty()) {
+      try {
+        result = bake_environment(scene, cache, n, device, plan.bake_key, plan.images);
+        baked = &result;
+      } catch (const BakeRefused& e) {
+        // Rule 5: the world renders black with one entry, never as a constant or the stale grid.
+        refused = true;
+        const uint64_t subject = plan.world ? plan.world->subject : 0u;
+        const std::string why = std::string("world: ") + e.what() + "; the world renders black";
+        scene.ctx().log.line("WARNING", why);
+        scene.report().raise(AR_REPORT_PROGRAM_REJECTED, subject, why, 1, nullptr, n.generation);
+      } catch (...) {
+        rethrow_upload("baking the environment table", n.generation);
+      }
+    }
+    n.lights = scene.build_lights(plan, baked, refused);
+  }
+
+  // Geometry: one copy per key, kept while its record is.
+  bool meshes_same = p && p->mesh_records.size() == n.mesh_records.size();
+  for (const auto& kv : n.mesh_records) {
+    const MeshCopy* old = nullptr;
+    if (p) {
+      const auto it = p->meshes.find(kv.first);
+      if (it != p->meshes.end()) {
+        old = it->second.get();
+        if (p->mesh_records.at(kv.first) == kv.second) {
+          n.meshes[kv.first] = it->second;
+          continue;
+        }
+      }
+    }
+    meshes_same = false;
+    try {
+      auto copy = upload_mesh(t, kv.second, old);
+      n.bytes_moved += copy->positions->moved() + copy->corner_normals->moved();
+      if (!old || old->topology_id != copy->topology_id)
+        n.bytes_moved += copy->tri_vertex->moved() + copy->tri_corners->moved() + copy->uv->moved() + copy->tri_material->moved();
+      n.meshes[kv.first] = std::move(copy);
+    } catch (...) {
+      rethrow_upload("uploading the geometry of key " + std::to_string(kv.first), n.generation);
+    }
+  }
+  std::vector<ar::DeviceMeshView> views;
+  std::map<ar_key, uint32_t> mesh_index;
+  for (auto& kv : n.meshes) mesh_index[kv.first] = uint32_t(views.size()), views.push_back(kv.second->view);
+  b.table(TableId::MESHES, meshes_same, uint32_t(views.size()),
+          [&] { return b.put(LedgerCategory::TABLES, views.data(), views.size() * sizeof(ar::DeviceMeshView)); });
+
+  // Instances: the scene's plus one record per lamp of the latched light table (068).
+  const uint32_t base_count = n.base_instances ? uint32_t(n.base_instances->instances.size()) : 0u;
+  const std::vector<ar::LightRecord>* lt_records = n.lights ? &n.lights->lights : nullptr;
+  const std::shared_ptr<const InstanceTable> instances =
+      n.lights ? append_lamp_instances(n.base_instances.get(), n.lights->lamp_instances) : n.base_instances;
+  const uint32_t inst_count = instances ? uint32_t(instances->instances.size()) : 0u;
+  // The records hold medium indices, which move with the media list.
+  const MediumIndex media_of = medium_index(n.media);
+  const bool inst_same =
+      p && p->base_instances == n.base_instances && p->lights == n.lights && meshes_same && p->media == n.media;
+  b.table(TableId::INSTANCES, inst_same, inst_count, [&] {
+    std::vector<ar::DeviceInstanceRecord> r(inst_count);
+    for (uint32_t i = 0; i < inst_count; ++i) {
+      const bool lamp = i >= base_count;
+      r[i] = instance_record(*instances, i, lamp ? kNoMeshIndex : mesh_index.at(instances->instances[i].geom_key), &media_of);
+    }
+    return b.put(LedgerCategory::TABLES, r.data(), r.size() * sizeof(ar::DeviceInstanceRecord));
+  });
+
+  // Traversal structures (114): the previous snapshot's when instances, lamps and mesh records are
+  // all unchanged (a material or image edit), else built for this snapshot with every mesh
+  // structure of an unchanged record carried over. An empty scene gets an empty valid structure.
+  if (p && p->accel && p->base_instances == n.base_instances && p->lights == n.lights &&
+      p->mesh_records == n.mesh_records) {
+    n.accel = p->accel;
+  } else {
+    // A missing builder is a configuration error and must not turn into a retryable failure.
+    AccelBuilder& builder = scene.accel_builder();
+    try {
+      AccelInput in;
+      in.instances = instances.get();
+      in.lights = lt_records;
+      in.host_ledger = t.host_ledger;
+      for (const auto& kv : n.mesh_records) in.meshes[kv.first] = AccelMesh{kv.second, n.meshes.at(kv.first)};
+      n.accel = builder.build(in, p ? p->accel.get() : nullptr);
+    } catch (...) {
+      rethrow_upload("building the traversal structures", n.generation);
+    }
+    char msg[160];
+    std::snprintf(msg, sizeof msg, "traversal structures of generation %llu: %u built, %u reused, %.2f ms",
+                  static_cast<unsigned long long>(n.generation), n.accel->gas_built, n.accel->gas_reused,
+                  n.accel->build_ms);
+    scene.ctx().log.line("INFO", msg);
+  }
+
+  // The light table (067, 068): the session's epoch snapshot.
+  const LightTable* lt = n.lights.get();
+  const bool lights_same = p && p->lights == n.lights;
+  const auto lp = lt ? sp(n.lights) : nullptr;
+  const auto light_table = [&](TableId id, const void* data, size_t count, size_t elem) {
+    b.table(id, lights_same, uint32_t(count), [&] { return b.put(LedgerCategory::TABLES, data, count * elem, lp); });
+  };
+  light_table(TableId::LIGHTS, lt ? lt->lights.data() : nullptr, lt ? lt->lights.size() : 0, sizeof(ar::LightRecord));
+  light_table(TableId::LIGHT_BINS, lt ? lt->bins.data() : nullptr, lt ? lt->bins.size() : 0, sizeof(ar::AliasBin));
+  light_table(TableId::LIGHT_BIN_LIGHT, lt ? lt->bin_light.data() : nullptr, lt ? lt->bin_light.size() : 0, 4);
+  light_table(TableId::LIGHT_PMF, lt ? lt->pmf.data() : nullptr, lt ? lt->pmf.size() : 0, 4);
+  light_table(TableId::LIGHT_INDEX, lt ? lt->light_index.data() : nullptr, lt ? lt->light_index.size() : 0, 4);
+
+  // The environment table (0004 D11): the light table's bake, kept while it is the same table.
+  const EnvTable* env = lt ? lt->env.get() : nullptr;
+  uint64_t env_floats = 0;
+  if (env)
+    for (const EnvDistribution* d : {&env->plain, &env->compensated})
+      env_floats += d->func.size() + d->cdf_u.size() + d->marginal_func.size() + d->marginal_cdf.size();
+  b.table(TableId::ENV_TABLE, p && p->lights && lt && p->lights->env == lt->env, uint32_t(env_floats), [&] {
+    std::vector<float> floats;
+    if (env) env_table_floats(*env, &floats);
+    return b.put(LedgerCategory::TABLES, floats.data(), floats.size() * 4);
   });
 
   // The header block: the structs KernelGlobals points to, holding the addresses above.
