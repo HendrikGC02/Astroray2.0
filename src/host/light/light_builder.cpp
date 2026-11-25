@@ -46,11 +46,15 @@ LightTable::~LightTable() {
   if (ledger && ledger_id != 0) ledger->remove(ledger_id);
 }
 
-double display_energy(const std::vector<EmissionTerm>& terms, const ar::ObserverView& obs) {
-  double wsum = 0.0, e = 0.0;
+namespace {
+
+// Both energies of D10 from one resolve of each term: the w(lambda)-weighted one (w the CMF sum
+// normalised to integrate to 1) and the unweighted one, each by the 1 nm rectangle rule on the 471
+// table samples.
+void spectral_energies(const std::vector<EmissionTerm>& terms, const ar::ObserverView& obs, double* display, double* radiometric) {
+  double wsum = 0.0, e = 0.0, r = 0.0;
   for (int i = 0; i < ar::kObsSamples; ++i)
     for (int c = 0; c < 3; ++c) wsum += double(obs.cmf[c * ar::kObsSamples + i]);
-  if (!(wsum > 0.0)) return 0.0;
   for (const EmissionTerm& t : terms)
     for (int i = 0; i < ar::kObsSamples; i += ar::kLanes) {
       ar::Lambda lam;
@@ -59,22 +63,27 @@ double display_energy(const std::vector<EmissionTerm>& terms, const ar::Observer
       for (int k = 0; k < ar::kLanes && i + k < ar::kObsSamples; ++k) {
         double w = 0.0;
         for (int c = 0; c < 3; ++c) w += double(obs.cmf[c * ar::kObsSamples + i + k]);
-        e += double(t.strength) * double(s.v[k]) * w / wsum;
+        const double v = double(t.strength) * double(s.v[k]);
+        e += wsum > 0.0 ? v * w / wsum : 0.0;
+        r += v;
       }
     }
+  *display = e;
+  *radiometric = r;
+}
+
+}  // namespace
+
+double display_energy(const std::vector<EmissionTerm>& terms, const ar::ObserverView& obs) {
+  double e, r;
+  spectral_energies(terms, obs, &e, &r);
   return e;
 }
 
 double radiometric_energy(const std::vector<EmissionTerm>& terms, const ar::ObserverView& obs) {
-  double e = 0.0;
-  for (const EmissionTerm& t : terms)
-    for (int i = 0; i < ar::kObsSamples; i += ar::kLanes) {
-      ar::Lambda lam;
-      for (int k = 0; k < ar::kLanes; ++k) lam.nm[k] = ar::Real(ar::kObsLambdaMin + std::min(i + k, ar::kObsSamples - 1));
-      const ar::Spec s = ar::resolve(t.color, lam, obs, nullptr);
-      for (int k = 0; k < ar::kLanes && i + k < ar::kObsSamples; ++k) e += double(t.strength) * double(s.v[k]);
-    }
-  return e;
+  double e, r;
+  spectral_energies(terms, obs, &e, &r);
+  return r;
 }
 
 namespace {
@@ -164,8 +173,7 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
       if (i == first || !same_terms(in[i - 1], li)) {
         const std::vector<EmissionTerm> own{{li.record.emission, li.record.strength}};
         const std::vector<EmissionTerm>& terms = li.terms.empty() ? own : li.terms;
-        energy = display_energy(terms, obs);
-        rad = radiometric_energy(terms, obs);
+        spectral_energies(terms, obs, &energy, &rad);
       }
       const double factor = double(ar::light_power(li.record, scene, ar::Real(1)));
       imps[i] = energy * factor;

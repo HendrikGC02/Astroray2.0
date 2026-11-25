@@ -136,10 +136,11 @@ gated = "merge"
 # test module (tests/gpu/kernels/reload_variant.cu) wraps the same stage with one more sample_add and
 # measures 272 B and 8 / 8 B, which sets the spill allowance (D10: VM kernels at most 128 / 192).
 # The escape's albedo guide (float display conversion) took the production stack 264 to 272 B and compile to 2.74-2.77 s.
+# Ruling 103: the world's light-tree pmf took the stack to 304 B, spills to 20 / 28 B (reload variant 36 / 36 B, the allowance).
 regs = 64
-stack = 272
-spill_store = 8
-spill_load = 8
+stack = 304
+spill_store = 36
+spill_load = 36
 compile_s = 2.8
 gated = "merge"
 
@@ -150,11 +151,12 @@ gated = "merge"
 # 6.76-6.81 s quiet; resolving the record's spectral slots in one loop brought it to 6.14-6.19 s
 # (kernelgate --time, quiet, three rounds interleaved with main).
 # The denoiser guides moved only the compile time: 6.68-6.72 s in two gates (3 runs each).
+# Ruling 103 and owner decision 41: the light-tree walks (NEE draw, emission pmf) give spills 4 / 16 B and 7.31-7.40 s.
 regs = 128
 stack = 400
-spill_store = 8
-spill_load = 8
-compile_s = 6.7
+spill_store = 4
+spill_load = 16
+compile_s = 7.4
 gated = "merge"
 
 [kernel.k_shade_shadow]
@@ -182,7 +184,8 @@ compile_s = 2.8
 gated = "merge"
 
 [kernel.k_shade_light]
-regs = 74
+# Ruling 103: the lamp's light-tree pmf takes 74 to 80 registers.
+regs = 80
 stack = 0
 spill_store = 0
 spill_load = 0

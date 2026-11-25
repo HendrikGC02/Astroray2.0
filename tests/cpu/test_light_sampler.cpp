@@ -149,7 +149,7 @@ TEST_CASE("light_sampler/pmf matches sample") {
   const auto t = table_of(mixed(10));
   const ar::LightSamplerView v = t->view();
   double sum = 0.0;
-  for (uint32_t i = 0; i < v.light_count; ++i) sum += double(ar::light_sampler_pmf(v, ctx(), i, false));
+  for (uint32_t i = 0; i < v.light_count; ++i) sum += double(ar::light_sampler_pmf(v, ctx(), i, true));
   CHECK(std::fabs(sum - 1.0) < 1e-5);
   // Importance = weighted energy e times strength times the geometric factor of 0004 D9 / pbrt
   // Phi, written out here: 1 for lamps, pi A for a triangle, 4 pi^2 R^2 for the world.
@@ -168,11 +168,11 @@ TEST_CASE("light_sampler/pmf matches sample") {
   }
   for (int k = 0; k < 100000; ++k) {
     const uint32_t ub = uint32_t((uint64_t(k) << 32) / 100000u);
-    const ar::SampledLight s = ar::light_sampler_sample(v, ctx(), ub, Real(((k * 7919) % 1000 + 0.5) / 1000.0), false);
+    const ar::SampledLight s = ar::light_sampler_sample(v, ctx(), ub, Real(((k * 7919) % 1000 + 0.5) / 1000.0), true);
     REQUIRE(s.light < v.light_count);
-    REQUIRE(std::fabs(double(ar::light_sampler_pmf(v, ctx(), s.light, false)) - double(s.pmf)) <= 1e-6);
+    REQUIRE(std::fabs(double(ar::light_sampler_pmf(v, ctx(), s.light, true)) - double(s.pmf)) <= 1e-6);
   }
-  CHECK(ar::light_sampler_pmf(v, ctx(), v.light_count, false) == Real(0));
+  CHECK(ar::light_sampler_pmf(v, ctx(), v.light_count, true) == Real(0));
 }
 
 TEST_CASE("light_sampler/zero estimate never chosen") {
