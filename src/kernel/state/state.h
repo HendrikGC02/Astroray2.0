@@ -34,7 +34,9 @@ static_assert(sizeof(U16x6) == 12 && sizeof(U32x4) == 16 && sizeof(Unorm16x8) ==
 // The feature tags of both tables: the condition columns of 0003 d19 and d20.
 // GUIDES_OR_LIGHTPASS and LIGHTPASS name 0008 D10's render passes (d19, "light
 // passes"); LIGHTPASS_OR_MEDIA names 0004 D20's light-tracing pass (d20, "light
-// pass"). They are different facts, see StateFeatures.
+// pass"). They are different facts, see StateFeatures. The _OR_ENV tags add a baked environment
+// world (0004 D11): its NEE items take the world's radiance at delivery from their lanes and an
+// item_flags bit.
 enum class StateFeature : uint8_t {
   ALWAYS,
   MOTION,
@@ -48,7 +50,8 @@ enum class StateFeature : uint8_t {
   LIGHTPASS_OR_MEDIA,
   NON_OPAQUE,
   LIGHT_GROUPS,
-  MEDIA_OR_NON_OPAQUE,
+  MEDIA_NON_OPAQUE_OR_ENV,
+  LIGHTPASS_MEDIA_OR_ENV,
 };
 
 // The scene and settings facts the tags derive from. `media` is d19's "any medium
@@ -67,12 +70,14 @@ struct StateFeatures {
   bool stat_rays = false;
   bool non_opaque = false;
   bool light_groups = false;
+  bool env_world = false;  // the world is a WORLD_ENV light (a baked environment table, 0004 D11)
 };
 
 constexpr StateFeatures all_features_on() {
   StateFeatures f;
   f.motion = f.curved = f.subsurface = f.media = f.filter_glossy = f.guides = true;
   f.light_render_passes = f.light_tracing = f.stat_time = f.stat_rays = f.non_opaque = f.light_groups = true;
+  f.env_world = true;
   return f;
 }
 
@@ -90,7 +95,8 @@ constexpr bool feature_on(const StateFeatures& f, StateFeature t) {
     case StateFeature::LIGHTPASS_OR_MEDIA: return f.light_tracing || f.media;
     case StateFeature::NON_OPAQUE: return f.non_opaque;
     case StateFeature::LIGHT_GROUPS: return f.light_groups;
-    case StateFeature::MEDIA_OR_NON_OPAQUE: return f.media || f.non_opaque;
+    case StateFeature::MEDIA_NON_OPAQUE_OR_ENV: return f.media || f.non_opaque || f.env_world;
+    case StateFeature::LIGHTPASS_MEDIA_OR_ENV: return f.light_tracing || f.media || f.env_world;
   }
   return false;
 }

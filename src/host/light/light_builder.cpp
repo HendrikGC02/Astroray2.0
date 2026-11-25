@@ -9,6 +9,7 @@
 
 #include "../../kernel/material/material_header.h"
 #include "../../kernel/material/slot_resolve.h"
+#include "host/light/env_bake.h"
 #include "host/material/material_store.h"
 #include "host/spectral/blackbody.h"
 #include "host/scene/instances.h"
@@ -64,9 +65,14 @@ bool same_terms(const LightInput& a, const LightInput& b) {
 
 std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput>& in, const ar::SceneSphere& scene,
                                                     const ar::ObserverView& obs, std::shared_ptr<Ledger> ledger,
-                                                    const ChunkRunner& run) {
+                                                    const ChunkRunner& run, const BakedEnvironment* env) {
   auto t = std::make_shared<LightTable>();
   t->scene = scene;
+  const auto program_world = [](const ar::LightRecord& r) {
+    return r.type == uint8_t(ar::LightType::WORLD_CONST) && (r.flags & ar::kLightWorldProgram) != 0;
+  };
+  // A program world is sampled only through its baked table (0004 D11).
+  const bool env_baked = env != nullptr && env->table != nullptr;
   // Per light, independently of every other: the display energy (once per run of identical terms,
   // the same function of the same input) times light_power's geometric factor (1, pi A,
   // 4 pi^2 R^2) (D9, D10).
@@ -75,11 +81,21 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
     double energy = 0.0;
     for (uint32_t i = first; i < last; ++i) {
       const LightInput& li = in[i];
-      // A program world has no importance until an importance table can be built from its program:
-      // pmf 0 means nothing samples it, so a BSDF hit that escapes takes MIS weight 1 (unbiased,
-      // noisier than with NEE).
-      if (li.record.type == uint8_t(ar::LightType::WORLD_CONST) && (li.record.flags & ar::kLightWorldProgram) != 0) {
-        imps[i] = 0.0;
+      // A program world: with a baked table, its importance energy is the integral of its
+      // w(lambda)-weighted radiance over the sphere, 4 pi times the bake's solid-angle mean (D10's
+      // display weighting, unscaled) times the record's strength, which carries s as every other
+      // light's display energy does (lead ruling 2026-11-25, 225's split; 0004 D11). Without a
+      // table (no bake, or a black world) it is 0: pmf 0, nothing samples it, and a BSDF hit that
+      // escapes takes MIS weight 1.
+      if (program_world(li.record)) {
+        if (!env_baked) {
+          imps[i] = 0.0;
+          continue;
+        }
+        ar::LightRecord r = li.record;
+        r.type = uint8_t(ar::LightType::WORLD_ENV);
+        const double world_energy = 4.0 * 3.14159265358979323846 * env->mean * double(li.record.strength);
+        imps[i] = world_energy * double(ar::light_power(r, scene, ar::Real(1)));
         continue;
       }
       if (i == first || !same_terms(in[i - 1], li))
@@ -94,11 +110,13 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
     const LightInput& li = in[i];
     const double imp = imps[i];
     if (!std::isfinite(imp) || imp < 0.0) throw std::runtime_error("light importance is not finite and non-negative");
-    if (li.record.type == uint8_t(ar::LightType::WORLD_CONST)) {
+    ar::LightRecord rec = li.record;
+    if (program_world(rec) && env_baked) rec.type = uint8_t(ar::LightType::WORLD_ENV);
+    if (ar::light_is_infinite(rec)) {
       if (t->world_light != ar::kNoLight) throw std::runtime_error("light table: more than one world light");
       t->world_light = uint32_t(t->lights.size());
     }
-    t->lights.push_back(li.record);
+    t->lights.push_back(rec);
     t->importance.push_back(imp);
     sum += imp;
   }

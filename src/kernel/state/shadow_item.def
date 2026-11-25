@@ -18,10 +18,10 @@ AR_SHADOW_FIELD(tmax, Real, ALWAYS)                       // 4
 AR_SHADOW_FIELD(time, Real, MOTION)                       // 4
 AR_SHADOW_FIELD(contribution, Spec, ALWAYS)               // 16
 AR_SHADOW_FIELD(target, uint32_t, ALWAYS)                 // 4
-AR_SHADOW_FIELD(item_flags, uint8_t, LIGHTPASS_OR_MEDIA)  // 1
+AR_SHADOW_FIELD(item_flags, uint8_t, LIGHTPASS_MEDIA_OR_ENV)  // 1
 AR_SHADOW_FIELD(transparent_left, uint8_t, NON_OPAQUE)    // 1
 AR_SHADOW_FIELD(light_group, uint8_t, LIGHT_GROUPS)       // 1
-AR_SHADOW_FIELD(lambda_t, Spec, MEDIA_OR_NON_OPAQUE)      // 16
+AR_SHADOW_FIELD(lambda_t, Spec, MEDIA_NON_OPAQUE_OR_ENV)  // 16
 AR_SHADOW_FIELD(r_u, Spec, MEDIA)                         // 16
 AR_SHADOW_FIELD_SHARED(r_l_film_pos, Spec, LIGHTPASS_OR_MEDIA, Real2)  // 16, 8 without media
 AR_SHADOW_FIELD(medium_stack, U32x4, MEDIA)               // 16

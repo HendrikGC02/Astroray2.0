@@ -6,9 +6,10 @@
 // compensated pdf, so both strategies of the balance heuristic read one density. The density over
 // solid angle is the table's density over the equal-area square divided by 4 pi
 // (environment_table.h). Radiance at a sampled direction is never read from the table: sample_li
-// returns deferred_le and the NEE stage runs the world program toward the direction, through the
-// same evaluation an escaped ray gets (stages/shade_background.h world_program_radiance). Light
-// paths (sample_le) are M4. Include light.h, not this file.
+// returns deferred_le, the NEE stage writes the shadow item with everything but Le (the MIS weight
+// included) and flags it ITEM_WORLD_LE, and shade_shadow runs the world program along the item's
+// direction on delivery, through the evaluation an escaped ray gets (stages/shade_background.h
+// world_program_radiance). Light paths (sample_le) are M4. Include light.h, not this file.
 //
 // Ref: third_party/_cache/refs/pbrt-v4-092b23a47ad4/src/pbrt/lights.h ImageInfiniteLight::SampleLi
 // (compensatedDistribution when allowIncompletePDF, pdf mapPDF / (4 pi), no sample when mapPDF is
@@ -28,10 +29,6 @@ AR_NS_BEGIN
 // The two distributions of one baked world, as KernelGlobals holds them: [0] plain (light paths),
 // [1] MIS-compensated (NEE and the escaped-ray weight).
 inline constexpr int kEnvPlain = 0, kEnvCompensated = 1;
-
-// Shadow item flag (item_flags): the contribution still lacks the world program's radiance along
-// ray_d at the item's lanes, which shade_shadow evaluates on delivery.
-inline constexpr uint8_t kShadowWorldLe = 1u << 0;
 
 AR_FN LightLiSample world_env_sample_li(const LightSampleContext& ctx, Real2 u, const EnvTableView* env) {
   AR_ASSERT(env != nullptr);

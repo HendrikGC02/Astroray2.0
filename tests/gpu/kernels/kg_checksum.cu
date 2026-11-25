@@ -65,7 +65,10 @@ extern "C" __global__ void ar_kg_checksum(const ar::KernelGlobals* kgp, uint8_t*
   kg_row(out, r++, s.medium_descs, s.medium_count, sizeof(ar::MediumDesc));
   kg_row(out, r++, s.world_program, s.world_program_words, 4);
   kg_row(out, r++, s.world_constants, s.world_constants != nullptr ? 1u : 0u, sizeof(ar::ConstantBlock));
-  kg_row(out, r++, nullptr, 0u, 4);  // ENV_TABLE: reached through the light records, not KernelGlobals
+  // ENV_TABLE through the two views: the block starts at the plain func and holds both
+  // distributions' four arrays (n^2 + n (n + 1) + n + n + 1 floats each).
+  const uint32_t en = kg.env[0].n;
+  kg_row(out, r++, kg.env[0].func, en ? 2u * (en * en + en * (en + 1u) + en + en + 1u) : 0u, 4);
   kg_row(out, r++, s.medium_blocks, s.medium_count, sizeof(ar::MediumBlock));
   kg_row(out, r++, s.medium_programs, s.medium_program_words, 4);
 }

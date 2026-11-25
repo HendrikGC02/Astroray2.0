@@ -505,8 +505,17 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     sh_contribution(kg, sh) = nee;
     sh_target(kg, sh) = sample;
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
-    if (ls.deferred_le && !triangle) {  // WORLD_ENV: shade_shadow adds the world's Le on delivery
-      sh_item_flags(kg, sh) = kShadowWorldLe;
+    const bool world_le = ls.deferred_le && !triangle;
+    if (kg.shadow->item_flags != nullptr) sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
+    if (world_le) {
+      // WORLD_ENV: shade_shadow runs the world program along ray_d at these lanes on delivery. The
+      // host allocates both fields with the env_world feature; without them the item cannot be
+      // finished, a host bug that fails the sample.
+      if (kg.shadow->item_flags == nullptr || kg.shadow->lambda_t == nullptr) {
+        sample_mark_invalid(kg, sample);
+        path_end(kg, slot, Term::INVALID);
+        return;
+      }
       Spec lt;
       for (int i = 0; i < kLanes; ++i) lt.v[i] = ctx.lambda_t.nm[i];
       sh_lambda_t(kg, sh) = lt;

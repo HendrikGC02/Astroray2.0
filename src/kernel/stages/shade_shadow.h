@@ -5,9 +5,16 @@
 // contribution to its target, the per-sample buffer slot of the sample that emitted it (0004 D5:
 // the path may have ended, or its pool slot been refilled, since), and frees the shadow slot.
 // The item is self-contained: nothing of the creating path is read (0004 D4, 0003 d20).
-// M1a has no non-opaque materials and no media, so there are no recorded hits to evaluate and
-// no VM; M2 extends this stage with ah_record's hits (opacity through the VM) and transmittance.
-// Ref: docs/decisions/0004-integrator.md D4 (delivery), D5 (late delivery to the sample's slot);
+// M1a has no non-opaque materials and no media, so there are no recorded hits to evaluate; M2
+// extends this stage with ah_record's hits (opacity through the VM) and transmittance.
+// An item flagged ITEM_WORLD_LE (NEE toward an environment world, light/world_env.h) still lacks
+// the world's radiance: it is the world program run along ray_d at the item's lanes, through
+// shade_background's world_program_radiance in the background context with no ray type and depth 0
+// (as the bake evaluates it). The NEE stage already applied the MIS weight and the record's
+// strength. A program that cannot run, or a non-finite product, marks the sample invalid (rule 5).
+// This makes shade_shadow a VM kernel (0002 D10 lists it among them).
+// Ref: docs/decisions/0004-integrator.md D4 (delivery), D5 (late delivery to the sample's slot),
+// D11 (radiance from the world program, never the table); 0003 d20 (item_flags, lambda_t);
 // 0002 D5, D8 (shade_shadow), D11 (outcomes); 0003 d20 (shadow item).
 #pragma once
 #include <cstdint>
@@ -16,6 +23,7 @@
 #include "../kernel_globals.h"
 #include "../portability.h"
 #include "../sched/step_table.h"
+#include "../state/flags.h"
 #include "../state/stage.h"
 #include "shade_background.h"
 
@@ -24,7 +32,7 @@ AR_NS_BEGIN
 AR_FN void stage_shade_shadow(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
   const uint32_t slot = load_ro(kg.shadow_queue + step.start + item);
   Spec c = sh_contribution(kg, slot);
-  if (kg.shadow->item_flags != nullptr && (sh_item_flags(kg, slot) & kShadowWorldLe) != 0u) {
+  if (kg.shadow->item_flags != nullptr && (sh_item_flags(kg, slot) & ITEM_WORLD_LE) != 0u) {
     const Spec lt = sh_lambda_t(kg, slot);
     Lambda lam;
     for (int i = 0; i < kLanes; ++i) lam.nm[i] = lt.v[i];

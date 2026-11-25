@@ -78,10 +78,10 @@ const Row kShadow[] = {
     {"time", 4, StateFeature::MOTION},
     {"contribution", 16, StateFeature::ALWAYS},
     {"target", 4, StateFeature::ALWAYS},
-    {"item_flags", 1, StateFeature::LIGHTPASS_OR_MEDIA},
+    {"item_flags", 1, StateFeature::LIGHTPASS_MEDIA_OR_ENV},
     {"transparent_left", 1, StateFeature::NON_OPAQUE},
     {"light_group", 1, StateFeature::LIGHT_GROUPS},
-    {"lambda_t", 16, StateFeature::MEDIA_OR_NON_OPAQUE},
+    {"lambda_t", 16, StateFeature::MEDIA_NON_OPAQUE_OR_ENV},
     {"r_u", 16, StateFeature::MEDIA},
     {"r_l_film_pos", 16, StateFeature::LIGHTPASS_OR_MEDIA},
     {"medium_stack", 16, StateFeature::MEDIA},
@@ -156,6 +156,9 @@ TEST_SUITE("fast") {
     CHECK(ar::shadow_item_bytes(only(&StateFeatures::light_groups)) == 49 + 1);
     // Light tracing (casters) without media: item_flags and the 8-B film_pos only.
     CHECK(ar::shadow_item_bytes(only(&StateFeatures::light_tracing)) == 49 + 1 + 8);
+    // A baked environment world: item_flags and lambda_t, for the world radiance at delivery.
+    CHECK(ar::shadow_item_bytes(only(&StateFeatures::env_world)) == 49 + 1 + 16);
+    CHECK(ar::path_state_bytes(only(&StateFeatures::env_world)) == 157);
     // Media: item_flags, lambda_t, r_u, 16-B r_l, medium_stack, medium_rng.
     CHECK(ar::shadow_item_bytes(only(&StateFeatures::media)) == 49 + 1 + 16 + 16 + 16 + 20);
     // Light tracing with media shares the 16-B r_l storage; it adds nothing more.
@@ -174,10 +177,10 @@ TEST_SUITE("fast") {
     // Every tag against every single fact: the condition columns of d19 and d20.
     struct Case {
       StateFeature tag;
-      bool StateFeatures::*on[3];  // facts that switch the tag on (nullptr terminated)
+      bool StateFeatures::*on[4];  // facts that switch the tag on (nullptr terminated)
     };
     const Case cases[] = {
-        {StateFeature::MOTION, {&StateFeatures::motion, nullptr, nullptr}},
+        {StateFeature::MOTION, {&StateFeatures::motion, nullptr, nullptr, nullptr}},
         {StateFeature::CURVED_OR_SUBSURFACE, {&StateFeatures::curved, &StateFeatures::subsurface, nullptr}},
         {StateFeature::MEDIA, {&StateFeatures::media, nullptr, nullptr}},
         {StateFeature::FILTER_GLOSSY, {&StateFeatures::filter_glossy, nullptr, nullptr}},
@@ -188,14 +191,15 @@ TEST_SUITE("fast") {
         {StateFeature::LIGHTPASS_OR_MEDIA, {&StateFeatures::light_tracing, &StateFeatures::media, nullptr}},
         {StateFeature::NON_OPAQUE, {&StateFeatures::non_opaque, nullptr, nullptr}},
         {StateFeature::LIGHT_GROUPS, {&StateFeatures::light_groups, nullptr, nullptr}},
-        {StateFeature::MEDIA_OR_NON_OPAQUE, {&StateFeatures::media, &StateFeatures::non_opaque, nullptr}},
+        {StateFeature::MEDIA_NON_OPAQUE_OR_ENV, {&StateFeatures::media, &StateFeatures::non_opaque, &StateFeatures::env_world, nullptr}},
+        {StateFeature::LIGHTPASS_MEDIA_OR_ENV, {&StateFeatures::light_tracing, &StateFeatures::media, &StateFeatures::env_world, nullptr}},
     };
     bool StateFeatures::* const all[] = {
         &StateFeatures::motion,     &StateFeatures::curved,     &StateFeatures::subsurface,
         &StateFeatures::media,      &StateFeatures::filter_glossy, &StateFeatures::guides,
         &StateFeatures::light_render_passes, &StateFeatures::light_tracing,
         &StateFeatures::stat_time,  &StateFeatures::stat_rays,
-        &StateFeatures::non_opaque, &StateFeatures::light_groups};
+        &StateFeatures::non_opaque, &StateFeatures::light_groups, &StateFeatures::env_world};
     CHECK(ar::feature_on(StateFeatures{}, StateFeature::ALWAYS));
     for (const Case& c : cases) {
       CHECK_FALSE(ar::feature_on(StateFeatures{}, c.tag));

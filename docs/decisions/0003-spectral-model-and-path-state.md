@@ -124,10 +124,10 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
 | `time` | Real | 4 | motion blur | 0004 D23; 0007 decision 15 |
 | `contribution` | Spec | 16 | always | 0004 D4, D23 |
 | `target` | u32 | 4 | always | NEE: `sample_id` of the path (0008 D3). Connection: the light path's `sample_id`, its sampler key (0004 D21) |
-| `item_flags` | u8 | 1 | light pass or media | bit 0 kind; 1 `SECONDARIES_TERMINATED`; 2-3 hero lane; 4-7 unallocated. Connections need bit 1 for `film_weights` at delivery; media need the hero (bits 2-3) for ratio tracking (0006 D8) |
+| `item_flags` | u8 | 1 | light pass, media or a baked environment world | bit 0 kind; 1 `SECONDARIES_TERMINATED`; 2-3 hero lane; 4 `ITEM_WORLD_LE`; 5-7 unallocated. Connections need bit 1 for `film_weights` at delivery; media need the hero (bits 2-3) for ratio tracking (0006 D8); NEE toward an environment world sets bit 4, and delivery multiplies the world program's radiance along `ray_d` at `lambda_t` (0004 D11) |
 | `transparent_left` | u8 | 1 | non-opaque materials | 0004 D4; 0005 item 33 |
 | `light_group` | u8 | 1 | light groups | 0004 D27; 0008 D10 |
-| `lambda_t` | Spec | 16 | media or non-opaque materials | opacity T(λ) (0005 items 32-33), media (0006 D19) |
+| `lambda_t` | Spec | 16 | media, non-opaque materials or a baked environment world | opacity T(λ) (0005 items 32-33), media (0006 D19), the environment world's radiance at delivery (0004 D11) |
 | `r_u` | Spec | 16 | media | 0006 D8, D19 |
 | `r_l` (NEE) / `film_pos` (connection) | Spec / Real2 | 16 (8 without media) | media or light pass | r_l: ratio-tracked MIS of NEE (0006 D19). film_pos: splat position (0004 D23, ruling 2). A connection has one strategy and needs no r_l |
 | `medium_stack`, `medium_rng` | u32[4], u32 | 20 | media | 0006 D8, D19 |

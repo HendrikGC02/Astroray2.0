@@ -37,11 +37,11 @@
 // the inlined VM is most of its compile time), the material evaluation sits in a two-phase loop:
 // phase 0 runs the hit material's surface entry, phase 1, only for a deferred light, the light
 // material's emission entry with the context rebuilt at the light point. An environment world
-// (WORLD_ENV, light/world_env.h) is deferred too: NEE draws its direction from the MIS-compensated
-// table and phase 1 runs the world program's emission entry (shade_background.h world_program_of)
-// in the background context of that direction (world_shade_geometry), keeping the path's ray type
-// and depth as a triangle's phase 1 does. Its Le is times the record's strength, which carries s,
-// as an escaped ray's (shade_background.h world_radiance); the table never gives radiance (0004 D11).
+// (WORLD_ENV, light/world_env.h) is deferred too but has no phase 1: NEE draws its direction from
+// the MIS-compensated table, the item's contribution takes everything but Le (the MIS weight and
+// the record's strength, which carries s, as an escaped ray's), and the item carries its lanes and
+// ITEM_WORLD_LE so shade_shadow runs the world program on delivery. The world's interpreter thus
+// stays out of this kernel (0002 D10 ladder, B-05); the table never gives radiance (0004 D11).
 // Continuation, as pbrt-v4 VolPathIntegrator::Li: a path that arrives with bounces[total] equal
 // to the limit ends MAX_BOUNCE (pbrt's depth++ == maxDepth). Otherwise the stack is sampled in
 // the frame of N with the event block's lobe choice, as the surface entry's Mix selection left it
@@ -331,9 +331,17 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     sh_contribution(kg, sh) = nee;
     sh_target(kg, sh) = sample;
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
-    if (ls.deferred_le && !triangle) {
-      // WORLD_ENV: shade_shadow runs the world program along ray_d at these lanes on delivery.
-      sh_item_flags(kg, sh) = kShadowWorldLe;
+    const bool world_le = ls.deferred_le && !triangle;
+    if (kg.shadow->item_flags != nullptr) sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
+    if (world_le) {
+      // WORLD_ENV: shade_shadow runs the world program along ray_d at these lanes on delivery. The
+      // host allocates both fields with the env_world feature; without them the item cannot be
+      // finished, a host bug that fails the sample.
+      if (kg.shadow->item_flags == nullptr || kg.shadow->lambda_t == nullptr) {
+        sample_mark_invalid(kg, sample);
+        path_end(kg, slot, Term::INVALID);
+        return;
+      }
       Spec lt;
       for (int i = 0; i < kLanes; ++i) lt.v[i] = ctx.lambda_t.nm[i];
       sh_lambda_t(kg, sh) = lt;

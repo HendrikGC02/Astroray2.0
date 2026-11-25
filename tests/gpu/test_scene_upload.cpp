@@ -319,6 +319,9 @@ std::vector<HostRow> host_rows(Scene& scene, const SceneTableSet& set) {
   at(TableId::MEDIA) = row_of(descs.data(), descs.size());
   at(TableId::WORLD_PROGRAM) = row_of(mats->world_program.data(), mats->world_program.size());
   at(TableId::WORLD_CONSTANTS) = row_of(mats->world_constants.data(), mats->world_constants.size());
+  std::vector<float> env;
+  if (lights->env) env_table_floats(*lights->env, &env);
+  at(TableId::ENV_TABLE) = row_of(env.data(), env.size());
   const MediumArrays marr = medium_arrays(media);
   at(TableId::MEDIUM_BLOCKS) = row_of(marr.blocks.data(), marr.blocks.size());
   at(TableId::MEDIUM_PROGRAMS) = row_of(marr.programs.data(), marr.programs.size());
@@ -393,6 +396,7 @@ TEST_CASE("scene_upload/checksums match host") {
   CHECK(want[static_cast<uint32_t>(TableId::MEDIA)].count == 1u);  // medium 60
   CHECK(want[static_cast<uint32_t>(TableId::WORLD_PROGRAM)].count > 4u);      // the world runs a program
   CHECK(want[static_cast<uint32_t>(TableId::WORLD_CONSTANTS)].count == 1u);
+  CHECK(want[static_cast<uint32_t>(TableId::ENV_TABLE)].count > 0u);  // the program world is baked
   // The emissive quad's index: N = 1, its slice offset, C = 2, then lights 0 and 1.
   CHECK(want[static_cast<uint32_t>(TableId::LIGHT_INDEX)].count == 5u);
   dev.free(kgb);

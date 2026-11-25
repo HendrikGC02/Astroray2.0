@@ -300,7 +300,7 @@ std::shared_ptr<const LightTable> Scene::build_lights(const LightPlan& plan, con
   const Clock::time_point t_scaled = Clock::now();
   // One immutable snapshot: the lights, s, and the lamps' instance records agree by construction.
   // The table is ours and unpublished until the assignment below, so the cast is safe.
-  auto table = std::const_pointer_cast<LightTable>(build_light_table(in.lights, in.scene, obs, meshes->shared_ledger(), run));
+  auto table = std::const_pointer_cast<LightTable>(build_light_table(in.lights, in.scene, obs, meshes->shared_ledger(), run, baked));
   {
     const auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
     const Clock::time_point t_end = Clock::now();

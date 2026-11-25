@@ -23,6 +23,7 @@
 
 namespace astroray::host {
 
+struct BakedEnvironment;
 struct InstanceTable;
 struct MaterialArrays;
 class MeshStore;
@@ -93,9 +94,13 @@ bool same_terms(const LightInput& a, const LightInput& b);
 // Throws std::runtime_error when two triangle records name the same instance and triangle.
 // With `run` the per-light importances are computed in its chunks; every sum, check and the alias
 // table stay serial in light order, so the table is bit-identical to the serial build (`run` empty).
+// `env` is the world program's bake (host/light/env_bake.h), built before this table: a program
+// world (WORLD_CONST with kLightWorldProgram) whose bake has a table becomes WORLD_ENV, with the
+// importance 4 pi mean x strength times its power factor (0004 D11); without one (no bake, or a
+// black world) it keeps WORLD_CONST with importance 0, so nothing samples it.
 std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput>& lights, const ar::SceneSphere& scene,
                                                     const ar::ObserverView& obs, std::shared_ptr<Ledger> ledger,
-                                                    const ChunkRunner& run = {});
+                                                    const ChunkRunner& run = {}, const BakedEnvironment* env = nullptr);
 
 // Triangle sidedness from AR_EMISSION_SAMPLING_*: 0 = not a light, else kLightTwoSided,
 // kLightBackFace or neither (FRONT), as LightRecord flags with kLightLit set. AUTO follows Cycles:
