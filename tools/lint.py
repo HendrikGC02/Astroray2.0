@@ -52,12 +52,25 @@ class Ctx:
     def find(self, path, line, section, msg):
         self.out.append(f"{path}:{line}: [{section}] {msg}")
 
-    def lines(self, path):
+    # Every file read lint makes goes through one of these three, so --timing's read column is complete.
+    def read_bytes(self, path, n=-1):
         t0 = time.perf_counter()
-        with open(os.path.join(self.root, path), encoding="utf-8", errors="replace") as f:
-            out = f.read().splitlines()
-        self.read_s += time.perf_counter() - t0
-        return out
+        try:
+            with open(os.path.join(self.root, path), "rb") as f:
+                return f.read(n)
+        finally:
+            self.read_s += time.perf_counter() - t0
+
+    def read_text(self, path, errors="replace", newline=None):
+        t0 = time.perf_counter()
+        try:
+            with open(os.path.join(self.root, path), encoding="utf-8", errors=errors, newline=newline) as f:
+                return f.read()
+        finally:
+            self.read_s += time.perf_counter() - t0
+
+    def lines(self, path):
+        return self.read_text(path).splitlines()
 
 
 def spdx(c):
@@ -137,8 +150,7 @@ def nvidia(c):
             continue
         if p.startswith("docs/"):
             continue
-        with open(os.path.join(c.root, p), "rb") as f:
-            head = f.read(2048)
+        head = c.read_bytes(p, 2048)
         if b"\0" in head:
             continue
         # A licence header is a copyright/licence line in the first lines, not any mention.
@@ -152,11 +164,10 @@ def ascii_ps1(c):
     for p in c.files:
         if not p.endswith(".ps1"):
             continue
-        with open(os.path.join(c.root, p), "rb") as f:
-            for n, ln in enumerate(f.read().split(b"\n"), 1):
-                if any(b > 127 for b in ln):
-                    c.find(p, n, "ascii-ps1", "non-ASCII character")
-                    break
+        for n, ln in enumerate(c.read_bytes(p).split(b"\n"), 1):
+            if any(b > 127 for b in ln):
+                c.find(p, n, "ascii-ps1", "non-ASCII character")
+                break
 
 
 def caps(c):
@@ -197,9 +208,8 @@ def caps(c):
                 c.find(p, 1, "caps", f"{n} lines, frozen at {frozen}")
     if ".claude/settings.json" in c.files:
         try:
-            with open(os.path.join(c.root, ".claude/settings.json"), encoding="utf-8") as f:
-                if "hooks" in json.load(f):
-                    c.find(".claude/settings.json", 1, "caps", "hooks key is not allowed")
+            if "hooks" in json.loads(c.read_text(".claude/settings.json", errors="strict")):
+                c.find(".claude/settings.json", 1, "caps", "hooks key is not allowed")
         except ValueError as e:
             c.find(".claude/settings.json", 1, "caps", f"invalid JSON: {e}")
     for p in c.files:
@@ -312,8 +322,7 @@ def budgets(c):
             cells = [x.strip() for x in ln.strip().strip("|").split(" | ")]
             table[cells[0]] = cells[2]
     try:
-        with open(os.path.join(c.root, toml_path), "rb") as f:
-            data = tomllib.load(f)
+        data = tomllib.loads(c.read_bytes(toml_path).decode("utf-8"))
     except (OSError, ValueError) as e:
         c.find(toml_path, 1, "budgets", f"cannot parse: {e}")
         return
@@ -394,8 +403,7 @@ def deps(c):
     if toml_path not in c.files:
         return
     try:
-        with open(os.path.join(c.root, toml_path), "rb") as f:
-            data = tomllib.load(f)
+        data = tomllib.loads(c.read_bytes(toml_path).decode("utf-8"))
     except (OSError, ValueError) as e:
         c.find(toml_path, 1, "deps", f"cannot parse: {e}")
         return
@@ -420,13 +428,11 @@ def deps(c):
             "thirdparty", os.path.join(os.path.dirname(os.path.abspath(__file__)), "thirdparty.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        with open(os.path.join(c.root, notice), encoding="utf-8", newline="") as f:
-            if f.read().replace("\r\n", "\n") != mod.render(data):
-                c.find(notice, 1, "deps", "differs from tools/thirdparty.py output: run it")
+        if c.read_text(notice, errors="strict", newline="").replace("\r\n", "\n") != mod.render(data):
+            c.find(notice, 1, "deps", "differs from tools/thirdparty.py output: run it")
         req = ".github/ci-requirements.txt"
         try:
-            with open(os.path.join(c.root, req), encoding="utf-8", newline="") as f:
-                have = f.read().replace("\r\n", "\n")
+            have = c.read_text(req, errors="strict", newline="").replace("\r\n", "\n")
         except OSError:
             have = None
         if have != mod.render_requirements(data):
@@ -698,8 +704,7 @@ def data(c):
             c.find(p, 1, "data", f"{DATA_MANIFEST} is missing")
         return
     try:
-        with open(os.path.join(c.root, DATA_MANIFEST), "rb") as f:
-            entries = tomllib.load(f).get("file", [])
+        entries = tomllib.loads(c.read_bytes(DATA_MANIFEST).decode("utf-8")).get("file", [])
     except (OSError, ValueError) as e:
         c.find(DATA_MANIFEST, 1, "data", f"cannot parse: {e}")
         return
@@ -721,8 +726,7 @@ def data(c):
         if full not in c.files:
             c.find(full, 1, "data", "listed in MANIFEST.toml but the file does not exist")
         elif isinstance(e.get("sha256"), str):
-            with open(os.path.join(c.root, full), "rb") as f:
-                got = hashlib.sha256(f.read()).hexdigest()
+            got = hashlib.sha256(c.read_bytes(full)).hexdigest()
             if got != e["sha256"]:
                 c.find(full, 1, "data", "sha256 differs from MANIFEST.toml")
     for p in files:
@@ -743,8 +747,7 @@ def assets(c):
     manifest = "assets/manifest.toml"
     if manifest in c.files:
         try:
-            with open(os.path.join(c.root, manifest), "rb") as f:
-                entries = tomllib.load(f).get("asset", [])
+            entries = tomllib.loads(c.read_bytes(manifest).decode("utf-8")).get("asset", [])
         except (OSError, ValueError) as e:
             c.find(manifest, 1, "assets", f"cannot parse: {e}")
             entries = []
@@ -760,8 +763,7 @@ def assets(c):
             continue
         if sizes[p] > ASSET_FILE_CAP:
             c.find(p, 1, "assets", f"image {sizes[p]} bytes, cap {ASSET_FILE_CAP} (2 MB)")
-        with open(os.path.join(c.root, p), "rb") as f:
-            head = f.read(24)
+        head = c.read_bytes(p, 24)
         if head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
             c.find(p, 1, "assets", "not a valid PNG header")
             continue
@@ -896,15 +898,14 @@ def refs(c):
 def refs_manifest(c, toml_path):
     import tomllib
     try:
-        with open(os.path.join(c.root, toml_path), "rb") as f:
-            entries = tomllib.load(f).get("ref", [])
+        entries = tomllib.loads(c.read_bytes(toml_path).decode("utf-8")).get("ref", [])
     except (OSError, ValueError) as e:
         c.find(toml_path, 1, "refs", f"cannot parse: {e}")
         return
     dep_names = set()
     if "third_party/deps.toml" in c.files:
-        with open(os.path.join(c.root, "third_party/deps.toml"), "rb") as f:
-            dep_names = {d.get("name") for d in tomllib.load(f).get("dep", [])}
+        dep_names = {d.get("name") for d in tomllib.loads(
+            c.read_bytes("third_party/deps.toml").decode("utf-8")).get("dep", [])}
     seen = set()
     for r in entries:
         name = r.get("name", "?")
@@ -992,7 +993,7 @@ def hygiene(c):
                     c.find(p, n, "hygiene", "use support.main()")
         top = p.split("/")[0]
         if top in ("src", "blender", "cli", "include") and p.endswith(HYG_EXT):
-            text = open(os.path.join(c.root, p), encoding="utf-8", errors="replace").read()
+            text = c.read_text(p)
             for n, cm in _comment_lines(p, text):
                 if HYG_TASK_RE.search(cm):
                     c.find(p, n, "hygiene", "ticket history in a comment (CLAUDE.md rule 8)")
@@ -1013,7 +1014,7 @@ def hygiene(c):
                         c.find(p, n, "hygiene", f"Ref: names {t}, which is not in the repository")
         if top in ("src", "cli", "include") and p.endswith((".cpp", ".h", ".hpp", ".cu", ".cuh")):
             if text is None:
-                text = open(os.path.join(c.root, p), encoding="utf-8", errors="replace").read()
+                text = c.read_text(p)
             code = blank_comments(text)
             for m in HYG_CATCH_RE.finditer(code):
                 depth, j = 1, m.end()
@@ -1087,6 +1088,45 @@ def timing_line(ph, sec):
             f"sections {sum(sec.values()):.2f} (slowest {name} {worst:.2f})")
 
 
+def timed_run(root):
+    """run() with a timing dict. Also counts opens under root against the timed read helpers, so a section
+    that opens a file directly (a read the read column would miss) is reported without wall seconds."""
+    import builtins
+    opens, timed = [0], [0]
+    real, rb, rt = builtins.open, Ctx.read_bytes, Ctx.read_text
+    here = os.path.abspath(root)
+
+    def counting_open(path, *a, **k):
+        if isinstance(path, str) and os.path.abspath(path).startswith(here):
+            opens[0] += 1
+        return real(path, *a, **k)
+
+    def counting_bytes(self, *a, **k):
+        timed[0] += 1
+        return rb(self, *a, **k)
+
+    def counting_text(self, *a, **k):
+        timed[0] += 1
+        return rt(self, *a, **k)
+
+    sec = {}
+    builtins.open, Ctx.read_bytes, Ctx.read_text = counting_open, counting_bytes, counting_text
+    try:
+        got = run(root, tree_files(root), SECTIONS, sec)
+    finally:
+        builtins.open, Ctx.read_bytes, Ctx.read_text = real, rb, rt
+    problems = []
+    if set(sec) != set(SECTIONS) | {"read"}:
+        problems.append(f"keys {sorted(sec)}")
+    if min(sec.values()) < 0:
+        problems.append("negative time")
+    if opens[0] != timed[0]:
+        problems.append(f"{opens[0]} opens, {timed[0]} through the timed readers")
+    if opens[0] and not sec["read"] > 0:
+        problems.append("files were read but read is 0")
+    return got, problems
+
+
 def self_test(repo):
     base = os.path.join(repo, CASES)
     n, bad = 0, 0
@@ -1096,14 +1136,23 @@ def self_test(repo):
     if got != want:
         bad += 1
         print(f"timing line: expected {want!r} got {got!r}")
+    ph = {}
+    repo_files(repo, ph)
+    n += 1
+    if set(ph) != {"ls-files", "stat"} or min(ph.values()) < 0:
+        bad += 1
+        print(f"repo_files timing keys: {ph}")
     per = {}
     for sec in sorted(os.listdir(base)):
         for case in sorted(os.listdir(os.path.join(base, sec))):
             root = os.path.join(base, sec, case)
             with open(os.path.join(root, "expected.txt"), encoding="utf-8") as f:
                 want = sorted(f.read().splitlines())
-            got = run(root, tree_files(root), SECTIONS)
+            got, problems = timed_run(root)
             n += 1
+            for pr in problems:
+                bad += 1
+                print(f"{sec}/{case}: timing: {pr}")
             per[sec] = per.get(sec, 0) + 1
             if got != want:
                 bad += 1
