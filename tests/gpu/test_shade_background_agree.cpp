@@ -10,6 +10,7 @@
 // The production module is launched, so what runs is the shipped code.
 #include <doctest.h>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -20,8 +21,11 @@
 
 #include "agree.h"
 #include "device/cpu/cpu_device.h"
+#include "host/data_resource.h"
 #include "host/device.h"
 #include "host/film/film_layout.h"
+#include "host/material/material_store.h"
+#include "host/scene/world.h"
 #include "host/thread_pool.h"
 #include "stages/shade_background.h"
 
@@ -43,13 +47,57 @@ struct Snapshot {
   std::vector<float> adds;       // every ADD plane (the bounce sum: exact integers)
 };
 
+constexpr uint32_t kEnvW = 64, kEnvH = 32;
+
+// A world program of an Environment Texture over a smooth float image, compiled by the host as the
+// addon's graph would be (LOAD_CTX_P -> TEX_ENVIRONMENT -> EMIT_LE), with everything the stage reads
+// besides the path state: the image, the sRGB decode table and the RGB-to-spectrum table.
+struct ProgramWorld {
+  MaterialStore store{std::make_shared<Ledger>()};
+  std::vector<float> texels;
+  std::array<float, ar::kSrgbTableSize> srgb{};
+  StoredGraph graph;
+  WorldOutput world;
+
+  // `grey`: every texel grey, whose lift is analytic; otherwise saturated colours, whose lift goes through the
+  // RGB-to-spectrum table.
+  explicit ProgramWorld(uint32_t mode, bool grey) {
+    texels.resize(size_t(kEnvW) * kEnvH * 4, 1.0f);
+    const float pi = 3.14159265358979f;
+    for (uint32_t y = 0; y < kEnvH; ++y)
+      for (uint32_t x = 0; x < kEnvW; ++x) {
+        float* t = &texels[(size_t(y) * kEnvW + x) * 4];
+        const float fx = (float(x) + 0.5f) / float(kEnvW), fy = (float(y) + 0.5f) / float(kEnvH);
+        t[0] = 0.6f + 0.4f * std::sin(2.0f * pi * fx) * std::sin(pi * fy);
+        t[1] = 0.5f + 0.3f * std::cos(2.0f * pi * fx + 1.0f);
+        t[2] = 0.3f + 0.4f * fy;
+        if (grey) t[0] = t[1] = t[2] = 0.6f + 0.35f * std::sin(2.0f * pi * fx) * std::sin(pi * fy);
+      }
+    ar::srgb_decode_table(srgb.data());
+    graph.f32 = {0.8f};
+    graph.i32 = {7, int32_t(mode)};
+    graph.nodes.assign(4, ar_graph_node{});
+    graph.nodes[0].op = uint32_t(ar::Op::LOAD_CTX_P);
+    graph.nodes[1].op = uint32_t(ar::Op::TEX_ENVIRONMENT), graph.nodes[1].i32_first = 0, graph.nodes[1].i32_count = 2;
+    graph.nodes[2].op = uint32_t(ar::Op::CONST_F32), graph.nodes[2].f32_first = 0, graph.nodes[2].f32_count = 1;
+    graph.nodes[3].op = uint32_t(ar::Op::EMIT_LE);
+    graph.links = {{0u, 0u, 1u, 0u}, {1u, 0u, 3u, 0u}, {2u, 0u, 3u, 1u}};
+    const ImageSlotFn slots = [](uint32_t key, uint32_t* slot) { return key == 7u ? (*slot = 0u, true) : false; };
+    ar_world_desc desc = {};
+    desc.surface_graph = 1;
+    world = compile_world(desc, &graph, store.table(), nullptr, &slots);
+  }
+};
+
 std::vector<float> observer_illuminant() {
   std::vector<float> t(ar::kObsSamples);
   for (int i = 0; i < ar::kObsSamples; ++i) t[size_t(i)] = 1.0f + 0.5f * std::sin(float(i) / 37.0f);
   return t;
 }
 
-Snapshot run(Device& dev, ModuleDevice* gpu) {
+// `program`: the world record names the program of that fixture (0005 item 32) and every ray is a
+// random unit direction, so the lookup, the Cycles mapping and the lift are what is compared.
+Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullptr) {
   const Owner owner{1, 1};
   const auto put = [&](const void* p, uint64_t bytes) {
     DeviceBuffer b = dev.allocate(LedgerCategory::TABLES, bytes, owner);
@@ -108,7 +156,13 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
     prev_dist[i] = float(agree::unit(i, 24));
     ray_o[i] = ar::Real3{float(agree::unit(i, 25)), float(agree::unit(i, 26)), float(agree::unit(i, 27))};
     ray_d[i] = ar::normalize(ar::Real3{float(agree::unit(i, 28)) - 0.5f, float(agree::unit(i, 29)) - 0.5f, 0.7f});
+    if (program != nullptr) {  // uniform on the sphere
+      const float z = 2.0f * float(agree::unit(i, 30)) - 1.0f, phi = 6.2831853f * float(agree::unit(i, 31));
+      const float r = std::sqrt(1.0f - z * z);
+      ray_d[i] = ar::Real3{r * std::cos(phi), r * std::sin(phi), z};
+    }
   }
+  std::vector<uint8_t> ray_type(kN, 0);
   DeviceBuffer next_buf = put(next.data(), kN), term_buf = put(term.data(), kN);
   DeviceBuffer flags_buf = put(flags.data(), kN * sizeof(uint32_t));
   DeviceBuffer bounces_buf = put(bounces.data(), kN * sizeof(ar::U16x6));
@@ -131,6 +185,8 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
   soa.ray_o = static_cast<ar::Real3*>(ro_buf.ptr), soa.ray_d = static_cast<ar::Real3*>(rd_buf.ptr);
   soa.prev_ng = static_cast<uint32_t*>(png_buf.ptr), soa.prev_ns = static_cast<uint32_t*>(pns_buf.ptr);
   soa.prev_dist = static_cast<ar::Real*>(pd_buf.ptr);
+  DeviceBuffer rtype_buf = put(ray_type.data(), kN);
+  soa.ray_type = static_cast<uint8_t*>(rtype_buf.ptr);
   DeviceBuffer soa_buf = put(&soa, sizeof soa);
 
   // The light table: an RGB illuminant world between two decoy lamps, so a wrong index would read a lamp.
@@ -140,10 +196,16 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
   colour.p[0] = 0.3f, colour.p[1] = -0.2f, colour.p[2] = 0.1f, colour.p[3] = 0.9f;
   const ar::LightRecord decoy =
       ar::light_make(ar::LightType::POINT, ar::Real3{1, 2, 3}, ar::Real(0), ar::Real(50), colour);
-  const std::vector<ar::LightRecord> lights{decoy, ar::light_make_world(ar::Real(1.75), colour), decoy};
+  const ar::SpectrumRef one = ar::make_const_ref(ar::SpectrumSemantic::ILLUMINANT, ar::Real(1));
+  const std::vector<ar::LightRecord> lights{
+      decoy,
+      program != nullptr ? ar::light_make_world(ar::Real(1.75), one, ar::kLightWorldProgram)
+                         : ar::light_make_world(ar::Real(1.75), colour),
+      decoy};
   DeviceBuffer lights_buf = put(lights.data(), lights.size() * sizeof(ar::LightRecord));
   // Selection probabilities for the world's MIS weight (the alias bins are never read by a miss).
-  const std::vector<float> pmf{0.3f, 0.45f, 0.25f};
+  // A program world has importance 0 (host/light/light_builder.cpp), so its pmf is 0.
+  const std::vector<float> pmf{0.3f, program != nullptr ? 0.0f : 0.45f, 0.25f};
   DeviceBuffer pmf_buf = put(pmf.data(), pmf.size() * sizeof(float));
   ar::LightSamplerView sampler{};
   sampler.light_count = uint32_t(lights.size());
@@ -155,6 +217,38 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
   DeviceBuffer cmf_buf = put(cmf.data(), cmf.size() * sizeof(float));
   ar::SceneTables tables{};
   tables.observer = ar::ObserverView{static_cast<const float*>(cmf_buf.ptr), static_cast<const float*>(illum_buf.ptr)};
+  // The program world's tables: the RGB-to-spectrum table with device addresses, the image, the sRGB
+  // decode table, and the SceneData that holds the program words and their constant block.
+  std::vector<DeviceBuffer> program_bufs;
+  ar::Rgb2SpecTable rgb_table{};
+  ar::DeviceImageView view{};
+  ar::SceneData scene_data{};
+  if (program != nullptr) {
+    const ar::Rgb2SpecTable& host_table = program->store.table();
+    rgb_table = host_table;
+    const uint64_t res = uint64_t(host_table.res);
+    program_bufs.push_back(put(host_table.z_nodes, res * 4));
+    rgb_table.z_nodes = static_cast<const float*>(program_bufs.back().ptr);
+    program_bufs.push_back(put(host_table.coeffs, 36 * res * res * res));
+    rgb_table.coeffs = static_cast<const float*>(program_bufs.back().ptr);
+    program_bufs.push_back(put(&rgb_table, sizeof rgb_table));
+    tables.rgb2spec = static_cast<const ar::Rgb2SpecTable*>(program_bufs.back().ptr);
+    program_bufs.push_back(put(program->texels.data(), program->texels.size() * 4));
+    view.texels = uint64_t(uintptr_t(program_bufs.back().ptr));
+    view.width = kEnvW, view.height = kEnvH, view.channels = 4;
+    view.format = uint32_t(ar::TexFormat::FLOAT), view.encoding = uint32_t(ar::TexEncoding::LINEAR);
+    program_bufs.push_back(put(&view, sizeof view));
+    tables.images = static_cast<const ar::DeviceImageView*>(program_bufs.back().ptr);
+    tables.image_count = 1;
+    program_bufs.push_back(put(program->srgb.data(), program->srgb.size() * 4));
+    tables.srgb_decode = static_cast<const float*>(program_bufs.back().ptr);
+    program_bufs.push_back(put(program->world.program.data(), program->world.program.size() * 4));
+    scene_data.world_program = static_cast<const uint32_t*>(program_bufs.back().ptr);
+    scene_data.world_program_words = uint32_t(program->world.program.size());
+    program_bufs.push_back(put(&program->world.block, sizeof(ar::ConstantBlock)));
+    scene_data.world_constants = static_cast<const ar::ConstantBlock*>(program_bufs.back().ptr);
+    program_bufs.push_back(put(&scene_data, sizeof scene_data));
+  }
   DeviceBuffer tables_buf = put(&tables, sizeof tables);
 
   ar::KernelGlobals kg{};
@@ -167,6 +261,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
   kg.lights = static_cast<const ar::LightRecord*>(lights_buf.ptr);
   kg.light_sampler = static_cast<const ar::LightSamplerView*>(sampler_buf.ptr);
   kg.world_light = 1;  // [decoy, world, decoy]
+  if (program != nullptr) kg.scene = static_cast<const ar::SceneData*>(program_bufs.back().ptr);
   kg.session.width = kFilmW;
   kg.session.height = kFilmH;
   kg.session.samples_per_pass = kK;
@@ -204,26 +299,17 @@ Snapshot run(Device& dev, ModuleDevice* gpu) {
 
   for (DeviceBuffer* b : {&film_buf, &queue_buf, &list_buf, &table_buf, &next_buf, &term_buf, &flags_buf, &bounces_buf,
                           &lambda_buf, &beta_buf, &ru_buf, &rl_buf, &ro_buf, &rd_buf, &png_buf, &pns_buf, &pd_buf, &pmf_buf, &sample_buf, &soa_buf, &lights_buf, &sampler_buf, &illum_buf, &cmf_buf, &tables_buf,
-                          &kg_buf})
+                          &kg_buf, &rtype_buf})
     dev.free(*b);
+  for (DeviceBuffer& b : program_bufs) dev.free(b);
   return s;
 }
 
-}  // namespace
-
-TEST_SUITE("gate") {
-
-TEST_CASE("shade_background/agreement") {
-  Ledger cpu_ledger, gpu_ledger;
-  ContextState ctx;
-  ThreadPool pool(ctx, 1);
-  CpuDevice cpu(cpu_ledger, pool);
-  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
-  const Snapshot c = run(cpu, nullptr);
-  const Snapshot g = run(*gpu, gpu.get());
-  CHECK(cpu_ledger.total() == 0);
-  CHECK(gpu_ledger.total() == 0);
-
+// The two devices' runs against each other: integer fields bit for bit, radiance by D12's evaluation
+// class. Returns the radiance statistics.
+// `gate_radiance` false only for the colour environment (ruling 96): the radiance statistics are printed,
+// not judged.
+agree::Stats check_agreement(const Snapshot& c, const Snapshot& g, const char* step, bool gate_radiance = true) {
   // Integer fields: bitwise.
   CHECK(c.term == g.term);
   CHECK(c.next_stage == g.next_stage);
@@ -264,8 +350,123 @@ TEST_CASE("shade_background/agreement") {
   rc.v.assign(lc.begin(), lc.end());
   rg.v.assign(lg.begin(), lg.end());
   const agree::Stats e = agree::compare(rg, rc, agree::Metric::REL_L2);
-  CHECK(agree::report("shade_background", "slot radiance nofma vs cpu float", e, agree::Cls::EVAL,
-                      agree::NOFMA_VS_CPU_FLOAT).pass);
+  const bool pass = agree::report("shade_background", step, e, agree::Cls::EVAL, agree::NOFMA_VS_CPU_FLOAT).pass;
+  if (gate_radiance) CHECK(pass);
+  return e;
+}
+
+
+}  // namespace
+
+TEST_SUITE("gate") {
+
+TEST_CASE("shade_background/agreement") {
+  Ledger cpu_ledger, gpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  const Snapshot c = run(cpu, nullptr);
+  const Snapshot g = run(*gpu, gpu.get());
+  CHECK(cpu_ledger.total() == 0);
+  CHECK(gpu_ledger.total() == 0);
+  check_agreement(c, g, "slot radiance nofma vs cpu float");
+}
+
+// The program world: 10^5 random directions through the Environment Texture program on both devices,
+// Linear on a smooth grey float image (a grey's lift is analytic, so only the mapping and the lookup
+// are compared). Closest is not run: a direction within 1e-6 of a texel edge may pick the neighbour on
+// one device, which is the lookup's conditioning, not a defect.
+TEST_CASE("shade_background/environment agreement") {
+  Ledger cpu_ledger, gpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  const ProgramWorld world(1u, true);
+  REQUIRE(!world.world.magenta);
+  REQUIRE(world.world.program.size() > 2);
+  const Snapshot c = run(cpu, nullptr, &world);
+  const Snapshot g = run(*gpu, gpu.get(), &world);
+  const agree::Stats e = check_agreement(c, g, "environment linear nofma vs cpu float");
+  // 1e-6 relative on the 4-lane radiance of a random direction, tighter than 0002 D12's 1e-5.
+  CHECK(e.max <= 1e-6);
+  CHECK(cpu_ledger.total() == 0);
+  CHECK(gpu_ledger.total() == 0);
+}
+
+// The same lookup on saturated colours, before the lift: the colour TEX_ENVIRONMENT returns for 10^5
+// random directions, no-FMA GPU against CPU float, at 1e-6: the direction mapping and the bilinear
+// lookup alone. (After the lift the same image differs by up to 1.4e-5: the sigmoid polynomial sums terms of 20 to 50 to an argument near 2, so it magnifies a 4e-7 input gap about 40 times.)
+TEST_CASE("shade_background/environment colour lookup agreement") {
+  const ProgramWorld world(1u, false);
+  Ledger ledger;
+  auto dev = make_cuda_device(ledger, 0);
+  agree::Inputs in;
+  in.n = kN, in.stride = 3;
+  in.v.resize(size_t(kN) * 3);
+  for (uint32_t i = 0; i < kN; ++i) {
+    const float z = 2.0f * float(agree::unit(i, 30)) - 1.0f, phi = 6.2831853f * float(agree::unit(i, 31));
+    const float r = std::sqrt(1.0f - z * z);
+    in.v[3 * i] = r * std::cos(phi), in.v[3 * i + 1] = r * std::sin(phi), in.v[3 * i + 2] = z;
+  }
+  DeviceBuffer texels = dev->allocate(LedgerCategory::TEXTURES, world.texels.size() * 4, Owner{});
+  dev->upload(texels, 0, world.texels.data(), world.texels.size() * 4);
+  ar::DeviceImageView view{};
+  view.width = kEnvW, view.height = kEnvH, view.channels = 4;
+  view.format = uint32_t(ar::TexFormat::FLOAT), view.encoding = uint32_t(ar::TexEncoding::LINEAR);
+  ar::DeviceImageView host_view = view;
+  host_view.texels = uint64_t(uintptr_t(world.texels.data()));
+  view.texels = uint64_t(uintptr_t(texels.ptr));
+  DeviceBuffer vb = dev->allocate(LedgerCategory::TABLES, sizeof view, Owner{});
+  dev->upload(vb, 0, &view, sizeof view);
+  DeviceBuffer sb = dev->allocate(LedgerCategory::TABLES, world.srgb.size() * 4, Owner{});
+  dev->upload(sb, 0, world.srgb.data(), world.srgb.size() * 4);
+  uint64_t views_p = uint64_t(uintptr_t(vb.ptr)), srgb_p = uint64_t(uintptr_t(sb.ptr));
+  uint32_t count = 1, mode = 1;
+  const agree::Results gpu = agree::run_gpu(*dev, std::string(AR_TEST_KERNEL_NOFMA_DIR) + "/tex_agree.cubin", "ar_env_agree", in, 3,
+                                            {&views_p, &count, &srgb_p, &mode});
+  ar::SceneTables tables{};
+  tables.images = &host_view;
+  tables.image_count = 1;
+  tables.srgb_decode = world.srgb.data();
+  agree::Results cpu;
+  cpu.n = kN, cpu.stride = 3;
+  cpu.v.resize(size_t(kN) * 3);
+  for (uint32_t i = 0; i < kN; ++i) {
+    float out[3];
+    ar::op_tex_environment(tables, 0u, mode, &in.v[3 * i], out);
+    for (int k = 0; k < 3; ++k) cpu.v[3 * i + uint32_t(k)] = out[k];
+  }
+  const agree::Stats e = agree::compare(gpu, cpu, agree::Metric::REL_L2);
+  std::printf("agree shade_background environment pre-lift colour: n=%u max=%.3e p99.9=%.3e\n", e.n, e.max, e.p999);
+  CHECK(e.max <= 1e-6);
+  dev->free(texels);
+  dev->free(vb);
+  dev->free(sb);
+  CHECK(ledger.total() == 0);
+}
+
+// Saturated colours through the whole program, lift included: reported, never judged (ruling 96). The
+// rgb2spec sigmoid argument c0 l^2 + c1 l + c2 cancels about 29x (terms near -32, +50 and -19 sum to
+// about -1.7), so a one-ulp libm difference in the texel position, 4e-7 in the colour, becomes up to
+// 2e-5 in the radiance. The parts are gated instead: the pre-lift colour above at 1e-6, the lift in
+// test_vm_agree (bit for bit on identical inputs) and the grey radiance case at 1e-6. This line keeps a
+// jump in the combined figure visible in the log.
+TEST_CASE("shade_background/environment colour radiance is reported") {
+  Ledger cpu_ledger, gpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  const ProgramWorld world(1u, false);
+  REQUIRE(!world.world.magenta);
+  const Snapshot c = run(cpu, nullptr, &world);
+  const Snapshot g = run(*gpu, gpu.get(), &world);
+  const agree::Stats e = check_agreement(c, g, "environment colour linear nofma vs cpu float (reported, ruling 96)", false);
+  CHECK(std::isfinite(e.max));  // the integer fields and the NaN positions still agree exactly
+  CHECK(cpu_ledger.total() == 0);
+  CHECK(gpu_ledger.total() == 0);
 }
 
 }  // TEST_SUITE

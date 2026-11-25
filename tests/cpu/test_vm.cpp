@@ -119,6 +119,36 @@ void fill(Rig& g, float* row, uint32_t i) {
   for (int l = 0; l < 4; ++l) g.ctx.lambda_t.nm[l] = float(360.0 + 470.0 * double(unit(i, 23 + uint32_t(l))));
 }
 
+// The colour TEX_ENVIRONMENT must return for direction d on the fixture image, computed in double from
+// the Cycles formulas (u = (atan2(y, x) - pi) / -2pi, v = (acos(z / |d|) - pi) / -pi), repeating, an sRGB
+// byte decoded by the sRGB function after any filtering. False for a Closest lookup within 1e-3 of a texel
+// edge, where float and double may pick different texels.
+bool env_reference(const float* d, uint32_t mode, double* out) {
+  const Fixture& f = fixture();
+  const double pi = 3.14159265358979323846;
+  const double n = std::sqrt(double(d[0]) * d[0] + double(d[1]) * d[1] + double(d[2]) * d[2]);
+  const double u = (std::atan2(double(d[1]), double(d[0])) - pi) / (-2.0 * pi), v = (std::acos(double(d[2]) / n) - pi) / (-pi);
+  const int w = int(f.image.width), h = int(f.image.height);
+  const auto texel = [&](int x, int y, int k) {
+    x = ((x % w) + w) % w, y = ((y % h) + h) % h;
+    return double(f.texels[size_t((y * w + x) * 3 + k)]) / 255.0;
+  };
+  const auto decode = [](double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); };
+  if (mode == 0u) {
+    const double x = u * w, y = v * h;
+    if (std::fabs(x - std::round(x)) < 1e-3 || std::fabs(y - std::round(y)) < 1e-3) return false;
+    for (int k = 0; k < 3; ++k) out[k] = decode(texel(int(std::floor(x)), int(std::floor(y)), k));
+    return true;
+  }
+  const double x = u * w - 0.5, y = v * h - 0.5;
+  const int ix = int(std::floor(x)), iy = int(std::floor(y));
+  const double tx = x - ix, ty = y - iy;
+  for (int k = 0; k < 3; ++k)
+    out[k] = decode((1 - ty) * (1 - tx) * texel(ix, iy, k) + (1 - ty) * tx * texel(ix + 1, iy, k) +
+                    ty * (1 - tx) * texel(ix, iy + 1, k) + ty * tx * texel(ix + 1, iy + 1, k));
+  return true;
+}
+
 float prod(float x, float y) { return float(double(x) * double(y)); }  // exact in double, one rounding
 float sum(float x, float y) { return float(double(x) + double(y)); }
 
@@ -298,6 +328,25 @@ TEST_CASE("vm/fold equals interpret") {
         }
         t.fold("TEX_IMAGE", fold_ok);
         t.ref("TEX_IMAGE", ref_ok);
+      }
+    }
+    {  // TEX_ENVIRONMENT in both modes at the direction (r0, r1, r2): the interpreter equals the direct
+       // call bit for bit, and the colour equals an independent double-precision lookup (the Cycles
+       // mapping, Closest or bilinear on the fixture's 3x2 sRGB image, repeating). Slot 1 is outside the table.
+      for (uint32_t mode = 0; mode < 2; ++mode) {
+        Prog p;
+        p.op(Op::TEX_ENVIRONMENT, 16, 0, 0, {0u, mode}).op(Op::TEX_ENVIRONMENT, 19, 0, 0, {1u, mode}).end();
+        Rig h = g;
+        REQUIRE(h.run(p) == VmStatus::OK);
+        float want[3];
+        ar::op_tex_environment(g.tables, 0u, mode, x, want);
+        bool fold_ok = true, ref_ok = h.regs.r[19] == 1.0f && bits(h.regs.r[20]) == 0u && h.regs.r[21] == 1.0f;
+        for (int k = 0; k < 3; ++k) fold_ok = fold_ok && bits(h.regs.r[16 + k]) == bits(want[k]);
+        double ref[3];
+        if (env_reference(x, mode, ref))
+          for (int k = 0; k < 3; ++k) ref_ok = ref_ok && std::fabs(double(h.regs.r[16 + k]) - ref[k]) <= 2e-6;
+        t.fold("TEX_ENVIRONMENT", fold_ok);
+        t.ref("TEX_ENVIRONMENT", ref_ok);
       }
     }
     {  // RGB_LIFT with each semantic, at the context's wavelengths.
@@ -485,8 +534,8 @@ TEST_CASE("vm/fold equals interpret") {
     CHECK(kv.second == 0u);
   }
   // Every opcode of the table was exercised, so a renamed key cannot hide a missing check.
-  CHECK(t.fold_bad.size() == 19u);
-  CHECK(t.ref_bad.size() == 19u);
+  CHECK(t.fold_bad.size() == 20u);
+  CHECK(t.ref_bad.size() == 20u);
 }
 
 TEST_CASE("vm/lift analytic values") {
@@ -765,6 +814,8 @@ TEST_CASE("vm/errors stop the run") {
   add("LOAD_CTX_UV dst 30", Prog().op(Op::LOAD_CTX_UV, 30, 0), VmStatus::BAD_REGISTER);
   add("TEX_IMAGE dst 30", Prog().op(Op::TEX_IMAGE, 30, 0, 0, {0u, 0u}), VmStatus::BAD_REGISTER);
   add("TEX_IMAGE uv 30", Prog().op(Op::TEX_IMAGE, 0, 30, 0, {0u, 0u}), VmStatus::BAD_REGISTER);
+  add("TEX_ENVIRONMENT dst 30", Prog().op(Op::TEX_ENVIRONMENT, 30, 0, 0, {0u, 0u}), VmStatus::BAD_REGISTER);
+  add("TEX_ENVIRONMENT direction 30", Prog().op(Op::TEX_ENVIRONMENT, 0, 30, 0, {0u, 0u}), VmStatus::BAD_REGISTER);
   add("RGB_LIFT dst 29", Prog().op(Op::RGB_LIFT, 29, 0, 0), VmStatus::BAD_REGISTER);
   add("RGB_LIFT src 30", Prog().op(Op::RGB_LIFT, 0, 30, 0), VmStatus::BAD_REGISTER);
   add("EMIT_LE needs 4 (a = 29)", Prog().op(Op::EMIT_LE, 29), VmStatus::BAD_REGISTER);
@@ -780,6 +831,8 @@ TEST_CASE("vm/errors stop the run") {
   add("LOAD_CTX_UV set 2", Prog().op(Op::LOAD_CTX_UV, 0, 2), VmStatus::BAD_OPERAND);
   add("CHANNEL_F32X3 channel 3", Prog().op(Op::CHANNEL_F32X3, 0, 3, 0, {3u}), VmStatus::BAD_OPERAND);
   add("TEX_IMAGE mode 4", Prog().op(Op::TEX_IMAGE, 0, 3, 0, {0u, 4u}), VmStatus::BAD_OPERAND);
+  add("TEX_ENVIRONMENT mode EXTEND", Prog().op(Op::TEX_ENVIRONMENT, 0, 3, 0, {0u, 2u}), VmStatus::BAD_OPERAND);  // always repeats
+  add("TEX_ENVIRONMENT mode 4", Prog().op(Op::TEX_ENVIRONMENT, 0, 3, 0, {0u, 4u}), VmStatus::BAD_OPERAND);
   add("RGB_LIFT semantic IOR", Prog().op(Op::RGB_LIFT, 0, 4, 3), VmStatus::BAD_OPERAND);
   add("RGB_LIFT semantic 255", Prog().op(Op::RGB_LIFT, 0, 4, 255), VmStatus::BAD_OPERAND);
   add("STORE_SLOT slot 37", Prog().op(Op::STORE_SLOT, 0, 0, 0, {37u}), VmStatus::BAD_OPERAND);
@@ -920,6 +973,39 @@ TEST_CASE("vm/non finite store is refused") {
     }
 }
 
+TEST_CASE("vm/tex environment direction convention") {
+  // Cycles' equirectangular mapping, written out as numbers: +x is the middle of the image, +y is a
+  // quarter in, -y three quarters, +z the top row (v = 1) and -z the bottom row, whatever the vector's length.
+  struct Axis {
+    float d[3];
+    float u, v;  // u < 0: any
+  };
+  const Axis axes[] = {{{1, 0, 0}, 0.5f, 0.5f},  {{0, 1, 0}, 0.25f, 0.5f}, {{0, -1, 0}, 0.75f, 0.5f},
+                       {{0, 0, 1}, -1.0f, 1.0f}, {{0, 0, -1}, -1.0f, 0.0f}, {{3, 0, 0}, 0.5f, 0.5f},
+                       {{1, 1, 0}, 0.375f, 0.5f}, {{1, 0, 1}, 0.5f, 0.75f}};
+  for (const Axis& a : axes) {
+    float uv[2];
+    ar::env_direction_uv(a.d, uv);
+    INFO(a.d[0] << " " << a.d[1] << " " << a.d[2]);
+    if (a.u >= 0.0f) CHECK(std::fabs(uv[0] - a.u) <= 1e-6f);
+    CHECK(std::fabs(uv[1] - a.v) <= 1e-6f);
+  }
+  // The zero vector maps to (0, 0), as Cycles does, and no direction near a pole gives NaN (a unit
+  // vector's z can round above 1, where acos would be NaN).
+  const float zero[3] = {0, 0, 0};
+  float uv[2] = {7, 7};
+  ar::env_direction_uv(zero, uv);
+  CHECK((uv[0] == 0.0f && uv[1] == 0.0f));
+  uint32_t bad = 0;
+  for (uint32_t i = 0; i < 20000; ++i) {
+    const float sgn = (i & 1u) ? -1.0f : 1.0f;
+    const float d[3] = {(unit(i, 0) - 0.5f) * 2e-3f, (unit(i, 1) - 0.5f) * 2e-3f, sgn * (0.5f + unit(i, 2))};
+    ar::env_direction_uv(d, uv);
+    bad += !(uv[0] >= 0.0f && uv[0] <= 1.0f && uv[1] >= 0.0f && uv[1] <= 1.0f);
+  }
+  CHECK(bad == 0u);
+}
+
 TEST_CASE("vm/opcode table is wired") {
   // Handler macros exist for every ops.def row (the build proves it); the table and the test's
   // encoding agree on the opcode numbers the programs above use.
@@ -937,7 +1023,8 @@ TEST_CASE("vm/opcode table is wired") {
   CHECK(uint32_t(Op::SUB_F32) == 22u);
   CHECK(uint32_t(Op::SPECTRUM_TABLE) == 23u);
   CHECK(uint32_t(Op::COLOR_TO_F32) == 24u);
-  CHECK(uint32_t(Op::COUNT_) == 25u);
+  CHECK(uint32_t(Op::TEX_ENVIRONMENT) == 25u);
+  CHECK(uint32_t(Op::COUNT_) == 26u);
 }
 
 }  // TEST_SUITE

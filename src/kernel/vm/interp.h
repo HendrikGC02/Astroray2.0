@@ -44,6 +44,7 @@
 #include "ops/store_slot.h"
 #include "ops/sub_f32.h"
 #include "ops/test_inject_nan.h"
+#include "ops/tex_environment.h"
 #include "ops/tex_image.h"
 #include "ops/unsupported.h"
 #include "ops/volume_coeffs.h"

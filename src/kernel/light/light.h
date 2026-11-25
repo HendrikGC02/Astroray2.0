@@ -225,8 +225,11 @@ AR_FN LightRecord light_make_triangle(Real3 p0, Real3 p1, Real3 p2, uint32_t ins
   return r;
 }
 
-AR_FN LightRecord light_make_world(Real strength, const SpectrumRef& emission) {
-  return light_make(LightType::WORLD_CONST, Real3{Real(0), Real(0), Real(0)}, Real(0), strength, emission);
+// flags is 0 or kLightWorldProgram.
+AR_FN LightRecord light_make_world(Real strength, const SpectrumRef& emission, uint16_t flags = 0) {
+  LightRecord r = light_make(LightType::WORLD_CONST, Real3{Real(0), Real(0), Real(0)}, Real(0), strength, emission);
+  r.flags = flags;
+  return r;
 }
 
 // An area lamp: xf is the rotation (axis_x, axis_y, axis_z = axis_x x axis_y, front = -axis_z)
@@ -338,7 +341,9 @@ AR_FN const char* light_problem(const LightRecord& r) {
         return "triangle light area is zero or not representable";
       return nullptr;
     }
-    case LightType::WORLD_CONST: return nullptr;
+    case LightType::WORLD_CONST:
+      if (r.flags & ~uint16_t(kLightWorldProgram)) return "unknown world light flag";
+      return nullptr;
   }
   return "unknown light type";
 }

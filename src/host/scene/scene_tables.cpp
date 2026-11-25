@@ -44,7 +44,8 @@ const char* table_name(TableId id) {
       "instances",          "mesh table",      "material slots", "material headers", "material programs",
       "material constants", "material pass indices", "image views",     "light records",  "light alias bins", "light bin lights",
       "light pmf",          "light index",     "rgb2spec nodes",  "rgb2spec coefficients", "observer cmf", "observer illuminant",
-      "srgb decode",        "e_diel table",    "material spectra", "e_spec table", "media table", "table header"};
+      "srgb decode",        "e_diel table",    "material spectra", "e_spec table", "media table", "world program",
+      "world constants", "table header"};
   const uint32_t i = static_cast<uint32_t>(id);
   if (i >= kTableCount) throw std::invalid_argument("table_name: no table " + std::to_string(i));
   return names[i];
@@ -369,6 +370,15 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
     const std::vector<ar::MediumDesc> medium_descs = medium_table(n.media);
     return b.put(LedgerCategory::TABLES, medium_descs.data(), medium_descs.size() * sizeof(ar::MediumDesc));
   });
+  // The world program and its block (0005 item 32): carried by the material arrays, so they are
+  // kept exactly while those are.
+  b.table(TableId::WORLD_PROGRAM, mats_same, mats ? uint32_t(mats->world_program.size()) : 0u, [&] {
+    return b.put(LedgerCategory::TABLES, mats ? mats->world_program.data() : nullptr, mats ? mats->world_program.size() * 4 : 0, mp);
+  });
+  b.table(TableId::WORLD_CONSTANTS, mats_same, mats ? uint32_t(mats->world_constants.size()) : 0u, [&] {
+    return b.put(LedgerCategory::TABLES, mats ? mats->world_constants.data() : nullptr,
+                 mats ? mats->world_constants.size() * sizeof(ar::ConstantBlock) : 0, mp);
+  });
 
   // Images (060): texels per slot, kept while the slot holds the same image.
   const ImageArrays* imgs = n.images.get();
@@ -465,6 +475,8 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   sd.material_pass_index = as<uint32_t>(at(TableId::MATERIAL_PASS_INDEX));
   sd.material_spectra = as<float>(at(TableId::MATERIAL_SPECTRA)), sd.material_spectra_count = cnt(TableId::MATERIAL_SPECTRA);
   sd.medium_descs = as<ar::MediumDesc>(at(TableId::MEDIA)), sd.medium_count = cnt(TableId::MEDIA);
+  sd.world_program = as<uint32_t>(at(TableId::WORLD_PROGRAM)), sd.world_program_words = cnt(TableId::WORLD_PROGRAM);
+  sd.world_constants = as<ar::ConstantBlock>(at(TableId::WORLD_CONSTANTS));
   sd.accel = n.accel->kernel_accel();
   ar::Rgb2SpecTable jt{};
   if (jh) jt = *jh;

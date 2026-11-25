@@ -78,7 +78,8 @@ ar_graph_desc StoredGraph::desc() const {
 uint64_t MaterialArrays::bytes() const {
   return headers.size() * sizeof(ar::MaterialHeader) + programs.size() * sizeof(uint32_t) +
          constants.size() * sizeof(ar::ConstantBlock) + spectra.size() * sizeof(float) + pass_index.size() * sizeof(uint32_t) +
-         media.size() * sizeof(ar::MediumBlock) + medium_programs.size() * sizeof(uint32_t);
+         media.size() * sizeof(ar::MediumBlock) + medium_programs.size() * sizeof(uint32_t) +
+         world_program.size() * sizeof(uint32_t) + world_constants.size() * sizeof(ar::ConstantBlock);
 }
 
 struct MaterialStore::Open {
@@ -233,8 +234,8 @@ ar_status MaterialStore::image_begin(Edit& edit, const ar_image_desc* d, ar_imag
   return AR_OK;
 }
 
-bool MaterialStore::uses_changed_image(const MaterialOutput& out, const Open& o) {
-  for (uint32_t k : out.images)
+bool MaterialStore::uses_changed_image(const std::vector<uint32_t>& images, const Open& o) {
+  for (uint32_t k : images)
     if (o.reset || o.images.count(k) != 0 || o.removed_images.count(k) != 0) return true;
   return false;
 }
@@ -380,6 +381,10 @@ void MaterialStore::rebuild_locked() {
   a->headers.push_back(h);
   a->constants.push_back(default_.compiled.block);
   a->pass_index.push_back(0u);
+  if (world_out_ && !world_out_->program.empty()) {
+    a->world_program = world_out_->program;
+    a->world_constants.push_back(world_out_->block);
+  }
   a->program_count = ar::sort_program_count(a->headers.data(), uint32_t(a->keys.size()));
   const uint64_t bytes = a->bytes();
   const uint64_t id = bytes != 0 ? ledger_->add(Owner{}, LedgerCategory::TABLES, bytes) : 0;
@@ -421,7 +426,7 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
       // or its emission estimate read was set, replaced or removed (a key that was not set when
       // it compiled sampled magenta; setting it now gives the material its slot).
       auto prev = materials_.find(kv.first);
-      const bool image_dirty = !own_pass && prev != materials_.end() && uses_changed_image(*prev->second.out, o);
+      const bool image_dirty = !own_pass && prev != materials_.end() && uses_changed_image(prev->second.out->images, o);
       if (!own_pass && !image_dirty) continue;
       auto gi = graphs_.find(kv.second.surface_graph);
       const std::shared_ptr<const StoredGraph> graph = gi != graphs_.end() ? gi->second : nullptr;
@@ -440,22 +445,26 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
       materials_[kv.first] = Active{kv.second, out};
       done.push_back({kv.first, o.materials.count(kv.first) != 0, out});
     }
-    rebuild_locked();
-    // The world, by the same rule: the worker's output when its prediction holds, else compiled here.
+    // The world, by the same rule: the worker's output when its prediction holds, else compiled
+    // here. It goes before the arrays are rebuilt, which carry its program. A world that samples an
+    // image is recompiled when that image changes, like a material.
     apply_world(o, world_);
     if (!world_) {
       if (world_out_) old_world = world_out_->subject;
       world_out_.reset();
-    } else if (world_compiles(o, world_)) {
+    } else if (world_compiles(o, world_) || (world_out_ && uses_changed_image(world_out_->images, o))) {
       auto gi = graphs_.find(world_->surface_graph);
       const std::shared_ptr<const StoredGraph> graph = gi != graphs_.end() ? gi->second : nullptr;
       std::shared_ptr<const WorldOutput> out = pass.world_out;
-      if (!out || pass.world_graph != graph || std::memcmp(&pass.world_desc, &*world_, sizeof(ar_world_desc)) != 0)
-        out = std::make_shared<const WorldOutput>(compile_world(*world_, graph.get(), table_));
+      // The worker compiled without image means and slots, so a world that reads images is compiled again.
+      if (!out || !out->images.empty() || pass.world_graph != graph ||
+          std::memcmp(&pass.world_desc, &*world_, sizeof(ar_world_desc)) != 0)
+        out = std::make_shared<const WorldOutput>(compile_world(*world_, graph.get(), table_, &means, &slots));
       if (world_out_) old_world = world_out_->subject;
       world_out_ = out;
       new_world = out;
     }
+    rebuild_locked();
   }
   // A material set in this edit had its old entries removed with its keyed item (the tracker
   // clears replaced subjects before on_active); a dependent is not a subject, so clear it here.

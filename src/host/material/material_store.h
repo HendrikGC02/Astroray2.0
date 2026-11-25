@@ -75,6 +75,11 @@ struct MaterialArrays {
   std::vector<ar::MediumBlock> media;
   std::vector<uint32_t> medium_programs;
   std::vector<uint32_t> medium_index;
+  // The active world's program (WorldOutput::program) and its constant block (one entry), both
+  // empty unless the world's emission varies with the direction. They sit here, beside the
+  // programs they are laid out like, so a snapshot of the material arrays is one of the world too.
+  std::vector<uint32_t> world_program;
+  std::vector<ar::ConstantBlock> world_constants;
   uint64_t bytes() const;
 };
 
@@ -120,8 +125,9 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   static void apply_open(const Open& o, GraphMap& graphs, DescMap& materials);
   // Whether the edit compiles this material: set in it, or its graph set or removed in it.
   static bool compiles(const Open& o, ar_key key, const ar_material_desc& d);
-  // Whether the edit set, replaced or removed (or reset away) an image the material reads.
-  static bool uses_changed_image(const MaterialOutput& out, const Open& o);
+  // Whether the edit set, replaced or removed (or reset away) one of `images`, the keys a compiled
+  // material or world reads.
+  static bool uses_changed_image(const std::vector<uint32_t>& images, const Open& o);
   // The world as of `o` applied to `world` (unset: none), and whether `o` recompiles it.
   static void apply_world(const Open& o, std::optional<ar_world_desc>& world);
   static bool world_compiles(const Open& o, const std::optional<ar_world_desc>& world);

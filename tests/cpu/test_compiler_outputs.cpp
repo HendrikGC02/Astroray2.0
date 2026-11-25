@@ -349,6 +349,107 @@ TEST_CASE("compiler_outputs/compile error is magenta with one PROGRAM_REJECTED")
   CHECK(same_ref(m.compiled.block.base_color, magenta_ref()));
 }
 
+namespace {
+astroray::host::WorldOutput world_of(const GB& g, const astroray::host::ImageSlotFn* slots = nullptr) {
+  astroray::host::StoredGraph sg;
+  sg.nodes = g.nodes, sg.links = g.links, sg.f32 = g.f, sg.i32 = g.i, sg.strings = g.s;
+  ar_world_desc d = {};
+  d.surface_graph = 1;
+  return astroray::host::compile_world(d, &sg, table(), nullptr, slots);
+}
+}  // namespace
+
+TEST_CASE("compiler_outputs/world compiles an environment texture to a program") {
+  const astroray::host::ImageSlotFn slots = [](uint32_t key, uint32_t* slot) { return key == 7u ? (*slot = 3u, true) : false; };
+  GB g;
+  const int p = g.add(Op::LOAD_CTX_P);
+  const int t = g.add(Op::TEX_ENVIRONMENT, {}, {7, 1});
+  g.link(p, t, 0);
+  const int e = g.add(Op::EMIT_LE);
+  g.link(t, e, 0);
+  g.link(g.add(Op::CONST_F32, {2.0f}), e, 1);
+  const astroray::host::WorldOutput w = world_of(g, &slots);
+  CHECK(!w.magenta);
+  CHECK(w.entries.empty());
+  REQUIRE(w.program.size() > 4);
+  REQUIRE(w.program[2] != 0u);  // the emission entry, offset 2 of the entry table
+  const std::vector<Op> ops = entry_ops(w.program, w.program[2]);
+  CHECK(std::count(ops.begin(), ops.end(), Op::LOAD_CTX_P) == 1);
+  CHECK(std::count(ops.begin(), ops.end(), Op::TEX_ENVIRONMENT) == 1);
+  CHECK(std::count(ops.begin(), ops.end(), Op::EMIT_LE) == 1);
+  CHECK(ops.back() == Op::END);
+  // The image key resolved to its slot (immediate 0) and the mode went through (immediate 1).
+  for (size_t pc = w.program[2]; pc + 2 < w.program.size(); ++pc)
+    if ((w.program[pc] & 0xffu) == uint32_t(Op::TEX_ENVIRONMENT)) {
+      CHECK(w.program[pc + 1] == 3u);
+      CHECK(w.program[pc + 2] == 1u);
+    }
+  CHECK(w.images == std::vector<uint32_t>{7u});
+  CHECK(w.strength == 1.0f);  // the record's strength: the program carries the authored one
+  // The same graph with no slot resolver samples the missing image, and is still a program.
+  const astroray::host::WorldOutput w2 = world_of(g);
+  CHECK(w2.program.size() == w.program.size());
+  // An environment image always repeats: the EXTEND bit is refused by the compiler, not ignored.
+  GB bad;
+  const int bp = bad.add(Op::LOAD_CTX_P);
+  const int bt = bad.add(Op::TEX_ENVIRONMENT, {}, {7, 2});
+  bad.link(bp, bt, 0);
+  const int be = bad.add(Op::EMIT_LE);
+  bad.link(bt, be, 0);
+  bad.link(bad.add(Op::CONST_F32, {1.0f}), be, 1);
+  const astroray::host::WorldOutput wb = world_of(bad, &slots);
+  CHECK(wb.magenta);
+  CHECK(wb.program.empty());
+  REQUIRE(wb.entries.size() == 1);
+  CHECK(wb.entries[0].code == AR_REPORT_PROGRAM_REJECTED);
+  CHECK(wb.entries[0].detail.find("TEX_ENVIRONMENT mode") != std::string::npos);
+  // A constant world keeps the block route: no program.
+  GB c;
+  const int ce = c.add(Op::EMIT_LE);
+  c.link(c.add(Op::CONST_F32X3, {0.2f, 0.4f, 0.6f}), ce, 0);
+  c.link(c.add(Op::CONST_F32, {3.0f}), ce, 1);
+  const astroray::host::WorldOutput wc = world_of(c);
+  CHECK(wc.program.empty());
+  CHECK(wc.strength == 3.0f);
+  CHECK(!wc.magenta);
+  // Two constant emissions add: a program, where they used to be refused, and its radiance is the
+  // sum of both lifted colours times their strengths.
+  GB two;
+  const float colours[2][3] = {{0.2f, 0.4f, 0.6f}, {0.6f, 0.3f, 0.1f}};
+  const float strengths[2] = {1.0f, 2.0f};
+  for (int k = 0; k < 2; ++k) {
+    const int te = two.add(Op::EMIT_LE);
+    two.link(two.add(Op::CONST_F32X3, {colours[k][0], colours[k][1], colours[k][2]}), te, 0);
+    two.link(two.add(Op::CONST_F32, {strengths[k]}), te, 1);
+  }
+  const astroray::host::WorldOutput w3 = world_of(two);
+  CHECK(!w3.magenta);
+  REQUIRE(w3.program.size() > 4);
+  REQUIRE(w3.program[2] != 0u);
+  const auto ob = read_data("spectral/observer.bin");
+  astroray::ObserverTables obs;
+  const std::string err = astroray::parse_observer(ob.data(), ob.size(), &obs);
+  REQUIRE_MESSAGE(err.empty(), err);
+  ar::SceneTables tables = {};
+  tables.rgb2spec = &table();
+  tables.observer.cmf = &obs.cmf[0][0];
+  tables.observer.illum = obs.d65;
+  ar::ShadeContext ctx = {};
+  for (int l = 0; l < ar::kLanes; ++l) ctx.lambda_t.nm[l] = 450.0f + 70.0f * float(l);
+  ar::VmRegs regs = {};
+  ar::Spec le = ar::spec_fill(ar::Real(0));
+  REQUIRE(ar::run_entry(w3.program.data(), w3.program[2], &regs, ctx, tables, nullptr, &le) == ar::VmStatus::OK);
+  ar::Spec want = ar::spec_fill(ar::Real(0));
+  for (int k = 0; k < 2; ++k) {
+    const ar::Spec one = ar::op_rgb_lift(tables, colours[k], ar::SpectrumSemantic::ILLUMINANT, ctx.lambda_t);
+    for (int l = 0; l < ar::kLanes; ++l) want.v[l] += one.v[l] * ar::Real(strengths[k]);
+  }
+  for (int l = 0; l < ar::kLanes; ++l) {
+    CHECK(want.v[l] > 0.0f);
+    CHECK(std::fabs(double(le.v[l]) - double(want.v[l])) <= 1e-6 * double(want.v[l]));
+  }
+}
+
 TEST_CASE("compiler/spectrum kinds accepted per semantic") {
   using SK = ar::SpectrumKind;
   // A Blackbody feeding the only emission, with a constant strength: one ref in the block.

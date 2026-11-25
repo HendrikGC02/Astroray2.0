@@ -55,7 +55,7 @@ struct Work {
   std::vector<int> topo;  // stable topological order: smallest ready index first
   std::vector<char> isc;  // value is a compile-time constant
   std::vector<Vec3> cv;
-  std::vector<uint32_t> slot;  // TEX_IMAGE nodes: the image table slot, or kTexNoImage
+  std::vector<uint32_t> slot;  // TEX_IMAGE and TEX_ENVIRONMENT nodes: the image table slot, or kTexNoImage
   std::map<std::vector<float>, uint32_t> table_at;  // arena offset of each distinct SPECTRUM_TABLE content
   std::set<int> table_noted;                        // SPECTRUM_TABLE nodes already checked against the observer range
 };
@@ -363,6 +363,7 @@ bool build_code(const Work& w, const std::vector<Item>& items, std::vector<uint3
       case Op::ADD_F32X3: code->push_back(word(nd.op, a, in(0), in(1))); break;
       case Op::COLOR_TO_F32: code->push_back(word(nd.op, a, in(0))); break;
       case Op::TEX_IMAGE:
+      case Op::TEX_ENVIRONMENT:
         code->push_back(word(nd.op, a, in(0)));
         code->push_back(w.slot[size_t(it.node)]);
         code->push_back(uint32_t(w.g.i32[nd.i32_first + 1]));
@@ -440,7 +441,9 @@ Mean mean_of_node(const Work& w, int i, MeanCtx* x) {
     return r;
   }
   const GraphNode& n = w.g.nodes[size_t(i)];
-  if (n.op == Op::TEX_IMAGE) {
+  if (n.op == Op::TEX_IMAGE || n.op == Op::TEX_ENVIRONMENT) {
+    // The mean of an environment image is its plain texel mean, which the emission estimate of a
+    // world never reads for importance (a program world has none).
     const uint32_t image = uint32_t(w.g.i32[n.i32_first]);
     x->images->insert(image);
     if (x->means == nullptr) return r;
@@ -476,19 +479,19 @@ Mean mean_of_node(const Work& w, int i, MeanCtx* x) {
 Vec3 estimate_input(const Work& w, int i, MeanCtx* x) {
   if (w.isc[size_t(i)]) return w.cv[size_t(i)];  // folded: the stored value, clamped by the colour packing
   const Mean m = mean_of(w, i, x);
-  const bool direct = w.g.nodes[size_t(i)].op == Op::TEX_IMAGE;
+  const bool direct = w.g.nodes[size_t(i)].op == Op::TEX_IMAGE || w.g.nodes[size_t(i)].op == Op::TEX_ENVIRONMENT;
   const bool zero = !(m.v[0] > 0.0f) && !(m.v[1] > 0.0f) && !(m.v[2] > 0.0f);
   return !m.known || (zero && !direct) ? Vec3{1.0f, 1.0f, 1.0f} : m.v;
 }
 
-// Resolves every TEX_IMAGE node in `used` to its image slot (0005 item 34: a missing image is
-// magenta with a report entry); the program depends on the key either way, so setting it later
-// recompiles.
+// Resolves every TEX_IMAGE and TEX_ENVIRONMENT node in `used` to its image slot (0005 item 34: a
+// missing image is magenta with a report entry); the program depends on the key either way, so
+// setting it later recompiles.
 void resolve_images(Work* w, const std::vector<char>& used, const ImageSlotFn* slots, std::set<uint32_t>* images,
                     std::set<uint32_t>* missing) {
   w->slot.assign(w->g.nodes.size(), ar::kTexNoImage);
   for (size_t i = 0; i < w->g.nodes.size(); ++i) {
-    if (!used[i] || w->g.nodes[i].op != Op::TEX_IMAGE) continue;
+    if (!used[i] || (w->g.nodes[i].op != Op::TEX_IMAGE && w->g.nodes[i].op != Op::TEX_ENVIRONMENT)) continue;
     const uint32_t key = uint32_t(w->g.i32[w->g.nodes[i].i32_first]);
     images->insert(key);
     if (slots != nullptr && !(*slots)(key, &w->slot[i])) w->slot[i] = ar::kTexNoImage, missing->insert(key);

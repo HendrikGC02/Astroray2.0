@@ -90,6 +90,12 @@ struct SceneData {
   // has none. DeviceInstanceRecord::medium indexes it; `program` is the medium's block index.
   const MediumDesc* medium_descs;
   uint32_t medium_count;
+  // The world program (0005 item 32): an entry table followed by the emission entry, laid out as a
+  // material program, and its constant block (one entry). Both null unless the world's light record
+  // carries kLightWorldProgram, which is exactly when shade_background runs them.
+  const uint32_t* world_program;
+  uint32_t world_program_words;
+  const ConstantBlock* world_constants;
   // The traversal structure of the backend that runs the stages, opaque to kernels and never null
   // in a session's scene (an empty scene has an empty structure). CPU: the snapshot's EmbreeScene.
   // CUDA: the OptixTraversableHandle of its TLAS as an integer; the launch reads it from the host
