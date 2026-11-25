@@ -10,7 +10,7 @@ Do:
 3. The record clause and the BACKLOG row.
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass, the gate twice in a row; the two batching cases pass 5 of 5 alone (paste their timings); the new fast test passes.
 Look at: none (timings only).
-Canary: tasks/229.canary.patch must turn red: the new fast test and `batching/session the publish cap holds every due frame during interaction` (the patch removes the request).
+Canary: tasks/229.canary.patch must turn red: astroray_tests_cpu "batching/session the publish cap holds every due frame during interaction", "batching/session a cancel during the publish wait parks at once" (the patch removes the timeBeginPeriod call; the loud probe fails both).
 Budget: gate +0 s, fast +0.1 s at most (stop and ask above 0.3 s); kernel rows: none.
 Depends on: none. Lands before 210 and 223 (their gates fail on these cases). Collisions: tests/cpu main with nothing open; test_batching.cpp with nothing open.
 Size: S (about 30 lines and one test); stop and report at 2x.
