@@ -155,11 +155,15 @@ compile_s = 6.2
 gated = "merge"
 
 [kernel.k_shade_shadow]
-regs = 28
-stack = 0
-spill_store = 0
-spill_load = 0
-compile_s = 1.2
+# A VM kernel since it runs the world program for NEE items toward an environment world (0004 D11):
+# the register file and the shading context are the 288 B stack, and the interpreter's switch spills
+# 24 / 28 B (D10: VM kernels at most 128 / 192). Compile 1.39-1.41 s quiet (kernelgate's nvcc call,
+# three rounds interleaved with main's 0.40 s).
+regs = 48
+stack = 288
+spill_store = 24
+spill_load = 28
+compile_s = 1.4
 gated = "merge"
 
 [kernel.k_shade_volume]
