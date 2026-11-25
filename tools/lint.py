@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Repository lint: licences, NVIDIA material, ASCII scripts, process caps, skips, task files, build flags, doc citations, recurring review defects.
 
-Run: <python> -I tools/lint.py [--self-test] [--section name]
+Run: <python> -I tools/lint.py [--self-test] [--section name] [--timing]
 Ref: docs/decisions/0009-build-test-process.md d10, d28, d31; 0001 D7.1 and V4.
 Findings print as `path:line: [section] message`; exit 1 on any finding.
 """
@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 CASES = "tests/cpu/lint_cases"
 
@@ -46,13 +47,17 @@ class Ctx:
         self.root = root
         self.files = sorted(files)  # forward-slash relative paths
         self.out = []
+        self.read_s = 0.0  # --timing: seconds inside lines()
 
     def find(self, path, line, section, msg):
         self.out.append(f"{path}:{line}: [{section}] {msg}")
 
     def lines(self, path):
+        t0 = time.perf_counter()
         with open(os.path.join(self.root, path), encoding="utf-8", errors="replace") as f:
-            return f.read().splitlines()
+            out = f.read().splitlines()
+        self.read_s += time.perf_counter() - t0
+        return out
 
 
 def spdx(c):
@@ -1040,18 +1045,28 @@ SECTIONS = {
     "hygiene": hygiene,
 }
 
-def run(root, files, sections):
+def run(root, files, sections, section_s=None):
     c = Ctx(root, files)
     for name in sections:
+        t0 = time.perf_counter()
         SECTIONS[name](c)
+        if section_s is not None:
+            section_s[name] = time.perf_counter() - t0
+    if section_s is not None:
+        section_s["read"] = c.read_s
     return sorted(c.out)
 
 
-def repo_files(root):
+def repo_files(root, phase_s=None):
+    t0 = time.perf_counter()
     r = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
                        cwd=root, capture_output=True, check=True)
+    t1 = time.perf_counter()
     fs = [f for f in r.stdout.decode().split("\0") if f and not f.startswith(CASES + "/")]
-    return [f for f in fs if os.path.isfile(os.path.join(root, f))]
+    fs = [f for f in fs if os.path.isfile(os.path.join(root, f))]
+    if phase_s is not None:
+        phase_s["ls-files"], phase_s["stat"] = t1 - t0, time.perf_counter() - t1
+    return fs
 
 
 def tree_files(root):
@@ -1094,13 +1109,21 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--section", choices=sorted(SECTIONS))
+    # Names the phase of a slow run: git's file list, the per-file stat, file reads, the sections.
+    ap.add_argument("--timing", action="store_true")
     a = ap.parse_args()
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if a.self_test:
         return self_test(repo)
-    out = run(repo, repo_files(repo), [a.section] if a.section else SECTIONS)
+    ph, sec = ({}, {}) if a.timing else (None, None)
+    out = run(repo, repo_files(repo, ph), [a.section] if a.section else SECTIONS, sec)
     for ln in out:
         print(ln)
+    if a.timing:
+        read = sec.pop("read")  # inside the sections' time, not added to it
+        name, worst = max(sec.items(), key=lambda kv: kv[1])
+        print(f"lint timing: ls-files {ph['ls-files']:.2f} stat {ph['stat']:.2f} read {read:.2f} "
+              f"sections {sum(sec.values()):.2f} (slowest {name} {worst:.2f})")
     return 1 if out else 0
 
 
