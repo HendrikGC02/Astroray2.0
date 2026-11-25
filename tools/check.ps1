@@ -411,6 +411,13 @@ $global:LASTEXITCODE = $code
       $r.Out | Where-Object { $_ -match $su.Echo } | ForEach-Object { Write-Host $_ }
       if ($r.Code -ne 0) { Fail "blender $($su.Name) failed (out/check/full.log)" }
     }
+    # Analytic renders moved out of the gate (owner decision 38; tools/analytic.py MOVED_TO_FULL): the
+    # gate keeps them on the other device. Recordings are up to date: the gate's `scenes` step built them.
+    foreach ($dev in 'cpu', 'cuda') {
+      $r = Step "analytic $dev moved to full" { & $py -I tools/analytic.py --moved --device $dev }
+      $r.Out | Where-Object { $_ -match '^(PASS|FAIL) analytic' } | ForEach-Object { Write-Host $_ }
+      if ($r.Code -ne 0) { Show-Tail $r 5; Fail "analytic $dev moved to full failed (out/check/full.log)" }
+    }
     # The probe build first, so kernelgate full reads fresh capped probe cubins (kernels_probe_capped).
     $r = Step 'build probe' { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_kernels_gpu_probe }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'probe build failed (out/check/build.log)' }

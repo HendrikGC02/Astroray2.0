@@ -3,7 +3,7 @@
 at 32x32, reads each pixel's mean and variance of the mean from the dump and compares every pixel
 with the closed-form truth of scenes/lib/truths.py.
 
-Usage: <python> -I tools/analytic.py --scene <name> | --gate --device cpu|cuda [--spp N] [--seed S] [--png P]
+Usage: <python> -I tools/analytic.py --scene <name> | --gate | --moved --device cpu|cuda [--spp N] [--seed S] [--png P]
        <python> -I tools/analytic.py --scene <comparison scene> --device D --null PAIRS
 Prints one line per scene channel and a final PASS or FAIL line with the worst pixel's z and a
 reproduce command; exits non-zero on failure.
@@ -52,6 +52,12 @@ MIN_SPP = 1024
 GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace", "a1_table_furnace", "a1_world_half", "a4_point", "a4_blackbody_lamp", "a4_sphere", "a3_disk",
                "lit_furnace_small", "d1_nee_onoff", "d8_stacked_lamps", "d1_uv_chart", "d3_alpha_cards", "d3_alpha_nee", "v1_slab",
                "a9_one_texel", "d11_env_onoff")
+# Gate scenes whose render on one device moved to `check full` (owner decision 38: named long-stable
+# statistical cases leave the gate when concurrent grouping is used up; check.ps1 full runs them with
+# --moved). The gate keeps the other device, and CPU-CUDA equivalence is the agreement tests' (0009
+# d12). d11_env_onoff on the CPU: three renders, each baking the program world at 1024^2 on the CPU
+# (host/light/env_bake.h kEnvBakeSize), 11 s against 1.3 s on CUDA.
+MOVED_TO_FULL = {"cpu": ("d11_env_onoff",), "cuda": ()}
 # Scenes whose harness line also reports lamp crossings per ray (0004 D8 row), and the samples per
 # pixel of the in-process render that reads the counters (one pass suffices: counters are per pass).
 CROSSING_SCENES = ("d8_stacked_lamps",)
@@ -288,15 +294,20 @@ def check_scene(mean, var, checks, m, eps_sys, max_relative=None, renders=None, 
     return out
 
 
+def gate_scenes(device):
+    """The scenes `--gate` renders on `device`: GATE_SCENES less the ones moved to full there."""
+    return [s for s in GATE_SCENES if s not in MOVED_TO_FULL[device]]
+
+
 def gate_members():
-    """Family members the gate runs: one per check of each GATE_SCENES scene on each device, plus
-    the truth-tested renders of tools/integrator_checks.py (also gate steps)."""
+    """Family members the gate runs: one per check of each scene the gate renders on each device,
+    plus the truth-tested renders of tools/integrator_checks.py (also gate steps)."""
     # By path (python -I puts no script folder on sys.path), here because it imports this module.
     spec = importlib.util.spec_from_file_location("integrator_checks", os.path.join(ROOT, "tools", "integrator_checks.py"))
     ic = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ic)
     n = ic.gate_members()
-    return n + scene_members(GATE_SCENES, len(DEVICES))
+    return n + sum(scene_members(gate_scenes(d)) for d in DEVICES)
 
 
 def shard_scenes(scenes, i, n):
@@ -573,11 +584,13 @@ def main():
     ap.add_argument("--spp", type=int, help=f"default: {MIN_SPP}, or a comparison scene's [truth] spp")
     ap.add_argument("--seed", type=int, help="default: seed_for(scene name), task 020's rule")
     ap.add_argument("--png", help="write the render here (one scene only), display scaled so truth is 0.5")
+    ap.add_argument("--moved", action="store_true", help="the gate scenes moved to check full on --device "
+                    "(MOVED_TO_FULL)")
     ap.add_argument("--null", type=int, metavar="PAIRS", help="null calibration of a comparison scene: PAIRS "
                     "render pairs for each mode pair its [truth] pairs name (null_calibration), no test")
     a = ap.parse_args()
-    if bool(a.scene) == a.gate:
-        ap.error("give --scene or --gate")
+    if bool(a.scene) + a.gate + a.moved != 1:
+        ap.error("give one of --scene, --gate and --moved")
     if a.null:
         for s in a.scene or ap.error("--null takes --scene"):
             for pair in meta.load(os.path.join(ROOT, "scenes", s, "meta.toml"))["truth"]["pairs"]:
@@ -585,14 +598,14 @@ def main():
         return 0
     if a.gate:
         check_family()
-    scenes = list(GATE_SCENES) if a.gate else a.scene
+    scenes = gate_scenes(a.device) if a.gate else list(MOVED_TO_FULL[a.device]) if a.moved else a.scene
     if a.shard:
         if not a.gate:
             ap.error("--shard goes with --gate")
         si, sn = (int(x) for x in a.shard.split("/"))
         scenes = shard_scenes(scenes, si, sn)
         # check.ps1 sums the k of every shard against the total: each scene runs in exactly one shard.
-        print(f"members analytic {a.device} shard {si}/{sn}: {scene_members(scenes)} of {scene_members(GATE_SCENES)}")
+        print(f"members analytic {a.device} shard {si}/{sn}: {scene_members(scenes)} of {scene_members(gate_scenes(a.device))}")
     if a.png and len(scenes) != 1:
         ap.error("--png takes one scene")
     ok = True
