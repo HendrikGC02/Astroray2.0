@@ -295,10 +295,24 @@ def gate_members():
     ic = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ic)
     n = ic.gate_members()
-    for s in GATE_SCENES:
+    return n + scene_members(GATE_SCENES, len(DEVICES))
+
+
+def shard_scenes(scenes, i, n):
+    """The scenes of shard i of n (1-based): every scene is in exactly one shard. Round robin, so
+    neighbours in GATE_SCENES (often the same truth family and cost) are spread over the shards."""
+    if not 1 <= i <= n:
+        raise ValueError(f"--shard {i}/{n}: i must be in 1..n")
+    return list(scenes)[i - 1::n]
+
+
+def scene_members(scenes, device_count=1):
+    """Family members (checks) of `scenes` on `device_count` devices, as gate_members counts them."""
+    n = 0
+    for s in scenes:
         t = meta.load(os.path.join(ROOT, "scenes", s, "meta.toml"))["truth"]
         size = int(t.get("size", SIZE))
-        n += len(truths.evaluate(t, size, size)) * len(DEVICES)
+        n += len(truths.evaluate(t, size, size)) * device_count
     return n
 
 
@@ -552,6 +566,8 @@ def main():
     ap.add_argument("--scene", action="append", help="scene name (repeatable)")
     ap.add_argument("--gate", action="store_true", help="the gate's scenes (GATE_SCENES), after checking "
                     "the declared family size")
+    ap.add_argument("--shard", metavar="I/N", help="with --gate: run shard I of N of the gate's scenes "
+                    "(1-based, round robin); the family size check still counts every scene")
     ap.add_argument("--device", required=True, choices=DEVICES)
     ap.add_argument("--spp", type=int, help=f"default: {MIN_SPP}, or a comparison scene's [truth] spp")
     ap.add_argument("--seed", type=int, help="default: seed_for(scene name), task 020's rule")
@@ -569,6 +585,13 @@ def main():
     if a.gate:
         check_family()
     scenes = list(GATE_SCENES) if a.gate else a.scene
+    if a.shard:
+        if not a.gate:
+            ap.error("--shard goes with --gate")
+        si, sn = (int(x) for x in a.shard.split("/"))
+        scenes = shard_scenes(scenes, si, sn)
+        # check.ps1 sums the k of every shard against the total: each scene runs in exactly one shard.
+        print(f"members analytic {a.device} shard {si}/{sn}: {scene_members(scenes)} of {scene_members(GATE_SCENES)}")
     if a.png and len(scenes) != 1:
         ap.error("--png takes one scene")
     ok = True

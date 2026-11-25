@@ -30,6 +30,49 @@ Expect '^result\s+PASS\s+PASS\s+FAIL$' 'result row shows PASS PASS FAIL'
 if ($code -ne 1) { Write-Host "FAIL gate_table: exit $code with a failed run, expected 1"; $fail++ }
 $out2 = @(& $py -I (Join-Path $root 'tools/gate_table.py') --check $check "$tmp/a.json" "$tmp/b.json")
 if ($LASTEXITCODE -ne 0) { Write-Host "FAIL gate_table: exit $LASTEXITCODE with only passing runs, expected 0"; $fail++ }
+# --cases on canned step outputs: slowest first across kinds, a scene that git knows gets its commit.
+# The doctest case name is unique per run, so `git log -S` finds no commit for it ("?").
+$cd = Join-Path $tmp 'cases'
+New-Item -ItemType Directory -Force $cd | Out-Null
+$uniq = 'canned_' + [guid]::NewGuid().ToString('N')
+Set-Content "$cd/cpu-gate-tests.out" @('build: sha=x dirty=0 kernels=embedded', "  0.250 s: $uniq/fast", "  3.500 s: $uniq/slow", "  1.000 s: $uniq/mid")
+Set-Content "$cd/gpu-gate-tests.out" @("  0.500 s: $uniq/gpu")
+Set-Content "$cd/analytic-cpu.out" @('PASS analytic a5_emitter cpu: worst z +1.00 (x at y) against per-pixel z 5.00 + eps_sys 0, 32x32 at 1024 spp, seed 1, 2.0 s; reproduce: r')
+Set-Content "$cd/analytic-cuda.out" @('PASS analytic a5_emitter cuda: worst z +1.00 (x at y) against per-pixel z 5.00 + eps_sys 0, 32x32 at 1024 spp, seed 1, 0.7 s; reproduce: r')
+Set-Content "$cd/integrator-cpu.out" @('PASS integrator d2_roulette cpu: ok (1.5 s)', 'PASS integrator cpu: 1 checks in 1.5 s')
+Set-Content "$cd/integrator-cuda.out" @('PASS integrator d2_roulette cuda: ok (0.1 s)')
+$co = @(& $py -I (Join-Path $root 'tools/gate_table.py') --cases --dir $cd --top 4)
+if ($LASTEXITCODE -ne 0) { Write-Host "FAIL gate_table --cases: exit $LASTEXITCODE"; $fail++ }
+$rows = @($co | Where-Object { $_ -match '^\s*[0-9]+\.[0-9]{2}\s' })
+if ($rows.Count -ne 4) { Write-Host "FAIL gate_table --cases: $($rows.Count) rows, expected 4"; $fail++ }
+elseif ($rows[0] -notmatch "3\.50\s+case\s+cpu\s+\?.*$uniq/slow") { Write-Host "FAIL gate_table --cases: the slowest case is not first: $($rows[0])"; $fail++ }
+elseif ($rows[1] -notmatch '2\.00\s+scene\s+cpu\s+[0-9a-f]{7,}\s.*a5_emitter') { Write-Host "FAIL gate_table --cases: a5_emitter has no added commit: $($rows[1])"; $fail++ }
+elseif ($rows[2] -notmatch '1\.50\s+integrator\s+cpu') { Write-Host "FAIL gate_table --cases: third row is not the integrator check: $($rows[2])"; $fail++ }
+if (-not ($co | Where-Object { $_ -match '^step totals: .*case cpu 4\.8 s' })) { Write-Host 'FAIL gate_table --cases: step totals line'; $fail++ }
+Set-Content "$cd/gpu-gate-tests.out" @('no timed line')
+$null = @(& $py -I (Join-Path $root 'tools/gate_table.py') --cases --dir $cd 2>&1)
+if ($LASTEXITCODE -eq 0) { Write-Host 'FAIL gate_table --cases: a step output without timed lines was accepted'; $fail++ }
+
+# The shard partition of tools/analytic.py: every gate scene in exactly one shard, for several n.
+$probe = @'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("analytic", sys.argv[1] + "/tools/analytic.py")
+a = importlib.util.module_from_spec(spec); spec.loader.exec_module(a)
+bad = 0
+for n in (1, 2, 3, 4):
+    got = [s for i in range(1, n + 1) for s in a.shard_scenes(a.GATE_SCENES, i, n)]
+    if sorted(got) != sorted(a.GATE_SCENES) or len(set(got)) != len(got):
+        bad += 1; print(f"shards n={n}: {got}")
+    members = sum(a.scene_members(a.shard_scenes(a.GATE_SCENES, i, n)) for i in range(1, n + 1))
+    if members != a.scene_members(a.GATE_SCENES):
+        bad += 1; print(f"shards n={n}: {members} members, expected {a.scene_members(a.GATE_SCENES)}")
+if a.shard_scenes(a.GATE_SCENES, 2, 2)[0] != a.GATE_SCENES[1]:
+    bad += 1; print("shard 2/2 does not start at the second scene")
+print("shards ok" if not bad else "shards bad")
+sys.exit(1 if bad else 0)
+'@
+$po = @(& $py -I -c $probe $root 2>&1)
+if ($LASTEXITCODE -ne 0) { Write-Host 'FAIL analytic shards: partition'; $po | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }; $fail++ }
 if ($fail -gt 0) { $out | ForEach-Object { Write-Host $_ }; exit 1 }
 Write-Host 'PASS gate_table'
 exit 0

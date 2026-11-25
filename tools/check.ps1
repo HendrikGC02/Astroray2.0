@@ -119,6 +119,32 @@ $global:LASTEXITCODE = 1
 '@
   $runTimed = [scriptblock]::Create($timedText)
 
+  # The two long CPU steps run as n shard processes side by side (they use under a tenth of the 16
+  # threads alone). Each shard prints through a file, as in $timedText, and the outputs are joined
+  # in shard order; the exit code is the first non-zero one. Text, for the same reason as $timedText.
+  $shardText = @'
+param([string]$file, [string[]]$argLines, [string]$capture)
+$ps = @()
+for ($i = 0; $i -lt $argLines.Count; $i++) {
+  $p = Start-Process -FilePath $file -ArgumentList $argLines[$i] -NoNewWindow -PassThru -RedirectStandardOutput "$capture.$i" -RedirectStandardError "$capture.$i.err"
+  $null = $p.Handle
+  $ps += $p
+}
+$code = 0
+for ($i = 0; $i -lt $ps.Count; $i++) {
+  $ps[$i].WaitForExit()
+  if ($ps[$i].ExitCode -ne 0 -and $code -eq 0) { $code = $ps[$i].ExitCode }
+  Get-Content "$capture.$i"
+  Get-Content "$capture.$i.err"
+}
+$global:LASTEXITCODE = $code
+'@
+  $runShards = [scriptblock]::Create($shardText)
+  # Shard counts: measured in task 212 (docs/BACKLOG.md Gate row). Every case and scene runs exactly once:
+  # the bodies below sum the shards' own counts against the whole and fail on a difference.
+  $shardsCpuGate = 2
+  $shardsAnalytic = 2
+
   # Group: steps with the same Group, adjacent in this table, run concurrently (CPU device against GPU
   # device; see Invoke-GateGroup). 'aov agreement', 'integrator cuda' (tripwire) and 'material compile'
   # are timing-sensitive or use both devices and stay alone.
@@ -166,7 +192,16 @@ $global:LASTEXITCODE = 1
     @{ Name = 'scenes'; Tag = 'cpu'; Echo = '^scenes:'; Run = { & $py -I tools/scenes.py } },
     # 0009 d11, d16 (072): analytic scenes on CPU and GPU at 32x32 through the CLI, after 'scenes'.
     @{ Name = 'analytic cpu'; Group = 'g1'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Keep = $true; Run = {
-        & $py -I tools/analytic.py --gate --device cpu } },
+        $n = $shardsAnalytic
+        $o = @(& $runShards $py @(1..$n | ForEach-Object { "-I tools/analytic.py --gate --device cpu --shard $_/$n" }) (Join-Path $root 'out/check/analytic-cpu'))
+        $code = $LASTEXITCODE
+        $o
+        # Each shard prints "members analytic cpu shard i/n: k of T"; the k must add up to T.
+        $k = 0; $tot = -1
+        foreach ($l in $o) { if ($l -match '^members analytic cpu shard \d+/\d+: (\d+) of (\d+)$') { $k += [int]$Matches[1]; $tot = [int]$Matches[2] } }
+        if ($k -ne $tot -or $tot -lt 0) { "FAIL analytic cpu shards: members $k of $tot"; $code = 1 }
+        else { "shards: analytic cpu $n shards, $k of $tot members" }
+        $global:LASTEXITCODE = $code } },
     @{ Name = 'analytic cuda'; Group = 'g1'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL|crossings) analytic'; Keep = $true; Run = {
         & $py -I tools/analytic.py --gate --device cuda } },
     # 0009 d17(iv) (077): deterministic AOVs of scene D2, CPU against GPU; D1 runs in the analytic steps.
@@ -182,7 +217,19 @@ $global:LASTEXITCODE = 1
         & $py -I tools/integrator_checks.py --gate --device cpu } },
     @{ Name = 'integrator cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Keep = $true; Run = {
         & $py -I tools/integrator_checks.py --gate --device cuda } },
-    @{ Name = 'cpu gate tests'; Group = 'g3'; Tag = 'cpu'; Lock = $true; Identity = $exe; Keep = $true; Run = { & $exe --tier=gate --duration=true } },
+    @{ Name = 'cpu gate tests'; Group = 'g3'; Tag = 'cpu'; Lock = $true; Identity = $exe; Keep = $true; Run = {
+        $n = $shardsCpuGate
+        $all = [int]((& $exe --tier=gate --count | Select-String -Pattern 'filters: (\d+)').Matches[0].Groups[1].Value)
+        $o = @(& $runShards $exe @(1..$n | ForEach-Object {
+            "--tier=gate --duration=true --first=$([int][math]::Floor(($_ - 1) * $all / $n) + 1) --last=$([int][math]::Floor($_ * $all / $n))" }) (Join-Path $root 'out/check/cpu-gate-tests'))
+        $code = $LASTEXITCODE
+        $o
+        # doctest's own summary per shard: cases run = passed + failed; together they are the whole tier.
+        $ran = 0
+        foreach ($l in $o) { if ($l -match '^\[doctest\] test cases:\s+\d+ \|\s+(\d+) passed \|\s+(\d+) failed') { $ran += [int]$Matches[1] + [int]$Matches[2] } }
+        if ($ran -ne $all) { "FAIL cpu gate tests shards: $ran of $all cases ran"; $code = 1 }
+        else { "shards: cpu gate tests $n shards, $ran of $all cases" }
+        $global:LASTEXITCODE = $code } },
     # Time limit 270 s: after 132's fix the tier took 12.6-24.1 s over 100 runs under the machine lock;
     # 10x the slowest run, rounded up to a multiple of 30 s.
     @{ Name = 'gpu gate tests'; Group = 'g3'; Tag = 'local'; Lock = $true; Identity = $gpuExe; Keep = $true;
@@ -255,11 +302,13 @@ $global:LASTEXITCODE = 1
         Set-Location $v.root
         $py = $v.py; $dargs = $v.dargs; $exe = $v.exe; $gpuExe = $v.gpuExe; $root = $v.root; $isCi = $v.isCi
         $runTimed = [scriptblock]::Create($v.timedText)
+        $runShards = [scriptblock]::Create($v.shardText)
+        $shardsCpuGate = $v.shardsCpuGate; $shardsAnalytic = $v.shardsAnalytic
         $t = [Diagnostics.Stopwatch]::StartNew()
         $global:LASTEXITCODE = 0
         $out = & ([scriptblock]::Create($body)) 2>&1 | ForEach-Object { "$_" }
         [pscustomobject]@{ Code = $LASTEXITCODE; Out = @($out); Seconds = $t.Elapsed.TotalSeconds } }
-      $vars = @{ root = "$root"; py = $py; dargs = $dargs; exe = $exe; gpuExe = $gpuExe; isCi = $isCi; timedText = $timedText }
+      $vars = @{ root = "$root"; py = $py; dargs = $dargs; exe = $exe; gpuExe = $gpuExe; isCi = $isCi; timedText = $timedText; shardText = $shardText; shardsCpuGate = $shardsCpuGate; shardsAnalytic = $shardsAnalytic }
       $jobs = @($members | ForEach-Object { Start-Job -ScriptBlock $pre -ArgumentList $_.Run.ToString(), $vars })
       $null = $jobs | Wait-Job
       $res = @(for ($i = 0; $i -lt $members.Count; $i++) {
