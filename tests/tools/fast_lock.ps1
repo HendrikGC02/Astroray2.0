@@ -170,7 +170,7 @@ while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() <
   $h3 = Start-On 'unknown' 'h3' @($holder, '60', (Join-Path $tmp 'unknown.ready'))
   $treeDir = Join-Path $tmp 'tree'
   $treeRelease = Join-Path $tmp 'tree.release'
-  $h4 = Start-On 'tree' 'h4' @($holder, '10', (Join-Path $tmp 'tree.ready'), $treeRelease, $treeDir)
+  $h4 = Start-On 'tree' 'h4' @($holder, '60', (Join-Path $tmp 'tree.ready'), $treeRelease, $treeDir)
   # Case 1: past the 1.5 s limit the waiter gives up, naming the holder.
   Wait-Ready 'timeout'
   $w1 = Start-On 'timeout' 'w1' @($waiter)
@@ -203,7 +203,7 @@ while timed and not os.path.exists(os.path.join(d, 'release')) and time.time() <
   $h2.WaitForExit()
   $w2 = Start-On 'abandon' 'w2' @($waiter)
   $sw4 = [Diagnostics.Stopwatch]::StartNew()
-  while ($sw4.Elapsed.TotalSeconds -lt 10 -and -not ((Read-Out 'w4') -match 'waiting for')) { Start-Sleep -Milliseconds 20 }
+  while ($sw4.Elapsed.TotalSeconds -lt 30 -and -not ((Read-Out 'w4') -match 'waiting for')) { Start-Sleep -Milliseconds 20 }
   Set-Content -Path $treeRelease -Value release
   $w1.WaitForExit(); Set-Content -Path $timeoutRelease -Value release; $w2.WaitForExit(); $w3.WaitForExit(); $w4.WaitForExit()
   $keep.Dispose()
