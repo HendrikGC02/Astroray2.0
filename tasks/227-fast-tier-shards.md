@@ -15,3 +15,6 @@ Budget: fast -2 s or better; gate +0 s.
 Depends on: none (212 landed). Collisions: tools/check.ps1 with 226 (run_fast/ci output) and 210 (row c); this lands first if ready first, the later one rebases.
 Size: S (about 40 lines); stop and report at 2x.
 Progress:
+- check.ps1: one shared tier-shard helper for the gate and fast tests; fast runs 3 shards (1 on ci) in --order-by=name.
+- tests/cpu/test_stat_harness.cpp (forced, outside Scope): the child-process case printed its `family count child 4 3` line into the parent's output, which the shard family sum counted; it now prints only its message line.
+- fast 9.9 s median -> 5.4 s (5 runs each, quiet); fast_gate_table fast-path case with fake exe; canary 3 hunks.

@@ -456,8 +456,8 @@ $global:LASTEXITCODE = $code
 
     $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $waited += $w; Add-ArExcluded $w
     if (-not (Test-Path $exe)) { Fail "missing $exe" }
-    # The fast tier's f32 and f64 instances of an AR_RT case share a name but sit hundreds of cases apart in file
-    # order, which would leave no allowed cut; by name they are adjacent (the gate's f64 names carry a suffix).
+    # Fast cases that share an exact name (plain TEST_CASEs in the ar-f64 files; AR_RT cases carry the ' f64' suffix
+    # here as in the gate) sit hundreds of cases apart in file order, which leaves no allowed cut; by name they are adjacent.
     $prevFast = Join-Path $root 'out/check/fast-tests.out'
     $r = Step 'tests' { & $runCpuTier 'fast' $shardsFast 'fast tests' $prevFast (Join-Path $root 'out/check/fast-tests') '--order-by=name' }
     # The next run's cut balances by these seconds, as the gate does with its kept step outputs.
