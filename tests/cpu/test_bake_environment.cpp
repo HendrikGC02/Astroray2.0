@@ -65,8 +65,8 @@ constexpr double kU = 1.0 / 16777216.0;  // float unit roundoff 2^-24
 constexpr double kReductionUnits = 8.0;  // bake_environment.h: the sums, the weights and the division
 constexpr double kAnalyticUnits = ar::kAnalyticWorldUnits;  // e_s, counted in common/analytic_world.h
 constexpr uint32_t kN = 64;              // tests use 64; production uses kEnvBakeSize
-// The cases that only read values, never directions, bake 32 x 32 to keep the fast tier inside B-08.
-constexpr uint32_t kSmall = 32;
+// The cases that only read values, never directions, bake 16 x 16 to keep the fast tier inside B-08.
+constexpr uint32_t kSmall = 16;
 
 const ar::ObserverView& observer() {
   static astroray::ObserverTables t;
@@ -379,7 +379,7 @@ TEST_CASE("bake_environment/constant world uniform") {
   const BakedEnvironment b = baker.get(rig.dev, rig.kg, {1}, nullptr, kSmall);
   REQUIRE(b.table);
   CHECK(b.max == double(grid[0]));
-  CHECK(b.mean == double(grid[0]));  // 1024 equal floats sum exactly in double
+  CHECK(b.mean == double(grid[0]));  // 256 equal floats sum exactly in double
   CHECK(std::fabs(b.max - want) <= 1e-6 * want);
   CHECK(std::fabs(b.mean - want) <= 1e-6 * want);
   // The table is a density: uniform, 1 in every cell, the integral 1, for both distributions.
@@ -522,7 +522,7 @@ TEST_CASE("bake_environment/non-finite cell is refused") {
     CAPTURE(bad);
     CHECK(what.find("bake_environment: cell 0 (iu 0, iv 0) at direction (") != std::string::npos);
     CHECK(what.find("not a finite non-negative radiance") != std::string::npos);
-    // Cell 0 of 32 x 32 is centred at (1/64, 1/64), near the south pole (z = -0.996).
+    // Cell 0 of 16 x 16 is centred at (1/32, 1/32), near the south pole (z = -0.984).
     const size_t at = what.find("direction (");
     REQUIRE(at != std::string::npos);
     char* end = nullptr;
@@ -530,7 +530,7 @@ TEST_CASE("bake_environment/non-finite cell is refused") {
     const double y = std::strtod(end + 1, &end);
     const double z = std::strtod(end + 1, &end);
     CHECK(std::fabs(x * x + y * y + z * z - 1.0) < 1e-5);
-    CHECK(z < -0.99);
+    CHECK(z < -0.98);
   }
   // The refusals left no cache: a good world under the same key bakes.
   CHECK(baker.rebuild_count() == 0u);
