@@ -307,7 +307,9 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
 
 // The two devices' runs against each other: integer fields bit for bit, radiance by D12's evaluation
 // class. Returns the radiance statistics.
-agree::Stats check_agreement(const Snapshot& c, const Snapshot& g, const char* step) {
+// `gate_radiance` false only for the colour environment (ruling 96): the radiance statistics are printed,
+// not judged.
+agree::Stats check_agreement(const Snapshot& c, const Snapshot& g, const char* step, bool gate_radiance = true) {
   // Integer fields: bitwise.
   CHECK(c.term == g.term);
   CHECK(c.next_stage == g.next_stage);
@@ -348,7 +350,8 @@ agree::Stats check_agreement(const Snapshot& c, const Snapshot& g, const char* s
   rc.v.assign(lc.begin(), lc.end());
   rg.v.assign(lg.begin(), lg.end());
   const agree::Stats e = agree::compare(rg, rc, agree::Metric::REL_L2);
-  CHECK(agree::report("shade_background", step, e, agree::Cls::EVAL, agree::NOFMA_VS_CPU_FLOAT).pass);
+  const bool pass = agree::report("shade_background", step, e, agree::Cls::EVAL, agree::NOFMA_VS_CPU_FLOAT).pass;
+  if (gate_radiance) CHECK(pass);
   return e;
 }
 
@@ -442,6 +445,28 @@ TEST_CASE("shade_background/environment colour lookup agreement") {
   dev->free(vb);
   dev->free(sb);
   CHECK(ledger.total() == 0);
+}
+
+// Saturated colours through the whole program, lift included: reported, never judged (ruling 96). The
+// rgb2spec sigmoid argument c0 l^2 + c1 l + c2 cancels about 29x (terms near -32, +50 and -19 sum to
+// about -1.7), so a one-ulp libm difference in the texel position, 4e-7 in the colour, becomes up to
+// 2e-5 in the radiance. The parts are gated instead: the pre-lift colour above at 1e-6, the lift in
+// test_vm_agree (bit for bit on identical inputs) and the grey radiance case at 1e-6. This line keeps a
+// jump in the combined figure visible in the log.
+TEST_CASE("shade_background/environment colour radiance is reported") {
+  Ledger cpu_ledger, gpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  const ProgramWorld world(1u, false);
+  REQUIRE(!world.world.magenta);
+  const Snapshot c = run(cpu, nullptr, &world);
+  const Snapshot g = run(*gpu, gpu.get(), &world);
+  const agree::Stats e = check_agreement(c, g, "environment colour linear nofma vs cpu float (reported, ruling 96)", false);
+  CHECK(std::isfinite(e.max));  // the integer fields and the NaN positions still agree exactly
+  CHECK(cpu_ledger.total() == 0);
+  CHECK(gpu_ledger.total() == 0);
 }
 
 }  // TEST_SUITE
