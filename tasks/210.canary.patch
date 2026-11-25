@@ -1,0 +1,13 @@
+diff --git a/tools/lint.py b/tools/lint.py
+index b22535c2..7cdc1c66 100644
+--- a/tools/lint.py
++++ b/tools/lint.py
+@@ -1084,7 +1084,7 @@ def timing_line(ph, sec):
+     read = sec.pop("read")  # inside the sections' time, not added to it
+     name, worst = max(sec.items(), key=lambda kv: kv[1])
+     return (f"lint timing: ls-files {ph['ls-files']:.2f} stat {ph['stat']:.2f} read {read:.2f} "
+-            f"sections {sum(sec.values()):.2f} (slowest {name} {worst:.2f})")
++            f"sections {max(sec.values()):.2f} (slowest {name} {worst:.2f})")
+ 
+ 
+ def self_test(repo):
