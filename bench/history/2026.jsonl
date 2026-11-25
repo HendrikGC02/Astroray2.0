@@ -51,3 +51,5 @@
 {"sha":"b9438a679079a807548cde84bf50524bc77c6526","machine":"rtx5070ti-8c16t","driver":"unknown","cuda":"cuda","scene":"b1m","metric":"pq_share","value":0.09469,"unit":"fraction","n":63,"spread":0.02457,"date":"2026-11-23T07:53:01Z"}
 {"sha":"b9438a679079a807548cde84bf50524bc77c6526","machine":"rtx5070ti-8c16t","driver":"unknown","cuda":"cuda","scene":"b5m","metric":"idle_share","value":0.098624,"unit":"fraction","n":63,"spread":0.122365,"date":"2026-11-23T07:53:01Z"}
 {"sha":"b9438a679079a807548cde84bf50524bc77c6526","machine":"rtx5070ti-8c16t","driver":"unknown","cuda":"cuda","scene":"b5m","metric":"pq_share","value":0.087054,"unit":"fraction","n":63,"spread":0.01737,"date":"2026-11-23T07:53:01Z"}
+{"sha":"67b2f69e0b4eddf985e36a28d7d800feaa75e8cc","machine":"rtx5070ti-8c16t","driver":"unknown","cuda":"none","scene":"b1m","metric":"pass_ms","value":12.0053997,"unit":"ms","n":64,"spread":0.696900368,"date":"2026-11-25T02:34:54Z"}
+{"sha":"67b2f69e0b4eddf985e36a28d7d800feaa75e8cc","machine":"rtx5070ti-8c16t","driver":"unknown","cuda":"none","scene":"b5m","metric":"pass_ms","value":12.5626001,"unit":"ms","n":64,"spread":0.327799797,"date":"2026-11-25T02:34:57Z"}
