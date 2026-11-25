@@ -250,21 +250,26 @@ TEST_SUITE("fast") {
     }
   }
 
-  AR_RT_CASE("lobe_ggx/pdf integral") {
-    // The VNDF pdf is a density over the upper hemisphere; reflections that leave it are lost, so
-    // the integral is <= 1. The pins are the python quadrature of the same integral.
-    struct Row {
-      double roughness, mu, want;
-    };
-    const Row rows[] = {{0.1, 0.9, 0.99989427553838}, {0.1, 0.5, 0.9998253278913073}, {0.1, 0.1, 0.9975364322298702},
-                        {0.5, 0.9, 0.9393897976583593}, {0.5, 0.5, 0.930008110410481},   {0.5, 0.1, 0.969170000808662},
-                        {1.0, 0.9, 0.526314535715448},  {1.0, 0.5, 0.6666621227915798},  {1.0, 0.1, 0.9090716924498142}};
-    for (const Row& row : rows) {
-      const double integral = pdf_integral(make_params(row.roughness, 1.0), dir_from(row.mu, 0.9), 2000, 180);
-      INFO("roughness=" << row.roughness << " mu=" << row.mu << " integral=" << integral);
+  // The VNDF pdf is a density over the upper hemisphere; reflections that leave it are lost, so
+  // the integral is <= 1. The pins are the python quadrature of the same integral. One case per
+  // roughness so that no case nears the per-test budget (0009 B-12).
+  static void check_pdf_integral(double roughness, const double (&want)[3]) {
+    const double mus[3] = {0.9, 0.5, 0.1};
+    for (int k = 0; k < 3; ++k) {
+      const double integral = pdf_integral(make_params(roughness, 1.0), dir_from(mus[k], 0.9), 2000, 180);
+      INFO("roughness=" << roughness << " mu=" << mus[k] << " integral=" << integral);
       CHECK(integral <= 1.0 + 1e-3);
-      CHECK(std::fabs(integral - row.want) <= 1e-3);
+      CHECK(std::fabs(integral - want[k]) <= 1e-3);
     }
+  }
+  AR_RT_CASE("lobe_ggx/pdf integral roughness 0.1") {
+    check_pdf_integral(0.1, {0.99989427553838, 0.9998253278913073, 0.9975364322298702});
+  }
+  AR_RT_CASE("lobe_ggx/pdf integral roughness 0.5") {
+    check_pdf_integral(0.5, {0.9393897976583593, 0.930008110410481, 0.969170000808662});
+  }
+  AR_RT_CASE("lobe_ggx/pdf integral roughness 1.0") {
+    check_pdf_integral(1.0, {0.526314535715448, 0.6666621227915798, 0.9090716924498142});
   }
 
   AR_RT_CASE("lobe_ggx/eval equals sample") {
