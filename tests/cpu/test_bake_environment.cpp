@@ -710,6 +710,38 @@ TEST_CASE("scene_tables/an emitter mesh edit keeps the bake") {
   CHECK(!set2->uploaded[uint32_t(TableId::ENV_TABLE)]);
 }
 
+TEST_CASE("scene_tables/the bake keeps its images alive") {
+  // The baker's key holds Image addresses of the image arrays it was baked with; the scene table build
+  // hands it those arrays as the key's pin. Once nothing else holds them (a constant world, a new
+  // image, and an emitter edit whose light table re-pins the newer arrays), the bake still does, so
+  // no address in its key can name a new Image.
+  Fixture fx;
+  fx.commit([&](Edit& e) {
+    fx.set_image(e, {1.0f, 0.5f, 0.25f, 1.0f, 0.2f, 0.4f, 0.6f, 1.0f});
+    fx.set_world(e, 2.0f);
+    fx.set_emitter(e, 5.0f);
+    fx.set_quad(e, 0.0f);
+  });
+  fx.commit([&](Edit& e) { fx.set_instance(e); });
+  REQUIRE(fx.scene.table_cache().baker.rebuild_count() == 0u);
+  acquire_scene_tables(fx.scene);
+  REQUIRE(fx.scene.table_cache().baker.rebuild_count() == 1u);
+  const std::weak_ptr<const ImageArrays> baked_with = fx.scene.materials->images().arrays();
+  fx.commit([&](Edit& e) {
+    const GB g = constant_emission(3.0f);
+    const ar_graph_desc d = g.desc();
+    REQUIRE(fx.scene.materials->set_graph(e, kWorldGraph, &d) == AR_OK);
+  });
+  acquire_scene_tables(fx.scene);
+  fx.commit([&](Edit& e) { fx.set_image(e, {0.1f, 0.1f, 0.1f, 1.0f, 0.9f, 0.9f, 0.9f, 1.0f}); });
+  acquire_scene_tables(fx.scene);
+  fx.commit([&](Edit& e) { fx.set_emitter(e, 50.0f); });
+  acquire_scene_tables(fx.scene);
+  REQUIRE(fx.scene.materials->images().arrays().get() != baked_with.lock().get());
+  CHECK(fx.scene.table_cache().baker.rebuild_count() == 1u);
+  CHECK(!baked_with.expired());
+}
+
 TEST_CASE("scene_tables/cpu context bakes") {
   // No scene device: the cache's CPU device bakes, and ENV_TABLE holds both distributions of the
   // light table's bake, in env_table_floats' order.
