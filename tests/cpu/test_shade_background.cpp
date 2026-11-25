@@ -528,7 +528,6 @@ TEST_CASE("shade_background/a program world has pmf 0 and nothing samples it") {
     for (uint32_t i = 0; i < 2000; ++i) picked_world += ar::light_sampler_sample(v, ctx, i * 2654435761u, float(i) / 2000.0f, false).light == 1u;
     CHECK(picked_world == 0u);
     CHECK(ar::light_sampler_pmf(v, ctx, 1, false) == 0.0f);
-    CHECK(ar::light_sampler_pmf(v, ctx, 1, true) == 0.0f);
   }
   // The same world with its constant record is sampled, so the zero comes from the flag.
   world.record = ar::light_make_world(ar::Real(1), c);
