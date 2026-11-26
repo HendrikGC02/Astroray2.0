@@ -16,3 +16,7 @@ Depends on: none (found by 201). Collisions: unknown until the cause is found; r
 Size: S for the fix, M for the investigation; stop and report at 2x.
 Progress:
 - Started: hypothesis from build.py: the deliberate coincident pair (red 0.9,0.1,0.1 / blue 0.1,0.1,0.9; aov_agree excludes it as a traversal tie) resolves to different instances on Embree and OptiX; G agrees, R and B move opposite. To be measured.
+- Main, 128x128 1024 spp seed 7: CPU (0.27696, 0.27220, 0.30195) SE (3.2e-5, 2.8e-5, 6.2e-5); CUDA (0.30758, 0.27219, 0.27135) SE (3.6e-5, 2.8e-5, 5.7e-5). Reproduces 201.
+- First differing quantity: the instance closest-hit traversal reports on the coincident pair (same box mesh, same transform, equal t): Embree (src/device/cpu, rtcIntersect1) reports pass index 302 (blue) on all 1392 pair pixels, OptiX (src/kernel_gpu/optix_traverse.cu, any-hit disabled) reports 301 (red) on all of them. Everything upstream of shading agrees (aov_agree PASS outside the pair).
+- Proof (variant recordings, out/tmp/235): pair colours equal -> CPU and CUDA means identical to 5 digits (0.30758, 0.27219, 0.27135 both); pair colours swapped -> the difference flips sign exactly. No shared-kernel, upload, world or lift defect.
+- Stopped before fixing: the record (0009 d17(iv), meta.toml) declares this a traversal tie and excludes it; a deterministic tie rule is a design choice (v1-lessons misc.md open question) and touches Embree and OptiX paths, not one place. Lead decides.
