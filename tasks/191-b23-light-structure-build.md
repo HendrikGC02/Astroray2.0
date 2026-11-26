@@ -11,7 +11,7 @@ Do:
 4. History lines through the lead's commit path with the neutral machine id; "Limits changed": expected none; if the table's second row applies, list B-23 old and proposed there and in the report for STATUS's owner list.
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `out/bin/astroray_tests_cpu.exe --tier=full -tc="light_build_time/*"` (paste its B-23 line); `pwsh tools/check.ps1 full` once at the end with the new step's line; `<python> -I tools/light_build_bench.py` output pasted (three sizes, phases, medians, spread, what else ran on the machine); the filled decision table in the PR body; `<python> -I tools/lint.py` clean for the history lines.
 Look at: none (numbers only; no image).
-Canary: tasks/191.canary.patch must turn red: astroray_tests_cpu "light_build_time/ten thousand lamps within B-23" (the patch sleeps 100 ms inside `build_light_tree`; run with `--tier=full`).
+Canary: tasks/191.canary.patch must turn red: `pwsh tools/b23_check.ps1` (the patch sleeps 100 ms inside `build_light_tree`; the helper runs 175 case "light_tree_kernel/B-23 tree build for 10k lights" with --tier=full and compares its line with budgets.toml limit).
 Budget: gate +0 s (the case is `full` only; say that no gate step runs it); `check full` +2 s at most; capture wall time under 5 min on the machine lock (state it); kernel rows: none; B-23 unchanged.
 Depends on: 175 (the tree and the radiometric table are in the build). Collisions: tools/check.ps1 with 190, 200, 201; tools/budgets.toml with 188; bench/history/2026.jsonl with every measurement task (append only; the later one rebases).
 Size: S (about 140 lines of script, scene and one test; no engine source); stop and report at 2x or when the table says stop.

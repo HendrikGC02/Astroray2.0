@@ -841,8 +841,7 @@ TEST_CASE("light_tree_kernel/B-23 tree build for 10k lights") {
   size_t nodes = 0;
   const double serial = build_ms(ChunkRunner{}, &nodes);
   CHECK(nodes == 2 * 10000 - 1);
-  std::printf("light_tree_kernel B-23: serial build %.1f ms (information)
-", serial);
+  std::printf("light_tree_kernel B-23: serial build %.1f ms (information)\n", serial);
   // The row's number: the median of 7 builds after 2 discarded, on every hardware thread. tools/b23_check.ps1
   // parses this line and compares it with B-23's limit in tools/budgets.toml; the limit is not read here.
   std::vector<double> ms;
@@ -852,8 +851,7 @@ TEST_CASE("light_tree_kernel/B-23 tree build for 10k lights") {
     if (i >= 2) ms.push_back(t);
   }
   std::sort(ms.begin(), ms.end());
-  std::printf("B-23 build: %.1f ms per 10k lights (median of 7 builds after 2 discarded, min %.1f, max %.1f, %u threads)
-",
+  std::printf("B-23 build: %.1f ms per 10k lights (median of 7 builds after 2 discarded, min %.1f, max %.1f, %u threads)\n",
               ms[3], ms.front(), ms.back(), hw);
 }
 
