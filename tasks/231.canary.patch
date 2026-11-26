@@ -1,8 +1,8 @@
 diff --git a/tools/lib/lock.ps1 b/tools/lib/lock.ps1
-index 5b5965c9..ce93981b 100644
+index 1129204a..3f49eab3 100644
 --- a/tools/lib/lock.ps1
 +++ b/tools/lib/lock.ps1
-@@ -177,7 +177,7 @@ $script:ArHolderScript = {
+@@ -179,7 +179,7 @@ $script:ArHolderScript = {
    if (-not $taken) { $m.Dispose(); $s.State = 'cancelled'; return }
    $s.Acquired.Set() | Out-Null
    $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -11,7 +11,7 @@ index 5b5965c9..ce93981b 100644
    if (-not $s.Release) {
      $s.Expired = $true
      $step = if ($s.Step) { $s.Step } else { 'unknown' }
-@@ -240,8 +240,8 @@ function Enter-ArMachineLock {
+@@ -242,8 +242,8 @@ function Enter-ArMachineLock {
    try {
      while ($true) {
        # A long tool yields while a short job waits; a short job never does.
