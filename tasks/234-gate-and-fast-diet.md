@@ -16,3 +16,4 @@ Depends on: 232 (so the before and after runs are not reds from load). Runs on a
 Size: S (about 100 lines without tests, mostly lists); stop and report at 2x.
 Progress:
 - Reading done (check.ps1, gate_table.py, analytic.py). Files I will change: tools/check.ps1, tools/analytic.py, tools/budgets.toml, tier tags in tests/cpu and tests/gpu of moved cases, docs/decisions/0009 d11, bench/history, tasks/234.canary.patch. Measurement waits for a quiet window.
+- Before runs: gate median 167.0 s (5 runs, run 1 cold 182.8), fast median 5.9 s. Added `cpu full tests` step to check full (one existing case: light_tree_kernel B-23, passes). Move list handed to the lead; no case moved yet.

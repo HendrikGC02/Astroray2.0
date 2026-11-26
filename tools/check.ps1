@@ -455,6 +455,9 @@ $global:LASTEXITCODE = $code
     # multiple of 30 s, as for the gate tier.
     $r = Step 'gpu full tests' { & $runTimed $gpuExe '--tier=full' 60 (Join-Path $root 'out/check/gpu-full-tests.out') }
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'gpu full tests failed (out/check/full.log)' }
+    # The CPU suite's full tier: cases tagged full there ran nowhere before this step; the gate's `cpu gate tests` runs --tier=gate only.
+    $r = Step 'cpu full tests' { & $runTimed $exe '--tier=full --duration=true' 300 (Join-Path $root 'out/check/cpu-full-tests.out') }
+    if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'cpu full tests failed (out/check/full.log)' }
     $r = Step 'probe registers' { & $py -I tools/kernelgate.py --probe }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'probe registers failed' }
     # Warnings only (0002 D10, ruling 17): shown, never a failure.
