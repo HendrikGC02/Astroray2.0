@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# 0004 D10 tree row: 64 rectangular area lamps of mixed power, size and height over a grey Lambertian
+# floor with occluding blocks, so some lamps light only their neighbourhood and the light tree's
+# spatial importance matters. tools/welch_tiles.py renders it with the tree (the default sampler)
+# and with the importance alias table (ASTRORAY_TEST_LIGHT_SAMPLER=alias) on `seeds` independent seeds
+# each and tests the means per tile x tile tile (Welch, Holm, 0009 d17(v)); the variance ratio alias /
+# tree is held against the row's 2x. Both samplers are unbiased for the same image (0004 D10), so a
+# rejected tile is a bias in the tree, the floor or the pmf. No closed-form truth.
+class = "D"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+
+[truth]
+size = 64
+spp = 256
+tile = 8
+seeds = 8
+max_bounces = 1
+rho = 0.5
+floor_size = 12.0
+# Lamps on an 8 x 8 grid of `pitch` metres centred on the origin, each moved by up to `jitter` in x
+# and y, at a height in [height_min, height_max], sides in [side_min, side_max], power log-uniform in
+# [power_min, power_max] watts, all facing down; drawn from layout_seed by build.py's splitmix64.
+pitch = 1.1
+jitter = 0.3
+height_min = 0.4
+height_max = 2.4
+side_min = 0.1
+side_max = 0.6
+power_min = 2.0
+power_max = 200.0
+layout_seed = 190
+# Occluding blocks (centre x, centre y, side, height): grey like the floor; taller than many lamps.
+blocks = [[-2.75, -2.75, 0.8, 1.6], [0.55, -1.65, 0.7, 2.0], [2.75, 0.55, 0.9, 1.2],
+          [-1.65, 1.65, 0.8, 1.8], [1.65, 2.75, 0.6, 1.4], [-0.55, -0.55, 0.5, 1.0]]
+camera_height = 16.0
+focal_mm = 60.0
+sensor_mm = 36.0
