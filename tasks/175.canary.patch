@@ -1,0 +1,118 @@
+diff --git a/src/host/light/light_builder.cpp b/src/host/light/light_builder.cpp
+index bbe567a6..f1f63a92 100644
+--- a/src/host/light/light_builder.cpp
++++ b/src/host/light/light_builder.cpp
+@@ -160,7 +160,7 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
+         // weighted mean, so the world has no floor bin. Baked, the tree's distant node, whose maximum
+         // importance is its energy at every point, gives it a positive pmf; unbaked, its importance
+         // is 0 as well and so is its pmf (D10).
+-        rads[i] = 0.0;
++        rads[i] = 1.0;
+         if (!env_baked) {
+           imps[i] = 0.0;
+           continue;
+@@ -178,7 +178,7 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
+       }
+       const double factor = double(ar::light_power(li.record, scene, ar::Real(1)));
+       imps[i] = energy * factor;
+-      rads[i] = rad * factor;
++      rads[i] = (rad > 0.0 ? rad : 1.0) * factor;
+     }
+   };
+   if (run) run(uint32_t(in.size()), importance);
+@@ -236,7 +236,6 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
+     const auto t0 = std::chrono::steady_clock::now();
+     LightTree tree = build_light_tree(t->lights, t->importance, scene);
+     t->tree_build_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+-    t->tree_nodes = std::move(tree.nodes);
+     t->tree_emitters = std::move(tree.emitters);
+   }
+   if (ledger && t->bytes() != 0) t->ledger_id = ledger->add(Owner{}, LedgerCategory::TABLES, t->bytes()), t->ledger = ledger;
+diff --git a/src/host/scene/scene_tables.cpp b/src/host/scene/scene_tables.cpp
+index 71b9f8b2..88f56f7e 100644
+--- a/src/host/scene/scene_tables.cpp
++++ b/src/host/scene/scene_tables.cpp
+@@ -596,7 +596,7 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
+               sizeof(ar::LightTreeEmitter));
+   light_table(TableId::LIGHT_RAD_BINS, lt ? lt->rad_bins.data() : nullptr, lt ? lt->rad_bins.size() : 0, sizeof(ar::AliasBin));
+   light_table(TableId::LIGHT_RAD_BIN_LIGHT, lt ? lt->rad_bin_light.data() : nullptr, lt ? lt->rad_bin_light.size() : 0, 4);
+-  light_table(TableId::LIGHT_RAD_PMF, lt ? lt->rad_pmf.data() : nullptr, lt ? lt->rad_pmf.size() : 0, 4);
++  light_table(TableId::LIGHT_RAD_PMF, lt ? lt->pmf.data() : nullptr, lt ? lt->pmf.size() : 0, 4);
+ 
+   // The environment table (0004 D11): the light table's bake, kept while it is the same table.
+   const EnvTable* env = lt ? lt->env.get() : nullptr;
+diff --git a/src/host/session/test_hooks.cpp b/src/host/session/test_hooks.cpp
+index 17418389..bf7916b3 100644
+--- a/src/host/session/test_hooks.cpp
++++ b/src/host/session/test_hooks.cpp
+@@ -88,8 +88,6 @@ TestHooks read_test_hooks() {
+   }
+   if (env_value("LIGHT_SAMPLER", &value)) {
+     // "tree" is the default sampler and sets no bit; "alias" selects the tree's oracle.
+-    if (value != "tree" && value != "alias")
+-      throw std::invalid_argument("ASTRORAY_TEST_LIGHT_SAMPLER=" + value + " is not one of tree, alias");
+     if (value == "alias") out.bits |= ar::TEST_HOOK_LIGHT_ALIAS;
+     out.active.push_back("LIGHT_SAMPLER=" + value);
+   }
+diff --git a/src/kernel/light/light_sampler.h b/src/kernel/light/light_sampler.h
+index 040b4343..02274535 100644
+--- a/src/kernel/light/light_sampler.h
++++ b/src/kernel/light/light_sampler.h
+@@ -65,7 +65,7 @@ AR_FN uint32_t light_alias_pick(const AliasBin* bins, const uint32_t* bin_light,
+ 
+ // The mixture's pmf from the tree's pmf of the light.
+ AR_FN Real light_floor_pmf(const LightSamplerView& v, Real p_tree, uint32_t light) {
+-  return (Real(1) - kLightFloorEps) * p_tree + kLightFloorEps * Real(ar::load_ro(v.rad_pmf + light));
++  return (Real(1) - kLightFloorEps) * p_tree + Real(0) * Real(ar::load_ro(v.rad_pmf + light));
+ }
+ 
+ // u_q < eps draws the radiometric bin from u_bin with u_q / eps as its test uniform; otherwise the
+@@ -77,7 +77,7 @@ AR_FN Real light_floor_pmf(const LightSamplerView& v, Real p_tree, uint32_t ligh
+ AR_FN SampledLight light_sampler_sample(const LightSamplerView& v, const LightSampleContext& ctx, uint32_t u_bin, Real u_q,
+                                         bool oracle) {
+   SampledLight s{kNoLight, Real(0)};
+-  if (oracle || v.rad_pmf == nullptr) {
++  if ((oracle && v.rad_pmf == nullptr) || v.rad_pmf == nullptr) {
+     const uint32_t light = light_alias_pick(v.bins, v.bin_light, v.bin_count, u_bin, u_q);
+     if (light == kNoLight) return s;
+     s.light = light;
+@@ -107,7 +107,7 @@ AR_FN SampledLight light_sampler_sample(const LightSamplerView& v, const LightSa
+ 
+ AR_FN Real light_sampler_pmf(const LightSamplerView& v, const LightSampleContext& ctx, uint32_t light, bool oracle) {
+   if (light >= v.light_count) return Real(0);
+-  if (oracle || v.rad_pmf == nullptr) return Real(ar::load_ro(v.pmf + light));
++  if ((oracle && v.rad_pmf == nullptr) || v.rad_pmf == nullptr) return Real(ar::load_ro(v.pmf + light));
+   return light_floor_pmf(v, light_tree_pmf(v.tree, ctx.p, ctx.n_shade, light), light);
+ }
+ 
+diff --git a/src/kernel/light/light_tree.h b/src/kernel/light/light_tree.h
+index 02a42ec0..cf28b4dd 100644
+--- a/src/kernel/light/light_tree.h
++++ b/src/kernel/light/light_tree.h
+@@ -238,11 +238,8 @@ AR_FN bool light_tree_split(const LightTreeView& v, const LightTreeNode& node, R
+   const Real min_sum = l.min + r.min;
+   const Real l_min = min_sum > Real(0) ? l.min / min_sum : Real(0.5) * (Real(l.max > Real(0) ? 1 : 0) + Real(r.max == Real(0) ? 1 : 0));
+   const Real r_min = min_sum > Real(0) ? r.min / min_sum : Real(0.5) * (Real(r.max > Real(0) ? 1 : 0) + Real(l.max == Real(0) ? 1 : 0));
+-  Real pl = Real(0.5) * (l.max / max_sum + l_min), pr = Real(0.5) * (r.max / max_sum + r_min);
+-  const Real sum = pl + pr;
+-  pl = pl / sum, pr = pr / sum;
+-  if (l.max > Real(0)) pl = ar::max(pl, kLightTreeMinBranch);
+-  if (r.max > Real(0)) pr = ar::max(pr, kLightTreeMinBranch);
++  Real pl = Real(0.5) * (l.max / max_sum + l_min), pr = Real(1) - pl;
++  (void)r_min;
+   AR_ASSERT(pl >= Real(0) && pr >= Real(0) && pl + pr > Real(0));
+   out->left = pl, out->right = pr;
+   return true;
+diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
+index 74e714dc..38c48032 100644
+--- a/src/kernel/stages/shade_surface.h
++++ b/src/kernel/stages/shade_surface.h
+@@ -334,7 +334,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+           // The previous vertex's context differs from NEE's: oct-decoded normals, origin offset toward wi;
+           // the tree's pmf moves up to 1.55e-5 relative (measured) and a tangent box can flip the box test.
+           const LightSampleContext prev = prev_light_context(kg, slot);
+-          p_light = light_sampler_pmf(*kg.light_sampler, prev, light, (hooks & TEST_HOOK_LIGHT_ALIAS) != 0u) *
++          p_light = light_sampler_pmf(*kg.light_sampler, prev, light, true) *
+                     tri_pdf_li(kg.lights[light], prev, -wo, LightHit{P, Ng});
+         }
+       }
