@@ -7,6 +7,11 @@
 #include <cstdlib>
 #include <stdexcept>
 
+#ifdef AR_GATE_HOOKS
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #include "host/scheduler.h"
 #include "kernel/kernel_globals.h"
 #include "kernel/launch_config.h"
@@ -34,14 +39,19 @@ struct Mode {
 };
 
 #ifdef AR_GATE_HOOKS
-// The variable ASTRORAY_TEST_<name>, or false when it is unset or empty.
+// The variable ASTRORAY_TEST_<name>, or false when it is unset or empty. Read from the process
+// environment block, not this module's C runtime copy: the engine links the runtime statically, so
+// its copy is fixed when the DLL loads, and a host that sets a hook afterwards (Python's os.environ
+// before a session is created) would never be seen.
 bool env_value(const char* name, std::string* out) {
   const std::string var = std::string("ASTRORAY_TEST_") + name;
-  char* v = nullptr;
-  size_t n = 0;
-  if (_dupenv_s(&v, &n, var.c_str()) != 0 || v == nullptr) return false;
+  const DWORD n = GetEnvironmentVariableA(var.c_str(), nullptr, 0);
+  if (n == 0) return false;
+  std::string v(n, '\0');
+  const DWORD got = GetEnvironmentVariableA(var.c_str(), v.data(), n);
+  if (got == 0 || got >= n) return false;
+  v.resize(got);
   *out = v;
-  std::free(v);
   return !out->empty();
 }
 
