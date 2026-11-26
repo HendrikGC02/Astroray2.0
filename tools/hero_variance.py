@@ -4,7 +4,9 @@
 absorbing slab, the chromatic scattering slab (scenes/v1_slab, --scattering) and the surface-only control
 a1_furnace through `astroray_cli dump`, S seeds per mode, each mode on its own seeds, and prints:
   - the means check: per scene, sampler and channel, the image means of the two modes within 3 SE
-    (the lane-0 mode is unbiased only while nothing terminates secondaries); any miss voids the run;
+    (the lane-0 mode is unbiased only while nothing terminates secondaries); any miss voids the run.
+    The Sobol column's SE comes from S seeds, so its limit is the t(S - 1) quantile with the two-sided
+    probability of a normal 3 SE (lead ruling);
   - per channel V_random / V_lane0 with its 2.5-97.5 % bootstrap interval over seeds (10,000 resamples,
     seeded). Independent sampler: V = image mean of the per-pixel variance of the mean (VAR plane,
     exact in that mode, 0008 d3). Sobol (the production sampler): V = image mean of the across-seed
@@ -13,13 +15,15 @@ a1_furnace through `astroray_cli dump`, S seeds per mode, each mode on its own s
   - pass_ms of both modes on the CPU (`astroray_cli bench`), to show the time per sample is the same.
 Usage: <python> -I tools/hero_variance.py [--seeds 16] [--spp 1024] [--sobol-spp 1024] [--size 64]
          [--no-cuda] [--evidence out/evidence/194] [--history FILE] [--limit-min 10]
-Ref: Efron and Tibshirani 1993, An Introduction to the Bootstrap, ch. 13 (percentile interval);
+Ref: Efron and Tibshirani 1993, An Introduction to the Bootstrap, ch. 13 (percentile interval); Student's
+t density (Abramowitz and Stegun 26.7.1), integrated numerically for its quantile;
 docs/decisions/0003-spectral-model-and-path-state.md d2, d6, Risk 11; 0008 d3 (VAR).
 """
 import argparse
 import datetime
 import importlib.util
 import json
+import math
 import os
 import subprocess
 import sys
@@ -39,6 +43,17 @@ Z_MEANS = 3.0          # the decision table's 3 SE
 BOOT, BOOT_SEED = 10000, 194
 SEED_BASE = {"random": 1, "lane0": 1001}  # disjoint seeds: the modes are independent renders
 CUDA_SEED = {"random": 9001, "lane0": 10001}
+
+
+def t_limit(z, dof):
+    """The t(dof) point with the two-sided tail probability of a normal z: the t density (Abramowitz and
+    Stegun 26.7.1) integrated by the trapezoid rule on a fine grid, then interpolated."""
+    p = math.erfc(z / math.sqrt(2.0))
+    t = np.linspace(0.0, 40.0, 400001)
+    c = math.lgamma((dof + 1) / 2) - math.lgamma(dof / 2) - 0.5 * math.log(dof * math.pi)
+    pdf = np.exp(c - (dof + 1) / 2 * np.log1p(t * t / dof))
+    cdf = np.concatenate([[0.0], np.cumsum((pdf[1:] + pdf[:-1]) / 2 * (t[1] - t[0]))])  # integral from 0
+    return float(np.interp((1.0 - p) / 2.0, cdf, t))  # two-sided tail beyond t is 1 - 2 cdf(t)
 
 
 def load_module(name, path):
@@ -215,13 +230,16 @@ def main():
         print(f"# cpu {sampler}: {len(SCENES)} scenes x 2 modes x {a.seeds} seeds, {a.size}x{a.size} at {spp} spp, "
               f"{time.perf_counter() - t1:.0f} s wall")
     void = False
+    limits = {"independent": Z_MEANS, "sobol": t_limit(Z_MEANS, a.seeds - 1)}
+    print(f"# means limits: independent {Z_MEANS:g} SE (exact VAR); sobol {limits['sobol']:.3f} SE, the t({a.seeds - 1}) "
+          f"point with the two-sided probability {math.erfc(Z_MEANS / math.sqrt(2.0)):.4g} of a normal {Z_MEANS:g} SE")
     for (name, sampler), data in results.items():
         for c, (z, mr, m0) in enumerate(means_check(data, sampler)):
-            ok = abs(z) <= Z_MEANS
+            ok = abs(z) <= limits[sampler]
             void |= not ok
             print(f"means {name:18s} {sampler:11s} {CHANNELS[c]:5s} random {mr:.6f} lane0 {m0:.6f} z {z:+5.2f} {'ok' if ok else 'FAIL'}")
     if void:
-        print(f"FAIL hero_variance: the modes' means differ beyond {Z_MEANS:g} SE; no ratio is reported "
+        print(f"FAIL hero_variance: the modes' means differ beyond their limits; no ratio is reported "
               f"({time.perf_counter() - t0:.0f} s)")
         sys.exit(1)
     rng = np.random.default_rng(BOOT_SEED)
@@ -263,7 +281,7 @@ def main():
             for h in hist:
                 line = {"sha": sha, "machine": "rtx5070ti-8c16t", "driver": "unknown", "cuda": "none", **h, "date": date}
                 f.write(json.dumps(line, separators=(",", ":")) + "\n")
-    print(f"PASS hero_variance: means agree within {Z_MEANS:g} SE; {time.perf_counter() - t0:.0f} s wall")
+    print(f"PASS hero_variance: means agree within their limits; {time.perf_counter() - t0:.0f} s wall")
 
 
 if __name__ == "__main__":
