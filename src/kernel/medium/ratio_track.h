@@ -27,11 +27,17 @@
 // is the largest finite float there, so a zero lane gives exp(-0) = 1 and not exp(-inf * 0)).
 // The caller then forms the light sample's weight as SampleLd does, r_l *= r_p p_l, r_u *= r_p
 // p_scatter, contribution beta f_hat T_ray L / avg(r_l + r_u) (avg(r_l) for a delta light).
-// Random numbers: each tentative collision takes one 4-D block of the variable-count stream
-// `st.stream` (0003 d23), its index the counter *counter (the item's medium_rng): lane 0 the
-// distance, lane 1 the roulette's uniform (drawn only when the roulette runs), lanes 2-3 unused.
-// After `limit` tentative collisions (D8: 131,072 per shadow segment, PROVISIONAL) the estimate
-// stops with `limit` set and T_ray = 0: the caller blocks the item and counts VOLUME_LIMIT.
+// Two departures that change no expectation: an estimate already 0 at every lane returns before the
+// roulette (pbrt draws its uniform and gets 0 either way), and the roulette's uniform has a block of
+// its own (below).
+// Random numbers: every draw takes one 4-D block of the variable-count stream `st.stream` (0003
+// d23, dims.h: one block per draw), its index the counter *counter (the item's medium_rng), and
+// reads its lane 0: a tentative collision's distance, or the roulette's uniform when the roulette
+// runs. Lane 0 only, because each Sobol lane a kernel reads is a 128 B direction table on the GPU
+// stack (sample/sobol.h) and shade_shadow is held to 0002 D10's 512 B VM stack. After `limit`
+// blocks (D8: 131,072 tentative collisions per shadow segment, PROVISIONAL; roulette draws count
+// too, so an item's blocks never leave its 2^17 stride) the estimate stops with `limit` set and
+// T_ray = 0: the caller blocks the item and counts VOLUME_LIMIT.
 // Ref: Novak, Selle and Jarosz 2014, "Residual ratio tracking for estimating attenuation in
 // participating media"; docs/decisions/0006-volumes-and-astrophysics.md D8, D19; 0003 d6, d7, d23
 // (stream 2); pbrt-v4 (Apache-2.0, read, not copied) in
@@ -81,15 +87,15 @@ AR_FN RatioTrack ratio_track_segment(const Spec& sigma_a, const Spec& sigma_s, c
   if (maj_h > Real(0)) {
     Spec sigma_n;
     for (int i = 0; i < kLanes; ++i) sigma_n.v[i] = ar::max(Real(0), sigma_maj.v[i] - sigma_a.v[i] - sigma_s.v[i]);
+    const uint32_t start = *counter;
     for (;;) {
-      if (r.collisions >= limit) {
+      if (*counter - start >= limit) {
         r.T = spec_fill(Real(0));
         r.limit = true;
         return r;
       }
-      const uint32_t block = (*counter)++;
+      const Real u = draw(st.mode, st.id, st.index, st.stream, stream_dim((*counter)++, 0u), st.seed);
       ++r.collisions;
-      const Real u = draw(st.mode, st.id, st.index, st.stream, stream_dim(block, 0u), st.seed);
       const Real tc = t - ar::log(Real(1) - u) / maj_h;
       if (!(tc < t_max)) break;
       Spec tm;
@@ -98,12 +104,16 @@ AR_FN RatioTrack ratio_track_segment(const Spec& sigma_a, const Spec& sigma_s, c
       r.T *= tm * sigma_n / pdf;
       r.r_l *= tm * sigma_maj / pdf;
       r.r_u *= tm * sigma_n / pdf;
-      if (max_lane(r.T / avg(r.r_l + r.r_u)) < Real(0.05)) {
-        const Real q = Real(0.75);
-        if (draw(st.mode, st.id, st.index, st.stream, stream_dim(block, 1u), st.seed) < q) r.T = spec_fill(Real(0));
-        else r.T = r.T / (Real(1) - q);
-      }
       if (!(max_lane(r.T) > Real(0))) return r;
+      if (max_lane(r.T / avg(r.r_l + r.r_u)) < Real(0.05)) {
+        if (*counter - start >= limit) continue;  // no block left for the roulette: the limit ends it
+        const Real q = Real(0.75);
+        if (draw(st.mode, st.id, st.index, st.stream, stream_dim((*counter)++, 0u), st.seed) < q) {
+          r.T = spec_fill(Real(0));
+          return r;
+        }
+        r.T = r.T / (Real(1) - q);
+      }
       t = tc;
     }
   }
