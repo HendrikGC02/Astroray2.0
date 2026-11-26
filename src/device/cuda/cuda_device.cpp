@@ -64,7 +64,7 @@ constexpr const char* kKernelNames[] = {
     "queue_build_count",  "queue_build_scan", "queue_build_scatter", "sort_count",           "sort_scatter",
     "generate_camera",    "generate_light",   "film_resolve",        "film_adaptive",        "film_present",
     "film_heatmap",       "film_prepare_denoise", "film_pack_dlss",  "bake_environment", "film_build_active",
-    "sort_scan"};
+    "sort_scan",          "shade_shadow_medium"};
 static_assert(sizeof(kKernelNames) / sizeof(kKernelNames[0]) == kKernelIdCount, "one name per KernelId");
 
 static_assert(std::is_standard_layout_v<ar::KernelGlobals>, "read_step_table reads a member by offset");

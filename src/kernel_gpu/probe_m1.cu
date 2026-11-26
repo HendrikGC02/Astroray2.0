@@ -508,7 +508,11 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     sh_target(kg, sh) = sample;
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
     const bool world_le = ls.deferred_le && !triangle;
-    if (kg.shadow->item_flags != nullptr) sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
+    if (kg.session.features.media)
+      nee_item_media(kg, sh, nee_item_medium(kg, inst, (flags & FRONT_FACE) != 0u, Ng, seg.dir, ls.delta), e, flags,
+                     ps_r_u(kg, slot), sl.pmf * ls.pdf, ev.pdf, ls.delta, ctx.lambda_t, world_le);
+    else if (kg.shadow->item_flags != nullptr)
+      sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
     if (world_le) {
       // WORLD_ENV: shade_shadow runs the world program along ray_d at these lanes on delivery. The
       // host allocates both fields with the env_world feature; without them the item cannot be

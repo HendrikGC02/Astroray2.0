@@ -40,9 +40,10 @@ enum class KernelId : uint8_t {
   FILM_PACK_DLSS,
   BAKE_ENVIRONMENT,
   FILM_BUILD_ACTIVE,  // per pass, before the refill (0002 D8)
-  SORT_SCAN,          // between SORT_COUNT and SORT_SCATTER (sort.h); last so earlier ids keep their value
+  SORT_SCAN,          // between SORT_COUNT and SORT_SCATTER (sort.h)
+  SHADE_SHADOW_MEDIUM,  // over the SHADE_SHADOW segment before that stage, with media (0006 D19); last, as SORT_SCAN
 };
-inline constexpr uint32_t kKernelIdCount = static_cast<uint32_t>(KernelId::SORT_SCAN) + 1u;
+inline constexpr uint32_t kKernelIdCount = static_cast<uint32_t>(KernelId::SHADE_SHADOW_MEDIUM) + 1u;
 
 // A device allocation. A plain value: free() zeroes the one it is given, so a stale
 // copy is a double free that the ledger rejects.
