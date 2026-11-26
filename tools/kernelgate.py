@@ -38,7 +38,7 @@ REGS_PER_SM = 65536                          # D10: registers <= 65536/(T*B) whe
 PROBE_WARN, PROBE_LOUD = 150, 168            # D10 uncapped registers: warning at 150, loud above 168
 COMPILE_LIMIT_S = 3.0                        # B-05; a result within 10% of it is re-timed (0009 d18)
 # Explicit owner raises of B-05 for single TUs (never silent; re-measured each milestone).
-COMPILE_LIMIT_OVERRIDE_S = {"shade_surface": 7.5}  # owner decision 41 (amends decision 40, RULINGS.md 72): the light tree in shade_surface, M1b
+COMPILE_LIMIT_OVERRIDE_S = {"shade_surface": 8.0}  # owner decision 43 (amends 41 and 40, RULINGS.md 72): the medium stack in shade_surface, M1b
 COMPILE_RETIME_BAND = 0.10
 COMPILE_TUS = 3                              # 0009 d18: at most three changed TUs, largest compile_s first
 BUDGET_KEYS = ("regs", "stack", "spill_store", "spill_load", "compile_s", "gated")
