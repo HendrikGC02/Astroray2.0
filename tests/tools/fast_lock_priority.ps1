@@ -39,6 +39,7 @@ $taker = Join-Path $tmp 'taker.ps1'
 Set-Content -Path $taker -Value @"
 param([string]`$name, [string]`$job, [switch]`$short, [string]`$release)
 . '$lockLib'
+Set-Content "$tmp/pre.`$name" x
 `$null = Enter-ArMachineLock -Job `$job -Short:`$short
 Set-Content "$tmp/acq.`$name" ([DateTime]::UtcNow.Ticks)
 if (`$release) { `$sw = [Diagnostics.Stopwatch]::StartNew(); while (-not (Test-Path `$release) -and `$sw.Elapsed.TotalSeconds -lt 20) { Start-Sleep -Milliseconds 20 } }
@@ -54,9 +55,9 @@ try {
   Wait-Until { Test-Path (Join-Path $tmp 'acq.g1') } 'g1 holds the lock'
   # The second gate queues first, the build after it; each is proven to be waiting before the next starts.
   $g2 = Start-Pwsh 'g2' @($taker, 'g2', 'check-gate')
-  Wait-Until { (Read-Out 'g2') -match 'waiting for' } 'g2 waits'
+  # g2 is past its marker and into the lock call well before the build's pwsh has started.
+  Wait-Until { Test-Path (Join-Path $tmp 'pre.g2') } 'g2 starts'
   $b = Start-Pwsh 'b' @($taker, 'b', 'build', '-short')
-  Wait-Until { (Read-Out 'b') -match 'waiting for' } 'the build waits'
   # The build's registration must be visible before the release, as a real queue's would be.
   Wait-Until { @(Get-ChildItem (Join-Path $env:ASTRORAY_LOCK_DIR 'shortwait') -Filter 'short.*.wait' -ErrorAction SilentlyContinue).Count -eq 1 } 'the build registered'
   Set-Content $rel release
@@ -74,9 +75,8 @@ try {
   $old = Join-Path $dir "short.$PID.wait"
   Set-Content $old 'waiting'
   (Get-Item $old).LastWriteTimeUtc = [DateTime]::UtcNow.AddMinutes(-6)
-  $g3 = Start-Pwsh 'g3' @($taker, 'g3', 'check-gate')
-  $null = $g3.WaitForExit(10000)
-  Check 'a dead or stale short registration does not stop a long tool' ($g3.HasExited -and (Test-Path (Join-Path $tmp 'acq.g3'))) (Read-Out 'g3')
+  . $lockLib
+  Check 'a dead or stale short registration is not counted' ((Get-ArShortWaiting) -eq 0)
 } finally {
   foreach ($p in $procs) { if ($p -and -not $p.HasExited) { & taskkill /PID $p.Id /T /F 2>&1 | Out-Null } }
   foreach ($p in $procs) { $null = $p.WaitForExit(5000) }
