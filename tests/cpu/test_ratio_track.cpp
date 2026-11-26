@@ -70,11 +70,12 @@ AR_RT_CASE("ratio_track/mean equals beer lambert") {
 AR_RT_CASE("ratio_track/roulette keeps beer lambert") {
   // A long segment (d = 8 m) under majorant 8: about 64 tentative collisions, so T_ray falls below
   // 0.05 avg(r_l + r_u) at every lane and pbrt's roulette runs (q = 0.75, survivors / (1 - q)). Over
-  // 2^16 segments each lane's mean stays within 3 standard errors of exp(-sigma_t d), and the
-  // roulette's blocks (blocks drawn beyond the tentative collisions) are a large share.
+  // 2^14 segments each lane's mean stays within 3 standard errors of exp(-sigma_t d), and the
+  // roulette's blocks (blocks drawn beyond the tentative collisions) are a large share. 2^14 segments keep the
+  // f64 copy inside B-12's per-test time.
   const Spec zero = ar::spec_fill(0);
   const Spec maj = ar::spec_fill(Real(8));
-  constexpr uint32_t kN = 1u << 16;
+  constexpr uint32_t kN = 1u << 14;
   double sum[4] = {0, 0, 0, 0}, sum2[4] = {0, 0, 0, 0}, roulette_blocks = 0.0;
   for (uint32_t i = 0; i < kN; ++i) {
     const uint32_t start = ar::shadow_rng_start(2u);
