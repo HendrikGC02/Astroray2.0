@@ -13,8 +13,8 @@
 // carries a: the compiler multiplies the emission by the opacity, so the hit, NEE on this
 // triangle and the emission estimate read one a x Le and nothing scales it here. Shadow rays stay
 // opaque to such materials (transparent shadows are M2); the compiler reports that per material.
-// Medium stack (0006 D16-D17; the media feature): at a medium-bearing instance a false interface
-// returns right after the hit's geometry, before the VM (surface_false_interface); a true interface
+// Medium stack (0006 D16-D17; the media feature): at a medium-bearing instance a false interface, or any hit
+// through MEDIUM_BOUNDARY alone (the ray type's bit is not in the instance mask), returns right after the hit's geometry, before the VM (surface_false_interface); a true interface
 // changes the stack only where the path crosses the surface, the opacity pass-through
 // (surface_true_crossing; a transmitting lobe and its crossing are M2), so a reflection keeps the
 // stack it arrived with; the NEE item takes the medium of that stack (nee_item_medium).
@@ -171,9 +171,11 @@ AR_FN void surface_move_past(const KernelGlobals& kg, uint32_t slot, Real3 P, Re
 // changes: no random number, no event index, no transparent or other bounce, no emission, beta, r_u
 // and r_l as they were. A count at the cap ends the path VOLUME_LIMIT, a push at depth 4
 // STACK_OVERFLOW; both are counted in the termination histogram. Returns whether the hit was a false
-// interface (the caller returns); false for an instance without a medium and for a true interface.
-// `mat` is the hit's material header. A false back face always finds its id (interface_is_true calls
-// an absent id true), so only a push can fail.
+// interface (the caller returns); false for an instance without a medium and for a true interface the ray
+// can see.
+// `mat` is the hit's material header. Only a push can fail: a visible false back face always finds its id
+// (interface_is_true calls an absent id true), and a back face met through bit 6 alone whose id is absent
+// (the path started inside the medium) is refused, the stack unchanged, as in surface_true_crossing.
 AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint32_t inst, uint32_t mat, bool front, Real3 P,
                                    Real3 Ng) {
   const uint32_t m = instance_medium(kg, inst);
@@ -181,10 +183,14 @@ AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint3
   const uint32_t flags = ps_flags(kg, slot);
   const U32x4 stack = ps_medium_stack(kg, slot);
   const uint32_t priority = front ? material_medium_priority(kg, mat) : 0u;
-  if (interface_is_true(stack, flags, m + 1u, priority, front)) return false;
+  // A ray that met the instance through MEDIUM_BOUNDARY alone never sees the surface: false whatever the
+  // priorities (0002 D11 row 6).
+  if (!instance_met_by_boundary_bit_only(kg, inst, ps_ray_type(kg, slot)) &&
+      interface_is_true(stack, flags, m + 1u, priority, front))
+    return false;
   const uint32_t n = crossings(flags) + 1u;
   const StackUpdate u = front ? stack_push(stack, flags, m + 1u, priority) : stack_remove(stack, flags, m + 1u);
-  if (n >= kVolumeBoundsMax || !u.ok) {
+  if (n >= kVolumeBoundsMax || (front && !u.ok)) {
     path_end(kg, slot, n >= kVolumeBoundsMax ? Term::VOLUME_LIMIT : Term::STACK_OVERFLOW);
     return true;
   }

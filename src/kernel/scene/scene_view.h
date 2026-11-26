@@ -59,6 +59,14 @@ inline constexpr uint32_t kShadowMaskBit = 1u << 4;
 // so every ray type updates the medium stack at it (0006 D20, 0002 D11). Bit 7 stays spare.
 inline constexpr uint32_t kMediumBoundaryMaskBit = 1u << 6;
 
+// The mask of a closest-hit ray: its type bit, plus MEDIUM_BOUNDARY when the scene has media, so a
+// medium-bearing instance invisible to the ray type is still met and the ray updates its stack there
+// (0002 D11 mask row 6, 0006 D20). A scene without media traces with the bare ray type. One rule for
+// Embree and the OptiX raygen.
+AR_FN uint32_t closest_hit_mask(uint32_t ray_type, bool media) {
+  return media ? (ray_type | kMediumBoundaryMaskBit) : ray_type;
+}
+
 // What KernelGlobals::scene points to. Arrays are device (or, on the CPU, host) memory.
 struct SceneData {
   const DeviceInstanceRecord* instances;
@@ -134,6 +142,14 @@ AR_FN uint32_t instance_medium(const KernelGlobals& kg, uint32_t inst) {
   const uint32_t m = load_ro(&s.instances[inst].medium);
   AR_ASSERT(m <= s.medium_count);
   return m == 0u ? kNoMedium : m - 1u;
+}
+
+// Whether a ray of `ray_type` met instance `inst` through MEDIUM_BOUNDARY alone: the instance's mask
+// lacks the ray type's bit, so the hit is a false interface whatever the priorities (0002 D11 row 6).
+AR_FN bool instance_met_by_boundary_bit_only(const KernelGlobals& kg, uint32_t inst, uint32_t ray_type) {
+  const SceneData& s = scene_of(kg);
+  AR_ASSERT(inst < s.instance_count);
+  return (load_ro(&s.instances[inst].mask) & ray_type) == 0u;
 }
 
 // The material-header index of the material a hit triangle uses: the triangle's slot picks an

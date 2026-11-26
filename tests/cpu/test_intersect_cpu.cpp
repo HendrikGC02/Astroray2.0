@@ -51,7 +51,7 @@ ar_xform translate(float x) {
 }
 
 // Instances: 0 at x = 0 (plain, every ray type), 1 at x = 3 (extension material, every ray
-// type), 2 at x = 6 (camera rays only: no shadow bit).
+// type), 2 at x = 6 (camera rays only by default, `mask2` otherwise; no shadow bit).
 struct Rig {
   ContextState ctx;
   Ledger ledger;
@@ -84,9 +84,9 @@ struct Rig {
   ar::KernelGlobals kg{};
   DeviceBuffer kg_buf;
 
-  Rig() {
+  explicit Rig(uint8_t mask2 = kCamera) {
     meshes.install(quad_record());
-    const uint8_t masks[3] = {0xFF, 0xFF, kCamera};
+    const uint8_t masks[3] = {0xFF, 0xFF, mask2};
     for (int i = 0; i < 3; ++i) {
       Instance in;
       in.geom_key = kQuadKey;
@@ -185,6 +185,25 @@ TEST_CASE("intersect_cpu/closest writes hit records and next stages") {
 
   CHECK(r.next[7] == 0xEE);
   CHECK(r.hit_inst[7] == 7u);
+}
+
+TEST_CASE("intersect_cpu/medium boundary bit reaches an invisible instance") {
+  // Instance 2 bears a medium and is visible to camera rays only: its mask is the camera bit plus bit 6.
+  for (const bool media : {false, true}) {
+    Rig r(uint8_t(kCamera | ar::kMediumBoundaryMaskBit));
+    r.kg.session.features.media = media;
+    r.add_path(6.5f, 0.25f, kDiffuse, 0);  // 0: a diffuse ray is invisible to the instance but for bit 6
+    r.add_path(6.5f, 0.25f, kCamera, 0);   // 1: a camera ray hits it either way
+    r.add_path(0.5f, 0.25f, kDiffuse, 0);  // 2: an instance without a medium is hit as before
+    r.main_queue = {0, 1, 2};
+    r.step.stage[static_cast<uint32_t>(Stage::INTERSECT_CLOSEST)] = {0, 3, 0};
+    r.bind();
+    r.dev.launch(Stage::INTERSECT_CLOSEST, 3);
+    CHECK(r.hit_inst[0] == (media ? 2u : ar::kNoInstance));
+    CHECK(r.hit_inst[1] == 2u);
+    CHECK(r.hit_inst[2] == 0u);
+    if (media) CHECK(std::fabs(r.hit_t[0] - 2.0f) < 1e-6f);
+  }
 }
 
 TEST_CASE("intersect_cpu/occluded shadow terminates") {

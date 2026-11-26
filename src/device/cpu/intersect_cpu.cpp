@@ -34,7 +34,8 @@ RTCRay stage_ray(ar::Real3 o, ar::Real3 d, ar::Real tmax, unsigned mask) {
 
 }  // namespace
 
-// Camera and light segments: the ray type is the mask bit of the next ray (0003 d19 row 4).
+// Camera and light segments: the ray type is the mask bit of the next ray (0003 d19 row 4), plus
+// MEDIUM_BOUNDARY when the scene has media (ar::closest_hit_mask).
 void cpu_stage_intersect_closest(const ar::KernelGlobals& kg, const ar::StepEntry& step, uint32_t first,
                                  uint32_t last) {
   const RTCScene scene = accel_of(kg);
@@ -45,7 +46,8 @@ void cpu_stage_intersect_closest(const ar::KernelGlobals& kg, const ar::StepEntr
     // ray_tmax exists only with a curved region or subsurface; a flat scene's segment is unbounded.
     const ar::Real tmax = kg.path->ray_tmax ? kg.path->ray_tmax[slot] : std::numeric_limits<ar::Real>::infinity();
     RTCRayHit rh;
-    rh.ray = stage_ray(ar::ps_ray_o(kg, slot), ar::ps_ray_d(kg, slot), tmax, ar::ps_ray_type(kg, slot));
+    rh.ray = stage_ray(ar::ps_ray_o(kg, slot), ar::ps_ray_d(kg, slot), tmax,
+                      ar::closest_hit_mask(ar::ps_ray_type(kg, slot), kg.session.features.media));
     rh.hit.geomID = RTC_INVALID_GEOMETRY_ID;
     rh.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
     rtcIntersect1(scene, &rh, &args);

@@ -71,11 +71,12 @@ std::vector<ar::LightRecord> make_lights() {
 }
 
 // Instances at x = 0, 3, 6: 0 plain, 1 a lamp (the geometry key is unused for a lamp), 2 camera
-// rays only (no shadow bit).
-InstanceTable make_table() {
+// rays only (no shadow bit); with `medium`, instance 2 also bears a medium, so its mask carries bit 6.
+InstanceTable make_table(bool medium = false) {
   InstanceTable table;
   table.motion_steps = 1;
-  const uint8_t masks[3] = {0xFF, visibility_mask(kLampRayVisibility), kCamera};  // a lamp has no shadow bit (0004 D8)
+  const uint8_t masks[3] = {0xFF, visibility_mask(kLampRayVisibility),
+                           uint8_t(medium ? kCamera | ar::kMediumBoundaryMaskBit : kCamera)};  // a lamp has no shadow bit (0004 D8)
   for (int i = 0; i < 3; ++i) {
     Instance in;
     in.geom_key = kQuadKey;
@@ -109,6 +110,7 @@ struct Pools {
   void add_shadow(float x, float y, float tmax) {
     s_next.push_back(0xEE), s_o.push_back({x, y, 2.0f}), s_d.push_back({0, 0, -1.0f}), s_tmax.push_back(tmax);
   }
+  bool ray_type_is_not_camera(uint32_t s) const { return ray_type[s] != 0x01; }
 };
 
 uint32_t hash(uint32_t x) {
@@ -178,7 +180,7 @@ void wire(Pools& p, Wired& w) {
 }
 
 // Embree: the CPU intersect stages on the same table.
-void run_cpu(const InstanceTable& table, Pools& p) {
+void run_cpu(const InstanceTable& table, Pools& p, bool media = false) {
   ContextState ctx;
   Ledger ledger;
   ThreadPool pool(ctx, 4);
@@ -199,6 +201,7 @@ void run_cpu(const InstanceTable& table, Pools& p) {
   ar::KernelGlobals kg{};
   kg.path = &w.path, kg.shadow = &w.shadow, kg.step_table = &p.step, kg.scene = &scene;
   kg.main_queue = p.main_queue.data(), kg.shadow_queue = p.shadow_queue.data();
+  kg.session.features.media = media;
   DeviceBuffer kg_buf = dev.allocate(LedgerCategory::TABLES, sizeof kg, {1, 1});
   dev.upload(kg_buf, 0, &kg, sizeof kg);
   dev.set_kernel_globals(kg_buf);
@@ -250,7 +253,7 @@ struct Gpu {
 };
 
 // Runs both raygens on the GPU over `p` (results written into p).
-void run_gpu(Gpu& g, const InstanceTable& table, Pools& p, uint32_t width) {
+void run_gpu(Gpu& g, const InstanceTable& table, Pools& p, uint32_t width, bool media = false) {
   g.upload->sync_mesh(quad_record());
   g.upload->upload_instances(table);
   g.accel->update_gas(*g.upload);
@@ -302,6 +305,7 @@ void run_gpu(Gpu& g, const InstanceTable& table, Pools& p, uint32_t width) {
   kg.step_table = static_cast<const ar::StepTable*>(step_buf.ptr);
   kg.main_queue = static_cast<const uint32_t*>(b_mq.ptr), kg.shadow_queue = static_cast<const uint32_t*>(b_sq.ptr);
   kg.scene = static_cast<const ar::SceneData*>(scene_buf.ptr);
+  kg.session.features.media = media;
   const DeviceBuffer kg_buf = keep(put(dev, LedgerCategory::TABLES, std::vector<ar::KernelGlobals>{kg}));
 
   g.pipeline->launch_closest(g.accel->tlas_handle(), kg_buf, width);
@@ -363,6 +367,30 @@ TEST_CASE("optix_trace/closest matches embree") {
   CHECK(gpu.hit_inst[6] == 2u);
   CHECK(gpu.hit_t[2] == 50.0f);
   CHECK(gpu.hit_t[4] == 25.0f);
+}
+
+TEST_CASE("optix_trace/medium boundary bit reaches an invisible instance") {
+  // Instance 2 bears a medium and is visible to camera rays only. With media on every closest-hit ray
+  // carries bit 6 and a diffuse ray hits it, on both traversals alike; with media off it is missed.
+  const InstanceTable table = make_table(true);
+  Gpu g("astroray_optix_trace_medium_cache");
+  for (const bool media : {false, true}) {
+    Pools cpu = make_pools(), gpu = make_pools();
+    run_cpu(table, cpu, media);
+    run_gpu(g, table, gpu, 64, media);
+    uint32_t boundary_hits = 0;
+    for (uint32_t s = 0; s < uint32_t(cpu.next.size()); ++s) {
+      if (s == 7) continue;
+      INFO("media " << media << " slot " << s);
+      CHECK(gpu.hit_inst[s] == cpu.hit_inst[s]);
+      CHECK(gpu.hit_prim[s] == cpu.hit_prim[s]);
+      CHECK(gpu.next[s] == cpu.next[s]);
+      boundary_hits += gpu.hit_inst[s] == 2u && gpu.ray_type_is_not_camera(s) ? 1u : 0u;  // hit through bit 6 alone
+    }
+    CHECK(gpu.hit_inst[5] == (media ? 2u : ar::kNoInstance));  // the diffuse ray at the camera-only instance
+    CHECK(gpu.hit_inst[6] == 2u);
+    CHECK((media ? boundary_hits > 0u : boundary_hits == 0u));
+  }
 }
 
 TEST_CASE("optix_trace/shadow occluded") {

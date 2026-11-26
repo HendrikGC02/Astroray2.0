@@ -54,6 +54,7 @@ namespace {
 constexpr uint32_t kFilmW = 250, kFilmH = 200, kK = 2;
 constexpr uint32_t kN = kFilmW * kFilmH * kK;  // 10^5 paths
 constexpr uint32_t kTris = 64, kInstances = 8, kSlotsPerInstance = 3;
+constexpr uint32_t kBoundaryOnly = 4;  // the media fixture's instance hit through MEDIUM_BOUNDARY alone
 
 struct Graph {
   std::vector<ar_graph_node> nodes;
@@ -301,6 +302,9 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
     r.material_offset = uint32_t(pool.size());
     r.material_count = j == 5 ? 0u : kSlotsPerInstance;
     if (media && j < 6) r.medium = 1u + j % 3u;
+    // Camera rays (type 1) see every instance; instance kBoundaryOnly bears a medium but is visible to no
+    // ray type, so a camera ray meets it through bit 6 alone.
+    r.mask = media && j < 6 ? (j == kBoundaryOnly ? ar::kMediumBoundaryMaskBit : (ar::kMediumBoundaryMaskBit | 1u)) : 1u;
     if (j != 5)
       for (uint32_t k = 0; k < kSlotsPerInstance; ++k) pool.push_back((j + 2 * k) % ms.count);
   }
@@ -698,11 +702,17 @@ TEST_CASE("shade_surface/false interface cuda") {
   CHECK(std::memcmp(c.bounces.data(), g.bounces.data(), kN * sizeof(ar::U16x6)) == 0);
   CHECK(std::memcmp(c.stack.data(), g.stack.data(), kN * sizeof(ar::U32x4)) == 0);
   // The fixture reaches every outcome of the stack code.
-  uint32_t false_push = 0, false_remove = 0, true_cross = 0, limit = 0, overflow = 0;
+  uint32_t false_push = 0, false_remove = 0, true_cross = 0, limit = 0, overflow = 0, boundary_only = 0;
   double worst = 0.0;
   const auto rel = [](double a, double b) { return std::fabs(a - b) / std::max(1.0, std::fabs(a)); };
   for (uint32_t i = 0; i < kN; ++i) {
     const uint32_t d0 = ar::medium_depth(c.flags_in[i]), d1 = ar::medium_depth(c.flags[i]);
+    // A hit through bit 6 alone never shades: the crossing count advances or the path ends on the cap or
+    // the stack.
+    if (uint32_t(rnd(i, 30) * kInstances) == kBoundaryOnly) {
+      ++boundary_only;
+      CHECK((c.term[i] != uint8_t(ar::Term::ACTIVE) || ar::crossings(c.flags[i]) == ar::crossings(c.flags_in[i]) + 1u));
+    }
     limit += c.term[i] == uint8_t(ar::Term::VOLUME_LIMIT);
     overflow += c.term[i] == uint8_t(ar::Term::STACK_OVERFLOW);
     if (ar::crossings(c.flags[i]) == ar::crossings(c.flags_in[i])) {
@@ -725,6 +735,7 @@ TEST_CASE("shade_surface/false interface cuda") {
   CHECK(true_cross > 1000u);
   CHECK(limit > 100u);
   CHECK(overflow > 100u);
+  CHECK(boundary_only > 100u);
   CHECK(worst <= 1e-6);
 }
 
