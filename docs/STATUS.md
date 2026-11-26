@@ -15,6 +15,7 @@ Process: owner decision 36 confirmed; `process/guards` merged (tool deny rules, 
 scope clause).
 
 ## Owner decisions still open
+- B-05 for `shade_surface` (owner decision 41: 7.5 s) BLOCKS spine task 205 (false interfaces and the medium stack in shade_surface): quiet interleaved kernelgate --time, min of 3 per round: main 7.29 / 7.19 / 7.21 s, branch 7.75 / 7.73 / 7.73 s (+0.52 s: the false-interface site at the top of the stage about 0.35-0.4 s, the pass-through crossing the rest; the dead LOBE_TRANSMISSION site already removed). Options: raise B-05 for shade_surface (e.g. 8.0 s for M1b); take D17's fallback (the medium lookup moves into the intersect routing step: a ladder candidate, not built); or remove the ~0.77 s of vcvarsall every timed compile includes (BACKLOG) and re-base the limit. 205 finishes meanwhile; its landing waits for the answer, and the spine queue after it (219, 220, 208, 206, 209) waits too.
 - B-10 (`check full` 12 min): full reads 777.5 s after 234 (798.5 s before it on 19a0211c); no script enforces B-10 (check.ps1 prints "budget n/a" for full). Owner: enforce, raise, or move work.
 - B-11 (hosted ci 450 s): after 233 the lean tier reads 335-379 s; its basis (1.3 x the old max) no longer derives the limit (1.3 x 379 = 493 s). Limit unchanged; the owner may restate the basis.
 - Ruling 101 (2026-11-25): B-38 baseline re-recorded on quiet main (b1m 11.69 -> 12.01 ms, b5m 12.28 -> 12.56 ms; +2.5 % cumulative since 2026-11-23 across M1b landings; limit 1.03 per landing unchanged); 215 reports the cumulative B-20 line.
