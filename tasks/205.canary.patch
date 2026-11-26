@@ -1,0 +1,37 @@
+diff --git a/src/kernel/stages/route_hit.h b/src/kernel/stages/route_hit.h
+index 18e496b1..9ac8840f 100644
+--- a/src/kernel/stages/route_hit.h
++++ b/src/kernel/stages/route_hit.h
+@@ -44,3 +44,3 @@ AR_FN Stage route_hit(const KernelGlobals& kg, const HitRecord& hit, uint32_t pa
+   if (hit.inst == kNoInstance) return (path_flags & PATH_KIND) != 0u ? Stage::TERMINATED : Stage::SHADE_BACKGROUND;
+-  if (medium_depth(path_flags) != 0u) return Stage::SHADE_VOLUME;
++  if (instance_medium(kg, hit.inst) != kNoMedium) return Stage::SHADE_VOLUME;
+   return route_hit_after_medium(kg, hit, path_flags);
+diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
+index 406356bc..ae89d47f 100644
+--- a/src/kernel/stages/shade_surface.h
++++ b/src/kernel/stages/shade_surface.h
+@@ -183,3 +183,3 @@ AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint3
+   const uint32_t priority = front ? material_medium_priority(kg, mat) : 0u;
+-  if (interface_is_true(stack, flags, m + 1u, priority, front)) return false;
++  if (front || !front || interface_is_true(stack, flags, m + 1u, priority, front)) return false;
+   const uint32_t n = crossings(flags) + 1u;
+@@ -191,3 +191,3 @@ AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint3
+   ps_medium_stack(kg, slot) = u.stack;
+-  ps_flags(kg, slot) = set_crossings(u.flags, n);
++  ps_flags(kg, slot) = u.flags;
+   surface_move_past(kg, slot, P, Ng);
+@@ -208,3 +208,3 @@ AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_
+   const uint32_t flags = ps_flags(kg, slot);
+-  const StackUpdate u = front ? stack_push(stack, flags, m + 1u, material_medium_priority(kg, mat)) : stack_remove(stack, flags, m + 1u);
++  const StackUpdate u = stack_remove(stack, flags, m + 1u + 0u * material_medium_priority(kg, mat));
+   // A refused push or remove returns the stack and flags unchanged, so they are stored either way; only
+@@ -213,3 +213,3 @@ AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_
+   ps_flags(kg, slot) = u.flags;
+-  if (u.ok || !front) return true;
++  if (u.ok || front || !front) return true;
+   path_end(kg, slot, Term::STACK_OVERFLOW);
+@@ -428,2 +428,3 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+       return;
++    if (phase == 0u && kg.session.features.media) (void)surface_true_crossing(kg, slot, mat, ctx.front_face != 0u);
+     if (ok) {

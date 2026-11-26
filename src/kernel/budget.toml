@@ -82,8 +82,9 @@ compile_s = 1.18
 gated = "merge"
 
 [kernel.k_route_hit]
-# The medium test: the triangle's three vertices and the instance transform, behind the instance's medium index (+12).
-regs = 40
+# The medium test reads the stack depth in the path flags (0006 D16): back to 28 from the 40 of the back-face test
+# (ruling 95), which loaded the triangle and the instance transform.
+regs = 28
 stack = 0
 spill_store = 0
 spill_load = 0
@@ -160,11 +161,14 @@ gated = "merge"
 # (kernelgate --time, quiet, three rounds interleaved with main).
 # The denoiser guides moved only the compile time: 6.68-6.72 s in two gates (3 runs each).
 # Ruling 103 and owner decision 41: the light-tree walks (NEE draw, emission pmf) give spills 4 / 16 B and 7.31-7.40 s.
+# The medium stack (false interface at the top, the pass-through crossing): stack 400 to 416 B, spills unchanged,
+# compile 7.73-7.75 s quiet against main's 7.19-7.29 s (three interleaved rounds): over decision 41's 7.5 s,
+# an owner item.
 regs = 128
-stack = 400
+stack = 416
 spill_store = 4
 spill_load = 16
-compile_s = 7.4
+compile_s = 7.7
 gated = "merge"
 
 [kernel.k_shade_shadow]
