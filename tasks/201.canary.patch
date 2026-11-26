@@ -1,0 +1,13 @@
+diff --git a/tools/denoise_check.py b/tools/denoise_check.py
+index e86b89c3..f63a7813 100644
+--- a/tools/denoise_check.py
++++ b/tools/denoise_check.py
+@@ -75,7 +75,7 @@ def rel_mse(x, ref, eps=EPS):
+     n = len(ref)
+     if len(x) != n:
+         raise ValueError(f"rel_mse: {len(x)} values against {n}")
+-    return sum((a - b) ** 2 / (b * b + eps) for a, b in zip(x, ref)) / n
++    return sum(abs(a - b) / (b * b + eps) for a, b in zip(x, ref)) / n
+ 
+ 
+ def rel_mse_img(x, ref):
