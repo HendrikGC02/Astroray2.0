@@ -13,7 +13,10 @@ a1_furnace through `astroray_cli dump`, S seeds per mode, each mode on its own s
     variance of the per-pixel mean. The slab's medium half (left) is printed beside the whole image;
   - one CUDA render per mode of each slab (independent sampler) against the CPU's single-seed ratios;
   - pass_ms of both modes on the CPU (`astroray_cli bench`), to show the time per sample is the same.
-Usage: <python> -I tools/hero_variance.py [--seeds 16] [--spp 1024] [--sobol-spp 1024] [--size 64]
+First, a positive control: one seed of the scattering slab in both modes must differ, or the hook never
+reached the kernel. The independent column's ratio does not depend on spp (V scales as 1/spp in both
+modes); the Sobol column's number holds at its spp. The defaults reproduce the recorded run in 10 min.
+Usage: <python> -I tools/hero_variance.py [--seeds 16] [--spp 256] [--sobol-spp 128] [--size 64]
          [--no-cuda] [--evidence out/evidence/194] [--history FILE] [--limit-min 10]
 Ref: Efron and Tibshirani 1993, An Introduction to the Bootstrap, ch. 13 (percentile interval); Student's
 t density (Abramowitz and Stegun 26.7.1), integrated numerically for its quantile;
@@ -101,7 +104,7 @@ def render(fr, rec, device, spp, seed, size, mode, sampler, tmp):
     with open(out, "rb") as f:
         hdus = fr.read_hdus(f.read())
     head, planes = hdus[0][0], {h["EXTNAME"]: d for h, d in hdus[1:]}
-    for key, want in (("SAMPLER", sampler), ("DEVICE", device), ("SPP", spp)):
+    for key, want in (("SAMPLER", sampler), ("DEVICE", device), ("SPP", spp), ("SEED", seed)):
         if head.get(key) != want:
             raise RuntimeError(f"the dump's {key} is {head.get(key)!r}, asked for {want!r}")
     mean = np.stack([planes[f"display.{c}"] for c in range(3)]).astype(np.float64)
@@ -194,15 +197,15 @@ def pass_ms(rec, mode, tmp):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--seeds", type=int, default=16)
-    ap.add_argument("--spp", type=int, default=1024)
-    ap.add_argument("--sobol-spp", type=int, default=1024)
-    ap.add_argument("--size", type=int, default=64)
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0], formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    ap.add_argument("--seeds", type=int, default=16, help="seeds per mode")
+    ap.add_argument("--spp", type=int, default=256, help="independent column spp")
+    ap.add_argument("--sobol-spp", type=int, default=128, help="Sobol column spp")
+    ap.add_argument("--size", type=int, default=64, help="image width and height")
     ap.add_argument("--no-cuda", action="store_true")
     ap.add_argument("--evidence", help="directory for hero_variance.png")
     ap.add_argument("--history", help="append the hero_variance_ratio lines to this jsonl")
-    ap.add_argument("--limit-min", type=float, default=10.0)
+    ap.add_argument("--limit-min", type=float, default=10.0, help="capture time limit in minutes")
     a = ap.parse_args()
     if not os.path.exists(CLI):
         raise FileNotFoundError(f"{CLI} missing: run tools/build.ps1 first")
@@ -211,6 +214,15 @@ def main():
     fr = load_module("_fits_read_hero", FITS_READ)
     tmp = tempfile.mkdtemp(prefix="hero_variance_")
     recs, results = {}, {}
+    # Positive control: the same seed in both modes renders different images, or the hook is dead.
+    control = os.path.join(tmp, "control.arrec")
+    build_recording(control, "v1_slab", {"scattering": True}, "independent")
+    pair = [render(fr, control, "cpu", 16, 1, a.size, mode, "independent", tmp)[0] for mode in MODES]
+    differ = int(np.count_nonzero(pair[0] != pair[1]))
+    print(f"# control: v1_slab.scattering seed 1 at 16 spp, random against lane0: {differ} of {pair[0].size} values differ")
+    if differ == 0:
+        print("FAIL hero_variance: the lane-0 hook changed nothing; it does not reach the kernel")
+        sys.exit(1)
     for sampler, spp in (("independent", a.spp), ("sobol", a.sobol_spp)):
         t1 = time.perf_counter()
         for name, scene, kwargs in SCENES:
