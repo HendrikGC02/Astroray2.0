@@ -109,6 +109,24 @@ class ASTRORAY_PT_film(AstrorayPanel, bpy.types.Panel):
         layout.prop(context.scene.render, "film_transparent", text="Transparent")
 
 
+class ASTRORAY_PT_denoise(AstrorayPanel, bpy.types.Panel):
+    bl_label = "Denoise"
+    bl_parent_id = "ASTRORAY_PT_settings"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw_header(self, context):
+        self.layout.prop(context.scene.astroray, "use_denoising", text="")
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        a = context.scene.astroray
+        col = layout.column()
+        col.active = a.use_denoising
+        col.prop(a, "denoising_store_passes", text="Denoising Data")
+
+
 class ASTRORAY_PT_viewport(AstrorayPanel, bpy.types.Panel):
     bl_label = "Viewport"
     bl_parent_id = "ASTRORAY_PT_settings"
@@ -176,5 +194,5 @@ class ASTRORAY_PT_diagnostics(AstrorayPanel, bpy.types.Panel):
             _entry_rows(layout, entry, width)
 
 
-classes = (ASTRORAY_PT_settings, ASTRORAY_PT_sampling, ASTRORAY_PT_light_paths, ASTRORAY_PT_film,
+classes = (ASTRORAY_PT_settings, ASTRORAY_PT_sampling, ASTRORAY_PT_light_paths, ASTRORAY_PT_film, ASTRORAY_PT_denoise,
            ASTRORAY_PT_viewport, ASTRORAY_PT_diagnostics)
