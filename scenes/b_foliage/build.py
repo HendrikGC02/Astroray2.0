@@ -34,7 +34,8 @@ DEPTH = (3.0, 14.0)            # m in front of the camera
 SPP, SEED, LAYOUT_SEED = 16, 12345, 170
 FOCAL_MM, SENSOR_MM, WIDTH, HEIGHT = 35.0, 36.0, 1920, 1080
 CENTRE = (0.0, 8.5, 0.0)       # the lamp's aim point
-TRANSPARENT_MARGIN = 8         # pass-throughs allowed beyond the longest geometric chain of a camera ray
+TRANSPARENT_MARGIN = 8         # a design margin, not a source: the limit counts pass-throughs cumulatively over the whole path
+                               # (camera ray, then each bounce ray), so it must exceed the longest camera-ray chain alone
 PROBE_RAYS = 8192
 
 
