@@ -1,0 +1,26 @@
+diff --git a/blender/astroray/render_final.py b/blender/astroray/render_final.py
+index 3c58cec1..c7d0c6ed 100644
+--- a/blender/astroray/render_final.py
++++ b/blender/astroray/render_final.py
+@@ -447,6 +447,8 @@ class Job:
+             # entries the status bar already printed.
+             diagnostics.add_engine(self.kind, level, names.get(e.code, str(e.code)), e.code,
+                                    diagnostics.subject_label(*self._subjects(), e.subject), detail)
++            if names.get(e.code) in ("DENOISER_UNAVAILABLE", "PASS_UNSUPPORTED"):
++                continue
+             ident = (e.code, e.subject, detail)
+             if ident in reported:
+                 continue
+@@ -474,9 +476,10 @@ class Job:
+         if final:
+             offered = offered_passes(self.lib, self.abi, self.session)
+             for p in self.wanted:
+-                if p.name not in offered:
++                if p.name not in offered or p.name == "Normal":
+                     continue
+-                data = read_pass(self.lib, self.abi, self.session, p.name, self.abi.AR_QUANTITY_MEAN)
++                data = read_pass(self.lib, self.abi, self.session, "Combined" if p.name == "Noisy Image" else p.name,
++                                 self.abi.AR_QUANTITY_MEAN)
+                 if data.shape[2] != len(p.chan_id):
+                     raise RenderFailed(f"astroray: pass {p.name} has {data.shape[2]} components, "
+                                        f"Blender registered {len(p.chan_id)} ({p.chan_id})")
