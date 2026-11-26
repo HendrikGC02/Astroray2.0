@@ -429,6 +429,7 @@ TEST_CASE("shade_surface_media/enter and leave") {
     CHECK(r.medium_stack[s].v[0] == ar::stack_entry(1u, 7u));
     CHECK(r.bounces[s].v[5] == 1u);
     CHECK(r.event_index[s] == 2u + s % 4u);
+    CHECK(r.medium_rng[s] == ar::flight_rng_start(r.event_index[s]));  // the new event's first medium block
     CHECK(ar::crossings(r.flags[s]) == 0u);
   }
   for (uint32_t s = 0; s < r.n; ++s) {
@@ -445,6 +446,7 @@ TEST_CASE("shade_surface_media/enter and leave") {
     CHECK(ar::medium_depth(r.flags[s]) == 0u);
     for (int k = 0; k < 4; ++k) CHECK(r.medium_stack[s].v[k] == 0u);
     CHECK(r.bounces[s].v[5] == 2u);
+    CHECK(r.medium_rng[s] == ar::flight_rng_start(r.event_index[s]));
     const ar::HitRecord h{Real(1), 0u, 1u, Real(0.25), Real(0.25)};
     CHECK(ar::route_hit(r.kg, h, r.flags[s]) == ar::Stage::SHADE_SURFACE);
   }

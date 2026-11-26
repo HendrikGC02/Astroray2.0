@@ -129,6 +129,9 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
   const MediumStream st{kg.session.sampler_mode, key.id, key.index, kg.session.seed, STREAM_PATH_MEDIUM};
   const uint32_t first = flight_rng_start(e), end = flight_rng_start(e + 1u);
   const uint32_t stored = kg.session.features.media ? ps_medium_rng(kg, slot) : 0u;
+  // A stored counter equal to `end` (the event's blocks used up) reads as out of range and restarts;
+  // the flight that used them up ended its path VOLUME_LIMIT, so no later flight reads it. Once grid
+  // media requeue flights (M2) it must be treated as exhausted instead.
   uint32_t counter = stored >= first && stored < end ? stored : first;
   TrackWeights w{ps_beta(kg, slot), ps_r_u(kg, slot), ps_r_l(kg, slot)};
   const TrackResult r = track_segment(sigma_a, sigma_s, sigma_a + sigma_s, t_max, hero_lane(flags), st,
