@@ -43,7 +43,8 @@ $secs = 0.0
 try {
   # A build of device code takes the machine lock too. Taken here, so its waiting messages reach the
   # console (the build's own output is captured); released after the build when the run needs no lock.
-  if ($machine -or $build -notcontains '-NoMachineLock') { $waited += Enter-ArMachineLock }
+  if ($machine -or $build -notcontains '-NoMachineLock') { $waited += Enter-ArMachineLock -Job test -Short:([bool]$Case) }
+  Set-ArLockStep "build $target"
   $b = @(& pwsh -NoProfile -File (Join-Path $PSScriptRoot 'build.ps1') @build 2>&1 | ForEach-Object { "$_" })
   Add-Content -Path $log -Value $b
   if ($LASTEXITCODE -ne 0) {
@@ -56,6 +57,7 @@ try {
   if (-not $machine) { Exit-ArMachineLock }
   $waited += Enter-ArTreeLock (Join-Path $root 'out/build')
   $sw = [Diagnostics.Stopwatch]::StartNew()
+  Set-ArLockStep "run $target $Case"
   $res = @(Invoke-ArTestCase -Kind $kind -Target $target -Case $Case -Tier $Tier -Root $root)
   $secs = $sw.Elapsed.TotalSeconds
   Add-Content -Path $log -Value $res[0].Output

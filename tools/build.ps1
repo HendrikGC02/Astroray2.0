@@ -31,7 +31,7 @@ $log = Join-Path $logDir 'build.log'
 # Locks first; the tier clock starts after them so waits are excluded.
 $waited = 0.0
 $machineWait = 0.0
-if (-not $NoMachineLock) { $machineWait = Enter-ArMachineLock }
+if (-not $NoMachineLock) { $machineWait = Enter-ArMachineLock -Job build -Short }
 # After the machine lock (a gate holds it before its fast window, so a build that held a share and waited for
 # the lock would deadlock the gate); before the tree lock. The gate's own fast tier is nested and does not wait.
 $shareWait = Enter-ArBuildShare

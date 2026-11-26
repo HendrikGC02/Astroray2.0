@@ -40,7 +40,7 @@ $mainCheckout = Get-LandingMain $root
 
 # Every machine-lock wait this process sees (canary, Blender suites) is summed into the lock_wait phase.
 $script:OrigEnterLock = ${function:Enter-ArMachineLock}
-function Enter-ArMachineLock { $w = & $script:OrigEnterLock; $script:LandTimes['lock_wait_s'] += $w; return $w }
+function Enter-ArMachineLock { $w = & $script:OrigEnterLock @args; $script:LandTimes['lock_wait_s'] += $w; return $w }
 
 $script:UndoTo = $null      # the sha before this script's "(land)" commit; set while that commit may be undone
 $script:LandSha = $null     # that commit
