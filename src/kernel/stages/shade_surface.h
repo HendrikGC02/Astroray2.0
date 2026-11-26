@@ -146,22 +146,12 @@ inline constexpr float kShadowUnbounded = 0x1.fffffep+127f;
 // third_party/_cache/refs/cycles-ed69ef2c6bd3.
 inline constexpr uint32_t kVolumeBoundsMax = 1024;
 
-// What medium_stack_cross returns when a push would pass the four entries.
-inline constexpr uint32_t kStackOverflowId = ~0u;
-
-// The priority of the material at hit (inst, prim): the entering face's (RULINGS 98).
-AR_FN uint32_t hit_medium_priority(const KernelGlobals& kg, uint32_t inst, uint32_t prim) {
+// The medium priority of material header `mat` (hit_material_id's index): the entering face's
+// (RULINGS 98). A scene without material tables is a host bug the stage fails; its priority reads 0.
+AR_FN uint32_t material_medium_priority(const KernelGlobals& kg, uint32_t mat) {
   const SceneData& s = scene_of(kg);
-  const uint32_t mat = hit_material_id(kg, inst, prim);
+  if (s.material_headers == nullptr || s.material_constants == nullptr) return 0u;
   return s.material_constants[load_ro(&s.material_headers[mat].const_offset)].medium_priority;
-}
-
-// The stack after crossing the surface of instance inst, medium index m, from the front (push with the
-// hit material's priority) or the back (remove). A failed push or remove comes back with ok false and
-// the input unchanged.
-AR_FN StackUpdate medium_stack_cross(const KernelGlobals& kg, U32x4 stack, uint32_t flags, uint32_t inst, uint32_t prim,
-                                     uint32_t m, bool front) {
-  return front ? stack_push(stack, flags, m + 1u, hit_medium_priority(kg, inst, prim)) : stack_remove(stack, flags, m + 1u);
 }
 
 // Moves the ray origin just past the surface and re-queues intersect_closest; prev_dist grows by the
@@ -182,22 +172,20 @@ AR_FN void surface_move_past(const KernelGlobals& kg, uint32_t slot, Real3 P, Re
 // and r_l as they were. A count at the cap ends the path VOLUME_LIMIT, a push at depth 4
 // STACK_OVERFLOW; both are counted in the termination histogram. Returns whether the hit was a false
 // interface (the caller returns); false for an instance without a medium and for a true interface.
-// A false back face always finds its id (interface_is_true calls an absent id true).
-AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint32_t inst, uint32_t prim, bool front, Real3 P,
+// `mat` is the hit's material header. A false back face always finds its id (interface_is_true calls
+// an absent id true), so only a push can fail.
+AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint32_t inst, uint32_t mat, bool front, Real3 P,
                                    Real3 Ng) {
   const uint32_t m = instance_medium(kg, inst);
   if (m == kNoMedium) return false;
   const uint32_t flags = ps_flags(kg, slot);
   const U32x4 stack = ps_medium_stack(kg, slot);
-  if (interface_is_true(stack, flags, m + 1u, front ? hit_medium_priority(kg, inst, prim) : 0u, front)) return false;
+  const uint32_t priority = front ? material_medium_priority(kg, mat) : 0u;
+  if (interface_is_true(stack, flags, m + 1u, priority, front)) return false;
   const uint32_t n = crossings(flags) + 1u;
-  if (n >= kVolumeBoundsMax) {
-    path_end(kg, slot, Term::VOLUME_LIMIT);
-    return true;
-  }
-  const StackUpdate u = medium_stack_cross(kg, stack, flags, inst, prim, m, front);
-  if (!u.ok) {
-    path_end(kg, slot, Term::STACK_OVERFLOW);
+  const StackUpdate u = front ? stack_push(stack, flags, m + 1u, priority) : stack_remove(stack, flags, m + 1u);
+  if (n >= kVolumeBoundsMax || !u.ok) {
+    path_end(kg, slot, n >= kVolumeBoundsMax ? Term::VOLUME_LIMIT : Term::STACK_OVERFLOW);
     return true;
   }
   ps_medium_stack(kg, slot) = u.stack;
@@ -210,14 +198,15 @@ AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint3
 // push or remove, as Cycles enters and exits volumes only when the continuation transmits. A remove of
 // an id not on the stack (the path started inside the medium) is refused and leaves stack and flags
 // unchanged. Returns false when a push overflowed: the path then ends STACK_OVERFLOW. The hit is the
-// path's (hit_inst, hit_prim).
+// path's (hit_inst), `mat` its material header.
 // Ref: Cycles kernel/integrator/shade_surface.h integrate_surface ("if (continue_path_label &
 // LABEL_TRANSMIT) volume_stack_enter_exit"), read in third_party/_cache/refs/cycles-ed69ef2c6bd3.
-AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, bool front) {
-  const uint32_t inst = ps_hit_inst(kg, slot);
-  const uint32_t m = instance_medium(kg, inst);
+AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_t mat, bool front) {
+  const uint32_t m = instance_medium(kg, ps_hit_inst(kg, slot));
   if (m == kNoMedium) return true;
-  const StackUpdate u = medium_stack_cross(kg, ps_medium_stack(kg, slot), ps_flags(kg, slot), inst, ps_hit_prim(kg, slot), m, front);
+  const U32x4 stack = ps_medium_stack(kg, slot);
+  const uint32_t flags = ps_flags(kg, slot);
+  const StackUpdate u = front ? stack_push(stack, flags, m + 1u, material_medium_priority(kg, mat)) : stack_remove(stack, flags, m + 1u);
   if (!u.ok && front) {
     path_end(kg, slot, Term::STACK_OVERFLOW);
     return false;
@@ -229,30 +218,18 @@ AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, bool fr
 
 // The medium a NEE item's segment lies in, as 1 + its medium index, 0 for none: the item layout of
 // ratio_track.h shadow_medium_field, whose one entry is the stack's highest id under RULINGS 98. The
-// stack is the path's at this vertex (`flags` holds its depth) when the segment leaves on wo's side
-// (the reflection side: Ng faces wo), and that stack after crossing the hit's surface when it leaves
-// through it, as Cycles gives a transmitted shadow ray the entered or exited stack. The geometric
-// normal decides, because the segment's origin is offset to the side of Ng that wi points into.
-// kStackOverflowId when that crossing is a push at depth 4 (the caller ends the path). Every light's
-// item carries it: the BSDF half of a non-delta light's MIS pair is tracked too (route_hit sends every
-// segment of a non-empty stack to shade_volume), so ratio tracking the NEE half keeps the pair's weights
+// stack is the path's as it stands when the item is written (`flags` holds its depth), the stack the
+// path arrived with, which is the medium on wo's side of a true interface. Every light's item carries
+// it: the BSDF half of a non-delta light's MIS pair is tracked too (route_hit sends every segment of a
+// non-empty stack to shade_volume), so ratio tracking the NEE half keeps the pair's weights
 // consistent (pbrt-v4 VolPathIntegrator). A shadow ray stops at every hull (0002 D11 until ah_record),
-// so an item is delivered only when its whole segment stays inside that medium.
-// Ref: Cycles kernel/integrator/shade_surface.h integrate_surface_direct_light ("if
-// (is_transmission) volume_stack_enter_exit<true>(kg, shadow_state, sd)"); pbrt-v4
-// src/pbrt/cpu/integrators.cpp VolPathIntegrator::SampleLd and Li (Apache-2.0).
-AR_FN uint32_t nee_item_medium(const KernelGlobals& kg, uint32_t slot, uint32_t flags, bool front, Real3 ng, Real3 wi) {
-  U32x4 stack = ps_medium_stack(kg, slot);
-  if (dot(wi, ng) < Real(0)) {
-    const uint32_t inst = ps_hit_inst(kg, slot);
-    const uint32_t m = instance_medium(kg, inst);
-    if (m != kNoMedium) {
-      const StackUpdate u = medium_stack_cross(kg, stack, flags, inst, ps_hit_prim(kg, slot), m, front);
-      if (!u.ok && front) return kStackOverflowId;
-      stack = u.stack, flags = u.flags;
-    }
-  }
-  return stack_highest_id(stack, flags);
+// so an item is delivered only when its whole segment stays inside that medium. An item whose segment
+// leaves through the surface would lie in the stack after the crossing (Cycles' is_transmission); no
+// lobe of this stage transmits in M1b, so only a shading normal tilted past Ng gives such an item a
+// non-zero contribution, and it keeps the arriving stack until the dielectric lobe (M2).
+// Ref: pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::SampleLd and Li (Apache-2.0).
+AR_FN uint32_t nee_item_medium(const KernelGlobals& kg, uint32_t slot, uint32_t flags) {
+  return stack_highest_id(ps_medium_stack(kg, slot), flags);
 }
 
 // A NEE item's fields of the media feature (0006 D19, 0003 d20), every one written: the medium of
@@ -296,8 +273,8 @@ AR_FN bool opacity_null_event(Real opacity, float* u) {
 // index advance (the next vertex's uniforms are a new block, 0004 D14); direction, flags, beta,
 // r_u, r_l and the previous vertex stay. The ray leaves from just past the hit (surface_move_past).
 // With the media feature the path crosses the surface, so a medium-bearing instance's true interface
-// updates the stack (surface_true_crossing; `front` is the hit's side), which may end the path
-// STACK_OVERFLOW. A path that arrives with the transparent counter at its limit
+// updates the stack (surface_true_crossing; `mat` is the hit's material, `front` its side), which
+// may end the path STACK_OVERFLOW. A path that arrives with the transparent counter at its limit
 // ends TRANSPARENT_LIMIT instead of passing; its emission was already added (Blender: the next
 // surface after the limit emits and terminates).
 // Ref: Cycles kernel/integrator/path_state.h path_state_next (transparent_bounce, a transparent label
@@ -305,13 +282,13 @@ AR_FN bool opacity_null_event(Real opacity, float* u) {
 // integrate_surface_bsdf_bssrdf_bounce (a transparent bounce only moves the ray start), read in
 // third_party/_cache/refs/cycles-ed69ef2c6bd3; docs/decisions/0004-integrator.md D3, D14;
 // 0002 D11; 0003 d19 (prev_dist), d23.
-AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P, Real3 Ng, bool front) {
+AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P, Real3 Ng, uint32_t mat, bool front) {
   U16x6 b = ps_bounces(kg, slot);
   if (b.v[5] >= kg.session.max_bounces[5]) {
     path_end(kg, slot, Term::TRANSPARENT_LIMIT);
     return;
   }
-  if (kg.session.features.media && !surface_true_crossing(kg, slot, front)) return;
+  if (kg.session.features.media && !surface_true_crossing(kg, slot, mat, front)) return;
   b.v[5] = uint16_t(b.v[5] + 1u);
   ps_bounces(kg, slot) = b;
   ps_event_index(kg, slot) = uint16_t(ps_event_index(kg, slot) + 1u);
@@ -445,10 +422,10 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
       path_end(kg, slot, Term::INVALID);
       return;
     }
-    // A false interface only updates the medium stack, before the material runs (0006 D17).
-    if (phase == 0u && kg.session.features.media && surface_false_interface(kg, slot, inst, prim, ctx.front_face != 0u, ctx.P, ctx.Ng))
-      return;
     mat = hit_material_id(kg, g_inst, g_prim);
+    // A false interface only updates the medium stack, before the material runs (0006 D17).
+    if (phase == 0u && kg.session.features.media && surface_false_interface(kg, slot, inst, mat, ctx.front_face != 0u, ctx.P, ctx.Ng))
+      return;
     if (ok) {
       AR_ASSERT(mat <= s.material_header_count);
       const MaterialHeader* hp = s.material_headers + mat;
@@ -499,7 +476,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     // scales it, 0005 item 38), before the AOVs and the total limit, so a pass-through at the total
     // limit still passes, writes no AOV and leaves the flags (FRONT_FACE included) as they were.
     if (valid && opacity_null_event(alpha, &uc)) {
-      surface_pass_through(kg, slot, P, Ng, ctx.front_face != 0u);
+      surface_pass_through(kg, slot, P, Ng, mat, ctx.front_face != 0u);
       return;
     }
     // Written even when the VM failed (the AOVs name the hit), whenever the material tables exist.
@@ -566,14 +543,10 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
     const bool world_le = ls.deferred_le && !triangle;
     // One branch on the launch-uniform media feature; without it nothing more is stored.
-    if (kg.session.features.media) {
-      const uint32_t medium = nee_item_medium(kg, slot, flags, (flags & FRONT_FACE) != 0u, Ng, seg.dir);
-      if (medium == kStackOverflowId) {  // the item's slot stays free: its next stage is never set
-        path_end(kg, slot, Term::STACK_OVERFLOW);
-        return;
-      }
-      nee_item_media(kg, sh, medium, e, flags, ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta, ctx.lambda_t, world_le);
-    } else if (kg.shadow->item_flags != nullptr)
+    if (kg.session.features.media)
+      nee_item_media(kg, sh, nee_item_medium(kg, slot, flags), e, flags, ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta,
+                     ctx.lambda_t, world_le);
+    else if (kg.shadow->item_flags != nullptr)
       sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
     if (world_le) {
       // WORLD_ENV: shade_shadow runs the world program along ray_d at these lanes on delivery. The
@@ -645,8 +618,10 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     path_end(kg, slot, Term::RUSSIAN_ROULETTE);
     return;
   }
-  // A transmitted continuation crosses the surface; a reflected one keeps the stack it arrived with.
-  if (kg.session.features.media && (bs.flags & LOBE_TRANSMISSION) != 0u && !surface_true_crossing(kg, slot, (flags & FRONT_FACE) != 0u))
+  // A transmitted continuation crosses the surface; a reflected one keeps the stack it arrived with. The
+  // hit's material is read again from the path (phase 1 may have left a light's in `mat`).
+  if (kg.session.features.media && (bs.flags & LOBE_TRANSMISSION) != 0u &&
+      !surface_true_crossing(kg, slot, hit_material_id(kg, ps_hit_inst(kg, slot), ps_hit_prim(kg, slot)), (flags & FRONT_FACE) != 0u))
     return;
 
   ps_beta(kg, slot) = beta_next;

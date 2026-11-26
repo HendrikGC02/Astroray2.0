@@ -416,9 +416,9 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
       path_end(kg, slot, Term::INVALID);
       return;
     }
-    if (phase == 0u && kg.session.features.media && surface_false_interface(kg, slot, inst, prim, ctx.front_face != 0u, ctx.P, ctx.Ng))
-      return;
     mat = hit_material_id(kg, g_inst, g_prim);
+    if (phase == 0u && kg.session.features.media && surface_false_interface(kg, slot, inst, mat, ctx.front_face != 0u, ctx.P, ctx.Ng))
+      return;
     if (ok) {
       const MaterialHeader* hp = s.material_headers + mat;
       const uint32_t mflags = load_ro(&hp->flags);
@@ -456,7 +456,7 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     const bool valid = ok && is_finite(contribution) && alpha == alpha;
     if (valid) sample_add(kg, sample, contribution);
     if (valid && opacity_null_event(alpha, &uc)) {
-      surface_pass_through(kg, slot, P, Ng, ctx.front_face != 0u);
+      surface_pass_through(kg, slot, P, Ng, mat, ctx.front_face != 0u);
       return;
     }
     if (s.material_pass_index != nullptr && s.material_headers != nullptr && total == 0u) {
@@ -510,14 +510,10 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     sh_target(kg, sh) = sample;
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
     const bool world_le = ls.deferred_le && !triangle;
-    if (kg.session.features.media) {
-      const uint32_t medium = nee_item_medium(kg, slot, flags, (flags & FRONT_FACE) != 0u, Ng, seg.dir);
-      if (medium == kStackOverflowId) {
-        path_end(kg, slot, Term::STACK_OVERFLOW);
-        return;
-      }
-      nee_item_media(kg, sh, medium, e, flags, ps_r_u(kg, slot), sl.pmf * ls.pdf, ev.pdf, ls.delta, ctx.lambda_t, world_le);
-    } else if (kg.shadow->item_flags != nullptr)
+    if (kg.session.features.media)
+      nee_item_media(kg, sh, nee_item_medium(kg, slot, flags), e, flags, ps_r_u(kg, slot), sl.pmf * ls.pdf, ev.pdf, ls.delta,
+                     ctx.lambda_t, world_le);
+    else if (kg.shadow->item_flags != nullptr)
       sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
     if (world_le) {
       // WORLD_ENV: shade_shadow runs the world program along ray_d at these lanes on delivery. The
@@ -592,7 +588,8 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     return;
   }
   // Spike A's dielectric transmits: wi on the far side of the shading frame crosses the surface.
-  if (kg.session.features.media && wi_l.z * wo_l.z < Real(0) && !surface_true_crossing(kg, slot, (flags & FRONT_FACE) != 0u))
+  if (kg.session.features.media && wi_l.z * wo_l.z < Real(0) &&
+      !surface_true_crossing(kg, slot, hit_material_id(kg, ps_hit_inst(kg, slot), ps_hit_prim(kg, slot)), (flags & FRONT_FACE) != 0u))
     return;
   ps_beta(kg, slot) = beta_next;
   ps_r_l(kg, slot) = r_u / bs.pdf;
