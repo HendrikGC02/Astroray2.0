@@ -1,0 +1,88 @@
+diff --git a/src/host/scheduler.cpp b/src/host/scheduler.cpp
+index c4ef2300..8d9887dc 100644
+--- a/src/host/scheduler.cpp
++++ b/src/host/scheduler.cpp
+@@ -391,7 +391,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
+       if (at_boundary(&status)) return status;
+       // The media pre-pass over the same segment, before shade_shadow (stages/shade_shadow_medium.h,
+       // 0006 D19): one launch-uniform test, so a scene without media launches nothing more.
+-      if (s == static_cast<uint32_t>(Stage::SHADE_SHADOW) && features_.media) {
++      if (s == static_cast<uint32_t>(Stage::SHADE_SHADOW)) {
+         launch_kernel(KernelId::SHADE_SHADOW_MEDIUM, t.stage[s].count);
+       }
+       launch_stage(static_cast<Stage>(s), t);
+diff --git a/src/kernel/medium/ratio_track.h b/src/kernel/medium/ratio_track.h
+index 4ae49d01..40b0d7a8 100644
+--- a/src/kernel/medium/ratio_track.h
++++ b/src/kernel/medium/ratio_track.h
+@@ -84,12 +84,12 @@ AR_FN RatioTrack ratio_track_segment(const Spec& sigma_a, const Spec& sigma_s, c
+   RatioTrack r{spec_fill(Real(1)), spec_fill(Real(1)), spec_fill(Real(1)), 0u, false};
+   const Real maj_h = lane_at(sigma_maj, h);
+   Real t = Real(0);
+-  if (maj_h > Real(0)) {
++  if (maj_h >= Real(0)) {
+     Spec sigma_n;
+     for (int i = 0; i < kLanes; ++i) sigma_n.v[i] = ar::max(Real(0), sigma_maj.v[i] - sigma_a.v[i] - sigma_s.v[i]);
+     const uint32_t start = *counter;
+     for (;;) {
+-      if (*counter - start >= limit) {
++      if (*counter - start > limit) {
+         r.T = spec_fill(Real(0));
+         r.limit = true;
+         return r;
+@@ -101,7 +101,7 @@ AR_FN RatioTrack ratio_track_segment(const Spec& sigma_a, const Spec& sigma_s, c
+       Spec tm;
+       for (int i = 0; i < kLanes; ++i) tm.v[i] = ar::exp(-(tc - t) * sigma_maj.v[i]);
+       const Real pdf = lane_at(tm, h) * maj_h;
+-      r.T *= tm * sigma_n / pdf;
++      r.T *= spec_fill(lane_at(tm * sigma_n, 0u)) / pdf;
+       r.r_l *= tm * sigma_maj / pdf;
+       r.r_u *= tm * sigma_n / pdf;
+       if (!(max_lane(r.T) > Real(0))) return r;
+diff --git a/src/kernel/stages/shade_shadow_medium.h b/src/kernel/stages/shade_shadow_medium.h
+index 9593addb..181c42d7 100644
+--- a/src/kernel/stages/shade_shadow_medium.h
++++ b/src/kernel/stages/shade_shadow_medium.h
+@@ -59,7 +59,10 @@ AR_FN void shadow_medium_block(const KernelGlobals& kg, uint32_t slot) {
+ AR_FN void stage_shade_shadow_medium(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
+   const uint32_t slot = load_ro(kg.shadow_queue + step.start + item);
+   const uint32_t m = sh_medium_stack(kg, slot).v[0];
+-  if (m == 0u) return;
++  if (m == 0u) {
++    shadow_medium_block(kg, slot);
++    return;
++  }
+   const SceneData& s = scene_of(kg);
+   AR_ASSERT(m - 1u < s.medium_count);
+   const uint32_t target = sh_target(kg, slot);
+@@ -85,7 +88,7 @@ AR_FN void stage_shade_shadow_medium(const KernelGlobals& kg, uint32_t item, con
+   const SamplerKey key = camera_key(kg.active_pixels, target, kg.session.samples_done, kg.session.samples_per_pass);
+   const MediumStream st{kg.session.sampler_mode, key.id, key.index, kg.session.seed, STREAM_SHADOW_MEDIUM};
+   uint32_t counter = sh_medium_rng(kg, slot);
+-  const RatioTrack r = ratio_track_segment(sigma_a, sigma_s, sigma_a + sigma_s, t_max, item_hero_lane(sh_item_flags(kg, slot)), st,
++  const RatioTrack r = ratio_track_segment(sigma_a, sigma_s, sigma_a + sigma_s, t_max, 0u, st,
+                                            &counter, kShadowCollisionLimit);
+   sh_medium_rng(kg, slot) = counter;
+   if (r.limit) {
+@@ -100,7 +103,7 @@ AR_FN void stage_shade_shadow_medium(const KernelGlobals& kg, uint32_t item, con
+     return;
+   }
+   const Spec r_u0 = sh_r_u(kg, slot), r_l0 = sh_r_l(kg, slot);
+-  const Spec c = sh_contribution(kg, slot) * r.T * (avg(r_l0 + r_u0) / avg(r_l0 * r.r_l + r_u0 * r.r_u));
++  const Spec c = sh_contribution(kg, slot) * r.T * (avg(r_l0 + r_u0) / avg(r_l0 + r_u0));
+   if (!is_finite(c)) {
+     sample_mark_invalid(kg, target);
+     shadow_medium_block(kg, slot);
+diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
+index ad3d36f0..52880a90 100644
+--- a/src/kernel/stages/shade_surface.h
++++ b/src/kernel/stages/shade_surface.h
+@@ -451,7 +451,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
+     const bool world_le = ls.deferred_le && !triangle;
+     // One branch on the launch-uniform media feature; without it nothing more is stored.
+-    if (kg.session.features.media)
++    if (false && kg.session.features.media)
+       nee_item_media(kg, sh, nee_item_medium(kg, inst, (flags & FRONT_FACE) != 0u, Ng, seg.dir), e, flags,
+                      ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta, ctx.lambda_t, world_le);
+     else if (kg.shadow->item_flags != nullptr)
