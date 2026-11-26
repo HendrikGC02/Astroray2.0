@@ -599,4 +599,47 @@ TEST_CASE("shade_surface_media/back face with an absent id") {
   CHECK(ar::crossings(r.flags[0] | r.flags[1]) == 0u);
 }
 
+TEST_CASE("shade_surface_media/hit through bit six alone is a false interface") {
+  // Instance 0 bears a medium and is visible to camera rays only: its mask is the camera bit plus bit 6.
+  // A diffuse ray meets it through bit 6 alone, so the hit only updates the stack and the path goes on
+  // past it, whatever the priorities (here an empty stack, which would make a visible front face true)
+  // and although the surface is opaque and emissive. The same hit by a camera ray is shaded.
+  Rig r(4, false, true);
+  r.medium(0, 0, 3);
+  r.instances[0].mask = ar::kMediumBoundaryMaskBit | 1u;
+  r.block(0).emission_color = Rig::grey(1.0f), r.block(0).emission_luminance = 1.0f;
+  for (uint32_t s = 0; s < r.n; ++s) r.ray_type[s] = ar::kRayTypeDiffuse;
+  r.hit(0, 0, true);                                  // front, empty stack: pushes
+  r.ray_type[1] = 1u, r.hit(1, 0, true);              // the camera ray: a true interface, shaded
+  r.arrive(2, {{0, 3}}), r.hit(2, 0, false);          // back, entry present: removes
+  r.hit(3, 0, false);                                 // back, the path started inside: refused, goes on
+  const std::vector<uint32_t> ev0 = r.event_index;
+  const std::vector<Spec> beta0 = r.beta, ru0 = r.r_u, rl0 = r.r_l;
+  const std::vector<ar::Real3> d0 = r.ray_d;
+  r.run();
+  const uint32_t want_depth[4] = {1, 0, 0, 0};
+  for (uint32_t s = 0; s < r.n; ++s) {
+    INFO("slot " << s);
+    CHECK(ar::medium_depth(r.flags[s]) == want_depth[s]);
+    if (s == 1) continue;
+    CHECK(r.term[s] == uint8_t(ar::Term::ACTIVE));
+    CHECK(r.next_stage[s] == uint8_t(ar::Stage::INTERSECT_CLOSEST));
+    CHECK(ar::crossings(r.flags[s]) == 1u);
+    CHECK(r.bounces[s].v[0] == 0u);
+    CHECK(r.event_index[s] == ev0[s]);
+    CHECK(r.ray_type[s] == ar::kRayTypeDiffuse);
+    CHECK(std::memcmp(&r.beta[s], &beta0[s], sizeof(Spec)) == 0);
+    CHECK(std::memcmp(&r.r_u[s], &ru0[s], sizeof(Spec)) == 0);
+    CHECK(std::memcmp(&r.r_l[s], &rl0[s], sizeof(Spec)) == 0);
+    CHECK(std::memcmp(&r.ray_d[s], &d0[s], sizeof(ar::Real3)) == 0);
+    for (int l = 0; l < 4; ++l) CHECK(r.film->data().slot_L[4u * s + uint32_t(l)] == 0.0f);  // no emission seen
+  }
+  CHECK(r.medium_stack[0].v[0] == ar::stack_entry(1u, 3u));
+  for (int k = 0; k < 4; ++k) CHECK(r.medium_stack[2].v[k] == 0u);
+  for (int k = 0; k < 4; ++k) CHECK(r.medium_stack[3].v[k] == 0u);
+  // The camera ray crossed nothing and was shaded: a real bounce, no crossing, an empty stack.
+  CHECK(r.bounces[1].v[0] == 1u);
+  CHECK(ar::crossings(r.flags[1]) == 0u);
+}
+
 }  // TEST_SUITE

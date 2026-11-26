@@ -15,3 +15,4 @@ Budget: gate +0.5 s at most (stop and ask above). k_shade_surface: state the row
 Depends on: 205 (spine queue: the lead's order 205, 219, 220, 208, 206, 209). Collisions: shade_surface.h and probe_m1.cu (queue), intersect_cpu.cpp and optix_traverse.cu with nothing open after 205; the later one rebases.
 Size: S (about 60 lines without tests); stop and report at 2x.
 Progress:
+- Files to change: scene_view.h (mask helper; task text names no file for it, shared kernel header, in 205's neighbourhood), intersect_cpu.cpp, optix_traverse.cu, shade_surface.h, probe_m1.cu, the five test files named, budget.toml, BACKLOG.md, 219.canary.patch.

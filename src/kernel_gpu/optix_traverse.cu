@@ -40,7 +40,8 @@ extern "C" __global__ void __raygen__intersect_closest() {
     // A miss keeps these: t = tmax and instance = none.
     uint32_t p0 = __float_as_uint(tmax), p1 = ~0u, p2 = ar::kNoInstance, p3 = 0u, p4 = 0u;
     optixTrace(ar_params.traversable, make_float3(o.x, o.y, o.z), make_float3(d.x, d.y, d.z), ar::kRayTmin, tmax,
-               0.0f, ar::ps_ray_type(kg, slot), OPTIX_RAY_FLAG_DISABLE_ANYHIT, 0, 1, 0, p0, p1, p2, p3, p4);
+               0.0f, ar::closest_hit_mask(ar::ps_ray_type(kg, slot), kg.session.features.media),
+               OPTIX_RAY_FLAG_DISABLE_ANYHIT, 0, 1, 0, p0, p1, p2, p3, p4);
     const ar::HitRecord h{__uint_as_float(p0), p1, p2, __uint_as_float(p3), __uint_as_float(p4)};
     ar::ps_hit_t(kg, slot) = h.t;
     ar::ps_hit_prim(kg, slot) = h.prim;
