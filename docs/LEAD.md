@@ -91,12 +91,11 @@ agent to `git switch task/NNN-*` first in its own worktree. No agent of this ses
   107 (106 superseded once 205 routes by stack depth, PROVISIONAL until 205 lands), 108 (B-38 baseline). Task-level rulings
   are in each task's Progress.
 - Ready to land once the owner answers (all reviewed, all green apart from the owner's number):
-  - 205 spine (task/205-false-interfaces-medium-stack, worktree agent-af6b96aa...): two Opus rounds, last PASS WITH FIXES;
-    the one fix (a test and canary hunk for the medium_rng reset at the pass-through, plus two M2 comments) was sent and
-    may or may not be committed: check `git log` on the branch; if missing, a small implementer adds it. Blocked on B-05
-    (shade_surface 7.73-7.75 s quiet vs 7.5 s; main 7.19-7.29). With the owner's yes, land it in a quiet window with
-    `-Evidence` from out/evidence/205/slab.png (Look at line). ABI hash moves (new report code 47). Then the spine: 219,
-    220, 208, 206, 209, and 230 (shade_surface.h).
+  - 205 spine (task/205-false-interfaces-medium-stack, head 5176484e, worktree agent-af6b96aa...): two Opus rounds, the
+    last PASS WITH FIXES and those fixes done (canary 15 hunks, per-hunk evidence in its report: each hunk alone red).
+    Blocked on B-05 (shade_surface 7.73-7.75 s quiet vs 7.5 s; main 7.19-7.29). With the owner's yes, land it in a quiet
+    window: `land.ps1 submit 205 PASS -Evidence` from out/evidence/205/slab.png (Look at line; CPU before/after max |z| 3.27,
+    no structure). ABI hash moves (new report code 47). Then the spine: 219, 220, 208, 206, 209, and 230 (shade_surface.h).
   - 190 (task/190-tree-vs-alias-d10-row, agent-a382cf20...): reviewed PASS WITH FIXES, fixes done. Blocked on the owner's
     2x row answer (1.795 measured) and the v1 margin fact; its history lines wait in that worktree's out/tmp/190/.
 - Parked: 201 (task/201-v11-final-oidn-check, draft PR #190, agent-a5ab6cd2...): stopped at its decision table (b_tx denoise
