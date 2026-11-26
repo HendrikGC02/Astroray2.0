@@ -207,16 +207,20 @@ AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_
   const U32x4 stack = ps_medium_stack(kg, slot);
   const uint32_t flags = ps_flags(kg, slot);
   const StackUpdate u = front ? stack_push(stack, flags, m + 1u, material_medium_priority(kg, mat)) : stack_remove(stack, flags, m + 1u);
-  // A refused push or remove returns the stack and flags unchanged, so they are stored either way; only
-  // a refused push ends the path (a refused remove is a path that started inside the medium).
+  // A refused push or remove returns the stack and flags unchanged, so they are stored either way.
   ps_medium_stack(kg, slot) = u.stack;
   ps_flags(kg, slot) = u.flags;
+  // A refused remove is a path that started inside the medium: it goes on with its stack as it was. A
+  // refused push would need a fifth entry, which the stack cannot hold (0006 D16), so it ends the path
+  // and is counted.
+  if (!u.ok && front) {
+    path_end(kg, slot, Term::STACK_OVERFLOW);
+    return false;
+  }
   // The pass-through starts a new event: its flights begin at that event's first medium block, and a
   // reused pool slot's counter is never continued (shade_volume.h).
   ps_medium_rng(kg, slot) = flight_rng_start(uint32_t(ps_event_index(kg, slot)) + 1u);
-  if (u.ok || !front) return true;
-  path_end(kg, slot, Term::STACK_OVERFLOW);
-  return false;
+  return true;
 }
 
 // The medium a NEE item's segment lies in, as 1 + its medium index, 0 for none: the item layout of
