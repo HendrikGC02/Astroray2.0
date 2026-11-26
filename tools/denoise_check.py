@@ -288,7 +288,7 @@ def main():
     print("scene            dev   raw relMSE  denoised  ratio   render s  denoise ms")
     bad = []
     for r in rows:
-        print(f"{r['scene']:<16} {r['device']:<5} {r['raw']:10.5f} {r['den']:9.5f} {r['den'] / r['raw']:6.3f} "
+        print(f"{r['scene']:<16} {r['device']:<5} {r['raw']:10.4g} {r['den']:9.4g} {r['den'] / r['raw']:6.3f} "
               f"{r['render_s']:9.2f} {r['denoise_ms']:10.0f}")
         if not r["den"] < r["raw"]:
             share, wl, al = r["worst"]
@@ -305,7 +305,7 @@ def main():
         for name in scenes:
             c, g = (np.load(os.path.join(WORK, f"{name}_{d}.npz")) for d in ("cpu", "cuda"))
             raw_d, den_d = rel_mse_img(c["noisy"], g["noisy"]), rel_mse_img(c["den"], g["den"])
-            print(f"cpu vs cuda {name}: raw {raw_d:.5f} denoised {den_d:.5f}")
+            print(f"cpu vs cuda {name}: raw {raw_d:.3e} denoised {den_d:.3e}")
             if den_d > raw_d:
                 word = "FAIL" if SCENES[name][2] else "note"
                 print(f"{word} denoise_check: {name} denoised cpu and cuda differ more than the raw renders")
@@ -322,8 +322,8 @@ def main():
                 "n": 1, "spread": 0.0, "date": now}
         lines = []
         for r in rows:
-            lines += [{**base, "scene": f"{r['scene']}_{r['device']}", "metric": "oidn_relmse_raw", "value": round(r["raw"], 6), "unit": "relMSE"},
-                      {**base, "scene": f"{r['scene']}_{r['device']}", "metric": "oidn_relmse_denoised", "value": round(r["den"], 6), "unit": "relMSE"}]
+            lines += [{**base, "scene": f"{r['scene']}_{r['device']}", "metric": "oidn_relmse_raw", "value": float(f"{r['raw']:.4g}"), "unit": "relMSE"},
+                      {**base, "scene": f"{r['scene']}_{r['device']}", "metric": "oidn_relmse_denoised", "value": float(f"{r['den']:.4g}"), "unit": "relMSE"}]
         for dev, (c1, c2) in cold.items():
             lines.append({**base, "scene": f"cold_{dev}", "metric": "oidn_cold_init_ms", "value": round(c1, 1), "unit": "ms", "n": 2,
                           "spread": round(abs(c1 - c2), 1)})
