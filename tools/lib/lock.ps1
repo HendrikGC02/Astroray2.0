@@ -168,10 +168,12 @@ $script:ArHolderScript = {
     if (-not $s.Try) { Start-Sleep -Milliseconds 25; continue }
     # A short job blocks in the wait, so it is first in line at a release; a long tool polls and so never
     # queues ahead of a short job that registered after it.
-    $slice = if ($s.Poll) { 0 } else { 100 }
+    # The blocking wait has no timeout slices (a slice would put the waiter at the back of the queue again);
+    # Cancel wakes it through its event.
     try {
-      if ($m.WaitOne($slice)) { $taken = $true; $s.State = 'held' }
-      elseif (-not $s.Short) { Start-Sleep -Milliseconds 25 }
+      if ($s.Poll) {
+        if ($m.WaitOne(0)) { $taken = $true; $s.State = 'held' } else { Start-Sleep -Milliseconds 25 }
+      } elseif ([System.Threading.WaitHandle]::WaitAny(@($m, $s.CancelEv)) -eq 0) { $taken = $true; $s.State = 'held' }
     } catch [System.Threading.AbandonedMutexException] { $taken = $true; $s.State = 'abandoned' }
   }
   if (-not $taken) { $m.Dispose(); $s.State = 'cancelled'; return }
@@ -225,7 +227,7 @@ function Enter-ArMachineLock {
   $ownerPath = Join-Path (Get-ArLockDir) 'owner.json'
   $sw = [Diagnostics.Stopwatch]::StartNew()
   $s = [hashtable]::Synchronized(@{
-      Name = $name; Try = $false; Cancel = $false; Release = $false; Short = [bool]$Short; State = 'waiting'
+      Name = $name; Try = $false; Cancel = $false; CancelEv = (New-Object System.Threading.ManualResetEvent($false)); Release = $false; Short = [bool]$Short; State = 'waiting'
       Expired = $false; Step = ''; CeilingS = $ceil; Job = $Job; Pid = $PID; OwnerPath = $ownerPath
       StartTicks = (Get-Process -Id $PID).StartTime.Ticks; Acquired = (New-Object System.Threading.ManualResetEvent($false)) })
   $rs = [runspacefactory]::CreateRunspace()
@@ -266,7 +268,7 @@ function Enter-ArMachineLock {
       }
     }
   } catch {
-    $s.Cancel = $true
+    $s.Cancel = $true; $null = $s.CancelEv.Set()
     $null = $handle.AsyncWaitHandle.WaitOne(2000)
     $ps.Dispose(); $rs.Dispose()
     Unregister-ArShortWait $reg
