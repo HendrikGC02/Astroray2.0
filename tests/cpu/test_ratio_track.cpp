@@ -67,6 +67,35 @@ AR_RT_CASE("ratio_track/mean equals beer lambert") {
   CHECK(collisions[1] > 2.0 * collisions[0]);
 }
 
+AR_RT_CASE("ratio_track/roulette keeps beer lambert") {
+  // A long segment (d = 8 m) under majorant 8: about 64 tentative collisions, so T_ray falls below
+  // 0.05 avg(r_l + r_u) at every lane and pbrt's roulette runs (q = 0.75, survivors / (1 - q)). Over
+  // 2^16 segments each lane's mean stays within 3 standard errors of exp(-sigma_t d), and the
+  // roulette's blocks (blocks drawn beyond the tentative collisions) are a large share.
+  const Spec zero = ar::spec_fill(0);
+  const Spec maj = ar::spec_fill(Real(8));
+  constexpr uint32_t kN = 1u << 16;
+  double sum[4] = {0, 0, 0, 0}, sum2[4] = {0, 0, 0, 0}, roulette_blocks = 0.0;
+  for (uint32_t i = 0; i < kN; ++i) {
+    const uint32_t start = ar::shadow_rng_start(2u);
+    uint32_t counter = start;
+    const ar::RatioTrack r =
+        ar::ratio_track_segment(kSigmaT, zero, maj, Real(8), i & 3u, stream(i >> 6, i & 63u, 0x0de7u), &counter, ar::kShadowCollisionLimit);
+    roulette_blocks += double(counter - start) - double(r.collisions);
+    for (int j = 0; j < 4; ++j) sum[j] += double(r.T.v[j]), sum2[j] += double(r.T.v[j]) * double(r.T.v[j]);
+  }
+  std::printf("ratio_track roulette: %.0f roulette blocks over %u segments\n", roulette_blocks, kN);
+  CHECK(roulette_blocks > 0.5 * kN);
+  for (int j = 0; j < 4; ++j) {
+    const double mean = sum[j] / kN, se = std::sqrt((sum2[j] / kN - mean * mean) / (kN - 1));
+    const double truth = std::exp(-8.0 * double(kSigmaT.v[j]));
+    std::printf("ratio_track roulette lane %d: mean %.4e truth %.4e se %.2e z %+.2f\n", j, mean, truth, se, (mean - truth) / se);
+    INFO("lane " << j);
+    CHECK(se > 0.0);
+    CHECK(std::fabs(mean - truth) < 3.0 * se);
+  }
+}
+
 AR_RT_CASE("ratio_track/zero sigma is one") {
   // No absorption or scattering and a zero majorant: no collision, no draw, T_ray and both factors
   // exactly 1 (pbrt's zero-valued majorant branch), over a finite and over an unbounded segment.

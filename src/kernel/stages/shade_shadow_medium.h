@@ -21,8 +21,9 @@
 // medium. A zero estimate blocks the item; D8's 131,072 tentative collisions block it too and count
 // VOLUME_LIMIT once in the termination histogram at the target's pixel. A blocked item ends as an
 // occluded one (SHADOW_TERMINATED) with contribution 0, so shade_shadow, which runs over the whole
-// segment, adds nothing for it. A volume entry that fails, or a non-finite coefficient or product,
-// marks the sample invalid and blocks the item.
+// segment, adds nothing for it. A volume entry that fails, or a non-finite coefficient, segment length
+// or product, marks the sample invalid and blocks the item. Only a delta light's item is in a medium
+// (shade_surface.h nee_item_medium, lead ruling 106), so no blocked item carries ITEM_WORLD_LE.
 // Ref: docs/decisions/0006-volumes-and-astrophysics.md D8, D19; 0002 D8, D9, D10; 0003 d20, d23;
 // 0004 D4, D5; pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::SampleLd (Apache-2.0) in
 // C:\Astroray2.0\third_party\_cache\refs\pbrt-v4-092b23a47ad4.
@@ -56,8 +57,9 @@ AR_FN void shadow_medium_block(const KernelGlobals& kg, uint32_t slot) {
   sh_next_stage(kg, slot) = static_cast<uint8_t>(Stage::SHADOW_TERMINATED);
 }
 
-AR_FN void stage_shade_shadow_medium(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
-  const uint32_t slot = load_ro(kg.shadow_queue + step.start + item);
+// The pre-pass of the item in shadow slot slot, with limit stream blocks for its segment (the stage passes D8's;
+// a test passes a small one to reach the limit).
+AR_FN void shadow_medium_item(const KernelGlobals& kg, uint32_t slot, uint32_t limit) {
   const uint32_t m = sh_medium_stack(kg, slot).v[0];
   if (m == 0u) return;
   const SceneData& s = scene_of(kg);
@@ -82,11 +84,17 @@ AR_FN void stage_shade_shadow_medium(const KernelGlobals& kg, uint32_t item, con
   }
   // Distances in the coefficients' unit (metres): ray_d need not be unit length.
   const Real t_max = sh_tmax(kg, slot) * length(sh_ray_d(kg, slot));
+  // A NaN or infinite length is a corrupt item (an unbounded segment never lies inside a hull): fail loudly.
+  if (!(t_max >= Real(0) && t_max <= Real(0x1.fffffep+127f))) {
+    sample_mark_invalid(kg, target);
+    shadow_medium_block(kg, slot);
+    return;
+  }
   const SamplerKey key = camera_key(kg.active_pixels, target, kg.session.samples_done, kg.session.samples_per_pass);
   const MediumStream st{kg.session.sampler_mode, key.id, key.index, kg.session.seed, STREAM_SHADOW_MEDIUM};
   uint32_t counter = sh_medium_rng(kg, slot);
   const RatioTrack r = ratio_track_segment(sigma_a, sigma_s, sigma_a + sigma_s, t_max, item_hero_lane(sh_item_flags(kg, slot)), st,
-                                           &counter, kShadowCollisionLimit);
+                                           &counter, limit);
   sh_medium_rng(kg, slot) = counter;
   if (r.limit) {
     const FilmData& f = *kg.film;
@@ -108,6 +116,10 @@ AR_FN void stage_shade_shadow_medium(const KernelGlobals& kg, uint32_t item, con
   }
   sh_contribution(kg, slot) = c;
   sh_medium_stack(kg, slot) = shadow_medium_field(0u);
+}
+
+AR_FN void stage_shade_shadow_medium(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
+  shadow_medium_item(kg, load_ro(kg.shadow_queue + step.start + item), kShadowCollisionLimit);
 }
 
 AR_NS_END

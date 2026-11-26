@@ -509,7 +509,7 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
     const bool world_le = ls.deferred_le && !triangle;
     if (kg.session.features.media)
-      nee_item_media(kg, sh, nee_item_medium(kg, inst, (flags & FRONT_FACE) != 0u, Ng, seg.dir), e, flags,
+      nee_item_media(kg, sh, nee_item_medium(kg, inst, (flags & FRONT_FACE) != 0u, Ng, seg.dir, ls.delta), e, flags,
                      ps_r_u(kg, slot), sl.pmf * ls.pdf, ev.pdf, ls.delta, ctx.lambda_t, world_le);
     else if (kg.shadow->item_flags != nullptr)
       sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);

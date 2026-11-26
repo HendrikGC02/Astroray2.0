@@ -134,7 +134,14 @@ inline constexpr float kShadowUnbounded = 0x1.fffffep+127f;
 // hit (Ng faces wo), away from it on a front face, toward it on a back face (pbrt-v4
 // Interaction::GetMedium(w): the medium on w's side). A shadow ray stops at every hull (0002 D11
 // until ah_record), so such an item is delivered only when the whole segment stays inside.
-AR_FN uint32_t nee_item_medium(const KernelGlobals& kg, uint32_t inst, bool front_face, Real3 ng, Real3 wi) {
+// Only a delta light's item gets the medium (lead ruling 106): NEE is its only strategy, so
+// attenuating it is correct. A non-delta light shares its MIS pair with BSDF rays, and a BSDF ray
+// from the hull into the interior that hits an emitter there is shaded without transmittance (route_hit
+// routes a segment to shade_volume only when it ends on the medium's own back face), so attenuating
+// only the NEE half would mix w_l f L T with w_b f L. Its item stays in no medium, both halves
+// unattenuated, until BSDF segments to interior hits are tracked.
+AR_FN uint32_t nee_item_medium(const KernelGlobals& kg, uint32_t inst, bool front_face, Real3 ng, Real3 wi, bool delta_light) {
+  if (!delta_light) return 0u;
   const uint32_t m = instance_medium(kg, inst);
   if (m == kNoMedium) return 0u;
   const Real c = dot(wi, ng);
@@ -452,7 +459,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     const bool world_le = ls.deferred_le && !triangle;
     // One branch on the launch-uniform media feature; without it nothing more is stored.
     if (kg.session.features.media)
-      nee_item_media(kg, sh, nee_item_medium(kg, inst, (flags & FRONT_FACE) != 0u, Ng, seg.dir), e, flags,
+      nee_item_media(kg, sh, nee_item_medium(kg, inst, (flags & FRONT_FACE) != 0u, Ng, seg.dir, ls.delta), e, flags,
                      ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta, ctx.lambda_t, world_le);
     else if (kg.shadow->item_flags != nullptr)
       sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);

@@ -176,7 +176,7 @@ struct EmitRig {
   std::vector<float> pmf{1.0f};
   ar::LightSamplerView sampler{};
 
-  EmitRig(ar::Real3 lamp, bool media, bool medium) {
+  EmitRig(const ar::LightRecord& lamp, bool media, bool medium) {
     scene.meshes = std::make_shared<MeshStore>();
     scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
     commit([&](Edit& e) {
@@ -275,7 +275,7 @@ struct EmitRig {
     scene_copy.instances = instances.data();
     scene_copy.medium_count = medium ? 1u : 0u;
     kg.scene = &scene_copy;
-    lamps = {ar::light_make(ar::LightType::POINT, lamp, Real(0), Real(10), ar::make_const_ref(ar::SpectrumSemantic::ILLUMINANT, Real(1)))};
+    lamps = {lamp};
     sampler = ar::LightSamplerView{bins.data(), bin_light.data(), pmf.data(), 1u, 1u};
     kg.lights = lamps.data(), kg.light_sampler = &sampler;
   }
@@ -292,9 +292,19 @@ struct EmitRig {
     REQUIRE(scene.generations().failed() == 0);
   }
   void run() { cpu_stage_shade_surface(kg, ar::StepEntry{0, n, 0}, 0, n); }
+  // The hit context and record of pool slot s, as the stage builds them before it runs.
+  void vertex(uint32_t s, ar::ShadeContext* c, ar::OpenPBRParams* rec) {
+    REQUIRE(ar::shade_context_build(kg, s, c));
+    const ar::SceneData& sd = *kg.scene;
+    const ar::MaterialHeader& h = sd.material_headers[sd.material_header_count];  // the default material
+    ar::resolve_constant_record(sd.material_constants[h.const_offset], *c, kg.tables->observer, sd.material_spectra, rec);
+  }
 };
 
 bool bits_equal(const Spec& a, const Spec& b) { return std::memcmp(&a, &b, sizeof(Spec)) == 0; }
+
+ar::SpectrumRef white() { return ar::make_const_ref(ar::SpectrumSemantic::ILLUMINANT, Real(1)); }
+ar::LightRecord point_lamp(ar::Real3 p) { return ar::light_make(ar::LightType::POINT, p, Real(0), Real(10), white()); }
 
 // ---- the scheduler's launch of the media pre-pass ----
 
@@ -462,7 +472,7 @@ TEST_CASE("shade_shadow/emit defines medium fields") {
     bool media, medium;
   };
   for (const Run run : {Run{2, true, true}, Run{-2, true, true}, Run{-2, true, false}, Run{-2, false, true}}) {
-    EmitRig rig(ar::Real3{Real(0.3), Real(0.2), run.lamp_z}, run.media, run.medium);
+    EmitRig rig(point_lamp(ar::Real3{Real(0.3), Real(0.2), run.lamp_z}), run.media, run.medium);
     rig.run();
     const bool below = run.lamp_z < 0;
     uint32_t items = 0;
@@ -495,6 +505,74 @@ TEST_CASE("shade_shadow/emit defines medium fields") {
   }
 }
 
+TEST_CASE("shade_shadow/area light item stays out of the medium") {
+  // Lead ruling 106: only a delta light's item is put in a medium. A rectangle lamp below the quad, the
+  // instance bearing a medium: the back-face hits emit items whose direction enters the interior, yet
+  // their medium field is empty. The other fields are defined as SampleLd forms them: r_l0 = r_p p_l
+  // (pmf 1) and r_u0 = r_p p_bsdf for the light sample the stage drew, recomputed here as in
+  // nee/rectangle lamp carries the balance weight, and avg(r_l0 + r_u0) times the emit's weight
+  // mis_nee_scale is 1.
+  const ar::LightRecord rect = ar::light_make_area(ar::LightType::AREA_RECT, ar::Real3{Real(0.2), 0, Real(-1.5)},
+                                                   ar::Real3{0, 1, 0}, ar::Real3{1, 0, 0}, Real(0.8), Real(1.0), Real(20), white());
+  EmitRig rig(rect, true, true);
+  std::vector<ar::ShadeContext> c(EmitRig::n);
+  std::vector<ar::OpenPBRParams> rec(EmitRig::n);
+  for (uint32_t s = 4; s < EmitRig::n; ++s) rig.vertex(s, &c[s], &rec[s]);
+  const std::vector<Spec> r_p = rig.r_u;
+  rig.run();
+  const auto near = [](double a, double b) { return std::fabs(a - b) <= 1e-5 * std::fabs(b); };
+  uint32_t items = 0;
+  for (uint32_t s = 4; s < EmitRig::n; ++s) {
+    const uint32_t it = rig.sh_queue[s];
+    INFO("slot " << s);
+    REQUIRE(rig.sh_next[it] == uint8_t(ar::Stage::INTERSECT_SHADOW));
+    ++items;
+    for (int k = 0; k < 4; ++k) CHECK(rig.sh_stack[it].v[k] == 0u);
+    const uint32_t e = 1u + s % 4u;  // the event index the path arrived with
+    const ar::Real2 u{ar::camera_path_draw(rig.kg, rig.sample_id[s], ar::event_dim(e, ar::EV_LIGHT_U)),
+                      ar::camera_path_draw(rig.kg, rig.sample_id[s], ar::event_dim(e, ar::EV_LIGHT_V))};
+    const ar::LightSampleContext lc = ar::light_context_point(ar::offset_ray_origin(c[s].P, c[s].Ng, c[s].wo), c[s].Ng, c[s].N);
+    const ar::LightLiSample ls = ar::light_sample_li(rect, lc, u, c[s].lambda_t, rig.kg.tables->observer);
+    REQUIRE(ls.pdf > 0.0f);
+    REQUIRE(!ls.delta);
+    const ar::LobeEval ev = ar::stack_eval(*rig.kg.e_diel, *rig.kg.e_spec, rec[s], ar::frame_from_normal(c[s].N), c[s].wo, ls.wi,
+                                           ar::TransportMode::Radiance);
+    REQUIRE(ev.pdf > 0.0f);
+    for (int k = 0; k < ar::kLanes; ++k) {
+      CHECK(near(double(rig.sh_r_l[it].v[k]), double(r_p[s].v[k]) * double(ls.pdf)));
+      CHECK(near(double(rig.sh_r_u[it].v[k]), double(r_p[s].v[k]) * double(ev.pdf)));
+    }
+    const double w = double(ar::mis_nee_scale(r_p[s], ls.pdf, ev.pdf, false));
+    CHECK(near(double(ar::avg(rig.sh_r_l[it] + rig.sh_r_u[it])) * w, 1.0));
+  }
+  CHECK(items == 4u);
+}
+
+TEST_CASE("shade_shadow/collision limit counts volume limit") {
+  // The pre-pass's per-item function with a limit of 0 blocks: item 1, in the chromatic medium, stops at
+  // the limit before any draw, ends blocked (contribution 0, SHADOW_TERMINATED, medium field cleared) and
+  // counts VOLUME_LIMIT exactly once in the termination histogram, at its target's pixel; item 0 is
+  // untouched.
+  ItemRig r(4, 1);
+  r.chromatic_medium(1.5f);
+  const uint32_t pixels = uint32_t(r.active.size());
+  std::vector<uint32_t> counts(size_t(ar::kTermCount) * pixels, 0u);
+  r.film.count = counts.data(), r.film.plane_stride = pixels, r.film.term_hist = 0;
+  ar::shadow_medium_item(r.kg, 1u, 0u);
+  const uint32_t pixel = ar::film_slot_pixel(r.kg, r.target[1]);
+  uint32_t wrong = 0;
+  for (uint32_t t = 0; t < ar::kTermCount; ++t)
+    for (uint32_t p = 0; p < pixels; ++p)
+      wrong += counts[size_t(t) * pixels + p] != (t == uint32_t(ar::Term::VOLUME_LIMIT) && p == pixel ? 1u : 0u);
+  CHECK(wrong == 0u);
+  CHECK(counts[size_t(ar::Term::VOLUME_LIMIT) * pixels + pixel] == 1u);
+  CHECK(r.next[1] == uint8_t(ar::Stage::SHADOW_TERMINATED));
+  CHECK(bits_equal(r.contrib[1], ar::spec_fill(0)));
+  CHECK(r.stack[1].v[0] == 0u);
+  CHECK(r.rng[1] == ar::shadow_rng_start(3u));  // no block drawn
+  CHECK(r.next[0] == uint8_t(ar::Stage::SHADE_SHADOW));
+  CHECK(bits_equal(r.contrib[0], ar::spec_fill(1)));
+}
 }  // TEST_SUITE
 
 TEST_SUITE("gate") {
