@@ -81,6 +81,9 @@ function Register-ArShortWait {
   try {
     New-Item -ItemType Directory -Force (Get-ArShortDir) -ErrorAction Stop | Out-Null
     $f = Join-Path (Get-ArShortDir) "short.$PID.wait"
+    # A stale file of an earlier process with this pid is deleted first, so the creation time that the
+    # liveness rule reads is this registration's.
+    Remove-Item -Force -LiteralPath $f -ErrorAction SilentlyContinue
     [IO.File]::WriteAllText($f, 'waiting')
     return $f
   } catch { Write-Host "WARN lock: short-job registration not written: $($_.Exception.Message)"; return $null }
@@ -219,16 +222,39 @@ $script:ArHolderScript = {
     try {
       if ($s.OwnerPath -and ([int](Get-Content -Raw $s.OwnerPath | ConvertFrom-Json).pid) -eq $s.Pid) { Remove-Item -Force $s.OwnerPath }
     } catch { }
+    # A host that goes on must not go on unlocked: the lock marker is cleared before the release, so nothing
+    # nests under a lock that is gone (Set-ArLockStep and Exit-ArMachineLock then raise the failure).
+    if (-not $s.CanExit) { [Environment]::SetEnvironmentVariable('ASTRORAY_LOCK_PID', $null) }
     try { $m.ReleaseMutex() } catch { }
     $m.Dispose()
-    # Ending the process is for a process started for the tool; an interactive shell is never ended from
-    # here (Exit-ArMachineLock raises the failure there instead).
+    # Ending the process is for a process started to run a script or command and end (Test-ArLockCanEnd); an
+    # interactive shell is never ended from here.
     if ($s.CanExit) { [Environment]::Exit(1) }
-    Say 'lock: not ending this interactive host; the failure is raised when the tool leaves the lock'
+    Say 'lock: not ending this interactive host; the failure is raised at its next step'
     return
   }
   try { $m.ReleaseMutex() } catch { }
   $m.Dispose()
+}
+
+# Whether this process was started to run a script or command and then end: its first non-option argument
+# (pwsh's positional file), or -File / -Command / -EncodedCommand in any prefix pwsh accepts, and no -NoExit.
+# Only such a process is ended by a watchdog; a bare `pwsh`, `-NoExit ...` and a Start-Job server (`-s`) are
+# hosts someone may be using. Arguments are those after the executable. Ref: pwsh's about_pwsh (parameters
+# match by unique prefix, `-` or `/`; -ExecutionPolicy, -WorkingDirectory and the format/style options take a value).
+function Test-ArLockCanEnd([string[]]$Argv) {
+  $valued = @('executionpolicy', 'workingdirectory', 'inputformat', 'outputformat', 'windowstyle', 'version', 'settingsfile', 'configurationname', 'custompipename')
+  $noExit = $false; $runs = $false
+  for ($i = 0; $i -lt $Argv.Count; $i++) {
+    $a = $Argv[$i]
+    if ($a -notmatch '^[-/]') { $runs = $true; break }
+    $t = $a.Substring(1).ToLowerInvariant()
+    if (-not $t) { continue }
+    if ('file'.StartsWith($t) -or 'command'.StartsWith($t) -or 'encodedcommand'.StartsWith($t)) { $runs = $true; break }
+    if ($t.Length -ge 3 -and 'noexit'.StartsWith($t)) { $noExit = $true; continue }
+    if ($t -in 'ep', 'wd' -or ($t.Length -ge 2 -and @($valued | Where-Object { $_.StartsWith($t) }).Count)) { $i++ }
+  }
+  return ($runs -and -not $noExit)
 }
 
 function Enter-ArMachineLock {
@@ -250,7 +276,7 @@ function Enter-ArMachineLock {
   $s = [hashtable]::Synchronized(@{
       Name = $name; Try = $false; Cancel = $false; CancelEv = (New-Object System.Threading.ManualResetEvent($false)); Release = $false; Short = [bool]$Short; Poll = (-not $Short); State = 'waiting'
       DescendantsFn = $script:ArDescendantsFn.ToString()
-      CanExit = [bool]@([Environment]::GetCommandLineArgs() | Where-Object { $_ -in '-File', '-f', '-Command', '-c', '-EncodedCommand', '-ec' }).Count
+      CanExit = (Test-ArLockCanEnd @([Environment]::GetCommandLineArgs() | Select-Object -Skip 1))
       Expired = $false; Step = ''; CeilingS = $ceil; Job = $Job; Pid = $PID; OwnerPath = $ownerPath
       StartTicks = (Get-Process -Id $PID).StartTime.Ticks; Acquired = (New-Object System.Threading.ManualResetEvent($false)) })
   $rs = [runspacefactory]::CreateRunspace()
@@ -320,7 +346,9 @@ function Enter-ArMachineLock {
 # Names the running step: the FAIL line of a watchdog stop and a waiter's message carry it. A no-op when this
 # process holds no machine lock.
 function Set-ArLockStep([string]$Step) {
-  if (-not $script:ArHold -or $script:ArHold.Sync.Expired) { return }
+  if (-not $script:ArHold) { return }
+  # A tool whose hold ceiling expired in a host that was not ended stops at its next step.
+  if ($script:ArHold.Sync.Expired) { throw "FAIL lock: the hold ceiling expired; stopping before step '$Step'" }
   $script:ArHold.Sync.Step = $Step
   if ($script:ArOwnerPath) {
     $null = Write-ArLockOwner $script:ArOwnerPath @{ ceiling_s = $script:ArHold.Sync.CeilingS; job = $script:ArHold.Job; step = $Step } $script:ArHeldAt

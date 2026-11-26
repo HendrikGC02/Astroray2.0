@@ -78,6 +78,9 @@ try {
 
   # Only the registration decides here: the mutex is free, a long tool is polling for it and a live short job
   # is registered (the file of this process, with nobody blocked in a wait that would win anyway).
+  # g4 must have reached its lock call and polled for a while, or "not acquired" proves nothing.
+  Wait-Until { Test-Path (Join-Path $tmp 'pre.g4') } 'g4 starts'
+  Start-Sleep -Milliseconds 300
   Check 'a long tool does not take the free mutex while a short job is registered' (-not (Test-Path (Join-Path $tmp 'acq.g4'))) (Read-Out 'g4')
   Remove-Item -Force $regY
   Wait-Until { Test-Path (Join-Path $tmp 'acq.g4') } 'g4 takes the lock once the registration is gone'

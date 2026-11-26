@@ -82,6 +82,25 @@ Set-Content "`$dir/ready" ready
 Start-Sleep 120
 "@
 
+# A holder in a host that a watchdog must not end (started with -NoExit): at its ceiling the watchdog stops
+# the children and releases, the process lives on, its next step and its Exit raise the failure, and nothing
+# nests under the lock any more (the lock marker is cleared).
+$idle = Join-Path $tmp 'idle.ps1'
+Set-Content -Path $idle -Value @"
+param([string]`$dir)
+. '$lockLib'
+`$c = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep 120' -PassThru
+Set-Content "`$dir/child.pid" `$c.Id
+`$null = Enter-ArMachineLock -Job test
+Set-Content "`$dir/ready" ready
+while (`$env:ASTRORAY_LOCK_PID) { Start-Sleep -Milliseconds 20 }
+`$r = @()
+try { Set-ArLockStep 'after'; `$r += 'step-no-throw' } catch { `$r += 'step-threw' }
+`$r += "marker=[`$env:ASTRORAY_LOCK_PID]"
+try { Exit-ArMachineLock; `$r += 'exit-no-throw' } catch { `$r += 'exit-threw' }
+`$r += 'alive'
+Set-Content "`$dir/result" `$r
+"@
 $ends = Join-Path $tmp 'ends.ps1'
 Set-Content -Path $ends -Value @"
 param([string]`$dir, [string]`$hold)
@@ -114,11 +133,23 @@ try {
   $d4 = Join-Path $tmp 'c4'; New-Item -ItemType Directory -Force $d4 | Out-Null
   Use-Lock 'd'
   $k = Start-Pwsh 'killed' @($ends, $d4, 'hold')
-  foreach ($d in $d1, $d2, $d3, $d4) { Wait-File (Join-Path $d 'ready') }
+  # 5. A holder that is not exit-capable (-NoExit; its stdin is an empty file so the host ends after the script).
+  $d5 = Join-Path $tmp 'c5'; New-Item -ItemType Directory -Force $d5 | Out-Null
+  $empty = Join-Path $tmp 'empty.txt'; Set-Content $empty ''
+  Use-Lock 'e'; $env:ASTRORAY_LOCK_CEILING_S = '1'
+  $i5 = Start-Process pwsh -ArgumentList '-NoProfile', '-NoExit', '-File', $idle, $d5 -PassThru -NoNewWindow -RedirectStandardInput $empty `
+    -RedirectStandardOutput (Join-Path $tmp 'idle.out') -RedirectStandardError (Join-Path $tmp 'idle.err')
+  $null = $i5.Handle; $procs += $i5
+  $env:ASTRORAY_LOCK_CEILING_S = $null
+  foreach ($d in $d1, $d2, $d3, $d4, $d5) { Wait-File (Join-Path $d 'ready') }
   # A waiter blocked on the mutex before the ceiling fires: it must get it from the watchdog's own release,
   # not from an abandonment.
   $env:FAST_GRACE = '30'
   Use-Lock 'a'; $w1 = Start-Pwsh 'wait1' @($wait)
+  Use-Lock 'e'; $w5 = Start-Pwsh 'wait5' @($wait)
+  Use-Lock 'a'
+  # wait5's holder stays alive after its ceiling, so a mutex the watchdog did not release would keep wait5 out.
+  Wait-Until { (Read-Out 'wait1') -match 'waiting for' } 'wait1 waits'
   $child = [int](Get-Content (Join-Path $d1 'child.pid')); $grand = [int](Get-Content (Join-Path $d1 'grand.pid'))
   $env:FAST_GRACE = '0.5'
   Use-Lock 'b'; $w2 = Start-Pwsh 'wait2' @($wait)
@@ -145,6 +176,17 @@ try {
   $o4 = Read-Out 'wait4'
   Check 'the waiter gets the mutex when its holder was killed, with the abandoned warning' (($o4 -contains 'ACQUIRED') -and (($o4 -join ' ') -match 'WARN lock: abandoned by')) $o4
   Check 'the holder that ended without Exit-ArMachineLock exited by itself' ($e.HasExited -and $e.ExitCode -eq 0)
+  # 5. The non-exit branch.
+  Wait-File (Join-Path $d5 'result')
+  $r5 = @(Get-Content (Join-Path $d5 'result'))
+  $c5 = [int](Get-Content (Join-Path $d5 'child.pid'))
+  Check 'a host that is not ended: its next step raises the failure' ($r5 -contains 'step-threw') (@($r5) + (Read-Out 'idle'))
+  Check 'a host that is not ended: the lock marker is cleared' ($r5 -contains 'marker=[]') $r5
+  Check 'a host that is not ended: its Exit raises the failure' ($r5 -contains 'exit-threw') $r5
+  Check 'a host that is not ended stays alive past the ceiling' ($r5 -contains 'alive') $r5
+  Check "a host that is not ended: its child is stopped" (-not (Test-Alive $c5)) (Read-Out 'idle')
+  $null = $w5.WaitForExit(15000)
+  Check 'a host that is not ended: the mutex is free, released by the watchdog' ((Read-Out 'wait5') -contains 'ACQUIRED' -and -not ((Read-Out 'wait5') -match 'abandoned')) (Read-Out 'wait5')
 
   # 5. Only the holder's descendants, created no earlier than the holder, are stopped (rows are synthetic: a
   # stranger's child under a reused parent pid is older than the holder).
@@ -159,6 +201,19 @@ try {
   . $lockLib
   $kill = @(& $script:ArDescendantsFn $rows 10 $t0)
   Check 'the descendants are the child and grandchild, deepest first' (($kill -join ',') -eq '12,11') @("got $($kill -join ',')")
+
+  # The exit rule: a process started to run a script or command and end, and not -NoExit.
+  $cases = @(
+    @{ a = @('tools/check.ps1', 'gate'); want = $true }, @{ a = @('-File', 'x.ps1'); want = $true }, @{ a = @('-f', 'x.ps1'); want = $true },
+    @{ a = @('-fi', 'x.ps1'); want = $true }, @{ a = @('-c', 'x'); want = $true }, @{ a = @('-com', 'x'); want = $true },
+    @{ a = @('-ec', 'abc'); want = $true }, @{ a = @('-e', 'abc'); want = $true }, @{ a = @('-enc', 'abc'); want = $true },
+    @{ a = @('-NoLogo', '-NoProfile', '-File', 'x.ps1'); want = $true }, @{ a = @('-ExecutionPolicy', 'Bypass', 'x.ps1'); want = $true },
+    @{ a = @('-NoExit', '-Command', 'x'); want = $false }, @{ a = @('-noe', '-f', 'x.ps1'); want = $false },
+    @{ a = @(); want = $false }, @{ a = @('-NoLogo'); want = $false }, @{ a = @('-s', '-NoLogo', '-NoProfile'); want = $false },
+    @{ a = @('-ep', 'Bypass', '-NoProfile'); want = $false })
+  foreach ($c in $cases) {
+    Check "Test-ArLockCanEnd '$($c.a -join ' ')' is $($c.want)" ((Test-ArLockCanEnd $c.a) -eq $c.want)
+  }
 
   # 6. A wrapper over Enter-ArMachineLock, as land.ps1's, forwards the job, ceiling and short flag.
   $line = [regex]::Match((Get-Content -Raw (Join-Path $root 'tools/land.ps1')), '(?m)^function Enter-ArMachineLock \{.*\}\s*$').Value
