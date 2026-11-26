@@ -27,9 +27,12 @@ namespace {
 // ---- the stage in isolation ----
 
 // Four medium-bearing instances of a one-triangle mesh: 0 plain, 1 extension material, 2 lamp, and
-// item 3 is a light path on instance 0. The medium is homogeneous with CONSTANT coefficients (the
+// item 3 is a light path on instance 0. Every path's stack holds that medium, the one the stage tracks.
+// The medium is homogeneous with CONSTANT coefficients (the
 // program {reserved, VOLUME_COEFFS, END}); vacuum by default. Every camera item's segment runs from
 // the origin along +z for hit_t = 1.
+constexpr uint32_t kDepth1 = 1u << ar::MEDIUM_DEPTH_SHIFT;
+
 struct StageRig {
   std::vector<int32_t> tri_material{0};
   std::vector<ar::DeviceMeshView> meshes{1};
@@ -45,7 +48,10 @@ struct StageRig {
   ar::KernelGlobals kg{};
   ar::PathStateSoA path{};
   static constexpr uint32_t kN = 4;
-  std::vector<uint32_t> queue{9, 9, 9, 9, 0, 1, 2, 3}, hit_prim{0, 0, 0, 0}, hit_inst{0, 1, 2, 0}, flags{0, 0, 0, ar::PATH_KIND};
+  std::vector<uint32_t> queue{9, 9, 9, 9, 0, 1, 2, 3}, hit_prim{0, 0, 0, 0}, hit_inst{0, 1, 2, 0};
+  // Every path is inside medium 0: one stack entry (id 1 = 1 + the medium index, priority 0), depth 1.
+  std::vector<uint32_t> flags{kDepth1, kDepth1, kDepth1, ar::PATH_KIND | kDepth1};
+  std::vector<ar::U32x4> medium_stack = std::vector<ar::U32x4>(kN, ar::U32x4{{1u << 8, 0, 0, 0}});
   std::vector<uint32_t> sample_id{0, 1, 2, 3}, active{0, 1, 2, 3}, prev_ng{0, 0, 0, 0}, prev_ns{0, 0, 0, 0};
   std::vector<uint32_t> medium_rng{0, 0, 0, 0}, slot_flags{0, 0, 0, 0};
   std::vector<float> slot_L = std::vector<float>(4 * kN, 0.0f);
@@ -82,7 +88,7 @@ struct StageRig {
     path.lambda_t = lambda_t.data(), path.beta = beta.data(), path.r_u = r_u.data(), path.r_l = r_l.data();
     path.bounces = bounces.data(), path.event_index = event_index.data(), path.term = term.data();
     path.ray_type = ray_type.data(), path.prev_ng = prev_ng.data(), path.prev_ns = prev_ns.data();
-    path.prev_dist = prev_dist.data(), path.medium_rng = medium_rng.data();
+    path.prev_dist = prev_dist.data(), path.medium_rng = medium_rng.data(), path.medium_stack = medium_stack.data();
     film.slot_capacity = kN, film.slot_flags = slot_flags.data(), film.slot_L = slot_L.data();
     film.bounce_sum = film.bounce_max = film.bounce_paths = film.term_hist = -1;
     film.guide_albedo = film.guide_normal = -1;  // no denoiser guides unless a case asks
@@ -151,6 +157,30 @@ TEST_CASE("shade_volume/scatter updates the path state") {
   // The light path passes through untouched.
   CHECK(r.next[3] == uint8_t(Stage::SHADE_LIGHT_PATH));
   CHECK(r.beta[3].v[0] == ar::Real(1));
+}
+
+TEST_CASE("shade_volume/the medium is the stack's highest entry") {
+  // Two media: 0 vacuum, 1 scattering (sigma_s = 1e4, a scatter is certain). Every instance bears medium 0;
+  // the stage tracks the stack's highest entry (greatest priority), not the hit instance's medium.
+  for (const bool scattering_on_top : {true, false}) {
+    INFO("scattering medium on top: " << scattering_on_top);
+    StageRig r;
+    r.medium(0.0f, 1.0e4f, 0.5f);
+    ar::MediumBlock vacuum = ar::medium_block_vacuum();
+    vacuum.entry = 1u;
+    std::vector<ar::MediumBlock> blocks{vacuum, r.block};
+    std::vector<ar::MediumDesc> descs(2, r.desc);
+    descs[0].program = 0, descs[1].program = 1;
+    r.scene.medium_descs = descs.data(), r.scene.medium_blocks = blocks.data(), r.scene.medium_count = 2;
+    const uint32_t lo = scattering_on_top ? 0u : 1u, hi = 1u - lo;  // medium indices at priority 0 and 3
+    for (uint32_t s = 0; s < StageRig::kN; ++s) {
+      r.medium_stack[s] = ar::U32x4{{ar::stack_entry(lo + 1u, 0u), ar::stack_entry(hi + 1u, 3u), 0, 0}};
+      r.flags[s] = ar::set_medium_depth(r.flags[s], 2u);
+    }
+    r.run();
+    CHECK(r.next[0] == uint8_t(scattering_on_top ? Stage::INTERSECT_CLOSEST : Stage::SHADE_SURFACE));
+    CHECK(r.bounces[0].v[4] == (scattering_on_top ? 1u : 0u));
+  }
 }
 
 TEST_CASE("shade_volume/absorption and bounce limits end the path") {

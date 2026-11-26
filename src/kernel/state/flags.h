@@ -42,6 +42,11 @@ inline constexpr uint32_t SHADOW_CATCHER_PASS = 1u << 19;
 inline constexpr uint32_t FRONT_FACE = 1u << 20;
 inline constexpr uint32_t FIRST_BOUNCE_SPECULAR = 1u << 21;
 
+// Bits 22-31: the path's false-interface crossings (0006 D17), the sanity counter that ends a path
+// caught between coincident medium boundaries. Ten bits: 0-1023.
+inline constexpr uint32_t CROSSINGS_SHIFT = 22;
+inline constexpr uint32_t CROSSINGS_MASK = 0x3ffu << CROSSINGS_SHIFT;
+
 // Shadow item_flags bit 4 (0003 d20): the contribution still lacks the environment world's radiance
 // along ray_d at the item's lambda_t, which shade_shadow evaluates on delivery (light/world_env.h).
 inline constexpr uint8_t ITEM_WORLD_LE = uint8_t(1u << 4);
@@ -73,6 +78,14 @@ AR_FN uint32_t medium_depth(uint32_t flags) { return (flags & MEDIUM_DEPTH_MASK)
 AR_FN uint32_t set_medium_depth(uint32_t flags, uint32_t depth) {
   AR_ASSERT(depth < 8u);
   return (flags & ~MEDIUM_DEPTH_MASK) | ((depth << MEDIUM_DEPTH_SHIFT) & MEDIUM_DEPTH_MASK);
+}
+
+AR_FN uint32_t crossings(uint32_t flags) { return (flags & CROSSINGS_MASK) >> CROSSINGS_SHIFT; }
+
+// Returns the flags with the crossing count replaced; n must be 0..1023.
+AR_FN uint32_t set_crossings(uint32_t flags, uint32_t n) {
+  AR_ASSERT(n < 1024u);
+  return (flags & ~CROSSINGS_MASK) | ((n << CROSSINGS_SHIFT) & CROSSINGS_MASK);
 }
 
 AR_NS_END

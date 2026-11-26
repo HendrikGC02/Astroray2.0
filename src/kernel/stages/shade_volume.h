@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// shade_volume: the stage for a segment that ran inside a medium (route_hit sends the back-face hit
-// of a medium-bearing instance here). It delta-tracks the segment from the ray origin to the hit
-// (medium/delta_track.h) over the medium of the hit's instance, which is homogeneous until grids
+// shade_volume: the stage for a segment that ran inside a medium (route_hit sends a hit here when the
+// path's medium-stack depth is not 0). It delta-tracks the segment from the ray origin to the hit
+// (medium/delta_track.h) over the medium of the stack's highest entry (stack_highest_id, whose id is
+// 1 + the medium index in M1b, RULINGS 98; M1b tracks that one medium, summing the active media is
+// M2's, 0006 D17), which is homogeneous until grids
 // arrive: its coefficients are evaluated once, at the segment start, and the majorant is sigma_t
 // itself (one majorant cell, 0006 D8 "homogeneous media run the same loop with one cell").
 // Outcomes:
@@ -47,6 +49,7 @@
 #include "../medium/medium.h"
 #include "../medium/medium_block.h"
 #include "../medium/medium_eval.h"
+#include "../medium/medium_stack.h"
 #include "../medium/phase.h"
 #include "../portability.h"
 #include "../sample/dims.h"
@@ -76,8 +79,6 @@ AR_FN void volume_fail(const KernelGlobals& kg, uint32_t slot, uint32_t sample) 
 AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
   const uint32_t slot = load_ro(kg.main_queue + step.start + item);
   const uint32_t inst = ps_hit_inst(kg, slot);
-  const uint32_t medium = instance_medium(kg, inst);
-  AR_ASSERT(medium != kNoMedium);  // route_hit sends only medium-bearing instances here
   if ((ps_flags(kg, slot) & PATH_KIND) != 0u) {
     const Real2 uv = ps_hit_uv(kg, slot);
     const HitRecord hit{ps_hit_t(kg, slot), ps_hit_prim(kg, slot), inst, uv.x, uv.y};
@@ -85,6 +86,10 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
     return;
   }
   const SceneData& s = scene_of(kg);
+  // route_hit sends only paths with a non-empty stack here, which exists only with the media feature.
+  const uint32_t id = stack_highest_id(ps_medium_stack(kg, slot), ps_flags(kg, slot));
+  AR_ASSERT(id != 0u && id <= s.medium_count);
+  const uint32_t medium = id - 1u;
   const MediumDesc& desc = s.medium_descs[medium];
   bool ok = (load_ro(&desc.flags) & MEDIUM_HAS_EMISSION) == 0u;
   // The coefficients first, with as little path state live as possible: the volume entry inlines the

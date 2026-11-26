@@ -59,7 +59,7 @@ void cpu_stage_intersect_closest(const ar::KernelGlobals& kg, const ar::StepEntr
     ar::ps_hit_prim(kg, slot) = h.prim;
     ar::ps_hit_inst(kg, slot) = h.inst;
     ar::ps_hit_uv(kg, slot) = ar::Real2{h.u, h.v};
-    ar::ps_next_stage(kg, slot) = static_cast<uint8_t>(ar::route_hit(kg, h, ar::ps_ray_d(kg, slot), ar::ps_flags(kg, slot)));
+    ar::ps_next_stage(kg, slot) = static_cast<uint8_t>(ar::route_hit(kg, h, ar::ps_flags(kg, slot)));
   }
 }
 
