@@ -8,8 +8,8 @@
 //   normal: the guide_normal ADD planes' sum over n, averaged and NOT renormalised.
 // Pixel j of the render sub-rectangle is element j of each plane (float x 3 per pixel, rows
 // bottom-up like the film and ImageView). A pixel with n = 0 writes colour 0, albedo 0 and normal 0:
-// the values of a path that escaped before its denoising surface (no normal) with nothing to
-// average. A non-finite value never leaves the kernel: it becomes 0 (the film's `invalid` counter
+// no sample exists to average, so there is nothing to read (an escaped path's albedo is the sky's
+// contribution, a per-sample value, so it is not a constant to write here). A non-finite value never leaves the kernel: it becomes 0 (the film's `invalid` counter
 // already counts the sample that caused it, so this adds none). A film without guide planes
 // (guide_albedo < 0, which implies guide_normal < 0) writes albedo 0 and normal 0 for every
 // pixel; the host then passes no guide views to the denoiser. The film is never written.
@@ -53,6 +53,7 @@ AR_FN void film_prepare_denoise_pixel(const KernelGlobals& kg, uint32_t j) {
   for (uint32_t c = 0; c < 3u; ++c) {
     float albedo = 0.0f, normal = 0.0f;
     if (n != 0u && f.guide_albedo >= 0) {
+      AR_ASSERT(f.guide_normal >= 0);  // requested together, as film_write_guides asserts
       const uint64_t a = uint64_t(uint32_t(f.guide_albedo) + c) * f.plane_stride + pixel;
       const uint64_t m = uint64_t(uint32_t(f.guide_normal) + c) * f.plane_stride + pixel;
       albedo = film_denoise_albedo(f.add[a] / float(n));

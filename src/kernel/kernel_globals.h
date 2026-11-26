@@ -109,8 +109,8 @@ struct KernelGlobals {
   uint32_t* sort_queue;
   uint32_t* sort_counts;
 
-  // film_present and film_heatmap: where they write (film/present.h). Last member so the offsets
-  // the CUDA device reads stay put.
+  // film_present and film_heatmap: where they write (film/present.h). Later members were appended
+  // after it; each keeps the offsets the CUDA device reads (step_table, env_bake) where they were.
   DisplayTarget* display;
 
   // generate_camera reads the camera and the pixel-filter table (host/scene/camera.h,

@@ -162,6 +162,10 @@ TEST_CASE("prepare_denoise/rows bottom-up and the present mean") {
   DenoiseRig rig(4, 3, true);
   rig.film->set_render_size(3, 2);
   rig.rebuild(3, 2);
+  // Exposure and radiance scale are applied when a sample is written, never by the readers: a
+  // kernel that applied them again would move the colour off S1 / n.
+  rig.f().film_exposure = 2.0;
+  rig.f().inv_radiance_scale = 0.5;
   const ar::FilmData& d = rig.f();
   for (uint32_t y = 0; y < 2; ++y)
     for (uint32_t x = 0; x < 3; ++x) {
@@ -173,12 +177,9 @@ TEST_CASE("prepare_denoise/rows bottom-up and the present mean") {
   rig.run();
   CHECK(ar::film_prepare_denoise_count(rig.kg) == 6u);
   for (uint32_t j = 0; j < 6; ++j) {
-    // The display mean film_present reads: S1 / n, exposure already in the moments.
-    float want[3];
-    ar::film_display_mean(d, rig.list[j], want);
+    // The closed-form S1 / n that film_present shows (the moments were set to n * value).
     CHECK(rig.colour[3 * j] == 0.5f * float(j + 1));
-    CHECK(rig.colour[3 * j] == want[0]);
-    CHECK(rig.colour[3 * j + 1] == want[1]);
+    CHECK(rig.colour[3 * j + 1] == 1.0f);
     CHECK(rig.colour[3 * j + 2] == 0.25f);
     CHECK(rig.normal[3 * j] == float(j));
   }
@@ -190,6 +191,8 @@ TEST_CASE("prepare_denoise/guides off writes zero guides") {
   CHECK(rig.f().guide_normal == -1);
   rig.set_mean(0, 2, 1.0, 2.0, 3.0);
   rig.set_mean(1, 1, 4.0, 5.0, 6.0);
+  // Other ADD planes (statistics) hold data: a kernel that read one as a guide would show it.
+  for (uint32_t i = 0; i < rig.film->layout().add_planes() * rig.f().plane_stride; ++i) rig.f().add[i] = 0.5f;
   rig.run();
   CHECK(rig.colour[0] == 1.0f);
   CHECK(rig.colour[5] == 6.0f);
