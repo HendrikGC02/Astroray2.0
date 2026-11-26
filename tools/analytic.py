@@ -58,7 +58,11 @@ GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace", "a1_table_furnace", "a1_w
 # --moved). The gate keeps the other device, and CPU-CUDA equivalence is the agreement tests' (0009
 # d12). d11_env_onoff on the CPU: three renders, each baking the program world at 1024^2 on the CPU
 # (host/light/env_bake.h kEnvBakeSize), 11 s against 1.3 s on CUDA.
-MOVED_TO_FULL = {"cpu": ("d11_env_onoff",), "cuda": ()}
+# a4_sphere, a3_disk and lit_furnace_small (3.4-4.4 s on the CPU, 1.3-1.5 s on CUDA each) left on both
+# devices for check full; the gate keeps their lamp and furnace siblings (a4_point, a4_blackbody_lamp,
+# a1_furnace, d1_nee_onoff) and v1_slab, the volume guard.
+MOVED_TO_FULL = {"cpu": ("d11_env_onoff", "a4_sphere", "a3_disk", "lit_furnace_small"),
+                 "cuda": ("a4_sphere", "a3_disk", "lit_furnace_small")}
 # Scenes whose harness line also reports lamp crossings per ray (0004 D8 row), and the samples per
 # pixel of the in-process render that reads the counters (one pass suffices: counters are per pass).
 CROSSING_SCENES = ("d8_stacked_lamps",)

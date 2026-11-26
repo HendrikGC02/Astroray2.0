@@ -492,7 +492,7 @@ TEST_CASE("instances/dangling geometry rejects generation") {
   }
 }
 
-TEST_CASE("instances/remove behind a pending set") {
+TEST_CASE("instances/remove behind a pending set" * doctest::test_suite("gate")) {
   // N sets a table that uses geometry 200; N+1 removes 200 without set_instances. Both are
   // committed before N has activated (its geometry job is held), so only the latest
   // committed table can see the reference.

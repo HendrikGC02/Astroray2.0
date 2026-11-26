@@ -274,7 +274,7 @@ TEST_CASE("session/commit wakes a converged session") {
   CHECK(r.s->stats().frames_published == 2);
 }
 
-TEST_CASE("session/final session waits for the generation committed before start") {
+TEST_CASE("session/final session waits for the generation committed before start" * doctest::test_suite("gate")) {
   // 0007 d25: F12 commits and starts at once; the final session renders that commit, never the
   // generation before it, however late the commit's jobs finish.
   ContextState ctx;
@@ -297,7 +297,7 @@ TEST_CASE("session/final session waits for the generation committed before start
   CHECK(r.s->latch().epoch() == 1);
 }
 
-TEST_CASE("session/final session fails loudly when its start generation is dropped") {
+TEST_CASE("session/final session fails loudly when its start generation is dropped" * doctest::test_suite("gate")) {
   // The commit's job fails: the generation is dropped, the tracker's listener wakes the waiting session,
   // and it converges on the previous generation with GENERATION_REJECTED in its report (an F12 error).
   ContextState ctx;
@@ -345,7 +345,7 @@ TEST_CASE("session/stale epoch resolve is dropped") {
   CHECK(s.film_samples(0) == 1);
 }
 
-TEST_CASE("session/pass time is published with its sample count") {
+TEST_CASE("session/pass time is published with its sample count" * doctest::test_suite("gate")) {
   // A poll that sees a new sample count reads that pass's time, never the previous pass's (0 before
   // the first pass): both are published under one lock. The hook holds the render thread between the
   // resolve and the publish, where publishing the count early would show it without its time.
@@ -444,7 +444,7 @@ TEST_CASE("session/wait wakes on pause") {
   CHECK(state(*r.s) == AR_STATE_PAUSED);
 }
 
-TEST_CASE("session/resume leaves PAUSED before wait can see it") {
+TEST_CASE("session/resume leaves PAUSED before wait can see it" * doctest::test_suite("gate")) {
   // wait() returns on PAUSED, so resume() itself ends PAUSED: a wait right after it must not return
   // for the pause just lifted (the render thread leaves PAUSED only at its loop top). Twenty rounds,
   // each read straight after resume().

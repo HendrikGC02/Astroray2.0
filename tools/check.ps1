@@ -421,6 +421,10 @@ $global:LASTEXITCODE = $code
   } elseif ($Tier -eq 'full') {
     $r = Step 'gate' { & pwsh -NoProfile -File tools/check.ps1 gate @dargs }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'gate failed (out/check/gate.log)' }
+    # The tools fixtures that left the gate's `tools tests` step (tests/tools/run_fast.ps1 $slow).
+    $r = Step 'tools tests slow' { & pwsh -NoProfile -File tests/tools/run_fast.ps1 -Set slow }
+    $r.Out | Where-Object { $_ -match '^(PASS|FAIL) ' } | ForEach-Object { Write-Host $_ }
+    if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'tools tests slow failed (out/check/full.log)' }
     # Land fixture cases a-j (canary refusals, hunk matrix, undo, busy refusals): minutes, so full only.
     $r = Step 'tools fixtures' { & pwsh -NoProfile -File tests/tools/land_fixture/run_cases.ps1 }
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'tools fixtures failed (out/check/full.log)' }

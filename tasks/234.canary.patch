@@ -1,0 +1,13 @@
+diff --git a/tools/gate_table.py b/tools/gate_table.py
+index f825fb27..35e6ccdb 100644
+--- a/tools/gate_table.py
++++ b/tools/gate_table.py
+@@ -271,7 +271,7 @@ def cut_main(n, list_path, prev_path):
+         return 1
+     start = 1
+     for e in ends:
+-        print(f"{start} {e}")
++        print(f"{start} {e - (e == ends[-1])}")
+         start = e + 1
+     return 0
+ 
