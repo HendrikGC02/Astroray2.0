@@ -98,22 +98,17 @@ AR_FN bool world_program_of(const SceneData& s, const uint32_t** prog, const Con
 // emission first (0 for a program world, whose emissions are all code), then the entry adds its
 // terms. The one evaluation of the world program: for escaped rays here, for NEE items toward an
 // environment world on delivery (shade_shadow.h) and for the environment bake (bake_environment.h).
-// False when the scene holds no program or the VM fails. `regs` is the calling kernel's register
-// file (shade_shadow shares one with its medium's volume entry); the overload below declares its own.
-AR_FN bool world_program_radiance(const SceneData& s, const SceneTables& tables, const ShadeContext& ctx, VmRegs* regs, Spec* le) {
+// False when the scene holds no program or the VM fails.
+AR_FN bool world_program_radiance(const SceneData& s, const SceneTables& tables, const ShadeContext& ctx, Spec* le) {
   const uint32_t* prog = nullptr;
   const ConstantBlock* block = nullptr;
   if (!world_program_of(s, &prog, &block)) return false;
   Spec e = resolve_slot<SpectrumSemantic::ILLUMINANT>(block->emission_color, ctx.lambda_t, tables.observer, s.material_spectra) *
            Real(block->emission_luminance);
-  if (run_entry(prog, load_ro(prog + 2), regs, ctx, tables, nullptr, &e) != VmStatus::OK) return false;
+  VmRegs regs;
+  if (run_entry(prog, load_ro(prog + 2), &regs, ctx, tables, nullptr, &e) != VmStatus::OK) return false;
   *le = e;
   return true;
-}
-
-AR_FN bool world_program_radiance(const SceneData& s, const SceneTables& tables, const ShadeContext& ctx, Spec* le) {
-  VmRegs regs;
-  return world_program_radiance(s, tables, ctx, &regs, le);
 }
 
 // The world's radiance along the escaped ray of pool slot `slot` at the lanes `lam`. False when a

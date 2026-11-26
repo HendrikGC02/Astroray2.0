@@ -389,6 +389,11 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
     for (uint32_t s = 0; s < ar::kStageCount; ++s) {
       if (s == kTerm || s == kShadowTerm || t.stage[s].count == 0) continue;
       if (at_boundary(&status)) return status;
+      // The media pre-pass over the same segment, before shade_shadow (stages/shade_shadow_medium.h,
+      // 0006 D19): one launch-uniform test, so a scene without media launches nothing more.
+      if (s == static_cast<uint32_t>(Stage::SHADE_SHADOW) && features_.media) {
+        launch_kernel(KernelId::SHADE_SHADOW_MEDIUM, t.stage[s].count);
+      }
       launch_stage(static_cast<Stage>(s), t);
       progress = true;
     }

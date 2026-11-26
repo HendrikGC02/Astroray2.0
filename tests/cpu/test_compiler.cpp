@@ -562,7 +562,7 @@ TEST_CASE("medium_eval/compiled graph folds to one block") {
   std::vector<uint32_t> program = {0u, v.medium.program[0], v.medium.program[1]};
   ar::MediumBlock block = b;
   block.entry = 1u;
-  const ar::MediumTables tables{program.data(), &block, &fixture().tables};
+  const ar::MediumTables tables{program.data(), &block, fixture().tables};
   ar::VmRegs regs = {};
   ar::MediumSample s;
   const ar::Lambda lam{{450.0f, 520.0f, 590.0f, 660.0f}};
@@ -725,7 +725,7 @@ TEST_CASE("medium_eval/material store compiles the volume graph") {
     REQUIRE(a->media.size() == 1u);
     ar::VmRegs regs = {};
     ar::MediumSample s;
-    const ar::MediumTables t{a->medium_programs.data(), a->media.data(), &fixture().tables};
+    const ar::MediumTables t{a->medium_programs.data(), a->media.data(), fixture().tables};
     ar::MediumDesc desc = {};
     desc.program = a->medium_index[0];
     REQUIRE(ar::medium_eval(t, desc, ar::Real3{0, 0, 0}, lam, &regs, &s) == ar::VmStatus::OK);

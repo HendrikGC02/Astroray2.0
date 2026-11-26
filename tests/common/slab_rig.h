@@ -375,7 +375,7 @@ inline std::array<double, 3> absorbing_slab_truth(SlabRig& rig) {
   tables.rgb2spec = &rig.scene.materials->table();
   tables.observer.cmf = &obs.cmf[0][0];
   tables.observer.illum = obs.d65;
-  const ar::MediumTables mt{arr.programs.data(), arr.blocks.data(), &tables};
+  const ar::MediumTables mt{arr.programs.data(), arr.blocks.data(), tables};
   ar::MediumDesc desc{};
   std::vector<double> sigma(kObserverSamples, 0.0);
   for (uint32_t i = 0; i < kObserverSamples; i += 4) {

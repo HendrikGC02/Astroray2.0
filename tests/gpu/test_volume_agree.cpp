@@ -3,8 +3,8 @@
 // grey scattering slab against the independent random walk, with the specs and checks the CPU twins in
 // tests/cpu/test_shade_volume.cpp use (common/slab_rig.h). Each device is checked against the truth, not
 // against the other, so a fault shared by both targets still fails; the gate runs the two files in one
-// concurrent group (CPU and GPU gate tests). The shadow case runs shade_shadow's ratio tracking on
-// hand-built items against Beer-Lambert and against the CPU stage on the same items.
+// concurrent group (CPU and GPU gate tests). The shadow case runs the shadow stage pair (the media
+// pre-pass shade_shadow_medium, then shade_shadow) on hand-built items against Beer-Lambert and against the CPU stage on the same items.
 // Ref: docs/decisions/0006-volumes-and-astrophysics.md D8, D19, V1; 0002 D12.
 #include <doctest.h>
 
@@ -22,6 +22,7 @@
 #include "device/cuda/optix_accel.h"
 #include "host/thread_pool.h"
 #include "stages/shade_shadow.h"
+#include "stages/shade_shadow_medium.h"
 #include "vm/ops.h"
 
 using namespace astroray;
@@ -57,7 +58,7 @@ slab::Render render_cuda(slab::SlabRig& rig) {
   return session.converge();
 }
 
-// ---- shade_shadow's ratio tracking on hand-built items ----
+// ---- the shadow stage pair's ratio tracking on hand-built items ----
 
 constexpr uint32_t kShadowItems = 1u << 20, kShadowK = 64;  // 2^14 pixels x 64 samples
 
@@ -77,8 +78,8 @@ const ar::Spec kShadowLambda{{450, 520, 590, 660}};
 
 // The stage over kShadowItems light-only items (contribution 1, r_u0 0, r_l0 1) in the medium, each
 // over 1 m (ray_d of length 2, tmax 0.5), hero lanes cycling, medium_rng at event 3's start. Returns
-// the per-sample buffer (4 lanes per item). The production module of the nofma build on CUDA, the
-// CPU chunk function otherwise.
+// the per-sample buffer (4 lanes per item). The production modules of the nofma build on CUDA, the
+// CPU functions otherwise.
 std::vector<float> run_shadow(Device& dev, ModuleDevice* gpu, uint32_t seed) {
   const Owner owner{1, 1};
   const uint32_t n = kShadowItems;
@@ -141,12 +142,17 @@ std::vector<float> run_shadow(Device& dev, ModuleDevice* gpu, uint32_t seed) {
   table.stage[uint32_t(ar::Stage::SHADE_SHADOW)] = step;
   kg.step_table = static_cast<const ar::StepTable*>(put(&table, sizeof table));
   void* kg_p = put(&kg, sizeof kg);
+  // The scheduler's order with media: the pre-pass, then shade_shadow over the same segment.
   if (gpu != nullptr) {
-    const uint32_t module = gpu->load_module_file(std::string(AR_TEST_KERNEL_NOFMA_DIR) + "/shade_shadow.cubin");
     const ar::KernelGlobals* kg_dev = static_cast<const ar::KernelGlobals*>(kg_p);
     void* args[] = {&kg_dev};
+    const std::string dir = AR_TEST_KERNEL_NOFMA_DIR;
+    const uint32_t medium = gpu->load_module_file(dir + "/shade_shadow_medium.cubin");
+    gpu->launch_module_kernel(medium, "k_shade_shadow_medium", (n + 255) / 256, 256, args);
+    const uint32_t module = gpu->load_module_file(dir + "/shade_shadow.cubin");
     gpu->launch_module_kernel(module, "k_shade_shadow", (n + 255) / 256, 256, args);
   } else {
+    cpu_shade_shadow_medium(kg, 0, n);
     cpu_stage_shade_shadow(kg, step, 0, n);
   }
   dev.synchronize();
@@ -174,7 +180,7 @@ TEST_CASE("volume_agree/scattering slab cuda") {
   slab::check_scattering(r, "volume_agree/scattering slab cuda");
 }
 
-// shade_shadow's medium branch on CUDA (0006 D8, D19): 2^20 light-only items over 1 m of the chromatic
+// The shadow stage pair on CUDA, shade_shadow_medium then shade_shadow (0006 D8, D19): 2^20 light-only items over 1 m of the chromatic
 // medium, Sobol keys, hero lanes cycling. Per lane the CUDA mean against exp(-sigma d), one gate member
 // per lane; then the CPU stage on the same items, every delivered value within 1e-6 relative (and the
 // blocked items the same). The CPU twin is shade_shadow/transmittance per lane.
@@ -196,8 +202,7 @@ TEST_CASE("volume_agree/shadow transmittance cuda") {
   for (int j = 0; j < ar::kLanes; ++j) lam.nm[j] = kShadowLambda.v[j];
   ar::MediumSample ms = ar::medium_sample_zero();
   ar::VmRegs regs;
-  const ar::SceneTables no_tables{};
-  REQUIRE(ar::medium_eval(ar::MediumTables{program.data(), &block, &no_tables}, ar::MediumDesc{}, ar::Real3{0, 0, 0}, lam, &regs,
+  REQUIRE(ar::medium_eval(ar::MediumTables{program.data(), &block, ar::SceneTables{}}, ar::MediumDesc{}, ar::Real3{0, 0, 0}, lam, &regs,
                           &ms) == ar::VmStatus::OK);
   std::vector<double> samples[4];
   double worst = 0.0;

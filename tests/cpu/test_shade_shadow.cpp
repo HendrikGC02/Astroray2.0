@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// shade_shadow on hand-built items (0006 D8, D19; 0004 D4, D5): an item in no medium delivers its
+// The shadow stage pair on hand-built items, shade_shadow_medium (the media pre-pass) then shade_shadow,
+// as the scheduler launches them (0006 D8, D19; 0004 D4, D5): an item in no medium delivers its
 // contribution bit for bit as before media; an item whose segment lies in a medium delivers
 // contribution x T_ray x avg(r_l0 + r_u0) / avg(r_l0 rescale_l + r_u0 rescale_u) (pbrt-v4 SampleLd's
 // weight from the tracked r_u, r_l), whose mean is Beer-Lambert per lane for a light-only item; and
-// the NEE emit in shade_surface writes every media field of the item it emits, nothing without media.
+// the NEE emit in shade_surface writes every media field of the item it emits, nothing without media;
+// the scheduler launches the pre-pass before shade_shadow with the media feature only.
 // The medium is homogeneous with chromatic RGB-sigmoid absorption (the program {reserved,
 // VOLUME_COEFFS, END}); its sigma per lane is the volume entry's own value, so the truth is
 // exp(-sigma d) at the item's lanes. With the majorant equal to sigma_t (the stage's), ratio
@@ -14,6 +16,7 @@
 // pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::SampleLd (Apache-2.0).
 #include <doctest.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -26,6 +29,7 @@
 #include "device/cpu/cpu_device.h"
 #include "film/present.h"
 #include "host/film/film_layout.h"
+#include "host/scheduler.h"
 #include "host/light/light_builder.h"
 #include "host/material/material_store.h"
 #include "host/scene/edit.h"
@@ -36,7 +40,9 @@
 #include "host/session/kg_builder.h"
 #include "host/thread_pool.h"
 #include "kernel/stages/shade_shadow.h"
+#include "kernel/stages/shade_shadow_medium.h"
 #include "kernel/stages/shade_surface.h"
+#include "stub_stages.h"
 #include "vm/ops.h"
 
 using namespace astroray;
@@ -72,6 +78,7 @@ struct ItemRig {
   ar::SceneTables tables{};
   ar::FilmData film{};
   ar::ShadowItemSoA shadow{};
+  ar::StepTable table{};
   ar::KernelGlobals kg{};
   ItemRig(uint32_t count, uint32_t k) : n(count) {
     for (uint32_t i = 0; i < n; ++i) {
@@ -94,6 +101,8 @@ struct ItemRig {
     film.bounce_sum = film.bounce_max = film.bounce_paths = film.term_hist = -1;
     kg.scene = &scene, kg.shadow = &shadow, kg.shadow_queue = queue.data(), kg.tables = &tables, kg.film = &film;
     kg.active_pixels = active.data();
+    table.stage[uint32_t(ar::Stage::SHADE_SHADOW)] = ar::StepEntry{0, n, 0};
+    kg.step_table = &table;
     kg.session.samples_per_pass = k, kg.session.seed = 23, kg.session.sampler_mode = ar::SAMPLER_SOBOL;
     kg.session.features.media = true;
   }
@@ -111,10 +120,14 @@ struct ItemRig {
     for (int j = 0; j < ar::kLanes; ++j) lam.nm[j] = lambda[i].v[j];
     ar::MediumSample ms = ar::medium_sample_zero();
     ar::VmRegs regs;
-    REQUIRE(ar::medium_eval(ar::MediumTables{program.data(), &block, &tables}, desc, o[i], lam, &regs, &ms) == ar::VmStatus::OK);
+    REQUIRE(ar::medium_eval(ar::MediumTables{program.data(), &block, tables}, desc, o[i], lam, &regs, &ms) == ar::VmStatus::OK);
     return ms.sigma_a + ms.sigma_s;
   }
-  void run() { cpu_stage_shade_shadow(kg, ar::StepEntry{0, n, 0}, 0, n); }
+  // The scheduler's order: the media pre-pass (only with the media feature), then shade_shadow.
+  void run() {
+    if (kg.session.features.media) cpu_shade_shadow_medium(kg, 0, n);
+    cpu_stage_shade_shadow(kg, ar::StepEntry{0, n, 0}, 0, n);
+  }
   float lane(uint32_t i, int j) const { return slot_L[4ull * i + uint32_t(j)]; }
 };
 
@@ -283,6 +296,24 @@ struct EmitRig {
 
 bool bits_equal(const Spec& a, const Spec& b) { return std::memcmp(&a, &b, sizeof(Spec)) == 0; }
 
+// ---- the scheduler's launch of the media pre-pass ----
+
+// What the counting pre-pass saw: its items, and those still unshaded (shade_shadow not yet run).
+struct MediumSeen {
+  std::atomic<uint32_t> items{0}, before{0};
+};
+MediumSeen& medium_seen() {
+  static MediumSeen s;
+  return s;
+}
+void counting_medium(const ar::KernelGlobals& kg, uint32_t first, uint32_t last) {
+  const ar::StepEntry& step = kg.step_table->stage[uint32_t(ar::Stage::SHADE_SHADOW)];
+  for (uint32_t i = first; i < last; ++i) {
+    ++medium_seen().items;
+    if (ar::sh_next_stage(kg, kg.shadow_queue[step.start + i]) == uint8_t(ar::Stage::SHADE_SHADOW)) ++medium_seen().before;
+  }
+}
+
 }  // namespace
 
 TEST_SUITE("fast") {
@@ -379,6 +410,45 @@ TEST_CASE("shade_shadow/medium item carries the tracked weight") {
   }
   CHECK(delivered > 32u);
   for (int j = 0; j < 4; ++j) CHECK(r.lane(63, j) == float(c.v[j]));
+}
+
+TEST_CASE("shade_shadow/medium pre-pass runs only with media") {
+  // The scheduler with the stub stages (stub_stages.h: every surface hit emits a shadow item). Without
+  // the media feature no SHADE_SHADOW_MEDIUM kernel is registered, so a launch would throw: the pass
+  // completing shows none. With it, the pre-pass runs over every item of every SHADE_SHADOW segment,
+  // each still unshaded, and the deliveries are the same.
+  std::vector<uint32_t> delivered[2];
+  for (int media = 0; media < 2; ++media) {
+    ContextState ctx;
+    Ledger ledger;
+    ThreadPool pool(ctx, 2);
+    CpuDevice dev(ledger, pool);
+    stub::Results res(3000, 0);
+    dev.register_scheduler_kernels();
+    dev.register_kernel(KernelId::GENERATE_CAMERA, &stub::generate_camera);
+    dev.register_stage(ar::Stage::INTERSECT_CLOSEST, &stub::intersect_closest);
+    dev.register_stage(ar::Stage::INTERSECT_SHADOW, &stub::intersect_shadow);
+    dev.register_stage(ar::Stage::SHADE_BACKGROUND, &stub::shade_background);
+    dev.register_stage(ar::Stage::SHADE_LIGHT, &stub::shade_light);
+    dev.register_stage(ar::Stage::SHADE_SURFACE, &stub::shade_surface);
+    dev.register_stage(ar::Stage::SHADE_SHADOW, &stub::shade_shadow);
+    if (media) dev.register_kernel(KernelId::SHADE_SHADOW_MEDIUM, &counting_medium);
+    ar::SceneData scene{};
+    SchedulerConfig cfg;
+    cfg.globals.film = reinterpret_cast<ar::FilmData*>(&res);
+    cfg.globals.scene = &scene;
+    cfg.features.media = media == 1;
+    Scheduler sched(dev, cfg);
+    medium_seen().items = 0, medium_seen().before = 0;
+    REQUIRE(sched.run_pass(PassWork{3000, 0}) == PassStatus::COMPLETE);
+    const uint64_t shaded = sched.counters().items[uint32_t(ar::Stage::SHADE_SHADOW)];
+    INFO("media " << media);
+    CHECK(shaded > 1000u);
+    CHECK(uint64_t(medium_seen().items.load()) == (media ? shaded : 0u));
+    CHECK(uint64_t(medium_seen().before.load()) == (media ? shaded : 0u));
+    delivered[media] = res.shadow_delivered;
+  }
+  CHECK(delivered[0] == delivered[1]);
 }
 
 TEST_CASE("shade_shadow/emit defines medium fields") {

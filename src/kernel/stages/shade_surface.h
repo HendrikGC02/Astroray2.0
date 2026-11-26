@@ -133,7 +133,7 @@ inline constexpr float kShadowUnbounded = 0x1.fffffep+127f;
 // medium exactly when its direction leaves the vertex into the interior: against the face that was
 // hit (Ng faces wo), away from it on a front face, toward it on a back face (pbrt-v4
 // Interaction::GetMedium(w): the medium on w's side). A shadow ray stops at every hull (0002 D11
-// until ah_record), so such an item reaches shade_shadow only when the whole segment stays inside.
+// until ah_record), so such an item is delivered only when the whole segment stays inside.
 AR_FN uint32_t nee_item_medium(const KernelGlobals& kg, uint32_t inst, bool front_face, Real3 ng, Real3 wi) {
   const uint32_t m = instance_medium(kg, inst);
   if (m == kNoMedium) return 0u;
@@ -146,7 +146,7 @@ AR_FN uint32_t nee_item_medium(const KernelGlobals& kg, uint32_t inst, bool fron
 // the lanes, item_flags with the hero lane in bits 2-3 (ITEM_WORLD_LE kept), and r_u, r_l as
 // pbrt-v4 SampleLd forms them from the path's r_p after tracking left both at 1: r_l = r_p p_l, r_u
 // = r_p p_scatter, 0 for a delta light (whose weight is 1 / avg(r_l)). The contribution already
-// carries the weight 1 / avg(r_l + r_u) (integrator/mis.h); shade_shadow replaces it by the one of
+// carries the weight 1 / avg(r_l + r_u) (integrator/mis.h); shade_shadow_medium replaces it by the one of
 // the tracked r_u and r_l. Also called by the M-1 probe (kernel_gpu/probe_m1.cu).
 // Ref: pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::SampleLd ("r_l *= r_p * p_l;
 // r_u *= r_p * scatterPDF;"); docs/decisions/0006-volumes-and-astrophysics.md D8, D19.

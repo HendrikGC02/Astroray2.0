@@ -34,7 +34,7 @@
 // d23, dims.h: one block per draw), its index the counter *counter (the item's medium_rng), and
 // reads its lane 0: a tentative collision's distance, or the roulette's uniform when the roulette
 // runs. Lane 0 only, because each Sobol lane a kernel reads is a 128 B direction table on the GPU
-// stack (sample/sobol.h) and shade_shadow is held to 0002 D10's 512 B VM stack. After `limit`
+// stack (sample/sobol.h) and shade_shadow_medium is held to 0002 D10's 512 B VM stack. After `limit`
 // blocks (D8: 131,072 tentative collisions per shadow segment, PROVISIONAL; roulette draws count
 // too, so an item's blocks never leave its 2^17 stride) the estimate stops with `limit` set and
 // T_ray = 0: the caller blocks the item and counts VOLUME_LIMIT.

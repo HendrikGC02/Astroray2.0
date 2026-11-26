@@ -26,31 +26,18 @@ AR_NS_BEGIN
 struct MediumTables {
   const uint32_t* programs;  // volume programs of every medium, word 0 reserved so entry 0 means none
   const MediumBlock* blocks;
-  // The observer for resolve(); rgb2spec is not read by a volume entry. A pointer, so a kernel passes
-  // its KernelGlobals::tables without a stack copy whose address the interpreter would hold.
-  const SceneTables* scene;
+  SceneTables scene;         // the observer for resolve(); rgb2spec is not read by a volume entry
 };
 
-// With the caller's context: *ctx is overwritten (zero but for P and the lanes) when the entry runs, so
-// a kernel that also runs another entry (shade_shadow: the world program) holds one context and one
-// register file for both; a kernel's separately inlined locals are not reliably overlaid on the GPU
-// stack (0002 D10's 512 B for VM kernels).
 AR_FN VmStatus medium_eval(const MediumTables& t, const MediumDesc& desc, Real3 p, const Lambda& lambda_rest, VmRegs* regs,
-                           ShadeContext* ctx, MediumSample* out) {
+                           MediumSample* out) {
   *out = medium_sample_zero();
   const MediumBlock& b = t.blocks[desc.program];
   if (b.entry == 0u) return VmStatus::OK;
-  *ctx = ShadeContext{};
-  ctx->P = p;
-  ctx->lambda_t = lambda_rest;
-  return run_volume_entry(t.programs, b.entry, regs, *ctx, *t.scene, &b, out);
-}
-
-// The same with a context of its own.
-AR_FN VmStatus medium_eval(const MediumTables& t, const MediumDesc& desc, Real3 p, const Lambda& lambda_rest, VmRegs* regs,
-                           MediumSample* out) {
-  ShadeContext ctx;
-  return medium_eval(t, desc, p, lambda_rest, regs, &ctx, out);
+  ShadeContext ctx = {};
+  ctx.P = p;
+  ctx.lambda_t = lambda_rest;
+  return run_volume_entry(t.programs, b.entry, regs, ctx, t.scene, &b, out);
 }
 
 AR_NS_END

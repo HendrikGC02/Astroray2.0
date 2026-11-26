@@ -87,7 +87,7 @@ struct Rig {
   ar::MediumDesc desc = {};
   ar::VmRegs regs = {};
   Rig() { block.entry = 1u; }
-  ar::MediumTables tables() const { return ar::MediumTables{program.data(), &block, &fixture().scene}; }
+  ar::MediumTables tables() const { return ar::MediumTables{program.data(), &block, fixture().scene}; }
   VmStatus eval(const Lambda& lam, MediumSample* out) {
     return ar::medium_eval(tables(), desc, ar::Real3{Real(0.25), Real(-1), Real(3)}, lam, &regs, out);
   }

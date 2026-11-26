@@ -98,7 +98,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
       for (int i = 0; i < kLanes; ++i) lambda.nm[i] = lt.v[i];
       MediumSample ms;
       VmRegs regs;
-      const MediumTables mt{s.medium_programs, s.medium_blocks, kg.tables};
+      const MediumTables mt{s.medium_programs, s.medium_blocks, *kg.tables};
       ok = medium_eval(mt, desc, ps_ray_o(kg, slot), lambda, &regs, &ms) == VmStatus::OK && !(max_lane(ms.phase[1].weight) > Real(0));
       sigma_a = ms.sigma_a, sigma_s = ms.sigma_s, lobe = ms.phase[0];
       // A NaN or infinite coefficient would read as a zero majorant or a NaN event probability.
