@@ -2,8 +2,8 @@
 // The medium stack in shade_surface on hand-built hits (0006 D16-D17): at a medium-bearing instance's
 // surface a false interface (the hit is not the highest priority) only updates the stack and the
 // crossing counter, moves the origin past the surface and re-queues intersect_closest; a true interface
-// changes the stack only where the path crosses (the opacity pass-through here; a transmitting sample
-// has no lobe in shade_surface yet), so a reflection and its NEE item keep the stack the path arrived
+// changes the stack only where the path crosses (the opacity pass-through; a transmitting lobe and
+// its crossing are M2's), so a reflection and its NEE item keep the stack the path arrived
 // with. The scene's tables are real (four quads facing +z, instance i at z = -0.5 i with material
 // i + 1); the media hang on copied instance records and the priorities on copied constant blocks, as
 // the host sets DeviceInstanceRecord::medium and ConstantBlock::medium_priority.

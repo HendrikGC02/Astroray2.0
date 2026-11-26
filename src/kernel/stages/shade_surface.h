@@ -15,9 +15,9 @@
 // opaque to such materials (transparent shadows are M2); the compiler reports that per material.
 // Medium stack (0006 D16-D17; the media feature): at a medium-bearing instance a false interface
 // returns right after the hit's geometry, before the VM (surface_false_interface); a true interface
-// changes the stack only where the path crosses the surface, the opacity pass-through and a
-// transmitting sample (surface_true_crossing), so a reflection keeps the stack it arrived with; the
-// NEE item takes the medium its segment lies in (nee_item_medium).
+// changes the stack only where the path crosses the surface, the opacity pass-through
+// (surface_true_crossing; a transmitting lobe and its crossing are M2), so a reflection keeps the
+// stack it arrived with; the NEE item takes the medium of that stack (nee_item_medium).
 // Emission MIS (0004 D1, integrator/mis.h): emission reached by a BSDF ray after a non-delta
 // bounce is weighted against NEE with pmf(ctx_prev, light) pdf_li(ctx_prev, wi), the previous
 // vertex's context rebuilt from prev_ng, prev_ns and prev_dist; at the first vertex or after a
@@ -194,9 +194,9 @@ AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint3
   return true;
 }
 
-// A true interface that the path crosses (the opacity pass-through, a transmitting sample): the same
-// push or remove, as Cycles enters and exits volumes only when the continuation transmits. A remove of
-// an id not on the stack (the path started inside the medium) is refused and leaves stack and flags
+// A true interface that the path crosses (the opacity pass-through; a transmitting sample joins with
+// the dielectric lobe, 0006 D17): the same push or remove, as Cycles enters and exits volumes only
+// when the continuation transmits. A remove of an id not on the stack (the path started inside the medium) is refused and leaves stack and flags
 // unchanged. Returns false when a push overflowed: the path then ends STACK_OVERFLOW. The hit is the
 // path's (hit_inst), `mat` its material header.
 // Ref: Cycles kernel/integrator/shade_surface.h integrate_surface ("if (continue_path_label &
@@ -618,11 +618,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     path_end(kg, slot, Term::RUSSIAN_ROULETTE);
     return;
   }
-  // A transmitted continuation crosses the surface; a reflected one keeps the stack it arrived with. The
-  // hit's material is read again from the path (phase 1 may have left a light's in `mat`).
-  if (kg.session.features.media && (bs.flags & LOBE_TRANSMISSION) != 0u &&
-      !surface_true_crossing(kg, slot, hit_material_id(kg, ps_hit_inst(kg, slot), ps_hit_prim(kg, slot)), (flags & FRONT_FACE) != 0u))
-    return;
+  // The continuation keeps the stack it arrived with: no lobe of this stage transmits in M1b, and the
+  // transmitted continuation's crossing lands with the dielectric lobe (0006 D17).
 
   ps_beta(kg, slot) = beta_next;
   ps_r_l(kg, slot) = r_u / bs.pdf;

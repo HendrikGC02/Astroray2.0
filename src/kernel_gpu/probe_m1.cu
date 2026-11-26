@@ -587,10 +587,6 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     path_end(kg, slot, Term::RUSSIAN_ROULETTE);
     return;
   }
-  // Spike A's dielectric transmits: wi on the far side of the shading frame crosses the surface.
-  if (kg.session.features.media && wi_l.z * wo_l.z < Real(0) &&
-      !surface_true_crossing(kg, slot, hit_material_id(kg, ps_hit_inst(kg, slot), ps_hit_prim(kg, slot)), (flags & FRONT_FACE) != 0u))
-    return;
   ps_beta(kg, slot) = beta_next;
   ps_r_l(kg, slot) = r_u / bs.pdf;
   ps_flags(kg, slot) = flags & ~LAST_BOUNCE_SPECULAR;
