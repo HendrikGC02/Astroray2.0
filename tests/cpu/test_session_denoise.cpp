@@ -95,6 +95,9 @@ TEST_CASE("session_denoise/noisy image is the film") {
                 rel_noisy, rel_denoised, rel_denoised / rel_noisy, st.denoise_ms, st.denoise_copy_ms);
     CHECK(rel_denoised < rel_noisy);
     CHECK(st.denoises == 1);
+    cornell::dump("reference", ref);
+    cornell::dump("cpu_noisy", noisy);
+    cornell::dump("cpu_denoised", combined);
     // A denoised image has no variance: the film's is Noisy Image's.
     CHECK_THROWS_WITH_AS(cornell::read_mean(s, "Combined", AR_QUANTITY_VARIANCE), doctest::Contains("Noisy Image"),
                          std::invalid_argument);

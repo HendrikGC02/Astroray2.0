@@ -354,6 +354,15 @@ inline std::vector<float> reference() {
   return ref;
 }
 
+// Raw little-endian float32, 3 per pixel, rows bottom-up, to out/check/session_denoise/<name>.f32, for
+// a look at the images (the side-by-side PNG is a script's job).
+inline void dump(const std::string& name, const std::vector<float>& rgb) {
+  const std::filesystem::path dir = repo_root() / "out" / "check" / "session_denoise";
+  std::filesystem::create_directories(dir);
+  std::ofstream(dir / (name + ".f32"), std::ios::binary)
+      .write(reinterpret_cast<const char*>(rgb.data()), std::streamsize(rgb.size() * sizeof(float)));
+}
+
 // Sets an environment variable for one scope (the test hooks are read when a session is created).
 struct EnvGuard {
   std::string name;

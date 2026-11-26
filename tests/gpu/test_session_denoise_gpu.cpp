@@ -67,6 +67,8 @@ TEST_CASE("session_denoise_gpu/denoised lowers relmse") {
     std::printf("session_denoise cuda: relMSE noisy %.5f denoised %.5f (ratio %.4f); denoise %.1f ms, prepare and copy %.1f ms\n",
                 rel_noisy, rel_denoised, rel_denoised / rel_noisy, st.denoise_ms, st.denoise_copy_ms);
     CHECK(rel_denoised < rel_noisy);
+    cornell::dump("cuda_noisy", noisy);
+    cornell::dump("cuda_denoised", combined);
     CHECK(cornell::entries(s, AR_REPORT_DENOISER_UNAVAILABLE).empty());
     // d16: OIDN's CUDA memory (creation and configuration records) and the target planes.
     const uint64_t held_bytes = ledger.category_total(LedgerCategory::DENOISER);
