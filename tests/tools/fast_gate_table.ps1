@@ -166,6 +166,35 @@ else {
     if ($LASTEXITCODE -eq 0 -or -not ($to | Where-Object { $_ -match '^FAIL fast tests shards: 1 of 3 shards printed a build line$' })) { Write-Host "FAIL tier shards: two shards that died before their build line were accepted: $($to -join ' / ')"; $fail++ }
   } finally { Pop-Location; Remove-Item Env:FAKE_DROP, Env:FAKE_DIE -ErrorAction SilentlyContinue }
 }
+# Every moved item runs once somewhere (task 234). Tools fixtures: `run_fast -Set gate` and `-Set slow` together list
+# every fast_*.ps1 exactly once.
+$gateSet = @(& pwsh -NoProfile -File (Join-Path $root 'tests/tools/run_fast.ps1') -Set gate -List)
+$slowSet = @(& pwsh -NoProfile -File (Join-Path $root 'tests/tools/run_fast.ps1') -Set slow -List)
+$allFix = @(Get-ChildItem (Join-Path $root 'tests/tools') -Filter 'fast_*.ps1' | ForEach-Object BaseName | Sort-Object)
+if ((@($gateSet + $slowSet | Sort-Object) -join ',') -ne ($allFix -join ',')) { Write-Host "FAIL tier cover: run_fast sets $($gateSet -join ',') | $($slowSet -join ',') do not cover $($allFix -join ',') once"; $fail++ }
+# Analytic scenes: per device the gate's scenes plus MOVED_TO_FULL are GATE_SCENES, each once.
+$cover = @'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("analytic", sys.argv[1] + "/tools/analytic.py")
+a = importlib.util.module_from_spec(spec); spec.loader.exec_module(a)
+bad = 0
+for d in a.DEVICES:
+    got = sorted(list(a.gate_scenes(d)) + list(a.MOVED_TO_FULL[d]))
+    if got != sorted(a.GATE_SCENES) or len(set(got)) != len(got):
+        bad += 1; print(f"scenes {d}: gate + moved = {got}")
+print("scenes cover ok" if not bad else "scenes cover bad")
+sys.exit(1 if bad else 0)
+'@
+$co2 = @(& $py -I -c $cover $root 2>&1)
+if ($LASTEXITCODE -ne 0) { Write-Host 'FAIL tier cover: analytic scenes'; $co2 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }; $fail++ }
+# The step list of `check full` runs the CPU full suite, the moved scenes on both devices and the slow tools fixtures.
+$full = [regex]::Match($ct, '(?s)elseif \(\$Tier -eq ''full''\) \{(.*?)\r?\n  \} else \{').Groups[1].Value
+if (-not $full) { Write-Host 'FAIL tier cover: the full branch of check.ps1 was not found'; $fail++ }
+else {
+  if ($full -notmatch '\$exe ''--tier=full') { Write-Host 'FAIL tier cover: check full does not run --tier=full on the CPU exe'; $fail++ }
+  if ($full -notmatch 'foreach \(\$dev in ''cpu'', ''cuda''\)' -or $full -notmatch 'analytic\.py --moved --device \$dev') { Write-Host 'FAIL tier cover: check full does not run --moved for both devices'; $fail++ }
+  if ($full -notmatch 'run_fast\.ps1 -Set slow') { Write-Host 'FAIL tier cover: check full does not run the slow tools fixtures'; $fail++ }
+}
 if ($fail -gt 0) { $out | ForEach-Object { Write-Host $_ }; exit 1 }
 Write-Host 'PASS gate_table'
 exit 0
