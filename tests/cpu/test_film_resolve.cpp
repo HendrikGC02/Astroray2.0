@@ -466,7 +466,7 @@ TEST_CASE("film_resolve/sub rectangle uses the allocated width in the sample key
 
 TEST_SUITE("gate") {
 
-TEST_CASE("film_resolve/3e7 ones exact") {
+TEST_CASE("film_resolve/3e7 ones exact" * doctest::test_suite("full")) {
   // float32 stalls at 2^24 = 16,777,216; the fp64 moments do not.
   Rig rig(one_pixel(3000));
   stream(rig, 30000000ull, 3000, [](uint64_t) { return 1.0f; });
@@ -479,7 +479,7 @@ TEST_CASE("film_resolve/3e7 ones exact") {
   CHECK(d.s1[2 * d.plane_stride] == 3.0e7);
 }
 
-TEST_CASE("film_resolve/2^24 samples of 0.1") {
+TEST_CASE("film_resolve/2^24 samples of 0.1" * doctest::test_suite("full")) {
   Rig rig(one_pixel(4096));
   const uint64_t total = 1ull << 24;
   stream(rig, total, 4096, [](uint64_t) { return 0.1f; });

@@ -816,7 +816,7 @@ TEST_SUITE("gate") {
     }
   }
 
-  TEST_CASE("lobe_stack/white furnace") {
+  TEST_CASE("lobe_stack/white furnace" * doctest::test_suite("full")) {
     // Lossless configuration of 0005 Verification 1: base_color 1, specular_weight 1, IOR 1.5, no
     // coat. E = mean of f cos / pdf over 2^20 stratified samples of stack_sample; the layering gives
     // E_spec + (1 - E_spec) E_eon = 1 when the table is the lobe's own albedo.

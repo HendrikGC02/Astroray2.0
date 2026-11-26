@@ -674,7 +674,7 @@ TEST_CASE("light_sampler/selection frequencies match pmf") {
   CHECK_MESSAGE(res.pass, res.message);
 }
 
-TEST_CASE("light_sampler/small q is exact at 2^20 bins") {
+TEST_CASE("light_sampler/small q is exact at 2^20 bins" * doctest::test_suite("full")) {
   // 2^20 lights of power 1 and one of 0.01, whose bin keeps it with q = n p ~ 0.01. Its selection
   // probability is P(bin) * P(q test) = q / n; sweep the q test of that bin and check nothing else
   // aliases to it, so its frequency is the returned pmf whatever the bin count.

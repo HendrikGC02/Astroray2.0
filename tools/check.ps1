@@ -421,6 +421,10 @@ $global:LASTEXITCODE = $code
   } elseif ($Tier -eq 'full') {
     $r = Step 'gate' { & pwsh -NoProfile -File tools/check.ps1 gate @dargs }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'gate failed (out/check/gate.log)' }
+    # The tools fixtures that left the gate's `tools tests` step (tests/tools/run_fast.ps1 $slow).
+    $r = Step 'tools tests slow' { & pwsh -NoProfile -File tests/tools/run_fast.ps1 -Set slow }
+    $r.Out | Where-Object { $_ -match '^(PASS|FAIL) ' } | ForEach-Object { Write-Host $_ }
+    if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'tools tests slow failed (out/check/full.log)' }
     # Land fixture cases a-j (canary refusals, hunk matrix, undo, busy refusals): minutes, so full only.
     $r = Step 'tools fixtures' { & pwsh -NoProfile -File tests/tools/land_fixture/run_cases.ps1 }
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'tools fixtures failed (out/check/full.log)' }
@@ -455,6 +459,10 @@ $global:LASTEXITCODE = $code
     # multiple of 30 s, as for the gate tier.
     $r = Step 'gpu full tests' { & $runTimed $gpuExe '--tier=full' 60 (Join-Path $root 'out/check/gpu-full-tests.out') }
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'gpu full tests failed (out/check/full.log)' }
+    # The CPU suite's full tier: cases tagged full there ran nowhere before this step; the gate's `cpu gate tests` runs --tier=gate only.
+    # Time limit 150 s: the tier took 14.7 s (one run, task 234); 10x that, rounded up to a multiple of 30 s, as for the GPU tiers.
+    $r = Step 'cpu full tests' { & $runTimed $exe '--tier=full --duration=true' 150 (Join-Path $root 'out/check/cpu-full-tests.out') }
+    if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'cpu full tests failed (out/check/full.log)' }
     $r = Step 'probe registers' { & $py -I tools/kernelgate.py --probe }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'probe registers failed' }
     # Warnings only (0002 D10, ruling 17): shown, never a failure.
