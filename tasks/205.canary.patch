@@ -17,14 +17,14 @@ index 18e496b1..9ac8840f 100644
 +  if (instance_medium(kg, hit.inst) != kNoMedium) return Stage::SHADE_VOLUME;
    return route_hit_after_medium(kg, hit, path_flags);
 diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
-index ae39ecf4..ac31d24a 100644
+index ae39ecf4..7e75e048 100644
 --- a/src/kernel/stages/shade_surface.h
 +++ b/src/kernel/stages/shade_surface.h
-@@ -161,3 +161,3 @@ AR_FN void surface_move_past(const KernelGlobals& kg, uint32_t slot, Real3 P, Re
-   const Real3 o = ps_ray_o(kg, slot), d = ps_ray_d(kg, slot);
--  const Real3 o_next = offset_past_surface(P, Ng, d);
-+  const Real3 o_next = offset_ray_origin(P, Ng, d);
-   ps_prev_dist(kg, slot) = ps_prev_dist(kg, slot) + dot(o_next - o, d) / dot(d, d);
+@@ -162,3 +162,3 @@ AR_FN void surface_move_past(const KernelGlobals& kg, uint32_t slot, Real3 P, Re
+   const Real3 o_next = offset_past_surface(P, Ng, d);
+-  ps_prev_dist(kg, slot) = ps_prev_dist(kg, slot) + dot(o_next - o, d) / dot(d, d);
++  ps_prev_dist(kg, slot) = ps_prev_dist(kg, slot) + dot(o_next - o, d);
+   ps_ray_o(kg, slot) = o_next;
 @@ -183,3 +183,3 @@ AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint3
    const uint32_t priority = front ? material_medium_priority(kg, mat) : 0u;
 -  if (interface_is_true(stack, flags, m + 1u, priority, front)) return false;
