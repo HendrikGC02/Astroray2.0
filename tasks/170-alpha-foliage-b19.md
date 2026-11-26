@@ -17,3 +17,5 @@ Budget: gate +0.5 s at most (the scene's build and lint, stop and ask above); ca
 Depends on: 156, 140, 160.
 Size: S (about 120 lines of scene builder, no source); stop and report at 2x or when the table says stop.
 Progress:
+- Files: scenes/b_foliage/build.py and meta.toml (new), bench/scenes.toml (one row), bench/history/2026.jsonl, docs/decisions/0002 D7 (one result line); 0009 d13 B-19 row only if the table says so.
+- Decision table (written before any capture; limit idle <= 10 % and pq <= 10 %; share tolerance = 3 x spread of 5 captures, 160): (1) within limit: nothing, scene joins M1b, lines committed. (2) missed by no more than the measured tolerance: row stays red as on B-1M, PR lists the five largest idle gaps by cause and the step count, lead decides, no task. (3) missed by more: stop and ask; state remedy tasks used by B-19 (limit two).

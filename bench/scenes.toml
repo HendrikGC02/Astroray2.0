@@ -85,3 +85,9 @@ showcase = ["M1b"]
 gallery_size = [1280, 720]
 gallery_spp = 256
 heat = true
+
+[[scene]]
+name = "b_foliage"
+recording = "b_foliage.arrec"
+class = "B"
+sets = ["M1b"]
