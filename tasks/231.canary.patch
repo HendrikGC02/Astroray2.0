@@ -1,8 +1,17 @@
 diff --git a/tools/lib/lock.ps1 b/tools/lib/lock.ps1
-index 1129204a..3f49eab3 100644
+index 5db6fabc..d90a0974 100644
 --- a/tools/lib/lock.ps1
 +++ b/tools/lib/lock.ps1
-@@ -179,7 +179,7 @@ $script:ArHolderScript = {
+@@ -173,7 +173,7 @@ $script:ArDescendantsFn = {
+   $todo = [Collections.Generic.Queue[int]]::new(); $todo.Enqueue($root)
+   while ($todo.Count) {
+     $id = $todo.Dequeue()
+-    foreach ($c in @($all | Where-Object { $_.ParentProcessId -eq $id -and $_.ProcessId -ne $root -and $_.CreationDate -ge $since })) {
++    foreach ($c in @($all | Where-Object { $_.ParentProcessId -eq $id -and $_.ProcessId -ne $root })) {
+       if (-not $kill.Contains([int]$c.ProcessId)) { $kill.Add([int]$c.ProcessId); $todo.Enqueue([int]$c.ProcessId) }
+     }
+   }
+@@ -203,7 +203,7 @@ $script:ArHolderScript = {
    if (-not $taken) { $m.Dispose(); $s.State = 'cancelled'; return }
    $s.Acquired.Set() | Out-Null
    $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -11,14 +20,30 @@ index 1129204a..3f49eab3 100644
    if (-not $s.Release) {
      $s.Expired = $true
      $step = if ($s.Step) { $s.Step } else { 'unknown' }
-@@ -242,8 +242,8 @@ function Enter-ArMachineLock {
+@@ -219,8 +219,6 @@ $script:ArHolderScript = {
+     try {
+       if ($s.OwnerPath -and ([int](Get-Content -Raw $s.OwnerPath | ConvertFrom-Json).pid) -eq $s.Pid) { Remove-Item -Force $s.OwnerPath }
+     } catch { }
+-    try { $m.ReleaseMutex() } catch { }
+-    $m.Dispose()
+     # Ending the process is for a process started for the tool; an interactive shell is never ended from
+     # here (Exit-ArMachineLock raises the failure there instead).
+     if ($s.CanExit) { [Environment]::Exit(1) }
+@@ -248,7 +246,7 @@ function Enter-ArMachineLock {
+   $ownerPath = Join-Path (Get-ArLockDir) 'owner.json'
+   $sw = [Diagnostics.Stopwatch]::StartNew()
+   $s = [hashtable]::Synchronized(@{
+-      Name = $name; Try = $false; Cancel = $false; CancelEv = (New-Object System.Threading.ManualResetEvent($false)); Release = $false; Short = [bool]$Short; Poll = (-not $Short); State = 'waiting'
++      Name = $name; Try = $false; Cancel = $false; CancelEv = (New-Object System.Threading.ManualResetEvent($false)); Release = $false; Short = [bool]$Short; Poll = $false; State = 'waiting'
+       DescendantsFn = $script:ArDescendantsFn.ToString()
+       CanExit = [bool]@([Environment]::GetCommandLineArgs() | Where-Object { $_ -in '-File', '-f', '-Command', '-c', '-EncodedCommand', '-ec' }).Count
+       Expired = $false; Step = ''; CeilingS = $ceil; Job = $Job; Pid = $PID; OwnerPath = $ownerPath
+@@ -266,7 +264,7 @@ function Enter-ArMachineLock {
    try {
      while ($true) {
        # A long tool yields while a short job waits; a short job never does.
 -      $yield = (-not $Short) -and (Get-ArShortWaiting) -gt 0
--      $s.Poll = -not $Short
 +      $yield = $false
-+      $s.Poll = $false
        $s.Try = -not $yield
        if ($s.Acquired.WaitOne(100)) { break }
        if ($sw.Elapsed.TotalSeconds -lt $nextTick) { continue }

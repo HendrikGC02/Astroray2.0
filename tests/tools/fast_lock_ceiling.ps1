@@ -46,10 +46,12 @@ $hang = Join-Path $tmp 'hang.ps1'
 Set-Content -Path $hang -Value @"
 param([string]`$dir)
 . '$lockLib'
-`$null = Enter-ArMachineLock -Job test
-Set-ArLockStep 'hung step'
+# The child and grandchild exist before the ceiling clock starts, however slow a cold pwsh is.
 `$c = Start-Process pwsh -ArgumentList '-NoProfile','-File','$tmp/kid.ps1',`$dir -PassThru
 Set-Content "`$dir/child.pid" `$c.Id
+while (-not (Test-Path "`$dir/grand.pid")) { Start-Sleep -Milliseconds 10 }
+`$null = Enter-ArMachineLock -Job test
+Set-ArLockStep 'hung step'
 Set-Content "`$dir/ready" ready
 Start-Sleep 120
 "@
@@ -113,7 +115,10 @@ try {
   Use-Lock 'd'
   $k = Start-Pwsh 'killed' @($ends, $d4, 'hold')
   foreach ($d in $d1, $d2, $d3, $d4) { Wait-File (Join-Path $d 'ready') }
-  Wait-File (Join-Path $d1 'grand.pid')
+  # A waiter blocked on the mutex before the ceiling fires: it must get it from the watchdog's own release,
+  # not from an abandonment.
+  $env:FAST_GRACE = '30'
+  Use-Lock 'a'; $w1 = Start-Pwsh 'wait1' @($wait)
   $child = [int](Get-Content (Join-Path $d1 'child.pid')); $grand = [int](Get-Content (Join-Path $d1 'grand.pid'))
   $env:FAST_GRACE = '0.5'
   Use-Lock 'b'; $w2 = Start-Pwsh 'wait2' @($wait)
@@ -130,7 +135,6 @@ try {
   Check "the holder's child and grandchild are stopped" (-not (Test-Alive $child) -and -not (Test-Alive $grand)) $out
   Check 'an unrelated process is untouched' (Test-Alive $bystander.Id)
   Check 'the owner file is gone' (-not (Test-Path (Join-Path $lockA 'owner.json')))
-  Use-Lock 'a'; $w1 = Start-Pwsh 'wait1' @($wait)
   foreach ($p in $w1, $w2, $w3, $w4) { $null = $p.WaitForExit(15000) }
   Check 'the mutex is free for the next waiter (released by its owning thread, no abandonment)' ((Read-Out 'wait1') -contains 'ACQUIRED' -and -not ((Read-Out 'wait1') -match 'abandoned')) (Read-Out 'wait1')
   $o2 = Read-Out 'wait2'
