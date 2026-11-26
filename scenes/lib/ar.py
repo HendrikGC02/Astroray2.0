@@ -703,14 +703,18 @@ class Scene:
             "sensor_mm": float(sensor_mm), "width": width, "height": height, "near": 0.01, "far": 1000.0}
 
     def settings(self, spp, width, height, seed=1, max_bounces=8, pixel_filter="box", filter_width=1.0,
-                 sampler="sobol", min_bounces=0, passes=(), transparent_bounces=8):
+                 sampler="sobol", min_bounces=0, passes=(), transparent_bounces=8, volume_bounces=0):
         """Samples per pixel, seed, total bounce limit, minimum bounces before Russian roulette (at or
         above max_bounces disables it, as in Cycles), pixel filter (box, gaussian,
         blackman_harris), output size and sampler mode (sobol, or independent where a test needs
         the exact variance of the mean, 0008 d3). `passes` names the extra film passes (0008 d10).
         `transparent_bounces` is the opacity pass-through limit, Blender's default 8 (the ABI's zero would
-        end a path at its first alpha hit, 0004 D3)."""
+        end a path at its first alpha hit, 0004 D3). `volume_bounces` is the volume-scatter limit; the ABI's
+        zero ends a path at its first real scatter (0006 D14)."""
         a = self.abi
+        # ctypes would wrap a negative count to 2^32 - 1 and refuse a float only with a TypeError far from here.
+        if isinstance(volume_bounces, bool) or not isinstance(volume_bounces, int) or volume_bounces < 0:
+            raise ValueError(f"volume_bounces must be a non-negative integer, not {volume_bounces!r}")
         filters = {"box": a.AR_FILTER_BOX, "gaussian": a.AR_FILTER_GAUSSIAN, "blackman_harris": a.AR_FILTER_BLACKMAN_HARRIS}
         if pixel_filter not in filters:
             raise ValueError(f"unknown pixel filter '{pixel_filter}'")
@@ -722,6 +726,7 @@ class Scene:
         s.output_width, s.output_height, s.resolution_percent = width, height, 100
         s.max_bounces, s.min_bounces, s.seed = max_bounces, min_bounces, seed
         s.transparent_bounces = transparent_bounces
+        s.volume_bounces = volume_bounces
         s.pixel_filter, s.pixel_filter_width, s.film_exposure = filters[pixel_filter], filter_width, 1.0
         s.sampler_mode = samplers[sampler]
         names = (a.ar_name * max(1, len(passes)))()
