@@ -67,6 +67,7 @@ struct SceneData;    // scene/scene_view.h
 struct FilmData;     // film/film_write.h
 struct SceneTables;  // vm/context.h: the VM's rgb2spec, observer, image and sRGB tables
 struct DisplayTarget;
+struct DenoiseTarget;  // film/prepare_denoise.h
 struct LightRecord;       // light/light_record.h
 struct LightSamplerView;  // light/light_sampler.h
 struct EDielTable;        // material/lobes/tables.h
@@ -143,6 +144,11 @@ struct KernelGlobals {
   // kEnvCompensated). n = 0 in both when the scene has no baked world. Last members so the offsets
   // the CUDA device reads stay put.
   EnvTableView env[2] = {};
+
+  // film_prepare_denoise: where it writes (film/prepare_denoise.h). The very last member, after
+  // `env`, so every offset the CUDA device reads (step_table, env_bake) is unchanged; null in a
+  // value-initialised KernelGlobals, so the hand-built ones in tests need no edit.
+  DenoiseTarget* denoise = nullptr;
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is

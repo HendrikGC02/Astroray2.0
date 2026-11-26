@@ -71,7 +71,7 @@ if(ASTRORAY_GPU)
   set_property(GLOBAL APPEND PROPERTY JOB_POOLS nvcc=8)
 
   # film_resolve accumulates the fp64 moments of 0008 d3, the one other FP64 kernel.
-  set(AR_GPU_F64_MODULES advance_geodesic_f64 film_resolve film_present)
+  set(AR_GPU_F64_MODULES advance_geodesic_f64 film_resolve film_present film_prepare_denoise)
   # Gate hooks (src/kernel_gpu/test_*.cu, -DAR_GATE_HOOKS) are on exactly where the engine's own
   # AR_GATE_HOOKS is (CMakeLists.txt: every build type but Release), so a hook the host reads always
   # finds its module and a shipping build has neither. A plain variable, not a cache option: an old

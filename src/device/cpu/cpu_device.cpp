@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "kernel/film/prepare_denoise.h"
 #include "kernel/film/present.h"
 #include "kernel/film/resolve.h"
 #include "kernel/stages/bake_environment.h"
@@ -71,6 +72,7 @@ void CpuDevice::register_scheduler_kernels() {
   register_kernel(KernelId::FILM_RESOLVE, &cpu_film_resolve);
   register_kernel(KernelId::FILM_PRESENT, &cpu_film_present);
   register_kernel(KernelId::FILM_HEATMAP, &cpu_film_heatmap);
+  register_kernel(KernelId::FILM_PREPARE_DENOISE, &cpu_film_prepare_denoise);
   // Every pass starts by writing the active-pixel list the resolve and present kernels read.
   register_kernel(KernelId::FILM_BUILD_ACTIVE, &cpu_film_build_active);
   // The environment table's grid (0004 D11); launched by host/light/env_bake.cpp when the world changes.

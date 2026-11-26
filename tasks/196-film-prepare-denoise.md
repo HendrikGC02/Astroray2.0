@@ -15,3 +15,4 @@ Budget: gate +1 s at most (one more kernel TU compile is counted by B-05 at 3.0 
 Depends on: 174 (code: the guide planes and `FilmData` offsets). Collisions: kernel_globals.h and the hand-built KernelGlobals tests with 175 and the spine tasks; launch_config.h with 182; budget.toml; the later one rebases.
 Size: S-M (about 160 lines without tests); stop and report at 2x.
 Progress:
+- 196: started; files: film/present.h (film_display_mean factored), film/prepare_denoise.h, kernel_globals.h, launch_config.h, kernel_cpu/ and kernel_gpu/ film_prepare_denoise, cpu_device.cpp, budget.toml, cmake/kernels.cmake (F64 module list: the kernel reads fp64 S1; outside Scope, forced), tests prepare_denoise(.gpu).
