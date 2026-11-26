@@ -8,7 +8,7 @@ index 18e496b1..9ac8840f 100644
 +  if (instance_medium(kg, hit.inst) != kNoMedium) return Stage::SHADE_VOLUME;
    return route_hit_after_medium(kg, hit, path_flags);
 diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
-index 406356bc..ae89d47f 100644
+index 406356bc..32bb1b9f 100644
 --- a/src/kernel/stages/shade_surface.h
 +++ b/src/kernel/stages/shade_surface.h
 @@ -183,3 +183,3 @@ AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint3
@@ -31,7 +31,10 @@ index 406356bc..ae89d47f 100644
 -  if (u.ok || !front) return true;
 +  if (u.ok || front || !front) return true;
    path_end(kg, slot, Term::STACK_OVERFLOW);
-@@ -428,2 +428,3 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+@@ -428,2 +428,6 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
        return;
-+    if (phase == 0u && kg.session.features.media) (void)surface_true_crossing(kg, slot, mat, ctx.front_face != 0u);
++    if (phase == 0u && kg.session.features.media && ctx.front_face != 0u && instance_medium(kg, inst) != kNoMedium) {
++      const StackUpdate t = stack_push(ps_medium_stack(kg, slot), ps_flags(kg, slot), instance_medium(kg, inst) + 1u, 0u);
++      ps_medium_stack(kg, slot) = t.stack, ps_flags(kg, slot) = t.flags;
++    }
      if (ok) {
