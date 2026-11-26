@@ -16,3 +16,4 @@ Budget: gate +3 s at most (two small renders and the denoiser creation per devic
 Depends on: 176, 196 (code); 174 through 196. Collisions: session.cpp with 174, 182, 193; readback and session_api.cpp with no open task; cli/render.cpp; the later one rebases.
 Size: M-L (about 500 lines without tests); stop and report at 2x. Split point: session state machine, readback and the failure path with the NONE-equivalence tests first; the CLI flag and the ABI case after.
 Progress:
+- Lead (196 review): film_prepare_denoise checks the target size only by a debug AR_ASSERT; the session must validate the DenoiseTarget's width x height against the film rect before launching, and refuse loudly. n = 0 pixels write colour, albedo and normal 0.
