@@ -196,9 +196,9 @@ AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint3
 
 // A true interface that the path crosses (the opacity pass-through; a transmitting sample joins with
 // the dielectric lobe, 0006 D17): the same push or remove, as Cycles enters and exits volumes only
-// when the continuation transmits. A remove of an id not on the stack (the path started inside the medium) is refused and leaves stack and flags
-// unchanged. Returns false when a push overflowed: the path then ends STACK_OVERFLOW. The hit is the
-// path's (hit_inst), `mat` its material header.
+// when the continuation transmits. A remove of an id not on the stack (the path started inside the
+// medium) is refused and leaves stack and flags unchanged. Returns false when a push overflowed: the
+// path then ends STACK_OVERFLOW. The hit is the path's (hit_inst), `mat` its material header.
 // Ref: Cycles kernel/integrator/shade_surface.h integrate_surface ("if (continue_path_label &
 // LABEL_TRANSMIT) volume_stack_enter_exit"), read in third_party/_cache/refs/cycles-ed69ef2c6bd3.
 AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_t mat, bool front) {
@@ -207,13 +207,13 @@ AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_
   const U32x4 stack = ps_medium_stack(kg, slot);
   const uint32_t flags = ps_flags(kg, slot);
   const StackUpdate u = front ? stack_push(stack, flags, m + 1u, material_medium_priority(kg, mat)) : stack_remove(stack, flags, m + 1u);
-  if (!u.ok && front) {
-    path_end(kg, slot, Term::STACK_OVERFLOW);
-    return false;
-  }
+  // A refused push or remove returns the stack and flags unchanged, so they are stored either way; only
+  // a refused push ends the path (a refused remove is a path that started inside the medium).
   ps_medium_stack(kg, slot) = u.stack;
   ps_flags(kg, slot) = u.flags;
-  return true;
+  if (u.ok || !front) return true;
+  path_end(kg, slot, Term::STACK_OVERFLOW);
+  return false;
 }
 
 // The medium a NEE item's segment lies in, as 1 + its medium index, 0 for none: the item layout of
