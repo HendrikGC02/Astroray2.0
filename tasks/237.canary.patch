@@ -1,0 +1,13 @@
+diff --git a/tools/kernelgate.py b/tools/kernelgate.py
+index d2d9b268..59e1fbde 100644
+--- a/tools/kernelgate.py
++++ b/tools/kernelgate.py
+@@ -318,7 +318,7 @@ def timed_env(dump, base):
+     missing = [k for k in ("INCLUDE", "LIB") if not got.get(k)]
+     if missing:
+         raise GateError(f"the MSVC environment has no {' or '.join(missing)}: is vcvarsall's toolset installed?")
+-    return {**base, **got}
++    return {**base}
+ 
+ 
+ def msvc_environment():
