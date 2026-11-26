@@ -69,7 +69,7 @@ index 9593addb..181c42d7 100644
    }
    const Spec r_u0 = sh_r_u(kg, slot), r_l0 = sh_r_l(kg, slot);
 -  const Spec c = sh_contribution(kg, slot) * r.T * (avg(r_l0 + r_u0) / avg(r_l0 * r.r_l + r_u0 * r.r_u));
-+  const Spec c = sh_contribution(kg, slot) * r.T * (avg(r_l0 + r_u0) / avg(r_l0 + r_u0));
++  const Spec c = sh_contribution(kg, slot) * r.T * (avg(r_l0 + r_u0) / avg(r_l0 * r.r_l + r_u0));
    if (!is_finite(c)) {
      sample_mark_invalid(kg, target);
      shadow_medium_block(kg, slot);
