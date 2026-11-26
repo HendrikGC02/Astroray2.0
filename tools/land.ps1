@@ -2,16 +2,19 @@
 # tools/land.ps1 prepare|merge NNN [-DryRun]   |   submit NNN PASS|SKIP [-Title t] [-Evidence text] [-CiDeadlineMin 45] [-Queue] [-DryRun]   (lead only)
 # Ref: docs/decisions/0009-build-test-process.md d25 (gate status), d26 (landing), d28 (task and canary format).
 # prepare (in the task worktree): refusals (another land.ps1 running, out/bin/astroray_core.dll held), branch and tree
-#   checks, rebase on origin/main, canary verification (lib/canary.ps1, as tools/canary.ps1; every build is followed by
+#   checks, rebase on origin/main, deletion commit and push (submit also opens or reuses the PR, so hosted ci runs
+#   beside everything below), canary verification (lib/canary.ps1, as tools/canary.ps1; every build is followed by
 #   tools/scenes.py), the Blender suites for a diff under blender/ or tests/blender/ (lib/blender.ps1, the list `check
-#   full` runs), reviewer inputs in out/land/NNN/, deletion commit, push, gate, status `astroray/gate`. A failure after
-#   the commit undoes it: a reset while it is only local, a pushed revert once origin has it (never a force push).
+#   full` runs), reviewer inputs in out/land/NNN/, gate, perf, status `astroray/gate`. The canary and the reviewer
+#   inputs need the task file and the patch, so the branch sits on the commit before the deletion until the gate and
+#   goes to the pushed commit then. A failure after the push undoes the commit with a pushed revert (never a force
+#   push); a reset only while it is still local.
 # merge: PR head == gated sha, `ci` and `astroray/gate` success, lead comment `REVIEW PASS <sha>`
 #   (or `REVIEW SKIP <sha> (O31)` for a diff that is not kernel, physics, sampling, ABI or process),
 #   an `evidence:` comment when the task has `Look at:`; squash, confirm on origin/main, PASS, then best-effort cleanup
 #   (lib/landing.ps1; a leftover is printed as LEFTOVER and never fails the landing).
-# submit: prepare, open or reuse the PR, post the verdict (and evidence) comments, wait for hosted `ci` on that sha,
-#   merge; main moved ("re-run prepare") repeats everything, at most 3 attempts. One timing line per landing goes to
+# submit: prepare (the PR opens right after the push), post the verdict (and evidence) comments, wait for hosted `ci`
+#   on that sha (it has run since the push; ci_wait_s is what is left after the gate), merge; main moved ("re-run prepare") repeats everything, at most 3 attempts. One timing line per landing goes to
 #   out/land/history.jsonl of the main checkout. A failed ci run is a FAIL with its URL and never rerun here.
 # -Queue (prepare, submit): wait for the land.ps1 that is running instead of refusing (at most ASTRORAY_LAND_QUEUE_TIMEOUT_S,
 #   default 3 h, then FAIL); the wait is in lock_wait_s. merge refuses it.
@@ -45,6 +48,7 @@ $script:LandBranch = $null
 $script:OriginLand = $null  # a (land) commit a re-prepare dropped locally that origin still carries
 $script:TaskTitle = ''
 $script:TaskLook = ''
+$script:PrNumber = $null   # submit: the PR Invoke-Prepare opened or reused right after its push
 
 function Undo-LandCommit {
   # This attempt's own commit first, then a dropped earlier one origin may still carry.
@@ -54,7 +58,8 @@ function Undo-LandCommit {
 
 function Undo-OwnLandCommit {
   # Before the push the commit is only local: reset. Once origin has it, a reset would need a force push, so the
-  # commit is reverted and the revert pushed plainly; local and origin both carry the task file again.
+  # commit is reverted and the revert pushed plainly; local and origin both carry the task file again. The branch
+  # may still sit on the commit before it (canary phase), and a revert needs the commit in HEAD.
   if (-not $script:UndoTo) { return }
   $to = $script:UndoTo; $script:UndoTo = $null
   # Unknown (ls-remote failed) counts as pushed: a revert is right either way, a reset is not.
@@ -65,6 +70,7 @@ function Undo-OwnLandCommit {
     if ($LASTEXITCODE -eq 0) { Write-Host 'undid (land) commit' } else { Write-Host "WARN land: could not reset the branch to $to; drop the (land) commit by hand" }
     return
   }
+  if ("$(& git rev-parse HEAD)".Trim() -ne $script:LandSha) { & git reset -q --hard $script:LandSha 2>&1 | Out-Null }
   & git revert --no-edit $script:LandSha 2>&1 | Out-Null
   if ($LASTEXITCODE -ne 0) {
     & git revert --abort 2>&1 | Out-Null
@@ -189,6 +195,30 @@ function Invoke-Prepare {
   $canaryLine = Get-TaskField $taskText 'Canary:'
   if (($testsChanged -or $caseLines) -and -not (Test-Path $patch)) { Refuse 'missing canary patch' }
   if ((Test-Path $patch) -and $canaryLine -notmatch 'must turn red:') { Refuse 'canary patch present but the Canary: line names no tests' }
+  # The cheap text checks of the patch run before the push: a stale or malformed patch would otherwise start ci for nothing.
+  if (Test-Path $patch) {
+    $pp = @(Get-CanaryPatchProblems $patch $root $Number)
+    if ($pp.Count) { Refuse ($pp -join '; ') }
+  }
+
+  # Deletion commit and push before the canary: hosted ci starts at the PR (submit), beside the canary, the suites,
+  # the gate and perf. HEAD goes back to the commit before it, which still holds the task file and the patch the
+  # canary and the reviewer inputs read; the gate step moves it to the pushed commit.
+  $rm = @($taskFile[0].FullName)
+  if (Test-Path $patch) { $rm += $patch }
+  if ($DryRun) {
+    Write-Host "DRYRUN would: commit deletion of tasks/$Number*, push $branch$(if ($Mode -eq 'submit') { ', open or reuse the PR' }), then canary, Blender suites, check gate, perf, post astroray/gate"
+  } else {
+    $script:UndoTo = (GitX rev-parse HEAD)
+    $script:LandBranch = $branch
+    $null = GitX rm -q -- @rm
+    $null = GitX commit -q -m "$title (land)"
+    $script:LandSha = (GitX rev-parse HEAD)
+    $null = GitX push --force-with-lease -u origin HEAD
+    $script:OriginLand = $null   # the push replaced a dropped (land) commit on origin
+    if ($Mode -eq 'submit') { Open-LandPr $branch }
+    $null = GitX reset -q --hard $script:UndoTo
+  }
 
   if (Test-Path $patch) {
     # The canary run is lib/canary.ps1's, the one tools/canary.ps1 gives implementers. Its builds run tools/scenes.py;
@@ -199,9 +229,10 @@ function Invoke-Prepare {
     $script:LandTimes['scenes_s'] += $ds; $script:LandTimes['canary_s'] -= $ds
     $cr = $script:cr
     $cr.Lines | ForEach-Object { Write-Host $_ }
-    if ($cr.Dirty) { Write-Host 'FAIL land: git apply -R of the canary patch failed; the tree is dirty'; exit 1 }
+    if ($cr.Dirty) { Fail 'git apply -R of the canary patch failed; the tree is dirty' }
     if ($cr.Problems.Count) {
       $cr.Problems | ForEach-Object { Write-Host "REFUSE land: $_" }
+      Undo-LandCommit
       exit 1
     }
   } else {
@@ -251,21 +282,12 @@ function Invoke-Prepare {
   $needShares = @($names | Where-Object { $_ -match '^(src/host/scheduler|src/kernel/stages/queue_build\.h|src/kernel/stages/sort\.h|src/kernel/sched/|src/kernel/launch_config\.h|src/kernel_gpu/(queue_build_|sort_)|src/device/cuda/)' }).Count -gt 0
   if ($needShares -and $DryRun) { Write-Host 'DRYRUN would run perf -Shares (the diff touches the scheduler, queue_build, sort or CUDA device code)' }
   if ($DryRun) {
-    Write-Host "DRYRUN would: commit deletion of tasks/$Number*, push $branch, run check gate, post astroray/gate"
     Write-Host "PASS prepare $Number (dry run: canary accepted)"
     return
   }
 
-  $rm = @($taskFile[0].FullName)
-  if (Test-Path $patch) { $rm += $patch }
-  $script:UndoTo = (GitX rev-parse HEAD)
-  $script:LandBranch = $branch
-  $null = GitX rm -q -- @rm
-  $null = GitX commit -q -m "$title (land)"
-  $sha = (GitX rev-parse HEAD)
-  $script:LandSha = $sha
-  $null = GitX push --force-with-lease -u origin HEAD
-  $script:OriginLand = $null   # the push replaced a dropped (land) commit on origin
+  $sha = $script:LandSha
+  $null = GitX reset -q --hard $sha
   $out = @()
   Measure-LandPhase 'gate_s' { $script:gateOut = & pwsh -NoProfile -File (Join-Path $root 'tools/check.ps1') gate -Landing 2>&1 | ForEach-Object { "$_" } }
   $out = @($script:gateOut)
@@ -312,6 +334,16 @@ function Invoke-Prepare {
   }
   $script:GatedSha = $sha
   Write-Host "PASS prepare $Number sha $($sha.Substring(0, 9)) astroray/gate $state"
+}
+
+function Open-LandPr([string]$branch) {
+  # Open or reuse the PR: the hosted ci run starts here, on the pushed sha.
+  $pr = @(GhX pr list --head $branch --state open --json number | ConvertFrom-Json)
+  if ($pr.Count) { $script:PrNumber = $pr[0].number; return }
+  $t = if ($Title) { $Title } else { ($script:TaskTitle -replace "^$Number\s+", "${Number}: ") }
+  $bodyText = "Task $Number. Landed through tools/land.ps1.`n`n$([char]::ConvertFromUtf32(0x1F916)) Generated with [Claude Code](https://claude.com/claude-code)"
+  $script:PrNumber = Invoke-LandingPrCreate $branch $t $bodyText
+  Write-Host "PR #$($script:PrNumber) opened; hosted ci runs beside the canary and the gate"
 }
 
 function Find-CiRun([string]$branch, [string]$sha) {
@@ -401,7 +433,7 @@ function Invoke-Merge {
 
 function Invoke-Submit {
   if ($DryRun) {
-    Write-Host "DRYRUN plan: prepare (rebase, canary with scenes, Blender suites for a Blender diff, rebuild, gate); open or reuse the PR"
+    Write-Host "DRYRUN plan: prepare: rebase, deletion commit, push, open or reuse the PR (hosted ci starts), then canary with scenes, Blender suites for a Blender diff, rebuild, gate, perf"
     Write-Host "DRYRUN plan: comment REVIEW $Verdict <sha>$(if ($Evidence) { '; comment evidence:' }); wait for hosted ci on that sha (deadline $CiDeadlineMin min, no rerun)"
     Write-Host "DRYRUN plan: merge (on 're-run prepare' prepare again, at most 3 attempts); PASS, best-effort cleanup, timing line, history"
     Invoke-Prepare
@@ -417,13 +449,7 @@ function Invoke-Submit {
     Invoke-Prepare
     $sha = $script:GatedSha
     $branch = (GitX branch --show-current)
-    $pr = @(GhX pr list --head $branch --state open --json number | ConvertFrom-Json)
-    if ($pr.Count) { $n = $pr[0].number }
-    else {
-      $t = if ($Title) { $Title } else { ($script:TaskTitle -replace "^$Number\s+", "${Number}: ") }
-      $bodyText = "Task $Number. Landed through tools/land.ps1.`n`n$([char]::ConvertFromUtf32(0x1F916)) Generated with [Claude Code](https://claude.com/claude-code)"
-      $n = Invoke-LandingPrCreate $branch $t $bodyText
-    }
+    $n = $script:PrNumber
     $null = GhX pr comment $n --body $(if ($Verdict -eq 'PASS') { "REVIEW PASS $sha" } else { "REVIEW SKIP $sha (O31)" })
     if ($Evidence) { $null = GhX pr comment $n --body $(if ($Evidence -match '^evidence:') { $Evidence } else { "evidence: $Evidence" }) }
     Measure-LandPhase 'ci_wait_s' { Wait-Ci $branch $sha ([int]$n) }

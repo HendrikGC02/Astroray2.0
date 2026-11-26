@@ -7,11 +7,11 @@
 # JSON in out/check/<tier>.json, log in out/check/<tier>.log; non-zero exit on failure.
 # gate (0009 d11, d18; machine lock): fast, then the gate steps declared below, against B-09
 # (180 s in all, 120 s for the kernel part). Every gate step carries a tag: `cpu` (needs neither a
-# GPU nor Blender) or `local`; a task that adds a gate step tags it, and tier ci runs the `cpu` ones.
+# GPU nor Blender) or `local`; a task that adds a gate step tags it.
 # -Declared is the task's declared kernel delta, printed next to the measured one.
 # full: gate plus the probe build; uncapped registers are warnings, never failures (0002 D10).
-# ci (0009 d12, d24; hosted CI): fast, cpu build, deps, every `cpu`-tagged gate step; no budget
-# here (B-11 is measured by task 091); logs the cl version.
+# ci (0009 d12, d24; hosted CI): fast, cpu build, deps, the headless bpy suite and the API-surface check; the gate
+# steps stay local (owner decision 42: every landing gate runs them on this PC). No budget here (B-11); logs the cl version.
 # -Landing (gate only; land.ps1 passes it): the gate holds the fast window for the whole tier, so builds of other
 # worktrees wait while a landing is gated (0009 d8). A gate an implementer runs holds it for the fast step and
 # the compile timing step only.
@@ -193,11 +193,11 @@ $global:LASTEXITCODE = $code
   $runCpuTier = [scriptblock]::Create($cpuTierText)
   # Shard counts: measured in task 212 (docs/BACKLOG.md Gate row). Every case and scene runs exactly once:
   # the bodies below sum the shards' own counts against the whole and fail on a difference.
-  # Hosted ci runs one process each: 2-4 cores and timing-sensitive session cases (task 212).
-  $shardsCpuGate = if ($isCi) { 1 } else { 3 }
+  $shardsCpuGate = 3
   # Analytic: 3, so the longest CPU scene (A9, 6.6 s with its 1024^2 CPU bake) does not set a shard's wall.
-  $shardsAnalytic = if ($isCi) { 1 } else { 3 }
-  # The fast tier's tests run in 3 shards the same way; one on ci for the same reason.
+  $shardsAnalytic = 3
+  # The fast tier's tests run in 3 shards the same way; hosted ci runs one process: 2-4 cores and timing-sensitive
+  # session cases (task 212).
   $shardsFast = if ($isCi) { 1 } else { 3 }
 
   # Group: steps with the same Group, adjacent in this table, run concurrently (CPU device against GPU
@@ -210,7 +210,7 @@ $global:LASTEXITCODE = $code
   $gateSteps = @(
     @{ Name = 'build dev'; Tag = 'local'; Build = $true; Run = { & pwsh -NoProfile -Command "& tools/build.ps1 -Target all,astroray_kernels_gpu_nofma; exit `$LASTEXITCODE" } },
     # 0008 V9 compile part (050): the negative-compile cases are outside ALL, so only this step runs them.
-    @{ Name = 'negative compile'; Tag = 'cpu'; Run = { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_negative_compile -Preset $(if ($isCi) { 'cpu' } else { 'dev' }) -NoMachineLock } },
+    @{ Name = 'negative compile'; Tag = 'cpu'; Run = { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_negative_compile -Preset dev -NoMachineLock } },
     # The tools' own CPU tests (tests/tools/fast_*.ps1): without a step here no tier would run them.
     @{ Name = 'tools tests'; Tag = 'cpu'; Run = { & pwsh -NoProfile -File tests/tools/run_fast.ps1 } },
     @{ Name = 'kernelgate self-test'; Tag = 'cpu'; Run = { & $py -I tools/kernelgate.py --self-test } },
@@ -492,8 +492,6 @@ $global:LASTEXITCODE = $code
       if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'lint self-test failed (out/check/ci.log)' }
       $r = Step 'build cpu' { & pwsh -NoProfile -File tools/build.ps1 -Preset cpu -NoMachineLock }
       if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'cpu build failed (out/check/build.log)' }
-      # Every CPU gate step a later task tags `cpu` reaches hosted CI through this loop.
-      foreach ($s in $gateSteps | Where-Object { $_.Tag -eq 'cpu' }) { Invoke-GateStep $s }
       # Headless sync suite (0007 d16, 0009 d12) against the pinned bpy wheel; ci.yml installs it from
       # .github/ci-requirements.txt, and a local CI=true run installs it here when it is missing.
       $r = Step 'headless sync tests' {
