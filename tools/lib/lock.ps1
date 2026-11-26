@@ -246,7 +246,10 @@ function Enter-ArMachineLock {
       if ($sw.Elapsed.TotalSeconds -lt $nextTick) { continue }
       $nextTick += $msgS
       $o = Read-ArLockOwner $ownerPath
-      if (Test-ArLockSay $say $sw.Elapsed.TotalSeconds) {
+      # A holder past its own ceiling is named once whatever the cadence: it is hung, its watchdog has failed.
+      $past = $o -and $o.Alive -and $o.CeilingS -gt 0 -and ([DateTimeOffset]::Now - $o.Started).TotalSeconds -gt $o.CeilingS -and -not $say.Past
+      if ($past) { $say.Past = $true }
+      if ((Test-ArLockSay $say $sw.Elapsed.TotalSeconds) -or $past) {
         Write-Host $(if ($yield) { 'waiting for a short job (build or one test case) that is queued ahead of long tools' } else { Format-ArLockWait $o })
       }
       # The limit is on the live holder's hold, not this caller's wait: a long queue of legitimate holders is not
