@@ -16,3 +16,4 @@ Budget: gate +0 s (the case is `full` only; say that no gate step runs it); `che
 Depends on: 175 (the tree and the radiometric table are in the build). Collisions: tools/check.ps1 with 190, 200, 201; tools/budgets.toml with 188; bench/history/2026.jsonl with every measurement task (append only; the later one rebases).
 Size: S (about 140 lines of script, scene and one test; no engine source); stop and report at 2x or when the table says stop.
 Progress:
+191 started: stopped before code, asking lead whether the new case duplicates light_tree_kernel/B-23 (test_light_tree_kernel.cpp:808)
