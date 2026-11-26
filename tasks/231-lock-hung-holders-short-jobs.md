@@ -16,3 +16,4 @@ Budget: fast +1 s at most (fixtures with short ceilings set through the environm
 Depends on: none. Collisions: tools/check.ps1 with 232, 233 and 234; the later one rebases.
 Size: M (about 200 lines without tests); stop and report at 2x.
 Progress:
+- 231: lock.ps1 ceilings table, owning-thread watchdog, short-job priority (polling long waiters); fixtures fast_lock_ceiling (2.4 s) and fast_lock_priority (1.6 s); 0009 d8 written; canary red on both.
