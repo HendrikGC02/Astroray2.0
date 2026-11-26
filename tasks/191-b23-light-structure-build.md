@@ -18,3 +18,4 @@ Size: S (about 140 lines of script, scene and one test; no engine source); stop 
 Progress:
 191 started: stopped before code, asking lead whether the new case duplicates light_tree_kernel/B-23 (test_light_tree_kernel.cpp:808)
 Lead ruling: extend 175's case (Scope + tests/cpu/test_light_tree_kernel.cpp, that case only, no new test file); canary names a tools/ helper command that does the real limit compare
+191: scene, script, helper b23_check, extended case, canary PASS (red via b23_check); waiting for quiet window for capture
