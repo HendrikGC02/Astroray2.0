@@ -23,6 +23,7 @@ struct RunArgs {
   uint32_t passes = 16;       // bench only
   uint32_t warmup = 2;        // bench only
   bool auto_samples = false;  // bench set the sample count itself; not reported as a user override
+  bool dump_noisy = false;    // render and dump with --denoise: --dump also writes Noisy Image
 };
 
 // Returns kContinue or the exit code. `needs_out` is true for render and dump.

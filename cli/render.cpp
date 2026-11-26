@@ -7,7 +7,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "cli.h"
 
@@ -45,6 +47,63 @@ const char* level_name(uint32_t l) {
   return l == AR_LEVEL_ERROR ? "ERROR" : l == AR_LEVEL_WARNING ? "WARNING" : "INFO";
 }
 
+std::string session_error(ar_session s) {
+  uint8_t msg[256] = {};
+  ar_session_last_error(s, sizeof msg, msg);
+  return text(msg, sizeof msg);
+}
+
+// <path without its extension><suffix>.
+std::string with_suffix(const std::string& path, const char* suffix) {
+  const size_t dot = path.rfind('.');
+  const size_t slash = path.find_last_of("/\\");
+  const bool ext = dot != std::string::npos && (slash == std::string::npos || dot > slash);
+  return (ext ? path.substr(0, dot) : path) + suffix;
+}
+
+// Reads the MEAN of the pass named `name` through the ABI and writes it as a little-endian PFM
+// (rows bottom-up, as the film's and PFM's). PFM, not FITS: every FITS file says DENOISED = F
+// (0008 V9), and a denoised Combined must never look like science data (d17).
+bool write_pass_pfm(ar_session s, const char* name, const std::string& path, bool* denoised) {
+  uint32_t count = 0;
+  if (ar_session_pass_count(s, &count) != AR_OK) {
+    printf("pass list unreadable: %s\n", session_error(s).c_str());
+    return false;
+  }
+  for (uint32_t i = 0; i < count; ++i) {
+    ar_pass_info info{};
+    if (ar_session_pass_info(s, i, &info) != AR_OK) {
+      printf("pass %u unreadable: %s\n", i, session_error(s).c_str());
+      return false;
+    }
+    if (text(info.name, sizeof info.name) != name) continue;
+    if (info.component_count != 3) {
+      printf("pass %s has %u components, not 3\n", name, info.component_count);
+      return false;
+    }
+    std::vector<float> px(size_t(info.width) * info.height * 3);
+    if (ar_session_read_pass(s, i, AR_QUANTITY_MEAN, uint32_t(px.size()), px.data()) != AR_OK) {
+      printf("reading %s failed: %s\n", name, session_error(s).c_str());
+      return false;
+    }
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) {
+      printf("cannot write %s\n", path.c_str());
+      return false;
+    }
+    fprintf(f, "PF\n%u %u\n-1.0\n", info.width, info.height);
+    const bool ok = fwrite(px.data(), sizeof(float), px.size(), f) == px.size();
+    if (fclose(f) != 0 || !ok) {
+      printf("writing %s failed\n", path.c_str());
+      return false;
+    }
+    *denoised = (info.flags & AR_PASS_DENOISED) != 0;
+    return true;
+  }
+  printf("the session has no pass %s\n", name);
+  return false;
+}
+
 }  // namespace
 
 int parse_run_args(const char* cmd, int argc, char** argv, bool needs_out, bool is_bench, RunArgs& a) {
@@ -53,17 +112,21 @@ int parse_run_args(const char* cmd, int argc, char** argv, bool needs_out, bool 
     fprintf(stderr, is_bench ? "usage: astroray_cli bench <recording> [--passes N] [--warmup W] [--spp N] "
                                "[--device cpu|cuda[:i]] [--seed S] [--size WxH]\n"
                              : "usage: astroray_cli %s <recording> -o <file.fits> [--spp N] [--device cpu|cuda[:i]] "
-                               "[--seed S] [--size WxH]\n",
+                               "[--seed S] [--size WxH] [--denoise oidn|none [--dump]]\n",
             cmd);
     return kExitUsage;
   };
   for (int i = 2; i < argc; ++i) {
     if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
       printf("usage: astroray_cli %s <recording> %s[--spp N] [--device cpu|cuda[:i]] [--seed S] [--size WxH]%s\n", cmd,
-             needs_out ? "-o <file.fits> " : "", is_bench ? " [--passes N] [--warmup W]" : "");
+             needs_out ? "-o <file.fits> " : "",
+             is_bench ? " [--passes N] [--warmup W]" : " [--denoise oidn|none [--dump]]");
       if (needs_out)
         printf("The file is the full film dump (ar_session_write_fits AR_FITS_DUMP), not a science file: the\n"
-               "science file kind is not implemented yet, so render and dump write the same thing.\n");
+               "science file kind is not implemented yet, so render and dump write the same thing.\n"
+               "--denoise sets the recorded final session's denoiser; Combined (denoised when the report has no\n"
+               "DENOISER_UNAVAILABLE entry) is then also written as <file>_combined.pfm, and with --dump the\n"
+               "film's Noisy Image as <file>_noisy_image.pfm. A denoised image is never written to FITS (0008 d17).\n");
       return 0;
     }
     const char* k = argv[i];
@@ -93,6 +156,13 @@ int parse_run_args(const char* cmd, int argc, char** argv, bool needs_out, bool 
       } else {
         return usage("expected cpu or cuda[:i], got", v);
       }
+    } else if (needs_out && !strcmp(k, "--denoise") && has_val) {
+      const char* v = argv[++i];
+      if (!strcmp(v, "oidn")) a.overrides.denoiser = AR_DENOISER_OIDN;
+      else if (!strcmp(v, "none")) a.overrides.denoiser = AR_DENOISER_NONE;
+      else return usage("expected oidn or none, got", v);
+    } else if (needs_out && !strcmp(k, "--dump")) {
+      a.dump_noisy = true;
     } else if (is_bench && !strcmp(k, "--passes") && has_val) {
       if (!parse_u32(argv[++i], &a.passes) || a.passes == 0) return usage("bad pass count", argv[i]);
     } else if (is_bench && !strcmp(k, "--warmup") && has_val) {
@@ -105,6 +175,7 @@ int parse_run_args(const char* cmd, int argc, char** argv, bool needs_out, bool 
   }
   if (a.recording.empty()) return usage("missing recording", "");
   if (needs_out && a.out.empty()) return usage("missing -o", "");
+  if (a.dump_noisy && a.overrides.denoiser != AR_DENOISER_OIDN) return usage("--dump needs", "--denoise oidn");
   return kContinue;
 }
 
@@ -155,7 +226,8 @@ int Replayed::open(const RunArgs& a) {
        o.device_kind == AR_DEVICE_CUDA ? "cuda:" + std::to_string(o.device_index) : "cpu", true},
       {"--seed", o.seed != kReplayUnset, kAppliedSeed, std::to_string(o.seed), true},
       {"--size", o.width != kReplayUnset, kAppliedSize, std::to_string(o.width) + "x" + std::to_string(o.height), true},
-      {"--spp", o.samples != kReplayUnset, kAppliedSamples, std::to_string(o.samples), !a.auto_samples}};
+      {"--spp", o.samples != kReplayUnset, kAppliedSamples, std::to_string(o.samples), !a.auto_samples},
+      {"--denoise", o.denoiser != kReplayUnset, kAppliedDenoiser, o.denoiser == AR_DENOISER_OIDN ? "oidn" : "none", true}};
   for (const Check& c : checks) {
     if (!c.requested) continue;
     if ((res.applied & c.bits) != c.bits) {
@@ -278,6 +350,23 @@ int render_cmd(int argc, char** argv, bool dump) {
       return kExitFailure;
     }
     printf("wrote %s\n", path.c_str());
+    if (a.overrides.denoiser != AR_DENOISER_OIDN) continue;
+    struct Out {
+      const char* pass;
+      const char* suffix;
+      bool wanted;
+    };
+    for (const Out& o : {Out{"Combined", "_combined.pfm", true}, Out{"Noisy Image", "_noisy_image.pfm", a.dump_noisy}}) {
+      if (!o.wanted) continue;
+      const std::string pfm = with_suffix(path, o.suffix);
+      bool denoised = false;
+      if (!write_pass_pfm(r.res.sessions[i], o.pass, pfm, &denoised)) {
+        print_reports(r);
+        return kExitFailure;
+      }
+      // A failed denoiser leaves Combined noisy with one DENOISER_UNAVAILABLE entry (0008 d16), printed below.
+      printf("wrote %s (%s, %s)\n", pfm.c_str(), o.pass, denoised ? "denoised" : "not denoised");
+    }
   }
   const int highest = print_reports(r);
   return highest >= AR_LEVEL_ERROR ? kExitFailure : 0;

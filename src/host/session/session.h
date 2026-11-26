@@ -5,11 +5,15 @@
 // film, film_present (Beauty) or film_heatmap (a heat-map display mode) writes a frame, and the
 // frame is published to the display ring with the latched generation. At every pass boundary
 // the latch folds pending views and newly active commits into one latched state (latch.h).
-// Cancellation is checked between launches. The session never touches process-global state;
-// everything it owns dies with it.
+// Cancellation is checked between launches. With a denoiser, the state loads on a worker from
+// creation, and a converged final render runs film_prepare_denoise and one FINAL denoise before it
+// reports CONVERGED; a denoiser that fails leaves the noisy image and one report entry. The session
+// never touches process-global state; everything it owns dies with it.
 // Ref: docs/decisions/0007-blender-integration.md d5 (session functions), d23 (one render thread
 // per session), d25 (latch, epochs, interrupt rule), d27 (cancel at the next launch boundary);
-// 0004 D25 (epoch resets); 0008 d3 (resolve), d12 (heat-map default ranges); RULINGS 52, 69.
+// 0004 D25 (epoch resets); 0008 d3 (resolve), d12 (heat-map default ranges), d16-d18 (the final
+// denoise, its failure rule, FINAL settings), d13a (Combined denoised, Noisy Image the film's);
+// RULINGS 52, 69, 87 (the denoise order written into 0008 d16).
 #pragma once
 #include <atomic>
 #include <condition_variable>
@@ -27,6 +31,8 @@
 #include "host/device.h"
 #include "host/display/display_ring.h"
 #include "host/counters.h"
+#include "host/denoise/denoiser.h"
+#include "host/film/display_image.h"
 #include "host/film/active_pixels.h"
 #include "host/film/filter_table.h"
 #include "host/film/fits_writer.h"
@@ -67,6 +73,10 @@ struct SessionOptions {
   // Test hook, zero in production: the render thread sleeps this long after each resolve and before
   // the pass is published, so a poll can look for a sample count that arrives without its pass time.
   uint32_t test_sleep_after_resolve_ms = 0;
+  // Test hook, false in production: at convergence the render thread treats the denoiser state as
+  // still loading, so a cancel can be issued during the final render's wait for it. It holds the
+  // session's wait, not DenoiserState's own loading worker.
+  bool test_hold_denoiser = false;
 };
 
 // One published frame as the render thread saw it: when (the steady clock the batching uses), how
@@ -112,6 +122,9 @@ struct FilmReadContext {
   const Film& film;
   FitsProvenance provenance;
   uint64_t pass_revision = 0;  // of film's layout (ruling 75)
+  bool denoiser = false;  // the session selected a denoiser: list_passes(film.layout(), denoiser)
+  // The final denoise's DisplayImage when it ran and succeeded for this film state, else null.
+  const DisplayImage* denoised = nullptr;
 };
 
 struct SessionStats {
@@ -121,13 +134,19 @@ struct SessionStats {
   uint64_t stale_dropped = 0;       // resolves of a pass whose epoch was no longer current
   uint64_t frames_published = 0;
   uint64_t samples_done = 0;        // per pixel, in the current epoch
+  uint64_t denoises = 0;            // final denoises that succeeded
+  // The last final denoise: film_prepare_denoise and the copy of its three planes to the host (the
+  // OIDN backend takes host images), then the OIDN filter itself.
+  double denoise_copy_ms = 0.0;
+  double denoise_ms = 0.0;
 };
 
 class Session {
  public:
-  // Starts the render thread through start_engine_thread and returns. Throws
-  // std::invalid_argument for a zero size, an unknown mode or denoiser, and SessionUnsupported
-  // for a denoiser this build cannot run. `scene` and `device` outlive the session.
+  // Starts the render thread through start_engine_thread and, with AR_DENOISER_OIDN, the denoiser
+  // state's loading worker (0008 d16), and returns. Throws std::invalid_argument for a zero size, an
+  // unknown mode or denoiser, and SessionUnsupported for DLSS_RR and for OIDN in a VIEWPORT session.
+  // `scene` and `device` outlive the session.
   Session(Scene& scene, Device& device, const SessionOptions& options);
   ~Session();  // close() and join()
   Session(const Session&) = delete;
@@ -142,7 +161,8 @@ class Session {
   // becomes CLOSED.
   void close();
   // Blocks until the state is PAUSED, CONVERGED, CLOSED or FAILED, the context is poisoned, or
-  // `timeout_ms` passes; returns whether one of those was reached.
+  // `timeout_ms` passes; returns whether one of those was reached. A session with a denoiser stays
+  // RENDERING until its final denoise ended (0008 d16, ruling 87).
   bool wait(uint32_t timeout_ms);
   // Blocks until the render thread has exited (after close()).
   void join();
@@ -201,6 +221,18 @@ class Session {
   const Latch& latch() const { return latch_; }
   // Tests: the sample count n of render-rectangle pixel j, read under the render lock.
   uint32_t film_samples(uint32_t j) const;
+  bool denoiser_selected() const { return options_.denoiser != AR_DENOISER_NONE; }
+  // A final denoise succeeded for the current film state (AR_PASS_DENOISED on Combined).
+  bool denoised() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return denoised_;
+  }
+  // Tests: the denoiser's error text once it failed (what its DENOISER_UNAVAILABLE entry holds,
+  // before the report's 127-byte cut), else empty.
+  std::string denoiser_error() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return denoiser_error_;
+  }
   // The ASTRORAY_TEST_* hooks this session read at create (empty outside gate builds).
   const std::vector<std::string>& active_test_hooks() const { return hooks_.active; }
 
@@ -230,6 +262,12 @@ class Session {
   // False when the pass was dropped as stale; the caller publishes a resolved pass.
   bool resolve(uint64_t pass_epoch, uint64_t generation);
   void present(uint64_t generation);
+  // The final denoise after convergence (0008 d16): waits for the state in slices, prepares the
+  // three images, denoises with FINAL quality. True when it ended (denoised, or failed with its
+  // report entry); false when a cancel, close, failure or newly pending state stopped it, which
+  // leaves the noisy image.
+  bool final_denoise(uint64_t generation);
+  void denoiser_unavailable(const std::string& why, uint64_t generation);
   static double now_s();  // seconds on steady_clock, the one clock batching_ sees
   void wake();
   void raise_interrupt_if_due();
@@ -282,6 +320,17 @@ class Session {
   bool filter_ready_ = false;
   FilterSettings filter_uploaded_{};
   TestHooks hooks_;  // read once in the constructor
+  // The denoiser (null without one): created at construction, used and destroyed by the render
+  // thread (release(), before the device buffers; 176's rule that it goes before the CUDA device).
+  std::unique_ptr<DenoiserState> denoiser_;
+  // film_prepare_denoise's target: colour, albedo and normal planes at the maximum size, then the
+  // DenoiseTarget the kernel reads (KernelGlobals::denoise). Allocated at the first final denoise.
+  DeviceBuffer denoise_buf_;
+  bool denoise_bind_ = false;   // bind_globals points KernelGlobals::denoise at denoise_buf_
+  bool denoise_done_ = false;   // the final denoise of this epoch ended (render thread)
+  bool denoiser_reported_ = false;  // its DENOISER_UNAVAILABLE entry exists (once per session)
+  std::vector<float> denoise_host_[3];  // the planes on the host, the backend's input
+  DisplayImage display_;  // the final denoise's output; under render_mutex_
   uint64_t film_epoch_ = 0;
   uint64_t published_film_epoch_ = 0;  // guarded by mutex_
   uint64_t passes_in_epoch_ = 0;
@@ -316,6 +365,8 @@ class Session {
   ReportTable detached_scene_report_;  // the scene's report as of detach
   ReportTable report_snap_;            // the latest merged snapshot
   float last_pass_ms_ = 0.0f;
+  bool denoised_ = false;       // display_ holds a denoised image for the current film state
+  std::string denoiser_error_;  // the denoiser's failure text
   uint64_t device_free_bytes_ = 0, device_total_bytes_ = 0;  // published with last_pass_ms_
   PassCounters last_counters_;
   SessionProgress detached_progress_;  // what progress() reports once the scene is detached

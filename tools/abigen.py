@@ -1029,6 +1029,7 @@ constexpr uint32_t kAppliedSizeSettings = 1u << 3;
 constexpr uint32_t kAppliedSizeSession = 1u << 4;
 constexpr uint32_t kAppliedSizeView = 1u << 5;
 constexpr uint32_t kAppliedSize = kAppliedSizeSettings | kAppliedSizeSession | kAppliedSizeView;
+constexpr uint32_t kAppliedDenoiser = 1u << 6;
 
 struct ArReplayOptions {
   const char* log_path = nullptr;     // overrides the recorded context log path when set
@@ -1039,14 +1040,17 @@ struct ArReplayOptions {
   // `samples` and `viewport_samples`); width and height also at ar_session_create (max_width,
   // max_height) and ar_session_set_view (region_width, region_height); a size override also sets
   // resolution_percent = 100 and border_enabled = 0 in the settings and the view, and is refused
-  // (size_refused) when its aspect differs from the recorded region's. A null descriptor takes no
-  // override. kReplayUnset keeps the recorded value. Ref: Ruling 71.
+  // (size_refused) when its aspect differs from the recorded region's; denoiser at ar_session_create
+  // (ar_session_desc.denoiser), refused (the replay stops with AR_ERR_INVALID_ARGUMENT and a message)
+  // for a recorded VIEWPORT session, which takes no denoiser but NONE (0008 d16). A null descriptor
+  // takes no override. kReplayUnset keeps the recorded value. Ref: Ruling 71.
   uint32_t device_kind = kReplayUnset;
   uint32_t device_index = kReplayUnset;
   uint32_t seed = kReplayUnset;
   uint32_t width = kReplayUnset;
   uint32_t height = kReplayUnset;
   uint32_t samples = kReplayUnset;
+  uint32_t denoiser = kReplayUnset;
 };
 
 struct ArReplayResult {
@@ -1262,7 +1266,14 @@ ar_status replay_record(State& st, uint32_t fn, Reader& r, Arena& a, bool& stop)
                     s += (f"      if ({nm}_p && st.opt->width != kReplayUnset && st.opt->height != kReplayUnset) {{\n"
                           f"        {nm}_v.max_width = st.opt->width;\n"
                           f"        {nm}_v.max_height = st.opt->height;\n"
-                          f"        st.res->applied |= kAppliedSizeSession;\n      }}\n")
+                          f"        st.res->applied |= kAppliedSizeSession;\n      }}\n"
+                          f"      if ({nm}_p && st.opt->denoiser != kReplayUnset) {{\n"
+                          f"        if ({nm}_v.mode == AR_SESSION_MODE_VIEWPORT && st.opt->denoiser != AR_DENOISER_NONE) {{\n"
+                          f"          st.msg = \"the denoiser override cannot apply: the recording creates a VIEWPORT session\";\n"
+                          f"          stop = true;\n"
+                          f"          return AR_ERR_INVALID_ARGUMENT;\n        }}\n"
+                          f"        {nm}_v.denoiser = st.opt->denoiser;\n"
+                          f"        st.res->applied |= kAppliedDenoiser;\n      }}\n")
                 s += f"      const {k[1]}* {nm} = {nm}_p ? &{nm}_v : nullptr;\n"
             elif k[0] == "array":
                 if k[1] in LIKE:
