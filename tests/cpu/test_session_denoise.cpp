@@ -144,6 +144,8 @@ TEST_CASE("session_denoise/failure leaves noisy and one entry") {
   REQUIRE(e.size() == 1);
   CHECK(e[0].detail == error.substr(0, 127));
   CHECK(s.stats().denoises == 0);
+  // No target planes for a denoiser that does not work (OIDN's CPU device records none of its own).
+  CHECK(dev->ledger().category_total(LedgerCategory::DENOISER) == 0);
 }
 
 TEST_CASE("session_denoise/cancel during denoise") {

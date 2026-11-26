@@ -1148,18 +1148,16 @@ bool Session::final_denoise(uint64_t generation) {
   const uint64_t plane = denoise_plane_bytes(options_);
   uint32_t w = 0, h = 0;
   {
-    // The target first, before any wait: film_prepare_denoise checks its size only in debug builds, so
-    // the host refuses a render rectangle the allocated planes cannot hold, loudly (the session fails).
+    // The target's size first, before any wait: film_prepare_denoise checks it only in debug builds, so
+    // the host refuses a render rectangle the planes cannot hold, loudly (the session fails).
     std::lock_guard<std::mutex> render(render_mutex_);
     const ar::FilmData& f = film_->data();
     w = f.rect_width;
     h = f.rect_height;
-    if (!denoise_buf_.ptr) {
-      denoise_buf_ = device_.allocate(LedgerCategory::DENOISER, 3 * plane + sizeof(ar::DenoiseTarget), options_.owner);
-      denoise_capacity_px_ = options_.test_denoise_capacity_px != 0
-                                 ? options_.test_denoise_capacity_px
-                                 : uint64_t(options_.max_width) * options_.max_height;
-    }
+    // The planes are allocated at the maximum size (below, once the denoiser is known to work), so the
+    // capacity is known without them.
+    denoise_capacity_px_ = options_.test_denoise_capacity_px != 0 ? options_.test_denoise_capacity_px
+                                                                   : uint64_t(options_.max_width) * options_.max_height;
     if (uint64_t(w) * h > denoise_capacity_px_)
       throw std::logic_error("final denoise: the film's render rectangle " + std::to_string(w) + "x" +
                              std::to_string(h) + " does not fit the denoise target's " +
@@ -1195,6 +1193,10 @@ bool Session::final_denoise(uint64_t generation) {
   DenoiseInputs in;
   {
     std::lock_guard<std::mutex> render(render_mutex_);
+    // Allocated only now, once the denoiser works: a failed or poisoned denoiser holds no DENOISER bytes
+    // (300 MB of planes at 4K) for the rest of the session.
+    if (!denoise_buf_.ptr)
+      denoise_buf_ = device_.allocate(LedgerCategory::DENOISER, 3 * plane + sizeof(ar::DenoiseTarget), options_.owner);
     char* base = static_cast<char*>(denoise_buf_.ptr);
     const ar::DenoiseTarget target{reinterpret_cast<float*>(base), reinterpret_cast<float*>(base + plane),
                                    reinterpret_cast<float*>(base + 2 * plane), w, h};
