@@ -207,7 +207,8 @@ AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_
   const U32x4 stack = ps_medium_stack(kg, slot);
   const uint32_t flags = ps_flags(kg, slot);
   const StackUpdate u = front ? stack_push(stack, flags, m + 1u, material_medium_priority(kg, mat)) : stack_remove(stack, flags, m + 1u);
-  // A refused push or remove returns the stack and flags unchanged, so they are stored either way.
+  // A refused push or remove returns the stack and flags unchanged, so they are stored whether the
+  // update was applied or not.
   ps_medium_stack(kg, slot) = u.stack;
   ps_flags(kg, slot) = u.flags;
   // A refused remove is a path that started inside the medium: it goes on with its stack as it was. A
