@@ -258,6 +258,10 @@ std::unique_ptr<Device> make_cpu_device(Ledger& ledger, ThreadPool& pool);
 // Retains device `device_index`'s primary context; throws DeviceError when CUDA cannot
 // be used, including after a sticky error elsewhere in the process.
 std::unique_ptr<ModuleDevice> make_cuda_device(Ledger& ledger, uint32_t device_index);
+// The CUDA device ordinal and stream (a CUstream as void*) of a device make_cuda_device made, for a
+// library that runs on the engine's stream (the OIDN CUDA device, 0008 d18). Throws
+// std::invalid_argument for any other device: a CPU device has neither. Same file and builds as above.
+void cuda_stream_of(Device& device, int* ordinal, void** stream);
 // True for the CUDA driver results that need a process restart (illegal address, launch
 // failure, launch timeout, ECC and the other hardware-fault codes); takes the numeric
 // CUresult so callers need no CUDA header.

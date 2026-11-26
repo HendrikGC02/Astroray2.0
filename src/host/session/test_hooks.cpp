@@ -136,6 +136,12 @@ TestHooks read_test_hooks() {
     out.compute_capability = uint32_t(positive("COMPUTE_CAPABILITY", value, 999));
     out.active.push_back("COMPUTE_CAPABILITY=" + value);
   }
+  if (env_value("DENOISER_FAIL", &value)) {
+    if (value == "library") out.denoiser_fail = TestHooks::DenoiserFail::LIBRARY;
+    else if (value == "device") out.denoiser_fail = TestHooks::DenoiserFail::DEVICE;
+    else throw std::invalid_argument("ASTRORAY_TEST_DENOISER_FAIL=" + value + " is not one of library, device");
+    out.active.push_back("DENOISER_FAIL=" + value);
+  }
 #endif
   return out;
 }

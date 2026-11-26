@@ -10,9 +10,11 @@
 
 namespace astroray::host {
 
-std::vector<PassDesc> list_passes(const FilmLayout& layout) {
+std::vector<PassDesc> list_passes(const FilmLayout& layout, bool denoiser) {
+  if (denoiser && !layout.guides())
+    throw std::invalid_argument("a session with a denoiser has a film without the denoiser guide planes");
   std::vector<PassDesc> out;
-  out.push_back({"Combined", 3, AR_UNIT_ENERGY, PassSource::Combined, "display"});
+  out.push_back({"Combined", 3, AR_UNIT_ENERGY, denoiser ? PassSource::Denoised : PassSource::Combined, "display"});
   const struct {
     const char* channel;
     const char* name;
@@ -20,6 +22,12 @@ std::vector<PassDesc> list_passes(const FilmLayout& layout) {
   for (const auto& a : aovs)
     if (const FilmChannel* c = layout.find(a.channel))
       out.push_back({a.name, c->components, AR_UNIT_NONE, PassSource::Aov, a.channel});
+  if (denoiser) {
+    // d10: Noisy Image is always written when a denoiser ran; Denoising Depth has no producer yet.
+    out.push_back({"Denoising Albedo", 3, AR_UNIT_NONE, PassSource::GuideAlbedo, "guide_albedo"});
+    out.push_back({"Denoising Normal", 3, AR_UNIT_NONE, PassSource::GuideNormal, "guide_normal"});
+    out.push_back({"Noisy Image", 3, AR_UNIT_ENERGY, PassSource::NoisyImage, "display"});
+  }
   out.push_back({"AR Sample Count", 1, AR_UNIT_NONE, PassSource::SampleCount, ""});
   if (layout.find("bounces")) out.push_back({"AR Bounces", 1, AR_UNIT_NONE, PassSource::Bounces, "bounces"});
   out.push_back({"AR Rel Error", 1, AR_UNIT_NONE, PassSource::RelError, "display"});
@@ -31,18 +39,24 @@ std::vector<PassDesc> list_passes(const FilmLayout& layout) {
   return out;
 }
 
+namespace {
+// The passes read from the film's display MOMENT channel.
+bool film_moment(const PassDesc& p) {
+  return p.source == PassSource::Combined || p.source == PassSource::Denoised || p.source == PassSource::NoisyImage;
+}
+}  // namespace
+
 uint64_t pass_float_count(const PassDesc& pass, uint32_t quantity, uint32_t width, uint32_t height) {
   const uint64_t pixels = uint64_t(width) * height;
   switch (quantity) {
     case AR_QUANTITY_MEAN:
       return pixels * pass.components;
     case AR_QUANTITY_VARIANCE:
-      if (pass.source != PassSource::Combined)
+      if (!film_moment(pass))
         throw std::invalid_argument("pass '" + pass.name + "' has no variance (only MOMENT passes do)");
       return pixels * pass.components;
     case AR_QUANTITY_COUNT:
-      if (pass.source != PassSource::Combined && pass.source != PassSource::SampleCount &&
-          pass.source != PassSource::Invalid)
+      if (!film_moment(pass) && pass.source != PassSource::SampleCount && pass.source != PassSource::Invalid)
         throw std::invalid_argument("pass '" + pass.name + "' has no count");
       return pixels;
     default:
@@ -59,11 +73,27 @@ void interleave(const std::vector<T>& plane, uint32_t comps, uint32_t k, float* 
 
 }  // namespace
 
-void read_pass(const FilmView& film, const PassDesc& pass, uint32_t quantity, uint32_t n, float* dst) {
+void read_pass(const FilmView& film, const PassDesc& pass, uint32_t quantity, uint32_t n, float* dst,
+               const DisplayImage* denoised) {
   const uint64_t want = pass_float_count(pass, quantity, film.width(), film.height());
   if (n != want)
     throw std::invalid_argument("read_pass '" + pass.name + "': the buffer holds " + std::to_string(n) +
                                 " floats, the render needs exactly " + std::to_string(want));
+  const bool use_denoised = pass.source == PassSource::Denoised && denoised != nullptr && denoised->denoised;
+  if (use_denoised && quantity == AR_QUANTITY_VARIANCE)
+    throw std::invalid_argument("pass '" + pass.name +
+                                "' is denoised and has no variance; Noisy Image holds the film's variance of the mean");
+  if (use_denoised && quantity == AR_QUANTITY_MEAN) {
+    // d13a: Combined is the denoised DisplayImage. It was made from this film's render rectangle; a
+    // different size would be a session bug, never a picture to crop.
+    if (denoised->width != film.width() || denoised->height != film.height())
+      throw std::logic_error("read_pass: the denoised image is " + std::to_string(denoised->width) + "x" +
+                             std::to_string(denoised->height) + ", the film " + std::to_string(film.width()) + "x" +
+                             std::to_string(film.height()));
+    for (size_t j = 0; j < size_t(film.width()) * film.height(); ++j)
+      for (uint32_t k = 0; k < 3; ++k) dst[j * 3 + k] = denoised->rgba[j * 4 + k];
+    return;
+  }
   // Every value comes from FilmView, which owns the plane indexing and the S1 / n formulas.
   if (quantity == AR_QUANTITY_COUNT) {
     if (pass.source == PassSource::Invalid) interleave(film.invalid_counts(), 1, 0, dst);
@@ -72,11 +102,15 @@ void read_pass(const FilmView& film, const PassDesc& pass, uint32_t quantity, ui
   }
   switch (pass.source) {
     case PassSource::Combined:
+    case PassSource::Denoised:
+    case PassSource::NoisyImage:
       for (uint32_t k = 0; k < pass.components; ++k)
         interleave(quantity == AR_QUANTITY_MEAN ? film.mean(pass.channel, k) : film.variance_of_mean(pass.channel, k),
                    pass.components, k, dst);
       break;
     case PassSource::Aov:
+    case PassSource::GuideAlbedo:
+    case PassSource::GuideNormal:
       for (uint32_t k = 0; k < pass.components; ++k) interleave(film.mean(pass.channel, k), pass.components, k, dst);
       break;
     case PassSource::SampleCount:
