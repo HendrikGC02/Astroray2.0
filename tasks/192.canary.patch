@@ -100,7 +100,7 @@ index 202ec49e..95cebc2d 100644
    sh_medium_stack(kg, sh) = shadow_medium_field(medium_plus_one);
    sh_medium_rng(kg, sh) = shadow_rng_start(e);
 -  sh_r_u(kg, sh) = r_p * (delta_light ? Real(0) : p_scatter);
-+  sh_r_u(kg, sh) = r_p * (delta_light ? Real(0) : p_light);
++  sh_r_u(kg, sh) = r_p * (delta_light ? Real(0) : p_scatter + p_light);
    sh_r_l(kg, sh) = r_p * p_light;
    Spec lt;
    for (int i = 0; i < kLanes; ++i) lt.v[i] = lam.nm[i];
