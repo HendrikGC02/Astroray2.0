@@ -227,7 +227,7 @@ function Invoke-Canary {
     }
     [pscustomobject]@{ Red = $red; Green = $green; Problems = $probs } }
   try {
-    if (-not $cpuOnly) { $null = Enter-ArMachineLock }
+    if (-not $cpuOnly) { $null = Enter-ArMachineLock -Job canary }
     # Baseline: every item must run and pass without the patch, or "red" means nothing.
     $null = Invoke-CanaryBuild $targets $cpuOnly $Root
     if ($NoBaseline) { $res.Lines += 'baseline: skipped on request (-NoBaseline)' }

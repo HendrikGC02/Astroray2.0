@@ -47,7 +47,7 @@ $py = Get-ArPython
 & $py -I (Join-Path $PSScriptRoot 'scenes.py') @($scenes | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.recording) })
 if ($LASTEXITCODE -ne 0) { Write-Host 'FAIL bench: scene recordings'; exit 1 }
 
-$null = Enter-ArMachineLock
+$null = Enter-ArMachineLock -Job bench
 $failed = $false
 try {
   $dir = Join-Path $root 'out/bench'

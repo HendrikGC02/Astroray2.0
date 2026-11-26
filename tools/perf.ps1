@@ -82,7 +82,7 @@ $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
 $machine = "$gpu-$($cpu.NumberOfCores)c$($cpu.NumberOfLogicalProcessors)t"
 
 $cli = Join-Path $root 'out/bin/astroray_cli.exe'
-$null = Enter-ArMachineLock
+$null = Enter-ArMachineLock -Job perf
 $sw = [Diagnostics.Stopwatch]::StartNew()   # lock wait excluded
 $newLines = @()   # per bench run: the history lines it appended
 try {

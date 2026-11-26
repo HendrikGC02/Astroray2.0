@@ -23,7 +23,7 @@ function Invoke-ArBlender {
   $profileDir = Join-Path $root "out/blender_home/$runId"
   foreach ($d in 'config', 'scripts', 'extensions', 'datafiles') { New-Item -ItemType Directory -Force (Join-Path $profileDir $d) | Out-Null }
   $log = Join-Path $profileDir 'blender.log'
-  $waited = Enter-ArMachineLock
+  $waited = Enter-ArMachineLock -Job blender -CeilingS ($TimeoutS + 120)
   $saved = @{}
   $vars = @{
     BLENDER_USER_CONFIG = 'config'; BLENDER_USER_SCRIPTS = 'scripts'
@@ -72,7 +72,7 @@ function Invoke-ArBlenderCommand {
   if (-not (Test-Path $exe)) {
     throw "blender.exe not found at '$exe'; set ASTRORAY_BLENDER to the Blender 5.3 install folder"
   }
-  $null = Enter-ArMachineLock
+  $null = Enter-ArMachineLock -Job blender -CeilingS ($TimeoutS + 120)
   $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
   $home_ = Join-Path $root ('out/blender_home/cmd-' + $PID)
   $saved = @{}

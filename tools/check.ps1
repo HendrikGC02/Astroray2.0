@@ -37,7 +37,7 @@ if ($Landing -and $Tier -ne 'gate') {
 
 # Locks first; the tier clock starts after them so waits are excluded (0009 d8).
 $waited = 0.0
-if ($Tier -in @('gate', 'full')) { $waited = Enter-ArMachineLock }
+if ($Tier -in @('gate', 'full')) { $waited = Enter-ArMachineLock -Job "check-$Tier" }
 Start-ArSummary $Tier
 $budget = $null
 $isCi = ($Tier -eq 'ci')
@@ -62,6 +62,7 @@ function Fail([string]$why) {
 }
 # Run a step, return output lines; its time goes into the summary.
 function Step([string]$name, [scriptblock]$body) {
+  Set-ArLockStep $name
   $t = [Diagnostics.Stopwatch]::StartNew()
   $global:LASTEXITCODE = 0
   $out = & $body 2>&1 | ForEach-Object { "$_" }

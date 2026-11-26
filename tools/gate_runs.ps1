@@ -12,7 +12,7 @@ $py = Get-ArPython
 $dir = Join-Path $root 'out/tmp/157'
 New-Item -ItemType Directory -Force $dir | Out-Null
 Get-ChildItem $dir -Filter 'run-*.json' | Remove-Item
-$null = Enter-ArMachineLock
+$null = Enter-ArMachineLock -Job gate_runs
 $bad = 0
 $kept = @()
 try {
