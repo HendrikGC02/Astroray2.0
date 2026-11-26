@@ -533,7 +533,7 @@ Estimate estimate(const Oracle& o, const Shade& s, uint64_t seed, uint32_t n, ui
   auto run = [&](uint32_t c) {
     Rng rng{st::mix_bits(seed + c)};
     for (uint32_t k = 0; k < n / chunks; ++k) {
-      const ar::SampledLight a = ar::light_sampler_sample(av, ctx, rng.bits(), Real(rng.next()));
+      const ar::SampledLight a = ar::light_sampler_sample(av, ctx, rng.bits(), Real(rng.next()), true);
       alias[c].add(a.light == ar::kNoLight ? 0.0 : f_light(o.L, a.light, s) / double(a.pmf));
       const ar::SampledLight t = ar::light_tree_sample(tv, s.p, s.n, Real(rng.next()));
       const double pmf = t.light == ar::kNoLight ? 0.0 : double(ar::light_tree_pmf(tv, s.p, s.n, t.light));

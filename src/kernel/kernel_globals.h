@@ -40,6 +40,9 @@ inline constexpr uint32_t TEST_HOOK_PIXEL_CENTRE = 1u << 0;
 // table in this mode, not the MIS-compensated one (light/world_env.h, 0004 D11).
 inline constexpr uint32_t TEST_HOOK_NEE_OFF = 1u << 1;
 inline constexpr uint32_t TEST_HOOK_NEE_LIGHT_ONLY = 1u << 2;
+// LIGHT_ALIAS (ASTRORAY_TEST_LIGHT_SAMPLER=alias): every light pick and pmf reads the importance
+// alias table alone, the light tree's oracle (light/light_sampler.h, 0004 D10).
+inline constexpr uint32_t TEST_HOOK_LIGHT_ALIAS = 1u << 3;
 
 // Constant for a whole pass. max_bounces uses the order of PathStateSoA::bounces:
 // total, diffuse, glossy, transmission, volume, transparent.
@@ -114,9 +117,9 @@ struct KernelGlobals {
   const CameraView* camera;
   const FilterTable* filter;
 
-  // The light table the session latched for its epoch (068): records by light index, the alias
-  // sampler over them (light_sampler->light_count lights), the GGX dielectric E table (064) and the
-  // metal lobe's E_spec table (lobes/tables.h).
+  // The light table the session latched for its epoch (068): records by light index, the light
+  // sampler over them (light_sampler->light_count lights: tree, floor and oracle alias table), the
+  // GGX dielectric E table (064) and the metal lobe's E_spec table (lobes/tables.h).
   const LightRecord* lights;
   const LightSamplerView* light_sampler;
   const EDielTable* e_diel;

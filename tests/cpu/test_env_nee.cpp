@@ -505,9 +505,11 @@ TEST_CASE("env_nee/pmf matches sample") {
   const uint32_t draws = 100000;
   int bad = 0;
   for (uint32_t k = 0; k < draws; ++k) {
-    const ar::SampledLight s = ar::light_sampler_sample(v, ctx, uint32_t((uint64_t(k) << 32) / draws), Real(((k * 7919u) % 1000u + 0.5) / 1000.0));
+    // The importance alias table (the tree's oracle), whose pmf this case pins.
+    const ar::SampledLight s =
+        ar::light_sampler_sample(v, ctx, uint32_t((uint64_t(k) << 32) / draws), Real(((k * 7919u) % 1000u + 0.5) / 1000.0), true);
     REQUIRE(s.light < 2u);
-    bad += ar::light_sampler_pmf(v, ctx, s.light) != s.pmf;
+    bad += ar::light_sampler_pmf(v, ctx, s.light, true) != s.pmf;
     worlds += s.light == 1u;
   }
   CHECK(bad == 0);

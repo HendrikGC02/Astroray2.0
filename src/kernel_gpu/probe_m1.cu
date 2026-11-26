@@ -443,7 +443,8 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
         ok = light != kLightIndexInvalid;
         if (ok && light != kNoLight) {
           const LightSampleContext prev = prev_light_context(kg, slot);
-          p_light = light_sampler_pmf(*kg.light_sampler, prev, light) * tri_pdf_li(kg.lights[light], prev, -wo, LightHit{P, Ng});
+          p_light = light_sampler_pmf(*kg.light_sampler, prev, light, (kg.session.test_hooks & TEST_HOOK_LIGHT_ALIAS) != 0u) *
+                    tri_pdf_li(kg.lights[light], prev, -wo, LightHit{P, Ng});
         }
       }
       contribution = le * ps_beta(kg, slot) *
@@ -475,7 +476,8 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     const LightSampleContext lctx = light_context_point(offset_ray_origin(P, Ng, wo), Ng, N);
     const uint32_t bits = camera_path_draw_bits(kg, sample, event_dim(e, EV_LIGHT_PICK));
     const uint32_t q_bits = camera_path_draw_bits(kg, sample, DIM_CAM_ALIAS_Q) ^ uint32_t(mix_bits(uint64_t(e)));
-    const SampledLight sl = light_sampler_sample(*kg.light_sampler, lctx, bits, bits_to_unit(q_bits));
+    const SampledLight sl = light_sampler_sample(*kg.light_sampler, lctx, bits, bits_to_unit(q_bits),
+                                                 (kg.session.test_hooks & TEST_HOOK_LIGHT_ALIAS) != 0u);
     if (!(sl.pmf > Real(0))) break;
     const LightRecord& lr = kg.lights[sl.light];
     const Real2 ul{camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_U)), camera_path_draw(kg, sample, event_dim(e, EV_LIGHT_V))};

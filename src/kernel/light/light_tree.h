@@ -33,7 +33,9 @@
 // importance (Cycles evaluates per-type emitter parameters at leaves, M4); no transmission flag and
 // no volume segment (the importance takes p and n only); the root is a leaf when the scene has one
 // light, and that leaf's own importance decides whether it is drawn; a cone with theta_o + theta_e
-// equal to pi emits everywhere (see light_tree_cone_importance).
+// equal to pi emits everywhere (see light_tree_cone_importance); importances are clamped finite and
+// each child's branch probability is computed from its own ratios with a positive floor, so a
+// subtree holding a light with energy is never drawn with probability 0 (light_tree_split).
 //
 // Ref: docs/decisions/0004-integrator.md D10 (importance rules, alias table as oracle), D9 (pmf 0
 // for estimate 0); Conty Estevez and Kulla 2018, "Importance Sampling of Many Lights with Adaptive
@@ -51,7 +53,6 @@
 #include "../core/vec.h"
 #include "../portability.h"
 #include "light.h"
-#include "light_sampler.h"
 
 // The stored layout does not depend on Real, so it lives outside the Real namespace: the host
 // builder (compiled once) and both kernel builds share one definition.
@@ -94,11 +95,26 @@ struct LightTreeView {
 
 AR_NS_BEGIN
 
+inline constexpr uint32_t kNoLight = ~0u;
+
+// A drawn light and its selection probability; pmf 0 (light kNoLight) when nothing was drawn. The
+// result of both samplers, the tree here and the mixture of light_sampler.h.
+struct SampledLight {
+  uint32_t light;
+  Real pmf;
+};
+
 struct LightTreeImportance {
   Real max, min;
 };
 
 AR_FN Real light_tree_sin_from_cos(Real c) { return light_safe_sqrt(Real(1) - c * c); }
+
+// cos and sin of a cone angle through cospi / sinpi: sinf / cosf carry a double-precision slow
+// path that a GPU shade kernel may not contain (portability.h sinpi).
+inline constexpr Real kLightTreeInvPi = Real(0.318309886183790671537767526745);
+AR_FN Real light_tree_cos(Real a) { return ar::cospi(a * kLightTreeInvPi); }
+AR_FN Real light_tree_sin(Real a) { return ar::sinpi(a * kLightTreeInvPi); }
 
 AR_FN Real3 light_tree_f3(const float* v) { return Real3{Real(v[0]), Real(v[1]), Real(v[2])}; }
 
@@ -124,12 +140,12 @@ AR_FN LightTreeImportance light_tree_cone_importance(Real3 n, Real3 to_c, Real c
     sin_t = light_tree_sin_from_cos(cos_t);
   }
   const Real cos_t_minus_u = cos_t * cos_u + sin_t * sin_u;
-  const Real cos_o = ar::cos(theta_o), sin_o = ar::sin(theta_o);
+  const Real cos_o = light_tree_cos(theta_o), sin_o = light_tree_sin(theta_o);
   // cos(theta'), theta' = max(theta - theta_o - theta_u, 0), when theta' < theta_e.
   Real cos_min_out;
   if (cos_t >= cos_u || cos_t_minus_u >= cos_o) {
     cos_min_out = Real(1);
-  } else if (theta_o + theta_e >= kLightPi || cos_t_minus_u > ar::cos(theta_o + theta_e)) {
+  } else if (theta_o + theta_e >= kLightPi || cos_t_minus_u > light_tree_cos(theta_o + theta_e)) {
     // >= where Cycles has >: a two-sided emitter (theta_o 0, theta_e pi) seen from straight behind
     // has cos_t_minus_u = -1 = cos(pi) once cos_u rounds to 1, and > would call it invisible.
     cos_min_out = cos_t_minus_u * cos_o + light_tree_sin_from_cos(cos_t_minus_u) * sin_o;
@@ -139,7 +155,7 @@ AR_FN LightTreeImportance light_tree_cone_importance(Real3 n, Real3 to_c, Real c
   const Real inv_d2 = Real(1) / (dist * dist);
   out.max = ar::abs(cos_min_inc * energy * cos_min_out * inv_d2);
   const Real cos_t_plus_u = cos_t * cos_u - sin_t * sin_u;
-  if (theta_e - theta_o < Real(0) || cos_t < Real(0) || cos_u < Real(0) || cos_t_plus_u < ar::cos(theta_e - theta_o))
+  if (theta_e - theta_o < Real(0) || cos_t < Real(0) || cos_u < Real(0) || cos_t_plus_u < light_tree_cos(theta_e - theta_o))
     return out;
   const Real cos_max_out = cos_t_plus_u * cos_o - light_tree_sin_from_cos(cos_t_plus_u) * sin_o;
   out.min = ar::abs(cos_max_inc * energy * cos_max_out * inv_d2);
@@ -151,55 +167,96 @@ AR_FN LightTreeImportance light_tree_cone_importance(Real3 n, Real3 to_c, Real c
 AR_FN LightTreeImportance light_tree_importance(const LightTreeNode& node, Real3 p, Real3 n) {
   const Real3 axis = light_tree_f3(node.axis);
   const Real theta_o = Real(node.theta_o), theta_e = Real(node.theta_e);
-  if (node.flags & kLightTreeDistant)
-    return light_tree_cone_importance(n, -axis, ar::cos(theta_o + theta_e), axis, theta_o, theta_e, Real(1),
-                                      Real(node.energy));
-  const Real3 lo = light_tree_f3(node.bbox_lo), hi = light_tree_f3(node.bbox_hi);
-  const Real3 c = (lo + hi) * Real(0.5);
-  const Real3 ext = hi - c;
-  const Real3 v = c - p;
-  if (!(dot(n, v) + (ar::abs(n.x) * ar::abs(ext.x) + ar::abs(n.y) * ar::abs(ext.y) + ar::abs(n.z) * ar::abs(ext.z)) > Real(0)))
-    return LightTreeImportance{Real(0), Real(0)};  // the box is wholly behind the surface
-  const Real d = length(v);
-  // At the centre itself any direction will do: p is inside the bounding sphere, so cos_u = -1
-  // and the cone factors are 1 whatever the direction; dividing by d = 0 would give a NaN.
-  const Real3 to_c = d > Real(0) ? v / d : n;
-  // light_tree_cos_bound_subtended_angle: -1 when p is inside the bounding sphere.
-  const Real r2 = dot(ext, ext);
-  const Real cos_u = d * d <= r2 ? Real(-1) : light_safe_sqrt(Real(1) - r2 / (d * d));
-  const Real dist = ar::max(Real(0.5) * ar::sqrt(r2), d);
+  // Direction, subtended cosine and distance of the cluster, then one cone evaluation for both
+  // kinds of node (one inlined copy in the kernels).
+  Real3 to_c;
+  Real cos_u, dist;
+  if (node.flags & kLightTreeDistant) {
+    to_c = -axis;
+    cos_u = light_tree_cos(theta_o + theta_e);
+    dist = Real(1);
+  } else {
+    const Real3 lo = light_tree_f3(node.bbox_lo), hi = light_tree_f3(node.bbox_hi);
+    const Real3 c = (lo + hi) * Real(0.5);
+    const Real3 ext = hi - c;
+    const Real3 v = c - p;
+    if (!(dot(n, v) + (ar::abs(n.x) * ar::abs(ext.x) + ar::abs(n.y) * ar::abs(ext.y) + ar::abs(n.z) * ar::abs(ext.z)) > Real(0)))
+      return LightTreeImportance{Real(0), Real(0)};  // the box is wholly behind the surface
+    const Real d = length(v);
+    // At the centre itself any direction will do: p is inside the bounding sphere, so cos_u = -1
+    // and the cone factors are 1 whatever the direction; dividing by d = 0 would give a NaN.
+    to_c = d > Real(0) ? v / d : n;
+    // light_tree_cos_bound_subtended_angle: -1 when p is inside the bounding sphere.
+    const Real r2 = dot(ext, ext);
+    cos_u = d * d <= r2 ? Real(-1) : light_safe_sqrt(Real(1) - r2 / (d * d));
+    dist = ar::max(Real(0.5) * ar::sqrt(r2), d);
+  }
   return light_tree_cone_importance(n, to_c, cos_u, axis, theta_o, theta_e, dist, Real(node.energy));
 }
 
-// a / (a + b) for importances that may be infinite (a shading point exactly on a point lamp, whose
-// box has no extent): the limit of the ratio, so no NaN reaches the pmf.
-AR_FN Real light_tree_ratio(Real a, Real b) {
-  const bool a_inf = !(a - a == Real(0)), b_inf = !(b - b == Real(0));
-  if (a_inf) return b_inf ? Real(0.5) : Real(1);
-  if (b_inf) return Real(0);
-  return a / (a + b);
+// Bounds of a branch probability (see light_tree_split): a quarter of the largest finite Real, so
+// the sum of two importances stays finite, and the smallest normal Real as the floor, a positive
+// value with full precision (the kernels build with -ftz=false, cmake/kernels.cmake).
+inline constexpr Real kLightTreeImportanceCap =
+    sizeof(Real) == 4 ? Real(float(0x1.fffffep+125)) : Real(double(0x1.fffffffffffffp+1021));
+inline constexpr Real kLightTreeMinBranch = sizeof(Real) == 4 ? Real(float(0x1p-126)) : Real(double(0x1p-1022));
+
+// A node importance made finite for the branch ratios. A point within float range of a point lamp's
+// box (no extent) gets 1 / d^2 = inf, and an infinite sibling would leave every other subtree,
+// the world under the root's right child included, with probability 0. A NaN is a malformed node:
+// a debug build traps, a release build takes the cap, so its subtree keeps a positive probability.
+AR_FN Real light_tree_finite(Real x) {
+  AR_ASSERT(x == x);
+  return x == x ? ar::min(x, kLightTreeImportanceCap) : kLightTreeImportanceCap;
 }
 
-// Cycles get_left_probability: false when both children have maximum importance 0.
-AR_FN bool light_tree_left_probability(const LightTreeView& v, const LightTreeNode& node, Real3 p, Real3 n, Real* left) {
-  const LightTreeImportance l = light_tree_importance(v.nodes[node.child[0]], p, n);
-  const LightTreeImportance r = light_tree_importance(v.nodes[node.child[1]], p, n);
-  if (l.max + r.max == Real(0)) return false;
-  const Real p_max = light_tree_ratio(l.max, r.max);
-  const Real p_min = l.min + r.min > Real(0)
-                         ? light_tree_ratio(l.min, r.min)
-                         : Real(0.5) * (Real(l.max > Real(0) ? 1 : 0) + Real(r.max == Real(0) ? 1 : 0));
-  *left = Real(0.5) * (p_max + p_min);
+// The two branch probabilities of an inner node.
+struct LightTreeSplit {
+  Real left, right;
+};
+
+// Cycles get_left_probability, false when both children have maximum importance 0. Each side's
+// probability comes from its own ratios rather than as 1 minus the other's, so a child whose
+// importance is far below its sibling's (the world beside a nearby point lamp) keeps a representable
+// probability; the pair is normalised, and a child of positive maximum importance gets at least
+// kLightTreeMinBranch, so every subtree holding a light with energy can be drawn.
+AR_FN bool light_tree_split(const LightTreeView& v, const LightTreeNode& node, Real3 p, Real3 n, LightTreeSplit* out) {
+  // One importance evaluation in a loop over the two children rather than two inlined copies: each
+  // walk is inlined into the shade kernels, where the copies cost registers and compile time.
+  LightTreeImportance l{Real(0), Real(0)}, r{Real(0), Real(0)};
+#if defined(__CUDACC__)
+#pragma unroll 1
+#endif
+  for (uint32_t c = 0; c < 2u; ++c) {
+    const LightTreeImportance imp = light_tree_importance(v.nodes[node.child[c]], p, n);
+    const LightTreeImportance f{light_tree_finite(imp.max), light_tree_finite(imp.min)};
+    if (c == 0u) l = f;
+    else r = f;
+  }
+  const Real max_sum = l.max + r.max;
+  if (max_sum == Real(0)) return false;
+  const Real min_sum = l.min + r.min;
+  const Real l_min = min_sum > Real(0) ? l.min / min_sum : Real(0.5) * (Real(l.max > Real(0) ? 1 : 0) + Real(r.max == Real(0) ? 1 : 0));
+  const Real r_min = min_sum > Real(0) ? r.min / min_sum : Real(0.5) * (Real(r.max > Real(0) ? 1 : 0) + Real(l.max == Real(0) ? 1 : 0));
+  Real pl = Real(0.5) * (l.max / max_sum + l_min), pr = Real(0.5) * (r.max / max_sum + r_min);
+  const Real sum = pl + pr;
+  pl = pl / sum, pr = pr / sum;
+  if (l.max > Real(0)) pl = ar::max(pl, kLightTreeMinBranch);
+  if (r.max > Real(0)) pr = ar::max(pr, kLightTreeMinBranch);
+  AR_ASSERT(pl >= Real(0) && pr >= Real(0) && pl + pr > Real(0));
+  out->left = pl, out->right = pr;
   return true;
 }
 
-// Probability of the branch taken: left_prob for the left child, 1 - left_prob for the right one.
-AR_FN Real light_tree_branch_pmf(Real left, bool right) { return right ? Real(1) - left : left; }
-
-// One light drawn by descending from the root with the uniform u in [0, 1); pmf accumulated on the
-// way. No light (kNoLight, pmf 0) when the tree is empty or a node on the way has both children
-// at importance 0. A loop with one node index: no recursion, no stack.
-AR_FN SampledLight light_tree_sample(const LightTreeView& v, Real3 p, Real3 n, Real u) {
+// The one descent behind light_tree_sample and light_tree_pmf (and the mixture of light_sampler.h),
+// so a drawn light's pmf and the pmf of that light are one computation (0004 D7). From the root, an
+// inner node splits by light_tree_split; the branch is the uniform's (Cycles sample_reservoir with
+// the left child selected: the right child replaces it when r <= its probability, and r is rescaled
+// to stay uniform) or, with `replay`, bit `depth` of `trail` (Cycles light_tree_pdf). The pmf is the
+// product of the branch probabilities taken. No light (kNoLight, pmf 0) when the tree is empty, a
+// node on the way has both children at importance 0, or a replayed branch has probability 0. A
+// loop with one node index: no recursion, no stack.
+AR_FN SampledLight light_tree_walk(const LightTreeView& v, Real3 p, Real3 n, Real u, bool replay, uint32_t trail) {
   SampledLight s{kNoLight, Real(0)};
   if (v.node_count == 0u) return s;
   Real pmf = Real(1);
@@ -214,27 +271,28 @@ AR_FN SampledLight light_tree_sample(const LightTreeView& v, Real3 p, Real3 n, R
       s.pmf = pmf;
       return s;
     }
-    Real left;
-    if (!light_tree_left_probability(v, node, p, n, &left)) return s;
-    // Cycles sample_reservoir with the left child already selected: the right child, weight
-    // 1 - left, replaces it when r <= thresh, and r is rescaled to stay uniform.
-    const Real w_right = Real(1) - left;
-    bool right = false;
-    if (w_right > Real(0)) {
-      const Real thresh = w_right / (left + w_right);
-      if (r <= thresh) {
-        right = true;
-        r = r / thresh;
-      } else {
-        r = (r - thresh) / (Real(1) - thresh);
-      }
+    LightTreeSplit sp;
+    if (!light_tree_split(v, node, p, n, &sp)) return s;
+    bool right;
+    if (replay) {
+      right = depth < 32u && ((trail >> depth) & 1u) != 0u;
+    } else {
+      right = sp.right > Real(0) && r <= sp.right;
+      if (sp.right > Real(0)) r = right ? r / sp.right : (r - sp.right) / (Real(1) - sp.right);
       r = ar::min(ar::max(r, Real(0)), Real(1));
     }
-    pmf *= light_tree_branch_pmf(left, right);
+    pmf *= right ? sp.right : sp.left;
+    if (!(pmf > Real(0))) return s;
     idx = node.child[right ? 1 : 0];
   }
   AR_ASSERT(false);  // deeper than the bit trail: the builder refuses such a tree
   return s;
+}
+
+// One light drawn by descending from the root with the uniform u in [0, 1); pmf accumulated on the
+// way.
+AR_FN SampledLight light_tree_sample(const LightTreeView& v, Real3 p, Real3 n, Real u) {
+  return light_tree_walk(v, p, n, u, false, 0u);
 }
 
 // The probability that light_tree_sample(v, p, n, .) returns `light`: its bit trail replayed
@@ -243,23 +301,9 @@ AR_FN Real light_tree_pmf(const LightTreeView& v, Real3 p, Real3 n, uint32_t lig
   if (light >= v.emitter_count || v.node_count == 0u) return Real(0);
   const LightTreeEmitter e = v.emitters[light];
   if (e.depth == kLightTreeAbsent || e.depth > kLightTreeMaxDepth) return Real(0);
-  Real pmf = Real(1);
-  uint32_t idx = 0u, trail = e.bit_trail;
-  for (uint32_t d = 0u; d < e.depth; ++d) {
-    const LightTreeNode& node = v.nodes[idx];
-    AR_ASSERT(!(node.flags & kLightTreeLeaf));
-    Real left;
-    if (!light_tree_left_probability(v, node, p, n, &left)) return Real(0);
-    const bool right = (trail & 1u) != 0u;
-    trail >>= 1;
-    pmf *= light_tree_branch_pmf(left, right);
-    if (pmf == Real(0)) return Real(0);
-    idx = node.child[right ? 1 : 0];
-  }
-  const LightTreeNode& leaf = v.nodes[idx];
-  AR_ASSERT((leaf.flags & kLightTreeLeaf) && leaf.light == light);
-  if (idx == 0u && !(light_tree_importance(leaf, p, n).max > Real(0))) return Real(0);
-  return pmf;
+  const SampledLight s = light_tree_walk(v, p, n, Real(0), true, e.bit_trail);
+  AR_ASSERT(s.light == kNoLight || s.light == light);
+  return s.light == light ? s.pmf : Real(0);
 }
 
 AR_NS_END

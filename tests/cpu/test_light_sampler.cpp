@@ -149,7 +149,7 @@ TEST_CASE("light_sampler/pmf matches sample") {
   const auto t = table_of(mixed(10));
   const ar::LightSamplerView v = t->view();
   double sum = 0.0;
-  for (uint32_t i = 0; i < v.light_count; ++i) sum += double(ar::light_sampler_pmf(v, ctx(), i));
+  for (uint32_t i = 0; i < v.light_count; ++i) sum += double(ar::light_sampler_pmf(v, ctx(), i, true));
   CHECK(std::fabs(sum - 1.0) < 1e-5);
   // Importance = weighted energy e times strength times the geometric factor of 0004 D9 / pbrt
   // Phi, written out here: 1 for lamps, pi A for a triangle, 4 pi^2 R^2 for the world.
@@ -168,22 +168,22 @@ TEST_CASE("light_sampler/pmf matches sample") {
   }
   for (int k = 0; k < 100000; ++k) {
     const uint32_t ub = uint32_t((uint64_t(k) << 32) / 100000u);
-    const ar::SampledLight s = ar::light_sampler_sample(v, ctx(), ub, Real(((k * 7919) % 1000 + 0.5) / 1000.0));
+    const ar::SampledLight s = ar::light_sampler_sample(v, ctx(), ub, Real(((k * 7919) % 1000 + 0.5) / 1000.0), true);
     REQUIRE(s.light < v.light_count);
-    REQUIRE(std::fabs(double(ar::light_sampler_pmf(v, ctx(), s.light)) - double(s.pmf)) <= 1e-6);
+    REQUIRE(std::fabs(double(ar::light_sampler_pmf(v, ctx(), s.light, true)) - double(s.pmf)) <= 1e-6);
   }
-  CHECK(ar::light_sampler_pmf(v, ctx(), v.light_count) == Real(0));
+  CHECK(ar::light_sampler_pmf(v, ctx(), v.light_count, true) == Real(0));
 }
 
 TEST_CASE("light_sampler/zero estimate never chosen") {
   const auto t = table_of(mixed(10));
   const ar::LightSamplerView v = t->view();
-  for (uint32_t i = 0; i < 10; ++i) CHECK(ar::light_sampler_pmf(v, ctx(), i) == Real(0));
+  for (uint32_t i = 0; i < 10; ++i) CHECK(ar::light_sampler_pmf(v, ctx(), i, false) == Real(0));
   CHECK(v.bin_count == v.light_count - 10);
   // Every bin at both ends and its middle.
   for (uint32_t b = 0; b < v.bin_count; ++b)
     for (double f : {0.0, 0.5, 0.999999}) {
-      const ar::SampledLight s = ar::light_sampler_sample(v, ctx(), bin_u(b, v.bin_count), Real(f));
+      const ar::SampledLight s = ar::light_sampler_sample(v, ctx(), bin_u(b, v.bin_count), Real(f), true);
       REQUIRE(s.light >= 10u);
       REQUIRE(s.pmf > Real(0));
     }
@@ -191,7 +191,7 @@ TEST_CASE("light_sampler/zero estimate never chosen") {
   const std::vector<LightInput> all = mixed(1000);
   const std::vector<LightInput> dark(all.begin(), all.begin() + 1000);
   const auto d = table_of(dark);
-  CHECK(ar::light_sampler_sample(d->view(), ctx(), 0x40000000u, Real(0.3)).pmf == Real(0));
+  CHECK(ar::light_sampler_sample(d->view(), ctx(), 0x40000000u, Real(0.3), false).pmf == Real(0));
 }
 
 TEST_CASE("light_sampler/world pdf integrates to 1") {
@@ -665,7 +665,7 @@ TEST_CASE("light_sampler/selection frequencies match pmf") {
   std::vector<double> observed(v.light_count, 0.0), expected(v.light_count, 0.0);
   for (int k = 0; k < n; ++k) {
     const uint64_t bits = rng();
-    observed[ar::light_sampler_sample(v, ctx(), uint32_t(bits), Real(double(bits >> 40) * (1.0 / 16777216.0))).light] += 1.0;
+    observed[ar::light_sampler_sample(v, ctx(), uint32_t(bits), Real(double(bits >> 40) * (1.0 / 16777216.0)), true).light] += 1.0;
   }
   for (uint32_t i = 0; i < v.light_count; ++i) expected[i] = double(t->pmf[i]) * n;
   for (uint32_t i = 0; i < 10; ++i) CHECK(observed[i] == 0.0);
@@ -689,7 +689,7 @@ TEST_CASE("light_sampler/small q is exact at 2^20 bins") {
   for (uint32_t b = 0; b < n; ++b) REQUIRE((b == small || t->bins[b].alias != small || t->bins[b].q == 1.0f));
   const int m = 100000;
   int hits = 0;
-  for (int k = 0; k < m; ++k) hits += ar::light_sampler_sample(v, ctx(), bin_u(small, n), Real((k + 0.5) / m)).light == small;
+  for (int k = 0; k < m; ++k) hits += ar::light_sampler_sample(v, ctx(), bin_u(small, n), Real((k + 0.5) / m), true).light == small;
   const double freq = double(hits) / m / n;
   std::printf("light_sampler small q: frequency %.6e pmf %.6e\n", freq, double(t->pmf[small]));
   CHECK(freq == doctest::Approx(double(t->pmf[small])).epsilon(2e-3));

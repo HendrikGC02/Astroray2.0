@@ -14,7 +14,7 @@
 #include "scene/scene_view.h"
 #include "vm/context.h"
 
-// One row per table, in host/scene/scene_tables.h TableId order up to MEDIUM_PROGRAMS: count (u32),
+// One row per table, in host/scene/scene_tables.h TableId order up to LIGHT_RAD_PMF: count (u32),
 // element size (u32), then the first and last element, kKgElemMax bytes each.
 constexpr uint32_t kKgElemMax = 448;  // the largest element, ConstantBlock
 static_assert(sizeof(ar::ConstantBlock) <= kKgElemMax, "a table element is larger than the checksum row holds");
@@ -72,4 +72,9 @@ extern "C" __global__ void ar_kg_checksum(const ar::KernelGlobals* kgp, uint8_t*
   kg_row(out, r++, kg.env[0].func, en ? 2u * (en * en + en * (en + 1u) + en + en + 1u) : 0u, 4);
   kg_row(out, r++, s.medium_blocks, s.medium_count, sizeof(ar::MediumBlock));
   kg_row(out, r++, s.medium_programs, s.medium_program_words, 4);
+  kg_row(out, r++, l.tree.nodes, l.tree.node_count, sizeof(ar::LightTreeNode));
+  kg_row(out, r++, l.tree.emitters, l.tree.emitter_count, sizeof(ar::LightTreeEmitter));
+  kg_row(out, r++, l.rad_bins, l.rad_bin_count, sizeof(ar::AliasBin));
+  kg_row(out, r++, l.rad_bin_light, l.rad_bin_count, 4);
+  kg_row(out, r++, l.rad_pmf, l.rad_pmf != nullptr ? l.light_count : 0u, 4);
 }

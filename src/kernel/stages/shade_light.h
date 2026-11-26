@@ -120,8 +120,10 @@ AR_FN void stage_shade_light(const KernelGlobals& kg, uint32_t item, const StepE
     const bool weighted = after_scatter && (hooks & TEST_HOOK_NEE_OFF) == 0u;
     Real p_light = Real(0);
     if (weighted) {
+      // The previous vertex's context differs from NEE's: oct-decoded normals, origin offset toward wi;
+      // the tree's pmf moves up to 1.55e-5 relative (measured) and a tangent box can flip the box test.
       const LightSampleContext prev = prev_light_context(kg, slot);
-      p_light = light_sampler_pmf(*kg.light_sampler, prev, light) *
+      p_light = light_sampler_pmf(*kg.light_sampler, prev, light, (hooks & TEST_HOOK_LIGHT_ALIAS) != 0u) *
                 lamp_pdf_li(rec, prev, normalize(d), LightHit{hit.p, hit.n});
     }
     const Spec contribution = lamp_radiance(rec, lam, kg.tables->observer) * ps_beta(kg, slot) *
