@@ -25,8 +25,8 @@ floor_size = 12.0
 # [power_min, power_max] watts, all facing down; drawn from layout_seed by build.py's splitmix64.
 pitch = 1.1
 jitter = 0.3
-height_min = 0.4
-height_max = 2.4
+height_min = 0.2
+height_max = 1.0
 side_min = 0.1
 side_max = 0.6
 power_min = 2.0

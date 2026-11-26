@@ -15,10 +15,6 @@ import ar  # noqa: E402
 import meshes  # noqa: E402
 import meta as meta_mod  # noqa: E402
 
-# A half turn about x: the lamp's emitting side (local -z, scenes/b23_lights) faces the floor.
-FLIP_X = (1, 0, 0, 0, -1, 0, 0, 0, -1)
-
-
 def truth():
     return meta_mod.load(os.path.join(HERE, "meta.toml"))["truth"]
 
@@ -88,8 +84,8 @@ def build(out):
             items.append({"geom": key, "materials": [grey], "xf": [[1, 0, 0, bx], [0, 1, 0, by], [0, 0, 1, h / 2]]})
         s.instances(items)
         for x, y, z, sx, sy, p in lamps(t):
-            f = FLIP_X
-            s.light("rect", xf=[f[0], f[1], f[2], x, f[3], f[4], f[5], y, f[6], f[7], f[8], z], power=p, size=(sx, sy))
+            # Identity rotation: the lamp's emitting side (local -z, scenes/d1_nee_onoff) faces the floor.
+            s.light("rect", xf=ar.translation((x, y, z)), power=p, size=(sx, sy))
         s.world((0.0, 0.0, 0.0), 1.0)
         s.settings(t["spp"], size, size, seed=1, max_bounces=t["max_bounces"], sampler="independent")
         s.camera((0.0, 0.0, t["camera_height"]), (0.0, 0.0, 0.0), t["focal_mm"], t["sensor_mm"], size, size,

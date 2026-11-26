@@ -437,6 +437,14 @@ $global:LASTEXITCODE = $code
       $r.Out | Where-Object { $_ -match $su.Echo } | ForEach-Object { Write-Host $_ }
       if ($r.Code -ne 0) { Fail "blender $($su.Name) failed (out/check/full.log)" }
     }
+    # 0004 D10 tree row: the light tree against the alias-table oracle per 8x8 tile (Welch, Holm, 0009 d17(v)) and the
+    # 2x variance ratio, 8 seeds a side on each device (tools/welch_tiles.py). The gate's `scenes` step built the recording.
+    $r = Step 'tree~alias tiles' {
+      & $py -I tools/welch_tiles.py --scene d10_many_lights --device cpu
+      if ($LASTEXITCODE -eq 0) { & $py -I tools/welch_tiles.py --scene d10_many_lights --device cuda }
+    }
+    $r.Out | Where-Object { $_ -match '^(PASS|FAIL) welch_tiles|^variance ratio' } | ForEach-Object { Write-Host $_ }
+    if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'tree~alias tiles failed (out/check/full.log)' }
     # Analytic renders moved out of the gate (owner decision 38; tools/analytic.py MOVED_TO_FULL): the
     # gate keeps them on the other device. Recordings are up to date: the gate's `scenes` step built them.
     foreach ($dev in 'cpu', 'cuda') {
@@ -472,7 +480,19 @@ $global:LASTEXITCODE = $code
     # Warnings only (0002 D10, ruling 17): shown, never a failure.
     $r.Out | Where-Object { $_ -like 'WARNING*' } | ForEach-Object { Write-Host $_ }
   } else {
+    # The tile Welch tool's self-test (tools/welch_tiles.py, 0009 d17(v)) starts beside lint and is collected after
+    # it: its own work is 0.06 s, but importing numpy costs 0.4 s here, which run in series would grow B-08's clock.
+    $wtOut = Join-Path $root 'out/check/welch-self-test.out'
+    $wt = Start-Process -FilePath $py -ArgumentList '-I', (Join-Path $root 'tools/welch_tiles.py'), '--self-test' -WorkingDirectory $root `
+      -NoNewWindow -PassThru -RedirectStandardOutput $wtOut -RedirectStandardError "$wtOut.err"
+    $null = $wt.Handle
     $r = Step 'lint' { & $py -I tools/lint.py }
+    $wr = Step 'welch_tiles self-test' {
+      if (-not $wt.WaitForExit(60000)) { Stop-Process -Id $wt.Id -Force; 'FAIL welch_tiles self-test: no exit in 60 s'; $global:LASTEXITCODE = 1; return }
+      Get-Content $wtOut; Get-Content "$wtOut.err"
+      $global:LASTEXITCODE = $wt.ExitCode
+    }
+    if ($wr.Code -ne 0) { Show-Tail $wr 5; Fail 'welch_tiles self-test failed (out/check/fast.log)' }
     if ($r.Code -ne 0) {
       ($r.Out | Select-Object -First 6) | ForEach-Object { Write-Host $_ }
       $ids = ($r.Out | Select-String -Pattern 'B-\d\d' -AllMatches | ForEach-Object { $_.Matches.Value } | Sort-Object -Unique) -join ','
