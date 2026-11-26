@@ -5,15 +5,17 @@ How the lead (coordinator) session runs the build phase. Implementers follow CLA
 docs/PLAN-M1b.md, order in tasks/README.md, unowned items in docs/BACKLOG.md, rulings in docs/decisions/RULINGS.md.
 
 ## Loop per task
-1. Ready: every task in "Depends on" has landed (its file is gone from tasks/) and its lane has room
-   (tasks/README.md: cpu 5-8, kernel three with one on `shade_surface.h`, gpu one, blender one, tools two).
+1. Ready: every task in "Depends on" has landed (its file is gone from tasks/) and fewer than two implementers
+   are running (owner decision 42: two at once in all lanes together, at most one in gpu or blender; one at a time
+   on `shade_surface.h`). Prefer the task that unblocks the spine. A landing runs beside the two.
 2. Dispatch one `implementer` agent per task in its own worktree. The agent definition carries the standing
    brief (branch, early commit, canary recipe, stop-and-ask rules, report shape). The brief names only: the
    task number, contracts already on main that the task must reuse, and warnings specific to it. Give Opus
    to tasks marked O; use effort high for kernel and physics tasks.
 3. Rule on questions in the task file (Scope line, Progress line) or in RULINGS.md, then reply to the same
    agent so it keeps its context. A question that would change a number, a gate or an owner decision goes to
-   STATUS's owner list; the task waits or takes the stated default.
+   STATUS's owner list. It pauses the landing, not the work (decision 42): reply at once that the implementer
+   finishes the rest on the stated default or your provisional ruling, unless the answer changes the design.
 4. Review: `tools/lead/review-bundle.sh NNN task/NNN-slug`, then a `reviewer` agent (Opus) on out/land/NNN
    for kernel, physics, sampling, ABI, concurrency and process diffs and for any diff that edits a record
    (O31, ruling 87); host-only plumbing may skip. FAIL: findings back to the implementer, then review again.
@@ -39,6 +41,15 @@ docs/PLAN-M1b.md, order in tasks/README.md, unowned items in docs/BACKLOG.md, ru
    docs/PLAN-M1b.md, docs/ROADMAP.md, STATUS, BACKLOG, the ledger in tasks/README.md, the measured rows since the
    last batch and the task-file format. It analyses the slice and writes the next batch's task files. The lead
    then runs step 7's scope pre-flight and Opus critique before dispatching anything.
+
+## Waiting (owner decision 42)
+- Nobody polls. Run `land.ps1 submit` and long checks in the background and end the turn; the notification wakes
+  you. Never `sleep`, `until` or a loop on an output file, and never ask an agent to wait that way.
+- An implementer that reports "blocked on the lock" names the holder (`owner.json` in `$env:ProgramData\astroray2`).
+  A holder past its tool's ceiling is hung: stop that one tools process by its PID, say so, resume the implementer.
+- Resume an idle agent within the hour (decision 33's cache). Past it, resume only a small context; otherwise
+  brief a fresh implementer from the task's Progress and `git log main..task/NNN-*`.
+- The hosted ci wait leaves the machine free: implementers keep working during it.
 
 ## Measurement tasks
 docs/PLAN-M1b.md section 5. A capture runs with the gpu and blender lanes idle. A budget row gets at most two

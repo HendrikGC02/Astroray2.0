@@ -1,0 +1,17 @@
+# 234 Gate toward 120 s and fast toward 6 s on quiet main: move list, then the moves
+Goal: quiet-main gate is about 155 s (174's landing 156.4 s) against B-09's 180 s, and check fast 5.4-8.7 s against B-08's 10 s; every landing and many implementer steps pay it (owner decision 42: "tests are supposed to be fast") -> a per-case cost table for both tiers, a move list (gate cases to `check full`, fast cases to gate where they are not deterministic-fast), applied, so that quiet-main medians reach gate ≤ 120 s and fast ≤ 6 s. No case is deleted, no threshold changes, B-08 and B-09 stay. [lane tools; Sonnet; Opus review (process)]
+Read first: owner decisions 38, 39 and 42; 0009 d10-d12, d15 (family sizes: a case moved to full leaves the gate family and joins full's) and rows B-08, B-09, B-10, B-12; task 212's per-case table (`tools/gate_table.py`, tests/tools/fast_gate_table.ps1); tools/gate_runs.ps1; tools/check.ps1 (shards, `check full`'s step list); tools/budgets.toml (family sizes); tasks/README.md's gate ledger.
+Scope: tools/check.ps1 and tools/analytic.py (which cases and scenes each tier runs), tools/budgets.toml (family counts that the moves change), tests/cpu/ and tests/gpu/ tier tags of the moved cases only, docs/decisions/0009-build-test-process.md d11 (the list of what left the gate, quoted in the PR), bench/history (one line per tier median before and after), tasks/234.canary.patch.
+Out of scope: deleting or weakening any case; B-08, B-09, B-10 limits; hosted ci's content (233); B-10: `check full` may grow, its limit holds.
+Reference: decision 39 (the lead proposes the list with each case's history before any move); 0009 d15 (Šidák per family; moving a case changes no other case's threshold).
+Do:
+1. Measure: 5 quiet-main runs each of gate and fast with `tools/gate_runs.ps1`, per-case seconds from 212's table. Write the decision table first: a gate case moves when it is statistical, long-stable (no red in out/land/history.jsonl and the ledger since it landed) and among the costliest; a spine guard that is the only check of a kernel path stays. A fast case over 0.1 s that is not deterministic-fast moves to gate.
+2. Stop and hand the move list (case, seconds, history, the guard that remains) to the lead. Move only what the lead approves.
+3. Apply the moves, re-run 5 quiet-main runs each, and update the gate ledger line. Check that `check full` still passes and stays under B-10.
+Acceptance: `pwsh tools/check.ps1 fast`, `pwsh tools/check.ps1 gate` and `pwsh tools/check.ps1 full` pass; the before and after medians of 5 runs per tier, pasted.
+Look at: none
+Canary: tasks/234.canary.patch must turn red: `pwsh -NoProfile -File tests/tools/fast_gate_table.ps1` (the patch drops a moved case from both tiers, so the every-case-runs-once check fails).
+Budget: gate down to a 120 s median target; fast down to a 6 s median target; full up by what moved (state it, under B-10's 12 min).
+Depends on: 232 (so the before and after runs are not reds from load). Runs on a quiet machine: implementers paused, gpu and blender lanes idle.
+Size: S (about 100 lines without tests, mostly lists); stop and report at 2x.
+Progress:
