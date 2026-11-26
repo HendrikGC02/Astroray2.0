@@ -13,6 +13,7 @@ import contextlib
 import ctypes
 import os
 import time
+import typing
 import weakref
 
 import numpy as np
@@ -33,6 +34,28 @@ VIEW_LAYER_PASSES = (("use_pass_z", "Depth"), ("use_pass_position", "Position"),
                      ("use_pass_normal", "Normal"), ("use_pass_uv", "UV"),
                      ("use_pass_object_index", "IndexOB"), ("use_pass_material_index", "IndexMA"),
                      ("use_pass_mist", "Mist"), ("use_pass_vector", "Vector"))
+
+
+
+class CopiedPass(typing.NamedTuple):
+    """A pass beside Combined that the F12 result carries. `owner` says where `flag` lives: the view layer, or
+    scene.astroray (the denoising passes need Denoise as well, see passes_wanted). `chan_id` is Blender's
+    channel string, so its length is the registered component count and must equal the engine's."""
+    name: str
+    chan_id: str
+    kind: str   # register_pass type
+    owner: str  # "view_layer" or "denoising"
+    flag: str
+
+
+# The one list of passes copied into the RenderResult (0008 d10; ROADMAP M1b "Out of scope" keeps Position, UV and
+# IndexMA out although the session enumerates them). Channel ids and types as Cycles registers them.
+COPIED_PASSES = (
+    CopiedPass("Normal", "XYZ", "VECTOR", "view_layer", "use_pass_normal"),
+    CopiedPass("Noisy Image", "RGB", "COLOR", "denoising", "denoising_store_passes"),
+    CopiedPass("Denoising Albedo", "RGB", "COLOR", "denoising", "denoising_store_passes"),
+    CopiedPass("Denoising Normal", "XYZ", "VECTOR", "denoising", "denoising_store_passes"),
+)
 
 _contexts = {}  # device name -> _Context; one per device for the extension's lifetime (0007 d4)
 
@@ -176,6 +199,14 @@ def view_layer_passes(view_layer):
     return tuple(name for flag, name in VIEW_LAYER_PASSES if getattr(view_layer, flag))
 
 
+def passes_wanted(scene, view_layer):
+    """The COPIED_PASSES members this scene and view layer ask for. Reads settings only, because Blender calls
+    update_render_passes outside a render."""
+    a = scene.astroray
+    return tuple(p for p in COPIED_PASSES
+                 if (getattr(view_layer, p.flag) if p.owner == "view_layer" else a.use_denoising and getattr(a, p.flag)))
+
+
 def render_size(scene):
     r = scene.render
     return (max(1, int(r.resolution_x * r.resolution_percentage / 100)),
@@ -281,6 +312,7 @@ class Job:
         self.first = True
         # Everything render() needs from Blender, read by update() (0007 d23: render() reads no scene).
         self.size, self.samples, self.layer = None, None, None
+        self.denoise, self.wanted = False, ()  # the Denoise setting and passes_wanted(), read by update()
         self.generation = None  # what update() committed: the render must show at least this (0007 d25)
         self.subject_names = ({}, {})  # (ar_key -> identity, uid -> name) that label report subjects; set by update()
         self.subject_names = ({}, {})  # (ar_key -> identity, uid -> name) for the Diagnostics panel; set by update()
@@ -300,6 +332,7 @@ class Job:
         held.jobs.add(self)
         ctx = held.handle
         self.size, self.samples, self.layer = render_size(scene), scene.astroray.samples, view_layer.name
+        self.denoise, self.wanted = scene.astroray.use_denoising, passes_wanted(scene, view_layer)
         if not self.scene_h.value:
             workers = max(1, min(8, (os.cpu_count() or 2) // 2))
             desc = abi.ar_scene_desc(cache_dir().encode(), workers, 0)
@@ -335,7 +368,8 @@ class Job:
             engine.report({"WARNING"}, line)
             diagnostics.add_host(self.kind, diagnostics.WARNING, line)
         try:
-            sd = abi.ar_session_desc(abi.AR_SESSION_MODE_FINAL, w, h, abi.AR_DENOISER_NONE)
+            sd = abi.ar_session_desc(abi.AR_SESSION_MODE_FINAL, w, h,
+                                     abi.AR_DENOISER_OIDN if self.denoise else abi.AR_DENOISER_NONE)
             _ok(lib, native.call(lib.ar_session_create, self.scene_h, ctypes.byref(sd),
                                  ctypes.byref(self.session)),
                 "ar_session_create", "ar_scene_last_error", self.scene_h)
@@ -347,6 +381,8 @@ class Job:
         except BaseException:
             self._close_session()  # a half-built session is destroyed at once
             raise
+        for p in self.wanted:
+            engine.add_pass(p.name, len(p.chan_id), p.chan_id, layer=self.layer)
         result = engine.begin_result(0, 0, w, h, layer=self.layer)
         try:
             self._wait(engine, result, w, h, self.samples)
@@ -373,7 +409,7 @@ class Job:
                 break
             if time.monotonic() - last_preview >= PREVIEW_INTERVAL_S:
                 last_preview = time.monotonic()
-                self._copy_combined(engine, result, w, h)
+                self._copy_passes(engine, result, w, h)
         revision = self._report(engine, reported, None)
         if prog.state == abi.AR_STATE_FAILED:
             _ok(lib, 1, "the session (state FAILED)", "ar_session_last_error", s)
@@ -381,7 +417,7 @@ class Job:
             # Rule 5: an image of an older scene than update() committed is a failure, never a result.
             raise RenderFailed(f"astroray: the render converged on generation {prog.active_generation}, but update() "
                                f"committed {self.generation} (failed generation {prog.failed_generation})")
-        self._copy_combined(engine, result, w, h, final=True)
+        self._copy_passes(engine, result, w, h, final=True)
 
     def _subjects(self):
         """(reverse key map, uid names) that label a report entry's subject."""
@@ -425,13 +461,27 @@ class Job:
             raise RenderFailed("astroray: " + failed)
         return info.revision
 
-    def _copy_combined(self, engine, result, w, h, final=False):
-        """Combined (MEAN, rows bottom-up, 3 components) into the RenderResult's RGBA pass."""
+    def _copy_passes(self, engine, result, w, h, final=False):
+        """Combined (MEAN, rows bottom-up) into the RenderResult's RGBA pass; with `final`, also each wanted
+        COPIED_PASSES member the session enumerates, by the engine's component count. A wanted pass the session
+        does not enumerate is skipped: the engine's PASS_UNSUPPORTED entry says why. A preview copies Combined
+        only, because the denoising passes exist after convergence."""
         rgb = read_pass(self.lib, self.abi, self.session, "Combined", self.abi.AR_QUANTITY_MEAN)
         rgba = np.ones((h, w, 4), np.float32)
         rgba[:, :, :3] = rgb
-        result.layers[0].passes["Combined"].rect.foreach_set(rgba.reshape(-1))
-        if not final:
+        passes = result.layers[0].passes
+        passes["Combined"].rect.foreach_set(rgba.reshape(-1))
+        if final:
+            offered = offered_passes(self.lib, self.abi, self.session)
+            for p in self.wanted:
+                if p.name not in offered:
+                    continue
+                data = read_pass(self.lib, self.abi, self.session, p.name, self.abi.AR_QUANTITY_MEAN)
+                if data.shape[2] != len(p.chan_id):
+                    raise RenderFailed(f"astroray: pass {p.name} has {data.shape[2]} components, "
+                                       f"Blender registered {len(p.chan_id)} ({p.chan_id})")
+                passes[p.name].rect.foreach_set(data.reshape(-1))
+        else:
             engine.update_result(result)
 
     def _close_session(self):
@@ -447,6 +497,18 @@ class Job:
             self.scene_h = ctypes.c_void_p()
         if self._context is not None:
             self._context.jobs.discard(self)
+
+
+def offered_passes(lib, abi, session):
+    """The names the session enumerates (rulings 74 and 75)."""
+    n = ctypes.c_uint32()
+    native.call(lib.ar_session_pass_count, session, ctypes.byref(n))
+    names = set()
+    for i in range(n.value):
+        info = abi.ar_pass_info()
+        native.call(lib.ar_session_pass_info, session, i, ctypes.byref(info))
+        names.add(bytes(info.name).split(b"\0")[0].decode("utf-8"))
+    return names
 
 
 def read_pass(lib, abi, session, name, quantity):

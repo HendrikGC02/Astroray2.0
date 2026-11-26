@@ -82,6 +82,13 @@ class AstrorayScene(bpy.types.PropertyGroup):
     pixel_filter_width: bpy.props.FloatProperty(
         update=_tag_scene, name="Filter Width", description="Width of the pixel filter in pixels", default=1.5,
         min=0.01, max=10.0)
+    use_denoising: bpy.props.BoolProperty(
+        update=_tag_scene, name="Denoise", description="Denoise the final render with Intel Open Image Denoise; "
+        "the noisy image is kept as the Noisy Image pass when the denoising passes are stored", default=False)
+    # Cycles keeps this on the view layer; 0007 d37 lists no view-layer group, so it is a scene setting here.
+    denoising_store_passes: bpy.props.BoolProperty(
+        update=_tag_scene, name="Denoising Data", description="Store the Noisy Image, Denoising Albedo and "
+        "Denoising Normal passes in the render result; needs Denoise", default=False)
     film_exposure: bpy.props.FloatProperty(
         update=_tag_scene, name="Film Exposure", description="Linear multiplier applied to the display channels",
         default=1.0, min=0.0, soft_max=10.0)

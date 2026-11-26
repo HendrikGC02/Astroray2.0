@@ -118,13 +118,27 @@ def write_fits(path, planes, header):
 
 
 class Capture:
-    """Reads Combined MEAN, VARIANCE and COUNT before the job closes its session (the engine holds no
-    pixels afterwards); installed over Job._close_session of the enabled extension."""
+    """Reads Combined MEAN, VARIANCE and COUNT and the engine's Normal before the job closes its session (the
+    engine holds no pixels afterwards), and the pixels of each pass the final copy left in the RenderResult;
+    installed over Job._close_session and Job._copy_passes of the enabled extension."""
 
     def __init__(self, render_final):
-        self.rf, self.arrays = render_final, None
+        self.rf, self.arrays, self.normal, self.result = render_final, None, None, {}
         self._orig = render_final.Job._close_session
+        self._orig_copy = render_final.Job._copy_passes
         capture = self
+        orig_copy = self._orig_copy
+
+        def copy(job, engine, res, w, h, final=False):
+            orig_copy(job, engine, res, w, h, final)
+            if final:
+                for name in ("Combined",) + tuple(p.name for p in job.wanted):
+                    rect = res.layers[0].passes[name].rect
+                    buf = np.zeros(w * h * res.layers[0].passes[name].channels, np.float32)
+                    rect.foreach_get(buf)
+                    capture.result[name] = buf
+
+        render_final.Job._copy_passes = copy
 
         def close(job):
             if job.session.value and capture.arrays is None:
@@ -132,12 +146,15 @@ class Capture:
                 capture.arrays = tuple(
                     render_final.read_pass(job.lib, a, job.session, "Combined", q)
                     for q in (a.AR_QUANTITY_MEAN, a.AR_QUANTITY_VARIANCE, a.AR_QUANTITY_COUNT))
+                if any(p.name == "Normal" for p in job.wanted) and "Normal" in render_final.offered_passes(job.lib, a, job.session):
+                    capture.normal = render_final.read_pass(job.lib, a, job.session, "Normal", a.AR_QUANTITY_MEAN)
             capture._orig(job)
 
         render_final.Job._close_session = close
 
     def restore(self):
         self.rf.Job._close_session = self._orig
+        self.rf.Job._copy_passes = self._orig_copy
 
 
 def run_smoke(work, evidence):
@@ -202,7 +219,7 @@ def run_smoke(work, evidence):
         if p.returncode != 0:
             raise RuntimeError(f"astroray_cli dump {path} exited {p.returncode}:\n{p.stdout}{p.stderr}")
         dumps[name] = out
-    return {"mean": mean, "var": var, "count": count, "result": rr, "png": png, "dumps": dumps, "rf": rf,
+    return {"mean": mean, "var": var, "count": count, "result": rr, "rr_passes": cap.result, "normal": cap.normal, "png": png, "dumps": dumps, "rf": rf,
             "work": work}
 
 
@@ -224,10 +241,16 @@ class TestSmoke(unittest.TestCase):
                   f"worst z {worst[0]:+.2f} at {worst[1]}")
             self.assertTrue(passed, f"{name}: {reasons}")
 
-    def test_render_result_is_combined(self):
-        """What Blender shows is the pass the engine read: the RenderResult pixels equal Combined."""
+    def test_render_result_is_combined_and_requested_passes(self):
+        """What Blender shows is what the engine read: the RenderResult pixels equal Combined, and the Normal
+        the blend asks for sits in the result with 3 components equal to the engine's; Position, UV and IndexMA,
+        which the blend also asks for, are not copied."""
         a = self.state["mean"].transpose(1, 2, 0)
         np.testing.assert_allclose(self.state["result"], a, rtol=0, atol=1e-6)
+        got = self.state["rr_passes"]
+        self.assertEqual(sorted(got), ["Combined", "Normal"], "the copied passes are Combined and the requested Normal")
+        self.assertEqual(got["Normal"].size, SIZE * SIZE * 3)
+        np.testing.assert_array_equal(got["Normal"].reshape(SIZE, SIZE, 3), self.state["normal"])
 
     def test_samples_reached(self):
         """The render ran every requested sample: the engine's per-pixel COUNT equals samples."""

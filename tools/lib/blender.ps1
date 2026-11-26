@@ -102,6 +102,7 @@ function Get-ArFullBlenderSuites {
   $suites = @(
     [pscustomobject]@{ Name = 'api_surface'; Script = 'tools/api_surface.py'; Gui = $false; TimeoutS = 120; Echo = '^(api_surface:|MISSING|UNCHECKED)' }
     [pscustomobject]@{ Name = 'test_images'; Script = 'tests/blender/test_images.py'; Gui = $false; TimeoutS = 400; Echo = $echo }
+    [pscustomobject]@{ Name = 'test_f12_denoise'; Script = 'tests/blender/test_f12_denoise.py'; Gui = $false; TimeoutS = 400; Echo = $echo }
     [pscustomobject]@{ Name = 'test_node_values'; Script = 'tests/blender/test_node_values.py'; Gui = $false; TimeoutS = 400; Echo = $echo }
     [pscustomobject]@{ Name = 'headless/test_node_coverage'; Script = 'tests/blender/headless/test_node_coverage.py'; Gui = $false; TimeoutS = 400; Echo = $echo }
     [pscustomobject]@{ Name = 'headless/test_lowering'; Script = 'tests/blender/headless/test_lowering.py'; Gui = $false; TimeoutS = 400; Echo = $echo }
