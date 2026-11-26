@@ -218,6 +218,10 @@ struct Snapshot {
   std::vector<uint32_t> counts;  // every COUNT plane
   std::vector<float> adds;       // every ADD plane
   std::vector<ar::Real3> tint;   // guides case: the paths' guide tints after the stage
+  // Media case: the stacks after the stage, the flags the paths arrived with, prev_dist after.
+  std::vector<ar::U32x4> stack;
+  std::vector<uint32_t> flags_in;
+  std::vector<ar::Real> prev_dist;
   int32_t aov_position = 0, aov_normal = 0, aov_uv = 0, aov_material = 0, bounce_sum = 0;
   int32_t guide_albedo = -1, guide_normal = -1;
   uint32_t plane_stride = 0;
@@ -225,7 +229,11 @@ struct Snapshot {
 
 float rnd(uint32_t i, uint32_t d) { return float(agree::unit(i, d)); }
 
-Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& ms, bool guides = false) {
+// `media`: the media feature, instances 0-5 bearing media 0-2 and the materials priorities 0-2, every
+// path arriving with a random stack of depth 0-4 (ids 1-3, priorities 0-2) and a crossing count, a
+// quarter of them one below the cap; so false interfaces (pushes and removes), true crossings through
+// the alpha card, refused removes, overflows and the crossing cap all occur.
+Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& ms, bool guides = false, bool media = false) {
   const Owner owner{1, 1};
   std::vector<DeviceBuffer> bufs;
   const auto put = [&](const void* p, uint64_t bytes) {
@@ -292,6 +300,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
     r.light_index = ar::kNoLightIndex;
     r.material_offset = uint32_t(pool.size());
     r.material_count = j == 5 ? 0u : kSlotsPerInstance;
+    if (media && j < 6) r.medium = 1u + j % 3u;
     if (j != 5)
       for (uint32_t k = 0; k < kSlotsPerInstance; ++k) pool.push_back((j + 2 * k) % ms.count);
   }
@@ -304,11 +313,15 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   sd.material_headers = static_cast<const ar::MaterialHeader*>(put(ms.headers.data(), ms.headers.size() * sizeof(ar::MaterialHeader)));
   sd.material_header_count = ms.count;
   sd.material_programs = static_cast<const uint32_t*>(put(ms.programs.data(), ms.programs.size() * 4));
+  std::vector<ar::ConstantBlock> constants = ms.constants;
+  if (media)
+    for (size_t k = 0; k < constants.size(); ++k) constants[k].medium_priority = uint8_t(k % 3);
   sd.material_constants =
-      static_cast<const ar::ConstantBlock*>(put(ms.constants.data(), ms.constants.size() * sizeof(ar::ConstantBlock)));
+      static_cast<const ar::ConstantBlock*>(put(constants.data(), constants.size() * sizeof(ar::ConstantBlock)));
   sd.material_pass_index = static_cast<const uint32_t*>(put(ms.pass_index.data(), ms.pass_index.size() * 4));
   sd.material_spectra = nullptr, sd.material_spectra_count = 0;  // no material here holds a TABLE
-  sd.medium_descs = nullptr, sd.medium_count = 0;                // no medium
+  // shade_surface reads only an instance's medium index, never the medium itself.
+  sd.medium_descs = nullptr, sd.medium_count = media ? 3u : 0u;
   void* scene_p = put(&sd, sizeof sd);
 
   ar::Rgb2SpecTable jh = tb.jh;
@@ -345,6 +358,8 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   std::vector<ar::Real> eta_scale(kN, ar::Real(1)), prev_dist(kN, ar::Real(0));
   std::vector<uint32_t> prev_ng(kN, 0u), prev_ns(kN, 0u);
   std::vector<ar::Real3> tint(kN);
+  std::vector<ar::U32x4> stack(kN);
+  std::vector<uint32_t> medium_rng(kN, 0u);
   for (uint32_t i = 0; i < kN; ++i) {
     tint[i] = ar::Real3{rnd(i, 45), rnd(i, 46), rnd(i, 47)};
     sample_id[i] = i;
@@ -365,6 +380,13 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
     else if (bad < 0.01) beta[i].v[int(rnd(i, 9) * 4.0f)] = std::numeric_limits<float>::infinity();
     flags[i] = ar::set_hero_lane(uint32_t(rnd(i, 10) * 4096.0f) << 9, uint32_t(rnd(i, 11) * 4.0f) & 3u) & ~ar::PATH_KIND;
     if (rnd(i, 37) < 0.5f) flags[i] |= ar::FRONT_FACE;  // stale side bits must be overwritten
+    if (media) {
+      const uint32_t depth = uint32_t(rnd(i, 50) * 5.0f);
+      stack[i] = ar::U32x4{{0, 0, 0, 0}};
+      for (uint32_t k = 0; k < depth; ++k) stack[i].v[k] = ar::stack_entry(1u + uint32_t(rnd(i, 51 + k) * 3.0f), uint32_t(rnd(i, 55 + k) * 3.0f));
+      const uint32_t n = rnd(i, 59) < 0.25f ? ar::kVolumeBoundsMax - 1u : uint32_t(rnd(i, 60) * 16.0f);
+      flags[i] = ar::set_crossings(ar::set_medium_depth(flags[i], depth), n);
+    }
     bounces[i] = ar::U16x6{{uint16_t(rnd(i, 12) < 0.75f ? 0 : 1 + int(rnd(i, 13) * 5.0f)), 0, 0, 0, 0, uint16_t(rnd(i, 14) * 3.0f)}};
   }
   ar::PathStateSoA soa{};
@@ -390,6 +412,11 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   soa.prev_ns = static_cast<uint32_t*>(put(prev_ns.data(), kN * 4));
   soa.prev_dist = static_cast<ar::Real*>(put(prev_dist.data(), kN * sizeof(ar::Real)));
   if (guides) soa.guide_tint = static_cast<ar::Real3*>(put(tint.data(), kN * sizeof(ar::Real3)));
+  if (media) {
+    soa.medium_stack = static_cast<ar::U32x4*>(put(stack.data(), kN * sizeof(ar::U32x4)));
+    soa.medium_rng = static_cast<uint32_t*>(put(medium_rng.data(), kN * 4));
+  }
+  const std::vector<uint32_t> flags_in = flags;
   void* soa_p = put(&soa, sizeof soa);
 
   ar::KernelGlobals kg{};
@@ -414,6 +441,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   kg.session.max_bounces[0] = 8;
   kg.session.max_bounces[5] = 2;  // arrivals at 0-2 transparent passes: some at the limit
   kg.session.features.guides = guides;
+  kg.session.features.media = media;
   void* kg_p = put(&kg, sizeof kg);
 
   if (gpu != nullptr) {
@@ -469,6 +497,12 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
     s.tint.resize(kN);
     dev.download(s.tint.data(), find(soa.guide_tint), 0, kN * sizeof(ar::Real3));
     s.guide_albedo = fd.guide_albedo, s.guide_normal = fd.guide_normal;
+  }
+  if (media) {
+    s.stack.resize(kN), s.prev_dist.resize(kN);
+    dev.download(s.stack.data(), find(soa.medium_stack), 0, kN * sizeof(ar::U32x4));
+    dev.download(s.prev_dist.data(), find(soa.prev_dist), 0, kN * sizeof(ar::Real));
+    s.flags_in = flags_in;
   }
   for (DeviceBuffer& b : bufs) dev.free(b);
   return s;
@@ -638,6 +672,60 @@ TEST_CASE("shade_surface_agree/guides") {
   CHECK(sum > 1.0e3);  // guides really were written
   CHECK(worst_a <= 1e-6);
   CHECK(worst_t <= 1e-6);
+}
+
+TEST_CASE("shade_surface/false interface cuda") {
+  // The media fixture (run's `media`): the stack updates at the top of the stage and on true crossings
+  // agree bit for bit (stacks, flags with depth and crossing count, terminations and their histogram,
+  // bounce counters, event indices), and a false interface's moved origin and prev_dist agree within
+  // 1e-6 of the larger magnitude (or absolute below 1), its throughput, r_l and direction bit for bit.
+  const Tables tb;
+  const Materials ms = build_materials(tb);
+  Ledger cpu_ledger, gpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  const Snapshot c = run(cpu, nullptr, tb, ms, false, true);
+  const Snapshot g = run(*gpu, gpu.get(), tb, ms, false, true);
+  CHECK(cpu_ledger.total() == 0);
+  CHECK(gpu_ledger.total() == 0);
+  CHECK(c.term == g.term);
+  CHECK(c.next_stage == g.next_stage);
+  CHECK(c.flags == g.flags);
+  CHECK(c.counts == g.counts);
+  CHECK(c.event_index == g.event_index);
+  CHECK(std::memcmp(c.bounces.data(), g.bounces.data(), kN * sizeof(ar::U16x6)) == 0);
+  CHECK(std::memcmp(c.stack.data(), g.stack.data(), kN * sizeof(ar::U32x4)) == 0);
+  // The fixture reaches every outcome of the stack code.
+  uint32_t false_push = 0, false_remove = 0, true_cross = 0, limit = 0, overflow = 0;
+  double worst = 0.0;
+  const auto rel = [](double a, double b) { return std::fabs(a - b) / std::max(1.0, std::fabs(a)); };
+  for (uint32_t i = 0; i < kN; ++i) {
+    const uint32_t d0 = ar::medium_depth(c.flags_in[i]), d1 = ar::medium_depth(c.flags[i]);
+    limit += c.term[i] == uint8_t(ar::Term::VOLUME_LIMIT);
+    overflow += c.term[i] == uint8_t(ar::Term::STACK_OVERFLOW);
+    if (ar::crossings(c.flags[i]) == ar::crossings(c.flags_in[i])) {
+      true_cross += d1 != d0 && c.term[i] == uint8_t(ar::Term::ACTIVE);
+      continue;
+    }
+    false_push += d1 > d0, false_remove += d1 < d0;
+    CHECK(c.bounces[i].v[5] == g.bounces[i].v[5]);
+    CHECK(std::memcmp(&c.beta[i], &g.beta[i], sizeof(ar::Spec)) == 0);
+    CHECK(std::memcmp(&c.r_l[i], &g.r_l[i], sizeof(ar::Spec)) == 0);
+    CHECK(std::memcmp(&c.ray_d[i], &g.ray_d[i], sizeof(ar::Real3)) == 0);
+    worst = std::max({worst, rel(c.ray_o[i].x, g.ray_o[i].x), rel(c.ray_o[i].y, g.ray_o[i].y), rel(c.ray_o[i].z, g.ray_o[i].z),
+                      rel(c.prev_dist[i], g.prev_dist[i])});
+  }
+  std::printf("shade_surface false interfaces: %u pushes, %u removes, %u true crossings, %u at the crossing cap, %u "
+              "overflows of %u; worst origin or prev_dist difference %.3g\n",
+              false_push, false_remove, true_cross, limit, overflow, kN, worst);
+  CHECK(false_push > 1000u);
+  CHECK(false_remove > 1000u);
+  CHECK(true_cross > 1000u);
+  CHECK(limit > 100u);
+  CHECK(overflow > 100u);
+  CHECK(worst <= 1e-6);
 }
 
 }  // TEST_SUITE

@@ -74,7 +74,7 @@ TEST_CASE("route_hit/stack depth routes to shade_volume") {
   // At depth 0 a medium-bearing instance routes as any other: its own medium is entered or left only
   // when shade_surface crosses it.
   CHECK(r.route(6, 0, 0u) == Stage::SHADE_SURFACE);
-  CHECK(r.route(6, 1, kLight) == Stage::SHADE_LIGHT_PATH);
+  CHECK(r.route(6, 0, kLight) == Stage::SHADE_LIGHT_PATH);
   // A miss is a miss at any depth (a closed hull always ends a segment inside it).
   const ar::HitRecord miss{5.0f, ~0u, ar::kNoInstance, 0, 0};
   CHECK(ar::route_hit(r.kg, miss, ar::set_medium_depth(0u, 2u)) == Stage::SHADE_BACKGROUND);
