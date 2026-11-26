@@ -128,30 +128,55 @@ def margin_t(diff, ref, se):
         return np.where(se > 0, excess / np.where(se > 0, se, 1.0), np.where(excess > 0, np.inf, 0.0))
 
 
-def welch(a, b):
-    """a, b: (n, ...) samples. Returns (diff, ref, se, df, p) per element (Welch 1947)."""
-    na, nb = a.shape[0], b.shape[0]
-    ma, mb = a.mean(axis=0), b.mean(axis=0)
-    qa, qb = a.var(axis=0, ddof=1) / na, b.var(axis=0, ddof=1) / nb
+def var_of_mean(x):
+    """The estimated variance of the mean of the n samples along axis 0: s^2 / n, with s^2 the
+    sample variance (n - 1 in its denominator), Welch 1947's per-side term."""
+    n = x.shape[0]
+    return x.var(axis=0, ddof=1) / n
+
+
+def welch_df(qa, qb, na, nb):
+    """Welch 1947's degrees of freedom (qa + qb)^2 / (qa^2 / (na - 1) + qb^2 / (nb - 1)), qa and qb
+    the per-side variances of the mean; where both are 0 the statistic is decided by margin_t
+    without a tail, and the pooled na + nb - 2 only fills the slot."""
     se2 = qa + qb
     with np.errstate(divide="ignore", invalid="ignore"):
         den = qa * qa / (na - 1) + qb * qb / (nb - 1)
-        df = np.where(den > 0, se2 * se2 / np.where(den > 0, den, 1.0), float(na + nb - 2))
-    diff, ref, se = ma - mb, 0.5 * (ma + mb), np.sqrt(se2)
+        return np.where(den > 0, se2 * se2 / np.where(den > 0, den, 1.0), float(na + nb - 2))
+
+
+def welch(a, b):
+    """a, b: (n, ...) samples, n at least 2 and possibly different on the two sides. Returns
+    (diff, ref, se, df, p) per element: Welch 1947's statistic with margin_t's margin."""
+    na, nb = a.shape[0], b.shape[0]
+    ma, mb = a.mean(axis=0), b.mean(axis=0)
+    qa, qb = var_of_mean(a), var_of_mean(b)
+    df = welch_df(qa, qb, na, nb)
+    diff, ref, se = ma - mb, 0.5 * (ma + mb), np.sqrt(qa + qb)
     t = margin_t(diff, ref, se)
     p = np.where(np.isinf(t), 0.0, t_two_sided_p(np.where(np.isinf(t), 0.0, t), df))
     return diff, ref, se, df, p
 
 
+def holm_bounds(m, alpha):
+    """Holm 1979's bounds in rank order: the k-th smallest of m p-values (k from 1) is compared
+    with alpha / (m - k + 1), so the smallest meets alpha / m and the largest alpha."""
+    k = np.arange(1, m + 1)
+    return alpha / (m - k + 1)
+
+
 def holm(p, alpha=ALPHA):
-    """Holm 1979 step-down over the flat array p: sort ascending, reject p_(k) while p_(k) <=
-    alpha / (m - k + 1) (k from 1), stop at the first that is not. Returns a boolean mask."""
+    """Holm 1979 step-down over the flat array p. Returns a boolean mask of rejected entries."""
     p = np.asarray(p, dtype=np.float64).ravel()
-    m = p.size
-    order = np.argsort(p, kind="stable")
-    reject = np.zeros(m, dtype=bool)
-    for k, i in enumerate(order):
-        if p[i] <= alpha / (m - k):
+    order = np.argsort(p, kind="stable")  # ascending: the smallest p meets the strictest bound
+    bounds = holm_bounds(p.size, alpha)
+    reject = np.zeros(p.size, dtype=bool)
+    # Step down: the r-th smallest p (r from 0 here) is rejected when it is at most bounds[r] and
+    # every smaller p was rejected; the first that is not ends the procedure and the rest stand.
+    # A constant alpha / m would be Bonferroni and alpha / (m - r + 1) with r from 0 an off-by-one:
+    # the self-test's four-value example rejects a p that both of those keep.
+    for r, i in enumerate(order):
+        if p[i] <= bounds[r]:
             reject[i] = True
         else:
             break
@@ -160,7 +185,10 @@ def holm(p, alpha=ALPHA):
 
 def check_legs(side_a, side_b, n):
     """Fail closed (v1's reducer discipline): side = list of (seed, (3, h, w) mean). Each side holds
-    exactly n distinct seeds, no seed on both sides, equal shapes, finite planes."""
+    exactly n distinct seeds (n at least 2: a sample variance), no seed on both sides, equal shapes,
+    finite planes."""
+    if n < 2:
+        raise ValueError(f"{n} seeds a side: the per-tile sample variance needs at least 2")
     for name, side in (("a", side_a), ("b", side_b)):
         seeds = [s for s, _ in side]
         if len(seeds) != n:
@@ -184,6 +212,9 @@ def compare(side_a, side_b, n, tile):
     a = tile_means(np.stack([img for _, img in side_a]), tile)  # (n, 3, th, tw)
     b = tile_means(np.stack([img for _, img in side_b]), tile)
     diff, ref, se, df, p = welch(a, b)
+    if not np.isfinite(p).all():
+        raise ArithmeticError(f"non-finite p in {int((~np.isfinite(p)).sum())} (tile, channel) entries: "
+                              "the test cannot decide them (fewer than 2 seeds a side, or a non-finite tile mean)")
     reject = holm(p).reshape(p.shape)
     with np.errstate(divide="ignore", invalid="ignore"):
         t_plain = np.where(se > 0, diff / np.where(se > 0, se, 1.0), 0.0)
@@ -221,10 +252,19 @@ def self_test():
         for nu, want in ((1.0, 1.0 - 2.0 / math.pi * math.atan(t)), (2.0, 1.0 - t / math.sqrt(2.0 + t * t))):
             if abs(float(t_two_sided_p(t, nu)) - want) > 1e-12 * max(want, 1e-300) + 1e-14:
                 fails.append(f"t tail nu {nu} t {t}: {float(t_two_sided_p(t, nu)):.15g} vs {want:.15g}")
-    # Holm 1979 on four p-values: 0.005 <= 0.05/4 and 0.01 <= 0.05/3 are rejected; 0.03 > 0.05/2 stops.
+    # Holm 1979 on four p-values: 0.005 <= 0.05/4 and 0.015 <= 0.05/3 are rejected; 0.03 > 0.05/2 stops.
+    # Bonferroni (0.05/4 for all) and an off-by-one first bound (0.05/5, then 0.05/4) both keep 0.015.
     want = [True, False, False, True]
-    if holm([0.01, 0.04, 0.03, 0.005]).tolist() != [True, False, False, True]:
-        fails.append(f"holm: {holm([0.01, 0.04, 0.03, 0.005]).tolist()} vs {want}")
+    if holm([0.015, 0.04, 0.03, 0.005]).tolist() != want:
+        fails.append(f"holm: {holm([0.015, 0.04, 0.03, 0.005]).tolist()} vs {want}")
+    # Welch on a worked case with unequal variances and unequal n, constants by hand: a = 1..4
+    # (mean 2.5, s^2 = 5/3, s^2/n = 5/12), b = 2, 4, ..., 12 (mean 7, s^2 = 14, s^2/n = 7/3);
+    # SE^2 = 5/12 + 7/3 = 11/4; df = (11/4)^2 / ((5/12)^2 / 3 + (7/3)^2 / 5) = 16335/2477 = 6.5947
+    # (the pooled 4 + 6 - 2 = 8 would differ).
+    diff, _, se, df, _ = welch(np.array([1.0, 2.0, 3.0, 4.0]), np.array([2.0, 4.0, 6.0, 8.0, 10.0, 12.0]))
+    for name, got, want_v in (("diff", diff, -4.5), ("se", se, math.sqrt(11.0 / 4.0)), ("df", df, 16335.0 / 2477.0)):
+        if not abs(float(got) - want_v) <= 1e-12 * abs(want_v):
+            fails.append(f"welch worked case: {name} {float(got):.15g}, by hand {want_v:.15g}")
     # Image sets: 8 seeds a side, 32x32 pixels, mean 1, pixel noise 0.05; tile means have SE 0.05/8/sqrt(8).
     rng = np.random.default_rng(190)
     n, size, tile, sigma = 8, 32, 8, 0.05
@@ -253,7 +293,7 @@ def self_test():
     if not compare(quiet, shifted, n, tile)["reject"].all():
         fails.append("a 2 % offset at SE 0 was not rejected everywhere")
     # Null false-positive rate: 40 repeats of equal-mean sets; a family-wise size of 0.05 (the margin
-    # only lowers it) expects 2, and P(X >= 8 | 40, 0.05) is 3e-4.
+    # only lowers it) expects 2, and P(X >= 8 | 40, 0.05) is 7e-4.
     bad = sum(bool(compare(leg(0), leg(100), n, tile)["reject"].any()) for _ in range(40))
     if bad >= 8:
         fails.append(f"null: {bad} of 40 equal-mean repeats rejected a tile")
@@ -262,9 +302,10 @@ def self_test():
     for what, a, b in (("missing", good[:-1], leg(100)), ("duplicate", good[:-1] + [good[0]], leg(100)),
                        ("reused", good, leg(7)),
                        ("shape", good, [(100 + i, img[:, :16]) for i, (_, img) in enumerate(leg(0))]),
-                       ("non-finite", good, [(100, np.full((3, size, size), np.nan))] + leg(101)[:-1])):
+                       ("non-finite", good, [(100, np.full((3, size, size), np.nan))] + leg(101)[:-1]),
+                       ("single", good[:1], leg(100)[:1])):
         try:
-            compare(a, b, n, tile)
+            compare(a, b, 1 if what == "single" else n, tile)
             fails.append(f"fail closed: {what} seed set accepted")
         except ValueError:
             pass
@@ -272,7 +313,7 @@ def self_test():
         print("FAIL welch_tiles self-test:", f)
     if not fails:
         print("PASS welch_tiles self-test: t tail against A&S 26.10 and closed forms, Holm example, equal means pass, "
-              f"a 5 % tile offset rejected, margin holds 0.5 % and rejects 2 %, null {bad} of 40, fail closed on 5 seed faults")
+              f"a 5 % tile offset rejected, margin holds 0.5 % and rejects 2 %, null {bad} of 40, fail closed on 6 seed faults, Welch worked case by hand")
     return not fails
 
 
@@ -285,6 +326,8 @@ def scene_plan(scene):
     for k in ("size", "spp", "tile", "seeds"):
         if k not in t:
             raise ValueError(f"scenes/{scene}/meta.toml [truth] has no {k}")
+    if int(t["seeds"]) < 2:
+        raise ValueError(f"scenes/{scene}/meta.toml [truth] seeds = {t['seeds']}: a sample variance needs at least 2 seeds a side")
     rec = os.path.join(an.SCENES_OUT, scene + ".arrec")
     for p in (an.CLI, rec):
         if not os.path.exists(p):
