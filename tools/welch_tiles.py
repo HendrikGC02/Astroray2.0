@@ -46,7 +46,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALPHA = 0.05  # 0009 d17(v) family alpha
 MARGIN = 0.01  # 0009 d17(v) relative margin
 NULL_MAX_FAILING = 2  # 0009 Verification 17(v): at most 2 failing repeats per scene
-RATIO_MIN = 2.0  # 0004 Verification "D10 tree": at least 2x variance reduction (v1 gate)
+RATIO_MIN = 1.70  # 0004 Verification "D10 tree": 1.8x accepted for d10_many_lights with full MIS (owner decision 43; floor RULINGS 109)
 SIDES = ("tree", "alias")
 
 
