@@ -227,6 +227,37 @@ Exit-LandRunning
   $cm = @(Get-WaitLine 'CMARKER')
   Check 'Wait-LandRunning owns the marker when it returns (its pid)' ($cm.Count -eq 1 -and $cm[0] -eq $self) $wl
 
+  # Undo after the early push: the (land) commit is on origin while the branch still sits on the commit before it
+  # (the canary phase). The undo must put the revert on top of the pushed commit and push it plainly (a fast-forward
+  # of origin, never a force push), leaving local and origin equal and the task file back.
+  $fn = [Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'tools/land.ps1'), [ref]$null, [ref]$null).FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Undo-OwnLandCommit' }, $true)
+  Check 'land.ps1 defines Undo-OwnLandCommit' ($fn.Count -eq 1)
+  if ($fn.Count -eq 1) {
+    . ([scriptblock]::Create($fn[0].Extent.Text))
+    $env:GIT_AUTHOR_NAME = 't'; $env:GIT_AUTHOR_EMAIL = 't@example.invalid'; $env:GIT_COMMITTER_NAME = 't'; $env:GIT_COMMITTER_EMAIL = 't@example.invalid'
+    $u = Join-Path $tmp 'undo_wt'
+    & git clone -q (Join-Path $tmp 'origin.git') $u 2>$null
+    function U { & git -C $u @args 2>&1 | Out-Null; if ($LASTEXITCODE -ne 0) { throw "git $args failed" } }
+    U checkout -q -b task/777-u
+    New-Item -ItemType Directory -Force (Join-Path $u 'tasks') | Out-Null
+    Set-Content (Join-Path $u 'tasks/777-u.md') 'task'
+    U add -A; U commit -q -m 'work'
+    $pre = (& git -C $u rev-parse HEAD).Trim()
+    U rm -q -- tasks/777-u.md; U commit -q -m 'u (land)'
+    $land = (& git -C $u rev-parse HEAD).Trim()
+    U push -q -u origin HEAD
+    U reset -q --hard $pre
+    $script:UndoTo = $pre; $script:LandSha = $land; $script:LandBranch = 'task/777-u'
+    Push-Location $u
+    try { Undo-OwnLandCommit 6>$null } finally { Pop-Location }
+    $tip = ("$(& git -C $u ls-remote origin refs/heads/task/777-u)".Split("`t")[0]).Trim()
+    $head = (& git -C $u rev-parse HEAD).Trim()
+    & git -C $u merge-base --is-ancestor $land $tip
+    Check 'undo while the branch is behind the pushed commit: origin only moved forward' ($LASTEXITCODE -eq 0 -and $tip -ne $land)
+    Check 'undo: local branch equals origin' ($tip -eq $head)
+    Check 'undo: the task file is back' (Test-Path (Join-Path $u 'tasks/777-u.md'))
+  }
+
   # Judged last: what the plain and the queued submit printed.
   $null = $plainP.WaitForExit(30000); $null = $queueP.WaitForExit(30000); $null = $mergeP.WaitForExit(30000)
   $po = @(Get-Content (Join-Path $qout 'plain.out') -ErrorAction SilentlyContinue)
@@ -246,6 +277,8 @@ Exit-LandRunning
     Check 'lock_wait_s includes the queue wait' ([math]::Abs($qt - $qw) -le 0.11 -and $qt -ge 0.2) $qo
   }
   Check 'the queued submit then runs past the idle check (first refusal: not a task branch)' (@($qo | Where-Object { $_ -match "^REFUSE land: branch 'main' is not task/999-" }).Count -eq 1) $qo
+  # The printed plan puts the push and the PR before the canary, so hosted ci runs beside canary, gate and perf.
+  Check 'the submit plan pushes and opens the PR before the canary' (@($qo | Where-Object { $_ -match '^DRYRUN plan: prepare: rebase, deletion commit, push, open or reuse the PR.*, then canary.*, gate' }).Count -eq 1) $qo
   Check 'the marker is released after both' (-not (Test-Path $mkFile))
 } finally {
   Set-Location $root
