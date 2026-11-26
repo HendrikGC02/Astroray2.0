@@ -166,7 +166,8 @@ def holm_bounds(m, alpha):
 
 
 def holm(p, alpha=ALPHA):
-    """Holm 1979 step-down over the flat array p. Returns a boolean mask of rejected entries."""
+    """Holm 1979 step-down at family alpha over the flat array p (one entry per (tile, channel)).
+    Returns a boolean mask of the rejected entries."""
     p = np.asarray(p, dtype=np.float64).ravel()
     order = np.argsort(p, kind="stable")  # ascending: the smallest p meets the strictest bound
     bounds = holm_bounds(p.size, alpha)
