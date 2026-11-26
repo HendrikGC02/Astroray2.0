@@ -15,6 +15,8 @@ Process: owner decision 36 confirmed; `process/guards` merged (tool deny rules, 
 scope clause).
 
 ## Owner decisions still open
+- B-10 (`check full` 12 min): full reads 777.5 s after 234 (798.5 s before it on 19a0211c); no script enforces B-10 (check.ps1 prints "budget n/a" for full). Owner: enforce, raise, or move work.
+- B-11 (hosted ci 450 s): after 233 the lean tier reads 335-379 s; its basis (1.3 x the old max) no longer derives the limit (1.3 x 379 = 493 s). Limit unchanged; the owner may restate the basis.
 - Ruling 101 (2026-11-25): B-38 baseline re-recorded on quiet main (b1m 11.69 -> 12.01 ms, b5m 12.28 -> 12.56 ms; +2.5 % cumulative since 2026-11-23 across M1b landings; limit 1.03 per landing unchanged); 215 reports the cumulative B-20 line.
 - k_shade_surface compile: owner decision 41 (2026-11-26) raises B-05 to 7.5 s for M1b; 175's light tree reads 7.31-7.40 s (main 6.76-6.78 s after 173 and 174). The timing still includes about 0.77 s of vcvarsall per compile (BACKLOG). Ruling 103: the spill rows after 175.
 - Ruling 100 (2026-11-25, PROVISIONAL): B-09 also excludes the gate's compile-timing step (old: excluding build steps only, ruling 94); landing gates of kernel tasks read 179.8 s with 23 s of real timed compiles. Task 224. Rulings 97-99: shade_surface_ext may take 7.0 s B-05 (old 3.0 s default); medium-stack id for M1b; B-09 remedies 157 and 212.
