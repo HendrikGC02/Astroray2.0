@@ -8,7 +8,9 @@
 //    offset_past_surface) with the same direction. Bounce counters, event_index and the
 //    previous-vertex normals stay as they were; prev_dist grows by the distance the origin moved
 //    along the ray, so ray_o - prev_dist ray_d is still the previous scattering vertex (0003 d19
-//    row 17) and an emitter reached after the crossing is weighted from the right context.
+//    row 17) and an emitter reached after the crossing is weighted from the right context. The
+//    path's medium_rng stays too, so a flight after the crossing continues the medium stream where
+//    the one before it stopped instead of reusing its blocks (shade_volume.h).
 // Emitting face: every lamp emits from one side only, the area lamps toward their front (local
 // -Z) and the sphere lamp outward (light/sphere.h), so Le is added only when dot(ray_d, n) < 0
 // with n that face's normal. A camera ray through a sphere lamp therefore adds L once: its

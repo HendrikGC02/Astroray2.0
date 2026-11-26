@@ -394,6 +394,25 @@ TEST_CASE("shade_surface_media/reflection does not enter") {
   CHECK(items == r.n);
 }
 
+TEST_CASE("shade_surface_media/nee item takes the highest entry") {
+  // A path inside two media, the higher-priority one entered first (medium 1 at priority 5, then medium 2 at
+  // priority 0), reflects off an opaque surface without a medium under a point lamp: each NEE item names the
+  // highest entry, 1 + 1, not the latest, 1 + 2 (0006 D17 active media; M1b tracks the highest).
+  Rig r(8, true, true);
+  for (uint32_t s = 0; s < r.n; ++s) r.hit(s, 0, true), r.arrive(s, {{1, 5}, {2, 0}});
+  r.run();
+  uint32_t items = 0;
+  for (uint32_t s = 0; s < r.n; ++s) {
+    const uint32_t it = r.sh_queue[s];
+    if (r.sh_next[it] != uint8_t(ar::Stage::INTERSECT_SHADOW)) continue;
+    ++items;
+    INFO("slot " << s);
+    CHECK(r.sh_stack[it].v[0] == 2u);
+    for (int k = 1; k < 4; ++k) CHECK(r.sh_stack[it].v[k] == 0u);
+  }
+  CHECK(items == r.n);
+}
+
 TEST_CASE("shade_surface_media/enter and leave") {
   // One slab of opacity 0 bearing medium 0: the front-face pass-through pushes its entry (depth 1), the
   // back-face hit of the next segment goes to shade_volume first (depth 1) and then here, where the

@@ -211,6 +211,9 @@ AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_
   // a refused push ends the path (a refused remove is a path that started inside the medium).
   ps_medium_stack(kg, slot) = u.stack;
   ps_flags(kg, slot) = u.flags;
+  // The pass-through starts a new event: its flights begin at that event's first medium block, and a
+  // reused pool slot's counter is never continued (shade_volume.h).
+  ps_medium_rng(kg, slot) = flight_rng_start(uint32_t(ps_event_index(kg, slot)) + 1u);
   if (u.ok || !front) return true;
   path_end(kg, slot, Term::STACK_OVERFLOW);
   return false;
@@ -239,11 +242,16 @@ AR_FN uint32_t nee_item_medium(const KernelGlobals& kg, uint32_t slot, uint32_t 
 // = r_p p_scatter, 0 for a delta light (whose weight is 1 / avg(r_l)). The contribution already
 // carries the weight 1 / avg(r_l + r_u) (integrator/mis.h); shade_shadow_medium replaces it by the one of
 // the tracked r_u and r_l. Also called by the M-1 probe (kernel_gpu/probe_m1.cu).
+// An item toward the environment world (world_le) stays in no medium: its BSDF half is a miss, which
+// route_hit shades without tracking whatever the stack (an escape from a closed hull is impossible, so
+// only an open mesh or a leak gets there), and both halves stay unattenuated together; inside a closed
+// hull the hull blocks the item anyway. Tracking a miss over an unbounded segment, as Cycles'
+// intersect_closest does, is M2's (0006 D19).
 // Ref: pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::SampleLd ("r_l *= r_p * p_l;
 // r_u *= r_p * scatterPDF;"); docs/decisions/0006-volumes-and-astrophysics.md D8, D19.
 AR_FN void nee_item_media(const KernelGlobals& kg, uint32_t sh, uint32_t medium_plus_one, uint32_t e, uint32_t path_flags,
                           const Spec& r_p, Real p_light, Real p_scatter, bool delta_light, const Lambda& lam, bool world_le) {
-  sh_medium_stack(kg, sh) = shadow_medium_field(medium_plus_one);
+  sh_medium_stack(kg, sh) = shadow_medium_field(world_le ? 0u : medium_plus_one);
   sh_medium_rng(kg, sh) = shadow_rng_start(e);
   sh_r_u(kg, sh) = r_p * (delta_light ? Real(0) : p_scatter);
   sh_r_l(kg, sh) = r_p * p_light;
