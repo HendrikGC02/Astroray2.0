@@ -21,7 +21,8 @@ LAMP_SIZE, LAMP_HEIGHT, PITCH, LEG, EMISSION = 0.2, 3.0, 1.0, 0.4, 10.0
 def build(out, lamps, triangles):
     n = triangles or lamps
     width = int(math.ceil(math.sqrt(n)))
-    with ar.Scene(out) as s:
+    # The addon's default (render_final.py): min(8, cores / 2) workers; ar.Scene's own default of 2 is a test choice.
+    with ar.Scene(out, workers=max(1, min(8, (os.cpu_count() or 2) // 2))) as s:
         if triangles:
             gx, gy = np.meshgrid(np.arange(width), np.arange(width))
             origin = np.stack([gx.ravel(), gy.ravel(), np.zeros(width * width)], axis=1)[:triangles].astype(np.float32) * PITCH

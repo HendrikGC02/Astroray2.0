@@ -20,3 +20,4 @@ Progress:
 Lead ruling: extend 175's case (Scope + tests/cpu/test_light_tree_kernel.cpp, that case only, no new test file); canary names a tools/ helper command that does the real limit compare
 191: scene, script, helper b23_check, extended case, canary PASS (red via b23_check); waiting for quiet window for capture
 191: capture (3 workers, quiet machine): 10k lamps 40.3 ms per 10k (spread 2.1), 100k tri 6.6, 1M tri 6.8 (677 ms total). Row 1 of table: limit lands. History lines appended.
+191 ruling: gated case on the engine default thread count (min(8,cores/2) workers + caller = 9 here; the CLI's 3 came from ar.Scene workers=2 in recordings, the addon uses the default); recapture at default: 10k lamps 23.0 ms per 10k; case 12.0 ms
