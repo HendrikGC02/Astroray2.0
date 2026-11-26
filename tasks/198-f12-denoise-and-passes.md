@@ -16,3 +16,4 @@ Budget: gate +1 s at most (the smoke case reads two more passes; stop and ask ab
 Depends on: 197 (code: the session denoise and its failure hook). Collisions: render_final.py and properties.py with 199 and 187; engine.py; api_surface.txt; smoke_a1.py with BACKLOG's F12 error-race row (if it is fixed first, rebase); `Get-ArFullBlenderSuites` with 189; the later one rebases.
 Size: M (about 250 lines without tests); stop and report at 2x.
 Progress:
+- Files: properties.py, engine.py, render_final.py, api_surface.txt, smoke_a1.py, headless/test_render_final_cpu.py (fake Engine gains add_pass; _copy_combined patches renamed), new test_f12_denoise.py, tools/lib/blender.ps1, 198.canary.patch; no ui row (199 not landed).
