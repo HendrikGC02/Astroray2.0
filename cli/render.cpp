@@ -86,8 +86,8 @@ bool write_pass_pfm(ar_session s, const char* name, const std::string& path, boo
       printf("reading %s failed: %s\n", name, session_error(s).c_str());
       return false;
     }
-    FILE* f = fopen(path.c_str(), "wb");
-    if (!f) {
+    FILE* f = nullptr;
+    if (fopen_s(&f, path.c_str(), "wb") != 0 || !f) {
       printf("cannot write %s\n", path.c_str());
       return false;
     }
