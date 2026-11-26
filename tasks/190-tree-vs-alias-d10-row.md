@@ -17,3 +17,5 @@ Budget: gate +0 s; fast +0.3 s for the tool's self-test (B-08: state `check fast
 Depends on: 175 (the hook and the tree as default). Collisions: tools/check.ps1 with 191, 200, 201; analytic.py with 188; test_light_tree_kernel.cpp after 175; the later one rebases.
 Size: M (about 300 lines of tool and scene, under 30 of source); stop and report at 2x.
 Progress:
+- Files to change (all in Scope): tools/welch_tiles.py (new), tools/check.ps1 (fast self-test step, full comparison step), tools/analytic.py (render_mode's env handling shared as one function for ASTRORAY_TEST_NEE and ASTRORAY_TEST_LIGHT_SAMPLER), scenes/d10_many_lights/build.py and meta.toml (new), tests/cpu/test_light_tree_kernel.cpp (finite-importance case), bench/history/2026.jsonl (one line), docs/decisions/0009-build-test-process.md d17(v) (one sentence), tasks/190.canary.patch.
+- Open before code: the 1 % relative margin's formula (v1 candidate 1b), asked of the lead.
