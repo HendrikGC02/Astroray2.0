@@ -1,12 +1,12 @@
-diff --git a/src/host/light/light_tree.cpp b/src/host/light/light_tree.cpp
-index 8997629e..9dfb65b2 100644
---- a/src/host/light/light_tree.cpp
-+++ b/src/host/light/light_tree.cpp
-@@ -156,6 +156,7 @@ struct Builder {
- }  // namespace
- 
- LightTree build_light_tree(const std::vector<LightTreeLight>& lights) {
-+  for (const auto t0 = std::chrono::steady_clock::now(); std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(100);) {}
-   if (lights.empty()) throw std::runtime_error("light tree: no lights to build from");
-   if (lights.size() >= ar::kNoLight) throw std::runtime_error("light tree: too many lights for 32-bit indices");
-   LightTree t;
+diff --git a/src/host/light/light_builder.cpp b/src/host/light/light_builder.cpp
+index bbe567a6..71774830 100644
+--- a/src/host/light/light_builder.cpp
++++ b/src/host/light/light_builder.cpp
+@@ -235,6 +235,7 @@ std::shared_ptr<const LightTable> build_light_table(const std::vector<LightInput
+   if (!t->lights.empty()) {
+     const auto t0 = std::chrono::steady_clock::now();
+     LightTree tree = build_light_tree(t->lights, t->importance, scene);
++    for (const auto s0 = std::chrono::steady_clock::now(); std::chrono::steady_clock::now() - s0 < std::chrono::milliseconds(100);) {}
+     t->tree_build_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+     t->tree_nodes = std::move(tree.nodes);
+     t->tree_emitters = std::move(tree.emitters);
