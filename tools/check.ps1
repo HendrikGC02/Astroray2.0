@@ -26,6 +26,7 @@ Set-Location $root
 . (Join-Path $PSScriptRoot 'lib/python.ps1')
 . (Join-Path $PSScriptRoot 'lib/blender.ps1')
 . (Join-Path $PSScriptRoot 'lib/testrun.ps1')
+. (Join-Path $PSScriptRoot 'lib/load.ps1')
 if ($Tier -notin @('fast', 'gate', 'full', 'ci')) {
   Write-Host "FAIL check: unknown tier '$Tier' (fast, gate, full, ci)"
   exit 2
@@ -272,7 +273,8 @@ $global:LASTEXITCODE = $code
     @{ Name = 'integrator cpu'; Group = 'g2'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Keep = $true; Run = {
         & $py -I tools/integrator_checks.py --gate --device cpu } },
     @{ Name = 'integrator cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Keep = $true; Run = {
-        & $py -I tools/integrator_checks.py --gate --device cuda } },
+        & $py -I tools/integrator_checks.py --gate --device cuda }
+       Timed = @{ Check = 'B-16 tripwire'; Case = 'tripwire'; Rerun = { & $py -I tools/integrator_checks.py --check tripwire --device cuda } } },
     @{ Name = 'cpu gate tests'; Group = 'g3'; Tag = 'cpu'; Lock = $true; Identity = $exe; Keep = $true; Run = {
         & $runCpuTier 'gate' $shardsCpuGate 'cpu gate tests' (Join-Path $root 'out/check/gate-steps/cpu-gate-tests.out') (Join-Path $root 'out/check/cpu-gate-tests') } },
     # Time limit 270 s: after 132's fix the tier took 12.6-24.1 s over 100 runs under the machine lock;
@@ -326,7 +328,26 @@ $global:LASTEXITCODE = $code
     if ($win) { $w = Enter-ArFastWindow; $script:waited += $w; Add-ArExcluded $w }
     try {
       if ($s.Lock) { $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $script:waited += $w; Add-ArExcluded $w }
-      try { $r = Step $s.Name $s.Run } finally { if ($s.Lock) { Exit-ArTreeLock } }
+      try {
+        if ($s.Timed) {
+          # A timing check with a re-run (B-16): foreign load in the step's window and nothing but this check
+          # failed re-runs that check alone once; the second result decides (0009 d13).
+          $tm = Invoke-ArTimedCheck -Check $s.Timed.Check -Run {
+            param($n)
+            if ($n -eq 1) { $x = Step $s.Name $s.Run; $script:GateFirstOut = $x.Out; $x } else { Step "$($s.Name) (rerun)" $s.Timed.Rerun }
+          } -Over {
+            param($x)
+            $bad = @($x.Out | Where-Object { $_ -match '^FAIL integrator (\w+) \w+:' } | ForEach-Object { $Matches[1] })
+            $line = @($x.Out | Where-Object { $_ -match "^(PASS|FAIL) integrator $($s.Timed.Case) " }) | Select-Object -First 1
+            @{ Over = ($x.Code -ne 0 -and $bad.Count -gt 0 -and @($bad | Where-Object { $_ -ne $s.Timed.Case }).Count -eq 0); Text = "$line" }
+          }
+          $r = $tm.Result
+          if ($tm.Rerun) {
+            # Keep the first run's other checks in the echo and the kept output; the re-run's line replaces its own.
+            $r = [pscustomobject]@{ Code = $r.Code; Out = @($script:GateFirstOut | Where-Object { $_ -notmatch "^(PASS|FAIL) integrator ($($s.Timed.Case) |\w+:)" }) + @($r.Out) }
+          }
+        } else { $r = Step $s.Name $s.Run }
+      } finally { if ($s.Lock) { Exit-ArTreeLock } }
     } finally { if ($win) { Exit-ArFastWindow } }
     if ($s.Build) { Add-GateBuild $script:ArSteps[-1].seconds }
     Complete-GateStep $s $r
@@ -469,7 +490,23 @@ $global:LASTEXITCODE = $code
     # Fast cases that share an exact name (plain TEST_CASEs in the ar-f64 files; AR_RT cases carry the ' f64' suffix
     # here as in the gate) sit hundreds of cases apart in file order, which leaves no allowed cut; by name they are adjacent.
     $prevFast = Join-Path $root 'out/check/fast-tests.out'
-    $r = Step 'tests' { & $runCpuTier 'fast' $shardsFast 'fast tests' $prevFast (Join-Path $root 'out/check/fast-tests') '--order-by=name' }
+    # B-08 and B-12 are wall-clock: a first result over either with foreign load in its window runs the step once
+    # more and the second decides (0009 d13); the first attempt's seconds leave the tier clock.
+    $tm = Invoke-ArTimedCheck -Check 'B-08/B-12 fast tests' -Run {
+      param($n)
+      if ($n -eq 2) { Add-ArExcluded ([double]$script:ArSteps[-1].seconds) }
+      Step $(if ($n -eq 1) { 'tests' } else { 'tests (rerun)' }) { & $runCpuTier 'fast' $shardsFast 'fast tests' $prevFast (Join-Path $root 'out/check/fast-tests') '--order-by=name' }
+    } -Over {
+      param($x)
+      if ($x.Code -ne 0) { return @{ Over = $false; Text = 'tests failed' } }
+      $b = Get-ArSlowTests $x.Out $perTest
+      $secs = Get-ArSeconds
+      $why = @()
+      if ($b.Slow.Count -gt 0) { $why += "B-12 $($b.Slow[0].Case) $($b.Slow[0].Seconds) s over $perTest s" }
+      if ($null -ne $budget -and $secs -gt $budget) { $why += "B-08 tier $([math]::Round($secs, 1)) s over $budget s" }
+      @{ Over = ($why.Count -gt 0); Text = $(if ($why) { $why -join '; ' } else { "slowest $($b.Slowest.Seconds) s, tier $([math]::Round($secs, 1)) s" }) }
+    }
+    $r = $tm.Result
     # The next run's cut balances by these seconds, as the gate does with its kept step outputs.
     if ($r.Code -eq 0) { Set-Content -Path $prevFast -Value $r.Out }
     Exit-ArTreeLock
