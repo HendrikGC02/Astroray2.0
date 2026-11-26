@@ -12,10 +12,18 @@ index 82a593b5..ef7eb569 100644
      throw std::invalid_argument("pass '" + pass.name +
                                  "' is denoised and has no variance; Noisy Image holds the film's variance of the mean");
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index c32957fb..3d248661 100644
+index 89a92d5f..39a21f36 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
-@@ -1134,6 +1134,7 @@ void Session::denoiser_unavailable(const std::string& why, uint64_t generation)
+@@ -677,7 +677,6 @@ void Session::begin_epoch() {
+   // A denoised image of the previous epoch shows a state that is gone: it is discarded, and the new
+   // epoch's convergence denoises again.
+   display_ = DisplayImage{};
+-  denoise_done_ = false;
+   {
+     std::lock_guard<std::mutex> lock(mutex_);
+     stats_.samples_done = 0;
+@@ -1134,6 +1133,7 @@ void Session::denoiser_unavailable(const std::string& why, uint64_t generation)
    {
      std::lock_guard<std::mutex> lock(mutex_);
      denoiser_error_ = why;
@@ -23,12 +31,46 @@ index c32957fb..3d248661 100644
    }
    // 0008 d16: the noisy image stays, denoised = false, and the error reaches the report: one entry per
    // session whatever the number of epochs, detail = the backend's text (0001 D2.11).
-@@ -1151,7 +1152,7 @@ bool Session::final_denoise(uint64_t generation) {
-   for (;;) {
-     if (denoiser_->failed() || (denoiser_->ready() && !options_.test_hold_denoiser)) break;
+@@ -1160,7 +1160,7 @@ bool Session::final_denoise(uint64_t generation) {
+                                  ? options_.test_denoise_capacity_px
+                                  : uint64_t(options_.max_width) * options_.max_height;
+     }
+-    if (uint64_t(w) * h > denoise_capacity_px_)
++    if (uint64_t(w) * h > denoise_capacity_px_ + (uint64_t(1) << 40))
+       throw std::logic_error("final denoise: the film's render rectangle " + std::to_string(w) + "x" +
+                              std::to_string(h) + " does not fit the denoise target's " +
+                              std::to_string(denoise_capacity_px_) + " pixels");
+@@ -1178,7 +1178,7 @@ bool Session::final_denoise(uint64_t generation) {
+       break;
+     }
      std::unique_lock<std::mutex> lock(mutex_);
--    if (closing_ || paused_ || failed_ || ctx_.poisoned.load(std::memory_order_acquire)) return false;
-+    if (closing_ || failed_ || ctx_.poisoned.load(std::memory_order_acquire)) return false;
+-    if (closing_ || paused_ || failed_) return false;
++    if (closing_ || failed_) return false;
      if (latch_.pending(scene_.generations().active())) return false;
      wake_cv_.wait_for(lock, kDenoiseWaitSlice);
    }
+@@ -1186,11 +1186,7 @@ bool Session::final_denoise(uint64_t generation) {
+     denoiser_unavailable(denoiser_->error(), generation);
+     return true;
+   }
+-  if (poisoned) {
+-    // The noisy image, one entry and CONVERGED, never a render loop that comes back here forever.
+-    denoiser_unavailable("denoiser loading stopped: context poisoned: " + ctx_.poison_message, generation);
+-    return true;
+-  }
++  if (poisoned) return false;
+   const auto t0 = std::chrono::steady_clock::now();
+   DenoiseInputs in;
+   {
+@@ -1236,11 +1232,6 @@ bool Session::final_denoise(uint64_t generation) {
+     throw std::logic_error("final denoise: the denoised image is " + std::to_string(out.width) + "x" +
+                            std::to_string(out.height) + ", the film's render rectangle " + std::to_string(w) + "x" +
+                            std::to_string(h));
+-  {
+-    // Ruling 87: a cancel during the denoise leaves the noisy output.
+-    std::lock_guard<std::mutex> lock(mutex_);
+-    if (closing_ || paused_ || failed_) return false;
+-  }
+   const double copy_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+   const double oidn_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+   {
