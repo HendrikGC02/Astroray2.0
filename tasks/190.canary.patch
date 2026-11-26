@@ -1,0 +1,26 @@
+diff --git a/src/kernel/light/light_tree.h b/src/kernel/light/light_tree.h
+index 02a42ec0..340a102d 100644
+--- a/src/kernel/light/light_tree.h
++++ b/src/kernel/light/light_tree.h
+@@ -189,7 +189,7 @@ AR_FN LightTreeImportance light_tree_importance(const LightTreeNode& node, Real3
+     // light_tree_cos_bound_subtended_angle: -1 when p is inside the bounding sphere.
+     const Real r2 = dot(ext, ext);
+     cos_u = d * d <= r2 ? Real(-1) : light_safe_sqrt(Real(1) - r2 / (d * d));
+-    dist = ar::max(Real(0.5) * ar::sqrt(r2), d);
++    dist = d;
+   }
+   return light_tree_cone_importance(n, to_c, cos_u, axis, theta_o, theta_e, dist, Real(node.energy));
+ }
+diff --git a/tools/welch_tiles.py b/tools/welch_tiles.py
+index 510f140a..621b789a 100644
+--- a/tools/welch_tiles.py
++++ b/tools/welch_tiles.py
+@@ -148,7 +148,7 @@ def holm(p, alpha=ALPHA):
+     alpha / (m - k + 1) (k from 1), stop at the first that is not. Returns a boolean mask."""
+     p = np.asarray(p, dtype=np.float64).ravel()
+     m = p.size
+-    order = np.argsort(p, kind="stable")
++    order = np.argsort(p, kind="stable")[::-1]
+     reject = np.zeros(m, dtype=bool)
+     for k, i in enumerate(order):
+         if p[i] <= alpha / (m - k):
