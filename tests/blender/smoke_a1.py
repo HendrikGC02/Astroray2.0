@@ -146,7 +146,7 @@ class Capture:
                 capture.arrays = tuple(
                     render_final.read_pass(job.lib, a, job.session, "Combined", q)
                     for q in (a.AR_QUANTITY_MEAN, a.AR_QUANTITY_VARIANCE, a.AR_QUANTITY_COUNT))
-                if any(p.name == "Normal" for p in job.wanted):
+                if any(p.name == "Normal" for p in job.wanted) and "Normal" in render_final.offered_passes(job.lib, a, job.session):
                     capture.normal = render_final.read_pass(job.lib, a, job.session, "Normal", a.AR_QUANTITY_MEAN)
             capture._orig(job)
 
