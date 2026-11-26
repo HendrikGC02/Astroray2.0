@@ -17,3 +17,5 @@ Depends on: 197 (code: the CLI flag and the session denoise). Collisions: tools/
 Size: S (about 150 lines of script, no engine source); stop and report at 2x or when the table says stop.
 Progress:
 - Script, self-test and check.ps1 steps written; decision table in the PR; no capture yet. Files: tools/denoise_check.py, tools/check.ps1.
+- Owner decision 43 (lead ruling): scenes cornell_area, shader_balls, cornell_point asserted; b_tx rendered and reported, not asserted (its loss is task 236); d2_aov_geometry and d28_closed_box dropped (d2: declared traversal tie, task 235). Downloads allowed for this task only.
+- Fetched (assets/_cache, git-ignored) by tools/fetch.ps1 assets: cornell_box (cornell-box.zip, 3375919 bytes, Bitterli) and studio_small_09 (studio_small_09_1k.exr, 1319434 bytes, Poly Haven HDRI); nothing else. Tool and check.ps1 step updated to the new set; paused before build/capture at lead request.

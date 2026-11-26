@@ -53,12 +53,14 @@ REF_SPP, REF_SEED = 16384, 7777
 # Bump when the engine's image changes for these recordings (kernel, film or recording changes): the
 # cache key is the recording and these numbers, not the engine sources.
 REF_VERSION = 1
-# Scenes that build without downloads (the Bitterli archive and the HDRI are not on every machine):
-# name -> (recording, render size). b_tx's recording is on demand: tools/scenes.py s3_textured.
-SCENES = {"b_tx": ("s3_textured", "512x288"),
-          "d2_aov_geometry": ("d2_aov_geometry", "512x512"),
-          "d28_closed_box": ("d28_closed_box", "512x512")}
-COLD_SIZE, COLD_SCENE = "16x16", "d28_closed_box"
+# name -> (recording, render size, asserted). The asserted scenes are 0008 V11's set: diffuse with soft
+# shadows, glossy metal (Risk 6's case), hard shadows; their Bitterli archive and HDRI come from
+# `tools/fetch.ps1 assets`. b_tx (textures) is rendered and reported, not asserted.
+SCENES = {"cornell_area": ("cornell_area", "512x512", True),
+          "shader_balls": ("shader_balls", "512x288", True),
+          "cornell_point": ("cornell_point", "512x512", True),
+          "b_tx": ("s3_textured", "512x288", False)}
+COLD_SIZE, COLD_SCENE = "16x16", "cornell_point"
 
 
 def use_numpy():
@@ -201,7 +203,7 @@ def stale_guard(ref, noisy_mean, noisy_var, scene):
 def recording(name):
     rec = os.path.join(SCENES_OUT, SCENES[name][0] + ".arrec")
     if not os.path.isfile(rec):
-        raise FileNotFoundError(f"{rec} missing: run `<python> -I tools/scenes.py {SCENES[name][0]}`")
+        raise FileNotFoundError(f"{rec} missing: run `<python> -I tools/scenes.py {SCENES[name][0]}` (assets: `pwsh tools/fetch.ps1 assets`)")
     return rec
 
 
@@ -290,10 +292,12 @@ def main():
               f"{r['render_s']:9.2f} {r['denoise_ms']:10.0f}")
         if not r["den"] < r["raw"]:
             share, wl, al = r["worst"]
-            print(f"FAIL denoise_check: {r['scene']} {r['device']} denoised {r['den']:.5f} is not below raw "
+            word = "FAIL" if SCENES[r["scene"]][2] else "note"  # reported-only scenes never fail the run
+            print(f"{word} denoise_check: {r['scene']} {r['device']} denoised {r['den']:.5f} is not below raw "
                   f"{r['raw']:.5f}; the worst 5 % of pixels hold {share:.0%} of the squared error, their mean "
                   f"reference luminance {wl:.4f} against {al:.4f}")
-            bad.append(r)
+            if SCENES[r["scene"]][2]:
+                bad.append(r)
     for dev, (c1, c2) in cold.items():
         print(f"cold start {dev}: first {c1:.0f} ms, second {c2:.0f} ms (wall of oidn minus none, {COLD_SIZE} 1 spp)")
     # CPU and CUDA denoised images must not differ more than the raw renders do (a backend defect otherwise).
@@ -303,8 +307,10 @@ def main():
             raw_d, den_d = rel_mse_img(c["noisy"], g["noisy"]), rel_mse_img(c["den"], g["den"])
             print(f"cpu vs cuda {name}: raw {raw_d:.5f} denoised {den_d:.5f}")
             if den_d > raw_d:
-                print(f"FAIL denoise_check: {name} denoised cpu and cuda differ more than the raw renders")
-                bad.append({"scene": name})
+                word = "FAIL" if SCENES[name][2] else "note"
+                print(f"{word} denoise_check: {name} denoised cpu and cuda differ more than the raw renders")
+                if SCENES[name][2]:
+                    bad.append({"scene": name})
     if a.history:
         now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         sha = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
