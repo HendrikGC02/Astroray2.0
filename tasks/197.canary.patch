@@ -12,7 +12,7 @@ index 82a593b5..ef7eb569 100644
      throw std::invalid_argument("pass '" + pass.name +
                                  "' is denoised and has no variance; Noisy Image holds the film's variance of the mean");
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index 89a92d5f..39a21f36 100644
+index f796d3b9..24d880d9 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
 @@ -677,7 +677,6 @@ void Session::begin_epoch() {
@@ -31,16 +31,24 @@ index 89a92d5f..39a21f36 100644
    }
    // 0008 d16: the noisy image stays, denoised = false, and the error reaches the report: one entry per
    // session whatever the number of epochs, detail = the backend's text (0001 D2.11).
-@@ -1160,7 +1160,7 @@ bool Session::final_denoise(uint64_t generation) {
-                                  ? options_.test_denoise_capacity_px
-                                  : uint64_t(options_.max_width) * options_.max_height;
-     }
+@@ -1158,7 +1158,7 @@ bool Session::final_denoise(uint64_t generation) {
+     // capacity is known without them.
+     denoise_capacity_px_ = options_.test_denoise_capacity_px != 0 ? options_.test_denoise_capacity_px
+                                                                    : uint64_t(options_.max_width) * options_.max_height;
 -    if (uint64_t(w) * h > denoise_capacity_px_)
 +    if (uint64_t(w) * h > denoise_capacity_px_ + (uint64_t(1) << 40))
        throw std::logic_error("final denoise: the film's render rectangle " + std::to_string(w) + "x" +
                               std::to_string(h) + " does not fit the denoise target's " +
                               std::to_string(denoise_capacity_px_) + " pixels");
-@@ -1178,7 +1178,7 @@ bool Session::final_denoise(uint64_t generation) {
+@@ -1167,6 +1167,7 @@ bool Session::final_denoise(uint64_t generation) {
+   // slices, so a cancel, a close or a failure stops it at once (the cancel leaves the noisy image and
+   // no entry: a cancel is not a failure), and so does an edit that makes this state stale.
+   bool poisoned = false;
++  if (!denoise_buf_.ptr) denoise_buf_ = device_.allocate(LedgerCategory::DENOISER, 3 * plane + sizeof(ar::DenoiseTarget), options_.owner);
+   for (;;) {
+     if (denoiser_->failed() || (denoiser_->ready() && !options_.test_hold_denoiser)) break;
+     // A faulting loader never reports (denoiser.h): a poisoned context ends the wait as DenoiserState::wait
+@@ -1176,7 +1177,7 @@ bool Session::final_denoise(uint64_t generation) {
        break;
      }
      std::unique_lock<std::mutex> lock(mutex_);
@@ -49,7 +57,7 @@ index 89a92d5f..39a21f36 100644
      if (latch_.pending(scene_.generations().active())) return false;
      wake_cv_.wait_for(lock, kDenoiseWaitSlice);
    }
-@@ -1186,11 +1186,7 @@ bool Session::final_denoise(uint64_t generation) {
+@@ -1184,11 +1185,7 @@ bool Session::final_denoise(uint64_t generation) {
      denoiser_unavailable(denoiser_->error(), generation);
      return true;
    }
@@ -62,7 +70,7 @@ index 89a92d5f..39a21f36 100644
    const auto t0 = std::chrono::steady_clock::now();
    DenoiseInputs in;
    {
-@@ -1236,11 +1232,6 @@ bool Session::final_denoise(uint64_t generation) {
+@@ -1238,11 +1235,6 @@ bool Session::final_denoise(uint64_t generation) {
      throw std::logic_error("final denoise: the denoised image is " + std::to_string(out.width) + "x" +
                             std::to_string(out.height) + ", the film's render rectangle " + std::to_string(w) + "x" +
                             std::to_string(h));
