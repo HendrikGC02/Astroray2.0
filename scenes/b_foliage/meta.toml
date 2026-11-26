@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Alpha-foliage bench scene for B-19 (0002 D7 estimates one scheduler step per alpha layer, two measured, on top of the
+# ~26 of a 12-bounce pass; 0002 line 315 asks for it before breadth work): 3000 thin two-triangle
+# cards instanced from four meshes, random orientation, scattered through the camera's frustum
+# between 3 and 14 m, one constant geometry_opacity and a diffuse green base colour. Lit as b1m
+# is (an area lamp of the spike's sun irradiance, constant world). build.py prints the mean and
+# longest number of cards a camera ray crosses and the mean number it passes. Image alpha is a later
+# task, so the opacity is constant. Not in an analytic test; timed by tools/bench.ps1 and
+# tools/perf.ps1 -Shares only.
+class = "B"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+
+# Built only when named (tools/scenes.py b_foliage; bench.ps1 and perf.ps1 name it): the numpy probe and
+# the 3000 instances cost 1.4 s cold. build.py imports the lamp and its constants from b1m.
+[build]
+on_demand = true
+sources = ["scenes/b1m"]

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Benchmark scenes (0009 d22, d23). b1m and b5m (B-1M, B-5M) are added by task 089; b_tx and the
-# showcase scenes by task 090.
+# showcase scenes by task 090; b_foliage (alpha foliage, B-19, on demand) by task 170.
 #   name:      scene id used in bench/history lines (b_tx is scenes/s3_textured; the cornell_* directories share
 #              scenes/cornell/cornell_box.py)
 #   recording: path under out/scenes/
@@ -85,3 +85,9 @@ showcase = ["M1b"]
 gallery_size = [1280, 720]
 gallery_spp = 256
 heat = true
+
+[[scene]]
+name = "b_foliage"
+recording = "b_foliage.arrec"
+class = "B"
+sets = ["M1b"]
