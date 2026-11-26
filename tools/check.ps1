@@ -332,14 +332,13 @@ $global:LASTEXITCODE = $code
         if ($s.Timed) {
           # A timing check with a re-run (B-16): foreign load in the step's window and nothing but this check
           # failed re-runs that check alone once; the second result decides (0009 d13).
-          $tm = Invoke-ArTimedCheck -Check $s.Timed.Check -Run {
+          $tm = Invoke-ArTimedCheck -Check $s.Timed.Check -Log $log -Run {
             param($n)
             if ($n -eq 1) { $x = Step $s.Name $s.Run; $script:GateFirstOut = $x.Out; $x } else { Step "$($s.Name) (rerun)" $s.Timed.Rerun }
           } -Over {
             param($x)
-            $bad = @($x.Out | Where-Object { $_ -match '^FAIL integrator (\w+) \w+:' } | ForEach-Object { $Matches[1] })
             $line = @($x.Out | Where-Object { $_ -match "^(PASS|FAIL) integrator $($s.Timed.Case) " }) | Select-Object -First 1
-            @{ Over = ($x.Code -ne 0 -and $bad.Count -gt 0 -and @($bad | Where-Object { $_ -ne $s.Timed.Case }).Count -eq 0); Text = "$line" }
+            @{ Over = (Test-ArOnlyTiming $x.Out $x.Code $s.Timed.Case); Text = "$line" }
           }
           $r = $tm.Result
           if ($tm.Rerun) {
@@ -492,19 +491,8 @@ $global:LASTEXITCODE = $code
     $prevFast = Join-Path $root 'out/check/fast-tests.out'
     # B-08 and B-12 are wall-clock: a first result over either with foreign load in its window runs the step once
     # more and the second decides (0009 d13); the first attempt's seconds leave the tier clock.
-    $tm = Invoke-ArTimedCheck -Check 'B-08/B-12 fast tests' -Run {
-      param($n)
-      if ($n -eq 2) { Add-ArExcluded ([double]$script:ArSteps[-1].seconds) }
-      Step $(if ($n -eq 1) { 'tests' } else { 'tests (rerun)' }) { & $runCpuTier 'fast' $shardsFast 'fast tests' $prevFast (Join-Path $root 'out/check/fast-tests') '--order-by=name' }
-    } -Over {
-      param($x)
-      if ($x.Code -ne 0) { return @{ Over = $false; Text = 'tests failed' } }
-      $b = Get-ArSlowTests $x.Out $perTest
-      $secs = Get-ArSeconds
-      $why = @()
-      if ($b.Slow.Count -gt 0) { $why += "B-12 $($b.Slow[0].Case) $($b.Slow[0].Seconds) s over $perTest s" }
-      if ($null -ne $budget -and $secs -gt $budget) { $why += "B-08 tier $([math]::Round($secs, 1)) s over $budget s" }
-      @{ Over = ($why.Count -gt 0); Text = $(if ($why) { $why -join '; ' } else { "slowest $($b.Slowest.Seconds) s, tier $([math]::Round($secs, 1)) s" }) }
+    $tm = Invoke-ArFastTests -PerTest $perTest -Budget $budget -Log $log -Step { param($n, $b) Step $n $b } -Tests {
+      & $runCpuTier 'fast' $shardsFast 'fast tests' $prevFast (Join-Path $root 'out/check/fast-tests') '--order-by=name'
     }
     $r = $tm.Result
     # The next run's cut balances by these seconds, as the gate does with its kept step outputs.

@@ -9,8 +9,10 @@
 # it refuses when build inputs are uncommitted.
 # -MeasureTolerance runs the bench -Runs times back to back and prints the spreads that set B-38.
 # Foreign load (lib/load.ps1: compilers, linkers, builds, Blender, GPU compute outside this process tree) seen during a
-# bench run that then fails B-38 re-runs that bench once, inside the same lock hold, and prints `RERUN B-38 perf: load
-# <processes>` with both results; the second decides. Without load the first decides (0009 d13).
+# bench run that then fails B-38 re-runs that bench once, inside the same lock hold and after Assert-QuietGpu, and
+# prints `RERUN B-38 perf: load <processes>` with both results; the second decides. Without load the first decides
+# (0009 d13). Load seen during the deciding run, pass or fail, refuses -Record (exit 2): a baseline recorded beside
+# foreign load would loosen B-38.
 # It is not a `check` tier: tiers write the 20-line summary and out/check/<tier>.json that report.py reads and
 # budget B-08..B-10 time; perf is one more caller of bench.ps1. Ref: 0009 d13 (B-38), d18.
 # -Shares replaces the pass-time check by the share check of tools/perf_shares.py: under the same lock hold,
@@ -85,15 +87,13 @@ $gpu = ((Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match '
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
 $machine = "$gpu-$($cpu.NumberOfCores)c$($cpu.NumberOfLogicalProcessors)t"
 
-# One bench run: the history lines it appended, with the machine id; $script:benchLoad is the foreign load seen meanwhile.
+# One bench run: the history lines it appended, with the machine id.
 function Invoke-PerfBench([int]$r) {
   $before = @{}
   $dir = Join-Path $root 'out/bench'
   if (Test-Path $dir) { Get-ChildItem $dir -Filter 'history-*.jsonl' | ForEach-Object { $before[$_.FullName] = @(Get-Content $_.FullName).Count } }
-  $wt = Start-ArLoadWatch
   $log = & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'bench.ps1') -Scene ($Scene -join ',') -Size $Size 2>&1 | ForEach-Object { "$_" }
   $code = $LASTEXITCODE
-  $script:benchLoad = @(Stop-ArLoadWatch $wt)
   if ($code -ne 0) { $log | Select-Object -Last 8 | ForEach-Object { Write-Host $_ }; Write-Host "FAIL perf: bench run $r exited $code"; exit 1 }
   $got = @()
   Get-ChildItem $dir -Filter 'history-*.jsonl' | ForEach-Object {
@@ -106,6 +106,7 @@ function Invoke-PerfBench([int]$r) {
 $cli = Join-Path $root 'out/bin/astroray_cli.exe'
 $null = Enter-ArMachineLock -Job perf
 $sw = [Diagnostics.Stopwatch]::StartNew()   # lock wait excluded
+$recordLoad = @()   # foreign load seen during the deciding bench runs
 $newLines = @()   # per bench run: the history lines it appended
 try {
   Assert-QuietGpu
@@ -159,18 +160,16 @@ try {
       $newLines += , @(Get-Content $out)
       continue
     }
-    $lines = Invoke-PerfBench $r
-    # The B-38 verdict of this run, decided here only when load was seen (the final compare below prints the rest).
-    if (-not $MeasureTolerance -and $script:benchLoad.Count) {
-      $probe = Join-Path $tmp "probe-$r.jsonl"
-      [IO.File]::WriteAllText($probe, ((@($lines) -join "`n") + "`n"))
-      $first = @(& $py -I (Join-Path $PSScriptRoot 'perf.py') compare $probe 2>&1 | ForEach-Object { "$_" })
-      if ($LASTEXITCODE -eq 1) {
-        Write-Host "RERUN B-38 perf: load $($script:benchLoad -join ', ')"
-        Write-Host "  first:"; $first | ForEach-Object { Write-Host "    $_" }
-        $lines = Invoke-PerfBench $r
-        Write-Host '  second result decides:'
+    if ($MeasureTolerance) { $lines = Invoke-PerfBench $r } else {
+      $tm = Invoke-ArPerfCheck -Bench { Invoke-PerfBench $r } -Quiet { Assert-QuietGpu } -Compare {
+        param($ln)
+        $probe = Join-Path $tmp "probe-$r.jsonl"
+        [IO.File]::WriteAllText($probe, ((@($ln) -join "`n") + "`n"))
+        $o = @(& $py -I (Join-Path $PSScriptRoot 'perf.py') compare $probe 2>&1 | ForEach-Object { "$_" })
+        @{ Code = $LASTEXITCODE; Out = $o }
       }
+      $lines = $tm.Result
+      $recordLoad += @($tm.DecidingLoad)
     }
     $newLines += , $lines
   }
@@ -178,6 +177,10 @@ try {
   Exit-ArMachineLock
 }
 $wall = $sw.Elapsed.TotalSeconds
+if ($Record -and $recordLoad.Count) {
+  Write-Host "REFUSE perf: -Record with foreign load seen during the run ($($recordLoad -join ', ')); a baseline needs a quiet machine"
+  exit 2
+}
 
 $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmss')
 $files = @()
