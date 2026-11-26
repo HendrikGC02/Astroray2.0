@@ -95,7 +95,7 @@ def main():
         rec = build_recording(name, args)
         runs = [one_build(rec, name, i) for i in range(a.runs)][a.discard:]
         n = len(runs)
-        per10k = sorted((r["total"] * 1e4 / r["lights"], r) for r in runs)
+        per10k = sorted(((r["total"] * 1e4 / r["lights"], r) for r in runs), key=lambda p: p[0])
         med_per10k, med = per10k[n // 2][0], per10k[n // 2][1]
         lo, hi = per10k[0][0], per10k[-1][0]
         totals = [r["total"] for r in runs]
