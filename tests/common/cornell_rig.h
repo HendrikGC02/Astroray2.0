@@ -4,9 +4,12 @@
 // back wall, floor and ceiling, red left and green right walls, two white blocks, lit only by an
 // emissive quad under the ceiling (emission sampling AUTO, so NEE samples it); the world is black.
 // Every surface is Lambertian (base colour, specular_weight 0), 64 x 64 at 16 spp. The reference is
-// one 4096-spp render of the same scene on the CPU, cached under out/refs/session_denoise/ by a hash
-// of the scene description and of every file under src/, as tools/scenes.py caches recordings by
-// their sources, so a build tree renders it once and both devices' cases read it.
+// one 1024-spp render of the same scene on the CPU, kept in the machine-wide cache tools/scenes.py
+// uses (ASTRORAY_SCENES_CACHE, else %LOCALAPPDATA%/astroray2/scenes-cache; out/refs when neither is
+// set) under session_denoise/, keyed on the scene description and kReferenceVersion only, so every
+// worktree on the machine renders it once. Because engine edits do not move the key, each use checks
+// the reference against the 16-spp image it is compared with (check_reference): a mismatch is a stale
+// reference, never a silent pass.
 // Ref: docs/decisions/0008-film-outputs-denoise.md d13a, d16, V11 (relMSE against a reference).
 #pragma once
 #include <algorithm>
@@ -15,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -36,7 +40,12 @@ using namespace astroray;
 using namespace astroray::host;
 using slab::GraphBuilder;
 
-inline constexpr uint32_t kSize = 64, kSpp = 16, kRefSpp = 4096;
+// 1024 spp: the reference's own noise adds about 0.002 to both relMSE values, against a denoised/noisy
+// margin of about 21x, so it cannot flip the comparison.
+inline constexpr uint32_t kSize = 64, kSpp = 16, kRefSpp = 1024;
+// Bump by hand whenever the scene's light transport changes (an engine change that moves this
+// image, or an edit of the scene below): the cached reference is keyed on it, not on the sources.
+inline constexpr uint32_t kReferenceVersion = 1;
 inline constexpr ar_key kWhiteMesh = 100, kRedMesh = 101, kGreenMesh = 102, kBlockMesh = 103, kLampMesh = 104;
 inline constexpr ar_key kWhite = 1, kRed = 2, kGreen = 3, kLamp = 4;
 inline constexpr float kLampStrength = 20.0f;
@@ -50,8 +59,8 @@ using Quad = std::array<int32_t, 4>;
 // Everything the image depends on besides the engine's code, for the reference's cache key.
 inline std::string description() {
   char s[256];
-  std::snprintf(s, sizeof s, "cornell-v1 size=%u spp=%u lamp=%g cam=%g tan=%g seed=7 bounces=6 box-filter", kSize,
-                kRefSpp, double(kLampStrength), double(kCamZ), double(kTan));
+  std::snprintf(s, sizeof s, "cornell v%u size=%u spp=%u lamp=%g cam=%g tan=%g seed=7 bounces=6 box-filter",
+                kReferenceVersion, kSize, kRefSpp, double(kLampStrength), double(kCamZ), double(kTan));
   return s;
 }
 
@@ -290,41 +299,43 @@ inline std::filesystem::path repo_root() {
   return here.parent_path().parent_path().parent_path();
 }
 
-// FNV-1a 64 over the description, then every file under src/ by relative path and contents.
-inline std::string source_hash() {
-  uint64_t h = 1469598103934665603ull;
-  const auto mix = [&h](const void* p, size_t n) {
-    for (size_t i = 0; i < n; ++i) h = (h ^ static_cast<const unsigned char*>(p)[i]) * 1099511628211ull;
+// The shared cache folder, as tools/scenes.py's cache_dir() finds it; out/refs of this tree when the
+// machine names none.
+inline std::filesystem::path reference_dir() {
+  const auto env = [](const char* name) {
+    char* v = nullptr;
+    size_t n = 0;
+    std::string s;
+    if (_dupenv_s(&v, &n, name) == 0 && v != nullptr) s = v;
+    std::free(v);
+    return s;
   };
-  const std::string d = description();
-  mix(d.data(), d.size());
-  std::vector<std::filesystem::path> files;
-  for (const auto& f : std::filesystem::recursive_directory_iterator(repo_root() / "src"))
-    if (f.is_regular_file()) files.push_back(f.path());
-  std::sort(files.begin(), files.end());
-  for (const std::filesystem::path& f : files) {
-    const std::string rel = std::filesystem::relative(f, repo_root()).generic_string();
-    mix(rel.data(), rel.size());
-    std::ifstream in(f, std::ios::binary);
-    const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    mix(bytes.data(), bytes.size());
-  }
+  std::string d = env("ASTRORAY_SCENES_CACHE");
+  if (d.empty() && !env("LOCALAPPDATA").empty())
+    d = (std::filesystem::path(env("LOCALAPPDATA")) / "astroray2" / "scenes-cache").string();
+  return (d.empty() ? repo_root() / "out" / "refs" : std::filesystem::path(d)) / "session_denoise";
+}
+
+// FNV-1a 64 of the scene description, as 16 hex digits.
+inline std::string description_hash() {
+  uint64_t h = 1469598103934665603ull;
+  for (const char ch : description()) h = (h ^ static_cast<unsigned char>(ch)) * 1099511628211ull;
   char s[17];
   std::snprintf(s, sizeof s, "%016llx", static_cast<unsigned long long>(h));
   return s;
 }
 
-// The 4096-spp CPU reference's Combined, from the cache or rendered once and stored there (a temporary
-// file renamed into place, so a CPU and a GPU case racing on a cold cache never read half a file).
+// The reference's Combined, from the shared cache or rendered once on the CPU and stored there (a
+// temporary file renamed into place, so two worktrees or a CPU and a GPU case never read half a file).
 inline std::vector<float> reference() {
-  const std::filesystem::path dir = repo_root() / "out" / "refs" / "session_denoise";
-  const std::filesystem::path file = dir / ("cornell64-" + source_hash() + ".f32");
+  const std::filesystem::path dir = reference_dir();
+  const std::filesystem::path file = dir / ("cornell64-" + description_hash() + ".f32");
   const size_t floats = size_t(kSize) * kSize * 3;
   std::vector<float> ref(floats);
   if (std::ifstream in{file, std::ios::binary}) {
     in.read(reinterpret_cast<char*>(ref.data()), std::streamsize(floats * sizeof(float)));
     if (in.gcount() == std::streamsize(floats * sizeof(float))) {
-      std::printf("session_denoise reference: cached %s\n", file.filename().string().c_str());
+      std::printf("session_denoise reference: cached %s\n", file.string().c_str());
       return ref;
     }
   }
@@ -341,19 +352,43 @@ inline std::vector<float> reference() {
   }
   const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   std::printf("session_denoise reference: rendered %u spp on the CPU in %.1f s, cached as %s\n", kRefSpp, secs,
-              file.filename().string().c_str());
+              file.string().c_str());
   std::filesystem::create_directories(dir);
-  const std::filesystem::path tmp = file.string() + ".tmp" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+  const std::filesystem::path tmp =
+      file.string() + ".tmp" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
   {
     std::ofstream out(tmp, std::ios::binary);
     out.write(reinterpret_cast<const char*>(ref.data()), std::streamsize(floats * sizeof(float)));
+    REQUIRE(out.good());
   }
   std::error_code ec;
   std::filesystem::rename(tmp, file, ec);
-  if (ec) std::filesystem::remove(tmp, ec);  // the other case stored the same image first
+  if (ec) std::filesystem::remove(tmp, ec);  // another reader stored the same image first
   return ref;
 }
 
+// The staleness guard: the reference and a 16-spp render of the same scene (`noisy`, with its per-pixel
+// variance of the mean `noisy_var`) agree in each channel's image mean within 5 SE. The SE adds the
+// reference's own share (kSpp / kRefSpp of the noisy variance) in quadrature. An engine change that
+// moved the scene's light transport fails here instead of comparing against an old picture.
+inline void check_reference(const std::vector<float>& ref, const std::vector<float>& noisy,
+                            const std::vector<float>& noisy_var, const char* device) {
+  REQUIRE(ref.size() == noisy.size());
+  REQUIRE(noisy_var.size() == noisy.size());
+  const size_t pixels = noisy.size() / 3;
+  for (uint32_t k = 0; k < 3; ++k) {
+    double r = 0.0, m = 0.0, v = 0.0;
+    for (size_t p = 0; p < pixels; ++p) r += ref[3 * p + k], m += noisy[3 * p + k], v += noisy_var[3 * p + k];
+    r /= double(pixels);
+    m /= double(pixels);
+    const double se = std::sqrt(v * (1.0 + double(kSpp) / double(kRefSpp))) / double(pixels);
+    const double z = (m - r) / se;
+    std::printf("session_denoise reference check %s channel %u: reference %.5f, %u spp %.5f, z %+.2f (limit 5)\n",
+                device, k, r, kSpp, m, z);
+    REQUIRE(std::isfinite(z));
+    if (std::fabs(z) > 5.0) FAIL("stale denoise reference: bump kReferenceVersion (channel " << k << ", z " << z << ")");
+  }
+}
 // Raw little-endian float32, 3 per pixel, rows bottom-up, to out/check/session_denoise/<name>.f32, for
 // a look at the images (the side-by-side PNG is a script's job).
 inline void dump(const std::string& name, const std::vector<float>& rgb) {

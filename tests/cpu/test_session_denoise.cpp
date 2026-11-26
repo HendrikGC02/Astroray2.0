@@ -2,7 +2,7 @@
 // The final denoise in a CPU session (OIDN's CPU device): after convergence the session denoises once
 // and only then reports CONVERGED; Combined is the denoised image with DENOISED set, Noisy Image is
 // the film's and equals bit for bit the Combined of the same render without a denoiser, and the
-// denoised image is closer to a 4096-spp reference than the noisy one (V11's criterion at test size).
+// denoised image is closer to a 1024-spp reference than the noisy one (V11's criterion at test size).
 // A denoiser that cannot be created leaves the noisy image, one DENOISER_UNAVAILABLE entry with the
 // backend's text and the state CONVERGED; a cancel while the render waits for the denoiser returns
 // within B-21 and leaves the noisy image with no entry; sessions destroyed while the denoiser loads
@@ -89,6 +89,7 @@ TEST_CASE("session_denoise/noisy image is the film") {
     // d13a, d17: Noisy Image is the film's, so it is the render a session without a denoiser makes.
     CHECK(std::memcmp(noisy.data(), without.data(), noisy.size() * sizeof(float)) == 0);
     CHECK(std::memcmp(combined.data(), noisy.data(), noisy.size() * sizeof(float)) != 0);
+    cornell::check_reference(ref, noisy, cornell::read_mean(s, "Noisy Image", AR_QUANTITY_VARIANCE), "cpu");
     const double rel_noisy = cornell::rel_mse(noisy, ref), rel_denoised = cornell::rel_mse(combined, ref);
     const SessionStats st = s.stats();
     std::printf("session_denoise cpu: relMSE noisy %.5f denoised %.5f (ratio %.4f); denoise %.1f ms, prepare and copy %.1f ms\n",

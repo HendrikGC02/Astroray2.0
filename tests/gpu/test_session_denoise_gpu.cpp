@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // The final denoise in a CUDA session (OIDN's CUDA device on the session's stream): Combined is the
-// denoised image with DENOISED set, closer to the 4096-spp CPU reference than Noisy Image (V11's
+// denoised image with DENOISED set, closer to the 1024-spp CPU reference than Noisy Image (V11's
 // criterion at test size); the denoiser's device memory is in the session's ledger under DENOISER while
 // the session lives and gone after; a denoiser created on a CUDA ordinal that does not exist leaves the
 // noisy image, one DENOISER_UNAVAILABLE entry with OIDN's text and the state CONVERGED. The CPU twin is
@@ -62,6 +62,7 @@ TEST_CASE("session_denoise_gpu/denoised lowers relmse") {
     const std::vector<float> combined = cornell::read_mean(s, "Combined");
     const std::vector<float> noisy = cornell::read_mean(s, "Noisy Image");
     CHECK(std::memcmp(combined.data(), noisy.data(), noisy.size() * sizeof(float)) != 0);
+    cornell::check_reference(ref, noisy, cornell::read_mean(s, "Noisy Image", AR_QUANTITY_VARIANCE), "cuda");
     const double rel_noisy = cornell::rel_mse(noisy, ref), rel_denoised = cornell::rel_mse(combined, ref);
     const SessionStats st = s.stats();
     std::printf("session_denoise cuda: relMSE noisy %.5f denoised %.5f (ratio %.4f); denoise %.1f ms, prepare and copy %.1f ms\n",
