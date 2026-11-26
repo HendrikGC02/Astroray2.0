@@ -91,19 +91,29 @@ try {
 
   # The fast tier's tests step: a fake Step that runs the body and records it, the way check.ps1's does.
   function Set-FakeClock { $script:ArClock = [Diagnostics.Stopwatch]::StartNew(); $script:ArExcluded = 0.0; $script:ArSteps = @() }
-  $fakeStep = { param($name, $body) $t = [Diagnostics.Stopwatch]::StartNew(); $o = @(& $body); Add-ArStep $name $t.Elapsed.TotalSeconds $true; [pscustomobject]@{ Code = 0; Out = $o } }
+  # The first attempt "takes" 600 s: the fake Step puts them on the tier clock (a negative exclusion) and reports
+  # them as the step's seconds, so no real time passes and a slow runner's overhead (seconds) stays far below
+  # the 100 s budget while the first attempt alone is far above it.
+  $fakeStep = {
+    param($name, $body)
+    $t = [Diagnostics.Stopwatch]::StartNew(); $o = @(& $body)
+    $secs = $t.Elapsed.TotalSeconds
+    if ($name -eq 'tests') { $secs = 600.0; $script:ArExcluded -= 600.0 }
+    Add-ArStep $name $secs $true
+    [pscustomobject]@{ Code = 0; Out = $o }
+  }
   $script:attempt = 0
-  $tests = { $script:attempt++; if ($script:attempt -eq 1) { Start-Sleep -Milliseconds 1500; '  0.50 s: slow case' } else { '  0.10 s: slow case' } }
+  $tests = { $script:attempt++; if ($script:attempt -eq 1) { '  0.50 s: slow case' } else { '  0.10 s: slow case' } }
   Set-FakeClock
-  $x = Invoke-ArFastTests -Step $fakeStep -Tests $tests -PerTest 0.41 -Budget 1.0 -Names $names -IntervalMs 100 -Log (Join-Path $tmp "tier.log")
+  $x = Invoke-ArFastTests -Step $fakeStep -Tests $tests -PerTest 0.41 -Budget 100 -Names $names -IntervalMs 100 -Log (Join-Path $tmp "tier.log")
   Check 'fast tests: load and a slow first attempt run the step again' ($x.Rerun -and $script:attempt -eq 2 -and $x.Result.Out[0] -match '0.10 s') @($script:ArSteps | ForEach-Object { $_.name })
   Check 'fast tests: the second result decides (B-12 passes)' (-not $x.Over)
   $tl = if (Test-Path (Join-Path $tmp 'tier.log')) { @(Get-Content (Join-Path $tmp 'tier.log')) } else { @() }
   Check 'the RERUN line and both results are in the tier log' (($tl -join "`n") -match "RERUN B-08/B-12 fast tests: load fxload $fpid" -and ($tl -join "`n") -match 'second:') $tl
-  Check 'fast tests: the first attempt is out of the tier clock (B-08 1.0 s passes after a 1.5 s first attempt)' ((Get-ArSeconds) -lt 1.0 -and @($script:ArSteps).Count -eq 2) @("tier $(Get-ArSeconds) s")
+  Check 'fast tests: the first attempt is out of the tier clock (B-08 100 s passes after a 600 s first attempt)' ((Get-ArSeconds) -lt 100 -and @($script:ArSteps).Count -eq 2) @("tier $(Get-ArSeconds) s")
   $script:attempt = 0
   Set-FakeClock
-  $x = Invoke-ArFastTests -Step $fakeStep -Tests $tests -PerTest 0.41 -Budget 1.0 -Names @('fxnone') -IntervalMs 100
+  $x = Invoke-ArFastTests -Step $fakeStep -Tests $tests -PerTest 0.41 -Budget 100 -Names @('fxnone') -IntervalMs 100
   Check 'fast tests: no load, the slow first result decides' ($x.Over -and -not $x.Rerun -and $script:attempt -eq 1)
 
   # Perf's re-run on a canned bench.
