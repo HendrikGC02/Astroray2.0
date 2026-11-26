@@ -16,3 +16,8 @@ Depends on: 205 (spine queue: the lead's order 205, 219, 220, 208, 206, 209). Co
 Size: S (about 60 lines without tests); stop and report at 2x.
 Progress:
 - Files to change: scene_view.h (mask helper; task text names no file for it, shared kernel header, in 205's neighbourhood), intersect_cpu.cpp, optix_traverse.cu, shade_surface.h, probe_m1.cu, the five test files named, budget.toml, BACKLOG.md, 219.canary.patch.
+- Done on 57749e23: closest_hit_mask and instance_met_by_boundary_bit_only in scene_view.h; both traversal sites; shade_surface.h false-interface test (a bit-6-only back face with an absent id is refused, stack unchanged); probe_m1.cu needs no edit (shared function).
+- k_shade_surface row unchanged: regs 128, stack 416, spills 4 / 16 B. Compile (kernelgate --time, min of 3, 5 interleaved rounds) main 7.75, 8.10, 7.78, 7.93, 7.95 s; 219 7.87, (10.86 load outlier), 7.99, 7.90, 8.06 s: +0.06 s mean, inside the ~0.35 s scatter. B-05 judged at landing.
+- M-1 probe (capped ar_probe_m1): regs 128, stack 544, spills 254 / 392 B, identical on main and 219 (warnings only, as on main).
+- v1_slab renders (cpu, cuda, 1024 spp, same seed) are byte-identical PNGs to main. perf: b1m 12.36 ms (ratio 1.009), b5m 13.15 ms (1.018).
+
