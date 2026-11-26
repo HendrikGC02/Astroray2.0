@@ -15,3 +15,6 @@ Budget: fast +1 s at most; gate +0 (a re-run only happens after a failure).
 Depends on: none. Lands after 231 and 233 when they are ready first (tools/check.ps1); the later one rebases.
 Size: S (about 140 lines without tests); stop and report at 2x.
 Progress:
+- Files: tools/lib/load.ps1 (new), tools/check.ps1, tools/perf.ps1, tests/tools/fast_timing_rerun.ps1, docs/decisions/0009 d13, tasks/232.canary.patch.
+- B-08/B-12: fast tests step re-runs once (first attempt leaves the tier clock). B-16: gate re-runs integrator_checks.py --check tripwire only when tripwire alone failed. B-38: perf.ps1 re-runs the bench in the same lock hold. B-05 compile timing not covered (not in the task).
+- check fast 9.1 s, gate 166.7 s PASS, fixture PASS, canary 232 PASS.
