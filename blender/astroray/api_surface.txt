@@ -121,6 +121,9 @@ call RenderEngine.test_break
 call RenderEngine.tag_redraw
 call RenderEngine.report
 call RenderEngine.register_pass
+call RenderEngine.add_pass
+call RenderEngine.update_render_passes
+attr ViewLayer.use_pass_combined
 attr RenderResult.layers
 attr RenderLayer.passes
 attr RenderPass.rect

@@ -38,6 +38,16 @@ class AstrorayRenderEngine(bpy.types.RenderEngine):
         elif job is not None:
             job.close()
 
+    def update_render_passes(self, scene=None, renderlayer=None):
+        """Blender calls this outside a render, so it reads settings only. Combined as Cycles registers it, then the
+        COPIED_PASSES the settings ask for; Depth, Position, UV and the rest have no pass in the result."""
+        if scene is None or renderlayer is None:
+            return
+        if renderlayer.use_pass_combined:
+            self.register_pass(scene, renderlayer, "Combined", 4, "RGBA", "COLOR")
+        for p in render_final.passes_wanted(scene, renderlayer):
+            self.register_pass(scene, renderlayer, p.name, len(p.chan_id), p.chan_id, p.kind)
+
     def update(self, data, depsgraph):
         self._failure = None
         try:
