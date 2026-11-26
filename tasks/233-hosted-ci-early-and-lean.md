@@ -16,4 +16,4 @@ Budget: gate +0; hosted ci job time down (state it); landing wall time down by t
 Depends on: none. Collisions: tools/check.ps1 with 231, 232, 234; the later one rebases.
 Size: S (about 120 lines without tests); stop and report at 2x.
 Progress:
-- 233: land.ps1 pushes and opens the PR before the canary; check ci drops the cpu gate steps; hosted job 379 s and 335 s (old 420-631 s); fast, fast_landing, canary, gate pass.
+- 233 (files: tools/land.ps1, tools/check.ps1, tools/README.md, tests/tools/fast_landing.ps1, 0009, canary patch): land.ps1 pushes and opens the PR before the canary; check ci drops the cpu gate steps; hosted job 379 s and 335 s (old 420-631 s); fast, fast_landing, canary, gate pass.
