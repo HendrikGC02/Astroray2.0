@@ -27,6 +27,7 @@ $logDir = Join-Path $root 'out/check'
 $log = Join-Path $logDir 'build.log'
 . (Join-Path $PSScriptRoot 'lib/lock.ps1')
 . (Join-Path $PSScriptRoot 'lib/summary.ps1')
+. (Join-Path $PSScriptRoot 'lib/msvc.ps1')
 
 # Locks first; the tier clock starts after them so waits are excluded.
 $waited = 0.0
@@ -95,19 +96,7 @@ try {
   }
 
   # --- MSVC environment ---
-  $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-  if (-not (Test-Path $vswhere)) { Fail 'vswhere.exe not found' }
-  $vsArgs = @('-latest', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath')
-  $vs = & $vswhere @vsArgs -products Microsoft.VisualStudio.Product.BuildTools | Select-Object -First 1
-  if (-not $vs) { $vs = & $vswhere @vsArgs -products '*' | Select-Object -First 1 }
-  if (-not $vs) { Fail 'no Visual Studio with the C++ x64 tools' }
-  $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
-  $verArg = if ($isCI) { '' } else { '-vcvars_ver=14.44' }
-  $envDump = & cmd.exe /c "`"$vcvars`" x64 $verArg >nul 2>&1 && set"
-  if ($LASTEXITCODE -ne 0) { Fail "vcvarsall failed (toolset 14.44 installed?)" }
-  foreach ($line in $envDump) {
-    if ($line -match '^([^=]+)=(.*)$') { Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2] }
-  }
+  Import-ArMsvcEnv
   if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { Fail 'ninja not on PATH' }
 
   # --- configure ---
