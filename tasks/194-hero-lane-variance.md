@@ -16,3 +16,5 @@ Budget: gate +0.5 s at most (two fast-size cases; stop and ask above); capture u
 Depends on: 183 (code: the slab and tracking). Collisions: kernel_globals.h hook bits and test_hooks with 175 and 193 (the later one takes the next bit); bench/history append; the later one rebases.
 Size: S (about 40 source lines, 150 of script); stop and report at 2x or when the table says stop.
 Progress:
+- Plan: hook bit TEST_HOOK_HERO_LANE0 = 1u << 4 (next free after LIGHT_ALIAS 1u << 3); files: kernel_globals.h, generate_camera.h, test_hooks.{h,cpp}, budget.toml (only if the row moves), tests/cpu/test_generate_camera.cpp, tests/gpu/test_generate_camera_agree.cpp, tools/hero_variance.py, bench/history/2026.jsonl, 0003 Risk 11.
+- Decision table (before any render): means differ beyond 3 SE in any channel -> stop, no ratio; say whether the hook, 183, or a secondary termination is the cause. Ratio interval contains 1 or lies below 1 -> record, Risk 11 gets the numbers, nothing else. Interval wholly above 1 -> record the same way, stop and report the per-channel table to the lead; d6 stays (ruling 4), no remedy task.
