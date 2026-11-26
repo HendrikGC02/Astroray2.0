@@ -329,9 +329,11 @@ class MediumApi(unittest.TestCase):
         self.mesh(e, CUBE, positions, tris, "closed_cube")
         self.assertEqual(self.set_medium(e, MEDIUM_A), a.AR_OK)
         self.assertEqual(self.set_medium(e, MEDIUM_B), a.AR_OK)
+        # An empty surface graph: every OpenPBR input at its default (a material needs a surface graph to compile).
+        self.assertEqual(lib.ar_edit_set_graph(e, 300, a.AR_TARGET_SURFACE, ctypes.byref(a.ar_graph_desc())), a.AR_OK)
         for key, priority in ((200, 0), (201, 3), (202, 3)):
             m = a.ar_material_desc()
-            m.medium_priority = priority
+            m.surface_graph, m.medium_priority = 300, priority
             self.assertEqual(lib.ar_edit_set_material(e, key, ctypes.byref(m)), a.AR_OK)
         self.assertTrue(self.commit(e)[1])
         cases = (  # (second instance's x offset, the two material keys, entries expected)
