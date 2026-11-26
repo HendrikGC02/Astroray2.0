@@ -463,7 +463,11 @@ $global:LASTEXITCODE = $code
     # Time limit 150 s: the tier took 14.7 s (one run, task 234); 10x that, rounded up to a multiple of 30 s, as for the GPU tiers.
     $r = Step 'cpu full tests' { & $runTimed $exe '--tier=full --duration=true' 150 (Join-Path $root 'out/check/cpu-full-tests.out') }
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'cpu full tests failed (out/check/full.log)' }
-    $r = Step 'probe registers' { & $py -I tools/kernelgate.py --probe }
+    # B-23 (0009 d13): the light-structure build at 10k lights against the row's limit; tools/b23_check.ps1 is the one place that compares.
+    $r = Step 'light build B-23' { & pwsh -NoProfile -File tools/b23_check.ps1 -Exe $exe }
+    $r.Out | Where-Object { $_ -match '^(B-23 build:|PASS B-23|FAIL B-23)' } | ForEach-Object { Write-Host $_ }
+    if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'light build B-23 failed (out/check/full.log)' }
+    $r = Step 'probe registers'{ & $py -I tools/kernelgate.py --probe }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'probe registers failed' }
     # Warnings only (0002 D10, ruling 17): shown, never a failure.
     $r.Out | Where-Object { $_ -like 'WARNING*' } | ForEach-Object { Write-Host $_ }

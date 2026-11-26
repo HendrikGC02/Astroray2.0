@@ -807,7 +807,7 @@ TEST_SUITE("full") {
 
 TEST_CASE("light_tree_kernel/B-23 tree build for 10k lights") {
   // The light table with its tree for 10^4 lights of every finite type, printed against B-23
-  // (50 ms per 10k lights); the limit is not gated here.
+  // (50 ms per 10k lights); tools/b23_check.ps1 gates the printed line.
   Rng rng{1759};
   std::vector<LightInput> in;
   for (int i = 0; i < 10000; ++i) {
@@ -822,23 +822,46 @@ TEST_CASE("light_tree_kernel/B-23 tree build for 10k lights") {
     }
     in.push_back(li);
   }
-  // Serially, and with the per-light energies in chunks on every hardware thread as the scene's
-  // workers run them (build_light_table's ChunkRunner).
-  const uint32_t hw = std::max(1u, std::thread::hardware_concurrency());
-  const ChunkRunner threads = [hw](uint32_t count, const std::function<void(uint32_t, uint32_t)>& body) {
-    const uint32_t step = (count + hw - 1) / hw;
-    std::vector<std::thread> pool;
-    for (uint32_t first = 0; first < count; first += step) pool.emplace_back(body, first, std::min(count, first + step));
-    for (std::thread& th : pool) th.join();
+  // Serially, and with the per-light energies in chunks on n threads as the scene's workers run them
+  // (build_light_table's ChunkRunner).
+  const auto chunks_on = [](uint32_t n) {
+    return ChunkRunner([n](uint32_t count, const std::function<void(uint32_t, uint32_t)>& body) {
+      const uint32_t step = (count + n - 1) / n;
+      std::vector<std::thread> pool;
+      for (uint32_t first = 0; first < count; first += step) pool.emplace_back(body, first, std::min(count, first + step));
+      for (std::thread& th : pool) th.join();
+    });
   };
-  for (int parallel = 0; parallel < 2; ++parallel) {
+  const uint32_t hw = std::max(1u, std::thread::hardware_concurrency());
+  // The engine's default worker count (Scene::Scene, and the addon's render_final.py): min(8, cores / 2) workers
+  // plus the calling thread, which is what a first frame builds the table on.
+  const uint32_t engine_threads = std::max(1u, std::min(8u, hw / 2)) + 1;
+  const auto build_ms = [&](const ChunkRunner& run, size_t* nodes) {
     const auto t0 = std::chrono::steady_clock::now();
-    const auto t = build_light_table(in, ar::SceneSphere{r3(10, 10, 6), Real(16)}, observer(), nullptr, parallel ? threads : ChunkRunner{});
+    const auto t = build_light_table(in, ar::SceneSphere{r3(10, 10, 6), Real(16)}, observer(), nullptr, run);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    std::printf("light_tree_kernel B-23: 10000 lights on %u threads, table %.1f ms of which tree %.1f ms (%zu nodes); limit 50 ms per 10k lights\n",
-                parallel ? hw : 1u, ms, t->tree_build_ms, t->tree_nodes.size());
-    CHECK(t->tree_nodes.size() == 2 * 10000 - 1);
+    *nodes = t->tree_nodes.size();
+    return ms;
+  };
+  size_t nodes = 0;
+  const double serial = build_ms(ChunkRunner{}, &nodes);
+  CHECK(nodes == 2 * 10000 - 1);
+  std::printf("light_tree_kernel B-23: serial build %.1f ms (information)\n", serial);
+  const double all = build_ms(chunks_on(hw), &nodes);
+  CHECK(nodes == 2 * 10000 - 1);
+  std::printf("light_tree_kernel B-23: build on all %u hardware threads %.1f ms (information)\n", hw, all);
+  // The row's number: the median of 7 builds after 2 discarded, on the engine's default thread count.
+  // tools/b23_check.ps1 parses this line and compares it with B-23's limit in tools/budgets.toml; the limit is not read here.
+  const ChunkRunner engine = chunks_on(engine_threads);
+  std::vector<double> ms;
+  for (int i = 0; i < 9; ++i) {
+    const double t = build_ms(engine, &nodes);
+    CHECK(nodes == 2 * 10000 - 1);
+    if (i >= 2) ms.push_back(t);
   }
+  std::sort(ms.begin(), ms.end());
+  std::printf("B-23 build: %.1f ms per 10k lights (median of 7 builds after 2 discarded, min %.1f, max %.1f, %u threads)\n",
+              ms[3], ms.front(), ms.back(), engine_threads);
 }
 
 }  // TEST_SUITE("full")
