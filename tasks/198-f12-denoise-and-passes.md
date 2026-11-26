@@ -17,3 +17,4 @@ Depends on: 197 (code: the session denoise and its failure hook). Collisions: re
 Size: M (about 250 lines without tests); stop and report at 2x.
 Progress:
 - Files: properties.py, engine.py, render_final.py, api_surface.txt, smoke_a1.py, headless/test_render_final_cpu.py (fake Engine gains add_pass; _copy_combined patches renamed), new test_f12_denoise.py, tools/lib/blender.ps1, 198.canary.patch; no ui row (199 not landed).
+- Done: Denoise subpanel (ui/panels.py), smoke Normal capture guard; api_surface 127/0 missing, fast PASS 8.7 s, gate PASS 133.7 s, F12 suite 13.4 s tests, canary PASS.
