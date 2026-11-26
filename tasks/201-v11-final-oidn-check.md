@@ -16,3 +16,4 @@ Budget: gate +0 s; fast +0.2 s at most (self-test; state `check fast` before and
 Depends on: 197 (code: the CLI flag and the session denoise). Collisions: tools/check.ps1 with 190, 191, 200 (tools/README.md is at its 30-line cap: no line is added, the usage lives in the docstring and `--help`); bench/history append; the later one rebases.
 Size: S (about 150 lines of script, no engine source); stop and report at 2x or when the table says stop.
 Progress:
+- Script, self-test and check.ps1 steps written; decision table in the PR; no capture yet. Files: tools/denoise_check.py, tools/check.ps1.
