@@ -469,8 +469,17 @@ $global:LASTEXITCODE = $code
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'gpu full tests failed (out/check/full.log)' }
     # 0008 V11 final row: denoised relMSE below raw at 64 spp on three scenes, CUDA, against cached 16k-spp
     # references (rendered once into the machine-wide cache; tools/denoise_check.py). The scenes need the
-    # hash-verified assets of assets/manifest.toml (cached after the first fetch); b_tx is reported, not asserted.
-    $r = Step 'denoise check' { & pwsh -NoProfile -File tools/fetch.ps1 assets; if ($LASTEXITCODE -eq 0) { & $py -I tools/scenes.py cornell_area cornell_point shader_balls s3_textured }; if ($LASTEXITCODE -eq 0) { & $py -I tools/denoise_check.py --device cuda } }
+    # assets of assets/manifest.toml, fetched by hand (a check never downloads); b_tx is reported, not asserted.
+    $r = Step 'denoise check' {
+      $missing = @('cornell_box/cornell-box.zip', 'studio_small_09/studio_small_09_1k.exr') | Where-Object { -not (Test-Path (Join-Path $root "assets/_cache/$_")) }
+      if ($missing) {
+        "FAIL denoise_check: missing assets/_cache/$($missing -join ', assets/_cache/'): run pwsh tools/fetch.ps1 assets -Name cornell_box; pwsh tools/fetch.ps1 assets -Name studio_small_09"
+        $global:LASTEXITCODE = 1
+      } else {
+        & $py -I tools/scenes.py cornell_area cornell_point shader_balls s3_textured
+        if ($LASTEXITCODE -eq 0) { & $py -I tools/denoise_check.py --device cuda }
+      }
+    }
     $r.Out | Where-Object { $_ -match '^(PASS|FAIL) denoise_check|^cold start' } | ForEach-Object { Write-Host $_ }
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'denoise check failed (out/check/full.log)' }
     # The CPU suite's full tier: cases tagged full there ran nowhere before this step; the gate's `cpu gate tests` runs --tier=gate only.
