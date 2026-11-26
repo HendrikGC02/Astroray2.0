@@ -1,13 +1,26 @@
-diff --git a/tools/gate_table.py b/tools/gate_table.py
-index f825fb27..35e6ccdb 100644
---- a/tools/gate_table.py
-+++ b/tools/gate_table.py
-@@ -271,7 +271,7 @@ def cut_main(n, list_path, prev_path):
-         return 1
-     start = 1
-     for e in ends:
--        print(f"{start} {e}")
-+        print(f"{start} {e - (e == ends[-1])}")
-         start = e + 1
-     return 0
+diff --git a/tools/analytic.py b/tools/analytic.py
+index 19e8804b..ad347f0b 100644
+--- a/tools/analytic.py
++++ b/tools/analytic.py
+@@ -301,7 +301,7 @@ def check_scene(mean, var, checks, m, eps_sys, max_relative=None, renders=None,
  
+ def gate_scenes(device):
+     """The scenes `--gate` renders on `device`: GATE_SCENES less the ones moved to full there."""
+-    return [s for s in GATE_SCENES if s not in MOVED_TO_FULL[device]]
++    return [s for s in GATE_SCENES if s not in MOVED_TO_FULL["cpu"]]
+ 
+ 
+ def gate_members():
+diff --git a/tools/check.ps1 b/tools/check.ps1
+index 523599e6..b0935700 100644
+--- a/tools/check.ps1
++++ b/tools/check.ps1
+@@ -461,7 +461,7 @@ $global:LASTEXITCODE = $code
+     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'gpu full tests failed (out/check/full.log)' }
+     # The CPU suite's full tier: cases tagged full there ran nowhere before this step; the gate's `cpu gate tests` runs --tier=gate only.
+     # Time limit 150 s: the tier took 14.7 s (one run, task 234); 10x that, rounded up to a multiple of 30 s, as for the GPU tiers.
+-    $r = Step 'cpu full tests' { & $runTimed $exe '--tier=full --duration=true' 150 (Join-Path $root 'out/check/cpu-full-tests.out') }
++    $r = Step 'cpu full tests' { & $runTimed $gpuExe '--tier=full --duration=true' 150 (Join-Path $root 'out/check/cpu-full-tests.out') }
+     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'cpu full tests failed (out/check/full.log)' }
+     $r = Step 'probe registers' { & $py -I tools/kernelgate.py --probe }
+     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'probe registers failed' }

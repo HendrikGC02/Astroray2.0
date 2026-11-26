@@ -10,7 +10,7 @@ Do:
 3. Apply the moves, re-run 5 quiet-main runs each, and update the gate ledger line. Check that `check full` still passes and stays under B-10.
 Acceptance: `pwsh tools/check.ps1 fast`, `pwsh tools/check.ps1 gate` and `pwsh tools/check.ps1 full` pass; the before and after medians of 5 runs per tier, pasted.
 Look at: none
-Canary: tasks/234.canary.patch must turn red: `pwsh -NoProfile -File tests/tools/fast_gate_table.ps1` (the patch drops a moved case from both tiers, so the every-case-runs-once check fails).
+Canary: tasks/234.canary.patch must turn red: `pwsh -NoProfile -File tests/tools/fast_gate_table.ps1` (hunk 1 runs the GPU exe for `check full`'s cpu full step, hunk 2 makes the cuda gate scenes skip the cpu-moved ones, so a moved item runs in neither tier and the tier-cover case fails).
 Budget: gate down to a 120 s median target; fast down to a 6 s median target; full up by what moved (state it, under B-10's 12 min).
 Depends on: 232 (so the before and after runs are not reds from load). Runs on a quiet machine: implementers paused, gpu and blender lanes idle.
 Size: S (about 100 lines without tests, mostly lists); stop and report at 2x.
