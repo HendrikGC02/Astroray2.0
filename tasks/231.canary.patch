@@ -1,8 +1,8 @@
 diff --git a/tools/lib/lock.ps1 b/tools/lib/lock.ps1
-index 5db6fabc..d90a0974 100644
+index bfb19561..c252fd3c 100644
 --- a/tools/lib/lock.ps1
 +++ b/tools/lib/lock.ps1
-@@ -173,7 +173,7 @@ $script:ArDescendantsFn = {
+@@ -176,7 +176,7 @@ $script:ArDescendantsFn = {
    $todo = [Collections.Generic.Queue[int]]::new(); $todo.Enqueue($root)
    while ($todo.Count) {
      $id = $todo.Dequeue()
@@ -11,7 +11,7 @@ index 5db6fabc..d90a0974 100644
        if (-not $kill.Contains([int]$c.ProcessId)) { $kill.Add([int]$c.ProcessId); $todo.Enqueue([int]$c.ProcessId) }
      }
    }
-@@ -203,7 +203,7 @@ $script:ArHolderScript = {
+@@ -206,7 +206,7 @@ $script:ArHolderScript = {
    if (-not $taken) { $m.Dispose(); $s.State = 'cancelled'; return }
    $s.Acquired.Set() | Out-Null
    $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -20,25 +20,34 @@ index 5db6fabc..d90a0974 100644
    if (-not $s.Release) {
      $s.Expired = $true
      $step = if ($s.Step) { $s.Step } else { 'unknown' }
-@@ -219,8 +219,6 @@ $script:ArHolderScript = {
-     try {
-       if ($s.OwnerPath -and ([int](Get-Content -Raw $s.OwnerPath | ConvertFrom-Json).pid) -eq $s.Pid) { Remove-Item -Force $s.OwnerPath }
-     } catch { }
+@@ -225,8 +225,6 @@ $script:ArHolderScript = {
+     # A host that goes on must not go on unlocked: the lock marker is cleared before the release, so nothing
+     # nests under a lock that is gone (Set-ArLockStep and Exit-ArMachineLock then raise the failure).
+     if (-not $s.CanExit) { [Environment]::SetEnvironmentVariable('ASTRORAY_LOCK_PID', $null) }
 -    try { $m.ReleaseMutex() } catch { }
 -    $m.Dispose()
-     # Ending the process is for a process started for the tool; an interactive shell is never ended from
-     # here (Exit-ArMachineLock raises the failure there instead).
+     # Ending the process is for a process started to run a script or command and end (Test-ArLockCanEnd); an
+     # interactive shell is never ended from here.
      if ($s.CanExit) { [Environment]::Exit(1) }
-@@ -248,7 +246,7 @@ function Enter-ArMachineLock {
+@@ -254,7 +252,7 @@ function Test-ArLockCanEnd([string[]]$Argv) {
+     if ($t.Length -ge 3 -and 'noexit'.StartsWith($t)) { $noExit = $true; continue }
+     if ($t -in 'ep', 'wd' -or ($t.Length -ge 2 -and @($valued | Where-Object { $_.StartsWith($t) }).Count)) { $i++ }
+   }
+-  return ($runs -and -not $noExit)
++  return $runs
+ }
+ 
+ function Enter-ArMachineLock {
+@@ -274,7 +272,7 @@ function Enter-ArMachineLock {
    $ownerPath = Join-Path (Get-ArLockDir) 'owner.json'
    $sw = [Diagnostics.Stopwatch]::StartNew()
    $s = [hashtable]::Synchronized(@{
 -      Name = $name; Try = $false; Cancel = $false; CancelEv = (New-Object System.Threading.ManualResetEvent($false)); Release = $false; Short = [bool]$Short; Poll = (-not $Short); State = 'waiting'
 +      Name = $name; Try = $false; Cancel = $false; CancelEv = (New-Object System.Threading.ManualResetEvent($false)); Release = $false; Short = [bool]$Short; Poll = $false; State = 'waiting'
        DescendantsFn = $script:ArDescendantsFn.ToString()
-       CanExit = [bool]@([Environment]::GetCommandLineArgs() | Where-Object { $_ -in '-File', '-f', '-Command', '-c', '-EncodedCommand', '-ec' }).Count
+       CanExit = (Test-ArLockCanEnd @([Environment]::GetCommandLineArgs() | Select-Object -Skip 1))
        Expired = $false; Step = ''; CeilingS = $ceil; Job = $Job; Pid = $PID; OwnerPath = $ownerPath
-@@ -266,7 +264,7 @@ function Enter-ArMachineLock {
+@@ -292,7 +290,7 @@ function Enter-ArMachineLock {
    try {
      while ($true) {
        # A long tool yields while a short job waits; a short job never does.
@@ -47,3 +56,11 @@ index 5db6fabc..d90a0974 100644
        $s.Try = -not $yield
        if ($s.Acquired.WaitOne(100)) { break }
        if ($sw.Elapsed.TotalSeconds -lt $nextTick) { continue }
+@@ -348,7 +346,6 @@ function Enter-ArMachineLock {
+ function Set-ArLockStep([string]$Step) {
+   if (-not $script:ArHold) { return }
+   # A tool whose hold ceiling expired in a host that was not ended stops at its next step.
+-  if ($script:ArHold.Sync.Expired) { throw "FAIL lock: the hold ceiling expired; stopping before step '$Step'" }
+   $script:ArHold.Sync.Step = $Step
+   if ($script:ArOwnerPath) {
+     $null = Write-ArLockOwner $script:ArOwnerPath @{ ceiling_s = $script:ArHold.Sync.CeilingS; job = $script:ArHold.Job; step = $Step } $script:ArHeldAt
