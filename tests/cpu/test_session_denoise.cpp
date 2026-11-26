@@ -5,8 +5,10 @@
 // denoised image is closer to a 1024-spp reference than the noisy one (V11's criterion at test size).
 // A denoiser that cannot be created leaves the noisy image, one DENOISER_UNAVAILABLE entry with the
 // backend's text and the state CONVERGED; a cancel while the render waits for the denoiser returns
-// within B-21 and leaves the noisy image with no entry; sessions destroyed while the denoiser loads
-// free everything. The scene is common/cornell_rig.h. The C ABI path is
+// within B-21 and leaves the noisy image with no entry, as does a cancel during the OIDN call; a
+// poisoned context ends the wait as a denoiser failure; an edit after convergence discards the denoised
+// image and denoises again; a target smaller than the render rectangle fails the session; sessions
+// destroyed while the denoiser loads free everything. The scene is common/cornell_rig.h. The C ABI path is
 // tests/abi/test_session_passes.py; CUDA is tests/gpu/test_session_denoise_gpu.cpp.
 // Ref: docs/decisions/0008-film-outputs-denoise.md d10, d13a, d16 (ruling 87's order), d17, V9, V11;
 // 0007 d27; 0009 B-21.
@@ -210,6 +212,118 @@ TEST_CASE("session_denoise/refusals and unknown denoising passes") {
   CHECK(e.size() == 2);
   for (const char* p : {"Noisy Image", "Denoising Albedo"})
     CHECK(std::count_if(e.begin(), e.end(), [&](const cornell::Entry& x) { return x.detail == p; }) == 1);
+}
+
+TEST_CASE("session_denoise/poisoned context ends the denoiser wait") {
+  // A denoiser worker that faults never reports (denoiser.h); the context is poisoned instead. The
+  // render thread's wait must end as a denoiser failure: noisy image, one entry naming the poison, and
+  // the session parked in CONVERGED rather than coming back to the wait on every loop.
+  cornell::CornellRig rig(SceneConfig{2, {}, {}}, cornell::kSpp);
+  std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, kWorkers);
+  SessionOptions o = cornell::options(AR_DENOISER_OIDN);
+  o.test_hold_denoiser = true;
+  Session s(rig.scene, *dev, o);
+  s.set_view(cornell::view());
+  s.start();
+  REQUIRE(slab::until([&] { return s.progress().samples_per_pixel == cornell::kSpp; }));
+  rig.ctx.poison_message = "forced by the test";
+  rig.ctx.poisoned.store(true, std::memory_order_release);
+  REQUIRE(slab::until([&] { return !cornell::entries(s, AR_REPORT_DENOISER_UNAVAILABLE).empty(); }, 10000));
+  CHECK(s.progress().state == AR_STATE_FAILED);  // a poisoned context reads FAILED (0001 D2.5)
+  // The test's own poison is lifted so the session's own state shows: it parked in CONVERGED.
+  rig.ctx.poisoned.store(false, std::memory_order_release);
+  REQUIRE(slab::until([&] { return s.progress().state == AR_STATE_CONVERGED; }, 10000));
+  const std::vector<cornell::Entry> e = cornell::entries(s, AR_REPORT_DENOISER_UNAVAILABLE);
+  REQUIRE(e.size() == 1);
+  CHECK(e[0].detail.find("context poisoned: forced by the test") != std::string::npos);
+  CHECK_FALSE(s.denoised());
+  const std::vector<float> combined = cornell::read_mean(s, "Combined");
+  const std::vector<float> noisy = cornell::read_mean(s, "Noisy Image");
+  CHECK(std::memcmp(combined.data(), noisy.data(), noisy.size() * sizeof(float)) == 0);
+}
+
+TEST_CASE("session_denoise/cancel during the denoise execution") {
+  // Ruling 87: a cancel while OIDN runs leaves the noisy output (the filter itself cannot be stopped;
+  // its result is dropped). The hook cancels on the render thread right after the OIDN call returned.
+  cornell::CornellRig rig(SceneConfig{2, {}, {}}, cornell::kSpp);
+  std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, kWorkers);
+  SessionOptions o = cornell::options(AR_DENOISER_OIDN);
+  Session* self = nullptr;
+  o.test_after_denoise = [&self] { self->cancel(); };
+  Session s(rig.scene, *dev, o);
+  self = &s;
+  s.set_view(cornell::view());
+  s.start();
+  REQUIRE(slab::until([&] { return s.progress().state == AR_STATE_PAUSED; }));
+  CHECK_FALSE(s.denoised());
+  CHECK(s.stats().denoises == 0);
+  const std::vector<float> combined = cornell::read_mean(s, "Combined");
+  const std::vector<float> noisy = cornell::read_mean(s, "Noisy Image");
+  CHECK(std::memcmp(combined.data(), noisy.data(), noisy.size() * sizeof(float)) == 0);
+  CHECK(cornell::entries(s, AR_REPORT_DENOISER_UNAVAILABLE).empty());  // a cancel is not a failure
+}
+
+TEST_CASE("session_denoise/an edit after convergence denoises again") {
+  // An epoch reset discards the denoised image (0008 d16): right after it Combined is the film's, and
+  // the next convergence denoises again. Passes are slowed so the reset can be seen before it ends.
+  cornell::CornellRig rig(SceneConfig{2, {}, {}}, cornell::kSpp);
+  std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, kWorkers);
+  SessionOptions o = cornell::options(AR_DENOISER_OIDN);
+  o.test_sleep_after_resolve_ms = 20;
+  Session s(rig.scene, *dev, o);
+  s.set_view(cornell::view());
+  s.start();
+  cornell::settle(s, rig);
+  REQUIRE(s.denoised());
+  REQUIRE(s.stats().denoises == 1);
+  const uint64_t epoch = s.progress().epoch;
+  rig.commit([](Edit&) {});
+  REQUIRE(slab::until([&] {
+    const SessionProgress p = s.progress();
+    return p.epoch > epoch && p.film_epoch == p.epoch && p.samples_per_pixel < cornell::kSpp;
+  }));
+  CHECK_FALSE(s.denoised());
+  // Both reads under one render lock, so no pass lands between them.
+  std::vector<float> combined, noisy;
+  s.read_film([&](const FilmReadContext& c) {
+    CHECK(c.denoised == nullptr);
+    const std::vector<PassDesc> passes = list_passes(c.film.layout(), c.denoiser);
+    FilmView view(c.device, c.film);
+    for (const PassDesc& p : passes) {
+      if (p.name != "Combined" && p.name != "Noisy Image") continue;
+      std::vector<float>& out = p.name == "Combined" ? combined : noisy;
+      out.resize(pass_float_count(p, AR_QUANTITY_MEAN, view.width(), view.height()));
+      read_pass(view, p, AR_QUANTITY_MEAN, uint32_t(out.size()), out.data(), c.denoised);
+    }
+  });
+  REQUIRE(combined.size() == noisy.size());
+  CHECK(std::memcmp(combined.data(), noisy.data(), noisy.size() * sizeof(float)) == 0);
+  cornell::settle(s, rig);
+  CHECK(s.denoised());
+  CHECK(s.stats().denoises == 2);
+}
+
+}  // TEST_SUITE
+
+TEST_SUITE("fast") {
+
+TEST_CASE("session_denoise/the target must hold the render rectangle") {
+  // film_prepare_denoise checks its target only in debug builds: the session refuses a render
+  // rectangle larger than the target, loudly. The hook makes the target look one pixel short (the
+  // buffer stays full size, so nothing is written out of bounds either way).
+  cornell::CornellRig rig(SceneConfig{2, {}, {}}, 1);
+  std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, kWorkers);
+  SessionOptions o = cornell::options(AR_DENOISER_OIDN);
+  o.test_denoise_capacity_px = uint64_t(cornell::kSize) * cornell::kSize - 1;
+  Session s(rig.scene, *dev, o);
+  s.set_view(cornell::view());
+  s.start();
+  REQUIRE(slab::until([&] {
+    const uint32_t st = s.progress().state;
+    return st == AR_STATE_FAILED || st == AR_STATE_CONVERGED;
+  }));
+  CHECK(s.progress().state == AR_STATE_FAILED);
+  CHECK(s.failure().find("does not fit the denoise target") != std::string::npos);
 }
 
 }  // TEST_SUITE

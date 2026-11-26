@@ -77,6 +77,12 @@ struct SessionOptions {
   // still loading, so a cancel can be issued during the final render's wait for it. It holds the
   // session's wait, not DenoiserState's own loading worker.
   bool test_hold_denoiser = false;
+  // Test hook, empty in production: called on the render thread right after the final denoise's OIDN
+  // call returned and before its result is kept, so a test can cancel "during" the execute step.
+  std::function<void()> test_after_denoise;
+  // Test hook, zero in production: the pixels the denoise target is taken to hold, in place of the
+  // maximum size (the buffer itself is always allocated at the maximum size), so the size check fires.
+  uint64_t test_denoise_capacity_px = 0;
 };
 
 // One published frame as the render thread saw it: when (the steady clock the batching uses), how
@@ -327,6 +333,7 @@ class Session {
   // DenoiseTarget the kernel reads (KernelGlobals::denoise). Allocated at the first final denoise.
   DeviceBuffer denoise_buf_;
   bool denoise_bind_ = false;   // bind_globals points KernelGlobals::denoise at denoise_buf_
+  uint64_t denoise_capacity_px_ = 0;  // pixels each plane of denoise_buf_ holds
   bool denoise_done_ = false;   // the final denoise of this epoch ended (render thread)
   bool denoiser_reported_ = false;  // its DENOISER_UNAVAILABLE entry exists (once per session)
   std::vector<float> denoise_host_[3];  // the planes on the host, the backend's input

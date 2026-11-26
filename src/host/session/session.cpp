@@ -1145,13 +1145,40 @@ void Session::denoiser_unavailable(const std::string& why, uint64_t generation) 
 }
 
 bool Session::final_denoise(uint64_t generation) {
+  const uint64_t plane = denoise_plane_bytes(options_);
+  uint32_t w = 0, h = 0;
+  {
+    // The target first, before any wait: film_prepare_denoise checks its size only in debug builds, so
+    // the host refuses a render rectangle the allocated planes cannot hold, loudly (the session fails).
+    std::lock_guard<std::mutex> render(render_mutex_);
+    const ar::FilmData& f = film_->data();
+    w = f.rect_width;
+    h = f.rect_height;
+    if (!denoise_buf_.ptr) {
+      denoise_buf_ = device_.allocate(LedgerCategory::DENOISER, 3 * plane + sizeof(ar::DenoiseTarget), options_.owner);
+      denoise_capacity_px_ = options_.test_denoise_capacity_px != 0
+                                 ? options_.test_denoise_capacity_px
+                                 : uint64_t(options_.max_width) * options_.max_height;
+    }
+    if (uint64_t(w) * h > denoise_capacity_px_)
+      throw std::logic_error("final denoise: the film's render rectangle " + std::to_string(w) + "x" +
+                             std::to_string(h) + " does not fit the denoise target's " +
+                             std::to_string(denoise_capacity_px_) + " pixels");
+  }
   // The one wait 0008 d16 allows: a final render waits for the state before its denoise step, in
   // slices, so a cancel, a close or a failure stops it at once (the cancel leaves the noisy image and
   // no entry: a cancel is not a failure), and so does an edit that makes this state stale.
+  bool poisoned = false;
   for (;;) {
     if (denoiser_->failed() || (denoiser_->ready() && !options_.test_hold_denoiser)) break;
+    // A faulting loader never reports (denoiser.h): a poisoned context ends the wait as DenoiserState::wait
+    // ends it, as a failure of the denoiser.
+    if (ctx_.poisoned.load(std::memory_order_acquire)) {
+      poisoned = true;
+      break;
+    }
     std::unique_lock<std::mutex> lock(mutex_);
-    if (closing_ || paused_ || failed_ || ctx_.poisoned.load(std::memory_order_acquire)) return false;
+    if (closing_ || paused_ || failed_) return false;
     if (latch_.pending(scene_.generations().active())) return false;
     wake_cv_.wait_for(lock, kDenoiseWaitSlice);
   }
@@ -1159,29 +1186,18 @@ bool Session::final_denoise(uint64_t generation) {
     denoiser_unavailable(denoiser_->error(), generation);
     return true;
   }
+  if (poisoned) {
+    // The noisy image, one entry and CONVERGED, never a render loop that comes back here forever.
+    denoiser_unavailable("denoiser loading stopped: context poisoned: " + ctx_.poison_message, generation);
+    return true;
+  }
   const auto t0 = std::chrono::steady_clock::now();
   DenoiseInputs in;
-  uint32_t w = 0, h = 0;
   {
     std::lock_guard<std::mutex> render(render_mutex_);
-    const ar::FilmData& f = film_->data();
-    w = f.rect_width;
-    h = f.rect_height;
-    const uint64_t plane = denoise_plane_bytes(options_);
-    if (!denoise_buf_.ptr)
-      denoise_buf_ = device_.allocate(LedgerCategory::DENOISER, 3 * plane + sizeof(ar::DenoiseTarget), options_.owner);
     char* base = static_cast<char*>(denoise_buf_.ptr);
     const ar::DenoiseTarget target{reinterpret_cast<float*>(base), reinterpret_cast<float*>(base + plane),
                                    reinterpret_cast<float*>(base + 2 * plane), w, h};
-    // The kernel checks the target against the film only in debug builds, so the host refuses a
-    // mismatch here: the target must be the film's render rectangle and fit the planes.
-    if (target.width != f.rect_width || target.height != f.rect_height ||
-        uint64_t(target.width) * target.height * 3u * sizeof(float) > plane)
-      throw std::logic_error("final denoise: the target " + std::to_string(target.width) + "x" +
-                             std::to_string(target.height) + " does not match the film's render rectangle " +
-                             std::to_string(f.rect_width) + "x" + std::to_string(f.rect_height) +
-                             " within the planes allocated at " + std::to_string(options_.max_width) + "x" +
-                             std::to_string(options_.max_height));
     device_.upload(denoise_buf_, 3 * plane, &target, sizeof target);
     denoise_bind_ = true;
     bind_globals();
@@ -1214,6 +1230,12 @@ bool Session::final_denoise(uint64_t generation) {
     return true;
   }
   const auto t2 = std::chrono::steady_clock::now();
+  if (options_.test_after_denoise) options_.test_after_denoise();
+  // Readback hands this image out as the film's Combined, so it must be the film's render rectangle.
+  if (out.width != w || out.height != h)
+    throw std::logic_error("final denoise: the denoised image is " + std::to_string(out.width) + "x" +
+                           std::to_string(out.height) + ", the film's render rectangle " + std::to_string(w) + "x" +
+                           std::to_string(h));
   {
     // Ruling 87: a cancel during the denoise leaves the noisy output.
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1236,5 +1258,4 @@ bool Session::final_denoise(uint64_t generation) {
   ctx_.log.line("INFO", line);
   return true;
 }
-
 }  // namespace astroray::host
