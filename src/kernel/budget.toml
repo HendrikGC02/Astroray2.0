@@ -184,12 +184,12 @@ gated = "merge"
 # inside it the medium's volume entry beside the world program gave 80 registers and a 544 B stack.
 # Its volume entry (VmRegs, context, MediumSample), the shadow medium stream's Sobol lane table and
 # ratio tracking: 64 registers, 480 B stack, the interpreter's switch spills 36 / 36 B (D10: VM kernels
-# at most 128 / 192). First values from the task's measurement (ruling 91).
+# at most 128 / 192). First values from the task's measurement (ruling 91); compile 2.39 s in check gate.
 regs = 64
 stack = 480
 spill_store = 36
 spill_load = 36
-compile_s = 3.0
+compile_s = 2.4
 gated = "merge"
 
 [kernel.k_shade_volume]
