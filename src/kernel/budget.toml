@@ -200,8 +200,9 @@ gated = "merge"
 # Delta tracking of a homogeneous medium: the medium's volume entry (VmRegs, 128 B of the stack), the
 # path-medium stream's draws and the phase sample (34 / 0 as the pass-through skeleton). Launch row
 # (256, 1), ladder step 3 (ruling 102): with no minimum-blocks clause ptxas held 80 registers and
-# spilled 60 / 84 B with a 528 B stack.
-regs = 119
+# spilled 60 / 84 B with a 528 B stack. The medium from the stack's highest entry and the flight's
+# continued medium_rng: 119 to 121.
+regs = 121
 stack = 464
 spill_store = 0
 spill_load = 0
