@@ -613,7 +613,7 @@ TEST_CASE("shade_surface_media/hit through bit six alone is a false interface") 
   r.ray_type[1] = 1u, r.hit(1, 0, true);              // the camera ray: a true interface, shaded
   r.arrive(2, {{0, 3}}), r.hit(2, 0, false);          // back, entry present: removes
   r.hit(3, 0, false);                                 // back, the path started inside: refused, goes on
-  const std::vector<uint32_t> ev0 = r.event_index;
+  const std::vector<uint16_t> ev0 = r.event_index;
   const std::vector<Spec> beta0 = r.beta, ru0 = r.r_u, rl0 = r.r_l;
   const std::vector<ar::Real3> d0 = r.ray_d;
   r.run();
