@@ -30,14 +30,15 @@ diff reaches twice the task's Size.
 Work:
 - Physics, sampling, numerics: from the task's Reference, `Ref:` in the code.
   Never invent an algorithm or a constant; cite the file under third_party/_cache/refs you read (`fetch.ps1 refs` first), not memory.
-- Builds, GPU runs and Blender go through `tools/` (they hold the machine lock
-  and read the environment themselves). No direct cmake, ninja, nvcc, blender.
-  Run one test case with `pwsh tools/test.ps1 ...`; a GPU or Blender test never runs outside tools/.
+- Builds, GPU runs and Blender go through `tools/` (they take the machine lock and
+  read the environment). No direct cmake, ninja, nvcc, blender; one test case: `pwsh tools/test.ps1 ...`.
+- Never poll, sleep or loop on a log. Run a tool in the foreground (it waits for
+  the lock), or in the background and end your turn until it reports. Still
+  waiting for the lock after 10 min: commit, report the holder it names, stop.
 - Every test case sits in a tier suite (`fast` deterministic, `gate`
   statistical or GPU); Blender tests end with `support.main()`. Hosted ci has
   2-4 cores and no GPU: threaded tests must pass there.
-- Scratch files go under `out/tmp/NNN/`. Commit no dumps, logs or images that
-  the task does not name. Analysis scripts you want kept go under `tools/`.
+- Scratch under `out/tmp/NNN/`; commit no dumps, logs or images the task does not name.
 - Comments say why. No task numbers or history in comments.
 - Report unrelated problems; never fix them.
 
