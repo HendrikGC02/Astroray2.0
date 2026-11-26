@@ -301,7 +301,7 @@ AR_API ar_status ar_session_pass_count(ar_session h, uint32_t* count) {
   if (h && !count) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_pass_count output is null");
   return session_call(h, "ar_session_pass_count", [h, count](Session& s) {
     uint64_t revision = 0;
-    const auto passes = astroray::host::list_passes(s.layout(&revision));
+    const auto passes = astroray::host::list_passes(s.layout(&revision), s.denoiser_selected());
     *count = uint32_t(passes.size());
     h->pass_revision = revision;
   });
@@ -311,7 +311,7 @@ AR_API ar_status ar_session_pass_info(ar_session h, uint32_t index, ar_pass_info
   if (h && !info) return fail(h, AR_ERR_INVALID_ARGUMENT, "invalid argument: ar_session_pass_info output is null");
   return session_call(h, "ar_session_pass_info", [h, index, info](Session& s) {
     uint64_t revision = 0;
-    const auto passes = astroray::host::list_passes(s.layout(&revision));
+    const auto passes = astroray::host::list_passes(s.layout(&revision), s.denoiser_selected());
     check_pass_revision(h, revision);
     if (index >= passes.size())
       throw std::invalid_argument("pass index " + std::to_string(index) + " is past the " +
@@ -324,7 +324,8 @@ AR_API ar_status ar_session_pass_info(ar_session h, uint32_t index, ar_pass_info
     info->component_count = p.components;
     info->unit = p.unit;
     s.render_size(&info->width, &info->height);
-    info->flags = 0;  // AR_PASS_DENOISED only once a denoiser exists
+    // 0008 d13a, d17: Combined carries DENOISED exactly when the final denoise ran and succeeded.
+    info->flags = p.source == astroray::host::PassSource::Denoised && s.denoised() ? AR_PASS_DENOISED : 0u;
   });
 }
 
@@ -337,15 +338,19 @@ AR_API ar_status ar_session_read_pass(ar_session h, uint32_t index, uint32_t qua
     // changed pass request between two calls (ruling 74).
     std::vector<astroray::host::PassDesc> passes;
     std::unique_ptr<astroray::host::FilmView> copy;
+    // The denoised image of the same render-locked state, copied for a denoised Combined only.
+    std::unique_ptr<astroray::host::DisplayImage> denoised;
     s.read_film([&](const FilmReadContext& c) {
       check_pass_revision(h, c.pass_revision);
-      passes = astroray::host::list_passes(c.film.layout());
+      passes = astroray::host::list_passes(c.film.layout(), c.denoiser);
       if (index < passes.size()) copy = std::make_unique<astroray::host::FilmView>(c.device, c.film);
+      if (index < passes.size() && passes[index].source == astroray::host::PassSource::Denoised && c.denoised)
+        denoised = std::make_unique<astroray::host::DisplayImage>(*c.denoised);
     });
     if (index >= passes.size())
       throw std::invalid_argument("pass index " + std::to_string(index) + " is past the " +
                                   std::to_string(passes.size()) + " passes");
-    astroray::host::read_pass(*copy, passes[index], quantity, n, dst);
+    astroray::host::read_pass(*copy, passes[index], quantity, n, dst, denoised.get());
   });
 }
 

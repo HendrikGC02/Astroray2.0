@@ -34,7 +34,7 @@ def load(name, path):
 
 
 def make_recording(abi, ops, lib, path, ctx_log, bad_generation=False, close_session=False,
-                   unsupported_node=False, no_settings=False, sessions=1):
+                   unsupported_node=False, no_settings=False, sessions=1, final=False):
     """Records the scene; with bad_generation a mesh the engine rejects is committed after the
     session was created (an ERROR report entry once it is validated)."""
     a = abi
@@ -84,7 +84,8 @@ def make_recording(abi, ops, lib, path, ctx_log, bad_generation=False, close_ses
     gen = ctypes.c_uint64()
     assert lib.ar_edit_commit(edit, ctypes.byref(gen)) == a.AR_OK
 
-    sdesc = a.ar_session_desc(a.AR_SESSION_MODE_VIEWPORT, 4, 4, a.AR_DENOISER_NONE)
+    mode = a.AR_SESSION_MODE_FINAL if final else a.AR_SESSION_MODE_VIEWPORT
+    sdesc = a.ar_session_desc(mode, 4, 4, a.AR_DENOISER_NONE)
     made = []
     for _ in range(sessions):
         session = ctypes.c_void_p()
@@ -164,6 +165,8 @@ class TestCliRender(unittest.TestCase):
                        no_settings=True)
         cls.rec_two = os.path.join(SCENES, "069_two_sessions.arrec")
         make_recording(cls.abi, cls.ops, cls.lib, cls.rec_two, os.path.join(cls.tmp.name, "rec6.log"), sessions=2)
+        cls.rec_final = os.path.join(SCENES, "197_final_session.arrec")
+        make_recording(cls.abi, cls.ops, cls.lib, cls.rec_final, os.path.join(cls.tmp.name, "rec7.log"), final=True)
         cls.rec_bad = os.path.join(SCENES, "069_rejected_generation.arrec")
         make_recording(cls.abi, cls.ops, cls.lib, cls.rec_bad, os.path.join(cls.tmp.name, "rec2.log"),
                        bad_generation=True)
@@ -320,6 +323,41 @@ class TestCliRender(unittest.TestCase):
         r = self.run_cli(["bench", self.rec_two])
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("exactly one", r.stdout)
+
+    def read_pfm(self, path):
+        with open(path, "rb") as f:
+            data = f.read()
+        magic, size, scale, rest = data.split(b"\n", 3)
+        self.assertEqual(magic, b"PF")
+        self.assertEqual(scale, b"-1.0")  # little-endian
+        w, h = (int(x) for x in size.split())
+        return np.frombuffer(rest, dtype="<f4").reshape(h, w, 3)
+
+    def test_denoise_flag(self):
+        # 197: --denoise oidn sets the recorded FINAL session's denoiser; Combined is written denoised
+        # to <out>_combined.pfm, --dump adds the film's Noisy Image; the FITS dump stays the film's.
+        r, out = self.render(["--denoise", "oidn", "--dump"], rec=self.rec_final)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("override applied: --denoise oidn", r.stdout)
+        base = os.path.splitext(out)[0]
+        self.assertIn(f"wrote {base}_combined.pfm (Combined, denoised)", r.stdout)
+        self.assertIn(f"wrote {base}_noisy_image.pfm (Noisy Image, not denoised)", r.stdout)
+        combined, noisy = self.read_pfm(base + "_combined.pfm"), self.read_pfm(base + "_noisy_image.pfm")
+        self.assertEqual(combined.shape, (4, 4, 3))
+        self.assertTrue(np.isfinite(combined).all(), combined)
+        head, planes = self.planes(out)
+        self.assertIs(head["DENOISED"], False)
+        for c in range(3):  # Noisy Image is the film's display mean, as the dump holds it
+            self.assertTrue(np.array_equal(noisy[:, :, c], planes[f"display.{c}"]), c)
+        print(f"cli --denoise oidn: Combined mean {combined.mean(axis=(0, 1))}, Noisy Image mean {noisy.mean(axis=(0, 1))}")
+        # A VIEWPORT session cannot take the override: the replay refuses it loudly.
+        r, out = self.render(["--denoise", "oidn"])
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("replay failed", r.stdout)
+        self.assertIn("VIEWPORT session", r.stdout)
+        self.assertFalse(os.path.exists(out))
+        self.assertEqual(self.run_cli(["render", self.rec_final, "-o", "x.fits", "--dump"]).returncode, 2)
+        self.assertEqual(self.run_cli(["render", self.rec_final, "-o", "x.fits", "--denoise", "dlss"]).returncode, 2)
 
     def test_usage_errors(self):
         self.assertEqual(self.run_cli(["render", self.rec]).returncode, 2)

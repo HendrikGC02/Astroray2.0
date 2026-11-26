@@ -17,6 +17,7 @@
 #include "host/light/light_builder.h"
 #include "host/scene/camera.h"
 #include "host/thread.h"
+#include "kernel/film/prepare_denoise.h"
 #include "kernel/sample/sobol.h"
 #include "host/scene/accel.h"
 
@@ -38,6 +39,9 @@ static_assert(AR_SAMPLER_SOBOL == ar::SAMPLER_SOBOL && AR_SAMPLER_INDEPENDENT ==
 // The slice wait() sleeps between checks of the poisoned flag, which no notification announces:
 // the period Scene::wait_init uses.
 constexpr auto kWaitSlice = std::chrono::milliseconds(50);
+// The slice the render thread waits for the denoiser state between checks of ready(), which no
+// notification announces; a cancel, close or new pending state wakes it at once (wake_cv_).
+constexpr auto kDenoiseWaitSlice = std::chrono::milliseconds(10);
 
 bool terminal(uint32_t state) {
   return state == AR_STATE_CONVERGED || state == AR_STATE_CLOSED || state == AR_STATE_FAILED;
@@ -53,10 +57,15 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, std::
   req.max_width = o.max_width;
   req.max_height = o.max_height;
   req.statistics = !s || s->s.statistics != AR_STATISTICS_OFF;  // 0008 d12: on by default
+  // 0008 d15: the denoiser reads the guide planes, so a session with one always has them.
+  const bool denoiser = o.denoiser != AR_DENOISER_NONE;
+  req.guides = denoiser;
   if (!s || s->passes.empty()) return req;
   FilmRequest all = req;
   all.primary_aov = true;
-  const std::vector<PassDesc> produced = list_passes(FilmLayout::build(all));
+  // The denoising passes are names of this list only with a denoiser: requested without one they are
+  // PASS_UNSUPPORTED like any name the engine does not produce (d10: they exist with a denoiser).
+  const std::vector<PassDesc> produced = list_passes(FilmLayout::build(all), denoiser);
   for (const ar_name& n : s->passes) {
     const char* text = reinterpret_cast<const char*>(n.text);
     const std::string name(text, std::find(text, text + sizeof n.text, '\0'));
@@ -65,6 +74,12 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, std::
     else if (it->source == PassSource::Aov) req.primary_aov = true;
   }
   return req;
+}
+
+// One of film_prepare_denoise's three planes at the session's maximum size (3 floats per pixel),
+// rounded to the 256-byte alignment of every device region; the DenoiseTarget follows the third.
+uint64_t denoise_plane_bytes(const SessionOptions& o) {
+  return align_up(uint64_t(o.max_width) * o.max_height * 3u * sizeof(float), 256);
 }
 
 bool same_channels(const FilmLayout& a, const FilmLayout& b) {
@@ -80,8 +95,10 @@ Session::Session(Scene& scene, Device& device, const SessionOptions& options)
     throw std::invalid_argument("session: max_width and max_height must be non-zero");
   if (options.mode > AR_SESSION_MODE_PREVIEW) throw std::invalid_argument("session: unknown mode");
   if (options.denoiser > AR_DENOISER_DLSS_RR) throw std::invalid_argument("session: unknown denoiser");
-  if (options.denoiser != AR_DENOISER_NONE)
-    throw SessionUnsupported("session: denoisers are not supported in this build yet");
+  if (options.denoiser == AR_DENOISER_DLSS_RR)
+    throw SessionUnsupported("session: the DLSS_RR denoiser is not supported in this build yet");
+  if (options.denoiser == AR_DENOISER_OIDN && options.mode == AR_SESSION_MODE_VIEWPORT)
+    throw SessionUnsupported("session: viewport OIDN is M2");
   // What the settings committed so far request; the render thread rebuilds it from the settings it
   // latches (sync_film), which also reports names it cannot produce.
   std::vector<std::string> unknown;
@@ -98,6 +115,23 @@ Session::Session(Scene& scene, Device& device, const SessionOptions& options)
   if (const std::string arch = device_.untested_architecture(); !arch.empty()) {
     const double value[2] = {0.0, 0.0};  // value[0] = PTX JIT seconds: no JIT path exists, so 0
     report_.raise(AR_REPORT_UNTESTED_DEVICE, 0, arch + ": not covered by runtime tests", 1, value, 0);
+  }
+  if (options.denoiser == AR_DENOISER_OIDN) {
+    // 0008 d16: created on a worker when the session is created, off the first frame's path. A CUDA
+    // render's OIDN runs on the session's stream (d18), a CPU render's on OIDN's CPU device.
+    DenoiserConfig dc;
+    dc.ledger = &device_.ledger();
+    dc.owner = options.owner;
+    if (device_.kind() == AR_DEVICE_CUDA) {
+#ifdef ASTRORAY_GPU
+      cuda_stream_of(device_, &dc.cuda_device, &dc.cuda_stream);
+#else
+      throw std::logic_error("session: a CUDA device in a build without the CUDA backend");
+#endif
+    }
+    if (hooks_.denoiser_fail == TestHooks::DenoiserFail::LIBRARY) dc.library_dir.clear();
+    if (hooks_.denoiser_fail == TestHooks::DenoiserFail::DEVICE) dc.cuda_device = 99;
+    denoiser_ = DenoiserState::create(ctx_, DenoiserBackend::OIDN, dc);
   }
   SchedulerConfig cfg;
   cfg.report = &report_;
@@ -434,7 +468,9 @@ void Session::read_film(const std::function<void(const FilmReadContext&)>& fn) c
     std::lock_guard<std::mutex> lock(mutex_);
     revision = pass_revision_;
   }
-  fn(FilmReadContext{device_, *film_, fits_provenance_locked(), revision});
+  // display_ changes only under the render lock held here, so it belongs to this film state.
+  const DisplayImage* denoised = display_.denoised ? &display_ : nullptr;
+  fn(FilmReadContext{device_, *film_, fits_provenance_locked(), revision, denoiser_selected(), denoised});
 }
 
 std::optional<DisplayFrame> Session::display_acquire(uint64_t after_frame) {
@@ -574,9 +610,13 @@ void Session::sync_film() {
 }
 
 void Session::release() {
+  // The denoiser first: OIDN's filters, buffers and CUDA device go while the session's stream and
+  // buffers live (176's join and release order); a load still running stops at its next step.
+  denoiser_.reset();
   {
     std::lock_guard<std::mutex> lock(mutex_);
     scheduler_.reset();  // frees the pools
+    denoised_ = false;
   }
   // The pipeline goes while the scene's OptiX context lives. A detach error (a dead device) still
   // freed the pipeline; it is rethrown once everything else was released.
@@ -598,6 +638,8 @@ void Session::release() {
   tables_.reset();  // the pin: the set's copies go when no session holds them (RULINGS 70)
   session_tables_ = SessionTables{};
   active_.reset();
+  display_ = DisplayImage{};
+  device_.free(denoise_buf_);
   device_.free(camera_buf_);
   device_.free(filter_buf_);
   device_.free(present_buf_);
@@ -632,10 +674,15 @@ void Session::begin_epoch() {
   // and sample indices restart; FILM report entries go with the film.
   film_->clear();
   invalid_.on_film_reset(report_);
+  // A denoised image of the previous epoch shows a state that is gone: it is discarded, and the new
+  // epoch's convergence denoises again.
+  display_ = DisplayImage{};
+  denoise_done_ = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     stats_.samples_done = 0;
     published_film_epoch_ = latch_.epoch();
+    denoised_ = false;
   }
   pass_index_ = 0;
   passes_in_epoch_ = 0;
@@ -693,7 +740,10 @@ void Session::bind_globals() {
   // The guide tint (GUIDES_OR_LIGHTPASS, 0003 d19) exists exactly when the film has guide planes.
   u.features.guides = film_->layout().guides();
   scheduler_->config.features.guides = u.features.guides;
-  const ar::KernelGlobals kg = build_kernel_globals(tables_.get(), in);
+  ar::KernelGlobals kg = build_kernel_globals(tables_.get(), in);
+  // Only film_prepare_denoise reads it, and only after final_denoise allocated and filled the target.
+  if (denoise_bind_)
+    kg.denoise = reinterpret_cast<ar::DenoiseTarget*>(static_cast<char*>(denoise_buf_.ptr) + 3 * denoise_plane_bytes(options_));
   if (tables_) {
     // Rule 5: a null pointer that is not optional is a builder bug, never a silent fallback.
     const std::vector<std::string> missing = missing_pointers(kg, *tables_, false);
@@ -1062,9 +1112,152 @@ void Session::render_loop() {
       }
     }
     render.unlock();
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (converged_locked() && !latch_.pending(scene_.generations().active())) idle_ = true;
+    bool denoise_now = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (converged_locked() && !latch_.pending(scene_.generations().active())) {
+        // 0008 d16, ruling 87: a final render denoises once after convergence and reports CONVERGED
+        // only when that ended; the state stays RENDERING meanwhile.
+        if (denoiser_ && !denoise_done_) denoise_now = true;
+        else idle_ = true;
+      }
+    }
+    if (denoise_now && final_denoise(lr.generation)) {
+      denoise_done_ = true;
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!latch_.pending(scene_.generations().active())) idle_ = true;
+    }
   }
 }
 
+void Session::denoiser_unavailable(const std::string& why, uint64_t generation) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    denoiser_error_ = why;
+  }
+  // 0008 d16: the noisy image stays, denoised = false, and the error reaches the report: one entry per
+  // session whatever the number of epochs, detail = the backend's text (0001 D2.11).
+  if (denoiser_reported_) return;
+  denoiser_reported_ = true;
+  const double value[2] = {0.0, 0.0};
+  report_.raise(AR_REPORT_DENOISER_UNAVAILABLE, 0, why, 1, value, generation);
+  ctx_.log.line("WARNING", "session: denoiser unavailable, the image is not denoised: " + why);
+}
+
+bool Session::final_denoise(uint64_t generation) {
+  const uint64_t plane = denoise_plane_bytes(options_);
+  uint32_t w = 0, h = 0;
+  {
+    // The target's size first, before any wait: film_prepare_denoise checks it only in debug builds, so
+    // the host refuses a render rectangle the planes cannot hold, loudly (the session fails).
+    std::lock_guard<std::mutex> render(render_mutex_);
+    const ar::FilmData& f = film_->data();
+    w = f.rect_width;
+    h = f.rect_height;
+    // The planes are allocated at the maximum size (below, once the denoiser is known to work), so the
+    // capacity is known without them.
+    denoise_capacity_px_ = options_.test_denoise_capacity_px != 0 ? options_.test_denoise_capacity_px
+                                                                   : uint64_t(options_.max_width) * options_.max_height;
+    if (uint64_t(w) * h > denoise_capacity_px_)
+      throw std::logic_error("final denoise: the film's render rectangle " + std::to_string(w) + "x" +
+                             std::to_string(h) + " does not fit the denoise target's " +
+                             std::to_string(denoise_capacity_px_) + " pixels");
+  }
+  // The one wait 0008 d16 allows: a final render waits for the state before its denoise step, in
+  // slices, so a cancel, a close or a failure stops it at once (the cancel leaves the noisy image and
+  // no entry: a cancel is not a failure), and so does an edit that makes this state stale.
+  bool poisoned = false;
+  for (;;) {
+    if (denoiser_->failed() || (denoiser_->ready() && !options_.test_hold_denoiser)) break;
+    // A faulting loader never reports (denoiser.h): a poisoned context ends the wait as DenoiserState::wait
+    // ends it, as a failure of the denoiser.
+    if (ctx_.poisoned.load(std::memory_order_acquire)) {
+      poisoned = true;
+      break;
+    }
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (closing_ || paused_ || failed_) return false;
+    if (latch_.pending(scene_.generations().active())) return false;
+    wake_cv_.wait_for(lock, kDenoiseWaitSlice);
+  }
+  if (denoiser_->failed()) {
+    denoiser_unavailable(denoiser_->error(), generation);
+    return true;
+  }
+  if (poisoned) {
+    // The noisy image, one entry and CONVERGED, never a render loop that comes back here forever.
+    denoiser_unavailable("denoiser loading stopped: context poisoned: " + ctx_.poison_message, generation);
+    return true;
+  }
+  const auto t0 = std::chrono::steady_clock::now();
+  DenoiseInputs in;
+  {
+    std::lock_guard<std::mutex> render(render_mutex_);
+    // Allocated only now, once the denoiser works: a failed or poisoned denoiser holds no DENOISER bytes
+    // (300 MB of planes at 4K) for the rest of the session.
+    if (!denoise_buf_.ptr)
+      denoise_buf_ = device_.allocate(LedgerCategory::DENOISER, 3 * plane + sizeof(ar::DenoiseTarget), options_.owner);
+    char* base = static_cast<char*>(denoise_buf_.ptr);
+    const ar::DenoiseTarget target{reinterpret_cast<float*>(base), reinterpret_cast<float*>(base + plane),
+                                   reinterpret_cast<float*>(base + 2 * plane), w, h};
+    device_.upload(denoise_buf_, 3 * plane, &target, sizeof target);
+    denoise_bind_ = true;
+    bind_globals();
+    device_.launch(KernelId::FILM_PREPARE_DENOISE, w * h);
+    // OIDN takes host images (176's backend): one copy of each plane, outside the film.
+    const size_t floats = size_t(w) * h * 3u;
+    for (int k = 0; k < 3; ++k) {
+      denoise_host_[k].resize(floats);
+      device_.download(denoise_host_[k].data(), denoise_buf_, uint64_t(k) * plane, floats * sizeof(float));
+    }
+  }
+  in.color = {denoise_host_[0].data(), w, h, 3};
+  if (film_->layout().guides()) {
+    in.albedo = {denoise_host_[1].data(), w, h, 3};
+    in.normal = {denoise_host_[2].data(), w, h, 3};
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    in.metadata.samples_done = uint32_t(stats_.samples_done);
+  }
+  in.metadata.generation = generation;
+  const auto t1 = std::chrono::steady_clock::now();
+  DisplayImage out;
+  try {
+    denoise(*denoiser_, in, out, DenoiseMode::FINAL);
+  } catch (const DeviceError&) {
+    throw;  // the device failed, not the denoiser: the session fails
+  } catch (const std::runtime_error& e) {
+    denoiser_unavailable(e.what(), generation);  // OIDN's execution failure (d16)
+    return true;
+  }
+  const auto t2 = std::chrono::steady_clock::now();
+  if (options_.test_after_denoise) options_.test_after_denoise();
+  // Readback hands this image out as the film's Combined, so it must be the film's render rectangle.
+  if (out.width != w || out.height != h)
+    throw std::logic_error("final denoise: the denoised image is " + std::to_string(out.width) + "x" +
+                           std::to_string(out.height) + ", the film's render rectangle " + std::to_string(w) + "x" +
+                           std::to_string(h));
+  {
+    // Ruling 87: a cancel during the denoise leaves the noisy output.
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (closing_ || paused_ || failed_) return false;
+  }
+  const double copy_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+  const double oidn_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+  {
+    std::lock_guard<std::mutex> render(render_mutex_);
+    display_ = std::move(out);
+    std::lock_guard<std::mutex> lock(mutex_);
+    denoised_ = display_.denoised;
+    ++stats_.denoises;
+    stats_.denoise_copy_ms = copy_ms;
+    stats_.denoise_ms = oidn_ms;
+  }
+  char line[160];
+  std::snprintf(line, sizeof line, "session: final denoise %ux%u in %.1f ms (prepare and copy %.1f ms)", w, h, oidn_ms,
+                copy_ms);
+  ctx_.log.line("INFO", line);
+  return true;
+}
 }  // namespace astroray::host

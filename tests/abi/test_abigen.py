@@ -113,7 +113,9 @@ class TestReplayerGuards(unittest.TestCase):
                        "_p && st.opt->samples != kReplayUnset", "st.res->applied |= kAppliedSamples",
                        "_v.resolution_percent = 100", "st.res->applied |= kAppliedSizeSettings",
                        "st.res->applied |= kAppliedSizeSession", "st.res->applied |= kAppliedSizeView",
-                       "st.res->size_refused = true"):
+                       "st.res->size_refused = true",
+                       "_p && st.opt->denoiser != kReplayUnset", "st.res->applied |= kAppliedDenoiser",
+                       "_v.mode == AR_SESSION_MODE_VIEWPORT && st.opt->denoiser != AR_DENOISER_NONE"):
             self.assertIn(needle, src)
         for fn in ("ar_session_close", "ar_session_destroy", "ar_scene_destroy", "ar_context_destroy"):
             at = src.index(f"{fn}(")  # the call itself

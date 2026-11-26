@@ -6,8 +6,12 @@ engine cannot produce gives one PASS_UNSUPPORTED entry, and after a commit that 
 an index from the old pass list is refused until pass_count is called again. ar_settings.statistics
 (126; 0008 d12, on by default) switches the statistics channels: off, the film has no AR Bounces pass
 and the bounce display raises one PASS_UNSUPPORTED entry; on again, the pass is back; another value
-is refused. The scene has no geometry (every camera ray misses); tests/cpu/test_session_passes.cpp
-checks Position on a hit."""
+is refused. A FINAL session with AR_DENOISER_OIDN (task 197; 0008 d10, d13a, d16) lists Denoising
+Albedo, Denoising Normal and Noisy Image, flags its Combined AR_PASS_DENOISED once converged and refuses
+that Combined's variance; with the denoiser forced to fail (ASTRORAY_TEST_DENOISER_FAIL=library, set
+before the session is created) Combined is not flagged and the report holds one DENOISER_UNAVAILABLE
+entry. The scene has no geometry (every camera ray misses); tests/cpu/test_session_passes.cpp checks
+Position on a hit and tests/cpu/test_session_denoise.cpp the denoised pixels."""
 import ctypes
 import importlib.util
 import math
@@ -79,9 +83,10 @@ class TestSessionPasses(unittest.TestCase):
         self.assertEqual(st, a.AR_OK)
         return gen.value
 
-    def start_session(self):
+    def start_session(self, mode=None, denoiser=None):
         a, lib = self.abi, self.lib
-        sdesc = a.ar_session_desc(a.AR_SESSION_MODE_VIEWPORT, SIZE, SIZE, a.AR_DENOISER_NONE)
+        sdesc = a.ar_session_desc(a.AR_SESSION_MODE_VIEWPORT if mode is None else mode, SIZE, SIZE,
+                                  a.AR_DENOISER_NONE if denoiser is None else denoiser)
         session = ctypes.c_void_p()
         self.assertEqual(lib.ar_session_create(self.scene, ctypes.byref(sdesc), ctypes.byref(session)), a.AR_OK)
         self.addCleanup(self.destroy, session)
@@ -120,10 +125,35 @@ class TestSessionPasses(unittest.TestCase):
             listed[bytes(info.name).split(b"\0")[0].decode()] = (i, info.component_count)
         return listed
 
-    def read(self, session, index, comps):
+    def read(self, session, index, comps, quantity=None):
         n = SIZE * SIZE * comps
         buf = (ctypes.c_float * n)()
-        return self.lib.ar_session_read_pass(session, index, self.abi.AR_QUANTITY_MEAN, n, buf), list(buf)
+        q = self.abi.AR_QUANTITY_MEAN if quantity is None else quantity
+        return self.lib.ar_session_read_pass(session, index, q, n, buf), list(buf)
+
+    def flags(self, session):
+        """Name -> ar_pass_info.flags."""
+        a, lib = self.abi, self.lib
+        count = ctypes.c_uint32()
+        self.assertEqual(lib.ar_session_pass_count(session, ctypes.byref(count)), a.AR_OK)
+        out = {}
+        for i in range(count.value):
+            info = a.ar_pass_info()
+            self.assertEqual(lib.ar_session_pass_info(session, i, ctypes.byref(info)), a.AR_OK)
+            out[bytes(info.name).split(b"\0")[0].decode()] = info.flags
+        return out
+
+    def entries(self, session, code):
+        a, lib = self.abi, self.lib
+        info = a.ar_report_info()
+        self.assertEqual(lib.ar_session_report_info(session, ctypes.byref(info)), a.AR_OK)
+        hits = []
+        for i in range(info.entry_count):
+            e = a.ar_report_entry()
+            self.assertEqual(lib.ar_session_report_entry(session, i, ctypes.byref(e)), a.AR_OK)
+            if e.code == code:
+                hits.append(bytes(e.detail).split(b"\0")[0].decode())
+        return hits
 
     def last_error(self, session):
         buf = (ctypes.c_uint8 * 256)()
@@ -222,6 +252,50 @@ class TestSessionPasses(unittest.TestCase):
         self.assertEqual(listed["AR Invalid"][0], index)
         self.assertEqual(self.read(session, index, comps)[0], a.AR_OK)
         print(f"stale index {index} refused after the rebuild; reads again after pass_count")
+
+    def test_denoised_combined_and_noisy_image(self):
+        a, lib = self.abi, self.lib
+        # Viewport OIDN is M2 (0008 d16): refused at create, never a session that silently skips it.
+        sdesc = a.ar_session_desc(a.AR_SESSION_MODE_VIEWPORT, SIZE, SIZE, a.AR_DENOISER_OIDN)
+        refused = ctypes.c_void_p()
+        self.assertEqual(lib.ar_session_create(self.scene, ctypes.byref(sdesc), ctypes.byref(refused)), a.AR_ERR_UNSUPPORTED)
+
+        gen = self.commit_settings([])
+        session = self.start_session(a.AR_SESSION_MODE_FINAL, a.AR_DENOISER_OIDN)
+        self.settle(session, gen)
+        flags = self.flags(session)
+        print(f"denoiser session passes: {flags}")
+        for name in ("Combined", "Denoising Albedo", "Denoising Normal", "Noisy Image"):
+            self.assertIn(name, flags)
+        self.assertEqual(flags["Combined"], a.AR_PASS_DENOISED)
+        for name in ("Denoising Albedo", "Denoising Normal", "Noisy Image"):
+            self.assertEqual(flags[name], 0, name)
+        self.assertEqual(self.entries(session, a.AR_REPORT_DENOISER_UNAVAILABLE), [])
+        listed = self.passes(session)
+        index, comps = listed["Combined"]
+        st, values = self.read(session, index, comps)
+        self.assertEqual(st, a.AR_OK)
+        self.assertTrue(all(math.isfinite(x) for x in values), values)
+        st, _ = self.read(session, index, comps, a.AR_QUANTITY_VARIANCE)
+        self.assertEqual(st, a.AR_ERR_INVALID_ARGUMENT)
+        self.assertIn("Noisy Image", self.last_error(session))
+        noisy_index, noisy_comps = listed["Noisy Image"]
+        self.assertEqual(self.read(session, noisy_index, noisy_comps, a.AR_QUANTITY_VARIANCE)[0], a.AR_OK)
+
+        # A denoiser that cannot be created: the noisy image, no flag, one entry with OIDN's text, CONVERGED.
+        os.environ["ASTRORAY_TEST_DENOISER_FAIL"] = "library"
+        try:
+            failed = self.start_session(a.AR_SESSION_MODE_FINAL, a.AR_DENOISER_OIDN)
+        finally:
+            del os.environ["ASTRORAY_TEST_DENOISER_FAIL"]
+        self.settle(failed, gen)
+        hooks = self.entries(failed, a.AR_REPORT_TEST_HOOK_ACTIVE)
+        self.assertIn("DENOISER_FAIL=library", hooks)
+        self.assertEqual(self.flags(failed)["Combined"], 0)
+        unavailable = self.entries(failed, a.AR_REPORT_DENOISER_UNAVAILABLE)
+        self.assertEqual(len(unavailable), 1, unavailable)
+        self.assertIn("no library folder given", unavailable[0])
+        print(f"forced failure entry: {unavailable[0]}")
 
     def destroy(self, session):
         self.lib.ar_session_close(session)

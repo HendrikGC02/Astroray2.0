@@ -599,9 +599,9 @@ void CudaDevice::poison_for_test(const std::string& why) {
 void CudaDevice::set_traversable(uint64_t handle) { impl_->traversable = handle; }
 
 namespace {
-CudaDevice& as_cuda(Device& d) {
+CudaDevice& as_cuda(Device& d, const char* what = "CUDA traversal") {
   auto* c = dynamic_cast<CudaDevice*>(&d);
-  if (!c) throw std::invalid_argument("CUDA traversal: the session's device is not a CudaDevice");
+  if (!c) throw std::invalid_argument(std::string(what) + ": the session's device is not a CudaDevice");
   return *c;
 }
 }  // namespace
@@ -612,6 +612,11 @@ TraversalAttach attach_cuda_traversal(Device& session_device, AccelBuilder& scen
 }
 void detach_cuda_traversal(Device& session_device) { as_cuda(session_device).detach_traversal(); }
 void set_cuda_traversable(Device& session_device, uint64_t handle) { as_cuda(session_device).set_traversable(handle); }
+void cuda_stream_of(Device& device, int* ordinal, void** stream) {
+  CudaDevice& c = as_cuda(device, "cuda_stream_of");
+  *ordinal = c.device_ordinal();
+  *stream = c.native_stream();
+}
 
 void CudaDevice::launch(KernelId kernel, uint32_t count) {
   Impl& s = *impl_;
