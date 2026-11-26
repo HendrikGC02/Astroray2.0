@@ -11,6 +11,6 @@ extern "C" __global__ void AR_LAUNCH_BOUNDS(ar::kLaunch_k_route_hit.threads, ar:
   for (uint32_t slot = blockIdx.x * blockDim.x + threadIdx.x; slot < count; slot += gridDim.x * blockDim.x) {
     const ar::Real2 uv = ar::ps_hit_uv(g, slot);
     const ar::HitRecord h{ar::ps_hit_t(g, slot), ar::ps_hit_prim(g, slot), ar::ps_hit_inst(g, slot), uv.x, uv.y};
-    ar::ps_next_stage(g, slot) = static_cast<uint8_t>(ar::route_hit(g, h, ar::ps_ray_d(g, slot), ar::ps_flags(g, slot)));
+    ar::ps_next_stage(g, slot) = static_cast<uint8_t>(ar::route_hit(g, h, ar::ps_flags(g, slot)));
   }
 }

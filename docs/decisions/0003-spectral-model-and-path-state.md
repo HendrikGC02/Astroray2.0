@@ -160,7 +160,7 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
 | 18-19 | `SHADOW_CATCHER_HIT`, `SHADOW_CATCHER_PASS` | 0007 decisions 7, 36; Shadow Catcher pass, 0008 D10 (ruling 42) |
 | 20 | `FRONT_FACE` | hit side, surviving instance transforms: 0005 items 8, 33; 0006 D16 (ruling 42) |
 | 21 | `FIRST_BOUNCE_SPECULAR` | the first bounce sampled a specular, metal or coat lobe: 0008 D15 specular hit distance (ruling 42) |
-| 22-31 | unallocated | |
+| 22-31 | false-interface crossings, 0-1023 (the counter of a path's medium-boundary crossings that update only the stack; task 205, the field that exists instead of a new one) | 0006 D17 |
 
 22. **Termination reason (u8)**, the single enum that 0004 D28-D29, 0005 item 4a, 0006 D8, D16, D27-D28 and 0008 D12 count: `ACTIVE, ESCAPED, RUSSIAN_ROULETTE, ZERO_THROUGHPUT, MAX_BOUNCE, TRANSPARENT_LIMIT, ABSORBED, VOLUME_LIMIT, STACK_OVERFLOW, INVALID, CAPTURED, GEODESIC_STEP_LIMIT, GEODESIC_NUMERICAL, LIGHT_PATH_IN_REGION, LIGHT_PATH_END, CANCELLED`. `LIGHT_PATH_END` is a light path ended by 0004 D19's partition rules (discarded at its first vertex x₁ or after its connection; reasons are 0004 D29's counters). A NaN or Inf in beta or a contribution sets `INVALID` and is counted, never dropped silently. Step exhaustion is never folded into `CAPTURED` (v1).
 
@@ -187,7 +187,7 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
 
 | stream | counter | one block | consumer |
 |---|---|---|---|
-| 1 path medium | path `medium_rng`, set to e·2²⁰ when a flight enters `shade_volume` from `route_hit` (2²⁰ = 0006 D8's per-flight limit), so a reused slot's stale value is never read and flights at distinct e never share a block; a requeued flight continues it. Known limits (BACKLOG): two flights share blocks when they start at the same e, which happens when a path crosses a medium-bearing lamp between them (a lamp crossing leaves e unchanged); the Sobol dimension 4·block + lane wraps at e ≥ 1024 and the u32 counter at e ≥ 4096; independent mode keeps a dimension below 2²⁴ only for e < 4 | tentative-collision distance; collision event (absorb, scatter, null, fluorescent); overlapping-medium choice; unused | 0006 D8, D15, D18 |
+| 1 path medium | path `medium_rng`: event e owns blocks [e·2²⁰, (e+1)·2²⁰) (2²⁰ = 0006 D8's limit, shared by the event's flights); a flight continues the stored counter when it lies in e's range and starts at e·2²⁰ otherwise, so flights separated by a false interface or a lamp crossing (which leave e unchanged) never share a block (task 205, as Cycles advances `rng_offset` at a volume-bounds crossing); the opacity pass-through that enters a medium sets it to the new event's start, so a reused slot's stale value is never read; a requeued flight continues it. Known limits (BACKLOG): the Sobol dimension 4·block + lane wraps at e ≥ 1024 and the u32 counter at e ≥ 4096; independent mode keeps a dimension below 2²⁴ only for e < 4 | tentative-collision distance; collision event (absorb, scatter, null, fluorescent); overlapping-medium choice; unused | 0006 D8, D15, D18 |
 | 2 shadow medium | item `medium_rng`, initialised to e·2¹⁷ (0006 caps 131,072 collisions per shadow segment) | ratio-tracking distance; unused ×3 | 0006 D8, D19 |
 | 3 random walk | walk step counter + e·2¹⁶ | free-flight distance; direction u, v; event choice | random-walk subsurface (0005 item 4a) |
 

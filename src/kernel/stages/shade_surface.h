@@ -13,6 +13,11 @@
 // carries a: the compiler multiplies the emission by the opacity, so the hit, NEE on this
 // triangle and the emission estimate read one a x Le and nothing scales it here. Shadow rays stay
 // opaque to such materials (transparent shadows are M2); the compiler reports that per material.
+// Medium stack (0006 D16-D17; the media feature): at a medium-bearing instance a false interface
+// returns right after the hit's geometry, before the VM (surface_false_interface); a true interface
+// changes the stack only where the path crosses the surface, the opacity pass-through
+// (surface_true_crossing; a transmitting lobe and its crossing are M2), so a reflection keeps the
+// stack it arrived with; the NEE item takes the medium of that stack (nee_item_medium).
 // Emission MIS (0004 D1, integrator/mis.h): emission reached by a BSDF ray after a non-delta
 // bounce is weighted against NEE with pmf(ctx_prev, light) pdf_li(ctx_prev, wi), the previous
 // vertex's context rebuilt from prev_ng, prev_ns and prev_dist; at the first vertex or after a
@@ -95,6 +100,7 @@
 #include "../material/material_header.h"
 #include "../material/openpbr_params.h"
 #include "../material/slot_resolve.h"
+#include "../medium/medium_stack.h"
 #include "../medium/ratio_track.h"
 #include "../portability.h"
 #include "../scene/scene_view.h"
@@ -127,25 +133,111 @@ AR_FN Real2 triangle_barycentrics(Real3 a, Real3 b, Real3 c, Real3 p) {
 // The far end of an unbounded shadow segment toward an infinite light.
 inline constexpr float kShadowUnbounded = 0x1.fffffep+127f;
 
-// The medium a NEE item's segment lies in, as 1 + its medium_descs index, 0 for none (ratio_track.h
-// shadow_medium_field). Until the medium stack, route_hit's one-medium rule (stages/route_hit.h)
-// knows a medium only at a medium-bearing instance's own surface, so the item is in that instance's
-// medium exactly when its direction leaves the vertex into the interior: against the face that was
-// hit (Ng faces wo), away from it on a front face, toward it on a back face (pbrt-v4
-// Interaction::GetMedium(w): the medium on w's side). A shadow ray stops at every hull (0002 D11
-// until ah_record), so such an item is delivered only when the whole segment stays inside.
-// Only a delta light's item gets the medium (lead ruling 106): NEE is its only strategy, so
-// attenuating it is correct. A non-delta light shares its MIS pair with BSDF rays, and a BSDF ray
-// from the hull into the interior that hits an emitter there is shaded without transmittance (route_hit
-// routes a segment to shade_volume only when it ends on the medium's own back face), so attenuating
-// only the NEE half would mix w_l f L T with w_b f L. Its item stays in no medium, both halves
-// unattenuated, until BSDF segments to interior hits are tracked.
-AR_FN uint32_t nee_item_medium(const KernelGlobals& kg, uint32_t inst, bool front_face, Real3 ng, Real3 wi, bool delta_light) {
-  if (!delta_light) return 0u;
+// ---- the medium stack at a medium-bearing instance's surface (0006 D16-D17) ----
+// The entry of an instance's medium is 1 + its medium index (DeviceInstanceRecord::medium) with the
+// priority of the entering face's material; a remove finds the entry by id (RULINGS 98). Whether a
+// crossing pushes or removes comes from the face: a front face enters.
+
+// Cycles' VOLUME_BOUNDS_MAX (kernel/types.h): the cap on a path's volume-boundary crossings, which
+// path_state_volume_next counts without a transparent bounce, "only sanity check in case self
+// intersection gets us stuck". The crossing count lives in path-flag bits 22-31 (0003 d21), so it holds
+// 0-1023: the crossing that would make it VOLUME_BOUNDS_MAX ends the path, one before Cycles' (which
+// lets the 1024th pass). Ref: Cycles kernel/integrator/path_state.h path_state_volume_next, read in
+// third_party/_cache/refs/cycles-ed69ef2c6bd3.
+inline constexpr uint32_t kVolumeBoundsMax = 1024;
+
+// The medium priority of material header `mat` (hit_material_id's index): the entering face's
+// (RULINGS 98). A scene without material tables is a host bug the stage fails; its priority reads 0.
+AR_FN uint32_t material_medium_priority(const KernelGlobals& kg, uint32_t mat) {
+  const SceneData& s = scene_of(kg);
+  if (s.material_headers == nullptr || s.material_constants == nullptr) return 0u;
+  return s.material_constants[load_ro(&s.material_headers[mat].const_offset)].medium_priority;
+}
+
+// Moves the ray origin just past the surface and re-queues intersect_closest; prev_dist grows by the
+// distance the origin moved, so ray_o - prev_dist ray_d is still the previous scattering vertex (as
+// shade_light's crossing). Direction, flags and weights stay.
+AR_FN void surface_move_past(const KernelGlobals& kg, uint32_t slot, Real3 P, Real3 Ng) {
+  const Real3 o = ps_ray_o(kg, slot), d = ps_ray_d(kg, slot);
+  const Real3 o_next = offset_past_surface(P, Ng, d);
+  ps_prev_dist(kg, slot) = ps_prev_dist(kg, slot) + dot(o_next - o, d) / dot(d, d);
+  ps_ray_o(kg, slot) = o_next;
+  ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::INTERSECT_CLOSEST);
+}
+
+// A false interface (0006 D17: the hit is not the highest among the stack and itself), handled at the
+// top of the stage, before the material runs: the stack takes the push or remove, the crossing count
+// advances and the path goes on past the surface in its direction (surface_move_past). Nothing else
+// changes: no random number, no event index, no transparent or other bounce, no emission, beta, r_u
+// and r_l as they were. A count at the cap ends the path VOLUME_LIMIT, a push at depth 4
+// STACK_OVERFLOW; both are counted in the termination histogram. Returns whether the hit was a false
+// interface (the caller returns); false for an instance without a medium and for a true interface.
+// `mat` is the hit's material header. A false back face always finds its id (interface_is_true calls
+// an absent id true), so only a push can fail.
+AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint32_t inst, uint32_t mat, bool front, Real3 P,
+                                   Real3 Ng) {
   const uint32_t m = instance_medium(kg, inst);
-  if (m == kNoMedium) return 0u;
-  const Real c = dot(wi, ng);
-  return (front_face ? c < Real(0) : c > Real(0)) ? m + 1u : 0u;
+  if (m == kNoMedium) return false;
+  const uint32_t flags = ps_flags(kg, slot);
+  const U32x4 stack = ps_medium_stack(kg, slot);
+  const uint32_t priority = front ? material_medium_priority(kg, mat) : 0u;
+  if (interface_is_true(stack, flags, m + 1u, priority, front)) return false;
+  const uint32_t n = crossings(flags) + 1u;
+  const StackUpdate u = front ? stack_push(stack, flags, m + 1u, priority) : stack_remove(stack, flags, m + 1u);
+  if (n >= kVolumeBoundsMax || !u.ok) {
+    path_end(kg, slot, n >= kVolumeBoundsMax ? Term::VOLUME_LIMIT : Term::STACK_OVERFLOW);
+    return true;
+  }
+  ps_medium_stack(kg, slot) = u.stack;
+  ps_flags(kg, slot) = set_crossings(u.flags, n);
+  surface_move_past(kg, slot, P, Ng);
+  return true;
+}
+
+// A true interface that the path crosses (the opacity pass-through; a transmitting sample joins with
+// the dielectric lobe, 0006 D17): the same push or remove, as Cycles enters and exits volumes only
+// when the continuation transmits. A remove of an id not on the stack (the path started inside the
+// medium) is refused and leaves stack and flags unchanged. Returns false when a push overflowed: the
+// path then ends STACK_OVERFLOW. The hit is the path's (hit_inst), `mat` its material header.
+// Ref: Cycles kernel/integrator/shade_surface.h integrate_surface ("if (continue_path_label &
+// LABEL_TRANSMIT) volume_stack_enter_exit"), read in third_party/_cache/refs/cycles-ed69ef2c6bd3.
+AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_t mat, bool front) {
+  const uint32_t m = instance_medium(kg, ps_hit_inst(kg, slot));
+  if (m == kNoMedium) return true;
+  const U32x4 stack = ps_medium_stack(kg, slot);
+  const uint32_t flags = ps_flags(kg, slot);
+  const StackUpdate u = front ? stack_push(stack, flags, m + 1u, material_medium_priority(kg, mat)) : stack_remove(stack, flags, m + 1u);
+  // A refused push or remove returns the stack and flags unchanged, so they are stored whether the
+  // update was applied or not.
+  ps_medium_stack(kg, slot) = u.stack;
+  ps_flags(kg, slot) = u.flags;
+  // A refused remove is a path that started inside the medium: it goes on with its stack as it was. A
+  // refused push would need a fifth entry, which the stack cannot hold (0006 D16), so it ends the path
+  // and is counted.
+  if (!u.ok && front) {
+    path_end(kg, slot, Term::STACK_OVERFLOW);
+    return false;
+  }
+  // The pass-through starts a new event: its flights begin at that event's first medium block, and a
+  // reused pool slot's counter is never continued (shade_volume.h).
+  ps_medium_rng(kg, slot) = flight_rng_start(uint32_t(ps_event_index(kg, slot)) + 1u);
+  return true;
+}
+
+// The medium a NEE item's segment lies in, as 1 + its medium index, 0 for none: the item layout of
+// ratio_track.h shadow_medium_field, whose one entry is the stack's highest id under RULINGS 98. The
+// stack is the path's as it stands when the item is written (`flags` holds its depth), the stack the
+// path arrived with, which is the medium on wo's side of a true interface. Every light's item carries
+// it: the BSDF half of a non-delta light's MIS pair is tracked too (route_hit sends every segment of a
+// non-empty stack to shade_volume), so ratio tracking the NEE half keeps the pair's weights
+// consistent (pbrt-v4 VolPathIntegrator). A shadow ray stops at every hull (0002 D11 until ah_record),
+// so an item is delivered only when its whole segment stays inside that medium. An item whose segment
+// leaves through the surface would lie in the stack after the crossing (Cycles' is_transmission); no
+// lobe of this stage transmits in M1b, so only a shading normal tilted past Ng gives such an item a
+// non-zero contribution, and it keeps the arriving stack until the dielectric lobe (M2).
+// Ref: pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::SampleLd and Li (Apache-2.0).
+AR_FN uint32_t nee_item_medium(const KernelGlobals& kg, uint32_t slot, uint32_t flags) {
+  return stack_highest_id(ps_medium_stack(kg, slot), flags);
 }
 
 // A NEE item's fields of the media feature (0006 D19, 0003 d20), every one written: the medium of
@@ -155,11 +247,16 @@ AR_FN uint32_t nee_item_medium(const KernelGlobals& kg, uint32_t inst, bool fron
 // = r_p p_scatter, 0 for a delta light (whose weight is 1 / avg(r_l)). The contribution already
 // carries the weight 1 / avg(r_l + r_u) (integrator/mis.h); shade_shadow_medium replaces it by the one of
 // the tracked r_u and r_l. Also called by the M-1 probe (kernel_gpu/probe_m1.cu).
+// An item toward the environment world (world_le) stays in no medium: its BSDF half is a miss, which
+// route_hit shades without tracking whatever the stack (an escape from a closed hull is impossible, so
+// only an open mesh or a leak gets there), and both halves stay unattenuated together; inside a closed
+// hull the hull blocks the item anyway. Tracking a miss over an unbounded segment, as Cycles'
+// intersect_closest does, is M2's (0006 D19).
 // Ref: pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::SampleLd ("r_l *= r_p * p_l;
 // r_u *= r_p * scatterPDF;"); docs/decisions/0006-volumes-and-astrophysics.md D8, D19.
 AR_FN void nee_item_media(const KernelGlobals& kg, uint32_t sh, uint32_t medium_plus_one, uint32_t e, uint32_t path_flags,
                           const Spec& r_p, Real p_light, Real p_scatter, bool delta_light, const Lambda& lam, bool world_le) {
-  sh_medium_stack(kg, sh) = shadow_medium_field(medium_plus_one);
+  sh_medium_stack(kg, sh) = shadow_medium_field(world_le ? 0u : medium_plus_one);
   sh_medium_rng(kg, sh) = shadow_rng_start(e);
   sh_r_u(kg, sh) = r_p * (delta_light ? Real(0) : p_scatter);
   sh_r_l(kg, sh) = r_p * p_light;
@@ -187,9 +284,10 @@ AR_FN bool opacity_null_event(Real opacity, float* u) {
 
 // The null event of an opacity pass-through (0004 D3): only the transparent counter and the event
 // index advance (the next vertex's uniforms are a new block, 0004 D14); direction, flags, beta,
-// r_u, r_l and the previous vertex stay. The ray leaves from just past the hit and prev_dist grows
-// by the distance the origin moved, so ray_o - prev_dist ray_d is still the previous scattering
-// vertex (as shade_light's crossing). A path that arrives with the transparent counter at its limit
+// r_u, r_l and the previous vertex stay. The ray leaves from just past the hit (surface_move_past).
+// With the media feature the path crosses the surface, so a medium-bearing instance's true interface
+// updates the stack (surface_true_crossing; `mat` is the hit's material, `front` its side), which
+// may end the path STACK_OVERFLOW. A path that arrives with the transparent counter at its limit
 // ends TRANSPARENT_LIMIT instead of passing; its emission was already added (Blender: the next
 // surface after the limit emits and terminates).
 // Ref: Cycles kernel/integrator/path_state.h path_state_next (transparent_bounce, a transparent label
@@ -197,20 +295,17 @@ AR_FN bool opacity_null_event(Real opacity, float* u) {
 // integrate_surface_bsdf_bssrdf_bounce (a transparent bounce only moves the ray start), read in
 // third_party/_cache/refs/cycles-ed69ef2c6bd3; docs/decisions/0004-integrator.md D3, D14;
 // 0002 D11; 0003 d19 (prev_dist), d23.
-AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P, Real3 Ng) {
+AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P, Real3 Ng, uint32_t mat, bool front) {
   U16x6 b = ps_bounces(kg, slot);
   if (b.v[5] >= kg.session.max_bounces[5]) {
     path_end(kg, slot, Term::TRANSPARENT_LIMIT);
     return;
   }
+  if (kg.session.features.media && !surface_true_crossing(kg, slot, mat, front)) return;
   b.v[5] = uint16_t(b.v[5] + 1u);
   ps_bounces(kg, slot) = b;
   ps_event_index(kg, slot) = uint16_t(ps_event_index(kg, slot) + 1u);
-  const Real3 o = ps_ray_o(kg, slot), d = ps_ray_d(kg, slot);
-  const Real3 o_next = offset_past_surface(P, Ng, d);
-  ps_prev_dist(kg, slot) = ps_prev_dist(kg, slot) + dot(o_next - o, d) / dot(d, d);
-  ps_ray_o(kg, slot) = o_next;
-  ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::INTERSECT_CLOSEST);
+  surface_move_past(kg, slot, P, Ng);
 }
 
 // The lobe stack's directional albedo at mu_o in working-space RGB (0008 d15): the stack's own
@@ -341,6 +436,9 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
       return;
     }
     mat = hit_material_id(kg, g_inst, g_prim);
+    // A false interface only updates the medium stack, before the material runs (0006 D17).
+    if (phase == 0u && kg.session.features.media && surface_false_interface(kg, slot, inst, mat, ctx.front_face != 0u, ctx.P, ctx.Ng))
+      return;
     if (ok) {
       AR_ASSERT(mat <= s.material_header_count);
       const MaterialHeader* hp = s.material_headers + mat;
@@ -391,7 +489,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     // scales it, 0005 item 38), before the AOVs and the total limit, so a pass-through at the total
     // limit still passes, writes no AOV and leaves the flags (FRONT_FACE included) as they were.
     if (valid && opacity_null_event(alpha, &uc)) {
-      surface_pass_through(kg, slot, P, Ng);
+      surface_pass_through(kg, slot, P, Ng, mat, ctx.front_face != 0u);
       return;
     }
     // Written even when the VM failed (the AOVs name the hit), whenever the material tables exist.
@@ -459,8 +557,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     const bool world_le = ls.deferred_le && !triangle;
     // One branch on the launch-uniform media feature; without it nothing more is stored.
     if (kg.session.features.media)
-      nee_item_media(kg, sh, nee_item_medium(kg, inst, (flags & FRONT_FACE) != 0u, Ng, seg.dir, ls.delta), e, flags,
-                     ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta, ctx.lambda_t, world_le);
+      nee_item_media(kg, sh, nee_item_medium(kg, slot, flags), e, flags, ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta,
+                     ctx.lambda_t, world_le);
     else if (kg.shadow->item_flags != nullptr)
       sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
     if (world_le) {
@@ -533,6 +631,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     path_end(kg, slot, Term::RUSSIAN_ROULETTE);
     return;
   }
+  // The continuation keeps the stack it arrived with: no lobe of this stage transmits in M1b, and the
+  // transmitted continuation's crossing lands with the dielectric lobe (0006 D17).
 
   ps_beta(kg, slot) = beta_next;
   ps_r_l(kg, slot) = r_u / bs.pdf;

@@ -51,6 +51,10 @@ AR_NS_BEGIN
 // D8's limit on tentative collisions per flight.
 inline constexpr uint32_t kFlightCollisionLimit = 1u << 20;
 
+// The first path-medium block (stream 1, dims.h) of event index e: the flights between vertex e and the
+// next share blocks [flight_rng_start(e), flight_rng_start(e + 1)), each continuing the stored counter.
+AR_FN uint32_t flight_rng_start(uint32_t e) { return e * kFlightCollisionLimit; }
+
 // Where a flight's random numbers come from: one sampler key, mode and seed, and the stream id.
 struct MediumStream {
   uint32_t mode, id, index, seed, stream;

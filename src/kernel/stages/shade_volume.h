@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-// shade_volume: the stage for a segment that ran inside a medium (route_hit sends the back-face hit
-// of a medium-bearing instance here). It delta-tracks the segment from the ray origin to the hit
-// (medium/delta_track.h) over the medium of the hit's instance, which is homogeneous until grids
+// shade_volume: the stage for a segment that ran inside a medium (route_hit sends a hit here when the
+// path's medium-stack depth is not 0). It delta-tracks the segment from the ray origin to the hit
+// (medium/delta_track.h) over the medium of the stack's highest entry (stack_highest_id, whose id is
+// 1 + the medium index in M1b, RULINGS 98; M1b tracks that one medium, summing the active media is
+// M2's, 0006 D17), which is homogeneous until grids
 // arrive: its coefficients are evaluated once, at the segment start, and the majorant is sigma_t
 // itself (one majorant cell, 0006 D8 "homogeneous media run the same loop with one cell").
 // Outcomes:
 //   reached:   beta, r_u, r_l rescaled; the interrupted hit goes on to the stage route_hit gives
 //              without the medium test (route_hit_after_medium), the hit record unchanged;
 //   absorbed:  the path ends ABSORBED; a zero weight ends it ZERO_THROUGHPUT;
-//   limit:     the flight's 1,048,576 tentative collisions (D8) end it VOLUME_LIMIT, counted in the
-//              statistics' termination histogram;
+//   limit:     the event's 1,048,576 tentative collisions (D8, shared by its flights) end it
+//              VOLUME_LIMIT, counted in the statistics' termination histogram;
 //   scattered: a real scattering vertex, as pbrt-v4 VolPathIntegrator::Li's real-scattering branch:
 //              "if (depth++ >= maxDepth) terminated", then a phase sample, beta *= p / pdf (1 for
 //              HG, sampled exactly, D12), the ray leaves from the collision point. This stage has no
@@ -22,10 +24,17 @@
 // Russian roulette after a medium scatter, as in pbrt (a scattered ray skips the loop's tail). The
 // continuation's ray type is AR_VISIBILITY_VOLUME. A scatter advances the event index (0003 d23:
 // real volume scatters are vertices); null collisions do not.
-// Random numbers: the path medium stream (0003 d23 stream 1). Its block counter medium_rng starts
-// each flight that enters from route_hit at e * 2^20 (e the event index, 2^20 D8's per-flight
-// limit), so flights of one path never share a block and a reused pool slot's stale counter is never
-// read; the stage stores the counter it ends with, from which a requeued flight would continue.
+// Random numbers: the path medium stream (0003 d23 stream 1). Event index e owns its blocks
+// [e * 2^20, (e + 1) * 2^20) (flight_rng_start, 2^20 D8's limit). Several flights can run between
+// two vertices, separated by a false interface or a lamp crossing, which advance neither the event
+// index nor the camera dimensions; each continues the counter the previous one stored, so no two
+// flights of a path share a block, as Cycles advances its rng offset at every volume-bounds crossing
+// (path_state_volume_next: "Random number generator next bounce. rng_offset += PRNG_BOUNCE_NUM";
+// here only the medium stream advances). A stored counter outside e's range is an earlier event's or
+// a reused pool slot's and is not read: the flight starts at e * 2^20. A pool slot's stale counter
+// could lie in e's range only before the path's first flight, and every path enters a medium through
+// an opacity pass-through, which sets the counter to its new event's start (shade_surface.h). The
+// flights of one event share D8's 2^20 tentative collisions; the stage stores the counter it ends with.
 // The event and distance are decided at the hero lane (flags bits 7-8, 0003 d6).
 // Not built here, each with its own task: the emission-absorption marcher (a medium whose estimator
 // is MARCH_EMISSION_ABSORPTION, sigma_s = 0, is delta-tracked too, which is unbiased), volume NEE,
@@ -47,6 +56,7 @@
 #include "../medium/medium.h"
 #include "../medium/medium_block.h"
 #include "../medium/medium_eval.h"
+#include "../medium/medium_stack.h"
 #include "../medium/phase.h"
 #include "../portability.h"
 #include "../sample/dims.h"
@@ -65,9 +75,6 @@ AR_NS_BEGIN
 // include/astroray/astroray.h (pinned by tests/cpu/test_shade_volume.cpp).
 inline constexpr uint8_t kRayTypeVolume = 0x20;
 
-// The first medium_rng block of a flight that starts at event index e.
-AR_FN uint32_t flight_rng_start(uint32_t e) { return e * kFlightCollisionLimit; }
-
 AR_FN void volume_fail(const KernelGlobals& kg, uint32_t slot, uint32_t sample) {
   sample_mark_invalid(kg, sample);
   path_end(kg, slot, Term::INVALID);
@@ -76,8 +83,6 @@ AR_FN void volume_fail(const KernelGlobals& kg, uint32_t slot, uint32_t sample) 
 AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
   const uint32_t slot = load_ro(kg.main_queue + step.start + item);
   const uint32_t inst = ps_hit_inst(kg, slot);
-  const uint32_t medium = instance_medium(kg, inst);
-  AR_ASSERT(medium != kNoMedium);  // route_hit sends only medium-bearing instances here
   if ((ps_flags(kg, slot) & PATH_KIND) != 0u) {
     const Real2 uv = ps_hit_uv(kg, slot);
     const HitRecord hit{ps_hit_t(kg, slot), ps_hit_prim(kg, slot), inst, uv.x, uv.y};
@@ -85,6 +90,10 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
     return;
   }
   const SceneData& s = scene_of(kg);
+  // route_hit sends only paths with a non-empty stack here, which exists only with the media feature.
+  const uint32_t id = stack_highest_id(ps_medium_stack(kg, slot), ps_flags(kg, slot));
+  AR_ASSERT(id != 0u && id <= s.medium_count);
+  const uint32_t medium = id - 1u;
   const MediumDesc& desc = s.medium_descs[medium];
   bool ok = (load_ro(&desc.flags) & MEDIUM_HAS_EMISSION) == 0u;
   // The coefficients first, with as little path state live as possible: the volume entry inlines the
@@ -118,10 +127,15 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
   const uint32_t e = ps_event_index(kg, slot);
   const SamplerKey key = camera_key(kg.active_pixels, sample, kg.session.samples_done, kg.session.samples_per_pass);
   const MediumStream st{kg.session.sampler_mode, key.id, key.index, kg.session.seed, STREAM_PATH_MEDIUM};
-  uint32_t counter = flight_rng_start(e);
+  const uint32_t first = flight_rng_start(e), end = flight_rng_start(e + 1u);
+  const uint32_t stored = kg.session.features.media ? ps_medium_rng(kg, slot) : 0u;
+  // A stored counter equal to `end` (the event's blocks used up) reads as out of range and restarts;
+  // the flight that used them up ended its path VOLUME_LIMIT, so no later flight reads it. Once grid
+  // media requeue flights (M2) it must be treated as exhausted instead.
+  uint32_t counter = stored >= first && stored < end ? stored : first;
   TrackWeights w{ps_beta(kg, slot), ps_r_u(kg, slot), ps_r_l(kg, slot)};
   const TrackResult r = track_segment(sigma_a, sigma_s, sigma_a + sigma_s, t_max, hero_lane(flags), st,
-                                      &counter, kFlightCollisionLimit, &w);
+                                      &counter, end - counter, &w);
   if (kg.session.features.media) ps_medium_rng(kg, slot) = counter;
   if (r.event == TrackEvent::ABSORBED) {
     path_end(kg, slot, Term::ABSORBED);

@@ -65,9 +65,11 @@ inline constexpr uint32_t kShadowCollisionLimit = 1u << 17;
 // The first medium_rng block of the NEE item emitted at event index e.
 AR_FN uint32_t shadow_rng_start(uint32_t e) { return e * kShadowCollisionLimit; }
 
-// What an M1b shadow item's medium_stack holds until the medium stack lands (0006 D19): entry 0 is 1 +
-// the index in SceneData::medium_descs of the one medium the whole segment lies in, entries 1-3 are 0;
-// all zero for an item in no medium. The same 1 + index form as DeviceInstanceRecord::medium.
+// What an M1b shadow item's medium_stack holds until shadow rays update the stack themselves (0006
+// D19, ah_record): entry 0 is 1 + the index in SceneData::medium_descs of the one medium the whole
+// segment lies in, entries 1-3 are 0; all zero for an item in no medium. The same 1 + index form as
+// DeviceInstanceRecord::medium and as a path-stack entry's id (RULINGS 98), so the emit stores the
+// path stack's highest id here.
 AR_FN U32x4 shadow_medium_field(uint32_t medium_plus_one) { return U32x4{{medium_plus_one, 0u, 0u, 0u}}; }
 
 struct RatioTrack {

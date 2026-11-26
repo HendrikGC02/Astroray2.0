@@ -9,6 +9,8 @@
 #include <doctest.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -27,9 +29,12 @@ namespace {
 // ---- the stage in isolation ----
 
 // Four medium-bearing instances of a one-triangle mesh: 0 plain, 1 extension material, 2 lamp, and
-// item 3 is a light path on instance 0. The medium is homogeneous with CONSTANT coefficients (the
+// item 3 is a light path on instance 0. Every path's stack holds that medium, the one the stage tracks.
+// The medium is homogeneous with CONSTANT coefficients (the
 // program {reserved, VOLUME_COEFFS, END}); vacuum by default. Every camera item's segment runs from
 // the origin along +z for hit_t = 1.
+constexpr uint32_t kDepth1 = 1u << ar::MEDIUM_DEPTH_SHIFT;
+
 struct StageRig {
   std::vector<int32_t> tri_material{0};
   std::vector<ar::DeviceMeshView> meshes{1};
@@ -45,7 +50,10 @@ struct StageRig {
   ar::KernelGlobals kg{};
   ar::PathStateSoA path{};
   static constexpr uint32_t kN = 4;
-  std::vector<uint32_t> queue{9, 9, 9, 9, 0, 1, 2, 3}, hit_prim{0, 0, 0, 0}, hit_inst{0, 1, 2, 0}, flags{0, 0, 0, ar::PATH_KIND};
+  std::vector<uint32_t> queue{9, 9, 9, 9, 0, 1, 2, 3}, hit_prim{0, 0, 0, 0}, hit_inst{0, 1, 2, 0};
+  // Every path is inside medium 0: one stack entry (id 1 = 1 + the medium index, priority 0), depth 1.
+  std::vector<uint32_t> flags{kDepth1, kDepth1, kDepth1, ar::PATH_KIND | kDepth1};
+  std::vector<ar::U32x4> medium_stack = std::vector<ar::U32x4>(kN, ar::U32x4{{1u << 8, 0, 0, 0}});
   std::vector<uint32_t> sample_id{0, 1, 2, 3}, active{0, 1, 2, 3}, prev_ng{0, 0, 0, 0}, prev_ns{0, 0, 0, 0};
   std::vector<uint32_t> medium_rng{0, 0, 0, 0}, slot_flags{0, 0, 0, 0};
   std::vector<float> slot_L = std::vector<float>(4 * kN, 0.0f);
@@ -82,7 +90,7 @@ struct StageRig {
     path.lambda_t = lambda_t.data(), path.beta = beta.data(), path.r_u = r_u.data(), path.r_l = r_l.data();
     path.bounces = bounces.data(), path.event_index = event_index.data(), path.term = term.data();
     path.ray_type = ray_type.data(), path.prev_ng = prev_ng.data(), path.prev_ns = prev_ns.data();
-    path.prev_dist = prev_dist.data(), path.medium_rng = medium_rng.data();
+    path.prev_dist = prev_dist.data(), path.medium_rng = medium_rng.data(), path.medium_stack = medium_stack.data();
     film.slot_capacity = kN, film.slot_flags = slot_flags.data(), film.slot_L = slot_L.data();
     film.bounce_sum = film.bounce_max = film.bounce_paths = film.term_hist = -1;
     film.guide_albedo = film.guide_normal = -1;  // no denoiser guides unless a case asks
@@ -151,6 +159,81 @@ TEST_CASE("shade_volume/scatter updates the path state") {
   // The light path passes through untouched.
   CHECK(r.next[3] == uint8_t(Stage::SHADE_LIGHT_PATH));
   CHECK(r.beta[3].v[0] == ar::Real(1));
+}
+
+TEST_CASE("shade_volume/the medium is the stack's highest entry") {
+  // Two media: 0 vacuum, 1 scattering (sigma_s = 1e4, a scatter is certain). Every instance bears medium 0;
+  // the stage tracks the stack's highest entry (greatest priority), not the hit instance's medium and
+  // not the latest entry: the highest is entered first here.
+  for (const bool scattering_on_top : {true, false}) {
+    INFO("scattering medium on top: " << scattering_on_top);
+    StageRig r;
+    r.medium(0.0f, 1.0e4f, 0.5f);
+    ar::MediumBlock vacuum = ar::medium_block_vacuum();
+    vacuum.entry = 1u;
+    std::vector<ar::MediumBlock> blocks{vacuum, r.block};
+    std::vector<ar::MediumDesc> descs(2, r.desc);
+    descs[0].program = 0, descs[1].program = 1;
+    r.scene.medium_descs = descs.data(), r.scene.medium_blocks = blocks.data(), r.scene.medium_count = 2;
+    const uint32_t lo = scattering_on_top ? 0u : 1u, hi = 1u - lo;  // medium indices at priority 0 and 3
+    for (uint32_t s = 0; s < StageRig::kN; ++s) {
+      r.medium_stack[s] = ar::U32x4{{ar::stack_entry(hi + 1u, 3u), ar::stack_entry(lo + 1u, 0u), 0, 0}};
+      r.flags[s] = ar::set_medium_depth(r.flags[s], 2u);
+    }
+    r.run();
+    CHECK(r.next[0] == uint8_t(scattering_on_top ? Stage::INTERSECT_CLOSEST : Stage::SHADE_SURFACE));
+    CHECK(r.bounces[0].v[4] == (scattering_on_top ? 1u : 0u));
+  }
+}
+
+TEST_CASE("shade_volume/flights across a false interface draw new blocks") {
+  // 2^14 paths in a grey absorbing medium (sigma_a = 1 per m) run two flights at one event index, of
+  // L1 = 0.5 m and L2 = 0.7 m, as a false interface (or a lamp crossing) between them leaves the event
+  // index alone. The second flight continues the medium stream, so the fraction that reaches both
+  // ends is exp(-sigma (L1 + L2)) within 3 standard errors (fixed seed); flights that reused the first
+  // flight's blocks would give exp(-sigma max(L1, L2)).
+  constexpr uint32_t n = 1u << 14;
+  constexpr double sigma = 1.0, l1 = 0.5, l2 = 0.7;
+  StageRig r;
+  r.medium(float(sigma), 0.0f, 0.0f);
+  std::vector<uint32_t> queue(n), active(n), sample_id(n), flags(n, kDepth1), hit_prim(n, 0u), hit_inst(n, 0u), zero(n, 0u);
+  std::vector<uint32_t> medium_rng(n, 0u), slot_flags(n, 0u);
+  std::vector<ar::U32x4> stack(n, ar::U32x4{{1u << 8, 0, 0, 0}});
+  std::vector<float> slot_L(4 * size_t(n), 0.0f);
+  std::vector<ar::Real> hit_t(n, ar::Real(l1)), prev_dist(n, ar::Real(0));
+  std::vector<ar::Real2> hit_uv(n, ar::Real2{0.25f, 0.25f});
+  std::vector<ar::Real3> ray_o(n, ar::Real3{0, 0, 0}), ray_d(n, ar::Real3{0, 0, 1});
+  std::vector<ar::Spec> lambda_t(n, ar::Spec{{450, 520, 590, 660}}), beta(n, ar::spec_fill(1)), r_u = beta, r_l = beta;
+  std::vector<ar::U16x6> bounces(n, ar::U16x6{});
+  std::vector<uint16_t> event_index(n, 3);
+  std::vector<uint8_t> next(n, uint8_t(Stage::SHADE_VOLUME)), term(n, 0), ray_type(n, 1);
+  for (uint32_t i = 0; i < n; ++i) queue[i] = active[i] = sample_id[i] = i;
+  ar::PathStateSoA& p = r.path;
+  p.hit_t = hit_t.data(), p.hit_prim = hit_prim.data(), p.hit_inst = hit_inst.data(), p.hit_uv = hit_uv.data();
+  p.flags = flags.data(), p.next_stage = next.data(), p.sample_id = sample_id.data(), p.ray_o = ray_o.data();
+  p.ray_d = ray_d.data(), p.lambda_t = lambda_t.data(), p.beta = beta.data(), p.r_u = r_u.data(), p.r_l = r_l.data();
+  p.bounces = bounces.data(), p.event_index = event_index.data(), p.term = term.data(), p.ray_type = ray_type.data();
+  p.prev_ng = zero.data(), p.prev_ns = zero.data(), p.prev_dist = prev_dist.data(), p.medium_rng = medium_rng.data();
+  p.medium_stack = stack.data();
+  r.film.slot_capacity = n, r.film.slot_flags = slot_flags.data(), r.film.slot_L = slot_L.data();
+  r.kg.main_queue = queue.data(), r.kg.active_pixels = active.data();
+  r.kg.session.sampler_mode = ar::SAMPLER_INDEPENDENT;
+  cpu_stage_shade_volume(r.kg, ar::StepEntry{0, n, 0}, 0, n);
+  // The survivors' second flight from the first one's end; the absorbed are done.
+  std::vector<uint32_t> second;
+  for (uint32_t i = 0; i < n; ++i) {
+    if (next[i] != uint8_t(Stage::SHADE_SURFACE)) continue;
+    second.push_back(i);
+    next[i] = uint8_t(Stage::SHADE_VOLUME), ray_o[i] = ar::Real3{0, 0, ar::Real(l1)}, hit_t[i] = ar::Real(l2);
+  }
+  r.kg.main_queue = second.data();
+  cpu_stage_shade_volume(r.kg, ar::StepEntry{0, uint32_t(second.size()), 0}, 0, uint32_t(second.size()));
+  uint32_t reached = 0;
+  for (uint32_t i : second) reached += next[i] == uint8_t(Stage::SHADE_SURFACE);
+  const double mean = double(reached) / n, se = std::sqrt(mean * (1.0 - mean) / n), truth = std::exp(-sigma * (l1 + l2));
+  std::printf("shade_volume two flights: reached %.5f truth %.5f se %.2e z %+.2f (shared blocks would give %.5f)\n", mean, truth,
+              se, (mean - truth) / se, std::exp(-sigma * std::max(l1, l2)));
+  CHECK(std::fabs(mean - truth) < 3.0 * se);
 }
 
 TEST_CASE("shade_volume/absorption and bounce limits end the path") {
@@ -241,8 +324,9 @@ TEST_CASE("shade_volume/unsupported media end INVALID") {
 }
 
 TEST_CASE("shade_volume/stale medium_rng gives the same result") {
-  // A pool slot reused from another path carries that path's counter; each flight starts its own at
-  // e * 2^20, so the result does not depend on it. Run twice, the second time from stale counters.
+  // A pool slot reused from another path carries that path's counter; one outside the event's block
+  // range is not read (the flight starts at e * 2^20), so the result does not depend on it. Run twice,
+  // the second time from stale counters, both outside the range.
   const auto run = [](uint32_t stale) {
     auto r = std::make_unique<StageRig>();
     r->medium(0.5f, 1.0f, 0.3f);

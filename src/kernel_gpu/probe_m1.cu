@@ -417,6 +417,8 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
       return;
     }
     mat = hit_material_id(kg, g_inst, g_prim);
+    if (phase == 0u && kg.session.features.media && surface_false_interface(kg, slot, inst, mat, ctx.front_face != 0u, ctx.P, ctx.Ng))
+      return;
     if (ok) {
       const MaterialHeader* hp = s.material_headers + mat;
       const uint32_t mflags = load_ro(&hp->flags);
@@ -454,7 +456,7 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     const bool valid = ok && is_finite(contribution) && alpha == alpha;
     if (valid) sample_add(kg, sample, contribution);
     if (valid && opacity_null_event(alpha, &uc)) {
-      surface_pass_through(kg, slot, P, Ng);
+      surface_pass_through(kg, slot, P, Ng, mat, ctx.front_face != 0u);
       return;
     }
     if (s.material_pass_index != nullptr && s.material_headers != nullptr && total == 0u) {
@@ -509,8 +511,8 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
     const bool world_le = ls.deferred_le && !triangle;
     if (kg.session.features.media)
-      nee_item_media(kg, sh, nee_item_medium(kg, inst, (flags & FRONT_FACE) != 0u, Ng, seg.dir, ls.delta), e, flags,
-                     ps_r_u(kg, slot), sl.pmf * ls.pdf, ev.pdf, ls.delta, ctx.lambda_t, world_le);
+      nee_item_media(kg, sh, nee_item_medium(kg, slot, flags), e, flags, ps_r_u(kg, slot), sl.pmf * ls.pdf, ev.pdf, ls.delta,
+                     ctx.lambda_t, world_le);
     else if (kg.shadow->item_flags != nullptr)
       sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
     if (world_le) {

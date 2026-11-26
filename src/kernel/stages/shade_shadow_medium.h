@@ -22,8 +22,9 @@
 // VOLUME_LIMIT once in the termination histogram at the target's pixel. A blocked item ends as an
 // occluded one (SHADOW_TERMINATED) with contribution 0, so shade_shadow, which runs over the whole
 // segment, adds nothing for it. A volume entry that fails, or a non-finite coefficient, segment length
-// or product, marks the sample invalid and blocks the item. Only a delta light's item is in a medium
-// (shade_surface.h nee_item_medium, lead ruling 106), so no blocked item carries ITEM_WORLD_LE.
+// or product, marks the sample invalid and blocks the item. Any light's item may be in a medium
+// except one toward the environment world (shade_surface.h nee_item_media), so no blocked item
+// carries ITEM_WORLD_LE.
 // Ref: docs/decisions/0006-volumes-and-astrophysics.md D8, D19; 0002 D8, D9, D10; 0003 d20, d23;
 // 0004 D4, D5; pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::SampleLd (Apache-2.0) in
 // C:\Astroray2.0\third_party\_cache\refs\pbrt-v4-092b23a47ad4.

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <functional>
 #include <stdexcept>
@@ -350,6 +351,73 @@ void Scene::publish_medium(std::shared_ptr<const Medium> medium) {
   state_.media[k] = std::move(medium);
 }
 
+namespace {
+
+// World-space bounds of a mesh's object-space box under a row-major 3x4 transform (the 8 corners).
+void world_box(const MeshRecord& rec, const ar_xform& x, float lo[3], float hi[3]) {
+  for (int a = 0; a < 3; ++a) lo[a] = INFINITY, hi[a] = -INFINITY;
+  for (int c = 0; c < 8; ++c) {
+    const float p[3] = {(c & 1) ? rec.bounds_max[0] : rec.bounds_min[0], (c & 2) ? rec.bounds_max[1] : rec.bounds_min[1],
+                        (c & 4) ? rec.bounds_max[2] : rec.bounds_min[2]};
+    for (int a = 0; a < 3; ++a) {
+      const float w = x.m[4 * a] * p[0] + x.m[4 * a + 1] * p[1] + x.m[4 * a + 2] * p[2] + x.m[4 * a + 3];
+      lo[a] = std::min(lo[a], w), hi[a] = std::max(hi[a], w);
+    }
+  }
+}
+
+}  // namespace
+
+std::map<ar_key, std::string> Scene::medium_priority_ties() const {
+  std::map<ar_key, std::string> out;
+  std::shared_ptr<const InstanceTable> table;
+  {
+    std::lock_guard<std::mutex> lock(state_.mutex);
+    table = state_.instances;
+  }
+  if (!table || table->medium_geoms.empty() || !meshes) return out;
+  std::map<ar_key, uint32_t> priority;  // material key -> medium_priority; absent keys and the default material: 0
+  if (materials) {
+    const auto arrays = materials->arrays();
+    if (arrays)
+      for (size_t i = 0; i < arrays->keys.size(); ++i)
+        priority[arrays->keys[i]] = arrays->constants[arrays->headers[i].const_offset].medium_priority;
+  }
+  struct Bearer {
+    ar_key object;
+    uint32_t priority;
+    float lo[3], hi[3];
+  };
+  std::vector<Bearer> bearers;
+  for (uint32_t i = 0; i < table->instances.size(); ++i) {
+    const Instance& in = table->instances[i];
+    if (in.medium_key == 0) continue;
+    const auto rec = meshes->find(in.geom_key);
+    if (!rec) continue;  // refresh_medium_reports logs a medium-bearing key without a mesh
+    Bearer b{in.object_key, 0u, {}, {}};
+    // The highest priority among the instance's materials: whichever face a path enters, the entry's priority is at
+    // most this one.
+    for (uint32_t k = 0; k < in.material_count; ++k) {
+      const auto it = priority.find(table->material_pool[in.material_offset + k]);
+      if (it != priority.end()) b.priority = std::max(b.priority, it->second);
+    }
+    world_box(*rec, table->centre(i), b.lo, b.hi);
+    bearers.push_back(b);
+  }
+  for (size_t j = 1; j < bearers.size(); ++j)
+    for (size_t i = 0; i < j; ++i) {
+      const Bearer &a = bearers[i], &b = bearers[j];
+      if (a.priority != b.priority) continue;
+      bool overlap = true;
+      for (int k = 0; k < 3; ++k) overlap = overlap && a.lo[k] < b.hi[k] && b.lo[k] < a.hi[k];
+      if (!overlap || out.count(b.object)) continue;
+      out[b.object] = "object keys " + std::to_string(a.object) + " and " + std::to_string(b.object) +
+                      " bear media at the same medium_priority " + std::to_string(a.priority) +
+                      " and their bounds overlap; one medium is tracked per path, the most recently entered";
+    }
+  return out;
+}
+
 void Scene::refresh_medium_reports() noexcept {
   try {
     std::set<ar_key> work, now;
@@ -359,6 +427,21 @@ void Scene::refresh_medium_reports() noexcept {
       work = state_.medium_reported;
       work.insert(now.begin(), now.end());
       state_.medium_reported = now;
+    }
+    // MEDIUM_PRIORITY_TIE (0006 D17): rebuilt whole from the final state, as the open-mesh entries below.
+    const std::map<ar_key, std::string> ties = medium_priority_ties();
+    std::set<ar_key> old_ties;
+    {
+      std::lock_guard<std::mutex> lock(state_.mutex);
+      old_ties.swap(state_.tie_reported);
+      for (const auto& kv : ties) state_.tie_reported.insert(kv.first);
+    }
+    for (ar_key k : old_ties)
+      if (!ties.count(k)) report_.remove(AR_REPORT_MEDIUM_PRIORITY_TIE, k);
+    for (const auto& kv : ties) {
+      if (!old_ties.count(kv.first)) ctx_.log.line("WARNING", kv.second);
+      report_.remove(AR_REPORT_MEDIUM_PRIORITY_TIE, kv.first);
+      report_.raise(AR_REPORT_MEDIUM_PRIORITY_TIE, kv.first, kv.second, 1, nullptr, 0);
     }
     for (ar_key g : work) {
       try {

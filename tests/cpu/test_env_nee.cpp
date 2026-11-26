@@ -395,6 +395,41 @@ struct Rig {
 
 TEST_SUITE("fast") {
 
+TEST_CASE("env_nee/world item stays out of the medium") {
+  // With the media feature, paths whose stack holds a medium (depth 1) reflect off the white plane: every
+  // NEE item goes toward the environment world, and none names the medium, since the BSDF half of that
+  // pair is a miss that route_hit never tracks (0006 D19); the item's other media fields are written.
+  Rig r(8);
+  r.kg.session.features.media = true;
+  r.sd.medium_count = 1;  // the stack names medium 0; no instance needs to bear it here
+  std::vector<ar::U32x4> stack(r.n, ar::U32x4{{1u << 8, 0, 0, 0}}), sh_stack(r.n, ar::U32x4{{7, 7, 7, 7}});
+  std::vector<uint32_t> rng(r.n, 0u), sh_rng(r.n, 0xDEADBEEFu);
+  std::vector<ar::Spec> sh_r_u(r.n), sh_r_l(r.n);
+  r.path.medium_stack = stack.data(), r.path.medium_rng = rng.data();
+  r.shadow.medium_stack = sh_stack.data(), r.shadow.medium_rng = sh_rng.data();
+  r.shadow.r_u = sh_r_u.data(), r.shadow.r_l_film_pos = sh_r_l.data();
+  for (uint32_t i = 0; i < r.n; ++i) {
+    r.next_stage[i] = uint8_t(ar::Stage::SHADE_SURFACE), r.term[i] = uint8_t(ar::Term::ACTIVE);
+    r.flags[i] = ar::set_medium_depth(ar::set_hero_lane(0u, i & 3u), 1u), r.event_index[i] = 1, r.bounces[i] = ar::U16x6{};
+    r.hit_uv[i] = Real2{Real(0.2), Real(0.1 + 0.05 * i)};
+    r.ray_o[i] = Real3{0, 0, 1}, r.ray_d[i] = ar::normalize(Real3{Real(0.1), Real(-0.2 + 0.05 * i), Real(-1)});
+    r.lambda_t[i] = ar::Spec{{450, 520, 590, 660}}, r.beta[i] = r.r_u[i] = r.r_l[i] = ar::spec_fill(Real(1));
+    r.sh_next[i] = uint8_t(ar::Stage::SHADOW_TERMINATED), r.sh_flags[i] = 0xFF;
+  }
+  r.kg.main_queue = r.queue.data(), r.kg.shadow_queue = r.sh_identity.data();
+  cpu_stage_shade_surface(r.kg, ar::StepEntry{0, r.n, 0}, 0, r.n);
+  uint32_t items = 0;
+  for (uint32_t i = 0; i < r.n; ++i) {
+    if (r.sh_next[i] != uint8_t(ar::Stage::INTERSECT_SHADOW)) continue;
+    ++items;
+    INFO("slot " << i);
+    CHECK((r.sh_flags[i] & ar::ITEM_WORLD_LE) != 0u);
+    for (int k = 0; k < 4; ++k) CHECK(sh_stack[i].v[k] == 0u);
+    CHECK(sh_rng[i] == ar::shadow_rng_start(1u));
+  }
+  CHECK(items > r.n / 2);
+}
+
 TEST_CASE("env_nee/pdf matches sample") {
   const EnvTable t = build_env_table(test_grid(), kN);
   const ar::EnvTableView env[2] = {view_of(t.plain), view_of(t.compensated)};

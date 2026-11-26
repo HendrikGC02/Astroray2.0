@@ -138,8 +138,9 @@ constexpr ar_key kMesh = 100;
 // A quad of half-size 1 at z = 0 facing +z (instance 0, the default material); slots 0-3 hit it from
 // above (front face), slots 4-7 from below (back face), at points of its first triangle, each with its
 // own sample id, event index and hero lane. One point lamp, pmf 1 (delta: weight 1 / avg(r_u p_l)).
-// The instance bears medium 0 when `medium` is set (a copied SceneData: the emit reads only the
-// instance record). The shadow pool's media fields are allocated and poisoned.
+// The instance bears medium 0 when `medium` is set (a copied SceneData), and then the paths that hit
+// it from below came from its interior: their stack holds the medium (id 1, priority 0, depth 1). The
+// shadow pool's media fields are allocated and poisoned.
 struct EmitRig {
   static constexpr uint32_t n = 8;
   ContextState sctx;
@@ -169,7 +170,8 @@ struct EmitRig {
   std::vector<ar::Real3> sh_o, sh_d;
   std::vector<Real> sh_tmax;
   std::vector<Spec> sh_contrib, sh_lambda, sh_r_u, sh_r_l;
-  std::vector<ar::U32x4> sh_stack;
+  std::vector<ar::U32x4> sh_stack, stack;
+  std::vector<uint32_t> rng_path;
   std::vector<ar::LightRecord> lamps;
   std::vector<ar::AliasBin> bins{{1.0f, 0u}};
   std::vector<uint32_t> bin_light{0u};
@@ -218,7 +220,8 @@ struct EmitRig {
     for (uint32_t i = 0; i < n; ++i) {
       const bool below = i >= 4;
       queue.push_back(i), active.push_back(i), sample_id.push_back(n - 1 - i);
-      flags.push_back(ar::set_hero_lane(0u, (i + 1u) & 3u));
+      flags.push_back(ar::set_medium_depth(ar::set_hero_lane(0u, (i + 1u) & 3u), medium && below ? 1u : 0u));
+      stack.push_back(ar::U32x4{{medium && below ? 1u << 8 : 0u, 0, 0, 0}}), rng_path.push_back(0u);
       next_stage.push_back(uint8_t(ar::Stage::SHADE_SURFACE)), term.push_back(uint8_t(ar::Term::ACTIVE));
       ray_type.push_back(1u), event_index.push_back(uint16_t(1 + i % 4));
       bounces.push_back(ar::U16x6{{0, 0, 0, 0, 0, 0}});
@@ -249,6 +252,7 @@ struct EmitRig {
     path.lambda_t = lambda_t.data(), path.beta = beta.data(), path.r_u = r_u.data(), path.r_l = r_l.data();
     path.eta_scale = eta_scale.data(), path.prev_ng = prev_ng.data(), path.prev_ns = prev_ns.data();
     path.prev_dist = prev_dist.data();
+    if (media) path.medium_stack = stack.data(), path.medium_rng = rng_path.data();
     path.hit_t = hit_t.data(), path.hit_prim = hit_prim.data(), path.hit_inst = hit_inst.data();
     path.hit_uv = hit_uv.data();
     shadow.next_stage = sh_next.data(), shadow.ray_o = sh_o.data(), shadow.ray_d = sh_d.data();
@@ -464,8 +468,8 @@ TEST_CASE("shade_shadow/medium pre-pass runs only with media") {
 TEST_CASE("shade_shadow/emit defines medium fields") {
   // With the media feature, every item the emit writes has all its media fields defined: medium_rng
   // at its event's block start, the path's lanes and hero lane, r_u0 = 0 and r_l0 = r_p (a point
-  // lamp of pmf 1: delta, p_l = 1), and the stack naming the instance's medium exactly for items
-  // that leave a back face toward the interior (lamp below, hit from below). Without the feature
+  // lamp of pmf 1: delta, p_l = 1), and the stack naming the instance's medium exactly for items of the
+  // paths whose stack holds it, on their side of the surface (lamp below, hit from below). Without the feature
   // the poison stays.
   struct Run {
     Real lamp_z;
@@ -505,13 +509,14 @@ TEST_CASE("shade_shadow/emit defines medium fields") {
   }
 }
 
-TEST_CASE("shade_shadow/area light item stays out of the medium") {
-  // Lead ruling 106: only a delta light's item is put in a medium. A rectangle lamp below the quad, the
-  // instance bearing a medium: the back-face hits emit items whose direction enters the interior, yet
-  // their medium field is empty. The other fields are defined as SampleLd forms them: r_l0 = r_p p_l
-  // (pmf 1) and r_u0 = r_p p_bsdf for the light sample the stage drew, recomputed here as in
-  // nee/rectangle lamp carries the balance weight, and avg(r_l0 + r_u0) times the emit's weight
-  // mis_nee_scale is 1.
+TEST_CASE("shade_shadow/area light item takes the stack's medium") {
+  // A non-delta light's item lies in the medium too: the BSDF half of its MIS pair is delta-tracked
+  // (route_hit sends every segment of a non-empty stack to shade_volume), so both halves are attenuated.
+  // A rectangle lamp below the quad, the instance bearing a medium: the back-face hits came from its
+  // interior (their stack holds it) and emit items on that side, whose medium field names it. The other
+  // fields are defined as SampleLd forms them: r_l0 = r_p p_l (pmf 1) and r_u0 = r_p p_bsdf for the
+  // light sample the stage drew, recomputed here as in nee/rectangle lamp carries the balance weight,
+  // and avg(r_l0 + r_u0) times the emit's weight mis_nee_scale is 1.
   const ar::LightRecord rect = ar::light_make_area(ar::LightType::AREA_RECT, ar::Real3{Real(0.2), 0, Real(-1.5)},
                                                    ar::Real3{0, 1, 0}, ar::Real3{1, 0, 0}, Real(0.8), Real(1.0), Real(20), white());
   EmitRig rig(rect, true, true);
@@ -527,7 +532,8 @@ TEST_CASE("shade_shadow/area light item stays out of the medium") {
     INFO("slot " << s);
     REQUIRE(rig.sh_next[it] == uint8_t(ar::Stage::INTERSECT_SHADOW));
     ++items;
-    for (int k = 0; k < 4; ++k) CHECK(rig.sh_stack[it].v[k] == 0u);
+    CHECK(rig.sh_stack[it].v[0] == 1u);  // 1 + the medium index: the item layout of ratio_track.h
+    for (int k = 1; k < 4; ++k) CHECK(rig.sh_stack[it].v[k] == 0u);
     const uint32_t e = 1u + s % 4u;  // the event index the path arrived with
     const ar::Real2 u{ar::camera_path_draw(rig.kg, rig.sample_id[s], ar::event_dim(e, ar::EV_LIGHT_U)),
                       ar::camera_path_draw(rig.kg, rig.sample_id[s], ar::event_dim(e, ar::EV_LIGHT_V))};
