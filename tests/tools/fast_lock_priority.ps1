@@ -50,6 +50,13 @@ function Get-Acq([string]$name) { [long](Get-Content (Join-Path $tmp "acq.$name"
 
 try {
   # The first gate holds until released.
+  # A second lock, with a registration standing in for a waiting short job, and a long tool polling for it.
+  $env:ASTRORAY_LOCK_NAME = "Local\astroray2-priority-$PID-y"; $env:ASTRORAY_LOCK_DIR = Join-Path $tmp 'lock-y'
+  New-Item -ItemType Directory -Force (Join-Path $env:ASTRORAY_LOCK_DIR 'shortwait') | Out-Null
+  $regY = Join-Path $env:ASTRORAY_LOCK_DIR "shortwait/short.$PID.wait"
+  Set-Content $regY waiting
+  $g4 = Start-Pwsh 'g4' @($taker, 'g4', 'check-gate')
+  $env:ASTRORAY_LOCK_NAME = "Local\astroray2-priority-$PID"; $env:ASTRORAY_LOCK_DIR = Join-Path $tmp 'lock'
   $rel = Join-Path $tmp 'release'
   $g1 = Start-Pwsh 'g1' @($taker, 'g1', 'check-gate', '-release', $rel)
   Wait-Until { Test-Path (Join-Path $tmp 'acq.g1') } 'g1 holds the lock'
@@ -69,15 +76,28 @@ try {
   }
   Check "the build's registration is removed once it holds the lock" (@(Get-ChildItem (Join-Path $env:ASTRORAY_LOCK_DIR 'shortwait') -Filter 'short.*.wait' -ErrorAction SilentlyContinue).Count -eq 0)
 
-  # A registration of a process that is gone, and one older than the yield window, hold nothing back.
-  $dir = Join-Path $env:ASTRORAY_LOCK_DIR 'shortwait'
-  Set-Content (Join-Path $dir 'short.999999.wait') 'waiting'
-  $old = Join-Path $dir "short.$PID.wait"
-  Set-Content $old 'waiting'
-  (Get-Item $old).LastWriteTimeUtc = [DateTime]::UtcNow.AddMinutes(-6)
+  # Only the registration decides here: the mutex is free, a long tool is polling for it and a live short job
+  # is registered (the file of this process, with nobody blocked in a wait that would win anyway).
+  Check 'a long tool does not take the free mutex while a short job is registered' (-not (Test-Path (Join-Path $tmp 'acq.g4'))) (Read-Out 'g4')
+  Remove-Item -Force $regY
+  Wait-Until { Test-Path (Join-Path $tmp 'acq.g4') } 'g4 takes the lock once the registration is gone'
+
+  # Registrations that are not live: a process that is gone, one older than the yield window, and a reused pid
+  # (this process, but a file created before it started).
   . $lockLib
-  Check 'a dead or stale short registration is not counted' ((Get-ArShortWaiting) -eq 0)
-} finally {
+  $dir = Join-Path $env:ASTRORAY_LOCK_DIR 'shortwait'
+  New-Item -ItemType Directory -Force $dir | Out-Null
+  $mine = Join-Path $dir "short.$PID.wait"
+  Set-Content (Join-Path $dir 'short.999999.wait') 'waiting'
+  Check 'a registration of a dead process is not counted' ((Get-ArShortWaiting) -eq 0)
+  Remove-Item -Force (Join-Path $dir 'short.999999.wait')
+  Set-Content $mine 'waiting'
+  Check 'a live, young registration is counted' ((Get-ArShortWaiting) -eq 1)
+  (Get-Item $mine).LastWriteTimeUtc = [DateTime]::UtcNow.AddMinutes(-6)
+  Check 'a registration older than the yield window is not counted' ((Get-ArShortWaiting) -eq 0)
+  (Get-Item $mine).LastWriteTimeUtc = [DateTime]::UtcNow
+  (Get-Item $mine).CreationTimeUtc = (Get-Process -Id $PID).StartTime.ToUniversalTime().AddHours(-1)
+  Check 'a registration created before its pid started (a reused pid) is not counted' ((Get-ArShortWaiting) -eq 0)} finally {
   foreach ($p in $procs) { if ($p -and -not $p.HasExited) { & taskkill /PID $p.Id /T /F 2>&1 | Out-Null } }
   foreach ($p in $procs) { $null = $p.WaitForExit(5000) }
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

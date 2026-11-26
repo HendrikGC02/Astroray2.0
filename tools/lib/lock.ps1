@@ -19,7 +19,7 @@ $script:ArHeldAt = ''
 # perf_s 375.7) and out/check/*.json (gate 184 s, full 637 s net), rounded up to a whole minute; rows with no
 # recorded long hold (build, test, bench, gate_runs) are a stated estimate. `other` keeps the old 3600 s.
 $script:ArLockCeilings = @{
-  'build' = 600; 'test' = 900; 'check-gate' = 780; 'check-full' = 1440; 'canary' = 3000; 'blender' = 1140
+  'build' = 600; 'test' = 900; 'check-gate' = 780; 'check-full' = 1440; 'canary' = 3000; 'blender' = 1260
   'perf' = 780; 'bench' = 1800; 'gate_runs' = 1200; 'other' = 3600
 }
 $script:ArLockJobByScript = @{
@@ -67,7 +67,12 @@ function Get-ArShortWaiting {
   foreach ($f in [IO.Directory]::GetFiles($dir, 'short.*.wait')) {
     $age = ([DateTime]::UtcNow - [IO.File]::GetLastWriteTimeUtc($f)).TotalSeconds
     $id = [int](([IO.Path]::GetFileName($f) -replace '^short\.', '') -replace '\.wait$', '')
-    if ($age -lt $script:ArShortYieldS -and (Get-Process -Id $id -ErrorAction SilentlyContinue)) { $n++ }
+    # Live as for owner records: the pid runs and that process started no later than 1 s after the file was
+    # created (a later start is a reused pid). A start time that cannot be read counts as live on the pid.
+    $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+    $live = [bool]$p
+    if ($p) { try { $live = $p.StartTime.ToUniversalTime() -le [IO.File]::GetCreationTimeUtc($f).AddSeconds(1) } catch { } }
+    if ($age -lt $script:ArShortYieldS -and $live) { $n++ }
   }
   return $n
 }
@@ -159,6 +164,23 @@ function Test-ArLockSay($state, [double]$elapsedS) {
 # one that may release it. It lives in its own runspace (one dedicated thread for the whole script block), takes
 # the mutex, holds it until Exit-ArMachineLock signals Release, and past the ceiling releases it itself after
 # stopping the holder's own child processes. Ref: System.Threading.Mutex (ReleaseMutex from the owning thread).
+# The processes a holder may stop on expiry: its descendants by parent pid, deepest first, each created no
+# earlier than the holder's own start (a parent pid reused after its owner died names a stranger's child).
+# Rows carry ProcessId, ParentProcessId, CreationDate. Text-passed to the holder thread, so self-contained.
+$script:ArDescendantsFn = {
+  param($all, [int]$root, [datetime]$since)
+  $kill = [Collections.Generic.List[int]]::new()
+  $todo = [Collections.Generic.Queue[int]]::new(); $todo.Enqueue($root)
+  while ($todo.Count) {
+    $id = $todo.Dequeue()
+    foreach ($c in @($all | Where-Object { $_.ParentProcessId -eq $id -and $_.ProcessId -ne $root -and $_.CreationDate -ge $since })) {
+      if (-not $kill.Contains([int]$c.ProcessId)) { $kill.Add([int]$c.ProcessId); $todo.Enqueue([int]$c.ProcessId) }
+    }
+  }
+  $kill.Reverse()
+  return $kill.ToArray()
+}
+
 $script:ArHolderScript = {
   param($s)
   function Say([string]$t) { [Console]::Out.WriteLine($t); [Console]::Out.Flush() }
@@ -176,6 +198,8 @@ $script:ArHolderScript = {
       } elseif ([System.Threading.WaitHandle]::WaitAny(@($m, $s.CancelEv)) -eq 0) { $taken = $true; $s.State = 'held' }
     } catch [System.Threading.AbandonedMutexException] { $taken = $true; $s.State = 'abandoned' }
   }
+  # Cancelled while the wait returned with the mutex: give it back from this thread, as its owner.
+  if ($taken -and $s.Cancel) { try { $m.ReleaseMutex() } catch { }; $taken = $false }
   if (-not $taken) { $m.Dispose(); $s.State = 'cancelled'; return }
   $s.Acquired.Set() | Out-Null
   $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -184,17 +208,10 @@ $script:ArHolderScript = {
     $s.Expired = $true
     $step = if ($s.Step) { $s.Step } else { 'unknown' }
     Say "FAIL lock: held $([math]::Round($sw.Elapsed.TotalSeconds)) s, over the $($s.Job) ceiling of $($s.CeilingS) s (step: $step; pid $($s.Pid))"
-    # Only this process's descendants, newer than this process (a reused parent pid is not ours).
+    # Only this process's descendants (see Get-ArLockDescendants).
     try {
       $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate)
-      $mine = [DateTime]::new($s.StartTicks)
-      $todo = [Collections.Generic.Queue[int]]::new(); $todo.Enqueue($s.Pid)
-      $kill = @()
-      while ($todo.Count) {
-        $id = $todo.Dequeue()
-        foreach ($c in @($all | Where-Object { $_.ParentProcessId -eq $id -and $_.ProcessId -ne $s.Pid -and $_.CreationDate -ge $mine })) { $kill += $c.ProcessId; $todo.Enqueue([int]$c.ProcessId) }
-      }
-      [array]::Reverse($kill)
+      $kill = @(& ([scriptblock]::Create($s.DescendantsFn)) $all $s.Pid ([DateTime]::new($s.StartTicks)))
       foreach ($id in $kill) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
       Say "lock: stopped $($kill.Count) child process(es) of pid $($s.Pid)"
     } catch { Say "WARN lock: could not stop the holder's children: $($_.Exception.Message)" }
@@ -204,7 +221,11 @@ $script:ArHolderScript = {
     } catch { }
     try { $m.ReleaseMutex() } catch { }
     $m.Dispose()
-    [Environment]::Exit(1)
+    # Ending the process is for a process started for the tool; an interactive shell is never ended from
+    # here (Exit-ArMachineLock raises the failure there instead).
+    if ($s.CanExit) { [Environment]::Exit(1) }
+    Say 'lock: not ending this interactive host; the failure is raised when the tool leaves the lock'
+    return
   }
   try { $m.ReleaseMutex() } catch { }
   $m.Dispose()
@@ -227,7 +248,9 @@ function Enter-ArMachineLock {
   $ownerPath = Join-Path (Get-ArLockDir) 'owner.json'
   $sw = [Diagnostics.Stopwatch]::StartNew()
   $s = [hashtable]::Synchronized(@{
-      Name = $name; Try = $false; Cancel = $false; CancelEv = (New-Object System.Threading.ManualResetEvent($false)); Release = $false; Short = [bool]$Short; State = 'waiting'
+      Name = $name; Try = $false; Cancel = $false; CancelEv = (New-Object System.Threading.ManualResetEvent($false)); Release = $false; Short = [bool]$Short; Poll = (-not $Short); State = 'waiting'
+      DescendantsFn = $script:ArDescendantsFn.ToString()
+      CanExit = [bool]@([Environment]::GetCommandLineArgs() | Where-Object { $_ -in '-File', '-f', '-Command', '-c', '-EncodedCommand', '-ec' }).Count
       Expired = $false; Step = ''; CeilingS = $ceil; Job = $Job; Pid = $PID; OwnerPath = $ownerPath
       StartTicks = (Get-Process -Id $PID).StartTime.Ticks; Acquired = (New-Object System.Threading.ManualResetEvent($false)) })
   $rs = [runspacefactory]::CreateRunspace()
@@ -239,11 +262,11 @@ function Enter-ArMachineLock {
   $reg = if ($Short) { Register-ArShortWait } else { $null }
   $say = @{ Said = 0; Last = 0.0 }
   $nextTick = $msgS
+  $got = $false
   try {
     while ($true) {
       # A long tool yields while a short job waits; a short job never does.
       $yield = (-not $Short) -and (Get-ArShortWaiting) -gt 0
-      $s.Poll = -not $Short
       $s.Try = -not $yield
       if ($s.Acquired.WaitOne(100)) { break }
       if ($sw.Elapsed.TotalSeconds -lt $nextTick) { continue }
@@ -267,14 +290,18 @@ function Enter-ArMachineLock {
         throw "FAIL lock: waited $([math]::Round($sw.Elapsed.TotalSeconds)) s for $who, over the $lim s limit ($why); owner file $ownerPath"
       }
     }
-  } catch {
-    $s.Cancel = $true; $null = $s.CancelEv.Set()
-    $null = $handle.AsyncWaitHandle.WaitOne(2000)
-    $ps.Dispose(); $rs.Dispose()
+    $got = $true
+  } finally {
+    # Whatever ended the wait (a limit, Ctrl+C, an error), a caller that did not get the lock leaves no thread
+    # waiting for it and no registration behind.
     Unregister-ArShortWait $reg
-    throw
+    if (-not $got) {
+      # Release as well: the thread may have taken the mutex just now, and then releases it itself.
+      $s.Cancel = $true; $s.Release = $true; $null = $s.CancelEv.Set()
+      $null = $handle.AsyncWaitHandle.WaitOne(5000)
+      $ps.Dispose(); $rs.Dispose()
+    }
   }
-  Unregister-ArShortWait $reg
   if ($s.State -eq 'abandoned') {
     # This process now holds the mutex; the record, if any, is the dead holder's.
     $o = Read-ArLockOwner $ownerPath
@@ -293,7 +320,7 @@ function Enter-ArMachineLock {
 # Names the running step: the FAIL line of a watchdog stop and a waiter's message carry it. A no-op when this
 # process holds no machine lock.
 function Set-ArLockStep([string]$Step) {
-  if (-not $script:ArHold) { return }
+  if (-not $script:ArHold -or $script:ArHold.Sync.Expired) { return }
   $script:ArHold.Sync.Step = $Step
   if ($script:ArOwnerPath) {
     $null = Write-ArLockOwner $script:ArOwnerPath @{ ceiling_s = $script:ArHold.Sync.CeilingS; job = $script:ArHold.Job; step = $Step } $script:ArHeldAt
@@ -308,15 +335,24 @@ function Exit-ArMachineLock {
     # The owning thread releases; wait for it so the mutex is free when this returns.
     $h = $script:ArHold
     $h.Sync.Release = $true
-    $null = $h.Handle.AsyncWaitHandle.WaitOne(5000)
-    $h.Ps.Dispose(); $h.Rs.Dispose()
+    # A watchdog that has begun its stop (Expired) is waited for without a limit: disposing it would end the
+    # stop and the exit before the release.
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while (-not $h.Handle.AsyncWaitHandle.WaitOne(50)) {
+      if (-not $h.Sync.Expired -and $sw.Elapsed.TotalSeconds -gt 5) { break }
+    }
+    $done = $h.Handle.IsCompleted
+    if ($done) { $h.Ps.Dispose(); $h.Rs.Dispose() } else { Write-Host 'WARN lock: the holder thread did not finish releasing in 5 s' }
+    $expired = [bool]$h.Sync.Expired
     $script:ArHold = $null
     $script:ArMutex = $null
-  }
+  } else { $expired = $false }
   if ($script:ArOwnsLockPid) {
     $env:ASTRORAY_LOCK_PID = $null
     $script:ArOwnsLockPid = $false
   }
+  # Only reached in a host the watchdog does not end: the tool must still fail.
+  if ($expired) { throw 'FAIL lock: the hold ceiling expired and the watchdog stopped this tool''s children' }
 }
 
 $script:ArTreeStream = $null

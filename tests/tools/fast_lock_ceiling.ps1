@@ -96,7 +96,7 @@ try {
   $procs += $bystander
   # 1. Ceiling stop of a hung holder with a child and a grandchild.
   $d1 = Join-Path $tmp 'c1'; New-Item -ItemType Directory -Force $d1 | Out-Null
-  Use-Lock 'a'; $env:ASTRORAY_LOCK_CEILING_S = '1'
+  Use-Lock 'a'; $env:ASTRORAY_LOCK_CEILING_S = '2'
   $h = Start-Pwsh 'hang' @($hang, $d1)
   $env:ASTRORAY_LOCK_CEILING_S = $null
   $lockA = $env:ASTRORAY_LOCK_DIR
@@ -126,7 +126,7 @@ try {
   $null = $h.WaitForExit(15000)
   $out = Read-Out 'hang'
   Check 'the hung holder exits non-zero' ($h.HasExited -and $h.ExitCode -ne 0) $out
-  Check 'the FAIL line names the held seconds, the job ceiling and the step' (($out -join "`n") -match 'FAIL lock: held \d+ s, over the test ceiling of 1 s \(step: hung step; pid \d+\)') $out
+  Check 'the FAIL line names the held seconds, the job ceiling and the step' (($out -join "`n") -match 'FAIL lock: held \d+ s, over the test ceiling of 2 s \(step: hung step; pid \d+\)') $out
   Check "the holder's child and grandchild are stopped" (-not (Test-Alive $child) -and -not (Test-Alive $grand)) $out
   Check 'an unrelated process is untouched' (Test-Alive $bystander.Id)
   Check 'the owner file is gone' (-not (Test-Path (Join-Path $lockA 'owner.json')))
@@ -142,7 +142,30 @@ try {
   Check 'the waiter gets the mutex when its holder was killed, with the abandoned warning' (($o4 -contains 'ACQUIRED') -and (($o4 -join ' ') -match 'WARN lock: abandoned by')) $o4
   Check 'the holder that ended without Exit-ArMachineLock exited by itself' ($e.HasExited -and $e.ExitCode -eq 0)
 
-  # 5. Every lock-taking tool names a ceiling row that exists.
+  # 5. Only the holder's descendants, created no earlier than the holder, are stopped (rows are synthetic: a
+  # stranger's child under a reused parent pid is older than the holder).
+  $t0 = [DateTime]::new(2026, 1, 1, 12, 0, 0)
+  $rows = @(
+    [pscustomobject]@{ ProcessId = 10; ParentProcessId = 1; CreationDate = $t0 },
+    [pscustomobject]@{ ProcessId = 11; ParentProcessId = 10; CreationDate = $t0.AddSeconds(1) },
+    [pscustomobject]@{ ProcessId = 12; ParentProcessId = 11; CreationDate = $t0.AddSeconds(2) },
+    [pscustomobject]@{ ProcessId = 13; ParentProcessId = 10; CreationDate = $t0.AddSeconds(-5) },
+    [pscustomobject]@{ ProcessId = 14; ParentProcessId = 13; CreationDate = $t0.AddSeconds(3) },
+    [pscustomobject]@{ ProcessId = 20; ParentProcessId = 1; CreationDate = $t0.AddSeconds(1) })
+  . $lockLib
+  $kill = @(& $script:ArDescendantsFn $rows 10 $t0)
+  Check 'the descendants are the child and grandchild, deepest first' (($kill -join ',') -eq '12,11') @("got $($kill -join ',')")
+
+  # 6. A wrapper over Enter-ArMachineLock, as land.ps1's, forwards the job, ceiling and short flag.
+  $line = [regex]::Match((Get-Content -Raw (Join-Path $root 'tools/land.ps1')), '(?m)^function Enter-ArMachineLock \{.*\}\s*$').Value
+  Check 'land.ps1 wraps Enter-ArMachineLock on one line' ([bool]$line)
+  $script:LandTimes = @{ lock_wait_s = 0.0 }
+  $script:OrigEnterLock = { param([string]$Job = '', [double]$CeilingS = 0, [switch]$Short) $script:Got = "$Job|$CeilingS|$([bool]$Short)"; return 0.0 }
+  Invoke-Expression $line
+  $null = Enter-ArMachineLock -Job blender -CeilingS 420 -Short
+  Check "land.ps1's wrapper forwards -Job, -CeilingS and -Short" ($script:Got -eq 'blender|420|True') @("got $($script:Got)")
+
+  # 7. Every lock-taking tool names a ceiling row that exists.
   . $lockLib
   foreach ($row in 'build', 'test', 'check-gate', 'check-full', 'canary', 'blender', 'perf', 'bench', 'gate_runs', 'other') {
     Check "ceiling row $row exists and is positive" ($script:ArLockCeilings.ContainsKey($row) -and $script:ArLockCeilings[$row] -gt 0)
