@@ -5,7 +5,7 @@ CPU and CUDA devices, one 16,384-spp CUDA render per scene as the reference, and
 the raw and the denoised image against it, plus the denoiser's cold start.
 
 Usage: <python> -I tools/denoise_check.py --self-test
-       <python> -I tools/denoise_check.py [--device cpu|cuda|both] [--scene NAME ...] [--history]
+       <python> -I tools/denoise_check.py [--device cpu|cuda|both] [--scene NAME ...] [--history] [--compare-only]
 Run it under the machine lock (`check full` holds it; by hand: dot-source tools/lib/lock.ps1 and
 Enter-ArMachineLock -Job bench). It is a `full`-tier or on-demand tool (0008 V13), never a gate case.
 
@@ -268,8 +268,40 @@ def measure(device, scenes):
     return rows
 
 
+DEVICE_AGREE = 0.05  # relative, the denoised relMSE against the reference between the devices
+
+
+def compare_devices(scenes):
+    """Backend-defect check on the saved arrays of both devices: the denoised relMSE against the reference
+    agrees between CPU and CUDA within DEVICE_AGREE relative, per scene. Both renders share the RNG, so the
+    raw images agree to ~1e-8 and "the denoised images differ less than the raw ones" can never hold: the
+    CUDA device runs its network at reduced precision, the CPU device does not, and that alone exceeds it.
+    Also printed, not asserted: the cpu~cuda denoised relMSE and the share of it held by the worst 1 % of
+    pixels (a difference concentrated in few pixels is shown, not failed). Returns the failing rows."""
+    bad = []
+    for name in scenes:
+        c, g = (np.load(os.path.join(WORK, f"{name}_{d}.npz")) for d in ("cpu", "cuda"))
+        ref, _, _ = reference(name, recording(name), SCENES[name][1])
+        ref = ref.astype(np.float64)
+        e_c, e_g = rel_mse_img(c["den"], ref), rel_mse_img(g["den"], ref)
+        rel = abs(e_c - e_g) / max(e_c, e_g)
+        diff = ((c["den"].astype(np.float64) - g["den"]) ** 2 / (ref ** 2 + EPS)).mean(-1).ravel()
+        worst = np.sort(diff)[::-1][:max(1, diff.size // 100)].sum() / diff.sum()
+        print(f"cpu vs cuda {name}: denoised vs reference cpu {e_c:.4g} cuda {e_g:.4g} (differ {rel:.1%}); "
+              f"cpu~cuda denoised {diff.mean():.3e} (raw {rel_mse_img(c['noisy'], g['noisy']):.3e}), "
+              f"worst 1 % of pixels hold {worst:.0%}")
+        if rel > DEVICE_AGREE:
+            word = "FAIL" if SCENES[name][2] else "note"
+            print(f"{word} denoise_check: {name} denoised relMSE differs {rel:.1%} between cpu and cuda "
+                  f"(limit {DEVICE_AGREE:.0%})")
+            if SCENES[name][2]:
+                bad.append({"scene": name})
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--compare-only", action="store_true", help="only the cpu/cuda comparison, from the saved arrays")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--device", choices=("cpu", "cuda", "both"), default="both")
     ap.add_argument("--scene", action="append", choices=sorted(SCENES))
@@ -279,6 +311,10 @@ def main():
         return self_test()
     use_numpy()
     scenes = a.scene or list(SCENES)
+    if a.compare_only:
+        bad = compare_devices(scenes)
+        print(f"{'FAIL' if bad else 'PASS'} denoise_check: cpu~cuda comparison of {len(scenes)} scenes")
+        return 1 if bad else 0
     devices = ["cpu", "cuda"] if a.device == "both" else [a.device]
     t0 = time.perf_counter()
     rows, cold = [], {}
@@ -300,17 +336,8 @@ def main():
                 bad.append(r)
     for dev, (c1, c2) in cold.items():
         print(f"cold start {dev}: first {c1:.0f} ms, second {c2:.0f} ms (wall of oidn minus none, {COLD_SIZE} 1 spp)")
-    # CPU and CUDA denoised images must not differ more than the raw renders do (a backend defect otherwise).
     if len(devices) == 2:
-        for name in scenes:
-            c, g = (np.load(os.path.join(WORK, f"{name}_{d}.npz")) for d in ("cpu", "cuda"))
-            raw_d, den_d = rel_mse_img(c["noisy"], g["noisy"]), rel_mse_img(c["den"], g["den"])
-            print(f"cpu vs cuda {name}: raw {raw_d:.3e} denoised {den_d:.3e}")
-            if den_d > raw_d:
-                word = "FAIL" if SCENES[name][2] else "note"
-                print(f"{word} denoise_check: {name} denoised cpu and cuda differ more than the raw renders")
-                if SCENES[name][2]:
-                    bad.append({"scene": name})
+        bad += compare_devices(scenes)
     if a.history:
         now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         sha = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
