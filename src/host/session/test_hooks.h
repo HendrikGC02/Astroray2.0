@@ -3,7 +3,7 @@
 // create and sets the matching bits of SessionUniforms::test_hooks. A hook changes sampling or
 // sizes, never physics. Release builds (no AR_GATE_HOOKS) compile the reader out: the result is
 // always empty, so the variables are never looked at. Each later hook adds one row to the table
-// in test_hooks.cpp (NEE mode 106, light sampler, pool sizes and radiance scale 076, GPU fault 099).
+// in test_hooks.cpp (NEE mode 106, light sampler, hero lane, pool sizes and radiance scale 076, GPU fault 099).
 // Ref: 0007 V18 (PIXEL_CENTRE); CLAUDE.md rule 5 (no process-global mutable state: the values
 // live in the session that read them).
 #pragma once
@@ -35,7 +35,8 @@ struct TestHooks {
 
 // Any value but "" and "0" turns a flag hook on. ASTRORAY_TEST_NEE takes on, off or light_only
 // (RULINGS.md 77), ASTRORAY_TEST_LIGHT_SAMPLER takes tree (the default) or alias (the importance
-// alias table, the tree's oracle, 0004 D10), ASTRORAY_TEST_POOL takes MAIN[,SHADOW] capacities (SHADOW at least the largest
+// alias table, the tree's oracle, 0004 D10), ASTRORAY_TEST_HERO exactly lane0 (the hero lane pinned
+// to 0, 0003 Risk 11), ASTRORAY_TEST_POOL takes MAIN[,SHADOW] capacities (SHADOW at least the largest
 // shadow items one item emits per step, or the producers could never launch), ASTRORAY_TEST_THREADS
 // a positive worker count, ASTRORAY_TEST_RADIANCE_SCALE exactly "1", ASTRORAY_TEST_CORRUPT_CUBIN,
 // ASTRORAY_TEST_FAIL_INIT, ASTRORAY_TEST_GPU_FAULT and ASTRORAY_TEST_LAUNCH_TIMING exactly "1" and ASTRORAY_TEST_DRIVER_VERSION and

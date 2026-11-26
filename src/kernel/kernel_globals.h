@@ -43,6 +43,10 @@ inline constexpr uint32_t TEST_HOOK_NEE_LIGHT_ONLY = 1u << 2;
 // LIGHT_ALIAS (ASTRORAY_TEST_LIGHT_SAMPLER=alias): every light pick and pmf reads the importance
 // alias table alone, the light tree's oracle (light/light_sampler.h, 0004 D10).
 inline constexpr uint32_t TEST_HOOK_LIGHT_ALIAS = 1u << 3;
+// HERO_LANE0 (ASTRORAY_TEST_HERO=lane0): generate_camera pins every camera path's hero lane to 0,
+// pbrt-v4's fixed hero, so its variance can be measured against 0003 d6's random hero (0003 Risk
+// 11). Unbiased only while no secondary lane is terminated after a hero decision (0003 d6).
+inline constexpr uint32_t TEST_HOOK_HERO_LANE0 = 1u << 4;
 
 // Constant for a whole pass. max_bounces uses the order of PathStateSoA::bounces:
 // total, diffuse, glossy, transmission, volume, transparent.

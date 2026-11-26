@@ -4,9 +4,11 @@
 // 1024-wide film (so plane indices differ from j), a rotated camera, the production filter and
 // wavelength tables, samples_done = 3. Integer fields and the constant fields must be bit-equal;
 // ray directions agree to 0002 D12's direction threshold (p99.9 <= 1e-5 rad, FMA-off GPU build vs
-// CPU float); film wavelengths and the cone spread to its evaluation threshold.
+// CPU float); film wavelengths and the cone spread to its evaluation threshold. A second pair runs
+// with the HERO_LANE0 test hook: the flags stay bit-equal and every hero is lane 0 on both devices.
 // Ref: docs/decisions/0002-kernel-architecture.md D4, D12; 0009 d17; 0003 d23 (keys, dims 0-7);
-// 0008 d3 (the list). The production modules are launched, so what runs is the shipped code.
+// 0008 d3 (the list); 0003 Risk 11 (the lane-0 hero hook). The production modules are launched, so
+// what runs is the shipped code.
 #include <doctest.h>
 
 #include <cmath>
@@ -44,6 +46,9 @@ namespace {
 
 constexpr uint32_t kFilmW = 1024, kFilmH = 1000, kRectW = 1000, kRectH = 1000;
 constexpr uint32_t kN = kRectW * kRectH;  // 10^6 samples, k = 1
+// The hooked pair starts only the first kHookN samples: the flags need no million paths, and the path
+// arrays' allocation, poison fill and readback dominate the case's time.
+constexpr uint32_t kHookN = 1u << 16;
 constexpr uint32_t kSamplesDone = 3;
 
 ar::CameraView make_camera() {
@@ -82,7 +87,7 @@ struct Snapshot {
 // One device's copy of the fixture, run once. `gpu` is null for the CPU device, where a buffer
 // address is a host address and the kernels are called directly.
 Snapshot run(Device& dev, ModuleDevice* gpu, const WavelengthTable& wt, const ar::FilterTable& filter,
-             const ar::CameraView& camera) {
+             const ar::CameraView& camera, uint32_t test_hooks = 0u, uint32_t n = kN) {
   const Owner owner{1, 1};
   const auto put = [&](const void* p, uint64_t bytes) {
     DeviceBuffer b = dev.allocate(LedgerCategory::TABLES, bytes, owner);
@@ -106,11 +111,11 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const WavelengthTable& wt, const ar
   ActivePixels active(dev, kFilmW, kFilmH, owner);
   REQUIRE(active.plan(film) == kN);
 
-  std::vector<uint32_t> identity(kN);
-  for (uint32_t i = 0; i < kN; ++i) identity[i] = i;
+  std::vector<uint32_t> identity(n);
+  for (uint32_t i = 0; i < n; ++i) identity[i] = i;
   DeviceBuffer queue_buf = put(identity.data(), identity.size() * sizeof(uint32_t));
   ar::StepTable table{};
-  table.stage[uint32_t(ar::Stage::TERMINATED)] = ar::StepEntry{0, kN, 0};
+  table.stage[uint32_t(ar::Stage::TERMINATED)] = ar::StepEntry{0, n, 0};
   DeviceBuffer table_buf = put(&table, sizeof table);
 
   ar::PathStateSoA soa{};
@@ -118,7 +123,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const WavelengthTable& wt, const ar
   std::vector<std::string> names;
   std::vector<uint64_t> elem;
   ar::for_each_always_field(soa, [&](const char* name, size_t bytes, void** slot) {
-    DeviceBuffer b = dev.allocate(LedgerCategory::MAIN_PATH_POOL, bytes * kN, owner);
+    DeviceBuffer b = dev.allocate(LedgerCategory::MAIN_PATH_POOL, bytes * n, owner);
     dev.memset(b, 0, 0xAB, b.bytes);  // a field the kernel forgets reads back as poison
     *slot = b.ptr;
     bufs.push_back(b);
@@ -141,6 +146,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const WavelengthTable& wt, const ar
   kg.session.samples_per_pass = 1;
   kg.session.seed = 0xC0FFEEu;
   kg.session.sampler_mode = ar::SAMPLER_SOBOL;
+  kg.session.test_hooks = test_hooks;
   DeviceBuffer kg_buf = put(&kg, sizeof kg);
 
   if (gpu != nullptr) {
@@ -150,12 +156,12 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const WavelengthTable& wt, const ar
     const ar::KernelGlobals* kg_dev = static_cast<const ar::KernelGlobals*>(kg_buf.ptr);
     void* args[] = {&kg_dev};
     gpu->launch_module_kernel(build, "k_film_build_active", (kN + 255) / 256, 256, args);
-    gpu->launch_module_kernel(generate, "k_generate_camera", (kN + 255) / 256, 256, args);
+    gpu->launch_module_kernel(generate, "k_generate_camera", (n + 255) / 256, 256, args);
   } else {
     const ar::KernelGlobals host_kg = kg;
     // On the CPU device the uploaded copies are host memory the kernels read directly.
     cpu_film_build_active(host_kg, 0, kN);
-    cpu_stage_generate_camera(host_kg, table.stage[uint32_t(ar::Stage::TERMINATED)], 0, kN);
+    cpu_stage_generate_camera(host_kg, table.stage[uint32_t(ar::Stage::TERMINATED)], 0, n);
   }
   dev.synchronize();
 
@@ -232,6 +238,27 @@ TEST_CASE("generate_camera/agreement") {
   const agree::Stats cone = agree::compare(as_results(g.get("cone"), 2), as_results(c.get("cone"), 2), agree::Metric::REL_L2);
   CHECK(agree::report("generate_camera", "cone nofma vs cpu float", cone, agree::Cls::EVAL,
                       agree::NOFMA_VS_CPU_FLOAT).pass);
+
+  // The hook bit in the inputs: both devices pin every hero to lane 0, and the unhooked run drew
+  // other lanes, so the comparison is not of two default runs.
+  const Snapshot ch = run(cpu, nullptr, wt, *filter, camera, ar::TEST_HOOK_HERO_LANE0, kHookN);
+  const Snapshot gh = run(*gpu, gpu.get(), wt, *filter, camera, ar::TEST_HOOK_HERO_LANE0, kHookN);
+  const auto& fc = ch.get("flags");
+  const auto& fg = gh.get("flags");
+  REQUIRE(fc.size() == fg.size());
+  CHECK_MESSAGE(std::memcmp(fc.data(), fg.data(), fc.size()) == 0, "hooked flags differ");
+  const auto& f0 = c.get("flags");
+  uint32_t pinned_wrong = 0, drawn_nonzero = 0;
+  for (uint32_t i = 0; i < kHookN; ++i) {
+    uint32_t a, b;
+    std::memcpy(&a, fg.data() + size_t(i) * sizeof a, sizeof a);
+    std::memcpy(&b, f0.data() + size_t(i) * sizeof b, sizeof b);
+    pinned_wrong += ar::hero_lane(a) != 0u;
+    drawn_nonzero += ar::hero_lane(b) != 0u;
+  }
+  CHECK(fg.size() == size_t(kHookN) * sizeof(uint32_t));
+  CHECK(pinned_wrong == 0u);
+  CHECK(drawn_nonzero > 0u);
 }
 
 }  // TEST_SUITE
