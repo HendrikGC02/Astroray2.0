@@ -82,7 +82,7 @@ index ad3d36f0..52880a90 100644
      const bool world_le = ls.deferred_le && !triangle;
      // One branch on the launch-uniform media feature; without it nothing more is stored.
 -    if (kg.session.features.media)
-+    if (false && kg.session.features.media)
++    if (kg.session.features.env_world)
        nee_item_media(kg, sh, nee_item_medium(kg, inst, (flags & FRONT_FACE) != 0u, Ng, seg.dir), e, flags,
                       ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta, ctx.lambda_t, world_le);
      else if (kg.shadow->item_flags != nullptr)
