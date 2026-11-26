@@ -2,8 +2,7 @@
 """B-19 alpha-foliage builder: N thin cards (two triangles each) instanced from four meshes, random
 orientation and position inside the camera's frustum, one constant geometry_opacity and a diffuse
 base colour, lit as b1m is (an area lamp of the spike's sun irradiance, constant world). A camera
-ray crosses many cards; each passes it with probability 1 - opacity, so a pass needs about one
-scheduler step per alpha layer on top of the bounce steps (0002 D7).
+ray crosses many cards; each passes it with probability 1 - opacity, so a pass needs extra scheduler steps per alpha layer on top of the bounce steps (0002 D7\nestimates one; two are measured, an intersect and a pass-through shade).
 Usage: build.py --out <path.arrec> [--blend <path.blend>]. Prints the mean and longest number of
 cards a camera ray crosses and the mean number it passes (numpy, seeded, so the same every build).
 Ref: docs/decisions/0002-kernel-architecture.md D7 and the foliage row of its verification table;

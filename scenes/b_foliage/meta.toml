@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Alpha-foliage bench scene for B-19 (0002 D7: one scheduler step per alpha layer on top of the
+# Alpha-foliage bench scene for B-19 (0002 D7 estimates one scheduler step per alpha layer, two measured, on top of the
 # ~26 of a 12-bounce pass; 0002 line 315 asks for it before breadth work): 3000 thin two-triangle
 # cards instanced from four meshes, random orientation, scattered through the camera's frustum
 # between 3 and 14 m, one constant geometry_opacity and a diffuse green base colour. Lit as b1m
