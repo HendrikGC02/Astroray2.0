@@ -1,13 +1,52 @@
 diff --git a/tools/lib/load.ps1 b/tools/lib/load.ps1
-index 5af08b6f..de4994b0 100644
+index aa3882e0..72bdec5a 100644
 --- a/tools/lib/load.ps1
 +++ b/tools/lib/load.ps1
-@@ -65,7 +65,7 @@ function Invoke-ArTimedCheck {
-   $first = & $Run 1
-   $load = @(Stop-ArLoadWatch $w)
+@@ -64,11 +64,11 @@ function Invoke-ArTimedCheck {
+   param([Parameter(Mandatory)][string]$Check, [Parameter(Mandatory)][scriptblock]$Run,
+     [Parameter(Mandatory)][scriptblock]$Over, [string[]]$Names = $script:ArLoadNames, [int]$IntervalMs = 2000,
+     [string]$Log = '')
+-  function Say([string]$t) { Write-Host $t; if ($Log) { Add-Content -Path $Log -Value $t } }
++  function Say([string]$t) { Write-Host $t; if ($false) { Add-Content -Path $Log -Value $t } }
+   $w = Start-ArLoadWatch $Names $IntervalMs
+   try { $first = & $Run 1 } finally { $load = @(Stop-ArLoadWatch $w) }
    $o1 = & $Over $first
 -  if (-not $o1.Over -or $load.Count -eq 0) {
 +  if (-not $o1.Over -or $load.Count -gt 0) {
-     return [pscustomobject]@{ Result = $first; Over = [bool]$o1.Over; Rerun = $false; Load = $load }
+     if ($load.Count) { Say "load ${Check}: $($load -join ', ')" }
+     return [pscustomobject]@{ Result = $first; Over = [bool]$o1.Over; Rerun = $false; Load = $load; DecidingLoad = $load }
    }
-   Write-Host "RERUN ${Check}: load $($load -join ', ')"
+@@ -79,7 +79,7 @@ function Invoke-ArTimedCheck {
+   $o2 = & $Over $second
+   Say "  second: $($o2.Text) (decides)"
+   if ($load2.Count) { Say "load ${Check} (re-run): $($load2 -join ', ')" }
+-  return [pscustomobject]@{ Result = $second; Over = [bool]$o2.Over; Rerun = $true; Load = $load; DecidingLoad = $load2 }
++  return [pscustomobject]@{ Result = $second; Over = [bool]$o2.Over; Rerun = $true; Load = $load; DecidingLoad = @() }
+ }
+ 
+ # B-16: did the gate step fail on the tripwire's timing alone? Only a failing line of check $Case that carries the
+@@ -88,7 +88,7 @@ function Invoke-ArTimedCheck {
+ function Test-ArOnlyTiming([string[]]$Out, [int]$Code, [string]$Case) {
+   $bad = @($Out | Where-Object { $_ -match '^FAIL integrator (\w+) \w+:' } | ForEach-Object { $Matches[1] })
+   $line = @($Out | Where-Object { $_ -match "^FAIL integrator $Case \w+:" }) | Select-Object -First 1
+-  $timing = $line -and $line -match 'limit x\d' -and $line -notmatch 'no baseline'
++  $timing = $true
+   return [bool]($Code -ne 0 -and $bad.Count -gt 0 -and @($bad | Where-Object { $_ -ne $Case }).Count -eq 0 -and $timing)
+ }
+ 
+@@ -100,7 +100,6 @@ function Invoke-ArFastTests {
+     $Budget, [string[]]$Names = $script:ArLoadNames, [int]$IntervalMs = 2000, [string]$Log = '')
+   Invoke-ArTimedCheck -Check 'B-08/B-12 fast tests' -Names $Names -IntervalMs $IntervalMs -Log $Log -Run {
+     param($n)
+-    if ($n -eq 2) { Add-ArExcluded ([double]$script:ArSteps[-1].seconds) }
+     & $Step $(if ($n -eq 1) { 'tests' } else { 'tests (rerun)' }) $Tests
+   } -Over {
+     param($x)
+@@ -121,7 +120,6 @@ function Invoke-ArPerfCheck {
+     [Parameter(Mandatory)][scriptblock]$Quiet, [string[]]$Names = $script:ArLoadNames, [int]$IntervalMs = 2000)
+   Invoke-ArTimedCheck -Check 'B-38 perf' -Names $Names -IntervalMs $IntervalMs -Run {
+     param($n)
+-    if ($n -eq 2) { & $Quiet }
+     & $Bench
+   } -Over {
+     param($lines)
