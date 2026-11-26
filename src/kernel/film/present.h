@@ -71,16 +71,21 @@ inline constexpr uint32_t kHeatmapNoData = 0xff808080u;
 
 AR_FN uint32_t film_present_count(const KernelGlobals& kg) { return kg.film->rect_width * kg.film->rect_height; }
 
-AR_FN void film_present_pixel(const KernelGlobals& kg, uint32_t j) {
-  const FilmData& f = *kg.film;
-  const uint32_t pixel = load_ro(kg.active_pixels + j);
+// The display mean S1 / n of `pixel` in working-space RGB (0008 d3): 0 with no samples, not the
+// NaN of 0 / 0. The display group is always channel 0. Shared by present and film_prepare_denoise,
+// so both read the one mean.
+AR_FN void film_display_mean(const FilmData& f, uint32_t pixel, float rgb[3]) {
   const uint32_t n = f.n[pixel];
-  // No samples yet: black, not the NaN of 0 / 0. The display group is always channel 0.
-  float rgb[3];
   for (uint32_t c = 0; c < 3u; ++c) {
     const uint64_t at = uint64_t(f.moment[0].offset + c) * f.plane_stride + pixel;
     rgb[c] = n == 0u ? 0.0f : float(f.s1[at] / double(n));
   }
+}
+
+AR_FN void film_present_pixel(const KernelGlobals& kg, uint32_t j) {
+  const uint32_t pixel = load_ro(kg.active_pixels + j);
+  float rgb[3];
+  film_display_mean(*kg.film, pixel, rgb);
   uint16_t* o = static_cast<uint16_t*>(kg.display->out) + 4ull * j;
   o[0] = float_to_half(film_clamp_half(rgb[0]));
   o[1] = float_to_half(film_clamp_half(rgb[1]));

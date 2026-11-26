@@ -114,6 +114,14 @@ spill_load = 0
 compile_s = 1.21
 gated = "merge"
 
+[kernel.k_film_prepare_denoise]
+regs = 38
+stack = 0
+spill_store = 0
+spill_load = 0
+compile_s = 1.19
+gated = "merge"
+
 [kernel.k_film_build_active]
 regs = 16
 stack = 0

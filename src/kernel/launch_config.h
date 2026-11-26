@@ -63,6 +63,7 @@ struct LaunchRow {
   X(k_film_resolve, 256, 1, 0, OTHER) \
   X(k_film_present, 256, 0, 0, OTHER) \
   X(k_film_heatmap, 256, 0, 0, OTHER) \
+  X(k_film_prepare_denoise, 256, 0, 0, OTHER) \
   X(k_film_build_active, 256, 0, 0, OTHER) \
   X(k_generate_camera, 256, 0, 0, OTHER) \
   X(k_shade_background, 256, 0, 0, VM) \
