@@ -194,7 +194,13 @@ class Scene {
   // reset and the instance table are all final, so no ordering of the earlier callbacks can leave a stale
   // entry: it drops the entries of every key that bore a medium before or bears one now and raises the open
   // ones again. Reads flags and one set; never throws (an allocation failure is logged as ERROR).
+  // It also rebuilds MEDIUM_PRIORITY_TIE (0006 D17) from medium_priority_ties, scanning the instances only
+  // when some bear a medium.
   void refresh_medium_reports() noexcept;
+  // Medium-bearing instances of the active table whose materials carry the same highest medium_priority
+  // and whose world bounds (the mesh box under the rendered motion step) overlap: one entry per pair's
+  // later instance, subject its object key, value the report detail. M1b tracks one medium per path.
+  std::map<ar_key, std::string> medium_priority_ties() const;
   std::shared_ptr<const Medium> medium(ar_key key) const;
   std::vector<std::shared_ptr<const Medium>> media() const;
   // The active instances plus one record per lamp of `table`, which carries each lamp's light
@@ -222,6 +228,7 @@ class Scene {
     std::map<ar_key, std::shared_ptr<const Lamp>> lamps;          // as set; live ones are in known_active
     std::map<ar_key, std::shared_ptr<const Medium>> media;        // as set; live ones are in known_active
     std::set<ar_key> medium_reported;                             // medium-bearing geometry at the last refresh
+    std::set<ar_key> tie_reported;                                // MEDIUM_PRIORITY_TIE subjects at the last refresh
     std::vector<std::shared_ptr<const Lamp>> light_lamps;         // the last build's lamps, pinned for light_key
     std::shared_ptr<const ImageArrays> light_images;               // pins the image addresses light_key holds
     std::shared_ptr<const LightTable> lights;

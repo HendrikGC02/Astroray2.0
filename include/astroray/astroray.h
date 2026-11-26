@@ -99,6 +99,7 @@ typedef struct ar_edit_s* ar_edit;
 #define AR_REPORT_PASS_UNSUPPORTED 44
 #define AR_REPORT_TEST_HOOK_ACTIVE 45
 #define AR_REPORT_DEVICE_INIT_FAILED 46
+#define AR_REPORT_MEDIUM_PRIORITY_TIE 47
 
 /* Session mode, state and display mode (0007 decisions 5, 28, 40). */
 #define AR_SESSION_MODE_VIEWPORT 0

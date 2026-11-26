@@ -139,6 +139,7 @@ Binding inputs:
       | `PASS_UNSUPPORTED` | WARNING | SESSION | 0; detail = requested pass name; the pass is not allocated; one entry per name per latched settings change (`INPUT_IGNORED` is not reused: its subject is a material key) | 0008 decision 10, ruling 74 |
       | `TEST_HOOK_ACTIVE` | INFO | SESSION | 0; detail = hook name and value (gate builds only); one entry per active `ASTRORAY_TEST_*` hook, raised at session create | 0009 d11, task 076 |
       | `DEVICE_INIT_FAILED` | ERROR | SCENE | 0; detail = the asynchronous device init's failure text (CUDA or OptiX, a missing module image, a driver below the floor); the first device upload re-raises it | 0002 D15, task 099 |
+      | `MEDIUM_PRIORITY_TIE` | WARNING | SCENE | object key of the later of two medium-bearing instances whose materials carry the same highest `medium_priority` and whose world bounds overlap; detail = both object keys and the priority; M1b tracks one medium per path, so where they overlap the most recently entered one renders (raised at sync; `MEDIUM_PATH_LIMIT` is not reused: it counts paths ended) | 0006 D17, task 205 |
 
     Per-pass statistics that are not problems (0004 D29 counters, timings) are read through 0007's progress query and 0008's statistics buffers, not as report entries.
 

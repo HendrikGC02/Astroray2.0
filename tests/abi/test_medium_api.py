@@ -3,7 +3,8 @@
 0007 appendix ar_medium_desc): ar_edit_set_medium creates, replaces and (through ar_edit_remove) removes
 a medium; an instance names it with ar_instances_desc.medium_keys; an unknown key or a medium removed
 while instanced fails the edit; a medium-bearing mesh that is open or inconsistently wound raises one
-MEDIUM_MESH_OPEN report entry naming it, a closed one none; the slab scene builds and replays."""
+MEDIUM_MESH_OPEN report entry naming it, a closed one none; two overlapping medium-bearing instances at the
+same highest medium_priority raise one MEDIUM_PRIORITY_TIE entry (0006 D17); the slab scene builds and replays."""
 import ctypes
 import importlib.util
 import os
@@ -129,30 +130,38 @@ class MediumApi(unittest.TestCase):
         self.assertEqual(lib.ar_edit_item_commit(e, key), a.AR_OK)
 
     def instances(self, e, items):
-        """items: (geometry key, object key, medium key or None); None for every item sends no array."""
+        """items: (geometry key, object key, medium key or None[, x offset, material key]); None for every item
+        sends no medium array; without a material key an instance has the default material."""
         a = self.abi
         n = len(items)
+        mats = [it[4] for it in items if len(it) > 4]
         d = a.ar_instances_desc()
-        d.instance_count, d.motion_steps, d.transform_count, d.material_key_count = n, 1, n, 0
+        d.instance_count, d.motion_steps, d.transform_count, d.material_key_count = n, 1, n, len(mats)
 
         def arr(ctype, values):
             return (ctype * max(1, len(values)))(*values)
 
         all_visibility = (a.AR_VISIBILITY_CAMERA | a.AR_VISIBILITY_DIFFUSE | a.AR_VISIBILITY_GLOSSY |
                           a.AR_VISIBILITY_TRANSMISSION | a.AR_VISIBILITY_SHADOW | a.AR_VISIBILITY_VOLUME)
-        ident = a.ar_xform()
-        for i in (0, 5, 10):
-            ident.m[i] = 1.0
+        xfs = []
+        for it in items:
+            x = a.ar_xform()
+            for i in (0, 5, 10):
+                x.m[i] = 1.0
+            x.m[3] = it[3] if len(it) > 3 else 0.0
+            xfs.append(x)
         keep = dict(
-            geom=arr(ctypes.c_uint64, [it[0] for it in items]), xf=(a.ar_xform * n)(*([ident] * n)),
+            geom=arr(ctypes.c_uint64, [it[0] for it in items]), xf=(a.ar_xform * n)(*xfs),
             obj=arr(ctypes.c_uint64, [it[1] for it in items]), z32=arr(ctypes.c_uint32, [0] * n),
             col=(a.ar_rgba * n)(*[a.ar_rgba((ctypes.c_float * 4)(1, 1, 1, 1))] * n),
-            vis=arr(ctypes.c_uint32, [all_visibility] * n), lg=arr(ctypes.c_uint8, [0] * n), keys=arr(ctypes.c_uint64, []),
+            vis=arr(ctypes.c_uint32, [all_visibility] * n), lg=arr(ctypes.c_uint8, [0] * n), keys=arr(ctypes.c_uint64, mats),
+            moff=arr(ctypes.c_uint32, list(range(n)) if mats else [0] * n),
+            mcount=arr(ctypes.c_uint32, [1 if mats else 0] * n),
             med=arr(ctypes.c_uint64, [it[2] or 0 for it in items]))
         d.geom_keys, d.xf, d.object_keys = keep["geom"], keep["xf"], keep["obj"]
         d.random_ids = d.pass_indices = d.crypto_objects = d.crypto_assets = keep["z32"]
         d.colors, d.visibility, d.flags, d.light_groups = keep["col"], keep["vis"], keep["z32"], keep["lg"]
-        d.material_offsets = d.material_counts = keep["z32"]
+        d.material_offsets, d.material_counts = keep["moff"], keep["mcount"]
         d.material_keys = keep["keys"]
         if any(it[2] is not None for it in items):
             d.medium_keys = keep["med"]
@@ -309,6 +318,34 @@ class MediumApi(unittest.TestCase):
         self.instances(e, [(OPEN_CUBE, 1002, None)])
         self.assertTrue(self.commit(e)[1])
         self.assertEqual(self.entries(a.AR_REPORT_MEDIUM_MESH_OPEN), [])
+
+    def test_priority_tie_warns(self):
+        """Two medium-bearing instances whose materials share the highest medium_priority and whose world
+        bounds overlap raise one MEDIUM_PRIORITY_TIE entry, subject the later instance's object key (0006 D17:
+        M1b tracks one medium per path); disjoint bounds or different priorities raise none."""
+        a, lib = self.abi, self.lib
+        positions, tris = cube_triangles()
+        e = self.begin()
+        self.mesh(e, CUBE, positions, tris, "closed_cube")
+        self.assertEqual(self.set_medium(e, MEDIUM_A), a.AR_OK)
+        self.assertEqual(self.set_medium(e, MEDIUM_B), a.AR_OK)
+        for key, priority in ((200, 0), (201, 3), (202, 3)):
+            m = a.ar_material_desc()
+            m.medium_priority = priority
+            self.assertEqual(lib.ar_edit_set_material(e, key, ctypes.byref(m)), a.AR_OK)
+        self.assertTrue(self.commit(e)[1])
+        cases = (  # (second instance's x offset, the two material keys, entries expected)
+            (0.5, (200, 200), 1), (5.0, (200, 200), 0), (0.5, (200, 201), 0), (0.5, (201, 202), 1))
+        for dx, (m0, m1), want in cases:
+            e = self.begin()
+            self.instances(e, [(CUBE, 1000, MEDIUM_A, 0.0, m0), (CUBE, 1001, MEDIUM_B, dx, m1)])
+            self.assertTrue(self.commit(e)[1])
+            got = self.entries(a.AR_REPORT_MEDIUM_PRIORITY_TIE)
+            self.assertEqual(len(got), want, f"offset {dx}, materials {m0} and {m1}")
+            if want:
+                self.assertEqual(got[0][0], 1001)
+                self.assertEqual(got[0][1], 1, "reported once")
+                self.assertIn("1000", got[0][2])
 
     def test_mesh_reingest_rechecks(self):
         """A mesh replaced by a full re-ingest loses its report entries at activation; the check runs again
