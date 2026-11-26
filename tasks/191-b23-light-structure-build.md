@@ -19,3 +19,4 @@ Progress:
 191 started: stopped before code, asking lead whether the new case duplicates light_tree_kernel/B-23 (test_light_tree_kernel.cpp:808)
 Lead ruling: extend 175's case (Scope + tests/cpu/test_light_tree_kernel.cpp, that case only, no new test file); canary names a tools/ helper command that does the real limit compare
 191: scene, script, helper b23_check, extended case, canary PASS (red via b23_check); waiting for quiet window for capture
+191: capture (3 workers, quiet machine): 10k lamps 40.3 ms per 10k (spread 2.1), 100k tri 6.6, 1M tri 6.8 (677 ms total). Row 1 of table: limit lands. History lines appended.
