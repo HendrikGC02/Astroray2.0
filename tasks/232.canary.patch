@@ -1,0 +1,13 @@
+diff --git a/tools/lib/load.ps1 b/tools/lib/load.ps1
+index 5af08b6f..de4994b0 100644
+--- a/tools/lib/load.ps1
++++ b/tools/lib/load.ps1
+@@ -65,7 +65,7 @@ function Invoke-ArTimedCheck {
+   $first = & $Run 1
+   $load = @(Stop-ArLoadWatch $w)
+   $o1 = & $Over $first
+-  if (-not $o1.Over -or $load.Count -eq 0) {
++  if (-not $o1.Over -or $load.Count -gt 0) {
+     return [pscustomobject]@{ Result = $first; Over = [bool]$o1.Over; Rerun = $false; Load = $load }
+   }
+   Write-Host "RERUN ${Check}: load $($load -join ', ')"
