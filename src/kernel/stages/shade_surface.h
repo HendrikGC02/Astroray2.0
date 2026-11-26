@@ -95,6 +95,7 @@
 #include "../material/material_header.h"
 #include "../material/openpbr_params.h"
 #include "../material/slot_resolve.h"
+#include "../medium/ratio_track.h"
 #include "../portability.h"
 #include "../scene/scene_view.h"
 #include "../sched/step_table.h"
@@ -125,6 +126,41 @@ AR_FN Real2 triangle_barycentrics(Real3 a, Real3 b, Real3 c, Real3 p) {
 
 // The far end of an unbounded shadow segment toward an infinite light.
 inline constexpr float kShadowUnbounded = 0x1.fffffep+127f;
+
+// The medium a NEE item's segment lies in, as 1 + its medium_descs index, 0 for none (ratio_track.h
+// shadow_medium_field). Until the medium stack, route_hit's one-medium rule (stages/route_hit.h)
+// knows a medium only at a medium-bearing instance's own surface, so the item is in that instance's
+// medium exactly when its direction leaves the vertex into the interior: against the face that was
+// hit (Ng faces wo), away from it on a front face, toward it on a back face (pbrt-v4
+// Interaction::GetMedium(w): the medium on w's side). A shadow ray stops at every hull (0002 D11
+// until ah_record), so such an item reaches shade_shadow only when the whole segment stays inside.
+AR_FN uint32_t nee_item_medium(const KernelGlobals& kg, uint32_t inst, bool front_face, Real3 ng, Real3 wi) {
+  const uint32_t m = instance_medium(kg, inst);
+  if (m == kNoMedium) return 0u;
+  const Real c = dot(wi, ng);
+  return (front_face ? c < Real(0) : c > Real(0)) ? m + 1u : 0u;
+}
+
+// A NEE item's fields of the media feature (0006 D19, 0003 d20), every one written: the medium of
+// nee_item_medium, medium_rng at the item's block start (dims.h STREAM_SHADOW_MEDIUM, e * 2^17),
+// the lanes, item_flags with the hero lane in bits 2-3 (ITEM_WORLD_LE kept), and r_u, r_l as
+// pbrt-v4 SampleLd forms them from the path's r_p after tracking left both at 1: r_l = r_p p_l, r_u
+// = r_p p_scatter, 0 for a delta light (whose weight is 1 / avg(r_l)). The contribution already
+// carries the weight 1 / avg(r_l + r_u) (integrator/mis.h); shade_shadow replaces it by the one of
+// the tracked r_u and r_l. Also called by the M-1 probe (kernel_gpu/probe_m1.cu).
+// Ref: pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::SampleLd ("r_l *= r_p * p_l;
+// r_u *= r_p * scatterPDF;"); docs/decisions/0006-volumes-and-astrophysics.md D8, D19.
+AR_FN void nee_item_media(const KernelGlobals& kg, uint32_t sh, uint32_t medium_plus_one, uint32_t e, uint32_t path_flags,
+                          const Spec& r_p, Real p_light, Real p_scatter, bool delta_light, const Lambda& lam, bool world_le) {
+  sh_medium_stack(kg, sh) = shadow_medium_field(medium_plus_one);
+  sh_medium_rng(kg, sh) = shadow_rng_start(e);
+  sh_r_u(kg, sh) = r_p * (delta_light ? Real(0) : p_scatter);
+  sh_r_l(kg, sh) = r_p * p_light;
+  Spec lt;
+  for (int i = 0; i < kLanes; ++i) lt.v[i] = lam.nm[i];
+  sh_lambda_t(kg, sh) = lt;
+  sh_item_flags(kg, sh) = uint8_t((world_le ? uint32_t(ITEM_WORLD_LE) : 0u) | item_hero_bits(hero_lane(path_flags)));
+}
 
 // The opacity decision of a hit (0005 item 4: top = mix(transparent, surface, opacity)), on the
 // event's lobe-choice uniform u as the surface entry's Mix selection left it (0004 D14: Mix,
@@ -414,7 +450,12 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     sh_target(kg, sh) = sample;
     if (kg.session.features.light_groups) sh_light_group(kg, sh) = load_ro(&lr.light_group);
     const bool world_le = ls.deferred_le && !triangle;
-    if (kg.shadow->item_flags != nullptr) sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
+    // One branch on the launch-uniform media feature; without it nothing more is stored.
+    if (kg.session.features.media)
+      nee_item_media(kg, sh, nee_item_medium(kg, inst, (flags & FRONT_FACE) != 0u, Ng, seg.dir), e, flags,
+                     ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta, ctx.lambda_t, world_le);
+    else if (kg.shadow->item_flags != nullptr)
+      sh_item_flags(kg, sh) = world_le ? ITEM_WORLD_LE : uint8_t(0);
     if (world_le) {
       // WORLD_ENV: shade_shadow runs the world program along ray_d at these lanes on delivery. The
       // host allocates both fields with the env_world feature; without them the item cannot be

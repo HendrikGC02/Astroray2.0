@@ -46,12 +46,25 @@ inline constexpr uint32_t FIRST_BOUNCE_SPECULAR = 1u << 21;
 // along ray_d at the item's lambda_t, which shade_shadow evaluates on delivery (light/world_env.h).
 inline constexpr uint8_t ITEM_WORLD_LE = uint8_t(1u << 4);
 
+// Shadow item_flags bits 2-3 (0003 d20): the emitting path's hero lane, which ratio tracking draws
+// its distances at (0006 D8).
+inline constexpr uint32_t ITEM_HERO_LANE_SHIFT = 2;
+inline constexpr uint32_t ITEM_HERO_LANE_MASK = 3u << ITEM_HERO_LANE_SHIFT;
+
 AR_FN uint32_t hero_lane(uint32_t flags) { return (flags & HERO_LANE_MASK) >> HERO_LANE_SHIFT; }
 
 // Returns the flags with the hero lane replaced; lane must be 0..3.
 AR_FN uint32_t set_hero_lane(uint32_t flags, uint32_t lane) {
   AR_ASSERT(lane < 4u);
   return (flags & ~HERO_LANE_MASK) | ((lane << HERO_LANE_SHIFT) & HERO_LANE_MASK);
+}
+
+AR_FN uint32_t item_hero_lane(uint32_t item_flags) { return (item_flags & ITEM_HERO_LANE_MASK) >> ITEM_HERO_LANE_SHIFT; }
+
+// item_flags bits 2-3 holding lane 0..3.
+AR_FN uint32_t item_hero_bits(uint32_t lane) {
+  AR_ASSERT(lane < 4u);
+  return (lane << ITEM_HERO_LANE_SHIFT) & ITEM_HERO_LANE_MASK;
 }
 
 AR_FN uint32_t medium_depth(uint32_t flags) { return (flags & MEDIUM_DEPTH_MASK) >> MEDIUM_DEPTH_SHIFT; }
