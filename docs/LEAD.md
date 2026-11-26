@@ -83,26 +83,37 @@ repository text; treat its answer as a draft.
 ## Handover (fourth lead, night of 2026-11-26/27)
 State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from its task
 file, its Progress and `git log main..task/NNN-*`. To continue a branch, `git -C <old worktree> switch --detach`, then brief the
-agent to `git switch task/NNN-*` first in its own worktree.
-- Landed this session (9): 175, 233, 231, 232, 196, 234, 192, 197, 191 (ledger in tasks/README.md). `check full` passed on 234's
-  branch (777.5 s) and on 191's (789.4 s). Quiet main gate median after 234: 127.2 s (was 167 s); fast 5.6 s.
+agent to `git switch task/NNN-*` first in its own worktree. No agent of this session will report again.
+- Landed this session (10): 175, 233, 231, 232, 196, 234, 192, 197, 191, 198 (ledger in tasks/README.md). `check full` passed on
+  234's branch (777.5 s) and on 191's (789.4 s). Quiet main gate median after 234: 127.2 s (was 167 s); fast 5.6 s. B-38's
+  baseline re-recorded on quiet main (ruling 108: b1m 12.25 ms, b5m 12.92 ms).
 - Rulings this session: 104 (shadow medium pre-pass, D19 split), 105 (231's fixture gate cost), 106 (delta-light shadow items),
-  107 (106 superseded once 205 routes by stack depth, PROVISIONAL until 205's review). Task-level rulings are in each Progress.
+  107 (106 superseded once 205 routes by stack depth, PROVISIONAL until 205 lands), 108 (B-38 baseline). Task-level rulings
+  are in each task's Progress.
+- Ready to land once the owner answers (all reviewed, all green apart from the owner's number):
+  - 205 spine (task/205-false-interfaces-medium-stack, worktree agent-af6b96aa...): two Opus rounds, last PASS WITH FIXES;
+    the one fix (a test and canary hunk for the medium_rng reset at the pass-through, plus two M2 comments) was sent and
+    may or may not be committed: check `git log` on the branch; if missing, a small implementer adds it. Blocked on B-05
+    (shade_surface 7.73-7.75 s quiet vs 7.5 s; main 7.19-7.29). With the owner's yes, land it in a quiet window with
+    `-Evidence` from out/evidence/205/slab.png (Look at line). ABI hash moves (new report code 47). Then the spine: 219,
+    220, 208, 206, 209, and 230 (shade_surface.h).
+  - 190 (task/190-tree-vs-alias-d10-row, agent-a382cf20...): reviewed PASS WITH FIXES, fixes done. Blocked on the owner's
+    2x row answer (1.795 measured) and the v1 margin fact; its history lines wait in that worktree's out/tmp/190/.
+- Parked: 201 (task/201-v11-final-oidn-check, draft PR #190, agent-a5ab6cd2...): stopped at its decision table (b_tx denoise
+  3x worse; owner item). Its tool is good; the full step must not land while a scene fails. Draft PR: `gh pr ready` before
+  any land.
+- New task 235 (lead-written): d2_aov_geometry renders different colours on CPU and CUDA (R and B off by ~0.03, G equal),
+  found by 201. A correctness defect: dispatch it first (kernel, Opus, effort high).
+- Next after 235: 194 (hero-lane variance, measurement), 170 (gpu measurement, quiet), 193 after the lead rewrites its
+  Reference (task text says so). Most other written tasks wait behind the spine (205). When nothing is dispatchable,
+  loop step 8 (fable planner).
 - Process lessons: (1) land.ps1 runs from the task worktree: a branch not rebased after a land.ps1 change lands with the old
-  script (231 ran pre-233). (2) Kernel and session landings need a quiet window: pause implementers (commit and end the turn;
-  they may keep editing source without building), land, resume. 232 re-runs B-38 under load but the B-19 share check has no
-  re-run (BACKLOG). (3) Quiet windows also serve compile timings (205, 192) and measurement captures (234, 191). (4) A draft
-  PR blocks the merge (233): `gh pr ready`, then `land.ps1 merge`. (5) I let three implementers run at times against decision
-  42's two (a short fixer beside two builders); the lock serialised builds, but keep to two. (6) Chain `check fast` and the
-  push so a red stops the push (one push went out on a load-only B-12 red; re-run was green).
-- In flight:
-  - 205 spine (task/205-false-interfaces-medium-stack, worktree agent-af6b96aa...): implementation, docs, host report
-    (new code MEDIUM_PRIORITY_TIE 47, ABI hash 5c2354771d93a9b0 -> 303e28e16e0ad80c) done; it was running fast, canary,
-    gate, perf, probe and the slab after-render. BLOCKED for landing on the owner: shade_surface compiles 7.73-7.75 s quiet
-    against decision 41's 7.5 s (main 7.19-7.29 s). Opus review (kernel, physics, ABI) can run before the answer. The spine
-    after it (219, 220, 208, 206, 209) and 230 (shade_surface.h) wait.
-  - 198 blender (task/198-f12-denoise-and-passes): dispatched late, early state; brief notes in its Progress if any.
-- Next to dispatch once slots free: 190 (tree vs alias D10 row, measurement, quiet captures), 170 (gpu measurement, quiet),
-  201 after 197 and 198 (V11, gpu measurement), 218 after 208, 193 after 192 (rewrite its Reference first, task text says so),
-  194 after 183 (measurement). When the written tasks run out: loop step 8 (fable planner).
-- Owner list items added: B-05 for shade_surface (blocks 205), B-10 (check full 777-789 s, unenforced), B-11 basis.
+  script (231 ran pre-233). (2) Kernel and session landings, compile timings and captures need a quiet window: tell the
+  implementers to commit and end their turn (they may keep editing source without building), do the quiet work, resume
+  them. Tools that hold the machine lock serialise with each other. 232 re-runs B-38 under load; the B-19 share check has no
+  re-run (BACKLOG). (3) A draft PR blocks the merge: `gh pr ready`, then `land.ps1 merge`. (4) I let three implementers run
+  at times against decision 42's two (a short fixer beside two builders); keep to two. (5) Chain `check fast` and the push
+  so a red stops the push. (6) Implementer briefs: state current rows (k_shade_surface 128 / 416 after 205, else 400; spills
+  4 / 16; compile ~7.2-7.3 s on main, limit 7.5), "one pattern per call through tools/test.ps1", and the quiet-window rule.
+- Owner list (STATUS): B-05 for shade_surface (blocks 205 and the spine), the D10 2x row (190), the v1 margin formula (190),
+  V11 scenes and b_tx (201), B-10 (check full 777-789 s, unenforced), B-11 basis.

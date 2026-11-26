@@ -5,8 +5,8 @@ Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `t
 ## Current milestone
 M1b "First light" (docs/PLAN-M1b.md: slices, lanes, the `shade_surface` spine, gate ledger). First batch
 tasks/136-161, order and lanes in tasks/README.md; runbook and handover in docs/LEAD.md; items without a task in
-docs/BACKLOG.md. Slice 0 closed (all of 136-144, 155, 157, 159-162 landed; `check full` green 659 s; landings by `pwsh tools/land.ps1 submit`). Also landed: 145-158, 163, 164, 165, 172, 182, 183, 186, 189, 204, 211, 212, 224-228, 168, 169, 171, 176-181, 185, 199, 200, 202, 203. Second batch 163-183 (ruling 91), third batch 186-203 and 204 written;
-spine next 163 (reviewed, lands after 204), then 173; open work and next steps in docs/LEAD.md's handover.
+docs/BACKLOG.md. Slice 0 closed (all of 136-144, 155, 157, 159-162 landed; `check full` green 659 s; landings by `pwsh tools/land.ps1 submit`). Also landed: 145-158, 163, 164, 165, 172, 182, 183, 186, 189, 204, 211, 212, 224-228, 168, 169, 171, 176-181, 185, 199, 200, 202, 203, 166, 173, 174, 187, 195, 210, 221, 222, 223, 229; fourth lead: 175, 233, 231, 232, 196, 234, 192, 197, 191, 198. Second batch 163-183 (ruling 91), third batch 186-203 and 204 written;
+spine: 205 done and reviewed, its landing BLOCKED on the owner's B-05 answer (below); open work and next steps in docs/LEAD.md's handover.
 M1a "First pixels" closed (owner decision 37): textured, lamp-lit meshes render progressively in the Blender 5.3
 viewport and F12 on CUDA and CPU through the final C ABI; gallery and report from `tools/gallery.py --milestone
 M1a` and `tools/report.py`. Accepted at the close: B-19 idle 11.0 % (10 % stays the target), B-20 2.00x / 1.63x
@@ -15,6 +15,8 @@ Process: owner decision 36 confirmed; `process/guards` merged (tool deny rules, 
 scope clause).
 
 ## Owner decisions still open
+- V11 final (task 201, parked at its decision table): b_tx's denoised relMSE is 3x worse than raw on both devices (0.00326 vs 0.00108; error on ~1000 small textured spheres), d28 improves 88x (0.00528 -> 0.00006). Owner: a Risk 6-style remedy task for small textured detail, or a different third scene. Separately 201 found a CPU/CUDA colour mismatch on d2_aov_geometry: task 235.
+- V11 final (task 201): the Bitterli archive and the HDRI are not cached on this machine and no download was made overnight, so 201 measures b_tx, d2_aov_geometry and d28_closed_box; 0008 Risk 6 (near-mirror roughness smear) is not exercised. Owner: allow `tools/fetch.ps1` for the Cornell and shader-ball assets, then a re-run.
 - 0004 D10 verification row (task 190): "at least 2x variance reduction on 64 area lights at 256 spp" measured 1.795 on CPU and CUDA (scene d10_many_lights, full MIS with BSDF hits, lamps 0.2-1.0 m; not tuned to pass); tree and alias means agree (0 of 192 tiles rejected after Holm, null calibration 0 of 20 failing). 175's light-only NEE gate case reads 3.0-3.4. Owner: accept 1.8 for this configuration, restate the row for light-only NEE, or ask for a tree remedy.
 - v1 fact needed (task 190): the formula of v1's "1 % relative margin" in the tile Welch test (0009 d17(v); docs/v1-lessons/research/testing.md names it, candidate "1b", without an equation). Provisional lead ruling: shifted statistic t = max(|d| - 0.01 |ref|, 0) / SE with ref the mean of the two tile means, Welch df unchanged. The owner confirms or gives v1's definition.
 - B-05 for `shade_surface` (owner decision 41: 7.5 s) BLOCKS spine task 205 (false interfaces and the medium stack in shade_surface): quiet interleaved kernelgate --time, min of 3 per round: main 7.29 / 7.19 / 7.21 s, branch 7.75 / 7.73 / 7.73 s (+0.52 s: the false-interface site at the top of the stage about 0.35-0.4 s, the pass-through crossing the rest; the dead LOBE_TRANSMISSION site already removed). Options: raise B-05 for shade_surface (e.g. 8.0 s for M1b); take D17's fallback (the medium lookup moves into the intersect routing step: a ladder candidate, not built); or remove the ~0.77 s of vcvarsall every timed compile includes (BACKLOG) and re-base the limit. 205 finishes meanwhile; its landing waits for the answer, and the spine queue after it (219, 220, 208, 206, 209) waits too.
@@ -38,7 +40,7 @@ records (task 185) and superseding ADRs delete what they supersede, JPEG parity 
 - B-05 shade_surface at 6.0-6.4 s of 7.0 s after 163's branch: the spine (173, 174, 175, 192, ...) may reach 7.0 s; past it is an owner item (decision 40).
 
 ## Budget headroom
-`check gate` quiet-machine 145.5 s steady after task 176 (132.7 s after 157); landings under load
+`check gate` quiet-main median 127.2 s after task 234 (was 167 s; 145.5 s after 176); landings under load
 133-183 s (owner decision 38: measured ledger in tasks/README.md, hold above 170 s measured). `check fast` 6.9-7.2 s
 of B-08's 10 s. `check full` about 10-15 min. `k_shade_surface`: 128 registers, stack 400 B, spills 8 / 8 B (ruling 93: up to 16 / 16 for M1b), compile about 5.6 s quiet, 6.0-6.4 s under load on 163's branch of decision 40's 7.0 s (every VM opcode adds an interpreter case to this TU), watched along the spine queue; decision path in docs/PLAN-M1b.md
 "The spine". History: bench/history/2026.jsonl. Spikes: docs/spikes/*/RESULTS.md.

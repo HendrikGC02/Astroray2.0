@@ -1,0 +1,17 @@
+# 235 d2_aov_geometry renders different colours on CPU and CUDA: find the cause (investigation, then the fix)
+Goal: task 201's capture found that `scenes/d2_aov_geometry` (300 instanced meshes, one material each, max_bounces = 1, a dim constant world) renders a different image mean on the two backends before any denoising: CPU (0.2770, 0.2722, 0.3019), CUDA (0.3076, 0.2722, 0.2713) in R, G, B, stable at 64, 1024, 4096 and 16384 spp and across seeds 2, 3 and 7777 at 128 x 128 (SE about 3e-5). G agrees; R and B move in opposite directions. The gate's CPU/CUDA agreement cases did not catch it -> the first point where the two backends' paths differ is found and named, fixed from its source, and a gate case that fails on today's main guards it. [lane kernel; Opus; effort high]
+Read first: 201's draft PR and Progress (branch task/201-v11-final-oidn-check: the table, the commands, the 128 x 128 runs); scenes/d2_aov_geometry/build.py and meta.toml; 0003 d23 (sampler, identical integers on both devices) and D12 (CPU/CUDA agreement rule; ruling 96: agreement through the RGB-to-spectrum lift is gated by its parts); tools/aov_agree.py (primary-hit AOVs agree for this scene); src/kernel/color/rgb2spec.h, src/kernel/stages/shade_background.h (constant world), the material compile path for per-instance materials, and the CPU and CUDA upload of per-instance material tables.
+Scope: whatever file holds the defect once found (name it before fixing; stop and ask if it is outside src/kernel, src/host or src/device), one gate-tier CPU-against-CUDA case on a reduced d2 (a few instances, the same material kinds and world) in the matching test file, tasks/235.canary.patch. Investigation scripts live under out/tmp/235/ and are not committed.
+Out of scope: the denoiser (201's other finding: b_tx's denoised relMSE 3x worse than raw is a separate question for the owner), any tolerance change, other scenes unless the cause is shared (then name them).
+Reference: none until the cause is found; then the source the fixed code implements (Ref: line), never a guess.
+Do:
+1. Bisect the difference: AOV dumps (aov_agree.py) first; then per-instance material ids and constant-block values on both uploads; then the world colour; then the lift (rgb2spec) on the two devices for the scene's actual input colours; then the shade of one fixed path (hand-built state) on both devices. Write down at each step what agreed.
+2. Name the first differing quantity and the code that produces it; ask the lead before fixing if the fix is not a one-place change.
+3. Fix it; the gate case on the reduced scene fails on main (state the numbers) and passes after; the full d2 image means agree within 5 SE afterwards (paste both).
+Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; the new case through `pwsh tools/test.ps1` (one pattern per call); before/after d2 image means per channel on both devices at 128 x 128, 1024 spp.
+Look at: none (numbers; an image only if the bisection needs one).
+Canary: tasks/235.canary.patch must turn red: astroray_tests_gpu "d2_colour_agree/reduced scene matches cpu" (the case name may change with the cause: keep the line in step; the patch reverts the fix).
+Budget: gate +1 s at most; kernel rows: state any change.
+Depends on: none (found by 201). Collisions: unknown until the cause is found; rebase over whatever lands first.
+Size: S for the fix, M for the investigation; stop and report at 2x.
+Progress:
