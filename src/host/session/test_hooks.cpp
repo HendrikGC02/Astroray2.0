@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Ref: 0007 V18; RULINGS.md 77 (NEE modes); 0004 D10 (the light tree's alias-table oracle); 0002 D5 (shadow-slot reservation, k per producer);
+// Ref: 0007 V18; RULINGS.md 77 (NEE modes); 0004 D10 (the light tree's alias-table oracle); 0003 Risk 11 (lane-0 hero); 0002 D5 (shadow-slot reservation, k per producer);
 // host/session/test_hooks.h.
 #include "host/session/test_hooks.h"
 
@@ -102,6 +102,12 @@ TestHooks read_test_hooks() {
       throw std::invalid_argument("ASTRORAY_TEST_LIGHT_SAMPLER=" + value + " is not one of tree, alias");
     if (value == "alias") out.bits |= ar::TEST_HOOK_LIGHT_ALIAS;
     out.active.push_back("LIGHT_SAMPLER=" + value);
+  }
+  if (env_value("HERO", &value)) {
+    // Only the pinned lane is a mode; the random hero is the default and has no value here.
+    if (value != "lane0") throw std::invalid_argument("ASTRORAY_TEST_HERO=" + value + " is not lane0");
+    out.bits |= ar::TEST_HOOK_HERO_LANE0;
+    out.active.push_back("HERO=lane0");
   }
   if (env_value("POOL", &value)) {
     const size_t comma = value.find(',');

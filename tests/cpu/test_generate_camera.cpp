@@ -5,12 +5,14 @@
 // read from the table) or inverse maps (camera_we gives the film pixel a ray crosses), never the
 // stored result itself.
 // Ref: docs/decisions/0008-film-outputs-denoise.md d3 (slot assignment); 0003 d2 (film
-// wavelengths from the key), d6 (hero lane), d19, d21, d23, check 26 (first half); 0002 D7 step 4;
+// wavelengths from the key), d6 (hero lane), d19, d21, d23, check 26 (first half), Risk 11 (the
+// lane-0 hero hook); 0002 D7 step 4;
 // Akenine-Moller et al. 2021 (ray-cone spread).
 #include <doctest.h>
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -20,11 +22,13 @@
 #include <vector>
 
 #include "../../include/astroray/astroray.h"
+#include "common/stat.h"
 #include "device/cpu/cpu_device.h"
 #include "host/film/active_pixels.h"
 #include "host/film/film_layout.h"
 #include "host/film/filter_table.h"
 #include "host/film/response_table.h"
+#include "host/session/test_hooks.h"
 #include "host/spectral/wavelength_table.h"
 #include "host/thread_pool.h"
 #include "film/resolve.h"
@@ -332,6 +336,64 @@ TEST_CASE("generate_camera/initial state") {
   }
   CHECK(heroes.size() > 1);  // 70 draws reach more than one lane
   CHECK(AR_VISIBILITY_CAMERA == ar::kRayTypeCamera);
+}
+
+TEST_CASE("generate_camera/hero hook pins lane zero") {
+  // ASTRORAY_TEST_HERO takes lane0 only: the random hero is the default, and a misspelt value would
+  // silently measure it, so the session's hook reader throws.
+  {
+    struct Restore {
+      ~Restore() { _putenv_s("ASTRORAY_TEST_HERO", ""); }
+    } restore;
+    REQUIRE(_putenv_s("ASTRORAY_TEST_HERO", "random") == 0);
+    CHECK_THROWS_AS(read_test_hooks(), std::invalid_argument);
+    REQUIRE(_putenv_s("ASTRORAY_TEST_HERO", "lane0") == 0);
+    const TestHooks h = read_test_hooks();
+    CHECK(h.bits == ar::TEST_HOOK_HERO_LANE0);
+    REQUIRE(h.active.size() == 1u);
+    CHECK(h.active[0] == "HERO=lane0");
+  }
+  CHECK((read_test_hooks().bits & ar::TEST_HOOK_HERO_LANE0) == 0u);
+
+  // The same pass with and without the hook: the hook sets lane 0 and changes nothing else that
+  // generate_camera stores, so both modes take the same film wavelengths, rays and flags otherwise.
+  Rig a, b;
+  b.kg.session.test_hooks = ar::TEST_HOOK_HERO_LANE0;
+  a.run_pass(4, kK);
+  b.run_pass(4, kK);
+  uint32_t moved = 0;  // slots whose random hero is not lane 0, so the hook had something to pin
+  for (uint32_t sample = 0; sample < kSlots; ++sample) {
+    const uint32_t slot = a.queue[sample];
+    CHECK(ar::hero_lane(b.path.flags[slot]) == 0u);
+    CHECK((b.path.flags[slot] & ~ar::HERO_LANE_MASK) == (a.path.flags[slot] & ~ar::HERO_LANE_MASK));
+    moved += ar::hero_lane(a.path.flags[slot]) != 0u;
+    CHECK(std::memcmp(&a.path.lambda_t[slot], &b.path.lambda_t[slot], sizeof(ar::Spec)) == 0);
+    CHECK(std::memcmp(&a.path.ray_d[slot], &b.path.ray_d[slot], sizeof(ar::Real3)) == 0);
+  }
+  CHECK(moved > 0u);
+}
+
+}  // TEST_SUITE
+
+TEST_SUITE("gate") {
+
+TEST_CASE("generate_camera/hero lane is uniform without the hook") {
+  // 0003 d6: without the hook each camera path's hero is uniform on {0..3}. Independent sampler mode,
+  // so the draws are i.i.d. and the counts follow the multinomial the chi-squared test assumes
+  // (Sobol stratifies the hero dimension per pixel, which would only lower the statistic).
+  const astroray::stat::Run run = astroray::stat::begin("generate_camera/hero lane is uniform without the hook");
+  Rig r;
+  r.kg.session.sampler_mode = ar::SAMPLER_INDEPENDENT;
+  r.kg.session.seed = uint32_t(run.seed);
+  constexpr uint32_t kHeroPasses = 64;  // 64 x 70 = 4480 paths, 1120 expected per lane
+  std::vector<double> observed(ar::kLanes, 0.0);
+  for (uint32_t pass = 0; pass < kHeroPasses; ++pass) {
+    r.run_pass(pass * kK, kK);
+    for (uint32_t sample = 0; sample < kSlots; ++sample) observed[ar::hero_lane(r.path.flags[r.queue[sample]])] += 1.0;
+  }
+  const std::vector<double> expected(ar::kLanes, double(kHeroPasses) * kSlots / ar::kLanes);
+  const astroray::stat::Chi2Result res = astroray::stat::chi2_test(run, observed, expected);
+  CHECK_MESSAGE(res.pass, res.message);
 }
 
 }  // TEST_SUITE

@@ -4,9 +4,11 @@
 // 1024-wide film (so plane indices differ from j), a rotated camera, the production filter and
 // wavelength tables, samples_done = 3. Integer fields and the constant fields must be bit-equal;
 // ray directions agree to 0002 D12's direction threshold (p99.9 <= 1e-5 rad, FMA-off GPU build vs
-// CPU float); film wavelengths and the cone spread to its evaluation threshold.
+// CPU float); film wavelengths and the cone spread to its evaluation threshold. A second pair runs
+// with the HERO_LANE0 test hook: the flags stay bit-equal and every hero is lane 0 on both devices.
 // Ref: docs/decisions/0002-kernel-architecture.md D4, D12; 0009 d17; 0003 d23 (keys, dims 0-7);
-// 0008 d3 (the list). The production modules are launched, so what runs is the shipped code.
+// 0008 d3 (the list); 0003 Risk 11 (the lane-0 hero hook). The production modules are launched, so
+// what runs is the shipped code.
 #include <doctest.h>
 
 #include <cmath>
@@ -82,7 +84,7 @@ struct Snapshot {
 // One device's copy of the fixture, run once. `gpu` is null for the CPU device, where a buffer
 // address is a host address and the kernels are called directly.
 Snapshot run(Device& dev, ModuleDevice* gpu, const WavelengthTable& wt, const ar::FilterTable& filter,
-             const ar::CameraView& camera) {
+             const ar::CameraView& camera, uint32_t test_hooks = 0u) {
   const Owner owner{1, 1};
   const auto put = [&](const void* p, uint64_t bytes) {
     DeviceBuffer b = dev.allocate(LedgerCategory::TABLES, bytes, owner);
@@ -141,6 +143,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const WavelengthTable& wt, const ar
   kg.session.samples_per_pass = 1;
   kg.session.seed = 0xC0FFEEu;
   kg.session.sampler_mode = ar::SAMPLER_SOBOL;
+  kg.session.test_hooks = test_hooks;
   DeviceBuffer kg_buf = put(&kg, sizeof kg);
 
   if (gpu != nullptr) {
@@ -232,6 +235,26 @@ TEST_CASE("generate_camera/agreement") {
   const agree::Stats cone = agree::compare(as_results(g.get("cone"), 2), as_results(c.get("cone"), 2), agree::Metric::REL_L2);
   CHECK(agree::report("generate_camera", "cone nofma vs cpu float", cone, agree::Cls::EVAL,
                       agree::NOFMA_VS_CPU_FLOAT).pass);
+
+  // The hook bit in the inputs: both devices pin every hero to lane 0, and the unhooked run drew
+  // other lanes, so the comparison is not of two default runs.
+  const Snapshot ch = run(cpu, nullptr, wt, *filter, camera, ar::TEST_HOOK_HERO_LANE0);
+  const Snapshot gh = run(*gpu, gpu.get(), wt, *filter, camera, ar::TEST_HOOK_HERO_LANE0);
+  const auto& fc = ch.get("flags");
+  const auto& fg = gh.get("flags");
+  REQUIRE(fc.size() == fg.size());
+  CHECK_MESSAGE(std::memcmp(fc.data(), fg.data(), fc.size()) == 0, "hooked flags differ");
+  const auto& f0 = c.get("flags");
+  uint32_t pinned_wrong = 0, drawn_nonzero = 0;
+  for (uint32_t i = 0; i < kN; ++i) {
+    uint32_t a, b;
+    std::memcpy(&a, fg.data() + size_t(i) * sizeof a, sizeof a);
+    std::memcpy(&b, f0.data() + size_t(i) * sizeof b, sizeof b);
+    pinned_wrong += ar::hero_lane(a) != 0u;
+    drawn_nonzero += ar::hero_lane(b) != 0u;
+  }
+  CHECK(pinned_wrong == 0u);
+  CHECK(drawn_nonzero > 0u);
 }
 
 }  // TEST_SUITE

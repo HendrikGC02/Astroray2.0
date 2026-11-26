@@ -96,10 +96,12 @@ AR_FN void stage_generate_camera(const KernelGlobals& kg, uint32_t item, const S
   }
 
   // Hero lane floor(4 u) (0003 d6); the clamp guards u rounding up to 1. PATH_KIND stays clear:
-  // a camera path.
+  // a camera path. The HERO_LANE0 hook overrides the lane after the draw, so the sample's other
+  // dimensions are the same in both modes.
   {
     uint32_t hero = uint32_t(camera_draw(kg, key, DIM_CAM_HERO) * Real(4));
     if (hero > 3u) hero = 3u;
+    if ((kg.session.test_hooks & TEST_HOOK_HERO_LANE0) != 0u) hero = 0u;
     ps_flags(kg, slot) = set_hero_lane(0u, hero);
   }
   // Denoiser guides (0008 d15, d23): the tint starts at 1; the flags above leave
