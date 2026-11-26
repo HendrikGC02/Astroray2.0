@@ -362,6 +362,60 @@ AR_RT_CASE("light_tree_kernel/world pmf stays positive") {
   CHECK(ar::light_sampler_pmf(W.v, below, two.world, false) > Real(0));
 }
 
+AR_RT_CASE("light_tree_kernel/importance finite inside bounds") {
+  // 0004 Verification "D10 tree", third column: a tree over 64 down-facing rectangular lamps of mixed
+  // size and power; at 200 points inside the bounds of every node (the first the box centre, computed
+  // as light_tree_importance computes it, so the distance to it is exactly 0; flat boxes keep their
+  // flat coordinate) with random normals, the node's importance is finite and non-negative, and an
+  // inner node's two branch probabilities are non-negative and sum to 1, or the node returns no
+  // split and then both children have maximum importance 0.
+  Rng rng{1901};
+  auto u = [&](double a, double b) { return a + (b - a) * rng.next(); };
+  Lights L;
+  for (int i = 0; i < 64; ++i) {
+    const double s = std::exp(u(std::log(2.0), std::log(200.0)));
+    push(L, ar::light_make_area(ar::LightType::AREA_RECT, r3(u(-4, 4), u(-4, 4), u(0.4, 2.4)), r3(1, 0, 0), r3(0, 1, 0),
+                                Real(u(0.1, 0.6)), Real(u(0.1, 0.6)), Real(s), white()), s);
+  }
+  const View V(L);
+  REQUIRE(V.tree.nodes.size() == 127u);  // one leaf per lamp
+  const double tol = kF32 ? 1e-6 : 1e-12;
+  int bad_imp = 0, bad_sum = 0, bad_none = 0, splits = 0, none = 0;
+  double worst = 0.0;
+  for (const ar::LightTreeNode& node : V.tree.nodes) {
+    REQUIRE((node.flags & ar::kLightTreeDistant) == 0u);
+    const Real3 lo = ar::light_tree_f3(node.bbox_lo), hi = ar::light_tree_f3(node.bbox_hi);
+    for (int k = 0; k < 200; ++k) {
+      Real3 p = (lo + hi) * Real(0.5);
+      if (k > 0) {
+        const double f[3] = {rng.next(), rng.next(), rng.next()};
+        p = r3(double(lo.x) + f[0] * double(hi.x - lo.x), double(lo.y) + f[1] * double(hi.y - lo.y), double(lo.z) + f[2] * double(hi.z - lo.z));
+      }
+      const double z = 2.0 * rng.next() - 1.0, ph = 2.0 * 3.14159265358979323846 * rng.next(), r = std::sqrt(1.0 - z * z);
+      const Real3 n = r3(r * std::cos(ph), r * std::sin(ph), z);
+      const ar::LightTreeImportance imp = ar::light_tree_importance(node, p, n);
+      bad_imp += !(std::isfinite(double(imp.max)) && std::isfinite(double(imp.min)) && imp.max >= Real(0) && imp.min >= Real(0));
+      if (node.flags & ar::kLightTreeLeaf) continue;
+      ar::LightTreeSplit sp{};
+      if (ar::light_tree_split(V.v.tree, node, p, n, &sp)) {
+        ++splits;
+        const double sum = double(sp.left) + double(sp.right);
+        worst = std::max(worst, std::fabs(sum - 1.0));
+        bad_sum += !(sp.left >= Real(0) && sp.right >= Real(0) && std::fabs(sum - 1.0) <= tol);
+      } else {
+        ++none;
+        bad_none += !(ar::light_tree_importance(V.tree.nodes[node.child[0]], p, n).max == Real(0) &&
+                      ar::light_tree_importance(V.tree.nodes[node.child[1]], p, n).max == Real(0));
+      }
+    }
+  }
+  INFO("splits " << splits << ", no split " << none << ", worst |left + right - 1| " << worst);
+  CHECK(bad_imp == 0);
+  CHECK(bad_sum == 0);
+  CHECK(bad_none == 0);
+  CHECK(splits > 63 * 100);  // most inner-node points see a lamp: the sums were tested, not skipped
+}
+
 #if !defined(AR_REAL_DOUBLE)
 TEST_CASE("light_tree_kernel/selection frequency matches the mixture") {
   // 10^6 draws at one point against N pmf per light (chi-squared, pooled cells, Sidak), in four

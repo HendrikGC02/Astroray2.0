@@ -437,12 +437,22 @@ def comparison_plan(t, spp=None):
     return size, spp, block_size
 
 
+def hook_env(nee="on", light_sampler="tree"):
+    """The CLI's environment with the test hooks (src/host/session/test_hooks.cpp) set to these
+    values and nothing inherited for them: ASTRORAY_TEST_NEE ("on" leaves it unset) and
+    ASTRORAY_TEST_LIGHT_SAMPLER ("tree", the default, leaves it unset; "alias" selects the oracle)."""
+    env = {k: v for k, v in os.environ.items() if k not in ("ASTRORAY_TEST_NEE", "ASTRORAY_TEST_LIGHT_SAMPLER")}
+    if nee != "on":
+        env["ASTRORAY_TEST_NEE"] = nee
+    if light_sampler != "tree":
+        env["ASTRORAY_TEST_LIGHT_SAMPLER"] = light_sampler
+    return env
+
+
 def render_mode(rec, device, spp, seed, size, mode):
     """One CLI dump of `rec` with ASTRORAY_TEST_NEE = mode ("on" leaves it unset); returns
     (mean, var) or the CLI's output as a string on failure."""
-    env = {k: v for k, v in os.environ.items() if k != "ASTRORAY_TEST_NEE"}
-    if mode != "on":
-        env["ASTRORAY_TEST_NEE"] = mode
+    env = hook_env(nee=mode)
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "dump.fits")
         r = subprocess.run([CLI, "dump", rec, "-o", out, "--device", device, "--spp", str(spp),
