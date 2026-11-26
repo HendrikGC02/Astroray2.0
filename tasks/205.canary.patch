@@ -1,3 +1,21 @@
+diff --git a/src/host/scene/scene.cpp b/src/host/scene/scene.cpp
+index d235b36e..e6425e18 100644
+--- a/src/host/scene/scene.cpp
++++ b/src/host/scene/scene.cpp
+@@ -409,3 +409,3 @@ std::map<ar_key, std::string> Scene::medium_priority_ties() const {
+       const Bearer &a = bearers[i], &b = bearers[j];
+-      if (a.priority != b.priority) continue;
++      if (a.priority == b.priority) continue;
+       bool overlap = true;
+diff --git a/src/kernel/medium/medium_stack.h b/src/kernel/medium/medium_stack.h
+index 5b370d06..13bc013f 100644
+--- a/src/kernel/medium/medium_stack.h
++++ b/src/kernel/medium/medium_stack.h
+@@ -95,3 +95,3 @@ AR_FN bool interface_is_true(U32x4 stack, uint32_t flags, uint32_t hit_id, uint3
+     if (stack_entry_id(stack.v[i]) == hit_id) return int(i) == stack_highest_index(stack, flags);
+-  return true;
++  return false;
+ }
 diff --git a/src/kernel/stages/route_hit.h b/src/kernel/stages/route_hit.h
 index 18e496b1..9ac8840f 100644
 --- a/src/kernel/stages/route_hit.h
@@ -8,9 +26,14 @@ index 18e496b1..9ac8840f 100644
 +  if (instance_medium(kg, hit.inst) != kNoMedium) return Stage::SHADE_VOLUME;
    return route_hit_after_medium(kg, hit, path_flags);
 diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
-index 406356bc..32bb1b9f 100644
+index ae39ecf4..84bd585e 100644
 --- a/src/kernel/stages/shade_surface.h
 +++ b/src/kernel/stages/shade_surface.h
+@@ -161,3 +161,3 @@ AR_FN void surface_move_past(const KernelGlobals& kg, uint32_t slot, Real3 P, Re
+   const Real3 o = ps_ray_o(kg, slot), d = ps_ray_d(kg, slot);
+-  const Real3 o_next = offset_past_surface(P, Ng, d);
++  const Real3 o_next = offset_ray_origin(P, Ng, d);
+   ps_prev_dist(kg, slot) = ps_prev_dist(kg, slot) + dot(o_next - o, d) / dot(d, d);
 @@ -183,3 +183,3 @@ AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint3
    const uint32_t priority = front ? material_medium_priority(kg, mat) : 0u;
 -  if (interface_is_true(stack, flags, m + 1u, priority, front)) return false;
@@ -26,15 +49,44 @@ index 406356bc..32bb1b9f 100644
 -  const StackUpdate u = front ? stack_push(stack, flags, m + 1u, material_medium_priority(kg, mat)) : stack_remove(stack, flags, m + 1u);
 +  const StackUpdate u = stack_remove(stack, flags, m + 1u + 0u * material_medium_priority(kg, mat));
    // A refused push or remove returns the stack and flags unchanged, so they are stored either way; only
-@@ -213,3 +213,3 @@ AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_
-   ps_flags(kg, slot) = u.flags;
+@@ -216,3 +216,3 @@ AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_
+   ps_medium_rng(kg, slot) = flight_rng_start(uint32_t(ps_event_index(kg, slot)) + 1u);
 -  if (u.ok || !front) return true;
 +  if (u.ok || front || !front) return true;
    path_end(kg, slot, Term::STACK_OVERFLOW);
-@@ -428,2 +428,6 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+@@ -234,3 +234,3 @@ AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_
+ AR_FN uint32_t nee_item_medium(const KernelGlobals& kg, uint32_t slot, uint32_t flags) {
+-  return stack_highest_id(ps_medium_stack(kg, slot), flags);
++  return stack_entry_id(ps_medium_stack(kg, slot).v[medium_depth(flags) - 1u]);
+ }
+@@ -253,3 +253,3 @@ AR_FN void nee_item_media(const KernelGlobals& kg, uint32_t sh, uint32_t medium_
+                           const Spec& r_p, Real p_light, Real p_scatter, bool delta_light, const Lambda& lam, bool world_le) {
+-  sh_medium_stack(kg, sh) = shadow_medium_field(world_le ? 0u : medium_plus_one);
++  sh_medium_stack(kg, sh) = shadow_medium_field(medium_plus_one);
+   sh_medium_rng(kg, sh) = shadow_rng_start(e);
+@@ -436,2 +436,6 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
        return;
 +    if (phase == 0u && kg.session.features.media && ctx.front_face != 0u && instance_medium(kg, inst) != kNoMedium) {
 +      const StackUpdate t = stack_push(ps_medium_stack(kg, slot), ps_flags(kg, slot), instance_medium(kg, inst) + 1u, 0u);
 +      ps_medium_stack(kg, slot) = t.stack, ps_flags(kg, slot) = t.flags;
 +    }
      if (ok) {
+@@ -554,3 +558,3 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
+     if (kg.session.features.media)
+-      nee_item_media(kg, sh, nee_item_medium(kg, slot, flags), e, flags, ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta,
++      nee_item_media(kg, sh, ls.delta ? nee_item_medium(kg, slot, flags) : 0u, e, flags, ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta,
+                      ctx.lambda_t, world_le);
+diff --git a/src/kernel/stages/shade_volume.h b/src/kernel/stages/shade_volume.h
+index 4c52eb44..b0f553c0 100644
+--- a/src/kernel/stages/shade_volume.h
++++ b/src/kernel/stages/shade_volume.h
+@@ -93,3 +93,3 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
+   // route_hit sends only paths with a non-empty stack here, which exists only with the media feature.
+-  const uint32_t id = stack_highest_id(ps_medium_stack(kg, slot), ps_flags(kg, slot));
++  const uint32_t id = stack_entry_id(ps_medium_stack(kg, slot).v[medium_depth(ps_flags(kg, slot)) - 1u]);
+   AR_ASSERT(id != 0u && id <= s.medium_count);
+@@ -131,3 +131,3 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
+   const uint32_t stored = kg.session.features.media ? ps_medium_rng(kg, slot) : 0u;
+-  uint32_t counter = stored >= first && stored < end ? stored : first;
++  uint32_t counter = first + 0u * stored;
+   TrackWeights w{ps_beta(kg, slot), ps_r_u(kg, slot), ps_r_l(kg, slot)};
