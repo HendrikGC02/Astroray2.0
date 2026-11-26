@@ -80,42 +80,29 @@ handover below, then stop. Send long landing logs to a `digest` agent. `tools/le
 through opencode, owner decisions 32 and 36) may draft bench-history lines, backlog rows and digests from
 repository text; treat its answer as a draft.
 
-## Handover (M1b second batch, landing-load fixes in flight, 2026-11-25)
-State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from
-its task file. To continue a branch, `git -C <old worktree> switch --detach`, then brief the agent to `git switch task/NNN-*`
-first in its own worktree. Brief every implementer with the environment lines above and the current k_shade_surface row
-(128 regs, stack 400 B, spills 8 / 8 B, compile 6.0-6.4 s under load of 7.0 s; task files' Budget lines still say 384 / 0 / 4.6:
-stale, correct them in the brief).
-- Landed this session (9): 169, 156, 203, 202, 158, 181, 176, 177, 165 (ledger in tasks/README.md). `check full` passed at the
-  start (731.5 s on d0cc2d2) and is due after the next landing. Quiet main gate 145.5 s after 176 (gate_runs).
-- Rulings this session: 94 (B-09 excludes the gate's build steps, PROVISIONAL, owner list in STATUS). Task-level rulings
-  are in each task's Progress. Owner decision 40 lets the lead decide; record number or gate changes as rulings.
-- The blocker: landings fail on machine load. A landing gate rebuilds after the canary (16-31 s of builds in the tier) and
-  meets other worktrees' compiles: 181 183.2 s, 164 refused four times (build_info race, B-05 7.29 s, B-09 188.8 / 183.3 s).
-  Until 204 lands, land in a quiet window: message each implementer to commit and pause, check `Get-Process cl,nvcc,ninja`,
-  land with `-Queue`, then resume them. That worked for 176 and 165.
-- In flight, all paused or idle (no agent of this session will report again):
-  - 204 tools (task/204-build-info-stamp-race, worktree agent-a756de9e...): cause confirmed (git status/diff rewrite
-    .git/index, build_info.cpp depends on it); canary and 0009 d5/d8/d11/B-09 text committed; state of the code unknown
-    after a PC crash: a new implementer reads Progress and the log, finishes steps 2-4 (restat stamp, compile timing in
-    the window, `gate -Landing` from land.ps1, ruling 94's clock), runs fast, gate, canary; then Opus review (process
-    and concurrency), land in a quiet window. Lead answers already given: the shared cmake function, the extracted settle
-    function and the fixture's ~1-1.5 s gate cost are accepted.
-  - 164 cpu (task/164-compiler-flags-and-nan-rule, agent-a5de2621...): reviewed, PASS. Land right after 204.
-  - 163 spine (task/163-metal-in-the-stack, agent-afe8fb64...): reviewed PASS WITH FIXES, fixes done (65b6853); lands after
-    204 (its gate 169.6 s without builds). Then spawn the fable planner (loop step 8).
-  - 182 kernel (task/182-shade-volume-skeleton, agent-ac84f650...): code and tests done, paused twice, not rebased on
-    165/177; owes a rebase, the canary matrix, fast and gate, then an Opus review (kernel, upload, routing). Rulings in its
-    Progress; k_route_hit 28 to 40 regs (state the row's limit); new k_shade_volume 34 regs.
-- Next to dispatch: 172 (kernel S, ready: after 158 and 177), 170 (gpu measurement, quiet machine), then 183 after 182,
-  186 after 163, 189 after 172, 173 (spine) after 163 and 172.
-- The PC crashed at 05:59 on 2026-11-25: bugcheck 0x133 DPC_WATCHDOG_VIOLATION (dump C:\Windows\Minidump\112526-12000-01.dmp).
-  The System log carries nvlddmkm event 13 (Xid MMU NACK) about every 3-10 min since yesterday: the deliberate
-  out-of-bounds kernel of src/kernel_gpu/test_fault.cu run by the gpu abi tests in every gate. The watchdog in the
-  display driver during a fault recovery is the likely cause, unconfirmed without a debugger (none installed).
-- Review lessons: Opus reviews found real defects in 156, 202, 169, 181 (three rounds), 158, 177 (the task text's own
-  sigma rule), 164 and 165. Canary patches above 8 hunks skip canary.ps1's matrix: demand per-hunk evidence by hand.
-  Task acceptance commands with comma lists or old suite names (`nee_agree/*`, `shade_surface_agree/*`) match nothing;
-  accept the real case names.
-- Backlog rows added this session: see docs/BACKLOG.md (Blackbody folding, TABLE world colour, stack.h silent zero,
-  medium ray mask, Blackbody above 1e9 K, gate creep, stale incremental link, 203 review notes).
+## Handover (fourth lead, night of 2026-11-26/27)
+State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from its task
+file, its Progress and `git log main..task/NNN-*`. To continue a branch, `git -C <old worktree> switch --detach`, then brief the
+agent to `git switch task/NNN-*` first in its own worktree.
+- Landed this session (9): 175, 233, 231, 232, 196, 234, 192, 197, 191 (ledger in tasks/README.md). `check full` passed on 234's
+  branch (777.5 s) and on 191's (789.4 s). Quiet main gate median after 234: 127.2 s (was 167 s); fast 5.6 s.
+- Rulings this session: 104 (shadow medium pre-pass, D19 split), 105 (231's fixture gate cost), 106 (delta-light shadow items),
+  107 (106 superseded once 205 routes by stack depth, PROVISIONAL until 205's review). Task-level rulings are in each Progress.
+- Process lessons: (1) land.ps1 runs from the task worktree: a branch not rebased after a land.ps1 change lands with the old
+  script (231 ran pre-233). (2) Kernel and session landings need a quiet window: pause implementers (commit and end the turn;
+  they may keep editing source without building), land, resume. 232 re-runs B-38 under load but the B-19 share check has no
+  re-run (BACKLOG). (3) Quiet windows also serve compile timings (205, 192) and measurement captures (234, 191). (4) A draft
+  PR blocks the merge (233): `gh pr ready`, then `land.ps1 merge`. (5) I let three implementers run at times against decision
+  42's two (a short fixer beside two builders); the lock serialised builds, but keep to two. (6) Chain `check fast` and the
+  push so a red stops the push (one push went out on a load-only B-12 red; re-run was green).
+- In flight:
+  - 205 spine (task/205-false-interfaces-medium-stack, worktree agent-af6b96aa...): implementation, docs, host report
+    (new code MEDIUM_PRIORITY_TIE 47, ABI hash 5c2354771d93a9b0 -> 303e28e16e0ad80c) done; it was running fast, canary,
+    gate, perf, probe and the slab after-render. BLOCKED for landing on the owner: shade_surface compiles 7.73-7.75 s quiet
+    against decision 41's 7.5 s (main 7.19-7.29 s). Opus review (kernel, physics, ABI) can run before the answer. The spine
+    after it (219, 220, 208, 206, 209) and 230 (shade_surface.h) wait.
+  - 198 blender (task/198-f12-denoise-and-passes): dispatched late, early state; brief notes in its Progress if any.
+- Next to dispatch once slots free: 190 (tree vs alias D10 row, measurement, quiet captures), 170 (gpu measurement, quiet),
+  201 after 197 and 198 (V11, gpu measurement), 218 after 208, 193 after 192 (rewrite its Reference first, task text says so),
+  194 after 183 (measurement). When the written tasks run out: loop step 8 (fable planner).
+- Owner list items added: B-05 for shade_surface (blocks 205), B-10 (check full 777-789 s, unenforced), B-11 basis.
