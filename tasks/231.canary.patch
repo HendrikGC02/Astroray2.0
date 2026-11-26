@@ -1,0 +1,22 @@
+diff --git a/tools/lib/lock.ps1 b/tools/lib/lock.ps1
+index 8573468a..d93a22c9 100644
+--- a/tools/lib/lock.ps1
++++ b/tools/lib/lock.ps1
+@@ -168,7 +168,7 @@ $script:ArHolderScript = {
+     if (-not $s.Try) { Start-Sleep -Milliseconds 25; continue }
+     # A short job blocks in the wait, so it is first in line at a release; a long tool polls and so never
+     # queues ahead of a short job that registered after it.
+-    $slice = if ($s.Short) { 100 } else { 0 }
++    $slice = 100
+     try {
+       if ($m.WaitOne($slice)) { $taken = $true; $s.State = 'held' }
+       elseif (-not $s.Short) { Start-Sleep -Milliseconds 25 }
+@@ -177,7 +177,7 @@ $script:ArHolderScript = {
+   if (-not $taken) { $m.Dispose(); $s.State = 'cancelled'; return }
+   $s.Acquired.Set() | Out-Null
+   $sw = [Diagnostics.Stopwatch]::StartNew()
+-  while (-not $s.Release -and $sw.Elapsed.TotalSeconds -lt $s.CeilingS) { Start-Sleep -Milliseconds 25 }
++  while (-not $s.Release) { Start-Sleep -Milliseconds 25 }
+   if (-not $s.Release) {
+     $s.Expired = $true
+     $step = if ($s.Step) { $s.Step } else { 'unknown' }
