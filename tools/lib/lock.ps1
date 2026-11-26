@@ -168,7 +168,7 @@ $script:ArHolderScript = {
     if (-not $s.Try) { Start-Sleep -Milliseconds 25; continue }
     # A short job blocks in the wait, so it is first in line at a release; a long tool polls and so never
     # queues ahead of a short job that registered after it.
-    $slice = if ($s.Short) { 100 } else { 0 }
+    $slice = if ($s.Poll) { 0 } else { 100 }
     try {
       if ($m.WaitOne($slice)) { $taken = $true; $s.State = 'held' }
       elseif (-not $s.Short) { Start-Sleep -Milliseconds 25 }
@@ -241,6 +241,7 @@ function Enter-ArMachineLock {
     while ($true) {
       # A long tool yields while a short job waits; a short job never does.
       $yield = (-not $Short) -and (Get-ArShortWaiting) -gt 0
+      $s.Poll = -not $Short
       $s.Try = -not $yield
       if ($s.Acquired.WaitOne(100)) { break }
       if ($sw.Elapsed.TotalSeconds -lt $nextTick) { continue }

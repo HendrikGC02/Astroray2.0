@@ -13,7 +13,7 @@ function Check([string]$what, [bool]$ok, $out = @()) {
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "fast_lock_priority_$PID"
 New-Item -ItemType Directory -Force $tmp | Out-Null
 $env:ASTRORAY_LOCK_PID = $null
-$env:ASTRORAY_LOCK_MESSAGE_S = '0.2'
+$env:ASTRORAY_LOCK_MESSAGE_S = '0.1'
 $env:ASTRORAY_LOCK_TIMEOUT_S = $null
 $env:ASTRORAY_LOCK_CEILING_S = $null
 $env:ASTRORAY_LOCK_NAME = "Local\astroray2-priority-$PID"
@@ -42,7 +42,7 @@ param([string]`$name, [string]`$job, [switch]`$short, [string]`$release)
 `$null = Enter-ArMachineLock -Job `$job -Short:`$short
 Set-Content "$tmp/acq.`$name" ([DateTime]::UtcNow.Ticks)
 if (`$release) { `$sw = [Diagnostics.Stopwatch]::StartNew(); while (-not (Test-Path `$release) -and `$sw.Elapsed.TotalSeconds -lt 20) { Start-Sleep -Milliseconds 20 } }
-else { Start-Sleep -Milliseconds 400 }
+else { Start-Sleep -Milliseconds 100 }
 Exit-ArMachineLock
 "@
 function Get-Acq([string]$name) { [long](Get-Content (Join-Path $tmp "acq.$name")) }

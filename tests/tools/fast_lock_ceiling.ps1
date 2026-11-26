@@ -16,7 +16,7 @@ function Check([string]$what, [bool]$ok, $out = @()) {
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "fast_lock_ceiling_$PID"
 New-Item -ItemType Directory -Force $tmp | Out-Null
 $env:ASTRORAY_LOCK_PID = $null
-$env:ASTRORAY_LOCK_MESSAGE_S = '0.3'
+$env:ASTRORAY_LOCK_MESSAGE_S = '0.1'
 $env:ASTRORAY_LOCK_TIMEOUT_S = $null
 $env:ASTRORAY_LOCK_NAME = "Local\astroray2-ceiling-$PID"
 $env:ASTRORAY_LOCK_DIR = Join-Path $tmp 'lock'
@@ -34,6 +34,10 @@ function Start-Pwsh([string]$name, [string[]]$a) {
 function Wait-File([string]$f) {
   $sw = [Diagnostics.Stopwatch]::StartNew()
   while (-not (Test-Path $f)) { if ($sw.Elapsed.TotalSeconds -gt 15) { throw "$f not written in 15 s" }; Start-Sleep -Milliseconds 10 }
+}
+function Wait-Until([scriptblock]$cond, [string]$what) {
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  while (-not (& $cond)) { if ($sw.Elapsed.TotalSeconds -gt 15) { throw "timed out: $what" }; Start-Sleep -Milliseconds 10 }
 }
 function Test-Alive([int]$id) { [bool](Get-Process -Id $id -ErrorAction SilentlyContinue) }
 
@@ -71,49 +75,74 @@ param([string]`$dir)
 . '$lockLib'
 `$m = New-Object System.Threading.Mutex(`$false, `$env:ASTRORAY_LOCK_NAME)
 `$null = `$m.WaitOne()
-`$null = Write-ArLockOwner (Join-Path `$env:ASTRORAY_LOCK_DIR 'owner.json') @{ ceiling_s = 1; step = 'stuck step' }
+`$null = Write-ArLockOwner (Join-Path `$env:ASTRORAY_LOCK_DIR 'owner.json') @{ ceiling_s = 0.5; step = 'stuck step' }
 Set-Content "`$dir/ready" ready
 Start-Sleep 120
 "@
 
+$ends = Join-Path $tmp 'ends.ps1'
+Set-Content -Path $ends -Value @"
+param([string]`$dir, [string]`$hold)
+. '$lockLib'
+`$null = Enter-ArMachineLock -Job test
+Set-Content "`$dir/ready" ready
+if (`$hold -eq 'hold') { Start-Sleep 120 } elseif (`$hold) { Start-Sleep -Milliseconds 700 }
+"@
+
 try {
-  # An unrelated process must survive the watchdog.
+  # Each case has its own mutex and owner directory, so the cases start together and the fixture waits once.
+  function Use-Lock([string]$tag) { $env:ASTRORAY_LOCK_NAME = "Local\astroray2-ceiling-$PID-$tag"; $env:ASTRORAY_LOCK_DIR = Join-Path $tmp "lock-$tag" }
   $bystander = Start-Process pwsh -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 120' -PassThru -NoNewWindow
   $procs += $bystander
-  # 1. Ceiling stop.
+  # 1. Ceiling stop of a hung holder with a child and a grandchild.
   $d1 = Join-Path $tmp 'c1'; New-Item -ItemType Directory -Force $d1 | Out-Null
-  $env:ASTRORAY_LOCK_CEILING_S = '2'
+  Use-Lock 'a'; $env:ASTRORAY_LOCK_CEILING_S = '1'
   $h = Start-Pwsh 'hang' @($hang, $d1)
   $env:ASTRORAY_LOCK_CEILING_S = $null
-  Wait-File (Join-Path $d1 'ready'); Wait-File (Join-Path $d1 'grand.pid')
+  $lockA = $env:ASTRORAY_LOCK_DIR
+  # 2. A holder past its ceiling with no watchdog (a hung one whose watchdog failed): the waiter names it.
+  $d2 = Join-Path $tmp 'c2'; New-Item -ItemType Directory -Force $d2 | Out-Null
+  Use-Lock 'b'
+  $s = Start-Pwsh 'stuck' @($stuck, $d2)
+  # 3. A holder that ends without Exit-ArMachineLock, and 4. one that is killed: the next waiter gets the mutex
+  # at once, with the abandoned-mutex warning.
+  $d3 = Join-Path $tmp 'c3'; New-Item -ItemType Directory -Force $d3 | Out-Null
+  Use-Lock 'c'
+  $e = Start-Pwsh 'ends' @($ends, $d3, 'end')
+  $d4 = Join-Path $tmp 'c4'; New-Item -ItemType Directory -Force $d4 | Out-Null
+  Use-Lock 'd'
+  $k = Start-Pwsh 'killed' @($ends, $d4, 'hold')
+  foreach ($d in $d1, $d2, $d3, $d4) { Wait-File (Join-Path $d 'ready') }
+  Wait-File (Join-Path $d1 'grand.pid')
   $child = [int](Get-Content (Join-Path $d1 'child.pid')); $grand = [int](Get-Content (Join-Path $d1 'grand.pid'))
-  Check 'the holder, its child and grandchild run before the ceiling' ((Test-Alive $child) -and (Test-Alive $grand))
-  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $env:FAST_GRACE = '0.5'
+  Use-Lock 'b'; $w2 = Start-Pwsh 'wait2' @($wait)
+  Use-Lock 'c'; $w3 = Start-Pwsh 'wait3' @($wait)
+  Use-Lock 'd'; $w4 = Start-Pwsh 'wait4' @($wait)
+  # A waiter must be blocked on the mutex when its holder dies: the kernel destroys a named mutex with its last
+  # handle, and no abandonment is left to report to a waiter that starts later.
+  Wait-Until { (Read-Out 'wait4') -match 'waiting for' } 'wait4 waits'
+  Stop-Process -Id $k.Id -Force
   $null = $h.WaitForExit(15000)
   $out = Read-Out 'hang'
-  Check 'the hung holder exits' $h.HasExited $out
   Check 'the hung holder exits non-zero' ($h.HasExited -and $h.ExitCode -ne 0) $out
-  Check 'the FAIL line names the held seconds, the job ceiling and the step' (($out -join "`n") -match 'FAIL lock: held \d+ s, over the test ceiling of 2 s \(step: hung step; pid \d+\)') $out
+  Check 'the FAIL line names the held seconds, the job ceiling and the step' (($out -join "`n") -match 'FAIL lock: held \d+ s, over the test ceiling of 1 s \(step: hung step; pid \d+\)') $out
   Check "the holder's child and grandchild are stopped" (-not (Test-Alive $child) -and -not (Test-Alive $grand)) $out
   Check 'an unrelated process is untouched' (Test-Alive $bystander.Id)
-  Check 'the owner file is gone' (-not (Test-Path (Join-Path $env:ASTRORAY_LOCK_DIR 'owner.json')))
-  $w = Start-Pwsh 'wait1' @($wait)
-  $null = $w.WaitForExit(15000)
+  Check 'the owner file is gone' (-not (Test-Path (Join-Path $lockA 'owner.json')))
+  Use-Lock 'a'; $w1 = Start-Pwsh 'wait1' @($wait)
+  foreach ($p in $w1, $w2, $w3, $w4) { $null = $p.WaitForExit(15000) }
   Check 'the mutex is free for the next waiter (released by its owning thread, no abandonment)' ((Read-Out 'wait1') -contains 'ACQUIRED' -and -not ((Read-Out 'wait1') -match 'abandoned')) (Read-Out 'wait1')
-
-  # 2. A waiter behind a holder past its ceiling and without a watchdog names it, then fails at ceiling + grace.
-  $d2 = Join-Path $tmp 'c2'; New-Item -ItemType Directory -Force $d2 | Out-Null
-  $s = Start-Pwsh 'stuck' @($stuck, $d2)
-  Wait-File (Join-Path $d2 'ready')
-  $env:FAST_GRACE = '1'
-  $w = Start-Pwsh 'wait2' @($wait)
-  $null = $w.WaitForExit(20000)
   $o2 = Read-Out 'wait2'
-  Check 'the waiter fails instead of waiting for the unset 3600 s default' ($w.HasExited -and $w.ExitCode -ne 0) $o2
-  Check "the waiter's failure names the holder's step and its ceiling plus grace" (($o2 -join ' ') -match "FAIL lock: waited .* step 'stuck step'.*over the 2 s limit \(the holder's 1 s ceiling \+ 1 s\)") $o2
-  Check 'the waiter says the holder is past its ceiling' (($o2 -join ' ') -match "step 'stuck step', held \d+ s, PAST its 1 s ceiling") $o2
+  Check 'the waiter fails instead of waiting for the unset 3600 s default' ($w2.HasExited -and $w2.ExitCode -ne 0) $o2
+  Check "the waiter's failure names the holder's step and its ceiling plus grace" (($o2 -join ' ') -match "FAIL lock: waited .* step 'stuck step'.*over the 1 s limit \(the holder's 0.5 s ceiling \+ 0.5 s\)") $o2
+  Check 'the waiter says the holder is past its ceiling' (($o2 -join ' ') -match "step 'stuck step', held \d+ s, PAST its 0.5 s ceiling") $o2
+  Check 'the waiter gets the mutex when its holder ended without Exit-ArMachineLock' ((Read-Out 'wait3') -contains 'ACQUIRED') (Read-Out 'wait3')
+  $o4 = Read-Out 'wait4'
+  Check 'the waiter gets the mutex when its holder was killed, with the abandoned warning' (($o4 -contains 'ACQUIRED') -and (($o4 -join ' ') -match 'WARN lock: abandoned by')) $o4
+  Check 'the holder that ended without Exit-ArMachineLock exited by itself' ($e.HasExited -and $e.ExitCode -eq 0)
 
-  # 3. Every lock-taking tool names a ceiling row that exists.
+  # 5. Every lock-taking tool names a ceiling row that exists.
   . $lockLib
   foreach ($row in 'build', 'test', 'check-gate', 'check-full', 'canary', 'blender', 'perf', 'bench', 'gate_runs', 'other') {
     Check "ceiling row $row exists and is positive" ($script:ArLockCeilings.ContainsKey($row) -and $script:ArLockCeilings[$row] -gt 0)
