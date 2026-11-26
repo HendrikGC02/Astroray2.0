@@ -111,7 +111,7 @@ struct ItemRig {
     for (int j = 0; j < ar::kLanes; ++j) lam.nm[j] = lambda[i].v[j];
     ar::MediumSample ms = ar::medium_sample_zero();
     ar::VmRegs regs;
-    REQUIRE(ar::medium_eval(ar::MediumTables{program.data(), &block, tables}, desc, o[i], lam, &regs, &ms) == ar::VmStatus::OK);
+    REQUIRE(ar::medium_eval(ar::MediumTables{program.data(), &block, &tables}, desc, o[i], lam, &regs, &ms) == ar::VmStatus::OK);
     return ms.sigma_a + ms.sigma_s;
   }
   void run() { cpu_stage_shade_shadow(kg, ar::StepEntry{0, n, 0}, 0, n); }

@@ -56,7 +56,8 @@ AR_NS_BEGIN
 
 // The medium part of delivery for an item in medium `medium` (a medium_descs index): *c becomes the
 // tracked contribution. False when the item ends here, blocked or with its sample marked invalid.
-AR_FN bool shadow_through_medium(const KernelGlobals& kg, uint32_t slot, uint32_t medium, Spec* c) {
+// regs and ctx are the stage's one register file and context, which the world program reuses.
+AR_FN bool shadow_through_medium(const KernelGlobals& kg, uint32_t slot, uint32_t medium, VmRegs* regs, ShadeContext* ctx, Spec* c) {
   const SceneData& s = scene_of(kg);
   AR_ASSERT(medium < s.medium_count);
   const uint32_t target = sh_target(kg, slot);
@@ -66,9 +67,8 @@ AR_FN bool shadow_through_medium(const KernelGlobals& kg, uint32_t slot, uint32_
     const Spec lt = sh_lambda_t(kg, slot);
     for (int i = 0; i < kLanes; ++i) lambda.nm[i] = lt.v[i];
     MediumSample ms;
-    VmRegs regs;
-    const MediumTables mt{s.medium_programs, s.medium_blocks, *kg.tables};
-    const bool ok = medium_eval(mt, s.medium_descs[medium], sh_ray_o(kg, slot), lambda, &regs, &ms) == VmStatus::OK;
+    const MediumTables mt{s.medium_programs, s.medium_blocks, kg.tables};
+    const bool ok = medium_eval(mt, s.medium_descs[medium], sh_ray_o(kg, slot), lambda, regs, ctx, &ms) == VmStatus::OK;
     sigma_a = ms.sigma_a, sigma_s = ms.sigma_s;
     // A NaN or infinite coefficient would read as a zero majorant or a NaN estimate.
     if (!ok || !is_finite(sigma_a) || !is_finite(sigma_s)) {
@@ -103,9 +103,13 @@ AR_FN bool shadow_through_medium(const KernelGlobals& kg, uint32_t slot, uint32_
 AR_FN void stage_shade_shadow(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
   const uint32_t slot = load_ro(kg.shadow_queue + step.start + item);
   Spec c = sh_contribution(kg, slot);
+  // One register file and one context for both VM runs (the medium's volume entry, the world program):
+  // separately inlined ones are not overlaid on the GPU stack, and two exceed 0002 D10's 512 B.
+  VmRegs regs;
+  ShadeContext ctx;
   if (kg.session.features.media) {
     const uint32_t m = sh_medium_stack(kg, slot).v[0];
-    if (m != 0u && !shadow_through_medium(kg, slot, m - 1u, &c)) {
+    if (m != 0u && !shadow_through_medium(kg, slot, m - 1u, &regs, &ctx, &c)) {
       sh_next_stage(kg, slot) = static_cast<uint8_t>(Stage::SHADOW_TERMINATED);
       return;
     }
@@ -115,7 +119,8 @@ AR_FN void stage_shade_shadow(const KernelGlobals& kg, uint32_t item, const Step
     Lambda lam;
     for (int i = 0; i < kLanes; ++i) lam.nm[i] = lt.v[i];
     Spec le;
-    if (kg.scene == nullptr || !world_program_radiance(*kg.scene, *kg.tables, world_shade_context(normalize(sh_ray_d(kg, slot)), lam), &le) ||
+    ctx = world_shade_context(normalize(sh_ray_d(kg, slot)), lam);
+    if (kg.scene == nullptr || !world_program_radiance(*kg.scene, *kg.tables, ctx, &regs, &le) ||
         !is_finite(c * le)) {
       sample_mark_invalid(kg, sh_target(kg, slot));
       sh_next_stage(kg, slot) = static_cast<uint8_t>(Stage::SHADOW_TERMINATED);

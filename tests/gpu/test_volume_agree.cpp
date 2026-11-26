@@ -196,7 +196,8 @@ TEST_CASE("volume_agree/shadow transmittance cuda") {
   for (int j = 0; j < ar::kLanes; ++j) lam.nm[j] = kShadowLambda.v[j];
   ar::MediumSample ms = ar::medium_sample_zero();
   ar::VmRegs regs;
-  REQUIRE(ar::medium_eval(ar::MediumTables{program.data(), &block, ar::SceneTables{}}, ar::MediumDesc{}, ar::Real3{0, 0, 0}, lam, &regs,
+  const ar::SceneTables no_tables{};
+  REQUIRE(ar::medium_eval(ar::MediumTables{program.data(), &block, &no_tables}, ar::MediumDesc{}, ar::Real3{0, 0, 0}, lam, &regs,
                           &ms) == ar::VmStatus::OK);
   std::vector<double> samples[4];
   double worst = 0.0;

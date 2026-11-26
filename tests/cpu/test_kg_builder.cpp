@@ -323,7 +323,7 @@ TEST_CASE("kg_builder/medium blocks and programs") {
   CHECK(s.medium_programs[0] == 0u);
   CHECK(s.medium_blocks[0].entry == 1u);
   CHECK(s.medium_blocks[1].entry == 1u + media[0]->program.size());
-  const ar::MediumTables mt{s.medium_programs, s.medium_blocks, *kg.tables};
+  const ar::MediumTables mt{s.medium_programs, s.medium_blocks, kg.tables};
   const float want_a[2] = {1.0f, 2.0f}, want_s[2] = {0.0f, 0.5f};
   for (uint32_t m = 0; m < 2; ++m) {
     ar::VmRegs regs;
