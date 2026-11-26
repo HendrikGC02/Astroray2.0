@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# B-23 (0009 d13): the light-structure build measured at three sizes by tools/light_build_bench.py.
+# Not in any 0009 scene list; this is its definition:
+#   default    10,000 rectangular area lamps (0.2 m) on a 100 x 100 grid, 1 m pitch, 3 m up, facing down
+#   --triangles N   instead, one mesh of N separate emissive triangles (0.4 m legs, emission 10, white)
+#              laid out on a square grid, one instance; the table then holds N emissive-triangle lights
+#   world      constant black; camera 64 x 64, 1 spp (the render exists only so the engine builds the table)
+class = "B"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+
+# Built only when named; the bench script builds the 100k and 1M triangle sizes itself.
+[build]
+on_demand = true

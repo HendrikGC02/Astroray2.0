@@ -145,6 +145,7 @@ provisional = true
 [[budget]]
 id = "B-23"
 text = "≤ 50 ms per 10k lights"
+limit = 50
 tier = "`full`"
 provisional = true
 

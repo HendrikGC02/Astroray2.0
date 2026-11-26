@@ -17,3 +17,4 @@ Depends on: 175 (the tree and the radiometric table are in the build). Collision
 Size: S (about 140 lines of script, scene and one test; no engine source); stop and report at 2x or when the table says stop.
 Progress:
 191 started: stopped before code, asking lead whether the new case duplicates light_tree_kernel/B-23 (test_light_tree_kernel.cpp:808)
+Lead ruling: extend 175's case (Scope + tests/cpu/test_light_tree_kernel.cpp, that case only, no new test file); canary names a tools/ helper command that does the real limit compare

@@ -807,7 +807,7 @@ TEST_SUITE("full") {
 
 TEST_CASE("light_tree_kernel/B-23 tree build for 10k lights") {
   // The light table with its tree for 10^4 lights of every finite type, printed against B-23
-  // (50 ms per 10k lights); the limit is not gated here.
+  // (50 ms per 10k lights); tools/b23_check.ps1 gates the printed line.
   Rng rng{1759};
   std::vector<LightInput> in;
   for (int i = 0; i < 10000; ++i) {
@@ -831,14 +831,30 @@ TEST_CASE("light_tree_kernel/B-23 tree build for 10k lights") {
     for (uint32_t first = 0; first < count; first += step) pool.emplace_back(body, first, std::min(count, first + step));
     for (std::thread& th : pool) th.join();
   };
-  for (int parallel = 0; parallel < 2; ++parallel) {
+  const auto build_ms = [&](const ChunkRunner& run, size_t* nodes) {
     const auto t0 = std::chrono::steady_clock::now();
-    const auto t = build_light_table(in, ar::SceneSphere{r3(10, 10, 6), Real(16)}, observer(), nullptr, parallel ? threads : ChunkRunner{});
+    const auto t = build_light_table(in, ar::SceneSphere{r3(10, 10, 6), Real(16)}, observer(), nullptr, run);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    std::printf("light_tree_kernel B-23: 10000 lights on %u threads, table %.1f ms of which tree %.1f ms (%zu nodes); limit 50 ms per 10k lights\n",
-                parallel ? hw : 1u, ms, t->tree_build_ms, t->tree_nodes.size());
-    CHECK(t->tree_nodes.size() == 2 * 10000 - 1);
+    *nodes = t->tree_nodes.size();
+    return ms;
+  };
+  size_t nodes = 0;
+  const double serial = build_ms(ChunkRunner{}, &nodes);
+  CHECK(nodes == 2 * 10000 - 1);
+  std::printf("light_tree_kernel B-23: serial build %.1f ms (information)
+", serial);
+  // The row's number: the median of 7 builds after 2 discarded, on every hardware thread. tools/b23_check.ps1
+  // parses this line and compares it with B-23's limit in tools/budgets.toml; the limit is not read here.
+  std::vector<double> ms;
+  for (int i = 0; i < 9; ++i) {
+    const double t = build_ms(threads, &nodes);
+    CHECK(nodes == 2 * 10000 - 1);
+    if (i >= 2) ms.push_back(t);
   }
+  std::sort(ms.begin(), ms.end());
+  std::printf("B-23 build: %.1f ms per 10k lights (median of 7 builds after 2 discarded, min %.1f, max %.1f, %u threads)
+",
+              ms[3], ms.front(), ms.back(), hw);
 }
 
 }  // TEST_SUITE("full")
