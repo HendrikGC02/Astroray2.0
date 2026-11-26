@@ -16,3 +16,4 @@ Budget: gate +2 s at most (one statistical case, both devices concurrent; report
 Depends on: 175 (spine queue, ruling 92: this task is next after it) and 183 (code: delta_track.h's conventions, the medium table). Collisions: shade_surface.h and probe_m1.cu (spine queue), budget.toml, shade_shadow.h with 193; the later one rebases.
 Size: M (about 300 lines without tests); stop and report at 2x. Split point: ratio_track.h and its fast tests first, the emit and the stage after.
 Progress:
+- Files: src/kernel/medium/ratio_track.h (new), stages/shade_shadow.h, stages/shade_surface.h (emit as one helper the probe calls too), kernel_gpu/probe_m1.cu, budget.toml, tests/cpu/test_ratio_track.cpp, tests/cpu/test_shade_shadow.cpp (new), tests/gpu/test_volume_agree.cpp, 0006 D19. Forced, outside Scope: src/kernel/state/flags.h gains the item_flags hero-lane bits 2-3 (0003 d20 already allocates them; flags.h is their one home).
