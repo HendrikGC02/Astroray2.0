@@ -134,7 +134,7 @@ class Capture:
             if final:
                 for name in ("Combined",) + tuple(p.name for p in job.wanted):
                     rect = res.layers[0].passes[name].rect
-                    buf = np.zeros(len(rect), np.float32)
+                    buf = np.zeros(w * h * res.layers[0].passes[name].channels, np.float32)
                     rect.foreach_get(buf)
                     capture.result[name] = buf
 
