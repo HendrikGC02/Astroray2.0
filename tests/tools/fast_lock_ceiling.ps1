@@ -117,7 +117,7 @@ try {
   $procs += $bystander
   # 1. Ceiling stop of a hung holder with a child and a grandchild.
   $d1 = Join-Path $tmp 'c1'; New-Item -ItemType Directory -Force $d1 | Out-Null
-  Use-Lock 'a'; $env:ASTRORAY_LOCK_CEILING_S = '2'
+  Use-Lock 'a'; $env:ASTRORAY_LOCK_CEILING_S = '2.5'
   $h = Start-Pwsh 'hang' @($hang, $d1)
   $env:ASTRORAY_LOCK_CEILING_S = $null
   $lockA = $env:ASTRORAY_LOCK_DIR
@@ -141,14 +141,14 @@ try {
     -RedirectStandardOutput (Join-Path $tmp 'idle.out') -RedirectStandardError (Join-Path $tmp 'idle.err')
   $null = $i5.Handle; $procs += $i5
   $env:ASTRORAY_LOCK_CEILING_S = $null
-  foreach ($d in $d1, $d2, $d3, $d4, $d5) { Wait-File (Join-Path $d 'ready') }
   # A waiter blocked on the mutex before the ceiling fires: it must get it from the watchdog's own release,
-  # not from an abandonment.
+  # not from an abandonment. Started as soon as the hung holder holds the lock, and proven to be waiting.
+  Wait-File (Join-Path $d1 'ready')
   $env:FAST_GRACE = '30'
   Use-Lock 'a'; $w1 = Start-Pwsh 'wait1' @($wait)
-  Use-Lock 'e'; $w5 = Start-Pwsh 'wait5' @($wait)
-  Use-Lock 'a'
+  foreach ($d in $d2, $d3, $d4, $d5) { Wait-File (Join-Path $d 'ready') }
   # wait5's holder stays alive after its ceiling, so a mutex the watchdog did not release would keep wait5 out.
+  Use-Lock 'e'; $w5 = Start-Pwsh 'wait5' @($wait)
   Wait-Until { (Read-Out 'wait1') -match 'waiting for' } 'wait1 waits'
   $child = [int](Get-Content (Join-Path $d1 'child.pid')); $grand = [int](Get-Content (Join-Path $d1 'grand.pid'))
   $env:FAST_GRACE = '0.5'
@@ -162,10 +162,12 @@ try {
   $null = $h.WaitForExit(15000)
   $out = Read-Out 'hang'
   Check 'the hung holder exits non-zero' ($h.HasExited -and $h.ExitCode -ne 0) $out
-  Check 'the FAIL line names the held seconds, the job ceiling and the step' (($out -join "`n") -match 'FAIL lock: held \d+ s, over the test ceiling of 2 s \(step: hung step; pid \d+\)') $out
+  Check 'the FAIL line names the held seconds, the job ceiling and the step' (($out -join "`n") -match 'FAIL lock: held \d+ s, over the test ceiling of 2.5 s \(step: hung step; pid \d+\)') $out
   Check "the holder's child and grandchild are stopped" (-not (Test-Alive $child) -and -not (Test-Alive $grand)) $out
   Check 'an unrelated process is untouched' (Test-Alive $bystander.Id)
-  Check 'the owner file is gone' (-not (Test-Path (Join-Path $lockA 'owner.json')))
+  # The next holder (wait1, already blocked) may have written its own record by now: only the hung holder's is wrong.
+  $ow = Join-Path $lockA 'owner.json'
+  Check "the hung holder's owner file is gone" (-not (Test-Path $ow) -or [int](Get-Content -Raw $ow | ConvertFrom-Json).pid -ne $h.Id)
   foreach ($p in $w1, $w2, $w3, $w4) { $null = $p.WaitForExit(15000) }
   Check 'the mutex is free for the next waiter (released by its owning thread, no abandonment)' ((Read-Out 'wait1') -contains 'ACQUIRED' -and -not ((Read-Out 'wait1') -match 'abandoned')) (Read-Out 'wait1')
   $o2 = Read-Out 'wait2'
