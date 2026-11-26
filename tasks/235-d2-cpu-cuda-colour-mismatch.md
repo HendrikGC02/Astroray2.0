@@ -15,3 +15,4 @@ Budget: gate +1 s at most; kernel rows: state any change.
 Depends on: none (found by 201). Collisions: unknown until the cause is found; rebase over whatever lands first.
 Size: S for the fix, M for the investigation; stop and report at 2x.
 Progress:
+- Started: hypothesis from build.py: the deliberate coincident pair (red 0.9,0.1,0.1 / blue 0.1,0.1,0.9; aov_agree excludes it as a traversal tie) resolves to different instances on Embree and OptiX; G agrees, R and B move opposite. To be measured.
