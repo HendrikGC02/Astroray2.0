@@ -258,6 +258,76 @@ Exit-LandRunning
     Check 'undo: the task file is back' (Test-Path (Join-Path $u 'tasks/777-u.md'))
   }
 
+  # land.ps1 prepare itself, run in a throwaway repository with stand-ins for gh, build.ps1 and check.ps1 (the stand-in
+  # check.ps1 records, at gate time, HEAD, origin's tip and whether the task file is in the tree). This is what shows
+  # the order of the real code path, not the printed plan: the deletion commit is on origin before the canary and the
+  # gate, the gate runs on the pushed commit, and a canary problem after the push is undone with a pushed revert.
+  $env:GIT_AUTHOR_NAME = 't'; $env:GIT_AUTHOR_EMAIL = 't@example.invalid'; $env:GIT_COMMITTER_NAME = 't'; $env:GIT_COMMITTER_EMAIL = 't@example.invalid'
+  $lo = Join-Path $tmp 'land_origin.git'
+  $lr = Join-Path $tmp 'land_repo'
+  & git init -q --bare -b main $lo
+  & git clone -q $lo $lr 2>$null
+  function L { & git -C $lr @args 2>&1 | Out-Null; if ($LASTEXITCODE -ne 0) { throw "git $args failed" } }
+  L config core.autocrlf false
+  New-Item -ItemType Directory -Force (Join-Path $lr 'tools'), (Join-Path $lr 'tasks'), (Join-Path $lr 'docs') | Out-Null
+  Copy-Item (Join-Path $root 'tools/land.ps1') (Join-Path $lr 'tools/land.ps1')
+  Copy-Item (Join-Path $root 'tools/lib') (Join-Path $lr 'tools/lib') -Recurse
+  Set-Content (Join-Path $lr 'tools/build.ps1') 'exit 0'
+  Set-Content (Join-Path $lr 'tools/check.ps1') @'
+$h = (& git rev-parse HEAD).Trim()
+$o = ("$(& git ls-remote origin refs/heads/$(& git branch --show-current))".Split("`t")[0]).Trim()
+$t = @(Get-ChildItem tasks -Filter '99*-*.md' -ErrorAction SilentlyContinue).Count
+New-Item -ItemType Directory -Force out | Out-Null
+Set-Content out/gate_probe.txt "head=$h origin=$o taskfiles=$t"
+'PASS gate 1.0 s (budget 180 s, waited 0.0 s)'
+'@
+  [IO.File]::WriteAllText((Join-Path $lr 'docs/x.txt'), "a`n")
+  [IO.File]::WriteAllText((Join-Path $lr '.gitignore'), "out/`n")
+  L add -A; L commit -q -m base; L push -q origin HEAD:main
+  $ghDir = Join-Path $tmp 'ghstub'
+  New-Item -ItemType Directory -Force $ghDir | Out-Null
+  Set-Content (Join-Path $ghDir 'gh.cmd') "@echo off`r`nif `"%1`"==`"pr`" (echo []& exit /b 0)`r`necho {}`r`nexit /b 0"
+  $oldPath = $env:PATH
+  $env:PATH = "$ghDir;$env:PATH"
+  function Invoke-FixtureLand([string[]]$a) {
+    Push-Location $lr
+    try { return @(& pwsh -NoProfile -File (Join-Path $lr 'tools/land.ps1') @a 2>&1 | ForEach-Object { "$_" }) } finally { Pop-Location }
+  }
+  try {
+    # 999: a task with no canary patch.
+    L checkout -q -b task/999-fx
+    Set-Content (Join-Path $lr 'tasks/999-fx.md') "# 999 fixture`nCanary: none"
+    L add -A; L commit -q -m 'task 999'
+    $dry = Invoke-FixtureLand @('prepare', '999', '-DryRun')
+    $iPush = ($dry | Select-String -Pattern '^DRYRUN would: commit deletion of tasks/999\*, push task/999-fx' | Select-Object -First 1).LineNumber
+    $iCan = ($dry | Select-String -Pattern '^canary: none' | Select-Object -First 1).LineNumber
+    Check 'prepare -DryRun: the deletion commit and push come before the canary step' ($iPush -and $iCan -and $iPush -lt $iCan) $dry
+    $real = Invoke-FixtureLand @('prepare', '999')
+    Check 'prepare passes in the fixture' (@($real | Where-Object { $_ -match '^PASS prepare 999 sha' }).Count -eq 1) $real
+    $probe = Get-Content (Join-Path $lr 'out/gate_probe.txt') -ErrorAction SilentlyContinue
+    $m = [regex]::Match("$probe", 'head=(\w+) origin=(\w*) taskfiles=(\d+)')
+    $tip = ("$(& git -C $lr ls-remote origin refs/heads/task/999-fx)".Split("`t")[0]).Trim()
+    Check 'the gate ran on the pushed commit (HEAD == origin tip, task file deleted)' ($m.Success -and $m.Groups[1].Value -eq $m.Groups[2].Value -and $m.Groups[3].Value -eq '0') $probe
+    Check 'after prepare the branch is the pushed commit' ($tip -eq (& git -C $lr rev-parse HEAD).Trim() -and $tip -ne '')
+
+    # 998: a canary patch that applies, with a Canary: line that names no test; Invoke-Canary reports the problem
+    # before any build, after the push, so the landing commit must be reverted on origin.
+    L checkout -q main
+    L checkout -q -b task/998-bad
+    New-Item -ItemType Directory -Force (Join-Path $lr 'tasks') | Out-Null
+    Set-Content (Join-Path $lr 'tasks/998-bad.md') "# 998 fixture`nCanary: must turn red:"
+    [IO.File]::WriteAllText((Join-Path $lr 'docs/x.txt'), "b`n")
+    & git -C $lr diff --output=tasks/998.canary.patch -- docs 2>&1 | Out-Null
+    L checkout -q -- docs/x.txt
+    L add -A; L commit -q -m 'task 998'
+    $badOut = Invoke-FixtureLand @('prepare', '998')
+    $tip = ("$(& git -C $lr ls-remote origin refs/heads/task/998-bad)".Split("`t")[0]).Trim()
+    Check 'a canary problem after the push is refused' (@($badOut | Where-Object { $_ -match '^REFUSE land: canary names no test' }).Count -eq 1) $bad
+    & git -C $lr cat-file -e "${tip}:tasks/998-bad.md" 2>$null
+    Check 'a canary problem after the push is undone with a pushed revert (task file back on origin)' ($tip -and $LASTEXITCODE -eq 0) $badOut
+    Check 'after the undo local equals origin' ($tip -eq (& git -C $lr rev-parse HEAD).Trim()) $badOut
+  } finally { $env:PATH = $oldPath }
+
   # Judged last: what the plain and the queued submit printed.
   $null = $plainP.WaitForExit(30000); $null = $queueP.WaitForExit(30000); $null = $mergeP.WaitForExit(30000)
   $po = @(Get-Content (Join-Path $qout 'plain.out') -ErrorAction SilentlyContinue)
