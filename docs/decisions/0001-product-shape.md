@@ -109,7 +109,7 @@ Binding inputs:
       | `INPUT_IGNORED` | INFO | SCENE | material key; detail = input ignored under an extension kind | 0005 |
       | `NOT_ENERGY_CONSERVING` | INFO | SCENE | material key; Add Shader weights can sum above 1 | 0005 |
       | `PROGRAM_REJECTED` | WARNING | SCENE | material key; detail = compiler error; rendered magenta | 0005 |
-      | `GRATING_TABLE_LIMIT` | WARNING | SCENE | material key; detail = scalar theory out of range, or cells clipped to Σ η ≤ 1 | 0005 item 24 |
+      | `GRATING_TABLE_LIMIT` | WARNING | SCENE | material key; detail = scalar theory out of range, or cells clipped to Σ η ≤ 1 (the table builder), or the scene TableArena past 4 GiB (u32 offsets; the material renders magenta, task 206) | 0005 items 16, 24 |
       | `SPECTRUM_OUT_OF_RANGE` | WARNING | SCENE | source key; value = requested range in nm; edge value used | 0003 decision 8, 0004 D12, 0006 decision 4 |
       | `RGB_ONLY_OUTSIDE_VISIBLE` | WARNING | SCENE | material or light key; wavelength support extends beyond the visible band | 0003 |
       | `WAVELENGTH_BINS_WIDENED` | INFO | SCENE | 0; value[0] = bins needed, value[1] = bins used | 0003 decision 3 |
