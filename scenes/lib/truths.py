@@ -10,6 +10,7 @@ analytic family per device (tools/analytic.py; tools/integrator_checks.py for un
 Ref: docs/decisions/0009-build-test-process.md d16, d20; 0003 d11 (display Y, the unit anchor);
 src/host/data_resource.h (observer.bin layout).
 """
+import functools
 import os
 import struct
 
@@ -575,13 +576,197 @@ def beer_lambert_slab(t, width, height):
     return [(c, eye[i], truth[i], "pixels") for i, c in enumerate("RGB")]
 
 
+def bessel_j_integral(m, x, nodes=128):
+    """J_m(x) = (1 / 2 pi) int_0^{2 pi} cos(m tau - x sin tau) dtau (Bessel's integral), by the
+    trapezoid rule on the periodic integrand, which converges faster than any power of 1 / nodes once
+    nodes exceeds |x| + |m|. Ref: Abramowitz and Stegun 9.1.21; Trefethen and Weideman 2014, SIAM Review
+    56(3), sec. 2 (trapezoid rule on periodic functions)."""
+    x = np.asarray(x, dtype=np.float64)
+    tau = (np.arange(nodes) + 0.5) * (2.0 * np.pi / nodes)
+    return np.cos(m * tau - x[..., None] * np.sin(tau)).mean(axis=-1)
+
+
+def bessel_j_recurrence(m, x):
+    """J_m(x) for a scalar x by Miller's downward recurrence J_{n-1} = 2 n / x J_n - J_{n+1}, started
+    far above max(m, x) and normalised by 1 = J_0 + 2 sum J_{2k}. The independent check of
+    bessel_j_integral. Ref: Abramowitz and Stegun 9.1.27 (recurrence), 9.1.46 (normalisation);
+    Press et al., Numerical Recipes sec. 6.5 (Miller's algorithm)."""
+    x = float(x)
+    top = 2 * (int(max(abs(m), x)) + 30)
+    j = np.zeros(top + 2)
+    j[top] = 1e-30
+    for n in range(top, 0, -1):
+        j[n - 1] = 2.0 * n / x * j[n] - j[n + 1]
+    return j[abs(m)] / (j[0] + 2.0 * j[2:top:2].sum())
+
+
+def fresnel_conductor_mean(cos_i, n, k):
+    """Unpolarised Fresnel reflectance of a conductor of complex index n + i k: the mean of |r_parl|^2
+    and |r_perp|^2 with the complex transmitted cosine from Snell's law. Ref: pbrt-v4 FrComplex,
+    third_party/_cache/refs/pbrt-v4-092b23a47ad4/src/pbrt/util/scattering.h lines 81-92 (Born and
+    Wolf, Principles of Optics, sec. 13.2)."""
+    c = np.clip(np.asarray(cos_i, dtype=np.float64), 0.0, 1.0)
+    eta = complex(n, k)
+    cos_t = np.sqrt(1.0 - (1.0 - c * c) / (eta * eta))
+    r_parl = (eta * c - cos_t) / (eta * c + cos_t)
+    r_perp = (c - eta * cos_t) / (c + eta * cos_t)
+    return (np.abs(r_parl) ** 2 + np.abs(r_perp) ** 2) / 2.0
+
+
+def grating_order_angle_deg(m, lambda_nm, pitch_nm, incidence_deg=0.0):
+    """Outgoing angle (degrees from the normal, on the incidence side) of order m of a reflection
+    grating in the plane normal to the grooves: sin(beta) = -sin(alpha) + m lambda / d, with alpha the
+    angle of the incidence direction toward the grating vector (0005 item 21: t_o = -t_i + m lambda /
+    d, t the sine of the angle toward the grating vector); None when |t_o| > 1 (evanescent). Double
+    precision, from the equation alone. Ref: 0005 item 21; Harvey and Vernold 1998; Palmer,
+    Diffraction Grating Handbook 7th ed., eq. 2-1."""
+    s = -np.sin(np.radians(incidence_deg)) + m * lambda_nm / pitch_nm
+    return None if abs(s) > 1.0 else float(np.degrees(np.arcsin(s)))
+
+
+# V8 (0005 Verification 8): 600 lines/mm at 632.8 nm, normal incidence, orders 1 and 2 at these angles
+# and no third order. The predictor must reproduce them before any render is compared with it.
+V8_LINES_PER_MM, V8_LAMBDA_NM = 600.0, 632.8
+V8_ANGLES_DEG = {1: 22.31, 2: 49.41}
+
+
+def v8_selfcheck():
+    """The predictor's angles for V8's 632.8 nm line source at normal incidence, as (order, angle)
+    pairs for orders 1 to 3; raises unless orders 1 and 2 agree with V8 to 0.01 degrees and order 3
+    is evanescent."""
+    pitch = 1e6 / V8_LINES_PER_MM
+    got = [(m, grating_order_angle_deg(m, V8_LAMBDA_NM, pitch)) for m in (1, 2, 3)]
+    for m, want in V8_ANGLES_DEG.items():
+        if got[m - 1][1] is None or abs(got[m - 1][1] - want) > 0.01:
+            raise ValueError(f"V8 order {m}: predictor {got[m - 1][1]} deg, V8 {want} deg")
+    if got[2][1] is not None:
+        raise ValueError("V8: order 3 must be evanescent")
+    return got
+
+
+def _lamp_image_edges(m, lam_nm, pitch_nm, cam_height, lamp_height, lamp_edge_y):
+    """Card position P_y (card plane z = 0, along the grating vector, y) from which the camera at
+    (0, cam_height) sees the lamp's edge at (lamp_edge_y, lamp_height) in order m of wavelength lam_nm,
+    in the plane normal to the grooves. With t_i the grating-vector component of the unit direction to
+    the camera and t_l that of the unit direction to the lamp edge, item 21 asks t_l = -t_i + m lam / d.
+    t_l + t_i decreases strictly with P_y (each term does), so the root is unique and bisection finds
+    it. Arrays broadcast; 100 halvings of [-1e3, 1e3] m reach double precision."""
+    lam, edge = np.broadcast_arrays(np.asarray(lam_nm, dtype=np.float64), np.asarray(lamp_edge_y, dtype=np.float64))
+    k = m * lam / pitch_nm
+    lo, hi = np.full(lam.shape, -1e3), np.full(lam.shape, 1e3)
+    for _ in range(100):
+        mid = 0.5 * (lo + hi)
+        d = edge - mid
+        f = d / np.hypot(d, lamp_height) - mid / np.hypot(mid, cam_height) - k
+        lo, hi = np.where(f > 0.0, mid, lo), np.where(f > 0.0, hi, mid)
+    return 0.5 * (lo + hi)
+
+
+@functools.lru_cache(maxsize=None)
+def _j_table(m):
+    """J_m on x in [0, 8] at 8193 nodes (Bessel's integral), for linear interpolation (error below
+    1e-7: step 1e-3, |J''| <= 1)."""
+    xs = np.linspace(0.0, 8.0, 8193)
+    return xs, bessel_j_integral(m, xs)
+
+
+def grating_order_efficiency(m, lam_nm, cos_i, depth_nm, coating):
+    """eta_m = R(cos) J_m^2(phi / 2), phi = 4 pi h cos / lambda the peak-to-peak reflection phase of a
+    sinusoidal groove of depth h (0005 item 24: Goodman's thin-phase J_m^2 with the Rayleigh phase of
+    Zhao 2017 eqs. 1-2), R the unpolarised Fresnel reflectance of the constant coating (n, k) at cos,
+    the cosine of the camera's direction (the table's index, item 23)."""
+    x = 2.0 * np.pi * depth_nm * np.asarray(cos_i) / np.asarray(lam_nm)
+    if np.any(x > 8.0):
+        raise ValueError("grating depth too large for the J_m table (x > 8)")
+    xs, j = _j_table(abs(int(m)))
+    return fresnel_conductor_mean(cos_i, *coating) * np.interp(x, xs, j) ** 2
+
+
+def grating_profiles(t, width):
+    """Per order m of [m_min, m_max]: the display profile (3, width) of one row of the film of the
+    grating card (scenes/v8_grating_card) for lamp radiance `radiance`. The card's reflection is taken
+    in the plane normal to the grooves (the film's rows span +-0.5 degrees across it; the conical
+    correction of the order angles is below 0.01 degrees). The camera ray of film position u meets
+    the card at P(u); the lamp is seen in order m of wavelength lambda at u between the images of its
+    two edges (_lamp_image_edges), and box pixel i takes the overlap of [i, i + 1] with that interval,
+    times eta_m(lambda, cos of the camera direction at the pixel centre), summed over the 1 nm grid
+    360..830 with the display weights of the lamp's D65 white (0003 d11, d12). Returns (profiles
+    {m: (3, width)}, intervals {m: (a, b)} each (471,) in film columns, theta_deg (width,) the
+    camera direction angle of each pixel centre, from the card's normal toward the grating vector).
+    Film geometry (scenes/lib/ar.py look_at, projection_inverse): the camera at (0, 0, h) looks along
+    (0, -sin psi, -cos psi), image right is (0, -cos psi, sin psi), the sensor spans sensor / focal at
+    unit distance, so column position u sees theta = psi + atan((u / W - 1/2) sensor / focal)."""
+    pitch = 1e6 / float(t["lines_per_mm"])
+    depth, coat = float(t["depth_nm"]), (float(t["coating_n"]), float(t["coating_k"]))
+    cam_h, lamp_h = float(t["camera_height"]), float(t["lamp_height"])
+    half_y = 0.5 * float(t["lamp_size_y"])
+    psi = np.radians(float(t["camera_axis_deg"]))
+    span = float(t["sensor_mm"]) / float(t["focal_mm"])
+    lam = np.arange(360, 831, dtype=np.float64)
+    cmf, d65, y_n, m_ws = observer_tables()
+    weights = (m_ws @ cmf) * d65 / y_n  # (3, 471)
+    cols = np.arange(width, dtype=np.float64)
+    theta = psi + np.arctan(((cols + 0.5) / width - 0.5) * span)
+    profiles, intervals = {}, {}
+    for m in range(int(t["m_min"]), int(t["m_max"]) + 1):
+        edges = [np.arctan2(-_lamp_image_edges(m, lam, pitch, cam_h, lamp_h, e), cam_h) for e in (-half_y, half_y)]
+        # A direction 90 degrees or more from the axis is behind the camera: clamped to just short of it,
+        # tan sends it far off the film on the side it came from (without the clamp tan would wrap).
+        quarter = 0.5 * np.pi - 1e-9
+        u = [width * (0.5 + np.tan(np.clip(a - psi, -quarter, quarter)) / span) for a in edges]
+        a, b = np.minimum(*u), np.maximum(*u)
+        cov = np.clip(b[:, None] - cols, 0.0, 1.0) - np.clip(a[:, None] - cols, 0.0, 1.0)
+        eta = grating_order_efficiency(m, lam[:, None], np.cos(theta)[None, :], depth, coat)
+        profiles[m] = float(t["radiance"]) * np.einsum("cl,lu->cu", weights, eta * cov)
+        intervals[m] = (a, b)
+    return profiles, intervals, np.degrees(theta)
+
+
+def grating_orders(t, width, height):
+    """V8 on the grating card (0005 Verification 8, item 21): the checks of the film strip of
+    grating_profiles. Per order m in 0, 1, 2 one `order_centroids` check: the centroid, in degrees of
+    the camera direction, of each display channel's profile (the film's rows averaged) inside the
+    order's window must agree with the prediction's within [truth] centroid_tolerance_deg (V8's 0.1),
+    and order 0 must be achromatic within the same. The windows split the columns at the predicted
+    profile's minimum between consecutive orders, so every pixel is in one window and both centroids
+    are cut alike. Per channel one `pixels` check of the dark region: every pixel at least
+    dark_margin_px pixels from any lamp image of any wavelength (the predictor's zero) must hold less
+    than z SE of radiance. v8_selfcheck raises first if the predictor's angles disagree with V8's."""
+    v8_selfcheck()
+    if height != int(t["height"]) or width != int(t["width"]):
+        raise ValueError("grating_orders: the harness size must be [truth] width x height")
+    profiles, intervals, theta = grating_profiles(t, width)
+    total = sum(profiles.values())
+    mass = {m: np.abs(p).sum(axis=0) for m, p in profiles.items()}
+    cols = np.arange(width)
+    centre = {m: float((cols * mass[m]).sum() / mass[m].sum()) for m in (0, 1, 2)}
+    a_abs = np.abs(total).sum(axis=0)
+    cut = []
+    for m in (0, 1):
+        lo, hi = int(round(centre[m])), int(round(centre[m + 1]))
+        cut.append(lo + int(np.argmin(a_abs[lo:hi + 1])) + 1)  # first column of the next window
+    bounds = [0, cut[0], cut[1], width]
+    checks = []
+    for m in (0, 1, 2):
+        checks.append((f"order {m:+d} centroids", np.eye(3),
+                       {"order": m, "theta_deg": theta, "window": (bounds[m], bounds[m + 1]), "predicted": total,
+                        "tolerance_deg": float(t["centroid_tolerance_deg"])}, "order_centroids"))
+    reach = np.zeros(width, dtype=bool)
+    margin = int(t["dark_margin_px"])
+    for a, b in intervals.values():
+        reach |= (cols >= np.floor(a.min()) - margin) & (cols < np.ceil(b.max()) + margin)
+    dark = np.where(reach, np.nan, 0.0)
+    eye = np.eye(3)
+    return checks + [(f"{c} dark", eye[i], np.tile(dark, (height, 1)), "pixels") for i, c in enumerate("RGB")]
+
+
 FORMULAS = {"emitter_radiance": emitter_radiance, "alpha_transmittance": alpha_transmittance,
             "display_luminance": display_luminance,
             "lambertian_furnace": lambertian_furnace, "lambertian_furnace_table": lambertian_furnace_table,
             "lamp_over_plane": lamp_over_plane,
             "disk_over_plane": disk_over_plane, "lit_furnace": lit_furnace, "mode_agreement": mode_agreement,
             "uniform_enclosure": uniform_enclosure, "texture_chart": texture_chart, "beer_lambert_slab": beer_lambert_slab,
-            "environment_texel": environment_texel}
+            "environment_texel": environment_texel, "grating_orders": grating_orders}
 
 
 def evaluate(truth_table, width, height):
