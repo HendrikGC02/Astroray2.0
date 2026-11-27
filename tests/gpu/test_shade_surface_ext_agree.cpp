@@ -10,6 +10,9 @@
 // float expressions without contraction). On both devices each surviving path's throughput factor is
 // item 22's eta_m / p_m, recomputed on the host from grating B's table at its own offset, for the order
 // its direction names.
+// The render case replays scenes/ext_grating_card (out/scenes, built by the scenes step) through
+// astroray_cli at 32 x 32 and 4 spp on the CPU and the CUDA device: every display pixel of the film dump
+// is finite and the image is not black (188 owns the grating's image truth).
 // Ref: docs/decisions/0002-kernel-architecture.md D4, D12; 0005 items 16, 17, 21-23; 0009 d17.
 #include <doctest.h>
 
@@ -18,6 +21,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -33,6 +38,8 @@
 #include "host/scene/scene.h"
 #include "host/thread_pool.h"
 #include "stages/shade_surface_ext.h"
+
+#include <windows.h>
 
 using namespace astroray;
 using namespace astroray::host;
@@ -315,9 +322,102 @@ uint32_t factor_mismatches(const Inputs& in, const States& st, const Snapshot& s
   return checked > kN / 4u ? bad : ~0u;
 }
 
+// The display.0-2 mean planes of an astroray_cli film dump (FITS: 2880 B blocks of 80 B cards, one image
+// HDU per plane, big-endian float data), as doubles.
+std::vector<std::vector<double>> display_planes(const std::filesystem::path& fits) {
+  std::ifstream f(fits, std::ios::binary);
+  const std::vector<uint8_t> b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  std::vector<std::vector<double>> planes(3);
+  size_t at = 0;
+  while (at + 2880 <= b.size()) {
+    long long bitpix = 0, naxis = 0, n1 = 1, n2 = 1;
+    std::string extname;
+    size_t card = at;
+    bool end = false;
+    for (; card + 80 <= b.size() && !end; card += 80) {
+      const std::string c(reinterpret_cast<const char*>(b.data() + card), 80);
+      const std::string key = c.substr(0, 8);
+      const auto value = [&] { return c.substr(10, 70); };
+      if (key == "END     ") end = true;
+      else if (key == "BITPIX  ") bitpix = std::atoll(value().c_str());
+      else if (key == "NAXIS   ") naxis = std::atoll(value().c_str());
+      else if (key == "NAXIS1  ") n1 = std::atoll(value().c_str());
+      else if (key == "NAXIS2  ") n2 = std::atoll(value().c_str());
+      else if (key == "EXTNAME ") {
+        const std::string v = value();
+        const size_t q0 = v.find('\''), q1 = v.find('\'', q0 + 1);
+        extname = v.substr(q0 + 1, q1 - q0 - 1);
+        while (!extname.empty() && extname.back() == ' ') extname.pop_back();
+      }
+    }
+    if (!end) break;
+    const size_t data = (card - at + 2879) / 2880 * 2880 + at;
+    const size_t elem = size_t(bitpix < 0 ? -bitpix : bitpix) / 8, count = naxis == 0 ? 0 : size_t(n1 * n2);
+    for (int c = 0; c < 3; ++c) {
+      if (extname != "display." + std::to_string(c) || data + count * elem > b.size()) continue;
+      for (size_t i = 0; i < count; ++i) {
+        uint64_t w = 0;
+        for (size_t k = 0; k < elem; ++k) w = (w << 8) | b[data + i * elem + k];
+        double v = 0.0;
+        if (bitpix == -32) {
+          float x;
+          const uint32_t w32 = uint32_t(w);
+          std::memcpy(&x, &w32, 4);
+          v = x;
+        } else if (bitpix == -64) {
+          std::memcpy(&v, &w, 8);
+        } else {
+          v = std::nan("");  // not a float plane: fails the finiteness check
+        }
+        planes[size_t(c)].push_back(v);
+      }
+    }
+    at = data + (count * elem + 2879) / 2880 * 2880;
+  }
+  return planes;
+}
+
 }  // namespace
 
 TEST_SUITE("gate") {
+
+TEST_CASE("shade_surface_ext/grating card renders on both devices") {
+  char exe[MAX_PATH] = {};
+  REQUIRE(GetModuleFileNameA(nullptr, exe, MAX_PATH) != 0);
+  const std::filesystem::path bin = std::filesystem::path(exe).parent_path();
+  const std::filesystem::path cli = bin / "astroray_cli.exe";
+  const std::filesystem::path rec = bin.parent_path() / "scenes" / "ext_grating_card.arrec";
+  REQUIRE_MESSAGE(std::filesystem::exists(cli), cli.string() << " missing: run tools/build.ps1");
+  REQUIRE_MESSAGE(std::filesystem::exists(rec), rec.string() << " missing: run tools/check.ps1 (scenes)");
+  for (const char* device : {"cpu", "cuda"}) {
+    INFO("device " << device);
+    const std::filesystem::path fits = std::filesystem::temp_directory_path() / ("astroray_grating_card_" + std::string(device) + ".fits");
+    std::filesystem::remove(fits);
+    const std::string cmd = "\"\"" + cli.string() + "\" render \"" + rec.string() + "\" -o \"" + fits.string() + "\" --device " +
+                            device + " --spp 4 --size 32x32 2>&1\"";
+    FILE* p = _popen(cmd.c_str(), "r");
+    REQUIRE(p != nullptr);
+    std::string out;
+    char buf[512];
+    while (std::fgets(buf, sizeof buf, p)) out += buf;
+    const int rc = _pclose(p);
+    REQUIRE_MESSAGE(rc == 0, out);
+    const std::vector<std::vector<double>> planes = display_planes(fits);
+    double sum = 0.0, peak = 0.0;
+    uint32_t bad = 0;
+    for (const std::vector<double>& c : planes) {
+      CHECK(c.size() == 32u * 32u);
+      for (double v : c) {
+        if (!std::isfinite(v)) ++bad;
+        else sum += v, peak = std::max(peak, v);
+      }
+    }
+    std::printf("shade_surface_ext grating card %s: display sum %.6g, peak %.6g, %u non-finite\n", device, sum, peak, bad);
+    CHECK(bad == 0u);
+    CHECK(peak > 0.0);
+    std::filesystem::remove(fits);
+  }
+}
 
 TEST_CASE("shade_surface_ext/agree cuda") {
   const Inputs in;

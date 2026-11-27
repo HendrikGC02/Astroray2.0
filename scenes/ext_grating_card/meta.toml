@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# A horizontal reflective sinusoidal grating card (0005 items 21-24) under a small rectangular area
+# lamp, seen by a camera on the far side of the card's normal from the lamp, in the plane of the
+# grating vector: the card shows the lamp's white order-0 image at its centre and, on both sides along
+# the grating vector, the first orders spread into colours with blue nearer order 0 than red (the
+# grating equation, m lambda / d). The camera is rolled so the grating vector runs along the image
+# columns. No truth: the gate renders it on both devices (finite, non-black) and task 188 owns the
+# grating's image verification (V8). Built by the scenes step; it needs no asset.
+class = "G"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
