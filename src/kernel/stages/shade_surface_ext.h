@@ -158,10 +158,6 @@ struct SurfaceKind<ShadeKind::Ext> {
                                  Real3 wo, float) {
     return ext_sample(kg, slot, sample, e, rec, N, wo);
   }
-  // PROVISIONAL (header comment): the tint and the guide planes are left as they are.
-  static AR_FN uint32_t guides(const KernelGlobals&, uint32_t, uint32_t, uint32_t flags, OpenPBRParams&, Real3, const LobeSample&) {
-    return flags;
-  }
   // A wavelength-dependent direction terminates the secondaries first (0003 d5): lambda_t and beta
   // take lane 0 on every lane and the flags SECONDARIES_TERMINATED, stored at once so every later end
   // of the path carries them; the update then applies lane 0's f on every lane.
@@ -179,6 +175,10 @@ struct SurfaceKind<ShadeKind::Ext> {
     ps_lambda_t(kg, slot) = stored;
     ps_flags(kg, slot) = *flags;
     return b * (bs.f.v[0] * w);
+  }
+  // PROVISIONAL (header comment): the tint and the guide planes are left as they are.
+  static AR_FN uint32_t guides(const KernelGlobals&, uint32_t, uint32_t, uint32_t flags, OpenPBRParams&, Real3, const LobeSample&) {
+    return flags;
   }
 };
 
