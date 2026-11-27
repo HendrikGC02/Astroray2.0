@@ -11,7 +11,7 @@ regs = 20
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.3
+compile_s = 0.38
 gated = "merge"
 
 [kernel.ar_test_fault]
@@ -19,7 +19,7 @@ regs = 8
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.2
+compile_s = 0.37
 gated = "full"
 
 # The M-1 probe (src/kernel_gpu/probe_m1.cu), capped build in kernels_probe_capped/; measured by
@@ -38,7 +38,7 @@ regs = 38
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.23
+compile_s = 0.42
 gated = "merge"
 
 [kernel.k_queue_build_scan]
@@ -46,7 +46,7 @@ regs = 40
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.28
+compile_s = 0.49
 gated = "merge"
 
 [kernel.k_queue_build_scatter]
@@ -54,7 +54,7 @@ regs = 52
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.22
+compile_s = 0.44
 gated = "merge"
 
 [kernel.k_sort_count]
@@ -62,7 +62,7 @@ regs = 38
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.15
+compile_s = 0.41
 gated = "merge"
 
 [kernel.k_sort_scan]
@@ -70,7 +70,7 @@ regs = 40
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.28  # k_queue_build_scan's time for the same TU structure, not timed separately
+compile_s = 0.43
 gated = "merge"
 
 [kernel.k_sort_scatter]
@@ -78,7 +78,7 @@ regs = 38
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.18
+compile_s = 0.42
 gated = "merge"
 
 [kernel.k_route_hit]
@@ -88,7 +88,7 @@ regs = 28
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.2
+compile_s = 0.40
 gated = "merge"
 
 [kernel.k_film_resolve]
@@ -96,7 +96,7 @@ regs = 92
 stack = 128
 spill_store = 0
 spill_load = 0
-compile_s = 1.5
+compile_s = 0.61
 gated = "merge"
 
 [kernel.k_film_present]
@@ -104,7 +104,7 @@ regs = 37
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.21
+compile_s = 0.43
 gated = "merge"
 
 [kernel.k_film_heatmap]
@@ -112,7 +112,7 @@ regs = 23
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.21
+compile_s = 0.41
 gated = "merge"
 
 [kernel.k_film_prepare_denoise]
@@ -120,7 +120,7 @@ regs = 38
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.19
+compile_s = 0.43
 gated = "merge"
 
 [kernel.k_film_build_active]
@@ -128,7 +128,7 @@ regs = 16
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.15
+compile_s = 0.40
 gated = "merge"
 
 [kernel.k_generate_camera]
@@ -136,7 +136,7 @@ regs = 37
 stack = 128
 spill_store = 0
 spill_load = 0
-compile_s = 1.31
+compile_s = 0.54
 gated = "merge"
 
 [kernel.k_shade_background]
@@ -150,7 +150,7 @@ regs = 64
 stack = 304
 spill_store = 36
 spill_load = 36
-compile_s = 2.8
+compile_s = 2.17
 gated = "merge"
 
 [kernel.k_shade_surface]
@@ -162,13 +162,12 @@ gated = "merge"
 # The denoiser guides moved only the compile time: 6.68-6.72 s in two gates (3 runs each).
 # Ruling 103 and owner decision 41: the light-tree walks (NEE draw, emission pmf) give spills 4 / 16 B and 7.31-7.40 s.
 # The medium stack (false interface at the top, the pass-through crossing): stack 400 to 416 B, spills unchanged,
-# compile 7.73-7.75 s quiet against main's 7.19-7.29 s (three interleaved rounds): over decision 41's 7.5 s,
-# an owner item.
+# compile 7.10 s quiet inside the build's MSVC environment (task 237: 7.76 s with nvcc running vcvarsall itself)
 regs = 128
 stack = 416
 spill_store = 4
 spill_load = 16
-compile_s = 7.7
+compile_s = 7.10
 gated = "merge"
 
 [kernel.k_shade_shadow]
@@ -180,7 +179,7 @@ regs = 48
 stack = 288
 spill_store = 24
 spill_load = 28
-compile_s = 1.4
+compile_s = 1.38
 gated = "merge"
 
 [kernel.k_shade_shadow_medium]
@@ -193,7 +192,7 @@ regs = 64
 stack = 480
 spill_store = 36
 spill_load = 36
-compile_s = 2.4
+compile_s = 1.75
 gated = "merge"
 
 [kernel.k_shade_volume]
@@ -206,7 +205,7 @@ regs = 121
 stack = 464
 spill_store = 0
 spill_load = 0
-compile_s = 2.8
+compile_s = 2.01
 gated = "merge"
 
 [kernel.k_shade_light]
@@ -215,7 +214,7 @@ regs = 80
 stack = 0
 spill_store = 0
 spill_load = 0
-compile_s = 1.4
+compile_s = 0.86
 gated = "merge"
 
 [kernel.k_bake_environment]
@@ -223,7 +222,7 @@ regs = 64
 stack = 264
 spill_store = 0
 spill_load = 0
-compile_s = 2.3
+compile_s = 1.47
 gated = "merge"
 
 # The four OptiX programs are compiled by the driver: kernelgate never measures them, so regs and
