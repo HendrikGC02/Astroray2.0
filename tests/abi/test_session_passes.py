@@ -256,15 +256,16 @@ class TestSessionPasses(unittest.TestCase):
         self.assertEqual(self.pass_unsupported(session), [(b"AR Bounces", a.AR_LEVEL_WARNING, 0, 1)])
 
     def test_stale_index_after_a_rebuild_is_refused(self):
-        # With the AOVs, IndexMA sits where AR Invalid sits without them; both are one-component
-        # means, so only the revision check tells a stale index from a valid one.
+        # With the AOVs (Depth, Position, Normal, UV, IndexMA), IndexMA sits where AR Invalid sits when
+        # only Alpha is requested; both are one-component means, so only the revision check tells a
+        # stale index from a valid one.
         a, lib = self.abi, self.lib
         gen = self.commit_settings([b"Position"])
         session = self.start_session()
         self.settle(session, gen)
         index, comps = self.passes(session)["IndexMA"]
         self.assertEqual(self.read(session, index, comps)[0], a.AR_OK)
-        gen = self.commit_settings([])
+        gen = self.commit_settings([b"Alpha"])
         self.settle(session, gen)
         st, _ = self.read(session, index, comps)
         self.assertEqual(st, a.AR_ERR_INVALID_ARGUMENT)
