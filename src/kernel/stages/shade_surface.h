@@ -320,7 +320,9 @@ AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P,
 // The lobe stack's directional albedo at mu_o in working-space RGB (0008 d15): the stack's own
 // selection quantities (stack_select: the dielectric layer's E_diel, the metal's F E_spec c, the
 // EON albedo under the layering scale) evaluated with the material's exact RGB colours in lanes
-// 0-2 instead of the path's wavelengths, so no wavelength noise enters. Lane 3 repeats green so
+// 0-2 instead of the path's wavelengths, so no wavelength noise enters: a colour the program stored
+// per point is the record's packed source RGB (openpbr_params.h guide_rgb_pack), any other the
+// constant block's guide RGB. Lane 3 repeats green so
 // every lane holds a valid colour. The index is the record's (one value on every lane unless
 // dispersive) or, for a Cauchy index, its n_d. `rec` is the caller's record after the lobe sample,
 // which this overwrites: its scalars are the shading point's, its colours are replaced.
@@ -332,10 +334,16 @@ struct GuideAlbedo {
   Real3 diffuse, specular;
 };
 AR_FN GuideAlbedo surface_guide_albedo(const KernelGlobals& kg, OpenPBRParams& rec, const ConstantBlock& block, Real mu_o) {
+  // Read through volatile so the words come from the record's local memory: a plain read lets nvcc
+  // forward the VM's store and hold both words in registers across NEE and the lobe sample, which
+  // spilled 4 / 4 B more in the capped build (kernelgate, measured).
+  const volatile uint32_t* gw = rec.guide_rgb;
+  const uint32_t base_rgb = gw[0], spec_rgb = gw[1];
+  const bool base_stored = (base_rgb & kGuideRgbStored) != 0u, spec_stored = (spec_rgb & kGuideRgbStored) != 0u;
   for (int i = 0; i < kLanes; ++i) {
     const int c = i < 3 ? i : 1;
-    rec.base_color.v[i] = Real(block.guide_base_color[c]);
-    rec.specular_color.v[i] = Real(block.guide_specular_color[c]);
+    rec.base_color.v[i] = base_stored ? guide_rgb_channel(base_rgb, c) : Real(block.guide_base_color[c]);
+    rec.specular_color.v[i] = spec_stored ? guide_rgb_channel(spec_rgb, c) : Real(block.guide_specular_color[c]);
   }
   const bool cauchy = block.specular_ior.kind == uint8_t(SpectrumKind::CAUCHY_ABBE);
   rec.specular_ior = spec_fill(cauchy ? Real(block.specular_ior.p[0]) : rec.specular_ior.v[0]);
@@ -367,8 +375,9 @@ AR_FN GuideAlbedo surface_guide_albedo(const KernelGlobals& kg, OpenPBRParams& r
 // takes both, as Cycles defers the whole specular albedo, rather than the one the lobe choice drew.
 // A non-delta sample writes tint x (diffuse + specular) and the front-facing shading normal and
 // returns the flags with DENOISE_SURFACE_DONE. A material whose base_color or specular_color is
-// set per point has no exact RGB yet: its hit is the denoising surface with magenta albedo, the
-// project's colour for unsupported input. `rec` is overwritten.
+// set per point from a lifted spectrum has no RGB (the compiler marks it and reports it): its hit
+// is the denoising surface with magenta albedo, the project's colour for unsupported input. `rec`
+// is overwritten.
 // Ref: Cycles kernel/film/denoising_passes.h film_write_denoising_features_surface (Apache-2.0;
 // denoising_feature_throughput times the deferred specular albedo; the normal is not tinted), read
 // in third_party/_cache/refs/cycles-ed69ef2c6bd3; docs/decisions/0008-film-outputs-denoise.md

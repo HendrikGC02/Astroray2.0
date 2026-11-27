@@ -167,6 +167,13 @@ float* guide_rgb_of(ar::ConstantBlock* b, uint32_t idx) {
   return nullptr;
 }
 
+// True when a per-point store into record slot `slot` from a value of type `t` leaves the albedo
+// guide without an RGB: base_color or specular_color fed a lifted spectrum. An RGB (or grey) source
+// keeps its RGB in the record (store_slot.h), so only this case is magenta (0008 d15).
+bool guide_rgb_lost(uint32_t slot, VType t) {
+  return (slot == uint32_t(ar::RecordSlot::base_color) || slot == uint32_t(ar::RecordSlot::specular_color)) && t == VType::SPEC;
+}
+
 // The working-space RGB of a reflectance TABLE (scale times the n points w, v, clamped to [0, 1]
 // as the kernel's resolve clamps a REFLECTANCE slot) under the working space's white, D65:
 // XYZ_k = sum R(l) S(l) cmf_k(l) / sum S(l) ybar(l) at the observer's 1 nm samples, then M_ws.
@@ -1052,8 +1059,9 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     for (int st : stores_of[child]) {
       const GraphNode& nd = w.g.nodes[size_t(st)];
       const uint32_t slot = slot_of(st);
-      // A child's colours are code, so the material's block holds no RGB the albedo guide could read.
-      if (slot == uint32_t(RS::base_color) || slot == uint32_t(RS::specular_color)) res->block.guide_flags |= ar::GUIDE_RGB_RUNTIME;
+      // A child's colours are code: STORE_SLOT keeps an RGB source for the albedo guide, a lifted
+      // spectrum has none (0008 d15).
+      if (guide_rgb_lost(slot, w.g.nodes[size_t(nd.input[0])].out)) res->block.guide_flags |= ar::GUIDE_RGB_RUNTIME;
       if (!w.isc[size_t(nd.input[0])]) {
         c.runtime_slots |= uint64_t(1) << slot;
         continue;
@@ -1255,6 +1263,7 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
           return res.error = "a run-time scalar cannot be stored in a colour slot", res;
         if (slot == uint32_t(ar::RecordSlot::closure_weight))
           return res.error = "closure_weight is set by the selection, not stored by a graph", res;
+        if (guide_rgb_lost(slot, t)) res.block.guide_flags |= ar::GUIDE_RGB_RUNTIME;
         is_root[size_t(i)] = 1;
         is_opacity_root[size_t(i)] = slot == opacity_slot;
         res.runtime_slots |= uint64_t(1) << slot;
@@ -1625,9 +1634,11 @@ static MaterialOutput compile_material_impl(const ar_graph_desc& d, const ar::Rg
   MaterialOutput m;
   m.compiled = compile_surface(d, table, means, slots);
   if (!m.compiled.ok) return magenta_material(table, AR_REPORT_PROGRAM_REJECTED, m.compiled.error);
-  // A per-point base_color or specular_color has no constant RGB for the albedo guide (0008 d15).
-  if (per_point(m.compiled, ar::RecordSlot::base_color) || per_point(m.compiled, ar::RecordSlot::specular_color))
-    m.compiled.block.guide_flags |= ar::GUIDE_RGB_RUNTIME;
+  // compile_surface marked a per-point base_color or specular_color fed a lifted spectrum: the albedo
+  // guide has no RGB for it and is magenta (0008 d15), said once per material.
+  if ((m.compiled.block.guide_flags & ar::GUIDE_RGB_RUNTIME) != 0)
+    add_entry(&m, AR_REPORT_NODE_APPROXIMATED,
+              "per-point spectral base_color or specular_color: no RGB for the denoiser albedo guide, which is magenta");
   // The (kind, semantic) pairs resolve() evaluates (spectrum_ref.h, 0005 item 9): CONSTANT and RGB
   // anywhere, TABLE in every slot but an IOR one, BLACKBODY in an ILLUMINANT slot, CAUCHY_ABBE in
   // an IOR slot. Every other kind or pair is refused here, so it never reaches resolve().

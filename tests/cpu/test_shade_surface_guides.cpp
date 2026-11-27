@@ -8,14 +8,19 @@
 // dielectric with no diffuse base (the "glass": the stack has no transmission lobe yet) tints by
 // specular_color E_diel; a path whose only hit is delta and that escapes writes Cycles' background
 // value (tint times its contribution in display RGB, no normal); a film without guides writes
-// nothing; a material whose base_color is set per point (a UV-driven colour) writes magenta.
+// nothing. Per-point colours: an image-textured plane's guide is each texel's RGB clamped to [0, 1]
+// (as a textured specular_color's, through E_spec) and a Mix child's is its own RGB with a negative
+// channel at exactly 0, all to the record's 10-bit packing; a colour from a lifted
+// spectrum has no RGB and writes magenta, reported once. Per-pixel guide variance is printed.
 // The film is read through FilmView after one resolve (each pixel holds one sample).
 // Ref: docs/decisions/0008-film-outputs-denoise.md d15, d22, d23, V10; 0003 d21; Cycles
 // kernel/film/denoising_passes.h and light_passes.h (behaviour, not pixels).
 #include <doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <random>
@@ -50,7 +55,49 @@ using ar::Real3;
 
 namespace {
 
-constexpr ar_key kMesh = 100, kFront = 1, kWall = 2;
+constexpr ar_key kMesh = 100, kFront = 1, kWall = 2, kImage = 300;
+
+// An image of linear float RGBA texels (PIXELS source, linear Rec.709), rows as stored.
+struct TexImage {
+  uint32_t w = 0, h = 0;
+  std::vector<float> rgba;
+};
+
+// A surface graph built node by node (the shape test_shade_surface_agree.cpp's Graph has).
+struct SurfaceGraph {
+  std::vector<ar_graph_node> nodes;
+  std::vector<ar_graph_link> links;
+  std::vector<float> f;
+  std::vector<int32_t> i;
+  int add(ar::Op op, std::vector<float> fp, std::vector<int32_t> ip = {}) {
+    ar_graph_node n = {};
+    n.op = uint32_t(op);
+    n.f32_first = uint32_t(f.size()), n.f32_count = uint32_t(fp.size());
+    n.i32_first = uint32_t(i.size()), n.i32_count = uint32_t(ip.size());
+    f.insert(f.end(), fp.begin(), fp.end());
+    i.insert(i.end(), ip.begin(), ip.end());
+    nodes.push_back(n);
+    return int(nodes.size()) - 1;
+  }
+  void link(int from, int to, uint32_t socket) { links.push_back({uint32_t(from), 0u, uint32_t(to), socket}); }
+  // STORE_SLOT of `src` into `slot`, in Mix child `child` when it is not negative.
+  void store(int src, ar::RecordSlot slot, int32_t child = -1) {
+    std::vector<int32_t> ip{int32_t(slot)};
+    if (child >= 0) ip.push_back(child);
+    link(src, add(ar::Op::STORE_SLOT, {}, ip), 0);
+  }
+  ar_graph_desc desc() const {
+    ar_graph_desc d = {};
+    d.node_count = uint32_t(nodes.size()), d.link_count = uint32_t(links.size());
+    d.f32_count = uint32_t(f.size()), d.i32_count = uint32_t(i.size());
+    d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data(), d.params_i32 = i.data();
+    return d;
+  }
+};
+
+// The packed guide RGB's stated error (openpbr_params.h guide_rgb_pack): half a 10-bit step, plus
+// float rounding in the albedo.
+constexpr double kPackErr = 0.5 / 1023.0 + 1e-6;
 
 struct Rig {
   ContextState sctx;
@@ -80,10 +127,24 @@ struct Rig {
   std::vector<Real> hit_t, eta_scale, prev_dist;
   std::vector<ar::Spec> lambda_t, beta, r_u, r_l;
 
-  // `front` is the front quad's surface graph (null: an Emission graph whose block the test replaces).
-  Rig(uint32_t count, bool guides, const ar_graph_desc* front = nullptr) : n(count), guides_on(guides) {
+  // `front` is the front quad's surface graph (null: an Emission graph whose block the test replaces);
+  // `image`, when given, is image kImage, which that graph may sample.
+  Rig(uint32_t count, bool guides, const ar_graph_desc* front = nullptr, const TexImage* image = nullptr)
+      : n(count), guides_on(guides) {
     scene.meshes = std::make_shared<MeshStore>();
     scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
+    // The image in its own generation, before the graph that samples it compiles.
+    if (image != nullptr)
+      commit([&](Edit& e) {
+        ar_image_desc id = {};
+        id.key = kImage, id.source = AR_IMAGE_SOURCE_PIXELS, id.color_interop = AR_COLOR_INTEROP_LIN_REC709;
+        id.width = image->w, id.height = image->h;
+        ar_image_buffers ib = {};
+        REQUIRE(scene.materials->image_begin(e, &id, &ib) == AR_OK);
+        REQUIRE(ib.pixels_count == image->rgba.size());
+        std::memcpy(*ib.pixels, image->rgba.data(), image->rgba.size() * sizeof(float));
+        REQUIRE(e.item_commit(kImage) == AR_OK);
+      });
     commit([&](Edit& e) {
       std::vector<ar_graph_node> nodes(3);
       std::vector<ar_graph_link> links{{0, 0, 2, 0}, {1, 0, 2, 1}};
@@ -302,6 +363,47 @@ Real3 front_point(uint32_t i, uint32_t n) {
   return Real3{Real(0.15 + 0.3 * t), Real(-0.1 + 0.2 * std::fmod(7.0 * t, 1.0)), Real(0)};
 }
 
+// 8 x 8 float texels in distinct colours, red and green up to 1.35 so that some clamp (an image refuses a\n// negative texel, so the lower clamp has no texture case).
+TexImage test_image() {
+  TexImage im;
+  im.w = im.h = 8;
+  for (uint32_t i = 0; i < im.w * im.h; ++i) {
+    im.rgba.push_back(1.35f * float((i * 37u) % 64u) / 63.0f);
+    im.rgba.push_back(0.02f + 1.3f * float((i * 11u + 5u) % 64u) / 63.0f);
+    im.rgba.push_back(0.03f + 0.9f * float((i * 23u + 3u) % 64u) / 63.0f);
+    im.rgba.push_back(1.0f);
+  }
+  return im;
+}
+
+// The front quad's point at the centre of texel (tx, ty): the quad's UV is ((x + 1) / 2, (y + 1) / 2).
+Real3 texel_centre(const TexImage& im, uint32_t tx, uint32_t ty) {
+  const double u = (double(tx) + 0.5) / double(im.w), v = (double(ty) + 0.5) / double(im.h);
+  return Real3{Real(2.0 * u - 1.0), Real(2.0 * v - 1.0), Real(0)};
+}
+
+// A diffuse material (specular_weight 0) whose base_color is image kImage, Closest, at UV set 0.
+SurfaceGraph textured_graph() {
+  SurfaceGraph g;
+  const int tex = g.add(ar::Op::TEX_IMAGE, {}, {int32_t(kImage), 0});
+  g.link(g.add(ar::Op::LOAD_CTX_UV, {}, {0}), tex, 0);
+  g.store(tex, ar::RecordSlot::base_color);
+  g.store(g.add(ar::Op::CONST_F32, {0.0f}), ar::RecordSlot::specular_weight);
+  return g;
+}
+
+// Mix(factor) of two diffuse children whose base colours are c0 and c1.
+SurfaceGraph mix_graph(const float* c0, const float* c1, float factor) {
+  SurfaceGraph g;
+  for (int32_t child = 0; child < 2; ++child) {
+    const float* c = child == 0 ? c0 : c1;
+    g.store(g.add(ar::Op::CONST_F32X3, {c[0], c[1], c[2]}), ar::RecordSlot::base_color, child);
+    g.store(g.add(ar::Op::CONST_F32, {0.0f}), ar::RecordSlot::specular_weight, child);
+  }
+  g.link(g.add(ar::Op::CONST_F32, {factor}), g.add(ar::Op::BRANCH_MIX, {}, {0, 0, 1}), 0);
+  return g;
+}
+
 }  // namespace
 
 TEST_SUITE("fast") {
@@ -495,19 +597,148 @@ TEST_CASE("shade_surface_guides/off writes nothing") {
   }
 }
 
-TEST_CASE("shade_surface_guides/per-point colour is magenta") {
-  // base_color set per point (a UV-driven colour, the shape of a textured plane): the compiler marks
-  // the block and the hit writes the unsupported colour (1, 0, 1) as its albedo.
-  std::vector<ar_graph_node> nodes(2);
-  std::vector<ar_graph_link> links{{0, 0, 1, 0}};
-  std::vector<int32_t> ip{0, int32_t(ar::RecordSlot::base_color)};
-  nodes[0].op = uint32_t(ar::Op::LOAD_CTX_UV), nodes[0].i32_first = 0, nodes[0].i32_count = 1;
-  nodes[1].op = uint32_t(ar::Op::STORE_SLOT), nodes[1].i32_first = 1, nodes[1].i32_count = 1;
-  ar_graph_desc d = {};
-  d.node_count = 2, d.link_count = 1, d.i32_count = 2, d.nodes = nodes.data(), d.links = links.data(), d.params_i32 = ip.data();
+TEST_CASE("shade_surface_guides/textured plane carries the texel rgb") {
+  // A diffuse plane (no specular layer, EON at roughness 0, so the albedo is the base colour) whose
+  // base_color is an 8 x 8 float image read Closest at UV set 0, one path at each texel's centre.
+  // Texels reach above 1: each pixel's guide is the texel clamped to [0, 1], to the
+  // packing's error, computed here from the texel values.
+  const TexImage im = test_image();
+  const SurfaceGraph gr = textured_graph();
+  const ar_graph_desc d = gr.desc();
+  const uint32_t n = im.w * im.h;
+  Rig rig(n, true, &d, &im);
+  REQUIRE(rig.block(0).guide_flags == 0u);
+  std::mt19937_64 rng(30);
+  for (uint32_t i = 0; i < n; ++i) rig.start(i, 0, texel_centre(im, i % im.w, i / im.w), Real3{0, 0, -1}, rng);
+  rig.run();
+  for (uint32_t i = 0; i < n; ++i) CHECK((rig.flags[i] & ar::DENOISE_SURFACE_DONE) != 0u);
+  const Guides g = read_guides(rig);
+  uint32_t clamped = 0;
+  for (uint32_t p = 0; p < n; ++p)
+    for (uint32_t c = 0; c < 3; ++c) {
+      const double t = double(im.rgba[4 * p + c]);
+      clamped += t < 0.0 || t > 1.0;
+      CHECK(std::fabs(g.albedo[c][p] - std::min(std::max(t, 0.0), 1.0)) <= kPackErr);
+    }
+  CHECK(clamped > 0u);  // the clamp is exercised
+}
+
+TEST_CASE("shade_surface_guides/textured specular colour carries the texel rgb") {
+  // A GGX layer (specular_weight 1, roughness 0.3) over EON with a constant base colour, its
+  // specular_color the 8 x 8 image (Closest, UV set 0), one path at each texel's centre, straight down
+  // (mu_o = 1). From the albedo tables directly (0008 d15): E_spec = s E_diel(1, r, 1.5) with s the
+  // texel clamped to [0, 1], diffuse = E_eon (1 - E_spec), guide = diffuse + E_spec, computed here from
+  // the texels. d(guide)/ds = E_diel (1 - E_eon) <= 1, so the packing's error bounds it.
+  const TexImage im = test_image();
+  SurfaceGraph gr;
+  const float base[3] = {0.5f, 0.4f, 0.3f};
+  gr.store(gr.add(ar::Op::CONST_F32X3, {base[0], base[1], base[2]}), ar::RecordSlot::base_color);
+  const int tex = gr.add(ar::Op::TEX_IMAGE, {}, {int32_t(kImage), 0});
+  gr.link(gr.add(ar::Op::LOAD_CTX_UV, {}, {0}), tex, 0);
+  gr.store(tex, ar::RecordSlot::specular_color);
+  const ar_graph_desc d = gr.desc();
+  const uint32_t n = im.w * im.h;
+  Rig rig(n, true, &d, &im);
+  REQUIRE(rig.block(0).guide_flags == 0u);
+  REQUIRE(rig.block(0).specular_weight == 1.0f);
+  REQUIRE(rig.block(0).specular_roughness == 0.3f);
+  std::mt19937_64 rng(34);
+  for (uint32_t i = 0; i < n; ++i) rig.start(i, 0, texel_centre(im, i % im.w, i / im.w), Real3{0, 0, -1}, rng);
+  const Real r = ar::e_roughness_axis(Real(0.09f), Real(0.09f));
+  const double e = double(ar::e_diel_lookup(*rig.kg.e_diel, Real(1), r, Real(1.5)));
+  ar::EonParams ep{};
+  ep.base_color = ar::Spec{{Real(base[0]), Real(base[1]), Real(base[2]), Real(base[1])}};
+  ep.roughness = Real(0);
+  const ar::Spec e_eon = ar::eon_albedo(ep, Real(1));
+  rig.run();
+  for (uint32_t i = 0; i < n; ++i) CHECK((rig.flags[i] & ar::DENOISE_SURFACE_DONE) != 0u);
+  const Guides g = read_guides(rig);
+  uint32_t clamped = 0;
+  for (uint32_t p = 0; p < n; ++p)
+    for (uint32_t c = 0; c < 3; ++c) {
+      const double t = double(im.rgba[4 * p + c]);
+      clamped += t > 1.0;
+      const double es = std::min(t, 1.0) * e;
+      CHECK(std::fabs(g.albedo[c][p] - (double(e_eon.v[c]) * (1.0 - es) + es)) <= kPackErr);
+    }
+  CHECK(clamped > 0u);
+}
+
+TEST_CASE("shade_surface_guides/negative mix child channel is zero") {
+  // A Mix child's constant colour reaches STORE_SLOT as code, unclamped: a negative channel is 0 in
+  // the guide, exactly (the reflectance lift clamps it to 0 too, albedo_coeffs), the others the
+  // child's RGB to the packing's error.
+  const float c0[3] = {0.9f, -0.4f, 0.1f}, c1[3] = {-0.3f, 0.5f, 0.8f};
+  const SurfaceGraph gr = mix_graph(c0, c1, 0.3f);
+  const ar_graph_desc d = gr.desc();
+  constexpr uint32_t kN = 64;
+  Rig rig(kN, true, &d);
+  std::mt19937_64 rng(36);
+  for (uint32_t i = 0; i < kN; ++i) rig.start(i, 0, front_point(i, kN), Real3{0, 0, -1}, rng);
+  rig.run();
+  const Guides g = read_guides(rig);
+  uint32_t first = 0, second = 0;
+  for (uint32_t p = 0; p < kN; ++p) {
+    // Which child: its positive channels match.
+    const bool is0 = std::fabs(g.albedo[0][p] - double(c0[0])) <= kPackErr && std::fabs(g.albedo[2][p] - double(c0[2])) <= kPackErr;
+    const bool is1 = std::fabs(g.albedo[1][p] - double(c1[1])) <= kPackErr && std::fabs(g.albedo[2][p] - double(c1[2])) <= kPackErr;
+    REQUIRE((is0 || is1));
+    CHECK(g.albedo[is0 ? 1 : 0][p] == 0.0);
+    first += is0, second += is1;
+  }
+  CHECK(first > 0u);
+  CHECK(second > 0u);
+}
+
+TEST_CASE("shade_surface_guides/mix child carries its rgb") {
+  // Mix(0.3) of two diffuse children with constant colours, stored as code (CONST_STORE): each
+  // sample's guide is the RGB of the child its selection took, and both children occur.
+  const float c0[3] = {0.9f, 0.2f, 0.1f}, c1[3] = {0.1f, 0.5f, 0.8f};
+  const SurfaceGraph gr = mix_graph(c0, c1, 0.3f);
+  const ar_graph_desc d = gr.desc();
+  constexpr uint32_t kN = 64;
+  Rig rig(kN, true, &d);
+  REQUIRE(rig.block(0).guide_flags == 0u);
+  std::mt19937_64 rng(32);
+  for (uint32_t i = 0; i < kN; ++i) rig.start(i, 0, front_point(i, kN), Real3{0, 0, -1}, rng);
+  rig.run();
+  const Guides g = read_guides(rig);
+  uint32_t first = 0, second = 0;
+  for (uint32_t p = 0; p < kN; ++p) {
+    bool is0 = true, is1 = true;
+    for (uint32_t c = 0; c < 3; ++c) {
+      is0 = is0 && std::fabs(g.albedo[c][p] - double(c0[c])) <= kPackErr;
+      is1 = is1 && std::fabs(g.albedo[c][p] - double(c1[c])) <= kPackErr;
+    }
+    CHECK((is0 || is1));
+    first += is0, second += is1;
+  }
+  CHECK(first > 0u);
+  CHECK(second > 0u);
+}
+
+TEST_CASE("shade_surface_guides/spectral only source stays magenta") {
+  // base_color from a lifted spectrum (UV through RGB_LIFT): the record keeps no RGB, so the compiler
+  // marks the block and reports it once, and the hit writes the unsupported colour (1, 0, 1).
+  SurfaceGraph gr;
+  const int lift = gr.add(ar::Op::RGB_LIFT, {}, {int32_t(ar::SpectrumSemantic::REFLECTANCE)});
+  gr.link(gr.add(ar::Op::LOAD_CTX_UV, {}, {0}), lift, 0);
+  gr.store(lift, ar::RecordSlot::base_color);
+  const ar_graph_desc d = gr.desc();
   constexpr uint32_t kN = 8;
   Rig rig(kN, true, &d);
   REQUIRE((rig.block(0).guide_flags & ar::GUIDE_RGB_RUNTIME) != 0u);
+  Report& r = rig.scene.report();
+  r.snapshot();
+  ar_report_info info{};
+  REQUIRE(r.info(&info) == AR_OK);
+  uint32_t entries = 0;
+  for (uint32_t i = 0; i < info.entry_count; ++i) {
+    ar_report_entry e{};
+    REQUIRE(r.entry(i, &e) == AR_OK);
+    entries += e.code == AR_REPORT_NODE_APPROXIMATED && std::strstr(reinterpret_cast<const char*>(e.detail), "albedo guide") != nullptr;
+  }
+  CHECK(entries == 1u);
   std::mt19937_64 rng(10);
   for (uint32_t i = 0; i < kN; ++i) rig.start(i, 0, front_point(i, kN), Real3{0, 0, -1}, rng);
   rig.run();
@@ -518,6 +749,64 @@ TEST_CASE("shade_surface_guides/per-point colour is magenta") {
     CHECK(g.albedo[1][p] == 0.0);
     CHECK(g.albedo[2][p] == 1.0);
   }
+}
+
+TEST_CASE("shade_surface_guides/per-pixel variance is reported") {
+  // V10's per-pixel guide variance, reported and not gated: 16 pixels of 64 samples each, every path
+  // its own film pixel and the samples grouped here. The textured plane's pixels are 1.5 texels wide,
+  // so sub-pixel positions straddle texel edges; the Mix(0.3) pixels sit at fixed points, so only the
+  // selection varies (expected p (1 - p) |c0 - c1|^2 per channel).
+  constexpr uint32_t kPix = 16, kSpp = 64, kN = kPix * kSpp;
+  std::uniform_real_distribution<double> uni(0.0, 1.0);
+  const auto variance = [&](const Guides& g, double out[3]) {
+    for (uint32_t c = 0; c < 3; ++c) {
+      double sum = 0.0;
+      for (uint32_t p = 0; p < kPix; ++p) {
+        double m = 0.0, m2 = 0.0;
+        for (uint32_t s = 0; s < kSpp; ++s) {
+          const double v = g.albedo[c][p * kSpp + s];
+          REQUIRE(std::isfinite(v));
+          m += v, m2 += v * v;
+        }
+        m /= kSpp;
+        sum += (m2 / kSpp - m * m) * double(kSpp) / double(kSpp - 1);
+      }
+      out[c] = sum / kPix;
+    }
+  };
+  double tex_var[3], mix_var[3];
+  {
+    const TexImage im = test_image();
+    const SurfaceGraph gr = textured_graph();
+    const ar_graph_desc d = gr.desc();
+    Rig rig(kN, true, &d, &im);
+    std::mt19937_64 rng(40);
+    const double side = 1.5 / double(im.w);  // a pixel's width in UV
+    for (uint32_t p = 0; p < kPix; ++p)
+      for (uint32_t s = 0; s < kSpp; ++s) {
+        const double u = (double(p % 4) + 0.5) / 4.0 + side * (uni(rng) - 0.5);
+        const double v = (double(p / 4) + 0.5) / 4.0 + side * (uni(rng) - 0.5);
+        rig.start(p * kSpp + s, 0, Real3{Real(2.0 * u - 1.0), Real(2.0 * v - 1.0), Real(0)}, Real3{0, 0, -1}, rng);
+      }
+    rig.run();
+    variance(read_guides(rig), tex_var);
+  }
+  const float c0[3] = {0.9f, 0.2f, 0.1f}, c1[3] = {0.1f, 0.5f, 0.8f};
+  {
+    const SurfaceGraph gr = mix_graph(c0, c1, 0.3f);
+    const ar_graph_desc d = gr.desc();
+    Rig rig(kN, true, &d);
+    std::mt19937_64 rng(41);
+    for (uint32_t p = 0; p < kPix; ++p)
+      for (uint32_t s = 0; s < kSpp; ++s) rig.start(p * kSpp + s, 0, front_point(p, kPix), Real3{0, 0, -1}, rng);
+    rig.run();
+    variance(read_guides(rig), mix_var);
+  }
+  std::printf("guide variance per pixel (mean over %u pixels of %u samples): textured plane %.4g %.4g %.4g; "
+              "Mix(0.3) %.4g %.4g %.4g, binomial %.4g %.4g %.4g\n",
+              kPix, kSpp, tex_var[0], tex_var[1], tex_var[2], mix_var[0], mix_var[1], mix_var[2],
+              0.21 * double((c0[0] - c1[0]) * (c0[0] - c1[0])), 0.21 * double((c0[1] - c1[1]) * (c0[1] - c1[1])),
+              0.21 * double((c0[2] - c1[2]) * (c0[2] - c1[2])));
 }
 
 TEST_CASE("shade_surface_guides/cauchy index uses n_d") {

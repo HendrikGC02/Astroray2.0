@@ -56,10 +56,16 @@ AR_FN bool store_src_finite(const float* src, uint32_t n) {
   return ok;
 }
 
+// The guide RGB word of a colour slot the albedo guide reads (base_color, specular_color), else null.
+// Called with a constant slot, so it folds to one pointer or none.
+AR_FN uint32_t* guide_rgb_dst(OpenPBRParams* rec, RecordSlot s) {
+  return s == RecordSlot::base_color ? &rec->guide_rgb[0] : (s == RecordSlot::specular_color ? &rec->guide_rgb[1] : nullptr);
+}
+
 // One spectral slot: IOR is a flat scalar, other semantics lift an RGB colour, and a spectrum
-// register group is stored as is.
+// register group is stored as is. `guide`, when not null, also takes the RGB the lift consumed.
 AR_FN VmStatus store_spectral(Spec* dst, SpectrumSemantic sem, bool spec_src, const SceneTables& t,
-                              const Lambda& lam, const float* src, uint32_t avail) {
+                              const Lambda& lam, const float* src, uint32_t avail, uint32_t* guide) {
   if (spec_src) {
     if (avail < 4u) return VmStatus::BAD_REGISTER;
     if (!store_src_finite(src, 4u)) return VmStatus::NON_FINITE_INPUT;
@@ -71,6 +77,7 @@ AR_FN VmStatus store_spectral(Spec* dst, SpectrumSemantic sem, bool spec_src, co
   } else {
     if (avail < 3u) return VmStatus::BAD_REGISTER;
     if (!store_src_finite(src, 3u)) return VmStatus::NON_FINITE_INPUT;
+    if (guide != nullptr) *guide = guide_rgb_pack(src);
     *dst = op_rgb_lift(t, src, sem, lam);
   }
   return VmStatus::OK;
@@ -78,7 +85,9 @@ AR_FN VmStatus store_spectral(Spec* dst, SpectrumSemantic sem, bool spec_src, co
 
 // Writes src into the slot; BAD_OPERAND when the slot is unknown or the source form does not fit
 // it, BAD_REGISTER when fewer registers than the form needs remain, NON_FINITE_INPUT when a
-// source register is NaN or Inf.
+// source register is NaN or Inf. An RGB stored into base_color or specular_color also keeps the RGB
+// the lift consumed, for the denoiser's albedo guide (openpbr_params.h guide_rgb_pack, 0008 d15); a
+// lifted spectrum has none, and the compiler marks and reports such a material.
 AR_FN VmStatus op_store_slot(OpenPBRParams* rec, const SceneTables& t, const Lambda& lam, uint32_t imm,
                              const float* src, uint32_t avail) {
   const uint32_t slot = imm & 0xffu;
@@ -103,8 +112,9 @@ AR_FN VmStatus op_store_slot(OpenPBRParams* rec, const SceneTables& t, const Lam
     return VmStatus::OK;
     AR_RECORD_FRAMES(AR_X)
 #undef AR_X
-#define AR_X(n, s, sem) \
-  case RecordSlot::n: return store_spectral(&rec->n, SpectrumSemantic::sem, spec_src, t, lam, src, avail);
+#define AR_X(n, s, sem)                                                                              \
+  case RecordSlot::n:                                                                                \
+    return store_spectral(&rec->n, SpectrumSemantic::sem, spec_src, t, lam, src, avail, guide_rgb_dst(rec, RecordSlot::n));
     AR_RECORD_SPECTRAL(AR_X)
 #undef AR_X
     default: return VmStatus::BAD_OPERAND;
