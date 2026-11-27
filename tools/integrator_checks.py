@@ -206,14 +206,17 @@ def capped_pair(device):
 def check_capped(device):
     """0006 D8's per-launch cap, V6 third clause, 0003 check 26: a capped run equals an uncapped one.
     CPU (one thread): every plane bit-identical; CUDA: display within 1e-6 relative, the rest
-    bit-identical (compare_films). The medium half must not be black, so equal films mean something."""
+    bit-identical (compare_films). The medium half must not be black and the lamp's spot on the plate inside the
+    medium (NEE through ratio-tracked shadow items) must be lit, so equal films mean something for both stages."""
     ref, capped = capped_pair(device)
     ok, text = compare_films(ref, capped, device)
     a, b = display(ref)[0], display(capped)[0]
     half = float(a[:, :, : CAP_SIZE // 2].mean())
-    ok &= half > 0.01
+    # The lamp's spot on the plate inside the medium is lit only through ratio-tracked shadow items.
+    spot = float(a[:, :, : CAP_SIZE // 2].max())
+    ok &= half > 0.01 and spot > 0.5
     return ok, (f"dense v1_slab, majorant {CAP_MAJORANT} sigma_t, cap 1 vs default: {text}; max |difference| "
-                f"{float(np.max(np.abs(a - b))):.3g}, medium-half mean {half:.4f}")
+                f"{float(np.max(np.abs(a - b))):.3g}, medium-half mean {half:.4f}, lamp spot {spot:.3g}")
 
 
 def check_d28(device):

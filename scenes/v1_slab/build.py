@@ -70,13 +70,14 @@ def build(out, sigma_zero=False, scattering=False, dense=False):
         if dense:
             # A diffuse plate a quarter of the way up the box and a point lamp three quarters up, both inside
             # the medium: next-event estimation from the plate emits shadow items whose whole segment lies in
-            # the medium, so the shadow pre-pass ratio-tracks (and at a low cap requeues) them too.
+            # the medium, so the shadow pre-pass ratio-tracks (and at a low cap requeues) them too. The lamp sits
+            # over the middle of the view's left half, so its lit spot is in the picture.
             plate, side = s.key(), 0.9 * t["slab_size"]
             s.mesh_from(plate, meshes.plane(side, side), "plate")
             white = s.material({"base_color": (0.8, 0.8, 0.8), "specular_weight": 0.0})
             items.append({"geom": plate, "materials": [white],
                           "xf": ar.translation((-t["slab_size"] / 2, 0.0, t["gap"] + 0.25 * thickness))})
-            s.light("point", xf=ar.translation((-t["slab_size"] / 3, 0.0, t["gap"] + 0.75 * thickness)),
+            s.light("point", xf=ar.translation((-0.35, 0.0, t["gap"] + 0.75 * thickness)),
                     power=t["dense_lamp_power"])
         s.instances(items)
         s.world((0.0, 0.0, 0.0), 0.0)

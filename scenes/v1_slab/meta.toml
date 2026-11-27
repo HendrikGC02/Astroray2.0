@@ -41,7 +41,7 @@ dense_albedo = 0.9
 dense_g = 0.5
 dense_thickness = 0.05
 dense_bounces = 16
-dense_lamp_power = 1.0
+dense_lamp_power = 20.0
 
 [tolerance]
 kind = "z_se"
