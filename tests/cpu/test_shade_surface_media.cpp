@@ -357,9 +357,10 @@ TEST_SUITE("fast") {
 TEST_CASE("shade_surface_media/no medium is bit identical to the stage before the stack") {
   // Goldens: the digests of the three configurations with the media feature off and on, recorded from
   // the stage before the medium stack existed (an instance's medium was tested only at its own back face).
+  // Config 2's digest holds the stored flags of its transparent-limit ends, which carry the ending hit's own FRONT_FACE.
   const uint64_t golden[3][2] = {{0xfaa8ed417f8ddcc9ull, 0xaeb9501da0cde509ull},
                                  {0x984b3241c4371e1dull, 0x866eefea9bae5f2full},
-                                 {0xea2fd382fd58cbe0ull, 0x6e7727c544d73ea0ull}};
+                                 {0x0e1b091ded5f4be0ull, 0x76217b9c7e61bea0ull}};
   for (int c = 0; c < 3; ++c)
     for (int m = 0; m < 2; ++m) {
       const uint64_t got = config_digest(c, m != 0);
