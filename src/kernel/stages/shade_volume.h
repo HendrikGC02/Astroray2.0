@@ -5,13 +5,21 @@
 // 1 + the medium index in M1b, RULINGS 98; M1b tracks that one medium, summing the active media is
 // M2's, 0006 D17), which is homogeneous until grids
 // arrive: its coefficients are evaluated once, at the segment start, and the majorant is sigma_t
-// itself (one majorant cell, 0006 D8 "homogeneous media run the same loop with one cell").
+// itself (one majorant cell, 0006 D8 "homogeneous media run the same loop with one cell"; a gate hook
+// may scale it, RULINGS 111).
 // Outcomes:
 //   reached:   beta, r_u, r_l rescaled; the interrupted hit goes on to the stage route_hit gives
 //              without the medium test (route_hit_after_medium), the hit record unchanged;
 //   absorbed:  the path ends ABSORBED; a zero weight ends it ZERO_THROUGHPUT;
 //   limit:     the event's 1,048,576 tentative collisions (D8, shared by its flights) end it
 //              VOLUME_LIMIT, counted in the statistics' termination histogram;
+//   capped:    D8's per-launch cap (SessionUniforms::medium_launch_cap): the flight's state (the ray
+//              rebased to its last collision as ray_o, hit_t and prev_dist, the weights, medium_rng)
+//              is stored and the path requeued into this segment, which goes on bit-identically. With
+//              M1b's tight majorant no flight takes a null collision, so only the gate hook's loose
+//              majorant (medium_majorant, RULINGS 111) reaches it. The coefficients are evaluated again
+//              at the moved origin, so a volume program that reads P differs capped from uncapped
+//              (accepted: M1b approximates such a medium as homogeneous over the segment anyway);
 //   scattered: a real scattering vertex, as pbrt-v4 VolPathIntegrator::Li's real-scattering branch:
 //              "if (depth++ >= maxDepth) terminated", then a phase sample, beta *= p / pdf (1 for
 //              HG, sampled exactly, D12), the ray leaves from the collision point. This stage has no
@@ -138,9 +146,25 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
   // media requeue flights (M2) it must be treated as exhausted instead.
   uint32_t counter = stored >= first && stored < end ? stored : first;
   TrackWeights w{ps_beta(kg, slot), ps_r_u(kg, slot), ps_r_l(kg, slot)};
-  const TrackResult r = track_segment(sigma_a, sigma_s, sigma_a + sigma_s, hero_lane(flags), st, &counter, end - counter,
-                                      0xffffffffu, &ray, &w);
+  // medium_majorant is 1 outside the gate hook (RULINGS 111): the majorant is sigma_t exactly.
+  const TrackResult r = track_segment(sigma_a, sigma_s, (sigma_a + sigma_s) * Real(kg.session.medium_majorant), hero_lane(flags), st,
+                                      &counter, end - counter, kg.session.medium_launch_cap, &ray, &w);
   if (kg.session.features.media) ps_medium_rng(kg, slot) = counter;
+  if (r.event == TrackEvent::CAPPED) {
+    // D8's requeue: the flight's whole state goes back to the path, unchecked (an uncapped flight
+    // would carry it on in registers), and the path returns to this stage's segment. The limit wins
+    // over the cap, so the counter stays inside the event's range and the next launch continues it
+    // (the restart branch above is never taken by a requeued flight).
+    AR_ASSERT(counter > first && counter < end);
+    ps_beta(kg, slot) = w.beta;
+    ps_r_u(kg, slot) = w.r_u;
+    ps_r_l(kg, slot) = w.r_l;
+    ps_ray_o(kg, slot) = ray.o;
+    ps_hit_t(kg, slot) = ray.t_max;
+    ps_prev_dist(kg, slot) = ray.back;
+    ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::SHADE_VOLUME);
+    return;
+  }
   if (r.event == TrackEvent::ABSORBED) {
     path_end(kg, slot, Term::ABSORBED);
     return;

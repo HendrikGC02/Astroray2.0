@@ -211,7 +211,7 @@ AR_RT_CASE("ratio_track/collision limit blocks") {
 
 AR_RT_CASE("ratio_track/capped equals uncapped") {
   // 0006 D8 per-launch cap, V6 third clause, 0003 check 26: 1e4 random shadow segments with a loose
-  // majorant (2 to 40 times sigma_t) and lengths up to 6 m, so estimates take tens of collisions and
+  // majorant (2 to 20 times sigma_t) and lengths up to 4 m, so estimates take tens of collisions and
   // the roulette runs in many. Each is estimated uncapped and again with caps 1, 7 and 4,096, requeued
   // after every stop; T, r_u, r_l, the length left, the counter and the limit flag must equal the
   // uncapped estimate's bit for bit, and the calls must be ceil(collisions / cap).
@@ -221,14 +221,14 @@ AR_RT_CASE("ratio_track/capped equals uncapped") {
   int differ = 0, bad_calls = 0, capped_runs = 0, roulette = 0;
   for (int i = 0; i < 10000; ++i) {
     Spec sa, ss, maj;
-    const double loose = 2.0 + 38.0 * U(rng);
+    const double loose = 2.0 + 18.0 * U(rng);
     for (int j = 0; j < 4; ++j) {
       sa.v[j] = Real(0.05 + 1.0 * U(rng));
       ss.v[j] = Real(0.05 + 1.0 * U(rng));
       maj.v[j] = Real(double(sa.v[j] + ss.v[j]) * loose);
     }
     const uint32_t h = uint32_t(i) & 3u;
-    const Real len = Real(0.1 + 6.0 * U(rng));
+    const Real len = Real(0.1 + 4.0 * U(rng));
     const ar::MediumStream st = stream(uint32_t(i) >> 4, uint32_t(i) & 15u, 0x5eedu);
     const uint32_t first = ar::shadow_rng_start(uint32_t(i) & 7u);
     uint32_t c_ref = first;

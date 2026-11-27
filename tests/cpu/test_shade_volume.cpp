@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // shade_volume skeleton: the stage forwards every item to the stage route_hit would have chosen
 // without the medium test, and a slab scene whose medium has sigma = 0 renders bit for bit like the
-// same scene without a medium while the stage launches exactly once per medium segment.
+// same scene without a medium while the stage launches exactly once per medium segment, and a flight
+// requeued at 0006 D8's per-launch cap goes on bit-identically and lets its pass end.
 // The render cases use common/slab_rig.h (0006 V1's shape). Identity is claimed for that scene only: each
 // sample adds one contribution, so float addition order cannot differ; a scene with next-event estimation
 // or emission at neighbouring vertices does not have that guarantee across a medium segment.
@@ -12,6 +13,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -347,6 +350,123 @@ TEST_CASE("shade_volume/stale medium_rng gives the same result") {
     if (i < 3u) CHECK(a->medium_rng[i] == b->medium_rng[i]);
   }
   CHECK(a->medium_rng[0] > 1u * ar::kFlightCollisionLimit);
+}
+
+TEST_CASE("shade_volume/requeue continues the flight") {
+  // 0006 D8 requeue at the stage: a grey scattering medium under a majorant 16 sigma_t (the gate hook's
+  // value, RULINGS 111), so flights take null collisions; ray_d of length 2 and prev_dist 0.25, so the
+  // parameter-unit state is exercised. Run once at the default cap and once at cap 1, relaunching every
+  // requeued item (next_stage SHADE_VOLUME) until none is left: every path field the stage writes is
+  // bit-identical, and medium_rng advanced by exactly one block per launch at cap 1.
+  const auto rig = [](uint32_t cap) {
+    auto r = std::make_unique<StageRig>();
+    r->medium(0.0f, 0.5f, 0.3f);  // no absorption: every flight scatters or reaches, so its state lives on
+    r->kg.session.medium_majorant = 16u;
+    r->kg.session.medium_launch_cap = cap;
+    for (uint32_t i = 0; i < StageRig::kN; ++i) {
+      r->hit_t[i] = ar::Real(0.75), r->ray_d[i] = ar::Real3{0, 0, 2}, r->prev_dist[i] = ar::Real(0.25);
+      r->medium_rng[i] = ar::flight_rng_start(3u);
+    }
+    return r;
+  };
+  const auto relaunch = [](StageRig& r, std::vector<uint32_t>* launches) {
+    std::vector<uint32_t> items{0, 1, 2};  // item 3 is a light path, forwarded untouched
+    while (!items.empty()) {
+      for (uint32_t i : items) ++(*launches)[i];
+      r.kg.main_queue = items.data();
+      cpu_stage_shade_volume(r.kg, ar::StepEntry{0, uint32_t(items.size()), 0}, 0, uint32_t(items.size()));
+      std::vector<uint32_t> again;
+      for (uint32_t i : items)
+        if (r.next[i] == uint8_t(Stage::SHADE_VOLUME)) again.push_back(i);
+      items = again;
+    }
+  };
+  auto ref = rig(ar::kMediumLaunchCap), cap1 = rig(1u);
+  std::vector<uint32_t> n_ref(StageRig::kN, 0u), n_cap(StageRig::kN, 0u);
+  relaunch(*ref, &n_ref);
+  relaunch(*cap1, &n_cap);
+  uint32_t requeues = 0, live = 0;
+  for (uint32_t i = 0; i < 3u; ++i) {
+    INFO("item " << i);
+    CHECK(n_ref[i] == 1u);
+    requeues += n_cap[i] - 1u;
+    CHECK(cap1->medium_rng[i] - ar::flight_rng_start(3u) == n_cap[i]);
+    CHECK(ref->medium_rng[i] == cap1->medium_rng[i]);
+    CHECK(ref->next[i] == cap1->next[i]);
+    CHECK(ref->term[i] == cap1->term[i]);
+    // An ended path's fields are dead, and so is hit_t after a scatter (the next intersection writes it).
+    if (ref->term[i] != 0u) continue;
+    const bool scattered = ref->next[i] == uint8_t(Stage::INTERSECT_CLOSEST);
+    ++live;
+    CHECK(std::memcmp(&ref->beta[i], &cap1->beta[i], sizeof(ar::Spec)) == 0);
+    CHECK(std::memcmp(&ref->r_u[i], &cap1->r_u[i], sizeof(ar::Spec)) == 0);
+    CHECK(std::memcmp(&ref->r_l[i], &cap1->r_l[i], sizeof(ar::Spec)) == 0);
+    CHECK(std::memcmp(&ref->ray_o[i], &cap1->ray_o[i], sizeof(ar::Real3)) == 0);
+    CHECK(std::memcmp(&ref->ray_d[i], &cap1->ray_d[i], sizeof(ar::Real3)) == 0);
+    if (!scattered) CHECK(std::memcmp(&ref->hit_t[i], &cap1->hit_t[i], sizeof(ar::Real)) == 0);
+    CHECK(std::memcmp(&ref->prev_dist[i], &cap1->prev_dist[i], sizeof(ar::Real)) == 0);
+    CHECK(ref->event_index[i] == cap1->event_index[i]);
+  }
+  std::printf("shade_volume requeue at the stage: %u requeues over 3 flights, %u still live\n", requeues, live);
+  CHECK(requeues > 3u);
+  CHECK(live > 0u);  // at least one flight goes on, so its state was compared
+}
+
+// Sets ASTRORAY_TEST_<name> for the sessions created in its scope (the session reads hooks at create).
+struct HookScope {
+  const char* var;
+  HookScope(const char* v, const char* value) : var(v) { REQUIRE(_putenv_s(var, value) == 0); }
+  ~HookScope() { _putenv_s(var, ""); }
+};
+
+TEST_CASE("shade_volume/requeue ends the pass") {
+  // 0006 D8, V6 third clause, 0002 D7: the slab with a grey scattering medium (sigma_t 4 per m, optical
+  // depth 2) under ASTRORAY_TEST_MAJORANT=16, so a flight takes about 30 null collisions. At
+  // ASTRORAY_TEST_MEDIUM_CAP=1 every one is a requeue into the SHADE_VOLUME segment, yet each pass
+  // ends (the session converges) with a film bit-identical to the default cap's. With one path per
+  // pass (1 x 1, 1 spp) each requeue is one more step: steps at cap 1 = steps at the default + requeues.
+  HookScope k("ASTRORAY_TEST_MAJORANT", "16");
+  const auto spec = [](uint32_t w, uint32_t h, uint32_t spp) {
+    slab::SlabSpec s;
+    for (int c = 0; c < 3; ++c) s.medium.sigma_a[c] = 1.0f, s.medium.sigma_s[c] = 3.0f;
+    s.medium.g = 0.5f;
+    s.width = w, s.height = h, s.spp = spp;
+    s.max_bounces = s.volume_bounces = 16;
+    return s;
+  };
+  struct Out {
+    slab::Render r;
+    PassCounters c;
+  };
+  const auto render = [&](const slab::SlabSpec& sp, bool capped) {
+    std::unique_ptr<HookScope> cap;
+    if (capped) cap = std::make_unique<HookScope>("ASTRORAY_TEST_MEDIUM_CAP", "1");
+    slab::SlabRig rig(SceneConfig{2, {}, {}}, sp);
+    std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, 1);
+    slab::SlabSession s(rig, *dev);
+    Out o{s.converge(), {}};
+    o.c = s.session.pass_counters();
+    return o;
+  };
+  // The image: 6 x 4 at 2 spp.
+  {
+    const Out a = render(spec(slab::kW, slab::kH, 2), false), b = render(spec(slab::kW, slab::kH, 2), true);
+    REQUIRE(a.r.combined.size() == size_t(slab::kW) * slab::kH * 3);
+    REQUIRE(b.r.combined.size() == a.r.combined.size());
+    double sum = 0.0;
+    for (float v : a.r.combined) sum += v;
+    CHECK(sum / double(a.r.combined.size()) > 0.01);  // not black: identical bits mean something
+    CHECK(std::memcmp(a.r.combined.data(), b.r.combined.data(), a.r.combined.size() * sizeof(float)) == 0);
+    CHECK(b.r.volume_items > 4u * a.r.volume_items);
+  }
+  // One path per pass: every requeue adds exactly one step.
+  const Out a = render(spec(1, 1, 1), false), b = render(spec(1, 1, 1), true);
+  CHECK(std::memcmp(a.r.combined.data(), b.r.combined.data(), 3 * sizeof(float)) == 0);
+  const uint64_t requeues = b.r.volume_items - a.r.volume_items;
+  std::printf("shade_volume requeue pass: steps %llu at the default cap, %llu at cap 1, requeues %llu\n",
+              (unsigned long long)a.c.steps, (unsigned long long)b.c.steps, (unsigned long long)requeues);
+  CHECK(requeues > 0u);
+  CHECK(b.c.steps == a.c.steps + requeues);
 }
 
 TEST_CASE("shade_volume/zero sigma bit identical") {

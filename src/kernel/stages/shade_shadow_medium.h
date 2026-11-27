@@ -103,7 +103,7 @@ AR_FN void shadow_medium_item(const KernelGlobals& kg, uint32_t slot, uint32_t l
   const uint32_t used = counter % kShadowCollisionLimit;
   const uint32_t left = used < limit ? limit - used : 0u;
   RatioTrack r = ratio_track_start();
-  ratio_track_segment(sigma_a, sigma_s, sigma_a + sigma_s, &t_max, item_hero_lane(sh_item_flags(kg, slot)), st, &counter, left,
+  ratio_track_segment(sigma_a, sigma_s, (sigma_a + sigma_s) * Real(kg.session.medium_majorant), &t_max, item_hero_lane(sh_item_flags(kg, slot)), st, &counter, left,
                       0xffffffffu, &r);
   sh_medium_rng(kg, slot) = counter;
   if (r.limit) {

@@ -126,6 +126,16 @@ TestHooks read_test_hooks() {
     out.threads = uint32_t(positive("THREADS", value, 256));
     out.active.push_back("THREADS=" + value);
   }
+  // 0006 D8's cap and the majorant scale of RULINGS 111: sampling and sizes only. 0 or anything but a
+  // positive integer is refused, so a misspelt value never renders the default silently.
+  if (env_value("MEDIUM_CAP", &value)) {
+    out.medium_cap = uint32_t(positive("MEDIUM_CAP", value, ar::kMediumLaunchCap));
+    out.active.push_back("MEDIUM_CAP=" + value);
+  }
+  if (env_value("MAJORANT", &value)) {
+    out.medium_majorant = uint32_t(positive("MAJORANT", value, 1u << 20));
+    out.active.push_back("MAJORANT=" + value);
+  }
   if (env_value("RADIANCE_SCALE", &value)) {
     // Only s = 1 is a test of 0003 check 15; any other value would be read as a scale and is refused.
     if (value != "1") throw std::invalid_argument("ASTRORAY_TEST_RADIANCE_SCALE=" + value + " is not 1");

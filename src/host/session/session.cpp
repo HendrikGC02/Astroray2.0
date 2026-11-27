@@ -721,6 +721,9 @@ void Session::bind_globals() {
   u.pass_index = pass_index_;
   u.sampler_mode = AR_SAMPLER_SOBOL;  // no settings yet: the ABI's zero default
   u.test_hooks = hooks_.bits;
+  // read_test_hooks refused a cap or majorant of 0 at session create; 0 here means "not set".
+  u.medium_launch_cap = hooks_.medium_cap != 0u ? hooks_.medium_cap : ar::kMediumLaunchCap;
+  u.medium_majorant = hooks_.medium_majorant != 0u ? hooks_.medium_majorant : 1u;
   in.active_pixels = active_->list();
   in.camera = camera_ready_ ? static_cast<const ar::CameraView*>(camera_buf_.ptr) : nullptr;
   in.filter = filter_ready_ ? static_cast<const ar::FilterTable*>(filter_buf_.ptr) : nullptr;
