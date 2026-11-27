@@ -162,7 +162,7 @@ gated = "merge"
 # The denoiser guides moved only the compile time: 6.68-6.72 s in two gates (3 runs each).
 # Ruling 103 and owner decision 41: the light-tree walks (NEE draw, emission pmf) give spills 4 / 16 B and 7.31-7.40 s.
 # The medium stack (false interface at the top, the pass-through crossing): stack 400 to 416 B, spills unchanged,
-# compile 7.10 s quiet inside the build's MSVC environment (task 237: 7.76 s with nvcc running vcvarsall itself)
+# compile 7.10 s, timed in the build's MSVC environment (0009 d18).
 regs = 128
 stack = 416
 spill_store = 4
