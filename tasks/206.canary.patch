@@ -1,0 +1,38 @@
+diff --git a/src/host/material/material_store.cpp b/src/host/material/material_store.cpp
+index d1db2b6e..405ffc89 100644
+--- a/src/host/material/material_store.cpp
++++ b/src/host/material/material_store.cpp
+@@ -381,3 +381,3 @@ std::vector<MaterialStore::ArenaFailure> MaterialStore::rebuild_locked() {
+       if (code == 0) {
+-        ext.w[2] = offset;  // GRATING's table word (ext_params.h)
++        ext.w[2] = 0u;  // GRATING's table word (ext_params.h)
+         a->ext_params.push_back(ext);
+diff --git a/src/kernel/stages/shade_surface_ext.h b/src/kernel/stages/shade_surface_ext.h
+index d70d4453..d021d051 100644
+--- a/src/kernel/stages/shade_surface_ext.h
++++ b/src/kernel/stages/shade_surface_ext.h
+@@ -82,3 +82,3 @@ AR_FN bool ext_grating_table(const SceneData& s, const GratingParams& g, Grating
+   if (uint64_t(g.table) + bytes > uint64_t(s.table_arena_bytes)) return false;
+-  t->eta = reinterpret_cast<const float*>(s.table_arena + g.table);
++  t->eta = reinterpret_cast<const float*>(s.table_arena + 0u);
+   t->m_min = g.m_min;
+@@ -161,3 +161,4 @@ struct SurfaceKind<ShadeKind::Ext> {
+   // PROVISIONAL (header comment): the tint and the guide planes are left as they are.
+-  static AR_FN uint32_t guides(const KernelGlobals&, uint32_t, uint32_t, uint32_t flags, OpenPBRParams&, Real3, const LobeSample&) {
++  static AR_FN uint32_t guides(const KernelGlobals& kg, uint32_t slot, uint32_t, uint32_t flags, OpenPBRParams&, Real3, const LobeSample&) {
++    ps_guide_tint(kg, slot) = ps_guide_tint(kg, slot) * Real(0.5);
+     return flags;
+@@ -170,3 +171,7 @@ struct SurfaceKind<ShadeKind::Ext> {
+     const Real w = abs_dot(bs.wi, N) / bs.pdf;
+-    if ((bs.flags & LOBE_WL_DEPENDENT_DIR) == 0u) return beta * (bs.f * w);
++    if ((bs.flags & LOBE_WL_DEPENDENT_DIR) == 0u) {
++      Spec r = beta * (bs.f * w);
++      for (int i = 1; i < kLanes; ++i) r.v[i] = Real(0);
++      return r;
++    }
+     Lambda lam;
+@@ -175,3 +180,3 @@ struct SurfaceKind<ShadeKind::Ext> {
+     Spec b = beta;
+-    terminate_secondaries(lam, b, *flags);
++    // terminate_secondaries(lam, b, *flags);
+     Spec stored;
