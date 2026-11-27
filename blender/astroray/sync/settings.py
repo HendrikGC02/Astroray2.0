@@ -40,8 +40,6 @@ def build(scene, colorspace, passes=(), lightgroups=None):
     lines = []
     if r.use_border:
         lines.append("render border is not supported yet and is ignored")
-    if r.film_transparent:
-        lines.append("Film > Transparent is not supported yet and is ignored")
     if r.use_motion_blur:
         lines.append("motion blur lands in M8 and is ignored")
     fields = {
