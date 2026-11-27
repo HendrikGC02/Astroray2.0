@@ -73,6 +73,9 @@ FilmLayout FilmLayout::build(const FilmRequest& req) {
     all.push_back({"guide_albedo", ChannelKind::Add, 3, 0});
     all.push_back({"guide_normal", ChannelKind::Add, 3, 0});
   }
+  // After the guides, so no earlier plane offset moves.
+  if (req.depth) all.push_back({"aov_depth", ChannelKind::Add, 1, 0, true});
+  if (req.transparency) all.push_back({"transparency", ChannelKind::Add, 1, 0});
 
   uint32_t moment_channels = 0;
   for (const ChannelRequest& c : all) {
@@ -161,6 +164,8 @@ ar::FilmData FilmLayout::bind(void* base) const {
   d.aov_material = offset("aov_material");
   d.guide_albedo = offset("guide_albedo");
   d.guide_normal = offset("guide_normal");
+  d.aov_depth = offset("aov_depth");
+  d.transparency = offset("transparency");
   d.film_exposure = 1.0;
   d.inv_radiance_scale = 1.0;
   return d;

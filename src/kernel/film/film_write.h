@@ -12,6 +12,7 @@
 
 #include "../core/real.h"
 #include "../core/spectrum.h"
+#include "../camera/camera.h"
 #include "../core/vec.h"
 #include "../kernel_globals.h"
 #include "../portability.h"
@@ -71,6 +72,10 @@ struct FilmData {
   // Denoiser guides at the denoising surface (0008 d15): working-space RGB albedo and the
   // front-facing shading normal, ADD x 3 each; requested together, -1 when not.
   int32_t guide_albedo, guide_normal;
+  // Depth (linear view-space z of the primary hit, sample 0 only, stored 0 at the background) and the
+  // transparency plane (sum over samples of 1 - alpha, 0008 d10), ADD x 1 each, -1 when not requested.
+  // Appended after the guides: no earlier offset moves.
+  int32_t aov_depth, transparency;
 
   ResponseTableView response;
   WavelengthTableView wavelengths;
@@ -180,14 +185,27 @@ AR_FN bool film_bounce_mean_value(const FilmData& f, uint32_t pixel, Real* mean)
 // (AOV_WRITTEN in the path's flags; 0003 d21; 0008 d10). Position and material id keep only
 // sample 0 so an id stays exact (these channels are marked sample0 in the layout: readback must
 // not divide by n); normal and UV accumulate over samples (readback divides by n).
+// Depth is Cycles' camera_z_depth, the view-space z of the hit (positive in front of the camera),
+// and follows the same sample-0 rule (film_overwrite_pass_float of pass_depth when the path's sample is
+// 0). A path that never hits stores nothing: Cycles writes 0 at the background at sample 0
+// (film_write_data_passes_background), which the zeroed plane already holds, and readback turns a stored
+// 0 into 1e10 (film/read.h).
 // Ref: Cycles intern/cycles/kernel/film/data_passes.h, film_write_data_passes (sample == 0
-// overwrite vs accumulate).
+// overwrite vs accumulate; DEPTH) and camera/camera.h camera_z_depth.
 AR_FN void film_primary_aov(const KernelGlobals& kg, uint32_t slot, uint32_t sample_index, uint32_t* path_flags,
                             const Real3& position, const Real3& normal, Real u, Real v, uint32_t material_id) {
   if ((*path_flags & AOV_WRITTEN) != 0u) return;
   *path_flags |= AOV_WRITTEN;
   const FilmData& f = *kg.film;
   const uint32_t pixel = film_slot_pixel(kg, slot);
+  if (f.aov_depth >= 0 && sample_index == 0u) {
+    // camera_z_depth for the other camera types is the distance to the camera position, which this
+    // formula is not; the pinhole is the only type that exists, and the session refuses Depth for any
+    // other descriptor.
+    AR_ASSERT(kg.camera != nullptr && kg.camera->type == CameraType::PERSPECTIVE);
+    const CameraView& cam = *kg.camera;
+    film_add(kg, uint32_t(f.aov_depth), pixel, dot(position - cam.origin, -cam.axis[2]));
+  }
   if (f.aov_position >= 0 && sample_index == 0u) {
     film_add(kg, uint32_t(f.aov_position), pixel, position.x);
     film_add(kg, uint32_t(f.aov_position) + 1u, pixel, position.y);
@@ -203,6 +221,15 @@ AR_FN void film_primary_aov(const KernelGlobals& kg, uint32_t slot, uint32_t sam
     film_add(kg, uint32_t(f.aov_uv), pixel, u);
     film_add(kg, uint32_t(f.aov_uv) + 1u, pixel, v);
   }
+}
+
+// One camera sample's transparency = 1 - alpha. Cycles accumulates transparency rather than alpha
+// ("we accumulate transparency = 1 - alpha in the render buffer", film_write_transparent), so the
+// pixel's mean over its samples gives alpha = saturate(1 - mean) at readback (film/read.h). A no-op
+// without the plane. Ref: Cycles intern/cycles/kernel/film/light_passes.h film_write_transparent.
+AR_FN void film_add_transparency(const KernelGlobals& kg, uint32_t slot, Real transparency) {
+  const FilmData& f = *kg.film;
+  if (f.transparency >= 0) film_add(kg, uint32_t(f.transparency), film_slot_pixel(kg, slot), transparency);
 }
 
 // Denoiser guides of one sample (0008 d15): the albedo (already times the path's guide tint) and

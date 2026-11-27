@@ -52,7 +52,14 @@ bool terminal(uint32_t state) {
 // table stays the one mapping from names to channels (0008 d10, d13a). A name outside that list is
 // appended to `unknown`, so a statistics pass requested with the statistics off is one too. Combined
 // is always on; the statistics follow ar_settings.statistics, on unless switched off (0008 d12).
-FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, std::vector<std::string>* unknown) {
+// `pinhole` is whether the latched camera is the perspective type: Depth is the view-space z of a
+// pinhole and Cycles' distance to the camera position for the other types (camera/camera.h
+// camera_z_depth), which the kernel does not compute, so Depth is refused (an unknown name, hence a
+// PASS_UNSUPPORTED entry) for any other camera instead of reading a wrong plane. Alpha follows
+// ar_settings.film_transparent in the kernel, not in the film: the plane exists whenever the pass is
+// requested, and with the setting off it stays 0, which reads alpha 1.
+FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, bool pinhole,
+                         std::vector<std::string>* unknown) {
   FilmRequest req;
   req.max_width = o.max_width;
   req.max_height = o.max_height;
@@ -63,6 +70,8 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, std::
   if (!s || s->passes.empty()) return req;
   FilmRequest all = req;
   all.primary_aov = true;
+  all.depth = true;
+  all.transparency = true;
   // The denoising passes are names of this list only with a denoiser: requested without one they are
   // PASS_UNSUPPORTED like any name the engine does not produce (d10: they exist with a denoiser).
   const std::vector<PassDesc> produced = list_passes(FilmLayout::build(all), denoiser);
@@ -71,7 +80,10 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, std::
     const std::string name(text, std::find(text, text + sizeof n.text, '\0'));
     const auto it = std::find_if(produced.begin(), produced.end(), [&](const PassDesc& p) { return p.name == name; });
     if (it == produced.end()) unknown->push_back(name);
+    else if (it->source == PassSource::Depth && !pinhole) unknown->push_back(name);
     else if (it->source == PassSource::Aov) req.primary_aov = true;
+    else if (it->source == PassSource::Depth) req.depth = true;
+    else if (it->source == PassSource::Alpha) req.transparency = true;
   }
   return req;
 }
@@ -102,7 +114,7 @@ Session::Session(Scene& scene, Device& device, const SessionOptions& options)
   // What the settings committed so far request; the render thread rebuilds it from the settings it
   // latches (sync_film), which also reports names it cannot produce.
   std::vector<std::string> unknown;
-  layout_ = FilmLayout::build(film_request(options, scene.settings().get(), &unknown));
+  layout_ = FilmLayout::build(film_request(options, scene.settings().get(), true, &unknown));
   render_size_ = uint64_t(options.max_width) << 32 | options.max_height;
   hooks_ = read_test_hooks();
   // A test hook changes what a render measures, so each active one is visible in the report (0001
@@ -585,12 +597,16 @@ void Session::sync_film() {
   // Called with render_mutex_ held, before the first pass and at every epoch start: the settings
   // only change with an activated commit, and every one starts an epoch (0007 d25).
   const auto s = scene_.settings();
-  if (film_ && s == film_settings_) return;
+  // The camera type is part of the request (Depth, film_request): a view change that swaps it starts an
+  // epoch like a settings change and so reaches here.
+  const bool pinhole = !latch_.has_view() || latch_.view().v.camera.type == AR_CAMERA_PERSP;
+  if (film_ && s == film_settings_ && pinhole == film_pinhole_) return;
   // Held, not just compared: a new settings object can then never reuse the old one's address.
   film_settings_ = s;
+  film_pinhole_ = pinhole;
   stats_display_warned_ = false;
   std::vector<std::string> unknown;
-  const FilmLayout layout = FilmLayout::build(film_request(options_, s.get(), &unknown));
+  const FilmLayout layout = FilmLayout::build(film_request(options_, s.get(), pinhole, &unknown));
   // Ruling 74: one entry per name and settings change, detail = the pass name; the render goes on
   // without the pass.
   for (const std::string& name : unknown) {
@@ -735,6 +751,7 @@ void Session::bind_globals() {
                            s->s.transmission_bounces, s->s.volume_bounces,  s->s.transparent_bounces};
     std::memcpy(u.max_bounces, b, sizeof b);
     u.min_bounces = s->s.min_bounces;
+    u.film_transparent = s->s.film_transparent != 0u ? 1u : 0u;
   }
   // The MEDIA state fields (medium stack and medium_rng, 0003 d19) exist exactly when the pinned
   // scene has a medium; the scheduler reallocates the pools when the feature set changes.
