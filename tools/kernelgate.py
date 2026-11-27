@@ -88,9 +88,12 @@ def parse_ptxas(text):
     An out-of-line callee (AR_NOINLINE) gets its own "Function properties" block after the entry's: its
     spills are the kernel's (they run in its thread), so they add to the entry's totals, and its stack
     frame is listed in callee_frames (the gate fails on one: no budget row accounts for callee frames).
-    Registers are the entry's only (cuobjdump cross-checks them)."""
+    Registers are the entry's only (cuobjdump cross-checks them). A callee's block is credited to the
+    entry that precedes it, which is right for one entry per cubin only: a callee block before any entry,
+    or in a cubin with several entries, raises GateError (evaluate reports it as a failure of the cubin)."""
     out, cur, props = {}, None, None
     callee = {}
+    callee_seen = False
     for ln in text.splitlines():
         m = re.search(r"Compiling entry function '([^']+)'", ln)
         if m:
@@ -101,6 +104,9 @@ def parse_ptxas(text):
         m = re.search(r"Function properties for (\S+)", ln)
         if m:
             props = m.group(1)
+            if cur is None:
+                raise GateError(f"ptxas -v: block for {props} before any entry function; callee spills cannot be attributed")
+            callee_seen = callee_seen or props != cur
             continue
         m = re.search(r"(\d+) bytes stack frame, (\d+) bytes spill stores, (\d+) bytes spill loads", ln)
         if m and cur:
@@ -114,6 +120,8 @@ def parse_ptxas(text):
         m = re.search(r"Used (\d+) registers", ln)
         if m and cur:
             out[cur]["regs"] = int(m.group(1))
+    if callee_seen and len(out) > 1:
+        raise GateError(f"ptxas -v: {len(out)} entry functions and an out-of-line callee block; callee spills cannot be attributed")
     for name, (stores, loads) in callee.items():
         if "spill_store" in out[name]:
             out[name]["spill_store"] += stores
@@ -146,7 +154,12 @@ def evaluate(launch, budget, base, cubins, is_stage, declared, full=False):
             fails.append(f"{n}: spill allowance {br['spill_store']}/{br['spill_load']} B in budget.toml exceeds the "
                          f"{lr['cls']} ceiling {cap[0]}/{cap[1]} B of 0002 D10")
     for stem, (res_txt, ptx_txt) in sorted(cubins.items()):
-        res, ptx = parse_res_usage(res_txt), parse_ptxas(ptx_txt)
+        res = parse_res_usage(res_txt)
+        try:
+            ptx = parse_ptxas(ptx_txt)
+        except GateError as e:
+            fails.append(f"{stem}.ptxas.txt: {e}")
+            continue
         for name in sorted(res):
             required = name.startswith("k_") or is_stage(stem)
             lr, br = launch.get(name), budget.get(name)
