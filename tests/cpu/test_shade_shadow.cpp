@@ -586,7 +586,7 @@ TEST_CASE("shade_shadow/capped equals uncapped") {
   // step, and at caps 1 and 7 in as many steps as it takes, each step the pre-pass and shade_shadow
   // over the items still in SHADE_SHADOW, the tracker state in the side buffer between steps. Every
   // delivery, end and counter is bit-identical; a capped item is not delivered in its step.
-  constexpr uint32_t kItems = 256;
+  static constexpr uint32_t kItems = 256;  // static: the lambdas below use it without capturing it
   struct Run {
     std::vector<float> L;
     std::vector<uint8_t> next;
