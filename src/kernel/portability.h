@@ -9,11 +9,14 @@
 #if defined(__CUDACC__)
 #define AR_CUDA_BUILD 1
 #define AR_FN __host__ __device__ __forceinline__
+// A function kept out of line: a rare tail that would otherwise sit in a hot kernel's live range.
+#define AR_NOINLINE __host__ __device__ __noinline__ inline
 #else
 #define AR_CUDA_BUILD 0
 #include <cmath>
 #include <intrin.h>
 #define AR_FN inline
+#define AR_NOINLINE __declspec(noinline) inline
 #endif
 
 // Asserts exist only in AR_DEBUG builds; a release kernel never traps.

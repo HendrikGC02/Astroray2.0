@@ -165,6 +165,17 @@ AR_FN bool background_guides(const KernelGlobals& kg, uint32_t slot, uint32_t sa
   return true;
 }
 
+// The transparent-background write of a ray with no scattering event: the transparency plane gets
+// average(throughput). False, with nothing written, when the throughput is not finite (the sample
+// fails, as a non-finite contribution does). Kept out of line: inlined, its live values stay across the
+// escape's film write and cost the reload variant's spills (tests/gpu/kernels/reload_variant.cu).
+AR_NOINLINE bool background_transparent(const KernelGlobals& kg, uint32_t slot) {
+  const Real transparency = avg(ps_beta(kg, slot));
+  if (!(transparency - transparency == Real(0))) return false;
+  film_add_transparency(kg, ps_sample_id(kg, slot), transparency);
+  return true;
+}
+
 AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
   const uint32_t slot = load_ro(kg.main_queue + step.start + item);
   AR_ASSERT((ps_flags(kg, slot) & PATH_KIND) == 0u);
@@ -179,10 +190,7 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
   // PATH_RAY_TRANSPARENT_BACKGROUND set) reaching the world adds average(throughput) as transparency and
   // no radiance. A path that scattered still sees the world.
   if (kg.session.film_transparent != 0u && total == 0u) {
-    // A non-finite throughput has no transparency: it fails the sample, as a non-finite contribution does.
-    const Real transparency = avg(ps_beta(kg, slot));
-    if (transparency - transparency == Real(0)) film_add_transparency(kg, ps_sample_id(kg, slot), transparency);
-    else term = Term::INVALID;
+    if (!background_transparent(kg, slot)) term = Term::INVALID;
   } else if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
     const Spec lt = ps_lambda_t(kg, slot);
     Lambda lam;
