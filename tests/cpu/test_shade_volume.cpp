@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -410,6 +411,39 @@ TEST_CASE("shade_volume/requeue continues the flight") {
   std::printf("shade_volume requeue at the stage: %u requeues over 3 flights, %u still live\n", requeues, live);
   CHECK(requeues > 3u);
   CHECK(live > 0u);  // at least one flight goes on, so its state was compared
+}
+
+TEST_CASE("shade_volume/reached write-back keeps the hit and the previous vertex") {
+  // A flight that reaches its hit after null collisions has rebased its ray, so the stage writes the
+  // moved origin, the shortened hit_t and the grown prev_dist back. shade_light reads o + hit_t d (the
+  // lamp crossing) and shade_common o - prev_dist d (the previous vertex), so both must still be the
+  // points they were before the flight: checked here to 32 ulp of the coordinates' scale, under a
+  // majorant 64 sigma_t (null collisions in most flights), |ray_d| = 2 and prev_dist 0.25.
+  StageRig r;
+  r.medium(0.0f, 0.1f, 0.3f);  // no absorption, few real collisions: most flights reach their hit
+  r.kg.session.medium_majorant = 64u;
+  const ar::Real3 o0{ar::Real(0.125), ar::Real(-0.25), ar::Real(0.5)}, d{ar::Real(0.25), ar::Real(-0.5), ar::Real(2)};
+  const ar::Real t0 = ar::Real(0.75), back0 = ar::Real(0.25);
+  for (uint32_t i = 0; i < StageRig::kN; ++i) {
+    r.ray_o[i] = o0, r.ray_d[i] = d, r.hit_t[i] = t0, r.prev_dist[i] = back0;
+    r.medium_rng[i] = ar::flight_rng_start(3u);
+  }
+  r.run();
+  const auto close = [](const ar::Real3& a, const ar::Real3& b) {
+    const double tol = 32.0 * double(std::numeric_limits<ar::Real>::epsilon()) * 2.0;  // coordinates below 2
+    return std::fabs(double(a.x - b.x)) <= tol && std::fabs(double(a.y - b.y)) <= tol && std::fabs(double(a.z - b.z)) <= tol;
+  };
+  uint32_t checked = 0;
+  for (uint32_t i = 0; i < 3u; ++i) {
+    const bool reached = r.term[i] == 0u && r.next[i] != uint8_t(Stage::INTERSECT_CLOSEST);
+    if (!reached || r.medium_rng[i] - ar::flight_rng_start(3u) < 2u) continue;  // a reach after null collisions only
+    ++checked;
+    INFO("item " << i << " collisions " << r.medium_rng[i] - ar::flight_rng_start(3u));
+    CHECK(r.hit_t[i] < t0);  // the ray did move
+    CHECK(close(r.ray_o[i] + d * r.hit_t[i], o0 + d * t0));
+    CHECK(close(r.ray_o[i] - d * r.prev_dist[i], o0 - d * back0));
+  }
+  CHECK(checked > 0u);
 }
 
 // Sets ASTRORAY_TEST_<name> for the sessions created in its scope (the session reads hooks at create).

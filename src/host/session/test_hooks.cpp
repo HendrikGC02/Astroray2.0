@@ -15,6 +15,7 @@
 #include "host/scheduler.h"
 #include "kernel/kernel_globals.h"
 #include "kernel/launch_config.h"
+#include "kernel/medium/delta_track.h"
 
 namespace astroray::host {
 namespace {
@@ -133,7 +134,9 @@ TestHooks read_test_hooks() {
     out.active.push_back("MEDIUM_CAP=" + value);
   }
   if (env_value("MAJORANT", &value)) {
-    out.medium_majorant = uint32_t(positive("MAJORANT", value, 1u << 20));
+    // k sigma_t takes about k tau tentative collisions per flight of optical depth tau: above D8's per-event
+    // limit even a flight of depth 1 would end VOLUME_LIMIT, and the hook would measure the limit, not the cap.
+    out.medium_majorant = uint32_t(positive("MAJORANT", value, ar::kFlightCollisionLimit));
     out.active.push_back("MAJORANT=" + value);
   }
   if (env_value("RADIANCE_SCALE", &value)) {

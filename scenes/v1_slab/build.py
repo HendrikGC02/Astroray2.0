@@ -9,7 +9,7 @@ the variant whose medium has no absorption and no scattering (the render must eq
 medium); --scattering the chromatic scattering variant of the hero-lane variance measurement (no truth):
 extinction sigma_t = meta.toml's sigma_a per channel, albedo SCATTER_ALBEDO, Henyey-Greenstein g
 SCATTER_G, up to SCATTER_BOUNCES volume scatters; --dense the per-launch cap's gate scene (meta.toml's dense_* values: a
-grey scattering medium of sigma_t 64 per m in a thinner box, no truth).
+grey scattering medium of sigma_t 64 per m in a thinner box holding a diffuse plate and a point lamp, no truth).
 Ref: docs/decisions/0006-volumes-and-astrophysics.md V1, V6, D8, D20; 0004 D3 (opacity pass-through); 0003 Risk 11
 (the scattering variant); RULINGS 111 (the dense variant renders under ASTRORAY_TEST_MAJORANT)."""
 import argparse
@@ -64,9 +64,21 @@ def build(out, sigma_zero=False, scattering=False, dense=False):
                               SCATTER_G)
         else:
             medium = s.medium(zero if sigma_zero else t["sigma_a"], zero if sigma_zero else t["sigma_s"], t["g"])
-        s.instances([{"geom": emitter, "materials": [glow]},
-                     {"geom": slab, "materials": [shell], "medium": medium,
-                      "xf": ar.translation((-t["slab_size"] / 2, 0.0, t["gap"] + thickness / 2))}])
+        items = [{"geom": emitter, "materials": [glow]},
+                 {"geom": slab, "materials": [shell], "medium": medium,
+                  "xf": ar.translation((-t["slab_size"] / 2, 0.0, t["gap"] + thickness / 2))}]
+        if dense:
+            # A diffuse plate a quarter of the way up the box and a point lamp three quarters up, both inside
+            # the medium: next-event estimation from the plate emits shadow items whose whole segment lies in
+            # the medium, so the shadow pre-pass ratio-tracks (and at a low cap requeues) them too.
+            plate, side = s.key(), 0.9 * t["slab_size"]
+            s.mesh_from(plate, meshes.plane(side, side), "plate")
+            white = s.material({"base_color": (0.8, 0.8, 0.8), "specular_weight": 0.0})
+            items.append({"geom": plate, "materials": [white],
+                          "xf": ar.translation((-t["slab_size"] / 2, 0.0, t["gap"] + 0.25 * thickness))})
+            s.light("point", xf=ar.translation((-t["slab_size"] / 3, 0.0, t["gap"] + 0.75 * thickness)),
+                    power=t["dense_lamp_power"])
+        s.instances(items)
         s.world((0.0, 0.0, 0.0), 0.0)
         if scattering or dense:
             n = t["dense_bounces"] if dense else SCATTER_BOUNCES

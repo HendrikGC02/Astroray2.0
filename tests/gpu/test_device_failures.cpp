@@ -481,7 +481,8 @@ TEST_CASE("device_failures/longest launch within B-17") { longest_launch("b5m", 
 // The per-launch medium cap's B-17 case (0006 D8, RULINGS 111): the dense v1_slab (sigma_t 64 per m,
 // 0.05 m thick) under ASTRORAY_TEST_MAJORANT=2048, so a flight across the box takes about
 // 2048 * 64 * 0.05 = 6,554 tentative collisions and the default cap of 4,096 requeues it; without the
-// cap one such item would hold its launch for all of them. 1440 x 1440: the slab's view is square, and that is\n// 1080p's pixel count.
+// cap one such item would hold its launch for all of them. 1440 x 1440: the slab's view is square, and that is
+// 1080p's pixel count.
 TEST_CASE("device_failures/longest launch within B-17, dense slab at the medium cap") {
   Hook k("MAJORANT", "2048");
   longest_launch("v1_slab.dense", "1440x1440");
