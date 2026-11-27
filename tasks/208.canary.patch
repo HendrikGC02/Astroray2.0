@@ -12,7 +12,7 @@ index 8ef03269..7f2ae091 100644
        }
        break;
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index 0304ccc6..facede7b 100644
+index 07f13af4..a683d7aa 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
 @@ -81,7 +81,7 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, bool
@@ -53,22 +53,17 @@ index 46103daa..386e2431 100644
  
  // One camera sample's transparency = 1 - alpha. Cycles accumulates transparency rather than alpha
 diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
-index 042b6d02..4bb77242 100644
+index b2573912..2537f98e 100644
 --- a/src/kernel/stages/shade_background.h
 +++ b/src/kernel/stages/shade_background.h
-@@ -178,12 +178,13 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const
+@@ -192,9 +192,8 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const
    // pass-throughs, false interfaces and lamp crossings leave at 0 as Cycles' transparent bounces leave
    // PATH_RAY_TRANSPARENT_BACKGROUND set) reaching the world adds average(throughput) as transparency and
    // no radiance. A path that scattered still sees the world.
 -  if (kg.session.film_transparent != 0u && total == 0u) {
 +  if (kg.session.film_transparent != 0u) {
-     // A non-finite throughput has no transparency: it fails the sample, as a non-finite contribution does.
-     const Real transparency = avg(ps_beta(kg, slot));
-     if (transparency - transparency == Real(0)) film_add_transparency(kg, ps_sample_id(kg, slot), transparency);
-     else term = Term::INVALID;
--  } else if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
-+  }
-+  if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
+     background_transparent_end(kg, slot);
+-    return;
+   }
+   if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
      const Spec lt = ps_lambda_t(kg, slot);
-     Lambda lam;
-     for (int i = 0; i < kLanes; ++i) lam.nm[i] = lt.v[i];
