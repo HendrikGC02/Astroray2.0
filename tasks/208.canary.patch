@@ -12,18 +12,26 @@ index 8ef03269..7f2ae091 100644
        }
        break;
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index 07f13af4..08575cb2 100644
+index 07f13af4..4e07db18 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
-@@ -81,7 +81,7 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, bool
+@@ -81,14 +81,14 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, bool
      const std::string name(text, std::find(text, text + sizeof n.text, '\0'));
      const auto it = std::find_if(produced.begin(), produced.end(), [&](const PassDesc& p) { return p.name == name; });
      if (it == produced.end()) unknown->push_back(name);
 -    else if (it->source == PassSource::Depth && !pinhole) unknown->push_back(name);
-+    else if (it->source == PassSource::Depth && pinhole) unknown->push_back(name);
++    else if (it->source == PassSource::Depth) unknown->push_back(name);
      else if (it->source == PassSource::Aov) req.primary_aov = true;
      else if (it->source == PassSource::Depth) depth_named = true;
      else if (it->source == PassSource::Alpha) req.transparency = true;
+   }
+   // Depth is one of the primary-hit AOVs the surface stage writes together: any of them brings it
+   // (Position brings Normal, UV and IndexMA already), when the camera is one it is defined for.
+-  req.depth = pinhole && (depth_named || req.primary_aov);
++  req.depth = depth_named || req.primary_aov;
+   return req;
+ }
+ 
 diff --git a/src/kernel/film/film_write.h b/src/kernel/film/film_write.h
 index 46103daa..386e2431 100644
 --- a/src/kernel/film/film_write.h
