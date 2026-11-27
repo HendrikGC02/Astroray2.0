@@ -15,3 +15,7 @@ Budget: gate +0 s (the step should get faster by about 0.77 s per timed run); ke
 Depends on: none. Blocks: 220 and the rest of the spine queue (owner decision 44). Collisions: tools/kernelgate.py with 206 (later); tools/check.ps1 with 201 (the later one rebases).
 Size: S (under 80 lines); stop and report at 2x.
 Progress:
+- Files: tools/lib/msvc.ps1 (new, shared), tools/build.ps1, tools/kernelgate.py, src/kernel/budget.toml, docs/decisions/0009 (d18, B-05 row), docs/BACKLOG.md, tasks/237.canary.patch.
+- Step 1 (quiet, min of 3 per round, old = nvcc outside the MSVC environment, new = inside, interleaved): shade_surface old 7.82/7.76/7.76 s, new 7.06/7.06/7.06 s (share 0.76/0.70/0.70 s); generate_camera old 1.24/1.24/1.25 s, new 0.53/0.53/0.54 s (share 0.72/0.71/0.71 s).
+- Step 3: 23 timed rows re-recorded on the new clock (min of 3, quiet); k_shade_surface compile_s 7.7 -> 7.10; others 0.37-2.17 s, e.g. k_shade_background 2.8 -> 2.17. Limits unchanged (3.0 s, shade_surface 8.0 s).
+- `kernelgate --time --base 97b7f562~1`: shade_surface 7.14 s (limit 8.0), shade_background 2.18 s, reload_variant 2.17 s. check fast PASS 6.2 s; check gate PASS 137.3 s.
