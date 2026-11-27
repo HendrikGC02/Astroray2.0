@@ -1,0 +1,48 @@
+diff --git a/src/host/scheduler.cpp b/src/host/scheduler.cpp
+index 11045f3b..47e41146 100644
+--- a/src/host/scheduler.cpp
++++ b/src/host/scheduler.cpp
+@@ -229,7 +229,6 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
+   kg_.queue_counts = static_cast<uint32_t*>(counts_buf_.ptr);
+   kg_.sort_queue = static_cast<uint32_t*>(sort_queue_buf_.ptr);
+   kg_.sort_counts = static_cast<uint32_t*>(sort_counts_buf_.ptr);
+-  kg_.shadow_track = features_.media ? static_cast<ar::ShadowTrack*>(shadow_track_buf_.ptr) : nullptr;
+   device_.upload(kg_buf_, 0, &kg_, sizeof kg_);
+   device_.set_kernel_globals(kg_buf_);
+ 
+diff --git a/src/kernel/medium/delta_track.h b/src/kernel/medium/delta_track.h
+index 38e71887..ca729a10 100644
+--- a/src/kernel/medium/delta_track.h
++++ b/src/kernel/medium/delta_track.h
+@@ -175,6 +175,7 @@ AR_FN TrackResult track_segment(const Spec& sigma_a, const Spec& sigma_s, const
+     }
+     if (r.collisions >= max_collisions) {
+       r.event = TrackEvent::CAPPED;
++      *counter -= r.collisions;
+       return r;
+     }
+     const uint32_t block = (*counter)++;
+diff --git a/src/kernel/medium/ratio_track.h b/src/kernel/medium/ratio_track.h
+index d79b4f75..288971db 100644
+--- a/src/kernel/medium/ratio_track.h
++++ b/src/kernel/medium/ratio_track.h
+@@ -111,6 +111,7 @@ AR_FN void ratio_track_segment(const Spec& sigma_a, const Spec& sigma_s, const S
+       }
+       if (r->collisions >= max_collisions) {
+         r->capped = true;
++        *counter = start + 1u;
+         return;
+       }
+       const Real u = draw(st.mode, st.id, st.index, st.stream, stream_dim((*counter)++, 0u), st.seed);
+diff --git a/src/kernel/stages/shade_volume.h b/src/kernel/stages/shade_volume.h
+index 3f9bbb1e..e86b5670 100644
+--- a/src/kernel/stages/shade_volume.h
++++ b/src/kernel/stages/shade_volume.h
+@@ -187,7 +187,6 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
+     ps_r_l(kg, slot) = w.r_l;
+     // The ray rebased at the flight's null collisions: o + d hit_t is still the hit, and
+     // ray_o - prev_dist ray_d still the previous vertex (shade_light reads both).
+-    ps_ray_o(kg, slot) = ray.o;
+     ps_hit_t(kg, slot) = ray.t_max;
+     ps_prev_dist(kg, slot) = ray.back;
+     const Real2 uv = ps_hit_uv(kg, slot);
