@@ -40,7 +40,8 @@ class AstrorayRenderEngine(bpy.types.RenderEngine):
 
     def update_render_passes(self, scene=None, renderlayer=None):
         """Blender calls this outside a render, so it reads settings only. Combined as Cycles registers it, then the
-        COPIED_PASSES the settings ask for; Depth, Position, UV and the rest have no pass in the result."""
+        COPIED_PASSES the settings ask for (Depth as Blender's Z pass); Position, UV and the rest have no pass in
+        the result. Alpha is Combined's fourth channel, so it is no pass here."""
         if scene is None or renderlayer is None:
             return
         if renderlayer.use_pass_combined:

@@ -50,7 +50,10 @@ class CopiedPass(typing.NamedTuple):
 
 # The one list of passes copied into the RenderResult (0008 d10; ROADMAP M1b "Out of scope" keeps Position, UV and
 # IndexMA out although the session enumerates them). Channel ids and types as Cycles registers them.
+# Depth is Blender's Z pass: Cycles' own addon registers ('Depth', 1, 'Z', 'VALUE'); the engine's readback already
+# turns a stored 0 into 1e10, so the values are copied as read. Ref: third_party/_cache/refs/cycles-*/src/hydra/addon/__init__.py.
 COPIED_PASSES = (
+    CopiedPass("Depth", "Z", "VALUE", "view_layer", "use_pass_z"),
     CopiedPass("Normal", "XYZ", "VECTOR", "view_layer", "use_pass_normal"),
     CopiedPass("Noisy Image", "RGB", "COLOR", "denoising", "denoising_store_passes"),
     CopiedPass("Denoising Albedo", "RGB", "COLOR", "denoising", "denoising_store_passes"),
@@ -195,8 +198,11 @@ def break_requested(engine):
     return engine.test_break()
 
 
-def view_layer_passes(view_layer):
-    return tuple(name for flag, name in VIEW_LAYER_PASSES if getattr(view_layer, flag))
+def view_layer_passes(view_layer, scene):
+    """The engine pass names to request. Alpha is not a view layer pass: Film > Transparent makes it Combined's
+    fourth channel (0008 d10), so it is requested exactly when the film is transparent."""
+    names = tuple(name for flag, name in VIEW_LAYER_PASSES if getattr(view_layer, flag))
+    return names + ("Alpha",) if scene.render.film_transparent else names
 
 
 def passes_wanted(scene, view_layer):
@@ -252,7 +258,7 @@ def full_sync(edit, abi, op_id, depsgraph, scene, view_layer, keymap, tcache, is
     tl = tl or Timeline()
     lightgroups = instances.lightgroup_indices(view_layer)
     with tl.phase("settings_world"):
-        fields, lines = settings.build(scene, _colorspace(), view_layer_passes(view_layer), lightgroups)
+        fields, lines = settings.build(scene, _colorspace(), view_layer_passes(view_layer, scene), lightgroups)
         settings.set_settings(edit, abi, fields)
         world = scene.world
         world_sync.sync(edit, abi, world.evaluated_get(depsgraph) if world else None, keymap, op_id)
@@ -313,6 +319,7 @@ class Job:
         # Everything render() needs from Blender, read by update() (0007 d23: render() reads no scene).
         self.size, self.samples, self.layer = None, None, None
         self.denoise, self.wanted = False, ()  # the Denoise setting and passes_wanted(), read by update()
+        self.transparent = False  # Film > Transparent, read by update(): Combined's alpha is then the engine's Alpha
         self.generation = None  # what update() committed: the render must show at least this (0007 d25)
         self.subject_names = ({}, {})  # (ar_key -> identity, uid -> name) that label report subjects; set by update()
         self.subject_names = ({}, {})  # (ar_key -> identity, uid -> name) for the Diagnostics panel; set by update()
@@ -333,6 +340,7 @@ class Job:
         ctx = held.handle
         self.size, self.samples, self.layer = render_size(scene), scene.astroray.samples, view_layer.name
         self.denoise, self.wanted = scene.astroray.use_denoising, passes_wanted(scene, view_layer)
+        self.transparent = bool(scene.render.film_transparent)
         if not self.scene_h.value:
             workers = max(1, min(8, (os.cpu_count() or 2) // 2))
             desc = abi.ar_scene_desc(cache_dir().encode(), workers, 0)
@@ -463,12 +471,18 @@ class Job:
 
     def _copy_passes(self, engine, result, w, h, final=False):
         """Combined (MEAN, rows bottom-up) into the RenderResult's RGBA pass; with `final`, also each wanted
-        COPIED_PASSES member the session enumerates, by the engine's component count. A wanted pass the session
+        COPIED_PASSES member the session enumerates, by the engine's component count; Alpha fills Combined's fourth channel
+        whenever the film is transparent, in a preview too. A wanted pass the session
         does not enumerate is skipped: the engine's PASS_UNSUPPORTED entry says why. A preview copies Combined
         only, because the denoising passes exist after convergence."""
         rgb = read_pass(self.lib, self.abi, self.session, "Combined", self.abi.AR_QUANTITY_MEAN)
         rgba = np.ones((h, w, 4), np.float32)
         rgba[:, :, :3] = rgb
+        if self.transparent:
+            # Combined's RGB is already premultiplied by the film (the world adds nothing where the camera sees it);
+            # Blender's render layers are premultiplied (manual: compositing/types/color/alpha_convert.rst), so RGB and
+            # alpha are written as the engine returns them. Not denoised: alpha is the film's (0008 d18).
+            rgba[:, :, 3] = read_pass(self.lib, self.abi, self.session, "Alpha", self.abi.AR_QUANTITY_MEAN)[:, :, 0]
         passes = result.layers[0].passes
         passes["Combined"].rect.foreach_set(rgba.reshape(-1))
         if final:

@@ -140,7 +140,7 @@ class ViewportJob(render_final.Job):
         C = classify
         if C.SETTINGS in kinds:
             fields, self.lines = settings.build(scene, render_final._colorspace(),
-                                                render_final.view_layer_passes(view_layer), lightgroups)
+                                                render_final.view_layer_passes(view_layer, scene), lightgroups)
             settings.set_settings(e, abi, fields)
         if C.WORLD in kinds:
             world = scene.world

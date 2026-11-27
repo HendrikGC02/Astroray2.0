@@ -200,13 +200,17 @@ class TestSettings(unittest.TestCase):
 
     def test_unsupported_settings_are_reported(self):
         self.scene.render.use_border = True
-        self.scene.render.film_transparent = True
         self.scene.render.use_motion_blur = True
         _, lines = settings.build(self.scene, FakeColorspace("lin_rec709_scene"))
-        self.assertEqual(len(lines), 3)
+        self.assertEqual(len(lines), 2)
         self.assertTrue(any("border" in s for s in lines))
-        self.assertTrue(any("Transparent" in s for s in lines))
         self.assertTrue(any("motion blur" in s for s in lines))
+
+    def test_film_transparent_is_not_reported(self):
+        self.scene.render.film_transparent = True
+        fields, lines = settings.build(self.scene, FakeColorspace("lin_rec709_scene"))
+        self.assertEqual(lines, [])
+        self.assertEqual(fields["film_transparent"], 1)
 
 
 if __name__ == "__main__":

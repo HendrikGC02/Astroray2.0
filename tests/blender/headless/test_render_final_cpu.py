@@ -28,6 +28,7 @@ BIN = os.path.join(support.ROOT, "out", "bin")
 TEX = 2048   # texels per side: a decode of tens of milliseconds
 SIZE = 32    # pixels per side
 SPP = 4
+CARD_SPP = 32
 
 
 def load_addon():
@@ -81,6 +82,50 @@ def textured_scene(directory):
     scene.astroray.device = "CPU"
     scene.astroray.samples = scene.astroray.viewport_samples = SPP
     return scene
+
+
+def cards_scene():
+    """Pinhole camera 5 m above z = 0 looking down, a world of radiance 0.5, and three regions whose pixel boundaries
+    are the frame's centre lines: an opaque diffuse plane on the left half (depth 5), an opacity-0.5 card at z = 1
+    over the upper right (depth 4), and nothing over the lower right (the world)."""
+    import bpy
+
+    scene = support.reset_scene()
+    scene.render.resolution_x = scene.render.resolution_y = SIZE
+    scene.render.resolution_percentage = 100
+    cd = bpy.data.cameras.new("Cam")
+    cd.sensor_fit, cd.angle = "AUTO", 2 * math.atan(8.0 / 5.0)
+    cam = bpy.data.objects.new("Cam", cd)
+    scene.collection.objects.link(cam)
+    cam.location = (0.0, 0.0, 5.0)
+    scene.camera = cam
+    for name, (x0, x1, y0, y1), z, alpha in (("Opaque", (-8, 0, -8, 8), 0.0, 1.0), ("Card", (0, 8, 0, 8), 1.0, 0.5)):
+        me = bpy.data.meshes.new(name)
+        me.from_pydata([(x0, y0, z), (x1, y0, z), (x1, y1, z), (x0, y1, z)], [], [(0, 1, 2, 3)])
+        ob = bpy.data.objects.new(name, me)
+        scene.collection.objects.link(ob)
+        mat = bpy.data.materials.new(name)
+        mat.use_nodes = True
+        mat.node_tree.nodes["Principled BSDF"].inputs["Alpha"].default_value = alpha
+        ob.data.materials.append(mat)
+    world = bpy.data.worlds.new("World")
+    world.use_nodes = True
+    world.node_tree.nodes["Background"].inputs["Color"].default_value = (0.5, 0.5, 0.5, 1)
+    scene.world = world
+    bpy.context.view_layer.update()
+    scene.astroray.device = "CPU"
+    scene.astroray.samples = scene.astroray.viewport_samples = CARD_SPP
+    return scene
+
+
+# Pixel regions of cards_scene's 32 x 32 frame, rows bottom-up, three pixels clear of every boundary (the pixel
+# filter reaches 1.5 pixels across one).
+def _region(rows, cols):
+    return (slice(*rows), slice(*cols))
+
+
+LEFT, UPPER_RIGHT, LOWER_RIGHT = _region((3, 13), (3, 13)), _region((19, 29), (19, 29)), _region((3, 13), (19, 29))
+LEFT_UP = _region((19, 29), (3, 13))
 
 
 class Engine:
@@ -162,6 +207,55 @@ class TestF12Cpu(unittest.TestCase):
         self.assertEqual(seen["spp"], SPP)
         mean = float(engine.pixels[:, :, :3].mean())
         self.assertGreater(mean, 0.1, f"black frame (mean {mean}); reports {engine.reports}")
+
+    def render_cards(self, transparent, **layer_flags):
+        """cards_scene through Job.update and render with the fake Engine; Film Transparent as given."""
+        import bpy
+
+        rf, native = load_addon()
+        scene = cards_scene()
+        scene.render.film_transparent = transparent
+        for flag, on in layer_flags.items():
+            setattr(bpy.context.view_layer, flag, on)
+        log = os.path.join(self._dir.name, "context.log")
+        with mock.patch.object(native, "_bin_dir", lambda: BIN), mock.patch.object(rf, "_log_path", lambda: log):
+            job, engine = rf.Job(), Engine()
+            try:
+                job.update(support.depsgraph())
+                job.render(engine)
+            finally:
+                job.close()
+                rf.shutdown()
+        return engine
+
+    def test_transparent_film_alpha(self):
+        on, off = self.render_cards(True), self.render_cards(False)
+        a = on.pixels[:, :, 3]
+        self.assertEqual(sorted(on.passes), ["Combined"], "Alpha is Combined's channel, not a pass")
+        self.assertFalse([t for _, t in on.reports if "Transparent" in t], on.reports)
+        np.testing.assert_array_equal(a[LEFT], 1.0)
+        np.testing.assert_array_equal(a[LEFT_UP], 1.0)
+        np.testing.assert_array_equal(a[LOWER_RIGHT], 0.0)
+        np.testing.assert_array_equal(on.pixels[:, :, :3][LOWER_RIGHT], 0.0)  # camera rays do not see the world
+        # A camera ray passes the card with probability 0.5 per sample: the region mean is binomial.
+        n = a[UPPER_RIGHT].size * CARD_SPP
+        se = 0.5 / math.sqrt(n)
+        self.assertLess(abs(float(a[UPPER_RIGHT].mean()) - 0.5), 3 * se, f"alpha mean {a[UPPER_RIGHT].mean()}, SE {se}")
+        # Off: Combined's alpha is 1 everywhere, the world is visible, and a surface the world does not reach
+        # directly is unchanged to the bit.
+        np.testing.assert_array_equal(off.pixels[:, :, 3], 1.0)
+        self.assertGreater(float(off.pixels[:, :, :3][LOWER_RIGHT].mean()), 0.4)
+        np.testing.assert_array_equal(on.pixels[:, :, :3][LEFT], off.pixels[:, :, :3][LEFT])
+
+    def test_depth_pass(self):
+        engine = self.render_cards(False, use_pass_z=True)
+        self.assertEqual(engine.added, [("Depth", 1, "Z")])
+        d = engine.passes["Depth"]
+        self.assertEqual(d.size, SIZE * SIZE)
+        d = d.reshape(SIZE, SIZE)
+        np.testing.assert_allclose(d[LEFT], 5.0, rtol=0, atol=1e-4)  # view-space z of the plane under a pinhole
+        np.testing.assert_array_equal(d[LOWER_RIGHT], 1e10)          # a ray that misses reads 1e10
+        np.testing.assert_array_equal(engine.pixels[:, :, 3], 1.0)
 
 
 class StaleSession:
@@ -313,13 +407,14 @@ class TestF12Passes(unittest.TestCase):
         self.assertEqual(lines[0][0], ("WARNING",))
         np.testing.assert_array_equal(self.rgb(engine, "Combined"), self.rgb(engine, "Noisy Image"))
 
-    def test_depth_is_not_refused_by_the_engine_but_not_yet_registered(self):
-        # The engine produces Depth (0008 d10), so use_pass_z raises no PASS_UNSUPPORTED report; the addon
-        # does not register or copy the pass yet, so the render still holds Combined only.
+    def test_depth_is_registered_and_not_refused_by_the_engine(self):
+        # The engine produces Depth (0008 d10), so use_pass_z raises no PASS_UNSUPPORTED report, and the addon
+        # registers and copies it as Blender's Z pass beside Combined.
         engine, _ = self.render(False, use_pass_z=True)
         lines = [t for _, t in engine.reports if t.startswith("PASS_UNSUPPORTED")]
         self.assertEqual(lines, [], engine.reports)
-        self.assertEqual(sorted(engine.passes), ["Combined"])
+        self.assertEqual(sorted(engine.passes), ["Combined", "Depth"])
+        self.assertEqual(engine.added, [("Depth", 1, "Z")])
 
 
 if __name__ == "__main__":
