@@ -127,6 +127,7 @@ ar_status ar_session_write_fits(ar_session, const char* path, uint32_t what);  /
 | queue and sort indices | 0002 D6 | ~32 MiB | ~32 MiB | always |
 | shadow hit records | 0003 decision 20 side buffer (84 B per shadow slot at K = 4) | 336 MiB | 336 MiB | non-opaque instances |
 | shadow-pass split | 0003 decision 20 side buffer (17 B per shadow slot) | 68 MiB | 68 MiB | light passes |
+| shadow tracker | 0003 decision 20 side buffer (48 B per shadow slot at f32; ledger row: shadow pool) | 192 MiB | 192 MiB | media |
 | geodesic record | 0003 decision 20 side buffer (92 B float / 164 B double per path slot) | 184 / 328 MiB | same | black hole |
 | random-walk record | 0005 item 4a (40 B per path slot) | 80 MiB | 80 MiB | subsurface materials |
 | film incl. per-sample buffer | 0008 `FilmLayout` (decision 21) | ~110 MB moments + 41 MB per-sample buffer + enabled passes | ~4× 1080p | always |

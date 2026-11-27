@@ -139,6 +139,7 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
    - `ah_record`, by shadow slot: K × 20 B (t, primitive, instance, u, v) + `hit_count` u8 with overflow bit, 84 B at K = 4, non-opaque instances (0002 D11);
    - geodesic record, by path slot: 164 B double / 92 B float, black hole present (0006 D41);
    - random-walk record, by path slot, subsurface materials present: fields and size are 0005 item 4a's (40 B, PROVISIONAL); this record only allocates it (ruling 27);
+   - shadow tracker `shadow_track`, by shadow slot, media present: the ratio tracker's T, r_u and r_l rescales (3 Spec, 48 B at f32) of a shadow item the media pre-pass capped (0006 D8 per-launch cap; task 193, RULINGS 111 amended). Read only when the item resumes (its `medium_rng` is past its stride's start) and written only at a cap, so a fresh item never touches it; the item's own 124 B are unchanged;
    - the pass's active-pixel list is 0008's (D3).
    Their device memory is in 0007 decision 14's budget table (ruling 42).
 21. **Path flags (u32).** Assigning a free bit amends this record.
