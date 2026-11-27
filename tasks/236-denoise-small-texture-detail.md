@@ -12,6 +12,6 @@ Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; th
 Look at: out/evidence/236/b_tx_strip.png before and after (noisy, denoised, reference, error map): Read it; texture detail on the small spheres kept, numbers from the table.
 Canary: tasks/236.canary.patch must turn red: astroray_tests_gpu "denoise_final/small texture detail kept" (the case name may change with the cause: keep the line in step; the patch reverts the fix).
 Budget: gate +0.5 s at most; capture under 15 min on the machine lock (state it); kernel rows: state any change.
-Depends on: 201 (the tool and its b_tx table; it may start the bisection from 201's branch before 201 lands). Collisions: denoiser.cpp with nothing open; tools/denoise_check.py with 201 (the later one rebases).
+Depends on: 201 (landed); 230 (lead ruling 2026-11-27: the cause is the constant magenta albedo guide on per-point base colours, 0008 d15; a guide carrying the texture measured 0.71x raw on CUDA; after 230 lands, re-measure b_tx and decide 0008 d18's in-place albedo prefilter, which hurt a clean guide: 1.90e-3 against 7.65e-4; bisection table on branch task/236-denoise-small-texture-detail). Collisions: denoiser.cpp with nothing open; tools/denoise_check.py with 201 (the later one rebases).
 Size: S for the fix, M for the investigation; stop and report at 2x.
 Progress:

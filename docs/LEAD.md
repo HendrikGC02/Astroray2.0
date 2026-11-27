@@ -95,8 +95,8 @@ agent to `git switch task/NNN-*` first in its own worktree.
 - Running when this lead stopped (dispatched by this session; their reports return to this session, not to the next lead):
   - 220 spine (task/220-loud-lobe-values-and-limit-flags, Sonnet): non-finite lobe values INVALID, limit-end flags. Opus review
     (kernel diff) and a quiet-window landing. Then the spine: 208, 206, 209, and 230 (shade_surface.h).
-  - 236 (task/236-denoise-small-texture-detail, Opus): b_tx's 3x denoise loss, investigation then a remedy. denoiser.cpp
-    already prefilters the guides with cleanAux; the cause is open. Stop rule: name the cause before fixing.
+  - 236 stopped with its cause named and now waits on 230: textured materials write the magenta placeholder albedo guide
+    (0008 d15), so OIDN smooths the texture as noise; dispatch 230 (guide RGB, shade_surface.h, spine-serialised) after 220.
   If either has no fresh commit when you start, brief a new implementer from its Progress.
 - Next: 193 after the lead rewrites its Reference; 218 after 208; 215 after 206, 209, 193; 213/214/216/217 at the slice close.
   When nothing is dispatchable, loop step 8 (fable planner).
@@ -109,5 +109,8 @@ agent to `git switch task/NNN-*` first in its own worktree.
   before kernel landings and captures; 194's first landing failed B-05 beside 219's builds. (7) Keep to two implementers;
   pause one when a review fixer would make three. (8) Briefs: say "never run fetch.ps1 deps; set ASTRORAY_DEPS_CACHE" (235
   downloaded deps into its worktree), rows k_shade_surface 128 / 416 / 4 / 16, compile ~7.1 s of 8.0 s on the new clock.
+- Cache defect (BACKLOG): scene recordings embed worktree asset paths; the HDRI fetched by 201 went with its worktree, so
+  `check full`'s denoise step fails until `fetch.ps1 assets -Name studio_small_09` runs in the main checkout (decision 43 covers it;
+  ask the owner if unsure). A tools task should make recordings path-independent.
 - Owner list (STATUS): rulings 109 and 110 and the decision-44 reading to confirm; the optional coincident-hit tie rule (235);
   B-10 (check full ~740-790 s, unenforced); B-11 basis.
