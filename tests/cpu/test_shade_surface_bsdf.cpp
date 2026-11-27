@@ -598,6 +598,42 @@ TEST_CASE("shade_surface_bsdf/non-finite lobe value is invalid") {
   for (uint32_t s = 0; s < rough.n; ++s) CHECK(std::isnan(rough.film->data().slot_L[4u * s]));
 }
 
+TEST_CASE("shade_surface_bsdf/a non-finite pdf is invalid") {
+  // A huge diffuse roughness keeps f finite but makes the EON pdf NaN (test_lobe_stack's case), so the
+  // stage's pdf tests alone see it. A specular-only record picks GGX, whose sample is finite and whose
+  // mixture pdf is NaN: without a lamp that is the BSDF sample's test, with one NEE's eval comes first.
+  // A diffuse-only record's EON sample answers "no sample", so there only NEE's pdf test can end the
+  // path INVALID (the BSDF sample alone would end ZERO_THROUGHPUT).
+  const float huge = 1e30f;
+  for (const bool lamp : {false, true}) {
+    INFO("lamp=" << lamp);
+    Rig rig(64);
+    rig.specular();
+    rig.block().base_diffuse_roughness = huge;
+    if (lamp) rig.use_lamp();
+    rig.run();
+    // Every path with a GGX direction above the surface is INVALID; the rest are the lobe's own
+    // "no sample" and end ZERO_THROUGHPUT before any pdf matters.
+    const uint32_t invalid = rig.hist(ar::Term::INVALID);
+    CHECK(invalid > rig.n / 2);
+    CHECK(invalid + rig.hist(ar::Term::ZERO_THROUGHPUT) == rig.n);
+    uint32_t nan_slots = 0;
+    for (uint32_t s = 0; s < rig.n; ++s) nan_slots += std::isnan(rig.film->data().slot_L[4u * s]) ? 1u : 0u;
+    CHECK(nan_slots == invalid);
+  }
+  Rig diffuse(8);
+  diffuse.lambert(0.5f);
+  diffuse.block().base_diffuse_roughness = huge;
+  diffuse.use_lamp();
+  diffuse.run();
+  CHECK(diffuse.hist(ar::Term::INVALID) == diffuse.n);
+  CHECK(diffuse.hist(ar::Term::ZERO_THROUGHPUT) == 0u);
+  for (uint32_t s = 0; s < diffuse.n; ++s) {
+    CHECK(std::isnan(diffuse.film->data().slot_L[4u * s]));
+    CHECK(diffuse.sh_next[s] == uint8_t(ar::Stage::SHADOW_TERMINATED));
+  }
+}
+
 TEST_CASE("shade_surface_bsdf/octahedral normals round-trip") {
   // Cigolle et al. 2014: 2 x 16-bit octahedral codes are accurate to about 1e-4 rad. The angle is
   // measured in double (atan2 of |v x w| and v . w): acos of a float dot cannot resolve it.

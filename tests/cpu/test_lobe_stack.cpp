@@ -756,6 +756,32 @@ TEST_SUITE("fast") {
     CHECK(ar::stack_pdf(fx.table, fx.spec, p, frame, up, below, TransportMode::Radiance) == Real(0));
   }
 
+  TEST_CASE("lobe_stack/a non-finite pdf with a finite f is reported") {
+    // A huge diffuse roughness keeps the EON value finite while its LTC coefficients overflow, so the
+    // lobe's pdf is NaN: eval and a sample that evaluates the diffuse lobe return a finite f with a pdf
+    // that is not a number, which only the stage's pdf tests can tell from "no sample" (rule 5, 0004 D17).
+    Fixture fx;
+    const Frame frame = tilted_frame();
+    OpenPBRParams p = make_params(kOnes, kIor15, 1.0, 0.5, 1.0, kOnes, 0.0, 1.0);
+    p.base_diffuse_roughness = Real(1e30);
+    const Real3 wo = ar::to_world(frame, local_dir(0.7, 0.9));
+    const Real3 wi = ar::to_world(frame, local_dir(0.6, 0.4));
+    const auto finite_f = [](const Spec& f) {
+      bool ok = true;
+      for (int l = 0; l < ar::kLanes; ++l) ok = ok && std::isfinite(double(f.v[l]));
+      return ok;
+    };
+    const LobeEval e = ar::stack_eval(fx.table, fx.spec, p, frame, wo, wi, TransportMode::Radiance);
+    CHECK(finite_f(e.f));
+    CHECK(!std::isfinite(double(e.pdf)));
+    for (Real uc : {Real(0.001), Real(0.01), Real(0.02)}) {  // GGX picked; a diffuse pick is the EON sampler, which answers "no sample"
+      const LobeSample s = ar::stack_sample(fx.table, fx.spec, p, frame, wo, uc, Real2{Real(0.3), Real(0.6)}, TransportMode::Radiance);
+      INFO("uc=" << double(uc) << " pdf=" << double(s.pdf) << " f0=" << double(s.f.v[0]));
+      CHECK(finite_f(s.f));
+      CHECK(!std::isfinite(double(s.pdf)));
+    }
+  }
+
   TEST_CASE("lobe_stack/non-finite input is not a zero result") {
     // A NaN the stack's own arithmetic meets (the closure weight on both the delta and the
     // non-delta sample, the diffuse roughness on the EON lobe) reaches the caller as a NaN f or a
