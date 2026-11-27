@@ -77,11 +77,19 @@ def use_numpy():
         np = numpy
 
 
+def rel_scale(ref, eps=EPS):
+    """ref^2 + eps: the relMSE denominator. The reference's own squared value keeps a dark pixel's error
+    from dominating; eps keeps a black one finite.
+    Ref: tests/common/noisy_fixture.cpp rel_mse."""
+    return ref * ref + eps
+
+
 def rel_term(a, ref, eps=EPS):
     """(a - ref)^2 / (ref^2 + eps): the one definition of the relMSE term, for scalars and ndarrays
-    alike (the error maps and the device comparison call it on arrays).
+    alike (the error maps and the device comparison call it on arrays). The numerator is the plain
+    squared error; the denominator is rel_scale.
     Ref: tests/common/noisy_fixture.cpp rel_mse."""
-    return (a - ref) ** 2 / (ref * ref + eps)
+    return (a - ref) ** 2 / rel_scale(ref, eps)
 
 
 def rel_mse(x, ref, eps=EPS):
