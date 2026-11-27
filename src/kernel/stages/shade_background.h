@@ -172,21 +172,17 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
   const LightRecord* world = world_light(kg);
   const uint32_t flags = ps_flags(kg, slot);
   const uint32_t hooks = kg.session.test_hooks;
-  const bool after_scatter = ps_bounces(kg, slot).v[0] > 0u && (flags & LAST_BOUNCE_SPECULAR) == 0u;
+  const uint32_t total = ps_bounces(kg, slot).v[0];
+  const bool after_scatter = total > 0u && (flags & LAST_BOUNCE_SPECULAR) == 0u;
   // Film Transparent: a ray with no scattering event so far (bounces[total] == 0, which alpha
   // pass-throughs, false interfaces and lamp crossings leave at 0 as Cycles' transparent bounces leave
   // PATH_RAY_TRANSPARENT_BACKGROUND set) reaching the world adds average(throughput) as transparency and
   // no radiance. A path that scattered still sees the world.
-  const bool transparent_ray = kg.session.film_transparent != 0u && ps_bounces(kg, slot).v[0] == 0u;
-  if (transparent_ray) {
+  if (kg.session.film_transparent != 0u && total == 0u) {
     // A non-finite throughput has no transparency: it fails the sample, as a non-finite contribution does.
     const Real transparency = avg(ps_beta(kg, slot));
-    if (transparency - transparency == Real(0)) {
-      film_add_transparency(kg, ps_sample_id(kg, slot), transparency);
-    } else {
-      sample_mark_invalid(kg, ps_sample_id(kg, slot));
-      term = Term::INVALID;
-    }
+    if (transparency - transparency == Real(0)) film_add_transparency(kg, ps_sample_id(kg, slot), transparency);
+    else term = Term::INVALID;
   } else if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
     const Spec lt = ps_lambda_t(kg, slot);
     Lambda lam;
@@ -210,13 +206,11 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
                               mis_emitter_scale(ps_r_u(kg, slot), weighted ? ps_r_l(kg, slot) : Spec{}, p_light, weighted);
     const bool guide_ok = !(ran && is_finite(contribution)) || kg.film->guide_albedo < 0 ||
                           (flags & DENOISE_SURFACE_DONE) != 0u || background_guides(kg, slot, sample, flags, contribution);
-    if (ran && is_finite(contribution) && guide_ok) {
-      sample_add(kg, sample, contribution);
-    } else {
-      sample_mark_invalid(kg, sample);
-      term = Term::INVALID;
-    }
+    if (ran && is_finite(contribution) && guide_ok) sample_add(kg, sample, contribution);
+    else term = Term::INVALID;
   }
+  // The one failure exit of both branches: the sample is invalid exactly when the path ends INVALID.
+  if (term == Term::INVALID) sample_mark_invalid(kg, ps_sample_id(kg, slot));
   path_end(kg, slot, term);
 }
 
