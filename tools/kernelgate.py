@@ -351,25 +351,27 @@ def nvcc_command(build, stem, out_cubin):
     return out[:-1] + ["-o", out_cubin, out[-1]]
 
 
+def time_runs(stem, cmd, env, runner, clock):
+    """One TU's serial nvcc runs, no cache, OS file cache warm from the build (0002 D10); a first time within the
+    retime band of the limit is re-timed, three runs at most."""
+    runs = []
+    while True:
+        t0 = clock()
+        code, out = runner(cmd, env=env)
+        runs.append(clock() - t0)
+        if code != 0:
+            raise GateError(f"nvcc failed timing {stem}: {out.strip()[-400:]}")
+        limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
+        near = abs(runs[0] - limit) <= COMPILE_RETIME_BAND * limit
+        if not near or len(runs) == 3:
+            return runs
+
+
 def time_tus(cmds, get_env, runner=run, clock=time.perf_counter):
-    """The serial nvcc runs of [(stem, cmd)]: {stem: [seconds]}. The MSVC environment comes from get_env once, before
-    the first run, and every run gets it (0002 D10 method; a time within the retime band of the limit is re-timed)."""
+    """{stem: [seconds]} for [(stem, cmd)]. The MSVC environment comes from get_env once, before the first run, and
+    every run gets it (owner decision 44: nvcc never runs vcvarsall inside the clock)."""
     env = get_env()
-    times = {}
-    for stem, cmd in cmds:
-        runs = []
-        while True:  # serial, no cache, OS file cache warm from the build
-            t0 = clock()
-            code, out = runner(cmd, env=env)
-            runs.append(clock() - t0)
-            if code != 0:
-                raise GateError(f"nvcc failed timing {stem}: {out.strip()[-400:]}")
-            limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
-            near = abs(runs[0] - limit) <= COMPILE_RETIME_BAND * limit
-            if not near or len(runs) == 3:
-                break
-        times[stem] = runs
-    return times
+    return {stem: time_runs(stem, cmd, env, runner, clock) for stem, cmd in cmds}
 
 
 def compile_timing(args):
