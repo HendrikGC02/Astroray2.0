@@ -467,6 +467,21 @@ $global:LASTEXITCODE = $code
     # multiple of 30 s, as for the gate tier.
     $r = Step 'gpu full tests' { & $runTimed $gpuExe '--tier=full' 60 (Join-Path $root 'out/check/gpu-full-tests.out') }
     if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'gpu full tests failed (out/check/full.log)' }
+    # 0008 V11 final row: denoised relMSE below raw at 64 spp on three scenes, CUDA, against cached 16k-spp
+    # references (rendered once into the machine-wide cache; tools/denoise_check.py). The scenes need the
+    # assets of assets/manifest.toml, fetched by hand (a check never downloads); b_tx is reported, not asserted.
+    $r = Step 'denoise check' {
+      $missing = @('cornell_box/cornell-box.zip', 'studio_small_09/studio_small_09_1k.exr') | Where-Object { -not (Test-Path (Join-Path $root "assets/_cache/$_")) }
+      if ($missing) {
+        "FAIL denoise_check: missing assets/_cache/$($missing -join ', assets/_cache/'): run pwsh tools/fetch.ps1 assets -Name cornell_box; pwsh tools/fetch.ps1 assets -Name studio_small_09"
+        $global:LASTEXITCODE = 1
+      } else {
+        & $py -I tools/scenes.py cornell_area cornell_point shader_balls s3_textured
+        if ($LASTEXITCODE -eq 0) { & $py -I tools/denoise_check.py --device cuda }
+      }
+    }
+    $r.Out | Where-Object { $_ -match '^(PASS|FAIL) denoise_check|^cold start' } | ForEach-Object { Write-Host $_ }
+    if ($r.Code -ne 0) { Show-Tail $r 8; Fail 'denoise check failed (out/check/full.log)' }
     # The CPU suite's full tier: cases tagged full there ran nowhere before this step; the gate's `cpu gate tests` runs --tier=gate only.
     # Time limit 150 s: the tier took 14.7 s (one run, task 234); 10x that, rounded up to a multiple of 30 s, as for the GPU tiers.
     $r = Step 'cpu full tests' { & $runTimed $exe '--tier=full --duration=true' 150 (Join-Path $root 'out/check/cpu-full-tests.out') }
@@ -542,6 +557,10 @@ $global:LASTEXITCODE = $code
     }
     # Hosted ci shows only the summary, so the margin of the slowest case goes into it on every pass.
     Write-Host "B-12: slowest $($b12.Slowest.Case) $($b12.Slowest.Seconds) s of $perTest s"
+    # 0008 V11's relMSE function, its exact cases and its box-filter case: stdlib only (the tool imports numpy
+    # only for a capture), so hosted ci runs it as well.
+    $r = Step 'denoise self-test' { & $py -I tools/denoise_check.py --self-test }
+    if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'denoise self-test failed (out/check/fast.log)' }
 
     if ($isCi) {
       # The lint self-test proves every lint section still catches its seeded cases;
