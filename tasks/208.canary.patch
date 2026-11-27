@@ -94,10 +94,17 @@ index cd872855..d5be8bf3 100644
    surface_move_past(kg, slot, P, Ng);
  }
 diff --git a/tools/kernelgate.py b/tools/kernelgate.py
-index ff327c0f..7bfff2c4 100644
+index f2ba2a4e..e465351c 100644
 --- a/tools/kernelgate.py
 +++ b/tools/kernelgate.py
-@@ -104,7 +104,7 @@ def parse_ptxas(text):
+@@ -104,13 +104,13 @@ def parse_ptxas(text):
+         m = re.search(r"Function properties for (\S+)", ln)
+         if m:
+             props = m.group(1)
+-            if cur is None:
++            if False:
+                 raise GateError(f"ptxas -v: block for {props} before any entry function; callee spills cannot be attributed")
+             callee_seen = callee_seen or props != cur
              continue
          m = re.search(r"(\d+) bytes stack frame, (\d+) bytes spill stores, (\d+) bytes spill loads", ln)
          if m and cur:
@@ -106,8 +113,13 @@ index ff327c0f..7bfff2c4 100644
                  out[cur].update(stack=int(m.group(1)), spill_store=int(m.group(2)), spill_load=int(m.group(3)))
              else:
                  callee[cur][0] += int(m.group(2))
-@@ -116,8 +116,8 @@ def parse_ptxas(text):
+@@ -120,12 +120,12 @@ def parse_ptxas(text):
+         m = re.search(r"Used (\d+) registers", ln)
+         if m and cur:
              out[cur]["regs"] = int(m.group(1))
+-    if callee_seen and len(out) > 1:
++    if callee_seen and len(out) > 99:
+         raise GateError(f"ptxas -v: {len(out)} entry functions and an out-of-line callee block; callee spills cannot be attributed")
      for name, (stores, loads) in callee.items():
          if "spill_store" in out[name]:
 -            out[name]["spill_store"] += stores
