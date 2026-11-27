@@ -497,6 +497,7 @@ def build_metal_scene():
 class TestF12Textured(unittest.TestCase):
     """The textured, lamp-lit plane through F12 on both devices; one render each, before any case."""
     runs = None
+    alpha = None
     agree_line = None
 
     @classmethod
@@ -521,6 +522,12 @@ class TestF12Textured(unittest.TestCase):
                 cls.runs[device.lower()] = cls._render_device(rf, scene, device, work, evidence)
             except Exception as e:  # a failed render reddens its cases; setUpClass errors would hide them from land
                 cls.runs[device.lower()] = {"error": f"{type(e).__name__}: {e}"}
+        cls.alpha = {}
+        for device in ("CPU", "CUDA"):
+            try:
+                cls.alpha[device.lower()] = cls._alpha_device(rf, scene, device, work)
+            except Exception as e:
+                cls.alpha[device.lower()] = {"error": f"{type(e).__name__}: {e}"}
 
     @staticmethod
     def _render_device(rf, scene, device, work, evidence, tag="f12"):
@@ -553,6 +560,43 @@ class TestF12Textured(unittest.TestCase):
                   "luma": luma, "seconds": seconds, "kind": kind}
         print(f"RESULT smoke {tag} {device.lower()} kind {kind} mean {luma:.6f} floor {F12_FLOOR:.6f} time {seconds:.1f}")
         return result
+
+    @staticmethod
+    def _alpha_device(rf, scene, device, work):
+        """Combined's alpha channel of one tiny transparent render: the plane scaled to half the frame's width, so the
+        centre quarter is opaque (alpha 1) and the rest shows the world (alpha 0), with whole pixels between the two
+        at 32 x 32. Settings are restored for the cases after."""
+        plane = scene.objects["F12Plane"]
+        spp = scene.astroray.samples
+        scene.astroray.device, scene.astroray.samples, scene.render.film_transparent = device, 4, True
+        plane.scale = (0.5, 0.5, 1.0)
+        cap = Capture(rf)
+        try:
+            r = bpy.ops.render.render(write_still=False, scene=scene.name)
+        finally:
+            cap.restore()
+            rf.shutdown()
+            plane.scale = (1.0, 1.0, 1.0)
+            scene.render.film_transparent, scene.astroray.samples = False, spp
+        if r != {"FINISHED"}:
+            raise RuntimeError(f"transparent F12 on {device} returned {r}")
+        return {"alpha": cap.result["Combined"].reshape(F12_SIZE, F12_SIZE, 4)[:, :, 3].astype(np.float64)}
+
+    def test_cpu_cuda_alpha_agree(self):
+        """Film Transparent: the world is alpha 0 and the plane alpha 1 on both devices, and the two alpha images
+        agree to float tolerance (the plane's edges fall between pixels; the filter blends the ones beside them)."""
+        a = {k: self.alpha[k] for k in ("cpu", "cuda")}
+        for k, v in a.items():
+            self.assertNotIn("error", v, f"{k}: {v.get('error')}")
+            self.assertEqual(float(v["alpha"][0, 0]), 0.0, k)
+            self.assertEqual(float(v["alpha"][F12_SIZE // 2, F12_SIZE // 2]), 1.0, k)
+        edge = np.zeros((F12_SIZE, F12_SIZE), bool)
+        n = F12_SIZE // 4
+        edge[n - 2: n + 2, n - 2: 3 * n + 2] = edge[3 * n - 2: 3 * n + 2, n - 2: 3 * n + 2] = True
+        edge[n - 2: 3 * n + 2, n - 2: n + 2] = edge[n - 2: 3 * n + 2, 3 * n - 2: 3 * n + 2] = True
+        diff = float(np.abs(a["cpu"]["alpha"] - a["cuda"]["alpha"])[~edge].max())
+        print(f"RESULT smoke alpha cpu~cuda: max |diff| {diff:.6f}")
+        self.assertLess(diff, 1e-4)
 
     def _run(self, device):
         run = self.runs[device]
