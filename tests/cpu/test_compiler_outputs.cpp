@@ -257,14 +257,32 @@ TEST_CASE("compiler_outputs/guide rgb of a table") {
 }
 
 TEST_CASE("compiler_outputs/guide rgb is marked per point") {
-  // A textured base_color and a Mix Shader whose children store colours (as code) have no constant
-  // RGB: the block says so and the albedo guide writes magenta.
+  // A textured base_color and a Mix Shader whose children store colours (as code) keep their RGB in
+  // the record (STORE_SLOT), so the block is not marked and no entry is added; a per-point colour
+  // from a lifted spectrum has no RGB: the block is marked and one entry says the guide is magenta.
+  const auto guide_entries = [](const MaterialOutput& m) {
+    return std::count_if(m.entries.begin(), m.entries.end(), [](const auto& e) {
+      return e.code == AR_REPORT_NODE_APPROXIMATED && e.detail.find("albedo guide") != std::string::npos;
+    });
+  };
   GB textured;
   textured.store(tex(textured), ar::RecordSlot::base_color);
-  CHECK((textured.compile().compiled.block.guide_flags & ar::GUIDE_RGB_RUNTIME) != 0);
+  const MaterialOutput mt = textured.compile();
+  CHECK((mt.compiled.block.guide_flags & ar::GUIDE_RGB_RUNTIME) == 0);
+  CHECK(guide_entries(mt) == 0);
   GB spec_textured;
   spec_textured.store(tex(spec_textured), ar::RecordSlot::specular_color);
-  CHECK((spec_textured.compile().compiled.block.guide_flags & ar::GUIDE_RGB_RUNTIME) != 0);
+  CHECK((spec_textured.compile().compiled.block.guide_flags & ar::GUIDE_RGB_RUNTIME) == 0);
+  for (const ar::RecordSlot slot : {ar::RecordSlot::base_color, ar::RecordSlot::specular_color}) {
+    GB lifted;
+    const int lift = lifted.add(Op::RGB_LIFT, {}, {int32_t(ar::SpectrumSemantic::REFLECTANCE)});
+    lifted.link(tex(lifted), lift, 0);
+    lifted.store(lift, slot);
+    const MaterialOutput ml = lifted.compile();
+    REQUIRE_FALSE(ml.magenta);
+    CHECK((ml.compiled.block.guide_flags & ar::GUIDE_RGB_RUNTIME) != 0);
+    CHECK(guide_entries(ml) == 1);
+  }
   GB mix;
   for (int32_t child = 0; child < 2; ++child) {
     const int c = mix.add(Op::CONST_F32X3, {0.1f + 0.5f * float(child), 0.2f, 0.3f});
@@ -275,7 +293,8 @@ TEST_CASE("compiler_outputs/guide rgb is marked per point") {
   mix.link(mix.add(Op::CONST_F32, {0.5f}), br, 0);
   const MaterialOutput mm = mix.compile();
   REQUIRE_FALSE(mm.magenta);
-  CHECK((mm.compiled.block.guide_flags & ar::GUIDE_RGB_RUNTIME) != 0);
+  CHECK((mm.compiled.block.guide_flags & ar::GUIDE_RGB_RUNTIME) == 0);
+  CHECK(guide_entries(mm) == 0);
   GB rough;  // a per-point scalar leaves the colours constant
   const int ch = rough.add(Op::CHANNEL_F32X3, {}, {0});
   rough.link(rough.add(Op::LOAD_CTX_UV, {}, {0}), ch, 0);
