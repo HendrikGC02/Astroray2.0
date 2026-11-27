@@ -128,6 +128,9 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   void end_edit();
 
   std::shared_ptr<const MaterialArrays> arrays() const;
+  // The TableArena's limit in bytes for the next rebuild of the arrays: kTableArenaLimit unless a test
+  // lowers it to reach the magenta GRATING_TABLE_LIMIT path without 4 GiB of tables.
+  void set_table_arena_limit(uint64_t bytes);
   // The active world, null before the first set_world or after a reset.
   std::shared_ptr<const WorldOutput> world() const;
   const ar::Rgb2SpecTable& table() const { return table_; }
@@ -183,6 +186,7 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   MaterialOutput default_;  // the default material's compiled output, appended by rebuild_locked
   std::shared_ptr<const MaterialArrays> arrays_;
   uint64_t ledger_id_ = 0;
+  uint64_t table_arena_limit_ = kTableArenaLimit;
 };
 
 }  // namespace astroray::host

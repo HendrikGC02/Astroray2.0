@@ -518,6 +518,51 @@ TEST_CASE("ext_material/grating compiles and routes") {
   CHECK(static_cast<const CpuDevice&>(*dev).stage_fn(ar::Stage::SHADE_SURFACE_EXT) == &cpu_stage_shade_surface_ext);
 }
 
+TEST_CASE("ext_material/a table past the arena limit renders magenta") {
+  // The arena limit lowered to one table's bytes: the first of two distinct gratings fits at offset 0,
+  // the second would end past it, so the store renders it magenta (no EXTENSION, ext word 0, no
+  // ExtParams) and raises GRATING_TABLE_LIMIT naming the arena (0001's row, 0005 item 16).
+  using namespace astroray::host;
+  const size_t table_bytes = size_t(5) * ar::kGratingCosBins * ar::kGratingWavelengths * sizeof(float);
+  astroray::ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  auto store = std::make_shared<MaterialStore>(std::make_shared<Ledger>());
+  store->set_table_arena_limit(table_bytes);
+  GratingAuthored other = good_grating();
+  other.depth_nm = 90.0f;
+  auto e = scene.begin_edit();
+  REQUIRE(e);
+  const ar_material_desc a = material(1), b = material(1, other);
+  REQUIRE(store->set_material(*e, 30, &a) == AR_OK);
+  REQUIRE(store->set_material(*e, 31, &b) == AR_OK);
+  uint64_t gen = 0;
+  REQUIRE(e->commit(&gen) == AR_OK);
+  store->end_edit();
+  scene.generations().wait_idle();
+  const auto arr = store->arrays();
+  REQUIRE(arr->keys.size() == 2u);
+  CHECK(arr->ext_params.size() == 1u);
+  CHECK(arr->table_arena.size() == table_bytes);
+  CHECK(ar::ext_kind(arr->headers[0]) == uint32_t(ar::ExtKind::GRATING));
+  CHECK((arr->headers[0].flags & ar::EXTENSION) != 0u);
+  CHECK(arr->headers[1].ext == 0u);
+  CHECK((arr->headers[1].flags & ar::EXTENSION) == 0u);
+  scene.report().snapshot();
+  ar_report_info info = {};
+  REQUIRE(scene.report().info(&info) == AR_OK);
+  std::vector<std::string> limit;
+  for (uint32_t k = 0; k < info.entry_count; ++k) {
+    ar_report_entry en = {};
+    REQUIRE(scene.report().entry(k, &en) == AR_OK);
+    if (en.code == AR_REPORT_GRATING_TABLE_LIMIT) {
+      CHECK(en.subject == 31u);
+      limit.emplace_back(reinterpret_cast<const char*>(en.detail));
+    }
+  }
+  REQUIRE(limit.size() == 1u);
+  CHECK(limit[0] == "scene TableArena past 4 GiB (u32 offsets)");
+}
+
 TEST_CASE("ext_material/table arena placement and its limit") {
   using astroray::host::place_table;
   std::vector<uint8_t> arena;

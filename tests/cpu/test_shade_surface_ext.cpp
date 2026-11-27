@@ -68,6 +68,7 @@ struct Rig {
   ar::KernelGlobals kg{};
   ar::SceneData sd{};
   std::vector<ar::ExtParams> ext;
+  std::vector<ar::ConstantBlock> blocks;
   ar::PathStateSoA path{};
   ar::LightSamplerView no_lights{};
   ar::ShadowItemSoA shadow{};
@@ -186,6 +187,9 @@ struct Rig {
     sd = *kg.scene;
     ext.assign(sd.ext_params, sd.ext_params + sd.ext_param_count);
     sd.ext_params = ext.data();
+    // The constant blocks too, so a case can set grating B's geometry_tangent.
+    blocks.assign(sd.material_constants, sd.material_constants + kg.material_constant_count);
+    sd.material_constants = blocks.data();
     kg.scene = &sd;
   }
   template <class F>
@@ -213,6 +217,11 @@ struct Rig {
     const ar::GratingParams g = params_b();
     REQUIRE(compiled_b.size() == size_t(g.m_max - g.m_min + 1) * ar::kGratingCosBins * ar::kGratingWavelengths);
     return ar::GratingTable{compiled_b.data(), g.m_min, g.m_max - g.m_min + 1};
+  }
+  // Grating B's constant geometry_tangent (0 means the shading point's own tangent, constant_block.h).
+  void set_tangent_b(float x, float y, float z) {
+    ar::ConstantBlock& b = blocks[mats->headers[material_b()].const_offset];
+    b.geometry_tangent[0] = x, b.geometry_tangent[1] = y, b.geometry_tangent[2] = z;
   }
   void run() { cpu_stage_shade_surface_ext(kg, ar::StepEntry{0, n, 0}, 0, n); }
   void run_common() { cpu_stage_shade_surface(kg, ar::StepEntry{0, n, 0}, 0, n); }
@@ -259,22 +268,26 @@ double dist(ar::Real3 a, ar::Real3 b) {
   return std::sqrt(x * x + y * y + z * z);
 }
 
-// Item 21 for a reflection off the quad's grating, computed here in double: the frame of N = +z and the
-// default tangent (core/frame.h for +z gives x), grooves along x and the grating vector along y, so
-// t_o = -t_i + m (lambda / d) y. False when the order is evanescent.
-bool order_direction(ar::Real3 wo, int m, double lambda_nm, double pitch_nm, ar::Real3* wi) {
-  const double tx = -double(wo.x), ty = -double(wo.y) + double(m) * lambda_nm / pitch_nm;
-  const double t2 = tx * tx + ty * ty;
+// Item 21 for a reflection off the quad's grating, computed here in double. N = +z; the grooves run
+// along the unit tangent `groove` in the quad's plane (by default x, core/frame.h's tangent of +z) and
+// the grating vector is g = N x groove, so with t the projection on (groove, g):
+// t_o = -t_i + m (lambda / d) g. False when the order is evanescent.
+bool order_direction(ar::Real3 wo, int m, double lambda_nm, double pitch_nm, ar::Real3* wi, double gx = 1.0, double gy = 0.0) {
+  const double vx = -gy, vy = gx;  // g = z x groove
+  const double ti_s = double(wo.x) * gx + double(wo.y) * gy, ti_g = double(wo.x) * vx + double(wo.y) * vy;
+  const double ts = -ti_s, tg = -ti_g + double(m) * lambda_nm / pitch_nm;
+  const double t2 = ts * ts + tg * tg;
   if (t2 > 1.0) return false;
-  *wi = ar::Real3{ar::Real(tx), ar::Real(ty), ar::Real(std::sqrt(1.0 - t2))};
+  *wi = ar::Real3{ar::Real(ts * gx + tg * vx), ar::Real(ts * gy + tg * vy), ar::Real(std::sqrt(1.0 - t2))};
   return true;
 }
 
 // The order whose direction at lambda_nm is within tol of wi, or 99.
-int order_of(ar::Real3 wo, ar::Real3 wi, double lambda_nm, double pitch_nm, int m_min, int m_max, double tol) {
+int order_of(ar::Real3 wo, ar::Real3 wi, double lambda_nm, double pitch_nm, int m_min, int m_max, double tol, double gx = 1.0,
+             double gy = 0.0) {
   for (int m = m_min; m <= m_max; ++m) {
     ar::Real3 d{};
-    if (order_direction(wo, m, lambda_nm, pitch_nm, &d) && dist(d, wi) <= tol) return m;
+    if (order_direction(wo, m, lambda_nm, pitch_nm, &d, gx, gy) && dist(d, wi) <= tol) return m;
   }
   return 99;
 }
@@ -378,6 +391,70 @@ TEST_CASE("shade_surface_ext/beta mean equals efficiency") {
     CHECK(std::fabs(mean - want) <= 3.0 * se);
   }
   CHECK(checked >= 3u);
+}
+
+TEST_CASE("shade_surface_ext/grooves follow the record tangent") {
+  // geometry_tangent = +y: the grooves run along y and the grating vector is N x T = -x (item 23: the
+  // frame from (N, T)), so the non-zero orders leave in the xz plane of the arriving ray's x component
+  // and match the grating equation in that frame, not in the default one (grooves along x).
+  Rig rig(1024);
+  rig.set_tangent_b(0.0f, 1.0f, 0.0f);
+  const ar::GratingParams g = rig.params_b();
+  rig.run();
+  const ar::Real3 wo = rig.wo();
+  uint32_t nonzero = 0;
+  for (uint32_t s = 0; s < rig.n; ++s) {
+    if (rig.term[s] != uint8_t(ar::Term::ACTIVE)) continue;
+    INFO("slot " << s);
+    const int m = order_of(wo, rig.ray_d[s], kLane[0], double(g.pitch_nm), g.m_min, g.m_max, 1e-5, 0.0, 1.0);
+    CHECK(m != 99);
+    if (m == 0 || m == 99) continue;
+    ++nonzero;
+    CHECK(order_of(wo, rig.ray_d[s], kLane[0], double(g.pitch_nm), g.m_min, g.m_max, 1e-3) == 99);
+  }
+  CHECK(nonzero > 20u);
+  CHECK(rig.hist(ar::Term::INVALID) == 0u);
+}
+
+TEST_CASE("shade_surface_ext/the order follows the extension-choice uniform") {
+  // u = the event's EV_EXT_CHOICE draw (0003 d23); the order is the first whose running sum of the lane
+  // mean eta (0 where evanescent) passes u times the total (item 22, grating.h's walk), recomputed here
+  // from grating B's compiled table. A chosen order evanescent at lambda_t[0] ends ZERO_THROUGHPUT.
+  Rig rig(1024);
+  const ar::GratingParams g = rig.params_b();
+  const ar::GratingTable tab = rig.table_b();
+  rig.run();
+  const ar::Real3 wo = rig.wo();
+  ar::Lambda lam;
+  for (int l = 0; l < ar::kLanes; ++l) lam.nm[l] = ar::Real(kLane[l]);
+  const ar::Spec one = ar::spec_fill(ar::Real(1));
+  const ar::Real cos_i = std::fabs(wo.z);
+  double sum = 0.0;
+  for (int m = g.m_min; m <= g.m_max; ++m) sum += double(ar::grating_order_mean(g, tab, wo, m, lam, one, one, cos_i));
+  REQUIRE(sum > 0.0);
+  uint32_t checked = 0;
+  for (uint32_t s = 0; s < rig.n; ++s) {
+    INFO("slot " << s);
+    const double u = double(ar::camera_path_draw(rig.kg, s, ar::event_dim(0, ar::EV_EXT_CHOICE)));
+    int want = g.m_max;
+    double acc = 0.0;
+    for (int m = g.m_min; m <= g.m_max; ++m) {
+      const double e = double(ar::grating_order_mean(g, tab, wo, m, lam, one, one, cos_i));
+      if (!(e > 0.0)) continue;
+      acc += e;
+      want = m;
+      if (u * sum < acc) break;
+    }
+    ar::Real3 d{};
+    if (!order_direction(wo, want, kLane[0], double(g.pitch_nm), &d)) {
+      CHECK(rig.term[s] == uint8_t(ar::Term::ZERO_THROUGHPUT));
+      continue;
+    }
+    REQUIRE(rig.term[s] == uint8_t(ar::Term::ACTIVE));
+    CHECK(order_of(wo, rig.ray_d[s], kLane[0], double(g.pitch_nm), g.m_min, g.m_max, 1e-5) == want);
+    ++checked;
+  }
+  CHECK(checked > rig.n / 2u);
 }
 
 TEST_CASE("shade_surface_ext/every order evanescent ends zero throughput") {

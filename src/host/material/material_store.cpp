@@ -374,7 +374,7 @@ std::vector<MaterialStore::ArenaFailure> MaterialStore::rebuild_locked() {
       std::string why;
       if (x.compiled.ext_table.empty())
         code = AR_REPORT_PROGRAM_REJECTED, why = "extension kind " + std::to_string(x.compiled.ext_kind) + " compiled without its table";
-      else if (!place_table(x.compiled.ext_table, kTableArenaLimit, &a->table_arena, &table_at, &offset))
+      else if (!place_table(x.compiled.ext_table, table_arena_limit_, &a->table_arena, &table_at, &offset))
         code = AR_REPORT_GRATING_TABLE_LIMIT, why = "scene TableArena past 4 GiB (u32 offsets)";
       else if (!ar::ext_pack_checked(x.compiled.ext_kind, uint32_t(a->ext_params.size()), &packed))
         code = AR_REPORT_PROGRAM_REJECTED, why = "more extension materials than ext_index holds (2^24)";
@@ -539,6 +539,11 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
 std::shared_ptr<const WorldOutput> MaterialStore::world() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return world_out_;
+}
+
+void MaterialStore::set_table_arena_limit(uint64_t bytes) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  table_arena_limit_ = std::min(bytes, kTableArenaLimit);
 }
 
 std::shared_ptr<const MaterialArrays> MaterialStore::arrays() const {

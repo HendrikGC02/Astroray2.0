@@ -164,12 +164,12 @@ gated = "merge"
 # The medium stack (false interface at the top, the pass-through crossing): stack 400 to 416 B, spills unchanged,
 # compile 7.10 s, timed in the build's MSVC environment (0009 d18).
 # The body as a template on ShadeKind (Common here, Ext in shade_surface_ext): resources unchanged, compile
-# 7.29 to 7.38 s in an interleaved A/B with main (4 runs each, quiet).
+# 7.29 to 7.38 s in an interleaved A/B with main (4 runs each, quiet); kernelgate --time 7.44-7.46 s.
 regs = 128
 stack = 416
 spill_store = 4
 spill_load = 16
-compile_s = 7.10
+compile_s = 7.45
 gated = "merge"
 
 [kernel.k_shade_surface_ext]
