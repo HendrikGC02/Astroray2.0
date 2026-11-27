@@ -41,6 +41,10 @@ struct OpenPBRParams {
 
 static_assert(sizeof(Real) != 4 || sizeof(OpenPBRParams) <= 304, "OpenPBRParams must stay within 304 B (0005 item 3)");
 
+// The lower half of the guide's clamp (guide_rgb_pack): a negative channel, or a NaN, is 0, as
+// rgb_clamp_negative makes it. A Mix child's constant colour and VM arithmetic both reach it.
+AR_FN float guide_rgb_floor(float x) { return x >= 0.0f ? x : 0.0f; }
+
 // The guide RGB of a per-point colour slot (0008 d15): the RGB the reflectance lift consumed,
 // clamped to [0, 1] per channel as albedo_coeffs clamps it (a NaN to 0, as rgb_clamp_negative), so
 // the guide is the colour the spectrum was fitted from (pbrt-v4 RGBAlbedoSpectrum). Two RGBs fit the
@@ -55,9 +59,8 @@ inline constexpr uint32_t kGuideRgbMax = 1023u;
 AR_FN uint32_t guide_rgb_pack(const float* rgb) {
   uint32_t w = kGuideRgbStored;
   for (int c = 0; c < 3; ++c) {
-    float x = rgb[c] >= 0.0f ? rgb[c] : 0.0f;
-    x = x < 1.0f ? x : 1.0f;
-    w |= uint32_t(x * float(kGuideRgbMax) + 0.5f) << (10 * c);
+    const float x = guide_rgb_floor(rgb[c]);
+    w |= uint32_t((x < 1.0f ? x : 1.0f) * float(kGuideRgbMax) + 0.5f) << (10 * c);
   }
   return w;
 }

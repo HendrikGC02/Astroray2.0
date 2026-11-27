@@ -9,7 +9,8 @@
 // specular_color E_diel; a path whose only hit is delta and that escapes writes Cycles' background
 // value (tint times its contribution in display RGB, no normal); a film without guides writes
 // nothing. Per-point colours: an image-textured plane's guide is each texel's RGB clamped to [0, 1]
-// and a Mix child's is its own RGB, both to the record's 10-bit packing; a colour from a lifted
+// (as a textured specular_color's, through E_spec) and a Mix child's is its own RGB with a negative
+// channel at exactly 0, all to the record's 10-bit packing; a colour from a lifted
 // spectrum has no RGB and writes magenta, reported once. Per-pixel guide variance is printed.
 // The film is read through FilmView after one resolve (each pixel holds one sample).
 // Ref: docs/decisions/0008-film-outputs-denoise.md d15, d22, d23, V10; 0003 d21; Cycles
@@ -620,6 +621,73 @@ TEST_CASE("shade_surface_guides/textured plane carries the texel rgb") {
       CHECK(std::fabs(g.albedo[c][p] - std::min(std::max(t, 0.0), 1.0)) <= kPackErr);
     }
   CHECK(clamped > 0u);  // the clamp is exercised
+}
+
+TEST_CASE("shade_surface_guides/textured specular colour carries the texel rgb") {
+  // A GGX layer (specular_weight 1, roughness 0.3) over EON with a constant base colour, its
+  // specular_color the 8 x 8 image (Closest, UV set 0), one path at each texel's centre, straight down
+  // (mu_o = 1). From the albedo tables directly (0008 d15): E_spec = s E_diel(1, r, 1.5) with s the
+  // texel clamped to [0, 1], diffuse = E_eon (1 - E_spec), guide = diffuse + E_spec, computed here from
+  // the texels. d(guide)/ds = E_diel (1 - E_eon) <= 1, so the packing's error bounds it.
+  const TexImage im = test_image();
+  SurfaceGraph gr;
+  const float base[3] = {0.5f, 0.4f, 0.3f};
+  gr.store(gr.add(ar::Op::CONST_F32X3, {base[0], base[1], base[2]}), ar::RecordSlot::base_color);
+  const int tex = gr.add(ar::Op::TEX_IMAGE, {}, {int32_t(kImage), 0});
+  gr.link(gr.add(ar::Op::LOAD_CTX_UV, {}, {0}), tex, 0);
+  gr.store(tex, ar::RecordSlot::specular_color);
+  const ar_graph_desc d = gr.desc();
+  const uint32_t n = im.w * im.h;
+  Rig rig(n, true, &d, &im);
+  REQUIRE(rig.block(0).guide_flags == 0u);
+  REQUIRE(rig.block(0).specular_weight == 1.0f);
+  REQUIRE(rig.block(0).specular_roughness == 0.3f);
+  std::mt19937_64 rng(34);
+  for (uint32_t i = 0; i < n; ++i) rig.start(i, 0, texel_centre(im, i % im.w, i / im.w), Real3{0, 0, -1}, rng);
+  const Real r = ar::e_roughness_axis(Real(0.09f), Real(0.09f));
+  const double e = double(ar::e_diel_lookup(*rig.kg.e_diel, Real(1), r, Real(1.5)));
+  ar::EonParams ep{};
+  ep.base_color = ar::Spec{{Real(base[0]), Real(base[1]), Real(base[2]), Real(base[1])}};
+  ep.roughness = Real(0);
+  const ar::Spec e_eon = ar::eon_albedo(ep, Real(1));
+  rig.run();
+  for (uint32_t i = 0; i < n; ++i) CHECK((rig.flags[i] & ar::DENOISE_SURFACE_DONE) != 0u);
+  const Guides g = read_guides(rig);
+  uint32_t clamped = 0;
+  for (uint32_t p = 0; p < n; ++p)
+    for (uint32_t c = 0; c < 3; ++c) {
+      const double t = double(im.rgba[4 * p + c]);
+      clamped += t > 1.0;
+      const double es = std::min(t, 1.0) * e;
+      CHECK(std::fabs(g.albedo[c][p] - (double(e_eon.v[c]) * (1.0 - es) + es)) <= kPackErr);
+    }
+  CHECK(clamped > 0u);
+}
+
+TEST_CASE("shade_surface_guides/negative mix child channel is zero") {
+  // A Mix child's constant colour reaches STORE_SLOT as code, unclamped: a negative channel is 0 in
+  // the guide, exactly (the reflectance lift clamps it to 0 too, albedo_coeffs), the others the
+  // child's RGB to the packing's error.
+  const float c0[3] = {0.9f, -0.4f, 0.1f}, c1[3] = {-0.3f, 0.5f, 0.8f};
+  const SurfaceGraph gr = mix_graph(c0, c1, 0.3f);
+  const ar_graph_desc d = gr.desc();
+  constexpr uint32_t kN = 64;
+  Rig rig(kN, true, &d);
+  std::mt19937_64 rng(36);
+  for (uint32_t i = 0; i < kN; ++i) rig.start(i, 0, front_point(i, kN), Real3{0, 0, -1}, rng);
+  rig.run();
+  const Guides g = read_guides(rig);
+  uint32_t first = 0, second = 0;
+  for (uint32_t p = 0; p < kN; ++p) {
+    // Which child: its positive channels match.
+    const bool is0 = std::fabs(g.albedo[0][p] - double(c0[0])) <= kPackErr && std::fabs(g.albedo[2][p] - double(c0[2])) <= kPackErr;
+    const bool is1 = std::fabs(g.albedo[1][p] - double(c1[1])) <= kPackErr && std::fabs(g.albedo[2][p] - double(c1[2])) <= kPackErr;
+    REQUIRE((is0 || is1));
+    CHECK(g.albedo[is0 ? 1 : 0][p] == 0.0);
+    first += is0, second += is1;
+  }
+  CHECK(first > 0u);
+  CHECK(second > 0u);
 }
 
 TEST_CASE("shade_surface_guides/mix child carries its rgb") {
