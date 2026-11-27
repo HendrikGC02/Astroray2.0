@@ -15,4 +15,4 @@ Canary: tasks/218.canary.patch must turn red: tests/blender/headless/test_lights
 Budget: gate +1 s at most (one more tiny F12 per device inside the smoke's Blender start; stop and ask above); `check full` + the headless cases' seconds (state them); kernel rows: none.
 Depends on: 208 (engine), 198 (`COPIED_PASSES`, `update_render_passes`). Collisions: render_final.py, engine.py and smoke_a1.py after 198 and with BACKLOG's F12 error-race row; api_surface.txt with every blender task; test_lights_sync.py with nothing open; the later one rebases.
 Size: S (about 90 lines without tests); stop and report at 2x.
-Progress:
+Progress: lead (2026-11-27): 208 landed (8c36e7ac) and renamed tests/blender/headless/test_render_final_cpu.py `TestF12Passes.test_depth_is_not_refused_by_the_engine_but_not_yet_registered` (no PASS_UNSUPPORTED, passes still ["Combined"]): this task registers Depth, so it changes that assertion (Depth in the pass list) and its canary covers it. That suite runs only in `check ci` (hosted): run it locally through Invoke-ArBlender on tests/blender/headless/run_all.py.

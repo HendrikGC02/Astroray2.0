@@ -126,3 +126,7 @@ them. Milestone is where the item must be settled at the latest.
 | Materials | A material with no surface graph compiles magenta and silently gets medium priority 0 (205): a medium-bearing instance whose material is graphless should be reported, not defaulted (rule 5). | 205 | M1b | - |
 | Addon | blender/astroray/render_final.py defines `_subjects` twice and assigns `self.subject_names` twice in `Job.__init__` (198). | 198 | M1b | - |
 | Release | Packaging `astroray_oidn*.dll` beside the engine DLL has no task (0001 V5): OIDN works in dev builds only, loaded from 176's dev folder (198). | 198 | M2 | - |
+| Tools | The headless sync suite (tests/blender/headless/run_all.py, incl. test_render_final_cpu.py) runs only in `check ci` on hosted ci; `gate` and `full` never run it, so 208's first submit failed on hosted ci after a green local gate. A local step (through Invoke-ArBlender, no wheel) in `gate` or `full` would catch it (208). | 208 | M1b | - |
+| Tools | canary.ps1 skips its per-hunk matrix above 8 hunks (208 has 9): hunks that mask each other then pass unseen; the lead had each hunk applied alone by hand. Raise the cap or run the matrix in a background step (208). | 208 | M1b | - |
+| Tools | `pwsh -File tools/build.ps1 -Target a,b` passes the comma list as one target ("unknown target 'all,...'"); `& tools/build.ps1 -Target a,b` works (230). | 230 | M1b | - |
+| Tools | A standalone kernelgate run right after canary.ps1 reads the canary's patched cubins (stale) until the kernels are rebuilt (208). | 208 | M1b | - |
