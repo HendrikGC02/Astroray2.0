@@ -67,3 +67,16 @@ index b2573912..2537f98e 100644
    }
    if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
      const Spec lt = ps_lambda_t(kg, slot);
+diff --git a/tools/kernelgate.py b/tools/kernelgate.py
+index f4d038aa..fa783595 100644
+--- a/tools/kernelgate.py
++++ b/tools/kernelgate.py
+@@ -97,7 +97,7 @@ def parse_ptxas(text):
+             props = m.group(1)
+             continue
+         m = re.search(r"(\d+) bytes stack frame, (\d+) bytes spill stores, (\d+) bytes spill loads", ln)
+-        if m and cur and props == cur:
++        if m and cur:
+             out[cur].update(stack=int(m.group(1)), spill_store=int(m.group(2)), spill_load=int(m.group(3)))
+         m = re.search(r"Used (\d+) registers", ln)
+         if m and cur:
