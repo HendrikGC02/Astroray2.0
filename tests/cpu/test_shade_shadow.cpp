@@ -579,6 +579,70 @@ TEST_CASE("shade_shadow/collision limit counts volume limit") {
   CHECK(r.next[0] == uint8_t(ar::Stage::SHADE_SHADOW));
   CHECK(bits_equal(r.contrib[0], ar::spec_fill(1)));
 }
+TEST_CASE("shade_shadow/capped equals uncapped") {
+  // 0006 D8 requeue in the media pre-pass: 256 items in the chromatic medium under a majorant 16 sigma_t
+  // (the gate hook's value, RULINGS 111), so estimates take null collisions, with r_u0 and r_l0 differing
+  // per lane so the final weight reads all three tracked factors. Delivered at the default cap in one
+  // step, and at caps 1 and 7 in as many steps as it takes, each step the pre-pass and shade_shadow
+  // over the items still in SHADE_SHADOW, the tracker state in the side buffer between steps. Every
+  // delivery, end and counter is bit-identical; a capped item is not delivered in its step.
+  constexpr uint32_t kItems = 256;
+  struct Run {
+    std::vector<float> L;
+    std::vector<uint8_t> next;
+    std::vector<uint32_t> rng;
+    uint32_t steps = 0, skipped_ok = 1;
+  };
+  const auto run = [](uint32_t cap) {
+    auto r = std::make_unique<ItemRig>(kItems, 4);
+    r->chromatic_medium(3.0f);
+    r->kg.session.medium_majorant = 16u;
+    r->kg.session.medium_launch_cap = cap;
+    std::vector<ar::ShadowTrack> track(kItems);
+    r->kg.shadow_track = track.data();
+    for (uint32_t i = 0; i < kItems; ++i) {
+      r->r_u[i] = Spec{{Real(0.25), Real(0.5), Real(1), Real(2)}} * Real(1 + (i & 7u));
+      r->r_l[i] = Spec{{Real(1.5), Real(1), Real(0.75), Real(0.5)}};
+    }
+    Run out;
+    std::vector<uint32_t> live(kItems);
+    for (uint32_t i = 0; i < kItems; ++i) live[i] = i;
+    while (!live.empty()) {
+      ++out.steps;
+      const uint32_t n = uint32_t(live.size());
+      r->kg.shadow_queue = live.data();
+      r->table.stage[uint32_t(ar::Stage::SHADE_SHADOW)] = ar::StepEntry{0, n, 0};
+      cpu_shade_shadow_medium(r->kg, 0, n);
+      cpu_stage_shade_shadow(r->kg, ar::StepEntry{0, n, 0}, 0, n);
+      std::vector<uint32_t> again;
+      for (uint32_t i : live) {
+        if (r->next[i] != uint8_t(ar::Stage::SHADE_SHADOW)) continue;
+        again.push_back(i);
+        // Capped this step: still in its medium and nothing delivered yet.
+        out.skipped_ok &= r->stack[i].v[0] != 0u && r->lane(i, 0) == 0.0f && r->lane(i, 3) == 0.0f;
+      }
+      live = again;
+    }
+    out.L = r->slot_L, out.next = r->next, out.rng = r->rng;
+    return out;
+  };
+  const Run ref = run(ar::kMediumLaunchCap);
+  CHECK(ref.steps == 1u);
+  uint32_t delivered = 0;
+  for (uint32_t i = 0; i < kItems; ++i) delivered += ref.L[4ull * i] > 0.0f;
+  CHECK(delivered > kItems / 8);  // the estimates are not all zero, so equal bits mean something
+  for (const uint32_t cap : {1u, 7u}) {
+    const Run c = run(cap);
+    INFO("cap " << cap);
+    std::printf("shade_shadow capped: cap %u took %u steps\n", cap, c.steps);
+    CHECK(c.steps > 2u);
+    CHECK(c.skipped_ok == 1u);
+    CHECK(c.next == ref.next);
+    CHECK(c.rng == ref.rng);
+    CHECK(std::memcmp(c.L.data(), ref.L.data(), c.L.size() * sizeof(float)) == 0);
+  }
+}
+
 }  // TEST_SUITE
 
 TEST_SUITE("gate") {

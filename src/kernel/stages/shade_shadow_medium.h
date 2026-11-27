@@ -25,6 +25,11 @@
 // or product, marks the sample invalid and blocks the item. Any light's item may be in a medium
 // except one toward the environment world (shade_surface.h nee_item_media), so no blocked item
 // carries ITEM_WORLD_LE.
+// D8's per-launch cap (SessionUniforms::medium_launch_cap): an estimate that reaches it stores T, r_u
+// and r_l in the shadow_track side buffer and what is left of its segment in tmax, and keeps its medium
+// field, so shade_shadow skips it and the next step's pre-pass resumes it bit-identically (the stride
+// offset of medium_rng tells a resume from a fresh item). With M1b's tight majorant no estimate takes a
+// null collision, so only the gate hook's loose majorant (medium_majorant, RULINGS 111) reaches it.
 // Ref: docs/decisions/0006-volumes-and-astrophysics.md D8, D19; 0002 D8, D9, D10; 0003 d20, d23;
 // 0004 D4, D5; pbrt-v4 src/pbrt/cpu/integrators.cpp VolPathIntegrator::SampleLd (Apache-2.0) in
 // C:\Astroray2.0\third_party\_cache\refs\pbrt-v4-092b23a47ad4.
@@ -102,10 +107,28 @@ AR_FN void shadow_medium_item(const KernelGlobals& kg, uint32_t slot, uint32_t l
   // has used, whatever earlier launches took, are the counter's offset in its stride.
   const uint32_t used = counter % kShadowCollisionLimit;
   const uint32_t left = used < limit ? limit - used : 0u;
+  // A fresh item has drawn no block (its counter is at its stride's start) and starts at 1; a requeued
+  // one has drawn at least one, and its state is in the side buffer.
   RatioTrack r = ratio_track_start();
-  ratio_track_segment(sigma_a, sigma_s, (sigma_a + sigma_s) * Real(kg.session.medium_majorant), &t_max, item_hero_lane(sh_item_flags(kg, slot)), st, &counter, left,
-                      0xffffffffu, &r);
+  if (used != 0u) {
+    AR_ASSERT(kg.shadow_track != nullptr);
+    const ShadowTrack& kept = kg.shadow_track[slot];
+    r.T = kept.T, r.r_u = kept.r_u, r.r_l = kept.r_l;
+  }
+  // medium_majorant is 1 outside the gate hook (RULINGS 111): the majorant is sigma_t exactly.
+  ratio_track_segment(sigma_a, sigma_s, (sigma_a + sigma_s) * Real(kg.session.medium_majorant), &t_max,
+                      item_hero_lane(sh_item_flags(kg, slot)), st, &counter, left, kg.session.medium_launch_cap, &r);
   sh_medium_rng(kg, slot) = counter;
+  if (r.capped) {
+    // D8's requeue: the estimate's state and what is left of the segment are stored; ray_o stays, so
+    // the coefficients are evaluated at the same point on every launch. The medium field stays set,
+    // so shade_shadow skips the item this step and queue_build returns it to this segment. The limit
+    // wins over the cap, so the counter cannot have reached its stride's end.
+    AR_ASSERT(counter % kShadowCollisionLimit != 0u && kg.shadow_track != nullptr);
+    kg.shadow_track[slot] = ShadowTrack{r.T, r.r_u, r.r_l};
+    sh_tmax(kg, slot) = t_max;
+    return;
+  }
   if (r.limit) {
     const FilmData& f = *kg.film;
     if (f.term_hist >= 0)

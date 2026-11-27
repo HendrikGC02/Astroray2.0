@@ -90,7 +90,7 @@ Scheduler::~Scheduler() { release_buffers(); }
 
 void Scheduler::release_buffers() {
   for (DeviceBuffer* b : {&path_buf_, &shadow_buf_, &main_queue_buf_, &shadow_queue_buf_, &step_buf_, &counts_buf_,
-                          &sort_queue_buf_, &sort_counts_buf_, &kg_buf_, &soa_buf_, &identity_buf_})
+                          &sort_queue_buf_, &sort_counts_buf_, &kg_buf_, &soa_buf_, &identity_buf_, &shadow_track_buf_})
     device_.free(*b);
   capacity_ = 0;
   shadow_capacity_ = 0;
@@ -107,6 +107,10 @@ void Scheduler::ensure_buffers(uint64_t cap, uint64_t shadow_cap) {
     const StateLayout sl = shadow_item_layout(features_, shadow_cap);
     path_buf_ = device_.allocate(LedgerCategory::MAIN_PATH_POOL, pl.total_bytes, o);
     shadow_buf_ = device_.allocate(LedgerCategory::SHADOW_POOL, sl.total_bytes, o);
+    // The ratio tracker's state of a capped shadow item, by shadow slot (0003 d20 side buffer, 0006 D8):
+    // only with media, in the shadow pool's ledger row (0007 d14 lists it as its own line).
+    if (features_.media)
+      shadow_track_buf_ = device_.allocate(LedgerCategory::SHADOW_POOL, shadow_cap * sizeof(ar::ShadowTrack), o);
     main_queue_buf_ = device_.allocate(LedgerCategory::QUEUE_SORT_INDICES, cap * 4, o);
     // The identity both queues start every pass from (main and shadow), uploaded once per
     // allocation: a device copy per pass instead of a host upload of cap x 4 bytes (8 MiB at
@@ -225,6 +229,7 @@ PassStatus Scheduler::run_pass(const PassWork& work) {
   kg_.queue_counts = static_cast<uint32_t*>(counts_buf_.ptr);
   kg_.sort_queue = static_cast<uint32_t*>(sort_queue_buf_.ptr);
   kg_.sort_counts = static_cast<uint32_t*>(sort_counts_buf_.ptr);
+  kg_.shadow_track = features_.media ? static_cast<ar::ShadowTrack*>(shadow_track_buf_.ptr) : nullptr;
   device_.upload(kg_buf_, 0, &kg_, sizeof kg_);
   device_.set_kernel_globals(kg_buf_);
 

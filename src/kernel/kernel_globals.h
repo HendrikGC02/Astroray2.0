@@ -97,6 +97,12 @@ struct EnvBake {
   uint32_t n;
 };
 
+// One shadow slot's element of KernelGlobals::shadow_track: T_ray and the rescaling factors of r_u and
+// r_l as medium/ratio_track.h's RatioTrack carries them between collisions (48 B at Real = float).
+struct ShadowTrack {
+  Spec T, r_u, r_l;
+};
+
 struct KernelGlobals {
   const PathStateSoA* path;
   const ShadowItemSoA* shadow;
@@ -164,6 +170,12 @@ struct KernelGlobals {
   // `env`, so every offset the CUDA device reads (step_table, env_bake) is unchanged; null in a
   // value-initialised KernelGlobals, so the hand-built ones in tests need no edit.
   DenoiseTarget* denoise = nullptr;
+
+  // The ratio tracker's state of a shadow item the media pre-pass capped (0006 D8 requeue; 0003 d20
+  // side buffer, by shadow slot, allocated only with the media feature; null otherwise). Read only on
+  // a resume and written only at a cap (stages/shade_shadow_medium.h). Last member so the offsets the
+  // CUDA device reads stay put.
+  ShadowTrack* shadow_track = nullptr;
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is
