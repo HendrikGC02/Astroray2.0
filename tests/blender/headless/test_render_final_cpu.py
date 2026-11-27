@@ -313,11 +313,12 @@ class TestF12Passes(unittest.TestCase):
         self.assertEqual(lines[0][0], ("WARNING",))
         np.testing.assert_array_equal(self.rgb(engine, "Combined"), self.rgb(engine, "Noisy Image"))
 
-    def test_depth_reports_unsupported_once(self):
+    def test_depth_is_not_refused_by_the_engine_but_not_yet_registered(self):
+        # The engine produces Depth (0008 d10), so use_pass_z raises no PASS_UNSUPPORTED report; the addon
+        # does not register or copy the pass yet, so the render still holds Combined only.
         engine, _ = self.render(False, use_pass_z=True)
         lines = [t for _, t in engine.reports if t.startswith("PASS_UNSUPPORTED")]
-        self.assertEqual(len(lines), 1, engine.reports)
-        self.assertIn("Depth", lines[0])
+        self.assertEqual(lines, [], engine.reports)
         self.assertEqual(sorted(engine.passes), ["Combined"])
 
 

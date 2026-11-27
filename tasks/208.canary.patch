@@ -12,9 +12,18 @@ index 8ef03269..7f2ae091 100644
        }
        break;
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index 07f13af4..a683d7aa 100644
+index 07f13af4..3df08314 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
+@@ -70,7 +70,7 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, bool
+   if (!s || s->passes.empty()) return req;
+   FilmRequest all = req;
+   all.primary_aov = true;
+-  all.depth = true;
++  all.depth = false;
+   all.transparency = true;
+   // The denoising passes are names of this list only with a denoiser: requested without one they are
+   // PASS_UNSUPPORTED like any name the engine does not produce (d10: they exist with a denoiser).
 @@ -81,7 +81,7 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, bool
      const std::string name(text, std::find(text, text + sizeof n.text, '\0'));
      const auto it = std::find_if(produced.begin(), produced.end(), [&](const PassDesc& p) { return p.name == name; });
