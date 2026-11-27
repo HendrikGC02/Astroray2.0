@@ -15,3 +15,4 @@ Budget: gate +0.5 s at most (stop and ask above). k_shade_surface 128 regs, stac
 Depends on: 219 (spine queue: the lead's order 205, 219, 220, 208, 206, 209); none in code. Collisions: shade_surface.h, stack.h and probe_m1.cu with the queue; the later one rebases.
 Size: S (about 40 lines without tests); stop and report at 2x.
 Progress:
+- 220: started; files: stack.h, shade_surface.h, tests (lobe_stack, shade_surface_bsdf, alpha_pass_through, shade_surface_agree), BACKLOG, canary patch.
