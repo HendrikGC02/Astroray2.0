@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# B-1M with a medium (benchmark class, on demand): b1m plus one closed box of constant scattering medium floating
+# over half of the grid, so that a 1080p pass reaches M1b's volume stages (the addon cannot send a medium). The
+# box shell has opacity 0 and the medium alone attenuates and scatters. Reported by tools/bench.ps1; no limit
+# and no analytic truth. See build.py for the geometry and coefficients.
+class = "B"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+
+# Built only when named (tools/scenes.py b1m_medium; bench.ps1 names it): b1m's builder is imported, so b1m is a source.
+[build]
+on_demand = true
+sources = ["scenes/b1m"]

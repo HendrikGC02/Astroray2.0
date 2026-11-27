@@ -310,6 +310,9 @@ class TestCliRender(unittest.TestCase):
         for ln in lines:
             self.assertEqual(set(ln), keys)
             self.assertEqual(ln["scene"], "069_empty_world")
+            # A neutral hardware id (gpu, cores, threads), never the computer's name.
+            self.assertRegex(ln["machine"], r"^[a-z0-9]+-\d+c\d+t$")
+            self.assertNotEqual(ln["machine"].split("-")[0], os.environ.get("COMPUTERNAME", "").lower())
         metrics = {ln["metric"]: ln for ln in lines}
         self.assertEqual(set(metrics), {"pass_ms", "kernel_ms_per_sample", "rays_closest", "rays_shadow",
                                         "steps_per_pass"})
