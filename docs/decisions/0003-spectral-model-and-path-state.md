@@ -160,7 +160,7 @@ Evidence used: spike A (registers, CPU/GPU agreement, timing noise); spike B (sc
 | 16-17 | first-vertex class: pending, surface, volume | 0008 D10 |
 | 18-19 | `SHADOW_CATCHER_HIT`, `SHADOW_CATCHER_PASS` | 0007 decisions 7, 36; Shadow Catcher pass, 0008 D10 (ruling 42) |
 | 20 | `FRONT_FACE` | hit side, surviving instance transforms: 0005 items 8, 33; 0006 D16 (ruling 42) |
-| 21 | `FIRST_BOUNCE_SPECULAR` | the first bounce sampled a specular, metal or coat lobe: 0008 D15 specular hit distance (ruling 42) |
+| 21 | `FIRST_BOUNCE_SPECULAR` | reserved, unused in M1b (owner decision 45: the DLSS specular input is M8's specular motion vectors); was 0008 D15 specular hit distance (ruling 42) |
 | 22-31 | false-interface crossings, 0-1023 (the counter of a path's medium-boundary crossings that update only the stack; task 205, the field that exists instead of a new one) | 0006 D17 |
 
 22. **Termination reason (u8)**, the single enum that 0004 D28-D29, 0005 item 4a, 0006 D8, D16, D27-D28 and 0008 D12 count: `ACTIVE, ESCAPED, RUSSIAN_ROULETTE, ZERO_THROUGHPUT, MAX_BOUNCE, TRANSPARENT_LIMIT, ABSORBED, VOLUME_LIMIT, STACK_OVERFLOW, INVALID, CAPTURED, GEODESIC_STEP_LIMIT, GEODESIC_NUMERICAL, LIGHT_PATH_IN_REGION, LIGHT_PATH_END, CANCELLED`. `LIGHT_PATH_END` is a light path ended by 0004 D19's partition rules (discarded at its first vertex x₁ or after its connection; reasons are 0004 D29's counters). A NaN or Inf in beta or a contribution sets `INVALID` and is counted, never dropped silently. Step exhaustion is never folded into `CAPTURED` (v1).
