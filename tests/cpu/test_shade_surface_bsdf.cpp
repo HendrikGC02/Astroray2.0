@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -58,6 +59,18 @@ struct Rig {
   std::vector<float> nrm;
   ar::PathStateSoA path{};
   ar::LightSamplerView no_lights{};  // NEE finds no light: these cases test the continuation (074)
+  // use_lamp(): one point lamp above the quad and the shadow items its NEE writes.
+  ar::ShadowItemSoA shadow{};
+  std::vector<uint32_t> sh_queue, sh_target;
+  std::vector<uint8_t> sh_next;
+  std::vector<ar::Real3> sh_o, sh_d;
+  std::vector<ar::Real> sh_tmax;
+  std::vector<ar::Spec> sh_contrib;
+  std::vector<ar::LightRecord> lamps;
+  std::vector<ar::AliasBin> bins;
+  std::vector<uint32_t> bin_light;
+  std::vector<float> pmf;
+  ar::LightSamplerView lamp_sampler{};
   uint32_t n;
   std::vector<uint32_t> queue, active, sample_id, flags, hit_prim, hit_inst, prev_ng, prev_ns;
   std::vector<uint8_t> next_stage, term, ray_type;
@@ -212,6 +225,24 @@ struct Rig {
     sd.meshes = meshes.data();
   }
   void run() { cpu_stage_shade_surface(kg, ar::StepEntry{0, n, 0}, 0, n); }
+  // One point lamp above the quad, the only light (pmf 1), and a shadow item for every slot.
+  void use_lamp() {
+    for (uint32_t i = 0; i < n; ++i) {
+      sh_queue.push_back(i), sh_target.push_back(~0u);
+      sh_next.push_back(uint8_t(ar::Stage::SHADOW_TERMINATED));
+      sh_o.push_back(ar::Real3{0, 0, 0}), sh_d.push_back(ar::Real3{0, 0, 0}), sh_tmax.push_back(ar::Real(-1));
+      sh_contrib.push_back(ar::spec_fill(ar::Real(0)));
+    }
+    shadow.next_stage = sh_next.data(), shadow.ray_o = sh_o.data(), shadow.ray_d = sh_d.data();
+    shadow.tmax = sh_tmax.data(), shadow.contribution = sh_contrib.data(), shadow.target = sh_target.data();
+    lamps.push_back(ar::light_make(ar::LightType::POINT, ar::Real3{ar::Real(0.3), ar::Real(0.2), ar::Real(2)}, ar::Real(0), ar::Real(10),
+                                   ar::make_const_ref(ar::SpectrumSemantic::ILLUMINANT, ar::Real(1))));
+    pmf = {1.0f};
+    bins.push_back({1.0f, 0u}), bin_light.push_back(0u);
+    lamp_sampler = ar::LightSamplerView{bins.data(), bin_light.data(), pmf.data(), 1u, 1u};
+    kg.shadow = &shadow, kg.shadow_queue = sh_queue.data();
+    kg.lights = lamps.data(), kg.light_sampler = &lamp_sampler;
+  }
   // The record and frame the stage samples with, for slot s, before it runs.
   void vertex(uint32_t s, ar::ShadeContext* c, ar::OpenPBRParams* rec) {
     REQUIRE(ar::shade_context_build(kg, s, c));
@@ -523,6 +554,39 @@ TEST_CASE("shade_surface_bsdf/reflections below the geometric surface end") {
   CHECK(zero > rig.n / 20);
   CHECK(active > rig.n / 2);
   CHECK(zero + active == rig.n);
+}
+
+TEST_CASE("shade_surface_bsdf/non-finite lobe value is invalid") {
+  // A NaN diffuse roughness reaches the stack as a NaN lobe value, which the stack hands to the
+  // stage as it is: the stage ends the path INVALID and the film's slot reads NaN (0004 D17), where
+  // a zeroed value would have left a black sample with no count. With a lamp the first catch is
+  // NEE's (no shadow item is written and the path never samples the BSDF); without one it is the
+  // BSDF sample's. A finite roughness on the same rig ends no path INVALID.
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  for (const bool lamp : {false, true}) {
+    INFO("lamp=" << lamp);
+    Rig good(8);
+    good.lambert(0.5f);
+    if (lamp) good.use_lamp();
+    good.run();
+    CHECK(good.hist(ar::Term::INVALID) == 0u);
+    Rig bad(8);
+    bad.lambert(0.5f);
+    bad.block().base_diffuse_roughness = nan;
+    if (lamp) bad.use_lamp();
+    bad.run();
+    CHECK(bad.hist(ar::Term::INVALID) == bad.n);
+    CHECK(bad.hist(ar::Term::ZERO_THROUGHPUT) == 0u);
+    for (uint32_t s = 0; s < bad.n; ++s) {
+      CHECK(bad.next_stage[s] == uint8_t(ar::Stage::TERMINATED));
+      CHECK(std::isnan(bad.film->data().slot_L[4u * s]));
+      CHECK(bad.bounces[s].v[0] == 0u);
+      if (lamp) {
+        CHECK(bad.sh_next[s] == uint8_t(ar::Stage::SHADOW_TERMINATED));
+        CHECK(bad.sh_target[s] == ~0u);
+      }
+    }
+  }
 }
 
 TEST_CASE("shade_surface_bsdf/octahedral normals round-trip") {

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -753,6 +754,48 @@ TEST_SUITE("fast") {
     const Real3 up = ar::to_world(frame, local_dir(0.5, 0.2));
     CHECK(ar::stack_eval(fx.table, fx.spec, p, frame, below, up, TransportMode::Radiance).pdf == Real(0));
     CHECK(ar::stack_pdf(fx.table, fx.spec, p, frame, up, below, TransportMode::Radiance) == Real(0));
+  }
+
+  TEST_CASE("lobe_stack/non-finite input is not a zero result") {
+    // A NaN the stack's own arithmetic meets (the closure weight on both the delta and the
+    // non-delta sample, the diffuse roughness on the EON lobe) reaches the caller as a NaN f or a
+    // pdf that is not a number, for the stage to end the sample INVALID, never as the zero of a lobe
+    // with no value (rule 5, 0004 D17). Eval and both sample forms are checked.
+    Fixture fx;
+    const Frame frame = tilted_frame();
+    const Real nan = std::numeric_limits<Real>::quiet_NaN();
+    const auto loud = [](const Spec& f, Real pdf) {
+      bool finite = std::isfinite(double(pdf));
+      for (int l = 0; l < ar::kLanes; ++l) finite = finite && std::isfinite(double(f.v[l]));
+      return !finite;
+    };
+    struct Case {
+      const char* what;
+      double rough, spec_weight, metal;
+      bool nan_closure, nan_diffuse;
+    };
+    const Case cases[] = {{"closure weight, glossy", 0.5, 1.0, 0.0, true, false},
+                          {"closure weight, delta", 0.0, 1.0, 0.0, true, false},
+                          {"closure weight, with metal", 0.5, 1.0, 0.5, true, false},
+                          {"diffuse roughness", 0.5, 0.0, 0.0, false, true}};
+    for (const Case& c : cases)
+      for (double mu : {0.3, 0.9}) {
+        OpenPBRParams p = make_params(kOnes, kIor15, c.spec_weight, c.rough, 1.0, kOnes, 0.0, 1.0);
+        p.base_metalness = Real(c.metal);
+        if (c.nan_closure) p.closure_weight = nan;
+        if (c.nan_diffuse) p.base_diffuse_roughness = nan;
+        const Real3 wo = ar::to_world(frame, local_dir(mu, 0.9));
+        const Real3 wi = ar::to_world(frame, local_dir(0.6, 0.4));
+        INFO(c.what << ", mu=" << mu);
+        const LobeEval e = ar::stack_eval(fx.table, fx.spec, p, frame, wo, wi, TransportMode::Radiance);
+        CHECK(loud(e.f, e.pdf));
+        for (Real uc : {Real(0.05), Real(0.4), Real(0.7), Real(0.95)}) {
+          const LobeSample a = ar::stack_sample(fx.table, fx.spec, p, frame, wo, uc, Real2{Real(0.3), Real(0.6)}, TransportMode::Radiance);
+          CHECK(loud(a.f, a.pdf));
+        }
+        const LobeSample b = ar::stack_sample(fx.table, fx.spec, p, frame, wo, Real2{Real(0.4), Real(0.6)}, TransportMode::Radiance);
+        CHECK(loud(b.f, b.pdf));
+      }
   }
 }
 

@@ -638,6 +638,43 @@ TEST_CASE("shade_surface/agreement") {
   CHECK(worst_o <= 1e-5);
 }
 
+TEST_CASE("shade_surface_agree/non-finite lobe value") {
+  // A NaN diffuse roughness on the constant-block material (a NaN lobe value out of the stack) ends
+  // those paths INVALID with a NaN slot on both devices: the terminations, histograms and the NaN
+  // positions agree, and the invalid count rises over the same fixture with a finite roughness
+  // (the stack used to zero such a value, so no path ended INVALID for it).
+  const Tables tb;
+  Materials ms = build_materials(tb);
+  Ledger cpu_ledger, gpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  const Snapshot base = run(cpu, nullptr, tb, ms);
+  ms.constants[0].base_diffuse_roughness = std::numeric_limits<float>::quiet_NaN();
+  const Snapshot c = run(cpu, nullptr, tb, ms);
+  const Snapshot g = run(*gpu, gpu.get(), tb, ms);
+  CHECK(c.term == g.term);
+  CHECK(c.next_stage == g.next_stage);
+  CHECK(c.counts == g.counts);
+  const auto invalid_of = [](const Snapshot& s) {
+    uint32_t n = 0;
+    for (uint8_t t : s.term) n += t == uint8_t(ar::Term::INVALID);
+    return n;
+  };
+  const uint32_t before = invalid_of(base), after = invalid_of(c);
+  CHECK(invalid_of(g) == after);
+  CHECK(after > before + 100u);
+  uint32_t nan_lanes = 0, nan_mismatch = 0;
+  for (size_t i = 0; i < c.slot_L.size(); ++i) {
+    const bool a = !(c.slot_L[i] == c.slot_L[i]), b = !(g.slot_L[i] == g.slot_L[i]);
+    nan_lanes += a;
+    nan_mismatch += a != b;
+  }
+  CHECK(nan_mismatch == 0u);
+  CHECK(nan_lanes == 4u * after);
+}
+
 TEST_CASE("shade_surface_agree/guides") {
   const Tables tb;
   const Materials ms = build_materials(tb, true);

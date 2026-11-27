@@ -335,6 +335,31 @@ TEST_CASE("alpha_pass_through/transparent limit ends the path") {
   }
 }
 
+TEST_CASE("alpha_pass_through/transparent limit stores this hit's flags") {
+  // The path ends on the hit that meets the limit, so the flag word the film stores holds that hit's
+  // side, not the previous surface's, and no AOV_WRITTEN (the decision comes before the AOVs). Slots
+  // 0-1 arrive with FRONT_FACE clear at a front hit, slots 2-3 with it set at a back hit; every
+  // other bit of the arriving word survives.
+  Rig rig(4);
+  rig.opacity(0.0f);
+  for (uint32_t s = 0; s < rig.n; ++s) {
+    rig.bounces[s].v[5] = uint16_t(kTransparent);
+    if (s >= 2) {
+      rig.ray_d[s] = ar::Real3{ar::Real(0.1), ar::Real(-0.2), ar::Real(1)};
+      rig.flags[s] |= ar::FRONT_FACE;
+    }
+  }
+  const std::vector<uint32_t> arrived = rig.flags;
+  rig.run();
+  CHECK(rig.hist(ar::Term::TRANSPARENT_LIMIT) == rig.n);
+  for (uint32_t s = 0; s < rig.n; ++s) {
+    const uint32_t stored = rig.film->data().slot_flags[s];
+    CHECK(((stored & ar::FRONT_FACE) != 0u) == (s < 2));
+    CHECK((stored & ar::AOV_WRITTEN) == 0u);
+    CHECK((stored & ~ar::FRONT_FACE) == (arrived[s] & ~ar::FRONT_FACE));
+  }
+}
+
 TEST_CASE("alpha_pass_through/a pass-through at the total limit passes") {
   // The decision comes before the total limit, so a null event at bounces[total] == limit passes.
   Rig rig(4);

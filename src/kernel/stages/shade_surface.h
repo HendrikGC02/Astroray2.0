@@ -301,9 +301,12 @@ AR_FN bool opacity_null_event(Real opacity, float* u) {
 // integrate_surface_bsdf_bssrdf_bounce (a transparent bounce only moves the ray start), read in
 // third_party/_cache/refs/cycles-ed69ef2c6bd3; docs/decisions/0004-integrator.md D3, D14;
 // 0002 D11; 0003 d19 (prev_dist), d23.
-AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P, Real3 Ng, uint32_t mat, bool front) {
+AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P, Real3 Ng, uint32_t mat, bool front,
+                                uint32_t flags) {
   U16x6 b = ps_bounces(kg, slot);
   if (b.v[5] >= kg.session.max_bounces[5]) {
+    // The path ends on this hit, so its stored flags are this hit's (FRONT_FACE); a pass-through leaves them as they were.
+    ps_flags(kg, slot) = flags;
     path_end(kg, slot, Term::TRANSPARENT_LIMIT);
     return;
   }
@@ -495,7 +498,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     // scales it, 0005 item 38), before the AOVs and the total limit, so a pass-through at the total
     // limit still passes, writes no AOV and leaves the flags (FRONT_FACE included) as they were.
     if (valid && opacity_null_event(alpha, &uc)) {
-      surface_pass_through(kg, slot, P, Ng, mat, ctx.front_face != 0u);
+      surface_pass_through(kg, slot, P, Ng, mat, ctx.front_face != 0u, flags);
       return;
     }
     // Written even when the VM failed (the AOVs name the hit), whenever the material tables exist.
@@ -540,7 +543,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
     if (!ls.deferred_le) nee *= ls.Le;
     else if (!triangle) nee *= Real(lr.strength);  // WORLD_ENV: its strength carries s
-    if (!is_finite(nee)) {
+    // A non-finite f gives a non-finite nee; a non-finite pdf does not (mis_nee_scale maps it to 0), so it is tested itself.
+    if (!is_finite(nee) || !(ev.pdf - ev.pdf == Real(0))) {
       sample_mark_invalid(kg, sample);
       path_end(kg, slot, Term::INVALID);
       return;
@@ -607,6 +611,12 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   const Spec r_u = ps_r_u(kg, slot);
   const Real2 u2{camera_path_draw(kg, sample, event_dim(e, EV_BSDF_U)), camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V))};
   const LobeSample bs = stack_sample(*kg.e_diel, *kg.e_spec, rec, frame_from_normal(N), wo, Real(uc), u2, TransportMode::Radiance);
+  // The stack hands a non-finite lobe value over as it is (stack_sample_settle); a pdf of 0 with a finite f is "no sample" below.
+  if (!is_finite(bs.f) || !(bs.pdf - bs.pdf == Real(0))) {
+    sample_mark_invalid(kg, sample);
+    path_end(kg, slot, Term::INVALID);
+    return;
+  }
   // Guides at the denoising surface (surface_guides); a branch on the constant plane offset.
   if (kg.film->guide_albedo >= 0 && (flags & DENOISE_SURFACE_DONE) == 0u && bs.pdf > Real(0)) {
     // The material and wo are read again from the path rather than kept live across the lobe sample
