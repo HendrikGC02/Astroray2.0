@@ -147,6 +147,17 @@ AR_FN StackSelect stack_select(const EDielTable& tab, const ESpecTable& tab_m, c
   return s;
 }
 
+// A sample is a result when f is finite and pdf is a finite number; a pdf of 0 (or below) is "no sample"
+// and carries f = 0. A NaN or infinite f or pdf is left exactly as the lobes produced it, for the stage to
+// end the sample INVALID: zeroing it would render a black sample with no AR Invalid count (rule 5, 0004 D17).
+AR_FN void stack_sample_settle(LobeSample& out) {
+  if (!is_finite(out.f) || !(out.pdf - out.pdf == Real(0))) return;
+  if (!(out.pdf > Real(0))) {
+    out.f = spec_fill(Real(0));
+    out.pdf = Real(0);
+  }
+}
+
 AR_FN LobeEval stack_zero_eval() {
   LobeEval e;
   e.f = spec_fill(Real(0));
@@ -207,7 +218,8 @@ AR_FN LobeEval stack_eval(const EDielTable& tab, const ESpecTable& tab_m, const 
     stack_add_metal_f(p, s, em.f, e.f);
     e.pdf += s.p_metal * em.pdf;
   }
-  if (!is_finite(e.f) || !(e.pdf >= Real(0))) return stack_zero_eval();
+  // A non-finite f or pdf is handed to the stage as it is, which ends the sample INVALID (rule 5, 0004 D17).
+  if (e.pdf < Real(0)) return stack_zero_eval();
   return e;
 }
 
@@ -282,10 +294,7 @@ AR_FN LobeSample stack_sample_core(const EDielTable& tab, const ESpecTable& tab_
     }
     out.pdf = (pick_metal ? s.p_metal : s.p_spec) * ls.pdf;
     out.flags = ls.flags | LOBE_GLOSSY;
-    if (!is_finite(out.f) || !(out.pdf > Real(0))) {
-      out.f = spec_fill(Real(0));
-      out.pdf = Real(0);
-    }
+    stack_sample_settle(out);
     return out;
   }
   const Real3 wi_local = ls.wi;
@@ -302,10 +311,7 @@ AR_FN LobeSample stack_sample_core(const EDielTable& tab, const ESpecTable& tab_
   out.flags = LOBE_REFLECTION | (pick_spec || pick_metal ? LOBE_GLOSSY : LOBE_DIFFUSE);
   out.f = stack_combine_f(p, s, es.f, ed.f, em.f);
   out.pdf = s.p_spec * es.pdf + s.p_diff * ed.pdf + s.p_metal * em.pdf;
-  if (!is_finite(out.f) || !(out.pdf > Real(0))) {
-    out.f = spec_fill(Real(0));
-    out.pdf = Real(0);
-  }
+  stack_sample_settle(out);
   return out;
 }
 

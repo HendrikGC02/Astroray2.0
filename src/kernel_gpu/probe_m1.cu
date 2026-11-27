@@ -456,7 +456,7 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     const bool valid = ok && is_finite(contribution) && alpha == alpha;
     if (valid) sample_add(kg, sample, contribution);
     if (valid && opacity_null_event(alpha, &uc)) {
-      surface_pass_through(kg, slot, P, Ng, mat, ctx.front_face != 0u);
+      surface_pass_through(kg, slot, P, Ng, mat, ctx.front_face != 0u, flags);
       return;
     }
     if (s.material_pass_index != nullptr && s.material_headers != nullptr && total == 0u) {
@@ -492,7 +492,7 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
     const bool triangle = LightType(lr.type) == LightType::TRIANGLE;
     if (!ls.deferred_le) nee *= ls.Le;
     else if (!triangle) nee *= Real(lr.strength);
-    if (!is_finite(nee)) {
+    if (!is_finite(nee) || !(ev.pdf - ev.pdf == Real(0))) {  // as stages/shade_surface.h
       sample_mark_invalid(kg, sample);
       path_end(kg, slot, Term::INVALID);
       return;
@@ -560,6 +560,11 @@ AR_FN void stage(const KernelGlobals& kg, uint32_t item, const StepEntry& step) 
                                        camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V)), &wi_l, &glossy);
   const LobeEval bs = sampled ? bsdf_eval(rec, c, ctx.lambda_t, wo_l, wi_l) : LobeEval{spec_fill(Real(0)), Real(0)};
   const Real3 wi = to_world(fr, wi_l);
+  if (!is_finite(bs.f) || !(bs.pdf - bs.pdf == Real(0))) {  // as stages/shade_surface.h
+    sample_mark_invalid(kg, sample);
+    path_end(kg, slot, Term::INVALID);
+    return;
+  }
   // Denoiser guides at the denoising surface, as stages/shade_surface.h (the stand-in lobes are delta
   // when the main roughness is, as the stack's specular and metal lobes).
   if (kg.film->guide_albedo >= 0 && (flags & DENOISE_SURFACE_DONE) == 0u && bs.pdf > Real(0)) {
