@@ -1,25 +1,25 @@
 diff --git a/src/kernel/material/lobes/stack.h b/src/kernel/material/lobes/stack.h
-index 9ec02a4e..43811f1d 100644
+index 9dc83b9d..d73114d5 100644
 --- a/src/kernel/material/lobes/stack.h
 +++ b/src/kernel/material/lobes/stack.h
-@@ -156,7 +156,10 @@ AR_FN Real stack_nan() { return Real(bit_cast<float>(0x7fc00000u)); }
- // a black sample with no AR Invalid count (rule 5, 0004 D17).
+@@ -151,7 +151,10 @@ AR_FN StackSelect stack_select(const EDielTable& tab, const ESpecTable& tab_m, c
+ // and carries f = 0. A NaN or infinite f or pdf is left exactly as the lobes produced it, for the stage to
+ // end the sample INVALID: zeroing it would render a black sample with no AR Invalid count (rule 5, 0004 D17).
  AR_FN void stack_sample_settle(LobeSample& out) {
-   if (out.pdf < Real(0)) out.pdf = stack_nan();
 -  if (!is_finite(out.f) || !(out.pdf - out.pdf == Real(0))) return;
 +  if (!is_finite(out.f) || !(out.pdf - out.pdf == Real(0))) {
 +    out.f = spec_fill(Real(0)), out.pdf = Real(0);
 +    return;
 +  }
-   if (!(out.pdf > Real(0))) out.f = spec_fill(Real(0));
- }
- 
-@@ -222,7 +225,7 @@ AR_FN LobeEval stack_eval(const EDielTable& tab, const ESpecTable& tab_m, const
+   if (!(out.pdf > Real(0))) {
+     out.f = spec_fill(Real(0));
+     out.pdf = Real(0);
+@@ -219,7 +222,7 @@ AR_FN LobeEval stack_eval(const EDielTable& tab, const ESpecTable& tab_m, const
+     e.pdf += s.p_metal * em.pdf;
    }
-   // A non-finite f or a pdf that is not a number is handed to the stage as it is (a negative pdf as a NaN,
-   // which no lobe can mean): the stage decides, and ends the sample INVALID (rule 5, 0004 D17).
--  if (!(e.pdf >= Real(0))) e.pdf = stack_nan();
-+  if (!is_finite(e.f) || !(e.pdf >= Real(0))) return stack_zero_eval();
+   // A non-finite f or pdf is handed to the stage as it is, which ends the sample INVALID (rule 5, 0004 D17).
+-  if (e.pdf < Real(0)) return stack_zero_eval();
++  if (!is_finite(e.f) || e.pdf < Real(0) || !(e.pdf - e.pdf == Real(0))) return stack_zero_eval();
    return e;
  }
  
