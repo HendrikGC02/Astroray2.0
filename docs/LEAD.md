@@ -80,6 +80,32 @@ handover below, then stop. Send long landing logs to a `digest` agent. `tools/le
 through opencode, owner decisions 32 and 36) may draft bench-history lines, backlog rows and digests from
 repository text; treat its answer as a draft.
 
+## Handover (seventh lead, 2026-11-28)
+State for the next lead (the sixth lead's notes below still hold where not superseded). Agent ids do not carry across sessions:
+detach the old worktree (`git -C <wt> switch --detach`, `git worktree unlock`), brief a new implementer from the task's Progress
+and `git log main..task/NNN-*`.
+- Landed this session (3): 208 (8c36e7ac; second submit after hosted ci's headless Depth test; reload spill 40 -> 36 / 36 B by
+  `AR_NOINLINE` on the transparent tail, the row's second and last remedy, allowance unchanged; kernelgate now adds out-of-line
+  callee spills to their entry and refuses callee frames and unattributable blocks), 230 (ca0e224e; guide RGB packed 3x10-bit,
+  volatile read keeps k_shade_surface at 128 / 416 / 4 / 16 B), 218 (d27b8797; addon Depth as Blender's Z pass, Combined alpha).
+- In progress (PC crash 2026-11-27 night; both branches clean and committed, worktrees locked):
+  206 on task/206-extension-routing-table-arena (worktree agent-a92f5f76822510797): host arena, ShadeKind template, Ext entry,
+  tests, compile timing done (shade_surface 7.44 s, +0.09 s from the template by interleaved A/B, accepted; shade_surface_ext
+  5.5-5.6 s, ruling 97 read as "takes shade_surface's 8.0 s", the owner may correct it; k_shade_surface_ext 124 / 400 / 0 / 0).
+  Lead rulings in its Progress: guides on an Ext delta sample keep the tint (PROVISIONAL, alternative: total efficiency),
+  GRATING_TABLE_LIMIT also for a TableArena past 4 GiB (0001 row amended), scenes/ext_grating_card built by the scenes step.
+  Needs: checks, canary, evidence, Opus review (kernel O), land in a quiet window.
+  236 on task/236-denoise-small-texture-detail (worktree agent-a8893832248f81927): resumed after 230 fixed its cause (magenta
+  albedo guide); re-runs the bisection on main and picks a documented OIDN mode if b_tx still denoises worse than raw. No OIDN
+  docs in refs: cite the installed OIDN headers; no downloads.
+- Next: 209 after 206 (shade_surface.h, one at a time); 215 after 206 and 209; 213 after 215; 214 after 206; 188 after 206.
+  `check full` is overdue (last before 208): run it after 236's capture, with `fetch.ps1 assets` for cornell_box and
+  studio_small_09 in the main checkout first (decision 43).
+- Lock: owner.json named a build (PID 12600) that died in the crash; tell agents to report a refusal rather than delete it.
+- Lessons: (12) the headless sync suite runs only on hosted ci (BACKLOG): run it through Invoke-ArBlender before an addon or
+  pass-list landing. (13) canary.ps1 skips its per-hunk matrix above 8 hunks: have each hunk applied alone. (14) Task Budget
+  lines older than decision 43 are stale: brief k_shade_surface 128 / 416 / 4 / 16 B and B-05 8.0 s.
+
 ## Handover (sixth lead, 2026-11-27)
 State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from its task
 file, its Progress and `git log main..task/NNN-*`. To continue a branch, `git -C <old worktree> switch --detach`, then brief the
