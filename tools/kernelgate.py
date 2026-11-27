@@ -351,6 +351,27 @@ def nvcc_command(build, stem, out_cubin):
     return out[:-1] + ["-o", out_cubin, out[-1]]
 
 
+def time_tus(cmds, get_env, runner=run, clock=time.perf_counter):
+    """The serial nvcc runs of [(stem, cmd)]: {stem: [seconds]}. The MSVC environment comes from get_env once, before
+    the first run, and every run gets it (0002 D10 method; a time within the retime band of the limit is re-timed)."""
+    env = get_env()
+    times = {}
+    for stem, cmd in cmds:
+        runs = []
+        while True:  # serial, no cache, OS file cache warm from the build
+            t0 = clock()
+            code, out = runner(cmd, env=env)
+            runs.append(clock() - t0)
+            if code != 0:
+                raise GateError(f"nvcc failed timing {stem}: {out.strip()[-400:]}")
+            limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
+            near = abs(runs[0] - limit) <= COMPILE_RETIME_BAND * limit
+            if not near or len(runs) == 3:
+                break
+        times[stem] = runs
+    return times
+
+
 def compile_timing(args):
     build = os.path.join(ROOT, args.build_dir)
     budget = parse_budget(open(os.path.join(ROOT, BUDGET), encoding="utf-8").read())
@@ -373,26 +394,16 @@ def compile_timing(args):
         print("compile timing: no changed device TU")
         return 0
     fails = []
-    env = msvc_environment()  # once, off the clock
     with tempfile.TemporaryDirectory() as tmp:
-        for cs, stem in tus:
-            cmd = nvcc_command(build, stem, os.path.join(tmp, stem + ".cubin"))
-            runs = []
-            while True:  # serial, no cache, OS file cache warm from the build (0002 D10)
-                t0 = time.perf_counter()
-                code, out = run(cmd, env=env)
-                runs.append(time.perf_counter() - t0)
-                if code != 0:
-                    raise GateError(f"nvcc failed timing {stem}: {out.strip()[-400:]}")
-                limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
-                near = abs(runs[0] - limit) <= COMPILE_RETIME_BAND * limit
-                if not near or len(runs) == 3:
-                    break
-            t = min(runs)
-            limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
-            print(f"compile {stem}: {t:.2f} s (limit {limit} s, {len(runs)} run(s), baseline {cs} s)")
-            if t > limit:
-                fails.append(f"B-05: {stem} compiles in {t:.2f} s, limit {limit} s")
+        cmds = [(stem, nvcc_command(build, stem, os.path.join(tmp, stem + ".cubin"))) for _, stem in tus]
+        times = time_tus(cmds, msvc_environment)
+    for cs, stem in tus:
+        runs = times[stem]
+        t = min(runs)
+        limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
+        print(f"compile {stem}: {t:.2f} s (limit {limit} s, {len(runs)} run(s), baseline {cs} s)")
+        if t > limit:
+            fails.append(f"B-05: {stem} compiles in {t:.2f} s, limit {limit} s")
     for f in fails:
         print("FAIL " + f)
     return 1 if fails else 0
@@ -463,6 +474,17 @@ def self_test():
         pass
     bad += not ok
     print(f"case timed_env: {'ok' if ok else 'MISMATCH'}")
+    # The timed runs: the environment is fetched once and reaches every run, the near-limit re-times included.
+    sentinel, calls, got_env = {"INCLUDE": "inc", "LIB": "lib"}, [], []
+    def stub_run(cmd, env=None):
+        got_env.append(env)
+        return 0, ""
+    ticks = iter(range(0, 1000))
+    clock = lambda: next(ticks) * COMPILE_LIMIT_S  # every run reads the limit exactly: near the limit, so 3 runs each
+    times = time_tus([("a", ["x"]), ("b", ["y"])], lambda: calls.append(1) or sentinel, stub_run, clock)
+    ok = len(calls) == 1 and len(got_env) == 6 and all(e is sentinel for e in got_env) and times == {"a": [COMPILE_LIMIT_S] * 3, "b": [COMPILE_LIMIT_S] * 3}
+    bad += not ok
+    print(f"case time_tus: {'ok' if ok else 'MISMATCH'}")
     print(f"self-test: {'FAILED' if bad else 'ok'}")
     return 1 if bad else 0
 

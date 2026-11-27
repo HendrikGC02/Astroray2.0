@@ -144,7 +144,7 @@ gated = "merge"
 # interpreter's switch. The production cubin measures 64 / 264 B with 0 / 0 B of spills; the dev-reload
 # test module (tests/gpu/kernels/reload_variant.cu) wraps the same stage with one more sample_add and
 # measures 272 B and 8 / 8 B, which sets the spill allowance (D10: VM kernels at most 128 / 192).
-# The escape's albedo guide (float display conversion) took the production stack 264 to 272 B and compile to 2.74-2.77 s.
+# The escape's albedo guide (float display conversion) took the production stack 264 to 272 B and compile to 2.74-2.77 s (old clock, with vcvarsall).
 # Ruling 103: the world's light-tree pmf took the stack to 304 B, spills to 20 / 28 B (reload variant 36 / 36 B, the allowance).
 regs = 64
 stack = 304
@@ -158,9 +158,9 @@ gated = "merge"
 # opacity decision and null event another 4 / 4 B (within ruling 93's 16 / 16 B for M1b). The metal in the
 # lobe stack moves only the compile time (5.6 to 6.2 s, two gate runs at 6.21 s). The spine grew it to
 # 6.76-6.81 s quiet; resolving the record's spectral slots in one loop brought it to 6.14-6.19 s
-# (kernelgate --time, quiet, three rounds interleaved with main).
-# The denoiser guides moved only the compile time: 6.68-6.72 s in two gates (3 runs each).
-# Ruling 103 and owner decision 41: the light-tree walks (NEE draw, emission pmf) give spills 4 / 16 B and 7.31-7.40 s.
+# (kernelgate --time, quiet, three rounds interleaved with main; old clock, with vcvarsall.)
+# The denoiser guides moved only the compile time: 6.68-6.72 s in two gates (3 runs each) (old clock, with vcvarsall).
+# Ruling 103 and owner decision 41: the light-tree walks (NEE draw, emission pmf) give spills 4 / 16 B and 7.31-7.40 s (old clock, with vcvarsall).
 # The medium stack (false interface at the top, the pass-through crossing): stack 400 to 416 B, spills unchanged,
 # compile 7.10 s, timed in the build's MSVC environment (0009 d18).
 regs = 128
@@ -174,7 +174,7 @@ gated = "merge"
 # A VM kernel since it runs the world program for NEE items toward an environment world (0004 D11):
 # the register file and the shading context are the 288 B stack, and the interpreter's switch spills
 # 24 / 28 B (D10: VM kernels at most 128 / 192). Compile 1.39-1.41 s quiet (kernelgate's nvcc call,
-# three rounds interleaved with main's 0.40 s).
+# three rounds interleaved with main's 0.40 s); re-timed on both clocks: 1.40 s new, 2.16 s old (with vcvarsall).
 regs = 48
 stack = 288
 spill_store = 24
@@ -187,7 +187,7 @@ gated = "merge"
 # inside it the medium's volume entry beside the world program gave 80 registers and a 544 B stack.
 # Its volume entry (VmRegs, context, MediumSample), the shadow medium stream's Sobol lane table and
 # ratio tracking: 64 registers, 480 B stack, the interpreter's switch spills 36 / 36 B (D10: VM kernels
-# at most 128 / 192). First values from the task's measurement (ruling 91); compile 2.39 s in check gate.
+# at most 128 / 192). First values from the task's measurement (ruling 91); compile 2.39 s in check gate (old clock, with vcvarsall).
 regs = 64
 stack = 480
 spill_store = 36
