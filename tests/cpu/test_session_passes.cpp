@@ -53,7 +53,7 @@ constexpr uint32_t kSpp = 16;
 constexpr float kStrength = 0.5f;
 // FNV-1a hashes of Combined (float bits) of the emitter quad at exposure 1 and 2, as the build before the
 // Depth and Alpha planes rendered it.
-constexpr uint64_t kGolden1 = 0, kGolden2 = 0;
+constexpr uint64_t kGolden1 = 7879973154604098651ull, kGolden2 = 10155126523775399412ull;
 
 struct PassRig {
   ContextState ctx;
