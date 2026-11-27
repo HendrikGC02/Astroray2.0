@@ -43,7 +43,7 @@ index 27df7803..0d07112d 100644
 +  sd.ext_params = as<ar::ExtParams>(at(TableId::MATERIAL_HEADERS)), sd.ext_param_count = cnt(TableId::EXT_PARAMS);
    sd.table_arena = as<uint8_t>(at(TableId::TABLE_ARENA)), sd.table_arena_bytes = cnt(TableId::TABLE_ARENA);
 diff --git a/src/kernel/stages/shade_surface_ext.h b/src/kernel/stages/shade_surface_ext.h
-index d70d4453..892e95b2 100644
+index e8776103..892e95b2 100644
 --- a/src/kernel/stages/shade_surface_ext.h
 +++ b/src/kernel/stages/shade_surface_ext.h
 @@ -82,3 +82,3 @@ AR_FN bool ext_grating_table(const SceneData& s, const GratingParams& g, Grating
@@ -70,17 +70,13 @@ index d70d4453..892e95b2 100644
 -    return x.kind != 0u && ext_all_delta(x.kind);
 +    return false && x.kind != 0u && ext_all_delta(x.kind);
    }
-@@ -158,7 +159,4 @@ struct SurfaceKind<ShadeKind::Ext> {
+@@ -158,3 +159,4 @@ struct SurfaceKind<ShadeKind::Ext> {
                                   Real3 wo, float) {
 -    return ext_sample(kg, slot, sample, e, rec, N, wo);
--  }
--  // PROVISIONAL (header comment): the tint and the guide planes are left as they are.
--  static AR_FN uint32_t guides(const KernelGlobals&, uint32_t, uint32_t, uint32_t flags, OpenPBRParams&, Real3, const LobeSample&) {
--    return flags;
 +    const LobeSample bs = ext_sample(kg, slot, sample, e, rec, N, wo);
 +    return bs.pdf > Real(0) ? bs : ext_invalid_sample();
    }
-@@ -170,3 +168,7 @@ struct SurfaceKind<ShadeKind::Ext> {
+@@ -166,3 +168,7 @@ struct SurfaceKind<ShadeKind::Ext> {
      const Real w = abs_dot(bs.wi, N) / bs.pdf;
 -    if ((bs.flags & LOBE_WL_DEPENDENT_DIR) == 0u) return beta * (bs.f * w);
 +    if ((bs.flags & LOBE_WL_DEPENDENT_DIR) == 0u) {
@@ -89,19 +85,17 @@ index d70d4453..892e95b2 100644
 +      return r;
 +    }
      Lambda lam;
-@@ -175,3 +177,3 @@ struct SurfaceKind<ShadeKind::Ext> {
+@@ -171,3 +177,3 @@ struct SurfaceKind<ShadeKind::Ext> {
      Spec b = beta;
 -    terminate_secondaries(lam, b, *flags);
 +    // terminate_secondaries(lam, b, *flags);
      Spec stored;
-@@ -182,2 +184,7 @@ struct SurfaceKind<ShadeKind::Ext> {
-   }
-+  // PROVISIONAL (header comment): the tint and the guide planes are left as they are.
+@@ -179,3 +185,4 @@ struct SurfaceKind<ShadeKind::Ext> {
+   // PROVISIONAL (header comment): the tint and the guide planes are left as they are.
+-  static AR_FN uint32_t guides(const KernelGlobals&, uint32_t, uint32_t, uint32_t flags, OpenPBRParams&, Real3, const LobeSample&) {
 +  static AR_FN uint32_t guides(const KernelGlobals& kg, uint32_t slot, uint32_t, uint32_t flags, OpenPBRParams&, Real3, const LobeSample&) {
 +    ps_guide_tint(kg, slot) = ps_guide_tint(kg, slot) * Real(0.5);
-+    return flags;
-+  }
- };
+     return flags;
 diff --git a/src/kernel_gpu/shade_surface_ext.cu b/src/kernel_gpu/shade_surface_ext.cu
 index f709c98b..ff88b505 100644
 --- a/src/kernel_gpu/shade_surface_ext.cu
