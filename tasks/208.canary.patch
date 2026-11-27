@@ -1,0 +1,56 @@
+diff --git a/src/host/session/readback.cpp b/src/host/session/readback.cpp
+index 8ef03269..7f2ae091 100644
+--- a/src/host/session/readback.cpp
++++ b/src/host/session/readback.cpp
+@@ -128,7 +128,7 @@ void read_pass(const FilmView& film, const PassDesc& pass, uint32_t quantity, ui
+       // With Film Transparent off nothing is written, the mean is 0 and alpha is exactly 1.
+       const std::vector<double> t = film.mean(pass.channel, 0);
+       for (size_t j = 0; j < t.size(); ++j) {
+-        const float a = 1.0f - float(t[j]);
++        const float a = float(t[j]);
+         dst[j] = a != a ? a : std::min(1.0f, std::max(0.0f, a));
+       }
+       break;
+diff --git a/src/kernel/film/film_write.h b/src/kernel/film/film_write.h
+index 46103daa..786de531 100644
+--- a/src/kernel/film/film_write.h
++++ b/src/kernel/film/film_write.h
+@@ -198,13 +198,13 @@ AR_FN void film_primary_aov(const KernelGlobals& kg, uint32_t slot, uint32_t sam
+   *path_flags |= AOV_WRITTEN;
+   const FilmData& f = *kg.film;
+   const uint32_t pixel = film_slot_pixel(kg, slot);
+-  if (f.aov_depth >= 0 && sample_index == 0u) {
++  if (f.aov_depth >= 0) {
+     // camera_z_depth for the other camera types is the distance to the camera position, which this
+     // formula is not; the pinhole is the only type that exists, and the session refuses Depth for any
+     // other descriptor.
+     AR_ASSERT(kg.camera != nullptr && kg.camera->type == CameraType::PERSPECTIVE);
+     const CameraView& cam = *kg.camera;
+-    film_add(kg, uint32_t(f.aov_depth), pixel, dot(position - cam.origin, -cam.axis[2]));
++    film_add(kg, uint32_t(f.aov_depth), pixel, length(position - cam.origin));
+   }
+   if (f.aov_position >= 0 && sample_index == 0u) {
+     film_add(kg, uint32_t(f.aov_position), pixel, position.x);
+diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
+index 94087c28..342fbb3f 100644
+--- a/src/kernel/stages/shade_background.h
++++ b/src/kernel/stages/shade_background.h
+@@ -177,7 +177,7 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const
+   // pass-throughs, false interfaces and lamp crossings leave at 0 as Cycles' transparent bounces leave
+   // PATH_RAY_TRANSPARENT_BACKGROUND set) reaching the world adds average(throughput) as transparency and
+   // no radiance. A path that scattered still sees the world.
+-  const bool transparent_ray = kg.session.film_transparent != 0u && ps_bounces(kg, slot).v[0] == 0u;
++  const bool transparent_ray = kg.session.film_transparent != 0u;
+   if (transparent_ray) {
+     // A non-finite throughput has no transparency: it fails the sample, as a non-finite contribution does.
+     const Real transparency = avg(ps_beta(kg, slot));
+@@ -187,7 +187,8 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const
+       sample_mark_invalid(kg, ps_sample_id(kg, slot));
+       term = Term::INVALID;
+     }
+-  } else if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
++  }
++  if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
+     const Spec lt = ps_lambda_t(kg, slot);
+     Lambda lam;
+     for (int i = 0; i < kLanes; ++i) lam.nm[i] = lt.v[i];
