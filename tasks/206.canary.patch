@@ -43,7 +43,7 @@ index 27df7803..0d07112d 100644
 +  sd.ext_params = as<ar::ExtParams>(at(TableId::MATERIAL_HEADERS)), sd.ext_param_count = cnt(TableId::EXT_PARAMS);
    sd.table_arena = as<uint8_t>(at(TableId::TABLE_ARENA)), sd.table_arena_bytes = cnt(TableId::TABLE_ARENA);
 diff --git a/src/kernel/stages/shade_surface_ext.h b/src/kernel/stages/shade_surface_ext.h
-index e8776103..892e95b2 100644
+index e8776103..ac0e1217 100644
 --- a/src/kernel/stages/shade_surface_ext.h
 +++ b/src/kernel/stages/shade_surface_ext.h
 @@ -82,3 +82,3 @@ AR_FN bool ext_grating_table(const SceneData& s, const GratingParams& g, Grating
@@ -54,7 +54,7 @@ index e8776103..892e95b2 100644
 @@ -101,3 +101,3 @@ AR_FN LobeSample ext_sample(const KernelGlobals& kg, uint32_t slot, uint32_t sam
    const ExtHit x = ext_hit(kg, hit_material_id(kg, ps_hit_inst(kg, slot), ps_hit_prim(kg, slot)));
 -  const Frame frame = frame_from_normal_tangent(N, rec.geometry_tangent);
-+  const Frame frame = frame_from_normal(N);
++  const Frame frame = frame_from_normal(N + rec.geometry_tangent * Real(0));
    // A tangent along N (or not finite) leaves no groove direction.
 @@ -107,3 +107,3 @@ AR_FN LobeSample ext_sample(const KernelGlobals& kg, uint32_t slot, uint32_t sam
    for (int i = 0; i < kLanes; ++i) lam.nm[i] = lt.v[i];
@@ -63,7 +63,7 @@ index e8776103..892e95b2 100644
    switch (x.kind) {
 @@ -115,2 +115,3 @@ AR_FN LobeSample ext_sample(const KernelGlobals& kg, uint32_t slot, uint32_t sam
        bs.flags |= LOBE_GLOSSY;  // a singular event counts and traces as glossy (header comment)
-+      bs.pdf *= Real(load_ro(kg.e_diel->e) * 0.0f + 1.0f);
++      if (kg.e_diel != nullptr) bs.pdf *= Real(load_ro(kg.e_diel->e) * 0.0f + 1.0f);
        return bs;
 @@ -150,3 +151,3 @@ struct SurfaceKind<ShadeKind::Ext> {
      const ExtHit x = ext_hit(kg, mat);
