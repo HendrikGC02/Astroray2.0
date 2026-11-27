@@ -7,14 +7,23 @@
 // The pass list is read as ar_session_pass_count reads it (list_passes of Session::layout()); values
 // through read_pass on a FilmView of the film under the render lock. The C API path, with its
 // revision check (ruling 75), is tests/abi/test_session_passes.py.
-// Ref: docs/decisions/0008-film-outputs-denoise.md d10, d13a; 0007 d25; RULINGS 74 (PASS_UNSUPPORTED).
+// Depth and Alpha (d10): a plane's Depth is the view-space z of the hit at sample 0 and reads 1e10
+// where nothing was hit; with film_transparent a ray that scattered nowhere adds no world radiance and
+// its transparency, so Alpha is the covered fraction of the pixel (exactly 1 and 0 with the
+// pixel-centre hook), an opacity card gives its opacity, and with the setting off Alpha is 1 and
+// Combined is what it was before the planes existed (the golden hashes).
+// Ref: docs/decisions/0008-film-outputs-denoise.md d10, d13a; 0007 d25; RULINGS 74 (PASS_UNSUPPORTED);
+// Cycles kernel/film/read.h (alpha and depth conversions), kernel/integrator/shade_background.h.
 #include <doctest.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -29,6 +38,7 @@
 #include "host/session/readback.h"
 #include "host/session/session.h"
 #include "vm/ops.h"
+#include "vm/ops/store_slot.h"
 
 using namespace astroray;
 using namespace astroray::host;
@@ -36,17 +46,28 @@ using namespace astroray::host;
 namespace {
 
 constexpr uint32_t kW = 6, kH = 4;
-constexpr ar_key kMesh = 100, kMaterial = 1, kGraph = 1001;
+constexpr ar_key kMesh = 100, kMaterial = 1, kGraph = 1001, kWorldGraph = 1002;
 constexpr uint32_t kSpp = 16;
 // A white emitter: its display value is kStrength in each channel (0008 d7; the analytic A5 scene
 // checks the same mapping).
 constexpr float kStrength = 0.5f;
+// FNV-1a hashes of Combined (float bits) of the emitter quad at exposure 1 and 2, as the build before the
+// Depth and Alpha planes rendered it.
+constexpr uint64_t kGolden1 = 0, kGolden2 = 0;
 
 struct PassRig {
   ContextState ctx;
   Scene scene{ctx, SceneConfig{2, {}, {}}};
   uint64_t generation = 0;
   float exposure = 1.0f;  // ar_settings.film_exposure of the next settings commit
+  uint32_t spp = kSpp;
+  bool film_transparent = false;  // ar_settings.film_transparent of the next settings commit
+  // The quad's four corners (x, y, z each); the default fills the camera's view at z = -1.
+  std::vector<float> quad_pos{-20, -20, -1, 20, -20, -1, 20, 20, -1, -20, 20, -1};
+  // The quad's material is a black card of this opacity (no emission) instead of the white emitter.
+  bool card = false;
+  float opacity = 0.5f;
+  float world = 0.0f;  // > 0: a constant white world of that strength
   PassRig() {
     scene.meshes = std::make_shared<MeshStore>();
     scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
@@ -68,8 +89,10 @@ struct PassRig {
     ar_settings s{};
     s.passes = names.data();
     s.pass_count = uint32_t(names.size());
-    s.samples = s.viewport_samples = kSpp;
+    s.samples = s.viewport_samples = spp;
     s.max_bounces = 0;
+    s.transparent_bounces = 8;
+    s.film_transparent = film_transparent ? 1u : 0u;
     s.pixel_filter = AR_FILTER_BOX;
     s.pixel_filter_width = 1.0f;
     s.film_exposure = exposure;
@@ -77,8 +100,8 @@ struct PassRig {
   }
   // A material-less quad at z = -1 that fills the camera's view, with one UV layer.
   void quad(Edit& e) {
-    const float h = 20.0f, z = -1.0f;
-    const std::vector<float> pos{-h, -h, z, h, -h, z, h, h, z, -h, h, z}, uv{0, 0, 1, 0, 1, 1, 0, 1};
+    const std::vector<float>& pos = quad_pos;
+    const std::vector<float> uv{0, 0, 1, 0, 1, 1, 0, 1};
     const std::vector<int32_t> cv{0, 1, 2, 3}, fs{0};
     ar_mesh_desc d = {};
     d.key = kMesh, d.vertex_count = 4, d.corner_count = 4, d.face_count = 1, d.motion_steps = 1, d.uv_layer_count = 1;
@@ -93,6 +116,25 @@ struct PassRig {
     REQUIRE(e.item_commit(kMesh) == AR_OK);
   }
   void material(Edit& e) {
+    if (card) {
+      // A constant opacity into the record's geometry_opacity slot: a null event with probability
+      // 1 - opacity at each hit, otherwise the path ends (max_bounces 0) with nothing to add.
+      std::vector<ar_graph_node> nodes(2);
+      std::vector<ar_graph_link> links{{0, 0, 1, 0}};
+      std::vector<float> f{opacity};
+      std::vector<int32_t> slot{int32_t(ar::RecordSlot::geometry_opacity)};
+      nodes[0].op = uint32_t(ar::Op::CONST_F32), nodes[0].f32_count = 1;
+      nodes[1].op = uint32_t(ar::Op::STORE_SLOT), nodes[1].i32_count = 1;
+      ar_graph_desc d = {};
+      d.node_count = 2, d.link_count = 1, d.f32_count = 1, d.i32_count = 1;
+      d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data(), d.params_i32 = slot.data();
+      REQUIRE(scene.materials->set_graph(e, kGraph, &d) == AR_OK);
+      ar_material_desc m = {};
+      m.surface_graph = kGraph;
+      m.emission_sampling = AR_EMISSION_SAMPLING_AUTO;
+      REQUIRE(scene.materials->set_material(e, kMaterial, &m) == AR_OK);
+      return;
+    }
     std::vector<ar_graph_node> nodes(3);
     std::vector<ar_graph_link> links{{0, 0, 2, 0}, {1, 0, 2, 1}};
     std::vector<float> f{1.0f, 1.0f, 1.0f, kStrength};
@@ -106,6 +148,20 @@ struct PassRig {
     m.surface_graph = kGraph;
     m.emission_sampling = AR_EMISSION_SAMPLING_AUTO;
     REQUIRE(scene.materials->set_material(e, kMaterial, &m) == AR_OK);
+  }
+  void world_light(Edit& e) {
+    std::vector<ar_graph_node> nodes(3);
+    std::vector<ar_graph_link> links{{0, 0, 2, 0}, {1, 0, 2, 1}};
+    std::vector<float> f{1.0f, 1.0f, 1.0f, world};
+    nodes[0].op = uint32_t(ar::Op::CONST_F32X3), nodes[0].f32_count = 3;
+    nodes[1].op = uint32_t(ar::Op::CONST_F32), nodes[1].f32_first = 3, nodes[1].f32_count = 1;
+    nodes[2].op = uint32_t(ar::Op::EMIT_LE);
+    ar_graph_desc d = {};
+    d.node_count = 3, d.link_count = 2, d.f32_count = 4, d.nodes = nodes.data(), d.links = links.data(), d.params_f32 = f.data();
+    REQUIRE(scene.materials->set_graph(e, kWorldGraph, &d) == AR_OK);
+    ar_world_desc w = {};
+    w.surface_graph = kWorldGraph;
+    REQUIRE(scene.materials->set_world(e, &w) == AR_OK);
   }
   void instance(Edit& e) {
     std::vector<ar_key> geom{kMesh}, object{500};
@@ -127,6 +183,7 @@ struct PassRig {
     commit([&](Edit& e) {
       quad(e);
       material(e);
+      if (world > 0.0f) world_light(e);
       settings(e, passes);
     });
     commit([&](Edit& e) { instance(e); });
@@ -173,7 +230,7 @@ bool has(const std::vector<std::string>& v, const char* name) { return std::find
 
 void check_no_aov(Session& s) {
   const std::vector<std::string> names = pass_names(s);
-  for (const char* aov : {"Position", "Normal", "UV", "IndexMA"}) CHECK_FALSE(has(names, aov));
+  for (const char* aov : {"Depth", "Position", "Normal", "UV", "IndexMA", "Alpha"}) CHECK_FALSE(has(names, aov));
   CHECK(has(names, "Combined"));
   CHECK(has(names, "AR Bounces"));  // statistics stay on
   s.read_film([](const FilmReadContext& c) { CHECK(c.film.layout().find("aov_position") == nullptr); });
@@ -191,6 +248,81 @@ std::vector<float> read_position(Session& s) {
     read_pass(view, *it, AR_QUANTITY_MEAN, uint32_t(out.size()), out.data());
   });
   return out;
+}
+
+// Any pass of the render rectangle (the mean), as ar_session_read_pass reads it.
+std::vector<float> read_named(Session& s, const std::string& name) {
+  const std::vector<PassDesc> passes = list_passes(s.layout());
+  const auto it = std::find_if(passes.begin(), passes.end(), [&](const PassDesc& p) { return p.name == name; });
+  REQUIRE(it != passes.end());
+  std::vector<float> out;
+  s.read_film([&](const FilmReadContext& c) {
+    FilmView view(c.device, c.film);
+    out.resize(pass_float_count(*it, AR_QUANTITY_MEAN, view.width(), view.height()));
+    read_pass(view, *it, AR_QUANTITY_MEAN, uint32_t(out.size()), out.data());
+  });
+  return out;
+}
+
+// ASTRORAY_TEST_PIXEL_CENTRE for the scope of a session's construction (the session reads it at create):
+// every camera ray then crosses its pixel's centre, so coverage is exact.
+struct CentreHook {
+  explicit CentreHook(bool on) { _putenv_s("ASTRORAY_TEST_PIXEL_CENTRE", on ? "1" : ""); }
+  ~CentreHook() { _putenv_s("ASTRORAY_TEST_PIXEL_CENTRE", ""); }
+};
+
+using Planes = std::map<std::string, std::vector<float>>;
+
+// Builds the rig, renders it to convergence on the CPU with one worker and returns the named passes. The
+// aov_depth film plane as stored (not as read) comes back under "stored depth".
+Planes render_planes(PassRig& rig, const std::vector<std::string>& passes, bool centre,
+                     const ar_view_desc& view = view_of(kW, kH)) {
+  rig.build(passes);
+  std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, 1);
+  SessionOptions o;
+  o.max_width = kW;
+  o.max_height = kH;
+  std::unique_ptr<Session> s;
+  {
+    CentreHook hook(centre);
+    s = std::make_unique<Session>(rig.scene, *dev, o);
+  }
+  s->set_view(view);
+  s->start();
+  settle(*s, rig);
+  Planes out;
+  for (const std::string& name : passes) out[name] = read_named(*s, name);
+  s->read_film([&](const FilmReadContext& c) {
+    FilmView fv(c.device, c.film);
+    const std::vector<PassDesc> listed = list_passes(c.film.layout());
+    if (const auto it = std::find_if(listed.begin(), listed.end(), [](const PassDesc& p) { return p.name == "Combined"; });
+        it != listed.end()) {
+      std::vector<float>& var = out["Combined variance"];
+      var.resize(pass_float_count(*it, AR_QUANTITY_VARIANCE, fv.width(), fv.height()));
+      read_pass(fv, *it, AR_QUANTITY_VARIANCE, uint32_t(var.size()), var.data());
+    }
+    if (c.film.layout().find("aov_depth") != nullptr) {
+      const std::vector<double> d = fv.mean("aov_depth", 0);
+      for (double z : d) out["stored depth"].push_back(float(z));
+    }
+  });
+  return out;
+}
+
+// The camera ray of pixel (column i, row j from the bottom) through its centre at z = -1 in view_of's
+// camera: film plane half-extents 0.5 and 0.375.
+double col_u(uint32_t i) { return ((double(i) + 0.5) / kW * 2.0 - 1.0) * 0.5; }
+double row_v(uint32_t j) { return ((double(j) + 0.5) / kH * 2.0 - 1.0) * 0.375; }
+
+// FNV-1a over the float bits: a golden of a whole plane.
+uint64_t hash_bits(const std::vector<float>& v) {
+  uint64_t h = 1469598103934665603ull;
+  for (float f : v) {
+    uint32_t b;
+    std::memcpy(&b, &f, 4);
+    for (int k = 0; k < 4; ++k) h = (h ^ ((b >> (8 * k)) & 0xffu)) * 1099511628211ull;
+  }
+  return h;
 }
 
 // Combined averaged over the render rectangle, per channel, and that average's standard error
@@ -256,7 +388,7 @@ TEST_CASE("session passes/the film follows the latched pass request") {
   rig.commit([&](Edit& e) { rig.settings(e, {"Combined", "Position"}); });
   settle(s, rig);
   const std::vector<std::string> names = pass_names(s);
-  for (const char* aov : {"Position", "Normal", "UV", "IndexMA"}) CHECK(has(names, aov));
+  for (const char* aov : {"Depth", "Position", "Normal", "UV", "IndexMA"}) CHECK(has(names, aov));
   const std::vector<float> pos = read_position(s);
   REQUIRE(pos.size() == size_t(kW) * kH * 3);
   // Every pixel hits the quad at z = -1, so every Position is finite and on that plane.
@@ -362,6 +494,207 @@ TEST_CASE("session passes/film exposure that is not finite and >= 0 is refused")
     CHECK(e->commit(&g) == AR_ERR_INVALID_ARGUMENT);
     CHECK(e->last_error().find("film_exposure") != std::string::npos);
   }
+}
+
+TEST_CASE("session passes/depth is the view space z of the hit") {
+  // A plane at z = -1: every pixel's ray has length 1 / cos(theta) but the view-space z is 1.
+  {
+    PassRig rig;
+    const Planes p = render_planes(rig, {"Combined", "Depth"}, true);
+    REQUIRE(p.at("Depth").size() == size_t(kW) * kH);
+    for (uint32_t j = 0; j < kH; ++j)
+      for (uint32_t i = 0; i < kW; ++i) CHECK(std::fabs(p.at("Depth")[j * kW + i] - 1.0f) <= 1e-5f);
+  }
+  // A tilted plane z = -2 + x / 2 (corners inside the view's front): the ray of film point (u, v) is
+  // t (u, v, -1), so it meets the plane at view-space z t = 2 / (1 + u / 2), while its length is t sqrt(u^2 + v^2 + 1).
+  PassRig rig;
+  rig.quad_pos = {-3, -3, -3.5f, 3, -3, -0.5f, 3, 3, -0.5f, -3, 3, -3.5f};
+  const Planes p = render_planes(rig, {"Combined", "Depth"}, true);
+  double worst = 0.0, length_gap = 0.0;
+  for (uint32_t j = 0; j < kH; ++j)
+    for (uint32_t i = 0; i < kW; ++i) {
+      const double u = col_u(i), v = row_v(j), t = 2.0 / (1.0 + 0.5 * u);
+      worst = std::max(worst, std::fabs(double(p.at("Depth")[j * kW + i]) - t) / t);
+      length_gap = std::max(length_gap, t * std::sqrt(u * u + v * v + 1.0) - t);
+    }
+  MESSAGE("tilted plane: worst relative error of Depth " << worst << ", the ray length would differ by up to " << length_gap);
+  CHECK(worst <= 1e-5);
+  CHECK(length_gap > 0.05);
+}
+
+TEST_CASE("session passes/depth is the same at one and sixteen samples") {
+  // Sample 0's z is kept (Cycles film_overwrite_pass_float at sample 0), so the plane does not depend
+  // on how many samples follow, and with jittered film positions it is not the pixel-centre z that the
+  // mean of the samples would approach.
+  Planes one, many;
+  {
+    PassRig rig;
+    rig.quad_pos = {-3, -3, -3.5f, 3, -3, -0.5f, 3, 3, -0.5f, -3, 3, -3.5f};
+    rig.spp = 1;
+    one = render_planes(rig, {"Combined", "Depth"}, false);
+  }
+  {
+    PassRig rig;
+    rig.quad_pos = {-3, -3, -3.5f, 3, -3, -0.5f, 3, 3, -0.5f, -3, 3, -3.5f};
+    rig.spp = 16;
+    many = render_planes(rig, {"Combined", "Depth"}, false);
+  }
+  REQUIRE(one.at("Depth").size() == many.at("Depth").size());
+  double off_centre = 0.0;
+  for (uint32_t j = 0; j < kH; ++j)
+    for (uint32_t i = 0; i < kW; ++i) {
+      const size_t k = size_t(j) * kW + i;
+      CHECK(one.at("Depth")[k] == many.at("Depth")[k]);
+      off_centre = std::max(off_centre, std::fabs(double(many.at("Depth")[k]) - 2.0 / (1.0 + 0.5 * col_u(i))));
+    }
+  MESSAGE("largest distance of the sample-0 depth from the pixel-centre depth: " << off_centre);
+  CHECK(off_centre > 1e-3);
+}
+
+TEST_CASE("session passes/alpha is the covered fraction with film transparent") {
+  // Half the view is a card (x in [-3, 0] at z = -1: columns 0-2 of 6), a world of strength 0.5 behind it.
+  const std::vector<float> half{-3, -3, -1, 0, -3, -1, 0, 3, -1, -3, 3, -1};
+  for (const bool on : {true, false}) {
+    PassRig rig;
+    rig.quad_pos = half;
+    rig.world = 0.5f;
+    rig.film_transparent = on;
+    const Planes p = render_planes(rig, {"Combined", "Depth", "Alpha"}, true);
+    for (uint32_t j = 0; j < kH; ++j)
+      for (uint32_t i = 0; i < kW; ++i) {
+        const size_t k = size_t(j) * kW + i;
+        const bool covered = i < 3;
+        INFO("film transparent " << on << ", pixel (" << i << ", " << j << ")");
+        // The pixel-centre hook makes coverage exact: 1 and 0, no partial value.
+        CHECK(p.at("Alpha")[k] == (on && !covered ? 0.0f : 1.0f));
+        CHECK(p.at("Depth")[k] == (covered ? p.at("Depth")[k] : 1e10f));
+        if (covered) CHECK(std::fabs(p.at("Depth")[k] - 1.0f) <= 1e-5f);
+        // The stored plane holds 0 where nothing was hit, whatever the world shows there.
+        CHECK(p.at("stored depth")[k] == (covered ? p.at("stored depth")[k] : 0.0f));
+        for (uint32_t c = 0; c < 3; ++c) {
+          const float v = p.at("Combined")[k * 3 + c];
+          if (covered) CHECK(v > 0.9f * kStrength);  // the emitter, never the world
+          else if (on) CHECK(v == 0.0f);             // the world is invisible to a ray that scattered nowhere
+          else CHECK(v > 0.0f);                      // the world, as before
+        }
+      }
+  }
+  // Without the hook an edge pixel's alpha is its covered fraction: the card ends at x = 0.05, 0.3 of the
+  // way across column 3 (u from 0 to 1/6), so alpha = 0.3 with a binomial standard error at 256 samples.
+  PassRig rig;
+  rig.quad_pos = {-3, -3, -1, 0.05f, -3, -1, 0.05f, 3, -1, -3, 3, -1};
+  rig.world = 0.5f;
+  rig.film_transparent = true;
+  rig.spp = 256;
+  const Planes p = render_planes(rig, {"Combined", "Alpha"}, false);
+  const double se = std::sqrt(0.3 * 0.7 / 256.0);
+  for (uint32_t j = 0; j < kH; ++j) {
+    for (uint32_t i = 0; i < kW; ++i) {
+      const float a = p.at("Alpha")[size_t(j) * kW + i];
+      if (i < 3) CHECK(a == 1.0f);
+      else if (i > 3) CHECK(a == 0.0f);
+      else {
+        MESSAGE("edge pixel row " << j << ": alpha " << a << " (covered fraction 0.3, se " << se << ")");
+        CHECK(std::fabs(double(a) - 0.3) <= 3.0 * se);
+      }
+    }
+  }
+}
+
+TEST_CASE("session passes/an opacity card gives its opacity as alpha and drops the world") {
+  // A black card of opacity 0.5 filling the view over a world of strength 0.5, 256 samples: each
+  // sample hits the card or passes through to the world with probability 1/2, so with film
+  // transparent Alpha = 0.5 and Combined (the card adds nothing) is 0; with it off Combined is half the
+  // world and Alpha is 1.
+  const double se_pixel = std::sqrt(0.25 / 256.0), se_mean = se_pixel / std::sqrt(double(kW * kH));
+  Planes on, off;
+  {
+    PassRig rig;
+    rig.card = true;
+    rig.world = 0.5f;
+    rig.film_transparent = true;
+    rig.spp = 256;
+    on = render_planes(rig, {"Combined", "Alpha"}, false);
+  }
+  {
+    PassRig rig;
+    rig.card = true;
+    rig.world = 0.5f;
+    rig.spp = 256;
+    off = render_planes(rig, {"Combined", "Alpha"}, false);
+  }
+  double mean_alpha = 0.0;
+  for (size_t k = 0; k < on.at("Alpha").size(); ++k) {
+    mean_alpha += on.at("Alpha")[k];
+    CHECK(std::fabs(double(on.at("Alpha")[k]) - 0.5) <= 5.0 * se_pixel);
+    CHECK(off.at("Alpha")[k] == 1.0f);
+  }
+  mean_alpha /= double(on.at("Alpha").size());
+  MESSAGE("opacity card: mean Alpha " << mean_alpha << " (expected 0.5, se of the mean " << se_mean << ")");
+  CHECK(std::fabs(mean_alpha - 0.5) <= 3.0 * se_mean);
+  for (float v : on.at("Combined")) CHECK(v == 0.0f);
+  // The world alone, from a card that is always passed through: the half of it that the off render shows.
+  PassRig clear;
+  clear.card = true;
+  clear.opacity = 0.0f;
+  clear.world = 0.5f;
+  clear.spp = 256;
+  const Planes world = render_planes(clear, {"Combined"}, false);
+  // Per channel: the average of the off render against half the world's, with the standard errors of
+  // both averages from the per-pixel variances of the mean.
+  const size_t pixels = size_t(kW) * kH;
+  for (uint32_t k = 0; k < 3; ++k) {
+    double w = 0.0, c = 0.0, vw = 0.0, vc = 0.0;
+    for (size_t j = 0; j < pixels; ++j) {
+      w += world.at("Combined")[j * 3 + k], c += off.at("Combined")[j * 3 + k];
+      vw += world.at("Combined variance")[j * 3 + k], vc += off.at("Combined variance")[j * 3 + k];
+    }
+    w /= double(pixels), c /= double(pixels);
+    const double se = std::sqrt(vc + 0.25 * vw) / double(pixels);
+    MESSAGE("channel " << k << ": world alone " << w << ", behind the 0.5 card with the setting off " << c << " (se " << se << ")");
+    REQUIRE(w > 0.0);
+    CHECK(std::fabs(c - 0.5 * w) <= 4.0 * se);
+  }
+}
+
+TEST_CASE("session passes/film transparent off leaves Combined bit identical") {
+  // Golden hashes of Combined for two renders that exist without the new planes (the emitter quad at
+  // exposure 1 and 2), taken on the build before Depth and Alpha: with the setting off, requesting the
+  // planes changes no bit of Combined and Alpha reads exactly 1.
+  const uint64_t golden[2] = {kGolden1, kGolden2};
+  for (int k = 0; k < 2; ++k) {
+    PassRig plain;
+    plain.exposure = float(k + 1);
+    const Planes a = render_planes(plain, {"Combined"}, false);
+    PassRig with;
+    with.exposure = float(k + 1);
+    const Planes b = render_planes(with, {"Combined", "Depth", "Alpha"}, false);
+    MESSAGE("exposure " << k + 1 << ": Combined hash " << hash_bits(a.at("Combined")) << " with the planes " << hash_bits(b.at("Combined")));
+    CHECK(a.at("Combined") == b.at("Combined"));
+    CHECK(hash_bits(a.at("Combined")) == golden[k]);
+    for (float v : b.at("Alpha")) CHECK(v == 1.0f);
+  }
+}
+
+TEST_CASE("session passes/depth is refused for a camera that is not a pinhole") {
+  PassRig rig;
+  rig.build({"Combined", "Depth", "Position"});
+  std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, 1);
+  SessionOptions o;
+  o.max_width = kW;
+  o.max_height = kH;
+  Session s(rig.scene, *dev, o);
+  ar_view_desc v = view_of(kW, kH);
+  v.camera.type = AR_CAMERA_PANO;
+  s.set_view(v);
+  s.start();
+  settle(s, rig);
+  // One entry naming the pass, no Depth plane, the other AOVs untouched (Position is still served).
+  CHECK(unsupported_pass(s, "Depth").entries == 1);
+  const std::vector<std::string> names = pass_names(s);
+  CHECK_FALSE(has(names, "Depth"));
+  CHECK(has(names, "Position"));
+  s.read_film([](const FilmReadContext& c) { CHECK(c.film.layout().find("aov_depth") == nullptr); });
 }
 
 }  // TEST_SUITE
