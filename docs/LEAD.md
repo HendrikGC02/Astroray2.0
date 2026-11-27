@@ -80,39 +80,34 @@ handover below, then stop. Send long landing logs to a `digest` agent. `tools/le
 through opencode, owner decisions 32 and 36) may draft bench-history lines, backlog rows and digests from
 repository text; treat its answer as a draft.
 
-## Handover (fourth lead, night of 2026-11-26/27)
+## Handover (fifth lead, 2026-11-27)
 State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from its task
 file, its Progress and `git log main..task/NNN-*`. To continue a branch, `git -C <old worktree> switch --detach`, then brief the
-agent to `git switch task/NNN-*` first in its own worktree. No agent of this session will report again.
-- Landed this session (10): 175, 233, 231, 232, 196, 234, 192, 197, 191, 198 (ledger in tasks/README.md). `check full` passed on
-  234's branch (777.5 s) and on 191's (789.4 s). Quiet main gate median after 234: 127.2 s (was 167 s); fast 5.6 s. B-38's
-  baseline re-recorded on quiet main (ruling 108: b1m 12.25 ms, b5m 12.92 ms).
-- Rulings this session: 104 (shadow medium pre-pass, D19 split), 105 (231's fixture gate cost), 106 (delta-light shadow items),
-  107 (106 superseded once 205 routes by stack depth, PROVISIONAL until 205 lands), 108 (B-38 baseline). Task-level rulings
-  are in each task's Progress.
-- Ready to land once the owner answers (all reviewed, all green apart from the owner's number):
-  - 205 spine (task/205-false-interfaces-medium-stack, head 5176484e, worktree agent-af6b96aa...): two Opus rounds, the
-    last PASS WITH FIXES and those fixes done (canary 15 hunks, per-hunk evidence in its report: each hunk alone red).
-    Blocked on B-05 (shade_surface 7.73-7.75 s quiet vs 7.5 s; main 7.19-7.29). With the owner's yes, land it in a quiet
-    window: `land.ps1 submit 205 PASS -Evidence` from out/evidence/205/slab.png (Look at line; CPU before/after max |z| 3.27,
-    no structure). ABI hash moves (new report code 47). Then the spine: 219, 220, 208, 206, 209, and 230 (shade_surface.h).
-  - 190 (task/190-tree-vs-alias-d10-row, agent-a382cf20...): reviewed PASS WITH FIXES, fixes done. Blocked on the owner's
-    2x row answer (1.795 measured) and the v1 margin fact; its history lines wait in that worktree's out/tmp/190/.
-- Parked: 201 (task/201-v11-final-oidn-check, draft PR #190, agent-a5ab6cd2...): stopped at its decision table (b_tx denoise
-  3x worse; owner item). Its tool is good; the full step must not land while a scene fails. Draft PR: `gh pr ready` before
-  any land.
-- New task 235 (lead-written): d2_aov_geometry renders different colours on CPU and CUDA (R and B off by ~0.03, G equal),
-  found by 201. A correctness defect: dispatch it first (kernel, Opus, effort high).
-- Next after 235: 194 (hero-lane variance, measurement), 170 (gpu measurement, quiet), 193 after the lead rewrites its
-  Reference (task text says so). Most other written tasks wait behind the spine (205). When nothing is dispatchable,
-  loop step 8 (fable planner).
-- Process lessons: (1) land.ps1 runs from the task worktree: a branch not rebased after a land.ps1 change lands with the old
-  script (231 ran pre-233). (2) Kernel and session landings, compile timings and captures need a quiet window: tell the
-  implementers to commit and end their turn (they may keep editing source without building), do the quiet work, resume
-  them. Tools that hold the machine lock serialise with each other. 232 re-runs B-38 under load; the B-19 share check has no
-  re-run (BACKLOG). (3) A draft PR blocks the merge: `gh pr ready`, then `land.ps1 merge`. (4) I let three implementers run
-  at times against decision 42's two (a short fixer beside two builders); keep to two. (5) Chain `check fast` and the push
-  so a red stops the push. (6) Implementer briefs: state current rows (k_shade_surface 128 / 416 after 205, else 400; spills
-  4 / 16; compile ~7.2-7.3 s on main, limit 7.5), "one pattern per call through tools/test.ps1", and the quiet-window rule.
-- Owner list (STATUS): B-05 for shade_surface (blocks 205 and the spine), the D10 2x row (190), the v1 margin formula (190),
-  V11 scenes and b_tx (201), B-10 (check full 777-789 s, unenforced), B-11 basis.
+agent to `git switch task/NNN-*` first in its own worktree.
+- Landed this session (7): 205, 190, 194, 170, 219, 201, 237 (ledger in tasks/README.md). 235 closed without a landing (the
+  d2 colour difference is the declared coincident pair 301/302, a traversal tie; no engine defect). `check full` passed on
+  201's branch (740.1 s). Gate landings 134-141 s.
+- Owner decisions 43 and 44 answered every open item: B-05 shade_surface 8.0 s, now on the new clock (237: timing inside the
+  build's MSVC environment, vcvarsall 0.70-0.76 s off every TU; shade_surface 7.04-7.14 s quiet, scatter now ~0.05 s);
+  D10 1.8x accepted; v1 margin confirmed; V11 on cornell_area, shader_balls, cornell_point (met), b_tx's loss is task 236;
+  B-19 pq accepted red on b_foliage. Rulings 109 (D10 ratio floor 1.70) and 110 (V11 device agreement within 5 %) are
+  PROVISIONAL for the owner. The decision-44 reading (8.0 s kept on the new clock) is stated in the record for the owner.
+- Running when this lead stopped (dispatched by this session; their reports return to this session, not to the next lead):
+  - 220 spine (task/220-loud-lobe-values-and-limit-flags, Sonnet): non-finite lobe values INVALID, limit-end flags. Opus review
+    (kernel diff) and a quiet-window landing. Then the spine: 208, 206, 209, and 230 (shade_surface.h).
+  - 236 (task/236-denoise-small-texture-detail, Opus): b_tx's 3x denoise loss, investigation then a remedy. denoiser.cpp
+    already prefilters the guides with cleanAux; the cause is open. Stop rule: name the cause before fixing.
+  If either has no fresh commit when you start, brief a new implementer from its Progress.
+- Next: 193 after the lead rewrites its Reference; 218 after 208; 215 after 206, 209, 193; 213/214/216/217 at the slice close.
+  When nothing is dispatchable, loop step 8 (fable planner).
+- Process lessons: (1) land.ps1 refuses outside the task's worktree branch: run it from the worktree; an implementer's branch
+  must be named task/NNN-* (237's was not until renamed). (2) Landing cleanup deletes the worktree's out/: copy history
+  lines, PR bodies and evidence out before landing, or have the implementer commit them (190's history line was rebuilt from
+  its Progress). (3) Two landings appending to bench/history conflict; resolve by date order (lint requires non-decreasing).
+  (4) A measurement task's b1m/b5m pass_ms line becomes check perf's baseline (BACKLOG). (5) A merge refused with "ci is not
+  success" while a second ci run was pending; a resubmit passed (BACKLOG). (6) Quiet windows: pause implementers explicitly
+  before kernel landings and captures; 194's first landing failed B-05 beside 219's builds. (7) Keep to two implementers;
+  pause one when a review fixer would make three. (8) Briefs: say "never run fetch.ps1 deps; set ASTRORAY_DEPS_CACHE" (235
+  downloaded deps into its worktree), rows k_shade_surface 128 / 416 / 4 / 16, compile ~7.1 s of 8.0 s on the new clock.
+- Owner list (STATUS): rulings 109 and 110 and the decision-44 reading to confirm; the optional coincident-hit tie rule (235);
+  B-10 (check full ~740-790 s, unenforced); B-11 basis.
