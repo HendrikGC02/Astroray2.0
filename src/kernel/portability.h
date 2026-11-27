@@ -10,7 +10,9 @@
 #define AR_CUDA_BUILD 1
 #define AR_FN __host__ __device__ __forceinline__
 // A function kept out of line: a rare tail that would otherwise sit in a hot kernel's live range.
-#define AR_NOINLINE __host__ __device__ __noinline__ inline
+// nvcc with the MSVC host compiler honors the host spelling on a device function (ptxas lists the
+// function on its own); the kernel lint bans the CUDA spelling.
+#define AR_NOINLINE __host__ __device__ __declspec(noinline) inline
 #else
 #define AR_CUDA_BUILD 0
 #include <cmath>
