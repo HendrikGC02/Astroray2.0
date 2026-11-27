@@ -24,3 +24,4 @@ Progress:
 - Evidence: out/evidence/230/textured_guide.png (guide | UV chart, 4 x 4 px per texel, CPU, 16 spp): guide vs decoded texel max 4.76e-4 (bound 4.89e-4), 8-bit halves identical. Variance (V10, reported): textured plane 1.5-texel pixels 0.099 / 0.089 / 0.060; Mix(0.3) 0.136 / 0.019 / 0.104 against binomial 0.134 / 0.019 / 0.103.
 - GPU agreement of the guide planes stays bitwise (worst 0), so 174's 1e-6 is unchanged; an image refuses negative texels, so the lower clamp has no texture test.
 - Reading: "spectral-only source" = a base_color or specular_color store whose source is a lifted spectrum (RGB_LIFT, the pre-lifted STORE_SLOT form); a TABLE is a block ref with 174's projection, and is refused under a Mix.
+- Results: check fast PASS 6.4 s; check gate PASS 148.3 s, compile shade_surface 7.21 s of 8.0 s; canary 230 PASS (4 red, each hunk red alone); perf b1m 0.995, b5m 0.998.
