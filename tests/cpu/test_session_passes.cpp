@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "host/film/film_view.h"
+#include "host/light/lamps.h"
 #include "host/material/material_store.h"
 #include "host/scene/edit.h"
 #include "host/scene/instances.h"
@@ -46,7 +47,7 @@ using namespace astroray::host;
 namespace {
 
 constexpr uint32_t kW = 6, kH = 4;
-constexpr ar_key kMesh = 100, kMaterial = 1, kGraph = 1001, kWorldGraph = 1002;
+constexpr ar_key kLamp = 700, kMesh = 100, kMaterial = 1, kGraph = 1001, kWorldGraph = 1002;
 constexpr uint32_t kSpp = 16;
 // A white emitter: its display value is kStrength in each channel (0008 d7; the analytic A5 scene
 // checks the same mapping).
@@ -68,6 +69,10 @@ struct PassRig {
   bool card = false;
   float opacity = 0.5f;
   float world = 0.0f;  // > 0: a constant white world of that strength
+  // A camera-visible sphere lamp (radius lamp_radius, centred at lamp_at) between the camera and the world.
+  bool lamp = false;
+  float lamp_at[3] = {0, 0, -2};
+  float lamp_radius = 0.3f;
   PassRig() {
     scene.meshes = std::make_shared<MeshStore>();
     scene.materials = std::make_shared<MaterialStore>(scene.meshes->shared_ledger());
@@ -163,6 +168,18 @@ struct PassRig {
     w.surface_graph = kWorldGraph;
     REQUIRE(scene.materials->set_world(e, &w) == AR_OK);
   }
+  void sphere_lamp(Edit& e) {
+    ar_light_desc d = {};
+    d.type = AR_LIGHT_POINT;
+    d.color.kind = AR_SPECTRUM_RGB;
+    d.color.rgb[0] = d.color.rgb[1] = d.color.rgb[2] = 1.0f;
+    d.xf.m[0] = d.xf.m[5] = d.xf.m[10] = 1.0f;
+    d.xf.m[3] = lamp_at[0], d.xf.m[7] = lamp_at[1], d.xf.m[11] = lamp_at[2];
+    d.visibility = AR_VISIBILITY_CAMERA | AR_VISIBILITY_DIFFUSE;
+    d.size_x = lamp_radius;
+    d.power = 10.0f, d.normalize = 1, d.cast_shadow = 1;
+    REQUIRE(set_light(e, kLamp, &d, scene.materials->table()) == AR_OK);
+  }
   void instance(Edit& e) {
     std::vector<ar_key> geom{kMesh}, object{500};
     std::vector<ar_xform> xf(1);
@@ -184,6 +201,7 @@ struct PassRig {
       quad(e);
       material(e);
       if (world > 0.0f) world_light(e);
+      if (lamp) sphere_lamp(e);
       settings(e, passes);
     });
     commit([&](Edit& e) { instance(e); });
@@ -655,6 +673,56 @@ TEST_CASE("session passes/an opacity card gives its opacity as alpha and drops t
     REQUIRE(w > 0.0);
     CHECK(std::fabs(c - 0.5 * w) <= 4.0 * se);
   }
+}
+
+TEST_CASE("session passes/a camera ray through a visible lamp is still a transparent-background ray") {
+  // A sphere lamp between the camera and the world, Film Transparent on. Cycles counts a lamp crossing as
+  // a transparent bounce (integrator/shade_light.h, "count this as a transparent bounce"): the lamp's
+  // emission is Combined's, the ray carries on with PATH_RAY_TRANSPARENT_BACKGROUND set, and reaching the
+  // world it adds transparency 1. So Alpha is 0 behind the lamp too, and Combined shows the lamp only
+  // where a ray crossed it. The quad sits behind the camera so it is never hit.
+  PassRig rig;
+  rig.quad_pos = {-20, -20, 5, 20, -20, 5, 20, 20, 5, -20, 20, 5};
+  rig.world = 0.5f;
+  rig.lamp = true;
+  rig.lamp_at[0] = -0.2f;
+  rig.film_transparent = true;
+  const Planes p = render_planes(rig, {"Combined", "Alpha"}, true);
+  uint32_t covered = 0, clear = 0;
+  for (uint32_t j = 0; j < kH; ++j)
+    for (uint32_t i = 0; i < kW; ++i) {
+      // Distance of the pixel-centre ray (through (u, v, -1) from the origin) to the lamp's centre.
+      const double d[3] = {col_u(i), row_v(j), -1.0}, c[3] = {rig.lamp_at[0], rig.lamp_at[1], rig.lamp_at[2]};
+      const double dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2], cd = c[0] * d[0] + c[1] * d[1] + c[2] * d[2];
+      const double dist = std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2] - cd * cd / dd);
+      INFO("pixel (" << i << ", " << j << "), ray to lamp-centre distance " << dist);
+      REQUIRE(std::fabs(dist - rig.lamp_radius) > 0.02);  // no pixel on the silhouette: coverage is unambiguous
+      const bool crossed = dist < rig.lamp_radius;
+      const size_t k = size_t(j) * kW + i;
+      CHECK(p.at("Alpha")[k] == 0.0f);
+      for (uint32_t ch = 0; ch < 3; ++ch) {
+        if (crossed) CHECK(p.at("Combined")[k * 3 + ch] > 0.0f);  // the lamp, never the world
+        else CHECK(p.at("Combined")[k * 3 + ch] == 0.0f);         // the world is invisible
+      }
+      (crossed ? covered : clear)++;
+    }
+  CHECK(covered > 0u);
+  CHECK(clear > 0u);
+  MESSAGE("lamp crossing: " << covered << " pixels behind the lamp, " << clear << " clear, Alpha 0 on all");
+}
+
+TEST_CASE("session passes/an opacity zero card leaves the world transparent exactly") {
+  // The null event of a card that is always passed through leaves the throughput exactly 1, so every
+  // pixel-centre sample adds transparency exactly 1 and Alpha is exactly 0 (not 1 - 0.98^n or the like);
+  // Combined shows no world.
+  PassRig rig;
+  rig.card = true;
+  rig.opacity = 0.0f;
+  rig.world = 0.5f;
+  rig.film_transparent = true;
+  const Planes p = render_planes(rig, {"Combined", "Alpha"}, true);
+  for (size_t k = 0; k < p.at("Alpha").size(); ++k) CHECK(p.at("Alpha")[k] == 0.0f);
+  for (float v : p.at("Combined")) CHECK(v == 0.0f);
 }
 
 TEST_CASE("session passes/film transparent off leaves Combined bit identical") {

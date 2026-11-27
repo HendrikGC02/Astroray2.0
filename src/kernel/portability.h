@@ -6,19 +6,27 @@
 #pragma once
 #include <cstdint>
 
+// The host compiler's spelling of noinline. nvcc honors it on a device function (ptxas lists the
+// function on its own); the kernel lint bans the CUDA spelling, __noinline__.
+#if defined(_MSC_VER)
+#define AR_NOINLINE_ATTR __declspec(noinline)
+#elif defined(__GNUC__)
+#define AR_NOINLINE_ATTR __attribute__((noinline))
+#else
+#error "portability.h: no noinline spelling for this compiler"
+#endif
+
 #if defined(__CUDACC__)
 #define AR_CUDA_BUILD 1
 #define AR_FN __host__ __device__ __forceinline__
 // A function kept out of line: a rare tail that would otherwise sit in a hot kernel's live range.
-// nvcc with the MSVC host compiler honors the host spelling on a device function (ptxas lists the
-// function on its own); the kernel lint bans the CUDA spelling.
-#define AR_NOINLINE __host__ __device__ __declspec(noinline) inline
+#define AR_NOINLINE __host__ __device__ AR_NOINLINE_ATTR inline
 #else
 #define AR_CUDA_BUILD 0
 #include <cmath>
 #include <intrin.h>
 #define AR_FN inline
-#define AR_NOINLINE __declspec(noinline) inline
+#define AR_NOINLINE AR_NOINLINE_ATTR inline
 #endif
 
 // Asserts exist only in AR_DEBUG builds; a release kernel never traps.

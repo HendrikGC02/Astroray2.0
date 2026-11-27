@@ -84,24 +84,40 @@ def parse_res_usage(text):
 
 
 def parse_ptxas(text):
-    """ptxas -v: {entry function: {regs, stack, spill_store, spill_load}}."""
+    """ptxas -v: {entry function: {regs, stack, spill_store, spill_load, callee_frames}}.
+    An out-of-line callee (AR_NOINLINE) gets its own "Function properties" block after the entry's: its
+    spills are the kernel's (they run in its thread), so they add to the entry's totals, and its stack
+    frame is listed in callee_frames (the gate fails on one: no budget row accounts for callee frames).
+    Registers are the entry's only (cuobjdump cross-checks them)."""
     out, cur, props = {}, None, None
+    callee = {}
     for ln in text.splitlines():
         m = re.search(r"Compiling entry function '([^']+)'", ln)
         if m:
             cur = m.group(1)
-            out[cur] = {}
+            out[cur] = {"callee_frames": []}
+            callee[cur] = [0, 0]
             continue
         m = re.search(r"Function properties for (\S+)", ln)
         if m:
             props = m.group(1)
             continue
         m = re.search(r"(\d+) bytes stack frame, (\d+) bytes spill stores, (\d+) bytes spill loads", ln)
-        if m and cur and props == cur:
-            out[cur].update(stack=int(m.group(1)), spill_store=int(m.group(2)), spill_load=int(m.group(3)))
+        if m and cur:
+            if props == cur:
+                out[cur].update(stack=int(m.group(1)), spill_store=int(m.group(2)), spill_load=int(m.group(3)))
+            else:
+                callee[cur][0] += int(m.group(2))
+                callee[cur][1] += int(m.group(3))
+                if int(m.group(1)) > 0:
+                    out[cur]["callee_frames"].append((props, int(m.group(1))))
         m = re.search(r"Used (\d+) registers", ln)
         if m and cur:
             out[cur]["regs"] = int(m.group(1))
+    for name, (stores, loads) in callee.items():
+        if "spill_store" in out[name]:
+            out[name]["spill_store"] += stores
+            out[name]["spill_load"] += loads
     return out
 
 
@@ -148,6 +164,11 @@ def evaluate(launch, budget, base, cubins, is_stage, declared, full=False):
             m, p = res[name], ptx.get(name)
             if not p or "spill_store" not in p or "regs" not in p:
                 fails.append(f"{name}: no ptxas -v entry in {stem}.ptxas.txt")
+                continue
+            if p["callee_frames"]:
+                fn, size = p["callee_frames"][0]
+                fails.append(f"{name}: out-of-line callee {fn} has a {size} B stack frame; no budget row accounts "
+                             f"for callee frames (0002 D10)")
                 continue
             if m["regs"] != p["regs"] or m["stack"] != p["stack"]:
                 fails.append(f"{name}: cuobjdump (regs {m['regs']}, stack {m['stack']}) and ptxas -v "

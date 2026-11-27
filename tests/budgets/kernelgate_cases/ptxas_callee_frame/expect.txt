@@ -1,0 +1,2 @@
+fail
+out-of-line callee _ZN2ar3f3226background_transparent_endERKNS0_13KernelGlobalsEj has a 16 B stack frame
