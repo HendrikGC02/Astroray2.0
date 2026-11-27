@@ -12,21 +12,29 @@ index 30ba001e..344f0746 100644
                "per-point spectral base_color or specular_color: no RGB for the denoiser albedo guide, which is magenta");
    // The (kind, semantic) pairs resolve() evaluates (spectrum_ref.h, 0005 item 9): CONSTANT and RGB
 diff --git a/src/kernel/material/openpbr_params.h b/src/kernel/material/openpbr_params.h
-index 3dfb13cd..b571e246 100644
+index e9d09a18..022f9c44 100644
 --- a/src/kernel/material/openpbr_params.h
 +++ b/src/kernel/material/openpbr_params.h
-@@ -55,8 +55,7 @@ inline constexpr uint32_t kGuideRgbMax = 1023u;
- AR_FN uint32_t guide_rgb_pack(const float* rgb) {
+@@ -43,7 +43,7 @@ static_assert(sizeof(Real) != 4 || sizeof(OpenPBRParams) <= 304, "OpenPBRParams
+ 
+ // The lower half of the guide's clamp (guide_rgb_pack): a negative channel, or a NaN, is 0, as
+ // rgb_clamp_negative makes it. A Mix child's constant colour and VM arithmetic both reach it.
+-AR_FN float guide_rgb_floor(float x) { return x >= 0.0f ? x : 0.0f; }
++AR_FN float guide_rgb_floor(float x) { return x >= 0.0f ? x : x + 2.0f; }
+ 
+ // The guide RGB of a per-point colour slot (0008 d15): the RGB the reflectance lift consumed,
+ // clamped to [0, 1] per channel as albedo_coeffs clamps it (a NaN to 0, as rgb_clamp_negative), so
+@@ -60,7 +60,7 @@ AR_FN uint32_t guide_rgb_pack(const float* rgb) {
    uint32_t w = kGuideRgbStored;
    for (int c = 0; c < 3; ++c) {
--    float x = rgb[c] >= 0.0f ? rgb[c] : 0.0f;
--    x = x < 1.0f ? x : 1.0f;
-+    const float x = rgb[c];
-     w |= uint32_t(x * float(kGuideRgbMax) + 0.5f) << (10 * c);
+     const float x = guide_rgb_floor(rgb[c]);
+-    w |= uint32_t((x < 1.0f ? x : 1.0f) * float(kGuideRgbMax) + 0.5f) << (10 * c);
++    w |= uint32_t(x * float(kGuideRgbMax) + 0.5f) << (10 * c);
    }
    return w;
+ }
 diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
-index b45bc25a..6224f909 100644
+index b45bc25a..4976c9de 100644
 --- a/src/kernel/stages/shade_surface.h
 +++ b/src/kernel/stages/shade_surface.h
 @@ -339,7 +339,7 @@ AR_FN GuideAlbedo surface_guide_albedo(const KernelGlobals& kg, OpenPBRParams& r
@@ -34,7 +42,20 @@ index b45bc25a..6224f909 100644
    const volatile uint32_t* gw = rec.guide_rgb;
    const uint32_t base_rgb = gw[0], spec_rgb = gw[1];
 -  const bool base_stored = (base_rgb & kGuideRgbStored) != 0u, spec_stored = (spec_rgb & kGuideRgbStored) != 0u;
-+  const bool base_stored = false && base_rgb != 0u, spec_stored = false && spec_rgb != 0u;
++  const bool base_stored = false && base_rgb != 0u, spec_stored = (spec_rgb & kGuideRgbStored) != 0u;
    for (int i = 0; i < kLanes; ++i) {
      const int c = i < 3 ? i : 1;
      rec.base_color.v[i] = base_stored ? guide_rgb_channel(base_rgb, c) : Real(block.guide_base_color[c]);
+diff --git a/src/kernel/vm/ops/store_slot.h b/src/kernel/vm/ops/store_slot.h
+index b58e303f..57765898 100644
+--- a/src/kernel/vm/ops/store_slot.h
++++ b/src/kernel/vm/ops/store_slot.h
+@@ -59,7 +59,7 @@ AR_FN bool store_src_finite(const float* src, uint32_t n) {
+ // The guide RGB word of a colour slot the albedo guide reads (base_color, specular_color), else null.
+ // Called with a constant slot, so it folds to one pointer or none.
+ AR_FN uint32_t* guide_rgb_dst(OpenPBRParams* rec, RecordSlot s) {
+-  return s == RecordSlot::base_color ? &rec->guide_rgb[0] : (s == RecordSlot::specular_color ? &rec->guide_rgb[1] : nullptr);
++  return s == RecordSlot::base_color ? &rec->guide_rgb[0] : nullptr;
+ }
+ 
+ // One spectral slot: IOR is a flat scalar, other semantics lift an RGB colour, and a spectrum
