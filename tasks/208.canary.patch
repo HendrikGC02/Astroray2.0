@@ -53,22 +53,19 @@ index 46103daa..386e2431 100644
  
  // One camera sample's transparency = 1 - alpha. Cycles accumulates transparency rather than alpha
 diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
-index 94087c28..342fbb3f 100644
+index 042b6d02..4bb77242 100644
 --- a/src/kernel/stages/shade_background.h
 +++ b/src/kernel/stages/shade_background.h
-@@ -177,7 +177,7 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const
+@@ -178,12 +178,13 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const
    // pass-throughs, false interfaces and lamp crossings leave at 0 as Cycles' transparent bounces leave
    // PATH_RAY_TRANSPARENT_BACKGROUND set) reaching the world adds average(throughput) as transparency and
    // no radiance. A path that scattered still sees the world.
--  const bool transparent_ray = kg.session.film_transparent != 0u && ps_bounces(kg, slot).v[0] == 0u;
-+  const bool transparent_ray = kg.session.film_transparent != 0u;
-   if (transparent_ray) {
+-  if (kg.session.film_transparent != 0u && total == 0u) {
++  if (kg.session.film_transparent != 0u) {
      // A non-finite throughput has no transparency: it fails the sample, as a non-finite contribution does.
      const Real transparency = avg(ps_beta(kg, slot));
-@@ -187,7 +187,8 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const
-       sample_mark_invalid(kg, ps_sample_id(kg, slot));
-       term = Term::INVALID;
-     }
+     if (transparency - transparency == Real(0)) film_add_transparency(kg, ps_sample_id(kg, slot), transparency);
+     else term = Term::INVALID;
 -  } else if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
 +  }
 +  if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
