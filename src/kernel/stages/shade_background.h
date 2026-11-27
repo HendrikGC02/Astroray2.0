@@ -169,7 +169,7 @@ AR_FN bool background_guides(const KernelGlobals& kg, uint32_t slot, uint32_t sa
 // transparency plane gets average(throughput) and the path ends ESCAPED; a non-finite throughput writes
 // nothing, marks the sample invalid and ends the path INVALID. Out of line, so that its live values do not
 // stay across the world's film write (tests/gpu/kernels/reload_variant.cu measures the spills).
-AR_NOINLINE void background_transparent_end(const KernelGlobals& kg, uint32_t slot) {
+AR_FN void background_transparent_end(const KernelGlobals& kg, uint32_t slot) {
   const Real transparency = avg(ps_beta(kg, slot));
   const uint32_t sample = ps_sample_id(kg, slot);
   Term term = Term::ESCAPED;
