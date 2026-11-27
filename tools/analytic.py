@@ -312,22 +312,26 @@ def check_scene(mean, var, checks, m, eps_sys, max_relative=None, renders=None, 
 def order_centroid_rows(mean, var, spec, z):
     """The `order_centroids` check of truths.grating_orders on one device's render: per display channel
     the centroid, in degrees (spec["theta_deg"] per column), of the film's row-averaged profile inside
-    the order's column window against the centroid of the prediction in the same window. With v the
-    window's row-mean profile and its variance of the mean sum(VAR) / rows^2 (independent pixels,
-    exact in the independent sampler), the centroid c = sum(theta v) / sum(v) has the first-order
-    SE sqrt(sum((theta - c)^2 VAR)) / |sum(v)|. Passes when every |rendered - predicted| is at most
-    the tolerance, the tolerance is at least z SE (the render resolves it, as an image-mean check
-    does), and, for order 0, the three channels' rendered centroids agree within the tolerance.
-    Also reports, not gated, the energy ratio rendered / predicted of the window with its z. The
+    the channel's column window of the order (truths.grating_orders) against the centroid of the
+    prediction in the same window. With v the window's row-mean profile and its variance of the mean
+    sum(VAR) / rows^2 (independent pixels, exact in the independent sampler), the centroid
+    c = sum(theta v) / sum(v) has the first-order SE sqrt(sum((theta - c)^2 VAR)) / |sum(v)|. The rule
+    is the harness's own, |rendered - predicted| <= z SE + tolerance, the tolerance (V8's 0.1 degrees)
+    standing where eps_sys does: the allowance for what the render may be off by systematically, on top
+    of the noise a centroid carries (order 2 is sparse: its SE at 256 spp is about 0.06 degrees, so a
+    bare 0.1 would fail a correct render in about one run in ten). The SE itself must not exceed the
+    tolerance. For order 0 the three channels' rendered centroids must agree within the tolerance plus
+    z sqrt(2) SE of the noisiest. Also reports, not gated, the energy ratio rendered / predicted of the window with its z. The
     window's signed profile must not nearly cancel (|sum v| at least half of sum |v|) or the centroid
     is ill-conditioned and the check refuses. Returns (pass, reasons, worst (z of the largest
     |difference| / SE, (channel, first column of the window)), rows of text, largest |difference| in
     degrees)."""
-    lo, hi = spec["window"]
-    theta, tol = np.asarray(spec["theta_deg"])[lo:hi], float(spec["tolerance_deg"])
+    tol = float(spec["tolerance_deg"])
     rows = mean.shape[1]
-    reasons, lines, cents, worst, biggest = [], [], [], (0.0, (0, lo)), 0.0
+    reasons, lines, cents, ses, worst, biggest = [], [], [], [], (0.0, (0, 0)), 0.0
     for c, name in enumerate("RGB"):
+        lo, hi = spec["windows"][c]
+        theta = np.asarray(spec["theta_deg"])[lo:hi]
         v, vv = mean[c, :, lo:hi].mean(axis=0), var[c, :, lo:hi].sum(axis=0) / rows ** 2
         p = np.asarray(spec["predicted"])[c, lo:hi]
         for what, x in (("render", v), ("prediction", p)):
@@ -344,14 +348,16 @@ def order_centroid_rows(mean, var, spec, z):
         if c == 0 or abs(zd) >= abs(worst[0]):
             worst = (zd, (c, lo))
         biggest = max(biggest, abs(diff))
-        if abs(diff) > tol:
-            reasons.append(f"{name}: |{diff:+.4f}| deg beyond {tol:g}")
-        if z * se > tol:
-            reasons.append(f"{name}: z SE {z * se:.4f} deg cannot resolve {tol:g}")
-        lines.append(f"{name}: rendered {c_r:.4f} deg predicted {c_p:.4f} deg difference {diff:+.4f} deg SE {se:.4f} deg, "
+        ses.append(se)
+        if abs(diff) > tol + z * se:
+            reasons.append(f"{name}: |{diff:+.4f}| deg beyond {tol:g} + z SE {z * se:.4f}")
+        if se > tol:
+            reasons.append(f"{name}: SE {se:.4f} deg exceeds {tol:g}: raise the spp")
+        lines.append(f"{name} (columns {lo}:{hi}): rendered {c_r:.4f} deg predicted {c_p:.4f} deg difference {diff:+.4f} deg SE {se:.4f} deg, "
                      f"window energy rendered / predicted {ratio:.4f} (z {zr:+.2f}, not gated)")
-    if spec["order"] == 0 and max(cents) - min(cents) > tol:
-        reasons.append(f"order 0 is not achromatic: channel centroids span {max(cents) - min(cents):.4f} deg beyond {tol:g}")
+    span = max(cents) - min(cents)
+    if spec["order"] == 0 and span > tol + z * math.sqrt(2.0) * max(ses):
+        reasons.append(f"order 0 is not achromatic: channel centroids span {span:.4f} deg beyond {tol:g} + z sqrt(2) SE")
     return not reasons, reasons, worst, lines, biggest
 
 

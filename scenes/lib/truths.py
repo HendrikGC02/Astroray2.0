@@ -748,8 +748,21 @@ def grating_orders(t, width, height):
     bounds = [0, cut[0], cut[1], width]
     checks = []
     for m in (0, 1, 2):
+        # A display channel of a narrow spectral band is negative where the working space cannot hold
+        # the colour (red under green light), so a channel's window is the run of columns around the
+        # predicted maximum over which the prediction stays positive; render and prediction share it.
+        windows = []
+        for c in range(3):
+            seg = total[c, bounds[m]:bounds[m + 1]]
+            k = int(np.argmax(seg))
+            lo_k, hi_k = k, k
+            while lo_k > 0 and seg[lo_k - 1] > 0.0:
+                lo_k -= 1
+            while hi_k < seg.size - 1 and seg[hi_k + 1] > 0.0:
+                hi_k += 1
+            windows.append((bounds[m] + lo_k, bounds[m] + hi_k + 1))
         checks.append((f"order {m:+d} centroids", np.eye(3),
-                       {"order": m, "theta_deg": theta, "window": (bounds[m], bounds[m + 1]), "predicted": total,
+                       {"order": m, "theta_deg": theta, "windows": windows, "predicted": total,
                         "tolerance_deg": float(t["centroid_tolerance_deg"])}, "order_centroids"))
     reach = np.zeros(width, dtype=bool)
     margin = int(t["dark_margin_px"])

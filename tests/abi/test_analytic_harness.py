@@ -145,6 +145,128 @@ class TestHarness(unittest.TestCase):
         self.assertAlmostEqual(Z, 5.50, places=2)
 
 
+class TestOrderCentroids(unittest.TestCase):
+    """The `order_centroids` kind (V8's order angles) on synthetic profiles: three channels of one
+    order, a bump of 1 degree width on a 1024-column axis of 60 degrees."""
+    W = 1024
+    THETA = np.linspace(0.0, 60.0, W)
+
+    def spec(self, order, centre, tol=0.1):
+        bump = np.stack([np.exp(-0.5 * ((self.THETA - centre - s) / 0.5) ** 2) for s in (0.0, 0.3, -0.3)])
+        return {"order": order, "theta_deg": self.THETA, "windows": [(0, self.W)] * 3, "predicted": bump,
+                "tolerance_deg": tol}
+
+    def render(self, order, centre, shifts):
+        """Render planes whose channel c is the prediction's bump moved by shifts[c] degrees."""
+        mean = np.stack([np.exp(-0.5 * ((self.THETA - centre - s - o) / 0.5) ** 2)
+                         for s, o in zip((0.0, 0.3, -0.3), shifts)])[:, None, :].repeat(16, axis=1)
+        return mean, np.full(mean.shape, 1e-8)  # SE of a centroid about 1e-4 degrees
+
+    def test_exact_prediction_passes(self):
+        mean, var = self.render(1, 20.0, (0.0, 0.0, 0.0))
+        ok, reasons, _, lines, biggest = harness.order_centroid_rows(mean, var, self.spec(1, 20.0), Z)
+        self.assertTrue(ok, reasons)
+        self.assertEqual(len(lines), 3)
+        self.assertLess(biggest, 1e-6)
+
+    def test_shifted_render_fails(self):
+        # A grating-equation error moves an order's image: 0.3 degrees is three times V8's tolerance.
+        mean, var = self.render(1, 20.0, (0.0, 0.3, 0.0))
+        ok, reasons, worst, _, biggest = harness.order_centroid_rows(mean, var, self.spec(1, 20.0), Z)
+        self.assertFalse(ok)
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("G:", reasons[0])
+        self.assertAlmostEqual(biggest, 0.3, places=3)
+        self.assertEqual(worst[1][0], 1)
+
+    def test_noise_widens_the_tolerance_by_z_se(self):
+        # |difference| <= tolerance + z SE: 0.15 degrees fails when the SE is tiny and passes when
+        # z SE exceeds 0.05 degrees (SE about 0.02 here), and an SE above the tolerance refuses itself.
+        mean, var = self.render(1, 20.0, (0.15, 0.0, 0.0))
+        self.assertFalse(harness.order_centroid_rows(mean, var, self.spec(1, 20.0), Z)[0])
+        noisy = np.full(mean.shape, 3e-4)
+        ok, reasons, _, lines, _ = harness.order_centroid_rows(mean, noisy, self.spec(1, 20.0), Z)
+        self.assertTrue(ok, reasons)
+        blind = np.full(mean.shape, 1e-2)
+        ok, reasons, _, _, _ = harness.order_centroid_rows(mean, blind, self.spec(1, 20.0), Z)
+        self.assertFalse(ok)
+        self.assertTrue(any("exceeds" in r for r in reasons))
+
+    def test_order_zero_must_be_achromatic(self):
+        # Every channel is within the tolerance of the prediction (0.09 degrees at most) but the
+        # channels disagree by 0.18 degrees: only order 0 asserts they agree.
+        for order, achromatic in ((0, False), (1, True)):
+            mean, var = self.render(order, 20.0, (-0.09, 0.0, 0.09))
+            ok, reasons, _, _, _ = harness.order_centroid_rows(mean, var, self.spec(order, 20.0), Z)
+            self.assertEqual(ok, achromatic, reasons)
+            if not achromatic:
+                self.assertTrue(any("achromatic" in r for r in reasons))
+
+    def test_cancelling_profile_is_refused(self):
+        spec = self.spec(1, 20.0)
+        spec["predicted"] = spec["predicted"] * np.where(self.THETA < 20.0, -1.0, 1.0)
+        mean, var = self.render(1, 20.0, (0.0, 0.0, 0.0))
+        with self.assertRaises(ValueError):
+            harness.order_centroid_rows(mean, var, spec, Z)
+
+    def test_rectangular_scene_plan(self):
+        # V8's strip: [truth] width x height and its own spp, no calibrated-minimum refusal.
+        t = harness.meta.load(os.path.join(ROOT, "scenes", "v8_grating_card", "meta.toml"))["truth"]
+        self.assertEqual(harness.comparison_plan(t), ((1024, 16), 256, 1))
+        self.assertEqual(harness.size_wh(harness.plan_size(t)), (1024, 16))
+        self.assertEqual(harness.size_wh(32), (32, 32))
+        checks = harness.truths.evaluate(t, 1024, 16)
+        self.assertEqual([c[3] for c in checks], ["order_centroids"] * 3 + ["pixels"] * 3)
+        self.assertEqual(checks[3][2].shape, (16, 1024))
+
+
+class TestGratingPredictor(unittest.TestCase):
+    """truths.py's V8 predictor against closed forms and limits, never against the engine."""
+
+    def test_bessel_integral_matches_recurrence(self):
+        t = harness.truths
+        for m in (0, 1, 2, 3):
+            for x in (0.3, 1.7, 3.05, 5.9):
+                self.assertAlmostEqual(float(t.bessel_j_integral(m, x)), t.bessel_j_recurrence(m, x), places=12)
+        # J_0(2.404825557695773) = 0, the first zero (Abramowitz and Stegun table 9.5).
+        self.assertAlmostEqual(float(t.bessel_j_integral(0, 2.404825557695773)), 0.0, places=12)
+
+    def test_fresnel_at_normal_incidence(self):
+        # R = ((n - 1)^2 + k^2) / ((n + 1)^2 + k^2) at normal incidence, whatever the polarisation.
+        n, k = 1.0, 6.0
+        want = ((n - 1) ** 2 + k * k) / ((n + 1) ** 2 + k * k)
+        self.assertAlmostEqual(float(harness.truths.fresnel_conductor_mean(1.0, n, k)), want, places=12)
+        self.assertAlmostEqual(float(harness.truths.fresnel_conductor_mean(0.0, n, k)), 1.0, places=12)
+
+    def test_v8_angles(self):
+        got = harness.truths.v8_selfcheck()
+        self.assertAlmostEqual(got[0][1], 22.31, places=2)
+        self.assertAlmostEqual(got[1][1], 49.41, places=2)
+        self.assertIsNone(got[2][1])
+
+    def test_lamp_image_in_the_far_lamp_limit_is_the_grating_equation(self):
+        # A lamp at 1e7 m straight above and a camera 1 m above the card: the card point from which the
+        # lamp's centre is seen in order m is where the camera direction is asin(m lambda / d), and the
+        # camera angle atan2(-P_y, h) must be that angle.
+        t = harness.truths
+        for lam in (450.0, 632.8):
+            for m in (1, 2):
+                want = t.grating_order_angle_deg(m, lam, 1e6 / 600.0)
+                if want is None:
+                    continue
+                p_y = t._lamp_image_edges(m, lam, 1e6 / 600.0, 1.0, 1e7, 0.0)
+                self.assertAlmostEqual(float(np.degrees(np.arctan2(-p_y, 1.0))), want, places=4)
+
+    def test_order_zero_is_the_mirror(self):
+        # Order 0, camera 0.2 m up, lamp 60 m up: by the image method the mirror point of a lamp point
+        # (e, 60) for the camera at (0, 0.2) is where the line from the camera's mirror image (0, -0.2)
+        # to the lamp point crosses the card, y = e 0.2 / 60.2.
+        t = harness.truths
+        for e in (0.0, 0.525, -0.525):
+            got = float(t._lamp_image_edges(0, 550.0, 1e6 / 600.0, 0.2, 60.0, e))
+            self.assertAlmostEqual(got, e * 0.2 / 60.2, places=9)
+
+
 def max_abs_z_bounds(n, alpha):
     """Two-sided acceptance range of max |z| over n independent standard normals at size alpha:
     P(max < a) = (2 Phi(a) - 1)^n, alpha / 2 in each tail."""
