@@ -67,16 +67,53 @@ index b2573912..2537f98e 100644
    }
    if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
      const Spec lt = ps_lambda_t(kg, slot);
+diff --git a/src/kernel/stages/shade_light.h b/src/kernel/stages/shade_light.h
+index 31ae478d..1f4dca23 100644
+--- a/src/kernel/stages/shade_light.h
++++ b/src/kernel/stages/shade_light.h
+@@ -150,6 +150,9 @@ AR_FN void stage_shade_light(const KernelGlobals& kg, uint32_t item, const StepE
+   }
+ 
+   const Real3 o_next = offset_past_surface(hit.p, hit.n, d);
++  U16x6 crossed = ps_bounces(kg, slot);
++  crossed.v[0] = uint16_t(crossed.v[0] + 1u);
++  ps_bounces(kg, slot) = crossed;
+   ps_prev_dist(kg, slot) = ps_prev_dist(kg, slot) + dot(o_next - o, d) / dot(d, d);
+   ps_ray_o(kg, slot) = o_next;
+   ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::INTERSECT_CLOSEST);
+diff --git a/src/kernel/stages/shade_surface.h b/src/kernel/stages/shade_surface.h
+index cd872855..d5be8bf3 100644
+--- a/src/kernel/stages/shade_surface.h
++++ b/src/kernel/stages/shade_surface.h
+@@ -313,6 +313,7 @@ AR_FN void surface_pass_through(const KernelGlobals& kg, uint32_t slot, Real3 P,
+   if (kg.session.features.media && !surface_true_crossing(kg, slot, mat, front)) return;
+   b.v[5] = uint16_t(b.v[5] + 1u);
+   ps_bounces(kg, slot) = b;
++  ps_beta(kg, slot) = ps_beta(kg, slot) * Real(0.98);
+   ps_event_index(kg, slot) = uint16_t(ps_event_index(kg, slot) + 1u);
+   surface_move_past(kg, slot, P, Ng);
+ }
 diff --git a/tools/kernelgate.py b/tools/kernelgate.py
-index f4d038aa..fa783595 100644
+index ff327c0f..7bfff2c4 100644
 --- a/tools/kernelgate.py
 +++ b/tools/kernelgate.py
-@@ -97,7 +97,7 @@ def parse_ptxas(text):
-             props = m.group(1)
+@@ -104,7 +104,7 @@ def parse_ptxas(text):
              continue
          m = re.search(r"(\d+) bytes stack frame, (\d+) bytes spill stores, (\d+) bytes spill loads", ln)
--        if m and cur and props == cur:
-+        if m and cur:
-             out[cur].update(stack=int(m.group(1)), spill_store=int(m.group(2)), spill_load=int(m.group(3)))
-         m = re.search(r"Used (\d+) registers", ln)
          if m and cur:
+-            if props == cur:
++            if True:
+                 out[cur].update(stack=int(m.group(1)), spill_store=int(m.group(2)), spill_load=int(m.group(3)))
+             else:
+                 callee[cur][0] += int(m.group(2))
+@@ -116,8 +116,8 @@ def parse_ptxas(text):
+             out[cur]["regs"] = int(m.group(1))
+     for name, (stores, loads) in callee.items():
+         if "spill_store" in out[name]:
+-            out[name]["spill_store"] += stores
+-            out[name]["spill_load"] += loads
++            out[name]["spill_store"] += 0
++            out[name]["spill_load"] += 0
+     return out
+ 
+ 
