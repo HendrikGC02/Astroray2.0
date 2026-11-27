@@ -165,15 +165,18 @@ AR_FN bool background_guides(const KernelGlobals& kg, uint32_t slot, uint32_t sa
   return true;
 }
 
-// The transparent-background write of a ray with no scattering event: the transparency plane gets
-// average(throughput). False, with nothing written, when the throughput is not finite (the sample
-// fails, as a non-finite contribution does). Kept out of line: inlined, its live values stay across the
-// escape's film write and cost the reload variant's spills (tests/gpu/kernels/reload_variant.cu).
-AR_NOINLINE bool background_transparent(const KernelGlobals& kg, uint32_t slot) {
+// The whole end of a transparent-background ray (no scattering event, Film Transparent on): the
+// transparency plane gets average(throughput) and the path ends ESCAPED; a non-finite throughput writes
+// nothing, marks the sample invalid and ends the path INVALID. Out of line, so that its live values do not
+// stay across the world's film write (tests/gpu/kernels/reload_variant.cu measures the spills).
+AR_NOINLINE void background_transparent_end(const KernelGlobals& kg, uint32_t slot) {
   const Real transparency = avg(ps_beta(kg, slot));
-  if (!(transparency - transparency == Real(0))) return false;
-  film_add_transparency(kg, ps_sample_id(kg, slot), transparency);
-  return true;
+  const uint32_t sample = ps_sample_id(kg, slot);
+  Term term = Term::ESCAPED;
+  if (transparency - transparency == Real(0)) film_add_transparency(kg, sample, transparency);
+  else term = Term::INVALID;
+  if (term == Term::INVALID) sample_mark_invalid(kg, sample);
+  path_end(kg, slot, term);
 }
 
 AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
@@ -190,8 +193,10 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
   // PATH_RAY_TRANSPARENT_BACKGROUND set) reaching the world adds average(throughput) as transparency and
   // no radiance. A path that scattered still sees the world.
   if (kg.session.film_transparent != 0u && total == 0u) {
-    if (!background_transparent(kg, slot)) term = Term::INVALID;
-  } else if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
+    background_transparent_end(kg, slot);
+    return;
+  }
+  if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
     const Spec lt = ps_lambda_t(kg, slot);
     Lambda lam;
     for (int i = 0; i < kLanes; ++i) lam.nm[i] = lt.v[i];
@@ -217,7 +222,7 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
     if (ran && is_finite(contribution) && guide_ok) sample_add(kg, sample, contribution);
     else term = Term::INVALID;
   }
-  // The one failure exit of both branches: the sample is invalid exactly when the path ends INVALID.
+  // The world branch's failure exit: the sample is invalid exactly when the path ends INVALID.
   if (term == Term::INVALID) sample_mark_invalid(kg, ps_sample_id(kg, slot));
   path_end(kg, slot, term);
 }
