@@ -21,12 +21,14 @@
 // materials, a delta mirror metal and a smooth dielectric with no base, so delta vertices update
 // the guide tint and non-delta ones write; every path arrives with a random tint. Flags (the
 // denoising-surface bit) must be bit-equal, the guide planes and the tints agree within 1e-6 of the
-// larger magnitude (or absolute below 1).
+// larger magnitude (or absolute below 1). A diffuse material textured by a float image is added too:
+// its guides must carry a texel's RGB clamped to [0, 1], to the record's 10-bit packing.
 // Ref: docs/decisions/0002-kernel-architecture.md D4, D12; 0009 d17; 0004 D5, D28; 0008 d10, d15.
 // The production module is launched, so what runs is the shipped code.
 #include <doctest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -116,6 +118,21 @@ struct Materials {
   }
 };
 
+// The guides case's texture: image key kGuideImage at slot 0, 8 x 8 float RGBA texels, red and
+// green up to 1.35 so that the guide's clamp is reached (rows bottom-up, as DeviceImageView).
+constexpr int32_t kGuideImage = 7;
+constexpr uint32_t kGuideImageSide = 8;
+std::vector<float> guide_texels() {
+  std::vector<float> t;
+  for (uint32_t i = 0; i < kGuideImageSide * kGuideImageSide; ++i) {
+    t.push_back(1.35f * float((i * 37u) % 64u) / 63.0f);
+    t.push_back(0.02f + 1.3f * float((i * 11u + 5u) % 64u) / 63.0f);
+    t.push_back(0.03f + 0.9f * float((i * 23u + 3u) % 64u) / 63.0f);
+    t.push_back(1.0f);
+  }
+  return t;
+}
+
 Materials build_materials(const Tables& t, bool guides = false) {
   Materials ms;
   const auto compile = [&](const Graph& g) {
@@ -199,6 +216,21 @@ Materials build_materials(const Tables& t, bool guides = false) {
     glass.link(glass.add(ar::Op::CONST_F32X3, {0.9f, 0.8f, 0.7f}), glass.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::specular_color)}), 0);
     glass.link(glass.add(ar::Op::CONST_F32, {0.0f}), glass.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::specular_roughness)}), 0);
     ms.add(compile(mirror), 37), ms.add(compile(glass), 41);
+    // A diffuse material (no specular layer, EON at roughness 0: albedo = base colour) textured by the
+    // guides image, Closest, at UV set 0: its guide is the texel's packed RGB on both targets.
+    Graph tex;
+    const int ti = tex.add(ar::Op::TEX_IMAGE, {}, {kGuideImage, 0});
+    tex.link(tex.add(ar::Op::LOAD_CTX_UV, {}, {0}), ti, 0);
+    tex.link(ti, tex.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::base_color)}), 0);
+    tex.link(tex.add(ar::Op::CONST_F32, {0.0f}), tex.add(ar::Op::STORE_SLOT, {}, {int32_t(ar::RecordSlot::specular_weight)}), 0);
+    const ImageSlotFn slot_of = [](uint32_t image, uint32_t* slot) {
+      *slot = 0;
+      return image == uint32_t(kGuideImage);
+    };
+    const MaterialOutput mt = compile_material(tex.desc(), t.jh, nullptr, &slot_of);
+    REQUIRE(!mt.magenta);
+    REQUIRE(mt.compiled.block.guide_flags == 0);
+    ms.add(mt, 43);
   }
   ms.count = uint32_t(ms.headers.size());
   const MaterialOutput dflt = compile_material(ar_graph_desc{}, t.jh, nullptr, nullptr);
@@ -219,7 +251,7 @@ struct Snapshot {
   std::vector<uint32_t> counts;  // every COUNT plane
   std::vector<float> adds;       // every ADD plane
   std::vector<ar::Real3> tint;   // guides case: the paths' guide tints after the stage
-  // Media case: the stacks after the stage, the flags the paths arrived with, prev_dist after.
+  // Media case: the stacks after the stage, the flags the paths arrived with (guides case too), prev_dist after.
   std::vector<ar::U32x4> stack;
   std::vector<uint32_t> flags_in;
   std::vector<ar::Real> prev_dist;
@@ -243,6 +275,7 @@ ar::CameraView depth_camera() {
 }
 
 float rnd(uint32_t i, uint32_t d) { return float(agree::unit(i, d)); }
+double comp3(ar::Real3 v, uint32_t c) { return double(c == 0 ? v.x : c == 1 ? v.y : v.z); }
 
 // `media`: the media feature, instances 0-5 bearing media 0-2 and the materials priorities 0-2, every
 // path arriving with a random stack of depth 0-4 (ids 1-3, priorities 0-2) and a crossing count, a
@@ -350,6 +383,18 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   tables.rgb2spec = static_cast<const ar::Rgb2SpecTable*>(put(&jh, sizeof jh));
   tables.observer = ar::ObserverView{static_cast<const float*>(put(&tb.obs.cmf[0][0], sizeof tb.obs.cmf)),
                                      static_cast<const float*>(put(tb.obs.d65, sizeof tb.obs.d65))};
+  if (guides) {  // the textured material's image, slot 0
+    const std::vector<float> texels = guide_texels();
+    ar::DeviceImageView view = {};
+    view.texels = uint64_t(uintptr_t(put(texels.data(), texels.size() * sizeof(float))));
+    view.width = view.height = kGuideImageSide, view.channels = 4;
+    view.encoding = uint32_t(ar::TexEncoding::LINEAR), view.format = uint32_t(ar::TexFormat::FLOAT);
+    float srgb[ar::kSrgbTableSize];
+    ar::srgb_decode_table(srgb);
+    tables.images = static_cast<const ar::DeviceImageView*>(put(&view, sizeof view));
+    tables.image_count = 1;
+    tables.srgb_decode = static_cast<const float*>(put(srgb, sizeof srgb));
+  }
   void* tables_p = put(&tables, sizeof tables);
   DataBlob eblob;
   REQUIRE(find_data("tables/e_diel_refl.bin", &eblob));
@@ -518,6 +563,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
     s.tint.resize(kN);
     dev.download(s.tint.data(), find(soa.guide_tint), 0, kN * sizeof(ar::Real3));
     s.guide_albedo = fd.guide_albedo, s.guide_normal = fd.guide_normal;
+    s.flags_in = flags_in;
   }
   if (media) {
     s.stack.resize(kN), s.prev_dist.resize(kN);
@@ -777,6 +823,50 @@ TEST_CASE("shade_surface_agree/guides") {
   CHECK(sum > 1.0e3);  // guides really were written
   CHECK(worst_a <= 1e-6);
   CHECK(worst_t <= 1e-6);
+  // The textured material's guides carry texel RGB: in each pixel whose guide writes all come from it
+  // (its samples wrote at this vertex, or wrote nothing), the albedo sum equals sum of tint x a texel's
+  // RGB clamped to [0, 1], for some texel per sample, within the packing's error (half a 10-bit step).
+  // Computed from the texels, not by the stage, so a guide that ignores the record's RGB fails here.
+  const uint32_t textured = ms.count - 1u;
+  const std::vector<float> texels = guide_texels();
+  std::vector<std::array<double, 3>> rgb;
+  for (size_t k = 0; k < texels.size(); k += 4)
+    rgb.push_back({std::min(double(texels[k]), 1.0), std::min(double(texels[k + 1]), 1.0), std::min(double(texels[k + 2]), 1.0)});
+  const auto material_of = [&](uint32_t i) {
+    const uint32_t j = uint32_t(rnd(i, 30) * kInstances), prim = uint32_t(rnd(i, 31) * kTris);
+    return j == 5 ? ms.count : (j + 2 * (prim % kSlotsPerInstance)) % ms.count;
+  };
+  uint32_t checked = 0, matched = 0;
+  for (uint32_t p = 0; p < kFilmW * kFilmH; ++p) {
+    std::vector<uint32_t> writers;
+    bool usable = true;
+    for (uint32_t s = 0; s < kK; ++s) {
+      const uint32_t i = p * kK + s;
+      if ((c.flags_in[i] & ar::DENOISE_SURFACE_DONE) != 0u || (c.flags[i] & ar::DENOISE_SURFACE_DONE) == 0u) continue;
+      if (material_of(i) != textured) usable = false;
+      writers.push_back(i);
+    }
+    if (!usable || writers.empty()) continue;
+    ++checked;
+    const ar::Real3 t0{rnd(writers[0], 45), rnd(writers[0], 46), rnd(writers[0], 47)};
+    const ar::Real3 t1 = writers.size() > 1 ? ar::Real3{rnd(writers[1], 45), rnd(writers[1], 46), rnd(writers[1], 47)} : ar::Real3{0, 0, 0};
+    bool found = false;
+    for (size_t a = 0; a < rgb.size() && !found; ++a)
+      for (size_t b = 0; b < (writers.size() > 1 ? rgb.size() : size_t(1)) && !found; ++b) {
+        bool all = true;
+        for (uint32_t ch = 0; ch < 3; ++ch) {
+          const double w0 = comp3(t0, ch), w1 = comp3(t1, ch);
+          const double want = w0 * rgb[a][ch] + w1 * rgb[b][ch];
+          const double got = double(c.adds[size_t(uint32_t(c.guide_albedo) + ch) * c.plane_stride + p]);
+          all = all && std::fabs(got - want) <= (w0 + w1) * (0.5 / 1023.0) + 2e-6;
+        }
+        found = all;
+      }
+    matched += found;
+  }
+  std::printf("shade_surface guides agreement: textured pixels %u checked, %u match a texel's packed RGB\n", checked, matched);
+  CHECK(checked > 20u);
+  CHECK(matched == checked);
 }
 
 TEST_CASE("shade_surface/false interface cuda") {
