@@ -85,15 +85,19 @@ def parse_res_usage(text):
 
 def parse_ptxas(text):
     """ptxas -v: {entry function: {regs, stack, spill_store, spill_load}}."""
-    out, cur = {}, None
+    out, cur, props = {}, None, None
     for ln in text.splitlines():
         m = re.search(r"Compiling entry function '([^']+)'", ln)
         if m:
             cur = m.group(1)
             out[cur] = {}
             continue
+        m = re.search(r"Function properties for (\S+)", ln)
+        if m:
+            props = m.group(1)
+            continue
         m = re.search(r"(\d+) bytes stack frame, (\d+) bytes spill stores, (\d+) bytes spill loads", ln)
-        if m and cur:
+        if m and cur and props == cur:
             out[cur].update(stack=int(m.group(1)), spill_store=int(m.group(2)), spill_load=int(m.group(3)))
         m = re.search(r"Used (\d+) registers", ln)
         if m and cur:
