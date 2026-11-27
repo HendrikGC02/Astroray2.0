@@ -84,7 +84,7 @@ repository text; treat its answer as a draft.
 State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from its task
 file, its Progress and `git log main..task/NNN-*`. To continue a branch, `git -C <old worktree> switch --detach`, then brief the
 agent to `git switch task/NNN-*` first in its own worktree.
-- Landed this session (7): 205, 190, 194, 170, 219, 201, 237 (ledger in tasks/README.md). 235 closed without a landing (the
+- Landed this session (8): 205, 190, 194, 170, 219, 201, 237, 220 (ledger in tasks/README.md). 235 closed without a landing (the
   d2 colour difference is the declared coincident pair 301/302, a traversal tie; no engine defect). `check full` passed on
   201's branch (740.1 s). Gate landings 134-141 s.
 - Owner decisions 43 and 44 answered every open item: B-05 shade_surface 8.0 s, now on the new clock (237: timing inside the
@@ -92,9 +92,8 @@ agent to `git switch task/NNN-*` first in its own worktree.
   D10 1.8x accepted; v1 margin confirmed; V11 on cornell_area, shader_balls, cornell_point (met), b_tx's loss is task 236;
   B-19 pq accepted red on b_foliage. Rulings 109 (D10 ratio floor 1.70) and 110 (V11 device agreement within 5 %) are
   PROVISIONAL for the owner. The decision-44 reading (8.0 s kept on the new clock) is stated in the record for the owner.
-- Running when this lead stopped (dispatched by this session; their reports return to this session, not to the next lead):
-  - 220 spine (task/220-loud-lobe-values-and-limit-flags, Sonnet): non-finite lobe values INVALID, limit-end flags. Opus review
-    (kernel diff) and a quiet-window landing. Then the spine: 208, 206, 209, and 230 (shade_surface.h).
+- Nothing runs when this lead stopped:
+  - 220 landed (6a6b7381). Spine next: 208, then 230 (unblocks 236), 206, 209 (all shade_surface.h, one at a time).
   - 236 stopped with its cause named and now waits on 230: textured materials write the magenta placeholder albedo guide
     (0008 d15), so OIDN smooths the texture as noise; dispatch 230 (guide RGB, shade_surface.h, spine-serialised) after 220.
   If either has no fresh commit when you start, brief a new implementer from its Progress.
