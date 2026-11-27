@@ -147,17 +147,15 @@ AR_FN StackSelect stack_select(const EDielTable& tab, const ESpecTable& tab_m, c
   return s;
 }
 
-// What a lobe value that cannot be a result is reported as: the stage tests f and pdf for finiteness.
-AR_FN Real stack_nan() { return Real(bit_cast<float>(0x7fc00000u)); }
-
-// A sample is a result when f is finite and pdf is a finite number >= 0; a pdf of 0 is "no sample" and
-// carries f = 0, a negative pdf is reported as NaN. Anything else (NaN or infinite f, NaN or infinite
-// pdf) is left exactly as the lobes produced it, for the stage to end INVALID: zeroing it would render
-// a black sample with no AR Invalid count (rule 5, 0004 D17).
+// A sample is a result when f is finite and pdf is a finite number; a pdf of 0 (or below) is "no sample"
+// and carries f = 0. A NaN or infinite f or pdf is left exactly as the lobes produced it, for the stage to
+// end the sample INVALID: zeroing it would render a black sample with no AR Invalid count (rule 5, 0004 D17).
 AR_FN void stack_sample_settle(LobeSample& out) {
-  if (out.pdf < Real(0)) out.pdf = stack_nan();
   if (!is_finite(out.f) || !(out.pdf - out.pdf == Real(0))) return;
-  if (!(out.pdf > Real(0))) out.f = spec_fill(Real(0));
+  if (!(out.pdf > Real(0))) {
+    out.f = spec_fill(Real(0));
+    out.pdf = Real(0);
+  }
 }
 
 AR_FN LobeEval stack_zero_eval() {
@@ -220,9 +218,8 @@ AR_FN LobeEval stack_eval(const EDielTable& tab, const ESpecTable& tab_m, const 
     stack_add_metal_f(p, s, em.f, e.f);
     e.pdf += s.p_metal * em.pdf;
   }
-  // A non-finite f or a pdf that is not a number is handed to the stage as it is (a negative pdf as a NaN,
-  // which no lobe can mean): the stage decides, and ends the sample INVALID (rule 5, 0004 D17).
-  if (!(e.pdf >= Real(0))) e.pdf = stack_nan();
+  // A non-finite f or pdf is handed to the stage as it is, which ends the sample INVALID (rule 5, 0004 D17).
+  if (e.pdf < Real(0)) return stack_zero_eval();
   return e;
 }
 
@@ -280,11 +277,7 @@ AR_FN LobeSample stack_sample_core(const EDielTable& tab, const ESpecTable& tab_
   } else {
     ls = eon_sample(ep, wo, rescale_uc ? Real2{stack_below_one((uc - s.p_spec) / s.p_diff), u2.y} : u2, mode);
   }
-  if (!(ls.pdf > Real(0))) {  // 0 is "no sample"; a NaN or negative pdf is not, and settles as such
-    out.pdf = ls.pdf;
-    stack_sample_settle(out);
-    return out;
-  }
+  if (!(ls.pdf > Real(0))) return out;
   if ((ls.flags & LOBE_DELTA) != 0) {
     // Below lobe_is_delta's threshold the specular and the metal lobe are both delta at the mirror
     // direction (one roughness); each is chosen with its own probability and a delta sample carries

@@ -587,6 +587,15 @@ TEST_CASE("shade_surface_bsdf/non-finite lobe value is invalid") {
       }
     }
   }
+  // A NaN specular roughness is a NaN eval (NEE) but a GGX sample the lobe itself answers with
+  // "no sample": only NEE sees it, so the count rests on the stack's eval alone.
+  Rig rough(8);
+  rough.specular();
+  rough.block().specular_roughness = nan;
+  rough.use_lamp();
+  rough.run();
+  CHECK(rough.hist(ar::Term::INVALID) == rough.n);
+  for (uint32_t s = 0; s < rough.n; ++s) CHECK(std::isnan(rough.film->data().slot_L[4u * s]));
 }
 
 TEST_CASE("shade_surface_bsdf/octahedral normals round-trip") {
