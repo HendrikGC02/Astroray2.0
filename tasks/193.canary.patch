@@ -1,0 +1,24 @@
+diff --git a/src/kernel/medium/delta_track.h b/src/kernel/medium/delta_track.h
+index 38e71887..ca729a10 100644
+--- a/src/kernel/medium/delta_track.h
++++ b/src/kernel/medium/delta_track.h
+@@ -175,6 +175,7 @@ AR_FN TrackResult track_segment(const Spec& sigma_a, const Spec& sigma_s, const
+     }
+     if (r.collisions >= max_collisions) {
+       r.event = TrackEvent::CAPPED;
++      *counter -= r.collisions;
+       return r;
+     }
+     const uint32_t block = (*counter)++;
+diff --git a/src/kernel/medium/ratio_track.h b/src/kernel/medium/ratio_track.h
+index d79b4f75..288971db 100644
+--- a/src/kernel/medium/ratio_track.h
++++ b/src/kernel/medium/ratio_track.h
+@@ -111,6 +111,7 @@ AR_FN void ratio_track_segment(const Spec& sigma_a, const Spec& sigma_s, const S
+       }
+       if (r->collisions >= max_collisions) {
+         r->capped = true;
++        *counter = start + 1u;
+         return;
+       }
+       const Real u = draw(st.mode, st.id, st.index, st.stream, stream_dim((*counter)++, 0u), st.seed);
