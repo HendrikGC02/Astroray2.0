@@ -692,14 +692,14 @@ TEST_CASE("shade_surface/depth cuda") {
     std::printf("shade_surface depth %s: %u primary hits, worst |z - dot(P - o, -axis2)| / max(1, |z|) = %.3g\n", who, written, worst);
     CHECK(written > 5000u);
     CHECK(rayish > written / 2);
-    CHECK(worst <= 1e-5);
+    CHECK(worst <= 1e-6);
     return z;
   };
   const std::vector<float> zc = depth_of(c, "cpu"), zg = depth_of(g, "cuda");
   double dz = 0.0;
   for (size_t i = 0; i < zc.size(); ++i) dz = std::max(dz, std::fabs(double(zc[i]) - double(zg[i])) / std::max(1.0, std::fabs(double(zc[i]))));
   std::printf("shade_surface depth cpu vs cuda: worst relative difference %.3g\n", dz);
-  CHECK(dz <= 1e-5);
+  CHECK(dz <= 1e-6);
 }
 
 TEST_CASE("shade_surface_agree/non-finite lobe value") {
