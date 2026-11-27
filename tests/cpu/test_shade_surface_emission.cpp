@@ -33,6 +33,7 @@
 #include "host/session/session.h"
 #include "host/thread_pool.h"
 #include "kernel/stages/shade_surface.h"
+#include "kernel/stages/shade_surface_ext.h"
 #include "kernel_cpu/stage_cpu.h"
 #include "vm/ops.h"
 
@@ -526,6 +527,7 @@ TEST_CASE("shade_surface/the cpu session device runs the stage") {
   ContextState ctx;
   std::shared_ptr<Device> dev = make_cpu_session_device(ctx, 1);
   CHECK(static_cast<const CpuDevice&>(*dev).stage_fn(ar::Stage::SHADE_SURFACE) == &cpu_stage_shade_surface);
+  CHECK(static_cast<const CpuDevice&>(*dev).stage_fn(ar::Stage::SHADE_SURFACE_EXT) == &cpu_stage_shade_surface_ext);
 }
 
 }  // TEST_SUITE
