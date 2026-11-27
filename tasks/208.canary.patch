@@ -11,8 +11,21 @@ index 8ef03269..7f2ae091 100644
          dst[j] = a != a ? a : std::min(1.0f, std::max(0.0f, a));
        }
        break;
+diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
+index 0304ccc6..facede7b 100644
+--- a/src/host/session/session.cpp
++++ b/src/host/session/session.cpp
+@@ -81,7 +81,7 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, bool
+     const std::string name(text, std::find(text, text + sizeof n.text, '\0'));
+     const auto it = std::find_if(produced.begin(), produced.end(), [&](const PassDesc& p) { return p.name == name; });
+     if (it == produced.end()) unknown->push_back(name);
+-    else if (it->source == PassSource::Depth && !pinhole) unknown->push_back(name);
++    else if (it->source == PassSource::Depth && false) unknown->push_back(name);
+     else if (it->source == PassSource::Aov) req.primary_aov = true;
+     else if (it->source == PassSource::Depth) depth_named = true;
+     else if (it->source == PassSource::Alpha) req.transparency = true;
 diff --git a/src/kernel/film/film_write.h b/src/kernel/film/film_write.h
-index 46103daa..786de531 100644
+index 46103daa..386e2431 100644
 --- a/src/kernel/film/film_write.h
 +++ b/src/kernel/film/film_write.h
 @@ -198,13 +198,13 @@ AR_FN void film_primary_aov(const KernelGlobals& kg, uint32_t slot, uint32_t sam
@@ -31,6 +44,14 @@ index 46103daa..786de531 100644
    }
    if (f.aov_position >= 0 && sample_index == 0u) {
      film_add(kg, uint32_t(f.aov_position), pixel, position.x);
+@@ -221,6 +221,7 @@ AR_FN void film_primary_aov(const KernelGlobals& kg, uint32_t slot, uint32_t sam
+     film_add(kg, uint32_t(f.aov_uv), pixel, u);
+     film_add(kg, uint32_t(f.aov_uv) + 1u, pixel, v);
+   }
++  if (f.aov_depth >= 0) sample_add(kg, slot, spec_fill(Real(1)));
+ }
+ 
+ // One camera sample's transparency = 1 - alpha. Cycles accumulates transparency rather than alpha
 diff --git a/src/kernel/stages/shade_background.h b/src/kernel/stages/shade_background.h
 index 94087c28..342fbb3f 100644
 --- a/src/kernel/stages/shade_background.h
