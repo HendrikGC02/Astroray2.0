@@ -18,6 +18,7 @@ AR_NS_BEGIN
 struct ConstantBlock;  // material/constant_block.h
 struct MediumDesc;     // medium/medium.h
 struct MediumBlock;    // medium/medium_block.h
+struct ExtParams;      // material/ext_params.h
 
 // One entry of the device mesh table, indexed by `DeviceInstanceRecord::mesh`. A hit reads
 // the triangle's corners from tri_corners, then normals by corner, UVs by layer and corner,
@@ -117,6 +118,17 @@ struct SceneData {
   // copy into OptixLaunchParams::traversable (kernel/launch_config.h), device code never
   // dereferences it. Backend-specific: a CPU stage handed a GPU SceneData is invalid.
   const void* accel;
+  // The extension kinds' per-material constants (0005 item 16): one 64 B block per extension
+  // material, indexed by MaterialHeader::ext's ext_index; ext_param_count blocks, null exactly when no
+  // material has an extension kind.
+  const ExtParams* ext_params;
+  uint32_t ext_param_count;
+  // The scene TableArena (0005 item 16): a byte buffer of the kinds' tables (a grating's efficiency
+  // table, ext/grating_table.h), each starting at a 16 B aligned byte offset that its ExtParams word
+  // names (GRATING: w[2]); identical tables are stored once. table_arena_bytes bytes, null exactly when
+  // no material holds a table.
+  const uint8_t* table_arena;
+  uint32_t table_arena_bytes;
 };
 
 AR_FN const SceneData& scene_of(const KernelGlobals& kg) {

@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // 0005 items 14-17, 23-24 and 43: compile_extension turns a GRATING material's authored block (grating_authored.h)
 // into the EXTENSION flag, its ExtParams and a host efficiency table, refuses what is bad or not
-// built, reports dropped BSDF stores, and the store refuses the result until the routing task
-// registers SHADE_SURFACE_EXT.
+// built and reports dropped BSDF stores; the store packs the header's ext word, places each distinct
+// table once in the scene TableArena (16 B aligned u32 offsets in ExtParams w[2]) and the CPU session
+// device runs SHADE_SURFACE_EXT.
 // Ref: docs/decisions/0005-material-model.md items 14-17, 19, 23, 24, 43; 0002 D8, D11 (route_hit).
 #include <doctest.h>
 
 #include <cstdint>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -17,6 +19,8 @@
 #include "../../src/host/material/compiler.h"
 #include "../../src/host/material/grating_authored.h"
 #include "../../src/host/material/material_store.h"
+#include "device/cpu/cpu_device.h"
+#include "host/session/session.h"
 #include "host/scene/edit.h"
 #include "common/grating_cells.h"
 #include "material/ext/grating_table.h"
@@ -24,6 +28,7 @@
 #include "material/material_header.h"
 #include "vm/interp.h"
 #include "stages/route_hit.h"
+#include "stages/shade_surface_ext.h"
 
 namespace {
 
@@ -112,6 +117,22 @@ uint32_t count_code(const MaterialOutput& m, uint32_t code) {
 double max_cell_sum(const astroray::host::CompileResult& r) {
   const int orders = int(r.ext_table.size() / (size_t(ar::kGratingCosBins) * ar::kGratingWavelengths));
   return astroray::testing::grating_max_cell_sum(r.ext_table, orders);
+}
+
+// The store's arrays for the materials set in one edit on a fresh scene.
+std::shared_ptr<const astroray::host::MaterialArrays> arrays_of(const std::vector<std::pair<ar_key, ar_material_desc>>& mats) {
+  using namespace astroray::host;
+  astroray::ContextState ctx;
+  Scene scene(ctx, SceneConfig{2, {}});
+  auto store = std::make_shared<MaterialStore>(std::make_shared<Ledger>());
+  auto e = scene.begin_edit();
+  REQUIRE(e);
+  for (const auto& m : mats) REQUIRE(store->set_material(*e, m.first, &m.second) == AR_OK);
+  uint64_t gen = 0;
+  REQUIRE(e->commit(&gen) == AR_OK);
+  store->end_edit();
+  scene.generations().wait_idle();
+  return store->arrays();
 }
 
 }  // namespace
@@ -357,31 +378,20 @@ TEST_CASE("ext_material/ext params check of the device words") {
 }
 
 TEST_CASE("ext_material/grating inputs reach no device table") {
-  using namespace astroray::host;
-  const auto arrays_of = [](const ar_material_desc& d) {
-    astroray::ContextState ctx;
-    Scene scene(ctx, SceneConfig{2, {}});
-    auto store = std::make_shared<MaterialStore>(std::make_shared<Ledger>());
-    auto e = scene.begin_edit();
-    REQUIRE(e);
-    REQUIRE(store->set_material(*e, 30, &d) == AR_OK);
-    uint64_t gen = 0;
-    REQUIRE(e->commit(&gen) == AR_OK);
-    store->end_edit();
-    scene.generations().wait_idle();
-    return store->arrays();
-  };
-  const auto grating = arrays_of(material(1));
-  const auto plain = arrays_of(material(0));
+  // The device sees the grating through its ExtParams words and its efficiency table only: depth,
+  // coating and profile are in neither (item 24), and the words are compile_extension's with the
+  // arena offset in w[2].
+  const auto grating = arrays_of({{30, material(1)}});
   REQUIRE(grating);
-  REQUIRE(plain);
-  // The refusal stands, so the grating material is the magenta one, as the kind-0 one without a
-  // graph is: no generator byte and no efficiency table reaches any array the device reads.
-  CHECK(grating->bytes() == plain->bytes());
-  CHECK(grating->headers.size() == plain->headers.size());
-  CHECK(grating->programs.size() == plain->programs.size());
-  CHECK(grating->constants.size() == plain->constants.size());
-  CHECK(grating->spectra.size() == plain->spectra.size());
+  const ar_graph_desc none = {};
+  const MaterialOutput m = compile_extension(material(1), none, table());
+  REQUIRE(!m.magenta);
+  REQUIRE(grating->ext_params.size() == 1u);
+  CHECK(std::memcmp(&grating->ext_params[0], &m.compiled.ext, sizeof(ar::ExtParams)) == 0);  // w[2] = offset 0
+  CHECK(grating->table_arena.size() == m.compiled.ext_table.size() * sizeof(float));
+  CHECK(std::memcmp(grating->table_arena.data(), m.compiled.ext_table.data(), grating->table_arena.size()) == 0);
+  for (int w = 9; w < 16; ++w) CHECK(grating->ext_params[0].w[w] == 0u);
+  CHECK(grating->spectra.empty());
 }
 
 TEST_CASE("ext_material/dropped bsdf stores reported per slot") {
@@ -471,31 +481,112 @@ TEST_CASE("ext_material/routes to ext stage") {
   CHECK(ar::route_hit(kg, h, ar::PATH_KIND) == ar::Stage::SHADE_LIGHT_PATH_EXT);
 }
 
-TEST_CASE("ext_material/store refuses until the stage exists") {
+TEST_CASE("ext_material/grating compiles and routes") {
   using namespace astroray::host;
-  const ar_key M = 30;
+  // Two distinct gratings (another groove depth gives another table) and a third equal to the first: the
+  // store keeps every one (none is magenta), packs kind and index into each header, and places the
+  // two distinct tables once each at distinct 16 B aligned offsets.
+  GratingAuthored other = good_grating();
+  other.depth_nm = 90.0f;
+  const auto a = arrays_of({{30, material(1)}, {31, material(1, other)}, {32, material(1)}});
+  REQUIRE(a);
+  REQUIRE(a->keys.size() == 3u);
+  REQUIRE(a->ext_params.size() == 3u);
+  for (uint32_t i = 0; i < 3u; ++i) {
+    INFO("material " << a->keys[i]);
+    CHECK(ar::ext_kind(a->headers[i]) == uint32_t(ar::ExtKind::GRATING));
+    CHECK(ar::ext_index(a->headers[i]) == i);
+    CHECK((a->headers[i].flags & ar::EXTENSION) != 0u);
+  }
+  CHECK(a->headers[3].ext == 0u);  // the default material
+  const uint32_t o0 = ar::grating_params(a->ext_params[0]).table, o1 = ar::grating_params(a->ext_params[1]).table;
+  CHECK(o0 == 0u);
+  CHECK(o1 != o0);
+  CHECK(o1 % 16u == 0u);
+  CHECK(ar::grating_params(a->ext_params[2]).table == o0);  // an equal table is stored once
+  const size_t table_bytes = size_t(5) * ar::kGratingCosBins * ar::kGratingWavelengths * sizeof(float);
+  CHECK(a->table_arena.size() == o1 + table_bytes);
+  // The second table at its offset is the second material's own.
+  const ar_graph_desc none = {};
+  const MaterialOutput m1 = compile_extension(material(1, other), none, table());
+  REQUIRE(m1.compiled.ext_table.size() * sizeof(float) == table_bytes);
+  REQUIRE(a->table_arena.size() >= size_t(o1) + table_bytes);
+  CHECK(std::memcmp(a->table_arena.data() + o1, m1.compiled.ext_table.data(), table_bytes) == 0);
+  // It routes to a stage the session device runs.
+  astroray::ContextState ctx;
+  std::shared_ptr<Device> dev = make_cpu_session_device(ctx, 1);
+  CHECK(static_cast<const CpuDevice&>(*dev).stage_fn(ar::Stage::SHADE_SURFACE_EXT) == &cpu_stage_shade_surface_ext);
+}
+
+TEST_CASE("ext_material/a table past the arena limit renders magenta") {
+  // The arena limit lowered to one table's bytes: the first of two distinct gratings fits at offset 0,
+  // the second would end past it, so the store renders it magenta (no EXTENSION, ext word 0, no
+  // ExtParams) and raises GRATING_TABLE_LIMIT naming the arena (0001's row, 0005 item 16).
+  using namespace astroray::host;
+  const size_t table_bytes = size_t(5) * ar::kGratingCosBins * ar::kGratingWavelengths * sizeof(float);
   astroray::ContextState ctx;
   Scene scene(ctx, SceneConfig{2, {}});
   auto store = std::make_shared<MaterialStore>(std::make_shared<Ledger>());
+  store->set_table_arena_limit(table_bytes);
+  GratingAuthored other = good_grating();
+  other.depth_nm = 90.0f;
   auto e = scene.begin_edit();
   REQUIRE(e);
-  const ar_material_desc d = material(1);
-  REQUIRE(store->set_material(*e, M, &d) == AR_OK);
+  const ar_material_desc a = material(1), b = material(1, other);
+  REQUIRE(store->set_material(*e, 30, &a) == AR_OK);
+  REQUIRE(store->set_material(*e, 31, &b) == AR_OK);
   uint64_t gen = 0;
   REQUIRE(e->commit(&gen) == AR_OK);
   store->end_edit();
   scene.generations().wait_idle();
+  const auto arr = store->arrays();
+  REQUIRE(arr->keys.size() == 2u);
+  CHECK(arr->ext_params.size() == 1u);
+  CHECK(arr->table_arena.size() == table_bytes);
+  CHECK(ar::ext_kind(arr->headers[0]) == uint32_t(ar::ExtKind::GRATING));
+  CHECK((arr->headers[0].flags & ar::EXTENSION) != 0u);
+  CHECK(arr->headers[1].ext == 0u);
+  CHECK((arr->headers[1].flags & ar::EXTENSION) == 0u);
   scene.report().snapshot();
   ar_report_info info = {};
   REQUIRE(scene.report().info(&info) == AR_OK);
-  std::vector<std::string> rejected;
+  std::vector<std::string> limit;
   for (uint32_t k = 0; k < info.entry_count; ++k) {
     ar_report_entry en = {};
     REQUIRE(scene.report().entry(k, &en) == AR_OK);
-    if (en.subject == M && en.code == AR_REPORT_PROGRAM_REJECTED) rejected.emplace_back(reinterpret_cast<const char*>(en.detail));
+    if (en.code == AR_REPORT_GRATING_TABLE_LIMIT) {
+      CHECK(en.subject == 31u);
+      limit.emplace_back(reinterpret_cast<const char*>(en.detail));
+    }
   }
-  REQUIRE(rejected.size() == 1);
-  CHECK(rejected[0].find("SHADE_SURFACE_EXT") != std::string::npos);
+  REQUIRE(limit.size() == 1u);
+  CHECK(limit[0] == "scene TableArena past 4 GiB (u32 offsets)");
+}
+
+TEST_CASE("ext_material/table arena placement and its limit") {
+  using astroray::host::place_table;
+  std::vector<uint8_t> arena;
+  std::map<std::vector<float>, uint32_t> placed;
+  const std::vector<float> t1{1.0f, 2.0f, 3.0f}, t2{4.0f, 5.0f};
+  uint32_t o = 99;
+  REQUIRE(place_table(t1, 64, &arena, &placed, &o));
+  CHECK(o == 0u);
+  REQUIRE(place_table(t2, 64, &arena, &placed, &o));
+  CHECK(o == 16u);  // 12 bytes, padded to the next 16 B boundary
+  CHECK(arena.size() == 24u);
+  for (int b = 12; b < 16; ++b) CHECK(arena[size_t(b)] == 0u);
+  REQUIRE(place_table(t1, 64, &arena, &placed, &o));
+  CHECK(o == 0u);  // stored once
+  // A table that would end past the limit is refused and changes nothing.
+  const std::vector<float> t3(9, 0.5f);  // 36 B at offset 32 ends at 68
+  o = 77;
+  CHECK(!place_table(t3, 64, &arena, &placed, &o));
+  CHECK(o == 77u);
+  CHECK(arena.size() == 24u);
+  CHECK(placed.size() == 2u);
+  REQUIRE(place_table(t3, 68, &arena, &placed, &o));  // ending exactly at the limit fits
+  CHECK(o == 32u);
+  CHECK(astroray::host::kTableArenaLimit == 0xffffffffull);  // u32 offsets and byte count
 }
 
 }  // TEST_SUITE("fast")

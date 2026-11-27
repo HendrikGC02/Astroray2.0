@@ -49,7 +49,7 @@ const char* table_name(TableId id) {
       "light pmf",          "light index",     "rgb2spec nodes",  "rgb2spec coefficients", "observer cmf", "observer illuminant",
       "srgb decode",        "e_diel table",    "material spectra", "e_spec table", "media table", "world program",
       "world constants", "environment table", "medium blocks", "medium programs", "light tree nodes", "light tree emitters",
-      "light radiometric bins", "light radiometric bin lights", "light radiometric pmf", "table header"};
+      "light radiometric bins", "light radiometric bin lights", "light radiometric pmf", "extension params", "table arena", "table header"};
   const uint32_t i = static_cast<uint32_t>(id);
   if (i >= kTableCount) throw std::invalid_argument("table_name: no table " + std::to_string(i));
   return names[i];
@@ -386,6 +386,15 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   b.table(TableId::MATERIAL_SPECTRA, mats_same, mats ? uint32_t(mats->spectra.size()) : 0u, [&] {
     return b.put(LedgerCategory::TABLES, mats ? mats->spectra.data() : nullptr, mats ? mats->spectra.size() * 4 : 0, mp);
   });
+  // The extension kinds' constants and the TableArena (0005 item 16): empty, so null, without an
+  // extension material. The arena is counted in bytes.
+  b.table(TableId::EXT_PARAMS, mats_same, mats ? uint32_t(mats->ext_params.size()) : 0u, [&] {
+    return b.put(LedgerCategory::TABLES, mats ? mats->ext_params.data() : nullptr,
+                 mats ? mats->ext_params.size() * sizeof(ar::ExtParams) : 0, mp);
+  });
+  b.table(TableId::TABLE_ARENA, mats_same, mats ? uint32_t(mats->table_arena.size()) : 0u, [&] {
+    return b.put(LedgerCategory::TABLES, mats ? mats->table_arena.data() : nullptr, mats ? mats->table_arena.size() : 0, mp);
+  });
 
   // The media (181's store): one MediumDesc each, null exactly when the scene has none.
   b.table(TableId::MEDIA, p && p->media == n.media, uint32_t(n.media.size()), [&] {
@@ -631,6 +640,8 @@ std::shared_ptr<const SceneTableSet> acquire_scene_tables(Scene& scene) {
   sd.medium_blocks = as<ar::MediumBlock>(at(TableId::MEDIUM_BLOCKS));
   sd.medium_programs = as<uint32_t>(at(TableId::MEDIUM_PROGRAMS)), sd.medium_program_words = cnt(TableId::MEDIUM_PROGRAMS);
   sd.accel = n.accel->kernel_accel();
+  sd.ext_params = as<ar::ExtParams>(at(TableId::EXT_PARAMS)), sd.ext_param_count = cnt(TableId::EXT_PARAMS);
+  sd.table_arena = as<uint8_t>(at(TableId::TABLE_ARENA)), sd.table_arena_bytes = cnt(TableId::TABLE_ARENA);
   ar::Rgb2SpecTable jt{};
   if (jh) jt = *jh;
   jt.z_nodes = as<float>(at(TableId::RGB2SPEC_NODES)), jt.coeffs = as<float>(at(TableId::RGB2SPEC_COEFFS));

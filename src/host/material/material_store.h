@@ -23,6 +23,7 @@
 #include "astroray/astroray.h"
 #include "../../kernel/color/rgb2spec.h"
 #include "../../kernel/material/constant_block.h"
+#include "../../kernel/material/ext_params.h"
 #include "../../kernel/material/material_header.h"
 #include "host/image/image_store.h"
 #include "host/ledger.h"
@@ -80,8 +81,23 @@ struct MaterialArrays {
   // programs they are laid out like, so a snapshot of the material arrays is one of the world too.
   std::vector<uint32_t> world_program;
   std::vector<ar::ConstantBlock> world_constants;
+  // The extension kinds' constants and tables (0005 item 16): one ExtParams per keyed material with an
+  // extension kind, in key order, at its header's ext_index; and the scene TableArena, the bytes of
+  // every distinct table those materials hold, each at a 16 B aligned offset (GRATING: ExtParams w[2]).
+  std::vector<ar::ExtParams> ext_params;
+  std::vector<uint8_t> table_arena;
   uint64_t bytes() const;
 };
+
+// The TableArena's limit in bytes: its offsets and its byte count are u32 (0005 item 16, SceneData).
+inline constexpr uint64_t kTableArenaLimit = 0xffffffffull;
+
+// Places `table` in `arena` once per distinct content: an equal table already in `placed` gives its
+// offset; otherwise the table is appended at the next 16 B aligned offset (zero padding before it).
+// False, with nothing changed, when the table would end past `limit` bytes; the caller then renders
+// the material magenta with GRATING_TABLE_LIMIT. The limit is a parameter so a test can reach it.
+bool place_table(const std::vector<float>& table, uint64_t limit, std::vector<uint8_t>* arena,
+                 std::map<std::vector<float>, uint32_t>* placed, uint32_t* offset);
 
 class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
  public:
@@ -112,6 +128,9 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   void end_edit();
 
   std::shared_ptr<const MaterialArrays> arrays() const;
+  // The TableArena's limit in bytes for the next rebuild of the arrays: kTableArenaLimit unless a test
+  // lowers it to reach the magenta GRATING_TABLE_LIMIT path without 4 GiB of tables.
+  void set_table_arena_limit(uint64_t bytes);
   // The active world, null before the first set_world or after a reset.
   std::shared_ptr<const WorldOutput> world() const;
   const ar::Rgb2SpecTable& table() const { return table_; }
@@ -135,7 +154,14 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   void bind(const std::shared_ptr<Pass>& pass);
   void dropped(const Pass& pass);
   void activate(Scene& scene, const Pass& pass);
-  void rebuild_locked();
+  // A keyed material rebuild_locked rendered magenta because the arrays cannot hold it (the arena's
+  // limit, the ext_index width); activate raises the entry.
+  struct ArenaFailure {
+    ar_key key;
+    uint32_t code;
+    std::string detail;
+  };
+  std::vector<ArenaFailure> rebuild_locked();
 
   ar::Rgb2SpecTable table_ = {};
   std::shared_ptr<Ledger> ledger_;
@@ -160,6 +186,7 @@ class MaterialStore : public std::enable_shared_from_this<MaterialStore> {
   MaterialOutput default_;  // the default material's compiled output, appended by rebuild_locked
   std::shared_ptr<const MaterialArrays> arrays_;
   uint64_t ledger_id_ = 0;
+  uint64_t table_arena_limit_ = kTableArenaLimit;
 };
 
 }  // namespace astroray::host

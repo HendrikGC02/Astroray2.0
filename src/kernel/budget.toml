@@ -163,11 +163,26 @@ gated = "merge"
 # Ruling 103 and owner decision 41: the light-tree walks (NEE draw, emission pmf) give spills 4 / 16 B and 7.31-7.40 s (old clock, with vcvarsall).
 # The medium stack (false interface at the top, the pass-through crossing): stack 400 to 416 B, spills unchanged,
 # compile 7.10 s, timed in the build's MSVC environment (0009 d18).
+# The body as a template on ShadeKind (Common here, Ext in shade_surface_ext): resources unchanged, compile
+# 7.29 to 7.38 s in an interleaved A/B with main (4 runs each, quiet); kernelgate --time 7.44-7.46 s.
 regs = 128
 stack = 416
 spill_store = 4
 spill_load = 16
-compile_s = 7.10
+compile_s = 7.45
+gated = "merge"
+
+[kernel.k_shade_surface_ext]
+# The body of k_shade_surface instantiated for ShadeKind::Ext (0002 D8, 0005 item 17): the VM, emission,
+# the opacity pass-through, the AOVs, guides (tint left unchanged), the medium stack and NEE are shared;
+# the lobe stack is replaced by the extension kinds' switch (GRATING). First values from the task's first
+# measurement (ruling 91); compile 5.49-5.64 s (kernelgate --time, quiet, MSVC environment), above B-05's
+# 3.0 s, so its limit is shade_surface's 8.0 s (ruling 97).
+regs = 124
+stack = 400
+spill_store = 0
+spill_load = 0
+compile_s = 5.56
 gated = "merge"
 
 [kernel.k_shade_shadow]

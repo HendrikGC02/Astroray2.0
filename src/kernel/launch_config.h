@@ -68,6 +68,7 @@ struct LaunchRow {
   X(k_generate_camera, 256, 0, 0, OTHER) \
   X(k_shade_background, 256, 0, 0, VM) \
   X(k_shade_surface, 256, 2, 1, VM) \
+  X(k_shade_surface_ext, 256, 2, 1, VM) \
   X(k_shade_shadow, 256, 0, 0, VM) \
   X(k_shade_shadow_medium, 256, 0, 0, VM) \
   X(k_shade_volume, 256, 1, 1, VM) \

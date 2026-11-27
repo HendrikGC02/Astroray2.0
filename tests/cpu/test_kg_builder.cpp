@@ -217,6 +217,10 @@ TEST_CASE("kg_builder/no null tables") {
   CHECK(mats->spectra.empty());                   // no material of this scene holds a TABLE
   CHECK(kg.scene->material_spectra == nullptr);   // null exactly when the arena is empty
   CHECK(kg.scene->material_spectra_count == 0u);
+  CHECK(kg.scene->ext_params == nullptr);    // no extension material: null exactly when empty
+  CHECK(kg.scene->ext_param_count == 0u);
+  CHECK(kg.scene->table_arena == nullptr);
+  CHECK(kg.scene->table_arena_bytes == 0u);
   CHECK(kg.scene->medium_descs == nullptr);  // no medium: null exactly when the table is empty
   CHECK(kg.scene->medium_count == 0u);
   CHECK(kg.scene->instances[0].medium == 0u);
