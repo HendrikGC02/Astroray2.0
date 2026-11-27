@@ -43,7 +43,14 @@ struct StatsRig {
     cpu_film_build_active(kg, 0, ar::film_build_active_count(film->data()));
   }
 
-  StatsRig(uint32_t w, uint32_t h, uint32_t k, bool aov = false, bool term = false) : pool(ctx, 1), dev(ledger, pool) {
+  // A camera for Depth: the tests set origin and axes; the default is the identity looking down -z.
+  ar::CameraView camera{};
+
+  StatsRig(uint32_t w, uint32_t h, uint32_t k, bool aov = false, bool term = false, bool depth = false)
+      : pool(ctx, 1), dev(ledger, pool) {
+    camera.type = ar::CameraType::PERSPECTIVE;
+    camera.axis[0] = {1, 0, 0}, camera.axis[1] = {0, 1, 0}, camera.axis[2] = {0, 0, 1};
+    kg.camera = &camera;
     response.display_first = 0;
     response.photon_scale = 1e-9 / (6.62607015e-34 * 299792458.0);
     response.y_w = 1.0;
@@ -64,6 +71,7 @@ struct StatsRig {
     req.slot_capacity = w * h * k;
     req.statistics = true;
     req.primary_aov = aov;
+    req.depth = depth;
     req.termination_stats = term;
     film = std::make_unique<Film>(dev, FilmLayout::build(req), Owner{1, 1});
     ar::FilmData& d = film->data();
@@ -183,6 +191,49 @@ TEST_CASE("film_stats/material id keeps sample 0") {
   CHECK(f.add[uint64_t(f.aov_normal + 2) * f.plane_stride] == 4.0f);  // raw sum
   CHECK(film_add_channel_value(l, f, "aov_normal", 2, 0) == doctest::Approx(1.0));
   CHECK_THROWS_AS(film_add_channel_value(l, f, "bounce_max", 0, 0), std::invalid_argument);
+}
+
+TEST_CASE("film_stats/depth is view space z") {
+  // A camera at (1, 2, 3) turned 90 degrees about +y: its back axis (axis[2]) is world +x, right is
+  // world -z, up is +y. A hit at P is at view-space z = dot(P - origin, -axis[2]) = -(P.x - 1) in front
+  // of it, which is not the distance to the camera.
+  StatsRig rig(1, 1, 1, false, false, true);
+  rig.camera.origin = {1, 2, 3};
+  rig.camera.axis[0] = {0, 0, -1}, rig.camera.axis[1] = {0, 1, 0}, rig.camera.axis[2] = {1, 0, 0};
+  const ar::Real3 p{-4, 6, 0}, n{1, 0, 0};
+  uint32_t flags = 0;
+  ar::film_primary_aov(rig.kg, 0, 0, &flags, p, n, 0.0f, 0.0f, 1u);
+  rig.add(0, 0, 1.0f);
+  rig.resolve();
+  const double z = film_add_channel_value(rig.film->layout(), rig.data(), "aov_depth", 0, 0);
+  CHECK(z == doctest::Approx(5.0).epsilon(1e-6));
+  const double dist = std::sqrt(25.0 + 16.0 + 9.0);
+  CHECK(std::fabs(z - dist) > 1.0);  // the ray distance would read 7.07
+  CHECK(rig.film->layout().find("aov_depth")->sample0);
+  // A point behind the camera is negative: the plane stores what the formula gives, it does not clamp.
+  StatsRig behind(1, 1, 1, false, false, true);
+  behind.camera = rig.camera;
+  uint32_t flags2 = 0;
+  ar::film_primary_aov(behind.kg, 0, 0, &flags2, ar::Real3{5, 2, 3}, n, 0.0f, 0.0f, 1u);
+  CHECK(film_add_channel_value(behind.film->layout(), behind.data(), "aov_depth", 0, 0) == doctest::Approx(-4.0));
+}
+
+TEST_CASE("film_stats/depth keeps sample zero") {
+  // Four samples of one pixel hit at z = 2, 3, 4, 5 (sample index 0..3): the plane holds sample 0's z,
+  // not their sum or mean (Cycles film_overwrite_pass_float at sample 0).
+  StatsRig rig(1, 1, 4, false, false, true);
+  const ar::Real3 n{0, 0, 1};
+  for (uint32_t s = 0; s < 4; ++s) {
+    uint32_t flags = 0;
+    ar::film_primary_aov(rig.kg, s, s, &flags, ar::Real3{0, 0, -(2.0f + float(s))}, n, 0.0f, 0.0f, 1u);
+    rig.add(0, s, 1.0f);
+  }
+  rig.resolve();
+  CHECK(film_add_channel_value(rig.film->layout(), rig.data(), "aov_depth", 0, 0) == 2.0);
+  // A later pass (samples_done > 0) writes nothing either: sample_index is the pixel's sample number.
+  uint32_t flags = 0;
+  ar::film_primary_aov(rig.kg, 0, 4, &flags, ar::Real3{0, 0, -9.0f}, n, 0.0f, 0.0f, 1u);
+  CHECK(film_add_channel_value(rig.film->layout(), rig.data(), "aov_depth", 0, 0) == 2.0);
 }
 
 TEST_CASE("film_stats/bounce mean divides by paths ended") {

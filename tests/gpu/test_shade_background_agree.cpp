@@ -55,6 +55,7 @@ struct Snapshot {
   std::vector<uint32_t> counts;  // every COUNT plane
   std::vector<float> adds;       // every ADD plane (the bounce sum: exact integers)
   std::vector<float> guides;     // guides case: the albedo then the normal planes
+  std::vector<float> transparency;  // film transparent case: the transparency plane
 };
 
 constexpr uint32_t kEnvW = 64, kEnvH = 32;
@@ -110,7 +111,7 @@ std::vector<float> observer_illuminant() {
 // `env`: the program world is the environment light WORLD_ENV over that table, with a selection pmf,
 // so a miss after a scatter is weighted with the compensated pdf of its direction.
 Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullptr, const EnvTable* env = nullptr,
-             bool guides = false) {
+             bool guides = false, bool transparent = false) {
   const Owner owner{1, 1};
   const auto put = [&](const void* p, uint64_t bytes) {
     DeviceBuffer b = dev.allocate(LedgerCategory::TABLES, bytes, owner);
@@ -124,6 +125,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
   req.statistics = true;
   req.termination_stats = true;
   req.guides = guides;
+  req.transparency = transparent;
   Film film(dev, FilmLayout::build(req), owner);
   // The guides case converts in the stage: the real display tables and a two-bin wavelength table.
   std::vector<DeviceBuffer> film_tables;
@@ -326,6 +328,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
   kg.session.height = kFilmH;
   kg.session.samples_per_pass = kK;
   kg.session.features.guides = guides;
+  kg.session.film_transparent = transparent ? 1u : 0u;
   DeviceBuffer kg_buf = put(&kg, sizeof kg);
 
   if (gpu != nullptr) {
@@ -357,6 +360,11 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const ProgramWorld* program = nullp
   dev.download(s.counts.data(), film.buffer(), offset(fd.count), s.counts.size() * sizeof(uint32_t));
   s.adds.resize(size_t(uint32_t(fd.bounce_sum) + 1u) * fd.plane_stride);
   dev.download(s.adds.data(), film.buffer(), offset(fd.add), s.adds.size() * sizeof(float));
+  if (transparent) {
+    s.transparency.resize(fd.plane_stride);
+    dev.download(s.transparency.data(), film.buffer(), offset(fd.add + uint64_t(fd.transparency) * fd.plane_stride),
+                 s.transparency.size() * sizeof(float));
+  }
   if (guides) {
     s.guides.resize(6ull * fd.plane_stride);
     dev.download(s.guides.data(), film.buffer(), offset(fd.add + uint64_t(fd.guide_albedo) * fd.plane_stride),
@@ -582,6 +590,60 @@ TEST_CASE("shade_background_agree/guides") {
   std::printf("shade_background guides agreement: %u non-zero guide values, worst difference %.3g\n", written, worst);
   CHECK(sum > 1.0e3);  // guides really were written
   CHECK(worst <= 1e-6);
+  CHECK(cpu_ledger.total() == 0);
+  CHECK(gpu_ledger.total() == 0);
+}
+
+// Film Transparent (0008 d10): the random paths with bounces[total] == 0 (about 8%) add average(beta) to the
+// transparency plane and nothing to the slot, the others keep the world; both devices write the plane
+// alike and both write what the inputs say (the expectation is rebuilt from the fixture's generator, so a
+// stage that added transparency after a bounce, or kept the world's radiance on a transparent ray, fails
+// on the CUDA module and not only against the CPU). The Depth half of this feature lives in the surface
+// kernel: "shade_surface/depth cuda".
+TEST_CASE("shade_background/depth and transparency cuda") {
+  Ledger cpu_ledger, gpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  const Snapshot c = run(cpu, nullptr, nullptr, nullptr, false, true);
+  const Snapshot g = run(*gpu, gpu.get(), nullptr, nullptr, false, true);
+  check_agreement(c, g, "slot radiance with film transparent nofma vs cpu float");
+  REQUIRE(c.transparency.size() == g.transparency.size());
+  REQUIRE(c.transparency.size() == size_t(kFilmW) * kFilmH);
+
+  // The inputs of path i, as run() generates them: pixel i / kK is its film position.
+  std::vector<double> want(size_t(kFilmW) * kFilmH, 0.0);
+  uint32_t transparent_paths = 0, kept_world = 0;
+  for (uint32_t i = 0; i < kN; ++i) {
+    const bool total_zero = uint16_t(agree::unit(i, 12) * 13.0) == 0;
+    const double bad = agree::unit(i, 8);
+    if (total_zero && bad >= 0.01) {
+      float lane[4];
+      for (int l = 0; l < ar::kLanes; ++l) lane[l] = 2.0f * float(agree::unit(i, 4u + uint32_t(l)));
+      float sum = lane[0];
+      for (int l = 1; l < ar::kLanes; ++l) sum += lane[l];
+      want[i / kK] += double(sum / 4.0f);
+      ++transparent_paths;
+      for (const Snapshot* s : {&c, &g})
+        for (int l = 0; l < ar::kLanes; ++l) CHECK(s->slot_L[size_t(i) * 4 + size_t(l)] == 0.0f);
+    } else if (!total_zero && bad >= 0.01) {
+      kept_world += c.slot_L[size_t(i) * 4] != 0.0f;
+    }
+  }
+  CHECK(transparent_paths > kN / 20);
+  CHECK(kept_world > kN / 2);
+  double worst_c = 0.0, worst_g = 0.0, worst_cg = 0.0;
+  for (size_t p = 0; p < want.size(); ++p) {
+    worst_c = std::max(worst_c, std::fabs(double(c.transparency[p]) - want[p]) / std::max(1.0, want[p]));
+    worst_g = std::max(worst_g, std::fabs(double(g.transparency[p]) - want[p]) / std::max(1.0, want[p]));
+    worst_cg = std::max(worst_cg, std::fabs(double(c.transparency[p]) - double(g.transparency[p])) / std::max(1.0, want[p]));
+  }
+  std::printf("shade_background transparency: %u transparent paths, worst difference to the inputs cpu %.3g cuda %.3g, "
+              "cpu vs cuda %.3g\n", transparent_paths, worst_c, worst_g, worst_cg);
+  CHECK(worst_c <= 1e-6);
+  CHECK(worst_g <= 1e-6);
+  CHECK(worst_cg <= 1e-6);
   CHECK(cpu_ledger.total() == 0);
   CHECK(gpu_ledger.total() == 0);
 }

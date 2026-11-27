@@ -29,6 +29,9 @@ using namespace astroray::host;
 
 namespace {
 
+// Exact in float, so the sum n * t and the division by n round trip.
+constexpr float kTransparency[6] = {0.0f, 0.25f, 0.5f, 1.0f, 1.25f, -0.25f};
+
 // Pixel p of the 3x2 film: n = 4 (pixel 5: n = 1); display component c has S1 = n (10c + p + 1)
 // and a spread that gives variance of the mean 0.5 + p/8; bounces mean p + 1; invalid p.
 struct ReadRig {
@@ -43,6 +46,8 @@ struct ReadRig {
     req.max_width = 3;
     req.max_height = 2;
     req.primary_aov = true;
+    req.depth = true;
+    req.transparency = true;
     film = std::make_unique<Film>(dev, FilmLayout::build(req), Owner{1, 1});
     ar::FilmData& d = film->data();
     const FilmLayout& l = film->layout();
@@ -59,6 +64,11 @@ struct ReadRig {
       d.count[uint64_t(l.offset("bounce_paths")) * d.plane_stride + p] = n;
       for (uint32_t c = 0; c < 3; ++c)  // sample0: stored as is
         d.add[uint64_t(l.offset("aov_position") + int32_t(c)) * d.plane_stride + p] = float(100 * c + p);
+      // Depth stores sample 0's z as is, 0 where the ray never hit (pixel 4). The transparency plane is a
+      // sum over the n samples of the mean transparency kTransparency[p]; its values include ones outside
+      // 0..1 (Russian roulette) for the clamp.
+      d.add[uint64_t(l.offset("aov_depth")) * d.plane_stride + p] = p == 4 ? 0.0f : 2.5f + float(p);
+      d.add[uint64_t(l.offset("transparency")) * d.plane_stride + p] = float(n) * kTransparency[p];
     }
   }
 };
@@ -85,8 +95,8 @@ TEST_CASE("readback/read_pass equals the film helpers") {
   const auto passes = list_passes(rig.film->layout());
   std::vector<std::string> names;
   for (const PassDesc& p : passes) names.push_back(p.name);
-  CHECK(names == std::vector<std::string>{"Combined", "Position", "Normal", "UV", "IndexMA", "AR Sample Count",
-                                          "AR Bounces", "AR Rel Error", "AR Invalid"});
+  CHECK(names == std::vector<std::string>{"Combined", "Depth", "Position", "Normal", "UV", "IndexMA", "Alpha",
+                                          "AR Sample Count", "AR Bounces", "AR Rel Error", "AR Invalid"});
   FilmView copy(rig.dev, *rig.film);
   const ar::FilmData& d = rig.film->data();
 
@@ -116,6 +126,31 @@ TEST_CASE("readback/read_pass equals the film helpers") {
     CHECK(inval[p] == float(p));
   }
   CHECK(rel[5] == -1.0f);  // n = 1: no data
+}
+
+TEST_CASE("readback/alpha is one minus transparency") {
+  // Cycles film/read.h: alpha = saturate(1 - transparency), so the stored mean (a sum over n samples)
+  // must be divided by n, subtracted from 1 and clamped; and a stored depth of 0 reads 1e10 while any
+  // other depth is read as stored.
+  ReadRig rig;
+  const auto passes = list_passes(rig.film->layout());
+  const PassDesc& alpha = pass_named(passes, "Alpha");
+  CHECK(alpha.source == PassSource::Alpha);
+  CHECK(alpha.components == 1);
+  FilmView copy(rig.dev, *rig.film);
+  const std::vector<float> a = read(copy, alpha, AR_QUANTITY_MEAN);
+  const float expect[6] = {1.0f, 0.75f, 0.5f, 0.0f, 0.0f, 1.0f};  // 1.25 and -0.25 are clamped
+  REQUIRE(a.size() == 6);
+  for (uint32_t p = 0; p < 6; ++p) CHECK(a[p] == expect[p]);
+  const std::vector<float> z = read(copy, pass_named(passes, "Depth"), AR_QUANTITY_MEAN);
+  REQUIRE(z.size() == 6);
+  for (uint32_t p = 0; p < 6; ++p) CHECK(z[p] == (p == 4 ? 1e10f : 2.5f + float(p)));
+
+  // A pixel without a sample has no alpha: NaN, not a made-up 1.
+  rig.film->data().n[2] = 0;
+  FilmView none(rig.dev, *rig.film);
+  CHECK(std::isnan(read(none, alpha, AR_QUANTITY_MEAN)[2]));
+  CHECK_THROWS_AS(pass_float_count(alpha, AR_QUANTITY_VARIANCE, 3, 2), std::invalid_argument);
 }
 
 TEST_CASE("readback/read_pass maps the render rectangle") {

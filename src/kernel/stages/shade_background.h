@@ -33,7 +33,8 @@
 // only by a scattering event). It adds transparency = average(throughput) to the transparency plane and
 // nothing to Combined, guides included, and does not evaluate the world: with no background pass Cycles
 // skips the background shader there too (integrate_background, eval_background), and
-// film_write_background writes transparency alone for it. The throughput is 1 unless a non-scattering
+// film_write_background writes transparency alone for it; a non-finite throughput marks the sample invalid
+// and ends the path INVALID, as a non-finite contribution does. The throughput is 1 unless a non-scattering
 // event attenuated it (an absorbing medium): M1b's opacity null event leaves it unchanged, so a surface
 // pass-through reads 1 and an alpha card's partial coverage comes from the stochastic decision. A path
 // through a visible lamp keeps the flag too: Cycles counts the lamp as a transparent bounce
@@ -178,7 +179,14 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
   // no radiance. A path that scattered still sees the world.
   const bool transparent_ray = kg.session.film_transparent != 0u && ps_bounces(kg, slot).v[0] == 0u;
   if (transparent_ray) {
-    film_add_transparency(kg, ps_sample_id(kg, slot), avg(ps_beta(kg, slot)));
+    // A non-finite throughput has no transparency: it fails the sample, as a non-finite contribution does.
+    const Real transparency = avg(ps_beta(kg, slot));
+    if (transparency - transparency == Real(0)) {
+      film_add_transparency(kg, ps_sample_id(kg, slot), transparency);
+    } else {
+      sample_mark_invalid(kg, ps_sample_id(kg, slot));
+      term = Term::INVALID;
+    }
   } else if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
     const Spec lt = ps_lambda_t(kg, slot);
     Lambda lam;

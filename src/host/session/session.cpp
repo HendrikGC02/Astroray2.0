@@ -75,6 +75,7 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, bool 
   // The denoising passes are names of this list only with a denoiser: requested without one they are
   // PASS_UNSUPPORTED like any name the engine does not produce (d10: they exist with a denoiser).
   const std::vector<PassDesc> produced = list_passes(FilmLayout::build(all), denoiser);
+  bool depth_named = false;
   for (const ar_name& n : s->passes) {
     const char* text = reinterpret_cast<const char*>(n.text);
     const std::string name(text, std::find(text, text + sizeof n.text, '\0'));
@@ -82,9 +83,12 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, bool 
     if (it == produced.end()) unknown->push_back(name);
     else if (it->source == PassSource::Depth && !pinhole) unknown->push_back(name);
     else if (it->source == PassSource::Aov) req.primary_aov = true;
-    else if (it->source == PassSource::Depth) req.depth = true;
+    else if (it->source == PassSource::Depth) depth_named = true;
     else if (it->source == PassSource::Alpha) req.transparency = true;
   }
+  // Depth is one of the primary-hit AOVs the surface stage writes together: any of them brings it
+  // (Position brings Normal, UV and IndexMA already), when the camera is one it is defined for.
+  req.depth = pinhole && (depth_named || req.primary_aov);
   return req;
 }
 
