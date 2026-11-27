@@ -3,7 +3,8 @@
 // Hero-lane delta tracking (medium/delta_track.h; 0006 D8, 0003 d6-d7) on its own, without a scene:
 // the free-flight distance against the hero lane's exponential, an exact enumeration of a flight's
 // one-collision outcomes against the per-lane analytic transmittance and scattered weight, the
-// collision limit, and (gate) the per-lane transmittance of absorbing slabs at 2^20 flights.
+// collision limit, the per-launch cap (a flight resumed after every cap stop is bit-identical to an
+// uncapped one), and (gate) the per-lane transmittance of absorbing slabs at 2^20 flights.
 // Analytic values: transmittance exp(-sigma_t d); with the majorant equal to sigma_t a flight has
 // at most one collision, scattered at depth t with density sigma_t e^(-sigma_t t), so the expected
 // scattered weight per lane is sigma_s / sigma_t (1 - exp(-sigma_t d)).
@@ -15,6 +16,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <random>
 #include <vector>
 
 #include "common/stat.h"
@@ -32,6 +35,35 @@ using ar::TrackWeights;
 const Spec kSigmaT{{Real(0.5), Real(1.0), Real(1.5), Real(2.0)}};
 
 TrackWeights unit_weights() { return TrackWeights{ar::spec_fill(1), ar::spec_fill(1), ar::spec_fill(1)}; }
+
+// A segment along +x from x0 with t_max left: the flight's distance from the start is o.x - x0.
+ar::TrackRay x_ray(Real t_max, Real x0 = Real(0)) { return ar::TrackRay{ar::Real3{x0, 0, 0}, ar::Real3{1, 0, 0}, t_max, Real(0)}; }
+
+constexpr uint32_t kUncapped = 0xffffffffu;
+
+// One flight driven to its end through cap stops: each CAPPED return is a requeue, the next call
+// continuing from the stored ray, weights and counter with the limit that is left. Returns the end.
+struct CappedRun {
+  ar::TrackResult end;
+  uint32_t calls, collisions;
+};
+
+CappedRun run_capped(const Spec& sa, const Spec& ss, const Spec& maj, uint32_t h, const ar::MediumStream& st, uint32_t first,
+                     uint32_t limit, uint32_t cap, uint32_t* counter, ar::TrackRay* ray, TrackWeights* w) {
+  CappedRun c{{TrackEvent::CAPPED, 0u}, 0u, 0u};
+  while (c.end.event == TrackEvent::CAPPED) {
+    const uint32_t before = *counter;
+    c.end = ar::track_segment(sa, ss, maj, h, st, counter, limit - (*counter - first), cap, ray, w);
+    ++c.calls;
+    c.collisions += c.end.collisions;
+    // A call advances the counter by exactly its collisions, and a capped call took exactly the cap.
+    if (*counter - before != c.end.collisions || (c.end.event == TrackEvent::CAPPED && c.end.collisions != cap)) c.calls = 0xffffffffu;
+  }
+  return c;
+}
+
+bool same_bits(Real a, Real b) { return std::memcmp(&a, &b, sizeof a) == 0; }
+bool same_bits(const Spec& a, const Spec& b) { return std::memcmp(&a, &b, sizeof a) == 0; }
 
 ar::MediumStream stream(uint32_t id, uint32_t mode, uint32_t seed) {
   return ar::MediumStream{mode, id, 0u, seed, ar::STREAM_PATH_MEDIUM};
@@ -58,11 +90,12 @@ AR_RT_CASE("delta_track/free flight distribution") {
     for (int i = 0; i < kN; ++i) {
       TrackWeights w = unit_weights();
       uint32_t counter = 0;
-      const ar::TrackResult r = ar::track_segment(kSigmaT, zero, kSigmaT, Real(1e30), h,
+      ar::TrackRay ray = x_ray(Real(1e30));
+      const ar::TrackResult r = ar::track_segment(kSigmaT, zero, kSigmaT, h,
                                                   stream(uint32_t(i), ar::SAMPLER_INDEPENDENT, uint32_t(run.seed) + h),
-                                                  &counter, ar::kFlightCollisionLimit, &w);
+                                                  &counter, ar::kFlightCollisionLimit, kUncapped, &ray, &w);
       odd += r.event != TrackEvent::ABSORBED || r.collisions != 1u || counter != 1u;
-      const double cdf = 1.0 - std::exp(-rate * double(r.t));
+      const double cdf = 1.0 - std::exp(-rate * double(ray.o.x));
       obs[std::min(kCells - 1, int(cdf * kCells))] += 1.0;
     }
     const st::Chi2Result res = st::chi2_test(run, obs, exp_);
@@ -87,9 +120,9 @@ AR_RT_CASE("delta_track/weights sum to transmittance") {
     for (int a = 0; a < kDist; ++a)
       for (int b = 0; b < kEvent; ++b) {
         TrackWeights w = unit_weights();
-        Real t = 0;
-        const TrackEvent e = ar::track_collision(sigma_a, sigma_s, kSigmaT, Real(1), h, Real((a + 0.5) / kDist),
-                                                 Real((b + 0.5) / kEvent), &t, &w);
+        ar::TrackRay ray = x_ray(Real(1));
+        const TrackEvent e = ar::track_collision(sigma_a, sigma_s, kSigmaT, h, Real((a + 0.5) / kDist), Real((b + 0.5) / kEvent),
+                                                 &ray, &w);
         other += e == TrackEvent::NULL_COLLISION || e == TrackEvent::ZERO;
         for (int j = 0; j < 4; ++j) {
           const double v = lane_estimate(w, j) / (4.0 * kDist * kEvent);
@@ -111,8 +144,9 @@ AR_RT_CASE("delta_track/null and reach rescale r_l as pbrt") {
   // pbrt-v4 VolPathIntegrator::Li with the hero lane h for lane 0, recomputed here in double:
   //   null:    pdf = T_maj[h] sigma_n[h]; beta, r_u *= T_maj sigma_n / pdf; r_l *= T_maj sigma_maj / pdf
   //   reached: beta, r_u, r_l *= T_maj / T_maj[h]
-  // with T_maj = exp(-(t - t_min) sigma_maj) and sigma_n = sigma_maj - sigma_a - sigma_s. The starting
-  // weights differ per lane, so a factor applied to the wrong spectrum shows.
+  // with T_maj = exp(-s sigma_maj), s the distance from the flight's origin (pbrt's t - t_min), and
+  // sigma_n = sigma_maj - sigma_a - sigma_s. The starting weights differ per lane, so a factor applied to
+  // the wrong spectrum shows. The flight starts at x = 0.25 with 9.75 left: a collision moves the ray.
   const Spec sa{{Real(0.1), Real(0.2), Real(0.3), Real(0.4)}}, ss{{Real(0.05), Real(0.1), Real(0.15), Real(0.2)}};
   const Spec maj{{Real(2.0), Real(2.5), Real(3.0), Real(3.5)}};
   const TrackWeights w0{Spec{{Real(1), Real(0.5), Real(2), Real(1.5)}}, Spec{{Real(0.75), Real(1), Real(1.25), Real(0.5)}},
@@ -123,14 +157,19 @@ AR_RT_CASE("delta_track/null and reach rescale r_l as pbrt") {
   // A null collision: the event uniform 0.95 lies past p_absorb + p_scatter = 0.15 at lane h.
   {
     TrackWeights w = w0;
-    Real t = Real(0.25);
-    const TrackEvent e = ar::track_collision(sa, ss, maj, Real(10), h, Real(0.3), Real(0.95), &t, &w);
+    ar::TrackRay ray = x_ray(Real(9.75), Real(0.25));
+    ray.back = Real(0.5);
+    const TrackEvent e = ar::track_collision(sa, ss, maj, h, Real(0.3), Real(0.95), &ray, &w);
     REQUIRE(e == TrackEvent::NULL_COLLISION);
-    const double tc = 0.25 - std::log(1.0 - double(Real(0.3))) / double(maj.v[h]);
-    CHECK(close(double(t), tc));
+    const double sd = -std::log(1.0 - double(Real(0.3))) / double(maj.v[h]);
+    CHECK(close(double(ray.o.x), 0.25 + sd));
+    CHECK(close(double(ray.t_max), 9.75 - sd));
+    CHECK(close(double(ray.back), 0.5 + sd));
+    CHECK(ray.o.y == Real(0));
+    CHECK(ray.o.z == Real(0));
     double tm[4], sn[4];
     for (int j = 0; j < 4; ++j) {
-      tm[j] = std::exp(-(double(t) - 0.25) * double(maj.v[j]));
+      tm[j] = std::exp(-sd * double(maj.v[j]));
       sn[j] = double(maj.v[j]) - double(sa.v[j]) - double(ss.v[j]);
     }
     const double pdf = tm[h] * sn[h];
@@ -141,15 +180,18 @@ AR_RT_CASE("delta_track/null and reach rescale r_l as pbrt") {
       CHECK(close(double(w.r_l.v[j]), double(w0.r_l.v[j]) * tm[j] * double(maj.v[j]) / pdf));
     }
   }
-  // Reaching t_max = 0.4 from t_min = 0.25: the distance uniform puts the collision far past it.
+  // Reaching the end 0.15 past x = 0.25: the distance uniform puts the collision far past it, and the
+  // ray is left where it was.
   {
     TrackWeights w = w0;
-    Real t = Real(0.25);
-    const TrackEvent e = ar::track_collision(sa, ss, maj, Real(0.4), h, Real(0.999), Real(0.5), &t, &w);
+    ar::TrackRay ray = x_ray(Real(0.15), Real(0.25));
+    const TrackEvent e = ar::track_collision(sa, ss, maj, h, Real(0.999), Real(0.5), &ray, &w);
     REQUIRE(e == TrackEvent::REACHED);
-    CHECK(t == Real(0.4));
+    CHECK(ray.o.x == Real(0.25));
+    CHECK(ray.t_max == Real(0.15));
+    CHECK(ray.back == Real(0));
     double tm[4];
-    for (int j = 0; j < 4; ++j) tm[j] = std::exp(-(double(Real(0.4)) - double(Real(0.25))) * double(maj.v[j]));
+    for (int j = 0; j < 4; ++j) tm[j] = std::exp(-double(Real(0.15)) * double(maj.v[j]));
     for (int j = 0; j < 4; ++j) {
       INFO("reached, lane " << j);
       CHECK(close(double(w.beta.v[j]), double(w0.beta.v[j]) * tm[j] / tm[h]));
@@ -165,8 +207,9 @@ AR_RT_CASE("delta_track/collision limit and zero majorant") {
   const Spec zero = ar::spec_fill(0);
   TrackWeights w = unit_weights();
   uint32_t counter = 40;
-  const ar::TrackResult r =
-      ar::track_segment(zero, zero, ar::spec_fill(Real(1e6)), Real(1), 2u, stream(7u, ar::SAMPLER_SOBOL, 3u), &counter, 16u, &w);
+  ar::TrackRay ray = x_ray(Real(1));
+  const ar::TrackResult r = ar::track_segment(zero, zero, ar::spec_fill(Real(1e6)), 2u, stream(7u, ar::SAMPLER_SOBOL, 3u), &counter,
+                                              16u, kUncapped, &ray, &w);
   CHECK(r.event == TrackEvent::LIMIT);
   CHECK(r.collisions == 16u);
   CHECK(counter == 56u);
@@ -176,12 +219,88 @@ AR_RT_CASE("delta_track/collision limit and zero majorant") {
   maj.v[1] = Real(0);
   TrackWeights z = unit_weights();
   uint32_t c2 = 5;
-  const ar::TrackResult r2 = ar::track_segment(zero, zero, maj, Real(1), 1u, stream(7u, ar::SAMPLER_SOBOL, 3u), &c2,
-                                               ar::kFlightCollisionLimit, &z);
+  ar::TrackRay ray2 = x_ray(Real(1));
+  const ar::TrackResult r2 = ar::track_segment(zero, zero, maj, 1u, stream(7u, ar::SAMPLER_SOBOL, 3u), &c2, ar::kFlightCollisionLimit,
+                                               kUncapped, &ray2, &z);
   CHECK(r2.event == TrackEvent::REACHED);
   CHECK(r2.collisions == 0u);
   CHECK(c2 == 5u);
   for (int j = 0; j < 4; ++j) CHECK(double(z.beta.v[j]) == doctest::Approx(std::exp(-double(maj.v[j]))).epsilon(1e-6));
+}
+
+AR_RT_CASE("delta_track/capped equals uncapped") {
+  // 0006 D8 per-launch cap, V6 third clause, 0003 check 26: 1e4 random segments with a loose majorant
+  // (2 to 40 times sigma_t, so flights take tens of null collisions), random coefficients, lengths,
+  // hero lanes and starting weights. Each is tracked uncapped and again with caps 1, 7 and 4,096,
+  // requeued after every stop; event, ray (origin, length left, distance back), weights and counter
+  // must equal the uncapped flight's bit for bit, and the calls must be ceil(collisions / cap).
+  std::mt19937 rng(0x193u);
+  std::uniform_real_distribution<double> U(0.0, 1.0);
+  const uint32_t caps[3] = {1u, 7u, 4096u};
+  int differ = 0, bad_calls = 0, capped_flights = 0;
+  uint64_t total = 0;
+  for (int i = 0; i < 10000; ++i) {
+    Spec sa, ss, maj;
+    const double loose = 2.0 + 38.0 * U(rng);
+    for (int j = 0; j < 4; ++j) {
+      sa.v[j] = Real(0.05 + 2.0 * U(rng));
+      ss.v[j] = Real(0.05 + 2.0 * U(rng));
+      maj.v[j] = Real(double(sa.v[j] + ss.v[j]) * loose);
+    }
+    const uint32_t h = uint32_t(i) & 3u;
+    const ar::TrackRay ray0{ar::Real3{Real(U(rng)), Real(U(rng)), Real(U(rng))}, ar::Real3{Real(U(rng) + 0.1), Real(U(rng)), Real(U(rng))},
+                            Real(0.1 + 4.0 * U(rng)), Real(U(rng))};
+    TrackWeights w0{};
+    for (int j = 0; j < 4; ++j) w0.beta.v[j] = Real(0.5 + U(rng)), w0.r_u.v[j] = Real(0.5 + U(rng)), w0.r_l.v[j] = Real(0.5 + U(rng));
+    const ar::MediumStream st = stream(uint32_t(i), ar::SAMPLER_SOBOL, 0x5eedu);
+    const uint32_t first = ar::flight_rng_start(uint32_t(i) & 7u);
+    uint32_t c_ref = first;
+    ar::TrackRay ray_ref = ray0;
+    TrackWeights w_ref = w0;
+    const ar::TrackResult ref = ar::track_segment(sa, ss, maj, h, st, &c_ref, ar::kFlightCollisionLimit, kUncapped, &ray_ref, &w_ref);
+    total += ref.collisions;
+    for (const uint32_t cap : caps) {
+      uint32_t c = first;
+      ar::TrackRay ray = ray0;
+      TrackWeights w = w0;
+      const CappedRun run = run_capped(sa, ss, maj, h, st, first, ar::kFlightCollisionLimit, cap, &c, &ray, &w);
+      capped_flights += run.calls > 1u;
+      bad_calls += run.calls != (ref.collisions + cap - 1u) / cap || run.collisions != ref.collisions;
+      differ += run.end.event != ref.event || c != c_ref || !same_bits(ray.o.x, ray_ref.o.x) || !same_bits(ray.o.y, ray_ref.o.y) ||
+                !same_bits(ray.o.z, ray_ref.o.z) || !same_bits(ray.t_max, ray_ref.t_max) || !same_bits(ray.back, ray_ref.back) ||
+                !same_bits(w.beta, w_ref.beta) || !same_bits(w.r_u, w_ref.r_u) || !same_bits(w.r_l, w_ref.r_l);
+    }
+  }
+  std::printf("delta_track capped: %llu tentative collisions over 1e4 flights, %d capped flight runs\n", (unsigned long long)total,
+              capped_flights);
+  CHECK(differ == 0);
+  CHECK(bad_calls == 0);
+  CHECK(capped_flights > 10000);  // cap 1 and 7 stop most flights: the requeue is exercised
+}
+
+AR_RT_CASE("delta_track/limit after the same count whatever the cap") {
+  // Null collisions only (majorant 1e6 per m over 1 m, no absorption or scattering): the event's limit,
+  // here 100 blocks from an offset start, ends the flight LIMIT after exactly 100 tentative collisions
+  // whether it runs uncapped or capped at 1, 7 or 4,096, and at a cap equal to the blocks left the limit
+  // wins (LIMIT, not CAPPED).
+  const Spec zero = ar::spec_fill(0), maj = ar::spec_fill(Real(1e6));
+  const ar::MediumStream st = stream(11u, ar::SAMPLER_SOBOL, 5u);
+  const uint32_t first = ar::flight_rng_start(2u) + 30u;
+  for (const uint32_t cap : {1u, 7u, 100u, 4096u, kUncapped}) {
+    uint32_t c = first;
+    ar::TrackRay ray = x_ray(Real(1));
+    TrackWeights w = unit_weights();
+    const CappedRun run = run_capped(zero, zero, maj, 1u, st, first, 100u, cap, &c, &ray, &w);
+    INFO("cap " << cap);
+    CHECK(run.calls != 0xffffffffu);
+    CHECK(run.end.event == TrackEvent::LIMIT);
+    CHECK(run.collisions == 100u);
+    CHECK(c == first + 100u);
+  }
+  uint32_t c = first;
+  ar::TrackRay ray = x_ray(Real(1));
+  TrackWeights w = unit_weights();
+  CHECK(ar::track_segment(zero, zero, maj, 1u, st, &c, 7u, 7u, &ray, &w).event == TrackEvent::LIMIT);
 }
 
 }  // TEST_SUITE
@@ -205,8 +324,9 @@ static void absorbing_slab(double majorant_scale, const char* name) {
     TrackWeights w = unit_weights();
     uint32_t counter = 3u * ar::kFlightCollisionLimit;
     const ar::MediumStream s{ar::SAMPLER_SOBOL, id, index, uint32_t(run.seed), ar::STREAM_PATH_MEDIUM};
-    const ar::TrackResult r = ar::track_segment(kSigmaT, zero, maj, Real(1), h < 4u ? h : 3u, s, &counter,
-                                                ar::kFlightCollisionLimit, &w);
+    ar::TrackRay ray = x_ray(Real(1));
+    const ar::TrackResult r = ar::track_segment(kSigmaT, zero, maj, h < 4u ? h : 3u, s, &counter, ar::kFlightCollisionLimit, kUncapped,
+                                                &ray, &w);
     for (int j = 0; j < 4; ++j) samples[j].push_back(r.event == TrackEvent::REACHED ? lane_estimate(w, j) : 0.0);
   }
   for (int j = 0; j < 4; ++j) {

@@ -120,10 +120,14 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
   }
   const uint32_t sample = ps_sample_id(kg, slot);
   const uint32_t flags = ps_flags(kg, slot);
-  const Real3 o = ps_ray_o(kg, slot), d = ps_ray_d(kg, slot);
-  // Distances in the coefficients' unit (metres): ray_d need not be unit length.
+  const Real3 d = ps_ray_d(kg, slot);
+  // The flight runs in the ray's parameter, the unit hit_t and prev_dist are stored in, so its state
+  // is stored without a conversion: coefficients per metre times metres per unit parameter (ray_d
+  // need not be unit length).
   const Real d_len = length(d);
-  const Real t_max = ps_hit_t(kg, slot) * d_len;
+  sigma_a *= d_len;
+  sigma_s *= d_len;
+  TrackRay ray{ps_ray_o(kg, slot), d, ps_hit_t(kg, slot), ps_prev_dist(kg, slot)};
   const uint32_t e = ps_event_index(kg, slot);
   const SamplerKey key = camera_key(kg.active_pixels, sample, kg.session.samples_done, kg.session.samples_per_pass);
   const MediumStream st{kg.session.sampler_mode, key.id, key.index, kg.session.seed, STREAM_PATH_MEDIUM};
@@ -134,8 +138,8 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
   // media requeue flights (M2) it must be treated as exhausted instead.
   uint32_t counter = stored >= first && stored < end ? stored : first;
   TrackWeights w{ps_beta(kg, slot), ps_r_u(kg, slot), ps_r_l(kg, slot)};
-  const TrackResult r = track_segment(sigma_a, sigma_s, sigma_a + sigma_s, t_max, hero_lane(flags), st,
-                                      &counter, end - counter, &w);
+  const TrackResult r = track_segment(sigma_a, sigma_s, sigma_a + sigma_s, hero_lane(flags), st, &counter, end - counter,
+                                      0xffffffffu, &ray, &w);
   if (kg.session.features.media) ps_medium_rng(kg, slot) = counter;
   if (r.event == TrackEvent::ABSORBED) {
     path_end(kg, slot, Term::ABSORBED);
@@ -157,8 +161,13 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
     ps_beta(kg, slot) = w.beta;
     ps_r_u(kg, slot) = w.r_u;
     ps_r_l(kg, slot) = w.r_l;
+    // The ray rebased at the flight's null collisions: o + d hit_t is still the hit, and
+    // ray_o - prev_dist ray_d still the previous vertex (shade_light reads both).
+    ps_ray_o(kg, slot) = ray.o;
+    ps_hit_t(kg, slot) = ray.t_max;
+    ps_prev_dist(kg, slot) = ray.back;
     const Real2 uv = ps_hit_uv(kg, slot);
-    const HitRecord hit{ps_hit_t(kg, slot), ps_hit_prim(kg, slot), inst, uv.x, uv.y};
+    const HitRecord hit{ray.t_max, ps_hit_prim(kg, slot), inst, uv.x, uv.y};
     ps_next_stage(kg, slot) = static_cast<uint8_t>(route_hit_after_medium(kg, hit, flags));
     return;
   }
@@ -198,7 +207,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
   ps_prev_ng(kg, slot) = oct_encode(ps.wi);
   ps_prev_ns(kg, slot) = oct_encode(ps.wi);
   ps_prev_dist(kg, slot) = Real(0);
-  ps_ray_o(kg, slot) = o + d * (r.t / d_len);
+  ps_ray_o(kg, slot) = ray.o;
   ps_ray_d(kg, slot) = ps.wi;
   ps_ray_type(kg, slot) = kRayTypeVolume;
   ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::INTERSECT_CLOSEST);

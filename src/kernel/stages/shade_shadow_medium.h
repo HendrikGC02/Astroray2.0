@@ -83,19 +83,28 @@ AR_FN void shadow_medium_item(const KernelGlobals& kg, uint32_t slot, uint32_t l
       return;
     }
   }
-  // Distances in the coefficients' unit (metres): ray_d need not be unit length.
-  const Real t_max = sh_tmax(kg, slot) * length(sh_ray_d(kg, slot));
+  // The estimate runs in the ray's parameter, the unit tmax is stored in: coefficients per metre times
+  // metres per unit parameter (ray_d need not be unit length).
+  Real t_max = sh_tmax(kg, slot);
+  const Real d_len = length(sh_ray_d(kg, slot));
   // A NaN or infinite length is a corrupt item (an unbounded segment never lies inside a hull): fail loudly.
-  if (!(t_max >= Real(0) && t_max <= Real(0x1.fffffep+127f))) {
+  if (!(t_max >= Real(0) && t_max * d_len <= Real(0x1.fffffep+127f))) {
     sample_mark_invalid(kg, target);
     shadow_medium_block(kg, slot);
     return;
   }
+  sigma_a *= d_len;
+  sigma_s *= d_len;
   const SamplerKey key = camera_key(kg.active_pixels, target, kg.session.samples_done, kg.session.samples_per_pass);
   const MediumStream st{kg.session.sampler_mode, key.id, key.index, kg.session.seed, STREAM_SHADOW_MEDIUM};
   uint32_t counter = sh_medium_rng(kg, slot);
-  const RatioTrack r = ratio_track_segment(sigma_a, sigma_s, sigma_a + sigma_s, t_max, item_hero_lane(sh_item_flags(kg, slot)), st,
-                                           &counter, limit);
+  // The item's blocks are [shadow_rng_start(e), + 2^17) and the stride is D8's limit, so the blocks it
+  // has used, whatever earlier launches took, are the counter's offset in its stride.
+  const uint32_t used = counter % kShadowCollisionLimit;
+  const uint32_t left = used < limit ? limit - used : 0u;
+  RatioTrack r = ratio_track_start();
+  ratio_track_segment(sigma_a, sigma_s, sigma_a + sigma_s, &t_max, item_hero_lane(sh_item_flags(kg, slot)), st, &counter, left,
+                      0xffffffffu, &r);
   sh_medium_rng(kg, slot) = counter;
   if (r.limit) {
     const FilmData& f = *kg.film;

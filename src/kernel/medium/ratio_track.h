@@ -6,8 +6,8 @@
 // coefficients, the majorant and the sampler stream are arguments.
 //
 // pbrt-v4 VolPathIntegrator::SampleLd (cpu/integrators.cpp) with SampleT_maj (media.h), [0] read as
-// [h]. T_ray, r_l and r_u start at 1. The distance is t = t_min + SampleExponential(u, sigma_maj[h])
-// and at a collision T_maj = exp(-(t - t_min) sigma_maj); quoted from the source:
+// [h]. T_ray, r_l and r_u start at 1. The distance from the last collision is s = SampleExponential(u,
+// sigma_maj[h]) (pbrt's t - t_min) and at a collision T_maj = exp(-s sigma_maj); quoted from the source:
 //   SampledSpectrum sigma_n = ClampZero(sigma_maj - mp.sigma_a - mp.sigma_s);
 //   Float pdf = T_maj[0] * sigma_maj[0];
 //   T_ray *= T_maj * sigma_n / pdf;
@@ -38,6 +38,12 @@
 // blocks (D8: 131,072 tentative collisions per shadow segment, PROVISIONAL; roulette draws count
 // too, so an item's blocks never leave its 2^17 stride) the estimate stops with `limit` set and
 // T_ray = 0: the caller blocks the item and counts VOLUME_LIMIT.
+// Per-launch cap (D8): after `max_collisions` tentative collisions in one call the estimate stops with
+// `capped` set and the caller requeues the item with the returned state. As in delta_track.h, the
+// loop's state between collisions is exactly what a caller keeps: T, r_u, r_l and what is left of the
+// segment, which is shortened at every collision instead of a running t growing from t_min, so a
+// resumed estimate is bit-identical to an uncapped one. The limit is checked before the cap, so a
+// capped estimate always has blocks left.
 // Ref: Novak, Selle and Jarosz 2014, "Residual ratio tracking for estimating attenuation in
 // participating media"; docs/decisions/0006-volumes-and-astrophysics.md D8, D19; 0003 d6, d7, d23
 // (stream 2); pbrt-v4 (Apache-2.0, read, not copied) in
@@ -74,62 +80,72 @@ AR_FN U32x4 shadow_medium_field(uint32_t medium_plus_one) { return U32x4{{medium
 
 struct RatioTrack {
   Spec T, r_u, r_l;     // T_ray and the rescaling factors of r_u and r_l, each starting at 1
-  uint32_t collisions;  // tentative collisions taken
+  uint32_t collisions;  // tentative collisions taken by the last call
   bool limit;           // stopped at `limit`: T is 0 and the caller counts VOLUME_LIMIT
+  bool capped;          // stopped after `max_collisions`: *t_max is what is left; call again with this state
 };
 
-// One shadow segment [0, t_max] of a homogeneous medium (one majorant segment). Coefficients and
-// t_max share one length unit; sigma_maj >= sigma_a + sigma_s at every lane is the caller's to keep.
-AR_FN RatioTrack ratio_track_segment(const Spec& sigma_a, const Spec& sigma_s, const Spec& sigma_maj, Real t_max, uint32_t h,
-                                     const MediumStream& st, uint32_t* counter, uint32_t limit) {
+// The state an estimate starts from: T_ray, r_u and r_l at 1.
+AR_FN RatioTrack ratio_track_start() { return RatioTrack{spec_fill(Real(1)), spec_fill(Real(1)), spec_fill(Real(1)), 0u, false, false}; }
+
+// Goes on with the estimate *r over what is left of a shadow segment, [0, *t_max], of a homogeneous
+// medium (one majorant segment), with at most `limit` blocks and `max_collisions` (> 0) tentative
+// collisions in this call. Coefficients and *t_max share one length unit; sigma_maj >= sigma_a +
+// sigma_s at every lane is the caller's to keep. *t_max is shortened at every collision.
+AR_FN void ratio_track_segment(const Spec& sigma_a, const Spec& sigma_s, const Spec& sigma_maj, Real* t_max, uint32_t h,
+                               const MediumStream& st, uint32_t* counter, uint32_t limit, uint32_t max_collisions, RatioTrack* r) {
   AR_ASSERT(h < uint32_t(kLanes));
-  RatioTrack r{spec_fill(Real(1)), spec_fill(Real(1)), spec_fill(Real(1)), 0u, false};
+  AR_ASSERT(max_collisions > 0u);
+  r->collisions = 0u;
+  r->capped = false;
   const Real maj_h = lane_at(sigma_maj, h);
-  Real t = Real(0);
   if (maj_h > Real(0)) {
     Spec sigma_n;
     for (int i = 0; i < kLanes; ++i) sigma_n.v[i] = ar::max(Real(0), sigma_maj.v[i] - sigma_a.v[i] - sigma_s.v[i]);
     const uint32_t start = *counter;
     for (;;) {
       if (*counter - start >= limit) {
-        r.T = spec_fill(Real(0));
-        r.limit = true;
-        return r;
+        r->T = spec_fill(Real(0));
+        r->limit = true;
+        return;
+      }
+      if (r->collisions >= max_collisions) {
+        r->capped = true;
+        return;
       }
       const Real u = draw(st.mode, st.id, st.index, st.stream, stream_dim((*counter)++, 0u), st.seed);
-      ++r.collisions;
-      const Real tc = t - ar::log(Real(1) - u) / maj_h;
-      if (!(tc < t_max)) break;
+      ++r->collisions;
+      const Real s = -ar::log(Real(1) - u) / maj_h;
+      if (!(s < *t_max)) break;
+      *t_max = *t_max - s;
       Spec tm;
-      for (int i = 0; i < kLanes; ++i) tm.v[i] = ar::exp(-(tc - t) * sigma_maj.v[i]);
+      for (int i = 0; i < kLanes; ++i) tm.v[i] = ar::exp(-s * sigma_maj.v[i]);
       const Real pdf = lane_at(tm, h) * maj_h;
-      r.T *= tm * sigma_n / pdf;
-      r.r_l *= tm * sigma_maj / pdf;
-      r.r_u *= tm * sigma_n / pdf;
-      if (!(max_lane(r.T) > Real(0))) return r;
-      if (max_lane(r.T / avg(r.r_l + r.r_u)) < Real(0.05)) {
+      r->T *= tm * sigma_n / pdf;
+      r->r_l *= tm * sigma_maj / pdf;
+      r->r_u *= tm * sigma_n / pdf;
+      if (!(max_lane(r->T) > Real(0))) return;
+      if (max_lane(r->T / avg(r->r_l + r->r_u)) < Real(0.05)) {
         if (*counter - start >= limit) continue;  // no block left for the roulette: the limit ends it
         const Real q = Real(0.75);
         if (draw(st.mode, st.id, st.index, st.stream, stream_dim((*counter)++, 0u), st.seed) < q) {
-          r.T = spec_fill(Real(0));
-          return r;
+          r->T = spec_fill(Real(0));
+          return;
         }
-        r.T = r.T / (Real(1) - q);
+        r->T = r->T / (Real(1) - q);
       }
-      t = tc;
     }
   }
-  // The final segment from the last collision (or the start) to t_max.
+  // The final segment from the last collision (or the start) to the end.
   // pbrt replaces an infinite dt by the largest finite Float; the float one serves both builds.
-  Real dt = t_max - t;
+  Real dt = *t_max;
   if (!(dt <= Real(0x1.fffffep+127f))) dt = Real(0x1.fffffep+127f);
   Spec tm;
   for (int i = 0; i < kLanes; ++i) tm.v[i] = ar::exp(-dt * sigma_maj.v[i]);
-  const Spec s = tm / lane_at(tm, h);
-  r.T *= s;
-  r.r_u *= s;
-  r.r_l *= s;
-  return r;
+  const Spec f = tm / lane_at(tm, h);
+  r->T *= f;
+  r->r_u *= f;
+  r->r_l *= f;
 }
 
 AR_NS_END
