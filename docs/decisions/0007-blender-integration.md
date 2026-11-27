@@ -127,6 +127,7 @@ ar_status ar_session_write_fits(ar_session, const char* path, uint32_t what);  /
 | queue and sort indices | 0002 D6 | ~32 MiB | ~32 MiB | always |
 | shadow hit records | 0003 decision 20 side buffer (84 B per shadow slot at K = 4) | 336 MiB | 336 MiB | non-opaque instances |
 | shadow-pass split | 0003 decision 20 side buffer (17 B per shadow slot) | 68 MiB | 68 MiB | light passes |
+| shadow tracker | 0003 decision 20 side buffer (48 B per shadow slot at f32; ledger row: shadow pool) | 192 MiB | 192 MiB | media |
 | geodesic record | 0003 decision 20 side buffer (92 B float / 164 B double per path slot) | 184 / 328 MiB | same | black hole |
 | random-walk record | 0005 item 4a (40 B per path slot) | 80 MiB | 80 MiB | subsurface materials |
 | film incl. per-sample buffer | 0008 `FilmLayout` (decision 21) | ~110 MB moments + 41 MB per-sample buffer + enabled passes | ~4× 1080p | always |
@@ -135,6 +136,8 @@ ar_status ar_session_write_fits(ar_session, const char* path, uint32_t what);  /
 | denoiser | 0008 (OIDN) | measured by P5 | measured by P5 | denoising on |
 | DLSS | 0008 V12 part A (spike F; every preset's figure in `docs/spikes/F-dlss/RESULTS.md`) | 154 MB (Performance) | 597 MB (Performance) to about 1.45 GB (DLAA) | DLSS mode |
 | **Total, always-allocated rows** | | **≤ 1.5 GiB** | **≤ 2.0 GiB** | |
+
+   The shadow tracker is counted in the ledger's SHADOW_POOL category (task 193; a category of its own would change `ar_progress.ledger_bytes` in the ABI), so with media that category's total is the shadow pool plus the tracker: about 688 MiB at 2^22 shadow slots (496 MiB of 124 B items and 192 MiB of 48 B records), above the shadow-pool row's 512 MiB, which the ledger's per-category figures show as one number.
 
 15. **Motion and deformation.** Instances and meshes carry `motion_steps` (S = 1 costs one u32 per descriptor); rays carry `ray_time` (0003). Camera and object (transform) motion blur in final renders: transforms sampled with `engine.frame_set(frame, subframe)` in `update()`, interpolated with T/R/S decomposition and slerp (Shoemake 1985; pbrt-v4 `AnimatedTransform`), built as an OptiX motion TLAS; the motion pipeline variant (0002's program list) is selected at runtime only when the scene has motion. Deformation blur fills S position steps and a motion GAS; until it is implemented, an object with deformation and motion blur enabled renders unblurred with a report entry. Viewport never blurs. **Representative step** (ruling 68, task 037): with S steps spaced evenly from shutter open to close and ray time measured from the shutter centre (0003 D9), the step used for static data (triangulation, the instance centre transform, bounds seeds) is (S-1)/2 in integer division: the centre for odd S, the earlier middle step for even S; one helper defines it. **Previous-frame data for 0008's motion buffer** (decision 15 there): a final render with the Vector pass samples camera and transforms (and position steps where deformation blur exists) at frame − 1 as well, through the same `frame_set` route, as Cycles does for its vector pass; in the viewport the engine keeps the camera and instance transforms of the previously presented generation, so no extra ABI field is needed and viewport motion is rigid only.
 

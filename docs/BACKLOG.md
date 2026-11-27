@@ -37,6 +37,7 @@ them. Milestone is where the item must be settled at the latest.
 | To settle | NaN material inputs render black with no INVALID_SAMPLE | 107 | M1b | slice A flags task |
 | Media | VM volume entry with `medium_eval`; constant-block layout for a medium (write into 0006) | 152 draft | M1b | slice C |
 | Process | Fold rulings 64-85 into the records; delete superseded records | R12 a, 0009 q4 | owner | |
+| Kernel | Report code 36 (AR_REPORT_MEDIUM_PATH_LIMIT) is never raised: VOLUME_LIMIT is counted in term_hist only; a kernel counter beside FilmData::invalid_total, read and raised once by session.cpp (183's ruling moved it to 193; 193 left it out, ruling 111) | 193 | M1b | |
 | Process | Stale directories `.claude/worktrees/agent-a934dd254fe6d8f2d`, `agent-a3a823bde1b1e2a0c`, `agent-a61c36ff96e523f48`, `agent-a631435169fa2c847`; 40 merged `worktree-agent-*` branches | handover | M1b | lead, after a look |
 | ABI, host | `Ledger::remove` throws on a non-live id (double free) and two destructors swallow it on every replace/remove (embree_scene.cpp ~Charge, mesh.cpp ~MeshTopology/~MeshRecord): report it through the context log | 142 review | M1b | |
 | Docs | 0009 d26 omits the reviewer's canary.patch input; 0009 Appendix A cites the old CLAUDE.md numbering; d13 rows B-26, B-27, B-36 cite "review item" text now in docs/history/; 0008 line 241 and ROADMAP line 37 say spike F part A must still run (it ran, owner decision 30); 0001 D7 says "one GPL file" (Cycles 5.3 has three GPL headers, none in src/) | 155, 143 reviews | M1b | |

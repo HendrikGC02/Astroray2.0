@@ -48,6 +48,9 @@ inline constexpr uint32_t TEST_HOOK_LIGHT_ALIAS = 1u << 3;
 // 11). Unbiased only while no secondary lane is terminated after a hero decision (0003 d6).
 inline constexpr uint32_t TEST_HOOK_HERO_LANE0 = 1u << 4;
 
+// 0006 D8's per-launch cap on tentative collisions per medium item (PROVISIONAL).
+inline constexpr uint32_t kMediumLaunchCap = 4096u;
+
 // Constant for a whole pass. max_bounces uses the order of PathStateSoA::bounces:
 // total, diffuse, glossy, transmission, volume, transparent.
 struct SessionUniforms {
@@ -64,6 +67,14 @@ struct SessionUniforms {
   // Blender's min_light_bounces: Russian roulette starts at depth max(2, min_bounces), so a value
   // at or above max_bounces[0] disables it, as in Cycles (0004 D2).
   uint32_t min_bounces;
+  // 0006 D8's per-launch cap on tentative collisions per medium item (PROVISIONAL 4,096; never 0, which
+  // the session refuses): shade_volume and the shadow pre-pass requeue an item that reaches it. Set
+  // below the default only by ASTRORAY_TEST_MEDIUM_CAP.
+  uint32_t medium_launch_cap = kMediumLaunchCap;
+  // The homogeneous majorant is medium_majorant times sigma_t (RULINGS 111): 1 in production, where
+  // the majorant is tight and no flight takes a null collision; ASTRORAY_TEST_MAJORANT sets k >= 1 so
+  // flights take null collisions and the cap is exercised. Unbiased for any k >= 1.
+  uint32_t medium_majorant = 1u;
 };
 
 // Opaque until the task that needs them defines them.
@@ -84,6 +95,12 @@ struct FilterTable;  // film/filter.h
 struct EnvBake {
   float* grid;
   uint32_t n;
+};
+
+// One shadow slot's element of KernelGlobals::shadow_track: T_ray and the rescaling factors of r_u and
+// r_l as medium/ratio_track.h's RatioTrack carries them between collisions (48 B at Real = float).
+struct ShadowTrack {
+  Spec T, r_u, r_l;
 };
 
 struct KernelGlobals {
@@ -153,6 +170,12 @@ struct KernelGlobals {
   // `env`, so every offset the CUDA device reads (step_table, env_bake) is unchanged; null in a
   // value-initialised KernelGlobals, so the hand-built ones in tests need no edit.
   DenoiseTarget* denoise = nullptr;
+
+  // The ratio tracker's state of a shadow item the media pre-pass capped (0006 D8 requeue; 0003 d20
+  // side buffer, by shadow slot, allocated only with the media feature; null otherwise). Read only on
+  // a resume and written only at a cap (stages/shade_shadow_medium.h). Last member so the offsets the
+  // CUDA device reads stay put.
+  ShadowTrack* shadow_track = nullptr;
 };
 
 // ps_<field> and sh_<field>: the slot's element of that field's array. The array is

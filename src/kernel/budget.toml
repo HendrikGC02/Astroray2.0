@@ -188,10 +188,12 @@ gated = "merge"
 # Its volume entry (VmRegs, context, MediumSample), the shadow medium stream's Sobol lane table and
 # ratio tracking: 64 registers, 480 B stack, the interpreter's switch spills 36 / 36 B (D10: VM kernels
 # at most 128 / 192). First values from the task's measurement (ruling 91); compile 2.39 s in check gate (old clock, with vcvarsall).
-regs = 64
-stack = 480
-spill_store = 36
-spill_load = 36
+# The per-launch cap's resume and requeue (0006 D8: the shadow_track side buffer's load and store, the rebased
+# estimate): 64 to 80 registers, the stack 480 to 432 B and the switch's spills 36 / 36 to 0 / 0 B.
+regs = 80
+stack = 432
+spill_store = 0
+spill_load = 0
 compile_s = 1.75
 gated = "merge"
 
@@ -200,7 +202,7 @@ gated = "merge"
 # path-medium stream's draws and the phase sample (34 / 0 as the pass-through skeleton). Launch row
 # (256, 1), ladder step 3 (ruling 102): with no minimum-blocks clause ptxas held 80 registers and
 # spilled 60 / 84 B with a 528 B stack. The medium from the stack's highest entry and the flight's
-# continued medium_rng: 119 to 121.
+# continued medium_rng: 119 to 121. The rebased flight and the per-launch cap's requeue (0006 D8) change nothing.
 regs = 121
 stack = 464
 spill_store = 0

@@ -2,7 +2,8 @@
 // ar-f64: compiled twice into this executable, once with AR_REAL_DOUBLE (cmake/sources.cmake).
 // Ratio tracking of one shadow segment (medium/ratio_track.h; 0006 D8, D19) on its own, without a
 // scene: the estimate's mean against Beer-Lambert per lane, the zero-coefficient segment, one
-// collision against pbrt-v4 SampleLd's updates recomputed in double, and the collision limit.
+// collision against pbrt-v4 SampleLd's updates recomputed in double, the collision limit, and the
+// per-launch cap (an estimate resumed after every cap stop is bit-identical to an uncapped one).
 // Analytic value: transmittance exp(-sigma_t d) per lane. With a spectrally constant majorant the
 // rescaling factor of r_l is 1 at every collision and at the end (T_maj sigma_maj / pdf and
 // T_maj / T_maj[h] have equal lanes), so the light-sample weight avg(r_l) is 1 and T_ray alone is
@@ -14,6 +15,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <random>
 
 #include "medium/ratio_track.h"
 
@@ -28,6 +31,40 @@ const Spec kSigmaT{{Real(0.5), Real(1.0), Real(1.5), Real(2.0)}};
 ar::MediumStream stream(uint32_t id, uint32_t index, uint32_t seed) {
   return ar::MediumStream{ar::SAMPLER_SOBOL, id, index, seed, ar::STREAM_SHADOW_MEDIUM};
 }
+
+constexpr uint32_t kUncapped = 0xffffffffu;
+
+// The uncapped estimate over a fresh segment [0, t_max].
+ar::RatioTrack ratio(const Spec& sa, const Spec& ss, const Spec& maj, Real t_max, uint32_t h, const ar::MediumStream& st,
+                     uint32_t* counter, uint32_t limit) {
+  ar::RatioTrack r = ar::ratio_track_start();
+  ar::ratio_track_segment(sa, ss, maj, &t_max, h, st, counter, limit, kUncapped, &r);
+  return r;
+}
+
+// An estimate driven to its end through cap stops: each capped return is a requeue, the next call going
+// on from the stored state, length left and counter with the blocks left of `limit` from `first`.
+// calls is 0xffffffff when a call advanced the counter by fewer blocks than its collisions or a capped
+// call took other than `cap` collisions.
+struct CappedRun {
+  uint32_t calls, collisions;
+};
+
+CappedRun run_capped(const Spec& sa, const Spec& ss, const Spec& maj, uint32_t h, const ar::MediumStream& st, uint32_t first,
+                     uint32_t limit, uint32_t cap, uint32_t* counter, Real* t_max, ar::RatioTrack* r) {
+  CappedRun c{0u, 0u};
+  *r = ar::ratio_track_start();
+  do {
+    const uint32_t before = *counter;
+    ar::ratio_track_segment(sa, ss, maj, t_max, h, st, counter, limit - (*counter - first), cap, r);
+    c.calls = c.calls == 0xffffffffu ? c.calls : c.calls + 1u;
+    c.collisions += r->collisions;
+    if (*counter - before < r->collisions || (r->capped && r->collisions != cap)) c.calls = 0xffffffffu;
+  } while (r->capped);
+  return c;
+}
+
+bool same_bits(const void* a, const void* b, size_t n) { return std::memcmp(a, b, n) == 0; }
 
 }  // namespace
 
@@ -47,7 +84,7 @@ AR_RT_CASE("ratio_track/mean equals beer lambert") {
     for (uint32_t i = 0; i < kN; ++i) {
       uint32_t counter = ar::shadow_rng_start(3u);
       const ar::RatioTrack r =
-          ar::ratio_track_segment(kSigmaT, zero, maj, Real(1), i & 3u, stream(i >> 6, i & 63u, 0x5eedu + uint32_t(m)), &counter,
+          ratio(kSigmaT, zero, maj, Real(1), i & 3u, stream(i >> 6, i & 63u, 0x5eedu + uint32_t(m)), &counter,
                                   ar::kShadowCollisionLimit);
       collisions[m] += r.collisions;
       bad_r_l += std::fabs(double(ar::avg(r.r_l)) - 1.0) > 1e-6;
@@ -81,7 +118,7 @@ AR_RT_CASE("ratio_track/roulette keeps beer lambert") {
     const uint32_t start = ar::shadow_rng_start(2u);
     uint32_t counter = start;
     const ar::RatioTrack r =
-        ar::ratio_track_segment(kSigmaT, zero, maj, Real(8), i & 3u, stream(i >> 6, i & 63u, 0x0de7u), &counter, ar::kShadowCollisionLimit);
+        ratio(kSigmaT, zero, maj, Real(8), i & 3u, stream(i >> 6, i & 63u, 0x0de7u), &counter, ar::kShadowCollisionLimit);
     roulette_blocks += double(counter - start) - double(r.collisions);
     for (int j = 0; j < 4; ++j) sum[j] += double(r.T.v[j]), sum2[j] += double(r.T.v[j]) * double(r.T.v[j]);
   }
@@ -103,7 +140,7 @@ AR_RT_CASE("ratio_track/zero sigma is one") {
   const Spec zero = ar::spec_fill(0);
   for (const Real t_max : {Real(3), Real(0x1.fffffep+127f)}) {
     uint32_t counter = 77u;
-    const ar::RatioTrack r = ar::ratio_track_segment(zero, zero, zero, t_max, 2u, stream(5u, 1u, 9u), &counter, ar::kShadowCollisionLimit);
+    const ar::RatioTrack r = ratio(zero, zero, zero, t_max, 2u, stream(5u, 1u, 9u), &counter, ar::kShadowCollisionLimit);
     CHECK(counter == 77u);
     CHECK(r.collisions == 0u);
     CHECK_FALSE(r.limit);
@@ -135,7 +172,7 @@ AR_RT_CASE("ratio_track/one collision follows pbrt") {
     if (!(t1 < 0.99 && t2 > 1.01)) continue;
     ++found;
     uint32_t counter = 10u;
-    const ar::RatioTrack r = ar::ratio_track_segment(sa, ss, maj, Real(1), h, st, &counter, ar::kShadowCollisionLimit);
+    const ar::RatioTrack r = ratio(sa, ss, maj, Real(1), h, st, &counter, ar::kShadowCollisionLimit);
     CHECK(r.collisions == 2u);  // the second draw is the one that passes the end
     CHECK(counter == 12u);
     double T[4], ru[4], rl[4], tm[4], te[4];
@@ -165,11 +202,77 @@ AR_RT_CASE("ratio_track/collision limit blocks") {
   // falls, so the estimate stops at the limit, advancing the counter by as many blocks, with T 0.
   const Spec zero = ar::spec_fill(0);
   uint32_t counter = 40u;
-  const ar::RatioTrack r = ar::ratio_track_segment(zero, zero, ar::spec_fill(Real(1e6)), Real(1), 3u, stream(7u, 2u, 3u), &counter, 16u);
+  const ar::RatioTrack r = ratio(zero, zero, ar::spec_fill(Real(1e6)), Real(1), 3u, stream(7u, 2u, 3u), &counter, 16u);
   CHECK(r.limit);
   CHECK(r.collisions == 16u);
   CHECK(counter == 56u);
   for (int j = 0; j < 4; ++j) CHECK(r.T.v[j] == Real(0));
+}
+
+AR_RT_CASE("ratio_track/capped equals uncapped") {
+  // 0006 D8 per-launch cap, V6 third clause, 0003 check 26: 1e4 random shadow segments with a loose
+  // majorant (2 to 20 times sigma_t) and lengths up to 4 m, so estimates take tens of collisions and
+  // the roulette runs in many. Each is estimated uncapped and again with caps 1, 7 and 4,096, requeued
+  // after every stop; T, r_u, r_l, the length left, the counter and the limit flag must equal the
+  // uncapped estimate's bit for bit, and the calls must be ceil(collisions / cap).
+  std::mt19937 rng(0x193u);
+  std::uniform_real_distribution<double> U(0.0, 1.0);
+  const uint32_t caps[3] = {1u, 7u, 4096u};
+  int differ = 0, bad_calls = 0, capped_runs = 0, roulette = 0;
+  for (int i = 0; i < 10000; ++i) {
+    Spec sa, ss, maj;
+    const double loose = 2.0 + 18.0 * U(rng);
+    for (int j = 0; j < 4; ++j) {
+      sa.v[j] = Real(0.05 + 1.0 * U(rng));
+      ss.v[j] = Real(0.05 + 1.0 * U(rng));
+      maj.v[j] = Real(double(sa.v[j] + ss.v[j]) * loose);
+    }
+    const uint32_t h = uint32_t(i) & 3u;
+    const Real len = Real(0.1 + 4.0 * U(rng));
+    const ar::MediumStream st = stream(uint32_t(i) >> 4, uint32_t(i) & 15u, 0x5eedu);
+    const uint32_t first = ar::shadow_rng_start(uint32_t(i) & 7u);
+    uint32_t c_ref = first;
+    Real t_ref = len;
+    ar::RatioTrack ref = ar::ratio_track_start();
+    ar::ratio_track_segment(sa, ss, maj, &t_ref, h, st, &c_ref, ar::kShadowCollisionLimit, kUncapped, &ref);
+    roulette += c_ref - first > ref.collisions;
+    for (const uint32_t cap : caps) {
+      uint32_t c = first;
+      Real t = len;
+      ar::RatioTrack r;
+      const CappedRun run = run_capped(sa, ss, maj, h, st, first, ar::kShadowCollisionLimit, cap, &c, &t, &r);
+      capped_runs += run.calls > 1u;
+      bad_calls += run.calls != (ref.collisions + cap - 1u) / cap || run.collisions != ref.collisions;
+      differ += c != c_ref || r.limit != ref.limit || !same_bits(&t, &t_ref, sizeof t) || !same_bits(&r.T, &ref.T, sizeof r.T) ||
+                !same_bits(&r.r_u, &ref.r_u, sizeof r.r_u) || !same_bits(&r.r_l, &ref.r_l, sizeof r.r_l);
+    }
+  }
+  std::printf("ratio_track capped: %d capped runs, %d estimates with roulette draws\n", capped_runs, roulette);
+  CHECK(differ == 0);
+  CHECK(bad_calls == 0);
+  CHECK(capped_runs > 10000);
+  CHECK(roulette > 1000);
+}
+
+AR_RT_CASE("ratio_track/limit after the same count whatever the cap") {
+  // Null collisions only (majorant 1e6 per m over 1 m): T_ray never falls, so the segment's limit, 100
+  // blocks from an offset start, blocks the item after exactly 100 tentative collisions uncapped or
+  // capped at 1, 7, 100 or 4,096; at a cap equal to the blocks left the limit wins.
+  const Spec zero = ar::spec_fill(0), maj = ar::spec_fill(Real(1e6));
+  const ar::MediumStream st = stream(11u, 3u, 5u);
+  const uint32_t first = ar::shadow_rng_start(2u) + 30u;
+  for (const uint32_t cap : {1u, 7u, 100u, 4096u, kUncapped}) {
+    uint32_t c = first;
+    Real t = Real(1);
+    ar::RatioTrack r;
+    const CappedRun run = run_capped(zero, zero, maj, 1u, st, first, 100u, cap, &c, &t, &r);
+    INFO("cap " << cap);
+    CHECK(run.calls != 0xffffffffu);
+    CHECK(r.limit);
+    CHECK(run.collisions == 100u);
+    CHECK(c == first + 100u);
+    for (int j = 0; j < 4; ++j) CHECK(r.T.v[j] == Real(0));
+  }
 }
 
 }  // TEST_SUITE

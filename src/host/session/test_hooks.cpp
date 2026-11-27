@@ -15,6 +15,7 @@
 #include "host/scheduler.h"
 #include "kernel/kernel_globals.h"
 #include "kernel/launch_config.h"
+#include "kernel/medium/delta_track.h"
 
 namespace astroray::host {
 namespace {
@@ -125,6 +126,18 @@ TestHooks read_test_hooks() {
   if (env_value("THREADS", &value)) {
     out.threads = uint32_t(positive("THREADS", value, 256));
     out.active.push_back("THREADS=" + value);
+  }
+  // 0006 D8's cap and the majorant scale of RULINGS 111: sampling and sizes only. 0 or anything but a
+  // positive integer is refused, so a misspelt value never renders the default silently.
+  if (env_value("MEDIUM_CAP", &value)) {
+    out.medium_cap = uint32_t(positive("MEDIUM_CAP", value, ar::kMediumLaunchCap));
+    out.active.push_back("MEDIUM_CAP=" + value);
+  }
+  if (env_value("MAJORANT", &value)) {
+    // k sigma_t takes about k tau tentative collisions per flight of optical depth tau: above D8's per-event
+    // limit even a flight of depth 1 would end VOLUME_LIMIT, and the hook would measure the limit, not the cap.
+    out.medium_majorant = uint32_t(positive("MAJORANT", value, ar::kFlightCollisionLimit));
+    out.active.push_back("MAJORANT=" + value);
   }
   if (env_value("RADIANCE_SCALE", &value)) {
     // Only s = 1 is a test of 0003 check 15; any other value would be read as a scale and is refused.

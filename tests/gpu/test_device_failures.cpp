@@ -6,9 +6,9 @@
 // host scene data kept), and a GPU other than sm_120 (a warning once per session, the render proceeds).
 // Each case ends in an ar_status-bearing DeviceError and a report entry; nothing renders silently.
 // The sticky-fault row (an out-of-bounds kernel write) breaks CUDA for the process, so it runs in a
-// child process: tests/abi/gpu_test_fault_cli.py. The `full` case at the end prints the longest launch
-// of a 1080p render of b5m against 0009 B-17.
-// Ref: docs/decisions/0002-kernel-architecture.md D15; 0001 D2.5, D2.8, D3.5; 0009 B-17.
+// child process: tests/abi/gpu_test_fault_cli.py. The `full` cases at the end print the longest launch
+// of a 1080p render of b5m, and of the dense v1_slab at the per-launch medium cap, against 0009 B-17.
+// Ref: docs/decisions/0002-kernel-architecture.md D15; 0001 D2.5, D2.8, D3.5; 0009 B-17; 0006 D8.
 #include <doctest.h>
 
 #include <windows.h>
@@ -443,20 +443,22 @@ TEST_CASE("device_failures/untested architecture warns once") {
 
 TEST_SUITE("full") {
 
-// 0009 B-17: no kernel launch of a 1080p render of b5m lasts above 100 ms (target 20 ms). The device
-// times every launch under ASTRORAY_TEST_LAUNCH_TIMING and prints the longest when the CLI's session ends.
-TEST_CASE("device_failures/longest launch within B-17") {
+// 0009 B-17: no kernel launch of a 1080p render (or a square one of as many pixels) lasts above 100 ms (target 20 ms). The device times every
+// launch under ASTRORAY_TEST_LAUNCH_TIMING and prints the longest when the CLI's session ends. `scene` is a
+// recording under out/scenes, built by tools/check.ps1 (`scenes` for b5m, the integrator checks for
+// v1_slab.dense).
+static void longest_launch(const char* scene, const char* size) {
   char exe[MAX_PATH] = {};
   REQUIRE(GetModuleFileNameA(nullptr, exe, MAX_PATH) != 0);
   const std::filesystem::path bin = std::filesystem::path(exe).parent_path();
   const std::filesystem::path cli = bin / "astroray_cli.exe";
-  const std::filesystem::path rec = bin.parent_path() / "scenes" / "b5m.arrec";
-  const std::filesystem::path fits = std::filesystem::temp_directory_path() / "astroray_099_b5m.fits";
+  const std::filesystem::path rec = bin.parent_path() / "scenes" / (std::string(scene) + ".arrec");
+  const std::filesystem::path fits = std::filesystem::temp_directory_path() / ("astroray_b17_" + std::string(scene) + ".fits");
   REQUIRE_MESSAGE(std::filesystem::exists(cli), cli.string() << " missing: run tools/build.ps1");
-  REQUIRE_MESSAGE(std::filesystem::exists(rec), rec.string() << " missing: run tools/check.ps1 (scenes)");
+  REQUIRE_MESSAGE(std::filesystem::exists(rec), rec.string() << " missing: run tools/check.ps1 gate");
   Hook h("LAUNCH_TIMING", "1");
   const std::string cmd = "\"\"" + cli.string() + "\" render \"" + rec.string() + "\" -o \"" + fits.string() +
-                          "\" --device cuda --spp 1 --size 1920x1080 2>&1\"";
+                          "\" --device cuda --spp 1 --size " + size + " 2>&1\"";
   FILE* p = _popen(cmd.c_str(), "r");
   REQUIRE(p != nullptr);
   std::string out;
@@ -466,12 +468,24 @@ TEST_CASE("device_failures/longest launch within B-17") {
   const size_t at = out.find("astroray: longest launch ");
   REQUIRE_MESSAGE(at != std::string::npos, "the CLI printed no launch timing: " << out);
   const double ms = std::atof(out.c_str() + at + std::strlen("astroray: longest launch "));
-  std::printf("%s", out.substr(at, out.find('\n', at) - at + 1).c_str());
+  std::printf("%s: %s", scene, out.substr(at, out.find('\n', at) - at + 1).c_str());
   CHECK_MESSAGE(rc == 0, out);
   CHECK(ms > 0.0);
   CHECK_MESSAGE(ms <= 100.0, "B-17: the longest launch is above the 100 ms hard cap");
   if (ms > 20.0) std::printf("B-17 target 20 ms exceeded: %.3f ms\n", ms);
   std::filesystem::remove(fits);
+}
+
+TEST_CASE("device_failures/longest launch within B-17") { longest_launch("b5m", "1920x1080"); }
+
+// The per-launch medium cap's B-17 case (0006 D8, RULINGS 111): the dense v1_slab (sigma_t 64 per m,
+// 0.05 m thick) under ASTRORAY_TEST_MAJORANT=2048, so a flight across the box takes about
+// 2048 * 64 * 0.05 = 6,554 tentative collisions and the default cap of 4,096 requeues it; without the
+// cap one such item would hold its launch for all of them. 1440 x 1440: the slab's view is square, and that is
+// 1080p's pixel count.
+TEST_CASE("device_failures/longest launch within B-17, dense slab at the medium cap") {
+  Hook k("MAJORANT", "2048");
+  longest_launch("v1_slab.dense", "1440x1440");
 }
 
 }  // TEST_SUITE

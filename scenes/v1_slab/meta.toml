@@ -32,6 +32,16 @@ plane_size = 4.0
 camera_distance = 2.0
 focal_mm = 50.0
 sensor_mm = 36.0
+# The dense variant (build.py --dense, no truth): the per-launch cap gate pair of 0006 V6 (tools/integrator_checks.py
+# capped_equals_uncapped, run with ASTRORAY_TEST_MAJORANT, RULINGS 111). A grey scattering medium of sigma_t 64 per m
+# in a thinner box (optical depth 3.2) that also holds a diffuse plate and a point lamp of dense_lamp_power W, so paths
+# and shadow items both track the medium.
+dense_sigma_t = 64.0
+dense_albedo = 0.9
+dense_g = 0.5
+dense_thickness = 0.05
+dense_bounces = 16
+dense_lamp_power = 20.0
 
 [tolerance]
 kind = "z_se"

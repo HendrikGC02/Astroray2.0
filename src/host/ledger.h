@@ -18,7 +18,8 @@
 
 namespace astroray::host {
 
-// Every row of 0007 d14's budget table, then the scene categories that table excludes
+// Every row of 0007 d14's budget table but the shadow tracker, which is counted under SHADOW_POOL (a category
+// of its own would change ar_progress.ledger_bytes in the ABI), then the scene categories that table excludes
 // (its `tables` row is the one category both lists share), then DEVICE_CONTEXT: device memory
 // the driver or OptiX takes outside any allocation of ours, recorded as the drop in free bytes
 // around the call that takes it (0002 D13's check compares the ledger total with that drop).

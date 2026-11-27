@@ -31,6 +31,10 @@ AR_NS_BEGIN
 
 AR_FN void stage_shade_shadow(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
   const uint32_t slot = load_ro(kg.shadow_queue + step.start + item);
+  // An item the media pre-pass capped this step still names its medium (the pre-pass clears the field
+  // only when the item is done): it is not delivered, keeps next_stage SHADE_SHADOW, and queue_build
+  // returns it to this segment, where the pre-pass goes on with it next step (0006 D8 requeue).
+  if (kg.shadow->medium_stack != nullptr && sh_medium_stack(kg, slot).v[0] != 0u) return;
   Spec c = sh_contribution(kg, slot);
   if (kg.shadow->item_flags != nullptr && (sh_item_flags(kg, slot) & ITEM_WORLD_LE) != 0u) {
     const Spec lt = sh_lambda_t(kg, slot);

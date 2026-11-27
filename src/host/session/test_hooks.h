@@ -19,6 +19,8 @@ struct TestHooks {
   uint64_t pool_main = 0;           // ASTRORAY_TEST_POOL: main-pool capacity, 0 = the device default
   uint64_t pool_shadow = 0;         // ASTRORAY_TEST_POOL: shadow-pool capacity, 0 = twice the main pool
   uint32_t threads = 0;             // ASTRORAY_TEST_THREADS: CPU session workers, 0 = one per core
+  uint32_t medium_cap = 0;          // ASTRORAY_TEST_MEDIUM_CAP: per-launch medium collision cap, 0 = 0006 D8's
+  uint32_t medium_majorant = 0;     // ASTRORAY_TEST_MAJORANT: homogeneous majorant k sigma_t, 0 = k of 1
   bool unit_radiance_scale = false; // ASTRORAY_TEST_RADIANCE_SCALE=1: s = 1 (0003 check 15)
   // Device failure injection (0002 D15 injection tests, 099); read by CudaDevice and Scene.
   bool corrupt_cubin = false;       // ASTRORAY_TEST_CORRUPT_CUBIN=1: modules load from a damaged copy
@@ -38,7 +40,8 @@ struct TestHooks {
 // alias table, the tree's oracle, 0004 D10), ASTRORAY_TEST_HERO exactly lane0 (the hero lane pinned
 // to 0, 0003 Risk 11), ASTRORAY_TEST_POOL takes MAIN[,SHADOW] capacities (SHADOW at least the largest
 // shadow items one item emits per step, or the producers could never launch), ASTRORAY_TEST_THREADS
-// a positive worker count, ASTRORAY_TEST_RADIANCE_SCALE exactly "1", ASTRORAY_TEST_CORRUPT_CUBIN,
+// a positive worker count, ASTRORAY_TEST_MEDIUM_CAP and ASTRORAY_TEST_MAJORANT a positive integer (RULINGS 111),
+// ASTRORAY_TEST_RADIANCE_SCALE exactly "1", ASTRORAY_TEST_CORRUPT_CUBIN,
 // ASTRORAY_TEST_FAIL_INIT, ASTRORAY_TEST_GPU_FAULT and ASTRORAY_TEST_LAUNCH_TIMING exactly "1" and ASTRORAY_TEST_DRIVER_VERSION and
 // ASTRORAY_TEST_COMPUTE_CAPABILITY a positive integer, ASTRORAY_TEST_DENOISER_FAIL library or device; each throws
 // std::invalid_argument on any other non-empty value. Empty in builds without AR_GATE_HOOKS.
