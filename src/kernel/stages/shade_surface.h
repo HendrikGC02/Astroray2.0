@@ -334,11 +334,16 @@ struct GuideAlbedo {
   Real3 diffuse, specular;
 };
 AR_FN GuideAlbedo surface_guide_albedo(const KernelGlobals& kg, OpenPBRParams& rec, const ConstantBlock& block, Real mu_o) {
-  const uint32_t base_rgb = rec.guide_rgb[0], spec_rgb = rec.guide_rgb[1];
+  // Read through volatile so the words come from the record's local memory: a plain read lets nvcc
+  // forward the VM's store and hold both words in registers across NEE and the lobe sample, which
+  // spilled 4 / 4 B more in the capped build (kernelgate, measured).
+  const volatile uint32_t* gw = rec.guide_rgb;
+  const uint32_t base_rgb = gw[0], spec_rgb = gw[1];
+  const bool base_stored = (base_rgb & kGuideRgbStored) != 0u, spec_stored = (spec_rgb & kGuideRgbStored) != 0u;
   for (int i = 0; i < kLanes; ++i) {
     const int c = i < 3 ? i : 1;
-    rec.base_color.v[i] = (base_rgb & kGuideRgbStored) != 0u ? guide_rgb_channel(base_rgb, c) : Real(block.guide_base_color[c]);
-    rec.specular_color.v[i] = (spec_rgb & kGuideRgbStored) != 0u ? guide_rgb_channel(spec_rgb, c) : Real(block.guide_specular_color[c]);
+    rec.base_color.v[i] = base_stored ? guide_rgb_channel(base_rgb, c) : Real(block.guide_base_color[c]);
+    rec.specular_color.v[i] = spec_stored ? guide_rgb_channel(spec_rgb, c) : Real(block.guide_specular_color[c]);
   }
   const bool cauchy = block.specular_ior.kind == uint8_t(SpectrumKind::CAUCHY_ABBE);
   rec.specular_ior = spec_fill(cauchy ? Real(block.specular_ior.p[0]) : rec.specular_ior.v[0]);

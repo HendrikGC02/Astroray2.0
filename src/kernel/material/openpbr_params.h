@@ -62,6 +62,10 @@ AR_FN uint32_t guide_rgb_pack(const float* rgb) {
   return w;
 }
 
-AR_FN Real guide_rgb_channel(uint32_t w, int c) { return Real((w >> (10 * c)) & kGuideRgbMax) / Real(kGuideRgbMax); }
+// Times the rounded reciprocal rather than a division (IEEE division is a subroutine on the GPU):
+// at most one more rounding, far below the packing's step.
+AR_FN Real guide_rgb_channel(uint32_t w, int c) {
+  return Real((w >> (10 * c)) & kGuideRgbMax) * Real(1.0 / double(kGuideRgbMax));
+}
 
 AR_NS_END
