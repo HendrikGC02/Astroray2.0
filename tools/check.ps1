@@ -557,11 +557,10 @@ $global:LASTEXITCODE = $code
     }
     # Hosted ci shows only the summary, so the margin of the slowest case goes into it on every pass.
     Write-Host "B-12: slowest $($b12.Slowest.Case) $($b12.Slowest.Seconds) s of $perTest s"
-    # 0008 V11's relMSE function and its box-filter case, pure Python (numpy is not on a bare hosted runner).
-    if (-not $isCi) {
-      $r = Step 'denoise self-test' { & $py -I tools/denoise_check.py --self-test }
-      if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'denoise self-test failed (out/check/fast.log)' }
-    }
+    # 0008 V11's relMSE function, its exact cases and its box-filter case: stdlib only (the tool imports numpy
+    # only for a capture), so hosted ci runs it as well.
+    $r = Step 'denoise self-test' { & $py -I tools/denoise_check.py --self-test }
+    if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'denoise self-test failed (out/check/fast.log)' }
 
     if ($isCi) {
       # The lint self-test proves every lint section still catches its seeded cases;

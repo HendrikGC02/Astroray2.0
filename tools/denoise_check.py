@@ -5,7 +5,8 @@ CPU and CUDA devices, one 16,384-spp CUDA render per scene as the reference, and
 the raw and the denoised image against it, plus the denoiser's cold start.
 
 Usage: <python> -I tools/denoise_check.py --self-test
-       <python> -I tools/denoise_check.py [--device cpu|cuda|both] [--scene NAME ...] [--history] [--compare-only]
+       <python> -I tools/denoise_check.py [--device cpu|cuda|both] [--scene NAME ...] [--history]
+                                          [--compare-only | --cold-only]
 Run it under the machine lock (`check full` holds it; by hand: dot-source tools/lib/lock.ps1 and
 Enter-ArMachineLock -Job bench). It is a `full`-tier or on-demand tool (0008 V13), never a gate case.
 
@@ -16,11 +17,16 @@ no denoiser, and kept in the machine-wide cache of tools/scenes.py (ASTRORAY_SCE
 %LOCALAPPDATA%/astroray2/scenes-cache, subfolder denoise_ref/), written through a temporary file and
 renamed; a reference that disagrees with the 64-spp image mean beyond 5 SE is stale: bump REF_VERSION.
 Cold start: the engine exposes no denoiser init time (DenoiserState::create returns at once and
-nothing times its worker), so it is measured from outside: the wall time of a fresh 16x16, 1-spp
-`render --denoise oidn` process minus the median of `--denoise none` processes (first and second
-oidn run); the difference is the denoiser's load plus the denoise of that tiny image.
-The per-scene denoise
-milliseconds are the same difference at the scene's size (the render overlaps the load: a lower bound).
+nothing times its worker), so it is measured from outside, before any scene is rendered, as the wall
+time of a fresh 16x16, 1-spp `render --denoise oidn --dump` process minus that of a `--denoise none`
+process in the same cache state; the difference is the denoiser's load plus the denoise of that tiny
+image plus the dump writes. "First" runs with CUDA_CACHE_PATH pointing at a new empty directory, so the
+driver's JIT/kernel cache is cold; "second" repeats both processes on the directories the first run
+filled. What stays warm is the operating system's file cache (the CLI, OIDN and CUDA libraries and
+weights are read from disk once before): cold here means the driver cache, not a rebooted machine.
+The per-scene denoise milliseconds are the same wall difference at the scene's size: neither a lower
+nor an upper bound, since the oidn run also writes its --dump files (more wall) while the denoiser's
+load overlaps the render (less wall).
 Output: out/tmp/201/ (renders), out/evidence/201/<scene>_strip.png (noisy | denoised | reference | the
 denoised image's relMSE map, one exposure per strip), --history: lines for bench/history in out/bench/.
 Ref: docs/decisions/0008-film-outputs-denoise.md V11, V13; tests/common/cornell_rig.h (the reference
@@ -33,9 +39,10 @@ import importlib.util
 import json
 import os
 import re
-import statistics
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 np = None  # numpy, imported by use_numpy(): the self-test must stay under the fast tier's 0.2 s
@@ -70,14 +77,20 @@ def use_numpy():
         np = numpy
 
 
-def rel_mse(x, ref, eps=EPS):
-    """mean((x - ref)^2 / (ref^2 + eps)) over every value of two flat sequences (lists or
-    ndarray.ravel().tolist()), in plain Python so the self-test needs no numpy.
+def rel_term(a, ref, eps=EPS):
+    """(a - ref)^2 / (ref^2 + eps): the one definition of the relMSE term, for scalars and ndarrays
+    alike (the error maps and the device comparison call it on arrays).
     Ref: tests/common/noisy_fixture.cpp rel_mse."""
+    return (a - ref) ** 2 / (ref * ref + eps)
+
+
+def rel_mse(x, ref, eps=EPS):
+    """mean(rel_term) over every value of two flat sequences (lists or ndarray.ravel().tolist()), in plain
+    Python so the self-test needs no numpy."""
     n = len(ref)
     if len(x) != n:
         raise ValueError(f"rel_mse: {len(x)} values against {n}")
-    return sum((a - b) ** 2 / (b * b + eps) for a, b in zip(x, ref)) / n
+    return sum(rel_term(a, b, eps) for a, b in zip(x, ref)) / n
 
 
 def rel_mse_img(x, ref):
@@ -109,6 +122,11 @@ def self_test():
     got = rel_mse([1.1] * 12, [1.0] * 12)
     if abs(got - want) > 1e-12:
         fails.append(f"offset case {got} != {want}")
+    # ref != 1 pins the denominator: ref^2 + eps, not ref + eps or 1 + eps.
+    want = 0.1 ** 2 / (0.5 ** 2 + EPS)
+    got = rel_mse([0.6] * 12, [0.5] * 12)
+    if abs(got - want) > 1e-12:
+        fails.append(f"ref 0.5 case {got} != {want}")
     a, b = rel_mse(noisy, ref), rel_mse(flat(box_filter(noisy2)), ref)
     if not b < a:
         fails.append(f"box-filtered relMSE {b:.5f} is not below noisy {a:.5f}")
@@ -148,14 +166,16 @@ def read_fits_display(path):
     return mean, var
 
 
-def run_cli(rec, device, spp, seed, size, denoise, stem, dump=False, timeout=7200):
-    """One `astroray_cli render`; returns (wall seconds, stdout). Raises on a failed render."""
+def run_cli(rec, device, spp, seed, size, denoise, stem, dump=False, timeout=7200, cuda_cache=None):
+    """One `astroray_cli render`; returns (wall seconds, stdout). Raises on a failed render.
+    cuda_cache: a directory for CUDA_CACHE_PATH (the driver's kernel cache), else the user's own."""
     os.makedirs(WORK, exist_ok=True)
     out = os.path.join(WORK, stem + ".fits")
     args = [CLI, "render", rec, "-o", out, "--device", device, "--spp", str(spp), "--seed", str(seed),
             "--size", size, "--denoise", denoise] + (["--dump"] if dump else [])
+    env = dict(os.environ, CUDA_CACHE_PATH=cuda_cache) if cuda_cache else None
     t0 = time.perf_counter()
-    r = subprocess.run(args, capture_output=True, text=True, timeout=timeout, cwd=WORK)
+    r = subprocess.run(args, capture_output=True, text=True, timeout=timeout, cwd=WORK, env=env)
     wall = time.perf_counter() - t0
     if r.returncode != 0:
         raise RuntimeError(f"astroray_cli exited {r.returncode}: {' '.join(args)}\n{r.stdout}{r.stderr}")
@@ -191,12 +211,16 @@ def reference(scene, rec, size):
 
 def stale_guard(ref, noisy_mean, noisy_var, scene):
     """The 64-spp image mean agrees with the reference's per channel within 5 SE of the mean (the
-    reference's own noise is negligible), else the cached reference belongs to an older engine."""
+    reference's own noise is negligible), else the cached reference belongs to an older engine. 5 SE:
+    a correct reference fails a channel with probability ~6e-7, while an engine change that moves a
+    scene's mean is many SE at 512 x 512 pixels, so the guard neither cries wolf nor sleeps."""
     n = ref.shape[0] * ref.shape[1]
     for k in range(3):
         se = np.sqrt(noisy_var[..., k].sum()) / n
+        if not (np.isfinite(se) and se > 0.0):
+            raise RuntimeError(f"{scene}: stale guard has no usable variance (channel {k}, SE {se})")
         z = (noisy_mean[..., k].mean() - float(ref[..., k].astype(np.float64).mean())) / se
-        if abs(z) > 5.0:
+        if not np.isfinite(z) or abs(z) > 5.0:
             raise RuntimeError(f"{scene}: stale denoise reference: bump REF_VERSION (channel {k}, z {z:.1f})")
 
 
@@ -220,7 +244,7 @@ def strip(scene, noisy, den, ref):
     """out/evidence/201/<scene>_strip.png: noisy | denoised | reference | relMSE map of the denoised."""
     sys.path.insert(0, os.path.join(ROOT, "tools"))
     import analytic  # noqa: E402  (write_png; not imported by the self-test)
-    err = ((den.astype(np.float64) - ref) ** 2 / (ref.astype(np.float64) ** 2 + EPS)).mean(-1)
+    err = rel_term(den.astype(np.float64), ref.astype(np.float64)).mean(-1)
     scale = 1.0 / max(float(np.percentile(ref.mean(-1), 99)), 1e-6)
     emap = np.repeat((err / max(float(np.percentile(err, 99)), 1e-12))[..., None], 3, axis=-1)
     panels = [np.clip(p.astype(np.float64) * scale, 0, 1) for p in (noisy, den, ref)] + [np.clip(emap, 0, 1)]
@@ -232,14 +256,20 @@ def strip(scene, noisy, den, ref):
 
 
 def cold_start(device):
-    """(first, second) cold-start milliseconds, see the module docstring."""
+    """(first, second) cold-start milliseconds, see the module docstring: each oidn process minus the none
+    process of the same cache state; the first pair runs on new empty CUDA_CACHE_PATH directories, the
+    second pair on the directories the first pair filled."""
     rec = recording(COLD_SCENE)
-    walls = {m: [] for m in ("oidn", "none")}
-    for mode in ("oidn", "oidn", "none", "none"):
-        w, _ = run_cli(rec, device, 1, SEED, COLD_SIZE, mode, f"cold_{device}_{mode}", dump=(mode == "oidn"))
-        walls[mode].append(w)
-    base = statistics.median(walls["none"])
-    return [(w - base) * 1e3 for w in walls["oidn"]]
+    os.makedirs(WORK, exist_ok=True)
+    dirs = {m: tempfile.mkdtemp(prefix=f"cuda_cache_{m}_", dir=WORK) for m in ("oidn", "none")}
+    out = []
+    for _ in range(2):
+        w = {m: run_cli(rec, device, 1, SEED, COLD_SIZE, m, f"cold_{device}_{m}", dump=(m == "oidn"),
+                        cuda_cache=dirs[m])[0] for m in ("oidn", "none")}
+        out.append((w["oidn"] - w["none"]) * 1e3)
+    for d in dirs.values():
+        shutil.rmtree(d, ignore_errors=True)
+    return out
 
 
 def measure(device, scenes):
@@ -268,7 +298,9 @@ def measure(device, scenes):
     return rows
 
 
-DEVICE_AGREE = 0.05  # relative, the denoised relMSE against the reference between the devices
+# Relative agreement of the denoised relMSE against the reference between the devices.
+# Ref: docs/decisions/RULINGS.md ruling 110 (the CPU-versus-CUDA outcome of this check's decision table).
+DEVICE_AGREE = 0.05
 
 
 def compare_devices(scenes):
@@ -285,7 +317,7 @@ def compare_devices(scenes):
         ref = ref.astype(np.float64)
         e_c, e_g = rel_mse_img(c["den"], ref), rel_mse_img(g["den"], ref)
         rel = abs(e_c - e_g) / max(e_c, e_g)
-        diff = ((c["den"].astype(np.float64) - g["den"]) ** 2 / (ref ** 2 + EPS)).mean(-1).ravel()
+        diff = rel_term(ref + (c["den"].astype(np.float64) - g["den"]), ref).mean(-1).ravel()  # (cpu - cuda)^2 over the reference term
         worst = np.sort(diff)[::-1][:max(1, diff.size // 100)].sum() / diff.sum()
         print(f"cpu vs cuda {name}: denoised vs reference cpu {e_c:.4g} cuda {e_g:.4g} (differ {rel:.1%}); "
               f"cpu~cuda denoised {diff.mean():.3e} (raw {rel_mse_img(c['noisy'], g['noisy']):.3e}), "
@@ -302,6 +334,7 @@ def compare_devices(scenes):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--compare-only", action="store_true", help="only the cpu/cuda comparison, from the saved arrays")
+    ap.add_argument("--cold-only", action="store_true", help="only the cold starts (no scene is rendered)")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--device", choices=("cpu", "cuda", "both"), default="both")
     ap.add_argument("--scene", action="append", choices=sorted(SCENES))
@@ -318,10 +351,11 @@ def main():
     devices = ["cpu", "cuda"] if a.device == "both" else [a.device]
     t0 = time.perf_counter()
     rows, cold = [], {}
-    for dev in devices:
-        rows += measure(dev, scenes)
+    for dev in devices:  # first, so no scene render has warmed anything the cold start is to pay
         cold[dev] = cold_start(dev)
-    print("scene            dev   raw relMSE  denoised  ratio   render s  denoise ms")
+    for dev in devices if not a.cold_only else []:
+        rows += measure(dev, scenes)
+    print("scene           dev   raw relMSE  denoised  ratio   render s  denoise ms")
     bad = []
     for r in rows:
         print(f"{r['scene']:<16} {r['device']:<5} {r['raw']:10.4g} {r['den']:9.4g} {r['den'] / r['raw']:6.3f} "
@@ -335,8 +369,8 @@ def main():
             if SCENES[r["scene"]][2]:
                 bad.append(r)
     for dev, (c1, c2) in cold.items():
-        print(f"cold start {dev}: first {c1:.0f} ms, second {c2:.0f} ms (wall of oidn minus none, {COLD_SIZE} 1 spp)")
-    if len(devices) == 2:
+        print(f"cold start {dev}: first {c1:.0f} ms, second {c2:.0f} ms (wall of oidn minus none, {COLD_SIZE} 1 spp, cold driver cache then warm)")
+    if len(devices) == 2 and not a.cold_only:
         bad += compare_devices(scenes)
     if a.history:
         now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
