@@ -204,10 +204,15 @@ struct Rig {
   uint32_t material_b() const { return 1u; }
   ar::GratingParams params_b() const { return ar::grating_params(ext[ar::ext_index(mats->headers[material_b()])]); }
   void set_params_b(const ar::GratingParams& g) { ext[ar::ext_index(mats->headers[material_b()])] = ar::grating_ext_params(g); }
-  // Grating B's table, read from the arena on the host side at its own offset.
-  ar::GratingTable table_b() const {
+  // Grating B's table as the compiler builds it from B's authored block, independent of where the store
+  // placed it in the arena.
+  std::vector<float> compiled_b;
+  ar::GratingTable table_b() {
+    const ar_graph_desc none = {};
+    compiled_b = compile_extension(grating(120.0f), none, scene.materials->table()).compiled.ext_table;
     const ar::GratingParams g = params_b();
-    return ar::GratingTable{reinterpret_cast<const float*>(mats->table_arena.data() + g.table), g.m_min, g.m_max - g.m_min + 1};
+    REQUIRE(compiled_b.size() == size_t(g.m_max - g.m_min + 1) * ar::kGratingCosBins * ar::kGratingWavelengths);
+    return ar::GratingTable{compiled_b.data(), g.m_min, g.m_max - g.m_min + 1};
   }
   void run() { cpu_stage_shade_surface_ext(kg, ar::StepEntry{0, n, 0}, 0, n); }
   void run_common() { cpu_stage_shade_surface(kg, ar::StepEntry{0, n, 0}, 0, n); }

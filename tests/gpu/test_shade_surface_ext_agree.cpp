@@ -63,6 +63,7 @@ ar_material_desc grating(float depth_nm) {
 // observer and RGB-to-spectrum tables.
 struct Inputs {
   std::shared_ptr<const MaterialArrays> mats;
+  std::vector<float> table_b;  // grating B's table as compile_extension builds it
   ObserverTables obs;
   ar::Rgb2SpecTable jh = {};
   Inputs() {
@@ -79,6 +80,8 @@ struct Inputs {
     store->end_edit();
     scene.generations().wait_idle();
     mats = store->arrays();
+    const ar_graph_desc none = {};
+    table_b = compile_extension(b, none, store->table()).compiled.ext_table;
     REQUIRE(mats->ext_params.size() == 2u);
     REQUIRE(ar::grating_params(mats->ext_params[1]).table != 0u);
     DataBlob blob;
@@ -283,12 +286,14 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Inputs& in, const States& st)
 
 // Paths of `s` whose throughput factor is not item 22's eta_m / p_m to 1e-5 relative: the order m from
 // the outgoing direction at lambda_t[0] (N = +z and the default tangent x make the frame the identity),
-// p_m the lane mean of eta over the propagating orders over its sum, eta from grating B's table read on
-// the host at grating B's own arena offset; every lane for order 0, lane 0 (copied) otherwise.
+// p_m the lane mean of eta over the propagating orders over its sum, eta from the table the compiler builds
+// from grating B's authored block (independent of its arena offset); every lane for order 0, lane 0
+// (copied) otherwise.
 uint32_t factor_mismatches(const Inputs& in, const States& st, const Snapshot& s) {
   const MaterialArrays& m = *in.mats;
   const ar::GratingParams g = ar::grating_params(m.ext_params[ar::ext_index(m.headers[1])]);
-  const ar::GratingTable tab{reinterpret_cast<const float*>(m.table_arena.data() + g.table), g.m_min, g.m_max - g.m_min + 1};
+  REQUIRE(in.table_b.size() == size_t(g.m_max - g.m_min + 1) * ar::kGratingCosBins * ar::kGratingWavelengths);
+  const ar::GratingTable tab{in.table_b.data(), g.m_min, g.m_max - g.m_min + 1};
   const ar::Spec one = ar::spec_fill(ar::Real(1));
   uint32_t bad = 0, checked = 0;
   for (uint32_t i = 0; i < kN; ++i) {
