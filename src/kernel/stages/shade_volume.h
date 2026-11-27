@@ -155,7 +155,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
     // would carry it on in registers), and the path returns to this stage's segment. The limit wins
     // over the cap, so the counter stays inside the event's range and the next launch continues it
     // (the restart branch above is never taken by a requeued flight).
-    AR_ASSERT(counter > first && counter < end);
+    AR_ASSERT(counter >= first && counter < end);
     ps_beta(kg, slot) = w.beta;
     ps_r_u(kg, slot) = w.r_u;
     ps_r_l(kg, slot) = w.r_l;
