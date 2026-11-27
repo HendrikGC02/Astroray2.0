@@ -23,6 +23,7 @@
 #include "host/image/image_store.h"
 #include "host/light/lamps.h"
 #include "host/light/light_builder.h"
+#include "host/material/grating_authored.h"
 #include "host/material/material_store.h"
 #include "host/scene/edit.h"
 #include "host/scene/instances.h"
@@ -40,7 +41,7 @@ namespace {
 
 constexpr uint32_t kElemMax = 448;  // kg_checksum.cu kKgElemMax
 constexpr uint32_t kRow = 8 + 2 * kElemMax;
-constexpr uint32_t kRows = static_cast<uint32_t>(TableId::LIGHT_RAD_PMF) + 1u;
+constexpr uint32_t kRows = static_cast<uint32_t>(TableId::TABLE_ARENA) + 1u;
 
 struct Graph {
   std::vector<ar_graph_node> nodes;
@@ -149,7 +150,8 @@ struct Rig {
     });
   }
   // One object of each kind: lit program world, emissive material on an instanced quad, an image (the
-  // magenta stand-in of a missing file), a point lamp, material 43 and material 45 (a TABLE colour).
+  // magenta stand-in of a missing file), a point lamp, material 43, material 45 (a TABLE colour) and
+  // material 47 (a grating).
   void build() {
     // The world's colour is the ray direction (LOAD_CTX_P), which makes it a program world: the scene
     // then has world tables to upload.
@@ -171,6 +173,13 @@ struct Rig {
       ar_material_desc mt = {};
       mt.surface_graph = 46;
       REQUIRE(scene->materials->set_material(e, 45, &mt) == AR_OK);
+      // Material 47, a GRATING (0005 item 23): its ExtParams and its table in the TableArena.
+      GratingAuthored ga = {};
+      ga.pitch_nm = 1600.0f, ga.depth_nm = 120.0f, ga.coating_n = 1.0f, ga.coating_k = 6.0f, ga.m_min = -2, ga.m_max = 2;
+      ar_material_desc mg = {};
+      mg.ext_kind = 1;
+      std::memcpy(mg.ext_constants, &ga, sizeof ga);
+      REQUIRE(scene->materials->set_material(e, 47, &mg) == AR_OK);
       ar_image_desc im = {};
       im.key = 7, im.source = AR_IMAGE_SOURCE_FILE, im.color_interop = AR_COLOR_INTEROP_LIN_REC709;
       im.path = "no_such_image_102.png";
@@ -330,6 +339,8 @@ std::vector<HostRow> host_rows(Scene& scene, const SceneTableSet& set) {
   at(TableId::LIGHT_RAD_BINS) = row_of(lights->rad_bins.data(), lights->rad_bins.size());
   at(TableId::LIGHT_RAD_BIN_LIGHT) = row_of(lights->rad_bin_light.data(), lights->rad_bin_light.size());
   at(TableId::LIGHT_RAD_PMF) = row_of(lights->rad_pmf.data(), lights->rad_pmf.size());
+  at(TableId::EXT_PARAMS) = row_of(mats->ext_params.data(), mats->ext_params.size());
+  at(TableId::TABLE_ARENA) = row_of(mats->table_arena.data(), mats->table_arena.size());
   return rows;
 }
 
@@ -396,6 +407,8 @@ TEST_CASE("scene_upload/checksums match host") {
   CHECK(want[static_cast<uint32_t>(TableId::MATERIAL_PROGRAMS)].count > 0u);  // material 43 runs a program
   CHECK(want[static_cast<uint32_t>(TableId::MATERIAL_SPECTRA)].count == 6u);  // material 45's table: 3 wavelengths, 3 values
   CHECK(want[static_cast<uint32_t>(TableId::MEDIA)].count == 1u);  // medium 60
+  CHECK(want[static_cast<uint32_t>(TableId::EXT_PARAMS)].count == 1u);  // grating 47
+  CHECK(want[static_cast<uint32_t>(TableId::TABLE_ARENA)].count == 5u * 16u * 95u * 4u);  // its orders -2..2
   CHECK(want[static_cast<uint32_t>(TableId::WORLD_PROGRAM)].count > 4u);      // the world runs a program
   CHECK(want[static_cast<uint32_t>(TableId::WORLD_CONSTANTS)].count == 1u);
   CHECK(want[static_cast<uint32_t>(TableId::ENV_TABLE)].count > 0u);  // the program world is baked
@@ -468,7 +481,8 @@ TEST_CASE("scene_upload/material edit uploads only material tables") {
     const bool material = id == TableId::MATERIAL_SLOTS || id == TableId::MATERIAL_HEADERS ||
                           id == TableId::MATERIAL_PROGRAMS || id == TableId::MATERIAL_CONSTANTS ||
                           id == TableId::MATERIAL_PASS_INDEX || id == TableId::MATERIAL_SPECTRA ||
-                          id == TableId::WORLD_PROGRAM || id == TableId::WORLD_CONSTANTS;
+                          id == TableId::WORLD_PROGRAM || id == TableId::WORLD_CONSTANTS ||
+                          id == TableId::EXT_PARAMS || id == TableId::TABLE_ARENA;
     // The header block holds the new tables' addresses, so it is always rewritten.
     CHECK_MESSAGE(second->uploaded[t] == (material || id == TableId::HEADER), table_name(id));
     if (second->uploaded[t]) material_bytes += second->tables[t]->bytes();

@@ -33,11 +33,6 @@ MaterialOutput compile_one(const ar::Rgb2SpecTable& t, const ar_material_desc& d
   } else if (d.ext_kind != 0) {
     const ar_graph_desc none = {};
     m = compile_extension(d, g != nullptr ? g->desc() : none, t, means, slots);
-    // A compiled extension would carry EXTENSION into a header, and route_hit would then send its
-    // hits to SHADE_SURFACE_EXT, which would throw at launch because no such stage is registered.
-    if (!m.magenta)
-      m = magenta_material(t, AR_REPORT_PROGRAM_REJECTED,
-                           "extension kind GRATING needs stage SHADE_SURFACE_EXT, which is not registered");
   } else if (g == nullptr)
     m = magenta_material(t, AR_REPORT_PROGRAM_REJECTED,
                          d.surface_graph == 0 ? std::string("no surface graph")
@@ -79,7 +74,26 @@ uint64_t MaterialArrays::bytes() const {
   return headers.size() * sizeof(ar::MaterialHeader) + programs.size() * sizeof(uint32_t) +
          constants.size() * sizeof(ar::ConstantBlock) + spectra.size() * sizeof(float) + pass_index.size() * sizeof(uint32_t) +
          media.size() * sizeof(ar::MediumBlock) + medium_programs.size() * sizeof(uint32_t) +
-         world_program.size() * sizeof(uint32_t) + world_constants.size() * sizeof(ar::ConstantBlock);
+         world_program.size() * sizeof(uint32_t) + world_constants.size() * sizeof(ar::ConstantBlock) +
+         ext_params.size() * sizeof(ar::ExtParams) + table_arena.size();
+}
+
+bool place_table(const std::vector<float>& table, uint64_t limit, std::vector<uint8_t>* arena,
+                 std::map<std::vector<float>, uint32_t>* placed, uint32_t* offset) {
+  const auto found = placed->find(table);
+  if (found != placed->end()) {
+    *offset = found->second;
+    return true;
+  }
+  const uint64_t at = (uint64_t(arena->size()) + 15u) & ~uint64_t(15u);
+  const uint64_t bytes = uint64_t(table.size()) * sizeof(float);
+  if (at + bytes > limit || at > uint64_t(UINT32_MAX)) return false;
+  arena->resize(size_t(at), uint8_t(0));
+  const auto* first = reinterpret_cast<const uint8_t*>(table.data());
+  arena->insert(arena->end(), first, first + bytes);
+  *offset = uint32_t(at);
+  placed->emplace(table, *offset);
+  return true;
 }
 
 struct MaterialStore::Open {
@@ -320,7 +334,7 @@ void MaterialStore::dropped(const Pass& pass) {
   for (const auto& p : queued_) apply_open(*p->open, latest_graphs_, latest_materials_), apply_world(*p->open, latest_world_);
 }
 
-void MaterialStore::rebuild_locked() {
+std::vector<MaterialStore::ArenaFailure> MaterialStore::rebuild_locked() {
   auto a = std::make_shared<MaterialArrays>();
   // One arena offset per distinct table content across the scene's materials (0005 item 9).
   std::map<std::vector<float>, uint32_t> arena_at;
@@ -346,12 +360,38 @@ void MaterialStore::rebuild_locked() {
     }
     return b;
   };
+  // One arena offset per distinct table content (0005 item 16), as the spectrum arena above.
+  std::map<std::vector<float>, uint32_t> table_at;
+  std::vector<ArenaFailure> failed;
   for (const auto& kv : materials_) {
-    const MaterialOutput& m = *kv.second.out;
+    // A material whose table does not fit the arena is the magenta one, reported by the caller.
+    std::shared_ptr<const MaterialOutput> substitute;
+    ar::ExtParams ext = kv.second.out->compiled.ext;
+    uint32_t packed = 0;
+    if (kv.second.out->compiled.ext_kind != 0) {
+      const MaterialOutput& x = *kv.second.out;
+      uint32_t offset = 0, code = 0;
+      std::string why;
+      if (x.compiled.ext_table.empty())
+        code = AR_REPORT_PROGRAM_REJECTED, why = "extension kind " + std::to_string(x.compiled.ext_kind) + " compiled without its table";
+      else if (!place_table(x.compiled.ext_table, kTableArenaLimit, &a->table_arena, &table_at, &offset))
+        code = AR_REPORT_GRATING_TABLE_LIMIT, why = "scene TableArena past 4 GiB (u32 offsets)";
+      else if (!ar::ext_pack_checked(x.compiled.ext_kind, uint32_t(a->ext_params.size()), &packed))
+        code = AR_REPORT_PROGRAM_REJECTED, why = "more extension materials than ext_index holds (2^24)";
+      if (code == 0) {
+        ext.w[2] = offset;  // GRATING's table word (ext_params.h)
+        a->ext_params.push_back(ext);
+      } else {
+        substitute = std::make_shared<const MaterialOutput>(magenta_material(table_, code, why));
+        failed.push_back({kv.first, code, why});
+        packed = 0;
+      }
+    }
+    const MaterialOutput& m = substitute ? *substitute : *kv.second.out;
     ar::MaterialHeader h = {};
     h.program_offset = uint32_t(a->programs.size());
     h.const_offset = uint32_t(a->constants.size());
-    h.ext = 0;  // no extension kind compiles in M1a (compile_one rejects ext_kind != 0)
+    h.ext = packed;  // ext_kind | ext_index << 8 (material_header.h); 0 for an OpenPBR material
     h.flags = m.flags;
     a->keys.push_back(kv.first);
     a->headers.push_back(h);
@@ -391,6 +431,7 @@ void MaterialStore::rebuild_locked() {
   if (ledger_id_ != 0) ledger_->remove(ledger_id_);
   ledger_id_ = id;
   arrays_ = std::move(a);
+  return failed;
 }
 
 void MaterialStore::activate(Scene& scene, const Pass& pass) {
@@ -401,6 +442,7 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
     std::shared_ptr<const MaterialOutput> out;
   };
   std::vector<Done> done;
+  std::vector<ArenaFailure> arena_failed;
   ar_key old_world = 0;
   std::shared_ptr<const WorldOutput> new_world;
   {
@@ -464,7 +506,7 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
       world_out_ = out;
       new_world = out;
     }
-    rebuild_locked();
+    arena_failed = rebuild_locked();
   }
   // A material set in this edit had its old entries removed with its keyed item (the tracker
   // clears replaced subjects before on_active); a dependent is not a subject, so clear it here.
@@ -480,6 +522,12 @@ void MaterialStore::activate(Scene& scene, const Pass& pass) {
       scene.ctx().log.line("WARNING", key_text(d.key) + ": " + e.detail + (d.out->magenta ? " (rendered magenta)" : ""));
       scene.report().raise(e.code, d.key, e.detail, 1, nullptr, pass.generation);
     }
+  // A material the arrays could not hold renders magenta (rebuild_locked); its entry comes on every
+  // activation that rebuilds the arrays, as long as it does not fit.
+  for (const ArenaFailure& f : arena_failed) {
+    scene.ctx().log.line("WARNING", key_text(f.key) + ": " + f.detail + " (rendered magenta)");
+    scene.report().raise(f.code, f.key, f.detail, 1, nullptr, pass.generation);
+  }
   images_->raise_entries(scene, pass.generation);
   if (new_world)
     for (const MaterialEntry& e : new_world->entries) {

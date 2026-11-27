@@ -115,6 +115,8 @@ std::vector<std::string> missing_pointers(const ar::KernelGlobals& kg, const Sce
     out.push_back("env (WORLD_ENV world light)");
   table(s.medium_blocks, TableId::MEDIUM_BLOCKS, "scene.medium_blocks");
   table(s.medium_programs, TableId::MEDIUM_PROGRAMS, "scene.medium_programs");
+  table(s.ext_params, TableId::EXT_PARAMS, "scene.ext_params");
+  table(s.table_arena, TableId::TABLE_ARENA, "scene.table_arena");
   for (uint32_t i = 0; i < kTableCount; ++i)
     if (scene.counts[i] != 0 && (!scene.tables[i] || !scene.tables[i]->ptr())) out.push_back(table_name(TableId(i)));
   return out;

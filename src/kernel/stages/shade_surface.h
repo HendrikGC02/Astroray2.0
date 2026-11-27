@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// shade_surface (ShadeKind::Common): a camera path's surface hit. In stage order, as Cycles'
+// shade_surface (ShadeKind::Common): a camera path's surface hit. The body is a template on ShadeKind
+// (0002 D8, its one parameter), instantiated for Common here and for Ext in shade_surface_ext.h; what
+// differs is SurfaceKind<K> below (lobes, NEE skip, guides, throughput). In stage order, as Cycles'
 // integrate_surface: build the shading context from the hit, run the material's surface entry
 // into the OpenPBR record (a CONSTANT_SURFACE material only resolves its slots), add the emission
 // the path sees with its MIS weight, decide between the surface and an opacity null event, write
@@ -106,6 +108,7 @@
 #include "../scene/scene_view.h"
 #include "../sched/step_table.h"
 #include "../state/flags.h"
+#include "../state/stage.h"
 #include "../vm/context.h"
 #include "../vm/interp.h"
 #include "../vm/vm_regs.h"
@@ -400,7 +403,44 @@ AR_FN uint32_t surface_guides(const KernelGlobals& kg, uint32_t slot, uint32_t s
   return flags | DENOISE_SURFACE_DONE;
 }
 
-AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
+// ---- what differs between the identities of the body (0002 D8: ShadeKind is its one parameter) ----
+// SurfaceKind<K> holds identity K's lobe calls: whether a hit skips NEE, f and pdf toward a light, the
+// sample, the guide step and the throughput update. Common's are the OpenPBR lobe stack's; Ext's
+// (stages/shade_surface_ext.h, the only header that reaches extension code) switch on the material's
+// ext_kind (0005 item 17). Each is inlined into the body, so an identity executes only its own code.
+template <ShadeKind K>
+struct SurfaceKind;
+
+template <>
+struct SurfaceKind<ShadeKind::Common> {
+  // Every OpenPBR material may have a non-delta lobe: NEE always runs.
+  static AR_FN bool nee_skipped(const KernelGlobals&, uint32_t) { return false; }
+  static AR_FN LobeEval eval(const KernelGlobals& kg, const OpenPBRParams& rec, uint32_t, Real3 N, Real3 wo, Real3 wi) {
+    return stack_eval(*kg.e_diel, *kg.e_spec, rec, frame_from_normal(N), wo, wi, TransportMode::Radiance);
+  }
+  // The stack in the frame of N with the lobe choice uc and direction u, v of event e.
+  static AR_FN LobeSample sample(const KernelGlobals& kg, uint32_t, uint32_t sample, uint32_t e, const OpenPBRParams& rec, Real3 N,
+                                 Real3 wo, float uc) {
+    const Real2 u2{camera_path_draw(kg, sample, event_dim(e, EV_BSDF_U)), camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V))};
+    return stack_sample(*kg.e_diel, *kg.e_spec, rec, frame_from_normal(N), wo, Real(uc), u2, TransportMode::Radiance);
+  }
+  // The material and wo are read again from the path rather than kept live across the lobe sample
+  // (registers); phase 0 built the context from these same fields, so the values are identical.
+  static AR_FN uint32_t guides(const KernelGlobals& kg, uint32_t slot, uint32_t sample, uint32_t flags, OpenPBRParams& rec, Real3 N,
+                               const LobeSample& bs) {
+    const SceneData& s = scene_of(kg);
+    const uint32_t m = hit_material_id(kg, ps_hit_inst(kg, slot), ps_hit_prim(kg, slot));
+    const ConstantBlock& block = s.material_constants[load_ro(&s.material_headers[m].const_offset)];
+    return surface_guides(kg, slot, sample, flags, rec, block, N, -normalize(ps_ray_d(kg, slot)), (bs.flags & LOBE_DELTA) != 0u);
+  }
+  // beta f |cos theta_i| / pdf on every lane.
+  static AR_FN Spec throughput(const KernelGlobals&, uint32_t, const LobeSample& bs, const Spec& beta, Real3 N, uint32_t*) {
+    return beta * (bs.f * (abs_dot(bs.wi, N) / bs.pdf));
+  }
+};
+
+template <ShadeKind K>
+AR_FN void shade_surface_body(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
   const uint32_t slot = load_ro(kg.main_queue + step.start + item);
   AR_ASSERT((ps_flags(kg, slot) & PATH_KIND) == 0u);
   const uint32_t sample = ps_sample_id(kg, slot);
@@ -529,6 +569,8 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
 
     // NEE from this vertex; none in the NEE_OFF test mode (BSDF sampling alone).
     if ((hooks & TEST_HOOK_NEE_OFF) != 0u) break;
+    // A kind whose lobes are all delta has nothing for a light sample: no light is picked (0005 item 17).
+    if (SurfaceKind<K>::nee_skipped(kg, mat)) break;
     const uint32_t e = ps_event_index(kg, slot);
     const LightSamplerView& lsv = *kg.light_sampler;
     const LightSampleContext lctx = light_context_point(offset_ray_origin(P, Ng, wo), Ng, N);
@@ -545,7 +587,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     // NEE_LIGHT_ONLY has no BSDF strategy, so an environment world samples its complete table.
     const LightLiSample ls = light_sample_li(lr, lctx, ul, ctx.lambda_t, obs, kg.env, (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u);
     if (!(ls.pdf > Real(0))) break;
-    const LobeEval ev = stack_eval(*kg.e_diel, *kg.e_spec, rec, frame_from_normal(N), wo, ls.wi, TransportMode::Radiance);
+    const LobeEval ev = SurfaceKind<K>::eval(kg, rec, mat, N, wo, ls.wi);
     // NEE_LIGHT_ONLY: the BSDF strategy is off, so its pdf leaves the weight.
     const Real p_bsdf = (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u ? Real(0) : ev.pdf;
     Spec nee = ps_beta(kg, slot) * ev.f * (abs_dot(ls.wi, N) * mis_nee_scale(ps_r_u(kg, slot), sl.pmf * ls.pdf, p_bsdf, ls.delta));
@@ -618,8 +660,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   const uint32_t e = ps_event_index(kg, slot);
   const Spec beta = ps_beta(kg, slot);
   const Spec r_u = ps_r_u(kg, slot);
-  const Real2 u2{camera_path_draw(kg, sample, event_dim(e, EV_BSDF_U)), camera_path_draw(kg, sample, event_dim(e, EV_BSDF_V))};
-  const LobeSample bs = stack_sample(*kg.e_diel, *kg.e_spec, rec, frame_from_normal(N), wo, Real(uc), u2, TransportMode::Radiance);
+  const LobeSample bs = SurfaceKind<K>::sample(kg, slot, sample, e, rec, N, wo, uc);
   // The stack hands a non-finite lobe value over as it is (stack_sample_settle); a pdf of 0 with a finite f is "no sample" below.
   if (!is_finite(bs.f) || !(bs.pdf - bs.pdf == Real(0))) {
     sample_mark_invalid(kg, sample);
@@ -628,12 +669,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   }
   // Guides at the denoising surface (surface_guides); a branch on the constant plane offset.
   if (kg.film->guide_albedo >= 0 && (flags & DENOISE_SURFACE_DONE) == 0u && bs.pdf > Real(0)) {
-    // The material and wo are read again from the path rather than kept live across the lobe sample
-    // (registers); phase 0 built the context from these same fields, so the values are identical.
-    const uint32_t m = hit_material_id(kg, ps_hit_inst(kg, slot), ps_hit_prim(kg, slot));
-    const ConstantBlock& block = s.material_constants[load_ro(&s.material_headers[m].const_offset)];
-    flags = surface_guides(kg, slot, sample, flags, rec, block, N, -normalize(ps_ray_d(kg, slot)),
-                           (bs.flags & LOBE_DELTA) != 0u);
+    flags = SurfaceKind<K>::guides(kg, slot, sample, flags, rec, N, bs);
     ps_flags(kg, slot) = flags;
   }
   // A reflection below the geometric surface would leave through the wrong side (0005 item 8).
@@ -641,7 +677,7 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
     path_end(kg, slot, Term::ZERO_THROUGHPUT);
     return;
   }
-  Spec beta_next = beta * (bs.f * (abs_dot(bs.wi, N) / bs.pdf));
+  Spec beta_next = SurfaceKind<K>::throughput(kg, slot, bs, beta, N, &flags);
   if (!is_finite(beta_next)) {
     sample_mark_invalid(kg, sample);
     path_end(kg, slot, Term::INVALID);
@@ -676,6 +712,10 @@ AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const Ste
   ps_ray_d(kg, slot) = bs.wi;
   ps_ray_type(kg, slot) = glossy ? kRayTypeGlossy : kRayTypeDiffuse;
   ps_next_stage(kg, slot) = static_cast<uint8_t>(Stage::INTERSECT_CLOSEST);
+}
+
+AR_FN void stage_shade_surface(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
+  shade_surface_body<ShadeKind::Common>(kg, item, step);
 }
 
 AR_NS_END

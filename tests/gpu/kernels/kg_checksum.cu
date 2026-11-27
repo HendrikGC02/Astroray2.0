@@ -8,13 +8,14 @@
 #include "light/light_record.h"
 #include "light/light_sampler.h"
 #include "material/constant_block.h"
+#include "material/ext_params.h"
 #include "material/lobes/tables.h"
 #include "medium/medium.h"
 #include "medium/medium_block.h"
 #include "scene/scene_view.h"
 #include "vm/context.h"
 
-// One row per table, in host/scene/scene_tables.h TableId order up to LIGHT_RAD_PMF: count (u32),
+// One row per table, in host/scene/scene_tables.h TableId order up to TABLE_ARENA (its element is one byte): count (u32),
 // element size (u32), then the first and last element, kKgElemMax bytes each.
 constexpr uint32_t kKgElemMax = 448;  // the largest element, ConstantBlock
 static_assert(sizeof(ar::ConstantBlock) <= kKgElemMax, "a table element is larger than the checksum row holds");
@@ -77,4 +78,6 @@ extern "C" __global__ void ar_kg_checksum(const ar::KernelGlobals* kgp, uint8_t*
   kg_row(out, r++, l.rad_bins, l.rad_bin_count, sizeof(ar::AliasBin));
   kg_row(out, r++, l.rad_bin_light, l.rad_bin_count, 4);
   kg_row(out, r++, l.rad_pmf, l.rad_pmf != nullptr ? l.light_count : 0u, 4);
+  kg_row(out, r++, s.ext_params, s.ext_param_count, sizeof(ar::ExtParams));
+  kg_row(out, r++, s.table_arena, s.table_arena_bytes, 1);
 }

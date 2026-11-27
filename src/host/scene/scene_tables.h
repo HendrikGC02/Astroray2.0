@@ -162,6 +162,8 @@ enum class TableId : uint32_t {
   LIGHT_RAD_BINS,       // D10's floor: the radiometric alias table
   LIGHT_RAD_BIN_LIGHT,  // the light index of each radiometric bin
   LIGHT_RAD_PMF,        // per light, p_rad
+  EXT_PARAMS,           // ExtParams per extension material (SceneData::ext_params), empty without one
+  TABLE_ARENA,          // the scene TableArena's bytes (SceneData::table_arena), empty without a table
   HEADER,
 };
 inline constexpr uint32_t kTableCount = static_cast<uint32_t>(TableId::HEADER) + 1u;

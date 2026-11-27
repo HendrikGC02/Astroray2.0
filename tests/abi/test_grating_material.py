@@ -3,8 +3,8 @@
 ar_material_desc). scenes/lib/ar.py packs the 64 ext_constants bytes from the field list in
 src/host/material/grating_authored.h; the engine parses them with the struct built from the same
 list. Each field is checked by sending a block in which only that field is bad and reading which
-field the report entry names, so a swapped or shifted field cannot pass. A valid block reaches the
-store's refusal (SHADE_SURFACE_EXT is not registered), the only report entry."""
+field the report entry names, so a swapped or shifted field cannot pass. A valid block compiles and
+the store keeps it: no PROGRAM_REJECTED entry."""
 import ctypes
 import os
 import struct
@@ -68,8 +68,10 @@ class GratingMaterial(unittest.TestCase):
         self.assertEqual(ar.grating_block(740.0, 90.0, (0.0, 0.0), -1, 3, "transmit", "csv"),
                          pack(pitch_nm=740.0, depth_nm=90.0, coating_n=0.0, coating_k=0.0, mode=1, profile=2,
                               m_min=-1, m_max=3))
-        # A valid block parses: the only thing left to refuse it is the missing stage.
-        self.assertIn("SHADE_SURFACE_EXT", self.refusal(KEY0, pack()))
+        # A valid block parses and compiles; SHADE_SURFACE_EXT renders it, so nothing refuses it.
+        self.submit(KEY0, pack())
+        got = self.entries(KEY0)
+        self.assertEqual([e for e in got if e[0] == self.abi.AR_REPORT_PROGRAM_REJECTED], [], got)
         # Only the named field is bad, and the report names it: the C parse reads each at ar.py's offset.
         bad = [("pitch_nm", pack(pitch_nm=-1.0), "pitch_nm"),
                ("depth_nm", pack(depth_nm=0.0), "depth_nm"),
