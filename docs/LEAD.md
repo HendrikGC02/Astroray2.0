@@ -80,31 +80,41 @@ handover below, then stop. Send long landing logs to a `digest` agent. `tools/le
 through opencode, owner decisions 32 and 36) may draft bench-history lines, backlog rows and digests from
 repository text; treat its answer as a draft.
 
-## Handover (seventh lead, 2026-11-28)
-State for the next lead (the sixth lead's notes below still hold where not superseded). Agent ids do not carry across sessions:
-detach the old worktree (`git -C <wt> switch --detach`, `git worktree unlock`), brief a new implementer from the task's Progress
-and `git log main..task/NNN-*`.
-- Landed this session (3): 208 (8c36e7ac; second submit after hosted ci's headless Depth test; reload spill 40 -> 36 / 36 B by
-  `AR_NOINLINE` on the transparent tail, the row's second and last remedy, allowance unchanged; kernelgate now adds out-of-line
-  callee spills to their entry and refuses callee frames and unattributable blocks), 230 (ca0e224e; guide RGB packed 3x10-bit,
-  volatile read keeps k_shade_surface at 128 / 416 / 4 / 16 B), 218 (d27b8797; addon Depth as Blender's Z pass, Combined alpha).
-- In progress (PC crash 2026-11-27 night; both branches clean and committed, worktrees locked):
-  206 on task/206-extension-routing-table-arena (worktree agent-a92f5f76822510797): host arena, ShadeKind template, Ext entry,
-  tests, compile timing done (shade_surface 7.44 s, +0.09 s from the template by interleaved A/B, accepted; shade_surface_ext
-  5.5-5.6 s, ruling 97 read as "takes shade_surface's 8.0 s", the owner may correct it; k_shade_surface_ext 124 / 400 / 0 / 0).
-  Lead rulings in its Progress: guides on an Ext delta sample keep the tint (PROVISIONAL, alternative: total efficiency),
-  GRATING_TABLE_LIMIT also for a TableArena past 4 GiB (0001 row amended), scenes/ext_grating_card built by the scenes step.
-  Needs: checks, canary, evidence, Opus review (kernel O), land in a quiet window.
-  236 on task/236-denoise-small-texture-detail (worktree agent-a8893832248f81927): resumed after 230 fixed its cause (magenta
-  albedo guide); re-runs the bisection on main and picks a documented OIDN mode if b_tx still denoises worse than raw. No OIDN
-  docs in refs: cite the installed OIDN headers; no downloads.
-- Next: 209 after 206 (shade_surface.h, one at a time); 215 after 206 and 209; 213 after 215; 214 after 206; 188 after 206.
-  `check full` is overdue (last before 208): run it after 236's capture, with `fetch.ps1 assets` for cornell_box and
-  studio_small_09 in the main checkout first (decision 43).
-- Lock: owner.json named a build (PID 12600) that died in the crash; tell agents to report a refusal rather than delete it.
-- Lessons: (12) the headless sync suite runs only on hosted ci (BACKLOG): run it through Invoke-ArBlender before an addon or
-  pass-list landing. (13) canary.ps1 skips its per-hunk matrix above 8 hunks: have each hunk applied alone. (14) Task Budget
-  lines older than decision 43 are stale: brief k_shade_surface 128 / 416 / 4 / 16 B and B-05 8.0 s.
+## Handover (seventh lead, 2026-11-28, final)
+State for the eighth lead (the sixth lead's notes below still hold where not superseded). Agent ids do not carry across
+sessions: detach the old worktree (`git -C <wt> switch --detach`, `git worktree unlock <wt>`), then brief a new implementer
+from the task's Progress and `git log main..task/NNN-*`, telling it to `git switch task/NNN-*` in its own worktree first.
+- Landed this session (4): 208 (8c36e7ac; reload spill 40 -> 36 / 36 B by `AR_NOINLINE` on the transparent tail; kernelgate adds
+  out-of-line callee spills to their entry and refuses callee frames and unattributable blocks), 230 (ca0e224e; guide RGB, volatile
+  read), 218 (d27b8797; addon Depth and Combined alpha), 206 (cc9ed58f; extension routing, k_shade_surface_ext 124 / 400 / 0 / 0,
+  ruling 112). `check full` green on main 0b8814f4 (1,297.8 s under load; decision-43 assets now in the main checkout).
+- Owner decision 45: 209 withdrawn to M8 (specular motion vectors after Cycles 5.3; BACKLOG M8 row). The DLSS-RR Integration Guide is
+  in the refs cache, dlss-rr-guide-374959484e79 (fetched by hand: fetch.ps1 refs takes zips only, BACKLOG).
+- Open owner item: 236 (final-denoise prefilter: b_tx 0.80x raw with NONE against 1.48x with ACCURATE, shader_balls 14 % worse with
+  NONE, both worse at 4 spp; table in STATUS). Lead's recommendation (b): keep ACCURATE, b_tx reported, plus a task exposing Cycles'
+  Denoising Prefilter setting in the addon. Branch task/236-denoise-small-texture-detail at 49243c9f holds NONE (e8619050) and the
+  REF_VERSION 2 bump (c6c284fd); worktree agent-a8893832248f81927 (locked). If the owner picks (b), land only the REF_VERSION bump
+  and the b_tx-reported row (drop e8619050, keep the test only if it asserts the chosen mode), then write the prefilter-setting task.
+- Paused at handover (commit-and-stop asked; branch state in each Progress line):
+  188 on task/188-grating-card-v8 at 4d2b13d5 (worktree agent-a6f230cb66c50cd78; cpu lane, Sonnet, Opus review): truths.py
+  grating_orders, scenes/v8_grating_card, analytic.py order_centroids pass on cpu and cuda (orders at 22.31 and 49.41 deg, energy
+  within 1-3 %). Lead must rule: the implementer used |diff| <= 0.1 deg + z SE (the harness's eps_sys + z SE form) because order 2's
+  centroid SE is about 0.06 deg at 256 spp and a bare 0.1 deg fails a correct render about one run in ten; check that 0005 V8
+  allows it, else raise spp, never loosen. Left: one failing harness self-test (synthetic SE), budgets.toml analytic_scenes, the
+  bench G row (suggests ext_grating_card: both sides), canary (7 hunks planned), evidence, checks; ar.py docstring is stale.
+  215 on task/215-b19-b20-b05-remeasure at 1f8138a8 (worktree agent-a3b7608f0d4077c19; gpu lane, measurement): preparation done
+  (neutral hardware id, perf -Cumulative, scenes/b1m_medium, decision table and baselines in Progress, canary, gate 141.4 s); left:
+  the timed captures, which need a quiet machine (pause the other implementer, no builds), then history lines and record sentences. Brief rulings in its Progress: without 209; B-05 8.0 s for shade_surface and
+  shade_surface_ext (ruling 112), 3.0 s others; B-19 pq on b_foliage accepted red (decision 44); B-38 baseline ruling 108.
+- Next: finish 188 and 215 (review, land); then 213 (after 215) and 214 (gpu/blender lane, measurement, without 209); 216 after
+  188; 217 last. When nothing is dispatchable, loop step 8 (fable planner) for M1b's close or M2's planning (PLAN-M1b section 7).
+  Landings since the last `check full`: 1 (206).
+- Lessons: (12) the headless sync suite runs only on hosted ci: run it through Invoke-ArBlender before an addon or pass-list
+  landing (208's first submit failed there). (13) canary.ps1 skips its per-hunk matrix above 8 hunks: have each hunk applied alone,
+  tool output pasted. (14) Task Budget lines older than decision 43 are stale: brief k_shade_surface 128 / 416 / 4 / 16 B, compile
+  7.45 s of 8.0 s. (15) After a PC crash: owner.json may name a dead holder (the lock reports "abandoned" and carries on); truncated
+  cubins ("no ELF magic") and PDBs in a worktree's build tree must be deleted to rebuild. (16) denoise_check's reference cache is
+  keyed on the whole recording (commit sha in the header): an engine change never invalidates it, bump REF_VERSION (BACKLOG).
 
 ## Handover (sixth lead, 2026-11-27)
 State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from its task
