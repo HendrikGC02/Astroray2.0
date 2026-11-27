@@ -80,25 +80,39 @@ handover below, then stop. Send long landing logs to a `digest` agent. `tools/le
 through opencode, owner decisions 32 and 36) may draft bench-history lines, backlog rows and digests from
 repository text; treat its answer as a draft.
 
-## Handover (fifth lead, 2026-11-27)
+## Handover (sixth lead, 2026-11-27)
 State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from its task
 file, its Progress and `git log main..task/NNN-*`. To continue a branch, `git -C <old worktree> switch --detach`, then brief the
 agent to `git switch task/NNN-*` first in its own worktree.
-- Landed this session (8): 205, 190, 194, 170, 219, 201, 237, 220 (ledger in tasks/README.md). 235 closed without a landing (the
-  d2 colour difference is the declared coincident pair 301/302, a traversal tie; no engine defect). `check full` passed on
-  201's branch (740.1 s). Gate landings 134-141 s.
-- Owner decisions 43 and 44 answered every open item: B-05 shade_surface 8.0 s, now on the new clock (237: timing inside the
-  build's MSVC environment, vcvarsall 0.70-0.76 s off every TU; shade_surface 7.04-7.14 s quiet, scatter now ~0.05 s);
-  D10 1.8x accepted; v1 margin confirmed; V11 on cornell_area, shader_balls, cornell_point (met), b_tx's loss is task 236;
-  B-19 pq accepted red on b_foliage. Rulings 109 (D10 ratio floor 1.70) and 110 (V11 device agreement within 5 %) are
-  PROVISIONAL for the owner. The decision-44 reading (8.0 s kept on the new clock) is stated in the record for the owner.
-- Nothing runs when this lead stopped:
-  - 220 landed (6a6b7381). Spine next: 208, then 230 (unblocks 236), 206, 209 (all shade_surface.h, one at a time).
-  - 236 stopped with its cause named and now waits on 230: textured materials write the magenta placeholder albedo guide
-    (0008 d15), so OIDN smooths the texture as noise; dispatch 230 (guide RGB, shade_surface.h, spine-serialised) after 220.
-  If either has no fresh commit when you start, brief a new implementer from its Progress.
-- Next: 193 after the lead rewrites its Reference; 218 after 208; 215 after 206, 209, 193; 213/214/216/217 at the slice close.
-  When nothing is dispatchable, loop step 8 (fable planner).
+- Landed this session (1): 193 (62e48261, second submit; the first failed hosted ci on a test lambda the hosted compiler rejects,
+  fixed with `static constexpr`). Gate 170.4 s, at decision 38's 170 s hold line (+20.5 s against 220, the new capped-equals-
+  uncapped checks): watch the next landings; hold one only if its measured max passes 170 s. Ruling 111 (shadow tracker side
+  buffer) and the B-17 owner item went in with 193's squash.
+- Nothing runs. 208 (Depth and Alpha) is complete and clean on task/208-depth-alpha-aovs at 5d52c97c (worktree
+  agent-a3e669b1d98df0318, locked: detach it before a new implementer switches to the branch), tests and canary (13 cases red)
+  done, evidence viewed and copied to out/land-evidence/208/{depth,alpha}.png (alpha steps 0.25/0.5/0.75/1.0; depth speckle is
+  the sample-0 rule). One blocker: kernelgate's `k_shade_background` reload variant (tests/gpu/kernels/reload_variant.cu)
+  spills 40 / 36 B against the 36 / 36 B allowance in src/kernel/budget.toml (production cubin within its rows). Five
+  attempts inside 208's Scope failed: a noinline helper 44 / 44, a merged tail 44 / 36, a hoisted sample id 44 / 36, an early
+  return 52 / 56, no finite check 40 / 36.
+- Owner, 2026-11-27: "remedy first" (no allowance raise now). Next step: the second and last remedy for this row (LEAD.md
+  "Measurement tasks"): extend 208's Scope by a Scope line in its task file on the branch (simpler than a new task: same branch,
+  same diff) to allow src/kernel/portability.h (an `AR_NOINLINE` macro; none exists today: `AR_FN` is `__forceinline__`) and a
+  restructure of shade_background.h's transparent-background tail, e.g. the transparency write moved out of line or the
+  branch folded into the existing film write. Allowance stays 36 / 36 B. If the reload variant still spills past 36 B, stop:
+  STATUS owner item with the five plus the new numbers, proposed 36 -> 40 B store (loads 36). Then Opus review
+  (`tools/lead/review-bundle.sh 208 task/208-depth-alpha-aovs`), land in a quiet window with
+  `-Evidence` from the two PNGs; 208 states the k_shade_surface row before and after.
+- Spine after 208: 230 (guide RGB; unblocks 236, which waits on branch task/236-denoise-small-texture-detail, worktree locked),
+  206, 209 (all shade_surface.h, one at a time). 218 (addon side of 208) after 208. 215 after 206, 209 (193 landed).
+  213/214/216/217 at the slice close. When nothing is dispatchable, loop step 8 (fable planner).
+- Owner list (STATUS): rulings 109 and 110 and the decision-44 reading; B-17 cap (4,096 PROVISIONAL or about 1,000); the
+  optional coincident-hit tie rule (235); B-10; B-11 basis. `check full` still needs `fetch.ps1 assets` for cornell_box and
+  studio_small_09 in the main checkout (decision 43 covers it); landings since the last full: 9 (205..220, 193): run
+  `check full` after the next landing.
+- Housekeeping: many stale agent worktrees under .claude/worktrees (`git worktree list`); agent-a4abb4c25eadf1a66 could not
+  be removed (a process holds a file). This session could not start or hand off sessions (Remote Control refused): the owner
+  starts the next lead by hand.
 - Process lessons: (1) land.ps1 refuses outside the task's worktree branch: run it from the worktree; an implementer's branch
   must be named task/NNN-* (237's was not until renamed). (2) Landing cleanup deletes the worktree's out/: copy history
   lines, PR bodies and evidence out before landing, or have the implementer commit them (190's history line was rebuilt from
@@ -111,5 +125,7 @@ agent to `git switch task/NNN-*` first in its own worktree.
 - Cache defect (BACKLOG): scene recordings embed worktree asset paths; the HDRI fetched by 201 went with its worktree, so
   `check full`'s denoise step fails until `fetch.ps1 assets -Name studio_small_09` runs in the main checkout (decision 43 covers it;
   ask the owner if unsure). A tools task should make recordings path-independent.
-- Owner list (STATUS): rulings 109 and 110 and the decision-44 reading to confirm; the optional coincident-hit tie rule (235);
-  B-10 (check full ~740-790 s, unenforced); B-11 basis.
+  (9) Hosted ci builds CPU-only and uploads no build.log on a compile failure; a local `check ci` does not reproduce it
+  (BACKLOG): read the error from the PR's ci run page. (10) A ruling that adds bytes to a pool item checks the item budget
+  first (ruling 111 moved to a side buffer for the shadow item's 128 B). (11) After a landing whose squash contains lead
+  commits, the local main rebase conflicts: `git rebase --skip` the already-landed ones.

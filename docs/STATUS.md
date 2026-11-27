@@ -5,8 +5,8 @@ Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `t
 ## Current milestone
 M1b "First light" (docs/PLAN-M1b.md: slices, lanes, the `shade_surface` spine, gate ledger). First batch
 tasks/136-161, order and lanes in tasks/README.md; runbook and handover in docs/LEAD.md; items without a task in
-docs/BACKLOG.md. Slice 0 closed (all of 136-144, 155, 157, 159-162 landed; `check full` green 659 s; landings by `pwsh tools/land.ps1 submit`). Also landed: 145-158, 163, 164, 165, 172, 182, 183, 186, 189, 204, 211, 212, 224-228, 168, 169, 171, 176-181, 185, 199, 200, 202, 203, 166, 173, 174, 187, 195, 210, 221, 222, 223, 229; fourth lead: 175, 233, 231, 232, 196, 234, 192, 197, 191, 198; fifth lead: 205, 190, 194, 170, 219, 201, 237, 220. Second batch 163-183 (ruling 91), third batch 186-203 and 204 written;
-spine: 205, 219 and 220 landed, 208 next (237 put B-05 on the new clock: shade_surface 7.1 s of 8.0 s); open work and next steps in docs/LEAD.md's handover.
+docs/BACKLOG.md. Slice 0 closed (all of 136-144, 155, 157, 159-162 landed; `check full` green 659 s; landings by `pwsh tools/land.ps1 submit`). Also landed: 145-158, 163, 164, 165, 172, 182, 183, 186, 189, 204, 211, 212, 224-228, 168, 169, 171, 176-181, 185, 199, 200, 202, 203, 166, 173, 174, 187, 195, 210, 221, 222, 223, 229; fourth lead: 175, 233, 231, 232, 196, 234, 192, 197, 191, 198; fifth lead: 205, 190, 194, 170, 219, 201, 237, 220; sixth lead: 193. Second batch 163-183 (ruling 91), third batch 186-203 and 204 written;
+spine: 205, 219 and 220 landed, 208 next (blocked on k_shade_background's reload-variant spill 40 / 36 B; owner: remedy first) (237 put B-05 on the new clock: shade_surface 7.1 s of 8.0 s); open work and next steps in docs/LEAD.md's handover.
 M1a "First pixels" closed (owner decision 37): textured, lamp-lit meshes render progressively in the Blender 5.3
 viewport and F12 on CUDA and CPU through the final C ABI; gallery and report from `tools/gallery.py --milestone
 M1a` and `tools/report.py`. Accepted at the close: B-19 idle 11.0 % (10 % stays the target), B-20 2.00x / 1.63x
