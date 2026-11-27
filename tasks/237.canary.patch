@@ -1,5 +1,5 @@
 diff --git a/tools/kernelgate.py b/tools/kernelgate.py
-index d2d9b268..59e1fbde 100644
+index e912513a..f87f0ae6 100644
 --- a/tools/kernelgate.py
 +++ b/tools/kernelgate.py
 @@ -318,7 +318,7 @@ def timed_env(dump, base):
@@ -11,3 +11,22 @@ index d2d9b268..59e1fbde 100644
  
  
  def msvc_environment():
+@@ -357,7 +357,7 @@ def time_runs(stem, cmd, env, runner, clock):
+     runs = []
+     while True:
+         t0 = clock()
+-        code, out = runner(cmd, env=env)
++        code, out = runner(cmd)
+         runs.append(clock() - t0)
+         if code != 0:
+             raise GateError(f"nvcc failed timing {stem}: {out.strip()[-400:]}")
+@@ -370,8 +370,7 @@ def time_runs(stem, cmd, env, runner, clock):
+ def time_tus(cmds, get_env, runner=run, clock=time.perf_counter):
+     """{stem: [seconds]} for [(stem, cmd)]. The MSVC environment comes from get_env once, before the first run, and
+     every run gets it (owner decision 44: nvcc never runs vcvarsall inside the clock)."""
+-    env = get_env()
+-    return {stem: time_runs(stem, cmd, env, runner, clock) for stem, cmd in cmds}
++    return {stem: time_runs(stem, cmd, get_env(), runner, clock) for stem, cmd in cmds}
+ 
+ 
+ def compile_timing(args):
