@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Integrator checks (task 076): Russian roulette furnace, shadow lifetime, closed-box statistics,
-radiance scale, and the B-16 work counters and timing tripwire.
+radiance scale, the per-launch medium cap, and the B-16 work counters and timing tripwire.
 
 Usage: <python> -I tools/integrator_checks.py --gate --device cpu|cuda [--bless]
        <python> -I tools/integrator_checks.py --check NAME [--check NAME ...] --device D
        <python> -I tools/integrator_checks.py --check d2_rr_furnace|d4_lifetime --device D --null N
 Checks (NAME): d2_rr_furnace (0004 D2), d4_lifetime (0004 D4/D5 opaque part, 0002 D5),
-d28_closed_box (0004 D28, 0008 V8), d15_radiance_scale (0003 check 15), counters (B-16, both
-devices) and tripwire (B-16, cuda only). Prints one line per check and a final PASS or FAIL line;
+d28_closed_box (0004 D28, 0008 V8), d15_radiance_scale (0003 check 15), capped_equals_uncapped
+(0006 V6, 0003 check 26), counters (B-16, both devices) and tripwire (B-16, cuda only). Prints one line per check and a final PASS or FAIL line;
 exits non-zero on failure. --bless rewrites tests/budgets/counters.toml for this device from the
 counters and tripwire measured now (the reviewer sees the edit, 0009 d18).
 
@@ -59,6 +59,11 @@ COUNTER_KEYS = ("rays_closest", "rays_shadow", "steps", "launches", "state_bytes
 COUNTER_GROWTH = 1.02  # B-16: fail above +2 %
 TRIPWIRE_SCENE, TRIPWIRE_SPP, TRIPWIRE_RUNS, TRIPWIRE_LIMIT = "b1m", (1, 64), 5, 1.25  # B-16
 RELATIVE_POOL = 1e-6  # 0004 D4/D5 row: equals the large-pool run within 1e-6 relative
+# 0006 V6 / 0003 check 26: the dense v1_slab at the default per-launch cap and at cap 1, both under the
+# majorant hook (RULINGS 111: k = 16, so flights take null collisions and cap 1 requeues each one).
+CAP_SCENE, CAP_SPP, CAP_SIZE, CAP_MAJORANT = "v1_slab", 4, 32, "16"
+# Builder keyword arguments of the variants recording() builds beside a scene's own recording.
+VARIANTS = {"rr_off": {"rr": False}, "dense": {"dense": True}}
 
 
 def gate_members():
@@ -78,17 +83,17 @@ def truth_of(scene):
 
 
 def recording(scene, variant="default"):
-    """out/scenes/<scene>.arrec (tools/scenes.py); d2's Russian-roulette-off variant is built here
-    beside it, again whenever it is older than the scene's own recording."""
+    """out/scenes/<scene>.arrec (tools/scenes.py); a variant (d2's Russian roulette off, v1_slab's dense
+    medium) is built here beside it, again whenever it is older than the scene's own recording."""
     rec = os.path.join(analytic.SCENES_OUT, scene + ".arrec")
     if not os.path.exists(rec):
         raise FileNotFoundError(f"{rec} missing: run tools/scenes.py first")
-    if variant != "rr_off":
+    if variant not in VARIANTS:
         return rec
-    off = os.path.join(analytic.SCENES_OUT, scene + ".rr_off.arrec")
-    if not os.path.exists(off) or os.path.getmtime(off) < os.path.getmtime(rec):
-        load_builder(scene).build(off, rr=False)
-    return off
+    out = os.path.join(analytic.SCENES_OUT, f"{scene}.{variant}.arrec")
+    if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(rec):
+        load_builder(scene).build(out, **VARIANTS[variant])
+    return out
 
 
 def read_fits(path):
@@ -182,6 +187,33 @@ def check_d4(device):
         ok &= same
         msgs.append(f"threads=1 twice: {'bit-identical' if same else 'DIFFER'}")
     return ok, "; ".join(msgs)
+
+
+def capped_pair(device):
+    """The dense v1_slab's dumps at the default cap and at ASTRORAY_TEST_MEDIUM_CAP=1, both with
+    ASTRORAY_TEST_MAJORANT (on the CPU at one thread): (default planes, capped planes)."""
+    env = {"ASTRORAY_TEST_MAJORANT": CAP_MAJORANT}
+    if device == "cpu":
+        env["ASTRORAY_TEST_THREADS"] = "1"
+    rec, s = recording(CAP_SCENE, "dense"), seed(CAP_SCENE, "dense")
+    _, ref, out = dump(rec, device, CAP_SPP, CAP_SIZE, s, env)
+    _, capped, out_c = dump(rec, device, CAP_SPP, CAP_SIZE, s, {**env, "ASTRORAY_TEST_MEDIUM_CAP": "1"})
+    if f"MAJORANT={CAP_MAJORANT}" not in out or "MEDIUM_CAP=1" not in out_c:
+        raise RuntimeError("the CLI's report lists no TEST_HOOK_ACTIVE entry for ASTRORAY_TEST_MAJORANT or _MEDIUM_CAP")
+    return ref, capped
+
+
+def check_capped(device):
+    """0006 D8's per-launch cap, V6 third clause, 0003 check 26: a capped run equals an uncapped one.
+    CPU (one thread): every plane bit-identical; CUDA: display within 1e-6 relative, the rest
+    bit-identical (compare_films). The medium half must not be black, so equal films mean something."""
+    ref, capped = capped_pair(device)
+    ok, text = compare_films(ref, capped, device)
+    a, b = display(ref)[0], display(capped)[0]
+    half = float(a[:, :, : CAP_SIZE // 2].mean())
+    ok &= half > 0.01
+    return ok, (f"dense v1_slab, majorant {CAP_MAJORANT} sigma_t, cap 1 vs default: {text}; max |difference| "
+                f"{float(np.max(np.abs(a - b))):.3g}, medium-half mean {half:.4f}")
 
 
 def check_d28(device):
@@ -598,7 +630,7 @@ def bless(device, measured):
 
 
 CHECKS = {"d2_rr_furnace": check_d2, "d4_lifetime": check_d4, "d28_closed_box": check_d28,
-          "d15_radiance_scale": check_d15, "counters": check_counters, "tripwire": check_tripwire,
+          "d15_radiance_scale": check_d15, "capped_equals_uncapped": check_capped, "counters": check_counters, "tripwire": check_tripwire,
           "d25": check_d25, "determinism": check_determinism, "record_replay": check_record_replay}
 
 
