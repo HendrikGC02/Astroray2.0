@@ -184,8 +184,8 @@ def evaluate(launch, budget, base, cubins, is_stage, declared, full=False):
     return fails, lines, deferred
 
 
-def run(cmd, cwd=ROOT):
-    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+def run(cmd, cwd=ROOT, env=None):
+    r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
@@ -307,6 +307,29 @@ def changed_files(ref):
     return {n.replace("\\", "/") for n in names}
 
 
+def timed_env(dump, base):
+    """`base` with vcvarsall's variables over it. A dump without INCLUDE and LIB is no MSVC environment: raise,
+    never time nvcc without it (0009 d18; nvcc would run vcvarsall itself inside the clock, owner decision 44)."""
+    got = {}
+    for line in dump:
+        m = re.match(r"^([^=\s][^=]*)=(.*)$", line.rstrip("\r"))
+        if m:
+            got[m[1].upper()] = m[2]
+    missing = [k for k in ("INCLUDE", "LIB") if not got.get(k)]
+    if missing:
+        raise GateError(f"the MSVC environment has no {' or '.join(missing)}: is vcvarsall's toolset installed?")
+    return {**base, **got}
+
+
+def msvc_environment():
+    """The environment build.ps1 builds in, from the one implementation both use (tools/lib/msvc.ps1)."""
+    script = os.path.join(ROOT, "tools", "lib", "msvc.ps1")
+    r = subprocess.run(["pwsh", "-NoProfile", "-Command", f". '{script}'; Get-ArMsvcEnv"], cwd=ROOT, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise GateError(f"MSVC environment: {(r.stderr or r.stdout).strip()[-400:]}")
+    return timed_env(r.stdout.splitlines(), os.environ)
+
+
 def nvcc_command(build, stem, out_cubin):
     """The production nvcc call of ninja's rule for this cubin, minus depfile output."""
     code, text = run(["ninja", "-C", build, "-t", "commands", f"kernels/{stem}.cubin"])
@@ -326,6 +349,29 @@ def nvcc_command(build, stem, out_cubin):
             out.append(argv[i])
             i += 1
     return out[:-1] + ["-o", out_cubin, out[-1]]
+
+
+def time_runs(stem, cmd, env, runner, clock):
+    """One TU's serial nvcc runs, no cache, OS file cache warm from the build (0002 D10); a first time within the
+    retime band of the limit is re-timed, three runs at most."""
+    runs = []
+    while True:
+        t0 = clock()
+        code, out = runner(cmd, env=env)
+        runs.append(clock() - t0)
+        if code != 0:
+            raise GateError(f"nvcc failed timing {stem}: {out.strip()[-400:]}")
+        limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
+        near = abs(runs[0] - limit) <= COMPILE_RETIME_BAND * limit
+        if not near or len(runs) == 3:
+            return runs
+
+
+def time_tus(cmds, get_env, runner=run, clock=time.perf_counter):
+    """{stem: [seconds]} for [(stem, cmd)]. The MSVC environment comes from get_env once, before the first run, and
+    every run gets it (owner decision 44: nvcc never runs vcvarsall inside the clock)."""
+    env = get_env()
+    return {stem: time_runs(stem, cmd, env, runner, clock) for stem, cmd in cmds}
 
 
 def compile_timing(args):
@@ -351,24 +397,15 @@ def compile_timing(args):
         return 0
     fails = []
     with tempfile.TemporaryDirectory() as tmp:
-        for cs, stem in tus:
-            cmd = nvcc_command(build, stem, os.path.join(tmp, stem + ".cubin"))
-            runs = []
-            while True:  # serial, no cache, OS file cache warm from the build (0002 D10)
-                t0 = time.perf_counter()
-                code, out = run(cmd)
-                runs.append(time.perf_counter() - t0)
-                if code != 0:
-                    raise GateError(f"nvcc failed timing {stem}: {out.strip()[-400:]}")
-                limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
-                near = abs(runs[0] - limit) <= COMPILE_RETIME_BAND * limit
-                if not near or len(runs) == 3:
-                    break
-            t = min(runs)
-            limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
-            print(f"compile {stem}: {t:.2f} s (limit {limit} s, {len(runs)} run(s), baseline {cs} s)")
-            if t > limit:
-                fails.append(f"B-05: {stem} compiles in {t:.2f} s, limit {limit} s")
+        cmds = [(stem, nvcc_command(build, stem, os.path.join(tmp, stem + ".cubin"))) for _, stem in tus]
+        times = time_tus(cmds, msvc_environment)
+    for cs, stem in tus:
+        runs = times[stem]
+        t = min(runs)
+        limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
+        print(f"compile {stem}: {t:.2f} s (limit {limit} s, {len(runs)} run(s), baseline {cs} s)")
+        if t > limit:
+            fails.append(f"B-05: {stem} compiles in {t:.2f} s, limit {limit} s")
     for f in fails:
         print("FAIL " + f)
     return 1 if fails else 0
@@ -428,6 +465,28 @@ def self_test():
             ok = ok and any(want[3][5:] in w for w in probe_warnings(warns))
         bad += not ok
         print(f"case {case}: expect {want[0]}, got {got}" + (f" ({fails[0]})" if fails else "") + (": ok" if ok else ": MISMATCH"))
+    # The timed command's environment: vcvarsall's INCLUDE and LIB reach it, and a dump without them raises.
+    base = {"PATH": "p", "INCLUDE": "stale"}
+    env = timed_env(["INCLUDE=inc", "LIB=lib", "Path=newp", "noise without equals", "=C:=C:\\x"], base)
+    ok = env["INCLUDE"] == "inc" and env["LIB"] == "lib" and env["PATH"] == "newp"
+    try:
+        timed_env(["Path=newp"], base)
+        ok = False
+    except GateError:
+        pass
+    bad += not ok
+    print(f"case timed_env: {'ok' if ok else 'MISMATCH'}")
+    # The timed runs: the environment is fetched once and reaches every run, the near-limit re-times included.
+    sentinel, calls, got_env = {"INCLUDE": "inc", "LIB": "lib"}, [], []
+    def stub_run(cmd, env=None):
+        got_env.append(env)
+        return 0, ""
+    ticks = iter(range(0, 1000))
+    clock = lambda: next(ticks) * COMPILE_LIMIT_S  # every run reads the limit exactly: near the limit, so 3 runs each
+    times = time_tus([("a", ["x"]), ("b", ["y"])], lambda: calls.append(1) or sentinel, stub_run, clock)
+    ok = len(calls) == 1 and len(got_env) == 6 and all(e is sentinel for e in got_env) and times == {"a": [COMPILE_LIMIT_S] * 3, "b": [COMPILE_LIMIT_S] * 3}
+    bad += not ok
+    print(f"case time_tus: {'ok' if ok else 'MISMATCH'}")
     print(f"self-test: {'FAILED' if bad else 'ok'}")
     return 1 if bad else 0
 
