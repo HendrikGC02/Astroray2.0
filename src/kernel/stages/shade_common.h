@@ -328,7 +328,7 @@ AR_FN void resolve_constant_record(const ConstantBlock& b, const ShadeContext& c
   rec->geometry_coat_tangent = block_frame(b.geometry_coat_tangent, t);
   rec->metal_ior = 0u;
   rec->flags = b.geometry_thin_walled != 0u ? PARAMS_THIN_WALLED : 0u;
-  rec->pad_[0] = rec->pad_[1] = 0u;
+  rec->guide_rgb[0] = rec->guide_rgb[1] = 0u;
 }
 
 AR_NS_END
