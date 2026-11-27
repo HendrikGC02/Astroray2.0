@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Deterministic AOV agreement, CPU against GPU (0009 d17(iv)): renders out/scenes/<scene>.arrec
 through `astroray_cli dump` on both devices at the scene's [truth] size, spp and seed and compares
-the primary-hit AOVs per pixel.
+the primary-hit AOVs per pixel (Depth, the view-space z of the hit with 0 at a miss, joins them: its
+bound is the position difference plus the position tolerance, see compare).
 
 Usage: <python> -I tools/aov_agree.py --scene d2_aov_geometry [--png P]
 Prints the mismatch count per AOV, the excluded pixel count and a final PASS or FAIL line; exits
@@ -130,13 +131,14 @@ def render(rec, device, size, spp, seed):
         raise RuntimeError(f"the {device} dump says DEVICE {head.get('DEVICE')!r}, SPP {head.get('SPP')}, "
                            f"SEED {head.get('SEED')}: not the render asked for")
     need = [f"aov_position.{i}" for i in range(3)] + [f"aov_normal.{i}" for i in range(3)] + \
-           ["aov_uv.0", "aov_uv.1", "aov_material"]
+           ["aov_uv.0", "aov_uv.1", "aov_material", "aov_depth"]
     missing = [n for n in need if n not in planes]
     if missing:
         raise RuntimeError(f"the {device} dump has no {missing} planes: does the builder request the Position pass?")
     return {"P": np.stack([planes[f"aov_position.{i}"] for i in range(3)]),
             "N": np.stack([planes[f"aov_normal.{i}"] for i in range(3)]),
-            "UV": np.stack([planes["aov_uv.0"], planes["aov_uv.1"]]), "ID": planes["aov_material"]}
+            "UV": np.stack([planes["aov_uv.0"], planes["aov_uv.1"]]), "ID": planes["aov_material"],
+            "Z": planes["aov_depth"]}
 
 
 def compare(a, b, pair, rates):
@@ -167,6 +169,13 @@ def compare(a, b, pair, rates):
         counts[name], worst[name] = int((ratio > 1.0).sum()), float(ratio.max())
 
     judge("position", dp, POS_REL * pnorm)
+    # Depth is the view-space z of the hit, a unit-gradient linear function of P (0008 d10; Cycles
+    # camera_z_depth), so the two devices' depths differ by at most the position difference |dP| plus the
+    # rounding of its own subtraction and 3-term dot, which the position tolerance covers.
+    judge("depth", np.abs(a["Z"] - b["Z"]), dp + POS_REL * pnorm)
+    # In front of the camera at every hit, and the stored 0 (read as 1e10) at every miss, on both devices.
+    counts["depth"] += int((((hit_a & (a["Z"] <= 0)) | (~hit_a & (a["Z"] != 0)) |
+                             (hit_b & (b["Z"] <= 0)) | (~hit_b & (b["Z"] != 0))) & ~tie).sum())
     na, nb = a["N"], b["N"]
     ang = np.arctan2(np.linalg.norm(np.cross(na, nb, axis=0), axis=0), (na * nb).sum(axis=0))
     judge("normal", ang, rate_n * (dp + eps_p) + eps_n)
@@ -216,8 +225,9 @@ def run(scene, png=None):
         if v:
             reasons.append(f"{v} {k} mismatches")
     print(f"aov {scene}: mismatches material {counts['material']}, position {counts['position']}, "
-          f"normal {counts['normal']}, uv {counts['uv']}; worst difference / bound: position "
-          f"{worst['position']:.3g} (bound {POS_REL:g} relative), normal {worst['normal']:.3g}, uv {worst['uv']:.3g}")
+          f"normal {counts['normal']}, uv {counts['uv']}, depth {counts['depth']}; worst difference / bound: position "
+          f"{worst['position']:.3g} (bound {POS_REL:g} relative), normal {worst['normal']:.3g}, uv {worst['uv']:.3g}, "
+          f"depth {worst['depth']:.3g}")
     print(f"aov {scene}: excluded {excluded} pixels on the coincident pair {pair}; {hits} hit pixels of "
           f"{size * size}, {ids} distinct material ids")
     if png:

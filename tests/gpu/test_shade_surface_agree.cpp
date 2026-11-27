@@ -225,8 +225,22 @@ struct Snapshot {
   std::vector<ar::Real> prev_dist;
   int32_t aov_position = 0, aov_normal = 0, aov_uv = 0, aov_material = 0, bounce_sum = 0;
   int32_t guide_albedo = -1, guide_normal = -1;
+  int32_t aov_depth = 0;
   uint32_t plane_stride = 0;
 };
+
+// The camera Depth is measured from: turned about y, off the origin, so that the view-space z of a hit
+// differs from its distance to the camera and from its z coordinate.
+ar::CameraView depth_camera() {
+  ar::CameraView cam{};
+  cam.type = ar::CameraType::PERSPECTIVE;
+  cam.origin = {0.4f, -0.7f, 1.9f};
+  const float a = 0.6f;
+  cam.axis[0] = {std::cos(a), 0.0f, -std::sin(a)};
+  cam.axis[1] = {0.0f, 1.0f, 0.0f};
+  cam.axis[2] = {std::sin(a), 0.0f, std::cos(a)};
+  return cam;
+}
 
 float rnd(uint32_t i, uint32_t d) { return float(agree::unit(i, d)); }
 
@@ -250,6 +264,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   req.statistics = true;
   req.termination_stats = true;
   req.primary_aov = true;
+  req.depth = true;
   req.guides = guides;
   Film film(dev, FilmLayout::build(req), owner);
   film.data().inv_radiance_scale = 0.5;  // s = 2
@@ -429,6 +444,8 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   kg.main_queue = static_cast<const uint32_t*>(queue_p);
   kg.active_pixels = static_cast<uint32_t*>(list_p);
   kg.film = static_cast<ar::FilmData*>(film_p);
+  const ar::CameraView camera = depth_camera();
+  kg.camera = static_cast<const ar::CameraView*>(put(&camera, sizeof camera));
   kg.scene = static_cast<const ar::SceneData*>(scene_p);
   kg.tables = static_cast<const ar::SceneTables*>(tables_p);
   kg.e_diel = static_cast<const ar::EDielTable*>(e_diel_p);
@@ -462,7 +479,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   Snapshot s;
   const ar::FilmData& fd = film.data();
   s.aov_position = fd.aov_position, s.aov_normal = fd.aov_normal, s.aov_uv = fd.aov_uv, s.aov_material = fd.aov_material;
-  s.bounce_sum = fd.bounce_sum, s.plane_stride = fd.plane_stride;
+  s.bounce_sum = fd.bounce_sum, s.plane_stride = fd.plane_stride, s.aov_depth = fd.aov_depth;
   const auto offset = [&](const void* p) { return uint64_t(static_cast<const char*>(p) - static_cast<const char*>(film.buffer().ptr)); };
   s.slot_L.resize(size_t(kN) * 4);
   s.slot_flags.resize(kN);
@@ -494,7 +511,7 @@ Snapshot run(Device& dev, ModuleDevice* gpu, const Tables& tb, const Materials& 
   s.counts.resize(size_t(n_count_planes) * fd.plane_stride);
   dev.download(s.counts.data(), film.buffer(), offset(fd.count), s.counts.size() * 4);
   const int32_t last_add = std::max({fd.bounce_sum, fd.aov_position + 2, fd.aov_normal + 2, fd.aov_uv + 1, fd.aov_material,
-                                     fd.guide_albedo + 2, fd.guide_normal + 2});
+                                     fd.guide_albedo + 2, fd.guide_normal + 2, fd.aov_depth});
   s.adds.resize(size_t(last_add + 1) * fd.plane_stride);
   dev.download(s.adds.data(), film.buffer(), offset(fd.add), s.adds.size() * 4);
   if (guides) {
@@ -636,6 +653,53 @@ TEST_CASE("shade_surface/agreement") {
               invalid, continued, glossy, rr, zero, kN, worst, worst_o);
   CHECK(worst <= 1e-5);
   CHECK(worst_o <= 1e-5);
+}
+
+TEST_CASE("shade_surface/depth cuda") {
+  // The Depth plane of the production module is the view-space z of the Position plane's own hit,
+  // dot(P - origin, -axis[2]) (not the ray distance or P.z), and the CPU stage writes the same.
+  const Tables tb;
+  const Materials ms = build_materials(tb);
+  Ledger cpu_ledger, gpu_ledger;
+  ContextState ctx;
+  ThreadPool pool(ctx, 1);
+  CpuDevice cpu(cpu_ledger, pool);
+  std::unique_ptr<ModuleDevice> gpu = make_cuda_device(gpu_ledger, 0);
+  const Snapshot c = run(cpu, nullptr, tb, ms);
+  const Snapshot g = run(*gpu, gpu.get(), tb, ms);
+  const ar::CameraView cam = depth_camera();
+  const auto plane = [](const Snapshot& s, int32_t first) {
+    return std::vector<float>(s.adds.begin() + int64_t(first) * s.plane_stride,
+                              s.adds.begin() + int64_t(first + 1) * s.plane_stride);
+  };
+  const auto depth_of = [&](const Snapshot& s, const char* who) {
+    const std::vector<float> z = plane(s, s.aov_depth), px = plane(s, s.aov_position), py = plane(s, s.aov_position + 1),
+                             pz = plane(s, s.aov_position + 2);
+    uint32_t written = 0, rayish = 0;
+    double worst = 0.0;
+    for (size_t i = 0; i < z.size(); ++i) {
+      if (px[i] == 0.0f && py[i] == 0.0f && pz[i] == 0.0f) {
+        CHECK(z[i] == 0.0f);  // no primary hit written: the stored 0 that reads 1e10
+        continue;
+      }
+      ++written;
+      const double ex = double(px[i]) - double(cam.origin.x), ey = double(py[i]) - double(cam.origin.y),
+                   ez = double(pz[i]) - double(cam.origin.z);
+      const double want = -(ex * double(cam.axis[2].x) + ey * double(cam.axis[2].y) + ez * double(cam.axis[2].z));
+      worst = std::max(worst, std::fabs(double(z[i]) - want) / std::max(1.0, std::fabs(want)));
+      rayish += std::fabs(want - std::sqrt(ex * ex + ey * ey + ez * ez)) > 0.05;  // the distance would differ
+    }
+    std::printf("shade_surface depth %s: %u primary hits, worst |z - dot(P - o, -axis2)| / max(1, |z|) = %.3g\n", who, written, worst);
+    CHECK(written > 5000u);
+    CHECK(rayish > written / 2);
+    CHECK(worst <= 1e-6);
+    return z;
+  };
+  const std::vector<float> zc = depth_of(c, "cpu"), zg = depth_of(g, "cuda");
+  double dz = 0.0;
+  for (size_t i = 0; i < zc.size(); ++i) dz = std::max(dz, std::fabs(double(zc[i]) - double(zg[i])) / std::max(1.0, std::fabs(double(zc[i]))));
+  std::printf("shade_surface depth cpu vs cuda: worst relative difference %.3g\n", dz);
+  CHECK(dz <= 1e-6);
 }
 
 TEST_CASE("shade_surface_agree/non-finite lobe value") {

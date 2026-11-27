@@ -59,7 +59,7 @@ class TestSessionPasses(unittest.TestCase):
         self.assertEqual(lib.ar_scene_create(self.ctx, ctypes.byref(sdesc), ctypes.byref(self.scene)), a.AR_OK)
         self.addCleanup(lib.ar_scene_destroy, self.scene)
 
-    def commit_settings(self, passes, statistics=None, expect=None):
+    def commit_settings(self, passes, statistics=None, expect=None, film_transparent=None):
         a, lib = self.abi, self.lib
         edit = ctypes.c_void_p()
         self.assertEqual(lib.ar_scene_edit_begin(self.scene, ctypes.byref(edit)), a.AR_OK)
@@ -73,6 +73,8 @@ class TestSessionPasses(unittest.TestCase):
         s.max_bounces = 4  # the bounce heat map's range
         if statistics is not None:
             s.statistics = statistics
+        if film_transparent is not None:
+            s.film_transparent = film_transparent
         self.assertEqual(lib.ar_edit_set_settings(edit, ctypes.byref(s)), a.AR_OK)
         gen = ctypes.c_uint64()
         st = lib.ar_edit_commit(edit, ctypes.byref(gen))
@@ -185,6 +187,29 @@ class TestSessionPasses(unittest.TestCase):
                 hits.append((bytes(e.detail).split(b"\0")[0], e.level, e.subject, e.count))
         self.assertEqual(hits, [(UNKNOWN, a.AR_LEVEL_WARNING, 0, 1)])
 
+    def test_depth_and_alpha_with_film_transparent(self):
+        # Depth and Alpha through the ABI (0008 d10; Cycles film/read.h): Depth follows Position's order
+        # (right after Combined), Alpha closes the AOVs. Every ray of this empty scene reaches the world,
+        # so a ray that scattered nowhere is a transparent-background ray with the setting on: Alpha 0.
+        # With it off Alpha is exactly 1. Depth reads 1e10 where nothing was hit, either way.
+        a = self.abi
+        for on in (1, 0):
+            with self.subTest(film_transparent=on):
+                gen = self.commit_settings([b"Depth", b"Alpha", b"Position"], film_transparent=on)
+                session = self.start_session()
+                self.settle(session, gen)
+                listed = self.passes(session)
+                order = [name for name, _ in sorted(listed.items(), key=lambda kv: kv[1][0])]
+                self.assertEqual(order[:3], ["Combined", "Depth", "Position"], order)
+                self.assertLess(order.index("IndexMA"), order.index("Alpha"))
+                for name, want in (("Alpha", 0.0 if on else 1.0), ("Depth", 1e10)):
+                    index, comps = listed[name]
+                    self.assertEqual(comps, 1)
+                    st, values = self.read(session, index, comps)
+                    self.assertEqual(st, a.AR_OK)
+                    self.assertTrue(all(v == ctypes.c_float(want).value for v in values), (name, values[:4]))
+                print(f"film_transparent {on}: Alpha and Depth read as Cycles' conversions give")
+
     def pass_unsupported(self, session):
         a, lib = self.abi, self.lib
         info = a.ar_report_info()
@@ -231,15 +256,16 @@ class TestSessionPasses(unittest.TestCase):
         self.assertEqual(self.pass_unsupported(session), [(b"AR Bounces", a.AR_LEVEL_WARNING, 0, 1)])
 
     def test_stale_index_after_a_rebuild_is_refused(self):
-        # With the AOVs, IndexMA sits where AR Invalid sits without them; both are one-component
-        # means, so only the revision check tells a stale index from a valid one.
+        # With the AOVs (Depth, Position, Normal, UV, IndexMA), IndexMA sits where AR Invalid sits when
+        # only Alpha is requested; both are one-component means, so only the revision check tells a
+        # stale index from a valid one.
         a, lib = self.abi, self.lib
         gen = self.commit_settings([b"Position"])
         session = self.start_session()
         self.settle(session, gen)
         index, comps = self.passes(session)["IndexMA"]
         self.assertEqual(self.read(session, index, comps)[0], a.AR_OK)
-        gen = self.commit_settings([])
+        gen = self.commit_settings([b"Alpha"])
         self.settle(session, gen)
         st, _ = self.read(session, index, comps)
         self.assertEqual(st, a.AR_ERR_INVALID_ARGUMENT)

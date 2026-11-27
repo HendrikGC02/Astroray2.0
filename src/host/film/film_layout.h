@@ -41,6 +41,8 @@ struct FilmRequest {
   bool termination_stats = false;  // "term": one COUNT plane per ar::Term value, on request
   bool primary_aov = false;        // "aov_position", "aov_normal", "aov_uv", "aov_material" (d10)
   bool guides = false;             // "guide_albedo", "guide_normal": denoiser guides (d15)
+  bool depth = false;              // "aov_depth": linear view-space z of the primary hit, sample 0 only (d10)
+  bool transparency = false;       // "transparency": the Alpha pass's plane, 1 - alpha summed over samples (d10)
   std::vector<ChannelRequest> extra;  // beyond the always-present display MOMENT channel
 };
 

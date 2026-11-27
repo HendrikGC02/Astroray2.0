@@ -300,6 +300,7 @@ class Session {
   WavelengthTable wavelengths_;
   std::unique_ptr<Film> film_;
   std::shared_ptr<const StoredSettings> film_settings_;  // the settings film_ was last checked against
+  bool film_pinhole_ = true;  // the camera type film_ was last checked against (Depth needs a pinhole)
   bool stats_display_warned_ = false;  // the bounce display met a film without statistics (render thread)
   // The scene table set the session renders, pinned until the next set (RULINGS 70). It holds the
   // light table of its snapshot (null for a scene without material and mesh stores), and

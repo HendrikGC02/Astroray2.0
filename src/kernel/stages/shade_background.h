@@ -28,6 +28,21 @@
 // background, so the plane keeps 0). The value is the beauty's, so it carries its wavelength noise.
 // A finite contribution can still overflow the float conversion: a non-finite guide value fails the
 // sample, as a non-finite contribution does.
+// Film Transparent (SessionUniforms::film_transparent): a camera ray that reaches the world with
+// bounces[total] == 0 is Cycles' transparent-background ray (PATH_RAY_TRANSPARENT_BACKGROUND, cleared
+// only by a scattering event). It adds transparency = average(throughput) to the transparency plane and
+// nothing to Combined, guides included, and does not evaluate the world: with no background pass Cycles
+// skips the background shader there too (integrate_background, eval_background), and
+// film_write_background writes transparency alone for it; a non-finite throughput marks the sample invalid
+// and ends the path INVALID, as a non-finite contribution does. The throughput is 1 unless a non-scattering
+// event attenuated it (an absorbing medium): M1b's opacity null event leaves it unchanged, so a surface
+// pass-through reads 1 and an alpha card's partial coverage comes from the stochastic decision. A path
+// through a visible lamp keeps the flag too: Cycles counts the lamp as a transparent bounce
+// (integrator/shade_light.h, "count this as a transparent bounce"), and shade_light advances no total
+// here. Depth needs no write at the background: the plane holds Cycles' 0 for a path that never hit.
+// Ref: Cycles kernel/integrator/shade_background.h integrate_background (is_transparent_background_ray,
+// transparent = average(throughput)) and kernel/film/light_passes.h film_write_background,
+// film_write_transparent; kernel/integrator/shade_light.h (lines 94-100).
 // Ref: docs/decisions/0004-integrator.md D5, D6 (world row), D28; 0002 D8 (shade_background);
 // docs/decisions/0005-material-model.md item 32;
 // Cycles kernel/integrator/shade_background.h (Apache-2.0) for the stage structure and
@@ -150,6 +165,20 @@ AR_FN bool background_guides(const KernelGlobals& kg, uint32_t slot, uint32_t sa
   return true;
 }
 
+// The whole end of a transparent-background ray (no scattering event, Film Transparent on): the
+// transparency plane gets average(throughput) and the path ends ESCAPED; a non-finite throughput writes
+// nothing, marks the sample invalid and ends the path INVALID. Out of line, so that its live values do not
+// stay across the world's film write (tests/gpu/kernels/reload_variant.cu measures the spills).
+AR_NOINLINE void background_transparent_end(const KernelGlobals& kg, uint32_t slot) {
+  const Real transparency = avg(ps_beta(kg, slot));
+  const uint32_t sample = ps_sample_id(kg, slot);
+  Term term = Term::ESCAPED;
+  if (transparency - transparency == Real(0)) film_add_transparency(kg, sample, transparency);
+  else term = Term::INVALID;
+  if (term == Term::INVALID) sample_mark_invalid(kg, sample);
+  path_end(kg, slot, term);
+}
+
 AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const StepEntry& step) {
   const uint32_t slot = load_ro(kg.main_queue + step.start + item);
   AR_ASSERT((ps_flags(kg, slot) & PATH_KIND) == 0u);
@@ -157,7 +186,16 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
   const LightRecord* world = world_light(kg);
   const uint32_t flags = ps_flags(kg, slot);
   const uint32_t hooks = kg.session.test_hooks;
-  const bool after_scatter = ps_bounces(kg, slot).v[0] > 0u && (flags & LAST_BOUNCE_SPECULAR) == 0u;
+  const uint32_t total = ps_bounces(kg, slot).v[0];
+  const bool after_scatter = total > 0u && (flags & LAST_BOUNCE_SPECULAR) == 0u;
+  // Film Transparent: a ray with no scattering event so far (bounces[total] == 0, which alpha
+  // pass-throughs, false interfaces and lamp crossings leave at 0 as Cycles' transparent bounces leave
+  // PATH_RAY_TRANSPARENT_BACKGROUND set) reaching the world adds average(throughput) as transparency and
+  // no radiance. A path that scattered still sees the world.
+  if (kg.session.film_transparent != 0u && total == 0u) {
+    background_transparent_end(kg, slot);
+    return;
+  }
   if (world != nullptr && !(after_scatter && (hooks & TEST_HOOK_NEE_LIGHT_ONLY) != 0u)) {
     const Spec lt = ps_lambda_t(kg, slot);
     Lambda lam;
@@ -181,13 +219,11 @@ AR_FN void stage_shade_background(const KernelGlobals& kg, uint32_t item, const 
                               mis_emitter_scale(ps_r_u(kg, slot), weighted ? ps_r_l(kg, slot) : Spec{}, p_light, weighted);
     const bool guide_ok = !(ran && is_finite(contribution)) || kg.film->guide_albedo < 0 ||
                           (flags & DENOISE_SURFACE_DONE) != 0u || background_guides(kg, slot, sample, flags, contribution);
-    if (ran && is_finite(contribution) && guide_ok) {
-      sample_add(kg, sample, contribution);
-    } else {
-      sample_mark_invalid(kg, sample);
-      term = Term::INVALID;
-    }
+    if (ran && is_finite(contribution) && guide_ok) sample_add(kg, sample, contribution);
+    else term = Term::INVALID;
   }
+  // The world branch's failure exit: the sample is invalid exactly when the path ends INVALID.
+  if (term == Term::INVALID) sample_mark_invalid(kg, ps_sample_id(kg, slot));
   path_end(kg, slot, term);
 }
 

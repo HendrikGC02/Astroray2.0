@@ -15,6 +15,7 @@ std::vector<PassDesc> list_passes(const FilmLayout& layout, bool denoiser) {
     throw std::invalid_argument("a session with a denoiser has a film without the denoiser guide planes");
   std::vector<PassDesc> out;
   out.push_back({"Combined", 3, AR_UNIT_ENERGY, denoiser ? PassSource::Denoised : PassSource::Combined, "display"});
+  if (layout.find("aov_depth")) out.push_back({"Depth", 1, AR_UNIT_NONE, PassSource::Depth, "aov_depth"});
   const struct {
     const char* channel;
     const char* name;
@@ -22,6 +23,7 @@ std::vector<PassDesc> list_passes(const FilmLayout& layout, bool denoiser) {
   for (const auto& a : aovs)
     if (const FilmChannel* c = layout.find(a.channel))
       out.push_back({a.name, c->components, AR_UNIT_NONE, PassSource::Aov, a.channel});
+  if (layout.find("transparency")) out.push_back({"Alpha", 1, AR_UNIT_NONE, PassSource::Alpha, "transparency"});
   if (denoiser) {
     // d10: Noisy Image is always written when a denoiser ran; Denoising Depth has no producer yet.
     out.push_back({"Denoising Albedo", 3, AR_UNIT_NONE, PassSource::GuideAlbedo, "guide_albedo"});
@@ -113,6 +115,24 @@ void read_pass(const FilmView& film, const PassDesc& pass, uint32_t quantity, ui
     case PassSource::GuideNormal:
       for (uint32_t k = 0; k < pass.components; ++k) interleave(film.mean(pass.channel, k), pass.components, k, dst);
       break;
+    case PassSource::Depth: {
+      // Cycles film/read.h film_get_pass_pixel_depth: pixel[0] = (f == 0.0f) ? 1e10f : f * scale_exposure
+      // (the depth plane has no exposure scale here).
+      const std::vector<double> z = film.mean(pass.channel, 0);
+      for (size_t j = 0; j < z.size(); ++j) dst[j] = float(z[j]) == 0.0f ? 1e10f : float(z[j]);
+      break;
+    }
+    case PassSource::Alpha: {
+      // Cycles film/read.h film_transparency_to_alpha: saturatef(1.0f - transparency), the clamp because
+      // Russian roulette can push the mean outside 0..1. A pixel with no sample stays NaN ("no data").
+      // With Film Transparent off nothing is written, the mean is 0 and alpha is exactly 1.
+      const std::vector<double> t = film.mean(pass.channel, 0);
+      for (size_t j = 0; j < t.size(); ++j) {
+        const float a = 1.0f - float(t[j]);
+        dst[j] = a != a ? a : std::min(1.0f, std::max(0.0f, a));
+      }
+      break;
+    }
     case PassSource::SampleCount:
       interleave(film.sample_counts(), 1, 0, dst);
       break;

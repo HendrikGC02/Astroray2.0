@@ -75,6 +75,9 @@ struct SessionUniforms {
   // the majorant is tight and no flight takes a null collision; ASTRORAY_TEST_MAJORANT sets k >= 1 so
   // flights take null collisions and the cap is exercised. Unbiased for any k >= 1.
   uint32_t medium_majorant = 1u;
+  // ar_settings.film_transparent: a camera ray that reaches the world with no scattering event adds
+  // no world radiance and its transparency instead (shade_background.h).
+  uint32_t film_transparent;
 };
 
 // Opaque until the task that needs them defines them.

@@ -22,9 +22,12 @@ namespace astroray::host {
 
 // Denoised is Combined of a session with a denoiser: the DisplayImage once a denoise succeeded, the
 // film until then. NoisyImage is always the film's display mean (0008 d17); the guides are the
-// denoiser guide planes' means, unclamped (the clamp belongs to the denoiser's copy, d15).
+// denoiser guide planes' means, unclamped (the clamp belongs to the denoiser's copy, d15). Depth is the
+// stored view-space z with a stored 0 (a ray that never hit) read as 1e10, and Alpha is
+// saturate(1 - mean transparency), both as Cycles' film/read.h converts them; Alpha is not denoised
+// (d18: it is copied from the film).
 enum class PassSource : uint8_t {
-  Combined, Aov, SampleCount, Bounces, RelError, Invalid, Denoised, NoisyImage, GuideAlbedo, GuideNormal
+  Combined, Aov, SampleCount, Bounces, RelError, Invalid, Denoised, NoisyImage, GuideAlbedo, GuideNormal, Depth, Alpha
 };
 
 struct PassDesc {
@@ -36,7 +39,7 @@ struct PassDesc {
 };
 
 // The passes the layout allocated, in 0008 d10's order: Combined, the primary-hit AOVs
-// (Position, Normal, UV, IndexMA), with `denoiser` the denoising passes (Denoising Albedo,
+// (Depth, Position, Normal, UV, IndexMA, Alpha), with `denoiser` the denoising passes (Denoising Albedo,
 // Denoising Normal, Noisy Image), the statistics (AR Sample Count, AR Bounces, AR Rel Error,
 // AR Invalid). The denoising passes exist exactly when a denoiser was selected (d10), and Combined's
 // source is then Denoised. Throws std::invalid_argument for a band channel (the layout does not carry

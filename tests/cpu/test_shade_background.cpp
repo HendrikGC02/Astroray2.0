@@ -76,11 +76,12 @@ struct MissRig {
   std::vector<ar::Spec> r_u = std::vector<ar::Spec>(kSlots, ar::spec_fill(1.0f));
   ar::StepEntry step{0, kSlots, 0};
 
-  explicit MissRig(float world_strength) : pool(ctx, 1), dev(ledger, pool) {
+  explicit MissRig(float world_strength, bool transparency_plane = false) : pool(ctx, 1), dev(ledger, pool) {
     FilmRequest req;
     req.max_width = kSlots;
     req.max_height = 1;
     req.slot_capacity = kSlots;
+    req.transparency = transparency_plane;
     req.statistics = true;
     req.termination_stats = true;
     film = std::make_unique<Film>(dev, FilmLayout::build(req), Owner{1, 1});
@@ -150,6 +151,10 @@ struct MissRig {
     ar::Spec s;
     for (int l = 0; l < ar::kLanes; ++l) s.v[l] = film->data().slot_L[4u * slot + uint32_t(l)];
     return s;
+  }
+  float transparency(uint32_t pixel) const {
+    const ar::FilmData& f = film->data();
+    return f.add[uint64_t(f.transparency) * f.plane_stride + pixel];
   }
   uint32_t hist(ar::Term t, uint32_t pixel) const {
     const ar::FilmData& f = film->data();
@@ -318,6 +323,70 @@ TEST_CASE("shade_background/a scene without a world is black and ends escaped") 
     CHECK(rig.term[s] == uint8_t(ar::Term::ESCAPED));
     CHECK(rig.next_stage[s] == uint8_t(ar::Stage::TERMINATED));
     CHECK(rig.hist(ar::Term::ESCAPED, s) == 1u);
+  }
+}
+
+TEST_CASE("shade_background/transparent film adds transparency not radiance") {
+  // Slots 0, 1 and 3 have bounces[total] == 0 (transparent-background rays); slot 2 scattered three times.
+  {
+    MissRig rig(2.5f, true);
+    rig.kg.session.film_transparent = 1;
+    rig.run();
+    for (uint32_t s = 0; s < kSlots; ++s) {
+      CHECK(rig.term[s] == uint8_t(ar::Term::ESCAPED));
+      CHECK(rig.next_stage[s] == uint8_t(ar::Stage::TERMINATED));
+      CHECK(rig.hist(ar::Term::ESCAPED, s) == 1u);
+      if (s == 2) {  // a path that scattered still sees the world and adds no transparency
+        for (int l = 0; l < ar::kLanes; ++l) CHECK(rig.slot_value(s).v[l] == 2.5f * rig.beta[s].v[l]);
+        CHECK(rig.transparency(s) == 0.0f);
+      } else {  // Cycles: transparent = average(throughput), no background radiance
+        for (int l = 0; l < ar::kLanes; ++l) CHECK(rig.slot_value(s).v[l] == 0.0f);
+        CHECK(rig.transparency(s) == ar::avg(rig.beta[s]));
+      }
+    }
+  }
+  {
+    // M1b's transparent events (the opacity null event, false interfaces, lamp crossings) leave the
+    // throughput at 1, so such a sample writes exactly 1 whatever the lanes' wavelengths.
+    MissRig rig(2.5f, true);
+    rig.kg.session.film_transparent = 1;
+    for (uint32_t s = 0; s < kSlots; ++s) rig.beta[s] = ar::spec_fill(1.0f);
+    rig.run();
+    for (uint32_t s : {0u, 1u, 3u}) CHECK(rig.transparency(s) == 1.0f);
+  }
+  {
+    // The setting off: the world is seen by every ray and the plane is never written.
+    MissRig rig(2.5f, true);
+    rig.run();
+    for (uint32_t s = 0; s < kSlots; ++s) {
+      for (int l = 0; l < ar::kLanes; ++l) CHECK(rig.slot_value(s).v[l] == 2.5f * rig.beta[s].v[l]);
+      CHECK(rig.transparency(s) == 0.0f);
+    }
+  }
+  {
+    // A throughput lane that is NaN has no transparency: the sample is invalid and the plane is not poisoned.
+    MissRig rig(2.5f, true);
+    rig.kg.session.film_transparent = 1;
+    rig.beta[0].v[1] = std::numeric_limits<float>::quiet_NaN();
+    rig.run();
+    CHECK(rig.term[0] == uint8_t(ar::Term::INVALID));
+    CHECK(!ar::film_sample_valid(rig.slot_value(0)));
+    CHECK(rig.transparency(0) == 0.0f);
+    CHECK(rig.term[1] == uint8_t(ar::Term::ESCAPED));
+  }
+  {
+    // With no world at all the film is still transparent there; and without the plane (Alpha not
+    // requested) the radiance is dropped all the same.
+    MissRig rig(2.5f, true);
+    rig.kg.session.film_transparent = 1;
+    rig.kg.world_light = ar::kNoLight;
+    rig.run();
+    CHECK(rig.transparency(0) == ar::avg(rig.beta[0]));
+    MissRig bare(2.5f, false);
+    bare.kg.session.film_transparent = 1;
+    bare.run();
+    for (int l = 0; l < ar::kLanes; ++l) CHECK(bare.slot_value(0).v[l] == 0.0f);
+    CHECK(bare.film->data().transparency == -1);
   }
 }
 
