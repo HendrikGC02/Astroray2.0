@@ -16,3 +16,6 @@ Depends on: 219 (spine queue: the lead's order 205, 219, 220, 208, 206, 209); no
 Size: S (about 40 lines without tests); stop and report at 2x.
 Progress:
 - 220: started; files: stack.h, shade_surface.h, tests (lobe_stack, shade_surface_bsdf, alpha_pass_through, shade_surface_agree), BACKLOG, canary patch.
+- 220: stack.h reports non-finite lobe values (eval, delta and non-delta sample) via stack_sample_settle; the stage ends INVALID on non-finite f or pdf (NEE ev.pdf, bs.f/bs.pdf added); the limit end stores this hit's flags; probe_m1.cu mirrors both.
+- 220: k_shade_surface 128/416/4/16 before and after; compile 7.11 s (limit 8.0); perf b1m 0.998, b5m 1.000; d3_alpha_cards and d1_nee_onoff CPU film data bit-identical to main.
+- 220: tests/cpu/test_shade_surface_media.cpp config-2 goldens re-recorded (limit-end slot flags; the old goldens hold with the old flag word).
