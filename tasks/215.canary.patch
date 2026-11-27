@@ -1,0 +1,29 @@
+diff --git a/cli/bench.cpp b/cli/bench.cpp
+index d49087ec..466d89ac 100644
+--- a/cli/bench.cpp
++++ b/cli/bench.cpp
+@@ -166,7 +166,10 @@ int bench_cmd(int argc, char** argv) {
+   ar_build_info(&b);
+   Line l;
+   l.sha = text(b.git_sha, sizeof b.git_sha);
+-  l.machine = hardware_id();
++  char* host = nullptr;
++  size_t host_len = 0;
++  l.machine = _dupenv_s(&host, &host_len, "COMPUTERNAME") == 0 && host ? host : "unknown";
++  std::free(host);
+   l.driver = "unknown";  // the ABI exposes no driver query (see info)
+   l.cuda = text(b.cuda, sizeof b.cuda);
+   l.scene = stem(a.recording);
+diff --git a/tools/perf.py b/tools/perf.py
+index afe6cc0f..efaea691 100644
+--- a/tools/perf.py
++++ b/tools/perf.py
+@@ -133,7 +133,7 @@ def cumulative(measured, history, sha):
+                 out.append(f"CUMULATIVE {scene} {metric}: no baseline line at {sha}")
+                 continue
+             now, then = median([m["value"] for m in cur]), median(base)
+-            out.append(f"CUMULATIVE {scene} {metric}: {now:.6g} against {then:.6g} at {sha[:9]} ratio {now / then:.3f}")
++            out.append(f"CUMULATIVE {scene} {metric}: {now:.6g} against {then:.6g} at {sha[:9]} ratio {now / now:.3f}")
+     if not out:
+         raise PerfError(f"no {' or '.join(CUMULATIVE_METRICS)} line in the measured file")
+     return out
