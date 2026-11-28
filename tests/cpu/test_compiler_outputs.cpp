@@ -1136,14 +1136,13 @@ TEST_CASE("compiler_outputs/blackbody needs constant opacity") {
   CHECK(bits(mk.compiled.block.emission_luminance) == bits(3.0f * 0.25f));
 }
 
-TEST_CASE("compiler_outputs/per-point opacity on emission reported") {
-  // A per-point opacity scales Le as computed (outside [0, 1] too) while the pass decision clamps
-  // it: one NODE_APPROXIMATED entry says so. A constant opacity is clamped before the product, and
-  // a per-point opacity without emission scales nothing: neither has the entry.
-  const std::string want = "opacity: a per-point geometry_opacity scales emission unclamped";
-  auto count = [&](const MaterialOutput& m) {
+TEST_CASE("compiler_outputs/per-point opacity on emission is clamped, not reported") {
+  // A per-point opacity enters Le through CLAMP_F32, the clamp the pass decision applies, so no
+  // entry says it scales emission unclamped (the clamped values are mix_shader/per-point alpha
+  // under an emission mix); a constant opacity is clamped on the host.
+  auto unclamped = [&](const MaterialOutput& m) {
     return std::count_if(m.entries.begin(), m.entries.end(), [&](const auto& e) {
-      return e.code == AR_REPORT_NODE_APPROXIMATED && e.detail == want;
+      return e.code == AR_REPORT_NODE_APPROXIMATED && e.detail.find("unclamped") != std::string::npos;
     });
   };
   GB per;
@@ -1151,14 +1150,11 @@ TEST_CASE("compiler_outputs/per-point opacity on emission reported") {
   per.store(channel(per, tex(per), 1), ar::RecordSlot::geometry_opacity);
   const MaterialOutput mp = per.compile();
   REQUIRE(!mp.magenta);
-  CHECK(count(mp) == 1);
+  CHECK(unclamped(mp) == 0);
   GB k;
   k.op2(Op::EMIT_LE, k.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), k.add(Op::CONST_F32, {2.0f}));
   k.store(k.add(Op::CONST_F32, {0.5f}), ar::RecordSlot::geometry_opacity);
-  CHECK(count(k.compile()) == 0);
-  GB dark;
-  dark.store(channel(dark, tex(dark), 1), ar::RecordSlot::geometry_opacity);
-  CHECK(count(dark.compile()) == 0);
+  CHECK(unclamped(k.compile()) == 0);
 }
 
 TEST_CASE("compiler_outputs/opaque shadow entry once per material") {

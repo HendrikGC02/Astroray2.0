@@ -546,6 +546,8 @@ TEST_CASE("vm/div and clamp fold as they interpret") {
   // in place, and a CONST after the clamp proves it advanced past its two immediates.
   constexpr uint32_t kN = 10000;
   const float nan = std::numeric_limits<float>::quiet_NaN(), inf = std::numeric_limits<float>::infinity();
+  volatile float volatile_zero = 0.0f;  // a runtime zero: MSVC's C4723 rejects a divide it can see is by 0
+  const float zero = volatile_zero;
   auto same = [](float a, float b) { return (std::isnan(a) && std::isnan(b)) || bits(a) == bits(b) || (a == 0.0f && b == 0.0f); };
   Tally t;
   for (uint32_t i = 0; i < kN; ++i) {
@@ -553,7 +555,7 @@ TEST_CASE("vm/div and clamp fold as they interpret") {
     float row[16];
     fill(g, row, i);
     const float* x = row;
-    const float den = i % 97u == 0u ? ((i & 1u) ? -0.0f : 0.0f) : x[1];
+    const float den = i % 97u == 0u ? ((i & 1u) ? -zero : zero) : x[1];
     const float specials[8] = {nan, inf, -inf, -0.0f, 0.0f, 1.0f, -1.0f, 0.5f};
     const float v = i % 11u < 8u && i % 3u == 0u ? specials[i % 11u] : x[2];
     // The compiler's [0, 1], and random pairs, every fifth one reversed (min(max(x, lo), hi) is hi).
@@ -592,8 +594,8 @@ TEST_CASE("vm/div and clamp fold as they interpret") {
   CHECK(std::isnan(ar::op_clamp_f32(nan, 0.0f, 1.0f)));
   CHECK(ar::op_clamp_f32(1.5f, 0.0f, 1.0f) == 1.0f);
   CHECK(ar::op_clamp_f32(-0.5f, 0.0f, 1.0f) == 0.0f);
-  CHECK(ar::op_div_f32(1.0f, 0.0f) == inf);
-  CHECK(std::isnan(ar::op_div_f32(0.0f, 0.0f)));
+  CHECK(ar::op_div_f32(1.0f, zero) == inf);
+  CHECK(std::isnan(ar::op_div_f32(zero, zero)));
 }
 
 TEST_CASE("vm/lift analytic values") {

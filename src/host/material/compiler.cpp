@@ -794,8 +794,8 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     if (op_store >= 0) {
       const int v = w.g.nodes[size_t(op_store)].input[0];
       if (w.isc[size_t(v)] && clamp01(w.cv[size_t(v)][0]) != w.cv[size_t(v)][0]) {
-        const int clamped = konst(clamp01(w.cv[size_t(v)][0]));  // konst may move the node array
-        w.g.nodes[size_t(op_store)].input[0] = clamped;
+        const int in_range = konst(clamp01(w.cv[size_t(v)][0]));  // konst may move the node array
+        w.g.nodes[size_t(op_store)].input[0] = in_range;
         res->opacity_clamped = true;
       }
       opacity_store_of[c] = op_store;
@@ -911,10 +911,22 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     } else if (is_const(p.tau, 0.0f) && is_const(a, 1.0f)) {
       cw = p.s;
     } else {
-      // 1 - a' = tau + s (1 - a) and closure_weight = s a / a' (item 38). A constant a' of 0 never
-      // takes the surface, so its weight is 0 as in the constant branch above.
+      // 1 - a' = tau + s (1 - a) and closure_weight = s a / a' when a' > 0, else 0 (item 38, ruling
+      // 115). a' <= 0 means the null event is certain, so the weight is never applied to light; the
+      // select only keeps IEEE 0/0 from reaching STORE_SLOT's non-finite refusal. A NaN a, s or tau
+      // still reaches the store as NaN and ends the path INVALID. Per point the select is
+      // m * num / (a' + 1 - m) with m = clamp(a' * 2^127 * 2^127, 0, 1): m is exactly 1 for any a' > 0
+      // (even the smallest denormal gives 2^105 or more) and 0 for a' <= 0, where the quotient
+      // is taken over a' + 1 and multiplied away. It uses only the two ops of this change.
+      const int num = mul(p.s, a);
       a2 = sub(one, add(p.tau, mul(p.s, sub(one, a))));
-      cw = w.isc[size_t(a2)] && !(w.cv[size_t(a2)][0] > 0.0f) ? zero : arith(Op::DIV_F32, mul(p.s, a), a2);
+      if (w.isc[size_t(a2)]) {
+        cw = !(w.cv[size_t(a2)][0] > 0.0f) ? zero : arith(Op::DIV_F32, num, a2);
+      } else {
+        const int k = konst(1.7014118346046923e38f);  // 2^127
+        const int m = clamped(arith(Op::MUL_F32, arith(Op::MUL_F32, a2, k), k));
+        cw = arith(Op::MUL_F32, m, arith(Op::DIV_F32, num, add(a2, sub(one, m))));
+      }
     }
     if (a2 >= 0) {
       if (opacity_store_of.count(c) != 0) w.g.nodes[size_t(opacity_store_of[c])].input[0] = a2;
