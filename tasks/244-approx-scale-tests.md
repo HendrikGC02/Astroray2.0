@@ -15,3 +15,5 @@ Budget: gate +0 s (no new case; the named case stays in `full`); kernel rows: no
 Depends on: none. Collisions: test files with 239, 243, 247 and M2's lobe tests by neighbouring lines only; tools/lint.py with 249-251 only if the rule is added.
 Size: S (test edits only); stop and report above 40 touched checks (then split by directory).
 Progress:
+- 5 checks in 3 files compare relatively (`.scale(0)`): light_sampler 167, 695; light_tree_kernel 279, 288; light_tree 321. Other Approx sites measured (every value < 5e-2 printed over the full suite) and left; no gpu test uses Approx.
+- Canary: 4 hunks (builder x2, sampler floor, tree walk), each red with the new form and green with the old; check fast and gate PASS. No lint rule (6 false positives on today's tree).
