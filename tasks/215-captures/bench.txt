@@ -1,0 +1,9 @@
+scene b1m_medium: from cache
+scenes: 0 built, 1 from cache, 0 up to date, 0.03 s
+b1m_medium pass_ms                       15.9437 ms (n=64, spread 1.884)
+b1m_medium kernel_ms_per_sample       7.6889e-06 ms (n=64, spread 9.088e-07)
+b1m_medium rays_closest              4.84203e+06 rays (n=1, spread 0)
+b1m_medium rays_shadow               1.46152e+06 rays (n=1, spread 0)
+b1m_medium steps_per_pass                     30 steps (n=1, spread 0)
+PASS bench: history lines in C:\Astroray2.0\.claude\worktrees\agent-a48c753f37cfc4d77\out\bench\history-20261128.jsonl
+wall 2.2767585 s

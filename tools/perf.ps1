@@ -151,9 +151,11 @@ try {
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$base.sqlite")) { $exp | Select-Object -Last 4 | ForEach-Object { Write-Host $_ }; Write-Host "FAIL perf: nsys export of $s"; exit 1 }
         $exports += "$s=$base.sqlite"
       }
-      # The id is the CLI's own, read from the bench lines the capture printed: one source.
-      $machine = (Get-Content "$base.capture.log" | Where-Object { $_ -like '{*' } | Select-Object -First 1 | ConvertFrom-Json).machine
-      if (-not $machine) { Write-Host "FAIL perf: the capture log $base.capture.log has no bench line"; exit 1 }
+      # The id is the CLI's own, read from the bench lines of a minimal run (nsys keeps the target's stdout in the
+      # report, not in the capture log): one source.
+      $probeOut = & $cli bench $rec --size 320x180 --passes 1 --warmup 0 --device cuda 2>&1 | ForEach-Object { "$_" }
+      $machine = ($probeOut | Where-Object { $_ -like '{*' } | Select-Object -First 1 | ConvertFrom-Json).machine
+      if (-not $machine) { Write-Host 'FAIL perf: the CLI printed no bench line to read the machine id from'; exit 1 }
       $out = Join-Path $tmp "shares-$r.jsonl"
       & $py -I (Join-Path $PSScriptRoot 'perf_shares.py') lines @exports --sha $binSha --machine $machine --out $out
       if ($LASTEXITCODE -ne 0) { Write-Host "FAIL perf: perf_shares.py exited $LASTEXITCODE"; exit 2 }

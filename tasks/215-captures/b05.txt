@@ -1,0 +1,13 @@
+=== run 1
+compile shade_surface: 7.52 s (limit 8.0 s, 3 run(s), baseline 7.45 s)
+compile shade_surface_ext: 5.42 s (limit 8.0 s, 1 run(s), baseline 5.56 s)
+compile shade_background: 2.25 s (limit 3.0 s, 1 run(s), baseline 2.17 s)
+=== run 2
+compile shade_surface: 7.34 s (limit 8.0 s, 3 run(s), baseline 7.45 s)
+compile shade_surface_ext: 5.41 s (limit 8.0 s, 1 run(s), baseline 5.56 s)
+compile shade_background: 2.23 s (limit 3.0 s, 1 run(s), baseline 2.17 s)
+=== run 3
+compile shade_surface: 7.33 s (limit 8.0 s, 3 run(s), baseline 7.45 s)
+compile shade_surface_ext: 5.44 s (limit 8.0 s, 1 run(s), baseline 5.56 s)
+compile shade_background: 2.24 s (limit 3.0 s, 1 run(s), baseline 2.17 s)
+wall 96.1096758 s

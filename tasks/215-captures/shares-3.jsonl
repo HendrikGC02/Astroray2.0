@@ -1,0 +1,2 @@
+{"sha":"1f8138a837b2d081d07791901a3b7f4789e3d56e","machine":"rtx5070ti-8c16t","driver":"unknown","cuda":"cuda","scene":"b_foliage","metric":"idle_share","value":0.094752,"unit":"fraction","n":63,"spread":0.044527,"date":"2026-11-28T00:11:49Z"}
+{"sha":"1f8138a837b2d081d07791901a3b7f4789e3d56e","machine":"rtx5070ti-8c16t","driver":"unknown","cuda":"cuda","scene":"b_foliage","metric":"pq_share","value":0.109428,"unit":"fraction","n":63,"spread":0.00727,"date":"2026-11-28T00:11:49Z"}
