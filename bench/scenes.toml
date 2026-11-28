@@ -102,9 +102,13 @@ name = "b_foliage"
 recording = "b_foliage.arrec"
 class = "B"
 sets = ["M1b"]
+# The blend writer has no mapping for geometry_opacity, so the foliage renders through astroray_cli (`gallery_via`),
+# at half its 1920 x 1080 (`cli_size`).
 showcase = ["M1b"]
-gallery_size = [1280, 720]
+gallery_size = [960, 540]
 gallery_spp = 64
+gallery_via = "cli"
+cli_size = [960, 540]
 
 # b1m with a closed box of test medium over half the grid (B-1M plus M1b's volume stages at 1080p, on demand).
 [[scene]]

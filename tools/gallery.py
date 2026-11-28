@@ -18,7 +18,8 @@ what the workers wrote. As the worker it runs inside Blender with the staged ext
         volume mapping in M1b): the recording through `astroray_cli render` on both devices at `gallery_spp`,
         the film's display planes written as PNG (sRGB encoding, clipped, no view transform: the sidecar says
         "none: CLI output"; nearest-neighbour up to `gallery_size`, which must be an integer multiple of the
-        recording's size), the same sidecars and difference map as f12.
+        recording's size, or `cli_size` [w, h] passed as --size so a recording larger than the page is rendered
+        smaller, not resampled), the same sidecars and difference map as f12.
   denoise: a scene with `denoise = true`: the F12 job on CUDA twice at `denoise_spp` (default `gallery_spp`),
         `use_denoising` off and on, <scene>_denoise_off.png and _on.png, and in the on sidecar the pair's statistics: the
         high-frequency energy and mean of the flat wall patch `denoise_patch` ([x0, y0, x1, y1] as fractions of
@@ -66,6 +67,8 @@ def showcase(milestone, toml=None):
             raise SystemExit(f"FAIL gallery: bench/scenes.toml entry {s['name']}: gallery_via {s['gallery_via']!r} is not \"cli\"")
         if s.get("gallery_via") == "cli" and not s.get("recording"):
             raise SystemExit(f"FAIL gallery: bench/scenes.toml entry {s['name']} has gallery_via = \"cli\" and no recording")
+        if s.get("cli_size") and s.get("gallery_via") != "cli":
+            raise SystemExit(f"FAIL gallery: bench/scenes.toml entry {s['name']} has cli_size without gallery_via = \"cli\"")
         if s.get("gallery_via") == "cli" and (s.get("denoise") or s.get("panel") or s.get("heat")):
             raise SystemExit(f"FAIL gallery: bench/scenes.toml entry {s['name']}: denoise, panel and heat need the addon, not gallery_via = \"cli\"")
         if s.get("denoise") and len(s.get("denoise_patch", ())) != 4:
@@ -647,7 +650,8 @@ def worker_cli(job):
                 os.remove(p)
         fits = os.path.join(work, stem + ".fits")
         t0 = time.perf_counter()
-        r = subprocess.run([exe, "render", job["rec"], "-o", fits, "--device", dev.lower(), "--spp", str(e["gallery_spp"])],
+        r = subprocess.run([exe, "render", job["rec"], "-o", fits, "--device", dev.lower(), "--spp", str(e["gallery_spp"])]
+                           + (["--size", "x".join(str(v) for v in e["cli_size"])] if e.get("cli_size") else []),
                            capture_output=True, text=True, cwd=work, timeout=3500)
         secs = time.perf_counter() - t0
         try:
