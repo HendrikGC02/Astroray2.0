@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "common/cornell_rig.h"
+#include "testing/off_reference.h"
 #include "host/film/fits_writer.h"
 
 using namespace astroray;
@@ -173,8 +174,8 @@ TEST_CASE("session_denoise/cancel during denoise") {
   const double paused_ms = std::chrono::duration<double, std::milli>(t2 - t0).count();
   std::printf("session_denoise cpu cancel during the denoiser wait: cancel %.3f ms, PAUSED after %.3f ms (B-21 %.0f ms)\n",
               cancel_ms, paused_ms, kB21Ms);
-  CHECK(cancel_ms <= kB21Ms);
-  CHECK(paused_ms <= kB21Ms);
+  CHECK(astroray::test::timing_ok("B-21 session_denoise cancel", cancel_ms, kB21Ms));
+  CHECK(astroray::test::timing_ok("B-21 session_denoise PAUSED", paused_ms, kB21Ms));
   CHECK(s.progress().state == AR_STATE_PAUSED);
   CHECK_FALSE(s.denoised());
   const std::vector<float> combined = cornell::read_mean(s, "Combined");
@@ -326,6 +327,24 @@ TEST_CASE("session_denoise/the target must hold the render rectangle") {
   }));
   CHECK(s.progress().state == AR_STATE_FAILED);
   CHECK(s.failure().find("does not fit the denoise target") != std::string::npos);
+}
+
+}  // TEST_SUITE
+
+TEST_SUITE("fast") {
+
+// The machine rule of a timing CHECK (src/testing/off_reference.h): an overrun fails on the reference machine and is
+// printed, not failed, on another.
+TEST_CASE("session_denoise/a timing check over its limit follows the machine standing") {
+  using astroray::test::timing_ok_for;
+  std::string said;
+  CHECK(timing_ok_for(nullptr, "B-21 x", 4.0, 5.0));
+  CHECK_FALSE(timing_ok_for(nullptr, "B-21 x", 6.0, 5.0));
+  CHECK_FALSE(timing_ok_for("", "B-21 x", 6.0, 5.0));
+  CHECK(timing_ok_for("laptop-6c12t", "B-21 x", 4.0, 5.0, "ms", &said));
+  CHECK(said.empty());
+  CHECK(timing_ok_for("laptop-6c12t", "B-21 x", 6.0, 5.0, "ms", &said));
+  CHECK(said == "off-reference laptop-6c12t B-21 x: 6 ms against 5 ms");
 }
 
 }  // TEST_SUITE

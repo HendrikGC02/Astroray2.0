@@ -52,5 +52,7 @@ std::string text(const uint8_t* p, size_t cap);
 
 int render_cmd(int argc, char** argv, bool dump);
 int bench_cmd(int argc, char** argv);
+// Prints `machine-id: <id>`, the id bench puts in its history lines (the one computation).
+int machine_id_cmd(int argc, char** argv);
 
 }  // namespace cli

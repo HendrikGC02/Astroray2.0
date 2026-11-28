@@ -98,13 +98,14 @@ int main(int argc, char** argv) {
     return 3;
   }
   if (argc < 2) {
-    fprintf(stderr, "usage: astroray_cli info [--create cpu|cuda[:i]] | render|dump <recording> -o <file.fits> | bench <recording>\n");
+    fprintf(stderr, "usage: astroray_cli info [--create cpu|cuda[:i]] | render|dump <recording> -o <file.fits> | bench <recording> | machine-id\n");
     return cli::kExitUsage;
   }
   if (!strcmp(argv[1], "info")) return info_cmd(argc, argv);
   if (!strcmp(argv[1], "render")) return cli::render_cmd(argc, argv, false);
   if (!strcmp(argv[1], "dump")) return cli::render_cmd(argc, argv, true);
   if (!strcmp(argv[1], "bench")) return cli::bench_cmd(argc, argv);
+  if (!strcmp(argv[1], "machine-id")) return cli::machine_id_cmd(argc, argv);
   fprintf(stderr, "unknown command '%s'\n", argv[1]);
   return cli::kExitUsage;
 }

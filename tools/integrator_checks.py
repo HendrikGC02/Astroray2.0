@@ -34,6 +34,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "scenes", "lib"))
 import analytic  # noqa: E402
+import machine_id  # noqa: E402
 import ar  # noqa: E402
 import meta  # noqa: E402
 import truths  # noqa: E402
@@ -592,42 +593,74 @@ def check_counters(device, measured):
     return ok, "; ".join(parts)
 
 
+def tripwire_verdict(mid, reference_id, spp, ms, reference_base, own_base):
+    """(ok, text) of one tripwire reading. The reference machine is held to [tripwire.cuda]; another machine to its own
+    baseline in [tripwire_machine."<id>".cuda] where --bless recorded one, and otherwise its reading over the
+    reference baseline's limit is an off-reference line, never a failure (owner decision 47 c)."""
+    if mid != reference_id and own_base is None:
+        if reference_base is None:
+            return True, f"off-reference {mid} B-16 tripwire {spp} spp: {ms:.3g} ms per sample, no baseline on this machine (run --bless)"
+        _, _, line = machine_id.judge(f"B-16 tripwire {spp} spp", ms, reference_base * TRIPWIRE_LIMIT, mid, "ms per sample")
+        return True, line or f"{spp} spp {ms:.3g} ms per sample (reference baseline {reference_base:.3g}, limit x{TRIPWIRE_LIMIT})"
+    base = reference_base if mid == reference_id else own_base
+    if base is None:
+        return False, f"ms_per_sample_{spp}spp {ms:.3g}: no baseline (run --bless)"
+    return ms <= base * TRIPWIRE_LIMIT, f"{spp} spp {ms:.3g} ms per sample (baseline {base:.3g}, limit x{TRIPWIRE_LIMIT})"
+
+
 def check_tripwire(device, measured):
     """B-16 tripwire: wall ms per sample of TRIPWIRE_SCENE at each TRIPWIRE_SPP, after one burn-in
-    render, minimum of TRIPWIRE_RUNS; fails above TRIPWIRE_LIMIT x the baseline. CUDA only (lead)."""
+    render, minimum of TRIPWIRE_RUNS; fails above TRIPWIRE_LIMIT x the baseline of this machine (tripwire_verdict).
+    CUDA only (lead)."""
     if device != "cuda":
         return True, "cuda only"
-    base = load_baselines().get("tripwire", {}).get(device, {})
+    mid, ref = machine_id.machine_id(), machine_id.reference()
+    data = load_baselines()
+    ref_base = data.get("tripwire", {}).get(device, {})
+    own_base = data.get("tripwire_machine", {}).get(mid, {}).get(device)
     ok, parts = True, []
     for spp in TRIPWIRE_SPP:
         _, times, samples, _ = in_process(TRIPWIRE_SCENE, device, runs=TRIPWIRE_RUNS + 1, spp=spp)
         ms = min(times[1:]) * 1e3 / samples
         key = f"ms_per_sample_{spp}spp"
         measured.setdefault("tripwire", {}).setdefault(device, {})[key] = ms
-        if key not in base:
-            ok = False
-            parts.append(f"{key} {ms:.3g}: no baseline (run --bless)")
-            continue
-        ok &= ms <= base[key] * TRIPWIRE_LIMIT
-        parts.append(f"{spp} spp {ms:.3g} ms per sample (baseline {base[key]:.3g}, limit x{TRIPWIRE_LIMIT})")
+        good, text = tripwire_verdict(mid, ref, spp, ms, ref_base.get(key), None if own_base is None else own_base.get(key))
+        if text.startswith("off-reference "):
+            print(text)
+        ok &= good
+        parts.append(text)
     return ok, "; ".join(parts)
 
 
 def bless(device, measured):
     """Rewrites this device's tables of tests/budgets/counters.toml, keeping the other device's."""
     data = load_baselines()
-    data[device] = measured.get(device, data.get(device, {}))
+    # The work counters are a correctness check and are written on every machine; the tripwire rows are timing, so
+    # [tripwire.D] is the reference machine's and another machine writes its own [tripwire_machine."<id>".D].
+    if device not in measured:
+        raise RuntimeError(f"--bless: no counters were measured for {device} (run the gate, not --check): nothing written")
+    if device == "cuda" and "tripwire" not in measured:
+        raise RuntimeError("--bless: no tripwire was measured for cuda (run the gate, not --check): nothing written")
+    on_reference = machine_id.machine_id() == machine_id.reference()
+    data[device] = measured[device]
     if "tripwire" in measured:
-        data.setdefault("tripwire", {})[device] = measured["tripwire"][device]
+        if on_reference:
+            data.setdefault("tripwire", {})[device] = measured["tripwire"][device]
+        else:
+            data.setdefault("tripwire_machine", {}).setdefault(machine_id.machine_id(), {})[device] = measured["tripwire"][device]
     lines = ["# Work-counter baselines of the gate's B-16 check (0009 d18), written by",
              "# `tools/integrator_checks.py --gate --device D --bless`: per device and fixed scene, the counters of",
              "# the last pass at the scene's seed (+2 % fails), and the CUDA tripwire's wall ms per sample",
-             "# (1.25x fails). An edit here is a re-bless, which the reviewer sees."]
+             "# (1.25x fails; another machine's own is [tripwire_machine.\"<id>\".cuda], the reference machine's stays [tripwire.cuda]).",
+             "# An edit here is a re-bless, which the reviewer sees."]
     for dev in DEVICES:
         for scene, c in sorted(data.get(dev, {}).items()):
             lines += ["", f"[{dev}.{scene}]"] + [f"{k} = {int(c[k])}" for k in COUNTER_KEYS]
     for dev, row in sorted(data.get("tripwire", {}).items()):
         lines += ["", f"[tripwire.{dev}]"] + [f"{k} = {v:.6g}" for k, v in sorted(row.items())]
+    for mid, devs in sorted(data.get("tripwire_machine", {}).items()):
+        for dev, row in sorted(devs.items()):
+            lines += ["", f'[tripwire_machine."{mid}".{dev}]'] + [f"{k} = {v:.6g}" for k, v in sorted(row.items())]
     with open(COUNTERS, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -707,7 +740,11 @@ def main():
         ok &= passed or a.bless and name in ("counters", "tripwire")
         print(f"{'PASS' if passed else 'FAIL'} integrator {name} {a.device}: {msg} ({time.perf_counter() - t1:.1f} s)")
     if a.bless:
-        bless(a.device, measured)
+        try:
+            bless(a.device, measured)
+        except (RuntimeError, OSError) as e:
+            print(f"FAIL integrator bless: {e}")
+            return 1
         print(f"blessed {os.path.relpath(COUNTERS, ROOT)} for {a.device}")
     print(f"{'PASS' if ok else 'FAIL'} integrator {a.device}: {len(names)} checks in {time.perf_counter() - t0:.1f} s")
     return 0 if ok else 1

@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include "testing/off_reference.h"
 #include "device/cuda/cuda_device.h"
 #include "device/cuda/optix_accel.h"
 #include "host/device.h"
@@ -302,7 +303,7 @@ TEST_CASE("dev_reload/swap at step boundary") {
   // B-04: from the module file landing in the directory to the end of the first pass rendered with it.
   std::printf("dev_reload: new module written to first pass on it %.1f ms (epoch reset after %.1f ms, that pass took %.1f ms; B-04 limit 5000 ms for the whole edit, nvcc separate)\n", ms, ms_epoch, double(s.progress().last_pass_ms));
   CHECK(first_pass);
-  CHECK(ms <= 5000.0);
+  CHECK(astroray::test::timing_ok("B-04 dev_reload edit to first pass", ms, 5000.0));
   CHECK(r.wait_passes(4));
   const double after = r.combined_mean();
   std::printf("dev_reload: Combined mean before %.6g, after %.6g\n", before, after);

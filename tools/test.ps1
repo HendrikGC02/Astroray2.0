@@ -17,6 +17,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 . (Join-Path $PSScriptRoot 'lib/testrun.ps1')
+. (Join-Path $PSScriptRoot 'lib/python.ps1')
+. (Join-Path $PSScriptRoot 'lib/machine.ps1')
 $log = Join-Path $root 'out/check/test.log'
 New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
 Set-Content -Path $log -Value "test $(Get-Date -Format s) exe='$Exe' py='$Py' case='$Case' tier=$Tier"
@@ -54,6 +56,9 @@ try {
   }
   $bj = Join-Path $root 'out/check/build.json'
   if (Test-Path $bj) { $waited += [double](Get-Content $bj -Raw | ConvertFrom-Json).waited }
+  # The standing a tier would give the case (ASTRORAY_OFF_REFERENCE, lib/machine.ps1): a hand-run timing case behaves as
+  # in the tier. It reads the machine id cache a full dev build wrote; this tool builds nothing for it.
+  try { $null = Set-ArMachineStanding } catch { Write-Host "FAIL test $target $Case 0.0 s (machine id: $($_.Exception.Message))"; exit 1 }
   if (-not $machine) { Exit-ArMachineLock }
   $waited += Enter-ArTreeLock (Join-Path $root 'out/build')
   $sw = [Diagnostics.Stopwatch]::StartNew()

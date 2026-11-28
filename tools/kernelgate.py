@@ -29,6 +29,8 @@ import time
 import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))  # -I leaves the script's own folder off the path
+import machine_id  # noqa: E402
 CASES = "tests/budgets/kernelgate_cases"
 LAUNCH_CONFIG = "src/kernel/launch_config.h"
 BUDGET = "src/kernel/budget.toml"
@@ -461,6 +463,20 @@ def time_tus(cmds, get_env, runner=run, clock=time.perf_counter):
     return {stem: time_runs(stem, cmd, env, runner, clock) for stem, cmd in cmds}
 
 
+def timing_verdicts(rows, mid=None):
+    """([failure lines], [off-reference lines]) of B-05 for [(stem, seconds, limit)] on machine `mid` (None: this
+    machine, from `astroray_cli machine-id`). Only the wall-clock column follows the machine rule (owner decision
+    47 c); the resource gate stays on every machine. Ref: tools/machine_id.py judge."""
+    fails, notes = [], []
+    for stem, t, limit in rows:
+        verdict, _, line = machine_id.judge(f"B-05 {stem}", t, limit, mid, "s")
+        if line:
+            notes.append(line)
+        if verdict == "fail":
+            fails.append(f"B-05: {stem} compiles in {t:.2f} s, limit {limit} s")
+    return fails, notes
+
+
 def compile_timing(args):
     build = os.path.join(ROOT, args.build_dir)
     budget = parse_budget(open(os.path.join(ROOT, BUDGET), encoding="utf-8").read())
@@ -482,7 +498,7 @@ def compile_timing(args):
     if not tus:
         print("compile timing: no changed device TU")
         return 0
-    fails = []
+    rows = []
     with tempfile.TemporaryDirectory() as tmp:
         cmds = [(stem, nvcc_command(build, stem, os.path.join(tmp, stem + ".cubin"))) for _, stem in tus]
         times = time_tus(cmds, msvc_environment)
@@ -491,8 +507,13 @@ def compile_timing(args):
         t = min(runs)
         limit = COMPILE_LIMIT_OVERRIDE_S.get(stem, COMPILE_LIMIT_S)
         print(f"compile {stem}: {t:.2f} s (limit {limit} s, {len(runs)} run(s), baseline {cs} s)")
-        if t > limit:
-            fails.append(f"B-05: {stem} compiles in {t:.2f} s, limit {limit} s")
+        rows.append((stem, t, limit))
+    try:
+        fails, notes = timing_verdicts(rows)
+    except machine_id.MachineError as e:
+        fails, notes = [f"B-05: {e}"], []
+    for n in notes:
+        print(n)
     for f in fails:
         print("FAIL " + f)
     return 1 if fails else 0

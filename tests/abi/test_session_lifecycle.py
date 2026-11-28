@@ -5,6 +5,7 @@ create, start, wait, pause, resume, close, destroy. Every call but the named wai
 import ctypes
 import importlib.util
 import os
+import sys
 import tempfile
 import time
 import unittest
@@ -12,6 +13,8 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DLL = os.path.join(ROOT, "out", "bin", "astroray_core.dll")
 ABI = os.path.join(ROOT, "out", "build", "gen", "_abi.py")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import machine_id  # noqa: E402
 B21_MS = 5.0
 
 STATE_NAMES = {0: "INITIALIZING", 1: "RENDERING", 2: "PAUSED", 3: "CONVERGED", 4: "TRIMMED", 5: "CLOSED", 6: "FAILED"}
@@ -60,7 +63,7 @@ class TestSessionLifecycle(unittest.TestCase):
         print(f"{name}: {ms:.3f} ms" + (f" (B-21 {B21_MS:g} ms)" if budget else " (named wait)"))
         self.assertEqual(st, self.abi.AR_OK, name)
         if budget:
-            self.assertLess(ms, B21_MS, f"{name} took {ms:.3f} ms")
+            self.assertTrue(machine_id.timing_ok(f"B-21 {name}", ms, B21_MS, "ms"), f"{name} took {ms:.3f} ms")
         return ms
 
     def state(self, session):

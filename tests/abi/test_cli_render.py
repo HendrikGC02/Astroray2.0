@@ -327,6 +327,27 @@ class TestCliRender(unittest.TestCase):
         self.assertAlmostEqual(metrics["kernel_ms_per_sample"]["value"], metrics["pass_ms"]["value"] / 16,
                                delta=1e-6 * max(1.0, metrics["pass_ms"]["value"]))
 
+    def test_machine_id_is_the_bench_machine(self):
+        """The one source: `astroray_cli machine-id` prints the `machine` field of a bench line; with no CUDA device it
+        refuses (the bench lines' CPU fallback would read the reference machine as another one)."""
+        info = self.run_cli(["info"])
+        has_cuda = re.search(r"(?m)^\d+ cuda ", info.stdout) is not None
+        # CUDA_VISIBLE_DEVICES=-1 hides every CUDA device from the driver for the child: the CPU entry alone is listed.
+        hidden = self.run_cli(["machine-id"], CUDA_VISIBLE_DEVICES="-1")
+        self.assertNotEqual(hidden.returncode, 0, hidden.stdout)
+        self.assertNotIn("machine-id: ", hidden.stdout.replace("machine-id: no hardware id", ""))
+        m = self.run_cli(["machine-id"])
+        found = re.findall(r"(?m)^machine-id: (\S+)$", m.stdout)
+        if not has_cuda:
+            self.assertNotEqual(m.returncode, 0, m.stdout)
+            self.assertEqual(found, [])
+            return
+        self.assertEqual(m.returncode, 0, m.stdout + m.stderr)
+        r = self.run_cli(["bench", self.rec, "--passes", "4", "--warmup", "1"])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        lines = [json.loads(ln) for ln in r.stdout.splitlines() if ln.startswith("{")]
+        self.assertEqual(found, [lines[0]["machine"]])
+
     def test_bench_refuses_two_sessions(self):
         r = self.run_cli(["bench", self.rec_two])
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)

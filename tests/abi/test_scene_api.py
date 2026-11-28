@@ -12,6 +12,8 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DLL = os.path.join(ROOT, "out", "bin", "astroray_core.dll")
 ABI = os.path.join(ROOT, "out", "build", "gen", "_abi.py")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import machine_id  # noqa: E402
 
 # Run in a child process so ASTRORAY_TEST_REAPER_HOLD is in the environment the DLL's C runtime
 # copies at load. argv: dll abi log n. Destroys n scenes, prints how many were freed before the
@@ -85,7 +87,7 @@ class TestSceneApi(unittest.TestCase):
         a, lib = self.abi, self.lib
         scene, ms = self.new_scene()
         print(f"ar_scene_create: {ms:.3f} ms (budget 5 ms, B-21)")
-        self.assertLess(ms, 5.0)
+        self.assertTrue(machine_id.timing_ok("B-21 ar_scene_create", ms, 5.0, "ms"), f"{ms:.3f} ms")
         edit = ctypes.c_void_p()
         self.assertEqual(lib.ar_scene_edit_begin(scene, ctypes.byref(edit)), a.AR_OK)
         self.assertEqual(lib.ar_edit_reset(edit), a.AR_OK)

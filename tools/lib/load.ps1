@@ -4,6 +4,8 @@
 # (its ancestors and its descendants; a sibling under a shared parent is foreign): other worktrees build without
 # the machine lock, and a wall-clock budget read beside them measures them. Ref: tools/perf.ps1 (the GPU-user
 # list); 0009 d18 (the tripwire's 1.25x is far outside the measured noise, so a red under load is the load).
+. (Join-Path $PSScriptRoot 'python.ps1')
+. (Join-Path $PSScriptRoot 'machine.ps1')   # Resolve-ArTimingRow: which rows fail on this machine
 $script:ArLoadNames = @('cl', 'link', 'nvcc', 'ninja', 'blender', 'astroray_cli', 'astroray_tests_gpu', 'nsys')
 
 # "name pid" of every foreign process of $Names now. Each call reads the process table once.
@@ -95,9 +97,11 @@ function Test-ArOnlyTiming([string[]]$Out, [int]$Code, [string]$Case) {
 # B-08 and B-12 of the fast tier's tests step. $Step is `{ param($name, $body) ... }` (check.ps1's Step: runs the
 # body, records the step, returns Code and Out); $Tests is the body. The first attempt's seconds leave the tier
 # clock, so the second result is judged on the tier's own time (summary.ps1 and testrun.ps1 are dot-sourced).
+# Over means a row that fails on this machine (machine.ps1 Resolve-ArTimingRow): an off-reference overrun does not
+# fail, so it neither re-runs nor counts; -WaiveB08 (the measuring runs of `check.ps1 profile`) leaves B-08 unjudged; -NoMachine (hosted ci, no machine id) judges against the limits alone.
 function Invoke-ArFastTests {
   param([Parameter(Mandatory)][scriptblock]$Step, [Parameter(Mandatory)][scriptblock]$Tests, [double]$PerTest,
-    $Budget, [string[]]$Names = $script:ArLoadNames, [int]$IntervalMs = 2000, [string]$Log = '')
+    $Budget, [string[]]$Names = $script:ArLoadNames, [int]$IntervalMs = 2000, [string]$Log = '', [switch]$NoMachine, [switch]$WaiveB08)
   Invoke-ArTimedCheck -Check 'B-08/B-12 fast tests' -Names $Names -IntervalMs $IntervalMs -Log $Log -Run {
     param($n)
     if ($n -eq 2) { Add-ArExcluded ([double]$script:ArSteps[-1].seconds) }
@@ -108,8 +112,11 @@ function Invoke-ArFastTests {
     $b = Get-ArSlowTests $x.Out $PerTest
     $secs = Get-ArSeconds
     $why = @()
-    if ($b.Slow.Count -gt 0) { $why += "B-12 $($b.Slow[0].Case) $($b.Slow[0].Seconds) s over $PerTest s" }
-    if ($null -ne $Budget -and $secs -gt $Budget) { $why += "B-08 tier $([math]::Round($secs, 1)) s over $Budget s" }
+    $slow = @($b.Slow | Where-Object { (Resolve-ArTimingRow -Row "B-12 $($_.Case)" -Measured $_.Seconds -Limit $PerTest -NoMachine:$NoMachine).Verdict -eq 'FAIL' })
+    if ($slow.Count -gt 0) { $why += "B-12 $($slow[0].Case) $($slow[0].Seconds) s over $PerTest s" }
+    if (-not $WaiveB08 -and $null -ne $Budget -and $secs -gt $Budget -and (Resolve-ArTimingRow -Row 'B-08' -Measured $secs -Limit $Budget -NoMachine:$NoMachine).Verdict -eq 'FAIL') {
+      $why += "B-08 tier $([math]::Round($secs, 1)) s over $Budget s"
+    }
     @{ Over = ($why.Count -gt 0); Text = $(if ($why) { $why -join '; ' } else { "slowest $($b.Slowest.Seconds) s, tier $([math]::Round($secs, 1)) s" }) }
   }
 }
