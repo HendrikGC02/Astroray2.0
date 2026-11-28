@@ -181,10 +181,10 @@ class TestOrderCentroids(unittest.TestCase):
 
     def test_noise_widens_the_tolerance_by_z_se(self):
         # |difference| <= tolerance + z SE: 0.15 degrees fails when the SE is tiny and passes when
-        # z SE exceeds 0.05 degrees (SE about 0.015 here, z SE about 0.06 <= 0.1).
+        # z SE exceeds 0.05 degrees (variance 4e-6 gives SE about 0.015 here, z SE about 0.06 <= 0.1).
         mean, var = self.render(1, 20.0, (0.15, 0.0, 0.0))
         self.assertFalse(harness.order_centroid_rows(mean, var, self.spec(1, 20.0), Z)[0])
-        noisy = np.full(mean.shape, 2e-4)
+        noisy = np.full(mean.shape, 4e-6)
         ok, reasons, _, lines, _ = harness.order_centroid_rows(mean, noisy, self.spec(1, 20.0), Z)
         self.assertTrue(ok, reasons)
 
