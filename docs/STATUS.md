@@ -7,7 +7,7 @@ M2 "Lobes, shadows and media" (docs/PLAN-M2.md: six slices, the `shade_surface` 
 task 248). Slice 0 is open: order and batches in tasks/README.md, runbook and handover in docs/LEAD.md, items
 without a task in docs/BACKLOG.md. Landed in M2 so far: 238, 239, 242, 267. Written and not dispatched: 240, 241,
 243-266 (scope-checked and critiqued by the eighth lead) and 267-272 (ninth lead: the second machine and the
-M1b retrospective's open recommendations; pre-flighted, no Opus critique yet).
+M1b retrospective's open recommendations; pre-flighted, 269, 270, 272 revised after the Opus critique; rulings 117, 118).
 M1b "First light" closed 2026-11-28 (owner decision 47): the owner looked at the gallery and report (25 images;
 grating orders, OIDN before and after, metal edge colour) and approved all of it. Accepted as measured: B-19 idle
 11.9 % on B-1M and pq 10.9 % on b_foliage, B-20 12.36 / 12.94 ms against 9.5 / 12.5 ms, b_tx under the final denoise
