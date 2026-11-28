@@ -58,7 +58,7 @@ def ledger_entries(text):
 
 
 def parse_ledger(text):
-    tries, measured, declared = {}, {}, {}
+    tries, measured, declared, lanes = {}, {}, {}, {}
     for task, body in ledger_entries(text):
         for w in re.findall(r'\b(' + '|'.join(TRY_WORDS) + r') (?:try|submit)\b', body):
             tries[task] = max(tries.get(task, 1), TRY_WORDS[w])
@@ -71,12 +71,14 @@ def parse_ledger(text):
         if m:
             declared[task] = float(m.group(1))
     # Batch rows: "NNN title lane model; depends; +X."
-    for m in re.finditer(r'\b(\d{3}) [^;]*? (?:kernel|cpu|gpu|blender|tools|docs) [SO]\b[^;]*; [^;]*; \+(' + NUM + ')', text):
-        declared.setdefault(int(m.group(1)), float(m.group(2)))
+    for m in re.finditer(r'\b(\d{3}) [^;]*? (kernel|cpu|gpu|blender|tools|docs) ([SO])\b[^;]*; [^;]*; \+(' + NUM + ')', text):
+        declared.setdefault(int(m.group(1)), float(m.group(4)))
+        lanes.setdefault(int(m.group(1)), (m.group(2), m.group(3)))
     # Table rows of an older README (`git show <sha>:tasks/README.md`): "| NNN title | lane | S | deps | +X |".
-    for m in re.finditer(r'^\| (\d{3}) [^|]*\| \w+ \| [SO] \| [^|]*\| \+(' + NUM + ')', text, re.M):
-        declared.setdefault(int(m.group(1)), float(m.group(2)))
-    return tries, measured, declared
+    for m in re.finditer(r'^\| (\d{3}) [^|]*\| (\w+) \| ([SO]) \| [^|]*\| \+(' + NUM + ')', text, re.M):
+        declared.setdefault(int(m.group(1)), float(m.group(4)))
+        lanes.setdefault(int(m.group(1)), (m.group(2), m.group(3)))
+    return tries, measured, declared, lanes
 
 
 def fmt(x):
@@ -113,13 +115,19 @@ def report(recs, ledger_text=None):
     for (kind, key), v in sorted(by.items(), key=lambda kv: (kv[0][0] != 'week', kv[0][1])):
         out.append(f'gate_s {kind} {key}: n {len(v):>2}, median {statistics.median(v):6.1f}, max {max(v):6.1f}')
     if ledger_text is not None:
-        tries, measured, declared = parse_ledger(ledger_text)
+        tries, measured, declared, lanes = parse_ledger(ledger_text)
         retried = {t: n for t, n in tries.items() if n > 1}
         out.append(f'ledger: tasks landed after a refused submit {len(retried)}; refused submits {sum(n - 1 for n in retried.values())}')
         out.append('  ' + ', '.join(f'{t}:{n}' for t, n in sorted(retried.items())))
         lt = set(tasks)
         hit = len(lt - set(retried))
         out.append(f'first-try rate (history tasks, ledger tries): {hit}/{len(lt)}')
+        per = {}
+        for t in tasks:
+            lane, model = lanes.get(t, ('no row', '-'))
+            per.setdefault(lane, []).append(model)
+        out.append('lane (model O) of history tasks: ' + ', '.join(
+            f'{k} {len(v)} ({v.count("O")})' for k, v in sorted(per.items(), key=lambda kv: -len(kv[1]))))
         both = sorted(set(measured) & set(declared))
         if both:
             out.append('gate s declared -> measured: ' + ', '.join(f'{t} {declared[t]:g}->{measured[t]:g}' for t in both))
@@ -157,6 +165,7 @@ def self_test():
         ('gate by week', 'gate_s week 2026-W02: n  2, median  110.0, max  120.0' in text),
         ('ledger tries', 'refused submits 4' in text and '302:2, 303:3, 305:2' in text),
         ('first-try rate from ledger', 'first-try rate (history tasks, ledger tries): 1/3' in text),
+        ('lanes from the row forms', 'lane (model O) of history tasks: no row 2 (0), tools 1 (0)' in text),
         ('declared vs measured', 'gate s declared -> measured: 301 0.5->0.7, 303 4->3.5' in text),
     ]
     for lines, why in (([], 'empty'), (['', '  '], 'blank'), (['{"task":1,"date":"2026-01-01T00:00:00","verdict":"REFUSE","attempts":1}'], 'bad verdict')):
