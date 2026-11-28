@@ -32,6 +32,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+$Scene = @($Scene | ForEach-Object { $_ -split ',' })   # -File passes a comma list as one string
 $dirs = @{ b1m = 'b1m'; b5m = 'b5m'; b_tx = 's3_textured'; b_foliage = 'b_foliage'; b1m_m1b = 'b1m_m1b' }
 $bad = @($Scene | Where-Object { -not $dirs.ContainsKey($_) })
 if ($bad) { Write-Host "FAIL measure_viewport: unknown scene $($bad -join ', '); known: $($dirs.Keys | Sort-Object | ForEach-Object { $_ })"; exit 2 }

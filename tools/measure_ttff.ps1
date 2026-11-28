@@ -47,6 +47,7 @@ Set-Location $root
 $out = Join-Path $root 'out/ttff'
 New-Item -ItemType Directory -Force $out | Out-Null
 $bench = @{ b1m = 'b1m'; b5m = 'b5m'; s3_textured = 'b_tx'; s3_hdri = 's3_hdri' }   # scene builder -> bench id (bench/scenes.toml)
+$Scene = @($Scene | ForEach-Object { $_ -split ',' })   # -File passes a comma list as one string
 $unknown = @($Scene | Where-Object { -not $bench.ContainsKey($_) })
 if ($unknown) { throw "measure_ttff: no bench id for scene $($unknown -join ', '); add it to `$bench" }
 
