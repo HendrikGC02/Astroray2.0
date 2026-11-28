@@ -1028,30 +1028,28 @@ TEST_CASE("mix_shader/per-point alpha under an emission mix") {
       CHECK(run_entry_at(q, q.program[2], -1.0f, ar::Real2{0.0f, -0.4f}).le.v[l] == 0.0f);
     }
   }
-}
-
-TEST_CASE("mix_shader/a zero effective opacity under an emission mix is transparent and valid") {
-  // Ruling 115: factor 1 over a per-point alpha of exactly 0 (uv.x - uv.x) gives a' = 0, where the
-  // survivor weight s a / a' is 0/0. The program stores weight 0 instead, the stage takes the null
-  // event for every path (the surface is fully transparent), and no path ends INVALID.
-  GB g;
-  g.emit(0, 0.8f, 3.0f);
-  g.store_const(1, 0.25f, RecordSlot::base_metalness);
-  g.store(1, g.op2(Op::SUB_F32, g.uv_channel(0), g.uv_channel(0)), RecordSlot::geometry_opacity);
-  g.mix_const(0, 1.0f, 0, 1);
-  const CompileResult r = g.compile();
-  REQUIRE_MESSAGE(r.ok, r.error);
-  CHECK(has_op(r, Op::DIV_F32));
-  const Full x = run_entry_at(r, r.program[0], 0.5f, ar::Real2{0.25f, 0.25f});
-  CHECK(x.rec.geometry_opacity == 0.0f);
-  CHECK(x.rec.closure_weight == 0.0f);
-  const ar_graph_desc d = g.desc();
-  stage_rig::Rig rig(d, 256);
-  rig.run();
-  uint32_t passes = 0;
-  for (uint32_t s = 0; s < rig.n; ++s) passes += rig.passed(s);
-  CHECK(passes == rig.n);
-  CHECK(rig.hist(ar::Term::INVALID) == 0u);
+  {  // Ruling 115: factor 1 over a per-point alpha of exactly 0 (uv.x - uv.x) gives a' = 0, where the
+     // survivor weight s a / a' is 0/0. The program stores weight 0 instead, the stage takes the null
+     // event for every path (the surface is fully transparent), and no path ends INVALID.
+    GB g;
+    g.emit(0, 0.8f, 3.0f);
+    g.store_const(1, 0.25f, RecordSlot::base_metalness);
+    g.store(1, g.op2(Op::SUB_F32, g.uv_channel(0), g.uv_channel(0)), RecordSlot::geometry_opacity);
+    g.mix_const(0, 1.0f, 0, 1);
+    const CompileResult r = g.compile();
+    REQUIRE_MESSAGE(r.ok, r.error);
+    CHECK(has_op(r, Op::DIV_F32));
+    const Full x = run_entry_at(r, r.program[0], 0.5f, ar::Real2{0.25f, 0.25f});
+    CHECK(x.rec.geometry_opacity == 0.0f);
+    CHECK(x.rec.closure_weight == 0.0f);
+    const ar_graph_desc d = g.desc();
+    stage_rig::Rig rig(d, 256);
+    rig.run();
+    uint32_t passes = 0;
+    for (uint32_t s = 0; s < rig.n; ++s) passes += rig.passed(s);
+    CHECK(passes == rig.n);
+    CHECK(rig.hist(ar::Term::INVALID) == 0u);
+  }
 }
 
 TEST_CASE("mix_shader/per-point factors and opacity are clamped, not reported") {
