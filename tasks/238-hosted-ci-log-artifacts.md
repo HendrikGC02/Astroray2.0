@@ -15,3 +15,4 @@ Depends on: none. Collisions: .github/workflows/ci.yml with nothing open.
 Size: S (about 15 lines of workflow); stop and report at 2x.
 Progress:
    - ci.yml upload step added; BACKLOG rows edited; hosted runs not done (no push allowed this dispatch)
+- Lead (2026-11-28, owner-approved throwaway draft PR 210, closed, branch deleted): run 46113991500 (broken CHECK) failed; ci-logs artifact held ci.log 267 KB and build.log 25 KB, ci.log line 37: `test_alpha_pass_through.cpp(230): ERROR: CHECK( u > 1.0f ) is NOT correct!`. Run 46114450743 (compile error) failed; artifact build.log 14 KB, line 158: `test_alpha_pass_through.cpp(231): error C2065: 'undefined_symbol_for_ci_log_demo': undeclared identifier`. Upload step 1 s each (under +10 s); artifact well under 5 MB.
