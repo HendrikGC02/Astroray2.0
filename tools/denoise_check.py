@@ -59,7 +59,7 @@ SPP, SEED = 64, 1
 REF_SPP, REF_SEED = 16384, 7777
 # Bump when the engine's image changes for these recordings (kernel, film or recording changes): the
 # cache key is the recording and these numbers, not the engine sources.
-REF_VERSION = 1
+REF_VERSION = 2
 # name -> (recording, render size, asserted). The asserted scenes are 0008 V11's set: diffuse with soft
 # shadows, glossy metal (Risk 6's case), hard shadows; their Bitterli archive and HDRI come from
 # `tools/fetch.ps1 assets`. b_tx (textures) is rendered and reported, not asserted.
