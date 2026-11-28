@@ -216,7 +216,7 @@ class TestOrderCentroids(unittest.TestCase):
     def test_rectangular_scene_plan(self):
         # V8's strip: [truth] width x height and its own spp, no calibrated-minimum refusal.
         t = harness.meta.load(os.path.join(ROOT, "scenes", "v8_grating_card", "meta.toml"))["truth"]
-        self.assertEqual(harness.comparison_plan(t), ((1024, 16), 256, 1))
+        self.assertEqual(harness.comparison_plan(t), ((1024, 16), int(t["spp"]), 1))
         self.assertEqual(harness.size_wh(harness.plan_size(t)), (1024, 16))
         self.assertEqual(harness.size_wh(32), (32, 32))
         checks = harness.truths.evaluate(t, 1024, 16)
