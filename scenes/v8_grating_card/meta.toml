@@ -16,8 +16,12 @@
 # below 0.10): eta_m = R J_m^2(2 pi h cos / lambda) at normal incidence is, at 450 / 550 / 650 nm,
 # eta_0 0.03 / 0.14 / 0.26, eta_1 0.29 / 0.30 / 0.27 and eta_2 0.13 / 0.07 / 0.04 (truths.py), coating
 # (n, k) = (1, 6) as 206's card, so orders 1 and 2 both carry energy and order 0 is not white (a thin
-# phase grating's zero order is J_0^2). The lamp is 1.05 m along the grating vector at 60 m, which subtends
-# 1.0 degree there, and 4 m along the grooves (so every film row sees it whole); its radiance is 1.
+# phase grating's zero order is J_0^2). The lamp is 3.15 m along the grating vector at 60 m, which subtends
+# 3.0 degrees there, and 4 m along the grooves (so every film row sees it whole); its radiance is 1.
+# Noise, ruling 113: every row needs z SE <= 0.1 degrees. Order 2 red is the sparsest (eta_2 0.04) and its
+# SE at 256 spp was 0.058 degrees for a 1.05 m lamp; the SE falls slowly with the lamp size (0.080, 0.058,
+# 0.046 degrees for 0.5, 1.05, 2.1 m) and as 1/sqrt(spp), so the lamp is 3.15 m and spp 1024 (SE 0.021
+# degrees, z SE 0.09 on both devices). The wider lamp image is blurred in the prediction as well.
 class = "A"
 units = "m"
 spectra = ["rgb"]
@@ -33,7 +37,7 @@ coating_k = 6.0
 m_min = -2
 m_max = 2
 lamp_height = 60.0
-lamp_size_y = 1.05
+lamp_size_y = 3.15
 lamp_size_x = 4.0
 radiance = 1.0
 camera_height = 0.2
@@ -42,7 +46,7 @@ focal_mm = 30.0
 sensor_mm = 36.0
 width = 1024
 height = 16
-spp = 256
+spp = 1024
 card_size = 2.0
 centroid_tolerance_deg = 0.1
 dark_margin_px = 3

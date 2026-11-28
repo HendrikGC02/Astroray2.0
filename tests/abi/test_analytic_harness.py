@@ -181,16 +181,20 @@ class TestOrderCentroids(unittest.TestCase):
 
     def test_noise_widens_the_tolerance_by_z_se(self):
         # |difference| <= tolerance + z SE: 0.15 degrees fails when the SE is tiny and passes when
-        # z SE exceeds 0.05 degrees (SE about 0.02 here), and an SE above the tolerance refuses itself.
+        # z SE exceeds 0.05 degrees (SE about 0.015 here, z SE about 0.06 <= 0.1).
         mean, var = self.render(1, 20.0, (0.15, 0.0, 0.0))
         self.assertFalse(harness.order_centroid_rows(mean, var, self.spec(1, 20.0), Z)[0])
-        noisy = np.full(mean.shape, 3e-4)
+        noisy = np.full(mean.shape, 2e-4)
         ok, reasons, _, lines, _ = harness.order_centroid_rows(mean, noisy, self.spec(1, 20.0), Z)
         self.assertTrue(ok, reasons)
+
+    def test_noise_guard_refuses_a_blind_row(self):
+        # z SE above the tolerance refuses even an exact render: the test would read beyond 0.2 degrees.
+        mean, _ = self.render(1, 20.0, (0.0, 0.0, 0.0))
         blind = np.full(mean.shape, 1e-2)
         ok, reasons, _, _, _ = harness.order_centroid_rows(mean, blind, self.spec(1, 20.0), Z)
         self.assertFalse(ok)
-        self.assertTrue(any("exceeds" in r for r in reasons))
+        self.assertTrue(any("z SE" in r and "exceeds" in r for r in reasons))
 
     def test_order_zero_must_be_achromatic(self):
         # Every channel is within the tolerance of the prediction (0.09 degrees at most) but the

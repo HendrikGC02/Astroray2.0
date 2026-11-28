@@ -318,9 +318,8 @@ def order_centroid_rows(mean, var, spec, z):
     c = sum(theta v) / sum(v) has the first-order SE sqrt(sum((theta - c)^2 VAR)) / |sum(v)|. The rule
     is the harness's own, |rendered - predicted| <= z SE + tolerance, the tolerance (V8's 0.1 degrees)
     standing where eps_sys does: the allowance for what the render may be off by systematically, on top
-    of the noise a centroid carries (order 2 is sparse: its SE at 256 spp is about 0.06 degrees, so a
-    bare 0.1 would fail a correct render in about one run in ten). The SE itself must not exceed the
-    tolerance. For order 0 the three channels' rendered centroids must agree within the tolerance plus
+    of the noise a centroid carries (0009 d16 form, ruling 113). Each row also needs z SE <= the
+    tolerance, so the test reads at most twice V8's 0.1 degrees. For order 0 the three channels' rendered centroids must agree within the tolerance plus
     z sqrt(2) SE of the noisiest. Also reports, not gated, the energy ratio rendered / predicted of the window with its z. The
     window's signed profile must not nearly cancel (|sum v| at least half of sum |v|) or the centroid
     is ill-conditioned and the check refuses. Returns (pass, reasons, worst (z of the largest
@@ -351,8 +350,8 @@ def order_centroid_rows(mean, var, spec, z):
         ses.append(se)
         if abs(diff) > tol + z * se:
             reasons.append(f"{name}: |{diff:+.4f}| deg beyond {tol:g} + z SE {z * se:.4f}")
-        if se > tol:
-            reasons.append(f"{name}: SE {se:.4f} deg exceeds {tol:g}: raise the spp")
+        if z * se > tol:
+            reasons.append(f"{name}: z SE {z * se:.4f} deg exceeds {tol:g}: raise the spp, rows or lamp size")
         lines.append(f"{name} (columns {lo}:{hi}): rendered {c_r:.4f} deg predicted {c_p:.4f} deg difference {diff:+.4f} deg SE {se:.4f} deg, "
                      f"window energy rendered / predicted {ratio:.4f} (z {zr:+.2f}, not gated)")
     span = max(cents) - min(cents)
