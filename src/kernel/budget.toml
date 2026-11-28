@@ -161,7 +161,7 @@ regs = 64
 stack = 304
 spill_store = 36
 spill_load = 36
-compile_s = 2.23
+compile_s = 2.26
 gated = "merge"
 
 [kernel.k_shade_surface]
@@ -193,7 +193,7 @@ regs = 124
 stack = 400
 spill_store = 0
 spill_load = 0
-compile_s = 5.41
+compile_s = 5.43
 gated = "merge"
 
 [kernel.k_shade_shadow]
@@ -205,7 +205,7 @@ regs = 48
 stack = 288
 spill_store = 24
 spill_load = 28
-compile_s = 1.38
+compile_s = 1.40
 gated = "merge"
 
 [kernel.k_shade_shadow_medium]
@@ -216,11 +216,13 @@ gated = "merge"
 # at most 128 / 192). First values from the task's measurement (ruling 91); compile 2.39 s in check gate (old clock, with vcvarsall).
 # The per-launch cap's resume and requeue (0006 D8: the shadow_track side buffer's load and store, the rebased
 # estimate): 64 to 80 registers, the stack 480 to 432 B and the switch's spills 36 / 36 to 0 / 0 B.
+# DIV_F32 and CLAMP_F32 add two interpreter cases to this TU's switch: stack 432 to 448 B, spills 0 / 0 to 20 / 20 B
+# (ruling 116, owner-approved 2026-11-28).
 regs = 80
-stack = 432
-spill_store = 0
-spill_load = 0
-compile_s = 1.75
+stack = 448
+spill_store = 20
+spill_load = 20
+compile_s = 1.77
 gated = "merge"
 
 [kernel.k_shade_volume]
@@ -233,7 +235,7 @@ regs = 121
 stack = 464
 spill_store = 0
 spill_load = 0
-compile_s = 2.01
+compile_s = 2.05
 gated = "merge"
 
 [kernel.k_shade_light]
@@ -250,7 +252,7 @@ regs = 64
 stack = 264
 spill_store = 0
 spill_load = 0
-compile_s = 1.47
+compile_s = 1.48
 gated = "merge"
 
 # The four OptiX programs are compiled by the driver: kernelgate never measures them, so regs and

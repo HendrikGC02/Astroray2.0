@@ -538,6 +538,66 @@ TEST_CASE("vm/fold equals interpret") {
   CHECK(t.ref_bad.size() == 20u);
 }
 
+TEST_CASE("vm/div and clamp fold as they interpret") {
+  // DIV_F32 and CLAMP_F32 (0005 items 31, 38): the interpreter equals the shared function bit for
+  // bit, as the host fold calls it, on 1e4 inputs, and both equal an independent double evaluation.
+  // The inputs include zero denominators (IEEE, no special case: the op adds no guard) and a NaN, an
+  // infinity and the signed zeros through the clamp, where NaN must pass through. Each op also runs
+  // in place, and a CONST after the clamp proves it advanced past its two immediates.
+  constexpr uint32_t kN = 10000;
+  const float nan = std::numeric_limits<float>::quiet_NaN(), inf = std::numeric_limits<float>::infinity();
+  volatile float volatile_zero = 0.0f;  // a runtime zero: MSVC's C4723 rejects a divide it can see is by 0
+  const float zero = volatile_zero;
+  auto same = [](float a, float b) { return (std::isnan(a) && std::isnan(b)) || bits(a) == bits(b) || (a == 0.0f && b == 0.0f); };
+  Tally t;
+  for (uint32_t i = 0; i < kN; ++i) {
+    Rig g;
+    float row[16];
+    fill(g, row, i);
+    const float* x = row;
+    const float den = i % 97u == 0u ? ((i & 1u) ? -zero : zero) : x[1];
+    const float specials[8] = {nan, inf, -inf, -0.0f, 0.0f, 1.0f, -1.0f, 0.5f};
+    const float v = i % 11u < 8u && i % 3u == 0u ? specials[i % 11u] : x[2];
+    // The compiler's [0, 1], and random pairs, every fifth one reversed (min(max(x, lo), hi) is hi).
+    const bool unit_range = i % 2u == 0u;
+    const float lo = unit_range ? 0.0f : x[4], hi = unit_range ? 1.0f : (i % 5u == 0u ? x[5] : x[4] + std::fabs(x[5]));
+    g.regs.r[0] = x[0], g.regs.r[1] = den, g.regs.r[2] = v, g.regs.r[3] = x[3];
+    Prog p;
+    p.op(Op::DIV_F32, 16, 0, 1)
+        .op(Op::DIV_F32, 3, 3, 1)
+        .op(Op::CLAMP_F32, 17, 2, 0, {fb(lo), fb(hi)})
+        .op(Op::CLAMP_F32, 2, 2, 0, {fb(0.0f), fb(1.0f)})
+        .op(Op::CONST_F32, 18, 0, 0, {fb(7.0f)})
+        .end();
+    Rig h = g;
+    REQUIRE(h.run(p) == VmStatus::OK);
+    const float want_div = ar::op_div_f32(x[0], den), want_div3 = ar::op_div_f32(x[3], den);
+    t.fold("DIV_F32", bits(h.regs.r[16]) == bits(want_div) && bits(h.regs.r[3]) == bits(want_div3));
+    t.ref("DIV_F32", same(h.regs.r[16], float(double(x[0]) / double(den))) && same(h.regs.r[3], float(double(x[3]) / double(den))));
+    auto clamp_ref = [](float a, float l, float u) {
+      return std::isnan(a) ? a : float(std::min(std::max(double(a), double(l)), double(u)));
+    };
+    t.fold("CLAMP_F32", bits(h.regs.r[17]) == bits(ar::op_clamp_f32(v, lo, hi)) && bits(h.regs.r[2]) == bits(ar::op_clamp_f32(v, 0.0f, 1.0f)));
+    t.ref("CLAMP_F32", same(h.regs.r[17], clamp_ref(v, lo, hi)) && same(h.regs.r[2], clamp_ref(v, 0.0f, 1.0f)) && h.regs.r[18] == 7.0f);
+  }
+  for (const auto& kv : t.fold_bad) {
+    INFO(kv.first);
+    CHECK(kv.second == 0u);
+  }
+  for (const auto& kv : t.ref_bad) {
+    INFO(kv.first);
+    CHECK(kv.second == 0u);
+  }
+  CHECK(t.fold_bad.size() == 2u);
+  CHECK(t.ref_bad.size() == 2u);
+  // NaN passes through the clamp, and a zero denominator is the IEEE quotient.
+  CHECK(std::isnan(ar::op_clamp_f32(nan, 0.0f, 1.0f)));
+  CHECK(ar::op_clamp_f32(1.5f, 0.0f, 1.0f) == 1.0f);
+  CHECK(ar::op_clamp_f32(-0.5f, 0.0f, 1.0f) == 0.0f);
+  CHECK(ar::op_div_f32(1.0f, zero) == inf);
+  CHECK(std::isnan(ar::op_div_f32(zero, zero)));
+}
+
 TEST_CASE("vm/lift analytic values") {
   // Grey lifts are analytic (c0 = c1 = 0, S(0) = 1/2), so these are exact, not tolerances.
   const Fixture& fx = fixture();
@@ -853,6 +913,9 @@ TEST_CASE("vm/errors stop the run") {
   add("BRANCH_MIX factor 32", Prog().op(Op::BRANCH_MIX, 32, 0, 0, {2u}), VmStatus::BAD_REGISTER);
   add("ADD_F32 dst 32", Prog().op(Op::ADD_F32, 32, 0, 0), VmStatus::BAD_REGISTER);
   add("SUB_F32 src2 32", Prog().op(Op::SUB_F32, 0, 0, 32), VmStatus::BAD_REGISTER);
+  add("DIV_F32 src2 32", Prog().op(Op::DIV_F32, 0, 0, 32), VmStatus::BAD_REGISTER);
+  add("CLAMP_F32 dst 32", Prog().op(Op::CLAMP_F32, 32, 0, 0, {fb(0.0f), fb(1.0f)}), VmStatus::BAD_REGISTER);
+  add("CLAMP_F32 src 32", Prog().op(Op::CLAMP_F32, 0, 32, 0, {fb(0.0f), fb(1.0f)}), VmStatus::BAD_REGISTER);
   add("UNSUPPORTED", Prog().op(Op::UNSUPPORTED, 0, 0, 0, {7u}), VmStatus::UNSUPPORTED);
 #if defined(AR_GATE_HOOKS)
   add("TEST_INJECT_NAN dst 32", Prog().op(Op::TEST_INJECT_NAN, 32), VmStatus::BAD_REGISTER);
@@ -1024,7 +1087,9 @@ TEST_CASE("vm/opcode table is wired") {
   CHECK(uint32_t(Op::SPECTRUM_TABLE) == 23u);
   CHECK(uint32_t(Op::COLOR_TO_F32) == 24u);
   CHECK(uint32_t(Op::TEX_ENVIRONMENT) == 25u);
-  CHECK(uint32_t(Op::COUNT_) == 26u);
+  CHECK(uint32_t(Op::DIV_F32) == 26u);
+  CHECK(uint32_t(Op::CLAMP_F32) == 27u);
+  CHECK(uint32_t(Op::COUNT_) == 28u);
 }
 
 }  // TEST_SUITE

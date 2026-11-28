@@ -108,6 +108,11 @@ std::vector<Named> programs() {
   p.push_back({"MUL_F32X3_F32", Prog().op(Op::MUL_F32X3_F32, 16, 0, 3).op(Op::END)});
   p.push_back({"ADD_F32X3", Prog().op(Op::ADD_F32X3, 16, 0, 3).op(Op::END)});
   p.push_back({"ADD_F32,SUB_F32", Prog().op(Op::ADD_F32, 16, 0, 1).op(Op::SUB_F32, 17, 2, 3).op(Op::END)});
+  p.push_back({"DIV_F32,CLAMP_F32", Prog()
+                                        .op(Op::DIV_F32, 16, 0, 1)
+                                        .op(Op::CLAMP_F32, 17, 2, 0, {fb(-1.5f), fb(2.0f)})
+                                        .op(Op::CLAMP_F32, 18, 3, 0, {fb(0.0f), fb(1.0f)})
+                                        .op(Op::END)});
   // A Mix selection: the selection uniform is UV set 0's u and the factor UV set 1 (both in
   // [0, 1)); output column 15 is the rescaled uniform and r22 names the side taken.
   p.push_back({"BRANCH_MIX", Prog()
