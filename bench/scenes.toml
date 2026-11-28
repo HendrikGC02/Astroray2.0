@@ -145,3 +145,11 @@ showcase = ["M1b"]
 gallery_size = [256, 256]
 gallery_spp = 256
 gallery_via = "cli"
+
+# b1m under the HDRI of s3_hdri with a grating card and a row of alpha cards: B-14 with the environment, the tree, alpha and
+# extension routing on in one Blender viewport session (on demand; tools/measure_viewport.ps1, no gate step).
+[[scene]]
+name = "b1m_m1b"
+recording = "b1m_m1b.arrec"
+class = "B"
+sets = ["M1b"]

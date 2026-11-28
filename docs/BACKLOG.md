@@ -33,7 +33,6 @@ them. Milestone is where the item must be settled at the latest.
 | Tools | Landing several green branches in one gate run | R7 | M2 | |
 | Report | The gallery section shows the M1b set (216); still missing: history lines for the build-time, pass_ms and ray-count sections, so they print "awaiting" | 100 | M1b | |
 | Report | The grating showcase (`scenes/ext_grating_card`) reads weakly: order 1 is washed to white and its blue-before-red edge holds on one side only; order 2 holds on both. Reframe: a smaller lamp, a closer camera, more spp | 216 | M1b | |
-| Blender | `scenes/lib/blend_writer.py` has no mapping for `geometry_opacity` (Principled Alpha), so alpha-card foliage cannot go through F12 and the gallery renders `b_foliage` with `gallery_via = "cli"` | 216 | M1b | blend writer |
 | Tools | A gallery worker's Python traceback does not reach the batch log (only the Blender banner shows); run the job through `Invoke-ArBlender` to see it | 216 | M1b | |
 | Tools | `tools/lib/lock.ps1` has a per-job hold-ceiling table: an ad-hoc measurement script cannot take the machine lock under its own job name | 216 | M1b | |
 | To settle | Roulette start against min bounces (0004 D2) | 076 | M2 | |

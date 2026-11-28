@@ -353,6 +353,23 @@ class TestLowering(unittest.TestCase):
         self.assertEqual(tm.unsupported_strings(tm.translate.translate_material(mat, km, tm.OP)),
                          ["Emission.Strength"])
 
+    def test_blend_writer_opacity_round_trips(self):
+        """scenes/lib/blend_writer.py writes geometry_opacity as Principled Alpha and the addon lowers Alpha back to the
+        same constant geometry_opacity; a non-constant opacity is refused, never dropped."""
+        sys.path.insert(0, os.path.join(support.ROOT, "scenes", "lib"))
+        import blend_writer
+
+        slot = SLOT["geometry_opacity"]
+        for a in (0.0, 0.3, 0.75):
+            mat = blend_writer._material(bpy, {"key": 7, "inputs": {"geometry_opacity": a}, "emission": None}, {})
+            self.assertAlmostEqual(principled(mat).inputs["Alpha"].default_value, a, places=6)
+            src = stores(lower(mat))[slot]
+            self.assertEqual(src["op"], "CONST_F32")
+            self.assertAlmostEqual(src["f32"][0], a, places=6)
+        for bad in ([0.5, 0.5, 0.5], -0.1, 1.5):
+            with self.subTest(bad=bad), self.assertRaises(blend_writer.BlendWriterError):
+                blend_writer._material(bpy, {"key": 8, "inputs": {"geometry_opacity": bad}, "emission": None}, {})
+
     def test_alpha_lowers_and_reaches_the_record(self):
         scene, plane, mat, world = tm.new_scene()
         p = principled(mat)

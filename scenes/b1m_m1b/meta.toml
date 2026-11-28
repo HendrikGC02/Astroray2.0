@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# B-1M with M1b's viewport-reachable features (benchmark class, on demand): b1m's grid, lamp and camera under the
+# studio_small_09 HDRI, plus one GRATING card and a row of alpha cards, so one Rendered-viewport session samples the
+# environment through the light tree and routes a surface to an extension. Measured by tools/measure_viewport.ps1
+# (B-14 variant, no limit); it is in no gate step. Test media and the guides film flag are not reachable from a
+# Blender viewport in M1b and are not in this scene. See build.py.
+class = "B"
+units = "m"
+spectra = ["rgb"]
+assets = ["studio_small_09"]
+single_witness = false
+
+# Built only when named (tools/scenes.py b1m_m1b): it needs the fetched HDRI, and b1m's builder is imported.
+[build]
+on_demand = true
+sources = ["scenes/b1m"]

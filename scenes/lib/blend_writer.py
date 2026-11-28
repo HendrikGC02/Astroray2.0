@@ -33,7 +33,8 @@ from ar import ALL_VISIBILITY  # noqa: E402  (every ray type, the Blender defaul
 
 # OpenPBR record input -> (Principled input name, scale into it).
 _PRINCIPLED = {"base_color": ("Base Color", 1.0), "base_metalness": ("Metallic", 1.0),
-               "specular_roughness": ("Roughness", 1.0), "specular_weight": ("Specular IOR Level", 0.5)}
+               "specular_roughness": ("Roughness", 1.0), "specular_weight": ("Specular IOR Level", 0.5),
+               "geometry_opacity": ("Alpha", 1.0)}   # the addon lowers Alpha as geometry_opacity unchanged (lowering_table.py)
 # Inputs that exist only at their Blender default; any other value cannot be written.
 _FIXED = {"base_weight": 1.0, "base_diffuse_roughness": 0.0}
 _PASS_FLAGS = {"Depth": "use_pass_z", "Position": "use_pass_position", "Normal": "use_pass_normal",
@@ -146,6 +147,9 @@ def _material(bpy, d, images):
         if name not in _PRINCIPLED:
             raise BlendWriterError(f"material {d['key']}: input '{name}' is not covered by the blend writer")
         socket, scale = _PRINCIPLED[name]
+        if name == "geometry_opacity" and (isinstance(value, list) or not 0.0 <= value <= 1.0):
+            # Blender clamps Alpha to [0, 1] without a word, which would write a different opacity.
+            raise BlendWriterError(f"material {d['key']}: geometry_opacity must be a constant number in [0, 1], got {value}")
         node.inputs[socket].default_value = (*value, 1.0) if isinstance(value, list) else value * scale
     grating = d.get("grating")
     if grating is not None:
