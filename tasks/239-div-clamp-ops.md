@@ -15,3 +15,4 @@ Budget: gate +0.5 s declared (fast-tier cases; no new analytic scene); kernel ro
 Depends on: none (202 landed). Collisions: ops.def, interp, probe_m1.cu and compiler.cpp with 263 (Add Shader) and 247; budget.toml with every kernel task; the later one rebases.
 Size: S (about 120 lines without tests); stop and report at 2x.
 Progress:
+- Started on task/239-div-clamp-ops. Baseline B-05 (quiet, min of 3, kernelgate nvcc call): shade_surface 7.33, ext 5.41, background 2.23, shadow 1.39, shadow_medium 1.76, volume 2.04, bake_environment 1.48 s.
