@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Bitterli's Cornell box (CC0) in two variants: `cornell_area`, the original rectangular lamp as an
-area lamp, and `cornell_point`, a point lamp of equal power at the lamp's centre (ROADMAP M1a "Owner
-sees"). Materials are the M1a set: constant base colour from the Lambertian albedo, specular_weight 0.
-Not a scene itself (no build.py here): scenes/cornell_area/build.py and scenes/cornell_point/build.py call
+"""Bitterli's Cornell box (CC0) in three variants: `cornell_area`, the original rectangular lamp as an
+area lamp, `cornell_point`, a point lamp of equal power at the lamp's centre (ROADMAP M1a "Owner
+sees"), and `cornell_metal`, the area variant with the tall block replaced by a metal sphere (M1b).
+Materials are the M1a set: constant base colour from the Lambertian albedo, specular_weight 0; the metal
+sphere is base_metalness 1.
+Not a scene itself (no build.py here): the build.py of scenes/cornell_area, cornell_point and cornell_metal call
 main(variant), so tools/scenes.py maps each directory to one recording. --blend writes <blend>.json, the
 description scenes/lib/blend_writer.py turns into the .blend.
 Lamp: an area lamp's radiance is L = P / (pi A) (0004 D7, front face only), so the authored radiance
@@ -23,12 +25,18 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "lib"))
 sys.path.insert(0, HERE)
 import ar  # noqa: E402
+import meshes  # noqa: E402
 import convert_bitterli  # noqa: E402
 
 ARCHIVE = os.path.join(ROOT, "assets", "_cache", "cornell_box", "cornell-box.zip")
 SPP, SEED = 256, 1
 MAX_BOUNCES = 65        # the archive's max_depth
 SENSOR_MM = 36.0
+# The metal variant's sphere stands on the floor under the tall block's footprint centre. Its colour is an authored
+# linear RGB used as the F82 edge-tint F0 (base_color of a base_metalness 1 material), not a measured spectrum:
+# a named measured metal is M2's asset work.
+METAL_RADIUS, METAL_COLOUR, METAL_ROUGHNESS = 0.45, (1.0, 0.71, 0.29), 0.15
+REPLACED_BLOCK = "TallBox"
 
 
 def lamp_fields(light):
@@ -53,6 +61,10 @@ def build(variant, out, blend=None):
     with ar.Scene(out, description=blend + ".json" if blend else None) as s:
         materials, instances = {}, []
         for shape in box.shapes:
+            if variant == "metal" and shape.name == REPLACED_BLOCK:
+                centre = shape.to_world[:3, 3].copy()
+                centre[2] = METAL_RADIUS
+                continue
             if shape.albedo not in materials:
                 materials[shape.albedo] = s.material({"base_color": shape.albedo, "specular_weight": 0.0})
             pos, cv, nrm = convert_bitterli.shape_mesh(shape, inward)
@@ -60,8 +72,15 @@ def build(variant, out, blend=None):
             s.mesh(key, pos, cv, np.arange(len(cv) // 3, dtype=np.int32) * 3, nrm, None, shape.name)
             instances.append({"geom": key, "materials": [materials[shape.albedo]]})
             triangles += len(cv) // 3
+        if variant == "metal":
+            key, sphere = s.key(), meshes.uv_sphere(METAL_RADIUS)
+            s.mesh_from(key, sphere, "metal sphere")
+            gold = s.material({"base_color": METAL_COLOUR, "base_metalness": 1.0, "specular_roughness": METAL_ROUGHNESS})
+            instances.append({"geom": key, "materials": [gold], "xf": ar.translation(centre)})
+            triangles += len(sphere.corner_vert) // 3
+            materials["metal"] = gold
         s.instances(instances)
-        if variant == "area":
+        if variant in ("area", "metal"):
             s.light("rect", xf=xf, rgb=rgb, power=power, size=box.light.size)
         else:
             s.light("point", xf=ar.translation(box.light.centre), rgb=rgb, power=power, size=(0.0, 0.0))

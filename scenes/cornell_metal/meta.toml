@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Bitterli's Cornell box (CC0, assets/manifest.toml cornell_box) with the tall block replaced by a metal sphere
+# (ROADMAP M1b "Owner sees": the Cornell box with a metal sphere; "Look": metal edge colour). Lit by the archive's
+# rectangular lamp as an area lamp (L = P / (pi A), 0004 D7); the other walls and the short block are the M1a set.
+# The sphere is base_metalness 1, specular_roughness 0.15, base_color (1.0, 0.71, 0.29): an authored gold-like RGB
+# used as the F82 edge-tint F0, not a measured spectrum (a named measured metal is M2's asset work). The archive's
+# units are metres; the black world is the archive's. Shared code: scenes/cornell/. No truth: a showcase scene.
+class = "G"
+units = "m"
+spectra = ["rgb"]
+assets = ["cornell_box"]
+single_witness = false
+
+# Built only when named (tools/scenes.py cornell_metal): it needs the fetched Bitterli archive (not in CI).
+[build]
+on_demand = true
+sources = ["scenes/cornell"]

@@ -102,6 +102,13 @@ name = "b_foliage"
 recording = "b_foliage.arrec"
 class = "B"
 sets = ["M1b"]
+# The blend writer has no mapping for geometry_opacity, so the foliage renders through astroray_cli (`gallery_via`),
+# at half its 1920 x 1080 (`cli_size`).
+showcase = ["M1b"]
+gallery_size = [960, 540]
+gallery_spp = 64
+gallery_via = "cli"
+cli_size = [960, 540]
 
 # b1m with a closed box of test medium over half the grid (B-1M plus M1b's volume stages at 1080p, on demand).
 [[scene]]
@@ -109,3 +116,32 @@ name = "b1m_medium"
 recording = "b1m_medium.arrec"
 class = "B"
 sets = ["M1b"]
+
+# M1b "Owner sees": the Cornell box with a metal sphere (scenes/cornell_metal; the sphere's colour is an authored RGB,
+# see its meta.toml), OIDN on and off in F12 (`denoise`: a CUDA pair at `denoise_spp`, the flat wall patch
+# `denoise_patch` as fractions x0, y0, x1, y1 of the image, top row first) and the Diagnostics panel with one node the
+# job adds (`panel`). Never timed.
+[[scene]]
+name = "cornell_metal"
+recording = "cornell_metal.arrec"
+class = "G"
+sets = []
+showcase = ["M1b"]
+gallery_size = [800, 800]
+gallery_spp = 256
+denoise = true
+denoise_spp = 16
+denoise_patch = [0.42, 0.12, 0.58, 0.24]
+panel = true
+
+# M1b "Owner sees": the homogeneous test slab (scenes/v1_slab, 0006 V1). Blender has no volume mapping in M1b, so it
+# renders through `astroray_cli render` (`gallery_via = "cli"`): the recording is 32 x 32, shown at 8x nearest.
+[[scene]]
+name = "v1_slab"
+recording = "v1_slab.arrec"
+class = "G"
+sets = []
+showcase = ["M1b"]
+gallery_size = [256, 256]
+gallery_spp = 256
+gallery_via = "cli"

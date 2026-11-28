@@ -400,6 +400,24 @@ def gallery_sections(gallery, milestone="M1a"):
     scenes = sorted({n.rsplit("_", 1)[0] for n in gallery if n.endswith(("_cpu", "_cuda", "_diff")) and "_heat_" not in n})
     rows = [f'<tr><th colspan="3">{html.escape(sc)}</th></tr><tr>{cell(sc + "_cpu", dev_caption)}'
             f'{cell(sc + "_cuda", dev_caption)}{cell(sc + "_diff", diff_caption)}</tr>' for sc in scenes]
+    def denoise_caption(g):
+        t = f"{g['device']}, {g['spp']} spp, use_denoising {g['denoise']}, {g['time']:.1f} s"
+        pr = g.get("pair")
+        if pr is None:
+            return t
+        return (f"{t}; flat wall patch: high-frequency energy {pr['hf_energy_off']:.3g} off, {pr['hf_energy_on']:.3g} on "
+                f"({pr['hf_ratio_on_over_off']:.3f}x), mean {pr['patch_mean_off']:.4f} off, {pr['patch_mean_on']:.4f} on; "
+                f"mean |on - off| {pr['mean_abs_diff']:.4f}")
+
+    def panel_caption(g):
+        names = "; ".join(f"{x['subject']}: {x['detail']}" for x in g["unsupported_entries"])
+        return f"Diagnostics panel after the job added node '{g['added_node']}' ({len(g['unsupported_entries'])} NODE_UNSUPPORTED: {names})"
+
+    for sc in sorted({n[:-len("_denoise_on")] for n in gallery if n.endswith("_denoise_on")}):
+        rows.append(f'<tr><th colspan="3">{html.escape(sc)}: OIDN off and on in F12</th></tr><tr>'
+                    f'{cell(sc + "_denoise_off", denoise_caption)}{cell(sc + "_denoise_on", denoise_caption)}</tr>')
+    for sc in sorted({n[:-len("_panel")] for n in gallery if n.endswith("_panel")}):
+        rows.append(f'<tr><th colspan="3">{html.escape(sc)}: the Diagnostics panel</th></tr><tr>{cell(sc + "_panel", panel_caption)}</tr>')
     heat = []
     raw_scenes = {g["scene"] for g in gallery.values() if g.get("heat")}
     for sc in sorted(raw_scenes | {n.split("_heat_")[0] for n in gallery if "_heat_" in n}):
@@ -616,9 +634,22 @@ def selftest():
             with open(os.path.join(g, name + ".json"), "w") as f:
                 json.dump(dict(extra, spp=8, time=1.5, build="b",
                                settings={"width": 4, "height": 4, "view_transform": "AgX"}), f)
+        pair = {"hf_energy_off": 4e-4, "hf_energy_on": 1e-5, "hf_ratio_on_over_off": 0.025, "patch_mean_off": 0.4,
+                "patch_mean_on": 0.41, "mean_abs_diff": 0.02}
+        for name, extra in (("s_denoise_off", {"denoise": "off"}), ("s_denoise_on", {"denoise": "on", "pair": pair}),
+                            ("s_panel", {"added_node": "Wave", "unsupported_entries": [{"subject": "Mat", "detail": "ShaderNodeTexWave"}]})):
+            write_png(os.path.join(g, "thumbs", name + ".png"), px)
+            with open(os.path.join(g, name + ".json"), "w") as f:
+                json.dump(dict(extra, device="CUDA", spp=8, time=1.5, build="b",
+                               settings={"width": 4, "height": 4, "view_transform": "AgX"}), f)
         gal = build_html(hist, [], {"B-08": 10.0, "B-09": 180.0}, gallery=read_gallery(d))
+        for want in ("s: OIDN off and on in F12", "high-frequency energy 0.0004 off, 1e-05 on", "s: the Diagnostics panel",
+                     "1 NODE_UNSUPPORTED: Mat: ShaderNodeTexWave"):
+            if want not in gal:
+                print(f"selftest FAIL: denoise pair or panel row (page lacks {want!r})")
+                return 1
         # s: three images; heat maps: samples on both devices, bounces missing on both
-        if gal.count("<img") != 5 or gal.count("missing: s_heat_bounces") != 2:
+        if gal.count("<img") != 8 or gal.count("missing: s_heat_bounces") != 2:
             print(f"selftest FAIL: gallery cells ({gal.count('<img')} images)")
             return 1
         if "(raw pass)" in gal:
