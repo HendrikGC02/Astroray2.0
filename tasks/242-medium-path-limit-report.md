@@ -10,7 +10,7 @@ Do:
 3. Flag words at the two shade_surface ends, with 220's style of test.
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `pwsh tools/test.ps1 -Exe astroray_tests_cpu -Case "shade_volume/*"` and `-Case "medium_stack/*"`; `out/bin/astroray_cli render` of scenes/v1_slab with the report printed (no entry) and one line from the hook case (one entry, its count).
 Look at: none (a report entry; paste its text).
-Canary: tasks/242.canary.patch must turn red: astroray_tests_cpu "shade_volume/a volume limit end is counted once", astroray_tests_cpu "session/medium path limit raises one report entry"
+Canary: tasks/242.canary.patch must turn red: astroray_tests_cpu "shade_volume/a volume limit end is counted once", astroray_tests_cpu "session/medium path limit raises one report entry", astroray_tests_cpu "shade_shadow/collision limit counts volume limit", astroray_tests_cpu "shade_surface_media/medium limit ends are counted once and carry their hit's flag word"
 Budget: gate +0.5 s declared (fast cases and one small session case; stop and ask above 1 s); kernel rows: k_shade_surface 128 / 416 B / 4 / 16 B expected unchanged (its loads sit at ruling 93's 16 B line: any spill growth is a stop, 0002 D10's ladder step 2 first), compile 7.45 s recorded of 8.0 s; k_shade_volume and k_shade_shadow_medium 80 / 432 B / 0 / 0: state both. Land in a quiet window; `check perf` 1.03.
 Depends on: none (193, 205, 220 landed). `shade_surface` TU queue, one at a time (lead ruling): 239, 242, 247, 253, 260, 263, 261, 262. Collisions: shade_surface.h with 247, 260, 261, 262; session.cpp with nothing open; budget.toml with every kernel task.
 Size: S (about 90 lines without tests); stop and report at 2x.
