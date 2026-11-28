@@ -14,9 +14,23 @@ what the workers wrote. As the worker it runs inside Blender with the staged ext
         sidecar's "heat" entry, their min, mean, max and the render's max spp and max bounces (tools/report.py).
   heat: a windowed Blender (the viewport draws only there), the Sample count and the Bounce count display modes
         of the scene, one device per run, a screenshot of the viewport region each (0007 d40).
+  cli:  (python, no Blender) a scene with `gallery_via = "cli"`, one the addon cannot express (the test slab: no
+        volume mapping in M1b): the recording through `astroray_cli render` on both devices at `gallery_spp`,
+        the film's display planes written as PNG (sRGB encoding, clipped, no view transform: the sidecar says
+        "none: CLI output"; nearest-neighbour up to `gallery_size`, which must be an integer multiple of the
+        recording's size), the same sidecars and difference map as f12.
+  denoise: a scene with `denoise = true`: the F12 job on CUDA twice at `denoise_spp` (default `gallery_spp`),
+        `use_denoising` off and on, <scene>_denoise_off.png and _on.png, and in the on sidecar the pair's statistics: the
+        high-frequency energy and mean of the flat wall patch `denoise_patch` ([x0, y0, x1, y1] as fractions of
+        the image, top row first) and the mean absolute difference of the two images.
+  panel: a windowed Blender; a scene with `panel = true` gets one deliberately unsupported node (a Wave Texture) in
+        a new material, Rendered shading, and a screenshot of the Properties editor's Diagnostics panel; the
+        sidecar lists the diagnostics store's entries as the job read them back.
 Images go to out/gallery/<milestone>/ and are never committed (0009 d23). A PNG over 1600 px or 2 MB, or whose
 mean is below 1 % of white, fails the run (d21).
-bench/scenes.toml carries the showcase entries: `showcase` (milestones), `gallery_size`, `gallery_spp`, `heat`.
+bench/scenes.toml carries the showcase entries: `showcase` (milestones), `gallery_size`, `gallery_spp`, `heat`,
+`gallery_via`, `denoise` (with `denoise_patch`, `denoise_spp`), `panel`. --plan prints the jobs and expected files
+without building or rendering; --scenes-toml reads another file.
 Ref: docs/decisions/0009-build-test-process.md d21, d22, d23; docs/decisions/0007-blender-integration.md d40.
 """
 import argparse
@@ -41,13 +55,21 @@ def out_dir(milestone):
     return os.path.join(ROOT, "out", "gallery", milestone)
 
 
-def showcase(milestone):
-    with open(os.path.join(ROOT, "bench", "scenes.toml"), "rb") as f:
+def showcase(milestone, toml=None):
+    with open(toml or os.path.join(ROOT, "bench", "scenes.toml"), "rb") as f:
         scenes = [s for s in tomllib.load(f)["scene"] if milestone in s.get("showcase", [])]
     for s in scenes:
         for key in ("gallery_size", "gallery_spp"):
             if key not in s:
                 raise SystemExit(f"FAIL gallery: bench/scenes.toml entry {s['name']} has no {key}")
+        if s.get("gallery_via", "f12") not in ("f12", "cli"):
+            raise SystemExit(f"FAIL gallery: bench/scenes.toml entry {s['name']}: gallery_via {s['gallery_via']!r} is not \"cli\"")
+        if s.get("gallery_via") == "cli" and not s.get("recording"):
+            raise SystemExit(f"FAIL gallery: bench/scenes.toml entry {s['name']} has gallery_via = \"cli\" and no recording")
+        if s.get("gallery_via") == "cli" and (s.get("denoise") or s.get("panel") or s.get("heat")):
+            raise SystemExit(f"FAIL gallery: bench/scenes.toml entry {s['name']}: denoise, panel and heat need the addon, not gallery_via = \"cli\"")
+        if s.get("denoise") and len(s.get("denoise_patch", ())) != 4:
+            raise SystemExit(f"FAIL gallery: bench/scenes.toml entry {s['name']} has denoise = true and no denoise_patch [x0, y0, x1, y1]")
     return scenes
 
 
