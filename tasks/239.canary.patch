@@ -1,5 +1,5 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 44efe714..bb201344 100644
+index 44efe714..71e7eec8 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
 @@ -524,7 +524,7 @@ Mean mean_of_node(const Work& w, int i, MeanCtx* x) {
@@ -29,15 +29,15 @@ index 44efe714..bb201344 100644
        }
      }
      if (a2 >= 0) {
-@@ -1174,7 +1174,7 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
+@@ -1169,7 +1169,7 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
+     c.f32_first = uint32_t(w.g.f32.size());
+     c.f32_count = 2;
+     w.g.f32.push_back(0.0f);
+-    w.g.f32.push_back(1.0f);
++    w.g.f32.push_back(2.0f);
+     c.input[0] = src;
      c.n_inputs = 1;
      c.out = VType::F32;
-     w.g.nodes.push_back(c);
--    factor = int(w.g.nodes.size()) - 1;
-+    factor = src;
-   }
-   for (int e : emits) {
-     GraphNode m;
 diff --git a/src/kernel/vm/ops/clamp_f32.h b/src/kernel/vm/ops/clamp_f32.h
 index c71b461e..38b98e5e 100644
 --- a/src/kernel/vm/ops/clamp_f32.h
