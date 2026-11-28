@@ -568,35 +568,54 @@ static std::vector<ar_report_entry> report_entries(Session& s) {
 }
 
 TEST_CASE("session/medium path limit raises one report entry") {
-  // ASTRORAY_TEST_MAJORANT at D8's per-event limit (1,048,576): a flight of optical depth 2 draws more
-  // tentative collisions than the event's blocks hold, so every camera path that reaches the slab's medium
-  // ends VOLUME_LIMIT. One pixel at two samples is two passes with one path each: the session reads the
-  // pass's counter after each resolve and raises under one key, so the entry's count is 2 and there is
-  // no other entry of that code. The same slab at the production majorant (1) raises none.
+  // ASTRORAY_TEST_MAJORANT at D8's per-event limit (1,048,576): a flight draws that many tentative
+  // collisions only when no real collision comes first, so some camera paths end VOLUME_LIMIT and others
+  // absorb or scatter (and a scatter's NEE items may end at the limit too). How many is the seed's, so the
+  // reference is counted independently: the session's film carries the termination histogram, which
+  // film_count_add fills per path end and per blocked shadow item. Over the passes (1 x 1, 2 spp: one
+  // pass per sample) the entry's count must equal the VOLUME_LIMIT and STACK_OVERFLOW planes' sum, under
+  // one key and no other entry of that code; a counter that was not cleared between passes would
+  // overcount. The same slab at the production majorant (1) raises none.
   const auto spec = [] {
     slab::SlabSpec s;
     for (int c = 0; c < 3; ++c) s.medium.sigma_a[c] = 2.0f, s.medium.sigma_s[c] = 2.0f;
     s.width = 1, s.height = 1, s.spp = 2;
     s.max_bounces = s.volume_bounces = 4;
+    s.termination_stats = true;
     return s;
   };
-  const auto entries = [&](bool limit) {
+  struct Out {
+    std::vector<ar_report_entry> entries;
+    uint64_t term_sum = 0;
+  };
+  const auto render = [&](bool limit) {
     std::unique_ptr<HookScope> k;
     if (limit) k = std::make_unique<HookScope>("ASTRORAY_TEST_MAJORANT", "1048576");
     slab::SlabRig rig(SceneConfig{2, {}, {}}, spec());
     std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, 1);
     slab::SlabSession s(rig, *dev);
     s.converge();
-    std::vector<ar_report_entry> hit;
+    Out o;
     for (const ar_report_entry& e : report_entries(s.session))
-      if (e.code == AR_REPORT_MEDIUM_PATH_LIMIT) hit.push_back(e);
-    return hit;
+      if (e.code == AR_REPORT_MEDIUM_PATH_LIMIT) o.entries.push_back(e);
+    s.session.read_film([&](const FilmReadContext& c) {
+      FilmView view(c.device, c.film);
+      for (ar::Term t : {ar::Term::VOLUME_LIMIT, ar::Term::STACK_OVERFLOW})
+        for (uint32_t n : view.counts("term", uint32_t(t))) o.term_sum += n;
+    });
+    return o;
   };
-  const std::vector<ar_report_entry> with = entries(true);
-  REQUIRE(with.size() == 1u);
-  CHECK(with[0].count == 2u);
-  CHECK(with[0].level == AR_LEVEL_WARNING);
-  CHECK(entries(false).empty());
+  const Out with = render(true);
+  std::printf("session medium path limit: entries %zu, count %llu, term_hist VOLUME_LIMIT + STACK_OVERFLOW %llu\n",
+              with.entries.size(), with.entries.empty() ? 0ull : (unsigned long long)with.entries[0].count,
+              (unsigned long long)with.term_sum);
+  REQUIRE(with.term_sum > 0u);  // a render with no limit end would not test the counter
+  REQUIRE(with.entries.size() == 1u);
+  CHECK(with.entries[0].count == with.term_sum);
+  CHECK(with.entries[0].level == AR_LEVEL_WARNING);
+  const Out without = render(false);
+  CHECK(without.term_sum == 0u);
+  CHECK(without.entries.empty());
 }
 
 TEST_CASE("shade_volume/chromatic slab transmittance") {

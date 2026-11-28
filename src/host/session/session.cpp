@@ -66,6 +66,7 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, bool 
   req.max_width = o.max_width;
   req.max_height = o.max_height;
   req.statistics = !s || s->s.statistics != AR_STATISTICS_OFF;  // 0008 d12: on by default
+  req.termination_stats = o.test_termination_stats;
   // 0008 d15: the denoiser reads the guide planes, so a session with one always has them.
   const bool denoiser = o.denoiser != AR_DENOISER_NONE;
   req.guides = denoiser;
