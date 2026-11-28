@@ -1,8 +1,8 @@
 diff --git a/tools/land_history.py b/tools/land_history.py
-index 56fbd8ff..73ae6ebd 100644
+index d7ed52cf..07c579e6 100644
 --- a/tools/land_history.py
 +++ b/tools/land_history.py
-@@ -80,7 +80,7 @@ def fmt(x):
+@@ -86,7 +86,7 @@ def fmt(x):
  def report(recs, ledger_text=None):
      out = []
      tasks = sorted({r['task'] for r in recs})
