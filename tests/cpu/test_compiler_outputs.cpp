@@ -407,6 +407,27 @@ TEST_CASE("compiler_outputs/emission estimate of an image channel") {
   CHECK(bound.emission_estimate[0].strength == 1.0f);
 }
 
+TEST_CASE("compiler_outputs/emission estimate of an image-driven opacity") {
+  // An emitter of strength 2 under a textured opacity a (channel 1, mean 0.5) is estimated at
+  // 2 mean(a) = 1, not the bound 2: the clamp of the opacity keeps the image's mean (0005 item 43).
+  const astroray::host::ImageMeanFn means = [](uint32_t image, std::array<float, 3>* rgb) {
+    if (image != 7) return false;
+    *rgb = {0.25f, 0.5f, 0.75f};
+    return true;
+  };
+  GB g;
+  g.op2(Op::EMIT_LE, g.add(Op::CONST_F32X3, {1.0f, 1.0f, 1.0f}), g.add(Op::CONST_F32, {2.0f}));
+  g.store(channel(g, tex(g), 1), ar::RecordSlot::geometry_opacity);
+  const MaterialOutput m = compile_material(g.desc(), table(), &means);
+  REQUIRE(!m.magenta);
+  REQUIRE(m.emission_estimate.size() == 1);
+  CHECK(bits(m.emission_estimate[0].strength) == bits(1.0f));
+  // Without the means the product is unknown and the estimate falls back to the bound 1.
+  const MaterialOutput bound = g.compile();
+  REQUIRE(bound.emission_estimate.size() == 1);
+  CHECK(bound.emission_estimate[0].strength == 1.0f);
+}
+
 TEST_CASE("compiler_outputs/two node types two entries") {
   GB g;
   g.unsupported("ShaderNodeBevel");

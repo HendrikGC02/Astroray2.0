@@ -1100,6 +1100,48 @@ TEST_CASE("mix_shader/per-point factors and opacity are clamped, not reported") 
   }
 }
 
+TEST_CASE("mix_shader/emission estimate takes the image mean of a clamped opacity and factor") {
+  // Item 43: a texture-driven weight keeps the image's mean through CLAMP_F32. Image 3's channel 1
+  // has mean 0.5 and channel 2 mean 0.75; without the means the weight is bounded by 1.
+  const astroray::host::ImageMeanFn means = [](uint32_t image, std::array<float, 3>* rgb) {
+    if (image != 3) return false;
+    *rgb = {0.25f, 0.5f, 0.75f};
+    return true;
+  };
+  auto channel_of_image = [](GB& g, int32_t ch) {
+    const int tex = g.add(Op::TEX_IMAGE, {}, {3, 0});
+    g.link(g.add(Op::LOAD_CTX_UV, {}, {0}), tex, 0);
+    const int c = g.add(Op::CHANNEL_F32X3, {}, {ch});
+    g.link(tex, c, 0);
+    return c;
+  };
+  auto estimate = [&](const GB& g, bool with_means) {
+    const ar_graph_desc d = g.desc();
+    const astroray::host::MaterialOutput m = astroray::host::compile_material(d, fixture().table, with_means ? &means : nullptr);
+    REQUIRE_FALSE(m.magenta);
+    REQUIRE(m.emission_estimate.size() == 1u);
+    return double(m.emission_estimate[0].strength);
+  };
+  {  // Mix(S1, S2 with opacity channel 2 and an emission of strength 3, 0.25): 0.25 x 0.75 x 3.
+    GB g;
+    g.store_const(0, 0.1f, RecordSlot::base_metalness);
+    g.store_const(1, 0.2f, RecordSlot::base_metalness);
+    g.store(1, channel_of_image(g, 2), RecordSlot::geometry_opacity);
+    g.emit(1, 1.0f, 3.0f);
+    g.mix_const(0, 0.25f, 0, 1);
+    check_rel(estimate(g, true), 0.25 * 0.75 * 3.0, 1e-6);
+    check_rel(estimate(g, false), 0.25 * 3.0, 1e-6);  // the opacity bounded by 1
+  }
+  {  // Mix(S, Emission of strength 4, f = channel 1): the second socket weighs the emission by f.
+    GB g;
+    g.store_const(0, 0.1f, RecordSlot::base_metalness);
+    g.emit(1, 1.0f, 4.0f);
+    g.mix(0, channel_of_image(g, 1), 0, 1);
+    check_rel(estimate(g, true), 0.5 * 4.0, 1e-6);
+    check_rel(estimate(g, false), 4.0, 1e-6);  // the factor bounded by 1
+  }
+}
+
 TEST_CASE("mix_shader/emission estimate keeps constant weights") {
   // Item 43: Mix(S1, S2 with a per-point alpha and an emission of strength 3, 0.01): the weight
   // 0.01 x a counts 0.01 at its value and bounds only the per-point a by 1, so the estimate is

@@ -524,6 +524,16 @@ Mean mean_of_node(const Work& w, int i, MeanCtx* x) {
     r.known = true;
     return r;
   }
+  if (n.op == Op::CLAMP_F32) {
+    // The clamp of the input's mean: exact when the image lies in [lo, hi] (an alpha or Mix factor
+    // texture, whose clamp changes nothing), otherwise the estimate's usual approximation.
+    const Mean a = mean_of(w, n.input[0], x);
+    if (!a.known) return r;
+    const float* f = w.g.f32.data() + n.f32_first;
+    r.v = {ar::op_clamp_f32(a.v[0], f[0], f[1]), 0.0f, 0.0f};
+    r.known = r.v[0] >= 0.0f;
+    return r;
+  }
   const bool arith = n.op == Op::MUL_F32 || n.op == Op::MUL_F32X3 || n.op == Op::MUL_F32X3_F32 || n.op == Op::ADD_F32X3;
   if (!arith) return r;
   const Mean a = mean_of(w, n.input[0], x), b = mean_of(w, n.input[1], x);
