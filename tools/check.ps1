@@ -45,7 +45,7 @@ if ($Landing -and $Tier -ne 'gate') {
 
 # Locks first; the tier clock starts after them so waits are excluded (0009 d8).
 $waited = 0.0
-if ($Tier -in @('gate', 'full', 'profile')) { $waited = Enter-ArMachineLock -Job "check-$Tier" }
+if ($Tier -in @('gate', 'full', 'profile')) { $waited = Enter-ArMachineLock -Job $(if ($Tier -eq 'profile') { 'check-gate' } else { "check-$Tier" }) }   # a profile holds the lock for minutes, like a gate
 Start-ArSummary $Tier
 $budget = $null
 $isCi = ($Tier -eq 'ci')

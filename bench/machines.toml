@@ -5,10 +5,9 @@
 # `off-reference <id> <row>` and does not fail, unless [machine."<id>"] holds that machine's own median of the row:
 # the limit is then the reference limit x (that median / the reference median below), never below the reference limit.
 # [machine."<id>"] is written only by `tools/check.ps1 profile` (lead, quiet machine); the reference rows below are
-# the records' numbers, edited by hand.
+# the reference rows below are measured the same way by `tools/check.ps1 profile -Reference` (lead, quiet reference machine).
 reference = "rtx5070ti-8c16t"
 
 [reference_median]
-# B-08, seconds: the quiet `check fast` median after task 227 (docs/history/M1b-task-ledger.md, task 227's line:
-# "quiet check fast median 9.9 -> 5.4 s").
-"B-08" = 5.4
+# B-08, seconds: median of five check fast runs after a dropped warm-up, on rtx5070ti-8c16t, 2026-11-29, sha df7d32d5 (check.ps1 profile -Reference; runs 6.55, 6.59, 6.6, 6.42, 6.58)
+"B-08" = 6.58
