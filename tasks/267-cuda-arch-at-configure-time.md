@@ -16,3 +16,4 @@ Budget: gate +0.9 s declared (one tools fixture at about 3 times nominal and one
 Depends on: none; first to land (the reference machine before the move if possible, else first on the laptop with 268). Collisions: src/kernel/budget.toml and tools/kernelgate.py with every kernel task and 268 (B-05 column only); session.cpp and test_hooks with 242-style session tasks; lands in a quiet window.
 Size: M (about 250 lines: cmake, PowerShell, C++ pre-check, kernelgate); stop and report at 2x.
 Progress:
+- 2026-11-29 implementer: ASTRORAY_CUDA_ARCH, preset, build.ps1, pre-check + BUILT_ARCH hook, kernels_ref, kernelgate --native, records; default cubins byte-identical (30 of 30); fast, gate, canary pass. Arch rides on the record's kernel_source text (cuda is parsed by tests). V13 first run: sm_75/86/89 compile, allowances do not hold (finding, not a gate).
