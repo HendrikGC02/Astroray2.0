@@ -3,6 +3,7 @@
 
 Run (Blender's python, -I first):
   kernelgate.py [--declared "name:regs=+0,stack=+16;..."] [--base origin/main]   resources
+  kernelgate.py --native                gate the build's own architecture's cubins (0001 V13, other GPUs)
   kernelgate.py --time                  compile timing of the changed device TUs (B-05)
   kernelgate.py --probe                 uncapped register warnings and the capped probe modules'
                                         rows, never a failure
@@ -10,6 +11,9 @@ Run (Blender's python, -I first):
 Ref: docs/decisions/0002-kernel-architecture.md D8, D10 (resources, growth rule, timing method);
 0009 d18 (resource gate, compile timing), B-05, B-06. Registers and stack come from
 `cuobjdump -res-usage`, spills from the `ptxas -v` text (the build saves it as <name>.ptxas.txt).
+The reference architecture is sm_120, whatever the GPU is (0001 D3.4, 0009 d18): a build for another architecture
+(cache variable ASTRORAY_CUDA_ARCH) also compiles every device TU for sm_120 into kernels_ref/, compile-only, and
+that set is the one gated against budget.toml; the native cubins print `recorded (sm_NN)` rows and are not gated.
 Gate-only probe modules (src/kernel_gpu/probe_*.cu) are built capped into kernels_probe_capped/ by the
 probe target; their rows are gated "full" and a breach is a warning, never a failure (task 092).
 Exit 0 pass, 1 gate failure, 2 usage or environment error.
@@ -287,6 +291,39 @@ def check_ptx(ptx_dir, launch, budget):
 
 
 PROBE_CAPPED_DIR = "kernels_probe_capped"
+REFERENCE_ARCH = 120                         # 0001 D3.4: budget.toml's rows are sm_120 numbers
+REF_DIR = "kernels_ref"
+
+
+def native_arch(build):
+    """The architecture the build tree's cubins are for: the cache variable, 120 for a cache older than it."""
+    cache = os.path.join(build, "CMakeCache.txt")
+    if not os.path.exists(cache):
+        raise GateError(f"{cache} missing: run tools/build.ps1 first")
+    m = re.search(r"^ASTRORAY_CUDA_ARCH:\w+=(\d+)$", open(cache, encoding="utf-8").read(), re.M)
+    return int(m.group(1)) if m else REFERENCE_ARCH
+
+
+def reference_sets(arch, native, ref):
+    """(cubins to gate, `recorded` lines). On the reference architecture the native cubins are the gated set. On
+    any other one the sm_120 reference set is (ref is None when its directory is absent: an error, never a pass
+    on another architecture's numbers) and the native cubins are only recorded."""
+    if arch == REFERENCE_ARCH:
+        return native, []
+    if ref is None:
+        raise GateError(f"the build is for sm_{arch} and has no {REF_DIR}/ (the sm_{REFERENCE_ARCH} reference pass): "
+                        f"build astroray_kernels_gpu_ref")
+    rows = []
+    for stem, (res_txt, ptx_txt) in sorted(native.items()):
+        try:
+            ptx = parse_ptxas(ptx_txt)
+        except GateError:
+            ptx = {}
+        for name, m in sorted(parse_res_usage(res_txt).items()):
+            p = ptx.get(name, {})
+            spill = f" spill {p['spill_store']}/{p['spill_load']} B" if "spill_store" in p else ""
+            rows.append(f"{name}: recorded (sm_{arch}) regs {m['regs']} stack {m['stack']} B{spill}")
+    return ref, rows
 
 
 def split_probe(fails, lines, probe_cubins):
@@ -315,7 +352,13 @@ def resources(args):
     build = os.path.join(ROOT, args.build_dir)
     launch = parse_launch_rows(open(os.path.join(ROOT, LAUNCH_CONFIG), encoding="utf-8").read())
     budget = parse_budget(open(os.path.join(ROOT, BUDGET), encoding="utf-8").read())
-    cubins = read_cubins(build, "kernels")
+    arch = native_arch(build)
+    # An empty directory is as good as none: a pass on another architecture's numbers is never an option.
+    ref = (read_cubins(build, REF_DIR) if os.path.isdir(os.path.join(build, REF_DIR)) else None) or None
+    native = read_cubins(build, "kernels")
+    # --native (0001 V13): the native architecture's cubins are the gated set, against the same rows. The rows are
+    # sm_120 numbers, so another architecture's breach is a finding for the record, not proof of a regression.
+    cubins, recorded = (native, []) if args.native else reference_sets(arch, native, ref)
     probe_cubins = {}
     if args.full:
         if os.path.isdir(os.path.join(build, PROBE_CAPPED_DIR)):
@@ -329,7 +372,11 @@ def resources(args):
     fails, warns, lines, _, deferred = gate_cubins(launch, budget, base_budget(args.base), cubins, probe_cubins, is_stage,
                                                    parse_declared(args.declared), args.full,
                                                    check_ptx(os.path.join(build, "optix"), launch, budget))
-    for ln in lines:
+    if args.native:
+        print(f"kernelgate: --native: gating the build's own sm_{arch} cubins (kernels/) against budget.toml")
+    elif arch != REFERENCE_ARCH:
+        print(f"kernelgate: the build is for sm_{arch}; gating the sm_{REFERENCE_ARCH} reference set ({REF_DIR}/), recording the native one")
+    for ln in lines + recorded:
         print(ln)
     for w in probe_warnings(warns):
         print(w)
@@ -491,11 +538,21 @@ def self_test():
                     for f in sorted(os.listdir(p)) if f.endswith(".resusage.txt")}
         # The case's own directory stands for kernels/, its kernels_probe_capped/ for the probe build.
         cubins, probe_cubins = case_cubins("."), case_cubins(PROBE_CAPPED_DIR)
+        # A case may be a build for another architecture: arch.txt names it, kernels_ref/ is the sm_120 set.
+        ap_ = os.path.join(d, "arch.txt")
+        arch = int(read("arch.txt")) if os.path.exists(ap_) else REFERENCE_ARCH
+        recorded, error = [], None
+        try:
+            cubins, recorded = reference_sets(arch, cubins, case_cubins(REF_DIR) or None)
+        except GateError as e:
+            error = str(e)
         bp = os.path.join(d, "base_budget.toml")  # the rows at the merge base, when the case needs growth
         base = parse_budget(read("base_budget.toml")) if os.path.exists(bp) else {}
         fails, warns, _, _, deferred = gate_cubins(launch, budget, base, cubins, probe_cubins, lambda s: False, {},
                                                   want[2:3] == ["full"])
-        got = "fail" if fails else "pass"
+        if error:
+            fails = [error]
+        got = "error" if error else "fail" if fails else "pass"
         if want[1].startswith("deferred="):
             ok = got == want[0] and len(deferred) == int(want[1][9:])
         else:
@@ -503,6 +560,10 @@ def self_test():
         # Optional fourth line "warn=<text>": a probe warning line must contain it.
         if len(want) > 3 and want[3].startswith("warn="):
             ok = ok and any(want[3][5:] in w for w in probe_warnings(warns))
+        # Optional line "recorded=<text>": a `recorded (sm_NN)` row of the native set must contain it.
+        for extra in want[3:]:
+            if extra.startswith("recorded="):
+                ok = ok and any(extra[9:] in r for r in recorded)
         bad += not ok
         print(f"case {case}: expect {want[0]}, got {got}" + (f" ({fails[0]})" if fails else "") + (": ok" if ok else ": MISMATCH"))
     # The timed command's environment: vcvarsall's INCLUDE and LIB reach it, and a dump without them raises.
@@ -536,6 +597,7 @@ def main():
     ap.add_argument("--build-dir", default="out/build")
     ap.add_argument("--base", default="origin/main", help="ref the diff is measured against")
     ap.add_argument("--declared", default="", help='the task\'s declared delta: "name:regs=+0,stack=+16;..."')
+    ap.add_argument("--native", action="store_true", help="gate the native cubins, not the sm_120 reference set (V13)")
     ap.add_argument("--full", action="store_true", help="also check the rows gated full (check full)")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--time", action="store_true")

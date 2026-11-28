@@ -73,9 +73,13 @@ AR_API ar_status ar_build_info(ar_build_record* info) {
     const astroray::BuildInfo& b = astroray::kBuildInfo;
     ar_build_record r;
     memset(&r, 0, sizeof r);
+    // The record has no field for the CUDA architecture (adding one changes the ABI hash), and `cuda` is the
+    // toolkit release that tools parse, so the architecture rides on the kernel source text.
+    const std::string arch = astroray::built_cuda_arch();
+    const std::string kernels = astroray::kernel_source() + (arch.empty() ? std::string() : " arch=" + arch);
     bool ok = put(r.version, b.version) && put(r.git_sha, b.git_sha) && put(r.cuda, b.cuda) &&
               put(r.optix, b.optix) && put(r.embree, b.embree) && put(r.oidn, b.oidn) &&
-              put(r.build_type, b.build_type) && put(r.kernel_source, astroray::kernel_source());
+              put(r.build_type, b.build_type) && put(r.kernel_source, kernels);
     if (!ok) return AR_ERR_INTERNAL;  // a field that does not fit is a build bug, never truncated
     r.dirty = static_cast<uint32_t>(b.dirty);
     *info = r;

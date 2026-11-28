@@ -6,7 +6,7 @@ them. Milestone is where the item must be settled at the latest.
 
 | Area | Item | Source | Milestone | Taken by |
 |---|---|---|---|---|
-| ABI, host | No CUDA probe reason or driver version in `ar_build_info` / CLI info | 017 | M1b | |
+| ABI, host | No CUDA probe reason or driver version in `ar_build_info` / CLI info (the built architecture rides on the `kernel_source` text, task 267; a field of its own would change the ABI hash) | 017 | M1b | |
 | ABI, host | CUDA init creates the context on the init thread | 094 | M2 | |
 | ABI, host | OptiX's first TLAS build keeps about 230 MiB | 126 | M2 | |
 | ABI, host | An epoch starts per activated commit (0007 d12) | 052 | M2 | |
@@ -52,7 +52,7 @@ them. Milestone is where the item must be settled at the latest.
 | Addon | `Light.node_tree` (read by sync/lights.py) is missing from blender/astroray/api_surface.txt | 159 review | M1b | |
 | ABI, host | `bind_globals` reads bounces and seed from live settings each pass, not the latched generation's snapshot (one-pass race on a display-mode-only latch) | 159 review | M2 | |
 | Tests | Flaky once: `cuda_session_trace/no cache dir disables the optix cache` (gate, 136); one hosted-ci `cpu gate tests` case on 137's head (no C++ change; rerun green) | 136, 137 | M1b | the task that sees one again files it |
-| Tools | build.ps1 reconfigures only when the source list changes, not when -Preset changes (a cpu-preset build leaves the tree GPU-off; the next dev build fails 'unknown target')  | 153 | M1b | |
+| Tools | build.ps1 reconfigures when the source list or the CUDA architecture changes, not when -Preset changes (a cpu-preset build leaves the tree GPU-off; the next dev build fails 'unknown target')  | 153 | M1b | |
 | Tools | A cold or reconfigured worktree's first `check gate` exceeds B-09 (182 s in 142, 198 s in 153) because the in-gate build counts; landings are warm (prepare builds first) | 142, 153 | M1b | |
 | Kernel | build_env_table throws on a uniform grid below ~1e-22 (compensated integral denormal in float): loud, unrealistic radiance; revisit with bake_environment | 153 | M1b | slice B |
 | ABI, host | Settings (film_exposure, seed, bounces) are read live at the latch, not from the latched generation's snapshot: a commit activating at the latch can give one transient frame whose exposure does not match its tables | 159 review | M2 | |

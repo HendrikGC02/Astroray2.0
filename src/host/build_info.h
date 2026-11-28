@@ -21,6 +21,18 @@ struct BuildInfo {
 
 extern const BuildInfo kBuildInfo;
 
+// The architecture the CUDA device modules were built for ("sm_120"; cmake/kernels.cmake,
+// ASTRORAY_CUDA_ARCH); empty in a build without the CUDA backend.
+#define AR_BUILD_STR_(x) #x
+#define AR_BUILD_STR(x) AR_BUILD_STR_(x)
+inline std::string built_cuda_arch() {
+#ifdef AR_BUILT_CUDA_ARCH
+  return "sm_" AR_BUILD_STR(AR_BUILT_CUDA_ARCH);
+#else
+  return {};
+#endif
+}
+
 // "embedded", or ASTRORAY_KERNEL_DIR in a build compiled with AR_DEV_KERNEL_DIR
 // (the dev presets only), which is the one build allowed to load loose kernels.
 inline std::string kernel_source() {
