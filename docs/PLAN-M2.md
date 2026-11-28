@@ -98,7 +98,7 @@ slice A:    254 dielectric -> 255 E_glass -> (stack: transmission, after 248)   
             263 Add Shader after 239      264 Principled sockets (blender)      265 A1 rows after 249
 ```
 Gate seconds: quiet main 142.7 s after 213 (137-147 s over the last ten landings). Open M1b tasks declare
-+2.9 s (214, 216, 217, 236), the close batch +3.4 s, this batch +11.9 s: projection 160.9 s against the 170 s
++2.9 s (214, 216, 217, 236), the close batch +3.5 s, this batch +11.9 s: projection 161.0 s against the 170 s
 hold line. Measured seconds replace declared ones as tasks land (owner decision 38). If the measured max
 passes 170 s the lead moves named long-stable statistical cases to `full` as before; nothing is weakened.
 Statistical lobe cases are written for the `full` family from the start, with one deterministic or
@@ -112,7 +112,7 @@ quiet window. The cpu lane carries slice A's library work; the kernel lane carri
 that edits a header already in a VM TU (`ggx.h`, `metal.h`, `stack.h`, `ops.def`); the gpu lane has 248's
 captures, then slice B's OptiX half and slice D; the blender lane has 240, 241, 216, 264, then lowerings.
 Models: Sonnet by default; Opus implements the tasks marked O in `tasks/README.md` (sampling, estimators,
-new lobe mathematics, measurement tasks whose table decides a design): 9 of this batch's 18, the lobe-heavy
+new lobe mathematics, measurement tasks whose table decides a design): 7 of this batch's 18, the lobe-heavy
 front of the milestone, falling in slices B-D. Opus reviews kernel, physics, sampling, ABI, concurrency and
 process diffs and every diff that writes into a record (ruling 87).
 
@@ -153,7 +153,7 @@ selects it.
 | 6 | B-17 and the per-launch medium cap (STATUS: 4,096 PROVISIONAL or about 1,000) | 4,096 | Decide at slice C's measurement with real majorants |
 | 7 | Metal under `specular_weight` (BACKLOG row from 166: 148's encoding scales metal by 2 x Specular IOR Level, Cycles does not) | Metallic with a level other than 0.5 stays reported unsupported | A lead ruling from the OpenPBR text before slice A's V9 rows; listed here because it changes what users see |
 | 8 | May M3's first slice (texture system, cpu lane) start beside M2 (PLAN-M1b section 7)? | no | Yes once slice A's library tasks are dispatched: they and M3's slice share only the cpu lane |
-| 9 | Opus implements 9 of the first 18 tasks | as M1b (owner decision 40) | keep |
+| 9 | Opus implements 7 of the first 18 tasks | as M1b (owner decision 40) | keep |
 
 ## 8. After M2
 
