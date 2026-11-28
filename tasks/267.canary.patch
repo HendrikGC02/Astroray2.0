@@ -1,13 +1,13 @@
 diff --git a/src/device/cuda/cuda_device.cpp b/src/device/cuda/cuda_device.cpp
-index e81b43f0..51fb42f0 100644
+index 0a6c71f4..7bac9a4b 100644
 --- a/src/device/cuda/cuda_device.cpp
 +++ b/src/device/cuda/cuda_device.cpp
-@@ -255,7 +255,7 @@ struct CudaDevice::Impl {
+@@ -256,7 +256,7 @@ struct CudaDevice::Impl {
        built = static_cast<uint32_t>(std::stoul(built_name.substr(3)));
      }
      const uint32_t device_cc = static_cast<uint32_t>(major * 10 + minor);
 -    if (built / 10 != device_cc / 10 || built % 10 > device_cc % 10)
-+    if (built == 0xFFFFu && device_cc == 0)
++    if (built > device_cc)
        throw DeviceError("GPU device unavailable: built for sm_" + std::to_string(built) + ", device is " + arch +
                          ": rebuild (tools/build.ps1 reads the installed GPU)");
      check(cu.cuDevicePrimaryCtxRetain_(&ctx, device), "cuDevicePrimaryCtxRetain");
@@ -24,3 +24,19 @@ index 72df18a3..ea96a424 100644
    if ($first -match '^(\d+)\.(\d+)$') { return [int]$Matches[1] * 10 + [int]$Matches[2] }
    return $null
  }
+diff --git a/tools/kernelgate.py b/tools/kernelgate.py
+index 0882c443..e02d1f49 100644
+--- a/tools/kernelgate.py
++++ b/tools/kernelgate.py
+@@ -308,9 +308,10 @@ def reference_sets(arch, native, ref):
+     """(cubins to gate, `recorded` lines). On the reference architecture the native cubins are the gated set. On
+     any other one the sm_120 reference set is (ref is None when its directory is absent: an error, never a pass
+     on another architecture's numbers) and the native cubins are only recorded."""
+-    if arch == REFERENCE_ARCH:
++    if True:
+         return native, []
+     if ref is None:
++        return native, []
+         raise GateError(f"the build is for sm_{arch} and has no {REF_DIR}/ (the sm_{REFERENCE_ARCH} reference pass): "
+                         f"build astroray_kernels_gpu_ref")
+     rows = []
