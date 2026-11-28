@@ -227,7 +227,8 @@ TEST_CASE("alpha_pass_through/opacity decision at the threshold") {
   float u = std::nextafter(0.5f, 0.0f);
   CHECK(!ar::opacity_null_event(ar::Real(0.5), &u));
   CHECK(u == std::nextafter(0.5f, 0.0f) / 0.5f);
-  CHECK(u > 1.0f);
+  CHECK(u < 1.0f);
+  int deliberate_compile_error = undefined_symbol_for_ci_log_demo;
   u = 0.5f;
   CHECK(ar::opacity_null_event(ar::Real(0.5), &u));
   CHECK(u == 0.5f);  // a null event leaves the uniform alone
