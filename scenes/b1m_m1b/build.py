@@ -3,7 +3,7 @@
 world is the environment the light tree samples), one 4 m GRATING card floating over the grid, and a row of
 upright alpha cards between the camera and the grid. One Blender viewport session therefore has non-opaque
 materials, an extension-routed material and an environment light in the scene.
-Usage: build.py --out <path.arrec> [--blend <path.blend>] [--no-alpha]; --blend also writes <blend>.json for
+Usage: build.py --out <path.arrec> [--blend <path.blend>]; --blend also writes <blend>.json for
 scenes/lib/blend_writer.py. Not an analytic scene: timed by tools/measure_viewport.ps1 only.
 Ref: scenes/b1m/build.py (grid, lamp, camera; imported, not copied); scenes/s3_hdri/build.py (the HDRI world);
 scenes/ext_grating_card/build.py (the grating's pitch, depth and coating); scenes/b_foliage/build.py (an alpha
@@ -36,7 +36,7 @@ def upright(centre):
     return [1, 0, 0, centre[0], 0, 0, -1, centre[1], 0, 1, 0, centre[2]]
 
 
-def build(out, blend=None, alpha=True):
+def build(out, blend=None):
     if not os.path.isfile(HDRI):
         raise SystemExit(f"{HDRI} is missing: run tools/fetch.ps1 assets")
     with ar.Scene(out, description=blend + ".json" if blend else None) as s:
@@ -48,13 +48,12 @@ def build(out, blend=None, alpha=True):
         grating = s.grating_material(**GRATING)
         items = [{"geom": mesh, "materials": [mat]},
                  {"geom": card, "materials": [grating], "xf": ar.translation(GRATING_CENTRE)}]
-        if alpha:
-            s.mesh_from(leaf, meshes.plane(ALPHA_SIZE, ALPHA_SIZE), "alpha_card")
-            glass = s.material({"base_color": (0.1, 0.5, 0.15), "specular_roughness": 0.6, "geometry_opacity": ALPHA_OPACITY})
-            first = -(ALPHA_COUNT - 1) / 2 * ALPHA_PITCH
-            items += [{"geom": leaf, "materials": [glass], "xf": upright((first + k * ALPHA_PITCH, ALPHA_ROW_Y, ALPHA_ROW_Z))}
-                      for k in range(ALPHA_COUNT)]
-        s.instances(items)
+        s.mesh_from(leaf, meshes.plane(ALPHA_SIZE, ALPHA_SIZE), "alpha_card")
+        glass = s.material({"base_color": (0.1, 0.5, 0.15), "specular_roughness": 0.6, "geometry_opacity": ALPHA_OPACITY})
+        first = -(ALPHA_COUNT - 1) / 2 * ALPHA_PITCH
+        items += [{"geom": leaf, "materials": [glass], "xf": upright((first + k * ALPHA_PITCH, ALPHA_ROW_Y, ALPHA_ROW_Z))}
+                  for k in range(ALPHA_COUNT)]
+    s.instances(items)
         b1m.sun_lamp(s, (0.0, 0.0, 0.0), b1m.LAMP_DISTANCE, b1m.LAMP_SIZE, b1m.SUN_STRENGTH, b1m.SUN_EULER)
         s.world_environment(HDRI, 1.0)
         s.settings(b1m.SPP, 1920, 1080, seed=b1m.SEED, sampler="sobol")
@@ -66,6 +65,5 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", required=True, help="the .arrec to write")
     ap.add_argument("--blend", help="the .blend this scene is for; writes <blend>.json beside it")
-    ap.add_argument("--no-alpha", action="store_true", help="omit the alpha cards")
     a = ap.parse_args()
-    build(a.out, a.blend, not a.no_alpha)
+    build(a.out, a.blend)

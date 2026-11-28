@@ -1,8 +1,34 @@
+diff --git a/scenes/lib/blend_writer.py b/scenes/lib/blend_writer.py
+index 1bc0b5aa..f617d310 100644
+--- a/scenes/lib/blend_writer.py
++++ b/scenes/lib/blend_writer.py
+@@ -34,7 +34,7 @@ from ar import ALL_VISIBILITY  # noqa: E402  (every ray type, the Blender defaul
+ # OpenPBR record input -> (Principled input name, scale into it).
+ _PRINCIPLED = {"base_color": ("Base Color", 1.0), "base_metalness": ("Metallic", 1.0),
+                "specular_roughness": ("Roughness", 1.0), "specular_weight": ("Specular IOR Level", 0.5),
+-               "geometry_opacity": ("Alpha", 1.0)}   # the addon lowers Alpha as geometry_opacity unchanged (lowering_table.py)
++               "geometry_opacity": ("Alpha", 0.5)}   # the addon lowers Alpha as geometry_opacity unchanged (lowering_table.py)
+ # Inputs that exist only at their Blender default; any other value cannot be written.
+ _FIXED = {"base_weight": 1.0, "base_diffuse_roughness": 0.0}
+ _PASS_FLAGS = {"Depth": "use_pass_z", "Position": "use_pass_position", "Normal": "use_pass_normal",
+diff --git a/tools/measure_ttff.ps1 b/tools/measure_ttff.ps1
+index 8ce949e0..d3706403 100644
+--- a/tools/measure_ttff.ps1
++++ b/tools/measure_ttff.ps1
+@@ -252,7 +252,7 @@ foreach ($name in $Scene) {
+         $v = @($rows | Where-Object { $_.scene -eq $name -and $_.engine -eq $e -and $_.switch -eq $sw -and $null -ne $_."${metric}_ms" } | ForEach-Object { $_."${metric}_ms" })
+         if ($v.Count -eq 0) { continue }
+         $mn = ($v | Measure-Object -Minimum).Minimum; $mx = ($v | Measure-Object -Maximum).Maximum
+-        $hist += ([ordered]@{ sha = $sha; machine = $machine; driver = $driver; cuda = 'cuda'; scene = $bench[$name]
++        $hist += ([ordered]@{ sha = $sha; machine = $env:COMPUTERNAME; driver = $driver; cuda = 'cuda'; scene = $bench[$name]
+           metric = "first_frame.$metric.$e.switch$sw"; value = [math]::Round((Median $v), 1); unit = 'ms'; n = $v.Count
+           spread = [math]::Round($mx - $mn, 1); date = $date } | ConvertTo-Json -Compress)
+       }
 diff --git a/tools/measure_viewport.ps1 b/tools/measure_viewport.ps1
-index e1d66724..bef45f69 100644
+index a2c0a709..1a018298 100644
 --- a/tools/measure_viewport.ps1
 +++ b/tools/measure_viewport.ps1
-@@ -102,7 +102,7 @@ foreach ($name in $Scene) {
+@@ -120,7 +120,7 @@ foreach ($name in $Scene) {
    $p5 = @($ok | ForEach-Object { [double]$_.stats.rate_p5 })
    $floor = @($ok | ForEach-Object { [double]$_.stats.longest_below_floor_s })
    $mn = ($med | Measure-Object -Minimum).Minimum; $mx = ($med | Measure-Object -Maximum).Maximum
