@@ -256,7 +256,7 @@ Light trees and alias tables (0004), sky tables (0004 D12), majorant grids (0006
 | Dev module in `ASTRORAY_KERNEL_DIR` fails to load (dev only) | module loader | previous image of that stage keeps running; persistent viewport warning with the loader error and module name until it loads |
 | OptiX module or pipeline failure | device init | GPU device unavailable for the session; render fails with the OptiX log |
 | Driver too old, unsupported GPU | device enumeration and context creation (`cuDriverGetVersion` vs the build's minimum; compute capability) | context refused with `AR_ERR_DEVICE` (0001 D2.8); message gives found and required driver and the GPU architecture |
-| No module image for this GPU | device init (module-load result) | GPU device unavailable; the scene's sessions fail with `AR_ERR_DEVICE` (0001 D2.8), message names the GPU architecture |
+| No module image for this GPU | device init (module-load result) | GPU device unavailable; the scene's sessions fail with `AR_ERR_DEVICE` (0001 D2.8), message names the GPU architecture; a build whose architecture does not cover the device is refused before the context is retained, "built for sm_X, device is sm_Y: rebuild" (task 267) |
 | Sticky CUDA error (illegal address, launch failure, ECC) | the per-step event wait | GPU device dead for the process; render fails naming stage and step; message says Blender must be restarted to use the GPU (CUDA requires a process restart); CPU device stays usable |
 | Other launch error | the per-step event wait | render fails naming stage and step |
 | Asynchronous device init fails during scene sync | init worker | error posted when it happens; the first device upload re-raises it; host scene data is kept |
