@@ -53,7 +53,7 @@ def build(out, blend=None):
         first = -(ALPHA_COUNT - 1) / 2 * ALPHA_PITCH
         items += [{"geom": leaf, "materials": [glass], "xf": upright((first + k * ALPHA_PITCH, ALPHA_ROW_Y, ALPHA_ROW_Z))}
                   for k in range(ALPHA_COUNT)]
-    s.instances(items)
+        s.instances(items)
         b1m.sun_lamp(s, (0.0, 0.0, 0.0), b1m.LAMP_DISTANCE, b1m.LAMP_SIZE, b1m.SUN_STRENGTH, b1m.SUN_EULER)
         s.world_environment(HDRI, 1.0)
         s.settings(b1m.SPP, 1920, 1080, seed=b1m.SEED, sampler="sobol")
