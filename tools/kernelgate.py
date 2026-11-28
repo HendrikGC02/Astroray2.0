@@ -3,6 +3,7 @@
 
 Run (Blender's python, -I first):
   kernelgate.py [--declared "name:regs=+0,stack=+16;..."] [--base origin/main]   resources
+  kernelgate.py --native                gate the build's own architecture's cubins (0001 V13, other GPUs)
   kernelgate.py --time                  compile timing of the changed device TUs (B-05)
   kernelgate.py --probe                 uncapped register warnings and the capped probe modules'
                                         rows, never a failure
@@ -353,7 +354,10 @@ def resources(args):
     budget = parse_budget(open(os.path.join(ROOT, BUDGET), encoding="utf-8").read())
     arch = native_arch(build)
     ref = read_cubins(build, REF_DIR) if os.path.isdir(os.path.join(build, REF_DIR)) else None
-    cubins, recorded = reference_sets(arch, read_cubins(build, "kernels"), ref)
+    native = read_cubins(build, "kernels")
+    # --native (0001 V13): the native architecture's cubins are the gated set, against the same rows. The rows are
+    # sm_120 numbers, so another architecture's breach is a finding for the record, not proof of a regression.
+    cubins, recorded = (native, []) if args.native else reference_sets(arch, native, ref)
     probe_cubins = {}
     if args.full:
         if os.path.isdir(os.path.join(build, PROBE_CAPPED_DIR)):
@@ -367,7 +371,9 @@ def resources(args):
     fails, warns, lines, _, deferred = gate_cubins(launch, budget, base_budget(args.base), cubins, probe_cubins, is_stage,
                                                    parse_declared(args.declared), args.full,
                                                    check_ptx(os.path.join(build, "optix"), launch, budget))
-    if arch != REFERENCE_ARCH:
+    if args.native:
+        print(f"kernelgate: --native: gating the build's own sm_{arch} cubins (kernels/) against budget.toml")
+    elif arch != REFERENCE_ARCH:
         print(f"kernelgate: the build is for sm_{arch}; gating the sm_{REFERENCE_ARCH} reference set ({REF_DIR}/), recording the native one")
     for ln in lines + recorded:
         print(ln)
@@ -590,6 +596,7 @@ def main():
     ap.add_argument("--build-dir", default="out/build")
     ap.add_argument("--base", default="origin/main", help="ref the diff is measured against")
     ap.add_argument("--declared", default="", help='the task\'s declared delta: "name:regs=+0,stack=+16;..."')
+    ap.add_argument("--native", action="store_true", help="gate the native cubins, not the sm_120 reference set (V13)")
     ap.add_argument("--full", action="store_true", help="also check the rows gated full (check full)")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--time", action="store_true")
