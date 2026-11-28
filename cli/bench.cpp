@@ -124,6 +124,21 @@ struct Line {
 
 }  // namespace
 
+int machine_id_cmd(int argc, char** argv) {
+  if (argc > 2) {
+    fprintf(stderr, "machine-id: takes no arguments, got '%s'
+", argv[2]);
+    return kExitUsage;
+  }
+  std::string id, why;
+  if (!hardware_id(id, why)) { printf("machine-id: no hardware id: %s
+", why.c_str()); return kExitFailure; }
+  // The one line the tools parse (tools/machine_id.py); the build line main() prints comes before it.
+  printf("machine-id: %s
+", id.c_str());
+  return 0;
+}
+
 int bench_cmd(int argc, char** argv) {
   RunArgs a;
   if (int rc = parse_run_args("bench", argc, argv, false, true, a); rc != kContinue) return rc;
