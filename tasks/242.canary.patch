@@ -1,8 +1,8 @@
 diff --git a/src/host/session/session.cpp b/src/host/session/session.cpp
-index 22d04adf..02f4ee72 100644
+index aa7b7a3b..3bd2fd41 100644
 --- a/src/host/session/session.cpp
 +++ b/src/host/session/session.cpp
-@@ -891,7 +891,7 @@ bool Session::resolve(uint64_t pass_epoch, uint64_t generation) {
+@@ -892,7 +892,7 @@ bool Session::resolve(uint64_t pass_epoch, uint64_t generation) {
    device_.download(pass_counts, globals_buf_, kInvalidTotalAt, sizeof pass_counts);
    const uint32_t pass_invalid = pass_counts[0], pass_medium_limit = pass_counts[1];
    invalid_.report_pass(pass_invalid, uint64_t(active_->count()) * (kSamplesPerPass + 1), report_, generation);
@@ -11,7 +11,7 @@ index 22d04adf..02f4ee72 100644
      // One entry per render: the key is fixed and each pass adds its count (0001 D2.11), so the entry's
      // count is the paths and shadow items that ended at a medium limit. The kernels count both ends in
      // one counter, so the detail names both.
-@@ -1041,7 +1041,6 @@ void Session::render_loop() {
+@@ -1042,7 +1042,6 @@ void Session::render_loop() {
        // they read has changed since.
        const auto pass_start = std::chrono::steady_clock::now();
        // A cancelled or interrupted pass leaves its count behind, so the clear is here and not after the read.
