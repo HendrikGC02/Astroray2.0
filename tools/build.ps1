@@ -33,6 +33,7 @@ $log = Join-Path $logDir 'build.log'
 . (Join-Path $PSScriptRoot 'lib/lock.ps1')
 . (Join-Path $PSScriptRoot 'lib/summary.ps1')
 . (Join-Path $PSScriptRoot 'lib/msvc.ps1')
+. (Join-Path $PSScriptRoot 'lib/python.ps1')
 
 # Locks first; the tier clock starts after them so waits are excluded.
 $waited = 0.0
@@ -175,6 +176,14 @@ try {
   $nw = Test-ArNoWorkLeft $buildDir $Target
   Add-Content -Path $log -Value ($nw.Output -join "`n")
   if (-not $nw.Ok) { Fail ("ninja -n reports work left: " + $nw.First) }
+  # Writer of the machine id cache (owner decision 47; tools/machine_id.py): a dev build under the machine lock has the
+  # CLI and the CUDA device `astroray_cli machine-id` needs. The CPU-only callers (-NoMachineLock) only read the cache.
+  if ($Preset -eq 'dev' -and -not $NoMachineLock -and (Test-Path (Join-Path $root 'out/bin/astroray_cli.exe'))) {
+    $sha = (& git rev-parse --short HEAD 2>$null)
+    $mline = @(& (Get-ArPython) -I (Join-Path $PSScriptRoot 'machine_id.py') refresh --sha "$sha" 2>&1 | ForEach-Object { "$_" })
+    $mline | ForEach-Object { Write-Host $_ }
+    Add-Content -Path $log -Value $mline
+  }
 } catch {
   Fail ($_.Exception.Message)
 }

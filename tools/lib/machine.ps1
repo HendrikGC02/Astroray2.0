@@ -61,3 +61,16 @@ function Set-ArMachineStanding([switch]$NoMachine) {
   else { $env:ASTRORAY_OFF_REFERENCE = $id }
   return $id
 }
+
+# B-08 of the fast tier's end of run. The measuring runs of `check.ps1 profile` (-Profiling, which the profile tier marks
+# with ASTRORAY_PROFILE_RUN in the child's environment) are the only runs that do not judge it, and say so; asking for
+# it anywhere else throws. Verdict PASS, FAIL or OFF as Resolve-ArTimingRow, or WAIVED.
+function Resolve-ArFastB08 {
+  param([Parameter(Mandatory)][double]$Seconds, [Parameter(Mandatory)][double]$Budget, [switch]$Profiling,
+    [switch]$StartedByProfile, [switch]$NoMachine)
+  if ($Profiling) {
+    if (-not $StartedByProfile) { throw 'B-08 is waived only in a run the profile tier started' }
+    return [pscustomobject]@{ Verdict = 'WAIVED'; Limit = $Budget; Line = 'B-08 not judged (profile measuring run)' }
+  }
+  return (Resolve-ArTimingRow -Row 'B-08' -Measured $Seconds -Limit $Budget -NoMachine:$NoMachine)
+}

@@ -42,6 +42,15 @@ if ($Landing -and $Tier -ne 'gate') {
   Write-Host "FAIL check: -Landing belongs to the gate tier, not '$Tier'"
   exit 2
 }
+if ($Reference -and $Tier -ne 'profile') {
+  Write-Host "FAIL check: -Reference belongs to the profile tier, not '$Tier'"
+  exit 2
+}
+# -Profiling waives B-08 for the measuring runs of the profile tier only, which marks the child's environment.
+if ($Profiling -and -not ($Tier -eq 'fast' -and $env:ASTRORAY_PROFILE_RUN -eq '1')) {
+  Write-Host "FAIL check: -Profiling is the profile tier's own switch; check fast does not waive B-08 on request"
+  exit 2
+}
 
 # Locks first; the tier clock starts after them so waits are excluded (0009 d8).
 $waited = 0.0
@@ -77,7 +86,11 @@ function Step([string]$name, [scriptblock]$body) {
   $code = $LASTEXITCODE
   Add-ArStep $name $t.Elapsed.TotalSeconds ($code -eq 0)
   Add-Content -Path $log -Value $out
-  return [pscustomobject]@{ Code = $code; Out = @($out) }
+  $res = [pscustomobject]@{ Code = $code; Out = @($out) }
+  # Every step of the full tier (the nested gate, Blender suites, kernelgate full, the GPU and CPU full tests, B-23): the
+  # off-reference lines a step printed are shown, never only logged. The gate tier shows them in Complete-GateStep.
+  if ($Tier -eq 'full') { Show-OffReference $res }
+  return $res
 }
 # A Blender start inside the tier: its machine-lock wait (0 s when nested under the tier's own hold) is not
 # work (0009 d8), so it joins `waited` and leaves the tier clock. Prints the Blender log for the step.
@@ -129,13 +142,15 @@ try {
     $load = @(Get-ArForeignLoad $script:ArLoadNames)
     if ($load.Count) { Fail "profile: foreign load ($($load -join ', ')); a profile needs a quiet machine" }
     $secs = @()
+    $env:ASTRORAY_PROFILE_RUN = '1'   # the marker `check fast -Profiling` requires
     for ($i = 0; $i -lt 6; $i++) {
       $r = Step "fast run $($i + 1)" { & pwsh -NoProfile -File tools/check.ps1 fast -Profiling }
       $fj = Join-Path $root 'out/check/fast.json'
       $fr = if (Test-Path $fj) { Get-Content $fj -Raw | ConvertFrom-Json } else { $null }
-      if ($r.Code -ne 0 -or -not $fr -or -not $fr.pass) { Show-Tail $r 5; Fail "profile: fast run $($i + 1) failed (out/check/profile.log)" }
+      if ($r.Code -ne 0 -or -not $fr -or -not $fr.pass) { Remove-Item Env:ASTRORAY_PROFILE_RUN -ErrorAction SilentlyContinue; Show-Tail $r 5; Fail "profile: fast run $($i + 1) failed (out/check/profile.log)" }
       $secs += [double]$fr.seconds
     }
+    Remove-Item Env:ASTRORAY_PROFILE_RUN -ErrorAction SilentlyContinue
     Write-Host "profile $id B-08: six runs $($secs -join ', ') s; the first is dropped"
     $secs = @($secs | Select-Object -Skip 1)   # the first run warms the caches
     $med = @($secs | Sort-Object)[[int][math]::Floor($secs.Count / 2)]
@@ -467,16 +482,19 @@ $global:LASTEXITCODE = $code
     $fb = @((Get-Content $fj -Raw | ConvertFrom-Json).steps | Where-Object { $_.name -eq 'build' })
     if ($fb.Count -ne 1) { Fail "out/check/fast.json holds $($fb.Count) 'build' steps, expected 1" }
     Add-GateBuild ([double]$fb[0].seconds)
-    # The fast step built the CLI (the machine id's one source): the standing the gate's tests with a timing CHECK take.
-    $sw = [Diagnostics.Stopwatch]::StartNew()
-    try { $null = Set-ArMachineStanding } catch { Fail "machine id: $($_.Exception.Message)" }
-    Add-ArExcluded $sw.Elapsed.TotalSeconds
     $i = 0
     while ($i -lt $gateSteps.Count) {
       $g = $gateSteps[$i].Group
       $n = 1
       if ($g) { while ($i + $n -lt $gateSteps.Count -and $gateSteps[$i + $n].Group -eq $g) { $n++ } }
       Invoke-GateGroup @($gateSteps[$i..($i + $n - 1)])
+      if ($gateSteps[$i].Name -eq 'build dev') {
+        # The gate is a writer of the machine id cache (the CLI is built, the machine lock held): refresh it every run
+        # (one line when it changed or the CLI refused), then the standing the gate's tests with a timing CHECK take.
+        $ml = @(& $py -I tools/machine_id.py refresh --sha "$(& git rev-parse --short HEAD 2>$null)" 2>&1 | ForEach-Object { "$_" })
+        $ml | ForEach-Object { Write-Host $_ }
+        try { $null = Set-ArMachineStanding } catch { Fail "machine id: $($_.Exception.Message)" }
+      }
       $i += $n
     }
   } elseif ($Tier -eq 'full') {
@@ -582,11 +600,7 @@ $global:LASTEXITCODE = $code
       $r = Step 'fetch deps' { & pwsh -NoProfile -File tools/fetch.ps1 deps }
       if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'fetch deps failed' }
     }
-    $r = Step 'build' {
-      & pwsh -NoProfile -File tools/build.ps1 -Target astroray_tests_cpu -Preset $(if ($isCi) { 'cpu' } else { 'dev' }) -NoMachineLock -Jobs 4
-      # The CLI computes the machine id (lib/machine.ps1); hosted ci has no machine id and does not build it.
-      if ($LASTEXITCODE -eq 0 -and -not $isCi) { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_cli -Preset dev -NoMachineLock -Jobs 4 }
-    }
+    $r = Step 'build' { & pwsh -NoProfile -File tools/build.ps1 -Target astroray_tests_cpu -Preset $(if ($isCi) { 'cpu' } else { 'dev' }) -NoMachineLock -Jobs 4 }
     $bj = Join-Path $root 'out/check/build.json'
     if (Test-Path $bj) { $waited += [double](Get-Content $bj -Raw | ConvertFrom-Json).waited }
     # B-08 times lint and tests. The build step (its lock wait included) leaves the tier clock: a rebuild
@@ -599,10 +613,9 @@ $global:LASTEXITCODE = $code
 
     $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $waited += $w; Add-ArExcluded $w
     if (-not (Test-Path $exe)) { Fail "missing $exe" }
-    # The standing the tests with a timing CHECK of their own take (ASTRORAY_OFF_REFERENCE); the CLI run is not test time.
-    $sw = [Diagnostics.Stopwatch]::StartNew()
-    try { $null = Set-ArMachineStanding -NoMachine:$isCi } catch { Fail "machine id: $($_.Exception.Message)" }   # ci: clears a stray value
-    Add-ArExcluded $sw.Elapsed.TotalSeconds
+    # The standing the tests with a timing CHECK of their own take (ASTRORAY_OFF_REFERENCE), from the machine id cache
+    # a full dev build wrote; ci has no machine id and clears a stray value. A file read: nothing here is excluded from B-08.
+    try { $null = Set-ArMachineStanding -NoMachine:$isCi } catch { Fail "machine id: $($_.Exception.Message)" }
     # Fast cases that share an exact name (plain TEST_CASEs in the ar-f64 files; AR_RT cases carry the ' f64' suffix
     # here as in the gate) sit hundreds of cases apart in file order, which leaves no allowed cut; by name they are adjacent.
     $prevFast = Join-Path $root 'out/check/fast-tests.out'
@@ -701,12 +714,16 @@ if ($Tier -eq 'gate') {
     # Off-reference (or a profile that allows it): the budget stays as printed, the line says why it passes.
     $waive = $true; $why += "; $($v.Line)"
   }
-} elseif ($Tier -eq 'fast' -and -not $Profiling -and (Get-ArSeconds) -gt $budget) {
-  $v = Resolve-TierRow 'B-08' (Get-ArSeconds) $budget
-  if ($v.Verdict -eq 'FAIL') { $why = "B-08: tier $(Get-OverText $v $budget)" }
-  else { $waive = $true; $why = $v.Line }
-} elseif ($Tier -eq 'fast' -and $Profiling) {
-  $waive = $true   # the measuring runs of `profile`: nothing else is waived (every other row judges as usual)
+} elseif ($Tier -eq 'fast') {
+  $v = Resolve-ArFastB08 -Seconds (Get-ArSeconds) -Budget $budget -Profiling:$Profiling -StartedByProfile:($env:ASTRORAY_PROFILE_RUN -eq '1') -NoMachine:$isCi
+  if ($v.Verdict -eq 'FAIL') {
+    $why = "B-08: tier $(Get-OverText $v $budget)"
+    if ($v.Line) { Write-ArOffReference $v.Line }
+  } elseif ($v.Line) {
+    # Off-reference, a profile that allows it, or a profile measuring run: the budget stays as printed, the line says why.
+    if ($v.Verdict -ne 'WAIVED') { Write-ArOffReference $v.Line }
+    $waive = $true; $why = $v.Line
+  }
 }
 $ok = Complete-ArSummary -Pass $true -Waited $waited -Budget $budget -Reason $why -OverWaived:$waive
 if ($isCi) {

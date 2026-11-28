@@ -138,14 +138,36 @@ def _():
     assert '# median of five, sha abc\n"B-08" = 6.25\n' in t and '"B-08" = 5.0' not in t, t
     assert '"B-09" = 120\n' in t and '[machine."profiled-4c8t"]' in t, t
     assert machine_id.load_machines(toml)["reference_median"] == {"B-08": 6.25, "B-09": 120}
-@case("a missing CLI names tools/build.ps1")
+@case("a missing cache names tools/build.ps1; readers never ask the CLI")
 def _():
     try:
-        machine_id.machine_id(os.path.join(tmp, "absent.exe"))
+        machine_id.machine_id(os.path.join(tmp, "nocache.json"))
     except machine_id.MachineError as e:
         assert "build.ps1" in str(e), str(e)
     else:
         raise AssertionError("no error")
+@case("refresh writes the cache, keeps it when the CLI refuses, and reports a change")
+def _():
+    def cli(name, text, code=0):
+        path = os.path.join(tmp, name)
+        open(path, "w", newline="\r\n").write("@echo " + text + "\n@exit /b " + str(code) + "\n")
+        return path
+    ok = cli("cli_ok.bat", "machine-id: fakebox-4c8t")
+    bad = cli("cli_bad.bat", "machine-id: no hardware id: no CUDA device is listed", 1)
+    other = cli("cli_other.bat", "machine-id: other-1c1t")
+    cache = os.path.join(tmp, "lock", "machine-id.json")
+    assert machine_id.refresh(ok, cache, "abc").startswith("machine-id cache written fakebox-4c8t")
+    assert machine_id.machine_id(cache) == "fakebox-4c8t"
+    assert machine_id.refresh(ok, cache, "abc") == ""
+    line = machine_id.refresh(bad, cache, "abc")
+    assert line.startswith("machine-id cache kept (fakebox-4c8t), not refreshed"), line
+    assert machine_id.machine_id(cache) == "fakebox-4c8t"
+    line = machine_id.refresh(other, cache, "abc")
+    assert line.startswith("machine-id cache changed from fakebox-4c8t to other-1c1t"), line
+    assert machine_id.machine_id(cache) == "other-1c1t"
+    nocache = os.path.join(tmp, "lock2", "machine-id.json")
+    assert machine_id.refresh(bad, nocache, "abc").startswith("machine-id cache kept (none)")
+    assert not os.path.exists(nocache)
 '@
   $out = @(& $py -I -c $code $root 2>&1 | ForEach-Object { "$_" })
   Check 'the Python cases' ($LASTEXITCODE -eq 0 -and -not ($out | Where-Object { $_ })) $out
@@ -199,6 +221,18 @@ def _():
   Check 'the profile measuring runs leave B-08 unjudged' (-not $t.Over)
   $t = Invoke-FastWith $ref 0 0.0000001 $slow -Waive
   Check 'the profile measuring runs still judge B-12' ($t.Over)
+
+  # B-08 at the end of the fast tier (check.ps1): judged by the machine rule, waived only in a run the profile tier started.
+  $script:ArMachineIdForTest = $ref
+  $v = Resolve-ArFastB08 -Seconds 12 -Budget 10
+  Check 'B-08 over its limit fails on the reference machine' ($v.Verdict -eq 'FAIL') $v
+  $v = Resolve-ArFastB08 -Seconds 9 -Budget 10
+  Check 'B-08 within its limit passes' ($v.Verdict -eq 'PASS') $v
+  $v = Resolve-ArFastB08 -Seconds 12 -Budget 10 -Profiling -StartedByProfile
+  Check 'a profile measuring run does not judge B-08 and says so' ($v.Verdict -eq 'WAIVED' -and $v.Line -eq 'B-08 not judged (profile measuring run)') $v
+  $threw = $false
+  try { $null = Resolve-ArFastB08 -Seconds 12 -Budget 10 -Profiling } catch { $threw = $true }
+  Check '-Profiling without the profile tier is refused, not waived' $threw
 } finally {
   $script:ArMachineIdForTest = ''
   if ($null -ne $saveEnv) { $env:ASTRORAY_OFF_REFERENCE = $saveEnv } else { Remove-Item Env:ASTRORAY_OFF_REFERENCE -ErrorAction SilentlyContinue }

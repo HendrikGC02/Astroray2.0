@@ -57,12 +57,7 @@ try {
   $bj = Join-Path $root 'out/check/build.json'
   if (Test-Path $bj) { $waited += [double](Get-Content $bj -Raw | ConvertFrom-Json).waited }
   # The standing a tier would give the case (ASTRORAY_OFF_REFERENCE, lib/machine.ps1): a hand-run timing case behaves as
-  # in the tier. The CLI computes the id; the exe targets do not build it.
-  if ($Exe) {
-    $cb = @(& pwsh -NoProfile -File (Join-Path $PSScriptRoot 'build.ps1') -Target astroray_cli $(if (-not $machine) { '-NoMachineLock' }) 2>&1 | ForEach-Object { "$_" })
-    Add-Content -Path $log -Value $cb
-    if ($LASTEXITCODE -ne 0) { $cb | Select-Object -Last 5 | ForEach-Object { Write-Host $_ }; Write-Host "FAIL test $target $Case 0.0 s (astroray_cli build failed: it computes the machine id)"; exit 1 }
-  }
+  # in the tier. It reads the machine id cache a full dev build wrote; this tool builds nothing for it.
   try { $null = Set-ArMachineStanding } catch { Write-Host "FAIL test $target $Case 0.0 s (machine id: $($_.Exception.Message))"; exit 1 }
   if (-not $machine) { Exit-ArMachineLock }
   $waited += Enter-ArTreeLock (Join-Path $root 'out/build')

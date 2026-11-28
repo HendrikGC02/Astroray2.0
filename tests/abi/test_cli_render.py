@@ -332,6 +332,10 @@ class TestCliRender(unittest.TestCase):
         refuses (the bench lines' CPU fallback would read the reference machine as another one)."""
         info = self.run_cli(["info"])
         has_cuda = re.search(r"(?m)^\d+ cuda ", info.stdout) is not None
+        # CUDA_VISIBLE_DEVICES=-1 hides every CUDA device from the driver for the child: the CPU entry alone is listed.
+        hidden = self.run_cli(["machine-id"], CUDA_VISIBLE_DEVICES="-1")
+        self.assertNotEqual(hidden.returncode, 0, hidden.stdout)
+        self.assertNotIn("machine-id: ", hidden.stdout.replace("machine-id: no hardware id", ""))
         m = self.run_cli(["machine-id"])
         found = re.findall(r"(?m)^machine-id: (\S+)$", m.stdout)
         if not has_cuda:

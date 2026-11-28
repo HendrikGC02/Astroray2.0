@@ -2,9 +2,13 @@
 """The machine id and the machine rule for timing rows (owner decision 47, 0009 d13, d18).
 
 One source for the id: `astroray_cli machine-id`, which prints what cli/bench.cpp computes for the history lines.
-Nothing here recomputes it; a CLI that is not built is an error naming tools/build.ps1, never a guess.
+Nothing here recomputes it. The CLI needs the engine DLL (nvcc-built kernels) and a CUDA device, so it runs only in
+the writers, which hold a full dev build under the machine lock: tools/build.ps1 and `check gate` call `refresh`,
+which caches the answer in machine-id.json of the lock directory. Every reader (check fast, tools/test.ps1, the
+history writers) reads that cache; a missing one is an error naming tools/build.ps1, never a guess.
 
-    machine_id.py id                       print the id
+    machine_id.py id                       print the cached id
+    machine_id.py refresh [--sha S]        ask the CLI, rewrite the cache when it differs, print one line if it did
     machine_id.py reference                print the reference id of bench/machines.toml
     machine_id.py judge --row R --measured M --limit L [--unit s] [--id X] [--machines FILE]
                                            print one JSON line {verdict, limit, line}; verdict is pass, fail or off
@@ -13,10 +17,11 @@ Nothing here recomputes it; a CLI that is not built is an error naming tools/bui
     machine_id.py record-reference --row R --value V --note TEXT [--machines FILE]
                                            the same for [reference_median] (check.ps1 profile -Reference)
 
-Importable: machine_id(), judge(), timing_ok() (the timing CHECKs inside tests), record().
+Importable: machine_id(), refresh(), judge(), timing_ok() (the timing CHECKs inside tests), record().
 Ref: docs/decisions/0000-owner-decisions.md decision 47 (a-f); bench/machines.toml.
 """
 import argparse
+import datetime
 import json
 import os
 import re
@@ -31,25 +36,66 @@ CLI = os.environ.get("ASTRORAY_CLI") or os.path.join(ROOT, "out", "bin", "astror
 # Set by the tools (never by hand, except to prove an off-reference path) to the id of a machine that is not the
 # reference one: a timing check inside a test then prints its measurement against the limit instead of failing.
 OFF_REFERENCE_ENV = "ASTRORAY_OFF_REFERENCE"
-_ids = {}
 
 
 class MachineError(RuntimeError):
     pass
 
 
-def machine_id(cli=CLI):
-    """The id astroray_cli computes, once per process and CLI path."""
-    if cli in _ids:
-        return _ids[cli]
+def cache_path():
+    """machine-id.json in the lock directory (tools/lib/lock.ps1 Get-ArLockDir): one file per machine."""
+    d = os.environ.get("ASTRORAY_LOCK_DIR") or os.path.join(os.environ.get("ProgramData", ""), "astroray2")
+    return os.path.join(d, "machine-id.json")
+
+
+def ask_cli(cli=CLI):
+    """The id `astroray_cli machine-id` prints. Only the writers call this (refresh): they hold a full dev build
+    under the machine lock; a reader never runs the CLI, which needs the engine DLL and a CUDA device."""
     if not os.path.exists(cli):
-        raise MachineError(f"{cli} is missing: the machine id comes from `astroray_cli machine-id`; run tools/build.ps1")
+        raise MachineError(f"{cli} is missing: run tools/build.ps1")
     p = subprocess.run([cli, "machine-id"], capture_output=True, text=True, timeout=120)
     m = re.search(r"^machine-id: (\S+)$", p.stdout, re.M)
     if p.returncode != 0 or not m:
         raise MachineError(f"`{cli} machine-id` exited {p.returncode} without an id: {(p.stdout + p.stderr).strip()[-300:]}")
-    _ids[cli] = m.group(1)
-    return _ids[cli]
+    return m.group(1)
+
+
+def read_cache(path=None):
+    path = path or cache_path()
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        d = json.load(f)
+    if not isinstance(d.get("id"), str) or not d["id"]:
+        raise MachineError(f"{path} holds no id: delete it and run tools/build.ps1")
+    return d
+
+
+def machine_id(cache=None):
+    """The id of this machine, read from the cache a full dev build wrote (build.ps1, check gate). A missing cache is
+    an error naming tools/build.ps1: one full build writes it; nothing here builds or guesses."""
+    d = read_cache(cache)
+    if d is None:
+        raise MachineError(f"no machine id cached at {cache or cache_path()}: run tools/build.ps1 (a full dev build writes it)")
+    return d["id"]
+
+
+def refresh(cli=CLI, cache=None, sha=""):
+    """Writer: asks the CLI and (re)writes the cache when it differs. Returns the one line to print ('' when the cache
+    is current). A CLI that refuses (no CUDA device after a driver reset, a stale binary) leaves the cache as it is,
+    so the reference machine keeps its identity, and says so."""
+    path = cache or cache_path()
+    old = read_cache(path)
+    try:
+        new = ask_cli(cli)
+    except MachineError as e:
+        return f"machine-id cache kept ({old['id'] if old else 'none'}), not refreshed: {e}"
+    if old and old["id"] == new:
+        return ""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump({"id": new, "date": datetime.date.today().isoformat(), "sha": sha}, f)
+    return f"machine-id cache {'written' if not old else 'changed from ' + old['id'] + ' to'} {new} ({path})"
 
 
 def load_machines(path=MACHINES):
@@ -152,6 +198,8 @@ def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("id")
+    rf = sub.add_parser("refresh")
+    rf.add_argument("--sha", default="")
     r = sub.add_parser("reference")
     r.add_argument("--machines", default=MACHINES)
     j = sub.add_parser("judge")
@@ -175,6 +223,10 @@ def main(argv):
     try:
         if a.cmd == "id":
             print(machine_id())
+        elif a.cmd == "refresh":
+            line = refresh(sha=a.sha)
+            if line:
+                print(line)
         elif a.cmd == "reference":
             print(reference(a.machines))
         elif a.cmd == "judge":

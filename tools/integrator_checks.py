@@ -635,11 +635,14 @@ def check_tripwire(device, measured):
 def bless(device, measured):
     """Rewrites this device's tables of tests/budgets/counters.toml, keeping the other device's."""
     data = load_baselines()
+    # The work counters are a correctness check and are written on every machine; the tripwire rows are timing, so
+    # [tripwire.D] is the reference machine's and another machine writes its own [tripwire_machine."<id>".D].
+    if device not in measured:
+        raise RuntimeError(f"--bless: no counters were measured for {device} (run the gate, not --check): nothing written")
+    if device == "cuda" and "tripwire" not in measured:
+        raise RuntimeError("--bless: no tripwire was measured for cuda (run the gate, not --check): nothing written")
     on_reference = machine_id.machine_id() == machine_id.reference()
-    # The work counters and [tripwire.D] are the reference machine's (reference rows keep their values); another
-    # machine's --bless writes only its own [tripwire_machine."<id>"] rows.
-    if on_reference:
-        data[device] = measured.get(device, data.get(device, {}))
+    data[device] = measured[device]
     if "tripwire" in measured:
         if on_reference:
             data.setdefault("tripwire", {})[device] = measured["tripwire"][device]
@@ -737,7 +740,11 @@ def main():
         ok &= passed or a.bless and name in ("counters", "tripwire")
         print(f"{'PASS' if passed else 'FAIL'} integrator {name} {a.device}: {msg} ({time.perf_counter() - t1:.1f} s)")
     if a.bless:
-        bless(a.device, measured)
+        try:
+            bless(a.device, measured)
+        except (RuntimeError, OSError) as e:
+            print(f"FAIL integrator bless: {e}")
+            return 1
         print(f"blessed {os.path.relpath(COUNTERS, ROOT)} for {a.device}")
     print(f"{'PASS' if ok else 'FAIL'} integrator {a.device}: {len(names)} checks in {time.perf_counter() - t0:.1f} s")
     return 0 if ok else 1
