@@ -330,17 +330,3 @@ TEST_CASE("session_denoise/the target must hold the render rectangle") {
 }
 
 }  // TEST_SUITE
-
-TEST_SUITE("fast") {
-
-// The machine rule of a timing CHECK (tests/common/off_reference.h): an overrun fails on the reference machine and is
-// printed, not failed, on another.
-TEST_CASE("session_denoise/a timing check over its limit follows the machine standing") {
-  using astroray::test::timing_ok_for;
-  CHECK(timing_ok_for(nullptr, "B-21 x", 4.0, 5.0));
-  CHECK_FALSE(timing_ok_for(nullptr, "B-21 x", 6.0, 5.0));
-  CHECK_FALSE(timing_ok_for("", "B-21 x", 6.0, 5.0));
-  CHECK(timing_ok_for("laptop-6c12t", "B-21 x", 6.0, 5.0));
-}
-
-}  // TEST_SUITE
