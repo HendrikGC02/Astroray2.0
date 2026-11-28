@@ -5,8 +5,8 @@ Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `t
 ## Current milestone
 M2 "Lobes, shadows and media" (docs/PLAN-M2.md: six slices, the `shade_surface` spine, the kernel-split decision of
 task 248). Slice 0 is open: order and batches in tasks/README.md, runbook and handover in docs/LEAD.md, items
-without a task in docs/BACKLOG.md. Landed in M2 so far: 238, 239, 242, 267. Written and not dispatched: 240, 241,
-243-266 (scope-checked and critiqued by the eighth lead) and 267-272 (ninth lead: the second machine and the
+without a task in docs/BACKLOG.md. Landed in M2 so far: 238, 239, 242, 267, 268; 271 by lead commit. Written and not dispatched: 240, 241,
+243-266 (scope-checked and critiqued by the eighth lead) and 269, 270, 272 (ninth lead: the second machine and the
 M1b retrospective's open recommendations; pre-flighted, 269, 270, 272 revised after the Opus critique; rulings 117, 118).
 M1b "First light" closed 2026-11-28 (owner decision 47): the owner looked at the gallery and report (25 images;
 grating orders, OIDN before and after, metal edge colour) and approved all of it. Accepted as measured: B-19 idle
@@ -17,9 +17,10 @@ ledger: docs/history/M1b-task-ledger.md. M1a "First pixels" closed by owner deci
 ## Machines (owner decision 47)
 The reference machine is the desktop, `rtx5070ti-8c16t`: every absolute budget row, kernel resource row and bench
 baseline was measured there. Development continues on a laptop with an RTX 3000-class GPU from a fresh clone
-(docs/SETUP.md). 267 landed: `build.ps1` builds the kernels for the installed GPU and gates the sm_120 rows compile-only. Until 268
-lands a red timing budget on the laptop is expected and reported, never fixed by editing a limit. Ruling 117: the
-desktop read 6 % slow on 2026-11-29 (cause not found); its B-38 baseline was re-recorded, re-measure after a restart.
+(docs/SETUP.md). 267 and 268 landed here: `build.ps1` builds the kernels for the installed GPU, gates the sm_120 rows compile-only
+and caches the machine id; on the laptop a timing row over its reference limit prints `off-reference` and does not
+fail until `check.ps1 profile` has recorded that machine. None of this has run on a second machine yet. Ruling 117:
+the desktop read 6 % slow on 2026-11-29 (cause not found); its B-38 baseline was re-recorded, re-measure after a restart.
 
 ## Owner decisions still open
 None blocks work. Decision 47 answered PLAN-M2 questions 1, 3, 6 and 8, the coincident-hit tie rule, B-10, B-11
@@ -27,8 +28,7 @@ and the PROVISIONAL rulings 94, 100, 109, 110, 112, 114 under the owner's delega
 - The laptop, as the owner states it: RTX 3000 with 8 GB (with a Core Ultra 7 165H that is the RTX 3000 Ada, sm_89: confirm
   with `nvidia-smi` on first start), 64 GB RAM, 16 cores / 22 threads. The desktop cannot be reached while the owner travels: absolute rows close as
   "reference rows pending" and are re-measured there first when it is back (decision 47 e).
-- After task 266 re-measures every prefilter mode with the assets present, the owner may revisit decision 46's
-  option (b) for the final denoise.
+- After task 266 re-measures the prefilter modes with the assets present, the owner may revisit decision 46 (b).
 
 ## Red items (reference machine)
 - B-20 not met (12.36 / 12.94 ms; 1.25x Cycles is the release target, not a gate for M2: decision 47); cumulative

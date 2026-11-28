@@ -83,17 +83,21 @@ repository text; treat its answer as a draft.
 
 ## Handover (ninth lead, planning session, 2026-11-28)
 State for the tenth lead, who starts on the laptop from a fresh clone (earlier handovers hold where not superseded).
-- No landing this session. Done on main: owner decision 47 (M1b closed on the owner's look; PLAN-M2 questions 1, 3, 6, 8, the tie
-  rule, B-10, B-11 and the provisional rulings settled under the owner's delegation; the machine rule); STATUS rewritten for M2;
-  tasks/README.md rewritten for M2 with the dispatch order (M1b's ledger moved to docs/history/M1b-task-ledger.md); docs/SETUP.md;
-  tasks 267-272 written by a planning agent with a scope pre-flight, not yet critiqued by Opus: run that critique before
-  dispatching 269-272 (267 and 268 are read by the lead and dispatched first; their review is Opus).
-- First on the laptop: SETUP sections 1-2 to a green `check fast`; note which timing budgets read red there (expected, decision
-  47 c); then 268 and 267 (order in tasks/README.md). Record a `perf.ps1 -Record` baseline on the quiet laptop once 267 lands.
-  The laptop's GPU model, VRAM and core count are unknown to this session: read them from `astroray_cli info` and put them in STATUS.
-- Not checked on this machine after these doc edits: `check gate` (docs only; lint and `check fast` were run, see the commit).
-- Branches pushed for the move: task/235-d2-cpu-cuda-colour-mismatch, keep/120-graphs-B, backup/148-before-179. Everything
-  else local to the desktop (about 150 worktree-agent branches, scratch branches, 9 registered worktrees) is scratch and stays.
+- Landed this session on the reference machine: 267 (1b6c9ce3; CUDA architecture at configure time, sm_120 reference set, device
+  pre-check) and 268 (8956dde3; machine profiles, machine-id cache, off-reference lines); 271 as lead commit 3d937f33. Also on
+  main: owner decision 47, rulings 117 (B-38 baseline re-recorded: the machine read 6 % slow, the baseline commit too) and 118
+  (B-10's clock), STATUS and tasks/README.md for M2, docs/SETUP.md, tasks 269, 270, 272 revised after an Opus critique.
+- First on the laptop (RTX 3000 Ada by the owner's description, sm_89, 8 GB, 16 cores / 22 threads): SETUP sections 1-2;
+  `tools/build.ps1` (prints the architecture it chose and writes the machine-id cache), `check fast`, `check gate`. Expect
+  `off-reference` lines, not failures, on timing rows; a real failure there is a finding about 267 or 268, which have never run
+  on a second machine: fix it by a task, never by a limit. Then on the quiet laptop `check.ps1 profile` and `perf.ps1 -Record`,
+  commit both. The desktop cannot be reached while the owner travels (decision 47 e: reference rows pending).
+- Then tasks/README.md's order. Write tasks for 271's seven silent-wrong-result rows before slice A's spine starts.
+- Lessons this session: (29) three submits of 267 failed on the machine, not the change: a browser beside `check perf`, a cold
+  lint, fast_lock_ceiling; the fourth cause was real and new: the whole machine 6 % slow. Rebuild the baseline commit and
+  measure it before believing a perf failure of byte-identical kernels. (30) land's canary rule reads documentation text
+  (BACKLOG). (31) A process diff needed three Opus rounds again (268, as 231 and 197): the second round's defect was made by
+  the first round's fix. Send the fix diff of a gate-changing task back to the reviewer, always.
 - Lessons from M1a and M1b taken together: (22) Task count came out at 4.4 times the roadmap estimate twice, with 22 % added
   mid-milestone and 35 % of landings spent on tooling and debts: size M2's slices on that, not on the estimate. (23) Agent work
   was 13 % of a task's time; waiting on locks, answers and hosted ci was most of the rest. What paid: ci beside the gate
