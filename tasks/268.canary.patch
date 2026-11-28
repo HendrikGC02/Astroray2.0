@@ -1,10 +1,13 @@
 diff --git a/cli/bench.cpp b/cli/bench.cpp
-index c2a2a642..6e8032ae 100644
+index c2a2a642..cff86d55 100644
 --- a/cli/bench.cpp
 +++ b/cli/bench.cpp
-@@ -135,7 +135,7 @@ int machine_id_cmd(int argc, char** argv) {
+@@ -133,9 +133,9 @@ int machine_id_cmd(int argc, char** argv) {
+     return kExitUsage;
+   }
    std::string id, why;
-   if (!hardware_id(id, why, true)) { printf("machine-id: no hardware id: %s\n", why.c_str()); return kExitFailure; }
+-  if (!hardware_id(id, why, true)) { printf("machine-id: no hardware id: %s\n", why.c_str()); return kExitFailure; }
++  if (!hardware_id(id, why)) { printf("machine-id: no hardware id: %s\n", why.c_str()); return kExitFailure; }
    // The one line the tools parse (tools/machine_id.py); the build line main() prints comes before it.
 -  printf("machine-id: %s\n", id.c_str());
 +  printf("machine-id: %sx\n", id.c_str());
@@ -37,24 +40,11 @@ index 2643d40d..a117ec83 100644
              fails.append(f"B-05: {stem} compiles in {t:.2f} s, limit {limit} s")
      return fails, notes
  
-diff --git a/tools/lib/load.ps1 b/tools/lib/load.ps1
-index af2aa8ad..dee67610 100644
---- a/tools/lib/load.ps1
-+++ b/tools/lib/load.ps1
-@@ -114,7 +114,7 @@ function Invoke-ArFastTests {
-     $why = @()
-     $slow = @($b.Slow | Where-Object { (Resolve-ArTimingRow -Row "B-12 $($_.Case)" -Measured $_.Seconds -Limit $PerTest -NoMachine:$NoMachine).Verdict -eq 'FAIL' })
-     if ($slow.Count -gt 0) { $why += "B-12 $($slow[0].Case) $($slow[0].Seconds) s over $PerTest s" }
--    if (-not $WaiveB08 -and $null -ne $Budget -and $secs -gt $Budget -and (Resolve-ArTimingRow -Row 'B-08' -Measured $secs -Limit $Budget -NoMachine:$NoMachine).Verdict -eq 'FAIL') {
-+    if ($null -ne $Budget -and $secs -gt $Budget -and (Resolve-ArTimingRow -Row 'B-08' -Measured $secs -Limit $Budget -NoMachine:$NoMachine).Verdict -eq 'FAIL') {
-       $why += "B-08 tier $([math]::Round($secs, 1)) s over $Budget s"
-     }
-     @{ Over = ($why.Count -gt 0); Text = $(if ($why) { $why -join '; ' } else { "slowest $($b.Slowest.Seconds) s, tier $([math]::Round($secs, 1)) s" }) }
 diff --git a/tools/lib/machine.ps1 b/tools/lib/machine.ps1
-index 17cdc5a1..e8d1aa15 100644
+index f48ceb2b..374995ee 100644
 --- a/tools/lib/machine.ps1
 +++ b/tools/lib/machine.ps1
-@@ -58,6 +58,6 @@ function Set-ArMachineStanding([switch]$NoMachine) {
+@@ -58,7 +58,7 @@ function Set-ArMachineStanding([switch]$NoMachine) {
    if ($NoMachine) { Remove-Item Env:ASTRORAY_OFF_REFERENCE -ErrorAction SilentlyContinue; return '' }
    $id = Get-ArMachineId
    if ($id -eq (Get-ArReferenceMachineId)) { Remove-Item Env:ASTRORAY_OFF_REFERENCE -ErrorAction SilentlyContinue }
@@ -62,11 +52,21 @@ index 17cdc5a1..e8d1aa15 100644
 +  else { $env:ASTRORAY_OFF_REFERENCE = '' }
    return $id
  }
+ 
+@@ -69,7 +69,7 @@ function Resolve-ArFastB08 {
+   param([Parameter(Mandatory)][double]$Seconds, [Parameter(Mandatory)][double]$Budget, [switch]$Profiling,
+     [switch]$StartedByProfile, [switch]$NoMachine)
+   if ($Profiling) {
+-    if (-not $StartedByProfile) { throw 'B-08 is waived only in a run the profile tier started' }
++    if ($false) { throw 'B-08 is waived only in a run the profile tier started' }
+     return [pscustomobject]@{ Verdict = 'WAIVED'; Limit = $Budget; Line = 'B-08 not judged (profile measuring run)' }
+   }
+   return (Resolve-ArTimingRow -Row 'B-08' -Measured $Seconds -Limit $Budget -NoMachine:$NoMachine)
 diff --git a/tools/machine_id.py b/tools/machine_id.py
-index 5e28d285..61fac617 100644
+index 5b097bb6..15e3104f 100644
 --- a/tools/machine_id.py
 +++ b/tools/machine_id.py
-@@ -80,7 +80,7 @@ def judge(row, measured, limit, mid=None, unit="", machines=MACHINES):
+@@ -126,7 +126,7 @@ def judge(row, measured, limit, mid=None, unit="", machines=MACHINES):
          return "pass", limit, ""
      t = load_machines(machines)
      mid = mid or machine_id()
@@ -75,7 +75,7 @@ index 5e28d285..61fac617 100644
          return "fail", limit, ""
      prof = t.get("machine", {}).get(mid, {})
      ref = t.get("reference_median", {})
-@@ -102,7 +102,7 @@ def timing_ok(row, measured, limit, unit=""):
+@@ -148,7 +148,7 @@ def timing_ok(row, measured, limit, unit=""):
          return True
      mid = os.environ.get(OFF_REFERENCE_ENV)
      if not mid:
@@ -84,12 +84,3 @@ index 5e28d285..61fac617 100644
      print(f"off-reference {mid} {row}: {_fmt(measured, unit)} against {_fmt(limit, unit)}", flush=True)
      return True
  
-@@ -136,7 +136,7 @@ def record_reference(row, value, note, machines=MACHINES):
-         raise MachineError(f"median of {row} is {value}: not a measurement")
-     with open(machines, encoding="utf-8", newline="") as f:
-         text = f.read().replace("\r\n", "\n")
--    entry = f'# {note}\n"{row}" = {value:.6g}\n'
-+    entry = f'# {note}\n"{row}x" = {value:.6g}\n'
-     old = re.compile(r'(?m)^(?:#[^\n]*\n)*^"' + re.escape(row) + r'" = [^\n]*\n')
-     if old.search(text):
-         text = old.sub(lambda _: entry, text, count=1)
