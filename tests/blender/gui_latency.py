@@ -41,6 +41,7 @@ sys.path.insert(0, HERE)
 for sub in ("tools", os.path.join("scenes", "lib")):
     sys.path.insert(0, os.path.join(ROOT, sub))
 import blend_writer  # noqa: E402
+import machine_id  # noqa: E402
 import smoke_a1  # noqa: E402
 
 MODULE, ARGS, arg = smoke_a1.MODULE, smoke_a1.ARGS, smoke_a1.arg
@@ -279,7 +280,7 @@ class TestLatency(Case):
         print(f"RESULT latency {SCENE} cancel: engine PAUSED {ms:.1f} ms after the break (state {rec['state']}), "
               f"F12 returned {loop_ms:.0f} ms after it, break after {rec['first_pass_s']:.1f} s; B-17 target 20 ms, limit {CANCEL_LIMIT_MS:.0f} ms")
         self.assertIn(rec["state"], tuple(rec["abi"].values()), "a cancel ends PAUSED or TRIMMED")
-        self.assertLessEqual(ms, CANCEL_LIMIT_MS)
+        self.assertTrue(machine_id.timing_ok(f"B-17 {SCENE} cancel", ms, CANCEL_LIMIT_MS, "ms"), f"{ms:.1f} ms above {CANCEL_LIMIT_MS} ms")
 
     def test_view_change_latency_within_b32(self):
         """0007 d25 / B-32: a view change reaches the screen (the first frame of a newer epoch, with a pass of it

@@ -126,16 +126,13 @@ struct Line {
 
 int machine_id_cmd(int argc, char** argv) {
   if (argc > 2) {
-    fprintf(stderr, "machine-id: takes no arguments, got '%s'
-", argv[2]);
+    fprintf(stderr, "machine-id: takes no arguments, got '%s'\n", argv[2]);
     return kExitUsage;
   }
   std::string id, why;
-  if (!hardware_id(id, why)) { printf("machine-id: no hardware id: %s
-", why.c_str()); return kExitFailure; }
+  if (!hardware_id(id, why)) { printf("machine-id: no hardware id: %s\n", why.c_str()); return kExitFailure; }
   // The one line the tools parse (tools/machine_id.py); the build line main() prints comes before it.
-  printf("machine-id: %s
-", id.c_str());
+  printf("machine-id: %s\n", id.c_str());
   return 0;
 }
 

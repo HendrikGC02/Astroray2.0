@@ -31,6 +31,8 @@ import time
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))  # -I leaves the script's own folder off the path
+import machine_id  # noqa: E402
 CLI = os.path.join(ROOT, "out", "bin", "astroray_cli.exe")
 FITS_READ = os.path.join(ROOT, "tests", "abi", "fits_read.py")
 SCENE = "a5_emitter"
@@ -183,7 +185,7 @@ def history_lines(results, sampler, device, S):
     date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = []
     for (split, c), r in sorted(results.items()):
-        base = {"sha": sha, "machine": "rtx5070ti-8c16t", "driver": "unknown", "cuda": "none" if device == "cpu" else "cuda",
+        base = {"sha": sha, "machine": machine_id.machine_id(), "driver": "unknown", "cuda": "none" if device == "cpu" else "cuda",
                 "scene": f"{SCENE}.{split}", "unit": "ratio", "n": S, "date": date}
         spread = (r["hi"] - r["lo"]) / 2
         lines.append({**base, "metric": f"region_var_ratio.{CHANNELS[c]}.{sampler}.{device}", "value": float(r["ratio"]),

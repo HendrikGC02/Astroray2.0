@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Machines (owner decision 47; 0009 d13 preamble, d18). tools/machine_id.py reads this file.
+# `reference` is the id `astroray_cli machine-id` prints on the reference machine; every absolute budget row keeps
+# the meaning it was measured with there. On another machine a wall-clock row over its reference limit prints
+# `off-reference <id> <row>` and does not fail, unless [machine."<id>"] holds that machine's own median of the row:
+# the limit is then the reference limit x (that median / the reference median below), never below the reference limit.
+# [machine."<id>"] is written only by `tools/check.ps1 profile` (lead, quiet machine); the reference rows below are
+# the records' numbers, edited by hand.
+reference = "rtx5070ti-8c16t"
+
+[reference_median]
+# B-08, seconds: the quiet `check fast` median after task 227 (docs/history/M1b-task-ledger.md, task 227's line:
+# "quiet check fast median 9.9 -> 5.4 s").
+"B-08" = 5.4

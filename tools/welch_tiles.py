@@ -43,6 +43,8 @@ import time
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))  # -I leaves the script's own folder off the path
+import machine_id  # noqa: E402
 ALPHA = 0.05  # 0009 d17(v) family alpha
 MARGIN = 0.01  # 0009 d17(v) relative margin
 NULL_MAX_FAILING = 2  # 0009 Verification 17(v): at most 2 failing repeats per scene
@@ -411,7 +413,7 @@ def write_evidence(path, scene, res, tree, alias, tile):
 
 def history_line(path, scene, device, ratio, per, n, spp):
     sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=ROOT).stdout.strip()
-    line = {"sha": sha, "machine": "rtx5070ti-8c16t", "driver": "unknown", "cuda": "none" if device == "cpu" else "cuda",
+    line = {"sha": sha, "machine": machine_id.machine_id(), "driver": "unknown", "cuda": "none" if device == "cpu" else "cuda",
             "scene": scene, "metric": f"tree_alias_var_ratio.{device}", "unit": "ratio", "value": round(ratio, 4),
             "spread": round(float(per.std(ddof=1)), 4), "n": n, "spp": spp,
             "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}

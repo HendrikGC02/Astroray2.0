@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "common/off_reference.h"
 #include "device/cuda/cuda_device.h"
 #include "device/cuda/module_loader.h"
 #include "device/cuda/optix_accel.h"
@@ -509,7 +510,7 @@ static void longest_launch(const char* scene, const char* size) {
   std::printf("%s: %s", scene, out.substr(at, out.find('\n', at) - at + 1).c_str());
   CHECK_MESSAGE(rc == 0, out);
   CHECK(ms > 0.0);
-  CHECK_MESSAGE(ms <= 100.0, "B-17: the longest launch is above the 100 ms hard cap");
+  CHECK_MESSAGE(astroray::test::timing_ok((std::string("B-17 longest launch of ") + scene).c_str(), ms, 100.0), "B-17: the longest launch is above the 100 ms hard cap");
   if (ms > 20.0) std::printf("B-17 target 20 ms exceeded: %.3f ms\n", ms);
   std::filesystem::remove(fits);
 }

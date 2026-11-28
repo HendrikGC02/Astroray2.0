@@ -27,9 +27,10 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))  # -I leaves the script's own folder off the path
+import machine_id  # noqa: E402
 TMP = os.path.join(ROOT, "out", "tmp", "191")
 CLI = os.path.join(ROOT, "out", "bin", "astroray_cli.exe")
-MACHINE = "rtx5070ti-8c16t"  # perf.ps1's neutral id (region_bias.py writes the same); never COMPUTERNAME
 SIZES = [("b23_10k_lamps", ["--lamps", "10000"]),
          ("b23_100k_triangles", ["--triangles", "100000"]),
          ("b23_1m_triangles", ["--triangles", "1000000"])]
@@ -102,7 +103,7 @@ def main():
         print(f"{name:20} {med['lights']:>8} {med['total']:>10.1f} {med_per10k:>8.1f} {lo:>8.1f} {hi:>8.1f} | "
               f"{med['gather']:.1f}, {med['peaks']:.1f}, {med['importance']:.1f}, {med['tree']:.1f}  "
               f"({n} builds, {med['threads']} threads, {med['nodes']} nodes)")
-        base = {"sha": sha, "machine": MACHINE, "driver": "unknown", "cuda": "none", "scene": name, "n": n, "date": date}
+        base = {"sha": sha, "machine": machine_id.machine_id(), "driver": "unknown", "cuda": "none", "scene": name, "n": n, "date": date}
         lines.append({**base, "metric": "light_build_ms", "value": round(med_per10k, 1), "unit": "ms per 10k lights",
                       "spread": round(hi - lo, 1)})
         lines.append({**base, "metric": "light_build_total_ms", "value": round(statistics.median(totals), 1), "unit": "ms",

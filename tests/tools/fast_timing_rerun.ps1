@@ -14,6 +14,8 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 . (Join-Path $root 'tools/lib/load.ps1')
 . (Join-Path $root 'tools/lib/summary.ps1')
 . (Join-Path $root 'tools/lib/testrun.ps1')
+# Canned B-08 and B-12 overruns are judged for the reference machine, whatever machine this runs on (machine.ps1).
+$script:ArMachineIdForTest = 'rtx5070ti-8c16t'
 $bad = 0
 function Check([string]$what, [bool]$ok, $out = @()) {
   if (-not $ok) { Write-Host "FAIL fast_timing_rerun: $what"; @($out) | Select-Object -Last 6 | ForEach-Object { Write-Host "  $_" }; $script:bad++ }
