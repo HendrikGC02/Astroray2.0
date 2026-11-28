@@ -17,8 +17,8 @@ Milestones are decided only here (G1). This page says **when**; what and how bel
 |---|---|---|---|---|
 | — | Before M1a | spike F part A and spike G reports; owner answers | S (~4) | DLSS unavailable; grid route fails |
 | M1a | First pixels | textured, lamp-lit meshes in the viewport on CUDA and CPU; heat maps | 135 task files landed (25 estimated, 111 at sign-off); built, close waits on the owner (B-19 idle, B-20, B-31) | wavefront overhead; first frame with materials |
-| M1b | First light | HDRI world, metal, alpha foliage, a grating card, a test medium, final OIDN | 110-135 planned in five slices (~22 estimated; `docs/PLAN-M1b.md`) | register growth as the must-exist set fills in |
-| M2 | Lobes, shadows and media | every OpenPBR lobe, transparent shadows, homogeneous media, the viewport controller and denoiser | M (~25) | shade-kernel spills at full lobe scope |
+| M1b | First light | HDRI world, metal, alpha foliage, a grating card, a test medium, final OIDN | 98 task files, 96 landed (22 estimated, 110-135 planned; `docs/PLAN-M1b.md`); closed by owner decision 47 | register growth as the must-exist set fills in |
+| M2 | Lobes, shadows and media | every OpenPBR lobe, transparent shadows, homogeneous media, the viewport controller and denoiser | 105-125 planned in six slices (~25 estimated; `docs/PLAN-M2.md`) | shade-kernel spills at full lobe scope |
 | M3 | Nodes and textures | procedural and colour nodes, filtered textures, Classroom's materials with coverage | M (~24) | node lowering and corpus translation time |
 | M4 | Lights, sky, spectra and cameras | all lamp types, sky and sun, spectral lamps and metals, light tree, every camera model | L (~32) | light-tree quality and build time |
 | M5 | Light tracing and caustics | caustics, dispersion and grating spectra from point lamps and spotlights; Classroom sunlit | M (~22) | light-pass share versus viewport rate |

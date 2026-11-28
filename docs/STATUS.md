@@ -3,46 +3,48 @@
 Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `tools/status.ps1`, never from here.
 
 ## Current milestone
-M1b "First light" (docs/PLAN-M1b.md: slices, lanes, the `shade_surface` spine, gate ledger). First batch
-tasks/136-161, order and lanes in tasks/README.md; runbook and handover in docs/LEAD.md; items without a task in
-docs/BACKLOG.md. Slice 0 closed (all of 136-144, 155, 157, 159-162 landed; `check full` green 659 s; landings by `pwsh tools/land.ps1 submit`). Also landed: 145-158, 163, 164, 165, 172, 182, 183, 186, 189, 204, 211, 212, 224-228, 168, 169, 171, 176-181, 185, 199, 200, 202, 203, 166, 173, 174, 187, 195, 210, 221, 222, 223, 229; fourth lead: 175, 233, 231, 232, 196, 234, 192, 197, 191, 198; fifth lead: 205, 190, 194, 170, 219, 201, 237, 220; sixth lead: 193; seventh lead: 208, 230, 218, 206; eighth lead: 215, 188, 213, 216, 214, 239, 217, 238, 242, 236. Second batch 163-183 (ruling 91), third batch 186-203 and 204 written;
-spine: 205, 219, 220, 208 (spill remedy held 36 / 36 B), 230, 206 landed; 209 withdrawn to M8 (owner decision 45); 215, then 213 and 214, close the slice (237 put B-05 on the new clock: shade_surface 7.1 s of 8.0 s); open work and next steps in docs/LEAD.md's handover.
-M1a "First pixels" closed (owner decision 37): textured, lamp-lit meshes render progressively in the Blender 5.3
-viewport and F12 on CUDA and CPU through the final C ABI; gallery and report from `tools/gallery.py --milestone
-M1a` and `tools/report.py`. Accepted at the close: B-19 idle 11.0 % (10 % stays the target), B-20 2.00x / 1.63x
-(1.25x is the release target; regression-gated by 140 until M2), B-31 39.8 ms (one slice-0 task).
-Process: owner decision 36 confirmed; `process/guards` merged (tool deny rules, allow-list, CLAUDE.md rule 1's
-scope clause).
+M2 "Lobes, shadows and media" (docs/PLAN-M2.md: six slices, the `shade_surface` spine, the kernel-split decision of
+task 248). Slice 0 is open: order and batches in tasks/README.md, runbook and handover in docs/LEAD.md, items
+without a task in docs/BACKLOG.md. Landed in M2 so far: 238, 239, 242. Written and not dispatched: 240, 241,
+243-266 (scope-checked and critiqued by the eighth lead) and 267-272 (ninth lead: the second machine and the
+M1b retrospective's open recommendations; pre-flighted, no Opus critique yet).
+M1b "First light" closed 2026-11-28 (owner decision 47): the owner looked at the gallery and report (25 images;
+grating orders, OIDN before and after, metal edge colour) and approved all of it. Accepted as measured: B-19 idle
+11.9 % on B-1M and pq 10.9 % on b_foliage, B-20 12.36 / 12.94 ms against 9.5 / 12.5 ms, b_tx under the final denoise
+reported, 0001 V5 deferred to task 269. Numbers and lessons: docs/retro/M1b-retrospective.md; batches and gate
+ledger: docs/history/M1b-task-ledger.md. M1a "First pixels" closed by owner decision 37.
+
+## Machines (owner decision 47)
+The reference machine is the desktop, `rtx5070ti-8c16t`: every absolute budget row, kernel resource row and bench
+baseline was measured there. Development continues on a laptop with an RTX 3000-class GPU from a fresh clone
+(docs/SETUP.md). Until 267 and 268 land there: the GPU kernels build for sm_120 only, so GPU tests, `check gate`
+and `check perf` fail on another GPU; `check fast`, CPU rendering and hosted `ci` work; a red timing budget on the
+laptop is expected and reported, never fixed by editing a limit. First two tasks on the laptop: 268, 267.
 
 ## Owner decisions still open
-- M1b close (owner decision 46): every M1b task has landed (slice D 213-217, 236 option (b); 188 V8). Open, the owner's own step: look at the M1b gallery and report (`pwsh tools/gallery.py --milestone M1b`, then `tools/report.py --milestone M1b`; grating orders, OIDN before and after, metal edge colour), then the lead records the verdict and M1b closes. Caveat for decision 46 found after it: 236's shader_balls prefilter figures ("NONE 14 % worse", ACCURATE 0.104) were measured on a magenta scene (assetless worktree); the b_tx figures stand; task 266 re-measures every mode with the assets present, and the owner may revisit (b) then. Answered also: 0001 V5 deferred to M2; M1b closes before 238-247; PLAN-M2 Q2, Q4 (downloads) and Q7 approved. Still open from PLAN-M2: Q1 (lobe stack out of line, 0002 D1), Q3 (B-20 at M2's close), Q6 (B-17), Q8 (B-10).
-- Answered 2026-11-28 (owner decision 45): 209 deferred to M8 as specular motion vectors after Cycles 5.3 (BACKLOG M8 row); the hit-distance plane is not built; 214 and 215 measure without it. The DLSS-RR Guide is in the refs cache (dlss-rr-guide-374959484e79).
-- Task 236 (b_tx under the final denoise; owner decision 43's remedy), 2026-11-28: with 230's guide RGB the cause is 0008 d18's in-place RT prefilter of the albedo guide (it removes sub-pixel texture; cleanAux then trusts the blurred guide). Measured, 64 spp, relMSE vs 16k ref, CUDA (CPU within 0.5 %): b_tx raw 1.079e-3, today's Final (prefilter + cleanAux, Cycles ACCURATE) 1.594e-3 = 1.48x raw (fails), no prefilter + cleanAux (Cycles DENOISER_PREFILTER_NONE) 8.63e-4 = 0.80x raw; but shader_balls (fresh reference) 2.96e-4 -> 3.38e-4, 14 % worse (still 0.12x raw: its 64-spp albedo guide carries MC noise, mostly at edges), and b_tx at 4 spp NONE 2.5e-2 against ACCURATE 1.0e-2 (raw 4.7e-2). cornell_area and cornell_point unchanged. No documented mode meets the acceptance (b_tx below raw without worsening the others). Options: (a) NONE for Final (0008 d18 edited), shader_balls -14 % and low-spp b_tx worse; (b) keep ACCURATE, b_tx reported, not asserted; (c) guide-side remedy for guide noise at 64 spp (0008 d15 / Risk 10, a new task). Lead's recommendation: (b) now, plus a task exposing Cycles' own Denoising Prefilter setting (None / Fast / Accurate, default Accurate) in the addon, so a texture-heavy scene can choose None; (c) for M2. Also found: shader_balls' cached 16k denoise reference was stale (201's V11 shader_balls numbers were measured against it; 236 bumps REF_VERSION and re-measures). Branch task/236-denoise-small-texture-detail holds NONE as a candidate (e8619050), not landable until this is decided. Re-measured on fresh references (REF_VERSION 2, both devices within 2.2 %), ratio to raw ACCURATE / NONE: 64 spp b_tx 1.48 / 0.80, shader_balls 0.104 / 0.119, cornell_area 0.030 / 0.030, cornell_point 0.003 / 0.003, d28_closed_box 0.012 / 0.012; 4 spp b_tx 0.215 / 0.527, shader_balls 0.033 / 0.050, d28 +7 % with NONE. Cycles device/denoise.h: NONE "requires guiding passes to be noise-free"; ACCURATE "improves quality when guiding passes are noisy". Only shader_balls' old reference was stale.
-- Answered 2026-11-27 (owner decision 43): B-05 for shade_surface 8.0 s (205 lands; the spine queue 219, 220, 208, 206, 209 follows); D10 tree row 1.8x accepted for full MIS (190 lands); v1 margin = the shifted statistic (190); V11 (201): a remedy task for small textured detail, a different third scene in place of b_tx, and `tools/fetch.ps1` may fetch the Cornell and shader-ball/HDRI assets for a re-run (201 resumes on cornell_area, shader_balls, cornell_point; remedy task 236).
-- Answered 2026-11-27 (owner decision 44): B-19 pq accepted red on b_foliage (as B-1M's idle); B-05's timed compile leaves out vcvarsall first (task 237, Sonnet), `shade_surface` keeps 8.0 s on the new clock (lead's reading, the owner may correct it), then 220 and the spine queue.
-- B-17 and D8's per-launch medium cap (task 193, measured 2026-11-27): dense slab under the test majorant hook, 1440x1440, longest shade_volume launch 82.8 ms at the cap of 4,096 (flat in k once warps reach the cap; limit 100 ms, target 20 ms). The cap holds the limit; about 1,000 would reach the target. No production M1b scene reaches the cap (majorant = sigma_t). Owner: keep 4,096 (PROVISIONAL), or lower it.
-- Coincident-hit tie rule (task 235, closed by the lead with its finding): d2_aov_geometry's CPU/CUDA mean difference (R -0.031, B +0.031, 633 / 365 SE) is the coincident box pair 301/302 that 0009 d17(iv) and the scene's meta.toml declare a traversal tie: Embree reports 302 on every pair pixel, OptiX 301; with the pair's colours equal the two devices agree to the last digit, swapped the difference flips sign. No engine defect. Image-mean CPU/CUDA comparisons on d2 mask the pair (201). Owner, optional: a deterministic tie rule on both backends (any-hit on GPU triangles plus an Embree filter, lowest instance id; a design record and a perf cost), or a loud warning on coincident faces with different materials; otherwise nothing.
-- B-10 (`check full` 12 min): full reads 777.5 s after 234 (798.5 s before it on 19a0211c); no script enforces B-10 (check.ps1 prints "budget n/a" for full). Owner: enforce, raise, or move work.
-- B-11 (hosted ci 450 s): after 233 the lean tier reads 335-379 s; its basis (1.3 x the old max) no longer derives the limit (1.3 x 379 = 493 s). Limit unchanged; the owner may restate the basis.
-- Ruling 101 (2026-11-25): B-38 baseline re-recorded on quiet main (b1m 11.69 -> 12.01 ms, b5m 12.28 -> 12.56 ms; +2.5 % cumulative since 2026-11-23 across M1b landings; limit 1.03 per landing unchanged); 215 reports the cumulative B-20 line.
-- k_shade_surface compile: owner decision 41 (2026-11-26) raises B-05 to 7.5 s for M1b; 175's light tree reads 7.31-7.40 s (main 6.76-6.78 s after 173 and 174). The timing still includes about 0.77 s of vcvarsall per compile (BACKLOG). Ruling 103: the spill rows after 175.
-- Ruling 100 (2026-11-25, PROVISIONAL): B-09 also excludes the gate's compile-timing step (old: excluding build steps only, ruling 94); landing gates of kernel tasks read 179.8 s with 23 s of real timed compiles. Task 224. Rulings 97-99: shade_surface_ext may take 7.0 s B-05 (old 3.0 s default); medium-stack id for M1b; B-09 remedies 157 and 212.
-- Ruling 96 (2026-11-25): CPU/CUDA agreement through the RGB-to-spectrum lift is gated by its parts (pre-lift 1e-6, lift bit-identity, grey radiance 1e-6); colour radiance printed, ungated (172 measured 1.36e-5 against D12's 1e-5, conditioning of the lift).
-- Ruling 95 (2026-11-25): k_route_hit regs 28 -> 40 for 182's medium back-face test, a lead ruling on a D10 row.
-- Ruling 94 (2026-11-25, PROVISIONAL): B-09 excludes the gate's build steps, as B-08 does since decision 36 (old: wall time incl. incremental build; limit 180 s unchanged). Landing gates rebuild after the canary and read 164-201 s; quiet main without a rebuild 145.5 s. The owner may revert it.
-- Ruling 93 (2026-11-24): k_shade_surface spills up to 16 / 16 B for M1b (old 0 / 0), a lead ruling on a D10 row.
-Earlier: Owner decision 40 (2026-11-24) accepted B-31 cold as measured and left the rest to the lead: B-05 for
-`shade_surface` is 7.0 s for M1b (145 measured 5.16 s quiet), Opus for O tasks kept, rulings 64-90 fold into the
-records (task 185) and superseding ADRs delete what they supersede, JPEG parity left.
+None blocks work. Decision 47 answered PLAN-M2 questions 1, 3, 6 and 8, the coincident-hit tie rule, B-10, B-11
+and the PROVISIONAL rulings 94, 100, 109, 110, 112, 114 under the owner's delegation; the owner may correct any.
+- For the owner when convenient: the exact GPU model, VRAM and core count of the laptop (267 and 268 read them
+  from the machine; SETUP's VRAM note depends on it); whether the desktop stays available for reference-machine
+  re-measurements before M2's close (decision 47 e: absolute rows are re-measured there).
+- After task 266 re-measures every prefilter mode with the assets present, the owner may revisit decision 46's
+  option (b) for the final denoise.
 
-## Red items
-- B-19 idle, B-20, B-31 accepted at the M1a close (decision 37); B-31 instance loop warm S2 28.0 ms per 10k after task 161 (limit 30), cold 82.7 accepted as measured (decision 40). M-1 probe spills 130/376 B come from spike A's stand-in lobes (ruling 89, task 144): not ratified, slice D re-measures.
-- `check perf` (140) gates kernel/device/session landings at B-38 1.03 PROVISIONAL (owner decision 39); F12 on CUDA is gated (139).
-- 204 landed (B-09 without build steps, landing gate holds the fast window). New: a cold first lint after a rebase failed B-08 in two landings (BACKLOG); 163's landing gate read 179.8 s (quiet main after it 157.3 s).
-- B-05 shade_surface at 6.0-6.4 s of 7.0 s after 163's branch: the spine (173, 174, 175, 192, ...) may reach 7.0 s; past it is an owner item (decision 40).
+## Red items (reference machine)
+- B-20 not met (12.36 / 12.94 ms; 1.25x Cycles is the release target, not a gate for M2: decision 47); cumulative
+  pass time +5.7 % / +5.4 % across M1b on scenes that use no M1b feature, reported at every slice close.
+- B-19 idle 11.9 % on B-1M and pq 10.9 % on b_foliage, accepted (decisions 37, 44); pq is re-measured at slice B's
+  close with `ah_record` on.
+- The full-scope proxy `ar_probe_m1` is over 0002 D10 (128 / 528 B / 198 / 344 B): the layered lobes do not fit
+  the fused kernel as built. Task 248 measures the arrangements; the spine holds at 262 until its table is ruled.
+- B-10: `check full` reads 740-855 s quiet against a limit nothing enforces; 20 min enforced by task 272.
+- Silent wrong results known and unfixed (CLAUDE.md rule 5): a missing image renders magenta with only a warning,
+  so comparisons pass when render and reference miss the same asset (BACKLOG; 245 and 246 remove the worktree
+  cause, the loud failure has no task yet: 271's PR lists it with the other silent rows).
 
-## Budget headroom
-`check gate` quiet-main median 127.2 s after task 234 (was 167 s; 145.5 s after 176); landings under load
-133-183 s (owner decision 38: measured ledger in tasks/README.md, hold above 170 s measured). `check fast` 6.9-7.2 s
-of B-08's 10 s. `check full` about 10-15 min. `k_shade_surface`: 128 registers, stack 400 B, spills 8 / 8 B (ruling 93: up to 16 / 16 for M1b), compile about 5.6 s quiet, 6.0-6.4 s under load on 163's branch of decision 40's 7.0 s (every VM opcode adds an interpreter case to this TU), watched along the spine queue; decision path in docs/PLAN-M1b.md
-"The spine". History: bench/history/2026.jsonl. Spikes: docs/spikes/*/RESULTS.md.
+## Budget headroom (reference machine, at the M1b close)
+`check gate` quiet-main median 127.2 s, landings 133-149 s, hold line 170 s, limit 180 s (B-09). `check fast` 5.4-7.2 s
+of 10 s (B-08). `check full` 740-855 s. Hosted `ci` 335-379 s of 450 s (B-11). `k_shade_surface` 128 registers, stack
+416 B of 512, spills 4 / 16 B of 16 / 16 (ruling 93, carried into M2 by decision 46), compile 7.37 s quiet of 8.0 s:
+about 0.6 s and no spill headroom left, which is why 248 runs first. `k_shade_surface_ext` 124 / 400 B / 0 / 0,
+5.41 s. Declared by the open batches: +21.9 s of gate (debts 3.5, M2 first batch 18.4) plus 267-272's own. History: bench/history/2026.jsonl; landings: docs/retro/land-history-rtx5070ti-8c16t.jsonl. Spikes: docs/spikes/*/RESULTS.md.

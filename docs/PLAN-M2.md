@@ -2,7 +2,7 @@
 
 Reader: the lead session that dispatches M2, and the owner. Scope and exit criteria are ROADMAP's M2 section;
 this page says in what order, in which lanes, and how the kernel-split question is settled before the lobes
-reach `shade_surface`. Evidence: `tasks/README.md` (gate ledger, slice D lines for 213, 215, 188),
+reach `shade_surface`. Evidence: `docs/history/M1b-task-ledger.md` (M1b's gate ledger, slice D lines for 213, 215, 188),
 `bench/history/2026.jsonl`, `docs/BACKLOG.md`, and task 217's retrospective once it lands (this page was
 written before it; where 217's tables disagree with a number here, 217 wins and the slice review corrects
 this page). Task files are in `tasks/`; their order is `tasks/README.md`. The process of
@@ -144,8 +144,12 @@ task's own bench history line, limits changed listed for the owner, no untried a
 
 ## 7. Owner decisions needed
 
-Each has a default that holds until answered; only the first blocks a design choice, and only if 248's table
-selects it.
+All nine are answered: 2, 4, 5, 7 and 9 by owner decision 46; 1 (candidate O is allowed if 248's table
+ranks it the fastest admissible variant), 3 (B-20 does not gate M2's close), 6 (4,096 until slice C, then
+set by rule) and 8 (20 min, enforced, task 272) by owner decision 47. The table is kept for its reasons.
+Decision 47 also makes 248's A/B valid on a machine other than the reference machine: it decides by
+ratios between variants, recorded with the machine id; resource rows come from sm_120 compile-only builds
+(task 267).
 
 | # | Question | Default until answered | Recommendation |
 |---|---|---|---|

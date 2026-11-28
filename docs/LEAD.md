@@ -2,7 +2,7 @@
 
 How the lead (coordinator) session runs the build phase. Implementers follow CLAUDE.md and
 `.claude/agents/implementer.md`; this page is the lead's half. State lives in docs/STATUS.md, the plan in
-docs/PLAN-M1b.md, order in tasks/README.md, unowned items in docs/BACKLOG.md, rulings in docs/decisions/RULINGS.md.
+docs/PLAN-M2.md, order in tasks/README.md, unowned items in docs/BACKLOG.md, rulings in docs/decisions/RULINGS.md.
 
 ## Loop per task
 1. Ready: every task in "Depends on" has landed (its file is gone from tasks/) and fewer than two implementers
@@ -60,9 +60,10 @@ the old and the new value, never in the landing whose test it failed.
 ## Environment for agents and scripts
 Tools read the user environment themselves. A pwsh that calls other programs directly starts with:
 ```
-$env:ASTRORAY_DEPS_CACHE = 'C:\Astroray2.0\third_party\_cache'
+$env:ASTRORAY_DEPS_CACHE = '<main checkout>\third_party\_cache'
 $env:ASTRORAY_BLENDER = [Environment]::GetEnvironmentVariable('ASTRORAY_BLENDER','User')
 ```
+A new machine: docs/SETUP.md. The reference machine for budgets is `rtx5070ti-8c16t` (owner decision 47).
 Worktrees share the dependency cache through that variable; never link a worktree to the cache.
 `check fast` times lint and tests; the build step is outside B-08 (owner decision 36). Inside a gate the fast step
 holds the fast window (0009 d8, task 203), so a red B-08 there is a real finding: fix it, do not rerun. A
@@ -79,6 +80,32 @@ Hand over to a fresh lead session every 15-20 landings (owner, 2026-11-25) or at
 handover below, then stop. Send long landing logs to a `digest` agent. `tools/lead/deepseek.sh` (DeepSeek
 through opencode, owner decisions 32 and 36) may draft bench-history lines, backlog rows and digests from
 repository text; treat its answer as a draft.
+
+## Handover (ninth lead, planning session, 2026-11-28)
+State for the tenth lead, who starts on the laptop from a fresh clone (earlier handovers hold where not superseded).
+- No landing this session. Done on main: owner decision 47 (M1b closed on the owner's look; PLAN-M2 questions 1, 3, 6, 8, the tie
+  rule, B-10, B-11 and the provisional rulings settled under the owner's delegation; the machine rule); STATUS rewritten for M2;
+  tasks/README.md rewritten for M2 with the dispatch order (M1b's ledger moved to docs/history/M1b-task-ledger.md); docs/SETUP.md;
+  tasks 267-272 written by a planning agent with a scope pre-flight, not yet critiqued by Opus: run that critique before
+  dispatching 269-272 (267 and 268 are read by the lead and dispatched first; their review is Opus).
+- First on the laptop: SETUP sections 1-2 to a green `check fast`; note which timing budgets read red there (expected, decision
+  47 c); then 268 and 267 (order in tasks/README.md). Record a `perf.ps1 -Record` baseline on the quiet laptop once 267 lands.
+  The laptop's GPU model, VRAM and core count are unknown to this session: read them from `astroray_cli info` and put them in STATUS.
+- Not checked on this machine after these doc edits: `check gate` (docs only; lint and `check fast` were run, see the commit).
+- Branches pushed for the move: task/235-d2-cpu-cuda-colour-mismatch, keep/120-graphs-B, backup/148-before-179. Everything
+  else local to the desktop (about 150 worktree-agent branches, scratch branches, 9 registered worktrees) is scratch and stays.
+- Lessons from M1a and M1b taken together: (22) Task count came out at 4.4 times the roadmap estimate twice, with 22 % added
+  mid-milestone and 35 % of landings spent on tooling and debts: size M2's slices on that, not on the estimate. (23) Agent work
+  was 13 % of a task's time; waiting on locks, answers and hosted ci was most of the rest. What paid: ci beside the gate
+  (landing median 844 -> 408 s), two implementers, no polling, questions that pause the landing and not the work. (24) Opus
+  review cost about 2 % of tokens and had a finding in 13 of 14 noted landings; canaries are why "a test that cannot fail" is the
+  commonest finding instead of an invisible one. Keep both on every kernel, physics and process diff. (25) Numbers passed on
+  broken images (the magenta worktree) and the lead's looks found the black F12 frame late: comparisons need a loud failure on
+  a missing input, and looking stays. (26) A budget row raised three times (B-05) was a design question postponed: measure the
+  arrangement before the next edit (248), and count a raise as a remedy. (27) Machine state hid in the tools: sm_120 as a literal,
+  the machine id as a literal in four tools, landing history and evidence only under out/, assets per checkout. None of it was
+  red; an audit before the move found it. (28) 0001 D3.4 and V13 say four architectures compile; no script did, and V5 had no
+  task either: at each close, list every exit and verification row without a task or a script (217 found V5; 267 runs V13 once).
 
 ## Handover (eighth lead, 2026-11-28, final)
 State for the ninth lead (earlier handovers still hold where not superseded).
