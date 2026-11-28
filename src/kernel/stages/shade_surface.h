@@ -173,9 +173,10 @@ AR_FN void surface_move_past(const KernelGlobals& kg, uint32_t slot, Real3 P, Re
 // advances and the path goes on past the surface in its direction (surface_move_past). Nothing else
 // changes: no random number, no event index, no transparent or other bounce, no emission, beta, r_u
 // and r_l as they were. A count at the cap ends the path VOLUME_LIMIT, a push at depth 4
-// STACK_OVERFLOW; both are counted in the termination histogram. Returns whether the hit was a false
-// interface (the caller returns); false for an instance without a medium and for a true interface the ray
-// can see.
+// STACK_OVERFLOW; both are counted in the termination histogram and in FilmData::medium_limit_total,
+// and the path's stored flags are this hit's (FRONT_FACE), as a TRANSPARENT_LIMIT end leaves them.
+// Returns whether the hit was a false interface (the caller returns); false for an instance without a
+// medium and for a true interface the ray can see.
 // `mat` is the hit's material header. Only a push can fail: a visible false back face always finds its id
 // (interface_is_true calls an absent id true), and a back face met through bit 6 alone whose id is absent
 // (the path started inside the medium) is refused, the stack unchanged, as in surface_true_crossing.
@@ -194,6 +195,8 @@ AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint3
   const uint32_t n = crossings(flags) + 1u;
   const StackUpdate u = front ? stack_push(stack, flags, m + 1u, priority) : stack_remove(stack, flags, m + 1u);
   if (n >= kVolumeBoundsMax || (front && !u.ok)) {
+    ps_flags(kg, slot) = front ? (flags | FRONT_FACE) : (flags & ~FRONT_FACE);
+    film_medium_limit_add(kg);
     path_end(kg, slot, n >= kVolumeBoundsMax ? Term::VOLUME_LIMIT : Term::STACK_OVERFLOW);
     return true;
   }
@@ -207,7 +210,8 @@ AR_FN bool surface_false_interface(const KernelGlobals& kg, uint32_t slot, uint3
 // the dielectric lobe, 0006 D17): the same push or remove, as Cycles enters and exits volumes only
 // when the continuation transmits. A remove of an id not on the stack (the path started inside the
 // medium) is refused and leaves stack and flags unchanged. Returns false when a push overflowed: the
-// path then ends STACK_OVERFLOW. The hit is the path's (hit_inst), `mat` its material header.
+// path then ends STACK_OVERFLOW, counted in FilmData::medium_limit_total, its stored flags this hit's.
+// The hit is the path's (hit_inst), `mat` its material header.
 // Ref: Cycles kernel/integrator/shade_surface.h integrate_surface ("if (continue_path_label &
 // LABEL_TRANSMIT) volume_stack_enter_exit"), read in third_party/_cache/refs/cycles-ed69ef2c6bd3.
 AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_t mat, bool front) {
@@ -224,6 +228,8 @@ AR_FN bool surface_true_crossing(const KernelGlobals& kg, uint32_t slot, uint32_
   // refused push would need a fifth entry, which the stack cannot hold (0006 D16), so it ends the path
   // and is counted.
   if (!u.ok && front) {
+    ps_flags(kg, slot) = u.flags | FRONT_FACE;
+    film_medium_limit_add(kg);
     path_end(kg, slot, Term::STACK_OVERFLOW);
     return false;
   }

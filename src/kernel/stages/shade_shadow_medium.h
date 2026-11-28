@@ -19,7 +19,7 @@
 // T_ray avg(r_l0 + r_u0) / avg(r_l0 rescale_l + r_u0 rescale_u) and written back, and the medium
 // field is cleared: the item is done with its medium step and shade_shadow sees an item in no
 // medium. A zero estimate blocks the item; D8's 131,072 tentative collisions block it too and count
-// VOLUME_LIMIT once in the termination histogram at the target's pixel. A blocked item ends as an
+// VOLUME_LIMIT once in the termination histogram at the target's pixel and once in FilmData::medium_limit_total. A blocked item ends as an
 // occluded one (SHADOW_TERMINATED) with contribution 0, so shade_shadow, which runs over the whole
 // segment, adds nothing for it. A volume entry that fails, or a non-finite coefficient, segment length
 // or product, marks the sample invalid and blocks the item. Any light's item may be in a medium
@@ -130,6 +130,7 @@ AR_FN void shadow_medium_item(const KernelGlobals& kg, uint32_t slot, uint32_t l
     return;
   }
   if (r.limit) {
+    film_medium_limit_add(kg);
     const FilmData& f = *kg.film;
     if (f.term_hist >= 0)
       film_count_add(kg, uint32_t(f.term_hist) + uint32_t(Term::VOLUME_LIMIT), film_slot_pixel(kg, target), 1u);

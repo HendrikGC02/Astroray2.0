@@ -12,7 +12,7 @@
 //              without the medium test (route_hit_after_medium), the hit record unchanged;
 //   absorbed:  the path ends ABSORBED; a zero weight ends it ZERO_THROUGHPUT;
 //   limit:     the event's 1,048,576 tentative collisions (D8, shared by its flights) end it
-//              VOLUME_LIMIT, counted in the statistics' termination histogram;
+//              VOLUME_LIMIT, counted in the termination histogram and in FilmData::medium_limit_total;
 //   capped:    D8's per-launch cap (SessionUniforms::medium_launch_cap): the flight's state (the ray
 //              rebased to its last collision as ray_o, hit_t and prev_dist, the weights, medium_rng)
 //              is stored and the path requeued into this segment, which goes on bit-identically. With
@@ -170,6 +170,7 @@ AR_FN void stage_shade_volume(const KernelGlobals& kg, uint32_t item, const Step
     return;
   }
   if (r.event == TrackEvent::LIMIT) {
+    film_medium_limit_add(kg);
     path_end(kg, slot, Term::VOLUME_LIMIT);
     return;
   }
