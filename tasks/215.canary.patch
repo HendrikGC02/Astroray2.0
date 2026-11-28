@@ -1,12 +1,29 @@
 diff --git a/cli/bench.cpp b/cli/bench.cpp
-index d49087ec..466d89ac 100644
+index 13094787..c2bfbd43 100644
 --- a/cli/bench.cpp
 +++ b/cli/bench.cpp
-@@ -166,7 +166,10 @@ int bench_cmd(int argc, char** argv) {
-   ar_build_info(&b);
+@@ -80,7 +80,7 @@ bool hardware_id(std::string& id, std::string& why) {
+       why = "ar_device_get_info(" + std::to_string(i) + ") status " + std::to_string(st);
+       return false;
+     }
+-    if (d.kind == AR_DEVICE_CUDA) { pick = d; have = true; break; }
++    if (d.kind == AR_DEVICE_CUDA + 2) { pick = d; have = true; break; }
+     if (!have && d.kind == AR_DEVICE_CPU) { pick = d; have = true; }
+   }
+   if (!have) { why = "no CUDA or CPU device in the device list"; return false; }
+@@ -99,7 +99,6 @@ bool hardware_id(std::string& id, std::string& why) {
+   if (bytes && GetLogicalProcessorInformationEx(RelationProcessorCore,
+                                                 reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf.data()), &bytes)) {
+     for (DWORD off = 0; off < bytes;) {
+-      ++cores;
+       off += reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf.data() + off)->Size;
+     }
+   }
+@@ -184,7 +183,10 @@ int bench_cmd(int argc, char** argv) {
    Line l;
    l.sha = text(b.git_sha, sizeof b.git_sha);
--  l.machine = hardware_id();
+   std::string why;
+-  if (!hardware_id(l.machine, why)) { printf("bench: no hardware id: %s\n", why.c_str()); return kExitFailure; }
 +  char* host = nullptr;
 +  size_t host_len = 0;
 +  l.machine = _dupenv_s(&host, &host_len, "COMPUTERNAME") == 0 && host ? host : "unknown";
