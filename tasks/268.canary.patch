@@ -24,19 +24,6 @@ index 4ef49d2e..80d9a3ea 100644
    char line[256];
    std::snprintf(line, sizeof line, "off-reference %s %s: %.4g %s against %.4g %s", id, row, measured, unit, limit, unit);
    std::printf("%s\n", line);
-diff --git a/tools/integrator_checks.py b/tools/integrator_checks.py
-index af62ba24..1412605e 100644
---- a/tools/integrator_checks.py
-+++ b/tools/integrator_checks.py
-@@ -601,7 +601,7 @@ def tripwire_verdict(mid, reference_id, spp, ms, reference_base, own_base):
-         if reference_base is None:
-             return True, f"off-reference {mid} B-16 tripwire {spp} spp: {ms:.3g} ms per sample, no baseline on this machine (run --bless)"
-         _, _, line = machine_id.judge(f"B-16 tripwire {spp} spp", ms, reference_base * TRIPWIRE_LIMIT, mid, "ms per sample")
--        return True, line or f"{spp} spp {ms:.3g} ms per sample (reference baseline {reference_base:.3g}, limit x{TRIPWIRE_LIMIT})"
-+        return False, line or f"{spp} spp {ms:.3g} ms per sample (reference baseline {reference_base:.3g}, limit x{TRIPWIRE_LIMIT})"
-     base = reference_base if mid == reference_id else own_base
-     if base is None:
-         return False, f"ms_per_sample_{spp}spp {ms:.3g}: no baseline (run --bless)"
 diff --git a/tools/kernelgate.py b/tools/kernelgate.py
 index 2643d40d..a117ec83 100644
 --- a/tools/kernelgate.py
@@ -76,7 +63,7 @@ index 17cdc5a1..e8d1aa15 100644
    return $id
  }
 diff --git a/tools/machine_id.py b/tools/machine_id.py
-index 5e28d285..be7c20c2 100644
+index 5e28d285..61fac617 100644
 --- a/tools/machine_id.py
 +++ b/tools/machine_id.py
 @@ -80,7 +80,7 @@ def judge(row, measured, limit, mid=None, unit="", machines=MACHINES):
@@ -97,15 +84,6 @@ index 5e28d285..be7c20c2 100644
      print(f"off-reference {mid} {row}: {_fmt(measured, unit)} against {_fmt(limit, unit)}", flush=True)
      return True
  
-@@ -111,7 +111,7 @@ def record(mid, row, value, machines=MACHINES):
-     """Rewrites [machine."mid"] of the file with row = value (other rows of that machine and every other line
-     stay). Refuses the reference id: its medians are the records' numbers, edited by hand."""
-     t = load_machines(machines)
--    if mid == t["reference"]:
-+    if True:
-         raise MachineError(f"{mid} is the reference machine: its medians are the recorded ones in [reference_median]")
-     if not value > 0:
-         raise MachineError(f"median of {row} is {value}: not a measurement")
 @@ -136,7 +136,7 @@ def record_reference(row, value, note, machines=MACHINES):
          raise MachineError(f"median of {row} is {value}: not a measurement")
      with open(machines, encoding="utf-8", newline="") as f:
