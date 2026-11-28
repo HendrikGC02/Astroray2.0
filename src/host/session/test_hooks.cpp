@@ -165,6 +165,10 @@ TestHooks read_test_hooks() {
     out.compute_capability = uint32_t(positive("COMPUTE_CAPABILITY", value, 999));
     out.active.push_back("COMPUTE_CAPABILITY=" + value);
   }
+  if (env_value("BUILT_ARCH", &value)) {
+    out.built_arch = uint32_t(positive("BUILT_ARCH", value, 999));
+    out.active.push_back("BUILT_ARCH=" + value);
+  }
   if (env_value("DENOISER_FAIL", &value)) {
     if (value == "library") out.denoiser_fail = TestHooks::DenoiserFail::LIBRARY;
     else if (value == "device") out.denoiser_fail = TestHooks::DenoiserFail::DEVICE;

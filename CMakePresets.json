@@ -10,8 +10,7 @@
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "/O2 /DNDEBUG",
         "ASTRORAY_GPU": "ON",
-        "ASTRORAY_DEV_KERNEL_DIR": "ON",
-        "CMAKE_CUDA_ARCHITECTURES": "120-real"
+        "ASTRORAY_DEV_KERNEL_DIR": "ON"
       }
     },
     {

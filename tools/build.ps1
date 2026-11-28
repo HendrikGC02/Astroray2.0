@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# tools/build.ps1 [-Target t[,t]] [-Preset dev|cpu] [-CheckOnly] [-NoMachineLock] [-Jobs n]
+# tools/build.ps1 [-Target t[,t]] [-Preset dev|cpu] [-CudaArch 75|86|89|120] [-CheckOnly] [-NoMachineLock] [-Jobs n]
 # Enters the pinned MSVC environment, configures when needed, builds, then proves
 # with `ninja -n` that no work is left (0009 d5, d9; Test-ArNoWorkLeft settles build_info's stamp first, so an
 # index refresh by another process is not work).
@@ -9,12 +9,17 @@
 # Takes the machine lock (not with -NoMachineLock, for CPU-only callers) and the
 # tree lock on out/build (0009 d8), and a share of the gate's fast window (lib/lock.ps1); the summary reports
 # the waits.
+# The CUDA architecture of the device modules (ASTRORAY_CUDA_ARCH, 0001 D3.4) comes from -CudaArch, else the
+# environment variable of that name, else `nvidia-smi` (first GPU); the dev preset with none of them fails, never
+# a silent 120. The line "cuda arch sm_NN (from variable|nvidia-smi)" names it; a configure runs when the
+# cache holds another one.
 # Output: at most 20 lines, last line "PASS build <s> s (budget n/a, waited <w> s)"
 # or "FAIL build ..."; full log in out/check/build.log, JSON in build.json;
 # non-zero exit on failure.
 param(
   [string[]]$Target = @('all'),
   [ValidateSet('dev', 'cpu')][string]$Preset = 'dev',
+  [ValidateSet('', '75', '86', '89', '120')][string]$CudaArch = '',
   [switch]$CheckOnly,
   [switch]$NoMachineLock,
   [int]$Jobs = 0
@@ -73,6 +78,14 @@ function Test-ArNoWorkLeft {
   }
 }
 
+# The architecture of the first GPU from `nvidia-smi --query-gpu=compute_cap --format=csv,noheader` (one line per
+# GPU, "12.0"), as 10*major+minor; $null when the first line is absent or not a capability.
+function ConvertFrom-ArNvidiaSmi([string[]]$Lines) {
+  $first = @($Lines | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne '' }) | Select-Object -First 1
+  if ($first -match '^(\d+)\.(\d+)$') { return [int]$Matches[1] * 10 + [int]$Matches[2] }
+  return $null
+}
+
 function Say([string]$m) { Add-Content -Path $log -Value $m }
 function Fail([string]$why) {
   $null = Complete-ArSummary -Pass $false -Waited $waited -Reason $why
@@ -119,13 +132,34 @@ try {
         if ($head -match '// ar-f64') { $lines += "f64 $f" }
       }
     }
+    # --- CUDA architecture (dev preset: the GPU kernels are built for exactly one) ---
+    $cfgArgs = @()
+    $archDiffers = $false
+    if ($Preset -eq 'dev') {
+      $arch = $CudaArch; $from = 'variable'
+      if (-not $arch -and $env:ASTRORAY_CUDA_ARCH) { $arch = $env:ASTRORAY_CUDA_ARCH }
+      if (-not $arch) {
+        $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+        if (-not $smi) { Fail 'no CUDA architecture: nvidia-smi not found; set ASTRORAY_CUDA_ARCH (75, 86, 89 or 120) or pass -CudaArch' }
+        $cc = ConvertFrom-ArNvidiaSmi @(& $smi.Source --query-gpu=compute_cap --format=csv,noheader 2>&1 | ForEach-Object { "$_" })
+        if ($null -eq $cc) { Fail 'no CUDA architecture: nvidia-smi reported no GPU; set ASTRORAY_CUDA_ARCH (75, 86, 89 or 120) or pass -CudaArch' }
+        $arch = "$cc"; $from = 'nvidia-smi'
+      }
+      if ($arch -notin '75', '86', '89', '120') { Fail "ASTRORAY_CUDA_ARCH is '$arch' ($from): it must be one of 75, 86, 89, 120 (0001 D3.4)" }
+      Write-Host "cuda arch sm_$arch (from $from)"
+      Say "cuda arch sm_$arch (from $from)"
+      $cfgArgs = @("-DASTRORAY_CUDA_ARCH=$arch")
+      $cache = Join-Path $buildDir 'CMakeCache.txt'
+      $cached = if (Test-Path $cache) { Select-String -Path $cache -Pattern '^ASTRORAY_CUDA_ARCH:\w+=(\d+)$' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1 } else { $null }
+      $archDiffers = ($cached -ne $arch)
+    }
     $listText = ($lines -join "`n") + "`n"
     $listFile = Join-Path $buildDir 'sources.txt'
     $old = if (Test-Path $listFile) { [IO.File]::ReadAllText($listFile) } else { $null }
-    $needCfg = (-not (Test-Path (Join-Path $buildDir 'CMakeCache.txt'))) -or ($old -ne $listText)
+    $needCfg = (-not (Test-Path (Join-Path $buildDir 'CMakeCache.txt'))) -or ($old -ne $listText) -or $archDiffers
     if ($needCfg) {
       $t = $clock.Elapsed.TotalSeconds
-      if ((Run 'cmake' @('--preset', $Preset)) -ne 0) { Fail "configure failed (see $log)" }
+      if ((Run 'cmake' (@('--preset', $Preset) + $cfgArgs)) -ne 0) { Fail "configure failed (see $log)" }
       [IO.File]::WriteAllText($listFile, $listText)
       Add-ArStep "configure $Preset" ($clock.Elapsed.TotalSeconds - $t)
     }

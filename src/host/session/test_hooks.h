@@ -29,6 +29,7 @@ struct TestHooks {
   bool gpu_fault = false;           // ASTRORAY_TEST_GPU_FAULT=1: the device's first launch runs test_fault.cu
   uint32_t driver_version = 0;      // ASTRORAY_TEST_DRIVER_VERSION: pretended cuDriverGetVersion, 0 = the real one
   uint32_t compute_capability = 0;  // ASTRORAY_TEST_COMPUTE_CAPABILITY: pretended 10*major+minor, 0 = the real one
+  uint32_t built_arch = 0;          // ASTRORAY_TEST_BUILT_ARCH: pretended architecture of the build (10*major+minor), 0 = the real one
   // ASTRORAY_TEST_DENOISER_FAIL: a session's denoiser state is created to fail (0008 V11's forced
   // creation failure): LIBRARY with an empty library folder, DEVICE with CUDA ordinal 99.
   enum class DenoiserFail : uint8_t { NONE = 0, LIBRARY, DEVICE };
@@ -43,7 +44,7 @@ struct TestHooks {
 // a positive worker count, ASTRORAY_TEST_MEDIUM_CAP and ASTRORAY_TEST_MAJORANT a positive integer (RULINGS 111),
 // ASTRORAY_TEST_RADIANCE_SCALE exactly "1", ASTRORAY_TEST_CORRUPT_CUBIN,
 // ASTRORAY_TEST_FAIL_INIT, ASTRORAY_TEST_GPU_FAULT and ASTRORAY_TEST_LAUNCH_TIMING exactly "1" and ASTRORAY_TEST_DRIVER_VERSION and
-// ASTRORAY_TEST_COMPUTE_CAPABILITY a positive integer, ASTRORAY_TEST_DENOISER_FAIL library or device; each throws
+// ASTRORAY_TEST_COMPUTE_CAPABILITY and ASTRORAY_TEST_BUILT_ARCH a positive integer, ASTRORAY_TEST_DENOISER_FAIL library or device; each throws
 // std::invalid_argument on any other non-empty value. Empty in builds without AR_GATE_HOOKS.
 TestHooks read_test_hooks();
 

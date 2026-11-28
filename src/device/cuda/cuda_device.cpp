@@ -28,6 +28,7 @@
 
 #include "device/cuda/module_loader.h"
 #include "device/cuda/optix_accel.h"
+#include "host/build_info.h"
 #include "host/device_probe.h"
 #include "host/session/test_hooks.h"
 #include "kernel/launch_config.h"
@@ -243,6 +244,20 @@ struct CudaDevice::Impl {
     const astroray::DeviceStatus status = astroray::cuda_device_status(driver, major, minor);
     if (status.status != AR_OK)
       throw DeviceError("GPU device unavailable: " + status.reason + " (GPU " + arch + ")");
+    // The modules are cubins of one architecture (cmake/kernels.cmake): refused here, before a context
+    // is retained, instead of as NO_BINARY_FOR_GPU at the first module load. A cubin of sm_XY loads on
+    // sm_XZ with Z >= Y (same major), which the CUDA programming guide's binary compatibility rule gives.
+    // Ref: 0001 D3.4 (one architecture per build), 0002 D15 "No module image for this GPU".
+    uint32_t built = hooks.built_arch;
+    if (built == 0) {
+      const std::string built_name = astroray::built_cuda_arch();  // "sm_NN", empty without AR_BUILT_CUDA_ARCH
+      if (built_name.size() <= 3) throw std::logic_error("CudaDevice: this build records no CUDA architecture");
+      built = static_cast<uint32_t>(std::stoul(built_name.substr(3)));
+    }
+    const uint32_t device_cc = static_cast<uint32_t>(major * 10 + minor);
+    if (built / 10 != device_cc / 10 || built % 10 > device_cc % 10)
+      throw DeviceError("GPU device unavailable: built for sm_" + std::to_string(built) + ", device is " + arch +
+                        ": rebuild (tools/build.ps1 reads the installed GPU)");
     check(cu.cuDevicePrimaryCtxRetain_(&ctx, device), "cuDevicePrimaryCtxRetain");
     bind();
     // Observes a sticky error left by any other user of the primary context: the call

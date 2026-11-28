@@ -25,6 +25,7 @@
 #include "device/cuda/cuda_device.h"
 #include "device/cuda/module_loader.h"
 #include "device/cuda/optix_accel.h"
+#include "host/build_info.h"
 #include "host/device.h"
 #include "host/light/lamps.h"
 #include "host/material/material_store.h"
@@ -405,6 +406,34 @@ TEST_CASE("device_failures/failing init worker") {
   CHECK(rig.scene->known(AR_KIND_LIGHT, 200));
 }
 
+TEST_CASE("device_failures/build arch not covering the device is refused") {
+  // 0001 D3.4: the modules are cubins of one architecture. A device of another major architecture is
+  // refused at creation, naming both, before any module load (0002 D15 "No module image for this GPU").
+  const std::string built = astroray::built_cuda_arch();
+  REQUIRE(built.size() > 3);
+  const std::string other = built[3] == '8' ? "75" : "86";  // a different major than this build's
+  {
+    Hook h("COMPUTE_CAPABILITY", other.c_str());
+    const DeviceError e = refused_device();
+    const std::string text = e.what();
+    CHECK(e.status() == AR_ERR_DEVICE);
+    CHECK(has(text, ("GPU device unavailable: built for " + built + ", device is sm_" + other + ": rebuild").c_str()));
+    CHECK_FALSE(has(text, "no usable module image"));
+  }
+  {
+    // The build's own architecture on a device of the same major and a higher minor is covered.
+    Hook h("BUILT_ARCH", "81");
+    Hook c("COMPUTE_CAPABILITY", "86");
+    Ledger ledger;
+    CHECK(make_cuda_device(ledger, 0) != nullptr);
+  }
+  {
+    Hook h("BUILT_ARCH", "89");
+    Hook c("COMPUTE_CAPABILITY", "86");  // a lower minor than the cubin's: not covered
+    CHECK(has(refused_device().what(), "built for sm_89, device is sm_86: rebuild"));
+  }
+}
+
 TEST_CASE("device_failures/untested architecture warns once") {
   {
     Ledger ledger;
@@ -413,6 +442,9 @@ TEST_CASE("device_failures/untested architecture warns once") {
     CHECK(device->untested_architecture().empty());
   }
   Hook h("COMPUTE_CAPABILITY", "86");
+  // The pretended GPU is not the build's architecture; the build is pretended to be sm_86 too, so the
+  // refusal of "build arch not covering the device" does not hide the warning under test.
+  Hook b("BUILT_ARCH", "86");
   Rig rig(true);
   rig.commit_settings();
   Ledger ledger;

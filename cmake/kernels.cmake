@@ -62,6 +62,26 @@ endif()
 # Every device build is an explicit custom command; CMake's CUDA language is enabled only so
 # that CUDAToolkit_NVCC_EXECUTABLE is the compiler it selected for the pinned toolchain.
 if(ASTRORAY_GPU)
+  # The one architecture the device modules are built for (0001 D3.4: 75 86 89 120). 120 is the reference
+  # machine's; tools/build.ps1 sets the variable from the installed GPU. A cubin runs only on the
+  # architecture it names, so a device this build does not cover is refused at device creation
+  # (CudaDevice) instead of failing at the first module load. CMake's own architecture list follows
+  # the variable, so no preset names one.
+  set(ASTRORAY_CUDA_ARCH 120 CACHE STRING "CUDA architecture of the device modules: 75, 86, 89 or 120")
+  set_property(CACHE ASTRORAY_CUDA_ARCH PROPERTY STRINGS 75 86 89 120)
+  if(NOT ASTRORAY_CUDA_ARCH MATCHES "^(75|86|89|120)$")
+    message(FATAL_ERROR "ASTRORAY_CUDA_ARCH is '${ASTRORAY_CUDA_ARCH}': it must be one of 75, 86, 89, 120 (0001 D3.4)")
+  endif()
+  set(CMAKE_CUDA_ARCHITECTURES ${ASTRORAY_CUDA_ARCH}-real)
+  message(STATUS "CUDA architecture sm_${ASTRORAY_CUDA_ARCH}")
+  # The host names the architecture it was built for (build_info.h built_cuda_arch). The identity
+  # library is created after this file, hence the deferred call.
+  function(_ar_define_built_arch arch)
+    if(TARGET astroray_buildinfo)
+      target_compile_definitions(astroray_buildinfo PUBLIC AR_BUILT_CUDA_ARCH=${arch})
+    endif()
+  endfunction()
+  cmake_language(DEFER CALL _ar_define_built_arch ${ASTRORAY_CUDA_ARCH})
   enable_language(CUDA)
   find_package(CUDAToolkit 12.8 REQUIRED)
   if(NOT CUDAToolkit_NVCC_EXECUTABLE)
@@ -89,9 +109,9 @@ if(ASTRORAY_GPU)
   # `ptxas --help` of CUDA 12.8 spells the double-use flag --warn-on-double-precision-use
   # (alias -warn-double-usage); ar_gpu_variant adds it to every module not listed in
   # AR_GPU_F64_MODULES, the one opt-out of D1.
+  # The gencode pair sits between the two halves: ar_gpu_variant names its architecture.
+  set(_ar_nvcc_head -ccbin ${CMAKE_CXX_COMPILER} -cubin)
   set(_ar_nvcc_base
-    -ccbin ${CMAKE_CXX_COMPILER}
-    -cubin -gencode arch=compute_120,code=sm_120
     -O3 -std=c++17
     -prec-div=true -prec-sqrt=true -ftz=false
     -Werror all-warnings
@@ -134,8 +154,12 @@ if(ASTRORAY_GPU)
   # One cubin per source: <dir>/<name>.cubin and <name>.ptxas.txt (the ptxas -v output).
   # DEPFILE carries the headers, so an edit to a kernel header rebuilds exactly its users.
   # Sets <target>_OUTPUTS to every file the variant produces.
+  # ARCH defaults to the build's architecture; the compile-only reference set passes 120.
   function(ar_gpu_variant target dir fmad)
-    cmake_parse_arguments(V "" "COPY_TO" "DEFS;SOURCES" ${ARGN})
+    cmake_parse_arguments(V "" "COPY_TO;ARCH" "DEFS;SOURCES" ${ARGN})
+    if(NOT V_ARCH)
+      set(V_ARCH ${ASTRORAY_CUDA_ARCH})
+    endif()
     set(_outs)
     foreach(_src IN LISTS V_SOURCES)
       get_filename_component(_n ${_src} NAME_WE)
@@ -148,7 +172,7 @@ if(ASTRORAY_GPU)
       add_custom_command(
         OUTPUT ${_cubin} ${_log}
         COMMAND ${CMAKE_COMMAND} -DAR_NVCC_LOG=${_log} -P ${CMAKE_CURRENT_FUNCTION_LIST_FILE} --
-                ${CUDAToolkit_NVCC_EXECUTABLE} ${_ar_nvcc_base} ${_f64} --fmad=${fmad} ${V_DEFS}
+                ${CUDAToolkit_NVCC_EXECUTABLE} ${_ar_nvcc_head} -gencode arch=compute_${V_ARCH},code=sm_${V_ARCH} ${_ar_nvcc_base} ${_f64} --fmad=${fmad} ${V_DEFS}
                 -MD -MF ${CMAKE_BINARY_DIR}/${dir}/${_n}.d -o ${_cubin} ${_src}
         DEPENDS ${_src}
         DEPFILE ${CMAKE_BINARY_DIR}/${dir}/${_n}.d
@@ -177,6 +201,13 @@ if(ASTRORAY_GPU)
   # are built, and copied loose in dev builds, but never embedded.
   ar_gpu_variant(astroray_kernels_gpu kernels true SOURCES ${_ar_gpu_prod} ${_ar_loose})
   add_custom_target(astroray_kernels_gpu ALL DEPENDS ${astroray_kernels_gpu_OUTPUTS})
+  # Reference pass (0009 d18): on a machine whose architecture is not 120 the same device TUs are
+  # compiled once more for sm_120, so kernelgate keeps gating budget.toml's rows on the reference
+  # architecture whatever the GPU is. Compile-only: never loaded, never embedded, never copied loose.
+  if(NOT ASTRORAY_CUDA_ARCH EQUAL 120)
+    ar_gpu_variant(astroray_kernels_gpu_ref kernels_ref true ARCH 120 SOURCES ${_ar_gpu_prod})
+    add_custom_target(astroray_kernels_gpu_ref ALL DEPENDS ${astroray_kernels_gpu_ref_OUTPUTS})
+  endif()
   set(ASTRORAY_STAGE_CUBINS)
   foreach(_f IN LISTS _ar_gpu_stages)
     get_filename_component(_n ${_f} NAME_WE)
@@ -205,7 +236,7 @@ if(ASTRORAY_GPU)
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/optix
         COMMAND ${CMAKE_COMMAND} -DAR_NVCC_LOG=${CMAKE_BINARY_DIR}/optix/${_n}.nvcc.txt -P ${CMAKE_CURRENT_LIST_FILE} --
                 ${CUDAToolkit_NVCC_EXECUTABLE} -ccbin ${CMAKE_CXX_COMPILER} -ptx
-                -gencode arch=compute_120,code=compute_120 -O3 -std=c++17
+                -gencode arch=compute_${ASTRORAY_CUDA_ARCH},code=compute_${ASTRORAY_CUDA_ARCH} -O3 -std=c++17
                 -prec-div=true -prec-sqrt=true -ftz=false --fmad=true -Werror all-warnings
                 -I ${CMAKE_SOURCE_DIR}/src/kernel -isystem ${_ar_optix_inc}
                 -MD -MF ${CMAKE_BINARY_DIR}/optix/${_n}.d -o ${_ptx} ${_src}
