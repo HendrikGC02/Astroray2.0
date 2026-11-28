@@ -6,14 +6,17 @@
 # reads). Scene ids are bench ids (bench/scenes.toml): b1m, b5m, b_tx (scenes/s3_textured), b_foliage, b1m_m1b; a scene's
 # .blend is written once into out/viewport/blend/ (scenes/<dir>/build.py, scenes/lib/blend_writer.py).
 # Output, in -OutDir (default out/viewport): <scene>_r<k>.json per run, rate_<scene>.json (the median run, which
-# tools/report.py plots, plus the table of runs) and, under out/evidence/214, Blender's screenshot of run 1 after the orbit.
+# tools/report.py plots, plus the table of runs) and, under out/evidence/214, Blender's screenshot of run 1, which the probe takes as the orbit ends (before the rest).
 # History lines go to out/bench/history-viewport-<yyyyMMdd>.jsonl (the lead commits them to bench/history/):
 # b14.rate (median over runs of each run's median rate), b14.rate_p5 (median of the 5th percentiles), b14.floor_longest_s
 # (the longest run of intervals above 1/24 s over all runs; B-14 allows 0.5). A run that sees other build or render
 # processes records their names in its json (busy_before, busy_after) and the summary line says "busy".
 # -Dry: a 2 s orbit and 1 s rest into out/tmp/214/dry, no history lines, to prove the flow. -Summarise: read the run
 # files again and print the table and the lines (tests/tools/fast_viewport_runner.ps1 uses it on canned files with
-# -HistoryOut, -Sha and -Date).
+# -HistoryOut, -Sha, -Date, and -Cli, -Recording for the machine id). A run with errors, without a median rate or whose
+# region is not 1920x1080 is a FAIL: the scene gets no history line and the exit code is 1. The history machine id is
+# read from the CLI's bench line before any capture (a minimal CUDA run under the machine lock), so a missing id fails at
+# once; -Dry writes no lines and reads none.
 param(
   [string[]]$Scene = @('b1m'),
   [int]$Runs = 3,
@@ -24,7 +27,8 @@ param(
   [switch]$Summarise,
   [string]$OutDir = '',
   [string]$HistoryOut = '',
-  [string]$Machine = '',   # the history lines' machine id; default: the CLI's, as perf.ps1 (the fixture passes one)
+  [string]$Cli = '',        # default out/bin/astroray_cli.exe
+  [string]$Recording = '',  # the .arrec the machine-id bench run reads; default the first scene's in out/viewport/blend
   [string]$Sha = '',
   [string]$Date = '',
   [int]$TimeoutS = 600
@@ -39,9 +43,16 @@ if ($bad) { Write-Host "FAIL measure_viewport: unknown scene $($bad -join ', ');
 if ($Runs -lt 1) { Write-Host 'FAIL measure_viewport: -Runs must be at least 1'; exit 2 }
 if (-not $OutDir) { $OutDir = if ($Dry) { Join-Path $root 'out/tmp/214/dry' } else { Join-Path $root 'out/viewport' } }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
+. (Join-Path $PSScriptRoot 'lib/lock.ps1')
+. (Join-Path $PSScriptRoot 'lib/proc.ps1')
+. (Join-Path $PSScriptRoot 'lib/python.ps1')
+. (Join-Path $PSScriptRoot 'lib/blender.ps1')
 function Get-BenchMachineId([string]$Cli, [string]$Rec) {
   # perf.ps1's neutral id, read from the CLI's own bench line of a minimal run (one source; cli/bench.cpp hardware_id).
-  $o = @(& $Cli bench $Rec --size 320x180 --passes 1 --warmup 0 --device cuda 2>&1 | ForEach-Object { "$_" })
+  # The run uses the GPU, so it holds the machine lock like perf.ps1 does.
+  $null = Enter-ArMachineLock -Job other -CeilingS 300
+  try { $o = @(& $Cli bench $Rec --size 320x180 --passes 1 --warmup 0 --device cuda 2>&1 | ForEach-Object { "$_" }) }
+  finally { Exit-ArMachineLock }
   $line = $o | Where-Object { $_ -like '{*' } | Select-Object -First 1
   $id = if ($line) { ($line | ConvertFrom-Json).machine } else { $null }
   if (-not $id) { throw "the CLI printed no bench line to read the machine id from ($Cli bench $Rec): $($o | Select-Object -Last 3)" }
@@ -60,10 +71,6 @@ function Get-Busy {
 }
 
 if (-not $Summarise) {
-  . (Join-Path $PSScriptRoot 'lib/lock.ps1')
-  . (Join-Path $PSScriptRoot 'lib/proc.ps1')
-  . (Join-Path $PSScriptRoot 'lib/python.ps1')
-  . (Join-Path $PSScriptRoot 'lib/blender.ps1')
   $blendDir = Join-Path $root 'out/viewport/blend'
   New-Item -ItemType Directory -Force $blendDir | Out-Null
   $failed = 0
@@ -79,12 +86,30 @@ if (-not $Summarise) {
       & $py -I (Join-Path $root "scenes/$($dirs[$name])/build.py") --out (Join-Path $blendDir "$name.arrec") --blend $blend
       if ($LASTEXITCODE -ne 0) { throw "scene builder $name failed" }
       Remove-Item $blend -ErrorAction SilentlyContinue   # a failed writer must not leave the last .blend to be measured
-      # b1m_m1b's GRATING material needs the add-on registered in the writer's Blender; the others are written as measure_ttff.ps1 does.
-      $w = if ($name -eq 'b1m_m1b') { @((Join-Path $root 'scenes/b1m_m1b/write_blend.py'), @("$blend.json", $blend)) }
-      else { @((Join-Path $root 'scenes/lib/blend_writer.py'), @('--no-extension', "$blend.json", $blend)) }
-      $null = Invoke-ArBlender -Script $w[0] -TimeoutS 900 -Args $w[1]
+      # b1m_m1b's GRATING material needs the add-on registered in the writer's Blender, so its Blender job enables the
+      # extension first (tests/blender/smoke_a1.py, as the probe does); the others are written as measure_ttff.ps1 does.
+      if ($name -eq 'b1m_m1b') {
+        $ext = Join-Path $blendDir 'write_blend_ext.py'
+        Set-Content -Path $ext -Value @'
+import sys
+root, desc, out = sys.argv[sys.argv.index("--") + 1:]
+sys.path[:0] = [root + "/tests/blender", root + "/scenes/lib"]
+import smoke_a1
+import blend_writer
+smoke_a1.install_and_enable()
+blend_writer.build(desc, out)
+'@
+        $null = Invoke-ArBlender -Script $ext -TimeoutS 900 -Args @($root, "$blend.json", $blend)
+      } else {
+        $null = Invoke-ArBlender -Script (Join-Path $root 'scenes/lib/blend_writer.py') -TimeoutS 900 -Args @('--no-extension', "$blend.json", $blend)
+      }
       if (-not (Test-Path $blend)) { throw "the .blend writer for $name failed (no $blend)" }
     }
+  }
+  # The machine id before any capture: a CLI that prints no bench line fails here, not after the runs.
+  if (-not $Dry) { $Machine = Get-BenchMachineId $(if ($Cli) { $Cli } else { Join-Path $root 'out/bin/astroray_cli.exe' }) $(if ($Recording) { $Recording } else { Join-Path $blendDir "$($Scene[0]).arrec" }) }
+  foreach ($name in $Scene) {
+    $blend = Join-Path $blendDir "$name.blend"
     for ($k = 1; $k -le $Runs; $k++) {
       $res = Join-Path $OutDir "${name}_r$k.json"
       Remove-Item $res -ErrorAction SilentlyContinue
@@ -105,7 +130,7 @@ if (-not $Summarise) {
 $lines = @()
 $date = if ($Date) { $Date } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
 $sha = if ($Sha) { $Sha } else { (git rev-parse HEAD).Trim() }
-if (-not $Machine) { $Machine = Get-BenchMachineId (Join-Path $root 'out/bin/astroray_cli.exe') (Join-Path $root "out/viewport/blend/$($Scene[0]).arrec") }
+if ($Summarise -and -not $Dry) { $Machine = Get-BenchMachineId $(if ($Cli) { $Cli } else { Join-Path $root 'out/bin/astroray_cli.exe' }) $(if ($Recording) { $Recording } else { Join-Path $root "out/viewport/blend/$($Scene[0]).arrec" }) }
 $gpu = (& nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>$null) -split ','
 $driver = if ($gpu.Count -ge 2) { $gpu[1].Trim() } else { 'unknown' }
 function New-Line([string]$scene, [string]$metric, [double]$value, [string]$unit, [int]$n, [double]$spread) {
@@ -115,8 +140,13 @@ function New-Line([string]$scene, [string]$metric, [double]$value, [string]$unit
 $fails = 0
 foreach ($name in $Scene) {
   $files = @(Get-ChildItem $OutDir -Filter "${name}_r*.json" -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object { Get-Content $_.FullName -Raw | ConvertFrom-Json })
-  $ok = @($files | Where-Object { $_.stats -and $null -ne $_.stats.rate_median -and -not $_.errors })
-  if ($ok.Count -eq 0) { Write-Host "FAIL measure_viewport: $name has no usable run in $OutDir"; $fails++; continue }
+  # A run that errored, has no median rate or is not 1920x1080 never feeds b14.rate: the scene gets no history line.
+  $ok = @($files | Where-Object { $_.stats -and $null -ne $_.stats.rate_median -and -not $_.errors -and $_.full_1080p -eq $true })
+  if ($files.Count -eq 0 -or $ok.Count -ne $files.Count) {
+    $why = @($files | Where-Object { $ok -notcontains $_ } | ForEach-Object { if ($_.errors) { 'errors' } elseif (-not $_.stats -or $null -eq $_.stats.rate_median) { 'no median rate' } else { "region $($_.region -join 'x')" } })
+    Write-Host "FAIL measure_viewport: $name has $($files.Count - $ok.Count) of $($files.Count) bad runs in $OutDir ($($why -join '; ')); no history line"
+    $fails++; continue
+  }
   $med = @($ok | ForEach-Object { [double]$_.stats.rate_median })
   $p5 = @($ok | ForEach-Object { [double]$_.stats.rate_p5 })
   $floor = @($ok | ForEach-Object { [double]$_.stats.longest_below_floor_s })

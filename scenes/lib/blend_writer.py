@@ -147,8 +147,9 @@ def _material(bpy, d, images):
         if name not in _PRINCIPLED:
             raise BlendWriterError(f"material {d['key']}: input '{name}' is not covered by the blend writer")
         socket, scale = _PRINCIPLED[name]
-        if name == "geometry_opacity" and isinstance(value, list):
-            raise BlendWriterError(f"material {d['key']}: geometry_opacity must be a constant number, got {value}")
+        if name == "geometry_opacity" and (isinstance(value, list) or not 0.0 <= value <= 1.0):
+            # Blender clamps Alpha to [0, 1] without a word, which would write a different opacity.
+            raise BlendWriterError(f"material {d['key']}: geometry_opacity must be a constant number in [0, 1], got {value}")
         node.inputs[socket].default_value = (*value, 1.0) if isinstance(value, list) else value * scale
     grating = d.get("grating")
     if grating is not None:

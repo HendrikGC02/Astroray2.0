@@ -366,8 +366,9 @@ class TestLowering(unittest.TestCase):
             src = stores(lower(mat))[slot]
             self.assertEqual(src["op"], "CONST_F32")
             self.assertAlmostEqual(src["f32"][0], a, places=6)
-        with self.assertRaises(blend_writer.BlendWriterError):
-            blend_writer._material(bpy, {"key": 8, "inputs": {"geometry_opacity": [0.5, 0.5, 0.5]}, "emission": None}, {})
+        for bad in ([0.5, 0.5, 0.5], -0.1, 1.5):
+            with self.subTest(bad=bad), self.assertRaises(blend_writer.BlendWriterError):
+                blend_writer._material(bpy, {"key": 8, "inputs": {"geometry_opacity": bad}, "emission": None}, {})
 
     def test_alpha_lowers_and_reaches_the_record(self):
         scene, plane, mat, world = tm.new_scene()

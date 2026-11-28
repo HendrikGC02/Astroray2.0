@@ -53,7 +53,10 @@ if ($unknown) { throw "measure_ttff: no bench id for scene $($unknown -join ', '
 
 function Get-BenchMachineId([string]$Cli, [string]$Rec) {
   # perf.ps1's neutral id, read from the CLI's own bench line of a minimal run (one source; cli/bench.cpp hardware_id).
-  $o = @(& $Cli bench $Rec --size 320x180 --passes 1 --warmup 0 --device cuda 2>&1 | ForEach-Object { "$_" })
+  # The run uses the GPU, so it holds the machine lock like perf.ps1 does.
+  $null = Enter-ArMachineLock -Job other -CeilingS 300
+  try { $o = @(& $Cli bench $Rec --size 320x180 --passes 1 --warmup 0 --device cuda 2>&1 | ForEach-Object { "$_" }) }
+  finally { Exit-ArMachineLock }
   $line = $o | Where-Object { $_ -like '{*' } | Select-Object -First 1
   $id = if ($line) { ($line | ConvertFrom-Json).machine } else { $null }
   if (-not $id) { throw "the CLI printed no bench line to read the machine id from ($Cli bench $Rec): $($o | Select-Object -Last 3)" }
@@ -152,6 +155,8 @@ $rows = @()   # one per run and switch
 $m8 = @()
 if (-not $Summarise) {
   foreach ($name in $Scene) { $null = Build-Blend $name }
+  # The id before any capture: a CLI that prints no bench line fails here, not after the runs.
+  $machine = Get-BenchMachineId (Join-Path $root 'out/bin/astroray_cli.exe') (Join-Path $out "$($Scene[0]).arrec")
   for ($k = 1; $k -le $Runs; $k++) {
     foreach ($name in $Scene) {
       foreach ($eng in $Engine) {
@@ -236,7 +241,7 @@ $rows | Sort-Object scene, engine, switch, run | Format-Table scene, engine, swi
 $hist = @()
 $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 $sha = (git rev-parse --short HEAD).Trim()
-$machine = Get-BenchMachineId (Join-Path $root 'out/bin/astroray_cli.exe') (Join-Path $out "$($Scene[0]).arrec")
+if (-not $machine) { $machine = Get-BenchMachineId (Join-Path $root 'out/bin/astroray_cli.exe') (Join-Path $out "$($Scene[0]).arrec") }
 $gpu = (& nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>$null) -split ','
 $driver = if ($gpu.Count -ge 2) { $gpu[1].Trim() } else { 'unknown' }
 foreach ($name in $Scene) {
