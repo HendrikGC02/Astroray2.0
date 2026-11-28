@@ -1,0 +1,22 @@
+diff --git a/tools/machine_id.py b/tools/machine_id.py
+index 885e0be2..452b53c2 100644
+--- a/tools/machine_id.py
++++ b/tools/machine_id.py
+@@ -77,7 +77,7 @@ def judge(row, measured, limit, mid=None, unit="", machines=MACHINES):
+         return "pass", limit, ""
+     t = load_machines(machines)
+     mid = mid or machine_id()
+-    if mid == t["reference"]:
++    if True:
+         return "fail", limit, ""
+     prof = t.get("machine", {}).get(mid, {})
+     ref = t.get("reference_median", {})
+@@ -108,7 +108,7 @@ def record(mid, row, value, machines=MACHINES):
+     """Rewrites [machine."mid"] of the file with row = value (other rows of that machine and every other line
+     stay). Refuses the reference id: its medians are the records' numbers, edited by hand."""
+     t = load_machines(machines)
+-    if mid == t["reference"]:
++    if True:
+         raise MachineError(f"{mid} is the reference machine: its medians are the recorded ones in [reference_median]")
+     if not value > 0:
+         raise MachineError(f"median of {row} is {value}: not a measurement")
