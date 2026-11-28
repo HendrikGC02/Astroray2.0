@@ -94,7 +94,7 @@ State for the ninth lead (earlier handovers still hold where not superseded).
 - Rulings 113-116 this session; 116 (k_shade_shadow_medium 448 / 20 / 20 B) needed the owner's own approval: the permission classifier
   refuses an implementer's (and the lead's relayed) edit of a budget allowance; ask the owner in chat and quote the answer.
 - Lessons: (17) a worktree without assets/_cache renders HDRIs magenta silently and every image comparison passes against an equally
-  broken reference: copy C:\Astroray2.0ssets\_cache\* into each worktree that renders assets until 245 lands (BACKLOG row). (18)
+  broken reference: copy the main checkout's assets/_cache folders into each worktree that renders assets until 245 lands (BACKLOG row). (18)
   land.ps1 refuses a task with a Look at line until -Evidence names what the lead saw (twice this session). (19) Disk filled to 100 %
   from stale worktrees; `git worktree remove` of landed ones freed 42 GB (owner OK); landing cleanup leaves unregistered folders when a
   process holds a file. (20) A throwaway PR needs the owner's own words in chat; an implementer cannot push on a relayed approval.
