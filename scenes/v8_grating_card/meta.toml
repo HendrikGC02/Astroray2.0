@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# V8 on a grating card (0005 Verification 8, items 21-22, 25): one flat reflective sinusoidal grating
+# card of 600 lines/mm under a small rectangular area lamp straight above it (normal incidence, as V8's
+# 22.31 and 49.41 degrees), seen by a wide-angle pinhole camera close to the card. The camera ray of a
+# pixel is the direction from the card to the camera, so a pixel is an outgoing angle (by reciprocity):
+# the lamp's image in order m of wavelength lambda sits where sin(theta) = m lambda / d, orders 0, +1 and
+# +2 spread along the strip, order 1 blue to red from about 14 to 25 degrees and order 2 from 26 to 57.
+# The film is a strip of 1024 x 16 pixels along the grating vector and shows one side only (columns run
+# from -3.5 to +58.5 degrees of the camera direction); the negative orders lie at negative angles, outside
+# it, and a second variant for them is not built (the gate seconds do not need it). The lamp's own direct
+# image is behind the camera. tools/analytic.py compares, per order and display channel, the centroid
+# of the render with the centroid of truths.py grating_orders (0.1 degrees, V8), the order-0 channels with
+# each other, and the pixels the prediction leaves dark with zero. That dark region is only the gap
+# between order 0 and order 1 and the film's left edge: orders 1 and 2 overlap in angle (blue of order 2
+# lies inside the red of order 1), so each order's window is cut at the predicted profile's minimum and
+# nothing is dark between them. Family z: one member holds four tests (three channel rows and the
+# achromatic test), so z = pixel_z(m, 4) = 4.22 at m = 104 (3.90 for one test), and z SE <= 0.1 degrees
+# per row still holds (largest 0.0212 * 4.22 = 0.09).
+#
+# Design values, stated. Depth 150 nm over a pitch of 1667 nm (h/d = 0.09, inside item 24's scalar range
+# below 0.10): eta_m = R J_m^2(2 pi h cos / lambda) at normal incidence is, at 450 / 550 / 650 nm,
+# eta_0 0.03 / 0.14 / 0.26, eta_1 0.29 / 0.30 / 0.27 and eta_2 0.13 / 0.07 / 0.04 (truths.py), coating
+# (n, k) = (1, 6) as 206's card, so orders 1 and 2 both carry energy and order 0 is not white (a thin
+# phase grating's zero order is J_0^2). The lamp is 3.15 m along the grating vector at 60 m, which subtends
+# 3.0 degrees there, and 4 m along the grooves (so every film row sees it whole); its radiance is 1.
+# Noise, ruling 113: every row needs z SE <= 0.1 degrees. Order 2 red is the sparsest (eta_2 0.04) and its
+# SE at 256 spp was 0.058 degrees for a 1.05 m lamp; the SE falls slowly with the lamp size (0.080, 0.058,
+# 0.046 degrees for 0.5, 1.05, 2.1 m) and as 1/sqrt(spp), so the lamp is 3.15 m and spp 1024 (SE 0.021
+# degrees, z SE 0.09 on both devices). The wider lamp image is blurred in the prediction as well.
+class = "A"
+units = "m"
+spectra = ["rgb"]
+assets = []
+single_witness = false
+# eps_sys defaults to 0: the centroid test is a tolerance of its own (centroid_tolerance_deg).
+[truth]
+formula = "grating_orders"
+lines_per_mm = 600.0
+depth_nm = 150.0
+coating_n = 1.0
+coating_k = 6.0
+m_min = -2
+m_max = 2
+lamp_height = 60.0
+lamp_size_y = 3.15
+lamp_size_x = 4.0
+radiance = 1.0
+camera_height = 0.2
+camera_axis_deg = 27.5
+focal_mm = 30.0
+sensor_mm = 36.0
+width = 1024
+height = 16
+spp = 1024
+card_size = 2.0
+centroid_tolerance_deg = 0.1
+dark_margin_px = 3
+
+[tolerance]
+kind = "z_se"

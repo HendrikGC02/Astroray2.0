@@ -52,7 +52,7 @@ MIN_SPP = 1024
 # 0009 d11: run by check.ps1 gate on both devices.
 GATE_SCENES = ("a5_emitter", "y_anchor", "a1_furnace", "a1_table_furnace", "a1_world_half", "a4_point", "a4_blackbody_lamp", "a4_sphere", "a3_disk",
                "lit_furnace_small", "d1_nee_onoff", "d8_stacked_lamps", "d1_uv_chart", "d3_alpha_cards", "d3_alpha_nee", "v1_slab",
-               "a9_one_texel", "d11_env_onoff")
+               "a9_one_texel", "d11_env_onoff", "v8_grating_card")
 # Gate scenes whose render on one device moved to `check full` (owner decision 38: named long-stable
 # statistical cases leave the gate when concurrent grouping is used up; check.ps1 full runs them with
 # --moved). The gate keeps the other device, and CPU-CUDA equivalence is the agreement tests' (0009
@@ -176,7 +176,13 @@ def check_channel(mean, var, truth, z, eps_sys):
     return not reasons, reasons, worst
 
 
+def size_wh(size):
+    """(width, height) of a plan's size: an int is a square image."""
+    return (size, size) if isinstance(size, int) else (int(size[0]), int(size[1]))
+
+
 def load_dump(path, spp, device, size=SIZE):
+    width, height = size_wh(size)
     spec = importlib.util.spec_from_file_location("_fits_read_analytic", FITS_READ)
     fr = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fr)
@@ -193,8 +199,8 @@ def load_dump(path, spp, device, size=SIZE):
     mean = np.stack([planes[f"display.{c}"] for c in range(3)]).astype(np.float64)
     var = np.stack([planes[f"display.{c}.VAR"] for c in range(3)]).astype(np.float64)
     nsamp = np.stack([planes[f"display.{c}.NSAMP"] for c in range(3)])
-    if mean.shape != (3, size, size) or not (nsamp == spp).all():
-        raise RuntimeError(f"the dump is {mean.shape[1:]} with NSAMP {np.unique(nsamp)}, expected {size}x{size} at {spp}")
+    if mean.shape != (3, height, width) or not (nsamp == spp).all():
+        raise RuntimeError(f"the dump is {mean.shape[1:]} with NSAMP {np.unique(nsamp)}, expected {width}x{height} at {spp}")
     return mean, var
 
 
@@ -246,6 +252,11 @@ def check_scene(mean, var, checks, m, eps_sys, max_relative=None, renders=None, 
     two renders."""
     out = []
     for name, w, truth, kind in checks:
+        if kind == "order_centroids":
+            # One member holds four tests (three channel rows and the achromatic test): Sidak over 4.
+            passed, reasons, worst, lines, biggest = order_centroid_rows(mean, var, truth, pixel_z(m, 4))
+            out.append((name, passed, reasons, worst, biggest, float(truth["tolerance_deg"]), lines))
+            continue
         if kind in ("pair_pixels", "pair_image"):
             (ma, va), (mb, vb) = (channel(w, *renders[mode]) for mode in truth)
             if kind == "pair_pixels":
@@ -299,6 +310,63 @@ def check_scene(mean, var, checks, m, eps_sys, max_relative=None, renders=None, 
     return out
 
 
+def order_centroid_rows(mean, var, spec, z):
+    """The `order_centroids` check of truths.grating_orders on one device's render: per display channel
+    the centroid, in degrees (spec["theta_deg"] per column), of the film's row-averaged profile inside
+    the channel's column window of the order (truths.grating_orders) against the centroid of the
+    prediction in the same window. With v the window's row-mean profile and its variance of the mean
+    sum(VAR) / rows^2 (independent pixels, exact in the independent sampler), the centroid
+    c = sum(theta v) / sum(v) has the first-order SE sqrt(sum((theta - c)^2 VAR)) / |sum(v)|. The rule
+    is the harness's own, |rendered - predicted| <= z SE + tolerance, the tolerance (V8's 0.1 degrees)
+    standing where eps_sys does: the allowance for what the render may be off by systematically, on top
+    of the noise a centroid carries (0009 d16 form, ruling 113). Each row also needs z SE <= the
+    tolerance, so the test reads at most twice V8's 0.1 degrees. For order 0 the three channels' rendered centroids must agree within the tolerance plus
+    z sqrt(2) SE of the noisiest. A window with no light in the render fails (order dropped). Also reports, not gated, the energy ratio rendered / predicted of the window with its z. The
+    window's signed profile must not nearly cancel (|sum v| at least half of sum |v|) or the centroid
+    is ill-conditioned and the check refuses. Returns (pass, reasons, worst (z of the largest
+    |difference| / SE, (channel, first column of the window)), rows of text, largest |difference| in
+    degrees)."""
+    tol = float(spec["tolerance_deg"])
+    rows = mean.shape[1]
+    reasons, lines, cents, ses, worst, biggest = [], [], [], [], (0.0, (0, 0)), 0.0
+    for c, name in enumerate("RGB"):
+        lo, hi = spec["windows"][c]
+        theta = np.asarray(spec["theta_deg"])[lo:hi]
+        v, vv = mean[c, :, lo:hi].mean(axis=0), var[c, :, lo:hi].sum(axis=0) / rows ** 2
+        if not np.any(v):
+            # An order dropped by the engine renders black: no centroid exists, and that is a failure.
+            reasons.append(f"{name}: the render is black in columns {lo}:{hi} (order dropped)")
+            lines.append(f"{name} (columns {lo}:{hi}): render black, order dropped")
+            worst = (math.inf, (c, lo))
+            continue
+        p = np.asarray(spec["predicted"])[c, lo:hi]
+        for what, x in (("render", v), ("prediction", p)):
+            if abs(x.sum()) < 0.5 * np.abs(x).sum():
+                raise ValueError(f"order centroid window {lo}:{hi} channel {name}: the {what}'s signed profile nearly "
+                                 f"cancels (|sum| {abs(x.sum()):.3g} of sum |.| {np.abs(x).sum():.3g})")
+        c_r, c_p = float((theta * v).sum() / v.sum()), float((theta * p).sum() / p.sum())
+        se = math.sqrt(float(((theta - c_r) ** 2 * vv).sum())) / abs(float(v.sum()))
+        diff = c_r - c_p
+        ratio, se_ratio = float(v.sum() / p.sum()), math.sqrt(float(vv.sum())) / abs(float(p.sum()))
+        zr = (ratio - 1.0) / se_ratio if se_ratio > 0 else math.inf
+        cents.append(c_r)
+        zd = diff / se if se > 0 else (0.0 if diff == 0 else math.copysign(math.inf, diff))
+        if c == 0 or abs(zd) >= abs(worst[0]):
+            worst = (zd, (c, lo))
+        biggest = max(biggest, abs(diff))
+        ses.append(se)
+        if abs(diff) > tol + z * se:
+            reasons.append(f"{name}: |{diff:+.4f}| deg beyond {tol:g} + z SE {z * se:.4f}")
+        if z * se > tol:
+            reasons.append(f"{name}: z SE {z * se:.4f} deg exceeds {tol:g}: raise the spp, rows or lamp size")
+        lines.append(f"{name} (columns {lo}:{hi}): rendered {c_r:.4f} deg predicted {c_p:.4f} deg difference {diff:+.4f} deg SE {se:.4f} deg, "
+                     f"window energy rendered / predicted {ratio:.4f} (z {zr:+.2f}, not gated)")
+    span = max(cents) - min(cents) if cents else 0.0
+    if spec["order"] == 0 and cents and span > tol + z * math.sqrt(2.0) * max(ses):
+        reasons.append(f"order 0 is not achromatic: channel centroids span {span:.4f} deg beyond {tol:g} + z sqrt(2) SE")
+    return not reasons, reasons, worst, lines, biggest
+
+
 def gate_scenes(device):
     """The scenes `--gate` renders on `device`: GATE_SCENES less the ones moved to full there."""
     return [s for s in GATE_SCENES if s not in MOVED_TO_FULL[device]]
@@ -329,8 +397,8 @@ def scene_checks(scene):
     and a quadrature truth (A9's environment_texel, about 0.5 s) would otherwise be evaluated again by
     every count the gate's family and shard lines make."""
     t = meta.load(os.path.join(ROOT, "scenes", scene, "meta.toml"))["truth"]
-    size = int(t.get("size", SIZE))
-    return len(truths.evaluate(t, size, size))
+    width, height = size_wh(plan_size(t))
+    return len(truths.evaluate(t, width, height))
 
 
 def scene_members(scenes, device_count=1):
@@ -418,11 +486,25 @@ def marker_check(scene, device, t, mean, block_size):
     return ok
 
 
+def plan_size(t):
+    """The image size a scene renders at: [truth] width and height (a rectangular film, V8's strip),
+    else [truth] size, else SIZE. An int for a square image, else (width, height)."""
+    if "width" in t:
+        return (int(t["width"]), int(t["height"]))
+    return int(t.get("size", SIZE))
+
+
 def comparison_plan(t, spp=None):
     """(size, spp, block) of a scene: SIZE at spp (default MIN_SPP) with per-pixel tests for a truth
     scene; [truth] size, spp (or `spp`) and block for a comparison scene or a truth scene that sets
     a block (D1's colour cells, lead ruling in task 077), refused unless every block holds at least
-    MIN_SPP samples (the calibrated minimum per tested unit)."""
+    MIN_SPP samples (the calibrated minimum per tested unit). A scene with a rectangular [truth]
+    width x height sets its own spp: its checks are centroids against a tolerance in degrees and a
+    dark-pixel test against zero, not the calibrated per-pixel normal test (whose minimum guards
+    skewed per-pixel means; order_centroid_rows computes the centroid's SE and holds it to the
+    tolerance)."""
+    if "width" in t:
+        return plan_size(t), int(t["spp"]) if spp is None else spp, 1
     if t["formula"] != "mode_agreement" and "block" not in t:
         spp = MIN_SPP if spp is None else spp
         check_spp(spp)
@@ -450,13 +532,14 @@ def hook_env(nee="on", light_sampler="tree"):
 
 
 def render_mode(rec, device, spp, seed, size, mode):
+    width, height = size_wh(size)
     """One CLI dump of `rec` with ASTRORAY_TEST_NEE = mode ("on" leaves it unset); returns
     (mean, var) or the CLI's output as a string on failure."""
     env = hook_env(nee=mode)
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "dump.fits")
         r = subprocess.run([CLI, "dump", rec, "-o", out, "--device", device, "--spp", str(spp),
-                            "--seed", str(seed), "--size", f"{size}x{size}"],
+                            "--seed", str(seed), "--size", f"{width}x{height}"],
                            capture_output=True, text=True, cwd=tmp, timeout=600, env=env)
         if r.returncode != 0:
             return f"astroray_cli exited {r.returncode} (NEE {mode})\n{r.stdout}{r.stderr}"
@@ -488,7 +571,12 @@ def run(scene, device, spp, seed, png=None):
     m, rec = scene_paths(scene)
     size, spp, block_size = comparison_plan(m["truth"], spp)
     repro = (f"<python> -I tools/analytic.py --scene {scene} --device {device} --spp {spp} --seed {seed}")
-    checks = truths.evaluate(m["truth"], size, size)
+    width, height = size_wh(size)
+    checks = truths.evaluate(m["truth"], width, height)
+    if m["truth"]["formula"] == "grating_orders":
+        print(f"analytic {scene} {device} V8 selfcheck: predictor 632.8 nm at 600 lines/mm, normal incidence: "
+              + ", ".join(f"order {o} " + ("evanescent" if a is None else f"{a:.2f} deg") for o, a in truths.v8_selfcheck())
+              + " (V8: 22.31 and 49.41 deg, no third order)")
     # The NEE modes the checks need (ASTRORAY_TEST_NEE, RULINGS.md 77): "on" for truth checks.
     modes = sorted({mode for c in checks if c[3].startswith("pair_") for mode in c[2]} | {"on"})
     renders = {}
@@ -503,9 +591,16 @@ def run(scene, device, spp, seed, png=None):
                           renders, block_size)
     ok = all(r[1] for r in results)
     worst_all = None
-    for (name, passed, reasons, worst, cmean, tmean), check in zip(results, checks):
+    for res, check in zip(results, checks):
+        name, passed, reasons, worst, cmean, tmean = res[:6]
         if worst_all is None or abs(worst[0]) > abs(worst_all[0]):
             worst_all = (worst[0], worst[1], name)
+        if check[3] == "order_centroids":
+            print(f"analytic {scene} {device} {name}: {'ok' if passed else 'FAIL'} largest |difference| {cmean:.4f} deg "
+                  f"of {tmean:g} deg" + ("; " + "; ".join(reasons) if reasons else ""))
+            for line in res[6]:
+                print(f"analytic {scene} {device} {name} {line}")
+            continue
         if check[3].startswith("pair_"):
             label = f"{check[2][0]} {cmean:.6f} {check[2][1]} {tmean:.6f}"
             excluded = 0
@@ -527,15 +622,15 @@ def run(scene, device, spp, seed, png=None):
             ref = truths.chart_linear(m["truth"], size, size)
             write_png(png, np.concatenate([mean, np.zeros((3, size, 2)), ref], axis=2), 1.0)
         else:
-            tmax = max((float(np.nanmax(t)) for _, _, t, k in checks if not k.startswith("pair_")),
+            tmax = max((float(np.nanmax(t)) for _, _, t, k in checks if k in ("pixels", "image")),
                        default=float(mean.max()))
-            write_png(png, mean, 0.5 / tmax if tmax > 0 else 1.0)
+            write_png(png, mean, 0.5 / tmax if tmax > 0 else 1.0, enlarge=1 if width != height else 8)
     secs = time.perf_counter() - t0
-    units = (size // block_size) ** 2
+    units = (width // block_size) * (height // block_size)
     unit = "block" if block_size > 1 else "pixel"
     print(f"{'PASS' if ok else 'FAIL'} analytic {scene} {device}: worst z {worst_all[0]:+.2f} "
           f"({worst_all[2]} at {worst_all[1]}) against per-{unit} z {pixel_z(family_m(), units):.2f} "
-          f"+ eps_sys {m['eps_sys']:g}, {size}x{size} at {spp} spp"
+          f"+ eps_sys {m['eps_sys']:g}, {width}x{height} at {spp} spp"
           + (f" in {block_size}x{block_size} blocks" if block_size > 1 else "")
           + f", seed {seed}, {secs:.1f} s; reproduce: {repro}")
     return ok
@@ -613,7 +708,11 @@ def main():
         ap.error("give one of --scene, --gate and --moved")
     if a.null:
         for s in a.scene or ap.error("--null takes --scene"):
-            for pair in meta.load(os.path.join(ROOT, "scenes", s, "meta.toml"))["truth"]["pairs"]:
+            truth = meta.load(os.path.join(ROOT, "scenes", s, "meta.toml"))["truth"]
+            if "width" in truth or "pairs" not in truth:
+                ap.error(f"--null needs a square comparison scene with [truth] pairs; {s} has "
+                         + ("a rectangular film" if "width" in truth else "no pairs"))
+            for pair in truth["pairs"]:
                 null_calibration(s, a.device, a.null, tuple(pair), a.spp)
         return 0
     if a.gate:

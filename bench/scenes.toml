@@ -86,6 +86,17 @@ gallery_size = [1280, 720]
 gallery_spp = 256
 heat = true
 
+# M1b "Look: grating orders": the grating card under a rectangular lamp, orders on both sides of the card
+# (scenes/ext_grating_card). The V8 gate scene is scenes/v8_grating_card (one side, a 1024 x 16 strip).
+[[scene]]
+name = "grating_card"
+recording = "ext_grating_card.arrec"
+class = "G"
+sets = []
+showcase = ["M1b"]
+gallery_size = [800, 800]
+gallery_spp = 256
+
 [[scene]]
 name = "b_foliage"
 recording = "b_foliage.arrec"
