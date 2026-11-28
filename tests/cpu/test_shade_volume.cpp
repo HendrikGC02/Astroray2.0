@@ -240,6 +240,35 @@ TEST_CASE("shade_volume/flights across a false interface draw new blocks") {
   CHECK(std::fabs(mean - truth) < 3.0 * se);
 }
 
+TEST_CASE("shade_volume/a volume limit end is counted once") {
+  // Each camera item has one collision left in its event's block range (medium_rng one below the range's
+  // end), and the majorant is 4096 sigma_t, so its first tentative collision is null with probability
+  // 4095/4096 and uses the range up: the flight ends VOLUME_LIMIT. Each such end adds one to
+  // FilmData::medium_limit_total, with no statistics plane requested; the light path (item 3) is
+  // forwarded and counts nothing. A rig whose film has no counter (null) runs the same ends.
+  const auto rig = [](uint32_t* counter) {
+    auto r = std::make_unique<StageRig>();
+    r->medium(0.0f, 1.0f, 0.0f);
+    r->kg.session.medium_majorant = 4096u;
+    r->film.medium_limit_total = counter;
+    for (uint32_t i = 0; i < StageRig::kN; ++i) r->medium_rng[i] = ar::flight_rng_start(4u) - 1u;
+    return r;
+  };
+  uint32_t total = 0;
+  auto r = rig(&total);
+  r->run();
+  for (uint32_t i = 0; i < 3u; ++i) {
+    INFO("item " << i);
+    CHECK(r->term[i] == uint8_t(ar::Term::VOLUME_LIMIT));
+    CHECK(r->next[i] == uint8_t(Stage::TERMINATED));
+  }
+  CHECK(r->next[3] != uint8_t(Stage::TERMINATED));
+  CHECK(total == 3u);
+  auto none = rig(nullptr);
+  none->run();
+  CHECK(none->term[0] == uint8_t(ar::Term::VOLUME_LIMIT));
+}
+
 TEST_CASE("shade_volume/absorption and bounce limits end the path") {
   StageRig a;
   a.medium(1.0e4f, 0.0f, 0.0f);
@@ -501,6 +530,48 @@ TEST_CASE("shade_volume/requeue ends the pass") {
               (unsigned long long)a.c.steps, (unsigned long long)b.c.steps, (unsigned long long)requeues);
   CHECK(requeues > 0u);
   CHECK(b.c.steps == a.c.steps + requeues);
+}
+
+// The report entries of a session, as ar_session_report_entry orders them.
+static std::vector<ar_report_entry> report_entries(Session& s) {
+  s.report().snapshot();
+  ar_report_info info{};
+  REQUIRE(s.report().info(&info) == AR_OK);
+  std::vector<ar_report_entry> out(info.entry_count);
+  for (uint32_t i = 0; i < info.entry_count; ++i) REQUIRE(s.report().entry(i, &out[i]) == AR_OK);
+  return out;
+}
+
+TEST_CASE("session/medium path limit raises one report entry") {
+  // ASTRORAY_TEST_MAJORANT at D8's per-event limit (1,048,576): a flight of optical depth 2 draws more
+  // tentative collisions than the event's blocks hold, so every camera path that reaches the slab's medium
+  // ends VOLUME_LIMIT. One pixel at two samples is two passes with one path each: the session reads the
+  // pass's counter after each resolve and raises under one key, so the entry's count is 2 and there is
+  // no other entry of that code. The same slab at the production majorant (1) raises none.
+  const auto spec = [] {
+    slab::SlabSpec s;
+    for (int c = 0; c < 3; ++c) s.medium.sigma_a[c] = 2.0f, s.medium.sigma_s[c] = 2.0f;
+    s.width = 1, s.height = 1, s.spp = 2;
+    s.max_bounces = s.volume_bounces = 4;
+    return s;
+  };
+  const auto entries = [&](bool limit) {
+    std::unique_ptr<HookScope> k;
+    if (limit) k = std::make_unique<HookScope>("ASTRORAY_TEST_MAJORANT", "1048576");
+    slab::SlabRig rig(SceneConfig{2, {}, {}}, spec());
+    std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, 1);
+    slab::SlabSession s(rig, *dev);
+    s.converge();
+    std::vector<ar_report_entry> hit;
+    for (const ar_report_entry& e : report_entries(s.session))
+      if (e.code == AR_REPORT_MEDIUM_PATH_LIMIT) hit.push_back(e);
+    return hit;
+  };
+  const std::vector<ar_report_entry> with = entries(true);
+  REQUIRE(with.size() == 1u);
+  CHECK(with[0].count == 2u);
+  CHECK(with[0].level == AR_LEVEL_WARNING);
+  CHECK(entries(false).empty());
 }
 
 TEST_CASE("shade_volume/zero sigma bit identical") {

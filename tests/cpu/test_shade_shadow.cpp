@@ -564,7 +564,10 @@ TEST_CASE("shade_shadow/collision limit counts volume limit") {
   const uint32_t pixels = uint32_t(r.active.size());
   std::vector<uint32_t> counts(size_t(ar::kTermCount) * pixels, 0u);
   r.film.count = counts.data(), r.film.plane_stride = pixels, r.film.term_hist = 0;
+  uint32_t medium_limit = 0;
+  r.film.medium_limit_total = &medium_limit;
   ar::shadow_medium_item(r.kg, 1u, 0u);
+  CHECK(medium_limit == 1u);
   const uint32_t pixel = ar::film_slot_pixel(r.kg, r.target[1]);
   uint32_t wrong = 0;
   for (uint32_t t = 0; t < ar::kTermCount; ++t)
