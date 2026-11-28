@@ -1,0 +1,13 @@
+diff --git a/tools/measure_viewport.ps1 b/tools/measure_viewport.ps1
+index e1d66724..bef45f69 100644
+--- a/tools/measure_viewport.ps1
++++ b/tools/measure_viewport.ps1
+@@ -102,7 +102,7 @@ foreach ($name in $Scene) {
+   $p5 = @($ok | ForEach-Object { [double]$_.stats.rate_p5 })
+   $floor = @($ok | ForEach-Object { [double]$_.stats.longest_below_floor_s })
+   $mn = ($med | Measure-Object -Minimum).Minimum; $mx = ($med | Measure-Object -Maximum).Maximum
+-  $lines += New-Line $name 'b14.rate' (Median $med) '/s' $ok.Count ($mx - $mn)
++  $lines += New-Line $name 'b14.rate' (Median $p5) '/s' $ok.Count ($mx - $mn)
+   $lines += New-Line $name 'b14.rate_p5' (Median $p5) '/s' $ok.Count (($p5 | Measure-Object -Maximum).Maximum - ($p5 | Measure-Object -Minimum).Minimum)
+   $lines += New-Line $name 'b14.floor_longest_s' ($floor | Measure-Object -Maximum).Maximum 's' $ok.Count 0
+   $busy = @($ok | Where-Object { $_.busy_before -or $_.busy_after }).Count
