@@ -91,3 +91,10 @@ name = "b_foliage"
 recording = "b_foliage.arrec"
 class = "B"
 sets = ["M1b"]
+
+# b1m with a closed box of test medium over half the grid (B-1M plus M1b's volume stages at 1080p, on demand).
+[[scene]]
+name = "b1m_medium"
+recording = "b1m_medium.arrec"
+class = "B"
+sets = ["M1b"]

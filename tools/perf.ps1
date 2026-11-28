@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# tools/perf.ps1 [-Scene b1m,b5m] [-Size 1920x1080] [-Record] [-MeasureTolerance [-Runs 5]]
+# tools/perf.ps1 [-Scene b1m,b5m] [-Size 1920x1080] [-Record] [-Cumulative <sha>] [-MeasureTolerance [-Runs 5]]
 # Pass-time regression check: runs bench.ps1 on b1m and b5m under one machine-lock hold and compares each
 # `pass_ms` with the last bench/history line of the same machine and scene against B-38 (tools/budgets.toml).
 # Refuses while another GPU user runs (blender, astroray_cli, astroray_tests_gpu, nsys outside this process
@@ -7,6 +7,8 @@
 # code than HEAD. The comparison and its decision table are tools/perf.py.
 # -Record appends the measured pass_ms lines of a PASS to bench/history/<year>.jsonl (the lead's commit path);
 # it refuses when build inputs are uncommitted.
+# -Cumulative <sha> adds, per scene, the ratio of pass_ms and kernel_ms_per_sample to that commit's history
+# lines (perf.py compare --cumulative; information, no limit).
 # -MeasureTolerance runs the bench -Runs times back to back and prints the spreads that set B-38.
 # Foreign load (lib/load.ps1: compilers, linkers, builds, Blender, GPU compute outside this process tree) seen during a
 # bench run that then fails B-38 re-runs that bench once, inside the same lock hold and after Assert-QuietGpu, and
@@ -24,6 +26,7 @@
 # nsys: $env:ASTRORAY_NSYS or the newest installed one (lib/nsys.ps1). Ref: tasks/160; 0009 d13 (B-19), d18.
 # Output: at most 20 summary lines plus the nsys commands; exit 0 pass, 1 a scene failed, 2 refused or unusable.
 param(
+  [string]$Cumulative = '',
   [string[]]$Scene = @('b1m', 'b5m'),
   [string]$Size = '1920x1080',
   [switch]$Record,
@@ -32,7 +35,12 @@ param(
   [switch]$Shares
 )
 $ErrorActionPreference = 'Stop'
-$Scene = @($Scene | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+# The cumulative ratio is printed by the pass-time comparison only; with either switch it would be silently dropped.
+if ($Cumulative -and ($Shares -or $MeasureTolerance)) {
+  Write-Host 'REFUSE perf: -Cumulative cannot be combined with -Shares or -MeasureTolerance (it is a pass-time comparison)'
+  exit 2
+}
+$Scene =@($Scene | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 . (Join-Path $PSScriptRoot 'lib/lock.ps1')
@@ -81,13 +89,7 @@ function Assert-QuietGpu {
   }
 }
 
-# The CLI stamps the computer name as `machine`; a history line carries a neutral hardware id instead
-# (gpu, cores, threads), the one the first lines of bench/history use, so no host or user name is committed.
-$gpu = ((Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match 'NVIDIA' } | Select-Object -First 1).Name -replace '(?i)nvidia|geforce|\s', '').ToLower()
-$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-$machine = "$gpu-$($cpu.NumberOfCores)c$($cpu.NumberOfLogicalProcessors)t"
-
-# One bench run: the history lines it appended, with the machine id.
+# One bench run: the history lines it appended (the CLI stamps the neutral hardware id, cli/bench.cpp).
 function Invoke-PerfBench([int]$r) {
   $before = @{}
   $dir = Join-Path $root 'out/bench'
@@ -100,7 +102,7 @@ function Invoke-PerfBench([int]$r) {
     $skip = if ($before.ContainsKey($_.FullName)) { $before[$_.FullName] } else { 0 }
     $got += @(Get-Content $_.FullName | Select-Object -Skip $skip)
   }
-  return @($got | ForEach-Object { $_ -replace '"machine":\s*"[^"]*"', ('"machine":"' + $machine + '"') })
+  return $got
 }
 
 $cli = Join-Path $root 'out/bin/astroray_cli.exe'
@@ -154,6 +156,11 @@ try {
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$base.sqlite")) { $exp | Select-Object -Last 4 | ForEach-Object { Write-Host $_ }; Write-Host "FAIL perf: nsys export of $s"; exit 1 }
         $exports += "$s=$base.sqlite"
       }
+      # The id is the CLI's own, read from the bench lines of a minimal run (nsys keeps the target's stdout in the
+      # report, not in the capture log): one source.
+      $probeOut = & $cli bench $rec --size 320x180 --passes 1 --warmup 0 --device cuda 2>&1 | ForEach-Object { "$_" }
+      $machine = ($probeOut | Where-Object { $_ -like '{*' } | Select-Object -First 1 | ConvertFrom-Json).machine
+      if (-not $machine) { Write-Host 'FAIL perf: the CLI printed no bench line to read the machine id from'; exit 1 }
       $out = Join-Path $tmp "shares-$r.jsonl"
       & $py -I (Join-Path $PSScriptRoot 'perf_shares.py') lines @exports --sha $binSha --machine $machine --out $out
       if ($LASTEXITCODE -ne 0) { Write-Host "FAIL perf: perf_shares.py exited $LASTEXITCODE"; exit 2 }
@@ -213,7 +220,9 @@ if ($MeasureTolerance) {
 # naming old and new); the lines are compact, as bench writes them.
 $rec = @()
 if ($Record) { $rec = @('--record', (Join-Path $root "bench/history/$([DateTime]::UtcNow.Year).jsonl")) }
-& $py -I (Join-Path $PSScriptRoot 'perf.py') compare $files[0] @rec
+$cum = @()
+if ($Cumulative) { $cum = @('--cumulative', $Cumulative) }
+& $py -I (Join-Path $PSScriptRoot 'perf.py') compare $files[0] @rec @cum
 $code = $LASTEXITCODE
 Write-Host ("perf wall {0:N1} s{1}" -f $wall, $(if ($wall -gt 60) { ' (ABOVE 60 s: stop and ask the lead)' } else { '' }))
 Write-Host 'shares are not checked here (pass_ms alone misses a longer idle share): run tools/perf.ps1 -Shares'

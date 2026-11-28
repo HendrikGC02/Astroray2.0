@@ -3,6 +3,8 @@
 
 Run (Blender's python, -I first):
   perf.py compare MEASURED.jsonl [--limit L] [--history GLOB]   decide each measured pass_ms line
+        [--cumulative SHA]   then print, per scene, the ratio of the measured pass_ms and kernel_ms_per_sample
+                             to the history lines of commit SHA (a prefix); information, no limit attached
   perf.py spread RUN1.jsonl ... RUNn.jsonl                      tolerance measurement (5 runs)
   perf.py --self-test                                           tests/budgets/perf_cases/
 Ref: docs/decisions/0009-build-test-process.md d13 (B-38, the limit), d18 (perf), d22 (history line).
@@ -106,6 +108,44 @@ def compare(measured, history, limit):
     return out[:20], failed
 
 
+CUMULATIVE_METRICS = ("pass_ms", "kernel_ms_per_sample")
+
+
+def median(v):
+    v = sorted(v)
+    return v[len(v) // 2] if len(v) % 2 else 0.5 * (v[len(v) // 2 - 1] + v[len(v) // 2])
+
+
+def cumulative(measured, history, sha):
+    """One line per measured scene and metric: the measured median over the median of the lines of the baseline
+    commit `sha` (prefix) with the same machine, scene and metric. A metric the baseline never recorded says so
+    instead of being derived from another. Ref: tasks/215 (the drift since a milestone's close, which the
+    per-landing B-38 comparison cannot show)."""
+    out = []
+    for scene in sorted({m["scene"] for m in measured}):
+        for metric in CUMULATIVE_METRICS:
+            cur = [m for m in measured if m["scene"] == scene and m.get("metric") == metric]
+            if not cur:
+                continue
+            base = [o["value"] for o in history if o.get("scene") == scene and o.get("metric") == metric
+                    and o.get("sha", "").startswith(sha) and o.get("machine") == cur[0]["machine"]]
+            if not base:
+                out.append(f"CUMULATIVE {scene} {metric}: no baseline line at {sha}")
+                continue
+            now, then = median([m["value"] for m in cur]), median(base)
+            out.append(f"CUMULATIVE {scene} {metric}: {now:.6g} against {then:.6g} at {sha[:9]} ratio {now / then:.3f}")
+    if not out:
+        raise PerfError(f"no {' or '.join(CUMULATIVE_METRICS)} line in the measured file")
+    return out
+
+
+def read_all_history(pattern):
+    lines = []
+    for p in sorted(glob.glob(pattern)):
+        lines += read_lines(p)
+    return lines
+
+
 def record(measured, path):
     """Appends the measured pass_ms lines, compact as bench writes them. Returns how many."""
     rows = [m for m in measured if m.get("metric") == METRIC]
@@ -168,6 +208,18 @@ def self_test():
               and not any(s in text for s in exp.get("absent", [])) and (recorded > 0) == (not exp["fail"]))
         print(f"{'ok  ' if ok else 'FAIL'} {name}" + ("" if ok else f": expected fail={exp['fail']} {exp['text']}, got fail={failed}\n{text}"))
         bad += not ok
+    # cumulative: the baseline commit's median, never the current value, is the divisor; another machine's
+    # lines and another commit's lines are ignored; kernel_ms_per_sample has no baseline here.
+    def row(sha, machine, metric, value):
+        return {"sha": sha, "machine": machine, "scene": "b1m", "metric": metric, "value": value}
+    hist = [row("aaaa1", "m", "pass_ms", 20.0), row("bbbb2", "m", "pass_ms", 10.0), row("bbbb2", "m", "pass_ms", 14.0),
+            row("bbbb2", "other", "pass_ms", 1.0), row("cccc3", "m", "pass_ms", 11.0)]
+    now = [row("dddd4", "m", "pass_ms", 15.0), row("dddd4", "m", "kernel_ms_per_sample", 1e-5)]
+    got = cumulative(now, hist, "bbbb")
+    ok = len(got) == 2 and got[0].endswith("ratio 1.250") and "no baseline" in got[1]
+    ok = ok and cumulative(now, hist, "aaaa")[0].endswith("ratio 0.750")
+    print(f"{'ok  ' if ok else 'FAIL'} cumulative" + ("" if ok else f": {got}"))
+    bad += not ok
     # The tolerance formula: 3 x the larger of the two scene spreads, (max - min) / mean.
     def rows(scene, v):
         return [{"scene": scene, "metric": METRIC, "value": x} for x in v]
@@ -178,7 +230,7 @@ def self_test():
     ok = abs(tol - 0.18) < 1e-9 and "limit = 1.180" in lines[-1]
     print(f"{'ok  ' if ok else 'FAIL'} spread_table" + ("" if ok else f": tolerance {tol}, {lines[-1]}"))
     bad += not ok
-    print(f"perf self-test: {len(names) + 1 - bad} of {len(names) + 1} cases ok")
+    print(f"perf self-test: {len(names) + 2 - bad} of {len(names) + 2} cases ok")
     return 1 if bad else 0
 
 
@@ -190,6 +242,7 @@ def main():
     c.add_argument("measured")
     c.add_argument("--limit", type=float)
     c.add_argument("--record", help="append the measured pass_ms lines to this history file when every scene passes")
+    c.add_argument("--cumulative", metavar="SHA", help="also print the ratios to the history lines of this commit")
     c.add_argument("--budgets", default=os.path.join(ROOT, "tools", "budgets.toml"))
     c.add_argument("--history", default=os.path.join(ROOT, "bench", "history", "*.jsonl"))
     s = sub.add_parser("spread")
@@ -201,6 +254,8 @@ def main():
         if a.cmd == "compare":
             limit = a.limit if a.limit else budget_limit(a.budgets)
             lines, failed = check(read_lines(a.measured), read_history(a.history), limit, a.record)
+            if a.cumulative:
+                lines += cumulative(read_lines(a.measured), read_all_history(a.history), a.cumulative)
             print("\n".join(lines))
             return 1 if failed else 0
         if a.cmd == "spread":

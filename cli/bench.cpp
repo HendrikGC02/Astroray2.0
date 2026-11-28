@@ -5,10 +5,17 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 
 #include "cli.h"
 
@@ -53,6 +60,56 @@ void print_session_state(const char* why, const ar_progress& p) {
          p.samples_per_pixel);
   if (p.active_generation < p.pending_generation && p.failed_generation != p.pending_generation)
     printf("bench: generation %llu has not activated\n", static_cast<unsigned long long>(p.pending_generation));
+}
+
+// A neutral hardware id for the history lines: the first CUDA device's name (the ABI's CPU entry when there is no
+// CUDA device) with the vendor words and blanks removed, physical cores and logical threads ("rtx5070ti-8c16t"),
+// the form bench/history carries. No host or user name. An id that cannot be read is an error, never a guess:
+// a history line under a wrong machine id would be compared against another machine's baselines.
+bool hardware_id(std::string& id, std::string& why) {
+  uint32_t n = 0;
+  if (const ar_status st = ar_device_count(&n); st != AR_OK || n == 0) {
+    why = "the device list is unavailable (ar_device_count status " + std::to_string(st) + ", " + std::to_string(n) + " devices)";
+    return false;
+  }
+  ar_device_info pick{};
+  bool have = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    ar_device_info d;
+    if (const ar_status st = ar_device_get_info(i, &d); st != AR_OK) {
+      why = "ar_device_get_info(" + std::to_string(i) + ") status " + std::to_string(st);
+      return false;
+    }
+    if (d.kind == AR_DEVICE_CUDA) { pick = d; have = true; break; }
+    if (!have && d.kind == AR_DEVICE_CPU) { pick = d; have = true; }
+  }
+  if (!have) { why = "no CUDA or CPU device in the device list"; return false; }
+  std::string gpu;
+  for (char c : text(pick.name, sizeof pick.name)) {
+    if (c != ' ') gpu += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  for (const char* word : {"nvidia", "geforce"}) {
+    const size_t at = gpu.find(word);
+    if (at != std::string::npos) gpu.erase(at, std::strlen(word));
+  }
+  DWORD bytes = 0;
+  GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &bytes);
+  std::vector<char> buf(bytes);
+  unsigned cores = 0;
+  if (bytes && GetLogicalProcessorInformationEx(RelationProcessorCore,
+                                                reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf.data()), &bytes)) {
+    for (DWORD off = 0; off < bytes;) {
+      ++cores;
+      off += reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf.data() + off)->Size;
+    }
+  }
+  const unsigned threads = std::thread::hardware_concurrency();
+  if (gpu.empty() || cores == 0 || threads == 0) {
+    why = "the core or thread count query failed (device '" + gpu + "', " + std::to_string(cores) + " cores, " + std::to_string(threads) + " threads)";
+    return false;
+  }
+  id = gpu + "-" + std::to_string(cores) + "c" + std::to_string(threads) + "t";
+  return true;
 }
 
 struct Line {
@@ -126,10 +183,8 @@ int bench_cmd(int argc, char** argv) {
   ar_build_info(&b);
   Line l;
   l.sha = text(b.git_sha, sizeof b.git_sha);
-  char* host = nullptr;
-  size_t host_len = 0;
-  l.machine = _dupenv_s(&host, &host_len, "COMPUTERNAME") == 0 && host ? host : "unknown";
-  std::free(host);
+  std::string why;
+  if (!hardware_id(l.machine, why)) { printf("bench: no hardware id: %s\n", why.c_str()); return kExitFailure; }
   l.driver = "unknown";  // the ABI exposes no driver query (see info)
   l.cuda = text(b.cuda, sizeof b.cuda);
   l.scene = stem(a.recording);
