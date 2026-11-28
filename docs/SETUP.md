@@ -48,7 +48,7 @@ The reference machine is the desktop, id `rtx5070ti-8c16t`. Until tasks 267 and 
   reference id as a literal (`hero_variance.py`, `light_build_bench.py`, `region_bias.py`,
   `welch_tiles.py`): do not commit a history line they write on another machine before 268.
 - **VRAM:** allocation needs 2 GiB of free reserve (0007 d14). B-5M and 4K viewport work may be refused on
-  a 6-8 GB card; report it, it is not a defect.
+  the laptop's 8 GB card; report it, it is not a defect.
 - **Landings:** `land.ps1` runs from the task's worktree, so 268 and 267 land through their own
   machine-aware tools. Hosted `ci` and the `astroray/gate` status stay required.
 
