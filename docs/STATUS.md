@@ -5,7 +5,7 @@ Overwritten by the lead only. Live facts (branches, PRs, last gate) come from `t
 ## Current milestone
 M2 "Lobes, shadows and media" (docs/PLAN-M2.md: six slices, the `shade_surface` spine, the kernel-split decision of
 task 248). Slice 0 is open: order and batches in tasks/README.md, runbook and handover in docs/LEAD.md, items
-without a task in docs/BACKLOG.md. Landed in M2 so far: 238, 239, 242. Written and not dispatched: 240, 241,
+without a task in docs/BACKLOG.md. Landed in M2 so far: 238, 239, 242, 267. Written and not dispatched: 240, 241,
 243-266 (scope-checked and critiqued by the eighth lead) and 267-272 (ninth lead: the second machine and the
 M1b retrospective's open recommendations; pre-flighted, no Opus critique yet).
 M1b "First light" closed 2026-11-28 (owner decision 47): the owner looked at the gallery and report (25 images;
@@ -17,9 +17,9 @@ ledger: docs/history/M1b-task-ledger.md. M1a "First pixels" closed by owner deci
 ## Machines (owner decision 47)
 The reference machine is the desktop, `rtx5070ti-8c16t`: every absolute budget row, kernel resource row and bench
 baseline was measured there. Development continues on a laptop with an RTX 3000-class GPU from a fresh clone
-(docs/SETUP.md). Until 267 and 268 land there: the GPU kernels build for sm_120 only, so GPU tests, `check gate`
-and `check perf` fail on another GPU; `check fast`, CPU rendering and hosted `ci` work; a red timing budget on the
-laptop is expected and reported, never fixed by editing a limit. First two tasks on the laptop: 268, 267.
+(docs/SETUP.md). 267 landed: `build.ps1` builds the kernels for the installed GPU and gates the sm_120 rows compile-only. Until 268
+lands a red timing budget on the laptop is expected and reported, never fixed by editing a limit. Ruling 117: the
+desktop read 6 % slow on 2026-11-29 (cause not found); its B-38 baseline was re-recorded, re-measure after a restart.
 
 ## Owner decisions still open
 None blocks work. Decision 47 answered PLAN-M2 questions 1, 3, 6 and 8, the coincident-hit tie rule, B-10, B-11
