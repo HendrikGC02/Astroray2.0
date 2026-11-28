@@ -70,6 +70,9 @@ struct SessionOptions {
   uint64_t test_stale_resolve_at_pass = 0;
   // Test hook, false in production: keep one PresentRecord per published frame (present_log).
   bool test_record_presents = false;
+  // Test hook, false in production: the film carries the termination histogram ("term", one COUNT
+  // plane per Term value), which counts path ends per pixel independently of the session's counters.
+  bool test_termination_stats = false;
   // Test hook, zero in production: the render thread sleeps this long after each resolve and before
   // the pass is published, so a poll can look for a sample count that arrives without its pass time.
   uint32_t test_sleep_after_resolve_ms = 0;
@@ -316,7 +319,7 @@ class Session {
   std::string observer_hash_;      // hex, written with film_ under render_mutex_
   std::atomic<uint64_t> render_size_{0};  // width << 32 | height, written at apply_view
   InvalidSampleReporter invalid_;
-  DeviceBuffer globals_buf_;  // KernelGlobals, then FilmData, then DisplayTarget, then the invalid total
+  DeviceBuffer globals_buf_;  // KernelGlobals, then FilmData, then DisplayTarget, then the invalid and medium-limit totals
   DeviceBuffer present_buf_;
   // Per session, in the ledger: the active-pixel list, the CameraView of the latched view and the
   // pixel-filter table of the scene's settings. Camera and filter exist once a view and the

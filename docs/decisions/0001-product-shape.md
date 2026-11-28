@@ -128,7 +128,7 @@ Binding inputs:
       | `MAJORANT_VIOLATION` | WARNING | FILM | medium key; count = samples with σ_t above the majorant | 0006 decision 7 |
       | `VOLUME_UNBOUNDED` | ERROR | SCENE | medium key; program has no interval bound; volume not rendered | 0006 decision 7 |
       | `PHASE_LOBES_EXCEEDED` | WARNING | SCENE | medium key; a third distinct phase lobe was dropped | 0006 decision 2 |
-      | `MEDIUM_PATH_LIMIT` | WARNING | FILM | medium or subsurface material key; detail = `VOLUME_LIMIT` or `STACK_OVERFLOW`; count = paths ended | 0006 D8, D16; 0005 item 4a |
+      | `MEDIUM_PATH_LIMIT` | WARNING | FILM | medium or subsurface material key; detail = `VOLUME_LIMIT` or `STACK_OVERFLOW`; count = paths ended; as built (task 242, ruling 87) one counter, `FilmData::medium_limit_total`, counts both ends and shadow items that end `VOLUME_LIMIT`, so the entry has subject 0 and the detail `VOLUME_LIMIT or STACK_OVERFLOW` | 0006 D8, D16; 0005 item 4a |
       | `MEDIUM_MESH_OPEN` | WARNING | SCENE | object key; rendered with Cycles' convention | 0006 D20 |
       | `REGION_SCATTERING_AS_EXTINCTION` | INFO | SCENE | medium key; detail = in-scattering or fluorescence | 0006 decisions 15, 29 |
       | `ERGOSPHERE_EXCLUDED` | INFO | SCENE | medium key; emission inside the ergosphere not evaluated | 0006 D30 |

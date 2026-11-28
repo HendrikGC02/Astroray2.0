@@ -71,6 +71,7 @@ struct Rig {
   ar::PathStateSoA path{};
   ar::ShadowItemSoA shadow{};
   uint32_t n;
+  uint32_t medium_limit = 0;  // FilmData::medium_limit_total
   std::vector<uint32_t> queue, active, sample_id, flags, hit_prim, hit_inst, prev_ng, prev_ns, medium_rng;
   std::vector<uint8_t> next_stage, term, ray_type;
   std::vector<uint16_t> event_index;
@@ -150,6 +151,7 @@ struct Rig {
     req.termination_stats = true;
     film = std::make_unique<Film>(dev, FilmLayout::build(req), Owner{1, 1});
     film->data().inv_radiance_scale = 1.0 / set->lights->radiance_scale;
+    film->data().medium_limit_total = &medium_limit;
 
     for (uint32_t i = 0; i < n; ++i) {
       queue.push_back(i), active.push_back(i), sample_id.push_back(i);
@@ -578,6 +580,49 @@ TEST_CASE("shade_surface_media/overflow ends the path") {
   CHECK(ar::medium_depth(r.flags[1]) == 4u);
   CHECK(ar::crossings(r.flags[1]) == 0u);
   CHECK(r.hist(ar::Term::STACK_OVERFLOW) == 2u);
+}
+
+TEST_CASE("shade_surface_media/medium limit ends are counted once and carry their hit's flag word") {
+  // The two ends of surface_false_interface and the one of surface_true_crossing each add one to
+  // FilmData::medium_limit_total and store the flag word of the hit that ended the path: FRONT_FACE set for a
+  // front face, clear for a back face, whatever the previous surface left.
+  // Shells: the 1024th false crossing, at B's back (a path arriving in A only) or at B's front (arriving in
+  // A and B, so the sequence starts with B's back).
+  for (const bool end_front : {false, true}) {
+    INFO("ends at a front face: " << end_front);
+    Rig r(1, false, true);
+    r.medium(0, 0, 2), r.medium(1, 1, 1);
+    if (end_front)
+      r.arrive(0, {{0, 2}, {1, 1}});
+    else
+      r.arrive(0, {{0, 2}});
+    r.flags[0] = end_front ? (r.flags[0] & ~ar::FRONT_FACE) : (r.flags[0] | ar::FRONT_FACE);
+    for (uint32_t runs = 0; runs < 4096u && r.term[0] == uint8_t(ar::Term::ACTIVE); ++runs) {
+      r.hit(0, 1, ((runs & 1u) == 0u) != end_front);
+      r.next_stage[0] = uint8_t(ar::Stage::SHADE_SURFACE);
+      r.run();
+    }
+    CHECK(r.term[0] == uint8_t(ar::Term::VOLUME_LIMIT));
+    CHECK(r.medium_limit == 1u);
+    CHECK(((r.flags[0] & ar::FRONT_FACE) != 0u) == end_front);
+  }
+  // Overflow: path 0's fifth push is a true crossing (an opacity-0 pass-through), path 1's a false
+  // interface; both end STACK_OVERFLOW, counted once each.
+  Rig r(2, false, true);
+  for (uint32_t i = 0; i < kInstances; ++i) r.medium(i, i, 0), r.opacity(i, 0.0f);
+  r.kg.session.max_bounces[5] = 8;
+  r.arrive(1, {{1, 5}, {2, 5}, {3, 5}, {1, 5}});
+  r.hit(1, 0, true);
+  for (uint32_t k = 0; k < 5; ++k) {
+    r.hit(0, k % kInstances, true);
+    r.next_stage[0] = uint8_t(ar::Stage::SHADE_SURFACE);
+    r.run(k == 0 ? 2u : 1u);
+  }
+  CHECK(r.term[0] == uint8_t(ar::Term::STACK_OVERFLOW));
+  CHECK(r.term[1] == uint8_t(ar::Term::STACK_OVERFLOW));
+  CHECK(r.medium_limit == 2u);
+  CHECK((r.flags[0] & ar::FRONT_FACE) != 0u);
+  CHECK((r.flags[1] & ar::FRONT_FACE) != 0u);
 }
 
 TEST_CASE("shade_surface_media/back face with an absent id") {

@@ -87,6 +87,7 @@ struct SlabSpec {
   ar_medium_desc medium{};
   uint32_t width = kW, height = kH, spp = kSpp;
   uint32_t max_bounces = 0, volume_bounces = 0;
+  bool termination_stats = false;  // the session's film carries the termination histogram
 };
 
 struct SlabRig {
@@ -266,6 +267,7 @@ struct SlabSession {
     o.max_width = r.spec.width;
     o.max_height = r.spec.height;
     o.owner = owner;
+    o.test_termination_stats = r.spec.termination_stats;
     return o;
   }
   SlabSession(SlabRig& r, Device& device, Owner owner = Owner{}) : rig(r), session(r.scene, device, options(r, owner)) {

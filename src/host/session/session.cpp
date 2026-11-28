@@ -30,7 +30,9 @@ constexpr uint64_t kFilmDataAt = align_up(sizeof(ar::KernelGlobals), 256);
 constexpr uint64_t kDisplayAt = kFilmDataAt + align_up(sizeof(ar::FilmData), 256);
 // FilmData::invalid_total: one u32, cleared before each resolve and read after it.
 constexpr uint64_t kInvalidTotalAt = align_up(kDisplayAt + sizeof(ar::DisplayTarget), 16);
-constexpr uint64_t kGlobalsBytes = kInvalidTotalAt + sizeof(uint32_t);
+// FilmData::medium_limit_total: one u32 beside it, cleared before each pass and read after its resolve.
+constexpr uint64_t kMediumLimitTotalAt = kInvalidTotalAt + sizeof(uint32_t);
+constexpr uint64_t kGlobalsBytes = kMediumLimitTotalAt + sizeof(uint32_t);
 // One pass is one sample per active pixel (0004 D25); the adaptive tail is not built.
 constexpr uint32_t kSamplesPerPass = 1;
 // The ABI's sampler mode is the kernel's value (ruling 60): bind_globals passes the latched settings'
@@ -64,6 +66,7 @@ FilmRequest film_request(const SessionOptions& o, const StoredSettings* s, bool 
   req.max_width = o.max_width;
   req.max_height = o.max_height;
   req.statistics = !s || s->s.statistics != AR_STATISTICS_OFF;  // 0008 d12: on by default
+  req.termination_stats = o.test_termination_stats;
   // 0008 d15: the denoiser reads the guide planes, so a session with one always has them.
   const bool denoiser = o.denoiser != AR_DENOISER_NONE;
   req.guides = denoiser;
@@ -776,6 +779,7 @@ void Session::bind_globals() {
   device_.upload(globals_buf_, 0, &kg, sizeof kg);
   ar::FilmData fd = f;
   fd.invalid_total = reinterpret_cast<uint32_t*>(base + kInvalidTotalAt);
+  fd.medium_limit_total = reinterpret_cast<uint32_t*>(base + kMediumLimitTotalAt);
   device_.upload(globals_buf_, kFilmDataAt, &fd, sizeof fd);
   device_.set_kernel_globals(globals_buf_);
 #ifdef ASTRORAY_GPU
@@ -881,9 +885,20 @@ bool Session::resolve(uint64_t pass_epoch, uint64_t generation) {
   // with the launch on the device's stream; the read is the pass's one wait for its resolve.
   device_.memset(globals_buf_, kInvalidTotalAt, 0, sizeof(uint32_t));
   device_.launch(KernelId::FILM_RESOLVE, active_->count());
-  uint32_t pass_invalid = 0;
-  device_.download(&pass_invalid, globals_buf_, kInvalidTotalAt, sizeof pass_invalid);
+  // Both counters sit side by side: one download. The medium-limit one was filled by the pass's shade
+  // stages (cleared in render_loop before the pass), so only the invalid one is cleared here.
+  uint32_t pass_counts[2] = {0, 0};
+  static_assert(kMediumLimitTotalAt == kInvalidTotalAt + sizeof(uint32_t));
+  device_.download(pass_counts, globals_buf_, kInvalidTotalAt, sizeof pass_counts);
+  const uint32_t pass_invalid = pass_counts[0], pass_medium_limit = pass_counts[1];
   invalid_.report_pass(pass_invalid, uint64_t(active_->count()) * (kSamplesPerPass + 1), report_, generation);
+  if (pass_medium_limit != 0) {
+    // One entry per render: the key is fixed and each pass adds its count (0001 D2.11), so the entry's
+    // count is the paths and shadow items that ended at a medium limit. The kernels count both ends in
+    // one counter, so the detail names both.
+    const double value[2] = {0.0, 0.0};
+    report_.raise(AR_REPORT_MEDIUM_PATH_LIMIT, 0, "VOLUME_LIMIT or STACK_OVERFLOW", pass_medium_limit, value, generation);
+  }
   ++pass_index_;
   ++passes_in_epoch_;
   return true;
@@ -1026,6 +1041,8 @@ void Session::render_loop() {
       // build_active bound this pass's globals and the scheduler's config just above; nothing
       // they read has changed since.
       const auto pass_start = std::chrono::steady_clock::now();
+      // A cancelled or interrupted pass leaves its count behind, so the clear is here and not after the read.
+      device_.memset(globals_buf_, kMediumLimitTotalAt, 0, sizeof(uint32_t));
       const PassStatus st = scheduler_->run_pass(PassWork{pass_camera_samples(), 0});
       if (st == PassStatus::CANCELLED) {
         std::lock_guard<std::mutex> lock(mutex_);

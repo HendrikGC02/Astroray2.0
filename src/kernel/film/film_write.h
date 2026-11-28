@@ -85,6 +85,10 @@ struct FilmData {
   // here too, so the host reads 4 bytes for the INVALID_SAMPLE entry instead of the whole plane.
   // The session clears it before each resolve; null when nobody reads a total.
   uint32_t* invalid_total;
+  // The other: paths and shadow items that ended at a medium limit (VOLUME_LIMIT, STACK_OVERFLOW), counted by
+  // film_medium_limit_add whether or not the statistics plane exists. Null is allowed (a rig nobody reads); the
+  // session clears it before each pass and reads it after the pass's resolve.
+  uint32_t* medium_limit_total;
 };
 
 // Slot lanes: fp32 atomic add, since several contributions to one sample can be live at once
@@ -124,6 +128,14 @@ AR_FN void film_count_add(const KernelGlobals& kg, uint32_t plane, uint32_t pixe
   const FilmData& f = *kg.film;
   AR_ASSERT(f.count != nullptr && pixel < f.plane_stride);
   atomic_add(f.count + uint64_t(plane) * f.plane_stride + pixel, v);
+}
+
+// One path or shadow item that ended at a medium limit: the one counter behind the MEDIUM_PATH_LIMIT report
+// entry (0001 D2.11: kernels count, the host raises). term_hist keeps its own count, per pixel, on request.
+// Ref: pattern of FilmData::invalid_total (resolve.h film_resolve); 0006 D8, D16.
+AR_FN void film_medium_limit_add(const KernelGlobals& kg) {
+  const FilmData& f = *kg.film;
+  if (f.medium_limit_total != nullptr) atomic_add(f.medium_limit_total, 1u);
 }
 
 AR_FN void film_count_max(const KernelGlobals& kg, uint32_t plane, uint32_t pixel, uint32_t v) {

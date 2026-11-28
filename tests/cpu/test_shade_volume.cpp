@@ -117,6 +117,13 @@ struct StageRig {
   }
 };
 
+// Sets ASTRORAY_TEST_<name> for the sessions created in its scope (the session reads hooks at create).
+struct HookScope {
+  const char* var;
+  HookScope(const char* v, const char* value) : var(v) { REQUIRE(_putenv_s(var, value) == 0); }
+  ~HookScope() { _putenv_s(var, ""); }
+};
+
 }  // namespace
 
 TEST_SUITE("fast") {
@@ -238,6 +245,35 @@ TEST_CASE("shade_volume/flights across a false interface draw new blocks") {
   std::printf("shade_volume two flights: reached %.5f truth %.5f se %.2e z %+.2f (shared blocks would give %.5f)\n", mean, truth,
               se, (mean - truth) / se, std::exp(-sigma * std::max(l1, l2)));
   CHECK(std::fabs(mean - truth) < 3.0 * se);
+}
+
+TEST_CASE("shade_volume/a volume limit end is counted once") {
+  // Each camera item has one collision left in its event's block range (medium_rng one below the range's
+  // end), and the majorant is 4096 sigma_t, so its first tentative collision is null with probability
+  // 4095/4096 and uses the range up: the flight ends VOLUME_LIMIT. Each such end adds one to
+  // FilmData::medium_limit_total, with no statistics plane requested; the light path (item 3) is
+  // forwarded and counts nothing. A rig whose film has no counter (null) runs the same ends.
+  const auto rig = [](uint32_t* counter) {
+    auto r = std::make_unique<StageRig>();
+    r->medium(0.0f, 1.0f, 0.0f);
+    r->kg.session.medium_majorant = 4096u;
+    r->film.medium_limit_total = counter;
+    for (uint32_t i = 0; i < StageRig::kN; ++i) r->medium_rng[i] = ar::flight_rng_start(4u) - 1u;
+    return r;
+  };
+  uint32_t total = 0;
+  auto r = rig(&total);
+  r->run();
+  for (uint32_t i = 0; i < 3u; ++i) {
+    INFO("item " << i);
+    CHECK(r->term[i] == uint8_t(ar::Term::VOLUME_LIMIT));
+    CHECK(r->next[i] == uint8_t(Stage::TERMINATED));
+  }
+  CHECK(r->next[3] != uint8_t(Stage::TERMINATED));
+  CHECK(total == 3u);
+  auto none = rig(nullptr);
+  none->run();
+  CHECK(none->term[0] == uint8_t(ar::Term::VOLUME_LIMIT));
 }
 
 TEST_CASE("shade_volume/absorption and bounce limits end the path") {
@@ -446,13 +482,6 @@ TEST_CASE("shade_volume/reached write-back keeps the hit and the previous vertex
   CHECK(checked > 0u);
 }
 
-// Sets ASTRORAY_TEST_<name> for the sessions created in its scope (the session reads hooks at create).
-struct HookScope {
-  const char* var;
-  HookScope(const char* v, const char* value) : var(v) { REQUIRE(_putenv_s(var, value) == 0); }
-  ~HookScope() { _putenv_s(var, ""); }
-};
-
 TEST_CASE("shade_volume/requeue ends the pass") {
   // 0006 D8, V6 third clause, 0002 D7: the slab with a grey scattering medium (sigma_t 4 per m, optical
   // depth 2) under ASTRORAY_TEST_MAJORANT=16, so a flight takes about 30 null collisions. At
@@ -527,6 +556,67 @@ TEST_CASE("shade_volume/zero sigma bit identical") {
 // The tracking cases (0006 V1) on the CPU device; their CUDA twins are tests/gpu/test_volume_agree.cpp,
 // which the gate runs in the same concurrent group.
 TEST_SUITE("gate") {
+
+// The report entries of a session, as ar_session_report_entry orders them.
+static std::vector<ar_report_entry> report_entries(Session& s) {
+  s.report().snapshot();
+  ar_report_info info{};
+  REQUIRE(s.report().info(&info) == AR_OK);
+  std::vector<ar_report_entry> out(info.entry_count);
+  for (uint32_t i = 0; i < info.entry_count; ++i) REQUIRE(s.report().entry(i, &out[i]) == AR_OK);
+  return out;
+}
+
+TEST_CASE("session/medium path limit raises one report entry") {
+  // ASTRORAY_TEST_MAJORANT at D8's per-event limit (1,048,576): a flight draws that many tentative
+  // collisions only when no real collision comes first, so some camera paths end VOLUME_LIMIT and others
+  // absorb or scatter (and a scatter's NEE items may end at the limit too). How many is the seed's, so the
+  // reference is counted independently: the session's film carries the termination histogram, which
+  // film_count_add fills per path end and per blocked shadow item. Over the passes (1 x 1, 2 spp: one
+  // pass per sample) the entry's count must equal the VOLUME_LIMIT and STACK_OVERFLOW planes' sum, under
+  // one key and no other entry of that code; a counter that was not cleared between passes would
+  // overcount. The same slab at the production majorant (1) raises none.
+  const auto spec = [] {
+    slab::SlabSpec s;
+    for (int c = 0; c < 3; ++c) s.medium.sigma_a[c] = 2.0f, s.medium.sigma_s[c] = 2.0f;
+    s.width = 1, s.height = 1, s.spp = 2;
+    s.max_bounces = s.volume_bounces = 4;
+    s.termination_stats = true;
+    return s;
+  };
+  struct Out {
+    std::vector<ar_report_entry> entries;
+    uint64_t term_sum = 0;
+  };
+  const auto render = [&](bool limit) {
+    std::unique_ptr<HookScope> k;
+    if (limit) k = std::make_unique<HookScope>("ASTRORAY_TEST_MAJORANT", "1048576");
+    slab::SlabRig rig(SceneConfig{2, {}, {}}, spec());
+    std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, 1);
+    slab::SlabSession s(rig, *dev);
+    s.converge();
+    Out o;
+    for (const ar_report_entry& e : report_entries(s.session))
+      if (e.code == AR_REPORT_MEDIUM_PATH_LIMIT) o.entries.push_back(e);
+    s.session.read_film([&](const FilmReadContext& c) {
+      FilmView view(c.device, c.film);
+      for (ar::Term t : {ar::Term::VOLUME_LIMIT, ar::Term::STACK_OVERFLOW})
+        for (uint32_t n : view.counts("term", uint32_t(t))) o.term_sum += n;
+    });
+    return o;
+  };
+  const Out with = render(true);
+  std::printf("session medium path limit: entries %zu, count %llu, term_hist VOLUME_LIMIT + STACK_OVERFLOW %llu\n",
+              with.entries.size(), with.entries.empty() ? 0ull : (unsigned long long)with.entries[0].count,
+              (unsigned long long)with.term_sum);
+  REQUIRE(with.term_sum > 0u);  // a render with no limit end would not test the counter
+  REQUIRE(with.entries.size() == 1u);
+  CHECK(with.entries[0].count == with.term_sum);
+  CHECK(with.entries[0].level == AR_LEVEL_WARNING);
+  const Out without = render(false);
+  CHECK(without.term_sum == 0u);
+  CHECK(without.entries.empty());
+}
 
 TEST_CASE("shade_volume/chromatic slab transmittance") {
   slab::SlabRig rig(SceneConfig{2, {}, {}}, slab::chromatic_spec());
