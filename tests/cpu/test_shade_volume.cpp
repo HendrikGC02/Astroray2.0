@@ -117,6 +117,13 @@ struct StageRig {
   }
 };
 
+// Sets ASTRORAY_TEST_<name> for the sessions created in its scope (the session reads hooks at create).
+struct HookScope {
+  const char* var;
+  HookScope(const char* v, const char* value) : var(v) { REQUIRE(_putenv_s(var, value) == 0); }
+  ~HookScope() { _putenv_s(var, ""); }
+};
+
 }  // namespace
 
 TEST_SUITE("fast") {
@@ -475,13 +482,6 @@ TEST_CASE("shade_volume/reached write-back keeps the hit and the previous vertex
   CHECK(checked > 0u);
 }
 
-// Sets ASTRORAY_TEST_<name> for the sessions created in its scope (the session reads hooks at create).
-struct HookScope {
-  const char* var;
-  HookScope(const char* v, const char* value) : var(v) { REQUIRE(_putenv_s(var, value) == 0); }
-  ~HookScope() { _putenv_s(var, ""); }
-};
-
 TEST_CASE("shade_volume/requeue ends the pass") {
   // 0006 D8, V6 third clause, 0002 D7: the slab with a grey scattering medium (sigma_t 4 per m, optical
   // depth 2) under ASTRORAY_TEST_MAJORANT=16, so a flight takes about 30 null collisions. At
@@ -532,6 +532,31 @@ TEST_CASE("shade_volume/requeue ends the pass") {
   CHECK(b.c.steps == a.c.steps + requeues);
 }
 
+TEST_CASE("shade_volume/zero sigma bit identical") {
+  const auto render = [](bool with_medium) {
+    slab::SlabRig rig(SceneConfig{2, {}, {}}, with_medium);
+    std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, 1);
+    return slab::render_slab(rig, *dev);
+  };
+  const slab::Render with = render(true), without = render(false);
+  slab::check_identity(with, without);
+  // The session turns on the MEDIA path-state fields exactly when the scene has a medium: the
+  // scheduler counts path_state_bytes of its feature set per main-pool item.
+  ar::StateFeatures on{}, off{};
+  on.media = true;
+  REQUIRE(ar::path_state_bytes(on) != ar::path_state_bytes(off));
+  REQUIRE(with.main_items > 0u);
+  REQUIRE(without.main_items > 0u);
+  CHECK(with.state_bytes == with.main_items * ar::path_state_bytes(on));
+  CHECK(without.state_bytes == without.main_items * ar::path_state_bytes(off));
+}
+
+}  // TEST_SUITE
+
+// The tracking cases (0006 V1) on the CPU device; their CUDA twins are tests/gpu/test_volume_agree.cpp,
+// which the gate runs in the same concurrent group.
+TEST_SUITE("gate") {
+
 // The report entries of a session, as ar_session_report_entry orders them.
 static std::vector<ar_report_entry> report_entries(Session& s) {
   s.report().snapshot();
@@ -573,31 +598,6 @@ TEST_CASE("session/medium path limit raises one report entry") {
   CHECK(with[0].level == AR_LEVEL_WARNING);
   CHECK(entries(false).empty());
 }
-
-TEST_CASE("shade_volume/zero sigma bit identical") {
-  const auto render = [](bool with_medium) {
-    slab::SlabRig rig(SceneConfig{2, {}, {}}, with_medium);
-    std::shared_ptr<Device> dev = make_cpu_session_device(rig.ctx, 1);
-    return slab::render_slab(rig, *dev);
-  };
-  const slab::Render with = render(true), without = render(false);
-  slab::check_identity(with, without);
-  // The session turns on the MEDIA path-state fields exactly when the scene has a medium: the
-  // scheduler counts path_state_bytes of its feature set per main-pool item.
-  ar::StateFeatures on{}, off{};
-  on.media = true;
-  REQUIRE(ar::path_state_bytes(on) != ar::path_state_bytes(off));
-  REQUIRE(with.main_items > 0u);
-  REQUIRE(without.main_items > 0u);
-  CHECK(with.state_bytes == with.main_items * ar::path_state_bytes(on));
-  CHECK(without.state_bytes == without.main_items * ar::path_state_bytes(off));
-}
-
-}  // TEST_SUITE
-
-// The tracking cases (0006 V1) on the CPU device; their CUDA twins are tests/gpu/test_volume_agree.cpp,
-// which the gate runs in the same concurrent group.
-TEST_SUITE("gate") {
 
 TEST_CASE("shade_volume/chromatic slab transmittance") {
   slab::SlabRig rig(SceneConfig{2, {}, {}}, slab::chromatic_spec());
