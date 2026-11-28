@@ -21,8 +21,10 @@
 #include "../../kernel/vm/ops/add_f32.h"
 #include "../../kernel/vm/ops/add_f32x3.h"
 #include "../../kernel/vm/ops/channel_f32x3.h"
+#include "../../kernel/vm/ops/clamp_f32.h"
 #include "../../kernel/vm/ops/color_to_f32.h"
 #include "../../kernel/vm/ops/const_f32.h"
+#include "../../kernel/vm/ops/div_f32.h"
 #include "../../kernel/vm/ops/mul_f32.h"
 #include "../../kernel/vm/ops/mul_f32x3.h"
 #include "../../kernel/vm/ops/mul_f32x3_f32.h"
@@ -139,6 +141,8 @@ bool fold(const Work& w, int i, Vec3* out, std::string* err) {
     case Op::MUL_F32: (*out)[0] = ar::op_mul_f32(a[0], b[0]); return true;
     case Op::ADD_F32: (*out)[0] = ar::op_add_f32(a[0], b[0]); return true;
     case Op::SUB_F32: (*out)[0] = ar::op_sub_f32(a[0], b[0]); return true;
+    case Op::DIV_F32: (*out)[0] = ar::op_div_f32(a[0], b[0]); return true;
+    case Op::CLAMP_F32: (*out)[0] = ar::op_clamp_f32(a[0], f[0], f[1]); return true;
     case Op::MUL_F32X3: ar::op_mul_f32x3(a.data(), b.data(), out->data()); return true;
     case Op::MUL_F32X3_F32: ar::op_mul_f32x3_f32(a.data(), b[0], out->data()); return true;
     case Op::ADD_F32X3: ar::op_add_f32x3(a.data(), b.data(), out->data()); return true;
@@ -412,9 +416,15 @@ bool build_code(const Work& w, const std::vector<Item>& items, std::vector<uint3
       case Op::MUL_F32:
       case Op::ADD_F32:
       case Op::SUB_F32:
+      case Op::DIV_F32:
       case Op::MUL_F32X3:
       case Op::MUL_F32X3_F32:
       case Op::ADD_F32X3: code->push_back(word(nd.op, a, in(0), in(1))); break;
+      case Op::CLAMP_F32:
+        code->push_back(word(nd.op, a, in(0)));
+        code->push_back(bits(w.g.f32[nd.f32_first]));
+        code->push_back(bits(w.g.f32[nd.f32_first + 1]));
+        break;
       case Op::COLOR_TO_F32: code->push_back(word(nd.op, a, in(0))); break;
       case Op::TEX_IMAGE:
       case Op::TEX_ENVIRONMENT:
@@ -740,6 +750,22 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     return arith(Op::ADD_F32, a, b);
   };
   auto sub = [&](int a, int b) { return is_const(b, 0.0f) ? a : arith(Op::SUB_F32, a, b); };
+  auto clamp01 = [](float v) { return std::min(std::max(v, 0.0f), 1.0f); };
+  // A value clamped to [0, 1]: a constant on the host, as the block clamps one, a per-point one by
+  // CLAMP_F32. The weights, the emission and the selection's factor then read one clamped value.
+  auto clamped = [&](int v) {
+    if (w.isc[size_t(v)]) return konst(clamp01(w.cv[size_t(v)][0]));
+    GraphNode c;
+    c.op = Op::CLAMP_F32;
+    c.f32_first = uint32_t(w.g.f32.size());
+    c.f32_count = 2;
+    w.g.f32.push_back(0.0f);
+    w.g.f32.push_back(1.0f);
+    c.input[0] = v;
+    c.n_inputs = 1;
+    c.out = VType::F32;
+    return push(c);
+  };
   auto new_store = [&](int child, RS slot, int src) {
     GraphNode st;
     st.op = Op::STORE_SLOT;
@@ -751,10 +777,9 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     st.child = child;
     return push(st);
   };
-  auto clamp01 = [](float v) { return std::min(std::max(v, 0.0f), 1.0f); };
 
   // Child kinds, and each child's own opacity a_i: a constant one clamped to [0, 1] and reported
-  // as without a Mix, a per-point one unclamped (item 38: no clamp op).
+  // as without a Mix, a per-point one through CLAMP_F32, as the opacity decision clamps it.
   enum class Kind { BSDF, EMISSION, TRANSPARENT };
   std::map<int, Kind> kind_of;
   std::map<int, int> opacity_store_of, opacity_of;  // child -> its geometry_opacity store, its a_i
@@ -776,7 +801,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
       opacity_store_of[c] = op_store;
     }
     const int src = op_store >= 0 ? w.g.nodes[size_t(op_store)].input[0] : one;
-    opacity_of[c] = src;
+    opacity_of[c] = w.isc[size_t(src)] ? src : clamped(src);  // clamped() may move the node array
     const std::string who = "Mix Shader child " + std::to_string(c) + ": ";
     if (bsdf_store || (op_store < 0 && !emits)) {
       kind_of[c] = Kind::BSDF;
@@ -790,15 +815,11 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
                           " is none of the child kinds (Emission, Transparent with a constant opacity, BSDF)", false;
     }
   }
-  // Socket weights (1 - f, f) per mix; a constant factor clamped as BRANCH_MIX clamps it, a
-  // per-point one unclamped (no clamp op; BRANCH_MIX still clamps it for the selection).
+  // Socket weights (1 - f, f) per mix, f clamped to [0, 1] as BRANCH_MIX clamps it for the
+  // selection (CLAMP_F32 for a per-point factor).
   std::map<int, std::array<int, 2>> side_w;
   for (const auto& [tag, m] : mix_of_tag) {
-    int f = w.g.nodes[size_t(m)].input[0];
-    if (w.isc[size_t(f)]) {
-      const float v = w.cv[size_t(f)][0];
-      if (clamp01(v) != v) f = konst(clamp01(v));
-    }
+    const int f = clamped(w.g.nodes[size_t(m)].input[0]);  // clamped() may move the node array
     side_w[m] = {sub(one, f), f};
   }
   std::map<int32_t, bool> has_bsdf_memo;
@@ -859,9 +880,6 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
   for (int c : order)
     for (int e : emits_of[c]) {
       const int weight = mul(path_of[c].w, opacity_of[c]);
-      res->emission_opacity_unclamped = res->emission_opacity_unclamped || !w.isc[size_t(opacity_of[c])];
-      // path.w is a product of socket weights alone: not constant means a per-point factor.
-      res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(path_of[c].w)];
       const int strength = w.g.nodes[size_t(e)].input[1];
       emitted.push_back({w.g.nodes[size_t(e)].input[0], strength, weight});
       int scaled = mul(strength, weight);  // mul may move the node array
@@ -882,7 +900,6 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     const Path& p = path_of[c];
     if (!p.collapsed) continue;
     const int a = opacity_of[c];
-    res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(p.s)];
     int a2 = -1, cw = -1;  // new opacity source and closure weight; -1: unchanged
     if (w.isc[size_t(p.s)] && w.isc[size_t(p.tau)] && w.isc[size_t(a)]) {
       const double s = w.cv[size_t(p.s)][0], tau = w.cv[size_t(p.tau)][0], av = w.cv[size_t(a)][0];
@@ -894,10 +911,10 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
     } else if (is_const(p.tau, 0.0f) && is_const(a, 1.0f)) {
       cw = p.s;
     } else {
-      return res->error = "Mix Shader child " + std::to_string(c) +
-                          ": its closure weight s a / a' under a pruned sibling is per point and needs a divide op "
-                          "(DIV_F32), which ops.def does not have",
-             false;
+      // 1 - a' = tau + s (1 - a) and closure_weight = s a / a' (item 38). A constant a' of 0 never
+      // takes the surface, so its weight is 0 as in the constant branch above.
+      a2 = sub(one, add(p.tau, mul(p.s, sub(one, a))));
+      cw = w.isc[size_t(a2)] && !(w.cv[size_t(a2)][0] > 0.0f) ? zero : arith(Op::DIV_F32, mul(p.s, a), a2);
     }
     if (a2 >= 0) {
       if (opacity_store_of.count(c) != 0) w.g.nodes[size_t(opacity_store_of[c])].input[0] = a2;
@@ -910,7 +927,6 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
   for (int c : order)
     if (!is_const(opacity_of[c], 1.0f)) {
       t = add(t, mul(path_of[c].w, sub(one, opacity_of[c])));
-      res->mix_factor_unclamped = res->mix_factor_unclamped || !w.isc[size_t(path_of[c].w)];
     }
   const int a_eff = sub(one, t);
   int opacity_store = -1;  // the per-point a_eff store, the opacity entry's root
@@ -1083,8 +1099,8 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots, 
 // Emission inside the opacity mix (0005 item 4: top = mix(transparent, surface, opacity), the
 // emission under the surface): every EMIT_LE strength becomes strength x a, a new MUL_F32 node, so
 // the hit, the emission entry that NEE on an emissive triangle runs and the emission estimate all
-// read a x Le from one program, and the kernel scales nothing again. A per-point opacity is the
-// store's own source, computed once in the emission segment and kept live for the store (item 38);
+// read a x Le from one program, and the kernel scales nothing again. A per-point opacity enters the
+// product through CLAMP_F32, the clamp the opacity decision applies to the store's own source (item 38);
 // a constant one is the clamped value the block holds, folded into the product (a lone constant
 // emission then lands in the block's luminance as before). An opacity of exactly 1 changes nothing.
 // A NaN constant never gets here: compile_surface refuses every non-finite constant first.
@@ -1124,6 +1140,19 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
       w.g.nodes.push_back(c);
       factor = int(w.g.nodes.size()) - 1;
     }
+  } else {
+    // The decision clamps a per-point opacity to [0, 1]; the emission takes the same clamped value.
+    GraphNode c;
+    c.op = Op::CLAMP_F32;
+    c.f32_first = uint32_t(w.g.f32.size());
+    c.f32_count = 2;
+    w.g.f32.push_back(0.0f);
+    w.g.f32.push_back(1.0f);
+    c.input[0] = src;
+    c.n_inputs = 1;
+    c.out = VType::F32;
+    w.g.nodes.push_back(c);
+    factor = int(w.g.nodes.size()) - 1;
   }
   for (int e : emits) {
     GraphNode m;
@@ -1396,9 +1425,6 @@ CompileResult compile_surface(const ar_graph_desc& desc, const ar::Rgb2SpecTable
     res.program[1] = uint32_t(res.program.size());
     res.program.insert(res.program.end(), opacity.begin(), opacity.end());
   }
-  // A per-point opacity multiplies Le as the graph computes it, while the pass decision clamps it
-  // to [0, 1]: a value outside that range scales the emission by itself (scale_emission_by_opacity).
-  res.emission_opacity_unclamped = has_opacity && !res.emission.empty();
   res.ok = true;
   return res;
 }
@@ -1659,8 +1685,6 @@ static MaterialOutput compile_material_impl(const ar_graph_desc& d, const ar::Rg
   if (m.compiled.opacity_clamped) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity clamped");
   if (m.compiled.transparent_folded)
     add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "Transparent under a Mix Shader: colour taken as its mean (exact only for grey)");
-  if (m.compiled.mix_factor_unclamped)
-    add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "per-point Mix factor enters weights unclamped (Cycles saturates it)");
   if (m.compiled.spectrum_clamped) add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "TABLE reflectance above 1 clamped to 1");
   if (!m.compiled.spectrum_range.empty()) add_entry(&m, AR_REPORT_SPECTRUM_OUT_OF_RANGE, m.compiled.spectrum_range);
   // Camera and indirect rays pass through by the opacity decision in shade_surface; shadow rays
@@ -1668,8 +1692,6 @@ static MaterialOutput compile_material_impl(const ar_graph_desc& d, const ar::Rg
   // shadows are those of an opaque surface (0004 D4's pass-through needs the M2 shadow pass).
   if (!extension && (m.flags & ar::NON_OPAQUE) != 0u)
     add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity: shadow rays treat this material as opaque (transparent shadows are M2)");
-  if (m.compiled.emission_opacity_unclamped)
-    add_entry(&m, AR_REPORT_NODE_APPROXIMATED, "opacity: a per-point geometry_opacity scales emission unclamped");
   set_medium_fields(&m, medium_priority);
   for (uint32_t key : m.compiled.missing_images)
     add_entry(&m, AR_REPORT_IMAGE_UNREADABLE, "image key " + std::to_string(key) + " is not set");

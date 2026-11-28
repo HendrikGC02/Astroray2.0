@@ -38,10 +38,12 @@ bool op_param_counts(Op op, uint32_t* nf, uint32_t* ni) {
     case Op::TEX_ENVIRONMENT: *ni = 2; return true;  // image ar_key (low 32 bits), mode bits (tex_image.h)
     case Op::VOLUME_COEFFS: *nf = 1; *ni = 1; return true;  // HG anisotropy g; VolumeTerm (volume_coeffs.h)
     case Op::BRANCH_MIX: *ni = 3; return true;  // tag, first subtree, second subtree (graph.h)
+    case Op::CLAMP_F32: *nf = 2; return true;     // lo, hi
     case Op::LOAD_CTX_P:
     case Op::MUL_F32:
     case Op::ADD_F32:
     case Op::SUB_F32:
+    case Op::DIV_F32:
     case Op::MUL_F32X3:
     case Op::MUL_F32X3_F32:
     case Op::ADD_F32X3:
@@ -58,6 +60,8 @@ VType op_input_type(Op op, int i) {
     case Op::MUL_F32:
     case Op::ADD_F32:
     case Op::SUB_F32:
+    case Op::DIV_F32:
+    case Op::CLAMP_F32:
     case Op::BRANCH_MIX: return VType::F32;
     case Op::MUL_F32X3:
     case Op::ADD_F32X3: return VType::F32X3;
@@ -103,6 +107,7 @@ int op_input_count(Op op) {
     case Op::MUL_F32:
     case Op::ADD_F32:
     case Op::SUB_F32:
+    case Op::DIV_F32:
     case Op::MUL_F32X3:
     case Op::MUL_F32X3_F32:
     case Op::ADD_F32X3:
@@ -113,6 +118,7 @@ int op_input_count(Op op) {
     case Op::RGB_LIFT:
     case Op::STORE_SLOT:
     case Op::CHANNEL_F32X3:
+    case Op::CLAMP_F32:
     case Op::COLOR_TO_F32:
     case Op::BRANCH_MIX: return 1;
     default: return 0;
@@ -125,6 +131,8 @@ VType op_result_type(Op op) {
     case Op::MUL_F32:
     case Op::ADD_F32:
     case Op::SUB_F32:
+    case Op::DIV_F32:
+    case Op::CLAMP_F32:
     case Op::COLOR_TO_F32:
     case Op::CHANNEL_F32X3: return VType::F32;
     case Op::CONST_F32X3:

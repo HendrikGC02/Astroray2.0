@@ -877,4 +877,100 @@ TEST_CASE("mix_shader/emission estimate keeps constant weights") {
   check_rel(double(m.emission_estimate[0].strength), 0.01 * 3.0, 1e-6);
 }
 
+TEST_CASE("mix_shader/zz scratch words") {
+  auto dump = [](const char* what, GB& g) {
+    const CompileResult r = g.compile();
+    std::string line = std::string("SCRATCH ") + what + ": ";
+    if (!r.ok) {
+      std::printf("%s rejected: %s\n", line.c_str(), r.error.c_str());
+      return;
+    }
+    std::vector<uint32_t> offs;
+    const char* names[3] = {"surface", "opacity", "emission"};
+    for (int e = 0; e < 3; ++e) {
+      const uint32_t off = e == 0 ? r.program[0] : r.program[e];
+      if (off == 0u) continue;
+      std::string ops;
+      uint32_t words = 0;
+      for (uint32_t pc = off; pc < r.program.size();) {
+        const Op op = Op(r.program[pc] & 0xffu);
+        ops += astroray::host::op_meta_table()[int(op)].name;
+        ops += " ";
+        const uint32_t len = op == Op::END ? 1u : length_of(op);
+        words += len;
+        if (op == Op::END) break;
+        pc += len;
+      }
+      line += std::string(names[e]) + "[" + std::to_string(words) + "w]: " + ops + " | ";
+    }
+    std::printf("%s total %zu words\n", line.c_str(), r.program.size());
+  };
+  {
+    GB g;
+    g.emit(0, 1.0f, 1.0f);
+    g.store_const(1, 0.5f, RecordSlot::base_metalness);
+    g.store(1, g.uv_channel(0), RecordSlot::geometry_opacity);
+    g.mix_const(0, 0.5f, 0, 1);
+    dump("A Mix(Emission, S alpha=uv.x, 0.5)", g);
+  }
+  {
+    GB g;
+    g.emit(0, 0.8f, 3.0f);
+    g.store_const(1, 0.25f, RecordSlot::base_metalness);
+    g.mix(0, g.uv_channel(0), 0, 1);
+    dump("B Mix(Emission, S, f=uv.x)", g);
+  }
+  {
+    GB g;
+    g.store_const(0, 0.1f, RecordSlot::base_metalness);
+    g.store_const(0, 0.5f, RecordSlot::geometry_opacity);
+    g.store_const(1, 0.2f, RecordSlot::base_metalness);
+    g.store(1, g.uv_channel(1), RecordSlot::geometry_opacity);
+    g.emit(1, 0.8f, 3.0f);
+    g.mix_const(0, 0.25f, 0, 1);
+    dump("C Mix(S1 a=.5, S2 a=uv.y + emission, .25)", g);
+  }
+  {
+    GB g;
+    g.store(0, g.uv_channel(1), RecordSlot::geometry_opacity);
+    g.emit(0, 1.0f, 2.0f);
+    dump("D no Mix: emission with per-point opacity", g);
+  }
+  {
+    GB g;
+    g.store_const(0, 0.1f, RecordSlot::base_metalness);
+    g.store_const(0, 0.3f, RecordSlot::geometry_opacity);
+    g.store_const(1, 0.2f, RecordSlot::base_metalness);
+    g.store(1, g.uv_channel(1), RecordSlot::geometry_opacity);
+    g.store_const(2, 0.3f, RecordSlot::base_metalness);
+    g.store_const(2, 0.8f, RecordSlot::geometry_opacity);
+    g.mix(7, g.uv_channel(0), 0, 1);
+    g.mix_const(3, 0.25f, mix_ref(7), 2);
+    dump("E Mix(Mix(S0,S1,f1=uv.x), S2, .25), a1=uv.y", g);
+  }
+  {
+    GB g;
+    g.store_const(0, 0.0f, RecordSlot::geometry_opacity);
+    g.store_const(1, 0.25f, RecordSlot::base_metalness);
+    g.store_const(1, 0.5f, RecordSlot::geometry_opacity);
+    g.mix(0, g.uv_channel(0), 0, 1);
+    dump("F Mix(Transparent, S a=.5, f=uv.x)", g);
+  }
+  {
+    GB g;
+    g.emit(0, 1.0f, 1.0f);
+    g.store_const(1, 0.25f, RecordSlot::base_metalness);
+    g.mix(0, g.uv_channel(0), 0, 1);
+    g.store_const(1, 0.25f, RecordSlot::geometry_opacity);
+    dump("G Mix(Emission, S a=.25 const, f=uv.x)", g);
+  }
+  {
+    GB g;
+    g.store_const(0, 0.1f, RecordSlot::base_metalness);
+    g.store_const(1, 0.2f, RecordSlot::base_metalness);
+    g.mix(0, g.uv_channel(0), 0, 1);
+    dump("H Mix(S1, S2, f=uv.x) selection only", g);
+  }
+}
+
 }  // TEST_SUITE
