@@ -16,3 +16,4 @@ Budget: gate +0 s (probe modules are built by the probe target, which `check gat
 Depends on: 174, 175, 192, 205, 219, 220, 208, 206 (the spine queue; 209 if it is unblocked by then), 215 (its B-05 numbers). Collisions: launch_config.h and budget.toml with 196 and 206; the three records with 205, 206, 215; bench/history append; the later one rebases.
 Size: S (about 150 lines of probe; record sentences); stop and report at 2x or when the table says stop.
 Progress:
+- Started on task/213-m1-ratification-m1b-scope from 9071957a. Files: src/kernel_gpu/probe_light_ext.cu (new), src/kernel/launch_config.h, src/kernel/budget.toml, bench/history/2026.jsonl, docs/decisions/0005, 0002 D10, docs/ROADMAP.md, docs/BACKLOG.md; kernelgate.py needs no change (no `probe_m1` hard-coded: `--probe`/`--full` read every probe_*.cu cubin).
