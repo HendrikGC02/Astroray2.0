@@ -147,7 +147,7 @@ task's own bench history line, limits changed listed for the owner, no untried a
 All nine are answered: 2, 4, 5, 7 and 9 by owner decision 46; 1 (candidate O is allowed if 248's table
 ranks it the fastest admissible variant), 3 (B-20 does not gate M2's close), 6 (4,096 until slice C, then
 set by rule) and 8 (20 min, enforced, task 272) by owner decision 47. The table is kept for its reasons.
-Decision 47 also makes 248's A/B valid on a machine other than the reference machine: it decides by
+On a machine other than the reference machine 248's A/B is indicative only (decision 47 e): it compares by
 ratios between variants, recorded with the machine id; resource rows come from sm_120 compile-only builds
 (task 267).
 
