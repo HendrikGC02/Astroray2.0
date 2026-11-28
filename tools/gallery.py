@@ -84,12 +84,18 @@ def png_size(path):
 # ------------------------------------------------------------------------------------------------ driver
 
 def run_blender_batch(runs):
-    """Every Blender start of the gallery under one hold of the machine lock (the nested Invoke-ArBlender calls see
+    """Every start of the gallery under one hold of the machine lock (the nested Invoke-ArBlender calls see
     ASTRORAY_LOCK_PID and do not wait again; with one lock per start each would queue behind other agents' runs).
-    runs: [(name, job json path, timeout s, windowed)]. Every run is made; the failing ones are named at the end."""
+    runs: [(name, job json path, timeout s, kind)], kind "blender", "windowed" or "python" (a worker that needs no
+    Blender: the cli mode). Every run is made; the failing ones are named at the end."""
     lines = [f". '{ROOT}/tools/lib/blender.ps1'", "$null = Enter-ArMachineLock", "$bad = ''", "try {"]
-    for name, job, timeout_s, gui in runs:
+    for name, job, timeout_s, kind in runs:
+        if kind == "python":
+            lines += [f"  & '{sys.executable}' -I '{ROOT}/tools/gallery.py' --job '{job}'",
+                      f"  Write-Host \"RUN {name} exit $LASTEXITCODE\"; if ($LASTEXITCODE -ne 0) {{ $bad += '{name} ' }}"]
+            continue
         # A windowed run draws only while its window is on screen, so a run that failed is tried once more.
+        gui = kind == "windowed"
         lines += [f"  for ($try = 0; $try -lt {2 if gui else 1}; $try++) {{",
                   f"    $r = Invoke-ArBlender -Script '{ROOT}/tools/gallery.py' -Args @('--job', '{job}') "
                   f"-TimeoutS {timeout_s}{' -Gui' if gui else ''}",
@@ -104,17 +110,27 @@ def run_blender_batch(runs):
     return subprocess.run(["pwsh", "-NoProfile", "-File", script], cwd=ROOT).returncode
 
 
+def builder_name(entry):
+    return os.path.splitext(entry["recording"])[0]   # the builder's folder: bench id b_tx is scenes/s3_textured
+
+
 def build_description(entry, work):
-    name = os.path.splitext(entry["recording"])[0]   # the builder's folder: bench id b_tx is scenes/s3_textured
-    blend = os.path.join(work, f"{name}.blend")
-    cmd = [sys.executable, "-I", os.path.join(ROOT, "scenes", name, "build.py"),
-           "--out", os.path.join(work, f"{name}.arrec"), "--blend", blend]
+    """Runs the scene's builder; returns the .blend path (an f12 scene) or the .arrec path (gallery_via cli, whose
+    builder may take no --blend)."""
+    name = builder_name(entry)
+    cli = entry.get("gallery_via") == "cli"
+    blend, rec = os.path.join(work, f"{name}.blend"), os.path.join(work, f"{name}.arrec")
+    cmd = [sys.executable, "-I", os.path.join(ROOT, "scenes", name, "build.py"), "--out", rec]
+    if not cli:
+        cmd += ["--blend", blend]
     if name == "a1_furnace":
         cmd += ["--sampler", "sobol"]   # a .blend cannot carry another sampler
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     if p.returncode != 0:
         raise SystemExit(f"FAIL gallery: scenes/{name}/build.py failed:\n{p.stdout}{p.stderr}")
-    return blend
+    if cli and not os.path.isfile(rec):
+        raise SystemExit(f"FAIL gallery: {entry['name']}: scenes/{name}/build.py wrote no recording {rec}")
+    return rec if cli else blend
 
 
 def expected_files(entry, devices):
@@ -122,48 +138,74 @@ def expected_files(entry, devices):
     files = [f"{n}_{d.lower()}.png" for d in devices] + [f"{n}_{d.lower()}.json" for d in devices]
     if len(devices) == 2:
         files += [f"{n}_diff.png", f"{n}_diff.json"]
+    if entry.get("denoise"):
+        files += [f"{n}_denoise_{k}.{ext}" for k in ("off", "on") for ext in ("png", "json")]
+    if entry.get("panel"):
+        files += [f"{n}_panel.png", f"{n}_panel.json"]
     return files
+
+
+def plan(entries, out, work, no_f12=False, no_heat=False):
+    """The runs of a gallery and the files it must produce, without building or rendering anything:
+    ([(name, job dict, timeout s, kind)], [file names]). Job paths are the ones the builders write."""
+    runs, produced = [], []
+    for e in entries:
+        base = os.path.join(work, builder_name(e))
+        if no_f12:
+            continue
+        if e.get("gallery_via") == "cli":
+            job = {"mode": "cli", "entry": e, "rec": base + ".arrec", "out": out, "devices": list(DEVICES)}
+            runs.append((f"{e['name']}_cli", job, 3600, "python"))
+        else:
+            job = {"mode": "f12", "entry": e, "blend": base + ".blend", "desc": base + ".blend.json", "out": out,
+                   "devices": list(DEVICES)}
+            runs.append((f"{e['name']}_f12", job, 5400, "blender"))
+        produced += expected_files(e, DEVICES)
+        if e.get("denoise"):
+            runs.append((f"{e['name']}_denoise", dict(job, mode="denoise", device="CUDA"), 3600, "blender"))
+        if e.get("panel"):
+            runs.append((f"{e['name']}_panel", dict(job, mode="panel", device="CPU"), 1500, "windowed"))
+    if not no_heat:
+        for e in (e for e in entries if e.get("heat")):
+            base = os.path.join(work, builder_name(e))
+            for dev in DEVICES:
+                job = {"mode": "heat", "entry": e, "blend": base + ".blend", "desc": base + ".blend.json", "out": out, "device": dev}
+                runs.append((f"{e['name']}_heat_{dev.lower()}", job, 1500, "windowed"))
+                for kind in ("samples", "bounces"):
+                    produced += [f"{e['name']}_heat_{kind}_{dev.lower()}.png", f"{e['name']}_heat_{kind}_{dev.lower()}.json"]
+    return runs, produced
 
 
 def driver(a):
     milestone = a.milestone
-    entries = showcase(milestone)
+    entries = showcase(milestone, a.scenes_toml)
     if a.scene:
         entries = [e for e in entries if e["name"] in a.scene]
     if not entries:
         raise SystemExit(f"FAIL gallery: no showcase scene for {milestone}")
     out = out_dir(milestone)
     work = os.path.join(out, "work")
+    jobs, produced = plan(entries, out, work, a.no_f12, a.no_heat)
+    if a.plan:
+        for name, job, _, kind in jobs:
+            print(f"job {name} {kind} {job['mode']}")
+        for name in produced:
+            print(f"file {name}")
+        return 0
     os.makedirs(work, exist_ok=True)
-    produced, runs = [], []
-
-    def job_file(name, job):
+    for e in entries:
+        build_description(e, work)
+    runs = []
+    for name, job, timeout_s, kind in jobs:
         jp = os.path.join(work, name + ".json")
         with open(jp, "w") as f:
             json.dump(job, f)
-        return jp
-
-    for e in entries:
-        blend = build_description(e, work)
-        if a.no_f12:
-            continue
-        job = {"mode": "f12", "entry": e, "blend": blend, "desc": blend + ".json", "out": out, "devices": list(DEVICES)}
-        runs.append((f"{e['name']}_f12", job_file(f"{e['name']}_f12", job), 5400, False))
-        produced += expected_files(e, DEVICES)
-    if not a.no_heat:
-        for e in (e for e in entries if e.get("heat")):
-            blend = os.path.join(work, os.path.splitext(e["recording"])[0] + ".blend")
-            for dev in DEVICES:
-                job = {"mode": "heat", "entry": e, "blend": blend, "desc": blend + ".json", "out": out, "device": dev}
-                name = f"{e['name']}_heat_{dev.lower()}"
-                runs.append((name, job_file(name, job), 1500, True))
-                for kind in ("samples", "bounces"):
-                    produced += [f"{e['name']}_heat_{kind}_{dev.lower()}.png", f"{e['name']}_heat_{kind}_{dev.lower()}.json"]
+        runs.append((name, jp, timeout_s, kind))
     t0 = time.perf_counter()
     code = run_blender_batch(runs)
-    print(f"gallery: {len(runs)} Blender runs, exit {code}, {time.perf_counter() - t0:.0f} s (lock wait included)", flush=True)
+    print(f"gallery: {len(runs)} runs, exit {code}, {time.perf_counter() - t0:.0f} s (lock wait included)", flush=True)
     print(f"gallery: images in {out}")
-    bad = ["a Blender run failed (its log is above; exit -1 is the timeout)"] if code != 0 else []
+    bad = ["a run failed (its log is above; exit -1 is the timeout)"] if code != 0 else []
     for name in produced:
         p = os.path.join(out, name)
         if not os.path.exists(p):
@@ -370,17 +412,7 @@ def worker_f12(job):
             failures.append(str(err))
             print(f"gallery: FAIL {err}", flush=True)
     if len(linear) == 2:
-        cpu, gpu = linear["CPU"], linear["CUDA"]
-        if not (np.isfinite(cpu).all() and np.isfinite(gpu).all()):
-            raise RuntimeError(f"{e['name']}: a render has non-finite pixels")
-        d, stats = diff_map(cpu, gpu)
-        name = f"{e['name']}_diff"
-        report.write_png(os.path.join(out, name + ".png"), d)
-        report.write_png(os.path.join(out, "thumbs", name + ".png"), thumbnail(d))
-        write_sidecar(os.path.join(out, name + ".json"), dict(stats, scene=e["name"], build=build, file=name + ".png",
-                                                           note="informational; agreement is gated by 0009 d17"))
-        print(f"gallery: {name} median {stats['median_rel']:.3f} p95 {stats['p95_rel']:.3f} "
-              f"gpu/cpu mean {stats['mean_gpu_over_cpu']:.4f}", flush=True)
+        write_diff(e, linear, out, build)
     if failures:
         raise RuntimeError("; ".join(failures))
 
@@ -546,16 +578,343 @@ def worker_heat(job):
     bpy.app.timers.register(Driver(rf).tick, first_interval=1.0)
 
 
+def write_diff(e, linear, out, build):
+    """The CPU-against-CUDA difference image and its sidecar, from the two scene-linear arrays."""
+    import numpy as np
+    import report
+    cpu, gpu = linear["CPU"], linear["CUDA"]
+    if not (np.isfinite(cpu).all() and np.isfinite(gpu).all()):
+        raise RuntimeError(f"{e['name']}: a render has non-finite pixels")
+    d, stats = diff_map(cpu, gpu)
+    name = f"{e['name']}_diff"
+    report.write_png(os.path.join(out, name + ".png"), d)
+    report.write_png(os.path.join(out, "thumbs", name + ".png"), thumbnail(d))
+    write_sidecar(os.path.join(out, name + ".json"), dict(stats, scene=e["name"], build=build, file=name + ".png",
+                                                       note="informational; agreement is gated by 0009 d17"))
+    print(f"gallery: {name} median {stats['median_rel']:.3f} p95 {stats['p95_rel']:.3f} "
+          f"gpu/cpu mean {stats['mean_gpu_over_cpu']:.4f}", flush=True)
+
+
+def cli_build_id():
+    """The core's version line for a worker that runs no Blender: the addon's own formatter (native._build_line)
+    on the staged binding and the built DLL, so a CLI sidecar names the same toolkits as an F12 one."""
+    import ctypes
+    import importlib
+    import importlib.util
+    import types
+    gen, bins = os.path.join(ROOT, "out", "build", "gen"), os.path.join(ROOT, "out", "bin")
+    pkg = types.ModuleType("_arcore")
+    pkg.__path__ = [gen]
+    sys.modules["_arcore"] = pkg
+    abi = importlib.import_module("_arcore._abi")
+    spec = importlib.util.spec_from_file_location("_arcore.native", os.path.join(ROOT, "blender", "astroray", "native.py"))
+    native = importlib.util.module_from_spec(spec)
+    sys.modules["_arcore.native"] = native
+    spec.loader.exec_module(native)
+    os.add_dll_directory(bins)
+    lib = ctypes.CDLL(os.path.join(bins, "astroray_core.dll"))
+    abi.check(lib)
+    return native._build_line(abi, lib)
+
+
+def srgb_u8(lin):
+    """sRGB encoding of scene-linear values clipped to [0, 1], as 8-bit (IEC 61966-2-1)."""
+    import numpy as np
+    v = np.clip(lin, 0.0, 1.0)
+    enc = np.where(v <= 0.0031308, 12.92 * v, 1.055 * np.power(v, 1 / 2.4) - 0.055)
+    return np.rint(enc * 255.0).astype(np.uint8)
+
+
+def worker_cli(job):
+    """The recording through astroray_cli render on each device (a scene the addon cannot express)."""
+    import importlib.util
+    import numpy as np
+    import report
+    e, out = job["entry"], job["out"]
+    exe = os.path.join(ROOT, "out", "bin", "astroray_cli.exe")
+    spec = importlib.util.spec_from_file_location("_fits_read_g", os.path.join(ROOT, "tests", "abi", "fits_read.py"))
+    fits_read = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fits_read)
+    if not os.path.isfile(job["rec"]):
+        raise RuntimeError(f"{e['name']}: no recording {job['rec']}")
+    build = cli_build_id()
+    os.makedirs(os.path.join(out, "thumbs"), exist_ok=True)
+    work, linear, failures = os.path.join(out, "work"), {}, []
+    for dev in job["devices"]:
+        stem = f"{e['name']}_{dev.lower()}"
+        for p in (os.path.join(out, stem + ".png"), os.path.join(out, stem + ".json"), os.path.join(out, "thumbs", stem + ".png")):
+            if os.path.exists(p):   # a stale file of an earlier run must not pass for this run's result
+                os.remove(p)
+        fits = os.path.join(work, stem + ".fits")
+        t0 = time.perf_counter()
+        r = subprocess.run([exe, "render", job["rec"], "-o", fits, "--device", dev.lower(), "--spp", str(e["gallery_spp"])],
+                           capture_output=True, text=True, cwd=work, timeout=3500)
+        secs = time.perf_counter() - t0
+        try:
+            if r.returncode != 0:
+                raise RuntimeError(f"{stem}: astroray_cli exited {r.returncode}:\n{r.stdout}{r.stderr}")
+            with open(fits, "rb") as f:
+                hdus = fits_read.read_hdus(f.read())
+            planes = {h["EXTNAME"]: d for h, d in hdus[1:]}
+            mean = np.stack([planes[f"display.{c}"] for c in range(3)], axis=-1).astype(np.float64)[::-1]   # row 1 is the bottom
+            h0, w0 = mean.shape[:2]
+            w, h = e["gallery_size"]
+            if w % w0 or h % h0 or w // w0 != h // h0:
+                raise RuntimeError(f"{stem}: gallery size {w} x {h} is not an integer multiple of the recording's {w0} x {h0}")
+            f_up = w // w0
+            lin = np.repeat(np.repeat(mean, f_up, axis=0), f_up, axis=1)
+            if not np.isfinite(lin).all():
+                raise RuntimeError(f"{stem}: non-finite pixels")
+            rgb = srgb_u8(lin)
+            path = os.path.join(out, stem + ".png")
+            report.write_png(path, rgb)
+            mean_white = check_image(rgb, stem + ".png")
+        except RuntimeError as err:
+            failures.append(str(err))
+            print(f"gallery: FAIL {err}", flush=True)
+            continue
+        linear[dev] = lin
+        report.write_png(os.path.join(out, "thumbs", stem + ".png"), thumbnail(rgb))
+        write_sidecar(os.path.join(out, stem + ".json"), {
+            "scene": e["name"], "device": dev, "spp": e["gallery_spp"], "time": secs, "time_unit": "s",
+            "time_note": "astroray_cli render wall clock: process start, replay, render, film write (first CUDA use includes any cold compile)",
+            "settings": {"width": w, "height": h, "recorded_width": w0, "recorded_height": h0, "upscale": f"{f_up}x nearest",
+                         "view_transform": "none: CLI output", "transfer": "sRGB encoding of the film's display planes, clipped to [0, 1]"},
+            "build": build, "file": stem + ".png", "bytes": os.path.getsize(path), "mean_of_white": mean_white})
+        print(f"gallery: {stem} {w} x {h} {e['gallery_spp']} spp in {secs:.1f} s, mean {mean_white:.3f}", flush=True)
+    if len(linear) == 2:
+        write_diff(e, linear, out, build)
+    if failures:
+        raise RuntimeError("; ".join(failures))
+
+
+def hf_energy(p):
+    """Mean squared residual of the pixels against the mean of their four neighbours: the noise power a flat patch
+    shows (a smooth gradient leaves ~0). p: (h, w, 3) floats."""
+    nb = (p[:-2, 1:-1] + p[2:, 1:-1] + p[1:-1, :-2] + p[1:-1, 2:]) / 4.0
+    return float(((p[1:-1, 1:-1] - nb) ** 2).mean())
+
+
+def open_f12_scene(job, spp):
+    """The f12 worker's setup: staged extension enabled, .blend built and opened, size and samples set, PNG output."""
+    import bpy
+    sys.path.insert(0, os.path.join(ROOT, "tests", "blender"))
+    import smoke_a1
+    import blend_writer
+    smoke_a1.install_and_enable()
+    blend_writer.build(job["desc"], job["blend"])
+    bpy.ops.wm.open_mainfile(filepath=job["blend"], load_ui=False)
+    scene, e = bpy.context.scene, job["entry"]
+    w, h = e["gallery_size"]
+    if w * scene.render.resolution_y != h * scene.render.resolution_x:
+        raise RuntimeError(f"gallery size {w} x {h} changes the aspect of the scene's "
+                           f"{scene.render.resolution_x} x {scene.render.resolution_y}")
+    scene.render.resolution_x, scene.render.resolution_y, scene.render.resolution_percentage = w, h, 100
+    scene.astroray.samples = scene.astroray.viewport_samples = spp
+    im = scene.render.image_settings
+    im.file_format, im.color_mode, im.color_depth, im.compression = "PNG", "RGB", "8", 100
+    return scene
+
+
+def worker_denoise(job):
+    """The F12 job twice on one device, use_denoising off and on, at denoise_spp (default gallery_spp)."""
+    import bpy
+    import numpy as np
+    import report
+    e, out, dev = job["entry"], job["out"], job["device"]
+    spp = e.get("denoise_spp", e["gallery_spp"])
+    scene = open_f12_scene(job, spp)
+    build = build_id("bl_ext.user_default.astroray")
+    os.makedirs(os.path.join(out, "thumbs"), exist_ok=True)
+    scene.astroray.device = dev
+    shots = {}
+    for state in ("off", "on"):
+        stem = f"{e['name']}_denoise_{state}"
+        for p in (os.path.join(out, stem + ".png"), os.path.join(out, stem + ".json"), os.path.join(out, "thumbs", stem + ".png")):
+            if os.path.exists(p):
+                os.remove(p)
+        scene.astroray.use_denoising = state == "on"
+        t0 = time.perf_counter()
+        bpy.ops.render.render(write_still=False)
+        secs = time.perf_counter() - t0
+        path = os.path.join(out, stem + ".png")
+        bpy.data.images["Render Result"].save_render(path)
+        rgb = load_u8(path)
+        mean = check_image(rgb, stem + ".png")
+        report.write_png(os.path.join(out, "thumbs", stem + ".png"), thumbnail(rgb))
+        shots[state] = (rgb.astype(np.float64) / 255.0, stem, secs, mean, path)
+    off, on = shots["off"][0], shots["on"][0]
+    h, w = off.shape[:2]
+    x0, y0, x1, y1 = e["denoise_patch"]
+    px0, py0, px1, py1 = int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h)
+    if px1 - px0 < 8 or py1 - py0 < 8:
+        raise RuntimeError(f"{e['name']}: denoise_patch {e['denoise_patch']} is under 8 px on a side at {w} x {h}")
+    mad = float(np.abs(on - off).mean())
+    if mad == 0.0:
+        raise RuntimeError(f"{e['name']}: the denoised render equals the noisy one: OIDN did not run")
+    pair = {"patch_fractions": e["denoise_patch"], "patch_px": [px0, py0, px1, py1],
+            "patch_mean_off": float(off[py0:py1, px0:px1].mean()), "patch_mean_on": float(on[py0:py1, px0:px1].mean()),
+            "hf_energy_off": hf_energy(off[py0:py1, px0:px1]), "hf_energy_on": hf_energy(on[py0:py1, px0:px1]),
+            "mean_abs_diff": mad, "units": "display values in [0, 1] of the 8-bit PNGs",
+            "hf_definition": "mean squared residual against the mean of the four neighbours, over the patch"}
+    pair["hf_ratio_on_over_off"] = pair["hf_energy_on"] / max(pair["hf_energy_off"], 1e-30)
+    for state, (_, stem, secs, mean, path) in shots.items():
+        write_sidecar(os.path.join(out, stem + ".json"), {
+            "scene": e["name"], "device": dev, "spp": spp, "time": secs, "time_unit": "s", "denoise": state,
+            "settings": settings_of(scene, job["desc"]), "build": build, "file": stem + ".png",
+            "bytes": os.path.getsize(path), "mean_of_white": mean, **({"pair": pair} if state == "on" else {})})
+        print(f"gallery: {stem} {w} x {h} {spp} spp in {secs:.1f} s, mean {mean:.3f}", flush=True)
+    print(f"gallery: denoise pair patch hf {pair['hf_energy_off']:.3e} -> {pair['hf_energy_on']:.3e}, "
+          f"patch mean {pair['patch_mean_off']:.4f} -> {pair['patch_mean_on']:.4f}, mean abs diff {mad:.4f}", flush=True)
+
+
+def worker_panel(job):
+    """A windowed Blender: the scene in Rendered shading with one unsupported node added, a screenshot of the
+    Properties editor's Diagnostics panel and the diagnostics store read back. Mirrors tests/blender/gui_diagnostics.py."""
+    import bpy
+    import importlib
+    import report
+    sys.path.insert(0, os.path.join(ROOT, "tests", "blender"))
+    import smoke_a1
+    import blend_writer
+    module = "bl_ext.user_default.astroray"
+    e, out = job["entry"], job["out"]
+    stem = f"{e['name']}_panel"
+    smoke_a1.install_and_enable()
+    blend_writer.build(job["desc"], job["blend"])
+    bpy.ops.wm.open_mainfile(filepath=job["blend"], load_ui=False)
+    scene = bpy.context.scene
+    build = build_id(module)
+    for p in (os.path.join(out, stem + ".png"), os.path.join(out, stem + ".json"), os.path.join(out, "thumbs", stem + ".png")):
+        if os.path.exists(p):
+            os.remove(p)
+    scene.render.engine = "ASTRORAY"
+    scene.astroray.device = job["device"]
+    scene.astroray.viewport_samples = 16
+    diag = importlib.import_module(module + ".diagnostics")
+    panels = importlib.import_module(module + ".ui.panels")
+    # The other settings sub-panels start collapsed so the Diagnostics panel is on screen without scrolling.
+    for cls in panels.classes:
+        if cls.__name__ not in ("ASTRORAY_PT_settings", "ASTRORAY_PT_diagnostics"):
+            bpy.utils.unregister_class(cls)
+            cls.bl_options = set(getattr(cls, "bl_options", ())) | {"DEFAULT_CLOSED"}
+            bpy.utils.register_class(cls)
+    state = {"t0": time.monotonic(), "step": "setup", "step_t0": time.monotonic()}
+    node_name, mat_name = "Deliberate Wave Texture", "Deliberate Unsupported Node"
+
+    def finish(code):
+        sys.stdout.flush()
+        os._exit(code)
+
+    def unsupported():
+        r = diag.latest()
+        return [x for x in r.entries if x.code == "NODE_UNSUPPORTED"] if r else []
+
+    def area(kind):
+        for win in bpy.context.window_manager.windows:
+            for a in win.screen.areas:
+                if a.type == kind:
+                    return win, a
+        raise RuntimeError(f"no {kind} area")
+
+    def go(name):
+        state["step"], state["step_t0"] = name, time.monotonic()
+
+    def tick():
+        try:
+            if time.monotonic() - state["t0"] > 300 or time.monotonic() - state["step_t0"] > 90:
+                raise RuntimeError(f"timeout in step {state['step']}")
+            return globals_step[state["step"]]()
+        except Exception:
+            traceback.print_exc()
+            finish(1)
+
+    def step_setup():
+        _, props = area("PROPERTIES")
+        props.spaces.active.context = "RENDER"
+        _, view = area("VIEW_3D")
+        view.spaces.active.shading.type = "RENDERED"
+        view.spaces.active.overlay.show_overlays = False
+        go("first")
+        return 0.5
+
+    def step_first():
+        r = diag.latest()
+        if r is None or r.kind != "VIEWPORT":
+            return 0.3
+        before = len(unsupported())
+        me = bpy.data.meshes.new("DiagPlane")
+        me.from_pydata([(-0.3, -0.3, 1.0), (0.3, -0.3, 1.0), (0.3, 0.3, 1.0), (-0.3, 0.3, 1.0)], [], [(0, 1, 2, 3)])
+        ob = bpy.data.objects.new("DiagPlane", me)
+        scene.collection.objects.link(ob)
+        mat = bpy.data.materials.new(mat_name)
+        mat.use_nodes = True
+        ob.data.materials.append(mat)
+        wave = mat.node_tree.nodes.new("ShaderNodeTexWave")
+        wave.name = wave.label = node_name
+        mat.node_tree.links.new(wave.outputs[0], mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"])
+        bpy.context.view_layer.update()
+        state["before"] = before
+        go("edited")
+        return 0.3
+
+    def step_edited():
+        seen = unsupported()
+        if not seen:
+            return 0.3
+        state["settle"] = state.get("settle", 0) + 1
+        win, props = area("PROPERTIES")
+        props.tag_redraw()
+        if state["settle"] < 6:   # the panel must have drawn with the entry
+            return 0.4
+        with bpy.context.temp_override(window=win, area=props):
+            bpy.ops.screen.screen_full_area()
+        go("shot")
+        return 1.0
+
+    def step_shot():
+        import numpy as np
+        win, props = next((w, a) for w in bpy.context.window_manager.windows for a in w.screen.areas if a.type == "PROPERTIES")
+        region = next(r for r in props.regions if r.type == "WINDOW")
+        props.tag_redraw()
+        tmp = os.path.join(out, "work", stem + "_area.png")
+        with bpy.context.temp_override(window=win, area=props, region=region):
+            bpy.ops.screen.screenshot_area(filepath=tmp)
+        rgb = load_u8(tmp)
+        os.remove(tmp)
+        rgb = rgb[:MAX_PX, :min(rgb.shape[1], 900)]   # the panel column; the editor is wider than the page
+        mean = check_image(rgb, stem + ".png")
+        seen = [{"level": x.level, "code": x.code, "subject": x.subject, "detail": x.detail} for x in unsupported()]
+        if not any(mat_name in x["subject"] and "ShaderNodeTexWave" in x["detail"] for x in seen):
+            raise RuntimeError(f"the diagnostics store does not list the unsupported node: {seen}")
+        path = os.path.join(out, stem + ".png")
+        report.write_png(path, rgb)
+        report.write_png(os.path.join(out, "thumbs", stem + ".png"), thumbnail(rgb))
+        write_sidecar(os.path.join(out, stem + ".json"), {
+            "scene": e["name"], "device": job["device"], "added_node": node_name, "added_material": mat_name,
+            "entries_before_edit": state["before"], "unsupported_entries": seen, "build": build, "file": stem + ".png",
+            "bytes": os.path.getsize(path), "mean_of_white": mean, "view_transform": "none: Blender UI screenshot",
+            "settings": {"width": rgb.shape[1], "height": rgb.shape[0], "view_transform": "none: Blender UI screenshot"},
+            "spp": 16})
+        print(f"gallery: {stem} {rgb.shape[1]} x {rgb.shape[0]}, unsupported entries {len(seen)}", flush=True)
+        importlib.import_module(module + ".render_final").shutdown()
+        finish(0)
+
+    globals_step = {"setup": step_setup, "first": step_first, "edited": step_edited, "shot": step_shot}
+    bpy.app.timers.register(tick, first_interval=1.0)
+
+
 def worker(job_path):
     with open(job_path) as f:
         job = json.load(f)
     try:
-        {"f12": worker_f12, "heat": worker_heat}[job["mode"]](job)
+        {"f12": worker_f12, "heat": worker_heat, "cli": worker_cli, "denoise": worker_denoise,
+         "panel": worker_panel}[job["mode"]](job)
     except Exception:
         traceback.print_exc()
         sys.stdout.flush()
         os._exit(1)
-    if job["mode"] == "f12":
+    if job["mode"] in ("f12", "denoise"):
         import importlib
         importlib.import_module("bl_ext.user_default.astroray.render_final").shutdown()   # contexts closed in order
 
@@ -569,6 +928,8 @@ def main():
     ap.add_argument("--scene", action="append", help="only this showcase scene (repeatable)")
     ap.add_argument("--no-f12", action="store_true", help="only the heat-map runs (a re-run of those)")
     ap.add_argument("--no-heat", action="store_true", help="skip the windowed heat-map runs")
+    ap.add_argument("--plan", action="store_true", help="print the jobs and expected files; build and render nothing")
+    ap.add_argument("--scenes-toml", help="read the showcase entries from this file instead of bench/scenes.toml")
     return driver(ap.parse_args(argv))
 
 
