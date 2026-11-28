@@ -1,5 +1,5 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 44efe714..a7841a56 100644
+index 44efe714..11fb3e03 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
 @@ -524,7 +524,7 @@ Mean mean_of_node(const Work& w, int i, MeanCtx* x) {
@@ -7,7 +7,7 @@ index 44efe714..a7841a56 100644
      return r;
    }
 -  if (n.op == Op::CLAMP_F32) {
-+  if (false && n.op == Op::CLAMP_F32) {
++  if (n.op == Op::END) {
      // The clamp of the input's mean: exact when the image lies in [lo, hi] (an alpha or Mix factor
      // texture, whose clamp changes nothing), otherwise the estimate's usual approximation.
      const Mean a = mean_of(w, n.input[0], x);
