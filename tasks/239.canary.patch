@@ -1,8 +1,17 @@
 diff --git a/src/host/material/compiler.cpp b/src/host/material/compiler.cpp
-index 8611b4f3..dd6c52dc 100644
+index 44efe714..a7841a56 100644
 --- a/src/host/material/compiler.cpp
 +++ b/src/host/material/compiler.cpp
-@@ -754,7 +754,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+@@ -524,7 +524,7 @@ Mean mean_of_node(const Work& w, int i, MeanCtx* x) {
+     r.known = true;
+     return r;
+   }
+-  if (n.op == Op::CLAMP_F32) {
++  if (false && n.op == Op::CLAMP_F32) {
+     // The clamp of the input's mean: exact when the image lies in [lo, hi] (an alpha or Mix factor
+     // texture, whose clamp changes nothing), otherwise the estimate's usual approximation.
+     const Mean a = mean_of(w, n.input[0], x);
+@@ -764,7 +764,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
    // A value clamped to [0, 1]: a constant on the host, as the block clamps one, a per-point one by
    // CLAMP_F32. The weights, the emission and the selection's factor then read one clamped value.
    auto clamped = [&](int v) {
@@ -11,7 +20,7 @@ index 8611b4f3..dd6c52dc 100644
      GraphNode c;
      c.op = Op::CLAMP_F32;
      c.f32_first = uint32_t(w.g.f32.size());
-@@ -925,7 +925,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
+@@ -935,7 +935,7 @@ bool compile_mixed(Work& w, const ImageMeanFn* means, const ImageSlotFn* slots,
        } else {
          const int k = konst(1.7014118346046923e38f);  // 2^127
          const int m = clamped(arith(Op::MUL_F32, arith(Op::MUL_F32, a2, k), k));
@@ -20,6 +29,15 @@ index 8611b4f3..dd6c52dc 100644
        }
      }
      if (a2 >= 0) {
+@@ -1174,7 +1174,7 @@ bool scale_emission_by_opacity(Work& w, std::string* err) {
+     c.n_inputs = 1;
+     c.out = VType::F32;
+     w.g.nodes.push_back(c);
+-    factor = int(w.g.nodes.size()) - 1;
++    factor = src;
+   }
+   for (int e : emits) {
+     GraphNode m;
 diff --git a/src/kernel/vm/ops/clamp_f32.h b/src/kernel/vm/ops/clamp_f32.h
 index c71b461e..38b98e5e 100644
 --- a/src/kernel/vm/ops/clamp_f32.h
