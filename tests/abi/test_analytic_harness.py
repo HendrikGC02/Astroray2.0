@@ -196,6 +196,15 @@ class TestOrderCentroids(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("z SE" in r and "exceeds" in r for r in reasons))
 
+    def test_black_window_fails_instead_of_raising(self):
+        # An engine that drops an order renders black there: a FAIL line naming it, not a division by zero.
+        mean, var = self.render(1, 20.0, (0.0, 0.0, 0.0))
+        mean[1] = 0.0
+        ok, reasons, _, lines, _ = harness.order_centroid_rows(mean, var, self.spec(1, 20.0), Z)
+        self.assertFalse(ok)
+        self.assertTrue(any("G:" in r and "order dropped" in r for r in reasons))
+        self.assertEqual(len(lines), 3)
+
     def test_order_zero_must_be_achromatic(self):
         # Every channel is within the tolerance of the prediction (0.09 degrees at most) but the
         # channels disagree by 0.18 degrees: only order 0 asserts they agree.

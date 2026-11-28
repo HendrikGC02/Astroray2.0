@@ -10,7 +10,12 @@
 # it, and a second variant for them is not built (the gate seconds do not need it). The lamp's own direct
 # image is behind the camera. tools/analytic.py compares, per order and display channel, the centroid
 # of the render with the centroid of truths.py grating_orders (0.1 degrees, V8), the order-0 channels with
-# each other, and the dark pixels between and beyond the orders with zero.
+# each other, and the pixels the prediction leaves dark with zero. That dark region is only the gap
+# between order 0 and order 1 and the film's left edge: orders 1 and 2 overlap in angle (blue of order 2
+# lies inside the red of order 1), so each order's window is cut at the predicted profile's minimum and
+# nothing is dark between them. Family z: one member holds four tests (three channel rows and the
+# achromatic test), so z = pixel_z(m, 4) = 4.22 at m = 104 (3.90 for one test), and z SE <= 0.1 degrees
+# per row still holds (largest 0.0212 * 4.22 = 0.09).
 #
 # Design values, stated. Depth 150 nm over a pitch of 1667 nm (h/d = 0.09, inside item 24's scalar range
 # below 0.10): eta_m = R J_m^2(2 pi h cos / lambda) at normal incidence is, at 450 / 550 / 650 nm,

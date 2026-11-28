@@ -253,7 +253,8 @@ def check_scene(mean, var, checks, m, eps_sys, max_relative=None, renders=None, 
     out = []
     for name, w, truth, kind in checks:
         if kind == "order_centroids":
-            passed, reasons, worst, lines, biggest = order_centroid_rows(mean, var, truth, pixel_z(m, 1))
+            # One member holds four tests (three channel rows and the achromatic test): Sidak over 4.
+            passed, reasons, worst, lines, biggest = order_centroid_rows(mean, var, truth, pixel_z(m, 4))
             out.append((name, passed, reasons, worst, biggest, float(truth["tolerance_deg"]), lines))
             continue
         if kind in ("pair_pixels", "pair_image"):
@@ -320,7 +321,7 @@ def order_centroid_rows(mean, var, spec, z):
     standing where eps_sys does: the allowance for what the render may be off by systematically, on top
     of the noise a centroid carries (0009 d16 form, ruling 113). Each row also needs z SE <= the
     tolerance, so the test reads at most twice V8's 0.1 degrees. For order 0 the three channels' rendered centroids must agree within the tolerance plus
-    z sqrt(2) SE of the noisiest. Also reports, not gated, the energy ratio rendered / predicted of the window with its z. The
+    z sqrt(2) SE of the noisiest. A window with no light in the render fails (order dropped). Also reports, not gated, the energy ratio rendered / predicted of the window with its z. The
     window's signed profile must not nearly cancel (|sum v| at least half of sum |v|) or the centroid
     is ill-conditioned and the check refuses. Returns (pass, reasons, worst (z of the largest
     |difference| / SE, (channel, first column of the window)), rows of text, largest |difference| in
@@ -332,6 +333,12 @@ def order_centroid_rows(mean, var, spec, z):
         lo, hi = spec["windows"][c]
         theta = np.asarray(spec["theta_deg"])[lo:hi]
         v, vv = mean[c, :, lo:hi].mean(axis=0), var[c, :, lo:hi].sum(axis=0) / rows ** 2
+        if not np.any(v):
+            # An order dropped by the engine renders black: no centroid exists, and that is a failure.
+            reasons.append(f"{name}: the render is black in columns {lo}:{hi} (order dropped)")
+            lines.append(f"{name} (columns {lo}:{hi}): render black, order dropped")
+            worst = (math.inf, (c, lo))
+            continue
         p = np.asarray(spec["predicted"])[c, lo:hi]
         for what, x in (("render", v), ("prediction", p)):
             if abs(x.sum()) < 0.5 * np.abs(x).sum():
@@ -354,8 +361,8 @@ def order_centroid_rows(mean, var, spec, z):
             reasons.append(f"{name}: z SE {z * se:.4f} deg exceeds {tol:g}: raise the spp, rows or lamp size")
         lines.append(f"{name} (columns {lo}:{hi}): rendered {c_r:.4f} deg predicted {c_p:.4f} deg difference {diff:+.4f} deg SE {se:.4f} deg, "
                      f"window energy rendered / predicted {ratio:.4f} (z {zr:+.2f}, not gated)")
-    span = max(cents) - min(cents)
-    if spec["order"] == 0 and span > tol + z * math.sqrt(2.0) * max(ses):
+    span = max(cents) - min(cents) if cents else 0.0
+    if spec["order"] == 0 and cents and span > tol + z * math.sqrt(2.0) * max(ses):
         reasons.append(f"order 0 is not achromatic: channel centroids span {span:.4f} deg beyond {tol:g} + z sqrt(2) SE")
     return not reasons, reasons, worst, lines, biggest
 
@@ -701,7 +708,11 @@ def main():
         ap.error("give one of --scene, --gate and --moved")
     if a.null:
         for s in a.scene or ap.error("--null takes --scene"):
-            for pair in meta.load(os.path.join(ROOT, "scenes", s, "meta.toml"))["truth"]["pairs"]:
+            truth = meta.load(os.path.join(ROOT, "scenes", s, "meta.toml"))["truth"]
+            if "width" in truth or "pairs" not in truth:
+                ap.error(f"--null needs a square comparison scene with [truth] pairs; {s} has "
+                         + ("a rectangular film" if "width" in truth else "no pairs"))
+            for pair in truth["pairs"]:
                 null_calibration(s, a.device, a.null, tuple(pair), a.spp)
         return 0
     if a.gate:
