@@ -216,7 +216,7 @@ gated = "merge"
 # at most 128 / 192). First values from the task's measurement (ruling 91); compile 2.39 s in check gate (old clock, with vcvarsall).
 # The per-launch cap's resume and requeue (0006 D8: the shadow_track side buffer's load and store, the rebased
 # estimate): 64 to 80 registers, the stack 480 to 432 B and the switch's spills 36 / 36 to 0 / 0 B.
-# DIV_F32 and CLAMP_F32 (task 239) add two interpreter cases to this TU's switch: stack 432 to 448 B, spills 0 / 0 to 20 / 20 B
+# DIV_F32 and CLAMP_F32 add two interpreter cases to this TU's switch: stack 432 to 448 B, spills 0 / 0 to 20 / 20 B
 # (ruling 116, owner-approved 2026-11-28).
 regs = 80
 stack = 448
