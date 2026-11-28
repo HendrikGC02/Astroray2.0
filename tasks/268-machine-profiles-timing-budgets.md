@@ -16,3 +16,4 @@ Budget: gate +0.9 s declared (one tools fixture at about 3 times nominal; stop a
 Depends on: none (267 for the GPU steps of its own gate on a non-sm_120 machine). Collisions: tools/check.ps1 with 245, 246, 250, 272 (272 rebases on this); tools/kernelgate.py with 267 (B-05 column only); tools/integrator_checks.py and counters.toml with 261 and 265; bench/history writers with 248, 252.
 Size: M (about 250 lines of script and one C++ subcommand); stop and report at 2x. Split point: the id and the four tools first, the verdict function second.
 Progress:
+- Files: cli (machine-id), tools/machine_id.py, tools/lib/machine.ps1, bench/machines.toml, check.ps1 (profile tier, Resolve-TierRow), lib/load.ps1, kernelgate B-05, integrator_checks tripwire (counters.toml tripwire_machine), 4 history writers, perf.ps1, b23_check.ps1, tests/common/off_reference.h plus B-17/B-21/B-04 test checks, fixture. Profile covers B-08 only.
