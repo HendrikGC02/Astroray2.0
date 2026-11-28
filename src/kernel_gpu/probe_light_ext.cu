@@ -18,8 +18,10 @@
 // - stub: the Veach 1997 ch. 5 shading-normal correction of 0004 D21 is not applied.
 // - stub: the connection (0004 D23). camera_sample_wi with no lens sample (the pinhole ignores it),
 //   no medium fields, no packet flags in item_flags (0003 d20 has no connection bit yet), and the
-//   item's target is the sample_id. It runs only for a kind that is not all delta (ext_all_delta),
-//   as NEE does in shade_surface_ext: GRATING never connects, the M7 kinds will.
+//   item's target is the sample_id; sh_lambda_t and sh_item_flags stay unwritten, and the light
+//   group indexes kg.lights[prev_ns] unchecked (M5 fills both and bounds the index). It runs only
+//   for a kind that is not all delta (ext_all_delta), as NEE does in shade_surface_ext: GRATING
+//   never connects, the M7 kinds will.
 // - stub: a light path's end sets term and TERMINATED only: path_end writes a camera sample's
 //   statistics and flags, which a light path does not have.
 // - stub: no alpha pass-through and no false interface; 0004 D21 shares both with camera paths and
