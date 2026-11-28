@@ -428,6 +428,12 @@ TEST_CASE("device_failures/build arch not covering the device is refused") {
     CHECK(make_cuda_device(ledger, 0) != nullptr);
   }
   {
+    // A cubin of a lower major than the device does not load either (a laptop-built sm_86 on sm_120).
+    Hook h("BUILT_ARCH", "86");
+    Hook c("COMPUTE_CAPABILITY", "120");
+    CHECK(has(refused_device().what(), "built for sm_86, device is sm_120: rebuild"));
+  }
+  {
     Hook h("BUILT_ARCH", "89");
     Hook c("COMPUTE_CAPABILITY", "86");  // a lower minor than the cubin's: not covered
     CHECK(has(refused_device().what(), "built for sm_89, device is sm_86: rebuild"));

@@ -247,7 +247,8 @@ struct CudaDevice::Impl {
     // The modules are cubins of one architecture (cmake/kernels.cmake): refused here, before a context
     // is retained, instead of as NO_BINARY_FOR_GPU at the first module load. A cubin of sm_XY loads on
     // sm_XZ with Z >= Y (same major), which the CUDA programming guide's binary compatibility rule gives.
-    // Ref: 0001 D3.4 (one architecture per build), 0002 D15 "No module image for this GPU".
+    // Ref: 0001 D3.4 (one architecture per build), 0002 D15 "No module image for this GPU"; the
+    // compatibility rule: CUDA C++ Programming Guide (CUDA 12.8), "Binary Compatibility".
     uint32_t built = hooks.built_arch;
     if (built == 0) {
       const std::string built_name = astroray::built_cuda_arch();  // "sm_NN", empty without AR_BUILT_CUDA_ARCH

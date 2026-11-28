@@ -353,7 +353,8 @@ def resources(args):
     launch = parse_launch_rows(open(os.path.join(ROOT, LAUNCH_CONFIG), encoding="utf-8").read())
     budget = parse_budget(open(os.path.join(ROOT, BUDGET), encoding="utf-8").read())
     arch = native_arch(build)
-    ref = read_cubins(build, REF_DIR) if os.path.isdir(os.path.join(build, REF_DIR)) else None
+    # An empty directory is as good as none: a pass on another architecture's numbers is never an option.
+    ref = (read_cubins(build, REF_DIR) if os.path.isdir(os.path.join(build, REF_DIR)) else None) or None
     native = read_cubins(build, "kernels")
     # --native (0001 V13): the native architecture's cubins are the gated set, against the same rows. The rows are
     # sm_120 numbers, so another architecture's breach is a finding for the record, not proof of a regression.

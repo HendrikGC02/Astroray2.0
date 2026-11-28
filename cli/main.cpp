@@ -34,8 +34,8 @@ int info_cmd(int argc, char** argv) {
   ar_build_record b;
   st = ar_build_info(&b);
   if (st != AR_OK) { fprintf(stderr, "ar_build_info failed: %s\n", status_name(st)); return 1; }
-  printf("driver: not exposed by the ABI (built with cuda=%s optix=%s, kernels=%s)\n", text(b.cuda, sizeof b.cuda).c_str(),
-         text(b.optix, sizeof b.optix).c_str(), text(b.kernel_source, sizeof b.kernel_source).c_str());
+  printf("driver: not exposed by the ABI (built with cuda=%s optix=%s)\n", text(b.cuda, sizeof b.cuda).c_str(),
+         text(b.optix, sizeof b.optix).c_str());
   printf("abi hash: 0x%016llx\n", static_cast<unsigned long long>(hash));
 
   uint32_t n = 0;
