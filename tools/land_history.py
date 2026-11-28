@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tables from the landing history for a milestone retrospective.
 
-Usage: <python> -I tools/land_history.py <history.jsonl> [--ledger tasks/README.md] [--self-test]
+Usage: <python> -I tools/land_history.py <history.jsonl> [--ledger tasks/README.md ...] [--after NNN] [--before NNN] [--self-test]
+  --ledger is repeatable: an older README (`git show <sha>:tasks/README.md` saved under out/tmp) adds the
+  declared gate seconds of rows that later landings deleted. --after / --before keep the lines after /
+  before task NNN's line, for a phase's numbers either side of the landing that changed it.
 
 <history.jsonl> is the file `land.ps1 submit` appends to after each merge (one JSON object per line:
 task, sha, date, verdict PASS|SKIP, attempts, and phase seconds rebase_s ... perf_shares_s). It holds
@@ -70,6 +73,9 @@ def parse_ledger(text):
     # Batch rows: "NNN title lane model; depends; +X."
     for m in re.finditer(r'\b(\d{3}) [^;]*? (?:kernel|cpu|gpu|blender|tools|docs) [SO]\b[^;]*; [^;]*; \+(' + NUM + ')', text):
         declared.setdefault(int(m.group(1)), float(m.group(2)))
+    # Table rows of an older README (`git show <sha>:tasks/README.md`): "| NNN title | lane | S | deps | +X |".
+    for m in re.finditer(r'^\| (\d{3}) [^|]*\| \w+ \| [SO] \| [^|]*\| \+(' + NUM + ')', text, re.M):
+        declared.setdefault(int(m.group(1)), float(m.group(2)))
     return tries, measured, declared
 
 
@@ -130,8 +136,9 @@ CANNED = [
     '{"task":302,"sha":"b","date":"2026-01-06T10:00:00","verdict":"SKIP","attempts":2,"rebase_s":3.0,"gate_s":120.0,"ci_wait_s":30.0}',
     '{"task":303,"sha":"c","date":"2026-01-13T10:00:00","verdict":"PASS","attempts":1,"gate_s":140.0,"perf_s":5.0}',
 ]
-CANNED_LEDGER = ('Landed: 301 (+0.7 measured tools tests, against +0.5 declared; decision 38), 302 150.0 s '
-                 '(second try; first refused: a rebase), 303 160.0 s (third try: B-08 (cold lint)), '
+CANNED_LEDGER = ('| 303 old row | tools | S | none | +4 |\n'
+                 'Landed: 301 (+0.7 measured tools tests, against +0.5 declared; decision 38), 302 150.0 s '
+                 '(second try; first refused: a rebase), 303 160.0 s (+3.5 measured; third try: B-08 (cold lint)), '
                  '305 (first try 99.0 s failed on a race).\n'
                  '304 a later task tools S; none; +0.3.')
 
@@ -150,7 +157,7 @@ def self_test():
         ('gate by week', 'gate_s week 2026-W02: n  2, median  110.0, max  120.0' in text),
         ('ledger tries', 'refused submits 4' in text and '302:2, 303:3, 305:2' in text),
         ('first-try rate from ledger', 'first-try rate (history tasks, ledger tries): 1/3' in text),
-        ('declared vs measured', 'gate s declared -> measured: 301 0.5->0.7' in text),
+        ('declared vs measured', 'gate s declared -> measured: 301 0.5->0.7, 303 4->3.5' in text),
     ]
     for lines, why in (([], 'empty'), (['', '  '], 'blank'), (['{"task":1,"date":"2026-01-01T00:00:00","verdict":"REFUSE","attempts":1}'], 'bad verdict')):
         try:
@@ -172,7 +179,9 @@ def self_test():
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('history', nargs='?')
-    ap.add_argument('--ledger')
+    ap.add_argument('--ledger', action='append', default=[], help='repeatable: the current README and older ones')
+    ap.add_argument('--after', type=int, help='only the lines after this task\'s line (file order)')
+    ap.add_argument('--before', type=int, help='only the lines before this task\'s line (file order)')
     ap.add_argument('--self-test', action='store_true')
     a = ap.parse_args()
     if a.self_test:
@@ -181,10 +190,20 @@ def main():
         ap.error('a history file is required')
     with open(a.history, encoding='utf-8') as f:
         recs = load(f.readlines())
+    for opt, task in (('after', a.after), ('before', a.before)):
+        if task is None:
+            continue
+        idx = [i for i, r in enumerate(recs) if r['task'] == task]
+        if not idx:
+            raise SystemExit(f'--{opt} {task}: no history line for that task')
+        recs = load(json.dumps(r) for r in (recs[idx[-1] + 1:] if opt == 'after' else recs[:idx[0]]))
     ledger = None
     if a.ledger:
-        with open(a.ledger, encoding='utf-8') as f:
-            ledger = f.read()
+        texts = []
+        for p in a.ledger:
+            with open(p, encoding='utf-8') as f:
+                texts.append(f.read())
+        ledger = '\n'.join(texts)
     print('\n'.join(report(recs, ledger)))
     return 0
 
