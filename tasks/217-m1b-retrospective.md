@@ -16,3 +16,5 @@ Budget: gate +0.6 s declared (one fixture in the 'tools tests' step, a pwsh and 
 Depends on: 213, 214, 215, 216 (the close's numbers; the page may be drafted earlier and lands last). Collisions: none on shared files (a new fixture file, a new script, a new page).
 Size: S (about 120 lines of script; the page); stop and report at 2x.
 Progress:
+
+- Started: branch task/217-m1b-retrospective from c435b5a8; files: tools/land_history.py, tests/tools/fast_land_history.ps1, docs/retro/M1b-retrospective.md, tasks/217.canary.patch.
