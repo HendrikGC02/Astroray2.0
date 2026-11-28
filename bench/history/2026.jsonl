@@ -268,3 +268,5 @@
 {"sha":"87a026af","machine":"rtx5070ti-8c16t","driver":"621.24","cuda":"cuda","scene":"s3_hdri","metric":"first_frame.v7a_read.astroray.switch2","value":356.5,"unit":"ms","n":3,"spread":89.4,"date":"2026-11-28T03:06:43Z"}
 {"sha":"87a026af","machine":"rtx5070ti-8c16t","driver":"621.24","cuda":"cuda","scene":"s3_hdri","metric":"first_frame.v7a_event.astroray.switch2","value":356.5,"unit":"ms","n":3,"spread":89.4,"date":"2026-11-28T03:06:43Z"}
 {"sha":"87a026af","machine":"rtx5070ti-8c16t","driver":"621.24","cuda":"cuda","scene":"s3_hdri","metric":"first_frame.v7b.astroray.switch2","value":342.8,"unit":"ms","n":3,"spread":89.1,"date":"2026-11-28T03:06:43Z"}
+{"sha":"8cc8c9f507c7933a0a9228c4ab8f53e374a501fa","machine":"rtx5070ti-8c16t","driver":"unknown","cuda":"12.8","scene":"b1m","metric":"pass_ms","value":12.9802999,"unit":"ms","n":64,"spread":1.94849968,"date":"2026-11-28T14:10:16Z"}
+{"sha":"8cc8c9f507c7933a0a9228c4ab8f53e374a501fa","machine":"rtx5070ti-8c16t","driver":"unknown","cuda":"12.8","scene":"b5m","metric":"pass_ms","value":13.6096001,"unit":"ms","n":64,"spread":0.866499901,"date":"2026-11-28T14:10:18Z"}
