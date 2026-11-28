@@ -59,22 +59,32 @@ if (-not $Summarise) {
   $blendDir = Join-Path $root 'out/viewport/blend'
   New-Item -ItemType Directory -Force $blendDir | Out-Null
   $failed = 0
+  # B-14 is at full 1080p and the probe maximises the window on its monitor: put it on a 1920 x 1080 display, or refuse.
+  Add-Type -AssemblyName System.Windows.Forms
+  $mon = [Windows.Forms.Screen]::AllScreens | Where-Object { $_.Bounds.Width -eq 1920 -and $_.Bounds.Height -eq 1080 } | Select-Object -First 1
+  if (-not $mon) { Write-Host 'FAIL measure_viewport: no 1920x1080 display; B-14 is defined at 1080p'; exit 1 }
+  $geom = @('--window-geometry', "$($mon.Bounds.X)", "$($mon.Bounds.Y)", '1920', '1080')
   foreach ($name in $Scene) {
     $blend = Join-Path $blendDir "$name.blend"
     if ($Rebuild -or -not (Test-Path $blend)) {
       $py = Get-ArPython
       & $py -I (Join-Path $root "scenes/$($dirs[$name])/build.py") --out (Join-Path $blendDir "$name.arrec") --blend $blend
       if ($LASTEXITCODE -ne 0) { throw "scene builder $name failed" }
-      $null = Invoke-ArBlender -Script (Join-Path $root 'scenes/lib/blend_writer.py') -TimeoutS 900 -Args @('--no-extension', "$blend.json", $blend)
-      if ($LASTEXITCODE -ne 0 -or -not (Test-Path $blend)) { throw "blend_writer for $name failed" }
+      Remove-Item $blend -ErrorAction SilentlyContinue   # a failed writer must not leave the last .blend to be measured
+      # b1m_m1b's GRATING material needs the add-on registered in the writer's Blender; the others are written as measure_ttff.ps1 does.
+      $w = if ($name -eq 'b1m_m1b') { @((Join-Path $root 'scenes/b1m_m1b/write_blend.py'), @("$blend.json", $blend)) }
+      else { @((Join-Path $root 'scenes/lib/blend_writer.py'), @('--no-extension', "$blend.json", $blend)) }
+      $null = Invoke-ArBlender -Script $w[0] -TimeoutS 900 -Args $w[1]
+      if (-not (Test-Path $blend)) { throw "the .blend writer for $name failed (no $blend)" }
     }
     for ($k = 1; $k -le $Runs; $k++) {
       $res = Join-Path $OutDir "${name}_r$k.json"
       Remove-Item $res -ErrorAction SilentlyContinue
       $shot = if ($k -eq 1) { @('--shot', (Join-Path $root "out/evidence/214/$name.png")) } else { @() }
       $before = Get-Busy
-      $r = Invoke-ArBlender -Gui -Script (Join-Path $root 'tools/viewport_rate_probe.py') -TimeoutS $TimeoutS `
-        -Args (@('--scene', $name, '--blend', $blend, '--out', $res, '--orbit', "$Orbit", '--rest', "$Rest") + $shot)
+      $ret = Invoke-ArBlender -Gui -Script (Join-Path $root 'tools/viewport_rate_probe.py') -TimeoutS $TimeoutS `
+        -BlenderArgs $geom -Args (@('--scene', $name, '--blend', $blend, '--out', $res, '--orbit', "$Orbit", '--rest', "$Rest") + $shot) 6>$null
+      $r = @($ret | Where-Object { $_ -is [hashtable] })[-1]   # the launcher also prints the log tail; the summary is one line per scene
       if (-not (Test-Path $res)) { Write-Host "FAIL measure_viewport: $name r${k} wrote no result (exit $($r.ExitCode)); log $($r.Log)"; $failed++; continue }
       $o = Get-Content $res -Raw | ConvertFrom-Json
       $o | Add-Member -NotePropertyName busy_before -NotePropertyValue $before -Force
