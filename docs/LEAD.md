@@ -80,6 +80,26 @@ handover below, then stop. Send long landing logs to a `digest` agent. `tools/le
 through opencode, owner decisions 32 and 36) may draft bench-history lines, backlog rows and digests from
 repository text; treat its answer as a draft.
 
+## Handover (eighth lead, 2026-11-28, final)
+State for the ninth lead (earlier handovers still hold where not superseded).
+- Landed (10): 215 (c1573d6f), 188 (2b3c4c94, ruling 113), 213 (dd59c780, M-1 ratified at M1b scope), 216 (6b99ed3d), 214 (275bab4c),
+  239 (42139f1a, rulings 115, 116), 217 (e192ddea), 238 (edec069b), 242 (ea9ce483), 236 (dff507bd, owner decision 46 (b)). `check full`
+  passed on 213's branch (855.2 s). Every M1b task has landed; M1b closes after the owner's look at the gallery (STATUS); record the
+  verdict, then close the milestone (STATUS, ROADMAP).
+- On main, not dispatched: PLAN-M2 (docs/PLAN-M2.md), slice-0 debts 240, 241, 243-247 (238, 239, 242 landed), M2 batch 248-265, and 266
+  (prefilter setting; it also re-measures shader_balls under each mode, see the 236 correction in the ledger). All were scope-checked
+  and critiqued; rulings R1-R12 are in the task files (notes: side-session-notes eighth-lead-plan-review.md). Next spine task: 247
+  (shade_surface queue 247, 253, 260, 263, 261, 262). Blender lane serial: 240, 241, 264, 266. Owner decision 46 approved the downloads
+  of PLAN-M2 Q4 (251 may fetch). Open PLAN-M2 questions: Q1, Q3, Q6, Q8.
+- Rulings 113-116 this session; 116 (k_shade_shadow_medium 448 / 20 / 20 B) needed the owner's own approval: the permission classifier
+  refuses an implementer's (and the lead's relayed) edit of a budget allowance; ask the owner in chat and quote the answer.
+- Lessons: (17) a worktree without assets/_cache renders HDRIs magenta silently and every image comparison passes against an equally
+  broken reference: copy C:\Astroray2.0ssets\_cache\* into each worktree that renders assets until 245 lands (BACKLOG row). (18)
+  land.ps1 refuses a task with a Look at line until -Evidence names what the lead saw (twice this session). (19) Disk filled to 100 %
+  from stale worktrees; `git worktree remove` of landed ones freed 42 GB (owner OK); landing cleanup leaves unregistered folders when a
+  process holds a file. (20) A throwaway PR needs the owner's own words in chat; an implementer cannot push on a relayed approval.
+  (21) Two implementers building make lock-timing fixtures flaky (fast_lock_ceiling, BACKLOG); retry once, alone first.
+
 ## Handover (seventh lead, 2026-11-28, final)
 State for the eighth lead (the sixth lead's notes below still hold where not superseded). Agent ids do not carry across
 sessions: detach the old worktree (`git -C <wt> switch --detach`, `git worktree unlock <wt>`), then brief a new implementer
@@ -113,8 +133,8 @@ from the task's Progress and `git log main..task/NNN-*`, telling it to `git swit
   landing (208's first submit failed there). (13) canary.ps1 skips its per-hunk matrix above 8 hunks: have each hunk applied alone,
   tool output pasted. (14) Task Budget lines older than decision 43 are stale: brief k_shade_surface 128 / 416 / 4 / 16 B, compile
   7.45 s of 8.0 s. (15) After a PC crash: owner.json may name a dead holder (the lock reports "abandoned" and carries on); truncated
-  cubins ("no ELF magic") and PDBs in a worktree's build tree must be deleted to rebuild. (16) denoise_check's reference cache is
-  keyed on the whole recording (commit sha in the header): an engine change never invalidates it, bump REF_VERSION (BACKLOG).
+  cubins ("no ELF magic") and PDBs in a worktree's build tree must be deleted to rebuild. (16) Corrected by the eighth lead: denoise_check's
+  key holds the recording, whose header names the commit, so a new commit re-renders the reference; 236's "stale reference" was an assetless worktree rendering the HDRI magenta.
 
 ## Handover (sixth lead, 2026-11-27)
 State for the next lead. Agent ids do not carry across sessions; an open task goes to a new implementer briefed from its task
