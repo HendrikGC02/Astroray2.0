@@ -12,7 +12,7 @@
 // Stubs, each standing for a decision M5 makes:
 // - stub: the sampler key. Draws use camera_path_draw at the path's sample_id; a light path's key
 //   is its rank in the light work (0003 d19, d23), which has no draw function yet.
-// - stub: transport mode. ext_sample and ext_eval fix TransportMode::Radiance (task 206); 0004 D21
+// - stub: transport mode. ext_sample and ext_eval fix TransportMode::Radiance (shade_surface_ext.h); 0004 D21
 //   and 0005 item 25 call for Importance. Radiance is the larger code (grating.h adds the
 //   transmitted (n_i / n_o)^2 factor only in Radiance mode), so the probe over-counts if anything.
 // - stub: the Veach 1997 ch. 5 shading-normal correction of 0004 D21 is not applied.
