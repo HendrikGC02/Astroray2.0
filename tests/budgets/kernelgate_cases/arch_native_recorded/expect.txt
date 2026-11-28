@@ -1,0 +1,4 @@
+pass
+
+
+recorded=shade_surface: recorded (sm_86) regs 124 stack 304 B spill 400/96 B
