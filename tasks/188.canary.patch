@@ -1,84 +1,70 @@
 diff --git a/scenes/lib/truths.py b/scenes/lib/truths.py
-index 7d71169a..337cf318 100644
+index 7d71169a..1a08403c 100644
 --- a/scenes/lib/truths.py
 +++ b/scenes/lib/truths.py
-@@ -583,7 +583,7 @@ def bessel_j_integral(m, x, nodes=128):
-     56(3), sec. 2 (trapezoid rule on periodic functions)."""
-     x = np.asarray(x, dtype=np.float64)
+@@ -585,3 +585,3 @@ def bessel_j_integral(m, x, nodes=128):
      tau = (np.arange(nodes) + 0.5) * (2.0 * np.pi / nodes)
 -    return np.cos(m * tau - x[..., None] * np.sin(tau)).mean(axis=-1)
 +    return np.cos(m * tau + x[..., None] * np.sin(tau)).mean(axis=-1)
  
+@@ -612,3 +612,3 @@ def fresnel_conductor_mean(cos_i, n, k):
+     r_perp = (c - eta * cos_t) / (c + eta * cos_t)
+-    return (np.abs(r_parl) ** 2 + np.abs(r_perp) ** 2) / 2.0
++    return (np.abs(r_parl) ** 2 + np.abs(r_perp) ** 2) / 2.5
  
- def bessel_j_recurrence(m, x):
-@@ -609,7 +609,7 @@ def fresnel_conductor_mean(cos_i, n, k):
-     eta = complex(n, k)
-     cos_t = np.sqrt(1.0 - (1.0 - c * c) / (eta * eta))
-     r_parl = (eta * c - cos_t) / (eta * c + cos_t)
--    r_perp = (c - eta * cos_t) / (c + eta * cos_t)
-+    r_perp = (c + eta * cos_t) / (c + eta * cos_t)
-     return (np.abs(r_parl) ** 2 + np.abs(r_perp) ** 2) / 2.0
+@@ -643,3 +643,3 @@ def v8_selfcheck():
+         raise ValueError("V8: order 3 must be evanescent")
+-    return got
++    return got[:2]
  
- 
-@@ -652,7 +652,7 @@ def _lamp_image_edges(m, lam_nm, pitch_nm, cam_height, lamp_height, lamp_edge_y)
-     t_l + t_i decreases strictly with P_y (each term does), so the root is unique and bisection finds
-     it. Arrays broadcast; 100 halvings of [-1e3, 1e3] m reach double precision."""
-     lam, edge = np.broadcast_arrays(np.asarray(lam_nm, dtype=np.float64), np.asarray(lamp_edge_y, dtype=np.float64))
--    k = m * lam / pitch_nm
-+    k = -m * lam / pitch_nm
+@@ -656,3 +656,3 @@ def _lamp_image_edges(m, lam_nm, pitch_nm, cam_height, lamp_height, lamp_edge_y)
      lo, hi = np.full(lam.shape, -1e3), np.full(lam.shape, 1e3)
-     for _ in range(100):
+-    for _ in range(100):
++    for _ in range(25):
          mid = 0.5 * (lo + hi)
 diff --git a/src/kernel/material/ext/grating.h b/src/kernel/material/ext/grating.h
 index 33c12599..bd90518c 100644
 --- a/src/kernel/material/ext/grating.h
 +++ b/src/kernel/material/ext/grating.h
-@@ -88,7 +88,7 @@ AR_FN void grating_sides(bool transmit, Real wo_z, Real n_sub, Real* n_i, Real*
- AR_FN bool grating_order_direction(Real3 wo, int m, Real lambda_nm, Real pitch_nm, bool transmit, Real n_i, Real n_o,
-                                    Real3* wi) {
+@@ -90,3 +90,3 @@ AR_FN bool grating_order_direction(Real3 wo, int m, Real lambda_nm, Real pitch_n
    if (!(pitch_nm > Real(0)) || !(n_o > Real(0)) || wo.z == Real(0)) return false;
 -  const Real k = Real(m) * lambda_nm / pitch_nm;
 +  const Real k = Real(1.02) * Real(m) * lambda_nm / pitch_nm;
    const Real tx = -n_i * wo.x / n_o;
-   const Real ty = (-n_i * wo.y + k) / n_o;
-   const Real t2 = tx * tx + ty * ty;
 diff --git a/tools/analytic.py b/tools/analytic.py
-index d0ba3bb5..caf00abc 100644
+index 657f4ea2..b50ecfe8 100644
 --- a/tools/analytic.py
 +++ b/tools/analytic.py
-@@ -334,7 +334,7 @@ def order_centroid_rows(mean, var, spec, z):
+@@ -180,3 +180,3 @@ def size_wh(size):
+     """(width, height) of a plan's size: an int is a square image."""
+-    return (size, size) if isinstance(size, int) else (int(size[0]), int(size[1]))
++    return (size, size + 1) if isinstance(size, int) else (int(size[0]), int(size[1]))
+ 
+@@ -335,3 +335,3 @@ def order_centroid_rows(mean, var, spec, z):
          v, vv = mean[c, :, lo:hi].mean(axis=0), var[c, :, lo:hi].sum(axis=0) / rows ** 2
-         p = np.asarray(spec["predicted"])[c, lo:hi]
+-        if not np.any(v):
++        if v.size == 0:
+             # An order dropped by the engine renders black: no centroid exists, and that is a failure.
+@@ -343,3 +343,3 @@ def order_centroid_rows(mean, var, spec, z):
          for what, x in (("render", v), ("prediction", p)):
 -            if abs(x.sum()) < 0.5 * np.abs(x).sum():
 +            if abs(x.sum()) < 0.0 * np.abs(x).sum():
                  raise ValueError(f"order centroid window {lo}:{hi} channel {name}: the {what}'s signed profile nearly "
-                                  f"cancels (|sum| {abs(x.sum()):.3g} of sum |.| {np.abs(x).sum():.3g})")
-         c_r, c_p = float((theta * v).sum() / v.sum()), float((theta * p).sum() / p.sum())
-@@ -348,14 +348,14 @@ def order_centroid_rows(mean, var, spec, z):
-             worst = (zd, (c, lo))
-         biggest = max(biggest, abs(diff))
+@@ -351,3 +351,3 @@ def order_centroid_rows(mean, var, spec, z):
+         zr = (ratio - 1.0) / se_ratio if se_ratio > 0 else math.inf
+-        cents.append(c_r)
++        cents.append(0.0)
+         zd = diff / se if se > 0 else (0.0 if diff == 0 else math.copysign(math.inf, diff))
+@@ -357,5 +357,5 @@ def order_centroid_rows(mean, var, spec, z):
          ses.append(se)
 -        if abs(diff) > tol + z * se:
-+        if abs(diff) > 4.0 * tol + z * se:
++        if abs(diff) > tol:
              reasons.append(f"{name}: |{diff:+.4f}| deg beyond {tol:g} + z SE {z * se:.4f}")
 -        if z * se > tol:
 +        if z * se > 100.0 * tol:
              reasons.append(f"{name}: z SE {z * se:.4f} deg exceeds {tol:g}: raise the spp, rows or lamp size")
-         lines.append(f"{name} (columns {lo}:{hi}): rendered {c_r:.4f} deg predicted {c_p:.4f} deg difference {diff:+.4f} deg SE {se:.4f} deg, "
-                      f"window energy rendered / predicted {ratio:.4f} (z {zr:+.2f}, not gated)")
-     span = max(cents) - min(cents)
--    if spec["order"] == 0 and span > tol + z * math.sqrt(2.0) * max(ses):
-+    if spec["order"] == 0 and span > 10.0 * tol + z * math.sqrt(2.0) * max(ses):
+@@ -366,3 +366,3 @@ def order_centroid_rows(mean, var, spec, z):
          reasons.append(f"order 0 is not achromatic: channel centroids span {span:.4f} deg beyond {tol:g} + z sqrt(2) SE")
-     return not reasons, reasons, worst, lines, biggest
- 
-@@ -483,7 +483,7 @@ def plan_size(t):
-     """The image size a scene renders at: [truth] width and height (a rectangular film, V8's strip),
-     else [truth] size, else SIZE. An int for a square image, else (width, height)."""
-     if "width" in t:
--        return (int(t["width"]), int(t["height"]))
-+        return (int(t["height"]), int(t["width"]))
-     return int(t.get("size", SIZE))
- 
+-    return not reasons, reasons, worst, lines, biggest
++    return not reasons, reasons, worst, lines, biggest + 0.01
  
