@@ -10,7 +10,7 @@ Do:
 3. Any case that now fails on main: reported, not fixed here.
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `pwsh tools/test.ps1 -Exe astroray_tests_cpu -Tier all -Case "light_sampler/*"`; the list in the PR; `pwsh tools/check.ps1 full` is not required (the named case is in the full suite: run it alone and paste its line).
 Look at: none.
-Canary: tasks/244.canary.patch must turn red: astroray_tests_cpu "light_sampler/small q is exact at 2^20 bins"
+Canary: tasks/244.canary.patch must turn red: astroray_tests_cpu "light_sampler/small q is exact at 2^20 bins", "light_sampler/pmf matches sample", "light_tree_kernel/zero importance has radiometric pmf", "light_tree/pmf matches sample"
 Budget: gate +0 s (no new case; the named case stays in `full`); kernel rows: none.
 Depends on: none. Collisions: test files with 239, 243, 247 and M2's lobe tests by neighbouring lines only; tools/lint.py with 249-251 only if the rule is added.
 Size: S (test edits only); stop and report above 40 touched checks (then split by directory).
