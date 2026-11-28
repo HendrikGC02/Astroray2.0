@@ -66,7 +66,7 @@ void print_session_state(const char* why, const ar_progress& p) {
 // CUDA device) with the vendor words and blanks removed, physical cores and logical threads ("rtx5070ti-8c16t"),
 // the form bench/history carries. No host or user name. An id that cannot be read is an error, never a guess:
 // a history line under a wrong machine id would be compared against another machine's baselines.
-bool hardware_id(std::string& id, std::string& why) {
+bool hardware_id(std::string& id, std::string& why, bool cuda_only = false) {
   uint32_t n = 0;
   if (const ar_status st = ar_device_count(&n); st != AR_OK || n == 0) {
     why = "the device list is unavailable (ar_device_count status " + std::to_string(st) + ", " + std::to_string(n) + " devices)";
@@ -84,6 +84,9 @@ bool hardware_id(std::string& id, std::string& why) {
     if (!have && d.kind == AR_DEVICE_CPU) { pick = d; have = true; }
   }
   if (!have) { why = "no CUDA or CPU device in the device list"; return false; }
+  // The machine rule of the tools must never read the reference machine as another one: without a CUDA device (a
+  // driver reset) the CPU entry gives a different id, so `machine-id` refuses where bench lines keep the fallback.
+  if (cuda_only && pick.kind != AR_DEVICE_CUDA) { why = "no CUDA device is listed (the CPU entry would be another machine's id)"; return false; }
   std::string gpu;
   for (char c : text(pick.name, sizeof pick.name)) {
     if (c != ' ') gpu += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -130,7 +133,7 @@ int machine_id_cmd(int argc, char** argv) {
     return kExitUsage;
   }
   std::string id, why;
-  if (!hardware_id(id, why)) { printf("machine-id: no hardware id: %s\n", why.c_str()); return kExitFailure; }
+  if (!hardware_id(id, why, true)) { printf("machine-id: no hardware id: %s\n", why.c_str()); return kExitFailure; }
   // The one line the tools parse (tools/machine_id.py); the build line main() prints comes before it.
   printf("machine-id: %s\n", id.c_str());
   return 0;

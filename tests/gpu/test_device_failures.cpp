@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-#include "common/off_reference.h"
+#include "testing/off_reference.h"
 #include "device/cuda/cuda_device.h"
 #include "device/cuda/module_loader.h"
 #include "device/cuda/optix_accel.h"

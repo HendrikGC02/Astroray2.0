@@ -35,11 +35,13 @@ function Add-ArStep {
 
 function Complete-ArSummary {
   # Budget is $null while the tier has no budget row.
-  param([bool]$Pass = $true, [double]$Waited = 0, $Budget = $null, [string]$Reason = '')
+  # OverWaived: the tier is over its budget and passes on purpose (off-reference machine, owner decision 47): the budget
+  # stays in the last line and the Reason says why.
+  param([bool]$Pass = $true, [double]$Waited = 0, $Budget = $null, [string]$Reason = '', [switch]$OverWaived)
   $secs = Get-ArSeconds
   $dir = Join-Path $script:ArRoot 'out/check'
   $sha = (& git -C $script:ArRoot rev-parse --short HEAD 2>$null)
-  $over = ($null -ne $Budget) -and ($secs -gt $Budget)
+  $over = ($null -ne $Budget) -and ($secs -gt $Budget) -and -not $OverWaived
   $ok = $Pass -and -not $over
   $bt = if ($null -ne $Budget) { "$Budget s" } else { 'n/a' }
   $lines = @()

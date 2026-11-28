@@ -3,9 +3,11 @@
 # gives `off-reference` lines and no failure; the reference id still fails; an id with a profile is judged against
 # the limit derived from it (reference limit x median / reference median, never below the reference limit); an id
 # with a profile that lacks the row, or no profile, prints; a missing machines file or CLI fails loudly; a failed
-# test run fails on both machines. Also the Python twins (timing_ok for the timing CHECKs of tests, the B-05 and B-16
-# verdicts, `record` for `check.ps1 profile`) and the standing a tier hands to those tests. No CLI, no GPU: the
-# fixture hands the id in. Run by tests/tools/run_fast.ps1.
+# test run fails on both machines; the measuring runs of `check.ps1 profile` leave B-08 unjudged and nothing else.
+# Also the Python twins (timing_ok for the timing CHECKs of tests, the B-05 and B-16 verdicts, `record` and
+# `record-reference` for `check.ps1 profile`) and the standing a tier hands to those tests. No CLI, no GPU: the
+# fixture hands the id in. The Python cases share one process (startup is most of this fixture's time). Run by
+# tests/tools/run_fast.ps1.
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 . (Join-Path $root 'tools/lib/python.ps1')
@@ -18,53 +20,135 @@ $bad = 0
 function Check([string]$what, [bool]$ok, $out = @()) {
   if (-not $ok) { Write-Host "FAIL fast_machine_profile: $what"; @($out) | Select-Object -Last 6 | ForEach-Object { Write-Host "  $_" }; $script:bad++ }
 }
-$ref = (& $py -I (Join-Path $root 'tools/machine_id.py') reference)
-Check 'bench/machines.toml names the reference machine' ($ref -eq 'rtx5070ti-8c16t') $ref
-$tmp = Join-Path ([IO.Path]::GetTempPath()) "fast_machine_profile_$PID"
-New-Item -ItemType Directory -Force $tmp | Out-Null
+$ref = 'rtx5070ti-8c16t'
 $saveEnv = $env:ASTRORAY_OFF_REFERENCE
 try {
-  $toml = Join-Path $tmp 'machines.toml'
-  Set-Content -Path $toml -Value @'
-reference = "refbox-8c16t"
+  # The Python cases, one process. Each failed assertion prints a line starting FAIL.
+  $code = @'
+import os, sys, tempfile, traceback
+root = sys.argv[1]
+sys.path.insert(0, os.path.join(root, "tools"))
+import machine_id
+import kernelgate
+import integrator_checks as ic
 
-[reference_median]
-"B-08" = 5.0
+tmp = tempfile.mkdtemp()
+toml = os.path.join(tmp, "machines.toml")
+def write(text):
+    open(toml, "w", newline="\n").write(text)
+BASE = 'reference = "refbox-8c16t"\n\n[reference_median]\n"B-08" = 5.0\n\n[machine."profiled-4c8t"]\n"B-08" = 10.0\n'
+write(BASE)
+def judge(mid, row, m, lim=10, f=None):
+    return machine_id.judge(row, m, lim, mid, "s", f or toml)
+def case(name):
+    def deco(fn):
+        try:
+            fn()
+        except Exception:
+            print("FAIL " + name + ": " + traceback.format_exc().strip().splitlines()[-1])
+    return deco
 
-[machine."profiled-4c8t"]
-"B-08" = 10.0
+@case("the file names the reference machine")
+def _():
+    assert machine_id.reference(os.path.join(root, "bench", "machines.toml")) == "rtx5070ti-8c16t"
+@case("the reference id fails an overrun silently, a row within its limit passes")
+def _():
+    assert judge("refbox-8c16t", "B-08", 12) == ("fail", 10, "")
+    assert judge("refbox-8c16t", "B-08", 9.9)[0] == "pass"
+@case("a machine without a profile prints off-reference with its id and the row")
+def _():
+    assert judge("laptop-6c12t", "B-08", 12) == ("off", 10, "off-reference laptop-6c12t B-08: 12 s against 10 s")
+@case("a profile derives the limit 10 x 10/5 = 20 and says so")
+def _():
+    v, lim, line = judge("profiled-4c8t", "B-08", 15)
+    assert v == "pass" and lim == 20 and line.startswith("profile profiled-4c8t B-08: 15 s against 20 s"), (v, lim, line)
+    v, lim, line = judge("profiled-4c8t", "B-08", 25)
+    assert v == "fail" and lim == 20, (v, lim)
+@case("a profile that lacks the row prints off-reference")
+def _():
+    v, _, line = judge("profiled-4c8t", "B-09", 200, 180)
+    assert v == "off" and line.startswith("off-reference profiled-4c8t B-09:"), (v, line)
+@case("a faster profile never tightens the reference limit")
+def _():
+    write(BASE.replace('"B-08" = 10.0', '"B-08" = 2.5'))
+    v, lim, _ = judge("profiled-4c8t", "B-08", 12)
+    assert v == "fail" and lim == 10, (v, lim)
+    write(BASE)
+@case("a missing machines file and a file without a reference fail loudly")
+def _():
+    for f, want in ((os.path.join(tmp, "absent.toml"), "absent.toml"), (None, "reference")):
+        if f is None:
+            f = os.path.join(tmp, "noref.toml")
+            open(f, "w").write("[reference_median]\n")
+        try:
+            judge("laptop-6c12t", "B-08", 12, 10, f)
+        except machine_id.MachineError as e:
+            assert want in str(e), str(e)
+        else:
+            raise AssertionError("no error for " + f)
+@case("timing_ok fails an overrun unset and prints it set")
+def _():
+    os.environ.pop("ASTRORAY_OFF_REFERENCE", None)
+    assert machine_id.timing_ok("B-21 x", 4.0, 5.0, "ms") is True
+    assert machine_id.timing_ok("B-21 x", 6.0, 5.0, "ms") is False
+    os.environ["ASTRORAY_OFF_REFERENCE"] = "fakebox-4c8t"
+    import io, contextlib
+    b = io.StringIO()
+    with contextlib.redirect_stdout(b):
+        assert machine_id.timing_ok("B-21 x", 6.0, 5.0, "ms") is True
+    assert b.getvalue().strip() == "off-reference fakebox-4c8t B-21 x: 6 ms against 5 ms", b.getvalue()
+    os.environ.pop("ASTRORAY_OFF_REFERENCE")
+@case("B-05 is judged by the machine rule")
+def _():
+    rows = [("shade_surface", 9.0, 8.0), ("shade_background", 2.0, 3.0)]
+    f, n = kernelgate.timing_verdicts(rows, "fakebox-4c8t")
+    assert f == [] and n == ["off-reference fakebox-4c8t B-05 shade_surface: 9 s against 8 s"], (f, n)
+    f, n = kernelgate.timing_verdicts(rows, "rtx5070ti-8c16t")
+    assert len(f) == 1 and f[0].startswith("B-05: shade_surface"), f
+@case("B-16 tripwire is keyed by machine")
+def _():
+    R = "rtx5070ti-8c16t"
+    ok, line = ic.tripwire_verdict("fakebox-4c8t", R, 64, 3.0e-05, 2.0e-05, None)
+    assert ok and line.startswith("off-reference fakebox-4c8t B-16 tripwire 64 spp:"), (ok, line)
+    ok, line = ic.tripwire_verdict(R, R, 64, 3.0e-05, 2.0e-05, 2.0e-05)
+    assert not ok and "limit x1.25" in line, (ok, line)
+    ok, line = ic.tripwire_verdict("fakebox-4c8t", R, 64, 3.0e-05, 2.0e-05, 2.9e-05)
+    assert ok and "limit x1.25" in line, (ok, line)
+    ok, line = ic.tripwire_verdict("fakebox-4c8t", R, 64, 4.0e-05, 2.0e-05, 2.9e-05)
+    assert not ok, (ok, line)
+@case("record adds a machine and rewrites one, keeping the rest; it refuses the reference machine")
+def _():
+    machine_id.record("newbox-2c4t", "B-08", 11.5, toml)
+    machine_id.record("profiled-4c8t", "B-08", 9, toml)
+    t = open(toml).read()
+    assert 'reference = "refbox-8c16t"' in t and '[machine."newbox-2c4t"]\n"B-08" = 11.5\n' in t, t
+    assert '"B-08" = 9\n' in t and "10.0" not in t, t
+    try:
+        machine_id.record("refbox-8c16t", "B-08", 9, toml)
+    except machine_id.MachineError as e:
+        assert "reference machine" in str(e)
+    else:
+        raise AssertionError("the reference machine was recorded")
+    write(BASE)
+@case("record-reference replaces the row and its comment, keeping the machines")
+def _():
+    machine_id.record_reference("B-08", 6.25, "median of five, sha abc", toml)
+    machine_id.record_reference("B-09", 120, "gate", toml)
+    t = open(toml).read()
+    assert '# median of five, sha abc\n"B-08" = 6.25\n' in t and '"B-08" = 5.0' not in t, t
+    assert '"B-09" = 120\n' in t and '[machine."profiled-4c8t"]' in t, t
+    assert machine_id.load_machines(toml)["reference_median"] == {"B-08": 6.25, "B-09": 120}
+@case("a missing CLI names tools/build.ps1")
+def _():
+    try:
+        machine_id.machine_id(os.path.join(tmp, "absent.exe"))
+    except machine_id.MachineError as e:
+        assert "build.ps1" in str(e), str(e)
+    else:
+        raise AssertionError("no error")
 '@
-  function Judge([string]$Id, [string]$Row, [double]$Measured, [double]$Limit = 10, [string]$File = $toml) {
-    $o = @(& $py -I (Join-Path $root 'tools/machine_id.py') judge --row $Row --measured $Measured --limit $Limit --unit s --id $Id --machines $File 2>&1 | ForEach-Object { "$_" })
-    if ($LASTEXITCODE -ne 0) { return [pscustomobject]@{ Code = $LASTEXITCODE; Out = $o } }
-    $j = $o[-1] | ConvertFrom-Json
-    [pscustomobject]@{ Code = 0; Verdict = $j.verdict; Limit = $j.limit; Line = $j.line; Out = $o }
-  }
-  # The reference id fails on an overrun, silently; within the limit passes.
-  $x = Judge 'refbox-8c16t' 'B-08' 12
-  Check 'the reference id fails a row over its limit' ($x.Verdict -eq 'fail' -and $x.Line -eq '') $x.Out
-  $x = Judge 'refbox-8c16t' 'B-08' 9.9
-  Check 'a row within its limit passes' ($x.Verdict -eq 'pass') $x.Out
-  # An id the file does not know: the overrun is printed, never failed, never silent.
-  $x = Judge 'laptop-6c12t' 'B-08' 12
-  Check 'a machine without a profile prints off-reference with its id and the row' ($x.Verdict -eq 'off' -and $x.Line -eq 'off-reference laptop-6c12t B-08: 12 s against 10 s') $x.Out
-  # A profile derives the limit: 10 x 10/5 = 20.
-  $x = Judge 'profiled-4c8t' 'B-08' 15
-  Check 'a profiled machine passes under its derived limit and says so' ($x.Verdict -eq 'pass' -and $x.Limit -eq 20 -and $x.Line -like 'profile profiled-4c8t B-08: 15 s against 20 s*') $x.Out
-  $x = Judge 'profiled-4c8t' 'B-08' 25
-  Check 'a profiled machine fails above its derived limit' ($x.Verdict -eq 'fail' -and $x.Limit -eq 20) $x.Out
-  $x = Judge 'profiled-4c8t' 'B-09' 200 180
-  Check 'a profile that lacks the row prints off-reference' ($x.Verdict -eq 'off' -and $x.Line -like 'off-reference profiled-4c8t B-09:*') $x.Out
-  # A machine faster than the reference keeps the reference limit.
-  Set-Content -Path $toml -Value (((Get-Content $toml -Raw) -replace '"B-08" = 10.0', '"B-08" = 2.5'))
-  $x = Judge 'profiled-4c8t' 'B-08' 12
-  Check 'a faster profile never tightens the reference limit' ($x.Verdict -eq 'fail' -and $x.Limit -eq 10) $x.Out
-  # No machines file, or none naming a reference: loud.
-  $x = Judge 'laptop-6c12t' 'B-08' 12 10 (Join-Path $tmp 'absent.toml')
-  Check 'a missing machines file fails loudly' ($x.Code -eq 2 -and ($x.Out -join ' ') -like 'FAIL machine_id:*absent.toml*') $x.Out
-  Set-Content -Path (Join-Path $tmp 'noref.toml') -Value '[reference_median]'
-  $x = Judge 'laptop-6c12t' 'B-08' 12 10 (Join-Path $tmp 'noref.toml')
-  Check 'a machines file without a reference fails loudly' ($x.Code -eq 2 -and ($x.Out -join ' ') -like '*has no*reference*') $x.Out
+  $out = @(& $py -I -c $code $root 2>&1 | ForEach-Object { "$_" })
+  Check 'the Python cases' ($LASTEXITCODE -eq 0 -and -not ($out | Where-Object { $_ })) $out
 
   # The PowerShell verdict function over the same rule, with the id handed in.
   $script:ArMachineIdForTest = 'fakebox-4c8t'
@@ -86,78 +170,38 @@ reference = "refbox-8c16t"
   $script:ArMachineIdForTest = 'fakebox-4c8t'
   $null = Set-ArMachineStanding
   Check 'another machine sets ASTRORAY_OFF_REFERENCE to its id' ($env:ASTRORAY_OFF_REFERENCE -eq 'fakebox-4c8t')
+  $env:ASTRORAY_OFF_REFERENCE = 'stale'
   $null = Set-ArMachineStanding -NoMachine
-  Check 'hosted ci has no standing' (-not $env:ASTRORAY_OFF_REFERENCE)
+  Check 'hosted ci has no standing, and clears a stray one' (-not $env:ASTRORAY_OFF_REFERENCE)
 
   # The fast tier's step: a failed run is a failure on both machines and never a re-run; a slow run is Over only
-  # where it fails (an off-reference overrun is not Over, so it does not re-run either).
-  function Invoke-FastWith([string]$Id, [int]$Code, [double]$Budget) {
+  # where it fails (an off-reference overrun is not Over, so it does not re-run either); -WaiveB08 (the measuring runs of
+  # `profile`) leaves B-08 unjudged and B-12 judged.
+  function Invoke-FastWith([string]$Id, [int]$Code, [double]$Budget, [string[]]$Lines, [switch]$Waive) {
     $script:ArMachineIdForTest = $Id
     $script:ArSteps = @([pscustomobject]@{ name = 'x'; seconds = 0.0; pass = $true })
     Start-ArSummary 'fast'
-    $out = @('  0.900000 s: slowcase', '  0.100000 s: other')
-    Invoke-ArFastTests -PerTest 0.41 -Budget $Budget -Log '' -Names @('fxnone') -IntervalMs 100 -Tests { } -Step { param($n, $b) [pscustomobject]@{ Code = $Code; Out = $out } }
+    Invoke-ArFastTests -PerTest 0.41 -Budget $Budget -Log '' -Names @('fxnone') -IntervalMs 100 -WaiveB08:$Waive -Tests { } -Step { param($n, $b) [pscustomobject]@{ Code = $Code; Out = $Lines } }
   }
+  $slow = @('  0.900000 s: slowcase', '  0.100000 s: other')
+  $quick = @('  0.100000 s: other')
   foreach ($id in $ref, 'fakebox-4c8t') {
-    $t = Invoke-FastWith $id 1 10
+    $t = Invoke-FastWith $id 1 10 $slow
     Check "a failed test run is not a timing result on $id" ($t.Result.Code -eq 1 -and -not $t.Over -and -not $t.Rerun)
   }
-  $t = Invoke-FastWith $ref 0 10
+  $t = Invoke-FastWith $ref 0 10 $slow
   Check 'B-12 over its limit is Over on the reference machine' ($t.Over)
-  $t = Invoke-FastWith 'fakebox-4c8t' 0 10
+  $t = Invoke-FastWith 'fakebox-4c8t' 0 10 $slow
   Check 'B-12 over its limit is not Over on another machine' (-not $t.Over)
-
-  # The Python side: timing CHECKs of tests, B-05, B-16, `record`.
-  $out = @(& $py -I -c @"
-import os, sys
-sys.path.insert(0, r'$root/tools')
-import machine_id
-os.environ.pop('ASTRORAY_OFF_REFERENCE', None)
-assert machine_id.timing_ok('B-21 x', 4.0, 5.0, 'ms') is True
-assert machine_id.timing_ok('B-21 x', 6.0, 5.0, 'ms') is False
-os.environ['ASTRORAY_OFF_REFERENCE'] = 'fakebox-4c8t'
-assert machine_id.timing_ok('B-21 x', 6.0, 5.0, 'ms') is True
-"@ 2>&1 | ForEach-Object { "$_" })
-  Check 'timing_ok fails on an overrun unset and prints it set' ($LASTEXITCODE -eq 0 -and ($out -join ' ') -eq 'off-reference fakebox-4c8t B-21 x: 6 ms against 5 ms') $out
-  $out = @(& $py -I -c @"
-import sys
-sys.path.insert(0, r'$root/tools')
-import kernelgate
-rows = [('shade_surface', 9.0, 8.0), ('shade_background', 2.0, 3.0)]
-f, lines = kernelgate.timing_verdicts(rows, 'fakebox-4c8t')
-assert f == [] and lines == ['off-reference fakebox-4c8t B-05 shade_surface: 9 s against 8 s'], (f, lines)
-f, lines = kernelgate.timing_verdicts(rows, 'rtx5070ti-8c16t')
-assert len(f) == 1 and f[0].startswith('B-05: shade_surface'), f
-"@ 2>&1 | ForEach-Object { "$_" })
-  Check 'B-05 is judged by the machine rule' ($LASTEXITCODE -eq 0) $out
-  $out = @(& $py -I -c @"
-import sys
-sys.path.insert(0, r'$root/tools')
-import integrator_checks as ic
-ok, line = ic.tripwire_verdict('fakebox-4c8t', 'rtx5070ti-8c16t', 64, 3.0e-05, 2.0e-05, None)
-assert ok and line.startswith('off-reference fakebox-4c8t B-16 tripwire 64 spp:'), (ok, line)
-ok, line = ic.tripwire_verdict('rtx5070ti-8c16t', 'rtx5070ti-8c16t', 64, 3.0e-05, 2.0e-05, 2.0e-05)
-assert not ok and 'limit x1.25' in line, (ok, line)
-ok, line = ic.tripwire_verdict('fakebox-4c8t', 'rtx5070ti-8c16t', 64, 3.0e-05, 2.0e-05, 2.9e-05)
-assert ok and 'limit x1.25' in line, (ok, line)
-ok, line = ic.tripwire_verdict('fakebox-4c8t', 'rtx5070ti-8c16t', 64, 4.0e-05, 2.0e-05, 2.9e-05)
-assert not ok, (ok, line)
-"@ 2>&1 | ForEach-Object { "$_" })
-  Check 'B-16 tripwire is keyed by machine' ($LASTEXITCODE -eq 0) $out
-  Set-Content -Path $toml -Value (((Get-Content $toml -Raw) -replace '"B-08" = 2.5', '"B-08" = 10.0'))
-  $out = @(& $py -I (Join-Path $root 'tools/machine_id.py') record --id newbox-2c4t --row B-08 --value 11.5 --machines $toml 2>&1)
-  $out2 = @(& $py -I (Join-Path $root 'tools/machine_id.py') record --id profiled-4c8t --row B-08 --value 9 --machines $toml 2>&1)
-  $t = Get-Content $toml -Raw
-  Check 'record adds a machine and rewrites one, keeping the rest' ($LASTEXITCODE -eq 0 -and $t -match '(?s)reference = "refbox-8c16t".*\[machine\."newbox-2c4t"\]\s+"B-08" = 11\.5' -and $t -match '"B-08" = 9\b' -and $t -notmatch '"B-08" = 10\b') @($out + $out2 + $t)
-  $x = @(& $py -I (Join-Path $root 'tools/machine_id.py') record --id refbox-8c16t --row B-08 --value 9 --machines $toml 2>&1)
-  Check 'record refuses the reference machine' ($LASTEXITCODE -eq 2 -and ($x -join ' ') -like 'FAIL machine_id:*reference machine*') $x
-  # No CLI: the id fails loudly naming build.ps1.
-  $x = @(& $py -I -c "import sys; sys.path.insert(0, r'$root/tools'); import machine_id; machine_id.machine_id(r'$tmp/absent.exe')" 2>&1)
-  Check 'a missing CLI names tools/build.ps1' (($x -join ' ') -like '*MachineError*build.ps1*') $x
+  $t = Invoke-FastWith $ref 0 0.0000001 $quick
+  Check 'B-08 over its limit is Over on the reference machine' ($t.Over)
+  $t = Invoke-FastWith $ref 0 0.0000001 $quick -Waive
+  Check 'the profile measuring runs leave B-08 unjudged' (-not $t.Over)
+  $t = Invoke-FastWith $ref 0 0.0000001 $slow -Waive
+  Check 'the profile measuring runs still judge B-12' ($t.Over)
 } finally {
   $script:ArMachineIdForTest = ''
   if ($null -ne $saveEnv) { $env:ASTRORAY_OFF_REFERENCE = $saveEnv } else { Remove-Item Env:ASTRORAY_OFF_REFERENCE -ErrorAction SilentlyContinue }
-  Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 if ($bad) { exit 1 }
 Write-Host 'PASS fast_machine_profile'

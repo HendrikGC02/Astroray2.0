@@ -98,10 +98,10 @@ function Test-ArOnlyTiming([string[]]$Out, [int]$Code, [string]$Case) {
 # body, records the step, returns Code and Out); $Tests is the body. The first attempt's seconds leave the tier
 # clock, so the second result is judged on the tier's own time (summary.ps1 and testrun.ps1 are dot-sourced).
 # Over means a row that fails on this machine (machine.ps1 Resolve-ArTimingRow): an off-reference overrun does not
-# fail, so it neither re-runs nor counts; -NoMachine (hosted ci, no machine id) judges against the limits alone.
+# fail, so it neither re-runs nor counts; -WaiveB08 (the measuring runs of `check.ps1 profile`) leaves B-08 unjudged; -NoMachine (hosted ci, no machine id) judges against the limits alone.
 function Invoke-ArFastTests {
   param([Parameter(Mandatory)][scriptblock]$Step, [Parameter(Mandatory)][scriptblock]$Tests, [double]$PerTest,
-    $Budget, [string[]]$Names = $script:ArLoadNames, [int]$IntervalMs = 2000, [string]$Log = '', [switch]$NoMachine)
+    $Budget, [string[]]$Names = $script:ArLoadNames, [int]$IntervalMs = 2000, [string]$Log = '', [switch]$NoMachine, [switch]$WaiveB08)
   Invoke-ArTimedCheck -Check 'B-08/B-12 fast tests' -Names $Names -IntervalMs $IntervalMs -Log $Log -Run {
     param($n)
     if ($n -eq 2) { Add-ArExcluded ([double]$script:ArSteps[-1].seconds) }
@@ -114,7 +114,7 @@ function Invoke-ArFastTests {
     $why = @()
     $slow = @($b.Slow | Where-Object { (Resolve-ArTimingRow -Row "B-12 $($_.Case)" -Measured $_.Seconds -Limit $PerTest -NoMachine:$NoMachine).Verdict -eq 'FAIL' })
     if ($slow.Count -gt 0) { $why += "B-12 $($slow[0].Case) $($slow[0].Seconds) s over $PerTest s" }
-    if ($null -ne $Budget -and $secs -gt $Budget -and (Resolve-ArTimingRow -Row 'B-08' -Measured $secs -Limit $Budget -NoMachine:$NoMachine).Verdict -eq 'FAIL') {
+    if (-not $WaiveB08 -and $null -ne $Budget -and $secs -gt $Budget -and (Resolve-ArTimingRow -Row 'B-08' -Measured $secs -Limit $Budget -NoMachine:$NoMachine).Verdict -eq 'FAIL') {
       $why += "B-08 tier $([math]::Round($secs, 1)) s over $Budget s"
     }
     @{ Over = ($why.Count -gt 0); Text = $(if ($why) { $why -join '; ' } else { "slowest $($b.Slowest.Seconds) s, tier $([math]::Round($secs, 1)) s" }) }

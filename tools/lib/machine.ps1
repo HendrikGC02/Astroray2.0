@@ -52,7 +52,7 @@ function Resolve-ArTimingRow {
 }
 
 # Tells tests with a timing CHECK of their own (ASTRORAY_OFF_REFERENCE, machine_id.py timing_ok and
-# tests/common/off_reference.h) which standing to take: set to this machine's id when it is not the reference one,
+# src/testing/off_reference.h) which standing to take: set to this machine's id when it is not the reference one,
 # removed otherwise, so a stray value cannot soften the reference machine's verdicts. Returns the id, or '' on hosted ci.
 function Set-ArMachineStanding([switch]$NoMachine) {
   if ($NoMachine) { Remove-Item Env:ASTRORAY_OFF_REFERENCE -ErrorAction SilentlyContinue; return '' }

@@ -635,10 +635,13 @@ def check_tripwire(device, measured):
 def bless(device, measured):
     """Rewrites this device's tables of tests/budgets/counters.toml, keeping the other device's."""
     data = load_baselines()
-    data[device] = measured.get(device, data.get(device, {}))
+    on_reference = machine_id.machine_id() == machine_id.reference()
+    # The work counters and [tripwire.D] are the reference machine's (reference rows keep their values); another
+    # machine's --bless writes only its own [tripwire_machine."<id>"] rows.
+    if on_reference:
+        data[device] = measured.get(device, data.get(device, {}))
     if "tripwire" in measured:
-        # The reference machine's baseline stays [tripwire.D]; any other machine records its own beside it.
-        if machine_id.machine_id() == machine_id.reference():
+        if on_reference:
             data.setdefault("tripwire", {})[device] = measured["tripwire"][device]
         else:
             data.setdefault("tripwire_machine", {}).setdefault(machine_id.machine_id(), {})[device] = measured["tripwire"][device]

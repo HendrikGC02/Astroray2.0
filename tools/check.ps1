@@ -13,7 +13,8 @@
 # Resolve-ArTimingRow): the reference machine fails it, a profiled machine fails it against its own derived limit, any
 # other machine prints `off-reference <machine id> <row>: ...` and passes. Hosted ci has no machine id.
 # profile (lead, quiet machine, not the reference): five fast runs after a warm-up, the median of their tier times into
-# bench/machines.toml as this machine's B-08.
+# bench/machines.toml as this machine's B-08; -Reference (lead, on the reference machine) writes the same measurement
+# as [reference_median] with its date and sha. The measuring runs (-Profiling on the fast tier) do not judge B-08.
 # full: gate plus the probe build; uncapped registers are warnings, never failures (0002 D10).
 # ci (0009 d12, d24; hosted CI): fast, cpu build, deps, the headless bpy suite and the API-surface check; the gate
 # steps stay local (owner decision 42: every landing gate runs them on this PC). No budget here (B-11); logs the cl version.
@@ -22,7 +23,7 @@
 # the compile timing step only.
 # Gate time (B-09, ruling 94) leaves out the gate's build steps (`build dev`, the nofma build and the build inside
 # the fast step); their seconds are printed beside the tier total.
-param([Parameter(Mandatory, Position = 0)][string]$Tier, [string]$Declared = '', [switch]$Landing)
+param([Parameter(Mandatory, Position = 0)][string]$Tier, [string]$Declared = '', [switch]$Landing, [switch]$Reference, [switch]$Profiling)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -94,6 +95,11 @@ function Resolve-TierRow([string]$Row, [double]$Measured, [double]$Limit, [strin
   if ($v.Line) { Write-ArOffReference $v.Line }
   return $v
 }
+# The off-reference and profile lines a step printed (tests with a timing CHECK of their own, B-05, B-16): visible in the
+# tier's output, never only in a log (a rule that does not gate must not be silent).
+function Show-OffReference($r) {
+  @($r.Out | Where-Object { $_ -match '^(off-reference|profile) ' } | Select-Object -Unique) | ForEach-Object { Write-Host $_ }
+}
 function Show-Tail($r, [int]$n = 8) {
   ($r.Out | Select-Object -Last $n) | ForEach-Object { Write-Host $_ }
 }
@@ -113,24 +119,35 @@ function Test-Identity($r, [string]$what) {
 try {
   $py = Get-ArPython
   if ($Tier -eq 'profile') {
-    # The machine's own median of B-08 (bench/machines.toml, owner decision 47 c): the lead runs it on a quiet machine
-    # that is not the reference one. The reference medians are the records' numbers, never measured here.
+    # The machine's own median of B-08 (bench/machines.toml, owner decision 47 c), measured by the lead on a quiet
+    # machine: five fast runs after a warm-up. -Reference does the same on the reference machine and writes
+    # [reference_median]. The runs are -Profiling: they do not judge B-08 against the profile they replace.
     $id = Get-ArMachineId
-    if ($id -eq (Get-ArReferenceMachineId)) { Fail "profile: $id is the reference machine; its medians are in bench/machines.toml" }
+    $isRef = ($id -eq (Get-ArReferenceMachineId))
+    if ($Reference -and -not $isRef) { Fail "profile -Reference: $id is not the reference machine" }
+    if (-not $Reference -and $isRef) { Fail "profile: $id is the reference machine; measure it with -Reference" }
     $load = @(Get-ArForeignLoad $script:ArLoadNames)
     if ($load.Count) { Fail "profile: foreign load ($($load -join ', ')); a profile needs a quiet machine" }
     $secs = @()
     for ($i = 0; $i -lt 6; $i++) {
-      $r = Step "fast run $($i + 1)" { & pwsh -NoProfile -File tools/check.ps1 fast }
+      $r = Step "fast run $($i + 1)" { & pwsh -NoProfile -File tools/check.ps1 fast -Profiling }
       $fj = Join-Path $root 'out/check/fast.json'
       $fr = if (Test-Path $fj) { Get-Content $fj -Raw | ConvertFrom-Json } else { $null }
       if ($r.Code -ne 0 -or -not $fr -or -not $fr.pass) { Show-Tail $r 5; Fail "profile: fast run $($i + 1) failed (out/check/profile.log)" }
-      if ($i -gt 0) { $secs += [double]$fr.seconds }   # the first run warms the caches
+      $secs += [double]$fr.seconds
     }
+    Write-Host "profile $id B-08: six runs $($secs -join ', ') s; the first is dropped"
+    $secs = @($secs | Select-Object -Skip 1)   # the first run warms the caches
     $med = @($secs | Sort-Object)[[int][math]::Floor($secs.Count / 2)]
-    & $py -I tools/machine_id.py record --id $id --row 'B-08' --value $med
+    if ($Reference) {
+      $sha = (& git rev-parse --short HEAD).Trim()
+      $note = "B-08, seconds: median of five check fast runs after a dropped warm-up, on $id, $(Get-Date -Format 'yyyy-MM-dd'), sha $sha (check.ps1 profile -Reference; runs $($secs -join ', '))"
+      & $py -I tools/machine_id.py record-reference --row 'B-08' --value $med --note $note
+    } else {
+      & $py -I tools/machine_id.py record --id $id --row 'B-08' --value $med
+    }
     if ($LASTEXITCODE -ne 0) { Fail 'profile: bench/machines.toml was not written' }
-    Write-Host "profile $id B-08: median $med s of $($secs.Count) runs ($($secs -join ', ')) written to bench/machines.toml"
+    Write-Host "profile $id B-08: median $med s of $($secs.Count) runs written to bench/machines.toml"
     $ok = Complete-ArSummary -Pass $true -Waited $waited -Budget $null
     Exit-ArMachineLock
     exit 0
@@ -257,7 +274,7 @@ $global:LASTEXITCODE = $code
     @{ Name = 'kernelgate'; Tag = 'local'; Lock = $true; Echo = '^kernelgate: \d+ row'; Run = { & $py -I tools/kernelgate.py @dargs } },
     # B-05 reads the compiler's own time: beside another worktree's build it read 7.29 s against 7.0 s when a
     # quiet machine reads 5.2-5.8 s.
-    @{ Name = 'compile timing'; Tag = 'local'; Lock = $true; Window = $true; Build = $true; Echo = '^off-reference '; Run = { & $py -I tools/kernelgate.py --time } },
+    @{ Name = 'compile timing'; Tag = 'local'; Lock = $true; Window = $true; Build = $true; Run = { & $py -I tools/kernelgate.py --time } },
     @{ Name = 'abi tests'; Tag = 'cpu'; Run = {
         if (Test-Path 'tests/abi') { & $py -I -m unittest discover -s tests/abi -p 'test_*.py' } } },
     @{ Name = 'dependents'; Tag = 'cpu'; Run = {
@@ -308,7 +325,7 @@ $global:LASTEXITCODE = $code
     # 0003 check 15) and the B-16 work counters against tests/budgets/counters.toml; the tripwire on cuda.
     @{ Name = 'integrator cpu'; Group = 'g2'; Tag = 'cpu'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Keep = $true; Run = {
         & $py -I tools/integrator_checks.py --gate --device cpu } },
-    @{ Name = 'integrator cuda'; Tag = 'local'; Lock = $true; Echo = '^((PASS|FAIL) integrator|off-reference )'; Keep = $true; Run = {
+    @{ Name = 'integrator cuda'; Tag = 'local'; Lock = $true; Echo = '^(PASS|FAIL) integrator'; Keep = $true; Run = {
         & $py -I tools/integrator_checks.py --gate --device cuda }
        Timed = @{ Check = 'B-16 tripwire'; Case = 'tripwire'; Rerun = { & $py -I tools/integrator_checks.py --check tripwire --device cuda } } },
     @{ Name = 'cpu gate tests'; Group = 'g3'; Tag = 'cpu'; Lock = $true; Identity = $exe; Keep = $true; Run = {
@@ -358,6 +375,7 @@ $global:LASTEXITCODE = $code
     }
     if ($s.Identity) { Test-Identity $r $s.Name }
     if ($s.Check) { & $s.Check $r } elseif ($s.Echo) { $r.Out | Where-Object { $_ -match $s.Echo } | ForEach-Object { Write-Host $_ } }
+    Show-OffReference ([pscustomobject]@{ Out = @($r.Out | Where-Object { -not ($s.Echo -and $_ -match $s.Echo) -or $s.Check }) })
   }
   function Invoke-GateStep($s) {
     # The window before the tree lock: a build holds its share while it waits for the tree lock, so the other
@@ -442,6 +460,7 @@ $global:LASTEXITCODE = $code
     $w = Enter-ArFastWindow; $waited += $w; Add-ArExcluded $w
     try { $r = Step 'fast' { & pwsh -NoProfile -File tools/check.ps1 fast } } finally { if (-not $Landing) { Exit-ArFastWindow } }
     if ($r.Code -ne 0) { Show-Tail $r 5; Fail 'fast failed (out/check/fast.log)' }
+    Show-OffReference $r
     # The fast tier's own build is not gate time either (B-08 leaves it out of its clock the same way).
     $fj = Join-Path $root 'out/check/fast.json'
     if (-not (Test-Path $fj)) { Fail 'fast wrote no out/check/fast.json' }
@@ -449,7 +468,9 @@ $global:LASTEXITCODE = $code
     if ($fb.Count -ne 1) { Fail "out/check/fast.json holds $($fb.Count) 'build' steps, expected 1" }
     Add-GateBuild ([double]$fb[0].seconds)
     # The fast step built the CLI (the machine id's one source): the standing the gate's tests with a timing CHECK take.
+    $sw = [Diagnostics.Stopwatch]::StartNew()
     try { $null = Set-ArMachineStanding } catch { Fail "machine id: $($_.Exception.Message)" }
+    Add-ArExcluded $sw.Elapsed.TotalSeconds
     $i = 0
     while ($i -lt $gateSteps.Count) {
       $g = $gateSteps[$i].Group
@@ -579,17 +600,15 @@ $global:LASTEXITCODE = $code
     $w = Enter-ArTreeLock (Join-Path $root 'out/build'); $waited += $w; Add-ArExcluded $w
     if (-not (Test-Path $exe)) { Fail "missing $exe" }
     # The standing the tests with a timing CHECK of their own take (ASTRORAY_OFF_REFERENCE); the CLI run is not test time.
-    if (-not $isCi) {
-      $sw = [Diagnostics.Stopwatch]::StartNew()
-      try { $null = Set-ArMachineStanding } catch { Fail "machine id: $($_.Exception.Message)" }
-      Add-ArExcluded $sw.Elapsed.TotalSeconds
-    }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    try { $null = Set-ArMachineStanding -NoMachine:$isCi } catch { Fail "machine id: $($_.Exception.Message)" }   # ci: clears a stray value
+    Add-ArExcluded $sw.Elapsed.TotalSeconds
     # Fast cases that share an exact name (plain TEST_CASEs in the ar-f64 files; AR_RT cases carry the ' f64' suffix
     # here as in the gate) sit hundreds of cases apart in file order, which leaves no allowed cut; by name they are adjacent.
     $prevFast = Join-Path $root 'out/check/fast-tests.out'
     # B-08 and B-12 are wall-clock: a first result over either with foreign load in its window runs the step once
     # more and the second decides (0009 d13); the first attempt's seconds leave the tier clock.
-    $tm = Invoke-ArFastTests -PerTest $perTest -Budget $budget -Log $log -NoMachine:$isCi -Step { param($n, $b) Step $n $b } -Tests {
+    $tm = Invoke-ArFastTests -PerTest $perTest -Budget $budget -Log $log -NoMachine:$isCi -WaiveB08:$Profiling -Step { param($n, $b) Step $n $b } -Tests {
       & $runCpuTier 'fast' $shardsFast 'fast tests' $prevFast (Join-Path $root 'out/check/fast-tests') '--order-by=name'
     }
     $r = $tm.Result
@@ -661,25 +680,35 @@ $global:LASTEXITCODE = $code
   Fail ($_.Exception.Message)
 }
 $why = ''
+$waive = $false
+# What the over-limit text says: the limit in force when a profile derived it, with the reference limit beside it.
+function Get-OverText($v, [double]$Limit) {
+  if ($v.Limit -ne $Limit) { return "over its derived limit $([math]::Round($v.Limit, 2)) s (reference limit $Limit s)" }
+  return "over $Limit s"
+}
 if ($Tier -eq 'gate') {
   $kp = ($script:ArSteps | Where-Object { $_.name -in $kernelSteps } | Measure-Object -Property seconds -Sum).Sum
   $ct = ($script:ArSteps | Where-Object { $_.name -eq 'compile timing' } | Measure-Object -Property seconds -Sum).Sum
   $why = "kernel part {0:N1} s of {1} s, build steps {2:N1} s not counted (compile timing {3:N1} s)" -f $kp, $kernelBudget, $script:buildSeconds, $ct
-  if ($kp -gt $kernelBudget -and (Resolve-TierRow 'B-09 kernel part' $kp $kernelBudget).Verdict -eq 'FAIL') {
-    Fail "B-09: kernel part $([math]::Round($kp, 1)) s over $kernelBudget s"
+  if ($kp -gt $kernelBudget) {
+    $v = Resolve-TierRow 'B-09 kernel part' $kp $kernelBudget
+    if ($v.Verdict -eq 'FAIL') { Fail "B-09: kernel part $([math]::Round($kp, 1)) s $(Get-OverText $v $kernelBudget)" }
+    $waive = $true; $why += "; $($v.Line)"
   }
   if ((Get-ArSeconds) -gt $budget) {
     $v = Resolve-TierRow 'B-09' (Get-ArSeconds) $budget
-    if ($v.Verdict -eq 'FAIL') { Fail "B-09: tier over $budget s ($why)" }
-    # Off-reference (or a profile that allows it): the summary judges against the limit in force, and says so.
-    $budget = if ($v.Verdict -eq 'OFF') { $null } else { $v.Limit }
+    if ($v.Verdict -eq 'FAIL') { Fail "B-09: tier $(Get-OverText $v $budget) ($why)" }
+    # Off-reference (or a profile that allows it): the budget stays as printed, the line says why it passes.
+    $waive = $true; $why += "; $($v.Line)"
   }
-} elseif ($Tier -eq 'fast' -and (Get-ArSeconds) -gt $budget) {
+} elseif ($Tier -eq 'fast' -and -not $Profiling -and (Get-ArSeconds) -gt $budget) {
   $v = Resolve-TierRow 'B-08' (Get-ArSeconds) $budget
-  if ($v.Verdict -eq 'FAIL') { $why = "B-08: tier over $budget s" }
-  else { $budget = if ($v.Verdict -eq 'OFF') { $null } else { $v.Limit } }
+  if ($v.Verdict -eq 'FAIL') { $why = "B-08: tier $(Get-OverText $v $budget)" }
+  else { $waive = $true; $why = $v.Line }
+} elseif ($Tier -eq 'fast' -and $Profiling) {
+  $waive = $true   # the measuring runs of `profile`: nothing else is waived (every other row judges as usual)
 }
-$ok = Complete-ArSummary -Pass $true -Waited $waited -Budget $budget -Reason $why
+$ok = Complete-ArSummary -Pass $true -Waited $waited -Budget $budget -Reason $why -OverWaived:$waive
 if ($isCi) {
   $jp = Join-Path $root 'out/check/ci.json'
   $j = Get-Content $jp -Raw | ConvertFrom-Json

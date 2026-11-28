@@ -13,10 +13,14 @@ namespace astroray::test {
 
 // `id` is the standing (null or empty: the reference machine); `row` is the budget row and the measurement
 // ("B-21 cancel during denoise").
-inline bool timing_ok_for(const char* id, const char* row, double measured, double limit, const char* unit = "ms") {
+inline bool timing_ok_for(const char* id, const char* row, double measured, double limit, const char* unit = "ms",
+                          std::string* said = nullptr) {
   if (measured <= limit) return true;
   if (!id || !*id) return false;
-  std::printf("off-reference %s %s: %.4g %s against %.4g %s\n", id, row, measured, unit, limit, unit);
+  char line[256];
+  std::snprintf(line, sizeof line, "off-reference %s %s: %.4g %s against %.4g %s", id, row, measured, unit, limit, unit);
+  std::printf("%s\n", line);
+  if (said) *said = line;
   return true;
 }
 

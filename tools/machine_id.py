@@ -10,6 +10,8 @@ Nothing here recomputes it; a CLI that is not built is an error naming tools/bui
                                            print one JSON line {verdict, limit, line}; verdict is pass, fail or off
     machine_id.py record --id X --row R --value V [--machines FILE]
                                            write the measured median of a row into [machine."X"] (check.ps1 profile)
+    machine_id.py record-reference --row R --value V --note TEXT [--machines FILE]
+                                           the same for [reference_median] (check.ps1 profile -Reference)
 
 Importable: machine_id(), judge(), timing_ok() (the timing CHECKs inside tests), record().
 Ref: docs/decisions/0000-owner-decisions.md decision 47 (a-f); bench/machines.toml.
@@ -125,6 +127,27 @@ def record(mid, row, value, machines=MACHINES):
         f.write(text)
 
 
+def record_reference(row, value, note, machines=MACHINES):
+    """Writes the reference machine's median of `row` into [reference_median] with `note` (a comment line: how, when,
+    which sha) above it, replacing that row's old comment and value; the other rows and lines stay. Lead only
+    (`check.ps1 profile -Reference`)."""
+    load_machines(machines)
+    if not value > 0:
+        raise MachineError(f"median of {row} is {value}: not a measurement")
+    with open(machines, encoding="utf-8", newline="") as f:
+        text = f.read().replace("\r\n", "\n")
+    entry = f'# {note}\n"{row}" = {value:.6g}\n'
+    old = re.compile(r'(?m)^(?:#[^\n]*\n)*^"' + re.escape(row) + r'" = [^\n]*\n')
+    if old.search(text):
+        text = old.sub(lambda _: entry, text, count=1)
+    elif "[reference_median]\n" in text:
+        text = text.replace("[reference_median]\n", "[reference_median]\n" + entry, 1)
+    else:
+        text = text.rstrip("\n") + "\n\n[reference_median]\n" + entry
+    with open(machines, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -143,6 +166,11 @@ def main(argv):
     w.add_argument("--row", required=True)
     w.add_argument("--value", type=float, required=True)
     w.add_argument("--machines", default=MACHINES)
+    q = sub.add_parser("record-reference")
+    q.add_argument("--row", required=True)
+    q.add_argument("--value", type=float, required=True)
+    q.add_argument("--note", required=True)
+    q.add_argument("--machines", default=MACHINES)
     a = ap.parse_args(argv)
     try:
         if a.cmd == "id":
@@ -152,6 +180,8 @@ def main(argv):
         elif a.cmd == "judge":
             v, lim, line = judge(a.row, a.measured, a.limit, a.id or None, a.unit, a.machines)
             print(json.dumps({"verdict": v, "limit": lim, "line": line}))
+        elif a.cmd == "record-reference":
+            record_reference(a.row, a.value, a.note, a.machines)
         else:
             record(a.id, a.row, a.value, a.machines)
     except MachineError as e:

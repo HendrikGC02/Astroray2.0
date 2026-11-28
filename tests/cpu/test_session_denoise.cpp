@@ -24,7 +24,7 @@
 #include <vector>
 
 #include "common/cornell_rig.h"
-#include "common/off_reference.h"
+#include "testing/off_reference.h"
 #include "host/film/fits_writer.h"
 
 using namespace astroray;
@@ -327,6 +327,24 @@ TEST_CASE("session_denoise/the target must hold the render rectangle") {
   }));
   CHECK(s.progress().state == AR_STATE_FAILED);
   CHECK(s.failure().find("does not fit the denoise target") != std::string::npos);
+}
+
+}  // TEST_SUITE
+
+TEST_SUITE("fast") {
+
+// The machine rule of a timing CHECK (src/testing/off_reference.h): an overrun fails on the reference machine and is
+// printed, not failed, on another.
+TEST_CASE("session_denoise/a timing check over its limit follows the machine standing") {
+  using astroray::test::timing_ok_for;
+  std::string said;
+  CHECK(timing_ok_for(nullptr, "B-21 x", 4.0, 5.0));
+  CHECK_FALSE(timing_ok_for(nullptr, "B-21 x", 6.0, 5.0));
+  CHECK_FALSE(timing_ok_for("", "B-21 x", 6.0, 5.0));
+  CHECK(timing_ok_for("laptop-6c12t", "B-21 x", 4.0, 5.0, "ms", &said));
+  CHECK(said.empty());
+  CHECK(timing_ok_for("laptop-6c12t", "B-21 x", 6.0, 5.0, "ms", &said));
+  CHECK(said == "off-reference laptop-6c12t B-21 x: 6 ms against 5 ms");
 }
 
 }  // TEST_SUITE
