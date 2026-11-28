@@ -17,6 +17,11 @@ function Check([string]$what, [bool]$ok, $out = @()) {
 }
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "fast_viewport_runner_$PID"
 New-Item -ItemType Directory -Force $tmp | Out-Null
+# The id helper takes the lock: a private per-PID name and directory keep this fixture off the machine's real lock
+# (the gate runs it under that lock, so a set ASTRORAY_LOCK_PID is cleared too).
+$env:ASTRORAY_LOCK_PID = $null
+$env:ASTRORAY_LOCK_NAME = "Localstroray2-test-$PID-viewport"
+$env:ASTRORAY_LOCK_DIR = Join-Path $tmp 'lock'
 try {
   $good = Join-Path $tmp 'good.cmd'; $none = Join-Path $tmp 'none.cmd'
   Set-Content $good '@echo off
