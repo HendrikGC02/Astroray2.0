@@ -141,7 +141,7 @@ by owner-approved ruling 116; the lead refused 214's first submit after its own 
 
 ## Appendix: commands and commit
 
-Main at c435b5a8; the main checkout's `out/land/history.jsonl` (77 lines, last task 214) read in place.
+Main at c435b5a8; the main checkout's `out/land/history.jsonl`, first 77 lines (to 214; `--before 239` now).
 - `<python> -I tools/land_history.py <history> --ledger tasks/README.md --ledger <first-batch README>`, the
   second being `git show 1a85b5cb:tasks/README.md` (lanes, declared seconds); again with `--before 232`,
   `--after 232`, `--after 234`. Landed ids and merge times: `git log main --format="%ad %s"`, subjects
