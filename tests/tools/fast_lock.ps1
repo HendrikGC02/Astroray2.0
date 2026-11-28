@@ -12,6 +12,8 @@
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $lockLib = Join-Path $root 'tools/lib/lock.ps1'
+# The copies of the tools below have no build: the gate's machine id comes from this tree's CLI (machine_id.py).
+$env:ASTRORAY_CLI = Join-Path $root 'out/bin/astroray_cli.exe'
 $bad = 0
 function Check([string]$what, [bool]$ok, $out = @()) {
   if (-not $ok) { Write-Host "FAIL fast_lock: $what"; @($out) | Select-Object -Last 6 | ForEach-Object { Write-Host "  $_" }; $script:bad++ }
@@ -119,6 +121,7 @@ try {
     $r = Join-Path $tmp $name
     New-Item -ItemType Directory -Force (Join-Path $r 'out/check') | Out-Null
     Copy-Item -Recurse (Join-Path $root 'tools') (Join-Path $r 'tools')
+    Copy-Item -Recurse (Join-Path $root 'bench') (Join-Path $r 'bench')   # machines.toml: the gate reads the reference id
     $f = Join-Path $r 'tools/check.ps1'
     $t = ([IO.File]::ReadAllText($f)) -replace "`r`n", "`n"
     $fast = "Step 'fast' { & pwsh -NoProfile -File tools/check.ps1 fast }"

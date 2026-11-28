@@ -24,7 +24,8 @@ import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MACHINES = os.path.join(ROOT, "bench", "machines.toml")
-CLI = os.path.join(ROOT, "out", "bin", "astroray_cli.exe")
+# ASTRORAY_CLI names another CLI binary (a fixture whose copy of the tools has no build of its own); the id is still the CLI's.
+CLI = os.environ.get("ASTRORAY_CLI") or os.path.join(ROOT, "out", "bin", "astroray_cli.exe")
 # Set by the tools (never by hand, except to prove an off-reference path) to the id of a machine that is not the
 # reference one: a timing check inside a test then prints its measurement against the limit instead of failing.
 OFF_REFERENCE_ENV = "ASTRORAY_OFF_REFERENCE"
