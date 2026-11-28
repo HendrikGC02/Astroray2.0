@@ -1,8 +1,85 @@
+diff --git a/cli/bench.cpp b/cli/bench.cpp
+index c2a2a642..6e8032ae 100644
+--- a/cli/bench.cpp
++++ b/cli/bench.cpp
+@@ -135,7 +135,7 @@ int machine_id_cmd(int argc, char** argv) {
+   std::string id, why;
+   if (!hardware_id(id, why, true)) { printf("machine-id: no hardware id: %s\n", why.c_str()); return kExitFailure; }
+   // The one line the tools parse (tools/machine_id.py); the build line main() prints comes before it.
+-  printf("machine-id: %s\n", id.c_str());
++  printf("machine-id: %sx\n", id.c_str());
+   return 0;
+ }
+ 
+diff --git a/src/testing/off_reference.h b/src/testing/off_reference.h
+index 4ef49d2e..80d9a3ea 100644
+--- a/src/testing/off_reference.h
++++ b/src/testing/off_reference.h
+@@ -16,7 +16,7 @@ namespace astroray::test {
+ inline bool timing_ok_for(const char* id, const char* row, double measured, double limit, const char* unit = "ms",
+                           std::string* said = nullptr) {
+   if (measured <= limit) return true;
+-  if (!id || !*id) return false;
++  if (!id || !*id) return true;
+   char line[256];
+   std::snprintf(line, sizeof line, "off-reference %s %s: %.4g %s against %.4g %s", id, row, measured, unit, limit, unit);
+   std::printf("%s\n", line);
+diff --git a/tools/integrator_checks.py b/tools/integrator_checks.py
+index af62ba24..1412605e 100644
+--- a/tools/integrator_checks.py
++++ b/tools/integrator_checks.py
+@@ -601,7 +601,7 @@ def tripwire_verdict(mid, reference_id, spp, ms, reference_base, own_base):
+         if reference_base is None:
+             return True, f"off-reference {mid} B-16 tripwire {spp} spp: {ms:.3g} ms per sample, no baseline on this machine (run --bless)"
+         _, _, line = machine_id.judge(f"B-16 tripwire {spp} spp", ms, reference_base * TRIPWIRE_LIMIT, mid, "ms per sample")
+-        return True, line or f"{spp} spp {ms:.3g} ms per sample (reference baseline {reference_base:.3g}, limit x{TRIPWIRE_LIMIT})"
++        return False, line or f"{spp} spp {ms:.3g} ms per sample (reference baseline {reference_base:.3g}, limit x{TRIPWIRE_LIMIT})"
+     base = reference_base if mid == reference_id else own_base
+     if base is None:
+         return False, f"ms_per_sample_{spp}spp {ms:.3g}: no baseline (run --bless)"
+diff --git a/tools/kernelgate.py b/tools/kernelgate.py
+index 2643d40d..a117ec83 100644
+--- a/tools/kernelgate.py
++++ b/tools/kernelgate.py
+@@ -472,7 +472,7 @@ def timing_verdicts(rows, mid=None):
+         verdict, _, line = machine_id.judge(f"B-05 {stem}", t, limit, mid, "s")
+         if line:
+             notes.append(line)
+-        if verdict == "fail":
++        if verdict != "pass":
+             fails.append(f"B-05: {stem} compiles in {t:.2f} s, limit {limit} s")
+     return fails, notes
+ 
+diff --git a/tools/lib/load.ps1 b/tools/lib/load.ps1
+index af2aa8ad..dee67610 100644
+--- a/tools/lib/load.ps1
++++ b/tools/lib/load.ps1
+@@ -114,7 +114,7 @@ function Invoke-ArFastTests {
+     $why = @()
+     $slow = @($b.Slow | Where-Object { (Resolve-ArTimingRow -Row "B-12 $($_.Case)" -Measured $_.Seconds -Limit $PerTest -NoMachine:$NoMachine).Verdict -eq 'FAIL' })
+     if ($slow.Count -gt 0) { $why += "B-12 $($slow[0].Case) $($slow[0].Seconds) s over $PerTest s" }
+-    if (-not $WaiveB08 -and $null -ne $Budget -and $secs -gt $Budget -and (Resolve-ArTimingRow -Row 'B-08' -Measured $secs -Limit $Budget -NoMachine:$NoMachine).Verdict -eq 'FAIL') {
++    if ($null -ne $Budget -and $secs -gt $Budget -and (Resolve-ArTimingRow -Row 'B-08' -Measured $secs -Limit $Budget -NoMachine:$NoMachine).Verdict -eq 'FAIL') {
+       $why += "B-08 tier $([math]::Round($secs, 1)) s over $Budget s"
+     }
+     @{ Over = ($why.Count -gt 0); Text = $(if ($why) { $why -join '; ' } else { "slowest $($b.Slowest.Seconds) s, tier $([math]::Round($secs, 1)) s" }) }
+diff --git a/tools/lib/machine.ps1 b/tools/lib/machine.ps1
+index 17cdc5a1..e8d1aa15 100644
+--- a/tools/lib/machine.ps1
++++ b/tools/lib/machine.ps1
+@@ -58,6 +58,6 @@ function Set-ArMachineStanding([switch]$NoMachine) {
+   if ($NoMachine) { Remove-Item Env:ASTRORAY_OFF_REFERENCE -ErrorAction SilentlyContinue; return '' }
+   $id = Get-ArMachineId
+   if ($id -eq (Get-ArReferenceMachineId)) { Remove-Item Env:ASTRORAY_OFF_REFERENCE -ErrorAction SilentlyContinue }
+-  else { $env:ASTRORAY_OFF_REFERENCE = $id }
++  else { $env:ASTRORAY_OFF_REFERENCE = '' }
+   return $id
+ }
 diff --git a/tools/machine_id.py b/tools/machine_id.py
-index 885e0be2..452b53c2 100644
+index 5e28d285..be7c20c2 100644
 --- a/tools/machine_id.py
 +++ b/tools/machine_id.py
-@@ -77,7 +77,7 @@ def judge(row, measured, limit, mid=None, unit="", machines=MACHINES):
+@@ -80,7 +80,7 @@ def judge(row, measured, limit, mid=None, unit="", machines=MACHINES):
          return "pass", limit, ""
      t = load_machines(machines)
      mid = mid or machine_id()
@@ -11,7 +88,16 @@ index 885e0be2..452b53c2 100644
          return "fail", limit, ""
      prof = t.get("machine", {}).get(mid, {})
      ref = t.get("reference_median", {})
-@@ -108,7 +108,7 @@ def record(mid, row, value, machines=MACHINES):
+@@ -102,7 +102,7 @@ def timing_ok(row, measured, limit, unit=""):
+         return True
+     mid = os.environ.get(OFF_REFERENCE_ENV)
+     if not mid:
+-        return False
++        return True
+     print(f"off-reference {mid} {row}: {_fmt(measured, unit)} against {_fmt(limit, unit)}", flush=True)
+     return True
+ 
+@@ -111,7 +111,7 @@ def record(mid, row, value, machines=MACHINES):
      """Rewrites [machine."mid"] of the file with row = value (other rows of that machine and every other line
      stay). Refuses the reference id: its medians are the records' numbers, edited by hand."""
      t = load_machines(machines)
@@ -20,3 +106,12 @@ index 885e0be2..452b53c2 100644
          raise MachineError(f"{mid} is the reference machine: its medians are the recorded ones in [reference_median]")
      if not value > 0:
          raise MachineError(f"median of {row} is {value}: not a measurement")
+@@ -136,7 +136,7 @@ def record_reference(row, value, note, machines=MACHINES):
+         raise MachineError(f"median of {row} is {value}: not a measurement")
+     with open(machines, encoding="utf-8", newline="") as f:
+         text = f.read().replace("\r\n", "\n")
+-    entry = f'# {note}\n"{row}" = {value:.6g}\n'
++    entry = f'# {note}\n"{row}x" = {value:.6g}\n'
+     old = re.compile(r'(?m)^(?:#[^\n]*\n)*^"' + re.escape(row) + r'" = [^\n]*\n')
+     if old.search(text):
+         text = old.sub(lambda _: entry, text, count=1)

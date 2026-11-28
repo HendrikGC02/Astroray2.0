@@ -4,8 +4,8 @@
 # the meaning it was measured with there. On another machine a wall-clock row over its reference limit prints
 # `off-reference <id> <row>` and does not fail, unless [machine."<id>"] holds that machine's own median of the row:
 # the limit is then the reference limit x (that median / the reference median below), never below the reference limit.
-# [machine."<id>"] is written only by `tools/check.ps1 profile` (lead, quiet machine); the reference rows below are
-# the reference rows below are measured the same way by `tools/check.ps1 profile -Reference` (lead, quiet reference machine).
+# [machine."<id>"] is written only by `tools/check.ps1 profile` (lead, quiet machine).
+# The reference rows below are measured the same way by `tools/check.ps1 profile -Reference` (lead, quiet reference machine).
 reference = "rtx5070ti-8c16t"
 
 [reference_median]

@@ -11,7 +11,7 @@ Do:
 4. On this machine run `check.ps1 fast` and `check.ps1 gate`; paste the off-reference lines (every one names the id and the row).
 Acceptance: `pwsh tools/check.ps1 fast` and `pwsh tools/check.ps1 gate` pass; `pwsh -NoProfile -File tests/tools/run_fast.ps1`; `<python> -I tools/kernelgate.py --self-test`; `<python> -I tools/lint.py` clean.
 Look at: none.
-Canary: tasks/268.canary.patch must turn red: `pwsh -NoProfile -File tests/tools/fast_machine_profile.ps1` (the patch treats an unknown machine id as the reference, so the off-reference case fails the row).
+Canary: tasks/268.canary.patch must turn red: `pwsh -NoProfile -File tests/tools/fast_machine_profile.ps1` (the patch treats an unknown machine id as the reference, so the off-reference case fails the row), astroray_tests_cpu "session_denoise/a timing check over its limit follows the machine standing", tests/abi/test_cli_render.py "TestCliRender.test_machine_id_is_the_bench_machine".
 Budget: gate +0.9 s declared (one tools fixture at about 3 times nominal; stop and ask above 1.5 s); `check full` +0; kernel rows: none; limits changed: none.
 Depends on: none (267 for the GPU steps of its own gate on a non-sm_120 machine). Collisions: tools/check.ps1 with 245, 246, 250, 272 (272 rebases on this); tools/kernelgate.py with 267 (B-05 column only); tools/integrator_checks.py and counters.toml with 261 and 265; bench/history writers with 248, 252.
 Size: M (about 250 lines of script and one C++ subcommand); stop and report at 2x. Split point: the id and the four tools first, the verdict function second.
