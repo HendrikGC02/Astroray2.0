@@ -24,6 +24,7 @@ param(
   [switch]$Summarise,
   [string]$OutDir = '',
   [string]$HistoryOut = '',
+  [string]$Machine = '',   # the history lines' machine id; default: the CLI's, as perf.ps1 (the fixture passes one)
   [string]$Sha = '',
   [string]$Date = '',
   [int]$TimeoutS = 600
@@ -37,8 +38,14 @@ if ($bad) { Write-Host "FAIL measure_viewport: unknown scene $($bad -join ', ');
 if ($Runs -lt 1) { Write-Host 'FAIL measure_viewport: -Runs must be at least 1'; exit 2 }
 if (-not $OutDir) { $OutDir = if ($Dry) { Join-Path $root 'out/tmp/214/dry' } else { Join-Path $root 'out/viewport' } }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
-# perf.ps1's neutral machine id (cli/bench.cpp stamps COMPUTERNAME, which a history line must not carry).
-$machine = 'rtx5070ti-8c16t'
+function Get-BenchMachineId([string]$Cli, [string]$Rec) {
+  # perf.ps1's neutral id, read from the CLI's own bench line of a minimal run (one source; cli/bench.cpp hardware_id).
+  $o = @(& $Cli bench $Rec --size 320x180 --passes 1 --warmup 0 --device cuda 2>&1 | ForEach-Object { "$_" })
+  $line = $o | Where-Object { $_ -like '{*' } | Select-Object -First 1
+  $id = if ($line) { ($line | ConvertFrom-Json).machine } else { $null }
+  if (-not $id) { throw "the CLI printed no bench line to read the machine id from ($Cli bench $Rec): $($o | Select-Object -Last 3)" }
+  return $id
+}
 
 function Median([double[]]$v) {
   if ($v.Count -eq 0) { return $null }
@@ -97,6 +104,7 @@ if (-not $Summarise) {
 $lines = @()
 $date = if ($Date) { $Date } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
 $sha = if ($Sha) { $Sha } else { (git rev-parse HEAD).Trim() }
+if (-not $Machine) { $Machine = Get-BenchMachineId (Join-Path $root 'out/bin/astroray_cli.exe') (Join-Path $root "out/viewport/blend/$($Scene[0]).arrec") }
 $gpu = (& nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>$null) -split ','
 $driver = if ($gpu.Count -ge 2) { $gpu[1].Trim() } else { 'unknown' }
 function New-Line([string]$scene, [string]$metric, [double]$value, [string]$unit, [int]$n, [double]$spread) {

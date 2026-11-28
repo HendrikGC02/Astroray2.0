@@ -46,7 +46,18 @@ Set-Location $root
 . (Join-Path $PSScriptRoot 'lib/blender.ps1')
 $out = Join-Path $root 'out/ttff'
 New-Item -ItemType Directory -Force $out | Out-Null
-$bench = @{ b1m = 'b1m'; b5m = 'b5m'; s3_textured = 'b_tx' }   # scene builder -> bench id (bench/scenes.toml)
+$bench = @{ b1m = 'b1m'; b5m = 'b5m'; s3_textured = 'b_tx'; s3_hdri = 's3_hdri' }   # scene builder -> bench id (bench/scenes.toml)
+$unknown = @($Scene | Where-Object { -not $bench.ContainsKey($_) })
+if ($unknown) { throw "measure_ttff: no bench id for scene $($unknown -join ', '); add it to `$bench" }
+
+function Get-BenchMachineId([string]$Cli, [string]$Rec) {
+  # perf.ps1's neutral id, read from the CLI's own bench line of a minimal run (one source; cli/bench.cpp hardware_id).
+  $o = @(& $Cli bench $Rec --size 320x180 --passes 1 --warmup 0 --device cuda 2>&1 | ForEach-Object { "$_" })
+  $line = $o | Where-Object { $_ -like '{*' } | Select-Object -First 1
+  $id = if ($line) { ($line | ConvertFrom-Json).machine } else { $null }
+  if (-not $id) { throw "the CLI printed no bench line to read the machine id from ($Cli bench $Rec): $($o | Select-Object -Last 3)" }
+  return $id
+}
 
 function Build-Blend([string]$name) {
   $blend = Join-Path $out "$name.blend"
@@ -224,6 +235,7 @@ $rows | Sort-Object scene, engine, switch, run | Format-Table scene, engine, swi
 $hist = @()
 $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 $sha = (git rev-parse --short HEAD).Trim()
+$machine = Get-BenchMachineId (Join-Path $root 'out/bin/astroray_cli.exe') (Join-Path $out "$($Scene[0]).arrec")
 $gpu = (& nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>$null) -split ','
 $driver = if ($gpu.Count -ge 2) { $gpu[1].Trim() } else { 'unknown' }
 foreach ($name in $Scene) {
@@ -240,7 +252,7 @@ foreach ($name in $Scene) {
         $v = @($rows | Where-Object { $_.scene -eq $name -and $_.engine -eq $e -and $_.switch -eq $sw -and $null -ne $_."${metric}_ms" } | ForEach-Object { $_."${metric}_ms" })
         if ($v.Count -eq 0) { continue }
         $mn = ($v | Measure-Object -Minimum).Minimum; $mx = ($v | Measure-Object -Maximum).Maximum
-        $hist += ([ordered]@{ sha = $sha; machine = $env:COMPUTERNAME; driver = $driver; cuda = 'cuda'; scene = $bench[$name]
+        $hist += ([ordered]@{ sha = $sha; machine = $machine; driver = $driver; cuda = 'cuda'; scene = $bench[$name]
           metric = "first_frame.$metric.$e.switch$sw"; value = [math]::Round((Median $v), 1); unit = 'ms'; n = $v.Count
           spread = [math]::Round($mx - $mn, 1); date = $date } | ConvertTo-Json -Compress)
       }

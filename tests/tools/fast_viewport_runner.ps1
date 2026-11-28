@@ -24,7 +24,7 @@ try {
   Canned 'b1m' 3 31.0 21.0 30.0 0.1
   Canned 'b1m' 4 5.0 1.0 4.0 9.0 @('boom')
   $hist = Join-Path $tmp 'h.jsonl'
-  $out = @(& pwsh -NoProfile -File $script -Scene b1m -Summarise -OutDir $tmp -HistoryOut $hist -Sha deadbeef -Date 2026-01-02T03:04:05Z 2>&1 | ForEach-Object { "$_" })
+  $out = @(& pwsh -NoProfile -File $script -Scene b1m -Summarise -OutDir $tmp -HistoryOut $hist -Machine m-test -Sha deadbeef -Date 2026-01-02T03:04:05Z 2>&1 | ForEach-Object { "$_" })
   Check "the summary run exited $LASTEXITCODE" ($LASTEXITCODE -eq 0) $out
   $L = @()
   if (Test-Path $hist) { $L = @(Get-Content $hist | ForEach-Object { $_ | ConvertFrom-Json }) }
@@ -40,7 +40,7 @@ try {
     Check "b14.rate_p5 is 21.0, got $($p.value)" ($p.value -eq 21.0) $out
     $f = $L | Where-Object { $_.metric -eq 'b14.floor_longest_s' }
     Check "b14.floor_longest_s is 0.2 (the errored run is out), got $($f.value)" ($f.value -eq 0.2) $out
-    Check 'machine id is the neutral one' ($r.machine -eq 'rtx5070ti-8c16t' -and $r.sha -eq 'deadbeef') $out
+    Check 'machine id is the neutral one' ($r.machine -eq 'm-test' -and $r.sha -eq 'deadbeef') $out
     Check 'date is the one given' ((Get-Content $hist -Raw) -match '"date":"2026-01-02T03:04:05Z"') $out
   }
   Check 'rate_b1m.json (read by report.py) must exist and carry the scene' ((Test-Path (Join-Path $tmp 'rate_b1m.json')) -and ((Get-Content (Join-Path $tmp 'rate_b1m.json') -Raw | ConvertFrom-Json).scene -eq 'b1m')) $out
@@ -48,6 +48,24 @@ try {
   Check 'an unknown scene must exit nonzero and name it' ($LASTEXITCODE -ne 0 -and ($o2 -join ' ') -match 'nosuch') $o2
   $o3 = @(& pwsh -NoProfile -File $script -Scene b1m -Runs 0 -Summarise -OutDir $tmp 2>&1 | ForEach-Object { "$_" })
   Check '-Runs 0 must exit nonzero' ($LASTEXITCODE -ne 0) $o3
+  # measure_ttff.ps1's machine id comes from the CLI's bench line, never COMPUTERNAME, and a CLI with no such line fails loudly.
+  foreach ($f in 'measure_ttff', 'measure_viewport') {
+    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $root "tools/$f.ps1"), [ref]$null, [ref]$null)
+    $fn = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-BenchMachineId' }, $true)
+    Check "$f has no Get-BenchMachineId" ($null -ne $fn)
+    if (-not $fn) { continue }
+    . ([scriptblock]::Create($fn.Extent.Text))
+    $good = Join-Path $tmp 'good.cmd'; $none = Join-Path $tmp 'none.cmd'
+    Set-Content $good '@echo off
+echo {"machine": "fake-id-1c1t", "pass_ms": 1.0}'
+    Set-Content $none '@echo off
+echo no line'
+    Check "$f machine id read from the CLI line" ((Get-BenchMachineId $good 'x.arrec') -eq 'fake-id-1c1t')
+    $threw = $false; try { $null = Get-BenchMachineId $none 'x.arrec' } catch { $threw = $true }
+    Check "$f must throw when the CLI prints no bench line" $threw
+  }
+  Check 'measure_ttff must not stamp COMPUTERNAME' (-not ((Get-Content (Join-Path $root 'tools/measure_ttff.ps1') -Raw) -match 'COMPUTERNAME'))
+  Check 'measure_ttff has an s3_hdri bench id' ((Get-Content (Join-Path $root 'tools/measure_ttff.ps1') -Raw) -match "s3_hdri = 's3_hdri'")
 } finally {
   Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
