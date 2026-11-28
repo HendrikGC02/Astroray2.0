@@ -14,3 +14,4 @@ Budget: gate +0 s (no local step changes); hosted ci time: state the upload step
 Depends on: none. Collisions: .github/workflows/ci.yml with nothing open.
 Size: S (about 15 lines of workflow); stop and report at 2x.
 Progress:
+   - ci.yml upload step added; BACKLOG rows edited; hosted runs not done (no push allowed this dispatch)
