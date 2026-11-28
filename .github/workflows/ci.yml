@@ -33,3 +33,15 @@ jobs:
         env:
           CI: 'true'
         run: pwsh tools/check.ps1 ci
+      # ci.log names a failing doctest case and build.log holds the compiler's
+      # error line; check.ps1's 20-line summary carries neither (0009 d24).
+      - name: Upload ci logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs
+          path: |
+            out/check/ci.log
+            out/check/build.log
+          if-no-files-found: warn
+          retention-days: 7
