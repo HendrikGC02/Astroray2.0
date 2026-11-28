@@ -6,6 +6,7 @@ import ctypes
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -303,6 +304,8 @@ class TestCliRender(unittest.TestCase):
         self.assertGreater(len(planes), 9, sorted(planes))  # display plus statistics and counters
 
     def test_bench_history_lines(self):
+        info = self.run_cli(["info"])
+        has_cuda = re.search(r"(?m)^\d+ cuda ", info.stdout) is not None
         r = self.run_cli(["bench", self.rec, "--passes", "32", "--warmup", "2"])
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         lines = [json.loads(ln) for ln in r.stdout.splitlines() if ln.startswith("{")]
@@ -311,7 +314,9 @@ class TestCliRender(unittest.TestCase):
             self.assertEqual(set(ln), keys)
             self.assertEqual(ln["scene"], "069_empty_world")
             # A neutral hardware id (gpu, cores, threads), never the computer's name.
-            self.assertRegex(ln["machine"], r"^[a-z0-9]+-\d+c\d+t$")
+            self.assertRegex(ln["machine"], r"^[a-z0-9]+-[1-9]\d*c[1-9]\d*t$")  # a zero count is a failed query
+            if has_cuda:  # a CUDA machine is never stamped with the CPU entry
+                self.assertFalse(ln["machine"].startswith("cpu-"), ln["machine"])
             self.assertNotEqual(ln["machine"].split("-")[0], os.environ.get("COMPUTERNAME", "").lower())
         metrics = {ln["metric"]: ln for ln in lines}
         self.assertEqual(set(metrics), {"pass_ms", "kernel_ms_per_sample", "rays_closest", "rays_shadow",

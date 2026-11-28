@@ -35,7 +35,12 @@ param(
   [switch]$Shares
 )
 $ErrorActionPreference = 'Stop'
-$Scene = @($Scene | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+# The cumulative ratio is printed by the pass-time comparison only; with either switch it would be silently dropped.
+if ($Cumulative -and ($Shares -or $MeasureTolerance)) {
+  Write-Host 'REFUSE perf: -Cumulative cannot be combined with -Shares or -MeasureTolerance (it is a pass-time comparison)'
+  exit 2
+}
+$Scene =@($Scene | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 . (Join-Path $PSScriptRoot 'lib/lock.ps1')
