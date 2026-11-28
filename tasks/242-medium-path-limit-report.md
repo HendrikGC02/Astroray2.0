@@ -15,3 +15,7 @@ Budget: gate +0.5 s declared (fast cases and one small session case; stop and as
 Depends on: none (193, 205, 220 landed). `shade_surface` TU queue, one at a time (lead ruling): 239, 242, 247, 253, 260, 263, 261, 262. Collisions: shade_surface.h with 247, 260, 261, 262; session.cpp with nothing open; budget.toml with every kernel task.
 Size: S (about 90 lines without tests); stop and report at 2x.
 Progress:
+- FilmData::medium_limit_total and film_medium_limit_add (null allowed); adds at shade_volume, shade_shadow_medium and both shade_surface ends; the two surface ends store the hit's flag word (FRONT_FACE).
+- session.cpp: counter after kInvalidTotalAt, cleared before each pass (not before the resolve: the shade stages fill it during the pass), read with the invalid total after the resolve, one MEDIUM_PATH_LIMIT entry (subject 0, detail "VOLUME_LIMIT or STACK_OVERFLOW", count accumulates).
+- Cases: shade_volume (stage, fast), session (gate, B-12 refused it in fast at 0.6 s), shade_shadow and shade_surface_media (outside Scope's test list: they hold the shadow and surface rigs); Canary line names all four; 6 hunks.
+- Kernel rows unchanged: k_shade_surface 128/416/4/16, k_shade_volume 121/464/0/0, k_shade_shadow_medium 80/448/20/20; compile shade_surface 7.37 s quiet (7.90 and 7.96 under foreign load).
