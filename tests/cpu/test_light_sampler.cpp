@@ -164,7 +164,7 @@ TEST_CASE("light_sampler/pmf matches sample") {
       geo = 4.0 * pi * pi * 10.0 * 10.0;
     }
     CHECK(t->importance[i] == doctest::Approx(e * double(r.strength) * geo).epsilon(1e-5));
-    CHECK(double(t->pmf[i]) == doctest::Approx(t->importance[i] / std::accumulate(t->importance.begin(), t->importance.end(), 0.0)).epsilon(1e-6));
+    CHECK(double(t->pmf[i]) == doctest::Approx(t->importance[i] / std::accumulate(t->importance.begin(), t->importance.end(), 0.0)).epsilon(1e-6).scale(0));
   }
   for (int k = 0; k < 100000; ++k) {
     const uint32_t ub = uint32_t((uint64_t(k) << 32) / 100000u);
@@ -692,7 +692,7 @@ TEST_CASE("light_sampler/small q is exact at 2^20 bins" * doctest::test_suite("f
   for (int k = 0; k < m; ++k) hits += ar::light_sampler_sample(v, ctx(), bin_u(small, n), Real((k + 0.5) / m), true).light == small;
   const double freq = double(hits) / m / n;
   std::printf("light_sampler small q: frequency %.6e pmf %.6e\n", freq, double(t->pmf[small]));
-  CHECK(freq == doctest::Approx(double(t->pmf[small])).epsilon(2e-3));
+  CHECK(freq == doctest::Approx(double(t->pmf[small])).epsilon(2e-3).scale(0));
 }
 
 }  // TEST_SUITE("gate")

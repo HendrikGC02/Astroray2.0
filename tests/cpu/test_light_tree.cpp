@@ -318,7 +318,7 @@ AR_RT_CASE("light_tree/pmf matches sample") {
   for (Real u : {Real(0), std::nextafter(Real(1), Real(0))}) {
     const ar::SampledLight sl = ar::light_tree_sample(v, s.p, s.n, u);
     REQUIRE(sl.light < v.emitter_count);
-    CHECK(double(ar::light_tree_pmf(v, s.p, s.n, sl.light)) == doctest::Approx(double(sl.pmf)).epsilon(1e-4));
+    CHECK(double(ar::light_tree_pmf(v, s.p, s.n, sl.light)) == doctest::Approx(double(sl.pmf)).epsilon(1e-4).scale(0));
   }
 }
 

@@ -276,7 +276,7 @@ AR_RT_CASE("light_tree_kernel/zero importance has radiometric pmf") {
   Rng rng{1753};
   for (int k = 0; k < 20; ++k) {
     const ar::LightSampleContext ctx = shade_point(rng);
-    CHECK(double(ar::light_sampler_pmf(V.v, ctx, uv, false)) == doctest::Approx(kEps * p_rad).epsilon(1e-6));  // p_rad is stored as float
+    CHECK(double(ar::light_sampler_pmf(V.v, ctx, uv, false)) == doctest::Approx(kEps * p_rad).epsilon(1e-6).scale(0));  // p_rad is stored as float
     CHECK(ar::light_sampler_pmf(V.v, ctx, uv, true) == Real(0));  // the oracle has no bin for it
   }
   uint32_t bin = 0;
@@ -285,7 +285,7 @@ AR_RT_CASE("light_tree_kernel/zero importance has radiometric pmf") {
   const ar::LightSampleContext ctx = ar::light_context_point(r3(5, 5, -3), r3(0, 0, 1), r3(0, 0, 1));
   const ar::SampledLight s = ar::light_sampler_sample(V.v, ctx, u_bin, Real(0.1 * kEps * double(V.rbins[bin].q)), false);
   CHECK(s.light == uv);
-  CHECK(double(s.pmf) == doctest::Approx(kEps * p_rad).epsilon(1e-6));
+  CHECK(double(s.pmf) == doctest::Approx(kEps * p_rad).epsilon(1e-6).scale(0));
 }
 
 AR_RT_CASE("light_tree_kernel/every light of positive power has positive pmf") {
