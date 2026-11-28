@@ -18,3 +18,6 @@ Size: S (about 120 lines of script; the page); stop and report at 2x.
 Progress:
 
 - Started: branch task/217-m1b-retrospective from c435b5a8; files: tools/land_history.py, tests/tools/fast_land_history.ps1, docs/retro/M1b-retrospective.md, tasks/217.canary.patch.
+- Script, self-test (14 checks), fixture and canary (1 hunk, red) committed; page 150 lines; lint clean.
+- History holds merged landings only (refusals, causes, review rounds from the ledger); 164 and 233 have no line (`land.ps1 merge` writes none).
+- Lead-brief facts without a repository source are in the page's section 6, labelled as such.
