@@ -33,6 +33,17 @@ spill_load = 192
 compile_s = 0  # not in kernels/, so compile timing never ranks it
 gated = "full"
 
+# The light-path extension probe (src/kernel_gpu/probe_light_ext.cu), standing in for
+# shade_light_path_ext until M5; capped build in kernels_probe_capped/, a breach is a warning.
+# regs and stack are its first measurement (ruling 91); allowance = the D10 VM ceiling, as ar_probe_m1.
+[kernel.ar_probe_light_ext]
+regs = 114
+stack = 384
+spill_store = 128
+spill_load = 192
+compile_s = 0  # not in kernels/, so compile timing never ranks it
+gated = "full"
+
 [kernel.k_queue_build_count]
 regs = 38
 stack = 0
