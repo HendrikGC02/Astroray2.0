@@ -150,7 +150,7 @@ regs = 64
 stack = 304
 spill_store = 36
 spill_load = 36
-compile_s = 2.17
+compile_s = 2.23
 gated = "merge"
 
 [kernel.k_shade_surface]
@@ -169,7 +169,7 @@ regs = 128
 stack = 416
 spill_store = 4
 spill_load = 16
-compile_s = 7.45
+compile_s = 7.33
 gated = "merge"
 
 [kernel.k_shade_surface_ext]
@@ -182,7 +182,7 @@ regs = 124
 stack = 400
 spill_store = 0
 spill_load = 0
-compile_s = 5.56
+compile_s = 5.41
 gated = "merge"
 
 [kernel.k_shade_shadow]
