@@ -25,8 +25,8 @@ laptop is expected and reported, never fixed by editing a limit. First two tasks
 None blocks work. Decision 47 answered PLAN-M2 questions 1, 3, 6 and 8, the coincident-hit tie rule, B-10, B-11
 and the PROVISIONAL rulings 94, 100, 109, 110, 112, 114 under the owner's delegation; the owner may correct any.
 - The laptop, as the owner states it: RTX 3000 with 8 GB (with a Core Ultra 7 165H that is the RTX 3000 Ada, sm_89: confirm
-  with `nvidia-smi` on first start), 64 GB RAM, 16 cores / 22 threads. For the owner: does the desktop stay available for reference-machine
-  re-measurements before M2's close (decision 47 e: absolute rows are re-measured there).
+  with `nvidia-smi` on first start), 64 GB RAM, 16 cores / 22 threads. The desktop cannot be reached while the owner travels: absolute rows close as
+  "reference rows pending" and are re-measured there first when it is back (decision 47 e).
 - After task 266 re-measures every prefilter mode with the assets present, the owner may revisit decision 46's
   option (b) for the final denoise.
 
