@@ -39,9 +39,8 @@ and the PROVISIONAL rulings 94, 100, 109, 110, 112, 114 under the owner's delega
   the fused kernel as built. Task 248 measures the arrangements; the spine holds at 262 until its table is ruled.
 - B-10: 20 min enforced by task 272 (740-855 s quiet today). Below sm_120 the kernels compile far over 0002 D10 (267: sm_89
   `k_shade_surface` 1,152 B stack, 76 / 124 B spills): laptop pass times are indicative only, 248 is confirmed on the desktop.
-- Silent wrong results known and unfixed (CLAUDE.md rule 5): a missing image renders magenta with only a warning,
-  so comparisons pass when render and reference miss the same asset (BACKLOG; 245 and 246 remove the worktree
-  cause, the loud failure has no task yet: 271's PR lists it with the other silent rows).
+- Silent wrong result, unfixed (rule 5): a missing image renders magenta with only a warning, so comparisons pass when
+  render and reference miss the same asset (BACKLOG; 245 and 246 remove the worktree cause; the loud failure has no task: 271).
 
 ## Budget headroom (reference machine, at the M1b close)
 `check gate` quiet-main median 127.2 s, landings 133-149 s, hold line 170 s, limit 180 s (B-09). `check fast` 5.4-7.2 s
